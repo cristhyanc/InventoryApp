@@ -10,7 +10,7 @@ public class Product
     public string? Description { get; set; }
     public decimal UnitPrice { get; set; }
     public int QuantityInStock { get; set; }
-    public int LowStockThreshold { get; set; } = 5;
+    public int LowStockThreshold { get; set; } = 0;
     public string? Unit { get; set; } = "unit";
     public bool Mapped { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;

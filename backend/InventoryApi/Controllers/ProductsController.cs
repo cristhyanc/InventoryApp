@@ -25,7 +25,7 @@ public class ProductsController : ControllerBase
     [HttpGet]
     public async Task<ActionResult<IEnumerable<Product>>> GetAll(
         [FromQuery] string? search,
-        [FromQuery] int? categoryId,
+        [FromQuery] long? categoryId,
         [FromQuery] int? supplierId,
         [FromQuery] bool? lowStockOnly)
     {
@@ -47,8 +47,8 @@ public class ProductsController : ControllerBase
         return Ok(result);
     }
 
-    [HttpGet("{id:int}")]
-    public async Task<ActionResult<Product>> Get(int id)
+    [HttpGet("{id:long}")]
+    public async Task<ActionResult<Product>> Get(long id)
     {
         var product = await _db.Products
             .Include(p => p.Category)
@@ -83,8 +83,8 @@ public class ProductsController : ControllerBase
         var localProducts = await localProductsTask;
         var localCategories = await localCatsTask;
 
-        var products = new List<Product>();
-        var categories = new List<Category>();        
+        var newProducts = new List<Product>();
+        var newCategories = new List<Category>();        
 
         foreach (var group in nayaxGroups)
         {
@@ -93,7 +93,7 @@ public class ProductsController : ControllerBase
             if(category == null)
             {
                 category = new Category { Id = group.ProductGroupID!.Value,  Name = group.ProductGroupName!, Description = group.ProductGroupRef };
-                categories.Add(category);
+                newCategories.Add(category);
             }            
         }
 
@@ -107,7 +107,8 @@ public class ProductsController : ControllerBase
                 {
                     Id = item.NayaxProductId,
                     CreatedAt = DateTime.UtcNow
-                };                
+                };
+                newProducts.Add(product);
             }
 
             product.Mapped = true;
@@ -115,14 +116,19 @@ public class ProductsController : ControllerBase
             product.Description = item.ProductDescription;
             product.UnitPrice = item.ProductCostPrice??0;
             product.CategoryId = item.ProductGroupId;
-            product.UpdatedAt = DateTime.UtcNow;
-
-            products.Add(product);
+            product.UpdatedAt = DateTime.UtcNow;            
         }
 
+        if(newCategories.Any())
+        {
+            _db.Categories.AddRange(newCategories);
+        }
 
-         _db.Categories.AddRange(categories);
-        _db.Products.AddRange(products);
+        if(newProducts.Any())
+        {
+            _db.Products.AddRange(newProducts);
+        }        
+        
         await _db.SaveChangesAsync();
         return true;
     }
@@ -163,8 +169,8 @@ public class ProductsController : ControllerBase
         return CreatedAtAction(nameof(Get), new { id = product.Id }, product);
     }
 
-    [HttpPut("{id:int}")]
-    public async Task<IActionResult> Update(int id, ProductUpdateDto dto)
+    [HttpPut("{id:long}")]
+    public async Task<IActionResult> Update(long id, ProductUpdateDto dto)
     {
         var product = await _db.Products.FindAsync(id);
         if (product is null) return NotFound();
@@ -183,8 +189,8 @@ public class ProductsController : ControllerBase
         return NoContent();
     }
 
-    [HttpDelete("{id:int}")]
-    public async Task<IActionResult> Delete(int id)
+    [HttpDelete("{id:long}")]
+    public async Task<IActionResult> Delete(long id)
     {
         var product = await _db.Products.FindAsync(id);
         if (product is null) return NotFound();

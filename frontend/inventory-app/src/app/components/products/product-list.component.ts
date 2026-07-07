@@ -69,12 +69,13 @@ export class ProductListComponent implements OnInit {
 
   importProducts(): void {
     this.productService.importProducts().subscribe({
-        next: () => this.toastService.success('Products imported successfully.'),
+        next: () => {
+          this.confirmingImport = false;
+          this.toastService.success('Products imported successfully.')
+          this.applyFilters();
+        },
         error: () => { this.toastService.error('Failed to import products.'); }
-      });
-
-
-    this.confirmingImport = true;
+      });    
   }
 
   cancelImportProducts(): void {

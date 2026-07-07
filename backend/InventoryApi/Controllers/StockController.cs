@@ -7,14 +7,14 @@ using InventoryApi.DTOs;
 namespace InventoryApi.Controllers;
 
 [ApiController]
-[Route("api/products/{productId:int}/stock")]
+[Route("api/products/{productId:long}/stock")]
 public class StockController : ControllerBase
 {
     private readonly AppDbContext _db;
     public StockController(AppDbContext db) => _db = db;
 
     [HttpGet]
-    public async Task<ActionResult<IEnumerable<StockAdjustment>>> History(int productId)
+    public async Task<ActionResult<IEnumerable<StockAdjustment>>> History(long productId)
     {
         var exists = await _db.Products.AnyAsync(p => p.Id == productId);
         if (!exists) return NotFound("Product not found");
@@ -27,7 +27,7 @@ public class StockController : ControllerBase
     }
 
     [HttpPost]
-    public async Task<ActionResult<StockAdjustment>> Adjust(int productId, StockAdjustmentDto dto)
+    public async Task<ActionResult<StockAdjustment>> Adjust(long productId, StockAdjustmentDto dto)
     {
         var product = await _db.Products.FindAsync(productId);
         if (product is null) return NotFound("Product not found");
