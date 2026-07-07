@@ -1,0 +1,18 @@
+<header class="app-header">
+  <div class="container header-inner">
+    <span class="brand">🧃 Inventory Manager</span>
+    <nav>
+      <a routerLink="/" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }">Dashboard</a>
+      <a routerLink="/products" routerLinkActive="active">Products</a>
+      <a routerLink="/categories" routerLinkActive="active">Categories</a>
+      <a routerLink="/suppliers" routerLinkActive="active">Suppliers</a>
+      <a routerLink="/receipts" routerLinkActive="active">Receipts</a>
+    </nav>
+  </div>
+</header>
+
+<main class="container">
+  <router-outlet />
+</main>
+
+<app-toast-container></app-toast-container>

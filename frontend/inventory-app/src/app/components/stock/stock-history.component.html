@@ -1,0 +1,71 @@
+@if (product) {
+  <div class="toolbar">
+    <h1 style="margin:0">Stock: {{ product.name }}</h1>
+    <a routerLink="/products" class="btn btn-secondary">Back to Products</a>
+  </div>
+
+  <div class="card-grid" style="grid-template-columns: repeat(3, 1fr); max-width:500px">
+    <div class="card stat">
+      <span class="stat-value">{{ product.quantityInStock }}</span>
+      <span class="stat-label">Current Stock ({{ product.unit }})</span>
+    </div>
+    <div class="card stat">
+      <span class="stat-value">{{ product.lowStockThreshold }}</span>
+      <span class="stat-label">Low Stock Threshold</span>
+    </div>
+    <div class="card stat">
+      <span class="stat-value">${{ product.unitPrice.toFixed(2) }}</span>
+      <span class="stat-label">Unit Price</span>
+    </div>
+  </div>
+
+  <div class="card" style="max-width:500px">
+    <h2>Adjust Stock</h2>
+    @if (error) {
+      <p style="color:#b91c1c">{{ error }}</p>
+    }
+    <form (ngSubmit)="adjust()">
+      <div class="form-row">
+        <label>Quantity Change *</label>
+        <input [(ngModel)]="form.quantityChange" name="quantityChange" type="number" required placeholder="e.g. 20 to add, -5 to remove" />
+      </div>
+      <div class="form-row">
+        <label>Reason</label>
+        <select [(ngModel)]="form.reason" name="reason">
+          @for (r of reasonOptions; track r.value) {
+            <option [ngValue]="r.value">{{ r.label }}</option>
+          }
+        </select>
+      </div>
+      <div class="form-row">
+        <label>Notes</label>
+        <textarea [(ngModel)]="form.notes" name="notes" rows="2" placeholder="Optional"></textarea>
+      </div>
+      <button type="submit" class="btn btn-primary">Apply Adjustment</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>Adjustment History</h2>
+    @if (history.length === 0) {
+      <p>No stock adjustments yet.</p>
+    } @else {
+      <table>
+        <thead><tr><th>Date</th><th>Change</th><th>Resulting Qty</th><th>Reason</th><th>Notes</th></tr></thead>
+        <tbody>
+          @for (h of history; track h.id) {
+            <tr>
+              <td>{{ h.createdAt | date:'short' }}</td>
+              <td [style.color]="h.quantityChange < 0 ? '#b91c1c' : '#15803d'">
+                {{ h.quantityChange > 0 ? '+' : '' }}{{ h.quantityChange }}
+              </td>
+              <td>{{ h.quantityAfter }}</td>
+              <td>{{ reasonLabel(h.reason) }}</td>
+              <td>{{ h.notes }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    }
+  </div>
+}

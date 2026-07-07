@@ -1,0 +1,43 @@
+<h1>Dashboard</h1>
+
+<div class="card-grid">
+  <div class="card stat">
+    <span class="stat-value">{{ totalProducts }}</span>
+    <span class="stat-label">Total Products</span>
+  </div>  
+  <div class="card stat">
+    <span class="stat-value">{{ totalUnitsInStock }}</span>
+    <span class="stat-label">Units In Stock</span>
+  </div>
+  <div class="card stat">
+    <span class="stat-value">${{ inventoryValue.toFixed(2) }}</span>
+    <span class="stat-label">Inventory Value</span>
+  </div>
+</div>
+
+<div class="card">
+  <div class="toolbar">
+    <h2 style="margin:0">⚠️ Low Stock Alerts</h2>
+    <a routerLink="/products" [queryParams]="{ lowStockOnly: true }" class="btn btn-secondary btn-sm">View all products</a>
+  </div>
+
+  @if (lowStock.length === 0) {
+    <p>No low-stock items. Everything looks good! ✅</p>
+  } @else {
+    <table>
+      <thead>
+        <tr><th>Product</th><th>Type</th><th>In Stock</th><th>Threshold</th><th></th></tr>
+      </thead>
+      <tbody>
+        @for (p of lowStock; track p.id) {
+          <tr>
+            <td>{{ p.name }}</td>            
+            <td><span class="badge badge-low">{{ p.quantityInStock }}</span></td>
+            <td>{{ p.lowStockThreshold }}</td>
+            <td><a [routerLink]="['/products', p.id, 'stock']" class="btn btn-primary btn-sm">Adjust Stock</a></td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  }
+</div>

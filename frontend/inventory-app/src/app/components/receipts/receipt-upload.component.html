@@ -1,0 +1,53 @@
+<h1>Upload Receipt</h1>
+
+<div class="card" style="max-width:600px">
+  @if (error) {
+    <p style="color:#b91c1c">{{ error }}</p>
+  }
+
+  <form (ngSubmit)="upload()">
+    <div class="form-row">
+      <label>Receipt File (image or PDF) *</label>
+      <input type="file" accept="image/*,.pdf" (change)="onFileSelected($event)" />
+    </div>
+
+    @if (previewUrl) {
+      <div class="form-row">
+        <img [src]="previewUrl" alt="Receipt preview" style="max-width:100%;max-height:300px;border-radius:8px" />
+      </div>
+    }
+
+    <div class="form-row">
+      <label>Title *</label>
+      <input [(ngModel)]="form.title" name="title" required placeholder="e.g. Weekly snack restock" />
+    </div>
+
+    <div class="form-row">
+      <label>Supplier</label>
+      <select [(ngModel)]="form.supplierId" name="supplierId">
+        <option value="">None</option>
+        @for (s of suppliers; track s.id) {
+          <option [ngValue]="s.id">{{ s.name }}</option>
+        }
+      </select>
+    </div>
+
+    <div class="form-row">
+      <label>Purchase Date</label>
+      <input type="date" [(ngModel)]="form.purchaseDate" name="purchaseDate" />
+    </div>
+
+    <div class="form-row">
+      <label>Total Amount ($)</label>
+      <input type="number" step="0.01" min="0" [(ngModel)]="form.totalAmount" name="totalAmount" placeholder="Optional" />
+    </div>
+
+    <div class="form-row">
+      <label>Notes</label>
+      <textarea [(ngModel)]="form.notes" name="notes" rows="2" placeholder="Optional"></textarea>
+    </div>
+
+    <button type="submit" class="btn btn-primary" [disabled]="saving">Upload Receipt</button>
+    <a routerLink="/receipts" class="btn btn-secondary">Cancel</a>
+  </form>
+</div>

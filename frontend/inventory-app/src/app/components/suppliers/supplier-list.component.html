@@ -1,0 +1,56 @@
+<h1>Suppliers</h1>
+
+<div class="card">
+  <h2>{{ editing ? 'Edit Supplier' : 'New Supplier' }}</h2>
+  <form (ngSubmit)="save()">
+    <div class="form-row">
+      <label>Name</label>
+      <input [(ngModel)]="form.name" name="name" required placeholder="e.g. General Distributors Inc." />
+    </div>
+    <div class="form-row">
+      <label>Contact Name</label>
+      <input [(ngModel)]="form.contactName" name="contactName" placeholder="Optional" />
+    </div>
+    <div class="form-row">
+      <label>Phone</label>
+      <input [(ngModel)]="form.phone" name="phone" placeholder="Optional" />
+    </div>
+    <div class="form-row">
+      <label>Email</label>
+      <input [(ngModel)]="form.email" name="email" type="email" placeholder="Optional" />
+    </div>
+    <div class="form-row">
+      <label>Address</label>
+      <textarea [(ngModel)]="form.address" name="address" rows="2" placeholder="Optional"></textarea>
+    </div>
+    <button type="submit" class="btn btn-primary">{{ editing ? 'Update' : 'Create' }}</button>
+    @if (editing) {
+      <button type="button" class="btn btn-secondary" (click)="cancel()">Cancel</button>
+    }
+  </form>
+</div>
+
+<div class="card">
+  <h2>All Suppliers</h2>
+  @if (suppliers.length === 0) {
+    <p>No suppliers yet.</p>
+  } @else {
+    <table>
+      <thead><tr><th>Name</th><th>Contact</th><th>Phone</th><th>Email</th><th></th></tr></thead>
+      <tbody>
+        @for (s of suppliers; track s.id) {
+          <tr>
+            <td>{{ s.name }}</td>
+            <td>{{ s.contactName }}</td>
+            <td>{{ s.phone }}</td>
+            <td>{{ s.email }}</td>
+            <td>
+              <button class="btn btn-secondary btn-sm" (click)="startEdit(s)">Edit</button>
+              <button class="btn btn-danger btn-sm" (click)="remove(s)">Delete</button>
+            </td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  }
+</div>

@@ -1,0 +1,83 @@
+<div class="toolbar">
+  <h1 style="margin:0">Products</h1>
+  <a routerLink="/products/new" class="btn btn-primary">+ New Product</a>
+  <button class="btn btn-primary" (click)="confirmImportProducts()">Import Products</button>
+</div>
+
+<div class="card">
+  <div class="filters">
+    <input style="max-width:200px" [(ngModel)]="search" (ngModelChange)="applyFilters()" placeholder="Search name or SKU" />
+
+    <select style="max-width:160px" [(ngModel)]="categoryId" (ngModelChange)="applyFilters()">
+      <option value="">All Categories</option>
+      @for (c of categories; track c.id) {
+        <option [ngValue]="c.id">{{ c.name }}</option>
+      }
+    </select>
+
+    <select style="max-width:180px" [(ngModel)]="supplierId" (ngModelChange)="applyFilters()">
+      <option value="">All Suppliers</option>
+      @for (s of suppliers; track s.id) {
+        <option [ngValue]="s.id">{{ s.name }}</option>
+      }
+    </select>
+
+    <label style="display:flex;align-items:center;gap:0.35rem;font-weight:normal;margin:0">
+      <input type="checkbox" style="width:auto" [(ngModel)]="lowStockOnly" (ngModelChange)="applyFilters()" />
+      Low stock only
+    </label>
+
+    <button class="btn btn-secondary btn-sm" (click)="resetFilters()">Reset</button>
+  </div>
+</div>
+
+<div class="card">
+  @if (products.length === 0) {
+    <p>No products match your filters.</p>
+  } @else {
+    <table>
+      <thead>
+        <tr><th>Name</th><th>SKU</th><th>Type</th><th>Category</th><th>Supplier</th><th>Price</th><th>Stock</th><th></th></tr>
+      </thead>
+      <tbody>
+        @for (p of products; track p.id) {
+          <tr>
+            <td>{{ p.name }}</td>
+            <td>{{ p.sku }}</td>            
+            <td>{{ p.category?.name }}</td>
+            <td>{{ p.supplier?.name }}</td>
+            <td>${{ p.unitPrice.toFixed(2) }}</td>
+            <td>
+              <span class="badge" [class.badge-low]="p.isLowStock" [class.badge-ok]="!p.isLowStock">
+                {{ p.quantityInStock }} {{ p.unit }}
+              </span>
+            </td>
+            <td>
+              <a [routerLink]="['/products', p.id, 'edit']" class="btn btn-secondary btn-sm">Edit</a>
+              <a [routerLink]="['/products', p.id, 'stock']" class="btn btn-primary btn-sm">Stock</a>
+              <button class="btn btn-danger btn-sm" (click)="confirmDelete(p)">Delete</button>
+            </td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  }
+</div>
+
+<app-confirmation-dialog 
+  confirmLabel="Delete"
+  cancelLabel="Cancel"
+  *ngIf="confirmingProduct"
+  title="Confirm delete"
+  [message]="`Delete product '${confirmingProduct.name}'?`"
+  (confirmed)="deleteConfirmed()"
+  (canceled)="cancelDelete()"></app-confirmation-dialog>
+
+  <app-confirmation-dialog 
+  confirmLabel="Import"
+  cancelLabel="Cancel"
+  *ngIf="confirmingImport"
+  title="Confirm import"
+  message="Do you want to import products from Nayax?"
+  (confirmed)="importProducts()"
+  (canceled)="cancelImportProducts()"></app-confirmation-dialog>
