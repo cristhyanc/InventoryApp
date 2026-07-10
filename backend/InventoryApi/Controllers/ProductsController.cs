@@ -92,7 +92,7 @@ public class ProductsController : ControllerBase
 
             if(category == null)
             {
-                category = new Category { Id = group.ProductGroupID!.Value,  Name = group.ProductGroupName!, Description = group.ProductGroupRef };
+                category = new Category { Id = group.ProductGroupID!.Value,  Name = group.ProductGroupName!, Description = group.ProductGroupName };
                 newCategories.Add(category);
             }            
         }

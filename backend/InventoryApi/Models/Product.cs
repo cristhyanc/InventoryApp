@@ -5,8 +5,6 @@ public class Product
     public long Id { get; set; }
     public string Name { get; set; } = string.Empty;
     public string? Sku { get; set; }
-    //public long? NayaxProductId { get; set; }
-    //public ProductType Type { get; set; } = ProductType.Snack;
     public string? Description { get; set; }
     public decimal UnitPrice { get; set; }
     public int QuantityInStock { get; set; }

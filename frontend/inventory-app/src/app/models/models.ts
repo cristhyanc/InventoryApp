@@ -38,6 +38,17 @@ export interface Product {
   supplierId?: number | null;
   supplier?: Supplier | null;
   isLowStock: boolean;
+  mapped: boolean;
+}
+
+export interface Machine {
+  machineID: number;
+  machineName?: string | null;
+  machineNumber?: string | null;
+  todayRevenue: number;
+  WeekRevenue: number;
+  MonthRevenue: number;
+  YearRevenue: number;
 }
 
 export interface ProductCreateDto {
