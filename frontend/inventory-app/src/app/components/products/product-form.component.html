@@ -1,28 +1,28 @@
-<h1>{{ isEdit ? 'Edit Product' : 'New Product' }}</h1>
+<h1 class="mb-6 text-2xl font-semibold text-slate-800">{{ isEdit ? 'Edit Product' : 'New Product' }}</h1>
 
-<div class="card" style="max-width:600px">
+<div class="mx-auto max-w-2xl rounded-xl bg-white p-6 shadow-sm">
   @if (error) {
-    <p style="color:#b91c1c">{{ error }}</p>
+    <p class="mb-4 text-sm text-red-600">{{ error }}</p>
   }
 
-  <form (ngSubmit)="save()">
-    <div class="form-row">
-      <label>Name *</label>
+  <form class="space-y-4" (ngSubmit)="save()">
+    <div>
+      <label class="mb-1 block text-sm font-medium text-slate-700">Name *</label>
       <input [(ngModel)]="form.name" name="name" required placeholder="e.g. Potato Chips" />
     </div>
 
-    <div class="form-row">
-      <label>SKU</label>
+    <div>
+      <label class="mb-1 block text-sm font-medium text-slate-700">SKU</label>
       <input [(ngModel)]="form.sku" name="sku" placeholder="Optional, e.g. SNK-001" />
     </div>
 
-    <div class="form-row">
-      <label>Description</label>
+    <div>
+      <label class="mb-1 block text-sm font-medium text-slate-700">Description</label>
       <textarea [(ngModel)]="form.description" name="description" rows="2"></textarea>
     </div>
 
-    <div class="form-row">
-      <label>Category</label>
+    <div>
+      <label class="mb-1 block text-sm font-medium text-slate-700">Category</label>
       <select [(ngModel)]="form.categoryId" name="categoryId">
         <option value="">None</option>
         @for (c of categories; track c.id) {
@@ -31,8 +31,8 @@
       </select>
     </div>
 
-    <div class="form-row">
-      <label>Supplier</label>
+    <div>
+      <label class="mb-1 block text-sm font-medium text-slate-700">Supplier</label>
       <select [(ngModel)]="form.supplierId" name="supplierId">
         <option value="">None</option>
         @for (s of suppliers; track s.id) {
@@ -41,29 +41,31 @@
       </select>
     </div>
 
-    <div class="form-row">
-      <label>Unit Price ($) *</label>
+    <div>
+      <label class="mb-1 block text-sm font-medium text-slate-700">Unit Price ($) *</label>
       <input [(ngModel)]="form.unitPrice" name="unitPrice" type="number" step="0.01" min="0" required />
     </div>
 
     @if (!isEdit) {
-      <div class="form-row">
-        <label>Initial Quantity in Stock</label>
+      <div>
+        <label class="mb-1 block text-sm font-medium text-slate-700">Initial Quantity in Stock</label>
         <input [(ngModel)]="form.quantityInStock" name="quantityInStock" type="number" min="0" />
       </div>
     }
 
-    <div class="form-row">
-      <label>Low Stock Threshold *</label>
+    <div>
+      <label class="mb-1 block text-sm font-medium text-slate-700">Low Stock Threshold *</label>
       <input [(ngModel)]="form.lowStockThreshold" name="lowStockThreshold" type="number" min="0" required />
     </div>
 
-    <div class="form-row">
-      <label>Unit Label</label>
+    <div>
+      <label class="mb-1 block text-sm font-medium text-slate-700">Unit Label</label>
       <input [(ngModel)]="form.unit" name="unit" placeholder="e.g. bag, can, bottle" />
     </div>
 
-    <button type="submit" class="btn btn-primary" [disabled]="saving">{{ isEdit ? 'Update' : 'Create' }} Product</button>
-    <a routerLink="/products" class="btn btn-secondary">Cancel</a>
+    <div class="flex flex-wrap gap-3 pt-2">
+      <button type="submit" class="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60" [disabled]="saving">{{ isEdit ? 'Update' : 'Create' }} Product</button>
+      <a routerLink="/products" class="inline-flex items-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Cancel</a>
+    </div>
   </form>
 </div>

@@ -7,6 +7,7 @@ export interface ProductFilters {
   search?: string;
   categoryId?: number;
   supplierId?: number;
+  machineId?: number;
   lowStockOnly?: boolean;
 }
 
@@ -21,6 +22,7 @@ export class ProductService {
     if (filters.search) params = params.set('search', filters.search);
     if (filters.categoryId !== undefined) params = params.set('categoryId', filters.categoryId);
     if (filters.supplierId !== undefined) params = params.set('supplierId', filters.supplierId);
+    if (filters.machineId !== undefined) params = params.set('machineId', filters.machineId);
     if (filters.lowStockOnly) params = params.set('lowStockOnly', true);
     return this.http.get<Product[]>(this.baseUrl, { params });
   }

@@ -1,80 +1,86 @@
-<div class="toolbar">
-  <h1 style="margin:0">Products</h1>
-  <a routerLink="/products/new" class="btn btn-primary">+ New Product</a>
-  <button class="btn btn-primary" (click)="confirmImportProducts()">Import Products</button>
+<div class="mb-6 flex flex-wrap items-center justify-between gap-4">
+  <h1 class="text-2xl font-semibold text-slate-800">Products</h1>
+  <div class="flex flex-wrap gap-3">
+    <a routerLink="/products/new" class="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">+ New Product</a>
+    <button class="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700" (click)="confirmImportProducts()">Import Products</button>
+  </div>
 </div>
 
-<div class="card">
-  <div class="filters">
-    <input style="max-width:200px" [(ngModel)]="search" (ngModelChange)="applyFilters()" placeholder="Search name or SKU" />
+<div class="mb-6 rounded-xl bg-white p-6 shadow-sm">
+  <div class="flex flex-wrap gap-4">
+    <input class="max-w-[220px]" [(ngModel)]="search" (ngModelChange)="applyFilters()" placeholder="Search name or SKU" />
 
-    <select style="max-width:160px" [(ngModel)]="categoryId" (ngModelChange)="applyFilters()">
+    <select class="max-w-[180px]" [(ngModel)]="categoryId" (ngModelChange)="applyFilters()">
       <option value="">All Categories</option>
       @for (c of categories; track c.id) {
         <option [ngValue]="c.id">{{ c.name }}</option>
       }
     </select>
 
-    <select style="max-width:180px" [(ngModel)]="supplierId" (ngModelChange)="applyFilters()">
+    <select class="max-w-[200px]" [(ngModel)]="supplierId" (ngModelChange)="applyFilters()">
       <option value="">All Suppliers</option>
       @for (s of suppliers; track s.id) {
         <option [ngValue]="s.id">{{ s.name }}</option>
       }
     </select>
 
-    <label style="display:flex;align-items:center;gap:0.35rem;font-weight:normal;margin:0">
-      <input type="checkbox" style="width:auto" [(ngModel)]="lowStockOnly" (ngModelChange)="applyFilters()" />
+    <label class="flex items-center gap-2 text-sm text-slate-600">
+      <input type="checkbox" class="h-4 w-4 rounded border-slate-300 text-blue-600" [(ngModel)]="lowStockOnly" (ngModelChange)="applyFilters()" />
       Low stock only
     </label>
 
-    <button class="btn btn-secondary btn-sm" (click)="resetFilters()">Reset</button>
+    <button class="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50" (click)="resetFilters()">Reset</button>
   </div>
 </div>
 
-<div class="card">
+<div class="rounded-xl bg-white p-6 shadow-sm">
   @if (products.length === 0) {
-    <p>No products match your filters.</p>
+    <p class="text-sm text-slate-500">No products match your filters.</p>
   } @else {
-    <table>
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>SKU</th>
-          <th>Category</th>
-          <th>Supplier</th>
-          <th>Price</th>
-          <th>Mapped</th>
-          <th>Stock</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-        @for (p of products; track p.id) {
+    <div class="overflow-x-auto">
+      <table class="min-w-full divide-y divide-slate-200 text-sm">
+        <thead class="bg-slate-50">
           <tr>
-            <td>{{ p.name }}</td>
-            <td>{{ p.sku }}</td>            
-            <td>{{ p.category?.name }}</td>
-            <td>{{ p.supplier?.name }}</td>
-            <td>${{ p.unitPrice.toFixed(2) }}</td>
-            <td>
-              <span class="badge" [class.badge-low]="p.isLowStock" [class.badge-ok]="!p.isLowStock">
-                {{ p.quantityInStock }} {{ p.unit }}
-              </span>
-            </td>
-            <td>
-              <span class="badge" [class.badge-low]="!p.mapped" [class.badge-ok]="p.mapped">
-                {{ p.mapped? 'Mapped' : 'Unmapped' }}
-              </span>
-            </td>
-            <td>
-              <a [routerLink]="['/products', p.id, 'edit']" class="btn btn-secondary btn-sm">Edit</a>
-              <a [routerLink]="['/products', p.id, 'stock']" class="btn btn-primary btn-sm">Stock</a>
-              <button class="btn btn-danger btn-sm" (click)="confirmDelete(p)">Delete</button>
-            </td>
+            <th class="px-4 py-3 text-left font-semibold text-slate-700">Name</th>
+            <th class="px-4 py-3 text-left font-semibold text-slate-700">SKU</th>
+            <th class="px-4 py-3 text-left font-semibold text-slate-700">Category</th>
+            <th class="px-4 py-3 text-left font-semibold text-slate-700">Supplier</th>
+            <th class="px-4 py-3 text-left font-semibold text-slate-700">Price</th>
+            <th class="px-4 py-3 text-left font-semibold text-slate-700">Mapped</th>
+            <th class="px-4 py-3 text-left font-semibold text-slate-700">Stock</th>
+            <th class="px-4 py-3 text-left font-semibold text-slate-700"></th>
           </tr>
-        }
-      </tbody>
-    </table>
+        </thead>
+        <tbody class="divide-y divide-slate-100 bg-white">
+          @for (p of products; track p.id) {
+            <tr>
+              <td class="px-4 py-3 text-slate-700">{{ p.name }}</td>
+              <td class="px-4 py-3 text-slate-600">{{ p.sku }}</td>
+              <td class="px-4 py-3 text-slate-600">{{ p.category?.name }}</td>
+              <td class="px-4 py-3 text-slate-600">{{ p.supplier?.name }}</td>
+              <td class="px-4 py-3 text-slate-600">${{ p.unitPrice.toFixed(2) }}</td>
+              <td class="px-4 py-3">
+                <span [class]="p.isLowStock ? 'inline-flex rounded-full bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-700' : 'inline-flex rounded-full bg-green-100 px-2.5 py-1 text-xs font-semibold text-green-700'">
+                  {{ p.quantityInStock }} {{ p.unit }}
+                </span>
+              </td>
+              <td class="px-4 py-3">
+                <span [class]="!p.mapped ? 'inline-flex rounded-full bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-700' : 'inline-flex rounded-full bg-green-100 px-2.5 py-1 text-xs font-semibold text-green-700'">
+                  {{ p.mapped ? 'Mapped' : 'Unmapped' }}
+                </span>
+              </td>
+              <td class="px-4 py-3">
+                <div class="flex flex-wrap gap-2">
+                  <a [routerLink]="['/products', p.id, 'edit']" class="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Edit</a>
+                  <a [routerLink]="['/products', p.id, 'stock']" class="inline-flex items-center rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700">Stock</a>
+                  <button class="inline-flex items-center rounded-md bg-red-600 px-3 py-2 text-sm font-medium text-white hover:bg-red-700" (click)="confirmDelete(p)">Delete</button>
+                </div>
+              </td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
   }
 </div>
 

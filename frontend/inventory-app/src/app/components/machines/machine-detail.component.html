@@ -1,0 +1,78 @@
+<div class="rounded-xl bg-white p-6 shadow-sm" *ngIf="machine && !loading">
+  <div class="mb-6 flex flex-wrap items-center justify-between gap-4">
+    <div>
+      <h1 class="text-2xl font-semibold text-slate-800">Machine Details - {{ machine.machineName || 'Unnamed machine' }}</h1>
+      <p class="text-sm text-slate-500">View key metrics and products linked to this machine.</p>
+    </div>
+    <a routerLink="/" class="inline-flex items-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Back to Dashboard</a>
+  </div>
+
+  <ng-container *ngIf="loading">
+    <p class="text-sm text-slate-500">Loading machine details…</p>
+  </ng-container>
+
+  <ng-container *ngIf="error && !loading">
+    <p class="text-sm text-red-600">{{ error }}</p>
+  </ng-container>
+
+  <ng-container >
+    <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div class="rounded-xl bg-slate-50 p-4">
+        <div class="text-xs uppercase tracking-wide text-slate-500">Today Gross</div>
+        <div class="mt-2 text-lg font-semibold text-blue-600">${{ machine.todayGrossRevenue.toFixed(2) }}</div>
+      </div>
+      <div class="rounded-xl bg-slate-50 p-4">
+        <div class="text-xs uppercase tracking-wide text-slate-500">Today Net</div>
+        <div class="mt-2 text-lg font-semibold text-blue-600">${{ machine.todayNetRevenue.toFixed(2) }}</div>
+      </div>
+      <div class="rounded-xl bg-slate-50 p-4">
+        <div class="text-xs uppercase tracking-wide text-slate-500">Current Week Gross</div>
+        <div class="mt-2 text-lg font-semibold text-blue-600">${{ machine.currentWeekGrossRevenue.toFixed(2) }}</div>
+      </div>
+      <div class="rounded-xl bg-slate-50 p-4">
+        <div class="text-xs uppercase tracking-wide text-slate-500">Current Week Net</div>
+        <div class="mt-2 text-lg font-semibold text-blue-600">${{ machine.currentWeekNetRevenue.toFixed(2) }}</div>
+      </div>
+    </div>
+
+    <div class="mt-8 rounded-xl bg-white p-6 shadow-sm">
+      <div class="mb-4 flex items-center justify-between gap-4">
+        <h2 class="text-lg font-semibold text-slate-800">Products for this machine</h2>
+        <span class="text-sm text-slate-500">{{ products.length }} products found</span>
+      </div>
+
+      <ng-container *ngIf="products.length === 0">
+        <p class="text-sm text-slate-500">No products are currently associated with this machine.</p>
+      </ng-container>
+
+      <div class="overflow-x-auto" *ngIf="products.length > 0">
+        <table class="min-w-full divide-y divide-slate-200 text-sm">
+          <thead class="bg-slate-50">
+            <tr>
+              <th class="px-4 py-3 text-left font-semibold text-slate-700">Name</th>
+              <th class="px-4 py-3 text-left font-semibold text-slate-700">SKU</th>
+              <th class="px-4 py-3 text-left font-semibold text-slate-700">Category</th>
+              <th class="px-4 py-3 text-left font-semibold text-slate-700">Supplier</th>
+              <th class="px-4 py-3 text-left font-semibold text-slate-700">Stock</th>
+              <th class="px-4 py-3 text-left font-semibold text-slate-700">Unit Price</th>
+              <th class="px-4 py-3 text-left font-semibold text-slate-700">Machine Price</th>
+              <th class="px-4 py-3 text-left font-semibold text-slate-700">Commission</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100 bg-white">
+            <tr *ngFor="let product of products">
+              <td class="px-4 py-3 text-slate-700">{{ product.name }}</td>
+              <td class="px-4 py-3 text-slate-600">{{ product.sku }}</td>
+              <td class="px-4 py-3 text-slate-600">{{ product.category?.name }}</td>
+              <td class="px-4 py-3 text-slate-600">{{ product.supplier?.name }}</td>
+              <td class="px-4 py-3 text-slate-600">{{ product.quantityInStock }}</td>
+              <td class="px-4 py-3 text-slate-600">${{ product.unitPrice.toFixed(2) }}</td>
+              <td class="px-4 py-3 text-slate-600">${{ product.machinePrice?.toFixed(2) }}</td>
+              <td class="px-4 py-3 text-slate-600">%{{ product.commissionValue?.toFixed(2) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </ng-container>
+</div>

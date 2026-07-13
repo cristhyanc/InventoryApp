@@ -1,17 +1,17 @@
-<header class="app-header">
-  <div class="container header-inner">
-    <span class="brand">🧃 Inventory Manager</span>
-    <nav>
-      <a routerLink="/" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }">Dashboard</a>
-      <a routerLink="/products" routerLinkActive="active">Products</a>
-      <a routerLink="/categories" routerLinkActive="active">Categories</a>
-      <a routerLink="/suppliers" routerLinkActive="active">Suppliers</a>
-      <a routerLink="/receipts" routerLinkActive="active">Receipts</a>
+<header class="border-b border-slate-200 bg-white/90 shadow-sm backdrop-blur">
+  <div class="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
+    <span class="text-lg font-semibold text-slate-800">🧃 Inventory Manager</span>
+    <nav class="flex flex-wrap items-center gap-5 text-sm font-medium text-slate-600">
+      <a routerLink="/" routerLinkActive="text-blue-600" [routerLinkActiveOptions]="{ exact: true }" class="transition hover:text-blue-600">Dashboard</a>
+      <a routerLink="/products" routerLinkActive="text-blue-600" class="transition hover:text-blue-600">Products</a>
+      <a routerLink="/categories" routerLinkActive="text-blue-600" class="transition hover:text-blue-600">Categories</a>
+      <a routerLink="/suppliers" routerLinkActive="text-blue-600" class="transition hover:text-blue-600">Suppliers</a>
+      <a routerLink="/receipts" routerLinkActive="text-blue-600" class="transition hover:text-blue-600">Receipts</a>
     </nav>
   </div>
 </header>
 
-<main class="container">
+<main class="mx-auto max-w-7xl px-6 py-6">
   <router-outlet />
 </main>
 

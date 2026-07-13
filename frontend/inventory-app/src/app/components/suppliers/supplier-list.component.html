@@ -1,56 +1,62 @@
-<h1>Suppliers</h1>
+<h1 class="mb-6 text-2xl font-semibold text-slate-800">Suppliers</h1>
 
-<div class="card">
-  <h2>{{ editing ? 'Edit Supplier' : 'New Supplier' }}</h2>
-  <form (ngSubmit)="save()">
-    <div class="form-row">
-      <label>Name</label>
+<div class="mb-6 rounded-xl bg-white p-6 shadow-sm">
+  <h2 class="mb-4 text-lg font-semibold text-slate-800">{{ editing ? 'Edit Supplier' : 'New Supplier' }}</h2>
+  <form class="space-y-4" (ngSubmit)="save()">
+    <div>
+      <label class="mb-1 block text-sm font-medium text-slate-700">Name</label>
       <input [(ngModel)]="form.name" name="name" required placeholder="e.g. General Distributors Inc." />
     </div>
-    <div class="form-row">
-      <label>Contact Name</label>
+    <div>
+      <label class="mb-1 block text-sm font-medium text-slate-700">Contact Name</label>
       <input [(ngModel)]="form.contactName" name="contactName" placeholder="Optional" />
     </div>
-    <div class="form-row">
-      <label>Phone</label>
+    <div>
+      <label class="mb-1 block text-sm font-medium text-slate-700">Phone</label>
       <input [(ngModel)]="form.phone" name="phone" placeholder="Optional" />
     </div>
-    <div class="form-row">
-      <label>Email</label>
+    <div>
+      <label class="mb-1 block text-sm font-medium text-slate-700">Email</label>
       <input [(ngModel)]="form.email" name="email" type="email" placeholder="Optional" />
     </div>
-    <div class="form-row">
-      <label>Address</label>
+    <div>
+      <label class="mb-1 block text-sm font-medium text-slate-700">Address</label>
       <textarea [(ngModel)]="form.address" name="address" rows="2" placeholder="Optional"></textarea>
     </div>
-    <button type="submit" class="btn btn-primary">{{ editing ? 'Update' : 'Create' }}</button>
-    @if (editing) {
-      <button type="button" class="btn btn-secondary" (click)="cancel()">Cancel</button>
-    }
+    <div class="flex flex-wrap gap-3">
+      <button type="submit" class="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">{{ editing ? 'Update' : 'Create' }}</button>
+      @if (editing) {
+        <button type="button" class="inline-flex items-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50" (click)="cancel()">Cancel</button>
+      }
+    </div>
   </form>
 </div>
 
-<div class="card">
-  <h2>All Suppliers</h2>
+<div class="rounded-xl bg-white p-6 shadow-sm">
+  <h2 class="mb-4 text-lg font-semibold text-slate-800">All Suppliers</h2>
   @if (suppliers.length === 0) {
-    <p>No suppliers yet.</p>
+    <p class="text-sm text-slate-500">No suppliers yet.</p>
   } @else {
-    <table>
-      <thead><tr><th>Name</th><th>Contact</th><th>Phone</th><th>Email</th><th></th></tr></thead>
-      <tbody>
-        @for (s of suppliers; track s.id) {
-          <tr>
-            <td>{{ s.name }}</td>
-            <td>{{ s.contactName }}</td>
-            <td>{{ s.phone }}</td>
-            <td>{{ s.email }}</td>
-            <td>
-              <button class="btn btn-secondary btn-sm" (click)="startEdit(s)">Edit</button>
-              <button class="btn btn-danger btn-sm" (click)="remove(s)">Delete</button>
-            </td>
-          </tr>
-        }
-      </tbody>
-    </table>
+    <div class="overflow-x-auto">
+      <table class="min-w-full divide-y divide-slate-200 text-sm">
+        <thead class="bg-slate-50"><tr><th class="px-4 py-3 text-left font-semibold text-slate-700">Name</th><th class="px-4 py-3 text-left font-semibold text-slate-700">Contact</th><th class="px-4 py-3 text-left font-semibold text-slate-700">Phone</th><th class="px-4 py-3 text-left font-semibold text-slate-700">Email</th><th class="px-4 py-3 text-left font-semibold text-slate-700"></th></tr></thead>
+        <tbody class="divide-y divide-slate-100 bg-white">
+          @for (s of suppliers; track s.id) {
+            <tr>
+              <td class="px-4 py-3 text-slate-700">{{ s.name }}</td>
+              <td class="px-4 py-3 text-slate-600">{{ s.contactName }}</td>
+              <td class="px-4 py-3 text-slate-600">{{ s.phone }}</td>
+              <td class="px-4 py-3 text-slate-600">{{ s.email }}</td>
+              <td class="px-4 py-3">
+                <div class="flex flex-wrap gap-2">
+                  <button class="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50" (click)="startEdit(s)">Edit</button>
+                  <button class="inline-flex items-center rounded-md bg-red-600 px-3 py-2 text-sm font-medium text-white hover:bg-red-700" (click)="remove(s)">Delete</button>
+                </div>
+              </td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
   }
 </div>

@@ -1,43 +1,109 @@
-<h1>Dashboard</h1>
+<h1 class="mb-6 text-2xl font-semibold text-slate-800">Dashboard</h1>
 
-<div class="card-grid">
-  <div class="card stat">
-    <span class="stat-value">{{ totalProducts }}</span>
-    <span class="stat-label">Total Products</span>
-  </div>  
-  <div class="card stat">
-    <span class="stat-value">{{ totalUnitsInStock }}</span>
-    <span class="stat-label">Units In Stock</span>
+<div class="mb-6 grid gap-4 md:grid-cols-3">
+  <div class="rounded-xl bg-white p-6 text-center shadow-sm">
+    <span class="text-3xl font-semibold text-blue-600">{{ totalProducts }}</span>
+    <span class="mt-2 block text-sm text-slate-500">Total Products</span>
   </div>
-  <div class="card stat">
-    <span class="stat-value">${{ inventoryValue.toFixed(2) }}</span>
-    <span class="stat-label">Inventory Value</span>
+  <div class="rounded-xl bg-white p-6 text-center shadow-sm">
+    <span class="text-3xl font-semibold text-blue-600">{{ totalUnitsInStock }}</span>
+    <span class="mt-2 block text-sm text-slate-500">Units In Stock</span>
+  </div>
+  <div class="rounded-xl bg-white p-6 text-center shadow-sm">
+    <span class="text-3xl font-semibold text-blue-600">${{ inventoryValue.toFixed(2) }}</span>
+    <span class="mt-2 block text-sm text-slate-500">Inventory Value</span>
   </div>
 </div>
 
-<div class="card">
-  <div class="toolbar">
-    <h2 style="margin:0">⚠️ Low Stock Alerts</h2>
-    <a routerLink="/products" [queryParams]="{ lowStockOnly: true }" class="btn btn-secondary btn-sm">View all products</a>
+<div class="mb-6 rounded-xl bg-white p-6 shadow-sm">
+  <div class="mb-4 flex items-center justify-between">
+    <h2 class="text-lg font-semibold text-slate-800">🛠️ Machines</h2>
+  </div>
+
+  @if (machines.length === 0) {
+    <p class="text-sm text-slate-500">No machines available yet.</p>
+  } @else {
+    <div class="flex flex-row gap-4">
+      @for (machine of machines; track machine.machineID) {
+        <div class="rounded-xl border border-slate-200 p-4 w-full max-w-xs">
+          <div class="mb-4 flex items-center justify-between gap-3">
+            <div>
+              <div class="text-lg font-semibold text-slate-800">{{ machine.machineName || 'Unnamed machine' }}</div>
+              <div class="text-sm text-slate-500">#{{ machine.machineNumber || machine.machineID }}</div>
+            </div>
+            <a [routerLink]="['/machines', machine.machineID]" class="inline-flex items-center rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700">Details</a>
+          </div>
+
+          <div class="flex flex-column max-w-full">
+            <div class="rounded-lg bg-slate-50 p-3 text-center">
+              <div class="text-lg font-semibold text-blue-600">${{ machine.todayGrossRevenue.toFixed(2) }}</div>
+              <div class="text-xs uppercase tracking-wide text-slate-500">Today Gross</div>
+            </div>
+            <div class="rounded-lg bg-slate-50 p-3 text-center">
+              <div class="text-lg font-semibold text-blue-600">${{ machine.currentWeekGrossRevenue.toFixed(2) }}</div>
+              <div class="text-xs uppercase tracking-wide text-slate-500">Current Week Gross</div>
+            </div>
+            <div class="rounded-lg bg-slate-50 p-3 text-center">
+              <div class="text-lg font-semibold text-blue-600">${{ machine.lastWeekGrossRevenue.toFixed(2) }}</div>
+              <div class="text-xs uppercase tracking-wide text-slate-500">Last Week Gross</div>
+            </div>
+            <div class="rounded-lg bg-slate-50 p-3 text-center">
+              <div class="text-lg font-semibold text-blue-600">${{ machine.twoWeeksAgoGrossRevenue.toFixed(2) }}</div>
+              <div class="text-xs uppercase tracking-wide text-slate-500">2 Weeks Ago Gross</div>
+            </div>
+            <div class="rounded-lg bg-slate-50 p-3 text-center">
+              <div class="text-lg font-semibold text-blue-600">${{ machine.todayNetRevenue.toFixed(2) }}</div>
+              <div class="text-xs uppercase tracking-wide text-slate-500">Today Net</div>
+            </div>
+            <div class="rounded-lg bg-slate-50 p-3 text-center">
+              <div class="text-lg font-semibold text-blue-600">${{ machine.twoWeeksAgoNetRevenue.toFixed(2) }}</div>
+              <div class="text-xs uppercase tracking-wide text-slate-500">2 Weeks Ago Net</div>
+            </div>
+            <div class="rounded-lg bg-slate-50 p-3 text-center">
+              <div class="text-lg font-semibold text-blue-600">${{ machine.lastWeekNetRevenue.toFixed(2) }}</div>
+              <div class="text-xs uppercase tracking-wide text-slate-500">Last Week Net</div>
+            </div>
+            <div class="rounded-lg bg-slate-50 p-3 text-center">
+              <div class="text-lg font-semibold text-blue-600">${{ machine.currentWeekNetRevenue.toFixed(2) }}</div>
+              <div class="text-xs uppercase tracking-wide text-slate-500">Current Week Net</div>
+            </div>
+          </div>
+        </div>
+      }
+    </div>
+  }
+</div>
+
+<div class="rounded-xl bg-white p-6 shadow-sm">
+  <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+    <h2 class="text-lg font-semibold text-slate-800">⚠️ Low Stock Alerts</h2>
+    <a routerLink="/products" [queryParams]="{ lowStockOnly: true }" class="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">View all products</a>
   </div>
 
   @if (lowStock.length === 0) {
-    <p>No low-stock items. Everything looks good! ✅</p>
+    <p class="text-sm text-slate-500">No low-stock items. Everything looks good! ✅</p>
   } @else {
-    <table>
-      <thead>
-        <tr><th>Product</th><th>Type</th><th>In Stock</th><th>Threshold</th><th></th></tr>
-      </thead>
-      <tbody>
-        @for (p of lowStock; track p.id) {
+    <div class="overflow-x-auto">
+      <table class="min-w-full divide-y divide-slate-200 text-sm">
+        <thead class="bg-slate-50">
           <tr>
-            <td>{{ p.name }}</td>            
-            <td><span class="badge badge-low">{{ p.quantityInStock }}</span></td>
-            <td>{{ p.lowStockThreshold }}</td>
-            <td><a [routerLink]="['/products', p.id, 'stock']" class="btn btn-primary btn-sm">Adjust Stock</a></td>
+            <th class="px-4 py-3 text-left font-semibold text-slate-700">Product</th>
+            <th class="px-4 py-3 text-left font-semibold text-slate-700">In Stock</th>
+            <th class="px-4 py-3 text-left font-semibold text-slate-700">Threshold</th>
+            <th class="px-4 py-3 text-left font-semibold text-slate-700"></th>
           </tr>
-        }
-      </tbody>
-    </table>
+        </thead>
+        <tbody class="divide-y divide-slate-100 bg-white">
+          @for (p of lowStock; track p.id) {
+            <tr>
+              <td class="px-4 py-3 text-slate-700">{{ p.name }}</td>
+              <td class="px-4 py-3"><span class="inline-flex rounded-full bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-700">{{ p.quantityInStock }}</span></td>
+              <td class="px-4 py-3 text-slate-600">{{ p.lowStockThreshold }}</td>
+              <td class="px-4 py-3"><a [routerLink]="['/products', p.id, 'stock']" class="inline-flex items-center rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700">Adjust Stock</a></td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
   }
 </div>

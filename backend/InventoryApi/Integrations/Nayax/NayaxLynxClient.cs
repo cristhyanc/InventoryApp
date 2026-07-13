@@ -9,10 +9,12 @@ public interface INayaxLynxClient
 {
     Task<List<NayaxDevice>> GetDevicesAsync(CancellationToken ct = default);
     Task<List<NayaxMachine>> GetMachinesAsync(CancellationToken ct = default);
-    Task<List<NayaxMachineProduct>> GetMachineProductsAsync(int machineId, CancellationToken ct = default);
-    Task<List<NayaxMachineProduct>> CreateMachineProductsAsync(int machineId, List<NayaxMachineProduct> products, CancellationToken ct = default);
+    Task<List<NayaxMachineProduct>> GetMachineProductsAsync(long machineId, CancellationToken ct = default);
+    Task<List<NayaxMachineProduct>> CreateMachineProductsAsync(long machineId, List<NayaxMachineProduct> products, CancellationToken ct = default);
     Task<List<NayaxProduct>> GetProductsAsync(CancellationToken ct = default);
     Task<List<NayaxProductGroup>> GetProductGroupssAsync(CancellationToken ct = default);
+    Task<List<NayaxLastSalesReport>> GetMachineLastSalesAsync(long machineId, CancellationToken ct = default);
+    Task<NayaxMachine> GetMachineAsync(long machineId, CancellationToken ct = default);
 }
 
 // Thin wrapper around Nayax Lynx's REST API.
@@ -67,15 +69,29 @@ public class NayaxLynxClient : INayaxLynxClient
         return await response.Content.ReadFromJsonAsync<List<NayaxProduct>>(cancellationToken: ct) ?? new();
     }
 
-    public async Task<List<NayaxMachineProduct>> GetMachineProductsAsync(int machineId, CancellationToken ct = default)
+    public async Task<List<NayaxMachineProduct>> GetMachineProductsAsync(long machineId, CancellationToken ct = default)
     {
         var response = await _http.GetAsync($"machines/{machineId}/machineProducts", ct);
         response.EnsureSuccessStatusCode();
         return await response.Content.ReadFromJsonAsync<List<NayaxMachineProduct>>(cancellationToken: ct) ?? new();
     }
 
+    public async Task<NayaxMachine> GetMachineAsync(long machineId, CancellationToken ct = default)
+    {
+        var response = await _http.GetAsync($"machines/{machineId}/", ct);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<NayaxMachine>(cancellationToken: ct) ?? new();
+    }
+
+    public async Task<List<NayaxLastSalesReport>> GetMachineLastSalesAsync(long machineId, CancellationToken ct = default)
+    {
+        var response = await _http.GetAsync($"machines/{machineId}/lastSales", ct);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<List<NayaxLastSalesReport>>(cancellationToken: ct) ?? new();
+    }
+
     public async Task<List<NayaxMachineProduct>> CreateMachineProductsAsync(
-        int machineId, List<NayaxMachineProduct> products, CancellationToken ct = default)
+        long machineId, List<NayaxMachineProduct> products, CancellationToken ct = default)
     {
         var response = await _http.PostAsJsonAsync($"machines/{machineId}/machineProducts", products, ct);
         response.EnsureSuccessStatusCode();

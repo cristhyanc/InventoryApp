@@ -1,31 +1,33 @@
-<div class="toolbar">
-  <h1 style="margin:0">Receipts</h1>
-  <a routerLink="/receipts/new" class="btn btn-primary">+ Upload Receipt</a>
+<div class="mb-6 flex flex-wrap items-center justify-between gap-4">
+  <h1 class="text-2xl font-semibold text-slate-800">Receipts</h1>
+  <a routerLink="/receipts/new" class="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">+ Upload Receipt</a>
 </div>
 
 @if (receipts.length === 0) {
-  <div class="card"><p>No receipts uploaded yet.</p></div>
+  <div class="rounded-xl bg-white p-6 text-sm text-slate-500 shadow-sm">No receipts uploaded yet.</div>
 } @else {
-  <div class="card-grid" style="grid-template-columns: repeat(auto-fill, minmax(220px, 1fr))">
+  <div class="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
     @for (r of receipts; track r.id) {
-      <div class="card" style="text-align:left">
+      <div class="rounded-xl bg-white p-4 shadow-sm">
         <a [href]="fileUrl(r)" target="_blank" rel="noopener">
           @if (isImage(r)) {
-            <img [src]="fileUrl(r)" [alt]="r.title" style="width:100%;height:140px;object-fit:cover;border-radius:6px;margin-bottom:0.5rem" />
+            <img [src]="fileUrl(r)" [alt]="r.title" class="mb-3 h-36 w-full rounded-lg object-cover" />
           } @else {
-            <div style="width:100%;height:140px;background:#eef1f4;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:2rem;margin-bottom:0.5rem">📄</div>
+            <div class="mb-3 flex h-36 w-full items-center justify-center rounded-lg bg-slate-100 text-3xl">📄</div>
           }
         </a>
-        <strong>{{ r.title }}</strong>
-        <p style="margin:0.25rem 0;font-size:0.85rem;color:#6b7280">
-          {{ r.purchaseDate | date:'mediumDate' }}
-          @if (r.totalAmount) { · ${{ r.totalAmount.toFixed(2) }} }
-        </p>
-        @if (r.supplier) {
-          <p style="margin:0.25rem 0;font-size:0.85rem">Supplier: {{ r.supplier.name }}</p>
-        }
-        <p style="margin:0.25rem 0;font-size:0.8rem;color:#9aa3af">{{ r.fileName }} · {{ formatSize(r.fileSizeBytes) }}</p>
-        <button class="btn btn-danger btn-sm" (click)="remove(r)">Delete</button>
+        <div class="space-y-1">
+          <strong class="text-sm font-semibold text-slate-800">{{ r.title }}</strong>
+          <p class="text-sm text-slate-500">
+            {{ r.purchaseDate | date:'mediumDate' }}
+            @if (r.totalAmount) { · ${{ r.totalAmount.toFixed(2) }} }
+          </p>
+          @if (r.supplier) {
+            <p class="text-sm text-slate-600">Supplier: {{ r.supplier.name }}</p>
+          }
+          <p class="text-xs text-slate-400">{{ r.fileName }} · {{ formatSize(r.fileSizeBytes) }}</p>
+        </div>
+        <button class="mt-4 inline-flex items-center rounded-md bg-red-600 px-3 py-2 text-sm font-medium text-white hover:bg-red-700" (click)="remove(r)">Delete</button>
       </div>
     }
   </div>

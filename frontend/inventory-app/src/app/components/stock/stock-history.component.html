@@ -1,71 +1,73 @@
 @if (product) {
-  <div class="toolbar">
-    <h1 style="margin:0">Stock: {{ product.name }}</h1>
-    <a routerLink="/products" class="btn btn-secondary">Back to Products</a>
+  <div class="mb-6 flex flex-wrap items-center justify-between gap-4">
+    <h1 class="text-2xl font-semibold text-slate-800">Stock: {{ product.name }}</h1>
+    <a routerLink="/products" class="inline-flex items-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Back to Products</a>
   </div>
 
-  <div class="card-grid" style="grid-template-columns: repeat(3, 1fr); max-width:500px">
-    <div class="card stat">
-      <span class="stat-value">{{ product.quantityInStock }}</span>
-      <span class="stat-label">Current Stock ({{ product.unit }})</span>
+  <div class="mb-6 grid gap-4 md:grid-cols-3">
+    <div class="rounded-xl bg-white p-6 text-center shadow-sm">
+      <span class="text-3xl font-semibold text-blue-600">{{ product.quantityInStock }}</span>
+      <span class="mt-2 block text-sm text-slate-500">Current Stock ({{ product.unit }})</span>
     </div>
-    <div class="card stat">
-      <span class="stat-value">{{ product.lowStockThreshold }}</span>
-      <span class="stat-label">Low Stock Threshold</span>
+    <div class="rounded-xl bg-white p-6 text-center shadow-sm">
+      <span class="text-3xl font-semibold text-blue-600">{{ product.lowStockThreshold }}</span>
+      <span class="mt-2 block text-sm text-slate-500">Low Stock Threshold</span>
     </div>
-    <div class="card stat">
-      <span class="stat-value">${{ product.unitPrice.toFixed(2) }}</span>
-      <span class="stat-label">Unit Price</span>
+    <div class="rounded-xl bg-white p-6 text-center shadow-sm">
+      <span class="text-3xl font-semibold text-blue-600">${{ product.unitPrice.toFixed(2) }}</span>
+      <span class="mt-2 block text-sm text-slate-500">Unit Price</span>
     </div>
   </div>
 
-  <div class="card" style="max-width:500px">
-    <h2>Adjust Stock</h2>
+  <div class="mb-6 max-w-2xl rounded-xl bg-white p-6 shadow-sm">
+    <h2 class="mb-4 text-lg font-semibold text-slate-800">Adjust Stock</h2>
     @if (error) {
-      <p style="color:#b91c1c">{{ error }}</p>
+      <p class="mb-4 text-sm text-red-600">{{ error }}</p>
     }
-    <form (ngSubmit)="adjust()">
-      <div class="form-row">
-        <label>Quantity Change *</label>
+    <form class="space-y-4" (ngSubmit)="adjust()">
+      <div>
+        <label class="mb-1 block text-sm font-medium text-slate-700">Quantity Change *</label>
         <input [(ngModel)]="form.quantityChange" name="quantityChange" type="number" required placeholder="e.g. 20 to add, -5 to remove" />
       </div>
-      <div class="form-row">
-        <label>Reason</label>
+      <div>
+        <label class="mb-1 block text-sm font-medium text-slate-700">Reason</label>
         <select [(ngModel)]="form.reason" name="reason">
           @for (r of reasonOptions; track r.value) {
             <option [ngValue]="r.value">{{ r.label }}</option>
           }
         </select>
       </div>
-      <div class="form-row">
-        <label>Notes</label>
+      <div>
+        <label class="mb-1 block text-sm font-medium text-slate-700">Notes</label>
         <textarea [(ngModel)]="form.notes" name="notes" rows="2" placeholder="Optional"></textarea>
       </div>
-      <button type="submit" class="btn btn-primary">Apply Adjustment</button>
+      <button type="submit" class="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">Apply Adjustment</button>
     </form>
   </div>
 
-  <div class="card">
-    <h2>Adjustment History</h2>
+  <div class="rounded-xl bg-white p-6 shadow-sm">
+    <h2 class="mb-4 text-lg font-semibold text-slate-800">Adjustment History</h2>
     @if (history.length === 0) {
-      <p>No stock adjustments yet.</p>
+      <p class="text-sm text-slate-500">No stock adjustments yet.</p>
     } @else {
-      <table>
-        <thead><tr><th>Date</th><th>Change</th><th>Resulting Qty</th><th>Reason</th><th>Notes</th></tr></thead>
-        <tbody>
-          @for (h of history; track h.id) {
-            <tr>
-              <td>{{ h.createdAt | date:'short' }}</td>
-              <td [style.color]="h.quantityChange < 0 ? '#b91c1c' : '#15803d'">
-                {{ h.quantityChange > 0 ? '+' : '' }}{{ h.quantityChange }}
-              </td>
-              <td>{{ h.quantityAfter }}</td>
-              <td>{{ reasonLabel(h.reason) }}</td>
-              <td>{{ h.notes }}</td>
-            </tr>
-          }
-        </tbody>
-      </table>
+      <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-slate-200 text-sm">
+          <thead class="bg-slate-50"><tr><th class="px-4 py-3 text-left font-semibold text-slate-700">Date</th><th class="px-4 py-3 text-left font-semibold text-slate-700">Change</th><th class="px-4 py-3 text-left font-semibold text-slate-700">Resulting Qty</th><th class="px-4 py-3 text-left font-semibold text-slate-700">Reason</th><th class="px-4 py-3 text-left font-semibold text-slate-700">Notes</th></tr></thead>
+          <tbody class="divide-y divide-slate-100 bg-white">
+            @for (h of history; track h.id) {
+              <tr>
+                <td class="px-4 py-3 text-slate-600">{{ h.createdAt | date:'short' }}</td>
+                <td class="px-4 py-3" [style.color]="h.quantityChange < 0 ? '#b91c1c' : '#15803d'">
+                  {{ h.quantityChange > 0 ? '+' : '' }}{{ h.quantityChange }}
+                </td>
+                <td class="px-4 py-3 text-slate-600">{{ h.quantityAfter }}</td>
+                <td class="px-4 py-3 text-slate-600">{{ reasonLabel(h.reason) }}</td>
+                <td class="px-4 py-3 text-slate-600">{{ h.notes }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
     }
   </div>
 }

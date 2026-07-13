@@ -4,29 +4,30 @@ namespace InventoryApi.Integrations.Nayax;
 
 public class NayaxDevice
 {
-    public int DeviceID { get; set; }
+    public long DeviceID { get; set; }
     public string? SerialNumber { get; set; }
     public string? DeviceStatus { get; set; }
 }
 
 public class NayaxMachine
 {
-    public int MachineID { get; set; }
+    public long MachineID { get; set; }
     public string? MachineName { get; set; }
     public string? MachineNumber { get; set; }
-    public int? ActorID { get; set; }
+    public long? ActorID { get; set; }
 }
 
 public class NayaxMachineProduct
 {
-    public int? NayaxProductID { get; set; }
-    public int MachineID { get; set; }
+    public long? NayaxProductID { get; set; }
+    public long MachineID { get; set; }
     public string ProductName { get; set; } = string.Empty;
     public int? MDBCode { get; set; }
-    public decimal CashPrice { get; set; }
-    public decimal CreditCardPrice { get; set; }
-    public decimal RetailPrice { get; set; }
-    public int? ProductGroupID { get; set; }
+    public decimal? CashPrice { get; set; }
+    public decimal? CreditCardPrice { get; set; }
+    public decimal? RetailPrice { get; set; }
+    public decimal? CommissionValue { get; set; }
+    public long? ProductGroupID { get; set; }
     public string? DEXProductName { get; set; }
     public bool IsActive { get; set; } = true;
 }
@@ -84,6 +85,61 @@ public class NayaxProductGroup
     /// <summary>The category code associated with the product group.</summary>
     [JsonPropertyName("ProductGroupCategoryCode")]
     public string? ProductGroupCategoryCode { get; set; }
+}
+
+public class NayaxLastSalesReport
+{
+    public int TransactionID { get; set; }
+
+    public string? PaymentServiceTransactionID { get; set; }
+
+    public string? PaymentServiceProviderName { get; set; }
+
+    public int MachineID { get; set; }
+
+    public string? MachineName { get; set; }
+
+    public string? MachineNumber { get; set; }
+
+    public string? InstituteLocationName { get; set; }
+
+    public decimal AuthorizationValue { get; set; }
+
+    public decimal SettlementValue { get; set; }
+
+    public string? CurrencyCode { get; set; }
+
+    public string? PaymentMethod { get; set; }
+
+    public string? RecognitionMethod { get; set; }
+
+    public string? CardNumber { get; set; }
+
+    public string? CardBrand { get; set; }
+
+    public string? CLI { get; set; }
+
+    public string? ProductName { get; set; }
+
+    public bool MultivendTransactionBit { get; set; }
+
+    public int MultivendNumverOfProducts { get; set; }
+
+    public string? UnitOfMeasurement { get; set; }
+
+    public decimal Quantity { get; set; }
+
+    public decimal EnergyConsumed { get; set; }
+
+    public DateTime AuthorizationDateTimeGMT { get; set; }
+
+    public DateTime MachineAuthorizationTime { get; set; }
+
+    public DateTime SettlementDateTimeGMT { get; set; }
+
+    public int SiteID { get; set; }
+
+    public string? SiteName { get; set; }
 }
 
 public class NayaxProduct

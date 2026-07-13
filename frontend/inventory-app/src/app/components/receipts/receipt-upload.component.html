@@ -1,29 +1,29 @@
-<h1>Upload Receipt</h1>
+<h1 class="mb-6 text-2xl font-semibold text-slate-800">Upload Receipt</h1>
 
-<div class="card" style="max-width:600px">
+<div class="mx-auto max-w-2xl rounded-xl bg-white p-6 shadow-sm">
   @if (error) {
-    <p style="color:#b91c1c">{{ error }}</p>
+    <p class="mb-4 text-sm text-red-600">{{ error }}</p>
   }
 
-  <form (ngSubmit)="upload()">
-    <div class="form-row">
-      <label>Receipt File (image or PDF) *</label>
+  <form class="space-y-4" (ngSubmit)="upload()">
+    <div>
+      <label class="mb-1 block text-sm font-medium text-slate-700">Receipt File (image or PDF) *</label>
       <input type="file" accept="image/*,.pdf" (change)="onFileSelected($event)" />
     </div>
 
     @if (previewUrl) {
-      <div class="form-row">
-        <img [src]="previewUrl" alt="Receipt preview" style="max-width:100%;max-height:300px;border-radius:8px" />
+      <div>
+        <img [src]="previewUrl" alt="Receipt preview" class="max-h-72 rounded-lg object-contain" />
       </div>
     }
 
-    <div class="form-row">
-      <label>Title *</label>
+    <div>
+      <label class="mb-1 block text-sm font-medium text-slate-700">Title *</label>
       <input [(ngModel)]="form.title" name="title" required placeholder="e.g. Weekly snack restock" />
     </div>
 
-    <div class="form-row">
-      <label>Supplier</label>
+    <div>
+      <label class="mb-1 block text-sm font-medium text-slate-700">Supplier</label>
       <select [(ngModel)]="form.supplierId" name="supplierId">
         <option value="">None</option>
         @for (s of suppliers; track s.id) {
@@ -32,22 +32,24 @@
       </select>
     </div>
 
-    <div class="form-row">
-      <label>Purchase Date</label>
+    <div>
+      <label class="mb-1 block text-sm font-medium text-slate-700">Purchase Date</label>
       <input type="date" [(ngModel)]="form.purchaseDate" name="purchaseDate" />
     </div>
 
-    <div class="form-row">
-      <label>Total Amount ($)</label>
+    <div>
+      <label class="mb-1 block text-sm font-medium text-slate-700">Total Amount ($)</label>
       <input type="number" step="0.01" min="0" [(ngModel)]="form.totalAmount" name="totalAmount" placeholder="Optional" />
     </div>
 
-    <div class="form-row">
-      <label>Notes</label>
+    <div>
+      <label class="mb-1 block text-sm font-medium text-slate-700">Notes</label>
       <textarea [(ngModel)]="form.notes" name="notes" rows="2" placeholder="Optional"></textarea>
     </div>
 
-    <button type="submit" class="btn btn-primary" [disabled]="saving">Upload Receipt</button>
-    <a routerLink="/receipts" class="btn btn-secondary">Cancel</a>
+    <div class="flex flex-wrap gap-3">
+      <button type="submit" class="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60" [disabled]="saving">Upload Receipt</button>
+      <a routerLink="/receipts" class="inline-flex items-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Cancel</a>
+    </div>
   </form>
 </div>

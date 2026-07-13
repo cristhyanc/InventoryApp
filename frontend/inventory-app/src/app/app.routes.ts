@@ -7,6 +7,7 @@ import { SupplierListComponent } from './components/suppliers/supplier-list.comp
 import { StockHistoryComponent } from './components/stock/stock-history.component';
 import { ReceiptListComponent } from './components/receipts/receipt-list.component';
 import { ReceiptUploadComponent } from './components/receipts/receipt-upload.component';
+import { MachineDetailComponent } from './components/machines/machine-detail.component';
 
 export const routes: Routes = [
   { path: '', component: DashboardComponent },
@@ -16,6 +17,7 @@ export const routes: Routes = [
   { path: 'products/:id/stock', component: StockHistoryComponent },
   { path: 'categories', component: CategoryListComponent },
   { path: 'suppliers', component: SupplierListComponent },
+  { path: 'machines/:id', component: MachineDetailComponent },
   { path: 'receipts', component: ReceiptListComponent },
   { path: 'receipts/new', component: ReceiptUploadComponent },
   { path: '**', redirectTo: '' }

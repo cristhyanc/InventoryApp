@@ -1,3 +1,5 @@
+using System.ComponentModel.DataAnnotations.Schema;
+
 namespace InventoryApi.Models;
 
 public class Product
@@ -7,6 +9,10 @@ public class Product
     public string? Sku { get; set; }
     public string? Description { get; set; }
     public decimal UnitPrice { get; set; }
+    [NotMapped]
+    public decimal MachinePrice { get; set; }
+    [NotMapped]
+    public decimal? CommissionValue { get; set; }
     public int QuantityInStock { get; set; }
     public int LowStockThreshold { get; set; } = 0;
     public string? Unit { get; set; } = "unit";

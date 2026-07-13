@@ -28,6 +28,8 @@ export interface Product {
   sku?: string | null;
   description?: string | null;
   unitPrice: number;
+  machinePrice: number | null;
+  commissionValue: number | null;
   quantityInStock: number;
   lowStockThreshold: number;
   unit?: string | null;
@@ -45,10 +47,14 @@ export interface Machine {
   machineID: number;
   machineName?: string | null;
   machineNumber?: string | null;
-  todayRevenue: number;
-  WeekRevenue: number;
-  MonthRevenue: number;
-  YearRevenue: number;
+  todayGrossRevenue: number;
+  currentWeekGrossRevenue: number;
+  lastWeekGrossRevenue: number;
+  twoWeeksAgoGrossRevenue: number;
+  todayNetRevenue: number;
+  twoWeeksAgoNetRevenue: number;
+  lastWeekNetRevenue: number;
+  currentWeekNetRevenue: number;
 }
 
 export interface ProductCreateDto {
