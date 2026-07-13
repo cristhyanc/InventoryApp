@@ -1,8 +1,8 @@
 import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterLink, ActivatedRoute } from '@angular/router';
+import { BehaviorSubject, catchError, map, Observable, of, switchMap, tap } from 'rxjs';
 import { MachineService } from '../../services/machine.service';
-import { ProductService } from '../../services/product.service';
 import { Machine, Product } from '../../models/models';
 
 @Component({
@@ -12,10 +12,10 @@ import { Machine, Product } from '../../models/models';
   templateUrl: './machine-detail.component.html'
 })
 export class MachineDetailComponent implements OnInit {
-  machine: Machine | null = null;
-  products: Product[] = [];
-  loading = false;
-  error = '';
+  machine$!: Observable<Machine | null>;
+  products$!: Observable<Product[]>;
+  loading$ = new BehaviorSubject(true);
+  error$ = new BehaviorSubject('');
 
   constructor(
     private route: ActivatedRoute,
@@ -23,31 +23,44 @@ export class MachineDetailComponent implements OnInit {
   ) {}
 
   ngOnInit(): void {
-    const idParam = this.route.snapshot.paramMap.get('id');
-    const machineId = idParam ? Number(idParam) : NaN;
+    const machineId$ = this.route.paramMap.pipe(map((params) => Number(params.get('id'))));
 
-    if (!machineId || isNaN(machineId)) {
-      this.error = 'Invalid machine id.';
-      return;
-    }
+    this.machine$ = machineId$.pipe(
+      tap(() => {
+        this.loading$.next(true);
+        this.error$.next('');
+      }),
+      switchMap((machineId) => {
+        if (!machineId || isNaN(machineId)) {
+          this.error$.next('Invalid machine id.');
+          this.loading$.next(false);
+          return of(null);
+        }
 
-    this.loading = true;
-    this.machineService.get(machineId).subscribe({
-      next: (machine) => {
-        this.machine = machine;
-        this.loading = false;
-      },
-      error: () => {
-        this.error = 'Failed to load machine details.';
-        this.loading = false;
-      }
-    });
+        return this.machineService.get(machineId).pipe(
+          tap(() => this.loading$.next(false)),
+          catchError(() => {
+            this.error$.next('Failed to load machine details.');
+            this.loading$.next(false);
+            return of(null);
+          })
+        );
+      })
+    );
 
-    this.machineService.getProducts(machineId).subscribe({
-      next: (products) => (this.products = products),
-      error: () => {
-        this.error = 'Failed to load products for this machine.';
-      }
-    });
+    this.products$ = machineId$.pipe(
+      switchMap((machineId) => {
+        if (!machineId || isNaN(machineId)) {
+          return of([] as Product[]);
+        }
+
+        return this.machineService.getProducts(machineId).pipe(
+          catchError(() => {
+            this.error$.next('Failed to load products for this machine.');
+            return of([] as Product[]);
+          })
+        );
+      })
+    );
   }
 }
