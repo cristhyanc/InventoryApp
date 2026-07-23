@@ -34,7 +34,7 @@
             <a [routerLink]="['/machines', machine.machineID]" class="inline-flex items-center rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700">Details</a>
           </div>
 
-          <div class="flex flex-column max-w-full">
+          <div class="flex flex-column max-w-full justify-between">
             <div class="rounded-lg bg-slate-50 p-3 text-center">
               <div class="text-lg font-semibold text-blue-600">${{ machine.todayGrossRevenue.toFixed(2) }}</div>
               <div class="text-xs uppercase tracking-wide text-slate-500">Today Gross</div>

@@ -89,13 +89,13 @@ public class NayaxProductGroup
 
 public class NayaxLastSalesReport
 {
-    public int TransactionID { get; set; }
+    public long TransactionID { get; set; }
 
     public string? PaymentServiceTransactionID { get; set; }
 
     public string? PaymentServiceProviderName { get; set; }
 
-    public int MachineID { get; set; }
+    public long MachineID { get; set; }
 
     public string? MachineName { get; set; }
 

@@ -47,7 +47,7 @@ public class AppDbContext : DbContext
             .HasForeignKey(r => r.SupplierId)
             .OnDelete(DeleteBehavior.SetNull);
 
-        modelBuilder.Entity<Category>().HasIndex(c => c.Name).IsUnique();
+        modelBuilder.Entity<Category>().HasIndex(c => c.Name);
         modelBuilder.Entity<Supplier>().HasIndex(s => s.Name);
         modelBuilder.Entity<Product>().HasIndex(p => p.Sku);
     }

@@ -30,8 +30,10 @@ export interface Product {
   unitPrice: number;
   machinePrice: number | null;
   commissionValue: number | null;
+  suggestedNetValue: number | null;
   quantityInStock: number;
   lowStockThreshold: number;
+  mdbCode: number | null;
   unit?: string | null;
   createdAt: string;
   updatedAt: string;

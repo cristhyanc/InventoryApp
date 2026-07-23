@@ -12,7 +12,11 @@ public class Product
     [NotMapped]
     public decimal MachinePrice { get; set; }
     [NotMapped]
-    public decimal? CommissionValue { get; set; }
+    public decimal CommissionValue { get; set; }
+    [NotMapped]
+    public decimal SuggestedNetValue { get; set; }
+    [NotMapped]
+    public int? MdbCode { get; set; }
     public int QuantityInStock { get; set; }
     public int LowStockThreshold { get; set; } = 0;
     public string? Unit { get; set; } = "unit";

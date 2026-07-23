@@ -41,11 +41,13 @@ namespace InventoryApi.Controllers
             var product = await db.Products.Include(x => x.Category).ToListAsync();
             var products = nayaxMachineProducts.Select(mp =>
             {
-                var prodcut = product.First(p => p.Id == mp.NayaxProductID);
-                prodcut.MachinePrice = mp.RetailPrice ?? 0;
-                prodcut.CommissionValue = mp.CommissionValue;
-                return prodcut;
-            }).ToList();
+                var result = product.First(p => p.Id == mp.NayaxProductID);
+                result.MachinePrice = mp.RetailPrice ?? 0;
+                result.CommissionValue = mp.CommissionValue ?? 0;
+                result.SuggestedNetValue = result.MachinePrice - (result.MachinePrice * result.CommissionValue / 100) - result.UnitPrice - (decimal)0.18;
+                result.MdbCode = mp.MDBCode;
+                return result;
+            }).ToList().OrderBy(x=>x.MdbCode);
             return Ok(products);
         }
 
@@ -78,10 +80,10 @@ namespace InventoryApi.Controllers
                 };
 
 
-                var todaySales = lastSales.Where(s => s.SettlementDateTimeGMT >= today).ToList();
-                var currentWeekSales = lastSales.Where(s => s.SettlementDateTimeGMT >= currentWeek.Start && s.SettlementDateTimeGMT <= currentWeek.End).ToList();
-                var lastWeekSales = lastSales.Where(s => s.SettlementDateTimeGMT >= lastWeek.Start && s.SettlementDateTimeGMT <= lastWeek.End).ToList();
-                var twoWeeksAgoSales = lastSales.Where(s => s.SettlementDateTimeGMT >= twoWeeksAgo.Start && s.SettlementDateTimeGMT <= twoWeeksAgo.End).ToList();
+                var todaySales = lastSales.Where(s => s.MachineAuthorizationTime >= today).ToList();
+                var currentWeekSales = lastSales.Where(s => s.MachineAuthorizationTime >= currentWeek.Start && s.MachineAuthorizationTime <= currentWeek.End).ToList();
+                var lastWeekSales = lastSales.Where(s => s.MachineAuthorizationTime >= lastWeek.Start && s.MachineAuthorizationTime <= lastWeek.End).ToList();
+                var twoWeeksAgoSales = lastSales.Where(s => s.MachineAuthorizationTime >= twoWeeksAgo.Start && s.MachineAuthorizationTime <= twoWeeksAgo.End).ToList();
 
                 results.CurrentWeekNetRevenue = CalculateRevenue(currentWeekSales, machineProducts, products);
                 results.LastWeekNetRevenue = CalculateRevenue(lastWeekSales, machineProducts, products);
@@ -130,7 +132,7 @@ namespace InventoryApi.Controllers
             // Calculate offset to Monday (start of week)
             int diff = (7 + (date.DayOfWeek - DayOfWeek.Monday)) % 7;
             DateTime startOfWeek = date.AddDays(-diff);
-            DateTime endOfWeek = startOfWeek.AddDays(6);
+            DateTime endOfWeek = startOfWeek.AddDays(7).AddMilliseconds(-1);
 
             return (startOfWeek, endOfWeek);
         }

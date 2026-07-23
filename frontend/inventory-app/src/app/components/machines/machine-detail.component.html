@@ -52,6 +52,7 @@
             <table class="min-w-full divide-y divide-slate-200 text-sm">
               <thead class="bg-slate-50">
                 <tr>
+                  <th class="px-4 py-3 text-left font-semibold text-slate-700">MDB Code</th>
                   <th class="px-4 py-3 text-left font-semibold text-slate-700">Name</th>
                   <th class="px-4 py-3 text-left font-semibold text-slate-700">SKU</th>
                   <th class="px-4 py-3 text-left font-semibold text-slate-700">Category</th>
@@ -60,18 +61,23 @@
                   <th class="px-4 py-3 text-left font-semibold text-slate-700">Unit Price</th>
                   <th class="px-4 py-3 text-left font-semibold text-slate-700">Machine Price</th>
                   <th class="px-4 py-3 text-left font-semibold text-slate-700">Commission</th>
+                  <th class="px-4 py-3 text-left font-semibold text-slate-700">Profit</th>
+                  <th class="px-4 py-3 text-left font-semibold text-slate-700">% Profit</th>
                 </tr>
               </thead>
               <tbody class="divide-y divide-slate-100 bg-white">
                 <tr *ngFor="let product of products">
+                  <td class="px-4 py-3 text-slate-700">{{ product.mdbCode }}</td>
                   <td class="px-4 py-3 text-slate-700">{{ product.name }}</td>
                   <td class="px-4 py-3 text-slate-600">{{ product.sku }}</td>
                   <td class="px-4 py-3 text-slate-600">{{ product.category?.name }}</td>
                   <td class="px-4 py-3 text-slate-600">{{ product.supplier?.name }}</td>
                   <td class="px-4 py-3 text-slate-600">{{ product.quantityInStock }}</td>
-                  <td class="px-4 py-3 text-slate-600">${{ product.unitPrice.toFixed(2) }}</td>
-                  <td class="px-4 py-3 text-slate-600">${{ product.machinePrice?.toFixed(2) }}</td>
-                  <td class="px-4 py-3 text-slate-600">%{{ product.commissionValue?.toFixed(2) }}</td>
+                  <td class="px-4 py-3 text-slate-600">${{ product.unitPrice?.toFixed(2) ?? '0.00' }}</td>
+                  <td class="px-4 py-3 text-slate-600">${{ product.machinePrice?.toFixed(2) ?? '0.00' }}</td>
+                  <td class="px-4 py-3 text-slate-600">%{{ product.commissionValue?.toFixed(2) ?? '0.00' }}</td>
+                  <td class="px-4 py-3 text-slate-600">${{ product.suggestedNetValue?.toFixed(2) ?? '0.00' }}</td>
+                  <td class="px-4 py-3 text-slate-600">{{ ((product.suggestedNetValue ?? 0) / (product.machinePrice ?? 1)*100).toFixed(2) }}%</td>
                 </tr>
               </tbody>
             </table>
