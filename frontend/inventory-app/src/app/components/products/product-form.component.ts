@@ -30,7 +30,8 @@ export class ProductFormComponent implements OnInit {
     lowStockThreshold: 5,
     unit: 'unit',
     categoryId: '' as number | '',
-    supplierId: '' as number | ''
+    supplierId: '' as number | '',
+    isActive: true
   };
 
   constructor(
@@ -59,7 +60,8 @@ export class ProductFormComponent implements OnInit {
           lowStockThreshold: p.lowStockThreshold,
           unit: p.unit ?? 'unit',
           categoryId: p.categoryId ?? '',
-          supplierId: p.supplierId ?? ''
+          supplierId: p.supplierId ?? '',
+          isActive: p.isActive
         };
       });
     }
@@ -81,7 +83,8 @@ export class ProductFormComponent implements OnInit {
       lowStockThreshold: this.form.lowStockThreshold,
       unit: this.form.unit || null,
       categoryId: this.form.categoryId === '' ? null : this.form.categoryId,
-      supplierId: this.form.supplierId === '' ? null : this.form.supplierId
+      supplierId: this.form.supplierId === '' ? null : this.form.supplierId,
+      isActive: this.form.isActive
     };
 
     if (this.isEdit && this.productId) {

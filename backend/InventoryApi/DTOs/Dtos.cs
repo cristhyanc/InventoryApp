@@ -11,7 +11,8 @@ public record ProductCreateDto(
     int LowStockThreshold,
     string? Unit,
     int? CategoryId,
-    int? SupplierId
+    int? SupplierId,
+    bool IsActive
 );
 
 public record ProductUpdateDto(
@@ -22,7 +23,8 @@ public record ProductUpdateDto(
     int LowStockThreshold,
     string? Unit,
     int? CategoryId,
-    int? SupplierId
+    int? SupplierId,
+    bool IsActive
 );
 
 public record StockAdjustmentDto(

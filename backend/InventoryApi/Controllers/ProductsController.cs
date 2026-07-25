@@ -62,7 +62,7 @@ public class ProductsController : ControllerBase
     {
         var items = await _db.Products
             .Include(p => p.Category)
-            .Where(p => p.QuantityInStock <= p.LowStockThreshold)
+            .Where(p => p.IsActive && p.QuantityInStock <= p.LowStockThreshold)
             .OrderBy(p => p.QuantityInStock)
             .ToListAsync();
         return Ok(items);
@@ -142,6 +142,7 @@ public class ProductsController : ControllerBase
             Sku = dto.Sku,
             Description = dto.Description,
             UnitPrice = dto.UnitPrice,
+            IsActive = dto.IsActive,
             QuantityInStock = dto.QuantityInStock,
             LowStockThreshold = dto.LowStockThreshold,
             Unit = dto.Unit,
@@ -179,6 +180,7 @@ public class ProductsController : ControllerBase
         product.Sku = dto.Sku;
         product.Description = dto.Description;
         product.UnitPrice = dto.UnitPrice;
+        product.IsActive = dto.IsActive;
         product.LowStockThreshold = dto.LowStockThreshold;
         product.Unit = dto.Unit;
         product.CategoryId = dto.CategoryId;

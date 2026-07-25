@@ -42,6 +42,7 @@ export interface Product {
   category?: Category | null;
   supplierId?: number | null;
   supplier?: Supplier | null;
+  isActive: boolean;
   isLowStock: boolean;
   mapped: boolean;
 }
@@ -70,6 +71,7 @@ export interface ProductCreateDto {
   unit?: string | null;
   categoryId?: number | null;
   supplierId?: number | null;
+  isActive?: boolean;
 }
 
 export interface ProductUpdateDto {
@@ -81,6 +83,7 @@ export interface ProductUpdateDto {
   unit?: string | null;
   categoryId?: number | null;
   supplierId?: number | null;
+  isActive: boolean;
 }
 
 export interface StockAdjustment {

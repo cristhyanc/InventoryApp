@@ -23,6 +23,7 @@ public class Product
     public int LowStockThreshold { get; set; } = 0;
     public string? Unit { get; set; } = "unit";
     public bool Mapped { get; set; }
+    public bool IsActive { get; set; } = true;
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 

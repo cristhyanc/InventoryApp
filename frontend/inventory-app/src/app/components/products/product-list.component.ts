@@ -97,4 +97,21 @@ export class ProductListComponent implements OnInit {
     this.confirmingProduct = null;
     this.productService.delete(product.id).subscribe(() => this.applyFilters());
   }
+
+  toggleActive(product: Product): void {
+    this.productService.update(product.id, {
+      name: product.name,
+      sku: product.sku ?? null,
+      description: product.description ?? null,
+      unitPrice: product.unitPrice,
+      lowStockThreshold: product.lowStockThreshold,
+      unit: product.unit ?? null,
+      categoryId: product.categoryId ?? null,
+      supplierId: product.supplierId ?? null,
+      isActive: !product.isActive
+    }).subscribe({
+      next: () => this.applyFilters(),
+      error: () => this.toastService.error('Failed to update product status.')
+    });
+  }
 }
