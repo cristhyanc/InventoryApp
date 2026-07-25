@@ -38,7 +38,7 @@ namespace InventoryApi.Controllers
         public async Task<ActionResult<List<Product>>> GetMachineProducts(long id)
         {
             var nayaxMachineProducts = await nayaxLynxClient.GetMachineProductsAsync(id);
-            var product = await db.Products.Include(x => x.Category).ToListAsync();
+            var product = await db.Products.Include(x => x.Category).AsNoTracking().ToListAsync();
             var products = nayaxMachineProducts.Select(mp =>
             {
                 var result = product.First(p => p.Id == mp.NayaxProductID);
@@ -46,8 +46,10 @@ namespace InventoryApi.Controllers
                 result.CommissionValue = mp.CommissionValue ?? 0;
                 result.SuggestedNetValue = result.MachinePrice - (result.MachinePrice * result.CommissionValue / 100) - result.UnitPrice - (decimal)0.18;
                 result.MdbCode = mp.MDBCode;
+                result.QuantityInStock = (mp.PAR - mp.MissingStockByMDB) ?? 0;
+                result.MaxStockInMachine = mp.PAR;
                 return result;
-            }).ToList().OrderBy(x=>x.MdbCode);
+            }).ToList().OrderBy(x => x.MdbCode);
             return Ok(products);
         }
 

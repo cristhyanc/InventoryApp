@@ -32,6 +32,7 @@ export interface Product {
   commissionValue: number | null;
   suggestedNetValue: number | null;
   quantityInStock: number;
+  maxStockInMachine: number;
   lowStockThreshold: number;
   mdbCode: number | null;
   unit?: string | null;

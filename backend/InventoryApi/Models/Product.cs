@@ -17,6 +17,8 @@ public class Product
     public decimal SuggestedNetValue { get; set; }
     [NotMapped]
     public int? MdbCode { get; set; }
+    [NotMapped]
+    public int? MaxStockInMachine { get; set; }
     public int QuantityInStock { get; set; }
     public int LowStockThreshold { get; set; } = 0;
     public string? Unit { get; set; } = "unit";

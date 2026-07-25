@@ -79,7 +79,7 @@ public class NayaxLynxClient : INayaxLynxClient
     public async Task<NayaxMachine> GetMachineAsync(long machineId, CancellationToken ct = default)
     {
         var response = await _http.GetAsync($"machines/{machineId}/", ct);
-        response.EnsureSuccessStatusCode();
+        response.EnsureSuccessStatusCode();        
         return await response.Content.ReadFromJsonAsync<NayaxMachine>(cancellationToken: ct) ?? new();
     }
 
