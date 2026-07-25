@@ -10,46 +10,22 @@ namespace InventoryApi.Controllers;
 [Route("api/products/{productId:long}/stock")]
 public class StockController : ControllerBase
 {
-    private readonly AppDbContext _db;
-    public StockController(AppDbContext db) => _db = db;
+    private readonly InventoryApi.Services.Interfaces.IStockService _service;
+    public StockController(InventoryApi.Services.Interfaces.IStockService service) => _service = service;
 
     [HttpGet]
     public async Task<ActionResult<IEnumerable<StockAdjustment>>> History(long productId)
     {
-        var exists = await _db.Products.AnyAsync(p => p.Id == productId);
-        if (!exists) return NotFound("Product not found");
-
-        var history = await _db.StockAdjustments
-            .Where(sa => sa.ProductId == productId)
-            .OrderByDescending(sa => sa.CreatedAt)
-            .ToListAsync();
+        var history = await _service.History(productId);
+        if (!history.Any()) return NotFound("Product not found");
         return Ok(history);
     }
 
     [HttpPost]
     public async Task<ActionResult<StockAdjustment>> Adjust(long productId, StockAdjustmentDto dto)
     {
-        var product = await _db.Products.FindAsync(productId);
-        if (product is null) return NotFound("Product not found");
-
-        var newQuantity = product.QuantityInStock + dto.QuantityChange;
-        if (newQuantity < 0)
-            return BadRequest("Resulting stock quantity cannot be negative.");
-
-        product.QuantityInStock = newQuantity;
-        product.UpdatedAt = DateTime.UtcNow;
-
-        var adjustment = new StockAdjustment
-        {
-            ProductId = productId,
-            QuantityChange = dto.QuantityChange,
-            QuantityAfter = newQuantity,
-            Reason = dto.Reason,
-            Notes = dto.Notes
-        };
-        _db.StockAdjustments.Add(adjustment);
-        await _db.SaveChangesAsync();
-
+        var adjustment = await _service.Adjust(productId, dto);
+        if (adjustment is null) return BadRequest("Invalid product or resulting quantity");
         return Ok(adjustment);
     }
 }

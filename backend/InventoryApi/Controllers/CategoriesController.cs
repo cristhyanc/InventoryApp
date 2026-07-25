@@ -10,47 +10,37 @@ namespace InventoryApi.Controllers;
 [Route("api/[controller]")]
 public class CategoriesController : ControllerBase
 {
-    private readonly AppDbContext _db;
-    public CategoriesController(AppDbContext db) => _db = db;
+    private readonly InventoryApi.Services.Interfaces.ICategoryService _service;
+    public CategoriesController(InventoryApi.Services.Interfaces.ICategoryService service) => _service = service;
 
     [HttpGet]
-    public async Task<ActionResult<IEnumerable<Category>>> GetAll() =>
-        Ok(await _db.Categories.OrderBy(c => c.Name).ToListAsync());
+    public async Task<ActionResult<IEnumerable<Category>>> GetAll() => Ok(await _service.GetAll());
 
     [HttpGet("{id:int}")]
     public async Task<ActionResult<Category>> Get(int id)
     {
-        var category = await _db.Categories.FindAsync(id);
+        var category = await _service.Get(id);
         return category is null ? NotFound() : Ok(category);
     }
 
     [HttpPost]
     public async Task<ActionResult<Category>> Create(CategoryDto dto)
     {
-        var category = new Category { Name = dto.Name, Description = dto.Description };
-        _db.Categories.Add(category);
-        await _db.SaveChangesAsync();
+        var category = await _service.Create(dto.Name, dto.Description);
         return CreatedAtAction(nameof(Get), new { id = category.Id }, category);
     }
 
     [HttpPut("{id:int}")]
     public async Task<IActionResult> Update(int id, CategoryDto dto)
     {
-        var category = await _db.Categories.FindAsync(id);
-        if (category is null) return NotFound();
-        category.Name = dto.Name;
-        category.Description = dto.Description;
-        await _db.SaveChangesAsync();
-        return NoContent();
+        var ok = await _service.Update(id, dto.Name, dto.Description);
+        return ok ? NoContent() : NotFound();
     }
 
     [HttpDelete("{id:int}")]
     public async Task<IActionResult> Delete(int id)
     {
-        var category = await _db.Categories.FindAsync(id);
-        if (category is null) return NotFound();
-        _db.Categories.Remove(category);
-        await _db.SaveChangesAsync();
-        return NoContent();
+        var ok = await _service.Delete(id);
+        return ok ? NoContent() : NotFound();
     }
 }
