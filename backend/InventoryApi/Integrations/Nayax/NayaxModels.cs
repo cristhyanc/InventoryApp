@@ -24,6 +24,7 @@ public class NayaxMachineProduct
     public string ProductName { get; set; } = string.Empty;
     public int? MDBCode { get; set; }
     public int? PAR { get; set; }
+    public int? VendOutAlertThreshold { get; set; }    
     public int? MissingStockByMDB { get; set; }
     public int? ProductMinimumPickQTY { get; set; }
     public decimal? CashPrice { get; set; }

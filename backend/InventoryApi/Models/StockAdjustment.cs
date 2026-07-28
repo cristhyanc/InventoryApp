@@ -27,5 +27,8 @@ public class StockAdjustment
     public StockAdjustmentReason Reason { get; set; } = StockAdjustmentReason.Other;
     public string? Notes { get; set; }
 
+    // Optional eat-before / expiration date for this adjustment (applies to restocks)
+    public DateTime? EatBefore { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }

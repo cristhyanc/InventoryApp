@@ -49,6 +49,26 @@ public class MachineService : IMachineService
             return result;
         }).ToList().OrderBy(x => x.MdbCode).ToList();
 
+        // Load last eat-before dates for these products (most recent first)
+        var productIds = products.Select(p => p.Id).Distinct().ToList();
+        var adjustments = await _db.StockAdjustments
+            .Where(sa => productIds.Contains(sa.ProductId) && sa.EatBefore != null)
+            .OrderByDescending(sa => sa.CreatedAt)
+            .ToListAsync();
+
+        var adjustmentsByProduct = adjustments
+            .GroupBy(sa => sa.ProductId)
+            .ToDictionary(g => g.Key, g => g.Select(sa => sa.EatBefore!.Value).ToList());
+
+        foreach (var prod in products)
+        {
+            if (adjustmentsByProduct.TryGetValue(prod.Id, out var dates))
+            {
+                prod.LastEatBefore1 = dates.ElementAtOrDefault(0);
+                prod.LastEatBefore2 = dates.ElementAtOrDefault(1);
+            }
+        }
+
         return products;
     }
 

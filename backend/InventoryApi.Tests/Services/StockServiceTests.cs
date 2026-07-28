@@ -27,7 +27,7 @@ public class StockServiceTests
         await db.SaveChangesAsync();
 
         IStockService svc = new StockService(db);
-        var adj = await svc.Adjust(1, new StockAdjustmentDto(3, StockAdjustmentReason.Restock, "note"));
+        var adj = await svc.Adjust(1, new StockAdjustmentDto(3, StockAdjustmentReason.Restock, "note", System.DateTime.UtcNow.AddDays(30)));
         Assert.NotNull(adj);
 
         var product = await db.Products.FindAsync(1L);

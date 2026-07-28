@@ -35,11 +35,12 @@ public class StockService : IStockService
 
         var adjustment = new StockAdjustment
         {
-            ProductId = (int)productId,
+            ProductId = productId,
             QuantityChange = dto.QuantityChange,
             QuantityAfter = newQuantity,
             Reason = dto.Reason,
-            Notes = dto.Notes
+            Notes = dto.Notes,
+            EatBefore = dto.EatBefore
         };
         _db.StockAdjustments.Add(adjustment);
         await _db.SaveChangesAsync();

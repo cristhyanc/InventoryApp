@@ -36,6 +36,8 @@ export interface Product {
   lowStockThreshold: number;
   mdbCode: number | null;
   unit?: string | null;
+  lastEatBefore1?: string | null;
+  lastEatBefore2?: string | null;
   createdAt: string;
   updatedAt: string;
   categoryId?: number | null;
@@ -93,6 +95,7 @@ export interface StockAdjustment {
   quantityAfter: number;
   reason: StockAdjustmentReason;
   notes?: string | null;
+  eatBefore?: string | null;
   createdAt: string;
 }
 
@@ -100,6 +103,7 @@ export interface StockAdjustmentDto {
   quantityChange: number;
   reason: StockAdjustmentReason;
   notes?: string | null;
+  EatBefore?: string | null;
 }
 
 export interface Receipt {

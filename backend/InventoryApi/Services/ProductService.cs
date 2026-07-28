@@ -45,11 +45,33 @@ public class ProductService : IProductService
 
     public async Task<IEnumerable<Product>> LowStock()
     {
-        return await _db.Products
-            .Include(p => p.Category)
-            .Where(p => p.IsActive && p.QuantityInStock <= p.LowStockThreshold)
-            .OrderBy(p => p.QuantityInStock)
-            .ToListAsync();
+        var result = new List<Product>();
+        var nayaxMachines = await _nayaxLynxClient.GetMachinesAsync();
+        var dbProducts = await _db.Products.AsNoTracking().ToListAsync();
+
+        foreach (var machine in nayaxMachines)
+        {
+            var nayaxMachineProducts = await _nayaxLynxClient.GetMachineProductsAsync(machine.MachineID);
+            foreach (var nayaxProduct in nayaxMachineProducts)
+            {
+                var product = result.SingleOrDefault(x => x.Id == nayaxProduct.NayaxProductID);
+                if (product == null)
+                {
+                    product = dbProducts.Single(x => x.Id == nayaxProduct.NayaxProductID);
+                    //product.MaxStockInMachine = product.LowStockThreshold;
+                    product.MaxStockInMachine = 0;
+                    result.Add(product);
+                }
+
+                if (nayaxProduct.VendOutAlertThreshold >= (nayaxProduct.PAR - nayaxProduct.MissingStockByMDB))
+                {
+                    product.MaxStockInMachine += nayaxProduct.MissingStockByMDB.Value;
+                }   
+
+            }
+        }
+
+        return result.Where(p => p.IsActive && p.QuantityInStock <= p.MaxStockInMachine).OrderBy(p => p.QuantityInStock).ToList();
     }
 
     public async Task<bool> ImportProductsAsync()

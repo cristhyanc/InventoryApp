@@ -24,6 +24,10 @@ public class Product
     public string? Unit { get; set; } = "unit";
     public bool Mapped { get; set; }
     public bool IsActive { get; set; } = true;
+    [NotMapped]
+    public DateTime? LastEatBefore1 { get; set; }
+    [NotMapped]
+    public DateTime? LastEatBefore2 { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 

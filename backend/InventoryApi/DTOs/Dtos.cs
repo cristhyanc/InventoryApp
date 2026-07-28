@@ -30,7 +30,8 @@ public record ProductUpdateDto(
 public record StockAdjustmentDto(
     int QuantityChange,
     StockAdjustmentReason Reason,
-    string? Notes
+    string? Notes,
+    DateTime? EatBefore
 );
 
 public record CategoryDto(string Name, string? Description);

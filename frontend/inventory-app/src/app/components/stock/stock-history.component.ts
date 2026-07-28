@@ -21,7 +21,8 @@ export class StockHistoryComponent implements OnInit {
   form = {
     quantityChange: 0,
     reason: StockAdjustmentReason.Restock,
-    notes: ''
+    notes: '',
+    EatBefore: null as string | null
   };
 
   reasonOptions = [
@@ -64,7 +65,7 @@ export class StockHistoryComponent implements OnInit {
 
     this.stockService.adjust(this.productId, this.form).subscribe({
       next: () => {
-        this.form = { quantityChange: 0, reason: StockAdjustmentReason.Restock, notes: '' };
+        this.form = { quantityChange: 0, reason: StockAdjustmentReason.Restock, notes: '', EatBefore: '' };
         this.load();
       },
       error: (err) => {
