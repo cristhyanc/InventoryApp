@@ -23,9 +23,9 @@
   @if (machines.length === 0) {
     <p class="text-sm text-slate-500">No machines available yet.</p>
   } @else {
-    <div class="flex flex-row gap-4">
+    <div class="flex flex-col gap-4">
       @for (machine of machines; track machine.machineID) {
-        <div class="rounded-xl border border-slate-200 p-4 w-full max-w-xs">
+        <div class="rounded-xl border border-slate-200 p-4 w-full">
           <div class="mb-4 flex items-center justify-between gap-3">
             <div>
               <div class="text-lg font-semibold text-slate-800">{{ machine.machineName || 'Unnamed machine' }}</div>
@@ -34,39 +34,27 @@
             <a [routerLink]="['/machines', machine.machineID]" class="inline-flex items-center rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700">Details</a>
           </div>
 
-          <div class="flex flex-column max-w-full justify-between">
+          <div class="flex flex-row justify-between">
             <div class="rounded-lg bg-slate-50 p-3 text-center">
               <div class="text-lg font-semibold text-blue-600">${{ machine.todayGrossRevenue.toFixed(2) }}</div>
-              <div class="text-xs uppercase tracking-wide text-slate-500">Today Gross</div>
+              <div class="text-lg font-semibold text-blue-600">${{ machine.todayNetRevenue.toFixed(2) }}</div>
+              <div class="text-xs uppercase tracking-wide text-slate-500">Today</div>
             </div>
             <div class="rounded-lg bg-slate-50 p-3 text-center">
               <div class="text-lg font-semibold text-blue-600">${{ machine.currentWeekGrossRevenue.toFixed(2) }}</div>
-              <div class="text-xs uppercase tracking-wide text-slate-500">Current Week Gross</div>
+              <div class="text-lg font-semibold text-blue-600">${{ machine.currentWeekNetRevenue.toFixed(2) }}</div>
+              <div class="text-xs uppercase tracking-wide text-slate-500">Current Week</div>
             </div>
             <div class="rounded-lg bg-slate-50 p-3 text-center">
               <div class="text-lg font-semibold text-blue-600">${{ machine.lastWeekGrossRevenue.toFixed(2) }}</div>
-              <div class="text-xs uppercase tracking-wide text-slate-500">Last Week Gross</div>
+              <div class="text-lg font-semibold text-blue-600">${{ machine.lastWeekNetRevenue.toFixed(2) }}</div>
+              <div class="text-xs uppercase tracking-wide text-slate-500">Last Week</div>
             </div>
             <div class="rounded-lg bg-slate-50 p-3 text-center">
               <div class="text-lg font-semibold text-blue-600">${{ machine.twoWeeksAgoGrossRevenue.toFixed(2) }}</div>
-              <div class="text-xs uppercase tracking-wide text-slate-500">2 Weeks Ago Gross</div>
-            </div>
-            <div class="rounded-lg bg-slate-50 p-3 text-center">
-              <div class="text-lg font-semibold text-blue-600">${{ machine.todayNetRevenue.toFixed(2) }}</div>
-              <div class="text-xs uppercase tracking-wide text-slate-500">Today Net</div>
-            </div>
-            <div class="rounded-lg bg-slate-50 p-3 text-center">
               <div class="text-lg font-semibold text-blue-600">${{ machine.twoWeeksAgoNetRevenue.toFixed(2) }}</div>
-              <div class="text-xs uppercase tracking-wide text-slate-500">2 Weeks Ago Net</div>
-            </div>
-            <div class="rounded-lg bg-slate-50 p-3 text-center">
-              <div class="text-lg font-semibold text-blue-600">${{ machine.lastWeekNetRevenue.toFixed(2) }}</div>
-              <div class="text-xs uppercase tracking-wide text-slate-500">Last Week Net</div>
-            </div>
-            <div class="rounded-lg bg-slate-50 p-3 text-center">
-              <div class="text-lg font-semibold text-blue-600">${{ machine.currentWeekNetRevenue.toFixed(2) }}</div>
-              <div class="text-xs uppercase tracking-wide text-slate-500">Current Week Net</div>
-            </div>
+              <div class="text-xs uppercase tracking-wide text-slate-500">2 Weeks Ago</div>
+            </div>                     
           </div>
         </div>
       }

@@ -1,0 +1,54 @@
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using InventoryApi.Data;
+using InventoryApi.Integrations.Nayax;
+using InventoryApi.Models;
+using InventoryApi.Services;
+using InventoryApi.Services.Interfaces;
+using Microsoft.EntityFrameworkCore;
+using Moq;
+using Xunit;
+
+namespace InventoryApi.Tests.Services;
+
+public class MachineServiceTests
+{
+    private static AppDbContext CreateDbContext(string dbName)
+    {
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseInMemoryDatabase(dbName)
+            .Options;
+        return new AppDbContext(options);
+    }
+
+    [Fact]
+    public async Task GetById_Computes_Revenues()
+    {
+        using var db = CreateDbContext("mach_test");
+        // seed product referenced by Nayax
+        db.Products.Add(new Product { Id = 200, Name = "px", UnitPrice = 2m });
+        await db.SaveChangesAsync();
+
+        var nayaxMock = new Mock<INayaxLynxClient>();
+        nayaxMock.Setup(m => m.GetMachineAsync(1, default))
+            .ReturnsAsync(new NayaxMachine { MachineID = 1, MachineName = "M1" });
+
+        nayaxMock.Setup(m => m.GetMachineProductsAsync(1, default))
+            .ReturnsAsync(new List<NayaxMachineProduct>
+            {
+                new NayaxMachineProduct { NayaxProductID = 200, ProductName = "ProdX", RetailPrice = 5m, CommissionValue = 10 }
+            });
+
+        nayaxMock.Setup(m => m.GetMachineLastSalesAsync(1, default))
+            .ReturnsAsync(new List<NayaxLastSalesReport>
+            {
+                new NayaxLastSalesReport { MachineID = 1, ProductName = "ProdX", SettlementValue = 5m, MachineAuthorizationTime = System.DateTime.UtcNow, Quantity = 1 }
+            });
+
+        IMachineService svc = new MachineService(db, nayaxMock.Object);
+        var machine = await svc.GetById(1);
+        Assert.NotNull(machine);
+        Assert.Equal(1, machine.MachineID);
+        Assert.True(machine.TodayGrossRevenue >= 0);
+    }
+}
