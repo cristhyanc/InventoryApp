@@ -27,7 +27,7 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAngularDevClient", policy =>
     {
-        policy.WithOrigins("http://localhost:4200")
+        policy.WithOrigins("http://localhost:4200", "https://red-island-0c128c000.7.azurestaticapps.net/")
               .AllowAnyHeader()
               .AllowAnyMethod();
     });

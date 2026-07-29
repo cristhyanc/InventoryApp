@@ -1,6 +1,6 @@
 {
   "/api": {
-    "target": "https://vm-manager-axhadxh5hjehayh0.australiaeast-01.azurewebsites.net/",
+    "target": "https://vm-manager-axhadxh5hjehayh0.australiaeast-01.azurewebsites.net",
     "secure": false,
     "changeOrigin": true
   }
