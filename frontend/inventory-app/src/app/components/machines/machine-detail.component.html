@@ -61,6 +61,7 @@
                   <th class="px-4 py-3 text-left font-semibold text-slate-700">Unit Price</th>
                   <th class="px-4 py-3 text-left font-semibold text-slate-700">Machine Price</th>
                   <th class="px-4 py-3 text-left font-semibold text-slate-700">Profit</th>
+                  <th class="px-4 py-3 text-left font-semibold text-slate-700">Actions</th>
                 </tr>
               </thead>
               <tbody class="divide-y divide-slate-100 bg-white">
@@ -81,6 +82,14 @@
                   <td class="px-4 py-3 text-slate-600">${{ product.suggestedNetValue?.toFixed(2) ?? '0.00' }} /
                     {{ ((product.suggestedNetValue ?? 0) / (product.machinePrice ?? 1)*100).toFixed(2) }}%
                   </td>                  
+                  <td class="px-4 py-3 text-slate-600">
+                    <div class="flex items-center gap-2">
+                      <input #qtyInput type="number" min="1" [value]="product.maxStockInMachine - product.quantityInStock" class="w-20 rounded-md border border-slate-200 px-2 py-1 text-sm text-slate-700" />
+                      <button (click)="restockProduct(product, machine, qtyInput.value)" [disabled]="product.quantityInStock >= product.maxStockInMachine" class="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-1 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">
+                        Restock
+                      </button>
+                    </div>
+                  </td>
                 </tr>
               </tbody>
             </table>
