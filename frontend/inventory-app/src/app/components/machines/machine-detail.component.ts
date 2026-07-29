@@ -83,7 +83,7 @@ export class MachineDetailComponent implements OnInit {
     }
 
     const payload: StockAdjustmentDto = {
-      quantityChange: qtyNum,
+      quantityChange: qtyNum*-1,
       reason: StockAdjustmentReason.Other,
       notes: `${machine?.machineName ?? ''} - ${machine?.machineID ?? ''} - Machine restock`
     };
