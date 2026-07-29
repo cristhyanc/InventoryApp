@@ -2,6 +2,7 @@ import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { Receipt } from '../models/models';
+import { ConfigService } from './config.service';
 
 export interface ReceiptUploadPayload {
   file: File;
@@ -14,9 +15,11 @@ export interface ReceiptUploadPayload {
 
 @Injectable({ providedIn: 'root' })
 export class ReceiptService {
-  private readonly baseUrl = '/api/receipts';
+  private get baseUrl(): string {
+    return `${this.config.apiBaseUrl.replace(/\/$/, '')}/receipts`;
+  }
 
-  constructor(private http: HttpClient) {}
+  constructor(private http: HttpClient, private config: ConfigService) {}
 
   getAll(supplierId?: number): Observable<Receipt[]> {
     const url = supplierId ? `${this.baseUrl}?supplierId=${supplierId}` : this.baseUrl;

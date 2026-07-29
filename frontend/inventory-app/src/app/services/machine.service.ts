@@ -2,14 +2,17 @@ import { HttpClient } from '@angular/common/http';
 import { Injectable } from '@angular/core';
 import { Observable } from 'rxjs';
 import { Machine, Product } from '../models/models';
+import { ConfigService } from './config.service';
 
 @Injectable({
   providedIn: 'root'
 })
 export class MachineService {
-  private readonly baseUrl = '/api/machines';
+  private get baseUrl(): string {
+    return `${this.config.apiBaseUrl.replace(/\/$/, '')}/machines`;
+  }
 
-  constructor(private http: HttpClient) { }
+  constructor(private http: HttpClient, private config: ConfigService) { }
 
   getAll(): Observable<Machine[]> {
     return this.http.get<Machine[]>(this.baseUrl);

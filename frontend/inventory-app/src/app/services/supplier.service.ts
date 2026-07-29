@@ -2,6 +2,7 @@ import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { Supplier } from '../models/models';
+import { ConfigService } from './config.service';
 
 export interface SupplierDto {
   name: string;
@@ -13,9 +14,11 @@ export interface SupplierDto {
 
 @Injectable({ providedIn: 'root' })
 export class SupplierService {
-  private readonly baseUrl = '/api/suppliers';
+  private get baseUrl(): string {
+    return `${this.config.apiBaseUrl.replace(/\/$/, '')}/suppliers`;
+  }
 
-  constructor(private http: HttpClient) {}
+  constructor(private http: HttpClient, private config: ConfigService) {}
 
   getAll(): Observable<Supplier[]> {
     return this.http.get<Supplier[]>(this.baseUrl);

@@ -2,6 +2,7 @@ import { Injectable } from '@angular/core';
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { Product, ProductCreateDto, ProductUpdateDto } from '../models/models';
+import { ConfigService } from './config.service';
 
 export interface ProductFilters {
   search?: string;
@@ -13,9 +14,11 @@ export interface ProductFilters {
 
 @Injectable({ providedIn: 'root' })
 export class ProductService {
-  private readonly baseUrl = '/api/products';
+  private get baseUrl(): string {
+    return `${this.config.apiBaseUrl.replace(/\/$/, '')}/products`;
+  }
 
-  constructor(private http: HttpClient) {}
+  constructor(private http: HttpClient, private config: ConfigService) {}
 
   getAll(filters: ProductFilters = {}): Observable<Product[]> {
     let params = new HttpParams();
