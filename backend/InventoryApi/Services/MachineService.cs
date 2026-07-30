@@ -39,7 +39,7 @@ public class MachineService : IMachineService
         var productList = await _db.Products.Include(x => x.Category).AsNoTracking().ToListAsync();
         var products = nayaxMachineProducts.Select(mp =>
         {
-            var result = productList.First(p => p.Id == mp.NayaxProductID);
+            var result = productList.First(p => p.Id == mp.NayaxProductID).Clone();
             result.MachinePrice = mp.RetailPrice ?? 0;
             result.CommissionValue = mp.CommissionValue ?? 0;
             result.SuggestedNetValue = result.MachinePrice - (result.MachinePrice * result.CommissionValue / 100) - result.UnitPrice - (decimal)0.18;
@@ -49,25 +49,25 @@ public class MachineService : IMachineService
             return result;
         }).ToList().OrderBy(x => x.MdbCode).ToList();
 
-        // Load last eat-before dates for these products (most recent first)
-        var productIds = products.Select(p => p.Id).Distinct().ToList();
-        var adjustments = await _db.StockAdjustments
-            .Where(sa => productIds.Contains(sa.ProductId) && sa.EatBefore != null)
-            .OrderByDescending(sa => sa.CreatedAt)
-            .ToListAsync();
+        //// Load last eat-before dates for these products (most recent first)
+        //var productIds = products.Select(p => p.Id).Distinct().ToList();
+        //var adjustments = await _db.StockAdjustments
+        //    .Where(sa => productIds.Contains(sa.ProductId) && sa.EatBefore != null)
+        //    .OrderByDescending(sa => sa.CreatedAt)
+        //    .ToListAsync();
 
-        var adjustmentsByProduct = adjustments
-            .GroupBy(sa => sa.ProductId)
-            .ToDictionary(g => g.Key, g => g.Select(sa => sa.EatBefore!.Value).ToList());
+        //var adjustmentsByProduct = adjustments
+        //    .GroupBy(sa => sa.ProductId)
+        //    .ToDictionary(g => g.Key, g => g.Select(sa => sa.EatBefore!.Value).ToList());
 
-        foreach (var prod in products)
-        {
-            if (adjustmentsByProduct.TryGetValue(prod.Id, out var dates))
-            {
-                prod.LastEatBefore1 = dates.ElementAtOrDefault(0);
-                prod.LastEatBefore2 = dates.ElementAtOrDefault(1);
-            }
-        }
+        //foreach (var prod in products)
+        //{
+        //    if (adjustmentsByProduct.TryGetValue(prod.Id, out var dates))
+        //    {
+        //        prod.LastEatBefore1 = dates.ElementAtOrDefault(0);
+        //        prod.LastEatBefore2 = dates.ElementAtOrDefault(1);
+        //    }
+        //}
 
         return products;
     }

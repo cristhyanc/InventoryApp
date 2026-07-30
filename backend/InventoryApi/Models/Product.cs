@@ -4,6 +4,8 @@ namespace InventoryApi.Models;
 
 public class Product
 {
+    public Product Clone() => (Product)MemberwiseClone();
+
     public long Id { get; set; }
     public string Name { get; set; } = string.Empty;
     public string? Sku { get; set; }

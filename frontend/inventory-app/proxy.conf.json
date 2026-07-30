@@ -1,6 +1,6 @@
 {
   "/api": {
-    "target": "https://vm-manager-axhadxh5hjehayh0.australiaeast-01.azurewebsites.net",
+    "target": "http://localhost:5000/",
     "secure": false,
     "changeOrigin": true
   }
