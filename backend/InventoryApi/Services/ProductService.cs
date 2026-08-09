@@ -63,10 +63,11 @@ public class ProductService : IProductService
                     result.Add(product);
                 }
 
-                if (nayaxProduct.VendOutAlertThreshold >= (nayaxProduct.PAR - nayaxProduct.MissingStockByMDB))
-                {
-                    product.MaxStockInMachine += nayaxProduct.MissingStockByMDB.Value;
-                }   
+                product.MaxStockInMachine += nayaxProduct.MissingStockByMDB.Value;
+                //if (nayaxProduct.VendOutAlertThreshold >= (nayaxProduct.PAR - nayaxProduct.MissingStockByMDB))
+                //{
+                //    product.MaxStockInMachine += nayaxProduct.MissingStockByMDB.Value;
+                //}   
 
             }
         }
