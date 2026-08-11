@@ -31,6 +31,7 @@ export interface Product {
   machinePrice: number | null;
   commissionValue: number | null;
   suggestedNetValue: number | null;
+  suggestedPriceValue: number | null;
   quantityInStock: number;
   maxStockInMachine: number;
   lowStockThreshold: number;

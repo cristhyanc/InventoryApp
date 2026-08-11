@@ -18,6 +18,8 @@ public class Product
     [NotMapped]
     public decimal SuggestedNetValue { get; set; }
     [NotMapped]
+    public decimal SuggestedPriceValue { get; set; }
+    [NotMapped]
     public int? MdbCode { get; set; }
     [NotMapped]
     public int? MaxStockInMachine { get; set; }

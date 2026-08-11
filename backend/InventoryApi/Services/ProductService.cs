@@ -58,21 +58,14 @@ public class ProductService : IProductService
                 if (product == null)
                 {
                     product = dbProducts.Single(x => x.Id == nayaxProduct.NayaxProductID);
-                    //product.MaxStockInMachine = product.LowStockThreshold;
                     product.MaxStockInMachine = 0;
                     result.Add(product);
                 }
-
                 product.MaxStockInMachine += nayaxProduct.MissingStockByMDB.Value;
-                //if (nayaxProduct.VendOutAlertThreshold >= (nayaxProduct.PAR - nayaxProduct.MissingStockByMDB))
-                //{
-                //    product.MaxStockInMachine += nayaxProduct.MissingStockByMDB.Value;
-                //}   
-
             }
         }
 
-        return result.Where(p => p.IsActive && p.QuantityInStock <= p.MaxStockInMachine).OrderBy(p => p.QuantityInStock).ToList();
+        return result.Where(p => p.IsActive && p.QuantityInStock <= p.MaxStockInMachine).OrderByDescending(p =>p.MaxStockInMachine - p.QuantityInStock).ToList();
     }
 
     public async Task<bool> ImportProductsAsync()

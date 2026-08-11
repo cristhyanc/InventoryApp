@@ -43,31 +43,12 @@ public class MachineService : IMachineService
             result.MachinePrice = mp.RetailPrice ?? 0;
             result.CommissionValue = mp.CommissionValue ?? 0;
             result.SuggestedNetValue = result.MachinePrice - (result.MachinePrice * result.CommissionValue / 100) - result.UnitPrice - (decimal)0.18;
+            result.SuggestedPriceValue = ((decimal)0.18 + result.UnitPrice) / ((decimal)0.5 - (result.CommissionValue / 100));
             result.MdbCode = mp.MDBCode;
             result.QuantityInStock = (mp.PAR - mp.MissingStockByMDB) ?? 0;
             result.MaxStockInMachine = mp.PAR;
             return result;
         }).ToList().OrderBy(x => x.MdbCode).ToList();
-
-        //// Load last eat-before dates for these products (most recent first)
-        //var productIds = products.Select(p => p.Id).Distinct().ToList();
-        //var adjustments = await _db.StockAdjustments
-        //    .Where(sa => productIds.Contains(sa.ProductId) && sa.EatBefore != null)
-        //    .OrderByDescending(sa => sa.CreatedAt)
-        //    .ToListAsync();
-
-        //var adjustmentsByProduct = adjustments
-        //    .GroupBy(sa => sa.ProductId)
-        //    .ToDictionary(g => g.Key, g => g.Select(sa => sa.EatBefore!.Value).ToList());
-
-        //foreach (var prod in products)
-        //{
-        //    if (adjustmentsByProduct.TryGetValue(prod.Id, out var dates))
-        //    {
-        //        prod.LastEatBefore1 = dates.ElementAtOrDefault(0);
-        //        prod.LastEatBefore2 = dates.ElementAtOrDefault(1);
-        //    }
-        //}
 
         return products;
     }
