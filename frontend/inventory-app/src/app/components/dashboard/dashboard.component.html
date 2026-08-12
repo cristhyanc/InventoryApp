@@ -23,41 +23,53 @@
   @if (machines.length === 0) {
     <p class="text-sm text-slate-500">No machines available yet.</p>
   } @else {
-    <div class="flex flex-col gap-4">
-      @for (machine of machines; track machine.machineID) {
-        <div class="rounded-xl border border-slate-200 p-4 w-full">
-          <div class="mb-4 flex items-center justify-between gap-3">
-            <div>
-              <div class="text-lg font-semibold text-slate-800">{{ machine.machineName || 'Unnamed machine' }}</div>
-              <div class="text-sm text-slate-500">#{{ machine.machineNumber || machine.machineID }}</div>
-            </div>
-            <a [routerLink]="['/machines', machine.machineID]" class="inline-flex items-center rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700">Details</a>
-          </div>
-
-          <div class="flex flex-row justify-between">
-            <div class="rounded-lg bg-slate-50 p-3 text-center">
-              <div class="text-lg font-semibold text-blue-600">${{ machine.todayGrossRevenue.toFixed(2) }}</div>
-              <div class="text-lg font-semibold text-blue-600">${{ machine.todayNetRevenue.toFixed(2) }}</div>
-              <div class="text-xs uppercase tracking-wide text-slate-500">Today</div>
-            </div>
-            <div class="rounded-lg bg-slate-50 p-3 text-center">
-              <div class="text-lg font-semibold text-blue-600">${{ machine.currentWeekGrossRevenue.toFixed(2) }}</div>
-              <div class="text-lg font-semibold text-blue-600">${{ machine.currentWeekNetRevenue.toFixed(2) }}</div>
-              <div class="text-xs uppercase tracking-wide text-slate-500">Current Week</div>
-            </div>
-            <div class="rounded-lg bg-slate-50 p-3 text-center">
-              <div class="text-lg font-semibold text-blue-600">${{ machine.lastWeekGrossRevenue.toFixed(2) }}</div>
-              <div class="text-lg font-semibold text-blue-600">${{ machine.lastWeekNetRevenue.toFixed(2) }}</div>
-              <div class="text-xs uppercase tracking-wide text-slate-500">Last Week</div>
-            </div>
-            <div class="rounded-lg bg-slate-50 p-3 text-center">
-              <div class="text-lg font-semibold text-blue-600">${{ machine.twoWeeksAgoGrossRevenue.toFixed(2) }}</div>
-              <div class="text-lg font-semibold text-blue-600">${{ machine.twoWeeksAgoNetRevenue.toFixed(2) }}</div>
-              <div class="text-xs uppercase tracking-wide text-slate-500">2 Weeks Ago</div>
-            </div>                     
-          </div>
-        </div>
-      }
+    <div class="overflow-x-auto">
+      <table class="min-w-full divide-y divide-slate-200 text-sm">
+        <thead class="bg-slate-50">
+          <tr>
+            <th class="px-4 py-3 text-left font-semibold text-slate-700">Machine</th>
+            <th class="px-4 py-3 text-right font-semibold text-slate-700">Today Gross</th>
+            <th class="px-4 py-3 text-right font-semibold text-slate-700">Today Net</th>
+            <th class="px-4 py-3 text-right font-semibold text-slate-700">Current Week Gross</th>
+            <th class="px-4 py-3 text-right font-semibold text-slate-700">Current Week Net</th>
+            <th class="px-4 py-3 text-right font-semibold text-slate-700">Last Week Gross</th>
+            <th class="px-4 py-3 text-right font-semibold text-slate-700">Last Week Net</th>
+            <th class="px-4 py-3 text-right font-semibold text-slate-700">2 Weeks Ago Gross</th>
+            <th class="px-4 py-3 text-right font-semibold text-slate-700">2 Weeks Ago Net</th>
+            <th class="px-4 py-3"></th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100 bg-white">
+          @for (machine of machines; track machine.machineID) {
+            <tr>
+              <td class="px-4 py-3 text-slate-700">{{ machine.machineName || 'Unnamed machine' }}</td>
+              <td class="px-4 py-3 text-right text-slate-600">${{ machine.todayGrossRevenue.toFixed(2) }}</td>
+              <td class="px-4 py-3 text-right text-slate-600">${{ machine.todayNetRevenue.toFixed(2) }} - %{{ (machine.todayNetRevenue / machine.todayGrossRevenue * 100).toFixed(2) }}</td>
+              <td class="px-4 py-3 text-right text-slate-600">${{ machine.currentWeekGrossRevenue.toFixed(2) }}</td>
+              <td class="px-4 py-3 text-right text-slate-600">${{ machine.currentWeekNetRevenue.toFixed(2) }} - %{{ (machine.currentWeekNetRevenue / machine.currentWeekGrossRevenue * 100).toFixed(2) }}</td>
+              <td class="px-4 py-3 text-right text-slate-600">${{ machine.lastWeekGrossRevenue.toFixed(2) }}</td>
+              <td class="px-4 py-3 text-right text-slate-600">${{ machine.lastWeekNetRevenue.toFixed(2) }} - %{{ (machine.lastWeekNetRevenue / machine.lastWeekGrossRevenue * 100).toFixed(2) }}</td>
+              <td class="px-4 py-3 text-right text-slate-600">${{ machine.twoWeeksAgoGrossRevenue.toFixed(2) }}</td>
+              <td class="px-4 py-3 text-right text-slate-600">${{ machine.twoWeeksAgoNetRevenue.toFixed(2) }} - %{{ (machine.twoWeeksAgoNetRevenue / machine.twoWeeksAgoGrossRevenue * 100).toFixed(2) }}</td>
+              <td class="px-4 py-3 text-right"><a [routerLink]="['/machines', machine.machineID]" class="inline-flex items-center rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700">Details</a></td>
+            </tr>
+          }
+        </tbody>
+        <tfoot class="bg-slate-50 font-semibold">
+          <tr>
+            <td class="px-4 py-3">Totals</td>          
+            <td class="px-4 py-3 text-right">${{ totalTodayGross.toFixed(2) }}</td>
+            <td class="px-4 py-3 text-right">${{ totalTodayNet.toFixed(2) }} - %{{ (totalTodayNet / totalTodayGross * 100).toFixed(2) }}</td>
+            <td class="px-4 py-3 text-right">${{ totalCurrentWeekGross.toFixed(2) }}</td>
+            <td class="px-4 py-3 text-right">${{ totalCurrentWeekNet.toFixed(2) }} - %{{ (totalCurrentWeekNet / totalCurrentWeekGross * 100).toFixed(2) }}</td>
+            <td class="px-4 py-3 text-right">${{ totalLastWeekGross.toFixed(2) }}</td>
+            <td class="px-4 py-3 text-right">${{ totalLastWeekNet.toFixed(2) }} - %{{ (totalLastWeekNet / totalLastWeekGross * 100).toFixed(2) }}</td>
+            <td class="px-4 py-3 text-right">${{ totalTwoWeeksAgoGross.toFixed(2) }}</td>
+            <td class="px-4 py-3 text-right">${{ totalTwoWeeksAgoNet.toFixed(2) }} - %{{ (totalTwoWeeksAgoNet / totalTwoWeeksAgoGross * 100).toFixed(2) }}</td>
+            <td class="px-4 py-3"></td>
+          </tr>
+        </tfoot>
+      </table>
     </div>
   }
 </div>

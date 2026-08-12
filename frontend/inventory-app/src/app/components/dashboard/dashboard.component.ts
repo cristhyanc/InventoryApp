@@ -41,4 +41,38 @@ export class DashboardComponent implements OnInit {
   get inventoryValue(): number {
     return this.products.reduce((sum, p) => sum + p.quantityInStock * p.unitPrice, 0);
   }
+
+  // Machine aggregates
+  get totalTodayGross(): number {
+    return this.machines.reduce((sum, m) => sum + (m.todayGrossRevenue ?? 0), 0);
+  }
+
+  get totalTodayNet(): number {
+    return this.machines.reduce((sum, m) => sum + (m.todayNetRevenue ?? 0), 0);
+  }
+
+  get totalCurrentWeekGross(): number {
+    return this.machines.reduce((sum, m) => sum + (m.currentWeekGrossRevenue ?? 0), 0);
+  }
+
+  get totalCurrentWeekNet(): number {
+    return this.machines.reduce((sum, m) => sum + (m.currentWeekNetRevenue ?? 0), 0);
+  }
+
+  get totalLastWeekGross(): number {
+    return this.machines.reduce((sum, m) => sum + (m.lastWeekGrossRevenue ?? 0), 0);
+  }
+
+  get totalLastWeekNet(): number {
+    return this.machines.reduce((sum, m) => sum + (m.lastWeekNetRevenue ?? 0), 0);
+  }
+
+  get totalTwoWeeksAgoGross(): number {
+    return this.machines.reduce((sum, m) => sum + (m.twoWeeksAgoGrossRevenue ?? 0), 0);
+  }
+
+  get totalTwoWeeksAgoNet(): number {
+    return this.machines.reduce((sum, m) => sum + (m.twoWeeksAgoNetRevenue ?? 0), 0);
+  }
 }
+

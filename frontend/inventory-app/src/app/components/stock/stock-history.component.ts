@@ -4,7 +4,8 @@ import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { StockService } from '../../services/stock.service';
 import { ProductService } from '../../services/product.service';
-import { Product, StockAdjustment, StockAdjustmentReason } from '../../models/models';
+import { MachineService } from '../../services/machine.service';
+import { Product, StockAdjustment, StockAdjustmentReason, Machine } from '../../models/models';
 
 @Component({
   selector: 'app-stock-history',
@@ -15,6 +16,7 @@ import { Product, StockAdjustment, StockAdjustmentReason } from '../../models/mo
 export class StockHistoryComponent implements OnInit {
   product: Product | null = null;
   history: StockAdjustment[] = [];
+  machines: Machine[] = [];
   StockAdjustmentReason = StockAdjustmentReason;
   error = '';
 
@@ -40,7 +42,8 @@ export class StockHistoryComponent implements OnInit {
   constructor(
     private route: ActivatedRoute,
     private stockService: StockService,
-    private productService: ProductService
+    private productService: ProductService,
+    private machineService: MachineService
   ) {}
 
   ngOnInit(): void {
@@ -51,10 +54,17 @@ export class StockHistoryComponent implements OnInit {
   load(): void {
     this.productService.get(this.productId).subscribe((p) => (this.product = p));
     this.stockService.history(this.productId).subscribe((h) => (this.history = h));
+    this.machineService.getAll().subscribe((ms) => (this.machines = ms || []));
   }
 
   reasonLabel(reason: StockAdjustmentReason): string {
     return this.reasonOptions.find((r) => r.value === reason)?.label ?? 'Machine refill';
+  }
+
+  getMachineLabel(machineId?: number | null): string {
+    if (machineId === null || machineId === undefined) return '—';
+    const m = this.machines.find((x) => x.machineID === machineId);
+    return m?.machineName ?? String(machineId);
   }
 
   adjust(): void {

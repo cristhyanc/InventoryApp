@@ -97,16 +97,20 @@ public class MachineService : IMachineService
     private static decimal CalculateRevenue(List<NayaxLastSalesReport> sales, List<NayaxMachineProduct> machineProducts, List<Product> products)
     {
         decimal totalRevenue = 0;
+        decimal machineCommission = machineProducts
+            .FirstOrDefault(x => x.CommissionValue.HasValue && x.CommissionValue.Value > 0)
+            ?.CommissionValue ?? 0m;
+
         foreach (var sale in sales)
         {
-            var machineProduct = machineProducts.SingleOrDefault(p => p.ProductName == sale.ProductName);
-            if (machineProduct != null)
+            var salesName = sale.ProductName?.Split("(").First();
+            var product = products.SingleOrDefault(p => p.Name == salesName);
+            if (product != null)
             {
-                var product = products.SingleOrDefault(p => p.Id == machineProduct.NayaxProductID);
                 decimal productCost = product?.UnitPrice ?? 0;
-                decimal commission = sale.SettlementValue * (machineProduct.CommissionValue ?? 0);
+                decimal commission = machineCommission != 0 ? sale.SettlementValue * machineCommission / 100 : 0;
                 decimal paymentFee = (decimal)(sale.PaymentMethod == "Cash" ? 0 : 0.18);
-                totalRevenue += sale.SettlementValue - (productCost * sale.Quantity) - commission - paymentFee;
+                totalRevenue += sale.SettlementValue - (productCost * (sale.Quantity == 0 ? 1 : sale.Quantity)) - commission - paymentFee;
             }
         }
         return totalRevenue;
