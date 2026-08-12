@@ -31,6 +31,7 @@ public record StockAdjustmentDto(
     int QuantityChange,
     StockAdjustmentReason Reason,
     string? Notes,
+    long? MachineId,
     DateTime? EatBefore
 );
 

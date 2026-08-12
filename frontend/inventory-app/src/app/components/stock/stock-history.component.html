@@ -38,6 +38,10 @@
         </select>
       </div>
       <div>
+        <label class="mb-1 block text-sm font-medium text-slate-700">Machine ID (optional)</label>
+        <input [(ngModel)]="form.machineId" name="machineId" type="number" placeholder="e.g. 12345" />
+      </div>
+      <div>
         <label class="mb-1 block text-sm font-medium text-slate-700">Eat Before</label>
         <input [(ngModel)]="form.EatBefore" name="eatBefore" type="date" />
       </div>

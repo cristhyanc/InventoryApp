@@ -4,7 +4,7 @@ export enum StockAdjustmentReason {
   Damaged = 2,
   Expired = 3,
   Correction = 4,
-  Other = 5
+  MachineRefill = 5
 }
 
 export interface Category {
@@ -95,6 +95,7 @@ export interface StockAdjustment {
   quantityChange: number;
   quantityAfter: number;
   reason: StockAdjustmentReason;
+  machineId?: number | null;
   notes?: string | null;
   eatBefore?: string | null;
   createdAt: string;
@@ -104,6 +105,7 @@ export interface StockAdjustmentDto {
   quantityChange: number;
   reason: StockAdjustmentReason;
   notes?: string | null;
+  machineId?: number | null;
   EatBefore?: string | null;
 }
 

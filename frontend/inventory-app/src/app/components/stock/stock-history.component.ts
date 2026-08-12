@@ -21,6 +21,7 @@ export class StockHistoryComponent implements OnInit {
   form = {
     quantityChange: 0,
     reason: StockAdjustmentReason.Restock,
+    machineId: null as number | null,
     notes: '',
     EatBefore: null as string | null
   };
@@ -31,7 +32,7 @@ export class StockHistoryComponent implements OnInit {
     { value: StockAdjustmentReason.Damaged, label: 'Damaged' },
     { value: StockAdjustmentReason.Expired, label: 'Expired' },
     { value: StockAdjustmentReason.Correction, label: 'Correction' },
-    { value: StockAdjustmentReason.Other, label: 'Other' }
+    { value: StockAdjustmentReason.MachineRefill, label: 'Machine refill' }
   ];
 
   private productId!: number;
@@ -53,7 +54,7 @@ export class StockHistoryComponent implements OnInit {
   }
 
   reasonLabel(reason: StockAdjustmentReason): string {
-    return this.reasonOptions.find((r) => r.value === reason)?.label ?? 'Other';
+    return this.reasonOptions.find((r) => r.value === reason)?.label ?? 'Machine refill';
   }
 
   adjust(): void {
@@ -65,7 +66,7 @@ export class StockHistoryComponent implements OnInit {
 
     this.stockService.adjust(this.productId, this.form).subscribe({
       next: () => {
-        this.form = { quantityChange: 0, reason: StockAdjustmentReason.Restock, notes: '', EatBefore: '' };
+        this.form = { quantityChange: 0, reason: StockAdjustmentReason.Restock, machineId: null, notes: '', EatBefore: '' };
         this.load();
       },
       error: (err) => {

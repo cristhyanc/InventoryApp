@@ -9,7 +9,7 @@ public enum StockAdjustmentReason
     Damaged = 2,
     Expired = 3,
     Correction = 4,
-    Other = 5
+    MachineRefill = 5
 }
 
 public class StockAdjustment
@@ -24,7 +24,8 @@ public class StockAdjustment
     public int QuantityChange { get; set; }
     public int QuantityAfter { get; set; }
 
-    public StockAdjustmentReason Reason { get; set; } = StockAdjustmentReason.Other;
+    public StockAdjustmentReason Reason { get; set; } = StockAdjustmentReason.MachineRefill;
+    public long? MachineId { get; set; }
     public string? Notes { get; set; }
 
     // Optional eat-before / expiration date for this adjustment (applies to restocks)

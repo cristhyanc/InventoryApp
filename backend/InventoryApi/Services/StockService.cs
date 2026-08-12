@@ -39,6 +39,7 @@ public class StockService : IStockService
             QuantityChange = dto.QuantityChange,
             QuantityAfter = newQuantity,
             Reason = dto.Reason,
+            MachineId = dto.MachineId,
             Notes = dto.Notes,
             EatBefore = dto.EatBefore
         };
