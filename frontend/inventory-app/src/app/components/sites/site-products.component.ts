@@ -14,6 +14,7 @@ import { SiteService } from '../../services/site.service';
 export class SiteProductsComponent implements OnInit {
   site$!: Observable<Site | null>;
   products$!: Observable<SiteProduct[]>;
+  products: SiteProduct[] = [];
   loading$ = new BehaviorSubject(true);
   error$ = new BehaviorSubject('');
 
@@ -54,7 +55,9 @@ export class SiteProductsComponent implements OnInit {
         if (!siteId || Number.isNaN(siteId)) return of([] as SiteProduct[]);
 
         return this.siteService.getProducts(siteId).pipe(
+          tap(products => (this.products = products)),
           catchError(() => {
+            this.products = [];
             this.error$.next('Failed to load products for this site.');
             return of([] as SiteProduct[]);
           })
@@ -71,5 +74,31 @@ export class SiteProductsComponent implements OnInit {
     if (percentage < 30) return 'bg-red-100 text-red-700';
     if (percentage < 80) return 'bg-yellow-100 text-yellow-700';
     return 'bg-green-100 text-green-700';
+  }
+
+  exportProducts(site: Site): void {
+    if (!this.products.length) return;
+
+    const headers = ['Product', 'Unit Price', 'Site Price', 'Profit', 'Stock', 'Max Stock'];
+    const rows = this.products.map(product => [
+      product.name,
+      product.unitPrice.toFixed(2),
+      product.sitePrice.toFixed(2),
+      product.profit.toFixed(2),
+      product.quantityInStock.toString(),
+      product.maxStock.toString()
+    ]);
+    const csv = [headers, ...rows]
+      .map(row => row.map(value => `"${value.replace(/"/g, '""')}"`).join(','))
+      .join('\r\n');
+    const blob = new Blob([`\ufeff${csv}`], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    const filename = (site.siteName || 'site').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '');
+
+    link.href = url;
+    link.download = `${filename || 'site'}-products.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
   }
 }
