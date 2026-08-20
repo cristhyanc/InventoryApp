@@ -1,7 +1,7 @@
 import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterLink, ActivatedRoute } from '@angular/router';
-import { BehaviorSubject, catchError, map, Observable, of, startWith, switchMap, tap } from 'rxjs';
+import { BehaviorSubject, catchError, map, Observable, of, switchMap, tap } from 'rxjs';
 import { MachineService } from '../../services/machine.service';
 import { StockService } from '../../services/stock.service';
 import { ToastService } from '../../services/toast.service';
@@ -18,7 +18,6 @@ export class MachineDetailComponent implements OnInit {
   products$!: Observable<Product[]>;
   loading$ = new BehaviorSubject(true);
   error$ = new BehaviorSubject('');
-  private productsRefresh = new BehaviorSubject<void>(undefined);
 
   constructor(
     private route: ActivatedRoute,
@@ -59,22 +58,21 @@ export class MachineDetailComponent implements OnInit {
           return of([] as Product[]);
         }
 
-        return this.productsRefresh.pipe(
-          startWith(undefined),
-          switchMap(() =>
-            this.machineService.getProducts(machineId).pipe(
-              catchError(() => {
-                this.error$.next('Failed to load products for this machine.');
-                return of([] as Product[]);
-              })
-            )
-          )
+        return this.machineService.getProducts(machineId).pipe(
+          catchError(() => {
+            this.error$.next('Failed to load products for this machine.');
+            return of([] as Product[]);
+          })
         );
       })
     );
   }
 
-  restockProduct(product: Product, machine: Machine | null, qty?: string | number): void {
+  restockProduct(product: Product, machine: Machine | null, qty?: string | number, qtyInput?: HTMLInputElement): void {
+    if (qtyInput) {
+      qtyInput.value = '0';
+    }
+
     const defaultQty = (product.maxStockInMachine ?? 0) - (product.quantityInStock ?? 0);
     const qtyNum = Math.trunc(Number(qty ?? defaultQty));
     if (!product || qtyNum <= 0) {
@@ -92,7 +90,6 @@ export class MachineDetailComponent implements OnInit {
     this.stockService.adjust(product.id, payload).subscribe({
       next: () => {
         this.toastService.success(`${product.name} restocked by ${qtyNum}`);
-        this.productsRefresh.next();
       },
       error: () => {
         this.toastService.error('Failed to create restock adjustment');

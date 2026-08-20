@@ -25,7 +25,6 @@ export class DashboardComponent implements OnInit {
     this.productService.getAll().subscribe((p) => (this.products = p));
     this.productService.getLowStock().subscribe((p) => (this.lowStock = p));
     this.machineService.getAll().subscribe((m) => {
-      console.log('Machines:', m);
       this.machines = m;
     });
   }
