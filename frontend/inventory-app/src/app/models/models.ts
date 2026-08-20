@@ -64,6 +64,27 @@ export interface Machine {
   currentWeekNetRevenue: number;
 }
 
+export interface Site {
+  siteId: number;
+  siteName: string;
+  machineCount: number;
+  totalStockPercentage: number;
+  emptyProductCount: number;
+  todayRevenue: number;
+  currentWeekRevenue: number;
+  lastWeekRevenue: number;
+}
+
+export interface SiteProduct {
+  productId: number;
+  name: string;
+  unitPrice: number;
+  sitePrice: number;
+  profit: number;
+  quantityInStock: number;
+  maxStock: number;
+}
+
 export interface ProductCreateDto {
   name: string;
   sku?: string | null;

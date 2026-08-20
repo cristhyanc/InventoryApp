@@ -45,6 +45,7 @@ builder.Services.AddScoped<InventoryApi.Services.Interfaces.ISupplierService, In
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IStockService, InventoryApi.Services.StockService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IReceiptService, InventoryApi.Services.ReceiptService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IMachineService, InventoryApi.Services.MachineService>();
+builder.Services.AddScoped<InventoryApi.Services.Interfaces.ISiteService, InventoryApi.Services.SiteService>();
 
 var app = builder.Build();
 

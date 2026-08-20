@@ -17,6 +17,51 @@
 
 <div class="mb-6 rounded-xl bg-white p-6 shadow-sm">
   <div class="mb-4 flex items-center justify-between">
+    <h2 class="text-lg font-semibold text-slate-800">📍 Sites</h2>
+  </div>
+
+  @if (sites.length === 0) {
+    <p class="text-sm text-slate-500">No sites available yet.</p>
+  } @else {
+    <div class="overflow-x-auto">
+      <table class="min-w-full divide-y divide-slate-200 text-sm">
+        <thead class="bg-slate-50">
+          <tr>
+            <th class="px-4 py-3 text-left font-semibold text-slate-700">Site</th>
+            <th class="px-4 py-3 text-left font-semibold text-slate-700">Stock</th>
+            <th class="px-4 py-3 text-left font-semibold text-slate-700">Empty Products</th>
+            <th class="px-4 py-3 text-right font-semibold text-slate-700">Today Revenue</th>
+            <th class="px-4 py-3 text-right font-semibold text-slate-700">This Week Revenue</th>
+            <th class="px-4 py-3 text-right font-semibold text-slate-700">Last Week Revenue</th>
+            <th class="px-4 py-3"></th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100 bg-white">
+          @for (site of sites; track site.siteId) {
+            <tr>
+              <td class="px-4 py-3 text-slate-700">{{ site.siteName }}</td>
+              <td class="px-4 py-3">
+                <span class="inline-flex rounded-full px-2.5 py-1 text-xs font-semibold" [ngClass]="siteStockClass(site)">
+                  {{ site.totalStockPercentage.toFixed(0) }}%
+                </span>
+              </td>
+              <td class="px-4 py-3 text-slate-600">{{ site.emptyProductCount }}</td>
+              <td class="px-4 py-3 text-right text-slate-600">${{ site.todayRevenue.toFixed(2) }}</td>
+              <td class="px-4 py-3 text-right text-slate-600">${{ site.currentWeekRevenue.toFixed(2) }}</td>
+              <td class="px-4 py-3 text-right text-slate-600">${{ site.lastWeekRevenue.toFixed(2) }}</td>
+              <td class="px-4 py-3 text-right">
+                <a [routerLink]="['/sites', site.siteId, 'products']" class="inline-flex items-center rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700">Products</a>
+              </td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  }
+</div>
+
+<div class="mb-6 rounded-xl bg-white p-6 shadow-sm">
+  <div class="mb-4 flex items-center justify-between">
     <h2 class="text-lg font-semibold text-slate-800">🛠️ Machines</h2>
   </div>
 

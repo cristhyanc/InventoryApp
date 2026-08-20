@@ -3,7 +3,8 @@ import { CommonModule } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import { ProductService } from '../../services/product.service';
 import { MachineService } from '../../services/machine.service';
-import { Product, Machine } from '../../models/models';
+import { SiteService } from '../../services/site.service';
+import { Product, Machine, Site } from '../../models/models';
 
 @Component({
   selector: 'app-dashboard',
@@ -15,10 +16,12 @@ export class DashboardComponent implements OnInit {
   products: Product[] = [];
   lowStock: Product[] = [];
   machines: Machine[] = [];
+  sites: Site[] = [];
 
   constructor(
     private productService: ProductService,
-    private machineService: MachineService
+    private machineService: MachineService,
+    private siteService: SiteService
   ) {}
 
   ngOnInit(): void {
@@ -26,6 +29,9 @@ export class DashboardComponent implements OnInit {
     this.productService.getLowStock().subscribe((p) => (this.lowStock = p));
     this.machineService.getAll().subscribe((m) => {
       this.machines = m;
+    });
+    this.siteService.getAll().subscribe((sites) => {
+      this.sites = sites;
     });
   }
 
@@ -73,5 +79,10 @@ export class DashboardComponent implements OnInit {
   get totalTwoWeeksAgoNet(): number {
     return this.machines.reduce((sum, m) => sum + (m.twoWeeksAgoNetRevenue ?? 0), 0);
   }
-}
 
+  siteStockClass(site: Site): string {
+    if (site.totalStockPercentage < 30) return 'bg-red-100 text-red-700';
+    if (site.totalStockPercentage < 80) return 'bg-yellow-100 text-yellow-700';
+    return 'bg-green-100 text-green-700';
+  }
+}

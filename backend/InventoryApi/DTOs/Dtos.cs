@@ -40,3 +40,24 @@ public record CategoryDto(string Name, string? Description);
 public record SupplierDto(string Name, string? ContactName, string? Phone, string? Email, string? Address);
 
 public record ReceiptCreateMetaDto(string Title, string? Notes, decimal? TotalAmount, DateTime? PurchaseDate, int? SupplierId);
+
+public record SiteSummaryDto(
+    long SiteId,
+    string SiteName,
+    int MachineCount,
+    decimal TotalStockPercentage,
+    int EmptyProductCount,
+    decimal TodayRevenue,
+    decimal CurrentWeekRevenue,
+    decimal LastWeekRevenue
+);
+
+public record SiteProductDto(
+    long ProductId,
+    string Name,
+    decimal UnitPrice,
+    decimal SitePrice,
+    decimal Profit,
+    int QuantityInStock,
+    int MaxStock
+);

@@ -1,0 +1,54 @@
+<div class="rounded-xl bg-white p-6 shadow-sm">
+  <div class="mb-6 flex flex-wrap items-center justify-between gap-4">
+    <div>
+      <h1 class="text-2xl font-semibold text-slate-800">Site Products</h1>
+      <ng-container *ngIf="site$ | async as site">
+        <p class="text-sm text-slate-500">{{ site?.siteName || 'Unnamed site' }} products across {{ site?.machineCount }} machines.</p>
+      </ng-container>
+    </div>
+    <a routerLink="/" class="inline-flex items-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Back to Dashboard</a>
+  </div>
+
+  <ng-container *ngIf="loading$ | async as loading">
+    <p class="text-sm text-slate-500" *ngIf="loading">Loading site products…</p>
+  </ng-container>
+
+  <ng-container *ngIf="error$ | async as error">
+    <p class="text-sm text-red-600" *ngIf="error">{{ error }}</p>
+  </ng-container>
+
+  <ng-container *ngIf="products$ | async as products">
+    <ng-container *ngIf="products.length === 0; else productsTable">
+      <p class="text-sm text-slate-500">No products are currently associated with this site.</p>
+    </ng-container>
+
+    <ng-template #productsTable>
+      <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-slate-200 text-sm">
+          <thead class="bg-slate-50">
+            <tr>
+              <th class="px-4 py-3 text-left font-semibold text-slate-700">Name</th>
+              <th class="px-4 py-3 text-left font-semibold text-slate-700">Unit Price</th>
+              <th class="px-4 py-3 text-left font-semibold text-slate-700">Site Price</th>
+              <th class="px-4 py-3 text-left font-semibold text-slate-700">Profit</th>
+              <th class="px-4 py-3 text-left font-semibold text-slate-700">Stock</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100 bg-white">
+            <tr *ngFor="let product of products">
+              <td class="px-4 py-3 text-slate-700">{{ product.name }}</td>
+              <td class="px-4 py-3 text-slate-600">${{ product.unitPrice.toFixed(2) }}</td>
+              <td class="px-4 py-3 text-slate-600">${{ product.sitePrice.toFixed(2) }}</td>
+              <td class="px-4 py-3 text-slate-600">${{ product.profit.toFixed(2) }}</td>
+              <td class="px-4 py-3">
+                <span class="inline-flex rounded-full px-2.5 py-1 text-xs font-semibold" [ngClass]="stockClass(product)">
+                  {{ product.quantityInStock }} / {{ product.maxStock }}
+                </span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </ng-template>
+  </ng-container>
+</div>
