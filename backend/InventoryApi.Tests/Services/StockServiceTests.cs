@@ -42,4 +42,21 @@ public class StockServiceTests
         var hist = await svc.History(99);
         Assert.Empty(hist);
     }
+
+    [Fact]
+    public async Task Adjust_Throws_When_Stock_Would_Become_Negative()
+    {
+        using var db = CreateDbContext("stock_insufficient_test");
+        db.Products.Add(new Product { Id = 1, Name = "p", QuantityInStock = 2 });
+        await db.SaveChangesAsync();
+
+        IStockService svc = new StockService(db);
+
+        var exception = await Assert.ThrowsAsync<InsufficientStockException>(() =>
+            svc.Adjust(1, new StockAdjustmentDto(-3, StockAdjustmentReason.MachineRefill, "note", 1, null)));
+
+        Assert.Equal("Not enough products in stock. Available stock: 2", exception.Message);
+        var product = await db.Products.FindAsync(1L);
+        Assert.Equal(2, product.QuantityInStock);
+    }
 }

@@ -68,11 +68,18 @@ export class MachineDetailComponent implements OnInit {
     );
   }
 
-  restockProduct(product: Product, machine: Machine | null, qty?: string | number, qtyInput?: HTMLInputElement): void {
-    if (qtyInput) {
-      qtyInput.value = '0';
-    }
+  stockClass(product: Product): string {
+    const maxStock = product.maxStockInMachine ?? 0;
+    const stockPercentage = maxStock > 0
+      ? ((product.quantityInStock ?? 0) / maxStock) * 100
+      : 100;
 
+    if (stockPercentage < 30) return 'bg-red-100 text-red-700';
+    if (stockPercentage < 80) return 'bg-yellow-100 text-yellow-700';
+    return 'bg-green-100 text-green-700';
+  }
+
+  restockProduct(product: Product, machine: Machine | null, qty?: string | number, qtyInput?: HTMLInputElement): void {
     const defaultQty = (product.maxStockInMachine ?? 0) - (product.quantityInStock ?? 0);
     const qtyNum = Math.trunc(Number(qty ?? defaultQty));
     if (!product || qtyNum <= 0) {
@@ -90,9 +97,15 @@ export class MachineDetailComponent implements OnInit {
     this.stockService.adjust(product.id, payload).subscribe({
       next: () => {
         this.toastService.success(`${product.name} restocked by ${qtyNum}`);
+        if (qtyInput) {
+          qtyInput.value = '0';
+        }
       },
-      error: () => {
-        this.toastService.error('Failed to create restock adjustment');
+      error: (x) => {
+        const message = typeof x.error === 'string'
+          ? x.error
+          : x.error?.message ?? x.error?.title;
+        this.toastService.error(message ?? 'Failed to restock product');
       }
     });
   }

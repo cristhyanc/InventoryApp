@@ -14,6 +14,7 @@ public class NayaxMachine
     public long MachineID { get; set; }
     public string? MachineName { get; set; }
     public string? MachineNumber { get; set; }
+    public long? CustomerID { get; set; }    
     public long? ActorID { get; set; }
 }
 

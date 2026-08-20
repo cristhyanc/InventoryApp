@@ -24,7 +24,16 @@ public class StockController : ControllerBase
     [HttpPost]
     public async Task<ActionResult<StockAdjustment>> Adjust(long productId, StockAdjustmentDto dto)
     {
-        var adjustment = await _service.Adjust(productId, dto);
+        StockAdjustment? adjustment;
+        try
+        {
+            adjustment = await _service.Adjust(productId, dto);
+        }
+        catch (InventoryApi.Services.InsufficientStockException exception)
+        {
+            return BadRequest(exception.Message);
+        }
+
         if (adjustment is null) return BadRequest("Invalid product or resulting quantity");
         return Ok(adjustment);
     }

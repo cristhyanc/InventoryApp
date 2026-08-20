@@ -28,7 +28,7 @@ public class StockService : IStockService
         if (product is null) return null;
 
         var newQuantity = product.QuantityInStock + dto.QuantityChange;
-        if (newQuantity < 0) return null;
+        if (newQuantity < 0) throw new InsufficientStockException(product.QuantityInStock);
 
         product.QuantityInStock = newQuantity;
         product.UpdatedAt = DateTime.UtcNow;
