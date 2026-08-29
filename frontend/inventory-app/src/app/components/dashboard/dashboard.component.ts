@@ -26,7 +26,7 @@ export class DashboardComponent implements OnInit {
 
   ngOnInit(): void {
     this.productService.getAll().subscribe((p) => (this.products = p));
-    this.productService.getLowStock().subscribe((p) => (this.lowStock = p));
+    this.productService.getLowStock().subscribe((p) => (this.lowStock = p.filter((product) => product.isActive !== false)));
     this.machineService.getAll().subscribe((m) => {
       this.machines = m;
     });

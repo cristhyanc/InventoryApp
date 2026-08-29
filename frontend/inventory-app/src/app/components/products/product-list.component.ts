@@ -52,7 +52,9 @@ export class ProductListComponent implements OnInit {
         supplierId: this.supplierId === '' ? undefined : this.supplierId,
         lowStockOnly: this.lowStockOnly || undefined
       })
-      .subscribe((p) => (this.products = p));
+      .subscribe((p) => {
+        this.products = p.filter((product) => !this.lowStockOnly || product.isActive !== false);
+      });
   }
 
   resetFilters(): void {
