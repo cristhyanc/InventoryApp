@@ -23,6 +23,14 @@ public class AppDbContext : DbContext
             .Property(r => r.TotalAmount)
             .HasColumnType("decimal(18,2)");
 
+        modelBuilder.Entity<Receipt>()
+            .Property(r => r.DeliveryCost)
+            .HasColumnType("decimal(18,2)");
+
+        modelBuilder.Entity<Receipt>()
+            .Property(r => r.PackageCost)
+            .HasColumnType("decimal(18,2)");
+
         modelBuilder.Entity<Product>()
             .HasOne(p => p.Category)
             .WithMany(c => c.Products)

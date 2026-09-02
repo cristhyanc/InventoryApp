@@ -23,6 +23,8 @@ export class ReceiptUploadComponent implements OnInit {
     title: '',
     notes: '',
     totalAmount: null as number | null,
+    deliveryCost: null as number | null,
+    packageCost: null as number | null,
     purchaseDate: new Date().toISOString().substring(0, 10),
     supplierId: '' as number | ''
   };
@@ -72,6 +74,8 @@ export class ReceiptUploadComponent implements OnInit {
         title: this.form.title.trim(),
         notes: this.form.notes || null,
         totalAmount: this.form.totalAmount,
+        deliveryCost: this.form.deliveryCost,
+        packageCost: this.form.packageCost,
         purchaseDate: this.form.purchaseDate ? new Date(this.form.purchaseDate).toISOString() : null,
         supplierId: this.form.supplierId === '' ? null : this.form.supplierId
       })

@@ -67,7 +67,8 @@ Open **http://localhost:4200** in your browser.
 | `GET /api/products/alerts/low-stock` | Products at or below their low-stock threshold |
 | `GET/POST /api/products/{id}/stock` | Stock adjustment history / apply an adjustment |
 | `GET /api/receipts` | List receipts (optionally `?supplierId=`) |
-| `POST /api/receipts` | Upload a receipt (multipart form: `file`, `title`, `notes`, `totalAmount`, `purchaseDate`, `supplierId`) |
+| `POST /api/receipts` | Upload a receipt (multipart form: `file`, `title`, `notes`, `totalAmount`, `deliveryCost`, `packageCost`, `purchaseDate`, `supplierId`) |
+| `PUT /api/receipts/{id}` | Update receipt metadata (same fields as upload) |
 | `GET /api/receipts/{id}/file` | Download/view the stored receipt scan |
 | `DELETE /api/receipts/{id}` | Delete a receipt and its file |
 

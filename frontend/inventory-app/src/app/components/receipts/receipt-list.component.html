@@ -25,9 +25,66 @@
           @if (r.supplier) {
             <p class="text-sm text-slate-600">Supplier: {{ r.supplier.name }}</p>
           }
+          @if (r.deliveryCost !== null || r.packageCost !== null) {
+            <p class="text-xs text-slate-500">
+              @if (r.deliveryCost !== null && r.deliveryCost !== undefined) {
+                <span>Delivery: ${{ r.deliveryCost.toFixed(2) }}</span>
+              }
+              @if (r.packageCost !== null && r.packageCost !== undefined) {
+                <span>@if (r.deliveryCost !== null && r.deliveryCost !== undefined) { · } Package: ${{ r.packageCost.toFixed(2) }}</span>
+              }
+            </p>
+          }
           <p class="text-xs text-slate-400">{{ r.fileName }} · {{ formatSize(r.fileSizeBytes) }}</p>
         </div>
-        <button class="mt-4 inline-flex items-center rounded-md bg-red-600 px-3 py-2 text-sm font-medium text-white hover:bg-red-700" (click)="remove(r)">Delete</button>
+        <div class="mt-4 flex flex-wrap gap-2">
+          <button class="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50" (click)="startEdit(r)">Edit</button>
+          <button class="inline-flex items-center rounded-md bg-red-600 px-3 py-2 text-sm font-medium text-white hover:bg-red-700" (click)="remove(r)">Delete</button>
+        </div>
+
+        @if (editingReceiptId === r.id) {
+          <form class="mt-4 space-y-3 border-t border-slate-200 pt-4" (ngSubmit)="saveEdit(r)">
+            <div>
+              <label class="mb-1 block text-sm font-medium text-slate-700">Title</label>
+              <input [(ngModel)]="editForm.title" name="editTitle" required />
+            </div>
+            <div>
+              <label class="mb-1 block text-sm font-medium text-slate-700">Supplier</label>
+              <select [(ngModel)]="editForm.supplierId" name="editSupplierId">
+                <option value="">None</option>
+                @for (s of suppliers; track s.id) {
+                  <option [ngValue]="s.id">{{ s.name }}</option>
+                }
+              </select>
+            </div>
+            <div>
+              <label class="mb-1 block text-sm font-medium text-slate-700">Purchase Date</label>
+              <input type="date" [(ngModel)]="editForm.purchaseDate" name="editPurchaseDate" />
+            </div>
+            <div class="grid gap-3 md:grid-cols-2">
+              <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700">Total Amount ($)</label>
+                <input type="number" step="0.01" min="0" [(ngModel)]="editForm.totalAmount" name="editTotalAmount" />
+              </div>
+              <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700">Delivery Cost ($)</label>
+                <input type="number" step="0.01" min="0" [(ngModel)]="editForm.deliveryCost" name="editDeliveryCost" />
+              </div>
+              <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700">Package Cost ($)</label>
+                <input type="number" step="0.01" min="0" [(ngModel)]="editForm.packageCost" name="editPackageCost" />
+              </div>
+            </div>
+            <div>
+              <label class="mb-1 block text-sm font-medium text-slate-700">Notes</label>
+              <textarea [(ngModel)]="editForm.notes" name="editNotes" rows="2"></textarea>
+            </div>
+            <div class="flex flex-wrap gap-2">
+              <button type="submit" class="inline-flex items-center rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700">Save</button>
+              <button type="button" class="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50" (click)="cancelEdit()">Cancel</button>
+            </div>
+          </form>
+        }
       </div>
     }
   </div>

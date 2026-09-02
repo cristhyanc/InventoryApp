@@ -6,6 +6,8 @@ public class Receipt
     public string Title { get; set; } = string.Empty;
     public string? Notes { get; set; }
     public decimal? TotalAmount { get; set; }
+    public decimal? DeliveryCost { get; set; }
+    public decimal? PackageCost { get; set; }
     public DateTime PurchaseDate { get; set; } = DateTime.UtcNow;
 
     public int? SupplierId { get; set; }

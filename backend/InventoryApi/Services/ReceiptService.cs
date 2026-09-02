@@ -54,7 +54,7 @@ public class ReceiptService : IReceiptService
         return (bytes, receipt.ContentType, receipt.FileName);
     }
 
-    public async Task<Receipt?> Upload(IFormFile file, string title, string? notes, decimal? totalAmount, DateTime? purchaseDate, int? supplierId)
+    public async Task<Receipt?> Upload(IFormFile file, string title, string? notes, decimal? totalAmount, decimal? deliveryCost, decimal? packageCost, DateTime? purchaseDate, int? supplierId)
     {
         if (file is null || file.Length == 0) return null;
         if (file.Length > MaxFileSizeBytes) return null;
@@ -77,6 +77,8 @@ public class ReceiptService : IReceiptService
             Title = string.IsNullOrWhiteSpace(title) ? file.FileName : title,
             Notes = notes,
             TotalAmount = totalAmount,
+            DeliveryCost = deliveryCost,
+            PackageCost = packageCost,
             PurchaseDate = purchaseDate ?? DateTime.UtcNow,
             SupplierId = supplierId,
             FileName = file.FileName,
@@ -88,6 +90,25 @@ public class ReceiptService : IReceiptService
         _db.Receipts.Add(receipt);
         await _db.SaveChangesAsync();
 
+        return receipt;
+    }
+
+    public async Task<Receipt?> Update(int id, string? title, string? notes, decimal? totalAmount, decimal? deliveryCost, decimal? packageCost, DateTime? purchaseDate, int? supplierId)
+    {
+        var receipt = await _db.Receipts.Include(r => r.Supplier).FirstOrDefaultAsync(r => r.Id == id);
+        if (receipt is null) return null;
+
+        if (supplierId.HasValue && !await _db.Suppliers.AnyAsync(s => s.Id == supplierId)) return null;
+
+        receipt.Title = string.IsNullOrWhiteSpace(title) ? receipt.Title : title;
+        receipt.Notes = notes;
+        receipt.TotalAmount = totalAmount;
+        receipt.DeliveryCost = deliveryCost;
+        receipt.PackageCost = packageCost;
+        receipt.PurchaseDate = purchaseDate ?? receipt.PurchaseDate;
+        receipt.SupplierId = supplierId;
+
+        await _db.SaveChangesAsync();
         return receipt;
     }
 

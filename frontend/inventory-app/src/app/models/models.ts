@@ -135,6 +135,8 @@ export interface Receipt {
   title: string;
   notes?: string | null;
   totalAmount?: number | null;
+  deliveryCost?: number | null;
+  packageCost?: number | null;
   purchaseDate: string;
   supplierId?: number | null;
   supplier?: Supplier | null;

@@ -38,7 +38,7 @@ public class ReceiptsController : ControllerBase
         return File(content, contentType ?? "application/octet-stream", fileName);
     }
 
-    // multipart/form-data: file + title + notes + totalAmount + purchaseDate + supplierId
+    // multipart/form-data: file + title + notes + totalAmount + deliveryCost + packageCost + purchaseDate + supplierId
     [HttpPost]
     [RequestSizeLimit(10485760)]
     public async Task<ActionResult<Receipt>> Upload(
@@ -46,12 +46,30 @@ public class ReceiptsController : ControllerBase
         [FromForm] string title,
         [FromForm] string? notes,
         [FromForm] decimal? totalAmount,
+        [FromForm] decimal? deliveryCost,
+        [FromForm] decimal? packageCost,
         [FromForm] DateTime? purchaseDate,
         [FromForm] int? supplierId)
     {
-        var receipt = await _service.Upload(file, title, notes, totalAmount, purchaseDate, supplierId);
+        var receipt = await _service.Upload(file, title, notes, totalAmount, deliveryCost, packageCost, purchaseDate, supplierId);
         if (receipt is null) return BadRequest("Invalid file or supplier");
         return CreatedAtAction(nameof(Get), new { id = receipt.Id }, receipt);
+    }
+
+    [HttpPut("{id:int}")]
+    public async Task<ActionResult<Receipt>> Update(
+        int id,
+        [FromForm] string? title,
+        [FromForm] string? notes,
+        [FromForm] decimal? totalAmount,
+        [FromForm] decimal? deliveryCost,
+        [FromForm] decimal? packageCost,
+        [FromForm] DateTime? purchaseDate,
+        [FromForm] int? supplierId)
+    {
+        var receipt = await _service.Update(id, title, notes, totalAmount, deliveryCost, packageCost, purchaseDate, supplierId);
+        if (receipt is null) return NotFound();
+        return Ok(receipt);
     }
 
     [HttpDelete("{id:int}")]

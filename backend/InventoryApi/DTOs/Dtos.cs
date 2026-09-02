@@ -39,7 +39,7 @@ public record CategoryDto(string Name, string? Description);
 
 public record SupplierDto(string Name, string? ContactName, string? Phone, string? Email, string? Address);
 
-public record ReceiptCreateMetaDto(string Title, string? Notes, decimal? TotalAmount, DateTime? PurchaseDate, int? SupplierId);
+public record ReceiptCreateMetaDto(string Title, string? Notes, decimal? TotalAmount, decimal? DeliveryCost, decimal? PackageCost, DateTime? PurchaseDate, int? SupplierId);
 
 public record SiteSummaryDto(
     long SiteId,
