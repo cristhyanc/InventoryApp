@@ -1,0 +1,41 @@
+using InventoryApi.DTOs;
+using InventoryApi.Services.Interfaces;
+using Microsoft.AspNetCore.Mvc;
+
+namespace InventoryApi.Controllers;
+
+[ApiController]
+[Route("api/reports")]
+public sealed class ReportsController : ControllerBase
+{
+    private readonly IReportingService _service;
+    public ReportsController(IReportingService service) => _service = service;
+
+    [HttpGet("bookkeeping")]
+    public Task<BookkeepingReportDto> Bookkeeping([FromQuery] ReportingFilterDto filter, CancellationToken ct) => _service.GetBookkeepingAsync(filter, ct);
+    [HttpGet("daily")]
+    public Task<DailyReportDto> Daily([FromQuery] ReportingFilterDto filter, CancellationToken ct) => _service.GetDailyAsync(filter, ct);
+    [HttpGet("reconciliation")]
+    public Task<ReconciliationReportDto> Reconciliation([FromQuery] ReportingFilterDto filter, [FromQuery] decimal tolerance = 0.01m, CancellationToken ct = default) => _service.GetReconciliationAsync(filter, tolerance, ct);
+    [HttpGet("machine-profitability")]
+    public Task<MachineProfitabilityReportDto> MachineProfitability([FromQuery] ReportingFilterDto filter, CancellationToken ct) => _service.GetMachineProfitabilityAsync(filter, ct);
+    [HttpGet("product-profitability")]
+    public Task<ProductProfitabilityReportDto> ProductProfitability([FromQuery] ReportingFilterDto filter, CancellationToken ct) => _service.GetProductProfitabilityAsync(filter, ct);
+    [HttpGet("gst")]
+    public Task<GstAccountingAidDto> Gst([FromQuery] ReportingFilterDto filter, CancellationToken ct) => _service.GetGstAsync(filter, ct);
+    [HttpGet("dashboard")]
+    public Task<DashboardReportDto> Dashboard([FromQuery] ReportingFilterDto filter, CancellationToken ct) => _service.GetDashboardAsync(filter, ct);
+
+    [HttpGet("{report}/export")]
+    public async Task<IActionResult> Export(string report, [FromQuery] string format = "csv", [FromQuery] ReportingFilterDto filter = null!, CancellationToken ct = default)
+    {
+        if (!string.Equals(format, "csv", StringComparison.OrdinalIgnoreCase) && !string.Equals(format, "xlsx", StringComparison.OrdinalIgnoreCase))
+            return BadRequest("format must be csv or xlsx.");
+        var bytes = string.Equals(format, "xlsx", StringComparison.OrdinalIgnoreCase)
+            ? await _service.ExportXlsxAsync(report, filter ?? new ReportingFilterDto(), ct)
+            : await _service.ExportCsvAsync(report, filter ?? new ReportingFilterDto(), ct);
+        return File(bytes, format.Equals("xlsx", StringComparison.OrdinalIgnoreCase)
+            ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : "text/csv",
+            $"{report}.{format.ToLowerInvariant()}");
+    }
+}

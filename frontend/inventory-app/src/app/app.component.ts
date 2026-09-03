@@ -11,4 +11,11 @@ import { ToastContainerComponent } from "./components/shared/toast-container.com
 })
 export class AppComponent {
   title = 'Inventory Manager';
+
+  closeReportsMenu(event: Event): void {
+    const target = event.target;
+    if (target instanceof HTMLElement) {
+      target.closest('details')?.removeAttribute('open');
+    }
+  }
 }

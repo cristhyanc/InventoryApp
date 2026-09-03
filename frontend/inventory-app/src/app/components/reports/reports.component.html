@@ -1,0 +1,120 @@
+<div class="mb-5 flex flex-wrap items-center justify-between gap-3">
+  <div>
+    <h1 class="text-2xl font-semibold text-slate-800">{{ title() }}</h1>
+    @if (kind === 'gst') { <p class="mt-1 text-sm text-amber-700">Accounting aid only; not a replacement for BAS or accounting advice.</p> }
+  </div>
+  @if (kind !== 'dashboard') {
+    <div class="flex gap-2">
+      <button class="rounded-md border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50" (click)="export('csv')">Export CSV</button>
+      <button class="rounded-md border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50" (click)="export('xlsx')">Export XLSX</button>
+    </div>
+  }
+</div>
+
+<div class="mb-5 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+  @if (kind === 'bookkeeping') {
+    <div class="flex flex-wrap items-center gap-2">
+      <span class="mr-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Period</span>
+      @for (option of [['thisMonth', 'This Month'], ['lastMonth', 'Last Month'], ['currentFy', 'Current FY'], ['previousFy', 'Previous FY'], ['custom', 'Custom']]; track option[0]) {
+        <button type="button" class="rounded-md px-3 py-1.5 text-sm transition" [class.bg-blue-600]="period === option[0]" [class.text-white]="period === option[0]" [class.bg-slate-100]="period !== option[0]" [class.text-slate-700]="period !== option[0]" (click)="selectPeriod(option[0])">{{ option[1] }}</button>
+      }
+      <label class="ml-auto text-sm text-slate-600">Machine
+        <select class="ml-2 rounded-md border border-slate-300 px-2 py-1.5" [(ngModel)]="machineId">
+          <option [ngValue]="null">All machines</option>
+          @for (machine of machines; track machine.machineID) {
+            <option [ngValue]="machine.machineID">{{ machineLabel(machine) }}</option>
+          }
+        </select>
+      </label>
+      <button class="rounded-md bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700" (click)="load()">Apply</button>
+    </div>
+    @if (period === 'custom') {
+      <div class="mt-3 flex flex-wrap items-center gap-3 border-t border-slate-100 pt-3">
+        <label class="text-sm text-slate-600">From<input class="ml-2 rounded-md border border-slate-300 px-2 py-1.5" type="date" [(ngModel)]="from" /></label>
+        <label class="text-sm text-slate-600">To<input class="ml-2 rounded-md border border-slate-300 px-2 py-1.5" type="date" [(ngModel)]="to" /></label>
+      </div>
+    }
+  } @else {
+    <div class="grid gap-3 md:grid-cols-4">
+      <label class="text-sm text-slate-600">From<input class="mt-1" type="date" [(ngModel)]="from" /></label>
+      <label class="text-sm text-slate-600">To<input class="mt-1" type="date" [(ngModel)]="to" /></label>
+      <label class="text-sm text-slate-600">Machine
+        <select class="mt-1 w-full rounded-md border border-slate-300 px-2 py-1.5" [(ngModel)]="machineId">
+          <option [ngValue]="null">All machines</option>
+          @for (machine of machines; track machine.machineID) {
+            <option [ngValue]="machine.machineID">{{ machineLabel(machine) }}</option>
+          }
+        </select>
+      </label>
+      <button class="self-end rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700" (click)="load()">Apply filters</button>
+    </div>
+  }
+</div>
+
+@if (loading) { <div class="rounded-xl bg-white p-8 text-center text-slate-500 shadow-sm">Loading report...</div> }
+@else if (error) { <div class="rounded-xl bg-red-50 p-6 text-red-700">{{ error }}</div> }
+@else if (report) {
+  @if (kind === 'dashboard') {
+    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      @for (card of [['Gross Sales', $any(report).sales], ['Gross Profit', $any(report).grossProfit], ['Net Profit', $any(report).netProfit], ['Delivery Costs', $any(report).deliveryCosts], ['Package Costs', $any(report).packageCosts], ['Nayax Fees Ex GST', $any(report).nayaxFeesExGst], ['Net Reimbursement', $any(report).netReimbursement], ['Site Commission', $any(report).siteCommission], ['Transactions', $any(report).transactions]]; track card[0]) {
+        <div class="rounded-xl bg-white p-5 shadow-sm"><div class="text-2xl font-semibold text-blue-600">{{ card[0] === 'Transactions' ? card[1] : money(card[1]) }}</div><div class="mt-1 text-sm text-slate-500">{{ card[0] }}</div></div>
+      }
+    </div>
+  } @else if (kind === 'bookkeeping') {
+    <div class="mb-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"><div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Gross Sales</div><div class="mt-2 text-2xl font-bold text-slate-800">{{ money($any(report).sales) }}</div></div>
+      <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"><div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Gross Profit</div><div class="mt-2 text-2xl font-bold text-slate-800">{{ money($any(report).grossProfit) }}</div><div class="mt-1 text-sm text-slate-500">{{ ($any(report).sales ? ($any(report).grossProfit / $any(report).sales * 100) : 0) | number:'1.1-1' }}% margin</div></div>
+      <div class="rounded-xl border-2 border-emerald-500 bg-emerald-50 p-4 shadow-sm"><div class="text-xs font-semibold uppercase tracking-wide text-emerald-700">Net Profit</div><div class="mt-2 text-3xl font-bold text-emerald-800">{{ money($any(report).netProfit) }}</div></div>
+      <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"><div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Net Margin</div><div class="mt-2 text-2xl font-bold text-slate-800">{{ $any(report).netMarginPercent | number:'1.1-1' }}%</div></div>
+    </div>
+    <div class="grid gap-5 lg:grid-cols-2">
+      <section class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <h2 class="mb-4 text-lg font-semibold text-slate-800">Cost of Sales</h2>
+        <div class="space-y-3 text-sm">
+          <div class="flex justify-between"><span>Gross Sales</span><strong>{{ money($any(report).sales) }}</strong></div>
+          <div class="flex justify-between"><span>COGS</span><strong>{{ money($any(report).costOfGoods) }}</strong></div>
+          <div class="flex justify-between border-t border-slate-100 pt-3"><span class="font-semibold">Gross Profit</span><strong>{{ money($any(report).grossProfit) }}</strong></div>
+          <div class="flex justify-between text-slate-500"><span>Gross Margin</span><strong>{{ ($any(report).sales ? ($any(report).grossProfit / $any(report).sales * 100) : 0) | number:'1.1-1' }}%</strong></div>
+        </div>
+      </section>
+      <section class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <h2 class="mb-4 text-lg font-semibold text-slate-800">Operating Costs</h2>
+        <div class="space-y-3 text-sm">
+          <div class="flex justify-between"><span>Nayax Fees Inc GST</span><strong>{{ money($any(report).nayaxFeesIncludingGst) }}</strong></div>
+          <div class="flex justify-between"><span>Site Commission</span><strong>{{ money($any(report).siteCommission) }}</strong></div>
+          <div class="flex justify-between"><span>Delivery Costs</span><strong>{{ money($any(report).deliveryCosts) }}</strong></div>
+          <div class="flex justify-between"><span>Package Costs</span><strong>{{ money($any(report).packageCosts) }}</strong></div>
+          <div class="flex justify-between"><span>Other Operating Expenses</span><strong>{{ money(otherOperatingExpenses($any(report))) }}</strong></div>
+          <div class="flex justify-between border-t border-slate-200 pt-3 text-base"><span class="font-semibold">Total Operating Costs</span><strong>{{ money(totalOperatingCosts($any(report))) }}</strong></div>
+        </div>
+      </section>
+      <section class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm lg:col-span-2">
+        <h2 class="mb-4 text-lg font-semibold text-slate-800">Nayax Settlement</h2>
+        <div class="max-w-xl space-y-3 text-sm">
+          <div class="flex justify-between"><span>Gross Sales / Reimbursable Sales</span><strong>{{ money($any(report).sales) }}</strong></div>
+          <div class="flex justify-between"><span>- Nayax Fees</span><strong>{{ money($any(report).nayaxFeesIncludingGst) }}</strong></div>
+          <div class="flex justify-between border-t border-slate-200 pt-3 text-base"><span class="font-semibold">Net Reimbursement</span><strong>{{ money($any(report).netSettlement) }}</strong></div>
+        </div>
+        <p class="mt-3 text-xs text-slate-500">Net reimbursement is the amount paid by Nayax and is not business profit.</p>
+      </section>
+      <section class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <h2 class="mb-4 text-lg font-semibold text-slate-800">GST</h2>
+        <div class="space-y-3 text-sm">
+          <div class="flex justify-between"><span>GST on Sales</span><strong>{{ money($any(report).gstOnSales) }}</strong></div>
+          <div class="flex justify-between"><span>GST on Nayax Fees</span><strong>{{ money($any(report).gstOnFees) }}</strong></div>
+        </div>
+      </section>
+    </div>
+  } @else if (kind === 'daily') {
+    <div class="overflow-x-auto rounded-xl bg-white shadow-sm"><table class="min-w-full text-sm"><thead><tr class="bg-slate-50 text-left"><th class="px-4 py-3">Date</th><th class="px-4 py-3">Transactions</th><th class="px-4 py-3">Sales</th><th class="px-4 py-3">COGS</th><th class="px-4 py-3">Gross Profit</th></tr></thead><tbody>@for (row of $any(report).rows; track row.date) {<tr class="border-t"><td class="px-4 py-3">{{ row.date | date:'dd/MM/yyyy' }}</td><td class="px-4 py-3">{{ row.transactionCount }}</td><td class="px-4 py-3">{{ money(row.sales) }}</td><td class="px-4 py-3">{{ money(row.costOfGoods) }}</td><td class="px-4 py-3">{{ money(row.grossProfit) }}</td></tr>}</tbody></table></div>
+  } @else if (kind === 'reconciliation') {
+    <div class="rounded-xl bg-white p-6 shadow-sm"><div class="mb-4 text-lg font-semibold" [class.text-green-700]="$any(report).isMatch" [class.text-red-700]="!$any(report).isMatch">{{ $any(report).isMatch ? 'Matched' : 'Mismatch' }}</div><div class="grid gap-4 md:grid-cols-4"><div>Transaction sales<strong class="block">{{ money($any(report).nayaxSales) }}</strong></div><div>Reimbursement<strong class="block">{{ money($any(report).importedReimbursement) }}</strong></div><div>Difference<strong class="block">{{ money($any(report).difference) }}</strong></div><div>Tolerance<strong class="block">{{ money($any(report).tolerance) }}</strong></div></div></div>
+  } @else if (kind === 'machines') {
+    <div class="overflow-x-auto rounded-xl bg-white shadow-sm"><table class="min-w-full text-sm"><thead><tr class="bg-slate-50 text-left"><th class="px-4 py-3">Machine</th><th class="px-4 py-3">Commission</th><th class="px-4 py-3">Transactions</th><th class="px-4 py-3">Sales</th><th class="px-4 py-3">COGS</th><th class="px-4 py-3">Gross Profit</th><th class="px-4 py-3">Net Profit</th><th class="px-4 py-3">Margin</th></tr></thead><tbody>@for (row of $any(report).rows; track row.machineId) {<tr class="border-t"><td class="px-4 py-3">{{ row.machineName }}</td><td class="px-4 py-3">{{ row.commissionPercent | number:'1.2-2' }}% ({{ money(row.siteCommission) }})</td><td class="px-4 py-3">{{ row.transactionCount }}</td><td class="px-4 py-3">{{ money(row.sales) }}</td><td class="px-4 py-3">{{ money(row.costOfGoods) }}</td><td class="px-4 py-3">{{ money(row.grossProfit) }}</td><td class="px-4 py-3">{{ money(row.netProfit) }}</td><td class="px-4 py-3">{{ row.netMarginPercent | number:'1.2-2' }}%</td></tr>}</tbody></table></div>
+  } @else if (kind === 'products') {
+    <div class="overflow-x-auto rounded-xl bg-white shadow-sm"><table class="min-w-full text-sm"><thead><tr class="bg-slate-50 text-left"><th class="px-4 py-3">Product</th><th class="px-4 py-3">Category</th><th class="px-4 py-3">Units</th><th class="px-4 py-3">Revenue</th><th class="px-4 py-3">COGS</th><th class="px-4 py-3">Gross Profit</th></tr></thead><tbody>@for (row of $any(report).rows; track row.productId ?? row.productName) {<tr class="border-t" [class.bg-amber-50]="row.isUnmapped"><td class="px-4 py-3">{{ row.productName }} @if (row.isUnmapped) {<span class="text-xs text-amber-700">(Unmapped Nayax product)</span>}</td><td class="px-4 py-3">{{ row.categoryName || '—' }}</td><td class="px-4 py-3">{{ row.quantity }}</td><td class="px-4 py-3">{{ money(row.sales) }}</td><td class="px-4 py-3">{{ money(row.costOfGoods) }}</td><td class="px-4 py-3">{{ money(row.grossProfit) }}</td></tr>}</tbody></table></div>
+  } @else {
+    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">@for (card of [['Taxable sales', $any(report).taxableSales], ['GST on sales', $any(report).gstOnSales], ['Taxable fees', $any(report).taxableFees], ['GST on fees', $any(report).gstOnFees], ['Estimated GST payable', $any(report).netGst]]; track card[0]) {<div class="rounded-xl bg-white p-5 shadow-sm"><div class="text-xl font-semibold">{{ money(card[1]) }}</div><div class="mt-1 text-sm text-slate-500">{{ card[0] }}</div></div>}</div>
+  }
+  @if (quality().length) { <div class="mt-6 rounded-xl bg-amber-50 p-5 text-sm text-amber-800"><strong>Data quality notes</strong><ul class="mt-2 list-disc pl-5">@for (note of quality(); track note) {<li>{{ note }}</li>}</ul></div> }
+}
