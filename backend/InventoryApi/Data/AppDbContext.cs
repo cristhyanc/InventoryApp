@@ -12,6 +12,7 @@ public class AppDbContext : DbContext
     public DbSet<Product> Products => Set<Product>();
     public DbSet<StockAdjustment> StockAdjustments => Set<StockAdjustment>();
     public DbSet<Receipt> Receipts => Set<Receipt>();
+    public DbSet<NayaxSales> NayaxSales => Set<NayaxSales>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -29,6 +30,20 @@ public class AppDbContext : DbContext
 
         modelBuilder.Entity<Receipt>()
             .Property(r => r.PackageCost)
+            .HasColumnType("decimal(18,2)");
+
+        modelBuilder.Entity<NayaxSales>()
+            .ToTable("NayaxSales");
+
+        modelBuilder.Entity<NayaxSales>()
+            .HasKey(s => s.TransactionID);
+
+        modelBuilder.Entity<NayaxSales>()
+            .Property(s => s.SettlementValue)
+            .HasColumnType("decimal(18,2)");
+
+        modelBuilder.Entity<NayaxSales>()
+            .Property(s => s.Quantity)
             .HasColumnType("decimal(18,2)");
 
         modelBuilder.Entity<Product>()

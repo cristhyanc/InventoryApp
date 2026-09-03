@@ -1141,6 +1141,11 @@ img {
   cursor: not-allowed;
 }
 
+.disabled\:bg-blue-400:disabled {
+  --tw-bg-opacity: 1;
+  background-color: rgb(96 165 250 / var(--tw-bg-opacity, 1));
+}
+
 .disabled\:opacity-50:disabled {
   opacity: 0.5;
 }

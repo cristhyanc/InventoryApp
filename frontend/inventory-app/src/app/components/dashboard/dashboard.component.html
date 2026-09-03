@@ -61,8 +61,24 @@
 </div>
 
 <div class="mb-6 rounded-xl bg-white p-6 shadow-sm">
-  <div class="mb-4 flex items-center justify-between">
+  <div class="mb-4 flex items-center justify-between gap-3">
     <h2 class="text-lg font-semibold text-slate-800">🛠️ Machines</h2>
+    <div class="flex items-center gap-3">
+      <input #nayaxSalesInput type="file" accept=".xlsx,.xls,.csv" class="hidden" (change)="onNayaxSalesSelected($event)" />
+      <button
+        type="button"
+        class="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+        (click)="downloadNayaxSalesTemplate()">
+        Download template
+      </button>
+      <button
+        type="button"
+        class="inline-flex items-center rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-blue-400"
+        [disabled]="importingNayaxSales"
+        (click)="nayaxSalesInput.click()">
+        {{ importingNayaxSales ? 'Importing...' : 'Import Nayax Sales' }}
+      </button>
+    </div>
   </div>
 
   @if (machines.length === 0) {

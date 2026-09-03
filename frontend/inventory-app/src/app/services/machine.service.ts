@@ -4,6 +4,12 @@ import { Observable } from 'rxjs';
 import { Machine, Product } from '../models/models';
 import { ConfigService } from './config.service';
 
+export interface NayaxSalesImportResult {
+  imported: number;
+  updated: number;
+  skipped: number;
+}
+
 @Injectable({
   providedIn: 'root'
 })
@@ -22,7 +28,14 @@ export class MachineService {
     return this.http.get<Machine>(`${this.baseUrl}/${id}`);
   }
 
-    getProducts(id: number): Observable<Product[]> {
+  getProducts(id: number): Observable<Product[]> {
     return this.http.get<Product[]>(`${this.baseUrl}/${id}/products`);
+  }
+
+  importNayaxSales(file: File): Observable<NayaxSalesImportResult> {
+    const formData = new FormData();
+    formData.append('file', file, file.name);
+
+    return this.http.post<NayaxSalesImportResult>(`${this.baseUrl}/import-nayax-sales`, formData);
   }
 }

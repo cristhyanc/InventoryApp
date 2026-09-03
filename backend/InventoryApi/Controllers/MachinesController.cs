@@ -1,6 +1,7 @@
 ﻿using InventoryApi.Integrations.Nayax;
 using InventoryApi.Models;
 using InventoryApi.Services.Interfaces;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 
 namespace InventoryApi.Controllers;
@@ -35,5 +36,23 @@ public class MachinesController : ControllerBase
     {
         var products = await _service.GetMachineProducts(id);
         return Ok(products);
+    }
+
+    [HttpPost("import-nayax-sales")]
+    [RequestSizeLimit(10485760)]
+    public async Task<ActionResult<object>> ImportNayaxSales([FromForm] IFormFile file, CancellationToken ct)
+    {
+        if (file is null || file.Length == 0)
+            return BadRequest("An Excel file is required.");
+
+        try
+        {
+            var result = await _service.ImportNayaxSalesFromExcelAsync(file, ct);
+            return Ok(new { imported = result.Imported, updated = result.Updated, skipped = result.Skipped });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(ex.Message);
+        }
     }
 }

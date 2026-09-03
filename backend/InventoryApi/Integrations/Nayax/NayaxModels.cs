@@ -96,55 +96,21 @@ public class NayaxLastSalesReport
 {
     public long TransactionID { get; set; }
 
-    public string? PaymentServiceTransactionID { get; set; }
-
-    public string? PaymentServiceProviderName { get; set; }
-
     public long MachineID { get; set; }
+
+    public long? NayaxProductId { get; set; }
 
     public string? MachineName { get; set; }
 
-    public string? MachineNumber { get; set; }
-
-    public string? InstituteLocationName { get; set; }
-
-    public decimal AuthorizationValue { get; set; }
-
     public decimal SettlementValue { get; set; }
-
-    public string? CurrencyCode { get; set; }
 
     public string? PaymentMethod { get; set; }
 
-    public string? RecognitionMethod { get; set; }
-
-    public string? CardNumber { get; set; }
-
-    public string? CardBrand { get; set; }
-
-    public string? CLI { get; set; }
-
     public string? ProductName { get; set; }
-
-    public bool MultivendTransactionBit { get; set; }
-
-    public int MultivendNumverOfProducts { get; set; }
-
-    public string? UnitOfMeasurement { get; set; }
 
     public decimal Quantity { get; set; }
 
-    public decimal EnergyConsumed { get; set; }
-
-    public DateTime AuthorizationDateTimeGMT { get; set; }
-
     public DateTime MachineAuthorizationTime { get; set; }
-
-    public DateTime SettlementDateTimeGMT { get; set; }
-
-    public int SiteID { get; set; }
-
-    public string? SiteName { get; set; }
 }
 
 public class NayaxProduct

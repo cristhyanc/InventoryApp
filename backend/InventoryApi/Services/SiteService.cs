@@ -12,7 +12,7 @@ public class SiteService : ISiteService
     private readonly AppDbContext _db;
     private readonly INayaxLynxClient _nayaxLynxClient;
 
-    public SiteService(AppDbContext db, INayaxLynxClient nayaxLynxClient)
+    public SiteService(AppDbContext db, INayaxLynxClient nayaxLynxClient, IMachineService machineService)
     {
         _db = db;
         _nayaxLynxClient = nayaxLynxClient;
@@ -54,7 +54,7 @@ public class SiteService : ISiteService
         var machineProductsTask = Task.WhenAll(
             machines.Select(machine => _nayaxLynxClient.GetMachineProductsAsync(machine.MachineID)));
         var salesTask = Task.WhenAll(
-            machines.Select(machine => _nayaxLynxClient.GetMachineLastSalesAsync(machine.MachineID)));
+            machines.Select(machine => _db.NayaxSales.Where(s => s.MachineID == machine.MachineID && s.MachineAuthorizationTime> DateTime.Now.AddDays(-16)).ToListAsync()));
 
         await Task.WhenAll(machineProductsTask, salesTask);
 
