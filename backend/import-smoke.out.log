@@ -1,0 +1,387 @@
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (19ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      PRAGMA journal_mode = 'wal';
+info: Microsoft.EntityFrameworkCore.Migrations[20411]
+      Acquiring an exclusive lock for migration application. See https://aka.ms/efcore-docs-migrations-lock for more information if this takes too long.
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (2ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      SELECT COUNT(*) FROM "sqlite_master" WHERE "name" = '__EFMigrationsLock' AND "type" = 'table';
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (5ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      CREATE TABLE IF NOT EXISTS "__EFMigrationsLock" (
+          "Id" INTEGER NOT NULL CONSTRAINT "PK___EFMigrationsLock" PRIMARY KEY,
+          "Timestamp" TEXT NOT NULL
+      );
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (1ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      INSERT OR IGNORE INTO "__EFMigrationsLock"("Id", "Timestamp") VALUES(1, '2026-09-03 02:00:01.0444178+00:00');
+      SELECT changes();
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      CREATE TABLE IF NOT EXISTS "__EFMigrationsHistory" (
+          "MigrationId" TEXT NOT NULL CONSTRAINT "PK___EFMigrationsHistory" PRIMARY KEY,
+          "ProductVersion" TEXT NOT NULL
+      );
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      SELECT COUNT(*) FROM "sqlite_master" WHERE "name" = '__EFMigrationsHistory' AND "type" = 'table';
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      SELECT "MigrationId", "ProductVersion"
+      FROM "__EFMigrationsHistory"
+      ORDER BY "MigrationId";
+info: Microsoft.EntityFrameworkCore.Migrations[20402]
+      Applying migration '20260707110636_InitialCreate'.
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      CREATE TABLE "Categories" (
+          "Id" INTEGER NOT NULL CONSTRAINT "PK_Categories" PRIMARY KEY AUTOINCREMENT,
+          "Name" TEXT NOT NULL,
+          "Description" TEXT NULL
+      );
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      CREATE TABLE "Suppliers" (
+          "Id" INTEGER NOT NULL CONSTRAINT "PK_Suppliers" PRIMARY KEY AUTOINCREMENT,
+          "Name" TEXT NOT NULL,
+          "ContactName" TEXT NULL,
+          "Phone" TEXT NULL,
+          "Email" TEXT NULL,
+          "Address" TEXT NULL
+      );
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      CREATE TABLE "Products" (
+          "Id" INTEGER NOT NULL CONSTRAINT "PK_Products" PRIMARY KEY AUTOINCREMENT,
+          "Name" TEXT NOT NULL,
+          "Sku" TEXT NULL,
+          "Description" TEXT NULL,
+          "UnitPrice" decimal(18,2) NOT NULL,
+          "QuantityInStock" INTEGER NOT NULL,
+          "LowStockThreshold" INTEGER NOT NULL,
+          "Unit" TEXT NULL,
+          "Mapped" INTEGER NOT NULL,
+          "CreatedAt" TEXT NOT NULL,
+          "UpdatedAt" TEXT NOT NULL,
+          "CategoryId" INTEGER NULL,
+          "SupplierId" INTEGER NULL,
+          CONSTRAINT "FK_Products_Categories_CategoryId" FOREIGN KEY ("CategoryId") REFERENCES "Categories" ("Id") ON DELETE SET NULL,
+          CONSTRAINT "FK_Products_Suppliers_SupplierId" FOREIGN KEY ("SupplierId") REFERENCES "Suppliers" ("Id") ON DELETE SET NULL
+      );
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      CREATE TABLE "Receipts" (
+          "Id" INTEGER NOT NULL CONSTRAINT "PK_Receipts" PRIMARY KEY AUTOINCREMENT,
+          "Title" TEXT NOT NULL,
+          "Notes" TEXT NULL,
+          "TotalAmount" decimal(18,2) NULL,
+          "PurchaseDate" TEXT NOT NULL,
+          "SupplierId" INTEGER NULL,
+          "FileName" TEXT NOT NULL,
+          "StoredFileName" TEXT NOT NULL,
+          "ContentType" TEXT NOT NULL,
+          "FileSizeBytes" INTEGER NOT NULL,
+          "CreatedAt" TEXT NOT NULL,
+          CONSTRAINT "FK_Receipts_Suppliers_SupplierId" FOREIGN KEY ("SupplierId") REFERENCES "Suppliers" ("Id") ON DELETE SET NULL
+      );
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      CREATE TABLE "StockAdjustments" (
+          "Id" INTEGER NOT NULL CONSTRAINT "PK_StockAdjustments" PRIMARY KEY AUTOINCREMENT,
+          "ProductId" INTEGER NOT NULL,
+          "QuantityChange" INTEGER NOT NULL,
+          "QuantityAfter" INTEGER NOT NULL,
+          "Reason" INTEGER NOT NULL,
+          "Notes" TEXT NULL,
+          "CreatedAt" TEXT NOT NULL,
+          CONSTRAINT "FK_StockAdjustments_Products_ProductId" FOREIGN KEY ("ProductId") REFERENCES "Products" ("Id") ON DELETE CASCADE
+      );
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      CREATE UNIQUE INDEX "IX_Categories_Name" ON "Categories" ("Name");
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      CREATE INDEX "IX_Products_CategoryId" ON "Products" ("CategoryId");
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      CREATE INDEX "IX_Products_Sku" ON "Products" ("Sku");
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      CREATE INDEX "IX_Products_SupplierId" ON "Products" ("SupplierId");
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      CREATE INDEX "IX_Receipts_SupplierId" ON "Receipts" ("SupplierId");
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      CREATE INDEX "IX_StockAdjustments_ProductId" ON "StockAdjustments" ("ProductId");
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      CREATE INDEX "IX_Suppliers_Name" ON "Suppliers" ("Name");
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      INSERT INTO "__EFMigrationsHistory" ("MigrationId", "ProductVersion")
+      VALUES ('20260707110636_InitialCreate', '10.0.0');
+info: Microsoft.EntityFrameworkCore.Migrations[20402]
+      Applying migration '20260723110733_RemoveUniqueName'.
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      DROP INDEX "IX_Categories_Name";
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      CREATE INDEX "IX_Categories_Name" ON "Categories" ("Name");
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      INSERT INTO "__EFMigrationsHistory" ("MigrationId", "ProductVersion")
+      VALUES ('20260723110733_RemoveUniqueName', '10.0.0');
+info: Microsoft.EntityFrameworkCore.Migrations[20402]
+      Applying migration '20260725102732_activeColmun'.
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      ALTER TABLE "Products" ADD "IsActive" INTEGER NOT NULL DEFAULT 0;
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      INSERT INTO "__EFMigrationsHistory" ("MigrationId", "ProductVersion")
+      VALUES ('20260725102732_activeColmun', '10.0.0');
+info: Microsoft.EntityFrameworkCore.Migrations[20402]
+      Applying migration '20260728100150_eatbeforedate'.
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      ALTER TABLE "StockAdjustments" ADD "EatBefore" TEXT NULL;
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      INSERT INTO "__EFMigrationsHistory" ("MigrationId", "ProductVersion")
+      VALUES ('20260728100150_eatbeforedate', '10.0.0');
+info: Microsoft.EntityFrameworkCore.Migrations[20402]
+      Applying migration '20260812091827_addmachineidcolumn'.
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      ALTER TABLE "StockAdjustments" ADD "MachineId" INTEGER NULL;
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      INSERT INTO "__EFMigrationsHistory" ("MigrationId", "ProductVersion")
+      VALUES ('20260812091827_addmachineidcolumn', '10.0.0');
+info: Microsoft.EntityFrameworkCore.Migrations[20402]
+      Applying migration '20260902015611_receiptColumns'.
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      ALTER TABLE "Receipts" ADD "DeliveryCost" decimal(18,2) NULL;
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      ALTER TABLE "Receipts" ADD "PackageCost" decimal(18,2) NULL;
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      INSERT INTO "__EFMigrationsHistory" ("MigrationId", "ProductVersion")
+      VALUES ('20260902015611_receiptColumns', '10.0.0');
+info: Microsoft.EntityFrameworkCore.Migrations[20402]
+      Applying migration '20260902191900_AddNayaxSales'.
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      CREATE TABLE "NayaxSales" (
+          "TransactionID" INTEGER NOT NULL CONSTRAINT "PK_NayaxSales" PRIMARY KEY,
+          "MachineID" INTEGER NOT NULL,
+          "MachineName" TEXT NULL,
+          "MachineNumber" TEXT NULL,
+          "SettlementValue" decimal(18,2) NOT NULL,
+          "PaymentMethod" TEXT NULL,
+          "ProductName" TEXT NULL,
+          "Quantity" decimal(18,2) NOT NULL,
+          "MachineAuthorizationTime" TEXT NOT NULL,
+          "SiteID" INTEGER NOT NULL,
+          "SiteName" TEXT NULL
+      );
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      INSERT INTO "__EFMigrationsHistory" ("MigrationId", "ProductVersion")
+      VALUES ('20260902191900_AddNayaxSales', '10.0.0');
+info: Microsoft.EntityFrameworkCore.Migrations[20402]
+      Applying migration '20260902194500_AddNayaxProductIdToNayaxSales'.
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      ALTER TABLE "NayaxSales" ADD "NayaxProductId" INTEGER NULL;
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      INSERT INTO "__EFMigrationsHistory" ("MigrationId", "ProductVersion")
+      VALUES ('20260902194500_AddNayaxProductIdToNayaxSales', '10.0.0');
+info: Microsoft.EntityFrameworkCore.Migrations[20402]
+      Applying migration '20260902220300_RemoveMachineNumberSiteFieldsFromNayaxSales'.
+warn: Microsoft.EntityFrameworkCore.Migrations[20410]
+      The migration operation 'PRAGMA foreign_keys = 0;
+      ' from migration 'RemoveMachineNumberSiteFieldsFromNayaxSales' cannot be executed in a transaction. If the app is terminated or an unrecoverable error occurs while this operation is being executed then the migration will be left in a partially applied state and would need to be reverted manually before it can be applied again. Create a separate migration that contains just this operation.
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      CREATE TABLE "ef_temp_NayaxSales" (
+          "TransactionID" INTEGER NOT NULL CONSTRAINT "PK_NayaxSales" PRIMARY KEY AUTOINCREMENT,
+          "MachineAuthorizationTime" TEXT NOT NULL,
+          "MachineID" INTEGER NOT NULL,
+          "MachineName" TEXT NULL,
+          "NayaxProductId" INTEGER NULL,
+          "PaymentMethod" TEXT NULL,
+          "ProductName" TEXT NULL,
+          "Quantity" decimal(18,2) NOT NULL,
+          "SettlementValue" decimal(18,2) NOT NULL
+      );
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      INSERT INTO "ef_temp_NayaxSales" ("TransactionID", "MachineAuthorizationTime", "MachineID", "MachineName", "NayaxProductId", "PaymentMethod", "ProductName", "Quantity", "SettlementValue")
+      SELECT "TransactionID", "MachineAuthorizationTime", "MachineID", "MachineName", "NayaxProductId", "PaymentMethod", "ProductName", "Quantity", "SettlementValue"
+      FROM "NayaxSales";
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      PRAGMA foreign_keys = 0;
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      DROP TABLE "NayaxSales";
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      ALTER TABLE "ef_temp_NayaxSales" RENAME TO "NayaxSales";
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      PRAGMA foreign_keys = 1;
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      INSERT INTO "__EFMigrationsHistory" ("MigrationId", "ProductVersion")
+      VALUES ('20260902220300_RemoveMachineNumberSiteFieldsFromNayaxSales', '10.0.0');
+info: Microsoft.EntityFrameworkCore.Migrations[20402]
+      Applying migration '20260903015645_AddImportedReimbursementFiles'.
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      CREATE TABLE "ImportedFiles" (
+          "Id" INTEGER NOT NULL CONSTRAINT "PK_ImportedFiles" PRIMARY KEY AUTOINCREMENT,
+          "FileName" TEXT NOT NULL,
+          "FileHash" TEXT NOT NULL,
+          "ImportedAt" TEXT NOT NULL
+      );
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      CREATE TABLE "ImportedReimbursements" (
+          "Id" INTEGER NOT NULL CONSTRAINT "PK_ImportedReimbursements" PRIMARY KEY AUTOINCREMENT,
+          "ImportedFileId" INTEGER NOT NULL,
+          "ReportType" TEXT NULL,
+          "ReimbursementStartDate" TEXT NULL,
+          "ReimbursementEndDate" TEXT NULL,
+          "ReimbursementPayoutDate" TEXT NULL,
+          "CompanyName" TEXT NULL,
+          "CustomerId" TEXT NULL,
+          "IsReimbursement" INTEGER NOT NULL,
+          "IsInvoice" INTEGER NOT NULL,
+          "Email" TEXT NULL,
+          "ActiveDevices" INTEGER NULL,
+          "TotalDevices" INTEGER NULL,
+          "InvoicePaymentMethod" TEXT NULL,
+          "InvoicePaymentMethodId" TEXT NULL,
+          "Total" decimal(18,4) NULL,
+          "SupportEmail" TEXT NULL,
+          "ErpId" TEXT NULL,
+          "DistributorActorId" TEXT NULL,
+          "FinanceEntityId" TEXT NULL,
+          "RawAttributesJson" TEXT NULL,
+          CONSTRAINT "FK_ImportedReimbursements_ImportedFiles_ImportedFileId" FOREIGN KEY ("ImportedFileId") REFERENCES "ImportedFiles" ("Id") ON DELETE CASCADE
+      );
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      CREATE TABLE "ImportedDevicePayments" (
+          "Id" INTEGER NOT NULL CONSTRAINT "PK_ImportedDevicePayments" PRIMARY KEY AUTOINCREMENT,
+          "ImportedReimbursementId" INTEGER NOT NULL,
+          "EntityId" TEXT NULL,
+          "PaymentMethodDescription" TEXT NULL,
+          "RecognitionDescription" TEXT NULL,
+          "SalesCount" INTEGER NULL,
+          "TotalSum" decimal(18,4) NULL,
+          "ProcessingFees" decimal(18,4) NULL,
+          "ServiceFees" decimal(18,4) NULL,
+          "RawAttributesJson" TEXT NULL,
+          CONSTRAINT "FK_ImportedDevicePayments_ImportedReimbursements_ImportedReimbursementId" FOREIGN KEY ("ImportedReimbursementId") REFERENCES "ImportedReimbursements" ("Id") ON DELETE CASCADE
+      );
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      CREATE TABLE "ImportedFees" (
+          "Id" INTEGER NOT NULL CONSTRAINT "PK_ImportedFees" PRIMARY KEY AUTOINCREMENT,
+          "ImportedReimbursementId" INTEGER NOT NULL,
+          "FeesTypeId" TEXT NULL,
+          "FeeTypeDescription" TEXT NULL,
+          "IsService" INTEGER NOT NULL,
+          "TotalSum" decimal(18,4) NULL,
+          "TotalSumWithVat" decimal(18,4) NULL,
+          "VatPercentage" decimal(18,4) NULL,
+          "AverageFeeAmount" decimal(18,4) NULL,
+          "TotalCount" decimal(18,4) NULL,
+          "IsPreviousPeriod" INTEGER NOT NULL,
+          "RawAttributesJson" TEXT NULL,
+          CONSTRAINT "FK_ImportedFees_ImportedReimbursements_ImportedReimbursementId" FOREIGN KEY ("ImportedReimbursementId") REFERENCES "ImportedReimbursements" ("Id") ON DELETE CASCADE
+      );
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      CREATE TABLE "ImportedPaymentMethods" (
+          "Id" INTEGER NOT NULL CONSTRAINT "PK_ImportedPaymentMethods" PRIMARY KEY AUTOINCREMENT,
+          "ImportedReimbursementId" INTEGER NOT NULL,
+          "PaymentMethodId" TEXT NULL,
+          "PaymentMethodDescription" TEXT NULL,
+          "IsNayaxReimbursement" INTEGER NOT NULL,
+          "BillingProvider" TEXT NULL,
+          "TotalSalesCount" INTEGER NULL,
+          "TotalSalesSum" decimal(18,4) NULL,
+          "RecognitionDescription" TEXT NULL,
+          "IsPreviousPeriod" INTEGER NOT NULL,
+          "RawAttributesJson" TEXT NULL,
+          CONSTRAINT "FK_ImportedPaymentMethods_ImportedReimbursements_ImportedReimbursementId" FOREIGN KEY ("ImportedReimbursementId") REFERENCES "ImportedReimbursements" ("Id") ON DELETE CASCADE
+      );
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      CREATE TABLE "ImportedReimbursementDevices" (
+          "Id" INTEGER NOT NULL CONSTRAINT "PK_ImportedReimbursementDevices" PRIMARY KEY AUTOINCREMENT,
+          "ImportedReimbursementId" INTEGER NOT NULL,
+          "EntityId" TEXT NULL,
+          "MachineType" TEXT NULL,
+          "VerticalTypeName" TEXT NULL,
+          "VerticalProductTypeName" TEXT NULL,
+          "HardwareSerial" TEXT NULL,
+          "MachineNumber" TEXT NULL,
+          "ActorCode" TEXT NULL,
+          "Location" TEXT NULL,
+          "TotalBillableTransactionCount" INTEGER NULL,
+          "TotalBillableTransactionAmount" decimal(18,4) NULL,
+          "TotalNotBillableTransactionCount" INTEGER NULL,
+          "TotalNotBillableTransactionAmount" decimal(18,4) NULL,
+          "ServiceFee" decimal(18,4) NULL,
+          "ProcessingFee" decimal(18,4) NULL,
+          "HasServicePerTransaction" INTEGER NOT NULL,
+          "TotalExtraCharge" decimal(18,4) NULL,
+          "NetAmount" decimal(18,4) NULL,
+          "RawAttributesJson" TEXT NULL,
+          CONSTRAINT "FK_ImportedReimbursementDevices_ImportedReimbursements_ImportedReimbursementId" FOREIGN KEY ("ImportedReimbursementId") REFERENCES "ImportedReimbursements" ("Id") ON DELETE CASCADE
+      );
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      CREATE INDEX "IX_ImportedDevicePayments_ImportedReimbursementId" ON "ImportedDevicePayments" ("ImportedReimbursementId");
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      CREATE INDEX "IX_ImportedFees_ImportedReimbursementId" ON "ImportedFees" ("ImportedReimbursementId");
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      CREATE UNIQUE INDEX "IX_ImportedFiles_FileHash" ON "ImportedFiles" ("FileHash");
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      CREATE INDEX "IX_ImportedPaymentMethods_ImportedReimbursementId" ON "ImportedPaymentMethods" ("ImportedReimbursementId");
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      CREATE INDEX "IX_ImportedReimbursementDevices_ImportedReimbursementId" ON "ImportedReimbursementDevices" ("ImportedReimbursementId");
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      CREATE INDEX "IX_ImportedReimbursements_ImportedFileId" ON "ImportedReimbursements" ("ImportedFileId");
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      INSERT INTO "__EFMigrationsHistory" ("MigrationId", "ProductVersion")
+      VALUES ('20260903015645_AddImportedReimbursementFiles', '10.0.0');
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (0ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      DELETE FROM "__EFMigrationsLock";
+warn: Microsoft.AspNetCore.StaticFiles.StaticFileMiddleware[16]
+      The WebRootPath was not found: C:\Users\crist\source\InventoryApp2\InventoryApp\backend\wwwroot. Static files may be unavailable.
+info: Microsoft.Hosting.Lifetime[14]
+      Now listening on: http://127.0.0.1:5099
+info: Microsoft.Hosting.Lifetime[0]
+      Application started. Press Ctrl+C to shut down.
+info: Microsoft.Hosting.Lifetime[0]
+      Hosting environment: Production
+info: Microsoft.Hosting.Lifetime[0]
+      Content root path: C:\Users\crist\source\InventoryApp2\InventoryApp\backend
