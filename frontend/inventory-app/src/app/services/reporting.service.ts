@@ -26,6 +26,7 @@ export interface DashboardReport {
   nayaxFeesExGst?: number; netReimbursement?: number; siteCommission?: number;
   netProfit?: number; netMarginPercent?: number;
   deliveryCosts?: number; packageCosts?: number; otherOperatingExpenses?: number;
+  cardSales?: number; cashSales?: number; cardTransactionCount?: number; cashTransactionCount?: number;
 }
 export interface BookkeepingReport {
   from: string; to: string; financialYear: string; sales: number; costOfGoods: number;
@@ -34,23 +35,70 @@ export interface BookkeepingReport {
   siteCommission?: number; netProfit?: number; netMarginPercent?: number;
   nayaxFeesExGst?: number; nayaxFeesIncludingGst?: number;
   deliveryCosts?: number; packageCosts?: number; otherOperatingExpenses?: number;
+  cardSales?: number; cashSales?: number; cardTransactionCount?: number; cashTransactionCount?: number;
+  nayaxProcessingRate?: number;
 }
-export interface DailyRow { date: string; sales: number; quantity: number; costOfGoods: number; grossProfit: number; transactionCount: number; }
-export interface DailyReport { from: string; to: string; rows: DailyRow[]; dataQuality: ReportQuality; }
+export interface DailyRow {
+  date: string; sales: number; grossSales?: number; cardSales?: number; cashSales?: number;
+  quantity: number; costOfGoods: number; grossProfit: number; transactionCount: number;
+  averageSale?: number; isCogsComplete?: boolean; uncostedTransactionCount?: number;
+  uncostedSalesAmount?: number; grossMarginPercent?: number;
+  nayaxFeesExGst?: number; nayaxFeesIncludingGst?: number;
+  importedReimbursement?: number; netReimbursement?: number;
+  isReconciled?: boolean; reconciliationStatus?: string;
+}
+export interface DailyTotals {
+  grossSales: number; cardSales: number; cashSales: number; quantity: number;
+  costOfGoods: number; grossProfit: number; transactionCount: number; averageSale: number;
+  isCogsComplete: boolean; uncostedTransactionCount: number; uncostedSalesAmount: number;
+  grossMarginPercent: number; nayaxFeesExGst: number; nayaxFeesIncludingGst: number;
+  importedReimbursement: number; netReimbursement: number;
+}
+export interface DailyReport { from: string; to: string; rows: DailyRow[]; dataQuality: ReportQuality; totals?: DailyTotals; }
+export interface ReconciliationPeriod {
+  from: string; to: string; totalVendingSales: number; cardSales: number; cashSales: number;
+  cardTransactionSales: number; nayaxReportedGrossCardSales: number;
+  cardTransactionCount: number; nayaxReportedCardTransactionCount: number; countDifference: number;
+  totalTransactionCount: number; cashTransactionCount: number;
+  grossDifference: number; grossStatus: string; processingFeesExGst: number; feeGst: number;
+  otherFees: number; adjustments: number; adjustmentsSupported: boolean; expectedNetReimbursement: number;
+  actualNetReimbursement: number; settlementDifference: number; settlementStatus: string;
+  status: string; payoutDate?: string; dataQuality: ReportQuality;
+}
+export interface ReconciliationTotals {
+  totalVendingSales: number; cardSales: number; cashSales: number;
+  cardTransactionSales: number; nayaxReportedGrossCardSales: number;
+  cardTransactionCount: number; nayaxReportedCardTransactionCount: number; countDifference: number;
+  totalTransactionCount: number; cashTransactionCount: number;
+  grossDifference: number; processingFeesExGst: number; feeGst: number; otherFees: number;
+  adjustments: number; adjustmentsSupported: boolean; expectedNetReimbursement: number; actualNetReimbursement: number;
+  settlementDifference: number; grossStatus: string; settlementStatus: string; status: string;
+}
 export interface ReconciliationReport {
   from: string; to: string; nayaxSales: number; importedReimbursement: number; difference: number;
-  tolerance: number; isMatch: boolean; dataQuality: ReportQuality;
+  tolerance: number; isMatch: boolean; dataQuality: ReportQuality; cardTransactionCount?: number;
+  nayaxTransactionCount?: number; countDifference?: number; processingFees?: number;
+  netReimbursement?: number; payoutDate?: string; totalVendingSales: number; cardSales: number;
+  cashSales: number; totalTransactionCount: number; cashTransactionCount: number;
+  cardTransactionSales: number; nayaxReportedGrossCardSales: number;
+  nayaxReportedCardTransactionCount: number; grossDifference: number; grossStatus: string;
+  processingFeesExGst: number; feeGst: number; otherFees: number; adjustments: number;
+  expectedNetReimbursement: number; actualNetReimbursement: number; settlementDifference: number;
+  adjustmentsSupported: boolean;
+  settlementStatus: string; status: string; periodRows: ReconciliationPeriod[]; totals?: ReconciliationTotals;
 }
 export interface MachineRow {
   machineId: number; machineName: string; sales: number; quantity: number; costOfGoods: number;
   grossProfit: number; marginPercent: number; transactionCount: number;
   siteCommission?: number; netProfit?: number; netMarginPercent?: number; commissionPercent?: number;
+  cardSales?: number; cashSales?: number;
 }
 export interface MachineReport { from: string; to: string; rows: MachineRow[]; dataQuality: ReportQuality; }
 export interface ProductRow {
   productId: number | null; productName: string; categoryName?: string; sales: number; quantity: number;
   costOfGoods: number; grossProfit: number; marginPercent: number; transactionCount: number;
   isUnmapped: boolean; historicalCostAvailable: boolean;
+  cardRevenue?: number; cashRevenue?: number;
 }
 export interface ProductReport { from: string; to: string; rows: ProductRow[]; dataQuality: ReportQuality; }
 export interface GstReport {

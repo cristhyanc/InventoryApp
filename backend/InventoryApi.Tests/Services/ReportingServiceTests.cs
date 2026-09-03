@@ -67,6 +67,49 @@ public class ReportingServiceTests
         Assert.Equal(1, row.TransactionCount);
     }
 
+    [Fact]
+    public async Task Daily_report_includes_payment_split_cogs_quality_and_period_reimbursement()
+    {
+        using var db = CreateDbContext();
+        db.Products.Add(new Product { Id = 1, Name = "Known", UnitPrice = 2m });
+        db.NayaxSales.AddRange(
+            new NayaxSales
+            {
+                TransactionID = 30, MachineID = 10, NayaxProductId = 1, SettlementValue = 10m,
+                Quantity = 1, PaymentMethod = "Credit Card", MachineAuthorizationTime = new DateTime(2025, 8, 1)
+            },
+            new NayaxSales
+            {
+                TransactionID = 31, MachineID = 10, NayaxProductId = 99, SettlementValue = 5m,
+                Quantity = 1, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1)
+            });
+        db.ImportedReimbursements.Add(new ImportedReimbursement
+        {
+            ReimbursementStartDate = new DateTime(2025, 8, 1),
+            ReimbursementEndDate = new DateTime(2025, 8, 1),
+            ReimbursementPayoutDate = new DateTime(2025, 8, 3),
+            Total = 10m,
+            Fees = { new ImportedFee { TotalSum = 1m, TotalSumWithVat = 1.1m, VatPercentage = 10m } }
+        });
+        await db.SaveChangesAsync();
+
+        var report = await new ReportingService(db).GetDailyAsync(
+            new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)));
+
+        var row = Assert.Single(report.Rows);
+        Assert.Equal(15m, row.GrossSales);
+        Assert.Equal(10m, row.CardSales);
+        Assert.Equal(5m, row.CashSales);
+        Assert.Equal(7.5m, row.AverageSale);
+        Assert.False(row.IsCogsComplete);
+        Assert.Equal(1, row.UncostedTransactionCount);
+        Assert.Equal(5m, row.UncostedSalesAmount);
+        Assert.Equal(10m, row.ImportedReimbursement);
+        Assert.Equal(1.1m, row.NayaxFeesIncludingGst);
+        Assert.Equal("Warning", row.ReconciliationStatus);
+        Assert.Equal(15m, report.Totals!.GrossSales);
+    }
+
     [Theory]
     [InlineData("2025-06-30", "FY2024-25")]
     [InlineData("2025-07-01", "FY2025-26")]
@@ -139,6 +182,7 @@ public class ReportingServiceTests
         db.NayaxSales.Add(new NayaxSales
         {
             TransactionID = 1, MachineID = 10, SettlementValue = 100m, Quantity = 1,
+            PaymentMethod = "Credit Card",
             MachineAuthorizationTime = new DateTime(2025, 8, 10)
         });
         var file = new ImportedFile { FileName = "aug.xml", FileHash = "aug", ImportedAt = DateTime.UtcNow };
@@ -191,11 +235,13 @@ public class ReportingServiceTests
             new NayaxSales
             {
                 TransactionID = 10, MachineID = 1216029552, SettlementValue = 90.30m, Quantity = 1,
+                PaymentMethod = "Credit Card",
                 MachineAuthorizationTime = new DateTime(2025, 8, 12)
             },
             new NayaxSales
             {
                 TransactionID = 11, MachineID = 1216029562, SettlementValue = 42.90m, Quantity = 1,
+                PaymentMethod = "Credit Card",
                 MachineAuthorizationTime = new DateTime(2025, 8, 12)
             });
 
@@ -230,5 +276,67 @@ public class ReportingServiceTests
         Assert.Equal(90.30m, report.NayaxSales);
         Assert.Equal(90.30m, report.ImportedReimbursement);
         Assert.True(report.IsMatch);
+    }
+
+    [Fact]
+    public async Task Reconciliation_exposes_sales_fee_and_settlement_breakdown()
+    {
+        using var db = CreateDbContext();
+        db.NayaxSales.AddRange(
+            new NayaxSales
+            {
+                TransactionID = 40, MachineID = 10, SettlementValue = 100m, Quantity = 1,
+                PaymentMethod = "Credit Card", MachineAuthorizationTime = new DateTime(2025, 8, 12)
+            },
+            new NayaxSales
+            {
+                TransactionID = 41, MachineID = 10, SettlementValue = 25m, Quantity = 1,
+                PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 12)
+            });
+        db.ImportedReimbursements.Add(new ImportedReimbursement
+        {
+            ReimbursementStartDate = new DateTime(2025, 8, 12),
+            ReimbursementEndDate = new DateTime(2025, 8, 12),
+            ReimbursementPayoutDate = new DateTime(2025, 8, 14),
+            Total = 88m,
+            Devices =
+            {
+                new ImportedReimbursementDevice
+                {
+                    EntityId = "device-1", MachineNumber = "10", TotalBillableTransactionAmount = 100m,
+                    TotalBillableTransactionCount = 1
+                }
+            },
+            DevicePayments =
+            {
+                new ImportedDevicePayment
+                {
+                    EntityId = "device-1", PaymentMethodDescription = "Credit Card",
+                    SalesCount = 1, TotalSum = 100m
+                }
+            },
+            Fees =
+            {
+                new ImportedFee { FeeTypeDescription = "Processing fee", TotalSum = 2m, TotalSumWithVat = 2.2m, VatPercentage = 10m },
+                new ImportedFee { FeeTypeDescription = "Service fee", TotalSum = 3m, TotalSumWithVat = 3.3m, VatPercentage = 10m }
+            }
+        });
+        await db.SaveChangesAsync();
+
+        var report = await new ReportingService(db).GetReconciliationAsync(
+            new ReportingFilterDto(new DateTime(2025, 8, 12), new DateTime(2025, 8, 12)));
+
+        Assert.Equal(125m, report.TotalVendingSales);
+        Assert.Equal(100m, report.CardTransactionSales);
+        Assert.Equal(25m, report.CashSales);
+        Assert.Equal(100m, report.NayaxReportedGrossCardSales);
+        Assert.Equal(2m, report.ProcessingFeesExGst);
+        Assert.Equal(0.5m, report.FeeGst);
+        Assert.Equal(3m, report.OtherFees);
+        Assert.Equal(94.5m, report.ExpectedNetReimbursement);
+        Assert.Equal(88m, report.ActualNetReimbursement);
+        Assert.Equal("Reconciled", report.GrossStatus);
+        Assert.Equal("Mismatch", report.SettlementStatus);
+        Assert.Single(report.PeriodRows);
     }
 }

@@ -9,7 +9,13 @@ import { ReceiptListComponent } from './components/receipts/receipt-list.compone
 import { ReceiptUploadComponent } from './components/receipts/receipt-upload.component';
 import { MachineDetailComponent } from './components/machines/machine-detail.component';
 import { SiteProductsComponent } from './components/sites/site-products.component';
-import { ReportsComponent } from './components/reports/reports.component';
+import { DashboardReportComponent } from './components/reports/dashboard-report.component';
+import { BookkeepingReportComponent } from './components/reports/bookkeeping-report.component';
+import { DailyReportComponent } from './components/reports/daily-report.component';
+import { ReconciliationReportComponent } from './components/reports/reconciliation-report.component';
+import { MachineReportComponent } from './components/reports/machine-report.component';
+import { ProductReportComponent } from './components/reports/product-report.component';
+import { GstReportComponent } from './components/reports/gst-report.component';
 
 export const routes: Routes = [
   { path: '', component: DashboardComponent },
@@ -23,12 +29,12 @@ export const routes: Routes = [
   { path: 'sites/:id/products', component: SiteProductsComponent },
   { path: 'receipts', component: ReceiptListComponent },
   { path: 'receipts/new', component: ReceiptUploadComponent },
-  { path: 'reports', component: ReportsComponent, data: { kind: 'dashboard' } },
-  { path: 'reports/bookkeeping', component: ReportsComponent, data: { kind: 'bookkeeping' } },
-  { path: 'reports/daily', component: ReportsComponent, data: { kind: 'daily' } },
-  { path: 'reports/reconciliation', component: ReportsComponent, data: { kind: 'reconciliation' } },
-  { path: 'reports/machines', component: ReportsComponent, data: { kind: 'machines' } },
-  { path: 'reports/products', component: ReportsComponent, data: { kind: 'products' } },
-  { path: 'reports/gst', component: ReportsComponent, data: { kind: 'gst' } },
+  { path: 'reports', component: DashboardReportComponent },
+  { path: 'reports/bookkeeping', component: BookkeepingReportComponent },
+  { path: 'reports/daily', component: DailyReportComponent },
+  { path: 'reports/reconciliation', component: ReconciliationReportComponent },
+  { path: 'reports/machines', component: MachineReportComponent },
+  { path: 'reports/products', component: ProductReportComponent },
+  { path: 'reports/gst', component: GstReportComponent },
   { path: '**', redirectTo: '' }
 ];

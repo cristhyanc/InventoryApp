@@ -1,0 +1,18 @@
+import { Component } from '@angular/core';
+import { CommonModule } from '@angular/common';
+import { ActivatedRoute } from '@angular/router';
+import { Observable } from 'rxjs';
+import { MachineService } from '../../services/machine.service';
+import { ReportingFilter, ReportingService, MachineReport } from '../../services/reporting.service';
+import { ReportPageBase } from './report-page.base';
+import { ReportFiltersComponent } from './report-filters.component';
+
+@Component({ selector: 'app-machine-report', standalone: true, imports: [CommonModule, ReportFiltersComponent], template: `
+<div class="mb-5 flex items-center justify-between"><h1 class="text-2xl font-semibold text-slate-800">Machine Profitability</h1><div class="flex gap-2"><button class="rounded-md border px-3 py-2 text-sm" (click)="export('csv','machine-profitability')">Export CSV</button><button class="rounded-md border px-3 py-2 text-sm" (click)="export('xlsx','machine-profitability')">Export XLSX</button></div></div>
+<app-report-filters [from]="from" [to]="to" [machineId]="machineId" [machines]="machines" [period]="period" (fromChange)="from=$event" (toChange)="to=$event" (machineChange)="machineId=$event" (periodChange)="selectPeriod($event)" (apply)="load()" />
+@if (loading) { <div class="rounded-xl bg-white p-8 text-center text-slate-500">Loading report...</div> } @else if (error) { <div class="rounded-xl bg-red-50 p-6 text-red-700">{{ error }}</div> } @else if (report) { <div class="overflow-x-auto rounded-xl bg-white shadow-sm"><table class="min-w-full text-sm"><thead><tr class="bg-slate-50 text-left"><th class="px-4 py-3">Machine</th><th class="px-4 py-3">Commission</th><th class="px-4 py-3">Transactions</th><th class="px-4 py-3">Sales</th><th class="px-4 py-3">COGS</th><th class="px-4 py-3">Gross Profit</th><th class="px-4 py-3">Net Profit</th><th class="px-4 py-3">Margin</th></tr></thead><tbody>@for (row of report.rows; track row.machineId) {<tr class="border-t"><td class="px-4 py-3">{{ row.machineName }}</td><td class="px-4 py-3">{{ row.commissionPercent | number:'1.2-2' }}% ({{ money(row.siteCommission) }})</td><td class="px-4 py-3">{{ row.transactionCount }}</td><td class="px-4 py-3"><div>{{ money(row.sales) }}</div><div class="text-xs text-slate-500">Card {{ money(row.cardSales) }} · Cash {{ money(row.cashSales) }}</div></td><td class="px-4 py-3">{{ money(row.costOfGoods) }}</td><td class="px-4 py-3">{{ money(row.grossProfit) }}</td><td class="px-4 py-3">{{ money(row.netProfit) }}</td><td class="px-4 py-3">{{ row.netMarginPercent | number:'1.2-2' }}%</td></tr>}</tbody></table></div> }
+` })
+export class MachineReportComponent extends ReportPageBase<MachineReport> {
+  constructor(route: ActivatedRoute, reports: ReportingService, machines: MachineService) { super(route, reports, machines); }
+  request(filter: ReportingFilter): Observable<MachineReport> { return this.reports.machines(filter); }
+}

@@ -39,10 +39,8 @@ public sealed class ReportingService : IReportingService
     public async Task<BookkeepingReportDto> GetBookkeepingAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default)
     {
         var range = ResolveRange(filter);
-        var sales = await SalesQuery(range, MachineId(filter))
-            .GroupBy(_ => 1)
-            .Select(g => new { Sales = g.Sum(x => x.SettlementValue), Quantity = g.Sum(x => x.Quantity) })
-            .SingleOrDefaultAsync(cancellationToken) ?? new { Sales = 0m, Quantity = 0m };
+        var paymentSummary = await GetPaymentSummaryAsync(range, MachineId(filter), cancellationToken);
+        var sales = paymentSummary.GrossSales;
 
         var cost = await CostQuery(range, MachineId(filter)).Select(x => x.Cost).SumAsync(cancellationToken);
         var receiptCosts = await ReceiptCostsAsync(range, cancellationToken);
@@ -51,54 +49,182 @@ public sealed class ReportingService : IReportingService
         var siteCommission = await GetSiteCommissionAsync(range, MachineId(filter), commissions, cancellationToken);
         var fees = imported.FeesExGst;
         var feesIncludingGst = imported.FeesIncludingGst;
-        var netSettlement = imported.HasNetSettlement ? imported.NetSettlement : sales.Sales - feesIncludingGst;
-        var netProfit = sales.Sales - cost - feesIncludingGst - siteCommission - receiptCosts.Total;
+        var netSettlement = imported.HasNetSettlement ? imported.NetSettlement : paymentSummary.CardSales - feesIncludingGst;
+        var netProfit = sales - cost - feesIncludingGst - siteCommission - receiptCosts.Total;
         var gstOnFees = imported.ContainsGstClassification
             ? imported.GstOnFees
             : imported.GstOnFees;
+        var qualityNotes = new List<string>();
+        if (paymentSummary.UnknownTransactions > 0)
+            qualityNotes.Add("One or more transactions have an unknown payment method.");
+        if (filter.MachineId.HasValue && !imported.MachineFilterMatched)
+            qualityNotes.Add("No reimbursement device row matched the selected machine ID.");
+        if (imported.FeesMachineFilterLimited)
+            qualityNotes.Add("Imported fees are account-level amounts and are not allocated to a selected machine.");
         var quality = Quality(imported.ContainsRows, imported.ContainsGstClassification, false,
-            imported.MachineFilterMatched ? null : filter.MachineId.HasValue
-                ? "No reimbursement device row matched the selected machine ID."
-                : null);
+            qualityNotes.Count == 0 ? null : string.Join(" ", qualityNotes));
         return new BookkeepingReportDto(range.From, range.ToDate, AustralianFyHelper.Label(range.From),
-            sales.Sales, cost, ReportingCalculations.GrossProfit(sales.Sales, cost), fees, netSettlement,
-            ReportingCalculations.GstFromInclusive(sales.Sales), gstOnFees, quality, siteCommission, netProfit,
-            ReportingCalculations.MarginPercent(sales.Sales, cost + feesIncludingGst + siteCommission + receiptCosts.Total),
-            fees, feesIncludingGst, receiptCosts.Delivery, receiptCosts.Package, receiptCosts.Total);
+            sales, cost, ReportingCalculations.GrossProfit(sales, cost), fees, netSettlement,
+            ReportingCalculations.GstFromInclusive(sales), gstOnFees, quality, siteCommission, netProfit,
+            ReportingCalculations.MarginPercent(sales, cost + feesIncludingGst + siteCommission + receiptCosts.Total),
+            fees, feesIncludingGst, receiptCosts.Delivery, receiptCosts.Package, receiptCosts.Total,
+            paymentSummary.CardSales, paymentSummary.CashSales, paymentSummary.CardTransactions,
+            paymentSummary.CashTransactions, ReportingCalculations.PercentageOf(feesIncludingGst, paymentSummary.CardSales));
     }
 
     public async Task<DailyReportDto> GetDailyAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default)
     {
         var range = ResolveRange(filter);
-        var rows = await CostQuery(range, MachineId(filter))
+        var sales = await CostQuery(range, MachineId(filter)).ToListAsync(cancellationToken);
+        var importedByDate = await DailyImportedSummaryAsync(range, MachineId(filter), cancellationToken);
+        var importedPeriod = await ImportedSummaryAsync(range, MachineId(filter), cancellationToken);
+        var rows = sales
             .GroupBy(x => x.MachineAuthorizationTime.Date)
-            .Select(g => new
+            .OrderBy(g => g.Key)
+            .Select(g =>
             {
-                Date = g.Key,
-                Sales = g.Sum(x => x.SettlementValue),
-                Quantity = g.Sum(x => x.Quantity),
-                Cost = g.Sum(x => x.Cost),
-                Transactions = g.Count()
-            })
-            .OrderBy(x => x.Date)
-            .ToListAsync(cancellationToken);
-        return new DailyReportDto(range.From, range.ToDate,
-            rows.Select(x => new DailyReportRowDto(x.Date, x.Sales, x.Quantity, x.Cost, ReportingCalculations.GrossProfit(x.Sales, x.Cost), x.Transactions)).ToList(),
-            Quality(false, false, false));
+                var grossSales = g.Sum(x => x.SettlementValue);
+                var cost = g.Sum(x => x.Cost);
+                var cardSales = g.Where(x => PaymentMethodClassifier.Classify(x.PaymentMethod) == NayaxPaymentType.Card)
+                    .Sum(x => x.SettlementValue);
+                var cashSales = g.Where(x => PaymentMethodClassifier.Classify(x.PaymentMethod) == NayaxPaymentType.Cash)
+                    .Sum(x => x.SettlementValue);
+                var uncosted = g.Where(x => !x.HasCost).ToList();
+                var unknownTransactions = g.Count(x => PaymentMethodClassifier.Classify(x.PaymentMethod) == NayaxPaymentType.Unknown);
+                var imported = importedByDate.TryGetValue(g.Key, out var importedValue)
+                    ? importedValue
+                    : (DailyImportedSummary?)null;
+                var importedReimbursement = imported?.Reimbursement ?? 0m;
+                var difference = cardSales - importedReimbursement;
+                var hasImported = imported?.HasReimbursement ?? false;
+                return new DailyReportRowDto(
+                    g.Key, grossSales, g.Sum(x => x.Quantity), cost,
+                    ReportingCalculations.GrossProfit(grossSales, cost), g.Count(),
+                    grossSales, cardSales, cashSales,
+                    ReportingCalculations.Average(grossSales, g.Count()),
+                    uncosted.Count == 0, uncosted.Count, uncosted.Sum(x => x.SettlementValue),
+                    ReportingCalculations.MarginPercent(grossSales, cost),
+                    imported?.FeesExGst ?? 0m, imported?.FeesIncludingGst ?? 0m,
+                    importedReimbursement, imported?.NetReimbursement ?? 0m,
+                    hasImported && IsReconciled(difference, 0.01m),
+                    ReconciliationStatus(hasImported, difference, 0.01m,
+                        uncosted.Count != 0 || unknownTransactions != 0,
+                        imported?.HasPeriodOnlyData == true));
+            }).ToList();
+        var totals = new DailyReportTotalsDto(
+            rows.Sum(x => x.GrossSales), rows.Sum(x => x.CardSales), rows.Sum(x => x.CashSales),
+            rows.Sum(x => x.Quantity), rows.Sum(x => x.CostOfGoods), rows.Sum(x => x.GrossProfit),
+            rows.Sum(x => x.TransactionCount), ReportingCalculations.Average(rows.Sum(x => x.GrossSales), rows.Sum(x => x.TransactionCount)),
+            rows.All(x => x.IsCogsComplete), rows.Sum(x => x.UncostedTransactionCount), rows.Sum(x => x.UncostedSalesAmount),
+            ReportingCalculations.MarginPercent(rows.Sum(x => x.GrossSales), rows.Sum(x => x.CostOfGoods)),
+            importedPeriod.ContainsRows ? importedPeriod.FeesExGst : rows.Sum(x => x.NayaxFeesExGst),
+            importedPeriod.ContainsRows ? importedPeriod.FeesIncludingGst : rows.Sum(x => x.NayaxFeesIncludingGst),
+            importedPeriod.ContainsRows ? importedPeriod.Settlement : rows.Sum(x => x.ImportedReimbursement),
+            importedPeriod.ContainsRows ? importedPeriod.NetSettlement : rows.Sum(x => x.NetReimbursement));
+        var note = importedPeriod.FeesMachineFilterLimited
+            ? "Imported fees are account-level amounts and are not allocated to a selected machine."
+            : importedByDate.Values.Any(x => x.HasPeriodOnlyData)
+                ? "Some reimbursements cover a period longer than one day and are not allocated to daily rows."
+                : null;
+        var quality = Quality(importedPeriod.ContainsRows, importedPeriod.ContainsGstClassification, false, note);
+        return new DailyReportDto(range.From, range.ToDate, rows,
+            quality,
+            totals);
     }
 
     public async Task<ReconciliationReportDto> GetReconciliationAsync(ReportingFilterDto filter, decimal tolerance = 0.01m, CancellationToken cancellationToken = default)
     {
         var range = ResolveRange(filter);
-        var nayax = await SalesQuery(range, MachineId(filter)).SumAsync(x => x.SettlementValue, cancellationToken);
-        var imported = await ImportedSummaryAsync(range, MachineId(filter), cancellationToken);
-        var difference = nayax - imported.Settlement;
-        var quality = Quality(imported.ContainsRows, imported.ContainsGstClassification, false,
-            !imported.ContainsRows ? "No imported reimbursement row matched the requested period." :
-            imported.MachineFilterMatched ? null :
-            filter.MachineId.HasValue ? "No reimbursement device row matched the selected machine ID." : null);
-        return new ReconciliationReportDto(range.From, range.ToDate, nayax, imported.Settlement,
-            difference, Math.Abs(tolerance), Math.Abs(difference) <= Math.Abs(tolerance), quality);
+        var machineId = MachineId(filter);
+        var paymentSummary = await GetPaymentSummaryAsync(range, machineId, cancellationToken);
+        var sales = await SalesQuery(range, machineId).ToListAsync(cancellationToken);
+        var reimbursements = await _db.ImportedReimbursements.AsNoTracking()
+            .Where(x => x.ReimbursementStartDate.HasValue && x.ReimbursementEndDate.HasValue)
+            .Include(x => x.Devices)
+            .Include(x => x.DevicePayments)
+            .Include(x => x.PaymentMethods)
+            .Include(x => x.Fees)
+            .ToListAsync(cancellationToken);
+
+        // Reconciliation is deliberately period based: an overlapping reimbursement is not
+        // silently attributed to a different requested period.
+        var matching = reimbursements
+            .Where(x => x.ReimbursementStartDate!.Value.Date >= range.From.Date &&
+                x.ReimbursementEndDate!.Value.Date <= range.ToDate.Date)
+            .OrderBy(x => x.Id)
+            .ToList();
+        var periodRows = new List<ReconciliationPeriodDto>();
+        foreach (var reimbursement in matching)
+        {
+            var periodSales = sales.Where(x => x.MachineAuthorizationTime.Date >= reimbursement.ReimbursementStartDate!.Value.Date &&
+                x.MachineAuthorizationTime.Date <= reimbursement.ReimbursementEndDate!.Value.Date).ToList();
+            periodRows.Add(BuildReconciliationPeriod(reimbursement, periodSales, machineId, tolerance));
+        }
+
+        if (periodRows.Count == 0)
+            periodRows.Add(BuildReconciliationPeriod(null, sales, machineId, tolerance, range.From, range.ToDate));
+
+        var importedGross = periodRows.Sum(x => x.NayaxReportedGrossCardSales);
+        var grossDifference = paymentSummary.CardSales - importedGross;
+        var hasImported = matching.Count != 0;
+        var aggregateWarning = periodRows.Any(x => x.GrossStatus == "Warning" || x.SettlementStatus == "Warning");
+        var aggregateSettlementDifference = periodRows.Sum(x => x.SettlementDifference);
+        var grossStatus = StatusFor(!hasImported, grossDifference, tolerance, aggregateWarning);
+        var settlementStatus = StatusFor(!hasImported, aggregateSettlementDifference, tolerance, aggregateWarning);
+        var totals = new ReconciliationTotalsDto(
+            paymentSummary.GrossSales, paymentSummary.CardSales, paymentSummary.CashSales,
+            paymentSummary.CardSales, importedGross,
+            paymentSummary.CardTransactions, periodRows.Sum(x => x.NayaxReportedCardTransactionCount),
+            paymentSummary.CardTransactions - periodRows.Sum(x => x.NayaxReportedCardTransactionCount), grossDifference,
+            periodRows.Sum(x => x.ProcessingFeesExGst), periodRows.Sum(x => x.FeeGst), periodRows.Sum(x => x.OtherFees),
+            periodRows.Sum(x => x.Adjustments), periodRows.Sum(x => x.ExpectedNetReimbursement),
+            periodRows.Sum(x => x.ActualNetReimbursement), periodRows.Sum(x => x.SettlementDifference),
+            grossStatus, settlementStatus, OverallStatus(grossStatus, settlementStatus))
+        {
+            TotalTransactionCount = sales.Count,
+            CashTransactionCount = paymentSummary.CashTransactions
+        };
+
+        var actualNet = totals.ActualNetReimbursement;
+        var qualityNotes = new List<string>();
+        if (!hasImported)
+            qualityNotes.Add("No imported reimbursement row matched the requested start and end dates.");
+        if (paymentSummary.UnknownTransactions > 0)
+            qualityNotes.Add("One or more transactions have an unknown payment method.");
+        if (machineId.HasValue)
+            qualityNotes.Add("Imported fees are account-level amounts and are not allocated to a selected machine.");
+        qualityNotes.Add("Adjustments are unsupported by the imported reimbursement model and are treated as zero.");
+        var quality = Quality(hasImported, periodRows.Any(x => x.DataQuality.GstClassificationMissing == false), false,
+            string.Join(" ", qualityNotes) is { Length: > 0 } note ? note : null);
+        var first = periodRows[0];
+        return new ReconciliationReportDto(range.From, range.ToDate, totals.CardTransactionSales,
+            totals.NayaxReportedGrossCardSales, grossDifference, Math.Abs(tolerance),
+            IsReconciled(grossDifference, tolerance), quality,
+            totals.CardTransactionCount, totals.NayaxReportedCardTransactionCount, totals.CountDifference,
+            totals.ProcessingFeesExGst, actualNet, first.PayoutDate)
+        {
+            TotalVendingSales = totals.TotalVendingSales,
+            CardSales = totals.CardSales,
+            CashSales = totals.CashSales,
+            TotalTransactionCount = sales.Count,
+            CashTransactionCount = paymentSummary.CashTransactions,
+            CardTransactionSales = totals.CardTransactionSales,
+            NayaxReportedGrossCardSales = totals.NayaxReportedGrossCardSales,
+            NayaxReportedCardTransactionCount = totals.NayaxReportedCardTransactionCount,
+            GrossDifference = totals.GrossDifference,
+            GrossStatus = totals.GrossStatus,
+            ProcessingFeesExGst = totals.ProcessingFeesExGst,
+            FeeGst = totals.FeeGst,
+            OtherFees = totals.OtherFees,
+            Adjustments = totals.Adjustments,
+            ExpectedNetReimbursement = totals.ExpectedNetReimbursement,
+            ActualNetReimbursement = actualNet,
+            SettlementDifference = totals.SettlementDifference,
+            SettlementStatus = totals.SettlementStatus,
+            Status = totals.Status,
+            PeriodRows = periodRows,
+            Totals = totals
+        };
     }
 
     public async Task<MachineProfitabilityReportDto> GetMachineProfitabilityAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default)
@@ -110,6 +236,8 @@ public sealed class ReportingService : IReportingService
             {
                 g.Key.MachineID,
                 g.Key.MachineName,
+                CardSales = g.Where(x => x.PaymentMethod == "Credit Card" || x.PaymentMethod == "Prepaid Credit").Sum(x => x.SettlementValue),
+                CashSales = g.Where(x => x.PaymentMethod == "Cash").Sum(x => x.SettlementValue),
                 Sales = g.Sum(x => x.SettlementValue),
                 Quantity = g.Sum(x => x.Quantity),
                 Cost = g.Sum(x => x.Cost),
@@ -122,7 +250,8 @@ public sealed class ReportingService : IReportingService
                 x.Sales * commissions.GetValueOrDefault(x.MachineID).Percent / 100m,
                 x.Sales - x.Cost - x.Sales * commissions.GetValueOrDefault(x.MachineID).Percent / 100m,
                 ReportingCalculations.MarginPercent(x.Sales, x.Cost + x.Sales * commissions.GetValueOrDefault(x.MachineID).Percent / 100m),
-                commissions.GetValueOrDefault(x.MachineID).Percent)).ToList(),
+                commissions.GetValueOrDefault(x.MachineID).Percent,
+                x.CardSales, x.CashSales)).ToList(),
             Quality(false, false, false));
     }
 
@@ -138,7 +267,9 @@ public sealed class ReportingService : IReportingService
                 g.Key.ProductName,
                 Sales = g.Sum(x => x.SettlementValue),
                 Quantity = g.Sum(x => x.Quantity),
-                Transactions = g.Count()
+                Transactions = g.Count(),
+                CardRevenue = g.Where(x => x.PaymentMethod == "Credit Card" || x.PaymentMethod == "Prepaid Credit").Sum(x => x.SettlementValue),
+                CashRevenue = g.Where(x => x.PaymentMethod == "Cash").Sum(x => x.SettlementValue)
             }).OrderByDescending(x => x.Sales).ToListAsync(cancellationToken);
 
         var result = rows.Select(x =>
@@ -148,7 +279,7 @@ public sealed class ReportingService : IReportingService
             var name = product?.Name ?? (string.IsNullOrWhiteSpace(x.ProductName) ? "Unmapped product" : x.ProductName);
             return new ProductProfitabilityRowDto(x.NayaxProductId, name, product?.Category?.Name,
                 x.Sales, x.Quantity, cost, ReportingCalculations.GrossProfit(x.Sales, cost), ReportingCalculations.MarginPercent(x.Sales, cost),
-                x.Transactions, product is null, product is not null);
+                x.Transactions, product is null, product is not null, x.CardRevenue, x.CashRevenue);
         }).ToList();
         var quality = Quality(false, false, result.Any(x => x.IsUnmapped),
             result.Any(x => x.IsUnmapped) ? "One or more sales could not be mapped to a Product." : null);
@@ -181,6 +312,7 @@ public sealed class ReportingService : IReportingService
                 Products = g.Select(x => x.NayaxProductId).Where(x => x.HasValue).Distinct().Count()
             }).SingleOrDefaultAsync(cancellationToken);
         var productReport = await GetProductProfitabilityAsync(filter, cancellationToken);
+        var paymentSummary = await GetPaymentSummaryAsync(range, MachineId(filter), cancellationToken);
         var imported = await ImportedSummaryAsync(range, MachineId(filter), cancellationToken);
         var commissions = await GetMachineCommissionsAsync(range, MachineId(filter), cancellationToken);
         var siteCommission = await GetSiteCommissionAsync(range, MachineId(filter), commissions, cancellationToken);
@@ -194,7 +326,8 @@ public sealed class ReportingService : IReportingService
             imported.HasNetSettlement ? imported.NetSettlement : (summary?.Sales ?? 0m) - fees,
             siteCommission, netProfit,
             ReportingCalculations.MarginPercent(summary?.Sales ?? 0m, (summary?.Cost ?? 0m) + fees + siteCommission + receiptCosts.Total),
-            imported.FeesExGst, receiptCosts.Delivery, receiptCosts.Package, receiptCosts.Total);
+            imported.FeesExGst, receiptCosts.Delivery, receiptCosts.Package, receiptCosts.Total,
+            paymentSummary.CardSales, paymentSummary.CashSales, paymentSummary.CardTransactions, paymentSummary.CashTransactions);
     }
 
     public async Task<byte[]> ExportCsvAsync(string report, ReportingFilterDto filter, CancellationToken cancellationToken = default)
@@ -225,32 +358,96 @@ public sealed class ReportingService : IReportingService
         if (report is "daily")
         {
             var value = await GetDailyAsync(filter, cancellationToken);
-            return new[] { new List<string> { "Date", "Sales", "Quantity", "CostOfGoods", "GrossProfit", "Transactions" } }
-                .Concat(value.Rows.Select(x => new List<string> { x.Date.ToString("yyyy-MM-dd"), x.Sales.ToString(CultureInfo.InvariantCulture), x.Quantity.ToString(CultureInfo.InvariantCulture), x.CostOfGoods.ToString(CultureInfo.InvariantCulture), x.GrossProfit.ToString(CultureInfo.InvariantCulture), x.TransactionCount.ToString(CultureInfo.InvariantCulture) })).ToList();
+            var rows = new[] { new List<string>
+                {
+                    "Date", "GrossSales", "CardSales", "CashSales", "AverageSale", "Quantity",
+                    "CostOfGoods", "GrossProfit", "GrossMarginPercent", "Transactions",
+                    "IsCogsComplete", "UncostedTransactionCount", "UncostedSalesAmount",
+                    "NayaxFeesExGst", "NayaxFeesIncludingGst", "ImportedReimbursement",
+                    "NetReimbursement", "ReconciliationStatus"
+                } }
+                .Concat(value.Rows.Select(x => new List<string>
+                {
+                    x.Date.ToString("yyyy-MM-dd"), x.GrossSales.ToString(CultureInfo.InvariantCulture),
+                    x.CardSales.ToString(CultureInfo.InvariantCulture), x.CashSales.ToString(CultureInfo.InvariantCulture),
+                    x.AverageSale.ToString(CultureInfo.InvariantCulture), x.Quantity.ToString(CultureInfo.InvariantCulture),
+                    x.CostOfGoods.ToString(CultureInfo.InvariantCulture), x.GrossProfit.ToString(CultureInfo.InvariantCulture),
+                    x.GrossMarginPercent.ToString(CultureInfo.InvariantCulture), x.TransactionCount.ToString(),
+                    x.IsCogsComplete.ToString(), x.UncostedTransactionCount.ToString(),
+                    x.UncostedSalesAmount.ToString(CultureInfo.InvariantCulture),
+                    x.NayaxFeesExGst.ToString(CultureInfo.InvariantCulture), x.NayaxFeesIncludingGst.ToString(CultureInfo.InvariantCulture),
+                    x.ImportedReimbursement.ToString(CultureInfo.InvariantCulture), x.NetReimbursement.ToString(CultureInfo.InvariantCulture),
+                    x.ReconciliationStatus
+                })).ToList();
+            if (value.Totals is not null)
+                rows.Add(new List<string>
+                {
+                    "TOTAL", value.Totals.GrossSales.ToString(CultureInfo.InvariantCulture),
+                    value.Totals.CardSales.ToString(CultureInfo.InvariantCulture), value.Totals.CashSales.ToString(CultureInfo.InvariantCulture),
+                    value.Totals.AverageSale.ToString(CultureInfo.InvariantCulture), value.Totals.Quantity.ToString(CultureInfo.InvariantCulture),
+                    value.Totals.CostOfGoods.ToString(CultureInfo.InvariantCulture), value.Totals.GrossProfit.ToString(CultureInfo.InvariantCulture),
+                    value.Totals.GrossMarginPercent.ToString(CultureInfo.InvariantCulture), value.Totals.TransactionCount.ToString(),
+                    value.Totals.IsCogsComplete.ToString(), value.Totals.UncostedTransactionCount.ToString(),
+                    value.Totals.UncostedSalesAmount.ToString(CultureInfo.InvariantCulture),
+                    value.Totals.NayaxFeesExGst.ToString(CultureInfo.InvariantCulture), value.Totals.NayaxFeesIncludingGst.ToString(CultureInfo.InvariantCulture),
+                    value.Totals.ImportedReimbursement.ToString(CultureInfo.InvariantCulture), value.Totals.NetReimbursement.ToString(CultureInfo.InvariantCulture),
+                    string.Empty
+                });
+            return rows;
         }
         if (report is "bookkeeping")
         {
             var value = await GetBookkeepingAsync(filter, cancellationToken);
             return new List<List<string>>
             {
-                new() { "From", "To", "FinancialYear", "Sales", "CostOfGoods", "GrossProfit", "NayaxFeesExGst", "NayaxFeesIncludingGst", "DeliveryCosts", "PackageCosts", "OtherOperatingExpenses", "NetSettlement", "SiteCommission", "NetProfit", "GstOnSales", "GstOnFees" },
-                new() { value.From.ToString("yyyy-MM-dd"), value.To.ToString("yyyy-MM-dd"), value.FinancialYear, value.Sales.ToString(CultureInfo.InvariantCulture), value.CostOfGoods.ToString(CultureInfo.InvariantCulture), value.GrossProfit.ToString(CultureInfo.InvariantCulture), value.NayaxFeesExGst.ToString(CultureInfo.InvariantCulture), value.NayaxFeesIncludingGst.ToString(CultureInfo.InvariantCulture), value.DeliveryCosts.ToString(CultureInfo.InvariantCulture), value.PackageCosts.ToString(CultureInfo.InvariantCulture), value.OtherOperatingExpenses.ToString(CultureInfo.InvariantCulture), value.NetSettlement.ToString(CultureInfo.InvariantCulture), value.SiteCommission.ToString(CultureInfo.InvariantCulture), value.NetProfit.ToString(CultureInfo.InvariantCulture), value.GstOnSales.ToString(CultureInfo.InvariantCulture), value.GstOnFees.ToString(CultureInfo.InvariantCulture) }
+                new() { "From", "To", "FinancialYear", "GrossSales", "CardSales", "CashSales", "CardTransactions", "CashTransactions", "COGS", "GrossProfit", "NayaxFeesExGst", "NayaxFeesIncludingGst", "NayaxProcessingRate", "DeliveryCosts", "PackageCosts", "OtherOperatingExpenses", "NetSettlement", "SiteCommission", "NetProfit", "NetMargin", "GstOnSales", "GstOnFees" },
+                new() { value.From.ToString("yyyy-MM-dd"), value.To.ToString("yyyy-MM-dd"), value.FinancialYear, value.Sales.ToString(CultureInfo.InvariantCulture), value.CardSales.ToString(CultureInfo.InvariantCulture), value.CashSales.ToString(CultureInfo.InvariantCulture), value.CardTransactionCount.ToString(), value.CashTransactionCount.ToString(), value.CostOfGoods.ToString(CultureInfo.InvariantCulture), value.GrossProfit.ToString(CultureInfo.InvariantCulture), value.NayaxFeesExGst.ToString(CultureInfo.InvariantCulture), value.NayaxFeesIncludingGst.ToString(CultureInfo.InvariantCulture), value.NayaxProcessingRate.ToString(CultureInfo.InvariantCulture), value.DeliveryCosts.ToString(CultureInfo.InvariantCulture), value.PackageCosts.ToString(CultureInfo.InvariantCulture), value.OtherOperatingExpenses.ToString(CultureInfo.InvariantCulture), value.NetSettlement.ToString(CultureInfo.InvariantCulture), value.SiteCommission.ToString(CultureInfo.InvariantCulture), value.NetProfit.ToString(CultureInfo.InvariantCulture), value.NetMarginPercent.ToString(CultureInfo.InvariantCulture), value.GstOnSales.ToString(CultureInfo.InvariantCulture), value.GstOnFees.ToString(CultureInfo.InvariantCulture) }
             };
         }
         if (report is "reconciliation")
         {
             var value = await GetReconciliationAsync(filter, cancellationToken: cancellationToken);
-            return new List<List<string>>
+            var rows = new List<List<string>>
             {
-                new() { "From", "To", "NayaxSales", "ImportedReimbursement", "Difference", "Tolerance", "IsMatch" },
-                new() { value.From.ToString("yyyy-MM-dd"), value.To.ToString("yyyy-MM-dd"), value.NayaxSales.ToString(CultureInfo.InvariantCulture), value.ImportedReimbursement.ToString(CultureInfo.InvariantCulture), value.Difference.ToString(CultureInfo.InvariantCulture), value.Tolerance.ToString(CultureInfo.InvariantCulture), value.IsMatch.ToString() }
+                new() { "From", "To", "TotalVendingSales", "CardSales", "CashSales", "CardTransactionSales", "NayaxReportedGrossCardSales", "CardTransactionCount", "NayaxReportedCardTransactionCount", "CountDifference", "GrossDifference", "GrossStatus", "ProcessingFeesExGst", "FeeGst", "OtherFees", "Adjustments", "ExpectedNetReimbursement", "ActualNetReimbursement", "SettlementDifference", "SettlementStatus", "Status", "PayoutDate" }
             };
+            rows.AddRange(value.PeriodRows.Select(x => new List<string>
+            {
+                x.From.ToString("yyyy-MM-dd"), x.To.ToString("yyyy-MM-dd"),
+                x.TotalVendingSales.ToString(CultureInfo.InvariantCulture), x.CardSales.ToString(CultureInfo.InvariantCulture),
+                x.CashSales.ToString(CultureInfo.InvariantCulture), x.CardTransactionSales.ToString(CultureInfo.InvariantCulture),
+                x.NayaxReportedGrossCardSales.ToString(CultureInfo.InvariantCulture), x.CardTransactionCount.ToString(),
+                x.NayaxReportedCardTransactionCount.ToString(), x.CountDifference.ToString(),
+                x.GrossDifference.ToString(CultureInfo.InvariantCulture), x.GrossStatus,
+                x.ProcessingFeesExGst.ToString(CultureInfo.InvariantCulture), x.FeeGst.ToString(CultureInfo.InvariantCulture),
+                x.OtherFees.ToString(CultureInfo.InvariantCulture), x.Adjustments.ToString(CultureInfo.InvariantCulture),
+                x.ExpectedNetReimbursement.ToString(CultureInfo.InvariantCulture), x.ActualNetReimbursement.ToString(CultureInfo.InvariantCulture),
+                x.SettlementDifference.ToString(CultureInfo.InvariantCulture), x.SettlementStatus, x.Status,
+                x.PayoutDate?.ToString("yyyy-MM-dd") ?? string.Empty
+            }));
+            if (value.Totals is not null)
+            {
+                var x = value.Totals;
+                rows.Add(new List<string>
+                {
+                    "TOTAL", string.Empty, x.TotalVendingSales.ToString(CultureInfo.InvariantCulture),
+                    x.CardSales.ToString(CultureInfo.InvariantCulture), x.CashSales.ToString(CultureInfo.InvariantCulture),
+                    x.CardTransactionSales.ToString(CultureInfo.InvariantCulture), x.NayaxReportedGrossCardSales.ToString(CultureInfo.InvariantCulture),
+                    x.CardTransactionCount.ToString(), x.NayaxReportedCardTransactionCount.ToString(), x.CountDifference.ToString(),
+                    x.GrossDifference.ToString(CultureInfo.InvariantCulture), x.GrossStatus,
+                    x.ProcessingFeesExGst.ToString(CultureInfo.InvariantCulture), x.FeeGst.ToString(CultureInfo.InvariantCulture),
+                    x.OtherFees.ToString(CultureInfo.InvariantCulture), x.Adjustments.ToString(CultureInfo.InvariantCulture),
+                    x.ExpectedNetReimbursement.ToString(CultureInfo.InvariantCulture), x.ActualNetReimbursement.ToString(CultureInfo.InvariantCulture),
+                    x.SettlementDifference.ToString(CultureInfo.InvariantCulture), x.SettlementStatus, x.Status, string.Empty
+                });
+            }
+            return rows;
         }
         if (report is "machine-profitability" or "machines")
         {
             var value = await GetMachineProfitabilityAsync(filter, cancellationToken);
-            return new[] { new List<string> { "MachineId", "MachineName", "Sales", "Quantity", "CostOfGoods", "GrossProfit", "CommissionPercent", "SiteCommission", "NetProfit", "NetMarginPercent", "Transactions" } }
-                .Concat(value.Rows.Select(x => new List<string> { x.MachineId.ToString(), x.MachineName, x.Sales.ToString(CultureInfo.InvariantCulture), x.Quantity.ToString(CultureInfo.InvariantCulture), x.CostOfGoods.ToString(CultureInfo.InvariantCulture), x.GrossProfit.ToString(CultureInfo.InvariantCulture), x.CommissionPercent.ToString(CultureInfo.InvariantCulture), x.SiteCommission.ToString(CultureInfo.InvariantCulture), x.NetProfit.ToString(CultureInfo.InvariantCulture), x.NetMarginPercent.ToString(CultureInfo.InvariantCulture), x.TransactionCount.ToString(CultureInfo.InvariantCulture) })).ToList();
+            return new[] { new List<string> { "MachineId", "MachineName", "Sales", "CardSales", "CashSales", "Quantity", "CostOfGoods", "GrossProfit", "CommissionPercent", "SiteCommission", "NetProfit", "NetMarginPercent", "Transactions" } }
+                .Concat(value.Rows.Select(x => new List<string> { x.MachineId.ToString(), x.MachineName, x.Sales.ToString(CultureInfo.InvariantCulture), x.CardSales.ToString(CultureInfo.InvariantCulture), x.CashSales.ToString(CultureInfo.InvariantCulture), x.Quantity.ToString(CultureInfo.InvariantCulture), x.CostOfGoods.ToString(CultureInfo.InvariantCulture), x.GrossProfit.ToString(CultureInfo.InvariantCulture), x.CommissionPercent.ToString(CultureInfo.InvariantCulture), x.SiteCommission.ToString(CultureInfo.InvariantCulture), x.NetProfit.ToString(CultureInfo.InvariantCulture), x.NetMarginPercent.ToString(CultureInfo.InvariantCulture), x.TransactionCount.ToString(CultureInfo.InvariantCulture) })).ToList();
         }
         if (report is "gst" or "gst-accounting")
         {
@@ -286,9 +483,31 @@ public sealed class ReportingService : IReportingService
         select new SaleCost
         {
             MachineID = sale.MachineID, MachineName = sale.MachineName, NayaxProductId = sale.NayaxProductId,
-            ProductName = sale.ProductName, SettlementValue = sale.SettlementValue, Quantity = sale.Quantity,
-            MachineAuthorizationTime = sale.MachineAuthorizationTime, Cost = product == null ? 0m : product.UnitPrice * sale.Quantity
+            ProductName = sale.ProductName, PaymentMethod = sale.PaymentMethod, SettlementValue = sale.SettlementValue, Quantity = sale.Quantity,
+            MachineAuthorizationTime = sale.MachineAuthorizationTime, Cost = product == null ? 0m : product.UnitPrice * sale.Quantity,
+            HasCost = product != null
         };
+
+    private async Task<SalesPaymentSummary> GetPaymentSummaryAsync(DateRange range, long? machineId, CancellationToken cancellationToken)
+    {
+        var rows = await SalesQuery(range, machineId)
+            .Select(x => new { x.PaymentMethod, x.SettlementValue })
+            .ToListAsync(cancellationToken);
+        var classified = rows.GroupBy(x => PaymentMethodClassifier.Classify(x.PaymentMethod))
+            .ToDictionary(x => x.Key, x => new { Sales = x.Sum(y => y.SettlementValue), Count = x.Count() });
+        var card = classified.GetValueOrDefault(NayaxPaymentType.Card);
+        var cash = classified.GetValueOrDefault(NayaxPaymentType.Cash);
+        var unknown = classified.GetValueOrDefault(NayaxPaymentType.Unknown);
+        return new SalesPaymentSummary(
+            rows.Sum(x => x.SettlementValue),
+            rows.Count,
+            card?.Sales ?? 0m,
+            card?.Count ?? 0,
+            cash?.Sales ?? 0m,
+            cash?.Count ?? 0,
+            unknown?.Sales ?? 0m,
+            unknown?.Count ?? 0);
+    }
 
     private async Task<ReceiptCostSummary> ReceiptCostsAsync(DateRange range, CancellationToken cancellationToken)
     {
@@ -302,6 +521,87 @@ public sealed class ReportingService : IReportingService
         return costs;
     }
 
+    private async Task<Dictionary<DateTime, DailyImportedSummary>> DailyImportedSummaryAsync(
+        DateRange range, long? machineId, CancellationToken cancellationToken)
+    {
+        var reimbursements = await _db.ImportedReimbursements.AsNoTracking()
+            .Where(x => x.ReimbursementStartDate.HasValue && x.ReimbursementEndDate.HasValue &&
+                x.ReimbursementStartDate < range.EndExclusive && x.ReimbursementEndDate >= range.From)
+            .Select(x => new
+            {
+                x.Id,
+                Start = x.ReimbursementStartDate!.Value,
+                End = x.ReimbursementEndDate!.Value,
+                x.Total
+            })
+            .ToListAsync(cancellationToken);
+        if (reimbursements.Count == 0)
+            return new();
+
+        var ids = reimbursements.Select(x => x.Id).ToList();
+        var fees = await _db.ImportedFees.AsNoTracking()
+            .Where(x => ids.Contains(x.ImportedReimbursementId) && !x.IsPreviousPeriod)
+            .Select(x => new
+            {
+                x.ImportedReimbursementId,
+                x.TotalSum,
+                x.TotalSumWithVat,
+                x.VatPercentage
+            })
+            .ToListAsync(cancellationToken);
+        var devices = machineId.HasValue
+            ? await _db.ImportedReimbursementDevices.AsNoTracking()
+                .Where(x => ids.Contains(x.ImportedReimbursementId))
+                .Select(x => new { x.ImportedReimbursementId, x.MachineNumber, x.TotalBillableTransactionAmount })
+                .ToListAsync(cancellationToken)
+            : new();
+
+        var result = new Dictionary<DateTime, DailyImportedSummary>();
+        foreach (var reimbursement in reimbursements)
+        {
+            var start = reimbursement.Start.Date;
+            var end = reimbursement.End.Date;
+            var matchingMachine = machineId.HasValue && devices.Any(x =>
+                x.ImportedReimbursementId == reimbursement.Id &&
+                long.TryParse(x.MachineNumber, out var parsed) && parsed == machineId.Value);
+            if (machineId.HasValue && !matchingMachine)
+                continue;
+
+            var daily = start == end && start >= range.From && start <= range.ToDate;
+            if (!daily)
+            {
+                if (start <= range.ToDate && end >= range.From)
+                {
+                    var periodStart = start < range.From.Date ? range.From.Date : start;
+                    var periodEnd = end > range.ToDate.Date ? range.ToDate.Date : end;
+                    for (var date = periodStart; date <= periodEnd; date = date.AddDays(1))
+                    {
+                        var existingPeriod = result.GetValueOrDefault(date);
+                        result[date] = existingPeriod with { HasPeriodOnlyData = true };
+                    }
+                }
+                continue;
+            }
+
+            var reimbursementFees = fees.Where(x => x.ImportedReimbursementId == reimbursement.Id).ToList();
+            var reimbursementAmount = machineId.HasValue
+                ? devices.Where(x => x.ImportedReimbursementId == reimbursement.Id &&
+                    long.TryParse(x.MachineNumber, out var parsed) && parsed == machineId.Value)
+                    .Sum(x => x.TotalBillableTransactionAmount ?? 0m)
+                : reimbursement.Total ?? 0m;
+            var summary = new DailyImportedSummary(
+                reimbursementAmount,
+                machineId.HasValue ? 0m : reimbursementFees.Sum(x => x.TotalSum ?? 0m),
+                machineId.HasValue ? 0m : reimbursementFees.Sum(x => x.TotalSumWithVat ?? x.TotalSum ?? 0m),
+                reimbursementFees.Any(x => x.VatPercentage.HasValue),
+                true,
+                reimbursement.Total ?? 0m,
+                machineId.HasValue);
+            result[start] = result.GetValueOrDefault(start) + summary;
+        }
+        return result;
+    }
+
     private async Task<ImportedSummary> ImportedSummaryAsync(DateRange range, long? machineId, CancellationToken cancellationToken)
     {
         var reimbursements = _db.ImportedReimbursements.AsNoTracking()
@@ -310,7 +610,8 @@ public sealed class ReportingService : IReportingService
             .Select(x => new ImportedReimbursementRow
             {
                 Id = x.Id,
-                Total = x.Total
+                Total = x.Total,
+                PayoutDate = x.ReimbursementPayoutDate
             })
             .ToListAsync(cancellationToken);
         if (reimbursementRows.Count == 0)
@@ -354,7 +655,8 @@ public sealed class ReportingService : IReportingService
                 PaymentMethodDescription = x.PaymentMethodDescription,
                 RecognitionDescription = x.RecognitionDescription,
                 Amount = x.TotalSum ?? 0m,
-                Fees = (x.ProcessingFees ?? 0m) + (x.ServiceFees ?? 0m)
+                Fees = (x.ProcessingFees ?? 0m) + (x.ServiceFees ?? 0m),
+                Count = x.SalesCount ?? 1
             })
             .ToListAsync(cancellationToken);
 
@@ -362,6 +664,9 @@ public sealed class ReportingService : IReportingService
         {
             Id = x.Id,
             Settlement = x.Total ?? 0m,
+            NetSettlement = x.Total ?? 0m,
+            HasImportedTotal = x.Total.HasValue,
+            PayoutDate = x.PayoutDate,
             FeesExGst = feeRows.Where(f => f.ReimbursementId == x.Id && !f.IsPreviousPeriod).Sum(f => f.TotalSum ?? 0m),
             FeesIncludingGst = feeRows.Where(f => f.ReimbursementId == x.Id && !f.IsPreviousPeriod).Sum(f => f.TotalSumWithVat ?? f.TotalSum ?? 0m),
             Gst = feeRows.Where(f => f.ReimbursementId == x.Id && !f.IsPreviousPeriod).Sum(f =>
@@ -379,22 +684,21 @@ public sealed class ReportingService : IReportingService
                 Gross = d.Gross,
                 NetAmount = d.NetAmount,
                 Payments = paymentRows.Where(p => p.ReimbursementId == x.Id && p.EntityId == d.EntityId)
-                    .Select(p => new ImportedPaymentNet(p.PaymentMethodDescription, p.RecognitionDescription, p.Amount, p.Fees))
+                    .Select(p => new ImportedPaymentNet(p.PaymentMethodDescription, p.RecognitionDescription, p.Amount, p.Fees, p.Count))
                     .ToList()
             }).ToList()
         }).ToList();
 
-        decimal NetAmount(IEnumerable<ImportedPaymentNet> payments, decimal? fallback) =>
-            payments.Any()
-                ? payments.Where(p => !IsCashPayment(p.PaymentMethodDescription, p.RecognitionDescription))
-                    .Sum(p => p.Amount - p.Fees)
-                : fallback ?? 0m;
+        var importedCardTransactionCount = rows.SelectMany(x => x.Devices)
+            .SelectMany(d => d.Payments)
+            .Where(p => PaymentMethodClassifier.Classify(p.PaymentMethodDescription, p.RecognitionDescription) == NayaxPaymentType.Card)
+            .Sum(p => p.Count);
 
         if (!machineId.HasValue)
             return new ImportedSummary(rows.Sum(x => x.Settlement), rows.Sum(x => x.FeesExGst),
                 rows.Sum(x => x.FeesIncludingGst), rows.Sum(x => x.Gst),
-                rows.SelectMany(x => x.Devices).Sum(d => NetAmount(d.Payments, d.NetAmount)),
-                rows.Count != 0, rows.Any(x => x.HasGst), rows.Any(x => x.HasNet), rows.Count != 0);
+                rows.Sum(x => x.NetSettlement),
+                rows.Count != 0, rows.Any(x => x.HasGst), rows.Any(x => x.HasImportedTotal), rows.Count != 0, rows.Select(x => x.PayoutDate).FirstOrDefault(), importedCardTransactionCount);
 
         var matchingDevices = rows.SelectMany(x => x.Devices)
             .Where(d => long.TryParse(d.MachineNumber, out var parsed) && parsed == machineId.Value)
@@ -404,15 +708,138 @@ public sealed class ReportingService : IReportingService
             .Select(row => row.Id)
             .ToHashSet();
         var matchingRows = rows.Where(row => matchingReimbursementIds.Contains(row.Id)).ToList();
-        return new ImportedSummary(matchingDevices.Sum(x => x.Gross), matchingRows.Sum(x => x.FeesExGst),
-            matchingRows.Sum(x => x.FeesIncludingGst), matchingRows.Sum(x => x.Gst),
-            matchingDevices.Sum(x => NetAmount(x.Payments, x.NetAmount)),
-            rows.Count != 0, matchingRows.Any(x => x.HasGst), matchingDevices.Any(x => x.NetAmount.HasValue), matchingDevices.Count != 0);
+        var matchingSettlement = matchingDevices
+            .Sum(d => d.Payments.Count != 0
+                ? d.Payments.Where(p => PaymentMethodClassifier.Classify(p.PaymentMethodDescription, p.RecognitionDescription) == NayaxPaymentType.Card).Sum(p => p.Amount)
+                : d.Gross);
+        return new ImportedSummary(matchingSettlement, 0m,
+            0m, 0m,
+            matchingRows.Sum(x => x.NetSettlement),
+            rows.Count != 0, matchingRows.Any(x => x.HasGst), matchingRows.Any(x => x.HasImportedTotal), matchingDevices.Count != 0,
+            matchingRows.Select(x => x.PayoutDate).FirstOrDefault(),
+            matchingDevices.SelectMany(d => d.Payments)
+                .Where(p => PaymentMethodClassifier.Classify(p.PaymentMethodDescription, p.RecognitionDescription) == NayaxPaymentType.Card)
+                .Sum(p => p.Count),
+            true);
     }
 
-    private static bool IsCashPayment(string? paymentMethod, string? recognition) =>
-        (paymentMethod ?? string.Empty).Contains("cash", StringComparison.OrdinalIgnoreCase) ||
-        (recognition ?? string.Empty).Contains("cash", StringComparison.OrdinalIgnoreCase);
+    private ReconciliationPeriodDto BuildReconciliationPeriod(
+        ImportedReimbursement? reimbursement,
+        IReadOnlyList<NayaxSales> sales,
+        long? machineId,
+        decimal tolerance,
+        DateTime? fallbackFrom = null,
+        DateTime? fallbackTo = null)
+    {
+        var totalVendingSales = sales.Sum(x => x.SettlementValue);
+        var cardSales = sales.Where(x => PaymentMethodClassifier.Classify(x.PaymentMethod) == NayaxPaymentType.Card)
+            .Sum(x => x.SettlementValue);
+        var cashSales = sales.Where(x => PaymentMethodClassifier.Classify(x.PaymentMethod) == NayaxPaymentType.Cash)
+            .Sum(x => x.SettlementValue);
+        var cardTransactionCount = sales.Count(x => PaymentMethodClassifier.Classify(x.PaymentMethod) == NayaxPaymentType.Card);
+        var hasImported = reimbursement is not null;
+        var devices = reimbursement?.Devices
+            .Where(x => !machineId.HasValue ||
+                (long.TryParse(x.MachineNumber, out var parsed) && parsed == machineId.Value))
+            .ToList() ?? new List<ImportedReimbursementDevice>();
+        var paymentRows = devices.Count == 0
+            ? (!machineId.HasValue ? reimbursement?.DevicePayments.ToList() ?? new List<ImportedDevicePayment>() : new List<ImportedDevicePayment>())
+            : reimbursement!.DevicePayments.Where(x =>
+                devices.Any(d => d.EntityId is not null && d.EntityId == x.EntityId) ||
+                (devices.Count == 1 && devices[0].EntityId is null && x.EntityId is null)).ToList();
+        var hasPaymentRows = paymentRows.Count != 0;
+        var paymentMethodRows = !machineId.HasValue
+            ? reimbursement?.PaymentMethods.Where(x => !x.IsPreviousPeriod).ToList() ?? new List<ImportedPaymentMethod>()
+            : new List<ImportedPaymentMethod>();
+        var hasAccountPaymentRows = paymentMethodRows.Count != 0;
+        var reportedGross = hasPaymentRows
+            ? paymentRows.Where(x => PaymentMethodClassifier.Classify(x.PaymentMethodDescription, x.RecognitionDescription) == NayaxPaymentType.Card)
+                .Sum(x => x.TotalSum ?? 0m)
+            : hasAccountPaymentRows
+                ? paymentMethodRows.Where(x => PaymentMethodClassifier.Classify(x.PaymentMethodDescription, x.RecognitionDescription) == NayaxPaymentType.Card)
+                    .Sum(x => x.TotalSalesSum ?? 0m)
+            : devices.Count != 0
+                ? devices.Sum(x => x.TotalBillableTransactionAmount ?? 0m)
+                : machineId.HasValue ? 0m : reimbursement?.Total ?? 0m;
+        var reportedCount = hasPaymentRows
+            ? paymentRows.Where(x => PaymentMethodClassifier.Classify(x.PaymentMethodDescription, x.RecognitionDescription) == NayaxPaymentType.Card)
+                .Sum(x => x.SalesCount ?? 1)
+            : hasAccountPaymentRows
+                ? paymentMethodRows.Where(x => PaymentMethodClassifier.Classify(x.PaymentMethodDescription, x.RecognitionDescription) == NayaxPaymentType.Card)
+                    .Sum(x => x.TotalSalesCount ?? 1)
+            : devices.Sum(x => x.TotalBillableTransactionCount ?? 0);
+
+        var fees = reimbursement?.Fees.Where(x => !x.IsPreviousPeriod).ToList() ?? new List<ImportedFee>();
+        var processingFees = fees.Where(IsProcessingFee).Sum(FeeExGst);
+        var otherFees = fees.Where(x => !IsProcessingFee(x)).Sum(FeeExGst);
+        var feeGst = fees.Sum(FeeGst);
+        var adjustments = 0m;
+        var expectedNet = reportedGross - processingFees - otherFees - feeGst - adjustments;
+        var actualNet = reimbursement?.Total ?? 0m;
+        var grossDifference = cardSales - reportedGross;
+        var settlementDifference = expectedNet - actualNet;
+        var paymentDetailMissing = hasImported && !hasPaymentRows && !hasAccountPaymentRows;
+        var warning = machineId.HasValue || paymentDetailMissing ||
+            sales.Any(x => PaymentMethodClassifier.Classify(x.PaymentMethod) == NayaxPaymentType.Unknown);
+        var grossStatus = StatusFor(!hasImported, grossDifference, tolerance, warning);
+        var settlementStatus = StatusFor(!hasImported, settlementDifference, tolerance, warning);
+        var notes = new List<string>();
+        if (!hasImported)
+            notes.Add("No imported reimbursement row matched the requested start and end dates.");
+        if (machineId.HasValue)
+            notes.Add("Imported fees are account-level amounts and are not allocated to a selected machine.");
+        if (paymentDetailMissing)
+            notes.Add("Imported card payment detail was unavailable; device or reimbursement gross was used as the card gross.");
+        if (adjustments == 0m)
+            notes.Add("Adjustments are unsupported by the imported reimbursement model and are treated as zero.");
+        var quality = Quality(hasImported, fees.Any(x => x.VatPercentage.HasValue), false,
+            string.Join(" ", notes));
+        return new ReconciliationPeriodDto(
+            reimbursement?.ReimbursementStartDate?.Date ?? fallbackFrom!.Value.Date,
+            reimbursement?.ReimbursementEndDate?.Date ?? fallbackTo!.Value.Date,
+            totalVendingSales, cardSales, cashSales, cardSales, reportedGross,
+            cardTransactionCount, reportedCount, cardTransactionCount - reportedCount,
+            grossDifference, grossStatus, processingFees, feeGst, otherFees, adjustments,
+            expectedNet, actualNet, settlementDifference, settlementStatus,
+            OverallStatus(grossStatus, settlementStatus), reimbursement?.ReimbursementPayoutDate, quality)
+        {
+            TotalTransactionCount = sales.Count,
+            CashTransactionCount = sales.Count(x => PaymentMethodClassifier.Classify(x.PaymentMethod) == NayaxPaymentType.Cash)
+        };
+    }
+
+    private static bool IsProcessingFee(ImportedFee fee) =>
+        (fee.FeesTypeId ?? string.Empty).Contains("processing", StringComparison.OrdinalIgnoreCase) ||
+        (fee.FeeTypeDescription ?? string.Empty).Contains("processing", StringComparison.OrdinalIgnoreCase);
+
+    private static decimal FeeGst(ImportedFee fee)
+    {
+        if (fee.TotalSumWithVat.HasValue && fee.TotalSum.HasValue)
+            return fee.TotalSumWithVat.Value - fee.TotalSum.Value;
+        if (fee.TotalSumWithVat.HasValue && fee.VatPercentage.HasValue)
+            return fee.TotalSumWithVat.Value * fee.VatPercentage.Value / (100m + fee.VatPercentage.Value);
+        return 0m;
+    }
+
+    private static decimal FeeExGst(ImportedFee fee) =>
+        fee.TotalSum ?? (fee.TotalSumWithVat.HasValue ? fee.TotalSumWithVat.Value - FeeGst(fee) : 0m);
+
+    private static bool IsReconciled(decimal difference, decimal tolerance) =>
+        Math.Abs(difference) <= Math.Abs(tolerance);
+
+    private static string StatusFor(bool pending, decimal difference, decimal tolerance, bool warning) =>
+        pending ? "Pending" : !IsReconciled(difference, tolerance) ? "Mismatch" : warning ? "Warning" : "Reconciled";
+
+    private static string StatusFor(bool pending, bool mismatch, bool warning) =>
+        pending ? "Pending" : mismatch ? "Mismatch" : warning ? "Warning" : "Reconciled";
+
+    private static string OverallStatus(string grossStatus, string settlementStatus) =>
+        grossStatus == "Mismatch" || settlementStatus == "Mismatch" ? "Mismatch" :
+        grossStatus == "Pending" || settlementStatus == "Pending" ? "Pending" :
+        grossStatus == "Warning" || settlementStatus == "Warning" ? "Warning" : "Reconciled";
+
+    private static string ReconciliationStatus(bool hasImported, decimal difference, decimal tolerance, bool hasWarning = false, bool hasPeriodOnlyData = false) =>
+        StatusFor(!hasImported && !hasPeriodOnlyData, difference, tolerance, hasWarning || hasPeriodOnlyData);
 
     private async Task<Dictionary<long, MachineCommission>> GetMachineCommissionsAsync(DateRange range, long? machineId, CancellationToken cancellationToken)
     {
@@ -469,16 +896,19 @@ public sealed class ReportingService : IReportingService
         public string? MachineName { get; set; }
         public long? NayaxProductId { get; set; }
         public string? ProductName { get; set; }
+        public string? PaymentMethod { get; set; }
         public decimal SettlementValue { get; set; }
         public decimal Quantity { get; set; }
         public DateTime MachineAuthorizationTime { get; set; }
         public decimal Cost { get; set; }
+        public bool HasCost { get; set; }
     }
 
     private sealed class ImportedReimbursementRow
     {
         public int Id { get; set; }
         public decimal? Total { get; set; }
+        public DateTime? PayoutDate { get; set; }
     }
 
     private sealed class ImportedFeeRow
@@ -508,15 +938,19 @@ public sealed class ReportingService : IReportingService
         public string? RecognitionDescription { get; set; }
         public decimal Amount { get; set; }
         public decimal Fees { get; set; }
+        public int Count { get; set; }
     }
 
     private sealed class ImportedReportRow
     {
         public int Id { get; set; }
         public decimal Settlement { get; set; }
+        public decimal NetSettlement { get; set; }
+        public bool HasImportedTotal { get; set; }
         public decimal FeesExGst { get; set; }
         public decimal FeesIncludingGst { get; set; }
         public decimal Gst { get; set; }
+        public DateTime? PayoutDate { get; set; }
         public bool HasNet { get; set; }
         public bool HasGst { get; set; }
         public List<ImportedReportDevice> Devices { get; set; } = new();
@@ -532,6 +966,15 @@ public sealed class ReportingService : IReportingService
     }
 
     private readonly record struct MachineCommission(decimal Percent);
+    private readonly record struct SalesPaymentSummary(
+        decimal GrossSales,
+        int Transactions,
+        decimal CardSales,
+        int CardTransactions,
+        decimal CashSales,
+        int CashTransactions,
+        decimal UnknownSales,
+        int UnknownTransactions);
     private readonly record struct ReceiptCostSummary(decimal Delivery, decimal Package)
     {
         public decimal Total => Delivery + Package;
@@ -541,9 +984,43 @@ public sealed class ReportingService : IReportingService
         string? PaymentMethodDescription,
         string? RecognitionDescription,
         decimal Amount,
-        decimal Fees);
+        decimal Fees,
+        int Count = 1);
 
-    private readonly record struct ImportedSummary(decimal Settlement, decimal FeesExGst, decimal FeesIncludingGst, decimal GstOnFees, decimal NetSettlement, bool ContainsRows, bool ContainsGstClassification, bool HasNetSettlement, bool MachineFilterMatched);
+    private readonly record struct DailyImportedSummary(
+        decimal Reimbursement,
+        decimal FeesExGst,
+        decimal FeesIncludingGst,
+        bool HasGstClassification,
+        bool HasReimbursement,
+        decimal NetReimbursement,
+        bool FeesMachineFilterLimited,
+        bool HasPeriodOnlyData = false)
+    {
+        public static DailyImportedSummary operator +(DailyImportedSummary left, DailyImportedSummary right) =>
+            new(left.Reimbursement + right.Reimbursement,
+                left.FeesExGst + right.FeesExGst,
+                left.FeesIncludingGst + right.FeesIncludingGst,
+                left.HasGstClassification || right.HasGstClassification,
+                left.HasReimbursement || right.HasReimbursement,
+                left.NetReimbursement + right.NetReimbursement,
+                left.FeesMachineFilterLimited || right.FeesMachineFilterLimited,
+                left.HasPeriodOnlyData || right.HasPeriodOnlyData);
+    }
+
+    private readonly record struct ImportedSummary(
+        decimal Settlement,
+        decimal FeesExGst,
+        decimal FeesIncludingGst,
+        decimal GstOnFees,
+        decimal NetSettlement,
+        bool ContainsRows,
+        bool ContainsGstClassification,
+        bool HasNetSettlement,
+        bool MachineFilterMatched,
+        DateTime? PayoutDate = null,
+        int CardTransactionCount = 0,
+        bool FeesMachineFilterLimited = false);
 }
 
 public static class AustralianFyHelper
@@ -577,5 +1054,8 @@ public static class ReportingCalculations
     public static decimal GrossProfit(decimal sales, decimal costOfGoods) => sales - costOfGoods;
     public static decimal MarginPercent(decimal sales, decimal costOfGoods) =>
         sales == 0m ? 0m : GrossProfit(sales, costOfGoods) / sales * 100m;
+    public static decimal PercentageOf(decimal amount, decimal denominator) =>
+        denominator == 0m ? 0m : amount / denominator * 100m;
     public static decimal GstFromInclusive(decimal amount) => amount * 10m / 110m;
+    public static decimal Average(decimal amount, int count) => count == 0 ? 0m : amount / count;
 }
