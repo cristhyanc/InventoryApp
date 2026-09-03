@@ -19,6 +19,9 @@ export class DashboardComponent implements OnInit {
   machines: Machine[] = [];
   sites: Site[] = [];
   importingNayaxSales = false;
+  isLoadingSites = false;
+  isLoadingMachines = false;
+  isLoadingLowStock = false;
 
   constructor(
     private productService: ProductService,
@@ -30,19 +33,52 @@ export class DashboardComponent implements OnInit {
   ngOnInit(): void {
     this.refreshProducts();
     this.refreshMachines();
-    this.siteService.getAll().subscribe((sites) => {
-      this.sites = sites;
+    this.refreshSites();
+  }
+
+  refreshSites(): void {
+    this.isLoadingSites = true;
+    this.siteService.getAll().subscribe({
+      next: (sites) => {
+        this.sites = sites;
+      },
+      error: () => {
+        this.sites = [];
+      },
+      complete: () => {
+        this.isLoadingSites = false;
+      }
     });
   }
 
   refreshProducts(): void {
+    this.isLoadingLowStock = true;
     this.productService.getAll().subscribe((p) => (this.products = p));
-    this.productService.getLowStock().subscribe((p) => (this.lowStock = p.filter((product) => product.isActive !== false)));
+    this.productService.getLowStock().subscribe({
+      next: (p) => {
+        this.lowStock = p.filter((product) => product.isActive !== false);
+      },
+      error: () => {
+        this.lowStock = [];
+      },
+      complete: () => {
+        this.isLoadingLowStock = false;
+      }
+    });
   }
 
   refreshMachines(): void {
-    this.machineService.getAll().subscribe((m) => {
-      this.machines = m;
+    this.isLoadingMachines = true;
+    this.machineService.getAll().subscribe({
+      next: (m) => {
+        this.machines = m;
+      },
+      error: () => {
+        this.machines = [];
+      },
+      complete: () => {
+        this.isLoadingMachines = false;
+      }
     });
   }
 

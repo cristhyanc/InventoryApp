@@ -20,7 +20,14 @@
     <h2 class="text-lg font-semibold text-slate-800">📍 Sites</h2>
   </div>
 
-  @if (sites.length === 0) {
+    @if (isLoadingSites) {
+    <div class="space-y-3">
+      <div class="h-4 w-32 animate-pulse rounded bg-slate-200"></div>
+      <div class="h-10 w-full animate-pulse rounded bg-slate-100"></div>
+      <div class="h-10 w-full animate-pulse rounded bg-slate-100"></div>
+      <div class="h-10 w-full animate-pulse rounded bg-slate-100"></div>
+    </div>
+  } @else if (sites.length === 0) {
     <p class="text-sm text-slate-500">No sites available yet.</p>
   } @else {
     <div class="overflow-x-auto">
@@ -81,7 +88,14 @@
     </div>
   </div>
 
-  @if (machines.length === 0) {
+  @if (isLoadingMachines) {
+    <div class="space-y-3">
+      <div class="h-4 w-36 animate-pulse rounded bg-slate-200"></div>
+      <div class="h-10 w-full animate-pulse rounded bg-slate-100"></div>
+      <div class="h-10 w-full animate-pulse rounded bg-slate-100"></div>
+      <div class="h-10 w-full animate-pulse rounded bg-slate-100"></div>
+    </div>
+  } @else if (machines.length === 0) {
     <p class="text-sm text-slate-500">No machines available yet.</p>
   } @else {
     <div class="overflow-x-auto">
@@ -141,7 +155,14 @@
     <a routerLink="/products" [queryParams]="{ lowStockOnly: true }" class="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">View all products</a>
   </div>
 
-  @if (lowStock.length === 0) {
+  @if (isLoadingLowStock) {
+    <div class="space-y-3">
+      <div class="h-4 w-40 animate-pulse rounded bg-slate-200"></div>
+      <div class="h-10 w-full animate-pulse rounded bg-slate-100"></div>
+      <div class="h-10 w-full animate-pulse rounded bg-slate-100"></div>
+      <div class="h-10 w-full animate-pulse rounded bg-slate-100"></div>
+    </div>
+  } @else if (lowStock.length === 0) {
     <p class="text-sm text-slate-500">No low-stock items. Everything looks good! ✅</p>
   } @else {
     <div class="overflow-x-auto">
