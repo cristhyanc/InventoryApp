@@ -12,6 +12,7 @@ public class Receipt
 
     public int? SupplierId { get; set; }
     public virtual Supplier? Supplier { get; set; }
+    public virtual ICollection<ReceiptItem> Items { get; set; } = new List<ReceiptItem>();
 
     // Stored file info for the uploaded scan/photo
     public string FileName { get; set; } = string.Empty;

@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using InventoryApi.Data;
 using InventoryApi.Models;
+using InventoryApi.DTOs;
 
 namespace InventoryApi.Controllers;
 
@@ -49,9 +50,19 @@ public class ReceiptsController : ControllerBase
         [FromForm] decimal? deliveryCost,
         [FromForm] decimal? packageCost,
         [FromForm] DateTime? purchaseDate,
-        [FromForm] int? supplierId)
+        [FromForm] int? supplierId,
+        [FromForm] string? items)
     {
-        var receipt = await _service.Upload(file, title, notes, totalAmount, deliveryCost, packageCost, purchaseDate, supplierId);
+        Receipt? receipt;
+        try
+        {
+            receipt = await _service.Upload(file, title, notes, totalAmount, deliveryCost, packageCost, purchaseDate, supplierId,
+                ParseItems(items));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(ex.Message);
+        }
         if (receipt is null) return BadRequest("Invalid file or supplier");
         return CreatedAtAction(nameof(Get), new { id = receipt.Id }, receipt);
     }
@@ -65,9 +76,19 @@ public class ReceiptsController : ControllerBase
         [FromForm] decimal? deliveryCost,
         [FromForm] decimal? packageCost,
         [FromForm] DateTime? purchaseDate,
-        [FromForm] int? supplierId)
+        [FromForm] int? supplierId,
+        [FromForm] string? items)
     {
-        var receipt = await _service.Update(id, title, notes, totalAmount, deliveryCost, packageCost, purchaseDate, supplierId);
+        Receipt? receipt;
+        try
+        {
+            receipt = await _service.Update(id, title, notes, totalAmount, deliveryCost, packageCost, purchaseDate, supplierId,
+                ParseItems(items));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(ex.Message);
+        }
         if (receipt is null) return NotFound();
         return Ok(receipt);
     }
@@ -78,4 +99,8 @@ public class ReceiptsController : ControllerBase
         var ok = await _service.Delete(id);
         return ok ? NoContent() : NotFound();
     }
+
+    private static IReadOnlyList<ReceiptItemDto>? ParseItems(string? items) =>
+        string.IsNullOrWhiteSpace(items) ? Array.Empty<ReceiptItemDto>() :
+        System.Text.Json.JsonSerializer.Deserialize<IReadOnlyList<ReceiptItemDto>>(items);
 }

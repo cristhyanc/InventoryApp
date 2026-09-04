@@ -1,7 +1,7 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
-import { Receipt } from '../models/models';
+import { Receipt, ReceiptItem } from '../models/models';
 import { ConfigService } from './config.service';
 
 export interface ReceiptUploadPayload {
@@ -13,6 +13,13 @@ export interface ReceiptUploadPayload {
   packageCost?: number | null;
   purchaseDate?: string | null;
   supplierId?: number | null;
+  items?: ReceiptItemPayload[];
+}
+
+export interface ReceiptItemPayload {
+  productId: number;
+  quantity: number;
+  unitCost: number;
 }
 
 export type ReceiptUpdatePayload = Omit<ReceiptUploadPayload, 'file'>;
@@ -60,6 +67,7 @@ export class ReceiptService {
     if (payload.purchaseDate) formData.append('purchaseDate', payload.purchaseDate);
     if (payload.supplierId !== undefined && payload.supplierId !== null)
       formData.append('supplierId', String(payload.supplierId));
+    formData.append('items', JSON.stringify(payload.items ?? []));
 
     return this.http.post<Receipt>(this.baseUrl, formData);
   }
@@ -78,6 +86,7 @@ export class ReceiptService {
     if (payload.purchaseDate) formData.append('purchaseDate', payload.purchaseDate);
     if (payload.supplierId !== undefined && payload.supplierId !== null)
       formData.append('supplierId', String(payload.supplierId));
+    if (payload.items !== undefined) formData.append('items', JSON.stringify(payload.items));
 
     return this.http.put<Receipt>(`${this.baseUrl}/${id}`, formData);
   }

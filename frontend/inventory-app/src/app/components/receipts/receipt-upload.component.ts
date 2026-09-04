@@ -4,7 +4,9 @@ import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
 import { ReceiptService } from '../../services/receipt.service';
 import { SupplierService } from '../../services/supplier.service';
-import { Supplier } from '../../models/models';
+import { Product, Supplier } from '../../models/models';
+import { ReceiptItemPayload } from '../../services/receipt.service';
+import { ProductService } from '../../services/product.service';
 
 @Component({
   selector: 'app-receipt-upload',
@@ -14,6 +16,8 @@ import { Supplier } from '../../models/models';
 })
 export class ReceiptUploadComponent implements OnInit {
   suppliers: Supplier[] = [];
+  products: Product[] = [];
+  items: ReceiptItemPayload[] = [];
   selectedFile: File | null = null;
   previewUrl: string | null = null;
   saving = false;
@@ -32,11 +36,13 @@ export class ReceiptUploadComponent implements OnInit {
   constructor(
     private receiptService: ReceiptService,
     private supplierService: SupplierService,
+    private productService: ProductService,
     private router: Router
   ) {}
 
   ngOnInit(): void {
     this.supplierService.getAll().subscribe((s) => (this.suppliers = s));
+    this.productService.getAll().subscribe((p) => (this.products = p));
   }
 
   onFileSelected(event: Event): void {
@@ -78,6 +84,7 @@ export class ReceiptUploadComponent implements OnInit {
         packageCost: this.form.packageCost,
         purchaseDate: this.form.purchaseDate ? new Date(this.form.purchaseDate).toISOString() : null,
         supplierId: this.form.supplierId === '' ? null : this.form.supplierId
+        , items: this.items
       })
       .subscribe({
         next: () => this.router.navigate(['/receipts']),
@@ -87,4 +94,10 @@ export class ReceiptUploadComponent implements OnInit {
         }
       });
   }
+
+  addItem(): void { this.items.push({ productId: this.products[0]?.id ?? 0, quantity: 1, unitCost: 0 }); }
+  removeItem(index: number): void { this.items.splice(index, 1); }
+  itemProduct(item: ReceiptItemPayload): Product | undefined { return this.products.find(p => p.id === Number(item.productId)); }
+  lineTotal(item: ReceiptItemPayload): number { return Number(item.quantity || 0) * Number(item.unitCost || 0); }
+  get itemsSubtotal(): number { return this.items.reduce((sum, item) => sum + this.lineTotal(item), 0); }
 }

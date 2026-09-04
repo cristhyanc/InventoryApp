@@ -4,7 +4,9 @@ import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
 import { ReceiptService } from '../../services/receipt.service';
 import { SupplierService } from '../../services/supplier.service';
-import { Receipt, Supplier } from '../../models/models';
+import { Product, Receipt, Supplier } from '../../models/models';
+import { ProductService } from '../../services/product.service';
+import { ReceiptItemPayload } from '../../services/receipt.service';
 
 @Component({
   selector: 'app-receipt-list',
@@ -15,6 +17,8 @@ import { Receipt, Supplier } from '../../models/models';
 export class ReceiptListComponent implements OnInit {
   receipts: Receipt[] = [];
   suppliers: Supplier[] = [];
+  products: Product[] = [];
+  editItems: ReceiptItemPayload[] = [];
   editingReceiptId: number | null = null;
   editForm = {
     title: '',
@@ -28,12 +32,14 @@ export class ReceiptListComponent implements OnInit {
 
   constructor(
     private receiptService: ReceiptService,
-    private supplierService: SupplierService
+    private supplierService: SupplierService,
+    private productService: ProductService
   ) {}
 
   ngOnInit(): void {
     this.load();
     this.supplierService.getAll().subscribe((s) => (this.suppliers = s));
+    this.productService.getAll().subscribe((p) => (this.products = p));
   }
 
   load(): void {
@@ -59,6 +65,9 @@ export class ReceiptListComponent implements OnInit {
       purchaseDate: receipt.purchaseDate ? new Date(receipt.purchaseDate).toISOString().substring(0, 10) : '',
       supplierId: receipt.supplierId ?? ''
     };
+    this.editItems = (receipt.items ?? []).map(item => ({
+      productId: item.productId, quantity: item.quantity, unitCost: item.unitCost
+    }));
   }
 
   cancelEdit(): void {
@@ -77,6 +86,7 @@ export class ReceiptListComponent implements OnInit {
         packageCost: this.editForm.packageCost,
         purchaseDate: this.editForm.purchaseDate ? new Date(this.editForm.purchaseDate).toISOString() : null,
         supplierId: this.editForm.supplierId === '' ? null : this.editForm.supplierId
+        , items: this.editItems
       })
       .subscribe({
         next: () => {
@@ -86,6 +96,11 @@ export class ReceiptListComponent implements OnInit {
         error: (err) => console.error('Failed to update receipt', err)
       });
   }
+
+  addEditItem(): void { this.editItems.push({ productId: this.products[0]?.id ?? 0, quantity: 1, unitCost: 0 }); }
+  removeEditItem(index: number): void { this.editItems.splice(index, 1); }
+  editLineTotal(item: ReceiptItemPayload): number { return Number(item.quantity || 0) * Number(item.unitCost || 0); }
+  get editItemsSubtotal(): number { return this.editItems.reduce((sum, item) => sum + this.editLineTotal(item), 0); }
 
   remove(receipt: Receipt): void {
     if (!confirm(`Delete receipt "${receipt.title}"?`)) return;

@@ -150,4 +150,16 @@ export interface Receipt {
   contentType: string;
   fileSizeBytes: number;
   createdAt: string;
+  items?: ReceiptItem[];
+
+}
+
+export interface ReceiptItem {
+  id?: number;
+  receiptId?: number;
+  productId: number;
+  product?: Product | null;
+  quantity: number;
+  unitCost: number;
+  lineTotal?: number;
 }

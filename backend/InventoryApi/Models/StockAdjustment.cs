@@ -19,6 +19,9 @@ public class StockAdjustment
     public long ProductId { get; set; }
     [JsonIgnore]
     public virtual Product? Product { get; set; }
+    public int? ReceiptItemId { get; set; }
+    [JsonIgnore]
+    public virtual ReceiptItem? ReceiptItem { get; set; }
 
     // Positive = stock added, Negative = stock removed
     public int QuantityChange { get; set; }

@@ -19,6 +19,7 @@ public class AppDbContext : DbContext
     public DbSet<ImportedDevicePayment> ImportedDevicePayments => Set<ImportedDevicePayment>();
     public DbSet<ImportedFee> ImportedFees => Set<ImportedFee>();
     public DbSet<ImportedPaymentMethod> ImportedPaymentMethods => Set<ImportedPaymentMethod>();
+    public DbSet<ReceiptItem> ReceiptItems => Set<ReceiptItem>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -75,6 +76,23 @@ public class AppDbContext : DbContext
             .WithMany()
             .HasForeignKey(r => r.SupplierId)
             .OnDelete(DeleteBehavior.SetNull);
+        modelBuilder.Entity<ReceiptItem>()
+            .HasOne(i => i.Receipt)
+            .WithMany(r => r.Items)
+            .HasForeignKey(i => i.ReceiptId)
+            .OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<ReceiptItem>()
+            .HasOne(i => i.Product)
+            .WithMany()
+            .HasForeignKey(i => i.ProductId)
+            .OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<StockAdjustment>()
+            .HasOne(a => a.ReceiptItem)
+            .WithMany()
+            .HasForeignKey(a => a.ReceiptItemId)
+            .OnDelete(DeleteBehavior.SetNull);
+        modelBuilder.Entity<ReceiptItem>().Property(i => i.Quantity).HasColumnType("decimal(18,4)");
+        modelBuilder.Entity<ReceiptItem>().Property(i => i.UnitCost).HasColumnType("decimal(18,4)");
 
         modelBuilder.Entity<Category>().HasIndex(c => c.Name);
         modelBuilder.Entity<Supplier>().HasIndex(s => s.Name);
