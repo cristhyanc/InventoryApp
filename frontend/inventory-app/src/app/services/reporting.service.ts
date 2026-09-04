@@ -51,6 +51,9 @@ export interface DailyRow {
   nayaxFeesExGst?: number; nayaxFeesIncludingGst?: number;
   importedReimbursement?: number; netReimbursement?: number;
   isReconciled?: boolean; reconciliationStatus?: string;
+  completedTransactionCount?: number; pendingTransactionCount?: number;
+  declinedOrCancelledTransactionCount?: number; refundedTransactionCount?: number;
+  unknownStatusTransactionCount?: number;
 }
 export interface DailyTotals {
   grossSales: number; cardSales: number; cashSales: number; quantity: number;
@@ -66,7 +69,9 @@ export interface ReconciliationPeriod {
   cardTransactionCount: number; nayaxReportedCardTransactionCount: number; countDifference: number;
   totalTransactionCount: number; cashTransactionCount: number;
   grossDifference: number; grossStatus: string; processingFeesExGst: number; feeGst: number;
-  otherFees: number; adjustments: number; adjustmentsSupported: boolean; expectedNetReimbursement: number;
+  otherFees: number; adjustments: number;   adjustmentsSupported: boolean;
+  pendingTransactionCount?: number; refundedTransactionCount?: number;
+  declinedOrCancelledTransactionCount?: number; unknownStatusTransactionCount?: number; expectedNetReimbursement: number;
   actualNetReimbursement: number; settlementDifference: number; settlementStatus: string;
   status: string; payoutDate?: string; dataQuality: ReportQuality;
 }
@@ -90,6 +95,8 @@ export interface ReconciliationReport {
   processingFeesExGst: number; feeGst: number; otherFees: number; adjustments: number;
   expectedNetReimbursement: number; actualNetReimbursement: number; settlementDifference: number;
   adjustmentsSupported: boolean;
+  pendingTransactionCount?: number; refundedTransactionCount?: number;
+  declinedOrCancelledTransactionCount?: number; unknownStatusTransactionCount?: number;
   settlementStatus: string; status: string; periodRows: ReconciliationPeriod[]; totals?: ReconciliationTotals;
 }
 export interface MachineRow {

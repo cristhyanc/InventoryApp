@@ -100,6 +100,7 @@ export class DashboardComponent implements OnInit {
   downloadNayaxSalesTemplate(): void {
     const headers = [
       'TransactionID',
+      'TransactionStatusId',
       'MachineID',
       'NayaxProductId',
       'MachineName',
@@ -112,6 +113,7 @@ export class DashboardComponent implements OnInit {
 
     const sampleRow = [
       '1001',
+      '12',
       '42',
       '987654',
       'Machine A',

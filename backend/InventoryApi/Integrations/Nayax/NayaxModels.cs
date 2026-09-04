@@ -95,6 +95,8 @@ public class NayaxProductGroup
 public class NayaxLastSalesReport
 {
     public long TransactionID { get; set; }
+    [JsonPropertyName("TransactionStatusID")]
+    public int? TransactionStatusId { get; set; } = 12;
 
     public long MachineID { get; set; }
 

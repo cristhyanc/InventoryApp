@@ -50,6 +50,29 @@ public class ReportingServiceTests
     }
 
     [Fact]
+    public async Task Non_completed_statuses_and_missing_status_are_excluded_from_gross_sales()
+    {
+        using var db = CreateDbContext();
+        db.NayaxSales.AddRange(
+            new NayaxSales { TransactionID = 1, MachineID = 10, SettlementValue = 12m, Quantity = 1, TransactionStatusId = 12, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
+            new NayaxSales { TransactionID = 2, MachineID = 10, SettlementValue = 5m, Quantity = 1, TransactionStatusId = 55, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
+            new NayaxSales { TransactionID = 3, MachineID = 10, SettlementValue = 4m, Quantity = 1, TransactionStatusId = 62, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
+            new NayaxSales { TransactionID = 4, MachineID = 10, SettlementValue = 3m, Quantity = 1, TransactionStatusId = 21, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
+            new NayaxSales { TransactionID = 5, MachineID = 10, SettlementValue = 7m, Quantity = 1, TransactionStatusId = null, MachineAuthorizationTime = new DateTime(2025, 8, 1) });
+        await db.SaveChangesAsync();
+
+        var report = await new ReportingService(db).GetDailyAsync(
+            new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)));
+
+        var row = Assert.Single(report.Rows);
+        Assert.Equal(12m, row.GrossSales);
+        Assert.Equal(1, row.PendingTransactionCount);
+        Assert.Equal(1, row.RefundedTransactionCount);
+        Assert.Equal(2, row.UnknownStatusTransactionCount);
+        Assert.Contains(report.DataQuality.Notes!, x => x.Contains("unrecognised status IDs"));
+    }
+
+    [Fact]
     public async Task Date_and_machine_filters_are_inclusive_and_machine_specific()
     {
         using var db = CreateDbContext();

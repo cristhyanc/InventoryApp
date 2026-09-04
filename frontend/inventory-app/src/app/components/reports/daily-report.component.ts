@@ -18,7 +18,7 @@ import { ReportFiltersComponent } from './report-filters.component';
 @for (row of report.rows; track row.date) {
 <tr class="border-t align-top">
   <td class="px-4 py-3">{{ row.date | date:'dd/MM/yyyy' }}</td>
-  <td class="px-4 py-3">{{ row.transactionCount }}<div class="text-xs text-slate-500">Avg {{ money(row.averageSale) }}</div></td>
+  <td class="px-4 py-3">{{ row.transactionCount }}<div class="text-xs text-slate-500">Avg {{ money(row.averageSale) }}</div>@if ((row.pendingTransactionCount ?? 0) > 0) {<div class="text-xs text-amber-700">{{ row.pendingTransactionCount }} pending</div>}</td>
   <td class="px-4 py-3">{{ money(row.grossSales ?? row.sales) }}<div class="text-xs text-slate-500">Card {{ money(row.cardSales) }} · Cash {{ money(row.cashSales) }}</div></td>
   <td class="px-4 py-3"><span [class.text-amber-700]="row.isCogsComplete === false">{{ row.isCogsComplete === false ? '—' : money(row.costOfGoods) }}</span>@if (row.isCogsComplete === false) {<div class="text-xs text-amber-700">Cost data incomplete: {{ row.uncostedTransactionCount }} uncosted ({{ money(row.uncostedSalesAmount) }})</div>}</td>
   <td class="px-4 py-3"><span [class.text-amber-700]="row.isCogsComplete === false">{{ row.isCogsComplete === false ? '—' : money(row.grossProfit) }}</span>@if (row.isCogsComplete !== false) {<div class="text-xs text-slate-500">{{ row.grossMarginPercent ?? 0 | number:'1.1-1' }}% margin</div>} @else {<div class="text-xs text-amber-700">Incomplete</div>}</td>

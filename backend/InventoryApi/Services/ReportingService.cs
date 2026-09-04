@@ -76,6 +76,7 @@ public sealed class ReportingService : IReportingService
     {
         var range = ResolveRange(filter);
         var sales = await CostQuery(range, MachineId(filter)).ToListAsync(cancellationToken);
+        var statusSales = await AllSalesQuery(range, MachineId(filter)).ToListAsync(cancellationToken);
         var importedByDate = await DailyImportedSummaryAsync(range, MachineId(filter), cancellationToken);
         var importedPeriod = await ImportedSummaryAsync(range, MachineId(filter), cancellationToken);
         var rows = sales
@@ -94,6 +95,7 @@ public sealed class ReportingService : IReportingService
                 var imported = importedByDate.TryGetValue(g.Key, out var importedValue)
                     ? importedValue
                     : (DailyImportedSummary?)null;
+                var statusRows = statusSales.Where(x => x.MachineAuthorizationTime.Date == g.Key).ToList();
                 var importedReimbursement = imported?.Reimbursement ?? 0m;
                 var difference = cardSales - importedReimbursement;
                 var hasImported = imported?.HasReimbursement ?? false;
@@ -108,8 +110,15 @@ public sealed class ReportingService : IReportingService
                     importedReimbursement, imported?.NetReimbursement ?? 0m,
                     hasImported && IsReconciled(difference, 0.01m),
                     ReconciliationStatus(hasImported, difference, 0.01m,
-                        uncosted.Count != 0 || unknownTransactions != 0,
-                        imported?.HasPeriodOnlyData == true));
+                    uncosted.Count != 0 || unknownTransactions != 0 ||
+                        statusRows.Any(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) != NayaxTransactionStatus.Completed &&
+                                            x.TransactionStatusId is not null),
+                    imported?.HasPeriodOnlyData == true),
+                    statusRows.Count(x => NayaxTransactionStatusClassifier.IsCompletedSale(x)),
+                    statusRows.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Pending),
+                    statusRows.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.CancelledOrDeclined),
+                    statusRows.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Refunded),
+                    statusRows.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Unknown));
             }).ToList();
         var totals = new DailyReportTotalsDto(
             rows.Sum(x => x.GrossSales), rows.Sum(x => x.CardSales), rows.Sum(x => x.CashSales),
@@ -120,13 +129,22 @@ public sealed class ReportingService : IReportingService
             importedPeriod.ContainsRows ? importedPeriod.FeesExGst : rows.Sum(x => x.NayaxFeesExGst),
             importedPeriod.ContainsRows ? importedPeriod.FeesIncludingGst : rows.Sum(x => x.NayaxFeesIncludingGst),
             importedPeriod.ContainsRows ? importedPeriod.Settlement : rows.Sum(x => x.ImportedReimbursement),
-            importedPeriod.ContainsRows ? importedPeriod.NetSettlement : rows.Sum(x => x.NetReimbursement));
+            importedPeriod.ContainsRows ? importedPeriod.NetSettlement : rows.Sum(x => x.NetReimbursement),
+            statusSales.Count(x => NayaxTransactionStatusClassifier.IsCompletedSale(x)),
+            statusSales.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Pending),
+            statusSales.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.CancelledOrDeclined),
+            statusSales.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Refunded),
+            statusSales.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Unknown));
         var note = importedPeriod.FeesMachineFilterLimited
             ? "Imported fees are account-level amounts and are not allocated to a selected machine."
             : importedByDate.Values.Any(x => x.HasPeriodOnlyData)
                 ? "Some reimbursements cover a period longer than one day and are not allocated to daily rows."
                 : null;
-        var quality = Quality(importedPeriod.ContainsRows, importedPeriod.ContainsGstClassification, false, note);
+        var qualityNotes = new List<string>();
+        if (note is not null) qualityNotes.Add(note);
+        AddStatusQualityNotes(qualityNotes, statusSales);
+        var quality = Quality(importedPeriod.ContainsRows, importedPeriod.ContainsGstClassification, false,
+            qualityNotes.Count == 0 ? null : string.Join(" ", qualityNotes));
         return new DailyReportDto(range.From, range.ToDate, rows,
             quality,
             totals);
@@ -138,6 +156,7 @@ public sealed class ReportingService : IReportingService
         var machineId = MachineId(filter);
         var paymentSummary = await GetPaymentSummaryAsync(range, machineId, cancellationToken);
         var sales = await SalesQuery(range, machineId).ToListAsync(cancellationToken);
+        var statusSales = await AllSalesQuery(range, machineId).ToListAsync(cancellationToken);
         var reimbursements = await _db.ImportedReimbursements.AsNoTracking()
             .Where(x => x.ReimbursementStartDate.HasValue && x.ReimbursementEndDate.HasValue)
             .Include(x => x.Devices)
@@ -167,7 +186,8 @@ public sealed class ReportingService : IReportingService
         var importedGross = periodRows.Sum(x => x.NayaxReportedGrossCardSales);
         var grossDifference = paymentSummary.CardSales - importedGross;
         var hasImported = matching.Count != 0;
-        var aggregateWarning = periodRows.Any(x => x.GrossStatus == "Warning" || x.SettlementStatus == "Warning");
+        var aggregateWarning = periodRows.Any(x => x.GrossStatus == "Warning" || x.SettlementStatus == "Warning") ||
+            statusSales.Any(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Pending);
         var aggregateSettlementDifference = periodRows.Sum(x => x.SettlementDifference);
         var grossStatus = StatusFor(!hasImported, grossDifference, tolerance, aggregateWarning);
         var settlementStatus = StatusFor(!hasImported, aggregateSettlementDifference, tolerance, aggregateWarning);
@@ -191,6 +211,7 @@ public sealed class ReportingService : IReportingService
             qualityNotes.Add("No imported reimbursement row matched the requested start and end dates.");
         if (paymentSummary.UnknownTransactions > 0)
             qualityNotes.Add("One or more transactions have an unknown payment method.");
+        AddStatusQualityNotes(qualityNotes, statusSales);
         if (machineId.HasValue)
             qualityNotes.Add("Imported fees are account-level amounts and are not allocated to a selected machine.");
         qualityNotes.Add("Adjustments are unsupported by the imported reimbursement model and are treated as zero.");
@@ -208,6 +229,10 @@ public sealed class ReportingService : IReportingService
             CashSales = totals.CashSales,
             TotalTransactionCount = sales.Count,
             CashTransactionCount = paymentSummary.CashTransactions,
+            PendingTransactionCount = statusSales.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Pending),
+            RefundedTransactionCount = statusSales.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Refunded),
+            DeclinedOrCancelledTransactionCount = statusSales.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.CancelledOrDeclined),
+            UnknownStatusTransactionCount = statusSales.Count(x => x.TransactionStatusId is not null && NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Unknown),
             CardTransactionSales = totals.CardTransactionSales,
             NayaxReportedGrossCardSales = totals.NayaxReportedGrossCardSales,
             NayaxReportedCardTransactionCount = totals.NayaxReportedCardTransactionCount,
@@ -498,6 +523,9 @@ public sealed class ReportingService : IReportingService
     }
 
     private IQueryable<NayaxSales> SalesQuery(DateRange range, long? machineId) =>
+        AllSalesQuery(range, machineId).Where(NayaxTransactionStatusClassifier.CompletedSalePredicate);
+
+    private IQueryable<NayaxSales> AllSalesQuery(DateRange range, long? machineId) =>
         _db.NayaxSales.AsNoTracking().Where(x => x.MachineAuthorizationTime >= range.From && x.MachineAuthorizationTime < range.EndExclusive &&
             (!machineId.HasValue || x.MachineID == machineId.Value));
 
@@ -888,9 +916,23 @@ public sealed class ReportingService : IReportingService
         return salesByMachine.Sum(x => x.Sales * commissions.GetValueOrDefault(x.MachineId).Percent / 100m);
     }
 
+    private static void AddStatusQualityNotes(List<string> notes, IEnumerable<NayaxSales> sales)
+    {
+        var pending = sales.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Pending);
+        var refunded = sales.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Refunded);
+        var declined = sales.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.CancelledOrDeclined);
+        var unknown = sales.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Unknown);
+        var unknownStatus = sales.Count(x => x.TransactionStatusId is null);
+        if (pending > 0) notes.Add($"{pending} pending Nayax transaction(s) are excluded from completed sales.");
+        if (refunded > 0) notes.Add($"{refunded} refunded Nayax transaction(s) are excluded from completed sales.");
+        if (declined > 0) notes.Add($"{declined} cancelled or declined Nayax transaction(s) are excluded from completed sales.");
+        if (unknown > 0) notes.Add($"{unknown} Nayax transaction(s) have unrecognised status IDs.");
+        if (unknownStatus > 0) notes.Add($"{unknownStatus} Nayax transaction(s) have no status ID and are excluded from completed sales.");
+    }
+
     private static ReportingDataQualityDto Quality(bool importedRows, bool gstClassification, bool unmapped, string? note = null) =>
-        new(true, true, true, true, unmapped,
-            new[] { "NayaxSales does not persist transaction status.", "Historical product cost is represented by the current Product.UnitPrice.", "Commission is read from Nayax machine products; the first product with a commission defines the machine rate.", "GST classification is not persisted on sales; GST amounts are an indicative 10% inclusive calculation." }
+        new(false, true, true, true, unmapped,
+            new[] { "Nayax status IDs are stored raw; existing historical rows were backfilled to status 12 by migration; rows still missing a status are excluded.", "Historical product cost is represented by the current Product.UnitPrice.", "Commission is read from Nayax machine products; the first product with a commission defines the machine rate.", "GST classification is not persisted on sales; GST amounts are an indicative 10% inclusive calculation." }
                 .Concat(note is null ? Array.Empty<string>() : new[] { note }).ToList());
 
     private static string Csv(string value) => $"\"{value.Replace("\"", "\"\"")}\"";

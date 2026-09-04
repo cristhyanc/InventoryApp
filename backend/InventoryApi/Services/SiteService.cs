@@ -75,13 +75,16 @@ public class SiteService : ISiteService
             stockCounts.LowProductCount,
             stockCounts.EmptyProductCount,
             sales.Where(sale => sale.MachineAuthorizationTime >= today &&
-                                sale.MachineAuthorizationTime <= now)
+                                sale.MachineAuthorizationTime <= now &&
+                                NayaxTransactionStatusClassifier.IsCompletedSale(sale))
                 .Sum(sale => sale.SettlementValue),
             sales.Where(sale => sale.MachineAuthorizationTime >= currentWeek.Start &&
-                                sale.MachineAuthorizationTime <= currentWeek.End)
+                                sale.MachineAuthorizationTime <= currentWeek.End &&
+                                NayaxTransactionStatusClassifier.IsCompletedSale(sale))
                 .Sum(sale => sale.SettlementValue),
             sales.Where(sale => sale.MachineAuthorizationTime >= previousComparableWeek.Start &&
-                                sale.MachineAuthorizationTime <= previousComparableWeek.End)
+                                sale.MachineAuthorizationTime <= previousComparableWeek.End &&
+                                NayaxTransactionStatusClassifier.IsCompletedSale(sale))
                 .Sum(sale => sale.SettlementValue));
     }
 

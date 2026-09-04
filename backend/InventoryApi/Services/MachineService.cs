@@ -124,6 +124,7 @@ public class MachineService : IMachineService
             var sale = new NayaxSales
             {
                 TransactionID = transactionId,
+                TransactionStatusId = TryParseInt(GetCell(row, headers, "TransactionStatusId")),
                 MachineID = TryParseLong(GetCell(row, headers, "MachineID")),
                 NayaxProductId = TryParseLongOrNull(GetCell(row, headers, "NayaxProductId")),
                 MachineName = GetCellValue(row, headers, "MachineName"),
@@ -149,6 +150,7 @@ public class MachineService : IMachineService
             else
             {
                 existing.MachineID = sale.MachineID;
+                existing.TransactionStatusId = sale.TransactionStatusId;
                 existing.NayaxProductId = sale.NayaxProductId;
                 existing.MachineName = sale.MachineName;
                 existing.SettlementValue = sale.SettlementValue;
@@ -283,12 +285,12 @@ public class MachineService : IMachineService
         };
 
         var todaySales = lastSales.Where(s => s.MachineAuthorizationTime >= today &&
-                                              s.MachineAuthorizationTime <= now).ToList();
-        var currentWeekSales = lastSales.Where(s => s.MachineAuthorizationTime >= currentWeek.Start && s.MachineAuthorizationTime <= currentWeek.End).ToList();
-        var previousComparableWeekSales = lastSales.Where(s => s.MachineAuthorizationTime >= previousComparableWeek.Start && s.MachineAuthorizationTime <= previousComparableWeek.End).ToList();
-        var lastWeekSales = lastSales.Where(s => s.MachineAuthorizationTime >= lastWeek.Start && s.MachineAuthorizationTime <= lastWeek.End).ToList();
-        var monthToDateSales = lastSales.Where(s => s.MachineAuthorizationTime >= monthToDate.Start && s.MachineAuthorizationTime <= monthToDate.End).ToList();
-        var twoWeeksAgoSales = lastSales.Where(s => s.MachineAuthorizationTime >= twoWeeksAgo.Start && s.MachineAuthorizationTime <= twoWeeksAgo.End).ToList();
+                                              s.MachineAuthorizationTime <= now && NayaxTransactionStatusClassifier.IsCompletedSale(s)).ToList();
+        var currentWeekSales = lastSales.Where(s => s.MachineAuthorizationTime >= currentWeek.Start && s.MachineAuthorizationTime <= currentWeek.End && NayaxTransactionStatusClassifier.IsCompletedSale(s)).ToList();
+        var previousComparableWeekSales = lastSales.Where(s => s.MachineAuthorizationTime >= previousComparableWeek.Start && s.MachineAuthorizationTime <= previousComparableWeek.End && NayaxTransactionStatusClassifier.IsCompletedSale(s)).ToList();
+        var lastWeekSales = lastSales.Where(s => s.MachineAuthorizationTime >= lastWeek.Start && s.MachineAuthorizationTime <= lastWeek.End && NayaxTransactionStatusClassifier.IsCompletedSale(s)).ToList();
+        var monthToDateSales = lastSales.Where(s => s.MachineAuthorizationTime >= monthToDate.Start && s.MachineAuthorizationTime <= monthToDate.End && NayaxTransactionStatusClassifier.IsCompletedSale(s)).ToList();
+        var twoWeeksAgoSales = lastSales.Where(s => s.MachineAuthorizationTime >= twoWeeksAgo.Start && s.MachineAuthorizationTime <= twoWeeksAgo.End && NayaxTransactionStatusClassifier.IsCompletedSale(s)).ToList();
 
         results.CurrentWeekNetRevenue = CalculateRevenue(currentWeekSales, machineProducts, products);
         results.PreviousComparableWeekNetRevenue = CalculateRevenue(previousComparableWeekSales, machineProducts, products);
@@ -321,6 +323,7 @@ public class MachineService : IMachineService
                     _db.NayaxSales.Add(new NayaxSales
                     {
                         TransactionID = sale.TransactionID,
+                        TransactionStatusId = sale.TransactionStatusId ?? 12,
                         MachineID = sale.MachineID,
                         NayaxProductId = sale.NayaxProductId,
                         MachineName = sale.MachineName,
@@ -330,6 +333,10 @@ public class MachineService : IMachineService
                         Quantity = sale.Quantity,
                         MachineAuthorizationTime = sale.MachineAuthorizationTime
                     });
+                }
+                else
+                {
+                    existing.TransactionStatusId = sale.TransactionStatusId ?? 12;
                 }
             }
         }

@@ -56,7 +56,11 @@ public record BookkeepingReportDto(
     decimal CashSales = 0m,
     int CardTransactionCount = 0,
     int CashTransactionCount = 0,
-    decimal NayaxProcessingRate = 0m);
+    decimal NayaxProcessingRate = 0m,
+    int PendingTransactionCount = 0,
+    int RefundedTransactionCount = 0,
+    int DeclinedOrCancelledTransactionCount = 0,
+    int UnknownStatusTransactionCount = 0);
 
 public record DailyReportRowDto(
     DateTime Date,
@@ -78,7 +82,12 @@ public record DailyReportRowDto(
     decimal ImportedReimbursement = 0m,
     decimal NetReimbursement = 0m,
     bool IsReconciled = false,
-    string ReconciliationStatus = "Unavailable");
+    string ReconciliationStatus = "Unavailable",
+    int CompletedTransactionCount = 0,
+    int PendingTransactionCount = 0,
+    int DeclinedOrCancelledTransactionCount = 0,
+    int RefundedTransactionCount = 0,
+    int UnknownStatusTransactionCount = 0);
 
 public record DailyReportTotalsDto(
     decimal GrossSales,
@@ -96,7 +105,12 @@ public record DailyReportTotalsDto(
     decimal NayaxFeesExGst,
     decimal NayaxFeesIncludingGst,
     decimal ImportedReimbursement,
-    decimal NetReimbursement);
+    decimal NetReimbursement,
+    int CompletedTransactionCount = 0,
+    int PendingTransactionCount = 0,
+    int DeclinedOrCancelledTransactionCount = 0,
+    int RefundedTransactionCount = 0,
+    int UnknownStatusTransactionCount = 0);
 
 public record DailyReportDto(
     DateTime From,
@@ -141,6 +155,10 @@ public record ReconciliationReportDto(
     public decimal SettlementDifference { get; init; }
     public string SettlementStatus { get; init; } = "Pending";
     public string Status { get; init; } = IsMatch ? "Reconciled" : "Mismatch";
+    public int PendingTransactionCount { get; init; }
+    public int RefundedTransactionCount { get; init; }
+    public int DeclinedOrCancelledTransactionCount { get; init; }
+    public int UnknownStatusTransactionCount { get; init; }
     public IReadOnlyList<ReconciliationPeriodDto> PeriodRows { get; init; } = Array.Empty<ReconciliationPeriodDto>();
     public ReconciliationTotalsDto? Totals { get; init; }
 }
@@ -173,6 +191,10 @@ public record ReconciliationPeriodDto(
     public int TotalTransactionCount { get; init; }
     public int CashTransactionCount { get; init; }
     public bool AdjustmentsSupported { get; init; }
+    public int PendingTransactionCount { get; init; }
+    public int RefundedTransactionCount { get; init; }
+    public int DeclinedOrCancelledTransactionCount { get; init; }
+    public int UnknownStatusTransactionCount { get; init; }
 }
 
 public record ReconciliationTotalsDto(

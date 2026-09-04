@@ -3,6 +3,7 @@ namespace InventoryApi.Models;
 public class NayaxSales
 {
     public long TransactionID { get; set; }
+    public int? TransactionStatusId { get; set; }
     public long MachineID { get; set; }
     public long? NayaxProductId { get; set; }
     public string? MachineName { get; set; }
