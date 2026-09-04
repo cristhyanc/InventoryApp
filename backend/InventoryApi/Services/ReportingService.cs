@@ -292,6 +292,8 @@ public sealed class ReportingService : IReportingService
                 g.Key.ProductName,
                 Sales = g.Sum(x => x.SettlementValue),
                 Quantity = g.Sum(x => x.Quantity),
+                CostOfGoodsSold = g.Sum(x => x.CostOfGoodsSold ?? 0m),
+                HasCompleteCost = g.All(x => x.CostOfGoodsSold.HasValue && x.CostingStatus == SaleCostingStatus.Costed),
                 Transactions = g.Count(),
                 CardRevenue = g.Where(x => x.PaymentMethod == "Credit Card" || x.PaymentMethod == "Prepaid Credit").Sum(x => x.SettlementValue),
                 CashRevenue = g.Where(x => x.PaymentMethod == "Cash").Sum(x => x.SettlementValue)
@@ -300,11 +302,11 @@ public sealed class ReportingService : IReportingService
         var result = rows.Select(x =>
         {
             products.TryGetValue(x.NayaxProductId ?? 0, out var product);
-            var cost = product is null ? 0m : product.UnitPrice * x.Quantity;
+            var cost = x.CostOfGoodsSold;
             var name = product?.Name ?? (string.IsNullOrWhiteSpace(x.ProductName) ? "Unmapped product" : x.ProductName);
             return new ProductProfitabilityRowDto(x.NayaxProductId, name, product?.Category?.Name,
                 x.Sales, x.Quantity, cost, ReportingCalculations.GrossProfit(x.Sales, cost), ReportingCalculations.MarginPercent(x.Sales, cost),
-                x.Transactions, product is null, product is not null, x.CardRevenue, x.CashRevenue);
+                x.Transactions, product is null, product is not null && x.HasCompleteCost, x.CardRevenue, x.CashRevenue);
         }).ToList();
         var quality = Quality(false, false, result.Any(x => x.IsUnmapped),
             result.Any(x => x.IsUnmapped) ? "One or more sales could not be mapped to a Product." : null);
@@ -537,8 +539,11 @@ public sealed class ReportingService : IReportingService
         {
             MachineID = sale.MachineID, MachineName = sale.MachineName, NayaxProductId = sale.NayaxProductId,
             ProductName = sale.ProductName, PaymentMethod = sale.PaymentMethod, SettlementValue = sale.SettlementValue, Quantity = sale.Quantity,
-            MachineAuthorizationTime = sale.MachineAuthorizationTime, Cost = product == null ? 0m : product.UnitPrice * sale.Quantity,
-            HasCost = product != null
+            MachineAuthorizationTime = sale.MachineAuthorizationTime,
+            Cost = sale.CostOfGoodsSold ?? 0m,
+            CostOfGoodsSold = sale.CostOfGoodsSold,
+            HasCost = sale.CostOfGoodsSold.HasValue,
+            HasCompleteCost = sale.CostingStatus == SaleCostingStatus.Costed
         };
 
     private async Task<SalesPaymentSummary> GetPaymentSummaryAsync(DateRange range, long? machineId, CancellationToken cancellationToken)
@@ -932,7 +937,7 @@ public sealed class ReportingService : IReportingService
 
     private static ReportingDataQualityDto Quality(bool importedRows, bool gstClassification, bool unmapped, string? note = null) =>
         new(false, true, true, true, unmapped,
-            new[] { "Nayax status IDs are stored raw; existing historical rows were backfilled to status 12 by migration; rows still missing a status are excluded.", "Historical product cost is represented by the current Product.UnitPrice.", "Commission is read from Nayax machine products; the first product with a commission defines the machine rate.", "GST classification is not persisted on sales; GST amounts are an indicative 10% inclusive calculation." }
+            new[] { "Nayax status IDs are stored raw; existing historical rows were backfilled to status 12 by migration; rows still missing a status are excluded.", "Historical COGS uses the persisted sale cost; unresolved completed sales are reported as incomplete.", "Commission is read from Nayax machine products; the first product with a commission defines the machine rate.", "GST classification is not persisted on sales; GST amounts are an indicative 10% inclusive calculation." }
                 .Concat(note is null ? Array.Empty<string>() : new[] { note }).ToList());
 
     private static string Csv(string value) => $"\"{value.Replace("\"", "\"\"")}\"";
@@ -969,6 +974,8 @@ public sealed class ReportingService : IReportingService
         public DateTime MachineAuthorizationTime { get; set; }
         public decimal Cost { get; set; }
         public bool HasCost { get; set; }
+        public decimal? CostOfGoodsSold { get; set; }
+        public bool HasCompleteCost { get; set; }
     }
 
     private sealed class ImportedReimbursementRow

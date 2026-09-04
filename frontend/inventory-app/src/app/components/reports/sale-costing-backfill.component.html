@@ -1,0 +1,37 @@
+<div class="mb-6">
+  <h1 class="text-2xl font-semibold text-slate-800">Historical COGS Backfill</h1>
+  <p class="mt-2 max-w-3xl text-sm text-slate-600">
+    Review how completed Nayax sales would be costed before saving historical COGS.
+    Finalized costs are not overwritten unless the backend is explicitly forced.
+  </p>
+</div>
+
+<section class="rounded-xl bg-white p-6 shadow-sm">
+  <div class="flex flex-wrap gap-3">
+    <button type="button" class="inline-flex items-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60" [disabled]="loading" (click)="runDryRun()">
+      {{ loading ? 'Working...' : 'Run dry run' }}
+    </button>
+    <button type="button" class="inline-flex items-center rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-60" [disabled]="loading" (click)="execute()">
+      Execute backfill
+    </button>
+  </div>
+
+  @if (error) {
+    <p class="mt-4 rounded-md bg-red-50 p-3 text-sm text-red-700">{{ error }}</p>
+  }
+
+  @if (result) {
+    <div class="mt-6">
+      <p class="mb-3 text-sm font-medium text-slate-700">
+        {{ result.dryRun ? 'Dry-run results' : 'Backfill completed' }}
+      </p>
+      <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+        <div class="rounded-lg bg-emerald-50 p-3"><div class="text-xs text-emerald-700">Costed</div><strong class="text-xl text-emerald-900">{{ result.costedCount }}</strong></div>
+        <div class="rounded-lg bg-amber-50 p-3"><div class="text-xs text-amber-700">Legacy estimated</div><strong class="text-xl text-amber-900">{{ result.legacyEstimatedCount }}</strong></div>
+        <div class="rounded-lg bg-slate-100 p-3"><div class="text-xs text-slate-600">Pending</div><strong class="text-xl text-slate-900">{{ result.pendingCount }}</strong></div>
+        <div class="rounded-lg bg-red-50 p-3"><div class="text-xs text-red-700">Errors</div><strong class="text-xl text-red-900">{{ result.errorCount }}</strong></div>
+        <div class="rounded-lg bg-blue-50 p-3"><div class="text-xs text-blue-700">Already finalized</div><strong class="text-xl text-blue-900">{{ result.alreadyFinalizedCount }}</strong></div>
+      </div>
+    </div>
+  }
+</section>

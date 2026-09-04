@@ -117,6 +117,14 @@ export interface GstReport {
   from: string; to: string; taxableSales: number; gstOnSales: number; taxableFees: number;
   gstOnFees: number; netGst: number; dataQuality: ReportQuality;
 }
+export interface SaleCostingBackfillResult {
+  costedCount: number;
+  legacyEstimatedCount: number;
+  pendingCount: number;
+  errorCount: number;
+  alreadyFinalizedCount: number;
+  dryRun: boolean;
+}
 
 @Injectable({ providedIn: 'root' })
 export class ReportingService {
@@ -130,6 +138,13 @@ export class ReportingService {
   machines(filter: ReportingFilter): Observable<MachineReport> { return this.http.get<MachineReport>(`${this.baseUrl}/machine-profitability`, { params: this.params(filter) }); }
   products(filter: ReportingFilter): Observable<ProductReport> { return this.http.get<ProductReport>(`${this.baseUrl}/product-profitability`, { params: this.params(filter) }); }
   gst(filter: ReportingFilter): Observable<GstReport> { return this.http.get<GstReport>(`${this.baseUrl}/gst`, { params: this.params(filter) }); }
+
+  backfillSaleCosts(dryRun = true, force = false): Observable<SaleCostingBackfillResult> {
+    const url = `${this.config.apiBaseUrl.replace(/\/$/, '')}/sale-costing/backfill`;
+    return this.http.post<SaleCostingBackfillResult>(url, null, {
+      params: { dryRun, force }
+    });
+  }
 
   export(report: string, format: 'csv' | 'xlsx', filter: ReportingFilter): Observable<Blob> {
     return this.http.get(`${this.baseUrl}/${report}/export`, { params: this.params(filter).set('format', format), responseType: 'blob' });

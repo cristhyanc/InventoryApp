@@ -6,6 +6,7 @@ using InventoryApi.Data;
 using InventoryApi.Integrations.Nayax;
 using InventoryApi.Models;
 using InventoryApi.Services;
+using InventoryApi.DTOs;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Moq;
@@ -41,6 +42,90 @@ public class NayaxTransactionStatusTests
 
         var sale = Assert.Single(db.NayaxSales);
         Assert.Equal(12, sale.TransactionStatusId);
+    }
+
+    [Fact]
+    public async Task Completed_sale_is_costed_from_historical_receipt_movement()
+    {
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        using var db = new AppDbContext(options);
+        db.Products.Add(new Product { Id = 10, Name = "Snack", AverageUnitCost = 9m });
+        db.StockAdjustments.Add(new StockAdjustment
+        {
+            ProductId = 10, QuantityChange = 10, QuantityAfter = 10,
+            Reason = StockAdjustmentReason.Restock, UnitCost = 2.10m,
+            TotalCost = 21m, EffectiveAt = new DateTime(2025, 8, 1)
+        });
+        await db.SaveChangesAsync();
+        var sale = new NayaxSales
+        {
+            TransactionID = 1, TransactionStatusId = 12, MachineID = 1, NayaxProductId = 10,
+            Quantity = 2, SettlementValue = 10m, MachineAuthorizationTime = new DateTime(2025, 8, 2)
+        };
+        var service = new SaleCostingService(db);
+
+        await service.CostSaleAsync(sale);
+
+        Assert.Equal(2.10m, sale.UnitCostAtSale);
+        Assert.Equal(4.20m, sale.CostOfGoodsSold);
+        Assert.Equal(SaleCostingStatus.Costed, sale.CostingStatus);
+    }
+
+    [Fact]
+    public async Task Pending_sale_costing_dry_run_does_not_mutate_database()
+    {
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        using var db = new AppDbContext(options);
+        db.Products.Add(new Product { Id = 10, Name = "Snack", AverageUnitCost = 2m });
+        db.NayaxSales.Add(new NayaxSales
+        {
+            TransactionID = 1, TransactionStatusId = 12, MachineID = 1, NayaxProductId = 10,
+            Quantity = 1, MachineAuthorizationTime = new DateTime(2025, 8, 2)
+        });
+        await db.SaveChangesAsync();
+
+        var result = await new SaleCostingService(db).BackfillAsync(dryRun: true);
+
+        Assert.True(result.DryRun);
+        Assert.Equal(SaleCostingStatus.Pending, (await db.NayaxSales.SingleAsync()).CostingStatus);
+    }
+
+    [Fact]
+    public async Task Historical_cost_is_stable_after_a_later_purchase()
+    {
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        using var db = new AppDbContext(options);
+        db.Products.Add(new Product { Id = 10, Name = "Snack", AverageUnitCost = 2.10m });
+        db.StockAdjustments.Add(new StockAdjustment
+        {
+            ProductId = 10, QuantityChange = 10, QuantityAfter = 10,
+            Reason = StockAdjustmentReason.Restock, UnitCost = 2.10m,
+            EffectiveAt = new DateTime(2025, 8, 1)
+        });
+        var sale = new NayaxSales
+        {
+            TransactionID = 1, TransactionStatusId = 12, MachineID = 1, NayaxProductId = 10,
+            Quantity = 1, MachineAuthorizationTime = new DateTime(2025, 8, 2)
+        };
+        db.NayaxSales.Add(sale);
+        await db.SaveChangesAsync();
+        var service = new SaleCostingService(db);
+        await service.CostSaleAsync(sale);
+        await db.SaveChangesAsync();
+
+        db.StockAdjustments.Add(new StockAdjustment
+        {
+            ProductId = 10, QuantityChange = 10, QuantityAfter = 20,
+            Reason = StockAdjustmentReason.Restock, UnitCost = 4m,
+            EffectiveAt = new DateTime(2025, 8, 3)
+        });
+        await db.SaveChangesAsync();
+
+        Assert.Equal(2.10m, (await db.NayaxSales.SingleAsync()).UnitCostAtSale);
+        Assert.Equal(2.10m, (await db.NayaxSales.SingleAsync()).CostOfGoodsSold);
     }
 
     private static IFormFile File(string csv)

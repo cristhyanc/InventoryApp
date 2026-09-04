@@ -23,11 +23,13 @@ public class ReportingServiceTests
     public async Task Product_profitability_uses_decimal_cost_and_zero_safe_margin()
     {
         using var db = CreateDbContext();
-        db.Products.Add(new Product { Id = 1, Name = "Known", UnitPrice = 3m });
+        db.Products.Add(new Product { Id = 1, Name = "Known", UnitPrice = 99m });
         db.NayaxSales.Add(new NayaxSales
         {
             TransactionID = 1, MachineID = 10, NayaxProductId = 1,
             SettlementValue = 10m, Quantity = 2, MachineAuthorizationTime = new DateTime(2025, 8, 1)
+            , TransactionStatusId = 12, UnitCostAtSale = 3m, CostOfGoodsSold = 6m,
+            CostingStatus = SaleCostingStatus.Costed
         });
         db.NayaxSales.Add(new NayaxSales
         {
@@ -94,12 +96,14 @@ public class ReportingServiceTests
     public async Task Daily_report_includes_payment_split_cogs_quality_and_period_reimbursement()
     {
         using var db = CreateDbContext();
-        db.Products.Add(new Product { Id = 1, Name = "Known", UnitPrice = 2m });
+        db.Products.Add(new Product { Id = 1, Name = "Known", UnitPrice = 99m });
         db.NayaxSales.AddRange(
             new NayaxSales
             {
                 TransactionID = 30, MachineID = 10, NayaxProductId = 1, SettlementValue = 10m,
                 Quantity = 1, PaymentMethod = "Credit Card", MachineAuthorizationTime = new DateTime(2025, 8, 1)
+                , TransactionStatusId = 12, UnitCostAtSale = 2m, CostOfGoodsSold = 2m,
+                CostingStatus = SaleCostingStatus.Costed
             },
             new NayaxSales
             {

@@ -37,4 +37,5 @@ public class StockAdjustment
     public DateTime? EatBefore { get; set; }
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime EffectiveAt { get; set; } = DateTime.UtcNow;
 }

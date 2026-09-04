@@ -11,16 +11,18 @@ public class ReceiptService : IReceiptService
     private readonly AppDbContext _db;
     private readonly IWebHostEnvironment _env;
     private readonly IInventoryCostService _costing;
+    private readonly ISaleCostingService _saleCosting;
 
     private static readonly string[] AllowedExtensions = { ".jpg", ".jpeg", ".png", ".pdf", ".webp", ".heic" };
     private const long MaxFileSizeBytes = 10 * 1024 * 1024;
     private const decimal ReceiptTotalTolerance = 0.02m;
 
-    public ReceiptService(AppDbContext db, IWebHostEnvironment env, IInventoryCostService? costing = null)
+    public ReceiptService(AppDbContext db, IWebHostEnvironment env, IInventoryCostService? costing = null, ISaleCostingService? saleCosting = null)
     {
         _db = db;
         _env = env;
         _costing = costing ?? new InventoryCostService(db);
+        _saleCosting = saleCosting ?? new SaleCostingService(db);
     }
 
     private string ReceiptsFolder
@@ -106,9 +108,11 @@ public class ReceiptService : IReceiptService
             _db.Receipts.Add(receipt);
             foreach (var item in receipt.Items)
                 _costing.ApplyMovement(item.ProductId, ToStockQuantity(item.Quantity), StockAdjustmentReason.Restock,
-                    item, $"Receipt purchase", item.UnitCost);
+                        item, $"Receipt purchase", item.UnitCost).EffectiveAt = receipt.PurchaseDate;
             await _db.SaveChangesAsync();
             if (transaction is not null) await transaction.CommitAsync();
+            foreach (var productId in receipt.Items.Select(x => x.ProductId).Distinct())
+                await _saleCosting.CostPendingSalesAsync(productId, cancellationToken: CancellationToken.None);
         }
         catch
         {
@@ -151,7 +155,7 @@ public class ReceiptService : IReceiptService
                     var quantityChange = ToStockQuantity(delta);
                     _costing.ApplyMovement(productId, quantityChange, StockAdjustmentReason.Restock, null,
                         $"Receipt {receipt.Id} adjustment",
-                        quantityChange > 0 ? newCostByProduct[productId] : null);
+                        quantityChange > 0 ? newCostByProduct[productId] : null).EffectiveAt = receipt.PurchaseDate;
                 }
             }
             _db.ReceiptItems.RemoveRange(receipt.Items);
@@ -162,6 +166,9 @@ public class ReceiptService : IReceiptService
         }
         await _db.SaveChangesAsync();
         if (transaction is not null) await transaction.CommitAsync();
+        if (items is not null)
+            foreach (var productId in receipt.Items.Select(x => x.ProductId).Distinct())
+                await _saleCosting.CostPendingSalesAsync(productId, cancellationToken: CancellationToken.None);
         return receipt;
     }
 
@@ -174,7 +181,7 @@ public class ReceiptService : IReceiptService
         await using var transaction = await BeginTransactionAsync();
         foreach (var item in receipt.Items)
             _costing.ApplyMovement(item.ProductId, -ToStockQuantity(item.Quantity), StockAdjustmentReason.Restock,
-                null, $"Receipt {receipt.Id} reversal");
+                null, $"Receipt {receipt.Id} reversal").EffectiveAt = DateTime.UtcNow;
         _db.Receipts.Remove(receipt);
         await _db.SaveChangesAsync();
         if (transaction is not null) await transaction.CommitAsync();

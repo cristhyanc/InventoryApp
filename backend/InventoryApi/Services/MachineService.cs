@@ -14,11 +14,13 @@ public class MachineService : IMachineService
 {
     private readonly AppDbContext _db;
     private readonly INayaxLynxClient _nayaxLynxClient;
+    private readonly ISaleCostingService _saleCosting;
 
-    public MachineService(AppDbContext db, INayaxLynxClient nayaxLynxClient)
+    public MachineService(AppDbContext db, INayaxLynxClient nayaxLynxClient, ISaleCostingService? saleCosting = null)
     {
         _db = db;
         _nayaxLynxClient = nayaxLynxClient;
+        _saleCosting = saleCosting ?? new SaleCostingService(db);
     }
 
     public async Task<Machine?> GetById(long id)
@@ -145,6 +147,7 @@ public class MachineService : IMachineService
             if (existing is null)
             {
                 _db.NayaxSales.Add(sale);
+                await _saleCosting.CostSaleAsync(sale, cancellationToken: ct);
                 imported++;
             }
             else
@@ -158,6 +161,9 @@ public class MachineService : IMachineService
                 existing.ProductName = sale.ProductName;
                 existing.Quantity = sale.Quantity;
                 existing.MachineAuthorizationTime = sale.MachineAuthorizationTime;
+                if (!NayaxTransactionStatusClassifier.IsCompletedSale(existing) ||
+                    existing.CostingStatus != SaleCostingStatus.Costed)
+                    await _saleCosting.CostSaleAsync(existing, cancellationToken: ct);
                 updated++;
             }
         }
@@ -333,6 +339,8 @@ public class MachineService : IMachineService
                         Quantity = sale.Quantity,
                         MachineAuthorizationTime = sale.MachineAuthorizationTime
                     });
+                    var added = _db.NayaxSales.Local.Last();
+                    await _saleCosting.CostSaleAsync(added, cancellationToken: ct);
                 }
                 else
                 {
@@ -366,7 +374,7 @@ public class MachineService : IMachineService
 
             if (product != null)
             {
-                decimal productCost = product?.UnitPrice ?? 0;
+                decimal productCost = sale.CostOfGoodsSold ?? 0m;
                 decimal commission = machineCommission != 0 ? sale.SettlementValue * machineCommission / 100 : 0;
                 decimal paymentFee = (decimal)(sale.PaymentMethod == "Cash" ? 0 : 0.18);
                 totalRevenue += sale.SettlementValue - (productCost * (sale.Quantity == 0 ? 1 : sale.Quantity)) - commission - paymentFee;
