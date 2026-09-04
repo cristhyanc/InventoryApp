@@ -27,6 +27,11 @@ export interface DashboardReport {
   netProfit?: number; netMarginPercent?: number;
   deliveryCosts?: number; packageCosts?: number; otherOperatingExpenses?: number;
   cardSales?: number; cashSales?: number; cardTransactionCount?: number; cashTransactionCount?: number;
+  totalSales?: number; costOfGoodsSold?: number; averageSale?: number; grossMarginPercent?: number;
+  nayaxFeesIncludingGst?: number;
+  expectedReimbursement?: number; actualReimbursement?: number; reimbursementDifference?: number;
+  isReconciled?: boolean; reconciliationStatus?: string; reconciliationTolerance?: number;
+  adjustmentsSupported?: boolean;
 }
 export interface BookkeepingReport {
   from: string; to: string; financialYear: string; sales: number; costOfGoods: number;

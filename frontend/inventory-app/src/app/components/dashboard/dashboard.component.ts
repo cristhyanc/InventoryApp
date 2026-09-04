@@ -163,37 +163,68 @@ export class DashboardComponent implements OnInit {
     return this.products.reduce((sum, p) => sum + p.quantityInStock * p.unitPrice, 0);
   }
 
-  // Machine aggregates
-  get totalTodayGross(): number {
+  get totalTodaySales(): number {
     return this.machines.reduce((sum, m) => sum + (m.todayGrossRevenue ?? 0), 0);
   }
 
-  get totalTodayNet(): number {
+  get totalTodayNetProfit(): number {
     return this.machines.reduce((sum, m) => sum + (m.todayNetRevenue ?? 0), 0);
   }
 
-  get totalCurrentWeekGross(): number {
+  get totalCurrentWeekSales(): number {
     return this.machines.reduce((sum, m) => sum + (m.currentWeekGrossRevenue ?? 0), 0);
   }
 
-  get totalCurrentWeekNet(): number {
+  get totalCurrentWeekNetProfit(): number {
     return this.machines.reduce((sum, m) => sum + (m.currentWeekNetRevenue ?? 0), 0);
   }
 
-  get totalLastWeekGross(): number {
+  get totalPreviousComparableWeekSales(): number {
+    return this.machines.reduce((sum, m) => sum + (m.previousComparableWeekGrossRevenue ?? m.lastWeekGrossRevenue ?? 0), 0);
+  }
+
+  get totalLastWeekSales(): number {
     return this.machines.reduce((sum, m) => sum + (m.lastWeekGrossRevenue ?? 0), 0);
   }
 
-  get totalLastWeekNet(): number {
+  get totalLastWeekNetProfit(): number {
     return this.machines.reduce((sum, m) => sum + (m.lastWeekNetRevenue ?? 0), 0);
   }
 
-  get totalTwoWeeksAgoGross(): number {
-    return this.machines.reduce((sum, m) => sum + (m.twoWeeksAgoGrossRevenue ?? 0), 0);
+  get totalMonthToDateSales(): number {
+    return this.machines.reduce((sum, m) => sum + (m.monthToDateGrossRevenue ?? 0), 0);
   }
 
-  get totalTwoWeeksAgoNet(): number {
-    return this.machines.reduce((sum, m) => sum + (m.twoWeeksAgoNetRevenue ?? 0), 0);
+  get totalMonthToDateNetProfit(): number {
+    return this.machines.reduce((sum, m) => sum + (m.monthToDateNetRevenue ?? 0), 0);
+  }
+
+  get totalNetMargin(): number {
+    return this.margin(this.totalCurrentWeekNetProfit, this.totalCurrentWeekSales);
+  }
+
+  netMargin(netProfit: number, sales: number): number {
+    return this.margin(netProfit, sales);
+  }
+
+  trend(current: number, previous: number): number | null {
+    return previous === 0 ? null : ((current - previous) / previous) * 100;
+  }
+
+  trendLabel(current: number, previous: number): string {
+    const value = this.trend(current, previous);
+    if (value === null) return 'No prior sales';
+    return `${value >= 0 ? '↑' : '↓'} ${Math.abs(value).toFixed(1)}%`;
+  }
+
+  trendClass(current: number, previous: number): string {
+    const value = this.trend(current, previous);
+    if (value === null) return 'text-slate-500';
+    return value >= 0 ? 'text-emerald-600' : 'text-rose-600';
+  }
+
+  private margin(netProfit: number, sales: number): number {
+    return sales === 0 ? 0 : (netProfit / sales) * 100;
   }
 
   siteStockClass(site: Site): string {

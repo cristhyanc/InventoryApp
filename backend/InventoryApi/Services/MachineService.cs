@@ -258,9 +258,12 @@ public class MachineService : IMachineService
 
     private async Task<Machine> GetMachineSalesAsync(NayaxMachine machine, List<Product> products)
     {
-        var today = DateTime.Today;
-        var currentWeek = GetWeekRange(today, 0);
+        var now = DateTime.Now;
+        var today = now.Date;
+        var currentWeek = GetWeekToDateRange(now);
+        var previousComparableWeek = GetPreviousComparableWeekRange(now);
         var lastWeek = GetWeekRange(today, -1);
+        var monthToDate = GetMonthToDateRange(now);
         var twoWeeksAgo = GetWeekRange(today, -2);
 
         var lastSalesTask = _db.NayaxSales.Where(s => s.MachineID == machine.MachineID && s.MachineAuthorizationTime > DateTime.Now.AddMonths(-1)).ToListAsync();
@@ -279,19 +282,26 @@ public class MachineService : IMachineService
             MachineNumber = machine.MachineNumber
         };
 
-        var todaySales = lastSales.Where(s => s.MachineAuthorizationTime >= today).ToList();
+        var todaySales = lastSales.Where(s => s.MachineAuthorizationTime >= today &&
+                                              s.MachineAuthorizationTime <= now).ToList();
         var currentWeekSales = lastSales.Where(s => s.MachineAuthorizationTime >= currentWeek.Start && s.MachineAuthorizationTime <= currentWeek.End).ToList();
+        var previousComparableWeekSales = lastSales.Where(s => s.MachineAuthorizationTime >= previousComparableWeek.Start && s.MachineAuthorizationTime <= previousComparableWeek.End).ToList();
         var lastWeekSales = lastSales.Where(s => s.MachineAuthorizationTime >= lastWeek.Start && s.MachineAuthorizationTime <= lastWeek.End).ToList();
+        var monthToDateSales = lastSales.Where(s => s.MachineAuthorizationTime >= monthToDate.Start && s.MachineAuthorizationTime <= monthToDate.End).ToList();
         var twoWeeksAgoSales = lastSales.Where(s => s.MachineAuthorizationTime >= twoWeeksAgo.Start && s.MachineAuthorizationTime <= twoWeeksAgo.End).ToList();
 
         results.CurrentWeekNetRevenue = CalculateRevenue(currentWeekSales, machineProducts, products);
+        results.PreviousComparableWeekNetRevenue = CalculateRevenue(previousComparableWeekSales, machineProducts, products);
         results.LastWeekNetRevenue = CalculateRevenue(lastWeekSales, machineProducts, products);
         results.TodayNetRevenue = CalculateRevenue(todaySales, machineProducts, products);
+        results.MonthToDateNetRevenue = CalculateRevenue(monthToDateSales, machineProducts, products);
         results.TwoWeeksAgoNetRevenue = CalculateRevenue(twoWeeksAgoSales, machineProducts, products);
 
         results.TodayGrossRevenue = todaySales.Sum(s => s.SettlementValue);
         results.CurrentWeekGrossRevenue = currentWeekSales.Sum(s => s.SettlementValue);
+        results.PreviousComparableWeekGrossRevenue = previousComparableWeekSales.Sum(s => s.SettlementValue);
         results.LastWeekGrossRevenue = lastWeekSales.Sum(s => s.SettlementValue);
+        results.MonthToDateGrossRevenue = monthToDateSales.Sum(s => s.SettlementValue);
         results.TwoWeeksAgoGrossRevenue = twoWeeksAgoSales.Sum(s => s.SettlementValue);
 
         return results;
@@ -365,5 +375,22 @@ public class MachineService : IMachineService
         DateTime startOfWeek = date.AddDays(-diff);
         DateTime endOfWeek = startOfWeek.AddDays(7).AddMilliseconds(-1);
         return (startOfWeek, endOfWeek);
+    }
+
+    public static (DateTime Start, DateTime End) GetWeekToDateRange(DateTime referenceDate)
+    {
+        var start = GetWeekRange(referenceDate.Date).Start;
+        return (start, referenceDate);
+    }
+
+    public static (DateTime Start, DateTime End) GetPreviousComparableWeekRange(DateTime referenceDate)
+    {
+        var current = GetWeekToDateRange(referenceDate);
+        return (current.Start.AddDays(-7), current.End.AddDays(-7));
+    }
+
+    public static (DateTime Start, DateTime End) GetMonthToDateRange(DateTime referenceDate)
+    {
+        return (new DateTime(referenceDate.Year, referenceDate.Month, 1), referenceDate);
     }
 }

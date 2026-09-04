@@ -14,5 +14,9 @@
         public decimal TwoWeeksAgoNetRevenue { get; set; } = 0;
         public decimal LastWeekNetRevenue { get; set; } = 0;
         public decimal CurrentWeekNetRevenue { get; set; } = 0;
+        public decimal PreviousComparableWeekGrossRevenue { get; set; } = 0;
+        public decimal PreviousComparableWeekNetRevenue { get; set; } = 0;
+        public decimal MonthToDateGrossRevenue { get; set; } = 0;
+        public decimal MonthToDateNetRevenue { get; set; } = 0;
     }
 }

@@ -5,7 +5,6 @@ import { RouterLink } from '@angular/router';
 import { ReceiptService } from '../../services/receipt.service';
 import { SupplierService } from '../../services/supplier.service';
 import { Receipt, Supplier } from '../../models/models';
-import { ToastService } from '../../services/toast.service';
 
 @Component({
   selector: 'app-receipt-list',
@@ -17,7 +16,6 @@ export class ReceiptListComponent implements OnInit {
   receipts: Receipt[] = [];
   suppliers: Supplier[] = [];
   editingReceiptId: number | null = null;
-  importing = false;
   editForm = {
     title: '',
     notes: '',
@@ -30,8 +28,7 @@ export class ReceiptListComponent implements OnInit {
 
   constructor(
     private receiptService: ReceiptService,
-    private supplierService: SupplierService,
-    private toast: ToastService
+    private supplierService: SupplierService
   ) {}
 
   ngOnInit(): void {
@@ -41,26 +38,6 @@ export class ReceiptListComponent implements OnInit {
 
   load(): void {
     this.receiptService.getAll().subscribe((r) => (this.receipts = r));
-  }
-
-  importPendingFiles(): void {
-    if (this.importing) return;
-    this.importing = true;
-    this.receiptService.importPendingFiles().subscribe({
-      next: (result) => {
-        this.importing = false;
-        this.toast.success(
-          `Imported ${result.importedFiles} file(s) and ${result.importedReimbursements} reimbursement(s). ` +
-          `Skipped ${result.skippedFiles}; failed ${result.failedFiles}.`,
-          'XML import complete'
-        );
-        this.load();
-      },
-      error: (err) => {
-        this.importing = false;
-        this.toast.error(err.error ?? 'The XML import could not be started.');
-      }
-    });
   }
 
   fileUrl(receipt: Receipt): string {

@@ -51,4 +51,27 @@ public class MachineServiceTests
         Assert.Equal(1, machine.MachineID);
         Assert.True(machine.TodayGrossRevenue >= 0);
     }
+
+    [Fact]
+    public void Week_to_date_comparison_uses_same_elapsed_period()
+    {
+        var reference = new System.DateTime(2026, 9, 4, 14, 30, 0);
+
+        var current = MachineService.GetWeekToDateRange(reference);
+        var previous = MachineService.GetPreviousComparableWeekRange(reference);
+
+        Assert.Equal(new System.DateTime(2026, 8, 31), current.Start);
+        Assert.Equal(reference, current.End);
+        Assert.Equal(new System.DateTime(2026, 8, 24), previous.Start);
+        Assert.Equal(new System.DateTime(2026, 8, 28, 14, 30, 0), previous.End);
+    }
+
+    [Fact]
+    public void Month_to_date_starts_at_the_first_local_day()
+    {
+        var range = MachineService.GetMonthToDateRange(new System.DateTime(2026, 9, 4, 14, 30, 0));
+
+        Assert.Equal(new System.DateTime(2026, 9, 1), range.Start);
+        Assert.Equal(new System.DateTime(2026, 9, 4, 14, 30, 0), range.End);
+    }
 }

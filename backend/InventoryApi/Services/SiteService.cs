@@ -54,42 +54,56 @@ public class SiteService : ISiteService
         var machineProductsTask = Task.WhenAll(
             machines.Select(machine => _nayaxLynxClient.GetMachineProductsAsync(machine.MachineID)));
         var salesTask = Task.WhenAll(
-            machines.Select(machine => _db.NayaxSales.Where(s => s.MachineID == machine.MachineID && s.MachineAuthorizationTime> DateTime.Now.AddDays(-16)).ToListAsync()));
+            machines.Select(machine => _db.NayaxSales.Where(s => s.MachineID == machine.MachineID && s.MachineAuthorizationTime > DateTime.Now.AddDays(-16)).ToListAsync()));
 
         await Task.WhenAll(machineProductsTask, salesTask);
 
         var machineProducts = (await machineProductsTask).SelectMany(items => items).ToList();
         var sales = (await salesTask).SelectMany(items => items).ToList();
-        var today = DateTime.Today;
-        var currentWeek = MachineService.GetWeekRange(today);
-        var lastWeek = MachineService.GetWeekRange(today, -1);
+        var now = DateTime.Now;
+        var today = now.Date;
+        var currentWeek = MachineService.GetWeekToDateRange(now);
+        var previousComparableWeek = MachineService.GetPreviousComparableWeekRange(now);
         var stock = GetStockTotals(machineProducts);
+        var stockCounts = GetStockCounts(machineProducts, products);
 
         return new SiteSummaryDto(
             siteId,
             GetSiteName(machines),
             machines.Count,
             stock.MaxStock == 0 ? 100 : (decimal)stock.QuantityInStock / stock.MaxStock * 100,
-            GetEmptyProductCount(machineProducts, products),
-            sales.Where(sale => sale.MachineAuthorizationTime >= today).Sum(sale => sale.SettlementValue),
+            stockCounts.LowProductCount,
+            stockCounts.EmptyProductCount,
+            sales.Where(sale => sale.MachineAuthorizationTime >= today &&
+                                sale.MachineAuthorizationTime <= now)
+                .Sum(sale => sale.SettlementValue),
             sales.Where(sale => sale.MachineAuthorizationTime >= currentWeek.Start &&
                                 sale.MachineAuthorizationTime <= currentWeek.End)
                 .Sum(sale => sale.SettlementValue),
-            sales.Where(sale => sale.MachineAuthorizationTime >= lastWeek.Start &&
-                                sale.MachineAuthorizationTime <= lastWeek.End)
+            sales.Where(sale => sale.MachineAuthorizationTime >= previousComparableWeek.Start &&
+                                sale.MachineAuthorizationTime <= previousComparableWeek.End)
                 .Sum(sale => sale.SettlementValue));
     }
 
-    private static int GetEmptyProductCount(
+    private static (int LowProductCount, int EmptyProductCount) GetStockCounts(
         IEnumerable<NayaxMachineProduct> machineProducts,
         Dictionary<long, Models.Product> products)
     {
-        return machineProducts
+        var stockByProduct = machineProducts
             .Where(machineProduct => machineProduct.NayaxProductID.HasValue &&
-                                     products.ContainsKey(machineProduct.NayaxProductID.Value))
+                                     products.TryGetValue(machineProduct.NayaxProductID.Value, out var product) &&
+                                     product.IsActive)
             .GroupBy(machineProduct => machineProduct.NayaxProductID!.Value)
-            .Count(group => group.Sum(machineProduct =>
-                (machineProduct.PAR ?? 0) - (machineProduct.MissingStockByMDB ?? 0)) <= 0);
+            .Select(group => new
+            {
+                Quantity = group.Sum(machineProduct =>
+                    (machineProduct.PAR ?? 0) - (machineProduct.MissingStockByMDB ?? 0)),
+                Threshold = group.Sum(machineProduct => machineProduct.VendOutAlertThreshold ?? 0)
+            });
+
+        return (
+            stockByProduct.Count(item => item.Quantity > 0 && item.Quantity <= item.Threshold),
+            stockByProduct.Count(item => item.Quantity <= 0));
     }
 
     private static List<SiteProductDto> AggregateProducts(

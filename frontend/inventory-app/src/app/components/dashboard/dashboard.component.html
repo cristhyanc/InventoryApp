@@ -36,11 +36,11 @@
           <tr>
             <th class="px-4 py-3 text-left font-semibold text-slate-700">Site</th>
             <th class="px-4 py-3 text-left font-semibold text-slate-700">Stock</th>
-            <th class="px-4 py-3 text-left font-semibold text-slate-700">Empty Products</th>
-            <th class="px-4 py-3 text-right font-semibold text-slate-700">Today Revenue</th>
-            <th class="px-4 py-3 text-right font-semibold text-slate-700">This Week Revenue</th>
-            <th class="px-4 py-3 text-right font-semibold text-slate-700">Last Week Revenue</th>
-            <th class="px-4 py-3"></th>
+            <th class="px-4 py-3 text-left font-semibold text-slate-700">Low / Empty</th>
+            <th class="px-4 py-3 text-right font-semibold text-slate-700">Today</th>
+            <th class="px-4 py-3 text-right font-semibold text-slate-700">This Week</th>
+            <th class="px-4 py-3 text-right font-semibold text-slate-700">vs Last Week</th>
+            <th class="px-4 py-3 text-right font-semibold text-slate-700">Products</th>
           </tr>
         </thead>
         <tbody class="divide-y divide-slate-100 bg-white">
@@ -52,10 +52,16 @@
                   {{ site.totalStockPercentage.toFixed(0) }}%
                 </span>
               </td>
-              <td class="px-4 py-3 text-slate-600">{{ site.emptyProductCount }}</td>
+              <td class="px-4 py-3 text-slate-600">
+                <a [routerLink]="['/sites', site.siteId, 'products']" class="hover:underline">
+                  {{ site.lowProductCount }} low · {{ site.emptyProductCount }} empty
+                </a>
+              </td>
               <td class="px-4 py-3 text-right text-slate-600">${{ site.todayRevenue.toFixed(2) }}</td>
               <td class="px-4 py-3 text-right text-slate-600">${{ site.currentWeekRevenue.toFixed(2) }}</td>
-              <td class="px-4 py-3 text-right text-slate-600">${{ site.lastWeekRevenue.toFixed(2) }}</td>
+              <td class="px-4 py-3 text-right" [ngClass]="trendClass(site.currentWeekRevenue, site.previousComparableWeekRevenue)">
+                {{ trendLabel(site.currentWeekRevenue, site.previousComparableWeekRevenue) }}
+              </td>
               <td class="px-4 py-3 text-right">
                 <a [routerLink]="['/sites', site.siteId, 'products']" class="inline-flex items-center rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700">Products</a>
               </td>
@@ -76,7 +82,7 @@
         type="button"
         class="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
         (click)="downloadNayaxSalesTemplate()">
-        Download template
+        Download Nayax Template
       </button>
       <button
         type="button"
@@ -103,14 +109,11 @@
         <thead class="bg-slate-50">
           <tr>
             <th class="px-4 py-3 text-left font-semibold text-slate-700">Machine</th>
-            <th class="px-4 py-3 text-right font-semibold text-slate-700">Today Gross</th>
-            <th class="px-4 py-3 text-right font-semibold text-slate-700">Today Net</th>
-            <th class="px-4 py-3 text-right font-semibold text-slate-700">Current Week Gross</th>
-            <th class="px-4 py-3 text-right font-semibold text-slate-700">Current Week Net</th>
-            <th class="px-4 py-3 text-right font-semibold text-slate-700">Last Week Gross</th>
-            <th class="px-4 py-3 text-right font-semibold text-slate-700">Last Week Net</th>
-            <th class="px-4 py-3 text-right font-semibold text-slate-700">2 Weeks Ago Gross</th>
-            <th class="px-4 py-3 text-right font-semibold text-slate-700">2 Weeks Ago Net</th>
+            <th class="px-4 py-3 text-right font-semibold text-slate-700">Today</th>
+            <th class="px-4 py-3 text-right font-semibold text-slate-700">This Week</th>
+            <th class="px-4 py-3 text-right font-semibold text-slate-700">Last Week</th>
+            <th class="px-4 py-3 text-right font-semibold text-slate-700">vs Last Week</th>
+            <th class="px-4 py-3 text-right font-semibold text-slate-700">Month to Date</th>
             <th class="px-4 py-3"></th>
           </tr>
         </thead>
@@ -118,14 +121,25 @@
           @for (machine of machines; track machine.machineID) {
             <tr>
               <td class="px-4 py-3 text-slate-700">{{ machine.machineName || 'Unnamed machine' }}</td>
-              <td class="px-4 py-3 text-right text-slate-600">${{ machine.todayGrossRevenue.toFixed(2) }}</td>
-              <td class="px-4 py-3 text-right text-slate-600">${{ machine.todayNetRevenue.toFixed(2) }} - %{{ (machine.todayNetRevenue / machine.todayGrossRevenue * 100).toFixed(2) }}</td>
-              <td class="px-4 py-3 text-right text-slate-600">${{ machine.currentWeekGrossRevenue.toFixed(2) }}</td>
-              <td class="px-4 py-3 text-right text-slate-600">${{ machine.currentWeekNetRevenue.toFixed(2) }} - %{{ (machine.currentWeekNetRevenue / machine.currentWeekGrossRevenue * 100).toFixed(2) }}</td>
-              <td class="px-4 py-3 text-right text-slate-600">${{ machine.lastWeekGrossRevenue.toFixed(2) }}</td>
-              <td class="px-4 py-3 text-right text-slate-600">${{ machine.lastWeekNetRevenue.toFixed(2) }} - %{{ (machine.lastWeekNetRevenue / machine.lastWeekGrossRevenue * 100).toFixed(2) }}</td>
-              <td class="px-4 py-3 text-right text-slate-600">${{ machine.twoWeeksAgoGrossRevenue.toFixed(2) }}</td>
-              <td class="px-4 py-3 text-right text-slate-600">${{ machine.twoWeeksAgoNetRevenue.toFixed(2) }} - %{{ (machine.twoWeeksAgoNetRevenue / machine.twoWeeksAgoGrossRevenue * 100).toFixed(2) }}</td>
+              <td class="px-4 py-3 text-right text-slate-600">
+                <div>${{ machine.todayGrossRevenue.toFixed(2) }} sales</div>
+                <div class="text-xs text-slate-500">${{ machine.todayNetRevenue.toFixed(2) }} net profit · {{ netMargin(machine.todayNetRevenue, machine.todayGrossRevenue).toFixed(1) }}% net margin</div>
+              </td>
+              <td class="px-4 py-3 text-right text-slate-600">
+                <div>${{ machine.currentWeekGrossRevenue.toFixed(2) }} sales</div>
+                <div class="text-xs text-slate-500">${{ machine.currentWeekNetRevenue.toFixed(2) }} net profit · {{ netMargin(machine.currentWeekNetRevenue, machine.currentWeekGrossRevenue).toFixed(1) }}% net margin</div>
+              </td>
+              <td class="px-4 py-3 text-right text-slate-600">
+                <div>${{ machine.lastWeekGrossRevenue.toFixed(2) }} sales</div>
+                <div class="text-xs text-slate-500">${{ machine.lastWeekNetRevenue.toFixed(2) }} net profit · {{ netMargin(machine.lastWeekNetRevenue, machine.lastWeekGrossRevenue).toFixed(1) }}% net margin</div>
+              </td>
+              <td class="px-4 py-3 text-right" [ngClass]="trendClass(machine.currentWeekGrossRevenue, machine.previousComparableWeekGrossRevenue)">
+                {{ trendLabel(machine.currentWeekGrossRevenue, machine.previousComparableWeekGrossRevenue) }}
+              </td>
+              <td class="px-4 py-3 text-right text-slate-600">
+                <div>${{ machine.monthToDateGrossRevenue.toFixed(2) }} sales</div>
+                <div class="text-xs text-slate-500">${{ machine.monthToDateNetRevenue.toFixed(2) }} net profit · {{ netMargin(machine.monthToDateNetRevenue, machine.monthToDateGrossRevenue).toFixed(1) }}% net margin</div>
+              </td>
               <td class="px-4 py-3 text-right"><a [routerLink]="['/machines', machine.machineID]" class="inline-flex items-center rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700">Details</a></td>
             </tr>
           }
@@ -133,14 +147,25 @@
         <tfoot class="bg-slate-50 font-semibold">
           <tr>
             <td class="px-4 py-3">Totals</td>          
-            <td class="px-4 py-3 text-right">${{ totalTodayGross.toFixed(2) }}</td>
-            <td class="px-4 py-3 text-right">${{ totalTodayNet.toFixed(2) }} - %{{ (totalTodayNet / totalTodayGross * 100).toFixed(2) }}</td>
-            <td class="px-4 py-3 text-right">${{ totalCurrentWeekGross.toFixed(2) }}</td>
-            <td class="px-4 py-3 text-right">${{ totalCurrentWeekNet.toFixed(2) }} - %{{ (totalCurrentWeekNet / totalCurrentWeekGross * 100).toFixed(2) }}</td>
-            <td class="px-4 py-3 text-right">${{ totalLastWeekGross.toFixed(2) }}</td>
-            <td class="px-4 py-3 text-right">${{ totalLastWeekNet.toFixed(2) }} - %{{ (totalLastWeekNet / totalLastWeekGross * 100).toFixed(2) }}</td>
-            <td class="px-4 py-3 text-right">${{ totalTwoWeeksAgoGross.toFixed(2) }}</td>
-            <td class="px-4 py-3 text-right">${{ totalTwoWeeksAgoNet.toFixed(2) }} - %{{ (totalTwoWeeksAgoNet / totalTwoWeeksAgoGross * 100).toFixed(2) }}</td>
+            <td class="px-4 py-3 text-right">
+              <div>${{ totalTodaySales.toFixed(2) }} sales</div>
+              <div class="text-xs text-slate-500">${{ totalTodayNetProfit.toFixed(2) }} net profit · {{ netMargin(totalTodayNetProfit, totalTodaySales).toFixed(1) }}% net margin</div>
+            </td>
+            <td class="px-4 py-3 text-right">
+              <div>${{ totalCurrentWeekSales.toFixed(2) }} sales</div>
+              <div class="text-xs text-slate-500">${{ totalCurrentWeekNetProfit.toFixed(2) }} net profit · {{ totalNetMargin.toFixed(1) }}% net margin</div>
+            </td>
+            <td class="px-4 py-3 text-right">
+              <div>${{ totalLastWeekSales.toFixed(2) }} sales</div>
+              <div class="text-xs text-slate-500">${{ totalLastWeekNetProfit.toFixed(2) }} net profit · {{ netMargin(totalLastWeekNetProfit, totalLastWeekSales).toFixed(1) }}% net margin</div>
+            </td>
+            <td class="px-4 py-3 text-right" [ngClass]="trendClass(totalCurrentWeekSales, totalPreviousComparableWeekSales)">
+              {{ trendLabel(totalCurrentWeekSales, totalPreviousComparableWeekSales) }}
+            </td>
+            <td class="px-4 py-3 text-right">
+              <div>${{ totalMonthToDateSales.toFixed(2) }} sales</div>
+              <div class="text-xs text-slate-500">${{ totalMonthToDateNetProfit.toFixed(2) }} net profit · {{ netMargin(totalMonthToDateNetProfit, totalMonthToDateSales).toFixed(1) }}% net margin</div>
+            </td>
             <td class="px-4 py-3"></td>
           </tr>
         </tfoot>

@@ -46,10 +46,11 @@ public record SiteSummaryDto(
     string SiteName,
     int MachineCount,
     decimal TotalStockPercentage,
+    int LowProductCount,
     int EmptyProductCount,
     decimal TodayRevenue,
     decimal CurrentWeekRevenue,
-    decimal LastWeekRevenue
+    decimal PreviousComparableWeekRevenue
 );
 
 public record SiteProductDto(

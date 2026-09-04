@@ -62,6 +62,10 @@ export interface Machine {
   twoWeeksAgoNetRevenue: number;
   lastWeekNetRevenue: number;
   currentWeekNetRevenue: number;
+  previousComparableWeekGrossRevenue: number;
+  previousComparableWeekNetRevenue: number;
+  monthToDateGrossRevenue: number;
+  monthToDateNetRevenue: number;
 }
 
 export interface Site {
@@ -69,10 +73,11 @@ export interface Site {
   siteName: string;
   machineCount: number;
   totalStockPercentage: number;
+  lowProductCount: number;
   emptyProductCount: number;
   todayRevenue: number;
   currentWeekRevenue: number;
-  lastWeekRevenue: number;
+  previousComparableWeekRevenue: number;
 }
 
 export interface SiteProduct {

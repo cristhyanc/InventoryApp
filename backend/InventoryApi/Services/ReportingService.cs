@@ -318,16 +318,41 @@ public sealed class ReportingService : IReportingService
         var siteCommission = await GetSiteCommissionAsync(range, MachineId(filter), commissions, cancellationToken);
         var receiptCosts = await ReceiptCostsAsync(range, cancellationToken);
         var fees = imported.FeesIncludingGst;
-        var netProfit = (summary?.Sales ?? 0m) - (summary?.Cost ?? 0m) - fees - siteCommission - receiptCosts.Total;
+        var totalSales = paymentSummary.GrossSales;
+        var costOfGoods = summary?.Cost ?? 0m;
+        var grossProfit = ReportingCalculations.GrossProfit(totalSales, costOfGoods);
+        var otherOperatingExpenses = receiptCosts.Total;
+        var netProfit = grossProfit - fees - siteCommission - otherOperatingExpenses;
+        var expectedReimbursement = paymentSummary.CardSales - fees;
+        var actualReimbursement = imported.NetSettlement;
+        var reimbursementDifference = actualReimbursement - expectedReimbursement;
+        var reconciliationStatus = !imported.ContainsRows
+            ? "Pending"
+            : Math.Abs(reimbursementDifference) <= 0.01m ? "Reconciled" : "Needs Review";
         return new DashboardReportDto(range.From, range.ToDate, summary?.Sales ?? 0m,
-            ReportingCalculations.GrossProfit(summary?.Sales ?? 0m, summary?.Cost ?? 0m), summary?.Transactions ?? 0,
+            grossProfit, summary?.Transactions ?? 0,
             summary?.Quantity ?? 0m, summary?.Machines ?? 0, summary?.Products ?? 0,
             productReport.Rows.Count(x => x.IsUnmapped), productReport.DataQuality, fees,
-            imported.HasNetSettlement ? imported.NetSettlement : (summary?.Sales ?? 0m) - fees,
+            actualReimbursement,
             siteCommission, netProfit,
-            ReportingCalculations.MarginPercent(summary?.Sales ?? 0m, (summary?.Cost ?? 0m) + fees + siteCommission + receiptCosts.Total),
+            ReportingCalculations.MarginPercent(totalSales, costOfGoods + fees + siteCommission + otherOperatingExpenses),
             imported.FeesExGst, receiptCosts.Delivery, receiptCosts.Package, receiptCosts.Total,
-            paymentSummary.CardSales, paymentSummary.CashSales, paymentSummary.CardTransactions, paymentSummary.CashTransactions);
+            paymentSummary.CardSales, paymentSummary.CashSales, paymentSummary.CardTransactions, paymentSummary.CashTransactions)
+        {
+            TotalSales = totalSales,
+            CostOfGoodsSold = costOfGoods,
+            AverageSale = ReportingCalculations.Average(totalSales, summary?.Transactions ?? 0),
+            GrossMarginPercent = ReportingCalculations.MarginPercent(totalSales, grossProfit),
+            NayaxFeesIncludingGst = fees,
+            OtherOperatingExpenses = otherOperatingExpenses,
+            ExpectedReimbursement = expectedReimbursement,
+            ActualReimbursement = actualReimbursement,
+            ReimbursementDifference = reimbursementDifference,
+            IsReconciled = imported.ContainsRows && Math.Abs(reimbursementDifference) <= 0.01m,
+            ReconciliationStatus = reconciliationStatus,
+            ReconciliationTolerance = 0.01m,
+            AdjustmentsSupported = false
+        };
     }
 
     public async Task<byte[]> ExportCsvAsync(string report, ReportingFilterDto filter, CancellationToken cancellationToken = default)

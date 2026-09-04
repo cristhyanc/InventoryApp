@@ -279,4 +279,18 @@ public record DashboardReportDto(
     decimal CardSales = 0m,
     decimal CashSales = 0m,
     int CardTransactionCount = 0,
-    int CashTransactionCount = 0);
+    int CashTransactionCount = 0)
+{
+    public decimal TotalSales { get; init; } = Sales;
+    public decimal CostOfGoodsSold { get; init; } = 0m;
+    public decimal AverageSale { get; init; } = Transactions == 0 ? 0m : Sales / Transactions;
+    public decimal GrossMarginPercent { get; init; } = Sales == 0m ? 0m : GrossProfit / Sales * 100m;
+    public decimal NayaxFeesIncludingGst { get; init; } = 0m;
+    public decimal ExpectedReimbursement { get; init; } = 0m;
+    public decimal ActualReimbursement { get; init; } = NetReimbursement;
+    public decimal ReimbursementDifference { get; init; } = 0m;
+    public bool IsReconciled { get; init; }
+    public string ReconciliationStatus { get; init; } = "Pending";
+    public decimal ReconciliationTolerance { get; init; } = 0.01m;
+    public bool AdjustmentsSupported { get; init; }
+}
