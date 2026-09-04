@@ -10,15 +10,17 @@ public class ReceiptService : IReceiptService
 {
     private readonly AppDbContext _db;
     private readonly IWebHostEnvironment _env;
+    private readonly IInventoryCostService _costing;
 
     private static readonly string[] AllowedExtensions = { ".jpg", ".jpeg", ".png", ".pdf", ".webp", ".heic" };
     private const long MaxFileSizeBytes = 10 * 1024 * 1024;
     private const decimal ReceiptTotalTolerance = 0.02m;
 
-    public ReceiptService(AppDbContext db, IWebHostEnvironment env)
+    public ReceiptService(AppDbContext db, IWebHostEnvironment env, IInventoryCostService? costing = null)
     {
         _db = db;
         _env = env;
+        _costing = costing ?? new InventoryCostService(db);
     }
 
     private string ReceiptsFolder
@@ -101,9 +103,10 @@ public class ReceiptService : IReceiptService
         try
         {
             await using var transaction = await BeginTransactionAsync();
-            foreach (var item in receipt.Items)
-                AddStockMovement(item.ProductId, ToStockQuantity(item.Quantity), StockAdjustmentReason.Restock, item, $"Receipt {receipt.Id}");
             _db.Receipts.Add(receipt);
+            foreach (var item in receipt.Items)
+                _costing.ApplyMovement(item.ProductId, ToStockQuantity(item.Quantity), StockAdjustmentReason.Restock,
+                    item, $"Receipt purchase", item.UnitCost);
             await _db.SaveChangesAsync();
             if (transaction is not null) await transaction.CommitAsync();
         }
@@ -131,17 +134,25 @@ public class ReceiptService : IReceiptService
         receipt.PackageCost = packageCost;
         receipt.PurchaseDate = purchaseDate ?? receipt.PurchaseDate;
         receipt.SupplierId = supplierId;
+        await using var transaction = await BeginTransactionAsync();
         if (items is not null)
         {
             var validated = await ValidateItemsAsync(items);
             ApplyTotalWarning(receipt, validated);
             var oldByProduct = receipt.Items.GroupBy(x => x.ProductId).ToDictionary(x => x.Key, x => x.Sum(i => i.Quantity));
             var newByProduct = validated.GroupBy(x => x.ProductId).ToDictionary(x => x.Key, x => x.Sum(i => i.Quantity));
+            var newCostByProduct = validated.GroupBy(x => x.ProductId)
+                .ToDictionary(x => x.Key, x => x.Sum(i => i.Quantity * i.UnitCost) / x.Sum(i => i.Quantity));
             foreach (var productId in oldByProduct.Keys.Union(newByProduct.Keys))
             {
                 var delta = newByProduct.GetValueOrDefault(productId) - oldByProduct.GetValueOrDefault(productId);
                 if (delta != 0)
-                    AddStockMovement(productId, ToStockQuantity(delta), StockAdjustmentReason.Restock, null, $"Receipt {receipt.Id} adjustment");
+                {
+                    var quantityChange = ToStockQuantity(delta);
+                    _costing.ApplyMovement(productId, quantityChange, StockAdjustmentReason.Restock, null,
+                        $"Receipt {receipt.Id} adjustment",
+                        quantityChange > 0 ? newCostByProduct[productId] : null);
+                }
             }
             _db.ReceiptItems.RemoveRange(receipt.Items);
             receipt.Items = validated.Select(x => new ReceiptItem
@@ -149,7 +160,6 @@ public class ReceiptService : IReceiptService
                 ReceiptId = receipt.Id, ProductId = x.ProductId, Quantity = x.Quantity, UnitCost = x.UnitCost
             }).ToList();
         }
-        await using var transaction = await BeginTransactionAsync();
         await _db.SaveChangesAsync();
         if (transaction is not null) await transaction.CommitAsync();
         return receipt;
@@ -163,7 +173,8 @@ public class ReceiptService : IReceiptService
         var path = Path.Combine(ReceiptsFolder, receipt.StoredFileName);
         await using var transaction = await BeginTransactionAsync();
         foreach (var item in receipt.Items)
-            AddStockMovement(item.ProductId, -ToStockQuantity(item.Quantity), StockAdjustmentReason.Restock, null, $"Receipt {receipt.Id} reversal");
+            _costing.ApplyMovement(item.ProductId, -ToStockQuantity(item.Quantity), StockAdjustmentReason.Restock,
+                null, $"Receipt {receipt.Id} reversal");
         _db.Receipts.Remove(receipt);
         await _db.SaveChangesAsync();
         if (transaction is not null) await transaction.CommitAsync();
@@ -190,22 +201,6 @@ public class ReceiptService : IReceiptService
             receipt.Notes = string.IsNullOrWhiteSpace(receipt.Notes)
                 ? $"Warning: item subtotal {subtotal:0.00} differs from receipt total {receipt.TotalAmount.Value:0.00}."
                 : $"{receipt.Notes} Warning: item subtotal {subtotal:0.00} differs from receipt total {receipt.TotalAmount.Value:0.00}.";
-    }
-
-    private void AddStockMovement(long productId, int quantityChange, StockAdjustmentReason reason, ReceiptItem? receiptItem, string notes)
-    {
-        var product = _db.Products.Local.FirstOrDefault(p => p.Id == productId) ??
-            _db.Products.Find(productId);
-        if (product is null) throw new InvalidOperationException($"Product {productId} was not loaded.");
-        var newQuantity = product.QuantityInStock + quantityChange;
-        if (newQuantity < 0) throw new InsufficientStockException(product.QuantityInStock);
-        product.QuantityInStock = newQuantity;
-        product.UpdatedAt = DateTime.UtcNow;
-        _db.StockAdjustments.Add(new StockAdjustment
-        {
-            ProductId = productId, QuantityChange = quantityChange, QuantityAfter = newQuantity,
-            Reason = reason, ReceiptItem = receiptItem, Notes = notes
-        });
     }
 
     private static int ToStockQuantity(decimal quantity) =>

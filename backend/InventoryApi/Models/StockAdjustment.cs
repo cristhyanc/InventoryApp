@@ -26,6 +26,8 @@ public class StockAdjustment
     // Positive = stock added, Negative = stock removed
     public int QuantityChange { get; set; }
     public int QuantityAfter { get; set; }
+    public decimal? UnitCost { get; set; }
+    public decimal? TotalCost { get; set; }
 
     public StockAdjustmentReason Reason { get; set; } = StockAdjustmentReason.MachineRefill;
     public long? MachineId { get; set; }

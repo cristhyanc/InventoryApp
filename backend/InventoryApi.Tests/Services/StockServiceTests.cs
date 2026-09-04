@@ -59,4 +59,40 @@ public class StockServiceTests
         var product = await db.Products.FindAsync(1L);
         Assert.Equal(2, product.QuantityInStock);
     }
+
+    [Fact]
+    public async Task Machine_refill_decreases_stock_without_changing_average_cost()
+    {
+        using var db = CreateDbContext("stock_avco_refill_test");
+        db.Products.Add(new Product { Id = 1, Name = "p", QuantityInStock = 34, AverageUnitCost = 1.323529411764705882m });
+        await db.SaveChangesAsync();
+
+        IStockService svc = new StockService(db);
+        await svc.Adjust(1, new StockAdjustmentDto(-8, StockAdjustmentReason.MachineRefill, "refill", 7, null));
+
+        var product = await db.Products.FindAsync(1L);
+        Assert.Equal(26, product!.QuantityInStock);
+        Assert.Equal(1.323529411764705882m, product.AverageUnitCost);
+        var movement = await db.StockAdjustments.SingleAsync();
+        Assert.Equal(1.323529411764705882m, movement.UnitCost);
+        Assert.Equal(8 * product.AverageUnitCost, movement.TotalCost);
+    }
+
+    [Fact]
+    public async Task Positive_adjustment_without_cost_does_not_invent_average_cost()
+    {
+        using var db = CreateDbContext("stock_unknown_cost_test");
+        db.Products.Add(new Product { Id = 1, Name = "p", QuantityInStock = 2, AverageUnitCost = 3m });
+        await db.SaveChangesAsync();
+
+        IStockService svc = new StockService(db);
+        await svc.Adjust(1, new StockAdjustmentDto(3, StockAdjustmentReason.Correction, "count correction", null, null));
+
+        var product = await db.Products.FindAsync(1L);
+        Assert.Equal(5, product!.QuantityInStock);
+        Assert.Equal(3m, product.AverageUnitCost);
+        var movement = await db.StockAdjustments.SingleAsync();
+        Assert.Null(movement.UnitCost);
+        Assert.Null(movement.TotalCost);
+    }
 }

@@ -9,7 +9,12 @@ namespace InventoryApi.Services;
 public class StockService : IStockService
 {
     private readonly AppDbContext _db;
-    public StockService(AppDbContext db) => _db = db;
+    private readonly IInventoryCostService _costing;
+    public StockService(AppDbContext db, IInventoryCostService? costing = null)
+    {
+        _db = db;
+        _costing = costing ?? new InventoryCostService(db);
+    }
 
     public async Task<IEnumerable<StockAdjustment>> History(long productId)
     {
@@ -24,26 +29,13 @@ public class StockService : IStockService
 
     public async Task<StockAdjustment?> Adjust(long productId, StockAdjustmentDto dto)
     {
-        var product = await _db.Products.FindAsync(productId);
-        if (product is null) return null;
+        var productExists = await _db.Products.AnyAsync(p => p.Id == productId);
+        if (!productExists) return null;
 
-        var newQuantity = product.QuantityInStock + dto.QuantityChange;
-        if (newQuantity < 0) throw new InsufficientStockException(product.QuantityInStock);
-
-        product.QuantityInStock = newQuantity;
-        product.UpdatedAt = DateTime.UtcNow;
-
-        var adjustment = new StockAdjustment
-        {
-            ProductId = productId,
-            QuantityChange = dto.QuantityChange,
-            QuantityAfter = newQuantity,
-            Reason = dto.Reason,
-            MachineId = dto.MachineId,
-            Notes = dto.Notes,
-            EatBefore = dto.EatBefore
-        };
-        _db.StockAdjustments.Add(adjustment);
+        var adjustment = _costing.ApplyMovement(productId, dto.QuantityChange, dto.Reason, null,
+            dto.Notes ?? string.Empty);
+        adjustment.MachineId = dto.MachineId;
+        adjustment.EatBefore = dto.EatBefore;
         await _db.SaveChangesAsync();
 
         return adjustment;

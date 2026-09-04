@@ -105,6 +105,7 @@ public class ProductService : IProductService
                 product = new Product
                 {
                     Id = item.NayaxProductId,
+                    AverageUnitCost = item.ProductCostPrice ?? 0m,
                     CreatedAt = DateTime.UtcNow
                 };
                 newProducts.Add(product);
@@ -133,6 +134,7 @@ public class ProductService : IProductService
             Sku = dto.Sku,
             Description = dto.Description,
             UnitPrice = dto.UnitPrice,
+            AverageUnitCost = dto.UnitPrice,
             IsActive = dto.IsActive,
             QuantityInStock = dto.QuantityInStock,
             LowStockThreshold = dto.LowStockThreshold,
@@ -153,6 +155,8 @@ public class ProductService : IProductService
                 QuantityChange = product.QuantityInStock,
                 QuantityAfter = product.QuantityInStock,
                 Reason = StockAdjustmentReason.Restock,
+                UnitCost = product.AverageUnitCost,
+                TotalCost = product.AverageUnitCost * product.QuantityInStock,
                 Notes = "Initial stock on product creation"
             });
             await _db.SaveChangesAsync();

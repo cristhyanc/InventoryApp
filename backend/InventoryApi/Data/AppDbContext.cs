@@ -26,6 +26,9 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<Product>()
             .Property(p => p.UnitPrice)
             .HasColumnType("decimal(18,2)");
+        modelBuilder.Entity<Product>()
+            .Property(p => p.AverageUnitCost)
+            .HasColumnType("decimal(18,6)");
 
         modelBuilder.Entity<Receipt>()
             .Property(r => r.TotalAmount)
@@ -93,6 +96,8 @@ public class AppDbContext : DbContext
             .OnDelete(DeleteBehavior.SetNull);
         modelBuilder.Entity<ReceiptItem>().Property(i => i.Quantity).HasColumnType("decimal(18,4)");
         modelBuilder.Entity<ReceiptItem>().Property(i => i.UnitCost).HasColumnType("decimal(18,4)");
+        modelBuilder.Entity<StockAdjustment>().Property(a => a.UnitCost).HasColumnType("decimal(18,6)");
+        modelBuilder.Entity<StockAdjustment>().Property(a => a.TotalCost).HasColumnType("decimal(18,6)");
 
         modelBuilder.Entity<Category>().HasIndex(c => c.Name);
         modelBuilder.Entity<Supplier>().HasIndex(s => s.Name);

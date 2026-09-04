@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations.Schema;
+using System.Text.Json.Serialization;
 
 namespace InventoryApi.Models;
 
@@ -6,6 +7,7 @@ public class ReceiptItem
 {
     public int Id { get; set; }
     public int ReceiptId { get; set; }
+    [JsonIgnore]
     public virtual Receipt? Receipt { get; set; }
     public long ProductId { get; set; }
     public virtual Product? Product { get; set; }

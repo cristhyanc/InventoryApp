@@ -152,4 +152,37 @@ public class ReceiptServiceTests
         Assert.Equal(0, (await db.Products.FindAsync(1L))!.QuantityInStock);
         Assert.Equal(3, await db.StockAdjustments.CountAsync());
     }
+
+    [Fact]
+    public async Task Upload_uses_weighted_average_cost_and_records_cost_ledger()
+    {
+        using var db = CreateDbContext("receipt_avco_test");
+        db.Products.Add(new Product { Id = 1, Name = "M&M", QuantityInStock = 10, AverageUnitCost = 2.10m });
+        await db.SaveChangesAsync();
+        var envMock = new Mock<IWebHostEnvironment>();
+        var temp = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(temp);
+        envMock.Setup(e => e.WebRootPath).Returns(temp);
+        envMock.Setup(e => e.ContentRootPath).Returns(temp);
+        IReceiptService svc = new ReceiptService(db, envMock.Object);
+
+        var content = new MemoryStream(new byte[] { 1 });
+        var fileMock = new Mock<IFormFile>();
+        fileMock.Setup(f => f.Length).Returns(1);
+        fileMock.Setup(f => f.FileName).Returns("t.jpg");
+        fileMock.Setup(f => f.ContentType).Returns("image/jpeg");
+        fileMock.Setup(f => f.OpenReadStream()).Returns(content);
+        fileMock.Setup(f => f.CopyToAsync(It.IsAny<Stream>(), default))
+            .Returns((Stream s, System.Threading.CancellationToken ct) => content.CopyToAsync(s, ct));
+
+        await svc.Upload(fileMock.Object, "Purchase", null, null, null, null, null, null,
+            new[] { new ReceiptItemDto(1, 24m, 1.00m) });
+
+        var product = await db.Products.FindAsync(1L);
+        Assert.Equal(34, product!.QuantityInStock);
+        Assert.Equal((10m * 2.10m + 24m) / 34m, product.AverageUnitCost);
+        var movement = await db.StockAdjustments.SingleAsync();
+        Assert.Equal(1.00m, movement.UnitCost);
+        Assert.Equal(24.00m, movement.TotalCost);
+    }
 }

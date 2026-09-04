@@ -102,5 +102,10 @@ public class ReceiptsController : ControllerBase
 
     private static IReadOnlyList<ReceiptItemDto>? ParseItems(string? items) =>
         string.IsNullOrWhiteSpace(items) ? Array.Empty<ReceiptItemDto>() :
-        System.Text.Json.JsonSerializer.Deserialize<IReadOnlyList<ReceiptItemDto>>(items);
+        System.Text.Json.JsonSerializer.Deserialize<IReadOnlyList<ReceiptItemDto>>(
+            items,
+            new System.Text.Json.JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            });
 }
