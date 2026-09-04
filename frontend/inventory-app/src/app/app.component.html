@@ -7,6 +7,7 @@
       <a routerLink="/categories" routerLinkActive="text-blue-600" class="transition hover:text-blue-600">Categories</a>
       <a routerLink="/suppliers" routerLinkActive="text-blue-600" class="transition hover:text-blue-600">Suppliers</a>
       <a routerLink="/receipts" routerLinkActive="text-blue-600" class="transition hover:text-blue-600">Receipts</a>
+      <a routerLink="/admin" routerLinkActive="text-blue-600" class="transition hover:text-blue-600">Admin</a>
       <span class="text-slate-400">|</span>
       <details class="relative">
         <summary class="cursor-pointer list-none text-slate-500 transition hover:text-blue-600">
@@ -20,7 +21,6 @@
           <a (click)="closeReportsMenu($event)" routerLink="/reports/machines" routerLinkActive="bg-blue-50 text-blue-600" class="rounded px-3 py-2 transition hover:bg-slate-50 hover:text-blue-600">Machines</a>
           <a (click)="closeReportsMenu($event)" routerLink="/reports/products" routerLinkActive="bg-blue-50 text-blue-600" class="rounded px-3 py-2 transition hover:bg-slate-50 hover:text-blue-600">Products</a>
           <a (click)="closeReportsMenu($event)" routerLink="/reports/gst" routerLinkActive="bg-blue-50 text-blue-600" class="rounded px-3 py-2 transition hover:bg-slate-50 hover:text-blue-600">GST</a>
-          <a (click)="closeReportsMenu($event)" routerLink="/reports/sale-costing-backfill" routerLinkActive="bg-blue-50 text-blue-600" class="rounded px-3 py-2 transition hover:bg-slate-50 hover:text-blue-600">COGS Backfill</a>
         </div>
       </details>
     </nav>

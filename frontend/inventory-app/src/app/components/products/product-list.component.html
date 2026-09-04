@@ -2,7 +2,6 @@
   <h1 class="text-2xl font-semibold text-slate-800">Products</h1>
   <div class="flex flex-wrap gap-3">
     <a routerLink="/products/new" class="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">+ New Product</a>
-    <button class="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700" (click)="confirmImportProducts()">Import Products</button>
   </div>
 </div>
 
@@ -96,12 +95,3 @@
   [message]="`Delete product '${confirmingProduct.name}'?`"
   (confirmed)="deleteConfirmed()"
   (canceled)="cancelDelete()"></app-confirmation-dialog>
-
-  <app-confirmation-dialog 
-  confirmLabel="Import"
-  cancelLabel="Cancel"
-  *ngIf="confirmingImport"
-  title="Confirm import"
-  message="Do you want to import products from Nayax?"
-  (confirmed)="importProducts()"
-  (canceled)="cancelImportProducts()"></app-confirmation-dialog>

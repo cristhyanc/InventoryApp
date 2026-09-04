@@ -20,7 +20,6 @@ export class ProductListComponent implements OnInit {
   categories: Category[] = [];
   suppliers: Supplier[] = [];
   confirmingProduct: Product | null = null;
-  confirmingImport: boolean = false;
   search = '';
   categoryId: number | '' = '';
   supplierId: number | '' = '';
@@ -63,25 +62,6 @@ export class ProductListComponent implements OnInit {
     this.supplierId = '';
     this.lowStockOnly = false;
     this.applyFilters();
-  }
-
-  confirmImportProducts(): void {
-    this.confirmingImport = true;
-  }
-
-  importProducts(): void {
-    this.productService.importProducts().subscribe({
-        next: () => {
-          this.confirmingImport = false;
-          this.toastService.success('Products imported successfully.')
-          this.applyFilters();
-        },
-        error: () => { this.toastService.error('Failed to import products.'); }
-      });    
-  }
-
-  cancelImportProducts(): void {
-    this.confirmingImport = false;
   }
 
   confirmDelete(product: Product): void {

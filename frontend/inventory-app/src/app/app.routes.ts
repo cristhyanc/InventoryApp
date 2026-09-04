@@ -16,7 +16,7 @@ import { ReconciliationReportComponent } from './components/reports/reconciliati
 import { MachineReportComponent } from './components/reports/machine-report.component';
 import { ProductReportComponent } from './components/reports/product-report.component';
 import { GstReportComponent } from './components/reports/gst-report.component';
-import { SaleCostingBackfillComponent } from './components/reports/sale-costing-backfill.component';
+import { AdminComponent } from './components/admin/admin.component';
 
 export const routes: Routes = [
   { path: '', component: DashboardComponent },
@@ -37,6 +37,6 @@ export const routes: Routes = [
   { path: 'reports/machines', component: MachineReportComponent },
   { path: 'reports/products', component: ProductReportComponent },
   { path: 'reports/gst', component: GstReportComponent },
-  { path: 'reports/sale-costing-backfill', component: SaleCostingBackfillComponent },
+  { path: 'admin', component: AdminComponent },
   { path: '**', redirectTo: '' }
 ];

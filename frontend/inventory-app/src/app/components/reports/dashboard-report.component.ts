@@ -3,14 +3,12 @@ import { CommonModule } from '@angular/common';
 import { ActivatedRoute } from '@angular/router';
 import { Observable } from 'rxjs';
 import { MachineService } from '../../services/machine.service';
-import { ReceiptService } from '../../services/receipt.service';
-import { ToastService } from '../../services/toast.service';
 import { ReportingFilter, ReportingService, DashboardReport } from '../../services/reporting.service';
 import { ReportPageBase } from './report-page.base';
 import { ReportFiltersComponent } from './report-filters.component';
 
 @Component({ selector: 'app-dashboard-report', standalone: true, imports: [CommonModule, ReportFiltersComponent], template: `
-<div class="mb-5 flex flex-wrap items-center justify-between gap-3"><h1 class="text-2xl font-semibold text-slate-800">Reporting Dashboard</h1><button type="button" [disabled]="importing" (click)="importPendingFiles()" class="inline-flex items-center rounded-md border border-blue-600 bg-white px-4 py-2 text-sm font-medium text-blue-600 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50">{{ importing ? 'Importing XML...' : 'Import XML Files' }}</button></div>
+<div class="mb-5"><h1 class="text-2xl font-semibold text-slate-800">Reporting Dashboard</h1></div>
 <app-report-filters [from]="from" [to]="to" [machineId]="machineId" [machines]="machines" [period]="period" (fromChange)="from=$event" (toChange)="to=$event" (machineChange)="machineId=$event" (periodChange)="selectPeriod($event)" (apply)="load()" />
 @if (loading) { <div class="rounded-xl bg-white p-8 text-center text-slate-500 shadow-sm">Loading report...</div> } @else if (error) { <div class="rounded-xl bg-red-50 p-6 text-red-700">{{ error }}</div> } @else if (report) {
 <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -30,29 +28,9 @@ import { ReportFiltersComponent } from './report-filters.component';
 }
 ` })
 export class DashboardReportComponent extends ReportPageBase<DashboardReport> {
-  importing = false;
-  constructor(route: ActivatedRoute, reports: ReportingService, machines: MachineService, private receiptService: ReceiptService, private toast: ToastService) { super(route, reports, machines); }
+  constructor(route: ActivatedRoute, reports: ReportingService, machines: MachineService) { super(route, reports, machines); }
   request(filter: ReportingFilter): Observable<DashboardReport> { return this.reports.dashboard(filter); }
   statusClass(status?: string): string {
     return status === 'Reconciled' ? 'text-emerald-700 bg-emerald-50' : 'text-amber-700 bg-amber-50';
-  }
-  importPendingFiles(): void {
-    if (this.importing) return;
-    this.importing = true;
-    this.receiptService.importPendingFiles().subscribe({
-      next: (result) => {
-        this.importing = false;
-        this.toast.success(
-          `Imported ${result.importedFiles} file(s) and ${result.importedReimbursements} reimbursement(s). ` +
-          `Skipped ${result.skippedFiles}; failed ${result.failedFiles}.`,
-          'XML import complete'
-        );
-        this.load();
-      },
-      error: (err) => {
-        this.importing = false;
-        this.toast.error(err.error ?? 'The XML import could not be started.');
-      }
-    });
   }
 }
