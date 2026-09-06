@@ -32,6 +32,24 @@ public record ReportingDataQualityDto(
     public bool CommissionPersistenceLimited => CommissionNotPersisted;
 }
 
+public record NayaxProcessingFeeResult(
+    decimal ActualFeeExGst,
+    decimal ActualFeeGst,
+    decimal ActualFeeIncGst,
+    decimal EstimatedFeeExGst,
+    decimal EstimatedFeeGst,
+    decimal EstimatedFeeIncGst,
+    int EstimatedCardTransactionCount,
+    DateTime? ActualFeeCoverageEndDate,
+    DateTime? EstimatedFeeFromDate)
+{
+    public decimal TotalFeeExGst => ActualFeeExGst + EstimatedFeeExGst;
+    public decimal TotalFeeGst => ActualFeeGst + EstimatedFeeGst;
+    public decimal TotalFeeIncGst => ActualFeeIncGst + EstimatedFeeIncGst;
+    public bool HasEstimatedFees => EstimatedCardTransactionCount > 0;
+    public bool IsFullyActual => EstimatedCardTransactionCount == 0;
+}
+
 public record BookkeepingReportDto(
     DateTime From,
     DateTime To,
@@ -60,7 +78,14 @@ public record BookkeepingReportDto(
     int PendingTransactionCount = 0,
     int RefundedTransactionCount = 0,
     int DeclinedOrCancelledTransactionCount = 0,
-    int UnknownStatusTransactionCount = 0);
+    int UnknownStatusTransactionCount = 0)
+{
+    public decimal StructuredOperatingExpenses { get; init; }
+    public decimal OperatingExpenseGst { get; init; }
+    public IReadOnlyDictionary<string, decimal> OperatingExpensesByCategory { get; init; } =
+        new Dictionary<string, decimal>();
+    public NayaxProcessingFeeResult NayaxProcessingFees { get; init; } = new(0m, 0m, 0m, 0m, 0m, 0m, 0, null, null);
+}
 
 public record DailyReportRowDto(
     DateTime Date,
@@ -87,7 +112,8 @@ public record DailyReportRowDto(
     int PendingTransactionCount = 0,
     int DeclinedOrCancelledTransactionCount = 0,
     int RefundedTransactionCount = 0,
-    int UnknownStatusTransactionCount = 0);
+    int UnknownStatusTransactionCount = 0,
+    string NayaxFeeSource = "None");
 
 public record DailyReportTotalsDto(
     decimal GrossSales,
@@ -110,7 +136,10 @@ public record DailyReportTotalsDto(
     int PendingTransactionCount = 0,
     int DeclinedOrCancelledTransactionCount = 0,
     int RefundedTransactionCount = 0,
-    int UnknownStatusTransactionCount = 0);
+    int UnknownStatusTransactionCount = 0)
+{
+    public NayaxProcessingFeeResult NayaxProcessingFees { get; init; } = new(0m, 0m, 0m, 0m, 0m, 0m, 0, null, null);
+}
 
 public record DailyReportDto(
     DateTime From,
@@ -237,7 +266,11 @@ public record MachineProfitabilityRowDto(
     decimal NetMarginPercent = 0m,
     decimal CommissionPercent = 0m,
     decimal CardSales = 0m,
-    decimal CashSales = 0m);
+    decimal CashSales = 0m)
+{
+    public decimal DirectOperatingExpenses { get; init; }
+    public NayaxProcessingFeeResult NayaxProcessingFees { get; init; } = new(0m, 0m, 0m, 0m, 0m, 0m, 0, null, null);
+}
 
 public record MachineProfitabilityReportDto(
     DateTime From,
@@ -276,7 +309,10 @@ public record GstAccountingAidDto(
     decimal NetGst,
     ReportingDataQualityDto DataQuality,
     decimal GstFreeSales = 0m,
-    decimal InventoryPurchaseGst = 0m);
+    decimal InventoryPurchaseGst = 0m)
+{
+    public decimal OperatingExpenseGst { get; init; }
+}
 
 public record DashboardReportDto(
     DateTime From,
@@ -303,6 +339,8 @@ public record DashboardReportDto(
     int CardTransactionCount = 0,
     int CashTransactionCount = 0)
 {
+    public decimal StructuredOperatingExpenses { get; init; }
+    public decimal OperatingExpenseGst { get; init; }
     public decimal TotalSales { get; init; } = Sales;
     public decimal CostOfGoodsSold { get; init; } = 0m;
     public decimal AverageSale { get; init; } = Transactions == 0 ? 0m : Sales / Transactions;
@@ -315,4 +353,5 @@ public record DashboardReportDto(
     public string ReconciliationStatus { get; init; } = "Pending";
     public decimal ReconciliationTolerance { get; init; } = 0.01m;
     public bool AdjustmentsSupported { get; init; }
+    public NayaxProcessingFeeResult NayaxProcessingFees { get; init; } = new(0m, 0m, 0m, 0m, 0m, 0m, 0, null, null);
 }

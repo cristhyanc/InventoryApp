@@ -20,6 +20,8 @@ public class AppDbContext : DbContext
     public DbSet<ImportedFee> ImportedFees => Set<ImportedFee>();
     public DbSet<ImportedPaymentMethod> ImportedPaymentMethods => Set<ImportedPaymentMethod>();
     public DbSet<ReceiptItem> ReceiptItems => Set<ReceiptItem>();
+    public DbSet<OperatingExpense> OperatingExpenses => Set<OperatingExpense>();
+    public DbSet<NayaxProcessingFeeRate> NayaxProcessingFeeRates => Set<NayaxProcessingFeeRate>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -102,6 +104,9 @@ public class AppDbContext : DbContext
             .OnDelete(DeleteBehavior.SetNull);
         modelBuilder.Entity<ReceiptItem>().Property(i => i.Quantity).HasColumnType("decimal(18,4)");
         modelBuilder.Entity<ReceiptItem>().Property(i => i.UnitCost).HasColumnType("decimal(18,4)");
+        modelBuilder.Entity<OperatingExpense>().Property(e => e.AmountExGst).HasColumnType("decimal(18,2)");
+        modelBuilder.Entity<OperatingExpense>().Property(e => e.GstAmount).HasColumnType("decimal(18,2)");
+        modelBuilder.Entity<OperatingExpense>().Property(e => e.TotalAmount).HasColumnType("decimal(18,2)");
         modelBuilder.Entity<StockAdjustment>().Property(a => a.UnitCost).HasColumnType("decimal(18,6)");
         modelBuilder.Entity<StockAdjustment>().Property(a => a.TotalCost).HasColumnType("decimal(18,6)");
 
@@ -150,5 +155,21 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<ImportedFee>().Property(f => f.AverageFeeAmount).HasColumnType("decimal(18,4)");
         modelBuilder.Entity<ImportedFee>().Property(f => f.TotalCount).HasColumnType("decimal(18,4)");
         modelBuilder.Entity<ImportedPaymentMethod>().Property(p => p.TotalSalesSum).HasColumnType("decimal(18,4)");
+        modelBuilder.Entity<OperatingExpense>()
+            .HasOne(e => e.Supplier)
+            .WithMany()
+            .HasForeignKey(e => e.SupplierId)
+            .OnDelete(DeleteBehavior.SetNull);
+        modelBuilder.Entity<OperatingExpense>()
+            .HasOne(e => e.Receipt)
+            .WithMany()
+            .HasForeignKey(e => e.ReceiptId)
+            .OnDelete(DeleteBehavior.SetNull);
+        modelBuilder.Entity<OperatingExpense>().HasIndex(e => e.ExpenseDate);
+        modelBuilder.Entity<OperatingExpense>().HasIndex(e => e.Category);
+        modelBuilder.Entity<OperatingExpense>().HasIndex(e => e.SupplierId);
+        modelBuilder.Entity<OperatingExpense>().HasIndex(e => e.MachineId);
+        modelBuilder.Entity<NayaxProcessingFeeRate>().Property(r => r.FeeExGst).HasColumnType("decimal(18,4)");
+        modelBuilder.Entity<NayaxProcessingFeeRate>().HasIndex(r => r.EffectiveFrom).IsUnique();
     }
 }

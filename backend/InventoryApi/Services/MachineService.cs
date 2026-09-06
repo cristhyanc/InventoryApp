@@ -15,12 +15,14 @@ public class MachineService : IMachineService
     private readonly AppDbContext _db;
     private readonly INayaxLynxClient _nayaxLynxClient;
     private readonly ISaleCostingService _saleCosting;
+    private readonly INayaxProcessingFeeService _nayaxProcessingFees;
 
-    public MachineService(AppDbContext db, INayaxLynxClient nayaxLynxClient, ISaleCostingService? saleCosting = null)
+    public MachineService(AppDbContext db, INayaxLynxClient nayaxLynxClient, ISaleCostingService? saleCosting = null, INayaxProcessingFeeService? nayaxProcessingFees = null)
     {
         _db = db;
         _nayaxLynxClient = nayaxLynxClient;
         _saleCosting = saleCosting ?? new SaleCostingService(db);
+        _nayaxProcessingFees = nayaxProcessingFees ?? new NayaxProcessingFeeService(db);
     }
 
     public async Task<Machine?> GetById(long id)
@@ -36,8 +38,10 @@ public class MachineService : IMachineService
         var nayaxMachines = await _nayaxLynxClient.GetMachinesAsync();
         await SaveMachinesLastSalesAsync(nayaxMachines.Select(x => x.MachineID).ToList());
         var products = await _db.Products.ToListAsync();
-        var machines = await Task.WhenAll(nayaxMachines.Select(x => GetMachineSalesAsync(x, products)));
-        return machines.ToList();
+        var machines = new List<Machine>();
+        foreach (var machine in nayaxMachines)
+            machines.Add(await GetMachineSalesAsync(machine, products));
+        return machines;
     }
 
     public async Task<List<Product>> GetMachineProducts(long id)
@@ -298,12 +302,12 @@ public class MachineService : IMachineService
         var monthToDateSales = lastSales.Where(s => s.MachineAuthorizationTime >= monthToDate.Start && s.MachineAuthorizationTime <= monthToDate.End && NayaxTransactionStatusClassifier.IsCompletedSale(s)).ToList();
         var twoWeeksAgoSales = lastSales.Where(s => s.MachineAuthorizationTime >= twoWeeksAgo.Start && s.MachineAuthorizationTime <= twoWeeksAgo.End && NayaxTransactionStatusClassifier.IsCompletedSale(s)).ToList();
 
-        results.CurrentWeekNetRevenue = CalculateRevenue(currentWeekSales, machineProducts, products);
-        results.PreviousComparableWeekNetRevenue = CalculateRevenue(previousComparableWeekSales, machineProducts, products);
-        results.LastWeekNetRevenue = CalculateRevenue(lastWeekSales, machineProducts, products);
-        results.TodayNetRevenue = CalculateRevenue(todaySales, machineProducts, products);
-        results.MonthToDateNetRevenue = CalculateRevenue(monthToDateSales, machineProducts, products);
-        results.TwoWeeksAgoNetRevenue = CalculateRevenue(twoWeeksAgoSales, machineProducts, products);
+        results.CurrentWeekNetRevenue = await CalculateRevenueAsync(currentWeekSales, machineProducts, products, currentWeek.Start, currentWeek.End, machine.MachineID);
+        results.PreviousComparableWeekNetRevenue = await CalculateRevenueAsync(previousComparableWeekSales, machineProducts, products, previousComparableWeek.Start, previousComparableWeek.End, machine.MachineID);
+        results.LastWeekNetRevenue = await CalculateRevenueAsync(lastWeekSales, machineProducts, products, lastWeek.Start, lastWeek.End, machine.MachineID);
+        results.TodayNetRevenue = await CalculateRevenueAsync(todaySales, machineProducts, products, today, now, machine.MachineID);
+        results.MonthToDateNetRevenue = await CalculateRevenueAsync(monthToDateSales, machineProducts, products, monthToDate.Start, monthToDate.End, machine.MachineID);
+        results.TwoWeeksAgoNetRevenue = await CalculateRevenueAsync(twoWeeksAgoSales, machineProducts, products, twoWeeksAgo.Start, twoWeeksAgo.End, machine.MachineID);
 
         results.TodayGrossRevenue = todaySales.Sum(s => s.SettlementValue);
         results.CurrentWeekGrossRevenue = currentWeekSales.Sum(s => s.SettlementValue);
@@ -352,7 +356,7 @@ public class MachineService : IMachineService
         await _db.SaveChangesAsync();
     }
 
-    private static decimal CalculateRevenue(List<NayaxSales> sales, List<NayaxMachineProduct> machineProducts, List<Product> products)
+    private async Task<decimal> CalculateRevenueAsync(List<NayaxSales> sales, List<NayaxMachineProduct> machineProducts, List<Product> products, DateTime from, DateTime to, long machineId)
     {
         decimal totalRevenue = 0;
         decimal machineCommission = machineProducts
@@ -376,11 +380,11 @@ public class MachineService : IMachineService
             {
                 decimal productCost = sale.CostOfGoodsSold ?? 0m;
                 decimal commission = machineCommission != 0 ? sale.SettlementValue * machineCommission / 100 : 0;
-                decimal paymentFee = (decimal)(sale.PaymentMethod == "Cash" ? 0 : 0.18);
-                totalRevenue += sale.SettlementValue - (productCost * (sale.Quantity == 0 ? 1 : sale.Quantity)) - commission - paymentFee;
+                totalRevenue += sale.SettlementValue - (productCost * (sale.Quantity == 0 ? 1 : sale.Quantity)) - commission;
             }
         }
-        return totalRevenue;
+        var fees = await _nayaxProcessingFees.GetProcessingFeesAsync(from, to, machineId);
+        return totalRevenue - fees.TotalFeeIncGst;
     }
 
     public static (DateTime Start, DateTime End) GetWeekRange(DateTime referenceDate, int weeksOffset = 0)

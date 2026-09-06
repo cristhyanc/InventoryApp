@@ -26,12 +26,21 @@ export interface DashboardReport {
   nayaxFeesExGst?: number; netReimbursement?: number; siteCommission?: number;
   netProfit?: number; netMarginPercent?: number;
   deliveryCosts?: number; packageCosts?: number; otherOperatingExpenses?: number;
+  structuredOperatingExpenses?: number; operatingExpenseGst?: number; operatingExpensesByCategory?: Record<string, number>;
   cardSales?: number; cashSales?: number; cardTransactionCount?: number; cashTransactionCount?: number;
   totalSales?: number; costOfGoodsSold?: number; averageSale?: number; grossMarginPercent?: number;
   nayaxFeesIncludingGst?: number;
   expectedReimbursement?: number; actualReimbursement?: number; reimbursementDifference?: number;
   isReconciled?: boolean; reconciliationStatus?: string; reconciliationTolerance?: number;
   adjustmentsSupported?: boolean;
+  nayaxProcessingFees?: NayaxProcessingFeeResult;
+}
+export interface NayaxProcessingFeeResult {
+  actualFeeExGst: number; actualFeeGst: number; actualFeeIncGst: number;
+  estimatedFeeExGst: number; estimatedFeeGst: number; estimatedFeeIncGst: number;
+  totalFeeExGst: number; totalFeeGst: number; totalFeeIncGst: number;
+  estimatedCardTransactionCount: number; hasEstimatedFees: boolean; isFullyActual: boolean;
+  actualFeeCoverageEndDate?: string; estimatedFeeFromDate?: string;
 }
 export interface BookkeepingReport {
   from: string; to: string; financialYear: string; sales: number; costOfGoods: number;
@@ -42,6 +51,8 @@ export interface BookkeepingReport {
   deliveryCosts?: number; packageCosts?: number; otherOperatingExpenses?: number;
   cardSales?: number; cashSales?: number; cardTransactionCount?: number; cashTransactionCount?: number;
   nayaxProcessingRate?: number;
+  nayaxProcessingFees?: NayaxProcessingFeeResult;
+  structuredOperatingExpenses?: number; operatingExpenseGst?: number; operatingExpensesByCategory?: Record<string, number>;
 }
 export interface DailyRow {
   date: string; sales: number; grossSales?: number; cardSales?: number; cashSales?: number;
@@ -54,6 +65,7 @@ export interface DailyRow {
   completedTransactionCount?: number; pendingTransactionCount?: number;
   declinedOrCancelledTransactionCount?: number; refundedTransactionCount?: number;
   unknownStatusTransactionCount?: number;
+  nayaxFeeSource?: string;
 }
 export interface DailyTotals {
   grossSales: number; cardSales: number; cashSales: number; quantity: number;
@@ -61,6 +73,7 @@ export interface DailyTotals {
   isCogsComplete: boolean; uncostedTransactionCount: number; uncostedSalesAmount: number;
   grossMarginPercent: number; nayaxFeesExGst: number; nayaxFeesIncludingGst: number;
   importedReimbursement: number; netReimbursement: number;
+  nayaxProcessingFees?: NayaxProcessingFeeResult;
 }
 export interface DailyReport { from: string; to: string; rows: DailyRow[]; dataQuality: ReportQuality; totals?: DailyTotals; }
 export interface ReconciliationPeriod {
@@ -104,6 +117,8 @@ export interface MachineRow {
   grossProfit: number; marginPercent: number; transactionCount: number;
   siteCommission?: number; netProfit?: number; netMarginPercent?: number; commissionPercent?: number;
   cardSales?: number; cashSales?: number;
+  directOperatingExpenses?: number;
+  nayaxProcessingFees?: NayaxProcessingFeeResult;
 }
 export interface MachineReport { from: string; to: string; rows: MachineRow[]; dataQuality: ReportQuality; }
 export interface ProductRow {
@@ -116,6 +131,7 @@ export interface ProductReport { from: string; to: string; rows: ProductRow[]; d
 export interface GstReport {
   from: string; to: string; taxableSales: number; gstOnSales: number; taxableFees: number;
   gstOnFees: number; netGst: number; dataQuality: ReportQuality;
+  operatingExpenseGst?: number;
 }
 export interface SaleCostingBackfillResult {
   costedCount: number;

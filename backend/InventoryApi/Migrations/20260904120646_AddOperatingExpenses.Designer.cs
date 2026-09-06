@@ -3,6 +3,7 @@ using System;
 using InventoryApi.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace InventoryApi.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260904120646_AddOperatingExpenses")]
+    partial class AddOperatingExpenses
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -338,29 +341,6 @@ namespace InventoryApi.Migrations
                     b.ToTable("ImportedReimbursementDevices");
                 });
 
-            modelBuilder.Entity("InventoryApi.Models.NayaxProcessingFeeRate", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTime>("EffectiveFrom")
-                        .HasColumnType("TEXT");
-
-                    b.Property<decimal>("FeeExGst")
-                        .HasColumnType("decimal(18,4)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("EffectiveFrom")
-                        .IsUnique();
-
-                    b.ToTable("NayaxProcessingFeeRates");
-                });
-
             modelBuilder.Entity("InventoryApi.Models.NayaxSales", b =>
                 {
                     b.Property<long>("TransactionID")
@@ -406,73 +386,6 @@ namespace InventoryApi.Migrations
                     b.HasKey("TransactionID");
 
                     b.ToTable("NayaxSales", (string)null);
-                });
-
-            modelBuilder.Entity("InventoryApi.Models.OperatingExpense", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER");
-
-                    b.Property<decimal>("AmountExGst")
-                        .HasColumnType("decimal(18,2)");
-
-                    b.Property<int>("Category")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("Description")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTime>("ExpenseDate")
-                        .HasColumnType("TEXT");
-
-                    b.Property<decimal>("GstAmount")
-                        .HasColumnType("decimal(18,2)");
-
-                    b.Property<long?>("MachineId")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<string>("Notes")
-                        .HasColumnType("TEXT");
-
-                    b.Property<int?>("ReceiptId")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<DateTime?>("ServicePeriodEnd")
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTime?>("ServicePeriodStart")
-                        .HasColumnType("TEXT");
-
-                    b.Property<long?>("SiteId")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<int?>("SupplierId")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<decimal>("TotalAmount")
-                        .HasColumnType("decimal(18,2)");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("TEXT");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("Category");
-
-                    b.HasIndex("ExpenseDate");
-
-                    b.HasIndex("MachineId");
-
-                    b.HasIndex("ReceiptId");
-
-                    b.HasIndex("SupplierId");
-
-                    b.ToTable("OperatingExpenses");
                 });
 
             modelBuilder.Entity("InventoryApi.Models.Product", b =>
@@ -748,23 +661,6 @@ namespace InventoryApi.Migrations
                         .IsRequired();
 
                     b.Navigation("ImportedReimbursement");
-                });
-
-            modelBuilder.Entity("InventoryApi.Models.OperatingExpense", b =>
-                {
-                    b.HasOne("InventoryApi.Models.Receipt", "Receipt")
-                        .WithMany()
-                        .HasForeignKey("ReceiptId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.HasOne("InventoryApi.Models.Supplier", "Supplier")
-                        .WithMany()
-                        .HasForeignKey("SupplierId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.Navigation("Receipt");
-
-                    b.Navigation("Supplier");
                 });
 
             modelBuilder.Entity("InventoryApi.Models.Product", b =>

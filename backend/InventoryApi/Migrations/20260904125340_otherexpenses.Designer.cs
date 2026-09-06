@@ -3,6 +3,7 @@ using System;
 using InventoryApi.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace InventoryApi.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260904125340_otherexpenses")]
+    partial class otherexpenses
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -336,29 +339,6 @@ namespace InventoryApi.Migrations
                     b.HasIndex("ImportedReimbursementId");
 
                     b.ToTable("ImportedReimbursementDevices");
-                });
-
-            modelBuilder.Entity("InventoryApi.Models.NayaxProcessingFeeRate", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTime>("EffectiveFrom")
-                        .HasColumnType("TEXT");
-
-                    b.Property<decimal>("FeeExGst")
-                        .HasColumnType("decimal(18,4)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("EffectiveFrom")
-                        .IsUnique();
-
-                    b.ToTable("NayaxProcessingFeeRates");
                 });
 
             modelBuilder.Entity("InventoryApi.Models.NayaxSales", b =>

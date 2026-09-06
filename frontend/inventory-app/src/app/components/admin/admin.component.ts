@@ -1,15 +1,17 @@
 import { Component } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { FormsModule } from '@angular/forms';
 import { MachineService } from '../../services/machine.service';
 import { ProductService } from '../../services/product.service';
 import { ReceiptService } from '../../services/receipt.service';
 import { ReportingService, SaleCostingBackfillResult } from '../../services/reporting.service';
 import { ToastService } from '../../services/toast.service';
+import { NayaxProcessingFeeRate, NayaxSettingsService } from '../../services/nayax-settings.service';
 
 @Component({
   selector: 'app-admin',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, FormsModule],
   template: `
     <div class="mb-6">
       <h1 class="text-2xl font-semibold text-slate-800">Admin</h1>
@@ -18,6 +20,21 @@ import { ToastService } from '../../services/toast.service';
 
     @if (error) { <div class="mb-5 rounded-lg bg-red-50 p-4 text-sm text-red-700">{{ error }}</div> }
     <div class="grid gap-5 md:grid-cols-2">
+      <section class="rounded-xl bg-white p-6 shadow-sm">
+        <h2 class="text-lg font-semibold text-slate-800">Nayax Settings</h2>
+        <p class="mt-1 text-sm text-slate-500">Used for current-period reporting when actual Nayax processing fee data has not yet been imported. Imported reimbursement data always takes precedence.</p>
+        <div class="mt-4 grid gap-3 sm:grid-cols-3">
+          <label class="text-sm text-slate-700 sm:col-span-2">Estimated Processing Fee per Card Transaction (ex GST)
+            <input type="number" min="0" step="0.0001" required class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2" [(ngModel)]="feeExGst" />
+          </label>
+          <label class="text-sm text-slate-700">Effective from
+            <input type="date" required class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2" [(ngModel)]="effectiveFrom" />
+          </label>
+        </div>
+        <button type="button" class="mt-3 rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50" [disabled]="loading" (click)="saveFeeRate()">Save rate</button>
+        @if (feeRates.length) { <div class="mt-3 text-xs text-slate-500">Rate history: @for (rate of feeRates; track rate.effectiveFrom) { <span class="mr-3">{{ rate.effectiveFrom | date:'dd/MM/yyyy' }}: {{ rate.feeExGst | currency:'AUD' }}</span> }</div> }
+      </section>
+
       <section class="rounded-xl bg-white p-6 shadow-sm">
         <h2 class="text-lg font-semibold text-slate-800">Import Nayax sales</h2>
         <p class="mt-1 text-sm text-slate-500">Import .xlsx, .xls, or .csv sales data.</p>
@@ -63,14 +80,40 @@ export class AdminComponent {
   loading = false;
   error = '';
   backfillResult: SaleCostingBackfillResult | null = null;
+  feeRates: NayaxProcessingFeeRate[] = [];
+  feeExGst = 0.17;
+  effectiveFrom = new Date().toISOString().slice(0, 10);
 
   constructor(
     private machineService: MachineService,
     private productService: ProductService,
     private receiptService: ReceiptService,
     private reportingService: ReportingService,
-    private toast: ToastService
-  ) {}
+    private toast: ToastService,
+    private nayaxSettings: NayaxSettingsService
+  ) { this.loadFeeRates(); }
+
+  loadFeeRates(): void {
+    this.nayaxSettings.getRates().subscribe({
+      next: rates => {
+        this.feeRates = rates;
+        if (rates[0]) this.feeExGst = rates[0].feeExGst;
+      },
+      error: () => this.toast.error('Failed to load Nayax settings.')
+    });
+  }
+
+  saveFeeRate(): void {
+    if (this.feeExGst === null || this.feeExGst < 0 || !this.effectiveFrom) {
+      this.toast.error('Enter a non-negative fee and effective date.');
+      return;
+    }
+    this.loading = true;
+    this.nayaxSettings.saveRate({ effectiveFrom: this.effectiveFrom, feeExGst: this.feeExGst }).subscribe({
+      next: () => { this.loading = false; this.toast.success('Nayax processing-fee rate saved.'); this.loadFeeRates(); },
+      error: err => { this.loading = false; this.toast.error(err?.error ?? 'Failed to save Nayax settings.'); }
+    });
+  }
 
   onSalesSelected(event: Event): void {
     const input = event.target as HTMLInputElement;
