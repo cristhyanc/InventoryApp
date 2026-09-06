@@ -22,14 +22,10 @@ public sealed class SaleCostingService : ISaleCostingService
             return;
         }
 
-        Product? product = null;
-        if (sale.NayaxProductId.HasValue)
-            product = await _db.Products.FindAsync(new object[] { sale.NayaxProductId.Value }, cancellationToken);
-        if (product is null && !string.IsNullOrWhiteSpace(sale.ProductName))
-        {
-            var name = sale.ProductName.Split('(').First().Trim();
-            product = await _db.Products.FirstOrDefaultAsync(p => p.Name == name, cancellationToken);
-        }
+        var product = NayaxProductMatcher.Match(
+            await _db.Products.ToListAsync(cancellationToken),
+            sale.NayaxProductId,
+            sale.ProductName);
 
         if (product is null)
         {
@@ -43,13 +39,13 @@ public sealed class SaleCostingService : ISaleCostingService
         if (cost.HasValue)
         {
             sale.UnitCostAtSale = cost.Value;
-            sale.CostOfGoodsSold = cost.Value * sale.Quantity;
+            sale.CostOfGoodsSold = cost.Value;
             sale.CostingStatus = SaleCostingStatus.Costed;
         }
         else if (allowLegacyEstimate && product.AverageUnitCost > 0)
         {
             sale.UnitCostAtSale = product.AverageUnitCost;
-            sale.CostOfGoodsSold = product.AverageUnitCost * sale.Quantity;
+            sale.CostOfGoodsSold = product.AverageUnitCost;
             sale.CostingStatus = SaleCostingStatus.LegacyEstimated;
         }
         else
@@ -64,7 +60,7 @@ public sealed class SaleCostingService : ISaleCostingService
     {
         var sales = await _db.NayaxSales
             .Where(s => s.CostingStatus == SaleCostingStatus.Pending &&
-                        s.TransactionStatusId == 12 &&
+                        s.TransactionStatusId == NayaxTransactionStatusIds.Completed &&
                         (!productId.HasValue || s.NayaxProductId == productId.Value))
             .OrderBy(s => s.MachineAuthorizationTime)
             .ToListAsync(cancellationToken);
@@ -80,7 +76,7 @@ public sealed class SaleCostingService : ISaleCostingService
     public async Task<SaleCostingBackfillResult> BackfillAsync(bool dryRun = true, bool force = false, CancellationToken cancellationToken = default)
     {
         var sales = await _db.NayaxSales
-            .Where(s => s.TransactionStatusId == 12)
+            .Where(s => s.TransactionStatusId == NayaxTransactionStatusIds.Completed)
             .OrderBy(s => s.MachineAuthorizationTime)
             .ToListAsync(cancellationToken);
         var costed = 0;

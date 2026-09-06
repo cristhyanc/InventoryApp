@@ -27,14 +27,14 @@ public class ReportingServiceTests
         db.NayaxSales.Add(new NayaxSales
         {
             TransactionID = 1, MachineID = 10, NayaxProductId = 1,
-            SettlementValue = 10m, Quantity = 2, MachineAuthorizationTime = new DateTime(2025, 8, 1)
-            , TransactionStatusId = 12, UnitCostAtSale = 3m, CostOfGoodsSold = 6m,
+            SettlementValue = 10m, MachineAuthorizationTime = new DateTime(2025, 8, 1)
+            , TransactionStatusId = NayaxTransactionStatusIds.Completed, UnitCostAtSale = 3m, CostOfGoodsSold = 6m,
             CostingStatus = SaleCostingStatus.Costed
         });
         db.NayaxSales.Add(new NayaxSales
         {
             TransactionID = 2, MachineID = 10, NayaxProductId = 99,
-            SettlementValue = 0m, Quantity = 1, ProductName = "Unknown",
+            SettlementValue = 0m, ProductName = "Unknown",
             MachineAuthorizationTime = new DateTime(2025, 8, 1)
         });
         await db.SaveChangesAsync();
@@ -52,15 +52,36 @@ public class ReportingServiceTests
     }
 
     [Fact]
+    public async Task Product_profitability_maps_unmapped_nayax_product_by_name_before_parenthesis()
+    {
+        using var db = CreateDbContext();
+        db.Products.Add(new Product { Id = 29, Name = "Maltese King Share 60g", UnitPrice = 4.80m });
+        db.NayaxSales.Add(new NayaxSales
+        {
+            TransactionID = 29, MachineID = 10, NayaxProductId = 999, ProductName = "Maltese King Share 60g(29, 29 = 4.80)",
+            SettlementValue = 4.80m, TransactionStatusId = NayaxTransactionStatusIds.Completed, CostOfGoodsSold = 2m,
+            CostingStatus = SaleCostingStatus.Costed, MachineAuthorizationTime = new DateTime(2026, 9, 1)
+        });
+        await db.SaveChangesAsync();
+
+        var report = await new ReportingService(db).GetProductProfitabilityAsync(
+            new ReportingFilterDto(new DateTime(2026, 9, 1), new DateTime(2026, 9, 1)));
+
+        var row = Assert.Single(report.Rows);
+        Assert.Equal("Maltese King Share 60g", row.ProductName);
+        Assert.False(row.IsUnmapped);
+    }
+
+    [Fact]
     public async Task Non_completed_statuses_and_missing_status_are_excluded_from_gross_sales()
     {
         using var db = CreateDbContext();
         db.NayaxSales.AddRange(
-            new NayaxSales { TransactionID = 1, MachineID = 10, SettlementValue = 12m, Quantity = 1, TransactionStatusId = 12, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
-            new NayaxSales { TransactionID = 2, MachineID = 10, SettlementValue = 5m, Quantity = 1, TransactionStatusId = 55, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
-            new NayaxSales { TransactionID = 3, MachineID = 10, SettlementValue = 4m, Quantity = 1, TransactionStatusId = 62, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
-            new NayaxSales { TransactionID = 4, MachineID = 10, SettlementValue = 3m, Quantity = 1, TransactionStatusId = 21, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
-            new NayaxSales { TransactionID = 5, MachineID = 10, SettlementValue = 7m, Quantity = 1, TransactionStatusId = null, MachineAuthorizationTime = new DateTime(2025, 8, 1) });
+            new NayaxSales { TransactionID = 1, MachineID = 10, SettlementValue = 12m, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
+            new NayaxSales { TransactionID = 2, MachineID = 10, SettlementValue = 5m, TransactionStatusId = NayaxTransactionStatusIds.PendingSettlementNotFinal, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
+            new NayaxSales { TransactionID = 3, MachineID = 10, SettlementValue = 4m, TransactionStatusId = NayaxTransactionStatusIds.Refunded, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
+            new NayaxSales { TransactionID = 4, MachineID = 10, SettlementValue = 3m, TransactionStatusId = 21, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
+            new NayaxSales { TransactionID = 5, MachineID = 10, SettlementValue = 7m, TransactionStatusId = null, MachineAuthorizationTime = new DateTime(2025, 8, 1) });
         await db.SaveChangesAsync();
 
         var report = await new ReportingService(db).GetDailyAsync(
@@ -79,9 +100,9 @@ public class ReportingServiceTests
     {
         using var db = CreateDbContext();
         db.NayaxSales.AddRange(
-            new NayaxSales { TransactionID = 1, MachineID = 10, SettlementValue = 5m, Quantity = 1, MachineAuthorizationTime = new DateTime(2025, 7, 1, 23, 59, 59) },
-            new NayaxSales { TransactionID = 2, MachineID = 11, SettlementValue = 8m, Quantity = 1, MachineAuthorizationTime = new DateTime(2025, 7, 1, 12, 0, 0) },
-            new NayaxSales { TransactionID = 3, MachineID = 10, SettlementValue = 9m, Quantity = 1, MachineAuthorizationTime = new DateTime(2025, 7, 2) });
+            new NayaxSales { TransactionID = 1, MachineID = 10, SettlementValue = 5m, MachineAuthorizationTime = new DateTime(2025, 7, 1, 23, 59, 59) },
+            new NayaxSales { TransactionID = 2, MachineID = 11, SettlementValue = 8m, MachineAuthorizationTime = new DateTime(2025, 7, 1, 12, 0, 0) },
+            new NayaxSales { TransactionID = 3, MachineID = 10, SettlementValue = 9m, MachineAuthorizationTime = new DateTime(2025, 7, 2) });
         await db.SaveChangesAsync();
 
         var report = await new ReportingService(db).GetDailyAsync(
@@ -101,14 +122,14 @@ public class ReportingServiceTests
             new NayaxSales
             {
                 TransactionID = 30, MachineID = 10, NayaxProductId = 1, SettlementValue = 10m,
-                Quantity = 1, PaymentMethod = "Credit Card", MachineAuthorizationTime = new DateTime(2025, 8, 1)
-                , TransactionStatusId = 12, UnitCostAtSale = 2m, CostOfGoodsSold = 2m,
+                PaymentMethod = "Credit Card", MachineAuthorizationTime = new DateTime(2025, 8, 1)
+                , TransactionStatusId = NayaxTransactionStatusIds.Completed, UnitCostAtSale = 2m, CostOfGoodsSold = 2m,
                 CostingStatus = SaleCostingStatus.Costed
             },
             new NayaxSales
             {
                 TransactionID = 31, MachineID = 10, NayaxProductId = 99, SettlementValue = 5m,
-                Quantity = 1, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1)
+                PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1)
             });
         db.ImportedReimbursements.Add(new ImportedReimbursement
         {
@@ -154,7 +175,7 @@ public class ReportingServiceTests
         db.NayaxSales.Add(new NayaxSales
         {
             TransactionID = 8, MachineID = 10, NayaxProductId = null,
-            SettlementValue = 110m, Quantity = 1, MachineAuthorizationTime = new DateTime(2025, 8, 1)
+            SettlementValue = 110m, MachineAuthorizationTime = new DateTime(2025, 8, 1)
         });
         db.ImportedReimbursements.Add(new ImportedReimbursement
         {
@@ -183,7 +204,7 @@ public class ReportingServiceTests
         using var db = CreateDbContext();
         db.NayaxSales.Add(new NayaxSales
         {
-            TransactionID = 20, MachineID = 10, SettlementValue = 100m, Quantity = 1,
+            TransactionID = 20, MachineID = 10, SettlementValue = 100m,
             MachineAuthorizationTime = new DateTime(2025, 8, 1)
         });
         db.Receipts.Add(new Receipt
@@ -208,7 +229,7 @@ public class ReportingServiceTests
         using var db = CreateDbContext();
         db.NayaxSales.Add(new NayaxSales
         {
-            TransactionID = 1, MachineID = 10, SettlementValue = 100m, Quantity = 1,
+            TransactionID = 1, MachineID = 10, SettlementValue = 100m,
             PaymentMethod = "Credit Card",
             MachineAuthorizationTime = new DateTime(2025, 8, 10)
         });
@@ -235,7 +256,7 @@ public class ReportingServiceTests
         using var db = CreateDbContext();
         db.NayaxSales.Add(new NayaxSales
         {
-            TransactionID = 2, MachineID = 10, SettlementValue = 50m, Quantity = 1,
+            TransactionID = 2, MachineID = 10, SettlementValue = 50m,
             MachineAuthorizationTime = new DateTime(2025, 8, 10)
         });
         db.ImportedReimbursements.Add(new ImportedReimbursement
@@ -261,13 +282,13 @@ public class ReportingServiceTests
         db.NayaxSales.AddRange(
             new NayaxSales
             {
-                TransactionID = 10, MachineID = 1216029552, SettlementValue = 90.30m, Quantity = 1,
+                TransactionID = 10, MachineID = 1216029552, SettlementValue = 90.30m,
                 PaymentMethod = "Credit Card",
                 MachineAuthorizationTime = new DateTime(2025, 8, 12)
             },
             new NayaxSales
             {
-                TransactionID = 11, MachineID = 1216029562, SettlementValue = 42.90m, Quantity = 1,
+                TransactionID = 11, MachineID = 1216029562, SettlementValue = 42.90m,
                 PaymentMethod = "Credit Card",
                 MachineAuthorizationTime = new DateTime(2025, 8, 12)
             });
@@ -312,12 +333,12 @@ public class ReportingServiceTests
         db.NayaxSales.AddRange(
             new NayaxSales
             {
-                TransactionID = 40, MachineID = 10, SettlementValue = 100m, Quantity = 1,
+                TransactionID = 40, MachineID = 10, SettlementValue = 100m,
                 PaymentMethod = "Credit Card", MachineAuthorizationTime = new DateTime(2025, 8, 12)
             },
             new NayaxSales
             {
-                TransactionID = 41, MachineID = 10, SettlementValue = 25m, Quantity = 1,
+                TransactionID = 41, MachineID = 10, SettlementValue = 25m,
                 PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 12)
             });
         db.ImportedReimbursements.Add(new ImportedReimbursement

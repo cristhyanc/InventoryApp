@@ -12,17 +12,27 @@ public enum NayaxTransactionStatus
     CancelledOrDeclined
 }
 
+public static class NayaxTransactionStatusIds
+{
+    public const int Completed = 12;
+    public const int CashlessCancelledProductNotDispensed = 28;
+    public const int PendingSettlementNotFinal = 55;
+    public const int Refunded = 62;
+    public const int PendingBatch = 80;
+}
+
 public static class NayaxTransactionStatusClassifier
 {
     public static Expression<Func<NayaxSales, bool>> CompletedSalePredicate =>
-        sale => sale.TransactionStatusId == 12;
+        sale => sale.TransactionStatusId == NayaxTransactionStatusIds.Completed;
 
     public static NayaxTransactionStatus Classify(int? transactionStatusId) =>
         transactionStatusId switch
         {
-            12 => NayaxTransactionStatus.Completed,
-            55 or 80 => NayaxTransactionStatus.Pending,
-            62 => NayaxTransactionStatus.Refunded,
+            NayaxTransactionStatusIds.Completed => NayaxTransactionStatus.Completed,
+            NayaxTransactionStatusIds.PendingSettlementNotFinal or NayaxTransactionStatusIds.PendingBatch => NayaxTransactionStatus.Pending,
+            NayaxTransactionStatusIds.Refunded => NayaxTransactionStatus.Refunded,
+            NayaxTransactionStatusIds.CashlessCancelledProductNotDispensed => NayaxTransactionStatus.CancelledOrDeclined,
             null => NayaxTransactionStatus.Unknown,
             _ => NayaxTransactionStatus.Unknown
         };
@@ -33,10 +43,11 @@ public static class NayaxTransactionStatusClassifier
     public static string Describe(int? transactionStatusId) =>
         transactionStatusId switch
         {
-            12 => "Approved / Completed",
-            55 => "Pending / Settlement not final",
-            62 => "Refunded",
-            80 => "Pending batch",
+            NayaxTransactionStatusIds.Completed => "Approved / Completed",
+            NayaxTransactionStatusIds.PendingSettlementNotFinal => "Pending / Settlement not final",
+            NayaxTransactionStatusIds.Refunded => "Refunded",
+            NayaxTransactionStatusIds.CashlessCancelledProductNotDispensed => "Cashless cancelled - Product could not be dispensed",
+            NayaxTransactionStatusIds.PendingBatch => "Pending batch",
             null => "Unknown",
             _ => $"Status {transactionStatusId}"
         };

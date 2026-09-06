@@ -1,5 +1,7 @@
 using System.Text.Json.Serialization;
 
+using InventoryApi.Services;
+
 namespace InventoryApi.Integrations.Nayax;
 
 public class NayaxDevice
@@ -96,7 +98,7 @@ public class NayaxLastSalesReport
 {
     public long TransactionID { get; set; }
     [JsonPropertyName("TransactionStatusID")]
-    public int? TransactionStatusId { get; set; } = 12;
+    public int? TransactionStatusId { get; set; } = NayaxTransactionStatusIds.Completed;
 
     public long MachineID { get; set; }
 
@@ -110,7 +112,6 @@ public class NayaxLastSalesReport
 
     public string? ProductName { get; set; }
 
-    public decimal Quantity { get; set; }
 
     public DateTime MachineAuthorizationTime { get; set; }
 }

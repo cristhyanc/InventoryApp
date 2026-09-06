@@ -112,7 +112,7 @@ public sealed class ReportingService : IReportingService
                 var hasImported = imported?.HasReimbursement ?? false;
                 var fee = feeByDate[g.Key];
                 return new DailyReportRowDto(
-                    g.Key, grossSales, g.Sum(x => x.Quantity), cost,
+                    g.Key, grossSales, g.Count(), cost,
                     ReportingCalculations.GrossProfit(grossSales, cost), g.Count(),
                     grossSales, cardSales, cashSales,
                     ReportingCalculations.Average(grossSales, g.Count()),
@@ -282,7 +282,7 @@ public sealed class ReportingService : IReportingService
                 CardSales = g.Where(x => PaymentMethodClassifier.Classify(x.PaymentMethod) == NayaxPaymentType.Card).Sum(x => x.SettlementValue),
                 CashSales = g.Where(x => PaymentMethodClassifier.Classify(x.PaymentMethod) == NayaxPaymentType.Cash).Sum(x => x.SettlementValue),
                 Sales = g.Sum(x => x.SettlementValue),
-                Quantity = g.Sum(x => x.Quantity),
+                Quantity = g.Count(),
                 Cost = g.Sum(x => x.Cost),
                 Transactions = g.Count()
             }).OrderByDescending(x => x.Sales).ToListAsync(cancellationToken);
@@ -325,7 +325,7 @@ public sealed class ReportingService : IReportingService
                 g.Key.NayaxProductId,
                 g.Key.ProductName,
                 Sales = g.Sum(x => x.SettlementValue),
-                Quantity = g.Sum(x => x.Quantity),
+                Quantity = g.Count(),
                 CostOfGoodsSold = g.Sum(x => x.CostOfGoodsSold ?? 0m),
                 HasCompleteCost = g.All(x => x.CostOfGoodsSold.HasValue && x.CostingStatus == SaleCostingStatus.Costed),
                 Transactions = g.Count(),
@@ -335,7 +335,7 @@ public sealed class ReportingService : IReportingService
 
         var result = rows.Select(x =>
         {
-            products.TryGetValue(x.NayaxProductId ?? 0, out var product);
+            var product = NayaxProductMatcher.Match(products.Values, x.NayaxProductId, x.ProductName);
             var cost = x.CostOfGoodsSold;
             var name = product?.Name ?? (string.IsNullOrWhiteSpace(x.ProductName) ? "Unmapped product" : x.ProductName);
             return new ProductProfitabilityRowDto(x.NayaxProductId, name, product?.Category?.Name,
@@ -370,7 +370,7 @@ public sealed class ReportingService : IReportingService
             .Select(g => new
             {
                 Sales = g.Sum(x => x.SettlementValue),
-                Quantity = g.Sum(x => x.Quantity),
+                Quantity = g.Count(),
                 Cost = g.Sum(x => x.Cost),
                 Transactions = g.Count(),
                 Machines = g.Select(x => x.MachineID).Distinct().Count(),
@@ -581,7 +581,7 @@ public sealed class ReportingService : IReportingService
         select new SaleCost
         {
             MachineID = sale.MachineID, MachineName = sale.MachineName, NayaxProductId = sale.NayaxProductId,
-            ProductName = sale.ProductName, PaymentMethod = sale.PaymentMethod, SettlementValue = sale.SettlementValue, Quantity = sale.Quantity,
+            ProductName = sale.ProductName, PaymentMethod = sale.PaymentMethod, SettlementValue = sale.SettlementValue,
             MachineAuthorizationTime = sale.MachineAuthorizationTime,
             Cost = sale.CostOfGoodsSold ?? 0m,
             CostOfGoodsSold = sale.CostOfGoodsSold,
@@ -1025,7 +1025,6 @@ public sealed class ReportingService : IReportingService
         public string? ProductName { get; set; }
         public string? PaymentMethod { get; set; }
         public decimal SettlementValue { get; set; }
-        public decimal Quantity { get; set; }
         public DateTime MachineAuthorizationTime { get; set; }
         public decimal Cost { get; set; }
         public bool HasCost { get; set; }

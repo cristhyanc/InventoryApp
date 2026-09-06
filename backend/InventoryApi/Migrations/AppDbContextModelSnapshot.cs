@@ -391,9 +391,6 @@ namespace InventoryApi.Migrations
                     b.Property<string>("ProductName")
                         .HasColumnType("TEXT");
 
-                    b.Property<decimal>("Quantity")
-                        .HasColumnType("decimal(18,2)");
-
                     b.Property<decimal>("SettlementValue")
                         .HasColumnType("decimal(18,2)");
 

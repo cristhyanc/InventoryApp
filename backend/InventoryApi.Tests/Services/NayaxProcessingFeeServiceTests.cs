@@ -81,6 +81,6 @@ public class NayaxProcessingFeeServiceTests
         new()
         {
             TransactionID = id, MachineID = machine, PaymentMethod = paymentMethod, TransactionStatusId = status,
-            SettlementValue = 1m, Quantity = 1m, MachineAuthorizationTime = new DateTime(2026, 9, day)
+            SettlementValue = 1m, MachineAuthorizationTime = new DateTime(2026, 9, day)
         };
 }

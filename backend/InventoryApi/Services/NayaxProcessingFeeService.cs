@@ -62,7 +62,7 @@ public sealed class NayaxProcessingFeeService : INayaxProcessingFeeService
 
         var eligibleSales = await _db.NayaxSales.AsNoTracking()
             .Where(s => s.MachineAuthorizationTime >= from && s.MachineAuthorizationTime < to.AddDays(1) &&
-                (!machineId.HasValue || s.MachineID == machineId.Value) && s.TransactionStatusId == 12)
+                (!machineId.HasValue || s.MachineID == machineId.Value) && s.TransactionStatusId == NayaxTransactionStatusIds.Completed)
             .Select(s => new { s.MachineAuthorizationTime, s.PaymentMethod })
             .ToListAsync(cancellationToken);
         var rates = await _db.NayaxProcessingFeeRates.AsNoTracking()

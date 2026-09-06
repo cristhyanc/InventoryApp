@@ -137,7 +137,6 @@ public class MachineService : IMachineService
                 SettlementValue = TryParseDecimal(GetCell(row, headers, "SettlementValue")) ?? 0m,
                 PaymentMethod = GetCellValue(row, headers, "PaymentMethod"),
                 ProductName = GetCellValue(row, headers, "ProductName"),
-                Quantity = TryParseDecimal(GetCell(row, headers, "Quantity")) ?? 0m,
                 MachineAuthorizationTime = TryParseDateTime(GetCell(row, headers, "MachineAuthorizationTime")) ?? DateTime.MinValue
             };
 
@@ -151,7 +150,7 @@ public class MachineService : IMachineService
             if (existing is null)
             {
                 _db.NayaxSales.Add(sale);
-                await _saleCosting.CostSaleAsync(sale, cancellationToken: ct);
+                await _saleCosting.CostSaleAsync(sale, allowLegacyEstimate: true, cancellationToken: ct);
                 imported++;
             }
             else
@@ -163,11 +162,8 @@ public class MachineService : IMachineService
                 existing.SettlementValue = sale.SettlementValue;
                 existing.PaymentMethod = sale.PaymentMethod;
                 existing.ProductName = sale.ProductName;
-                existing.Quantity = sale.Quantity;
                 existing.MachineAuthorizationTime = sale.MachineAuthorizationTime;
-                if (!NayaxTransactionStatusClassifier.IsCompletedSale(existing) ||
-                    existing.CostingStatus != SaleCostingStatus.Costed)
-                    await _saleCosting.CostSaleAsync(existing, cancellationToken: ct);
+                await _saleCosting.CostSaleAsync(existing, allowLegacyEstimate: true, cancellationToken: ct);
                 updated++;
             }
         }
@@ -333,22 +329,33 @@ public class MachineService : IMachineService
                     _db.NayaxSales.Add(new NayaxSales
                     {
                         TransactionID = sale.TransactionID,
-                        TransactionStatusId = sale.TransactionStatusId ?? 12,
+                        TransactionStatusId = sale.SettlementValue == 0
+                            ? NayaxTransactionStatusIds.CashlessCancelledProductNotDispensed
+                            : sale.TransactionStatusId ?? NayaxTransactionStatusIds.Completed,
                         MachineID = sale.MachineID,
                         NayaxProductId = sale.NayaxProductId,
                         MachineName = sale.MachineName,
                         SettlementValue = sale.SettlementValue,
                         PaymentMethod = sale.PaymentMethod,
                         ProductName = sale.ProductName,
-                        Quantity = sale.Quantity,
                         MachineAuthorizationTime = sale.MachineAuthorizationTime
                     });
                     var added = _db.NayaxSales.Local.Last();
-                    await _saleCosting.CostSaleAsync(added, cancellationToken: ct);
+                    await _saleCosting.CostSaleAsync(added, allowLegacyEstimate: true, cancellationToken: ct);
                 }
                 else
                 {
-                    existing.TransactionStatusId = sale.TransactionStatusId ?? 12;
+                    existing.TransactionStatusId = sale.SettlementValue == 0
+                            ? NayaxTransactionStatusIds.CashlessCancelledProductNotDispensed
+                            : sale.TransactionStatusId ?? NayaxTransactionStatusIds.Completed;
+                    existing.MachineID = sale.MachineID;
+                    existing.NayaxProductId = sale.NayaxProductId;
+                    existing.MachineName = sale.MachineName;
+                    existing.SettlementValue = sale.SettlementValue;
+                    existing.PaymentMethod = sale.PaymentMethod;
+                    existing.ProductName = sale.ProductName;
+                    existing.MachineAuthorizationTime = sale.MachineAuthorizationTime;
+                    await _saleCosting.CostSaleAsync(existing, allowLegacyEstimate: true, cancellationToken: ct);
                 }
             }
         }
@@ -365,22 +372,13 @@ public class MachineService : IMachineService
 
         foreach (var sale in sales)
         {
-            Product? product = null;
-            if (sale.NayaxProductId != null)
-            {
-                product = products.SingleOrDefault(p => p.Id == sale.NayaxProductId);
-            }
-            else
-            {
-                var salesName = sale.ProductName?.Split("(").First();
-                product = products.SingleOrDefault(p => p.Name == salesName);
-            }
+            var product = NayaxProductMatcher.Match(products, sale.NayaxProductId, sale.ProductName);
 
             if (product != null)
             {
                 decimal productCost = sale.CostOfGoodsSold ?? 0m;
                 decimal commission = machineCommission != 0 ? sale.SettlementValue * machineCommission / 100 : 0;
-                totalRevenue += sale.SettlementValue - (productCost * (sale.Quantity == 0 ? 1 : sale.Quantity)) - commission;
+                totalRevenue += sale.SettlementValue - productCost - commission;
             }
         }
         var fees = await _nayaxProcessingFees.GetProcessingFeesAsync(from, to, machineId);

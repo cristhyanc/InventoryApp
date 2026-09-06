@@ -17,10 +17,11 @@ namespace InventoryApi.Tests.Services;
 public class NayaxTransactionStatusTests
 {
     [Theory]
-    [InlineData(12, NayaxTransactionStatus.Completed)]
-    [InlineData(55, NayaxTransactionStatus.Pending)]
-    [InlineData(80, NayaxTransactionStatus.Pending)]
-    [InlineData(62, NayaxTransactionStatus.Refunded)]
+    [InlineData(NayaxTransactionStatusIds.Completed, NayaxTransactionStatus.Completed)]
+    [InlineData(NayaxTransactionStatusIds.PendingSettlementNotFinal, NayaxTransactionStatus.Pending)]
+    [InlineData(NayaxTransactionStatusIds.PendingBatch, NayaxTransactionStatus.Pending)]
+    [InlineData(NayaxTransactionStatusIds.Refunded, NayaxTransactionStatus.Refunded)]
+    [InlineData(NayaxTransactionStatusIds.CashlessCancelledProductNotDispensed, NayaxTransactionStatus.CancelledOrDeclined)]
     [InlineData(null, NayaxTransactionStatus.Unknown)]
     [InlineData(21, NayaxTransactionStatus.Unknown)]
     public void Classifier_maps_raw_status_ids(int? statusId, NayaxTransactionStatus expected)
@@ -37,8 +38,8 @@ public class NayaxTransactionStatusTests
         var client = new Mock<INayaxLynxClient>().Object;
         var service = new MachineService(db, client);
 
-        await service.ImportNayaxSalesFromExcelAsync(File("TransactionID,TransactionStatusId,MachineID,SettlementValue,Quantity,MachineAuthorizationTime\n1,55,10,5,1,2/9/2026 2:30:00 PM"));
-        await service.ImportNayaxSalesFromExcelAsync(File("TransactionID,TransactionStatusId,MachineID,SettlementValue,Quantity,MachineAuthorizationTime\n1,12,10,5,1,2/9/2026 2:30:00 PM"));
+        await service.ImportNayaxSalesFromExcelAsync(File("TransactionID,TransactionStatusId,MachineID,SettlementValue,MachineAuthorizationTime\n1,55,10,5,2/9/2026 2:30:00 PM"));
+        await service.ImportNayaxSalesFromExcelAsync(File("TransactionID,TransactionStatusId,MachineID,SettlementValue,MachineAuthorizationTime\n1,12,10,5,2/9/2026 2:30:00 PM"));
 
         var sale = Assert.Single(db.NayaxSales);
         Assert.Equal(12, sale.TransactionStatusId);
@@ -60,15 +61,15 @@ public class NayaxTransactionStatusTests
         await db.SaveChangesAsync();
         var sale = new NayaxSales
         {
-            TransactionID = 1, TransactionStatusId = 12, MachineID = 1, NayaxProductId = 10,
-            Quantity = 2, SettlementValue = 10m, MachineAuthorizationTime = new DateTime(2025, 8, 2)
+            TransactionID = 1, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineID = 1, NayaxProductId = 10,
+            SettlementValue = 10m, MachineAuthorizationTime = new DateTime(2025, 8, 2)
         };
         var service = new SaleCostingService(db);
 
         await service.CostSaleAsync(sale);
 
         Assert.Equal(2.10m, sale.UnitCostAtSale);
-        Assert.Equal(4.20m, sale.CostOfGoodsSold);
+        Assert.Equal(2.10m, sale.CostOfGoodsSold);
         Assert.Equal(SaleCostingStatus.Costed, sale.CostingStatus);
     }
 
@@ -81,8 +82,8 @@ public class NayaxTransactionStatusTests
         db.Products.Add(new Product { Id = 10, Name = "Snack", AverageUnitCost = 2m });
         db.NayaxSales.Add(new NayaxSales
         {
-            TransactionID = 1, TransactionStatusId = 12, MachineID = 1, NayaxProductId = 10,
-            Quantity = 1, MachineAuthorizationTime = new DateTime(2025, 8, 2)
+            TransactionID = 1, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineID = 1, NayaxProductId = 10,
+            MachineAuthorizationTime = new DateTime(2025, 8, 2)
         });
         await db.SaveChangesAsync();
 
@@ -107,8 +108,8 @@ public class NayaxTransactionStatusTests
         });
         var sale = new NayaxSales
         {
-            TransactionID = 1, TransactionStatusId = 12, MachineID = 1, NayaxProductId = 10,
-            Quantity = 1, MachineAuthorizationTime = new DateTime(2025, 8, 2)
+            TransactionID = 1, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineID = 1, NayaxProductId = 10,
+            MachineAuthorizationTime = new DateTime(2025, 8, 2)
         };
         db.NayaxSales.Add(sale);
         await db.SaveChangesAsync();
