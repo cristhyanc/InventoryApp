@@ -129,8 +129,9 @@ export interface ProductRow {
 }
 export interface ProductReport { from: string; to: string; rows: ProductRow[]; dataQuality: ReportQuality; }
 export interface SiteCommissionMachine { machineId: number; machineName: string; transactionCount: number; grossSales: number; cardSales: number; cashSales: number; eligibleSales: number; commissionDue: number; }
+export interface SiteCommissionProduct { productName: string; totalVends: number; totalSales: number; }
 export interface CommissionPayment { id: number; siteId: number; periodStart: string; periodEnd: string; paymentDate: string; amount: number; notes?: string; }
-export interface SiteCommissionRow { siteId: number; siteName: string; periodStart: string; periodEnd: string; frequency: string; basis: string; grossSales: number; cardSales: number; cashSales: number; eligibleSales: number; commissionRate: number; commissionDue: number; paid: number; outstanding: number; dueDate?: string; status: string; machines: SiteCommissionMachine[]; payments: CommissionPayment[]; dataQuality?: string; }
+export interface SiteCommissionRow { siteId: number; siteName: string; periodStart: string; periodEnd: string; frequency: string; basis: string; grossSales: number; cardSales: number; cashSales: number; eligibleSales: number; commissionRate: number; commissionDue: number; paid: number; outstanding: number; dueDate?: string; status: string; machines: SiteCommissionMachine[]; products: SiteCommissionProduct[]; payments: CommissionPayment[]; dataQuality?: string; }
 export interface SiteCommissionReport { from: string; to: string; rows: SiteCommissionRow[]; }
 export interface SiteCommissionAgreement { id?: number; siteId: number; effectiveFrom: string; effectiveTo?: string | null; commissionRate: number; frequency: number; basis: number; paymentDueDaysAfterPeriodEnd?: number | null; }
 export interface GstReport {

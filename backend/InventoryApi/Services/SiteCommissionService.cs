@@ -43,7 +43,8 @@ public sealed class SiteCommissionService : ISiteCommissionService
         foreach (var site in siteMachines)
         {
             var siteAgreements = agreements.Where(x => x.SiteId == site.Key).ToList();
-            var salesByMachine = sales.Where(x => site.Any(m => m.MachineID == x.MachineID)).GroupBy(x => x.MachineID);
+            var siteSales = sales.Where(x => site.Any(m => m.MachineID == x.MachineID)).ToList();
+            var salesByMachine = siteSales.GroupBy(x => x.MachineID);
             var machineRows = new List<SiteCommissionMachineDto>();
             var dataQuality = new List<string>();
             decimal gross = 0, card = 0, cash = 0, eligible = 0, due = 0;
@@ -82,12 +83,17 @@ public sealed class SiteCommissionService : ISiteCommissionService
             var paidRows = payments.Where(x => x.SiteId == site.Key).ToList();
             var paid = paidRows.Sum(x => x.Amount);
             var outstanding = due - paid;
+            var productRows = siteSales
+                .GroupBy(x => string.IsNullOrWhiteSpace(x.ProductName) ? "Unmapped product" : NayaxProductMatcher.NormalizeName(x.ProductName))
+                .Select(x => new SiteCommissionProductDto(x.Key, x.Count(), x.Sum(sale => sale.SettlementValue)))
+                .OrderByDescending(x => x.TotalSales)
+                .ToList();
             DateTime? dueDate = current?.PaymentDueDaysAfterPeriodEnd is int days ? to.AddDays(days) : null;
             var status = due == 0m ? "—" : paid >= due - Tolerance ? "Paid" : paid > Tolerance ? "Partially Paid" :
                 dueDate.HasValue && DateTime.Today > dueDate ? "Overdue" : "Due";
             rows.Add(new(site.Key, site.First().MachineName?.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? $"Site {site.Key}",
                 from, to, current?.Frequency ?? CommissionFrequency.None, current?.Basis ?? CommissionBasis.GrossSales, gross, card, cash, eligible,
-                current?.CommissionRate ?? 0m, due, paid, outstanding, dueDate, status, machineRows, paidRows,
+                current?.CommissionRate ?? 0m, due, paid, outstanding, dueDate, status, machineRows, productRows, paidRows,
                 dataQuality.Distinct().Any() ? string.Join(" ", dataQuality.Distinct()) : null));
         }
         return new(from, to, rows.OrderBy(x => x.SiteName).ToList());
