@@ -22,6 +22,8 @@ public class AppDbContext : DbContext
     public DbSet<ReceiptItem> ReceiptItems => Set<ReceiptItem>();
     public DbSet<OperatingExpense> OperatingExpenses => Set<OperatingExpense>();
     public DbSet<NayaxProcessingFeeRate> NayaxProcessingFeeRates => Set<NayaxProcessingFeeRate>();
+    public DbSet<SiteCommissionAgreement> SiteCommissionAgreements => Set<SiteCommissionAgreement>();
+    public DbSet<CommissionPayment> CommissionPayments => Set<CommissionPayment>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -168,5 +170,9 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<OperatingExpense>().HasIndex(e => e.MachineId);
         modelBuilder.Entity<NayaxProcessingFeeRate>().Property(r => r.FeeExGst).HasColumnType("decimal(18,4)");
         modelBuilder.Entity<NayaxProcessingFeeRate>().HasIndex(r => r.EffectiveFrom).IsUnique();
+        modelBuilder.Entity<SiteCommissionAgreement>().Property(x => x.CommissionRate).HasColumnType("decimal(18,4)");
+        modelBuilder.Entity<SiteCommissionAgreement>().HasIndex(x => new { x.SiteId, x.EffectiveFrom }).IsUnique();
+        modelBuilder.Entity<CommissionPayment>().Property(x => x.Amount).HasColumnType("decimal(18,2)");
+        modelBuilder.Entity<CommissionPayment>().HasIndex(x => new { x.SiteId, x.PeriodStart, x.PeriodEnd });
     }
 }

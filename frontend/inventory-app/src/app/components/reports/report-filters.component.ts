@@ -14,7 +14,7 @@ import { Machine } from '../../models/models';
         @for (option of options; track option[0]) {
           <button type="button" class="rounded-md px-3 py-1.5 text-sm transition" [class.bg-blue-600]="period === option[0]" [class.text-white]="period === option[0]" [class.bg-slate-100]="period !== option[0]" [class.text-slate-700]="period !== option[0]" (click)="periodChange.emit(option[0])">{{ option[1] }}</button>
         }
-        <label class="ml-auto text-sm text-slate-600">Machine
+        <label class="ml-auto mr-2 text-sm text-slate-600">Machine
           <select class="ml-2 rounded-md border border-slate-300 px-2 py-1.5" [(ngModel)]="machineId" (ngModelChange)="machineChange.emit($event)">
             <option [ngValue]="null">All machines</option>
             @for (machine of machines; track machine.machineID) { <option [ngValue]="machine.machineID">{{ machineLabel(machine) }}</option> }

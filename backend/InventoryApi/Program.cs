@@ -51,6 +51,7 @@ builder.Services.AddScoped<InventoryApi.Services.Interfaces.ISiteService, Invent
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IImportService, InventoryApi.Services.ImportService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IReportingService, InventoryApi.Services.ReportingService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.INayaxProcessingFeeService, InventoryApi.Services.NayaxProcessingFeeService>();
+builder.Services.AddScoped<InventoryApi.Services.Interfaces.ISiteCommissionService, InventoryApi.Services.SiteCommissionService>();
 
 var app = builder.Build();
 

@@ -128,6 +128,11 @@ export interface ProductRow {
   cardRevenue?: number; cashRevenue?: number;
 }
 export interface ProductReport { from: string; to: string; rows: ProductRow[]; dataQuality: ReportQuality; }
+export interface SiteCommissionMachine { machineId: number; machineName: string; transactionCount: number; grossSales: number; cardSales: number; cashSales: number; eligibleSales: number; commissionDue: number; }
+export interface CommissionPayment { id: number; siteId: number; periodStart: string; periodEnd: string; paymentDate: string; amount: number; notes?: string; }
+export interface SiteCommissionRow { siteId: number; siteName: string; periodStart: string; periodEnd: string; frequency: string; basis: string; grossSales: number; cardSales: number; cashSales: number; eligibleSales: number; commissionRate: number; commissionDue: number; paid: number; outstanding: number; dueDate?: string; status: string; machines: SiteCommissionMachine[]; payments: CommissionPayment[]; dataQuality?: string; }
+export interface SiteCommissionReport { from: string; to: string; rows: SiteCommissionRow[]; }
+export interface SiteCommissionAgreement { id?: number; siteId: number; effectiveFrom: string; effectiveTo?: string | null; commissionRate: number; frequency: number; basis: number; paymentDueDaysAfterPeriodEnd?: number | null; }
 export interface GstReport {
   from: string; to: string; taxableSales: number; gstOnSales: number; taxableFees: number;
   gstOnFees: number; netGst: number; dataQuality: ReportQuality;
@@ -153,6 +158,21 @@ export class ReportingService {
   reconciliation(filter: ReportingFilter): Observable<ReconciliationReport> { return this.http.get<ReconciliationReport>(`${this.baseUrl}/reconciliation`, { params: this.params(filter) }); }
   machines(filter: ReportingFilter): Observable<MachineReport> { return this.http.get<MachineReport>(`${this.baseUrl}/machine-profitability`, { params: this.params(filter) }); }
   products(filter: ReportingFilter): Observable<ProductReport> { return this.http.get<ProductReport>(`${this.baseUrl}/product-profitability`, { params: this.params(filter) }); }
+  siteCommissions(filter: ReportingFilter, siteId?: number | null): Observable<SiteCommissionReport> {
+    let params = this.params(filter);
+    if (siteId != null) params = params.set('siteId', siteId);
+    return this.http.get<SiteCommissionReport>(`${this.config.apiBaseUrl.replace(/\/$/, '')}/site-commissions`, { params });
+  }
+  recordCommissionPayment(siteId: number, periodStart: string, periodEnd: string, paymentDate: string, amount: number, notes?: string): Observable<CommissionPayment> {
+    return this.http.post<CommissionPayment>(`${this.config.apiBaseUrl.replace(/\/$/, '')}/site-commissions/${siteId}/payments`,
+      { paymentDate, amount, notes: notes || null }, { params: { periodStart, periodEnd } });
+  }
+  saveSiteCommissionAgreement(agreement: SiteCommissionAgreement): Observable<SiteCommissionAgreement> {
+    return this.http.post<SiteCommissionAgreement>(`${this.config.apiBaseUrl.replace(/\/$/, '')}/site-commissions/agreements`, agreement);
+  }
+  siteCommissionAgreements(): Observable<SiteCommissionAgreement[]> {
+    return this.http.get<SiteCommissionAgreement[]>(`${this.config.apiBaseUrl.replace(/\/$/, '')}/site-commissions/agreements`);
+  }
   gst(filter: ReportingFilter): Observable<GstReport> { return this.http.get<GstReport>(`${this.baseUrl}/gst`, { params: this.params(filter) }); }
 
   backfillSaleCosts(dryRun = true, force = false): Observable<SaleCostingBackfillResult> {

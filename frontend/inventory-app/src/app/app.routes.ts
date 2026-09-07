@@ -18,6 +18,7 @@ import { ProductReportComponent } from './components/reports/product-report.comp
 import { GstReportComponent } from './components/reports/gst-report.component';
 import { AdminComponent } from './components/admin/admin.component';
 import { OperatingExpenseComponent } from './components/expenses/operating-expense.component';
+import { SiteCommissionsReportComponent } from './components/reports/site-commissions-report.component';
 
 export const routes: Routes = [
   { path: '', component: DashboardComponent },
@@ -37,6 +38,7 @@ export const routes: Routes = [
   { path: 'reports/machines', component: MachineReportComponent },
   { path: 'reports/products', component: ProductReportComponent },
   { path: 'reports/gst', component: GstReportComponent },
+  { path: 'reports/site-commissions', component: SiteCommissionsReportComponent },
   { path: 'admin', component: AdminComponent },
   { path: 'expenses', component: OperatingExpenseComponent },
   { path: '**', redirectTo: '' }

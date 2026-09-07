@@ -15,12 +15,15 @@ public sealed class ReportingService : IReportingService
     private readonly AppDbContext _db;
     private readonly INayaxLynxClient? _nayaxLynxClient;
     private readonly INayaxProcessingFeeService _nayaxProcessingFees;
+    private readonly ISiteCommissionService? _siteCommissions;
 
-    public ReportingService(AppDbContext db, INayaxLynxClient? nayaxLynxClient = null, INayaxProcessingFeeService? nayaxProcessingFees = null)
+    public ReportingService(AppDbContext db, INayaxLynxClient? nayaxLynxClient = null, INayaxProcessingFeeService? nayaxProcessingFees = null,
+        ISiteCommissionService? siteCommissions = null)
     {
         _db = db;
         _nayaxLynxClient = nayaxLynxClient;
         _nayaxProcessingFees = nayaxProcessingFees ?? new NayaxProcessingFeeService(db);
+        _siteCommissions = siteCommissions;
     }
 
     public Task<BookkeepingReportDto> GetBookkeeping(ReportingFilterDto filter, CancellationToken cancellationToken = default) =>
@@ -299,10 +302,10 @@ public sealed class ReportingService : IReportingService
             var fees = await _nayaxProcessingFees.GetProcessingFeesAsync(range.From, range.ToDate, x.MachineID, cancellationToken);
             results.Add(new MachineProfitabilityRowDto(x.MachineID, x.MachineName ?? $"Machine {x.MachineID}",
                 x.Sales, x.Quantity, x.Cost, ReportingCalculations.GrossProfit(x.Sales, x.Cost), ReportingCalculations.MarginPercent(x.Sales, x.Cost), x.Transactions,
-                x.Sales * commissions.GetValueOrDefault(x.MachineID).Percent / 100m,
-                x.Sales - x.Cost - x.Sales * commissions.GetValueOrDefault(x.MachineID).Percent / 100m -
+                commissions.GetValueOrDefault(x.MachineID).Due,
+                x.Sales - x.Cost - commissions.GetValueOrDefault(x.MachineID).Due -
                     operatingExpenses.GetValueOrDefault(x.MachineID) - fees.TotalFeeIncGst,
-                ReportingCalculations.MarginPercent(x.Sales, x.Cost + x.Sales * commissions.GetValueOrDefault(x.MachineID).Percent / 100m +
+                ReportingCalculations.MarginPercent(x.Sales, x.Cost + commissions.GetValueOrDefault(x.MachineID).Due +
                     operatingExpenses.GetValueOrDefault(x.MachineID) + fees.TotalFeeIncGst),
                 commissions.GetValueOrDefault(x.MachineID).Percent,
                 x.CardSales, x.CashSales)
@@ -992,6 +995,14 @@ public sealed class ReportingService : IReportingService
 
     private async Task<Dictionary<long, MachineCommission>> GetMachineCommissionsAsync(DateRange range, long? machineId, CancellationToken cancellationToken)
     {
+        if (_siteCommissions is not null)
+        {
+            var report = await _siteCommissions.GetReportAsync(range.From, range.ToDate, null, cancellationToken);
+            return report.Rows.SelectMany(site => site.Machines.Select(machine =>
+                (machine.MachineId, new MachineCommission(site.CommissionRate, machine.CommissionDue))))
+                .Where(x => !machineId.HasValue || x.MachineId == machineId.Value)
+                .ToDictionary(x => x.MachineId, x => x.Item2);
+        }
         if (_nayaxLynxClient is null) return new();
         var machineIds = await SalesQuery(range, machineId).Select(x => x.MachineID).Distinct().ToListAsync(cancellationToken);
         var results = await Task.WhenAll(machineIds.Select(async id =>
@@ -1000,7 +1011,7 @@ public sealed class ReportingService : IReportingService
             var commission = products.FirstOrDefault(x => x.CommissionValue.HasValue)?.CommissionValue ?? 0m;
             return (id, commission);
         }));
-        return results.ToDictionary(x => x.id, x => new MachineCommission(x.commission));
+        return results.ToDictionary(x => x.id, x => new MachineCommission(x.commission / 100m, 0m));
     }
 
     private async Task<decimal> GetSiteCommissionAsync(DateRange range, long? machineId, Dictionary<long, MachineCommission> commissions, CancellationToken cancellationToken)
@@ -1009,7 +1020,7 @@ public sealed class ReportingService : IReportingService
             .GroupBy(x => x.MachineID)
             .Select(g => new { MachineId = g.Key, Sales = g.Sum(x => x.SettlementValue) })
             .ToListAsync(cancellationToken);
-        return salesByMachine.Sum(x => x.Sales * commissions.GetValueOrDefault(x.MachineId).Percent / 100m);
+        return salesByMachine.Sum(x => commissions.GetValueOrDefault(x.MachineId).Due);
     }
 
     private static void AddStatusQualityNotes(List<string> notes, IEnumerable<NayaxSales> sales)
@@ -1131,7 +1142,7 @@ public sealed class ReportingService : IReportingService
         public List<ImportedPaymentNet> Payments { get; set; } = new();
     }
 
-    private readonly record struct MachineCommission(decimal Percent);
+    private readonly record struct MachineCommission(decimal Percent, decimal Due);
     private readonly record struct SalesPaymentSummary(
         decimal GrossSales,
         int Transactions,
