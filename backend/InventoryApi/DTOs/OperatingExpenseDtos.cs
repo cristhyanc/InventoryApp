@@ -30,6 +30,7 @@ public record OperatingExpenseReportRowDto(
     long? SiteId,
     long? MachineId,
     int? ReceiptId,
+    string? ReceiptFileName,
     DateTime? ServicePeriodStart,
     DateTime? ServicePeriodEnd,
     string? Notes);

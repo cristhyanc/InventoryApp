@@ -15,6 +15,9 @@ public class OperatingExpense
     public long? MachineId { get; set; }
     public int? ReceiptId { get; set; }
     public virtual Receipt? Receipt { get; set; }
+    public string? ReceiptFileName { get; set; }
+    public string? ReceiptStoredFileName { get; set; }
+    public string? ReceiptContentType { get; set; }
     public DateTime? ServicePeriodStart { get; set; }
     public DateTime? ServicePeriodEnd { get; set; }
     public string? Notes { get; set; }

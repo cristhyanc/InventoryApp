@@ -28,6 +28,7 @@ export interface OperatingExpense {
   siteId?: number | null;
   machineId?: number | null;
   receiptId?: number | null;
+  receiptFileName?: string | null;
   servicePeriodStart?: string | null;
   servicePeriodEnd?: string | null;
   notes?: string | null;
@@ -61,7 +62,37 @@ export class OperatingExpenseService {
     if (filters.supplierId !== undefined) params = params.set('supplierId', filters.supplierId);
     return this.http.get<OperatingExpense[]>(this.baseUrl, { params });
   }
-  create(payload: OperatingExpensePayload): Observable<OperatingExpense> { return this.http.post<OperatingExpense>(this.baseUrl, payload); }
-  update(id: number, payload: OperatingExpensePayload): Observable<OperatingExpense> { return this.http.put<OperatingExpense>(`${this.baseUrl}/${id}`, payload); }
+  create(payload: OperatingExpensePayload, receipt?: File | null): Observable<OperatingExpense> {
+    return receipt
+      ? this.http.post<OperatingExpense>(this.baseUrl, this.toFormData(payload, receipt))
+      : this.http.post<OperatingExpense>(this.baseUrl, payload);
+  }
+
+  update(id: number, payload: OperatingExpensePayload, receipt?: File | null): Observable<OperatingExpense> {
+    return receipt
+      ? this.http.put<OperatingExpense>(`${this.baseUrl}/${id}`, this.toFormData(payload, receipt))
+      : this.http.put<OperatingExpense>(`${this.baseUrl}/${id}`, payload);
+  }
+
   delete(id: number): Observable<void> { return this.http.delete<void>(`${this.baseUrl}/${id}`); }
+  receiptUrl(id: number): string { return `${this.baseUrl}/${id}/receipt`; }
+
+  private toFormData(payload: OperatingExpensePayload, receipt: File): FormData {
+    const formData = new FormData();
+    formData.append('expenseDate', payload.expenseDate);
+    formData.append('category', String(payload.category));
+    formData.append('description', payload.description);
+    formData.append('amountExGst', String(payload.amountExGst));
+    formData.append('gstAmount', String(payload.gstAmount));
+    formData.append('totalAmount', String(payload.totalAmount));
+    if (payload.supplierId != null) formData.append('supplierId', String(payload.supplierId));
+    if (payload.siteId != null) formData.append('siteId', String(payload.siteId));
+    if (payload.machineId != null) formData.append('machineId', String(payload.machineId));
+    if (payload.receiptId != null) formData.append('receiptId', String(payload.receiptId));
+    if (payload.servicePeriodStart) formData.append('servicePeriodStart', payload.servicePeriodStart);
+    if (payload.servicePeriodEnd) formData.append('servicePeriodEnd', payload.servicePeriodEnd);
+    if (payload.notes != null) formData.append('notes', payload.notes);
+    formData.append('receipt', receipt);
+    return formData;
+  }
 }
