@@ -505,9 +505,6 @@ namespace InventoryApi.Migrations
                     b.Property<int>("LowStockThreshold")
                         .HasColumnType("INTEGER");
 
-                    b.Property<bool>("Mapped")
-                        .HasColumnType("INTEGER");
-
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasColumnType("TEXT");

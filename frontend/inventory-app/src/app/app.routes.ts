@@ -22,7 +22,6 @@ import { OperatingExpenseComponent } from './components/expenses/operating-expen
 export const routes: Routes = [
   { path: '', component: DashboardComponent },
   { path: 'products', component: ProductListComponent },
-  { path: 'products/new', component: ProductFormComponent },
   { path: 'products/:id/edit', component: ProductFormComponent },
   { path: 'products/:id/stock', component: StockHistoryComponent },
   { path: 'categories', component: CategoryListComponent },

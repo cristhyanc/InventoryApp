@@ -9,20 +9,9 @@ using Microsoft.EntityFrameworkCore;
 
 namespace InventoryApi.Services;
 
-public class ImportedFileService : IImportedFileService
+public sealed partial class ImportService
 {
-    private readonly AppDbContext _db;
-    private readonly IWebHostEnvironment _environment;
-    private readonly ILogger<ImportedFileService> _logger;
-
-    public ImportedFileService(AppDbContext db, IWebHostEnvironment environment, ILogger<ImportedFileService> logger)
-    {
-        _db = db;
-        _environment = environment;
-        _logger = logger;
-    }
-
-    public async Task<ImportedFileImportResult> ImportPendingFiles()
+    public async Task<ImportedFileImportResult> ImportPendingXmlFilesAsync()
     {
         var folder = Path.Combine(_environment.WebRootPath ?? Path.Combine(_environment.ContentRootPath, "wwwroot"), "ImportedFiles");
         Directory.CreateDirectory(folder);

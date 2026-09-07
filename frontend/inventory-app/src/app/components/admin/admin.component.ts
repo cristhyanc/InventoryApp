@@ -1,9 +1,7 @@
 import { Component } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { MachineService } from '../../services/machine.service';
-import { ProductService } from '../../services/product.service';
-import { ReceiptService } from '../../services/receipt.service';
+import { ImportService } from '../../services/import.service';
 import { ReportingService, SaleCostingBackfillResult } from '../../services/reporting.service';
 import { ToastService } from '../../services/toast.service';
 import { NayaxProcessingFeeRate, NayaxSettingsService } from '../../services/nayax-settings.service';
@@ -85,9 +83,7 @@ export class AdminComponent {
   effectiveFrom = new Date().toISOString().slice(0, 10);
 
   constructor(
-    private machineService: MachineService,
-    private productService: ProductService,
-    private receiptService: ReceiptService,
+    private importService: ImportService,
     private reportingService: ReportingService,
     private toast: ToastService,
     private nayaxSettings: NayaxSettingsService
@@ -125,7 +121,7 @@ export class AdminComponent {
       return;
     }
     this.loading = true;
-    this.machineService.importNayaxSales(file).subscribe({
+    this.importService.importNayaxSales(file).subscribe({
       next: result => { this.loading = false; this.toast.success(`Imported ${result.imported} sales, updated ${result.updated}, skipped ${result.skipped}.`); },
       error: err => { this.loading = false; this.toast.error(err?.error?.message ?? err?.error ?? 'Failed to import Nayax sales.'); }
     });
@@ -140,7 +136,7 @@ export class AdminComponent {
 
   importProducts(): void {
     this.loading = true;
-    this.productService.importProducts().subscribe({
+    this.importService.importProducts().subscribe({
       next: () => { this.loading = false; this.toast.success('Products imported successfully.'); },
       error: () => { this.loading = false; this.toast.error('Failed to import products.'); }
     });
@@ -148,7 +144,7 @@ export class AdminComponent {
 
   importXml(): void {
     this.loading = true;
-    this.receiptService.importPendingFiles().subscribe({
+    this.importService.importPendingXmlFiles().subscribe({
       next: result => { this.loading = false; this.toast.success(`Imported ${result.importedFiles} file(s) and ${result.importedReimbursements} reimbursement(s).`); },
       error: err => { this.loading = false; this.toast.error(err?.error ?? 'The XML import could not be started.'); }
     });

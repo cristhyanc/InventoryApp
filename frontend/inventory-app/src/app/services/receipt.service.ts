@@ -24,13 +24,6 @@ export interface ReceiptItemPayload {
 
 export type ReceiptUpdatePayload = Omit<ReceiptUploadPayload, 'file'>;
 
-export interface ImportedFileImportResult {
-  importedFiles: number;
-  importedReimbursements: number;
-  skippedFiles: number;
-  failedFiles: number;
-}
-
 @Injectable({ providedIn: 'root' })
 export class ReceiptService {
   private get baseUrl(): string {
@@ -95,10 +88,4 @@ export class ReceiptService {
     return this.http.delete<void>(`${this.baseUrl}/${id}`);
   }
 
-  importPendingFiles(): Observable<ImportedFileImportResult> {
-    return this.http.post<ImportedFileImportResult>(
-      `${this.config.apiBaseUrl.replace(/\/$/, '')}/importedfiles/import`,
-      {}
-    );
-  }
 }

@@ -30,8 +30,8 @@ public class ProductService : IProductService
 
         if (categoryId.HasValue) query = query.Where(p => p.CategoryId == categoryId);
         if (supplierId.HasValue) query = query.Where(p => p.SupplierId == supplierId);
-        if (lowStockOnly == true) query = query.Where(p => p.QuantityInStock <= p.LowStockThreshold);
 
+        if (lowStockOnly == true) return await LowStock(search, categoryId, supplierId);
         return await query.OrderBy(p => p.Name).ToListAsync();
     }
 
@@ -43,87 +43,38 @@ public class ProductService : IProductService
             .FirstOrDefaultAsync(p => p.Id == id);
     }
 
-    public async Task<IEnumerable<Product>> LowStock()
+    public async Task<IEnumerable<Product>> LowStock(string? search = null, long? categoryId = null, int? supplierId = null)
     {
-        var result = new List<Product>();
+        var query = _db.Products.AsNoTracking()
+            .Include(p => p.Category)
+            .Include(p => p.Supplier)
+            .AsQueryable();
+        if (!string.IsNullOrWhiteSpace(search))
+            query = query.Where(p => p.Name.Contains(search) || (p.Sku != null && p.Sku.Contains(search)));
+        if (categoryId.HasValue) query = query.Where(p => p.CategoryId == categoryId);
+        if (supplierId.HasValue) query = query.Where(p => p.SupplierId == supplierId);
+
+        var products = await query.ToListAsync();
+        var productsById = products.ToDictionary(p => p.Id);
         var nayaxMachines = await _nayaxLynxClient.GetMachinesAsync();
-        var dbProducts = await _db.Products.AsNoTracking().ToListAsync();
 
         foreach (var machine in nayaxMachines)
         {
             var nayaxMachineProducts = await _nayaxLynxClient.GetMachineProductsAsync(machine.MachineID);
             foreach (var nayaxProduct in nayaxMachineProducts)
             {
-                var product = result.SingleOrDefault(x => x.Id == nayaxProduct.NayaxProductID);
-                if (product == null)
-                {
-                    product = dbProducts.Single(x => x.Id == nayaxProduct.NayaxProductID);
-                    product.MaxStockInMachine = 0;
-                    result.Add(product);
-                }
-                product.MaxStockInMachine += nayaxProduct.MissingStockByMDB.Value;
+                if (nayaxProduct.NayaxProductID is not long productId ||
+                    !productsById.TryGetValue(productId, out var product))
+                    continue;
+
+                product.MachineReplenishmentNeed += nayaxProduct.MissingStockByMDB ?? 0;
             }
         }
 
-        return result.Where(p => p.IsActive && p.QuantityInStock <= p.MaxStockInMachine).OrderByDescending(p =>p.MaxStockInMachine - p.QuantityInStock).ToList();
-    }
-
-    public async Task<bool> ImportProductsAsync()
-    {
-        var productsTask = _nayaxLynxClient.GetProductsAsync();
-        var groupsTask = _nayaxLynxClient.GetProductGroupssAsync();
-        var localProductsTask = _db.Products.ToListAsync();
-        var localCatsTask = _db.Categories.ToListAsync();
-
-        await Task.WhenAll(productsTask, groupsTask, localProductsTask, localCatsTask);
-
-        var nayaxProducts = await productsTask;
-        var nayaxGroups = await groupsTask;
-        var localProducts = await localProductsTask;
-        var localCategories = await localCatsTask;
-
-        var newProducts = new List<Product>();
-        var newCategories = new List<Category>();
-
-        foreach (var group in nayaxGroups)
-        {
-            var category = localCategories.Where(x => x.Id == group.ProductGroupID).SingleOrDefault();
-
-            if(category == null)
-            {
-                category = new Category { Id = group.ProductGroupID!.Value,  Name = group.ProductGroupName!, Description = group.ProductGroupName };
-                newCategories.Add(category);
-            }
-        }
-
-        foreach (var item in nayaxProducts)
-        {
-            var product = localProducts.Where(x=> x.Id == item.NayaxProductId).SingleOrDefault();
-
-            if(product == null)
-            {
-                product = new Product
-                {
-                    Id = item.NayaxProductId,
-                    AverageUnitCost = item.ProductCostPrice ?? 0m,
-                    CreatedAt = DateTime.UtcNow
-                };
-                newProducts.Add(product);
-            }
-
-            product.Mapped = true;
-            product.Name = item.ProductName!;
-            product.Description = item.ProductDescription;
-            product.UnitPrice = item.ProductCostPrice??0;
-            product.CategoryId = item.ProductGroupId;
-            product.UpdatedAt = DateTime.UtcNow;
-        }
-
-        if(newCategories.Any()) _db.Categories.AddRange(newCategories);
-        if(newProducts.Any()) _db.Products.AddRange(newProducts);
-
-        await _db.SaveChangesAsync();
-        return true;
+        return products.Where(p => p.IsReorderAlert)
+            .OrderByDescending(p => p.ReorderShortfall)
+            .ThenBy(p => p.Name)
+            .ToList();
     }
 
     public async Task<Product> Create(ProductCreateDto dto)
@@ -170,14 +121,11 @@ public class ProductService : IProductService
         var product = await _db.Products.FindAsync(id);
         if (product is null) return false;
 
-        product.Name = dto.Name;
         product.Sku = dto.Sku;
         product.Description = dto.Description;
-        product.UnitPrice = dto.UnitPrice;
         product.IsActive = dto.IsActive;
         product.LowStockThreshold = dto.LowStockThreshold;
         product.Unit = dto.Unit;
-        product.CategoryId = dto.CategoryId;
         product.SupplierId = dto.SupplierId;
         product.UpdatedAt = DateTime.UtcNow;
 

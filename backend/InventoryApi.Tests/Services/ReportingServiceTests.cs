@@ -4,6 +4,7 @@ using InventoryApi.Data;
 using InventoryApi.DTOs;
 using InventoryApi.Models;
 using InventoryApi.Services;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
 
@@ -17,6 +18,42 @@ public class ReportingServiceTests
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options;
         return new AppDbContext(options);
+    }
+
+    [Fact]
+    public async Task Machine_profitability_classifies_payment_methods_with_sqlite()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseSqlite(connection)
+            .Options;
+        await using var db = new AppDbContext(options);
+        await db.Database.EnsureCreatedAsync();
+        db.NayaxSales.AddRange(
+            new NayaxSales
+            {
+                TransactionID = 1, MachineID = 10, MachineName = "Machine A",
+                SettlementValue = 10m, PaymentMethod = "Credit Card",
+                MachineAuthorizationTime = new DateTime(2025, 8, 1),
+                TransactionStatusId = NayaxTransactionStatusIds.Completed, CostOfGoodsSold = 4m
+            },
+            new NayaxSales
+            {
+                TransactionID = 2, MachineID = 10, MachineName = "Machine A",
+                SettlementValue = 5m, PaymentMethod = "Cash",
+                MachineAuthorizationTime = new DateTime(2025, 8, 1),
+                TransactionStatusId = NayaxTransactionStatusIds.Completed, CostOfGoodsSold = 2m
+            });
+        await db.SaveChangesAsync();
+
+        var report = await new ReportingService(db).GetMachineProfitabilityAsync(
+            new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)));
+
+        var row = Assert.Single(report.Rows);
+        Assert.Equal(15m, row.Sales);
+        Assert.Equal(10m, row.CardSales);
+        Assert.Equal(5m, row.CashSales);
     }
 
     [Fact]
@@ -70,6 +107,39 @@ public class ReportingServiceTests
         var row = Assert.Single(report.Rows);
         Assert.Equal("Maltese King Share 60g", row.ProductName);
         Assert.False(row.IsUnmapped);
+    }
+
+    [Fact]
+    public async Task Product_profitability_merges_sales_that_map_to_the_same_catalogue_product()
+    {
+        using var db = CreateDbContext();
+        db.Products.Add(new Product { Id = 1, Name = "Nu Pure Spring Water 600mL", UnitPrice = 3m });
+        db.NayaxSales.AddRange(
+            new NayaxSales
+            {
+                TransactionID = 1, MachineID = 10, NayaxProductId = 1, ProductName = "Nu Pure Spring Water 600mL",
+                SettlementValue = 3m, MachineAuthorizationTime = new DateTime(2026, 9, 1),
+                TransactionStatusId = NayaxTransactionStatusIds.Completed, CostOfGoodsSold = 1m,
+                CostingStatus = SaleCostingStatus.Costed
+            },
+            new NayaxSales
+            {
+                TransactionID = 2, MachineID = 10, NayaxProductId = 999, ProductName = "Nu Pure Spring Water 600mL (999)",
+                SettlementValue = 3m, MachineAuthorizationTime = new DateTime(2026, 9, 1),
+                TransactionStatusId = NayaxTransactionStatusIds.Completed, CostOfGoodsSold = 1m,
+                CostingStatus = SaleCostingStatus.Costed
+            });
+        await db.SaveChangesAsync();
+
+        var report = await new ReportingService(db).GetProductProfitabilityAsync(
+            new ReportingFilterDto(new DateTime(2026, 9, 1), new DateTime(2026, 9, 1)));
+
+        var row = Assert.Single(report.Rows);
+        Assert.Equal(1, row.ProductId);
+        Assert.Equal("Nu Pure Spring Water 600mL", row.ProductName);
+        Assert.Equal(6m, row.Sales);
+        Assert.Equal(2m, row.CostOfGoods);
+        Assert.Equal(2, row.TransactionCount);
     }
 
     [Fact]

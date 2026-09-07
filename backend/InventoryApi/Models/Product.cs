@@ -24,10 +24,15 @@ public class Product
     public int? MdbCode { get; set; }
     [NotMapped]
     public int? MaxStockInMachine { get; set; }
+    [NotMapped]
+    public int MachineReplenishmentNeed { get; set; }
+    [NotMapped]
+    public int ReorderLevel => Math.Max(LowStockThreshold, MachineReplenishmentNeed);
+    [NotMapped]
+    public int ReorderShortfall => Math.Max(0, ReorderLevel - QuantityInStock);
     public int QuantityInStock { get; set; }
     public int LowStockThreshold { get; set; } = 0;
     public string? Unit { get; set; } = "unit";
-    public bool Mapped { get; set; }
     public bool IsActive { get; set; } = true;
     [NotMapped]
     public DateTime? LastEatBefore1 { get; set; }
@@ -45,4 +50,5 @@ public class Product
     public virtual ICollection<StockAdjustment> StockAdjustments { get; set; } = new List<StockAdjustment>();
 
     public bool IsLowStock => QuantityInStock <= LowStockThreshold;
+    public bool IsReorderAlert => IsActive && QuantityInStock <= ReorderLevel;
 }

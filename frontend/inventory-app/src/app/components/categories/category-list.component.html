@@ -1,44 +1,18 @@
 <h1 class="mb-6 text-2xl font-semibold text-slate-800">Categories</h1>
 
-<div class="mb-6 rounded-xl bg-white p-6 shadow-sm">
-  <h2 class="mb-4 text-lg font-semibold text-slate-800">{{ editing ? 'Edit Category' : 'New Category' }}</h2>
-  <form class="space-y-4" (ngSubmit)="save()">
-    <div>
-      <label class="mb-1 block text-sm font-medium text-slate-700">Name</label>
-      <input [(ngModel)]="form.name" name="name" required placeholder="e.g. Snacks" />
-    </div>
-    <div>
-      <label class="mb-1 block text-sm font-medium text-slate-700">Description</label>
-      <textarea [(ngModel)]="form.description" name="description" rows="2" placeholder="Optional description"></textarea>
-    </div>
-    <div class="flex flex-wrap gap-3">
-      <button type="submit" class="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">{{ editing ? 'Update' : 'Create' }}</button>
-      @if (editing) {
-        <button type="button" class="inline-flex items-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50" (click)="cancel()">Cancel</button>
-      }
-    </div>
-  </form>
-</div>
-
 <div class="rounded-xl bg-white p-6 shadow-sm">
-  <h2 class="mb-4 text-lg font-semibold text-slate-800">All Categories</h2>
+  <p class="mb-4 text-sm text-slate-500">Categories are managed from the product import and are read-only here.</p>
   @if (categories.length === 0) {
     <p class="text-sm text-slate-500">No categories yet.</p>
   } @else {
     <div class="overflow-x-auto">
       <table class="min-w-full divide-y divide-slate-200 text-sm">
-        <thead class="bg-slate-50"><tr><th class="px-4 py-3 text-left font-semibold text-slate-700">Name</th><th class="px-4 py-3 text-left font-semibold text-slate-700">Description</th><th class="px-4 py-3 text-left font-semibold text-slate-700"></th></tr></thead>
+        <thead class="bg-slate-50"><tr><th class="px-4 py-3 text-left font-semibold text-slate-700">Name</th><th class="px-4 py-3 text-left font-semibold text-slate-700">Description</th></tr></thead>
         <tbody class="divide-y divide-slate-100 bg-white">
           @for (c of categories; track c.id) {
             <tr>
               <td class="px-4 py-3 text-slate-700">{{ c.name }}</td>
               <td class="px-4 py-3 text-slate-600">{{ c.description }}</td>
-              <td class="px-4 py-3">
-                <div class="flex flex-wrap gap-2">
-                  <button class="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50" (click)="startEdit(c)">Edit</button>
-                  <button class="inline-flex items-center rounded-md bg-red-600 px-3 py-2 text-sm font-medium text-white hover:bg-red-700" (click)="remove(c)">Delete</button>
-                </div>
-              </td>
             </tr>
           }
         </tbody>

@@ -44,15 +44,17 @@ export class ProductListComponent implements OnInit {
   }
 
   applyFilters(): void {
-    this.productService
-      .getAll({
-        search: this.search || undefined,
-        categoryId: this.categoryId === '' ? undefined : this.categoryId,
-        supplierId: this.supplierId === '' ? undefined : this.supplierId,
-        lowStockOnly: this.lowStockOnly || undefined
-      })
+    const filters = {
+      search: this.search || undefined,
+      categoryId: this.categoryId === '' ? undefined : this.categoryId,
+      supplierId: this.supplierId === '' ? undefined : this.supplierId
+    };
+    const request = this.lowStockOnly
+      ? this.productService.getLowStock(filters)
+      : this.productService.getAll(filters);
+    request
       .subscribe((p) => {
-        this.products = p.filter((product) => !this.lowStockOnly || product.isActive !== false);
+        this.products = p;
       });
   }
 

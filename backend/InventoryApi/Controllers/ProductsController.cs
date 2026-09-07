@@ -39,24 +39,13 @@ public class ProductsController : ControllerBase
     }
 
     [HttpGet("alerts/low-stock")]
-    public async Task<ActionResult<IEnumerable<Product>>> LowStock()
+    public async Task<ActionResult<IEnumerable<Product>>> LowStock(
+        [FromQuery] string? search,
+        [FromQuery] long? categoryId,
+        [FromQuery] int? supplierId)
     {
-        var items = await _service.LowStock();
+        var items = await _service.LowStock(search, categoryId, supplierId);
         return Ok(items);
-    }
-
-    [HttpPost("importProducts")]
-    public async Task<ActionResult<bool>> ImportProducts()
-    {
-        var result = await _service.ImportProductsAsync();
-        return result;
-    }
-
-    [HttpPost]
-    public async Task<ActionResult<Product>> Create(ProductCreateDto dto)
-    {
-        var product = await _service.Create(dto);
-        return CreatedAtAction(nameof(Get), new { id = product.Id }, product);
     }
 
     [HttpPut("{id:long}")]

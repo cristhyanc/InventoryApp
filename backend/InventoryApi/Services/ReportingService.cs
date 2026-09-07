@@ -273,7 +273,8 @@ public sealed class ReportingService : IReportingService
     public async Task<MachineProfitabilityReportDto> GetMachineProfitabilityAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default)
     {
         var range = ResolveRange(filter);
-        var rows = await CostQuery(range, MachineId(filter))
+        var sales = await CostQuery(range, MachineId(filter)).ToListAsync(cancellationToken);
+        var rows = sales
             .GroupBy(x => new { x.MachineID, x.MachineName })
             .Select(g => new
             {
@@ -285,7 +286,7 @@ public sealed class ReportingService : IReportingService
                 Quantity = g.Count(),
                 Cost = g.Sum(x => x.Cost),
                 Transactions = g.Count()
-            }).OrderByDescending(x => x.Sales).ToListAsync(cancellationToken);
+            }).OrderByDescending(x => x.Sales).ToList();
         var commissions = await GetMachineCommissionsAsync(range, MachineId(filter), cancellationToken);
         var operatingExpenses = await _db.OperatingExpenses.AsNoTracking()
             .Where(x => x.ExpenseDate >= range.From && x.ExpenseDate < range.EndExclusive && x.MachineId.HasValue)
@@ -333,15 +334,52 @@ public sealed class ReportingService : IReportingService
                 CashRevenue = g.Where(x => x.PaymentMethod == "Cash").Sum(x => x.SettlementValue)
             }).OrderByDescending(x => x.Sales).ToListAsync(cancellationToken);
 
-        var result = rows.Select(x =>
-        {
-            var product = NayaxProductMatcher.Match(products.Values, x.NayaxProductId, x.ProductName);
-            var cost = x.CostOfGoodsSold;
-            var name = product?.Name ?? (string.IsNullOrWhiteSpace(x.ProductName) ? "Unmapped product" : x.ProductName);
-            return new ProductProfitabilityRowDto(x.NayaxProductId, name, product?.Category?.Name,
-                x.Sales, x.Quantity, cost, ReportingCalculations.GrossProfit(x.Sales, cost), ReportingCalculations.MarginPercent(x.Sales, cost),
-                x.Transactions, product is null, product is not null && x.HasCompleteCost, x.CardRevenue, x.CashRevenue);
-        }).ToList();
+        var result = rows
+            .Select(x =>
+            {
+                var product = NayaxProductMatcher.Match(products.Values, x.NayaxProductId, x.ProductName);
+                return new
+                {
+                    Product = product,
+                    x.NayaxProductId,
+                    UnmappedName = string.IsNullOrWhiteSpace(x.ProductName)
+                        ? "Unmapped product"
+                        : NayaxProductMatcher.NormalizeName(x.ProductName),
+                    x.Sales,
+                    x.Quantity,
+                    x.CostOfGoodsSold,
+                    x.HasCompleteCost,
+                    x.Transactions,
+                    x.CardRevenue,
+                    x.CashRevenue
+                };
+            })
+            .GroupBy(x => x.Product is not null
+                ? $"product:{x.Product.Id}"
+                : $"unmapped:{x.NayaxProductId}:{x.UnmappedName}")
+            .Select(g =>
+            {
+                var first = g.First();
+                var sales = g.Sum(x => x.Sales);
+                var cost = g.Sum(x => x.CostOfGoodsSold);
+                var isUnmapped = first.Product is null;
+                return new ProductProfitabilityRowDto(
+                    first.Product?.Id ?? first.NayaxProductId,
+                    first.Product?.Name ?? first.UnmappedName,
+                    first.Product?.Category?.Name,
+                    sales,
+                    g.Sum(x => x.Quantity),
+                    cost,
+                    ReportingCalculations.GrossProfit(sales, cost),
+                    ReportingCalculations.MarginPercent(sales, cost),
+                    g.Sum(x => x.Transactions),
+                    isUnmapped,
+                    !isUnmapped && g.All(x => x.HasCompleteCost),
+                    g.Sum(x => x.CardRevenue),
+                    g.Sum(x => x.CashRevenue));
+            })
+            .OrderByDescending(x => x.Sales)
+            .ToList();
         var quality = Quality(false, false, result.Any(x => x.IsUnmapped),
             result.Any(x => x.IsUnmapped) ? "One or more sales could not be mapped to a Product." : null);
         return new ProductProfitabilityReportDto(range.From, range.ToDate, result, quality);

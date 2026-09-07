@@ -14,7 +14,6 @@ import { Category, Supplier } from '../../models/models';
   templateUrl: './product-form.component.html'
 })
 export class ProductFormComponent implements OnInit {
-  isEdit = false;
   productId: number | null = null;
   categories: Category[] = [];
   suppliers: Supplier[] = [];
@@ -26,7 +25,6 @@ export class ProductFormComponent implements OnInit {
     sku: '',
     description: '',
     unitPrice: 0,
-    quantityInStock: 0,
     lowStockThreshold: 5,
     unit: 'unit',
     categoryId: '' as number | '',
@@ -48,7 +46,6 @@ export class ProductFormComponent implements OnInit {
 
     const idParam = this.route.snapshot.paramMap.get('id');
     if (idParam) {
-      this.isEdit = true;
       this.productId = Number(idParam);
       this.productService.get(this.productId).subscribe((p) => {
         this.form = {
@@ -56,7 +53,6 @@ export class ProductFormComponent implements OnInit {
           sku: p.sku ?? '',
           description: p.description ?? '',
           unitPrice: p.unitPrice,
-          quantityInStock: p.quantityInStock,
           lowStockThreshold: p.lowStockThreshold,
           unit: p.unit ?? 'unit',
           categoryId: p.categoryId ?? '',
@@ -87,18 +83,11 @@ export class ProductFormComponent implements OnInit {
       isActive: this.form.isActive
     };
 
-    if (this.isEdit && this.productId) {
+    if (this.productId) {
       this.productService.update(this.productId, base).subscribe({
         next: () => this.router.navigate(['/products']),
         error: () => { this.error = 'Failed to update product.'; this.saving = false; }
       });
-    } else {
-      this.productService
-        .create({ ...base, quantityInStock: this.form.quantityInStock })
-        .subscribe({
-          next: () => this.router.navigate(['/products']),
-          error: () => { this.error = 'Failed to create product.'; this.saving = false; }
-        });
     }
   }
 }

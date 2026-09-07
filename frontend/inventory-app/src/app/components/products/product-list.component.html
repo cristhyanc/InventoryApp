@@ -1,8 +1,5 @@
 <div class="mb-6 flex flex-wrap items-center justify-between gap-4">
   <h1 class="text-2xl font-semibold text-slate-800">Products</h1>
-  <div class="flex flex-wrap gap-3">
-    <a routerLink="/products/new" class="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">+ New Product</a>
-  </div>
 </div>
 
 <div class="mb-6 rounded-xl bg-white p-6 shadow-sm">
@@ -25,7 +22,7 @@
 
     <label class="flex items-center gap-2 text-sm text-slate-600">
       <input type="checkbox" class="h-4 w-4 rounded border-slate-300 text-blue-600" [(ngModel)]="lowStockOnly" (ngModelChange)="applyFilters()" />
-      Low stock only
+      Reorder alerts only
     </label>
 
     <button class="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50" (click)="resetFilters()">Reset</button>
@@ -45,8 +42,12 @@
             <th class="px-4 py-3 text-left font-semibold text-slate-700">Supplier</th>
             <th class="px-4 py-3 text-left font-semibold text-slate-700">Price</th>
             <th class="px-4 py-3 text-left font-semibold text-slate-700">Stock</th>
+            @if (lowStockOnly) {
+              <th class="px-4 py-3 text-left font-semibold text-slate-700">Machine need</th>
+              <th class="px-4 py-3 text-left font-semibold text-slate-700">Reorder level</th>
+              <th class="px-4 py-3 text-left font-semibold text-slate-700">Shortfall</th>
+            }
             <th class="px-4 py-3 text-left font-semibold text-slate-700">Status</th>
-            <th class="px-4 py-3 text-left font-semibold text-slate-700">Mapped</th>
             <th class="px-4 py-3 text-left font-semibold text-slate-700"></th>
           </tr>
         </thead>
@@ -58,19 +59,19 @@
               <td class="px-4 py-3 text-slate-600">{{ p.supplier?.name }}</td>
               <td class="px-4 py-3 text-slate-600">${{ p.unitPrice.toFixed(2) }}</td>
               <td class="px-4 py-3">
-                <span [ngClass]="p.isActive ? (p.isLowStock ? 'inline-flex rounded-full bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-700' : 'inline-flex rounded-full bg-green-100 px-2.5 py-1 text-xs font-semibold text-green-700') : 'inline-flex rounded-full bg-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-600'">
+                <span [ngClass]="p.isActive ? ((lowStockOnly ? p.isReorderAlert : p.isLowStock) ? 'inline-flex rounded-full bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-700' : 'inline-flex rounded-full bg-green-100 px-2.5 py-1 text-xs font-semibold text-green-700') : 'inline-flex rounded-full bg-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-600'">
                   {{ p.quantityInStock }} {{ p.unit }} / {{ p.lowStockThreshold }}
                 </span>
               </td>
+              @if (lowStockOnly) {
+                <td class="px-4 py-3 text-slate-600">{{ p.machineReplenishmentNeed }}</td>
+                <td class="px-4 py-3 text-slate-600">{{ p.reorderLevel }}</td>
+                <td class="px-4 py-3 font-semibold text-red-700">{{ p.reorderShortfall }}</td>
+              }
               <td class="px-4 py-3">
                 <button type="button" class="inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold" [ngClass]="p.isActive ? 'bg-green-100 text-green-700' : 'bg-slate-200 text-slate-700'" (click)="toggleActive(p)">
                   {{ p.isActive ? 'Active' : 'Inactive' }}
                 </button>
-              </td>
-              <td class="px-4 py-3">
-                <span [class]="!p.mapped ? 'inline-flex rounded-full bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-700' : 'inline-flex rounded-full bg-green-100 px-2.5 py-1 text-xs font-semibold text-green-700'">
-                  {{ p.mapped ? 'Mapped' : 'Unmapped' }}
-                </span>
               </td>
               <td class="px-4 py-3">
                 <div class="flex flex-wrap gap-2">

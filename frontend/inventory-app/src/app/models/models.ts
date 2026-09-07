@@ -34,6 +34,9 @@ export interface Product {
   suggestedPriceValue: number | null;
   quantityInStock: number;
   maxStockInMachine: number;
+  machineReplenishmentNeed: number;
+  reorderLevel: number;
+  reorderShortfall: number;
   lowStockThreshold: number;
   mdbCode: number | null;
   unit?: string | null;
@@ -47,7 +50,7 @@ export interface Product {
   supplier?: Supplier | null;
   isActive: boolean;
   isLowStock: boolean;
-  mapped: boolean;
+  isReorderAlert: boolean;
 }
 
 export interface Machine {
@@ -88,19 +91,6 @@ export interface SiteProduct {
   profit: number;
   quantityInStock: number;
   maxStock: number;
-}
-
-export interface ProductCreateDto {
-  name: string;
-  sku?: string | null;
-  description?: string | null;
-  unitPrice: number;
-  quantityInStock: number;
-  lowStockThreshold: number;
-  unit?: string | null;
-  categoryId?: number | null;
-  supplierId?: number | null;
-  isActive?: boolean;
 }
 
 export interface ProductUpdateDto {

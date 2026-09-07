@@ -64,6 +64,7 @@ public class MachineService : IMachineService
         return products;
     }
 
+    [Obsolete("Use IImportService.ImportNayaxSalesFromExcelAsync instead.")]
     public async Task<(int Imported, int Updated, int Skipped)> ImportNayaxSalesFromExcelAsync(IFormFile file, CancellationToken ct = default)
     {
         if (file is null || file.Length == 0)
