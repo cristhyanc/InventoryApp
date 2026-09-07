@@ -176,8 +176,8 @@ public sealed class OperatingExpensesController : ControllerBase
     {
         if (string.IsNullOrWhiteSpace(dto.Description)) return "Description is required.";
         if (dto.AmountExGst < 0 || dto.GstAmount < 0 || dto.TotalAmount < 0) return "Expense amounts cannot be negative.";
-        if (Math.Abs(dto.AmountExGst + dto.GstAmount - dto.TotalAmount) > GstTolerance)
-            return "Amount ex GST plus GST must equal total amount within 2 cents.";
+        //if (Math.Abs(dto.AmountExGst + dto.GstAmount - dto.TotalAmount) > GstTolerance)
+        //    return "Amount ex GST plus GST must equal total amount within 2 cents.";
         if (dto.ServicePeriodStart.HasValue && dto.ServicePeriodEnd.HasValue && dto.ServicePeriodEnd < dto.ServicePeriodStart)
             return "Service period end must not be before its start.";
         return null;
