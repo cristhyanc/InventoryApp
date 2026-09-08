@@ -65,6 +65,9 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<NayaxSales>()
             .Property(s => s.CostOfGoodsSold)
             .HasColumnType("decimal(18,6)");
+        modelBuilder.Entity<NayaxSales>()
+            .Property(s => s.NayaxProductCostPrice)
+            .HasColumnType("decimal(18,6)");
 
         modelBuilder.Entity<Product>()
             .HasOne(p => p.Category)

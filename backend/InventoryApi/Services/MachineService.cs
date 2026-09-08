@@ -64,207 +64,6 @@ public class MachineService : IMachineService
         return products;
     }
 
-    [Obsolete("Use IImportService.ImportNayaxSalesFromExcelAsync instead.")]
-    public async Task<(int Imported, int Updated, int Skipped)> ImportNayaxSalesFromExcelAsync(IFormFile file, CancellationToken ct = default)
-    {
-        if (file is null || file.Length == 0)
-            return (0, 0, 0);
-
-        if (!file.FileName.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase) &&
-            !file.FileName.EndsWith(".xls", StringComparison.OrdinalIgnoreCase) &&
-            !file.FileName.EndsWith(".csv", StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException("Only .xlsx, .xls, or .csv files are supported.");
-        }
-
-        using var stream = file.OpenReadStream();
-        using var workbook = file.FileName.EndsWith(".csv", StringComparison.OrdinalIgnoreCase)
-            ? GetCsvWorkbook(stream)
-            : new XLWorkbook(stream);
-
-        var worksheet = workbook.Worksheets.FirstOrDefault();
-        if (worksheet is null)
-            return (0, 0, 0);
-
-        var rows = worksheet.Rows().ToList();
-        if (rows.Count == 0)
-            return (0, 0, 0);
-
-        var headerRow = rows.First();
-        var headers = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        var headerIndex = 1;
-
-        foreach (var cell in headerRow.Cells())
-        {
-            var value = cell.GetString().Trim();
-            if (!string.IsNullOrWhiteSpace(value))
-            {
-                headers[NormalizeHeader(value)] = cell.Address.ColumnNumber - 1;
-            }
-
-            headerIndex++;
-        }
-
-        if (headers.Count == 0)
-            return (0, 0, 0);
-
-        var imported = 0;
-        var updated = 0;
-        var skipped = 0;
-
-        foreach (var row in rows.Skip(1))
-        {
-            var transactionIdCell = GetCell(row, headers, "TransactionID");
-            if (transactionIdCell is null || transactionIdCell.IsEmpty())
-            {
-                skipped++;
-                continue;
-            }
-
-            var transactionId = TryParseLong(transactionIdCell);
-            if (transactionId <= 0)
-            {
-                skipped++;
-                continue;
-            }
-
-            var sale = new NayaxSales
-            {
-                TransactionID = transactionId,
-                TransactionStatusId = TryParseInt(GetCell(row, headers, "TransactionStatusId")),
-                MachineID = TryParseLong(GetCell(row, headers, "MachineID")),
-                NayaxProductId = TryParseLongOrNull(GetCell(row, headers, "NayaxProductId")),
-                MachineName = GetCellValue(row, headers, "MachineName"),
-                SettlementValue = TryParseDecimal(GetCell(row, headers, "SettlementValue")) ?? 0m,
-                PaymentMethod = GetCellValue(row, headers, "PaymentMethod"),
-                ProductName = GetCellValue(row, headers, "ProductName"),
-                MachineAuthorizationTime = TryParseDateTime(GetCell(row, headers, "MachineAuthorizationTime")) ?? DateTime.MinValue
-            };
-
-            if (sale.MachineID <= 0 || sale.MachineAuthorizationTime == DateTime.MinValue)
-            {
-                skipped++;
-                continue;
-            }
-
-            var existing = await _db.NayaxSales.FirstOrDefaultAsync(x => x.TransactionID == sale.TransactionID, ct);
-            if (existing is null)
-            {
-                _db.NayaxSales.Add(sale);
-                await _saleCosting.CostSaleAsync(sale, allowLegacyEstimate: true, cancellationToken: ct);
-                imported++;
-            }
-            else
-            {
-                existing.MachineID = sale.MachineID;
-                existing.TransactionStatusId = sale.TransactionStatusId;
-                existing.NayaxProductId = sale.NayaxProductId;
-                existing.MachineName = sale.MachineName;
-                existing.SettlementValue = sale.SettlementValue;
-                existing.PaymentMethod = sale.PaymentMethod;
-                existing.ProductName = sale.ProductName;
-                existing.MachineAuthorizationTime = sale.MachineAuthorizationTime;
-                await _saleCosting.CostSaleAsync(existing, allowLegacyEstimate: true, cancellationToken: ct);
-                updated++;
-            }
-        }
-
-        if (imported > 0 || updated > 0)
-        {
-            await _db.SaveChangesAsync(ct);
-        }
-
-        return (imported, updated, skipped);
-    }
-
-    private static IXLWorkbook GetCsvWorkbook(Stream stream)
-    {
-        var csvPath = Path.GetTempFileName();
-        using (var fs = File.Create(csvPath))
-        {
-            stream.CopyTo(fs);
-        }
-
-        return new XLWorkbook(csvPath);
-    }
-
-    private static string NormalizeHeader(string value)
-    {
-        var normalized = new string(value.Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
-        return normalized;
-    }
-
-    private static IXLCell? GetCell(IXLRow row, Dictionary<string, int> headers, string key)
-    {
-        if (!headers.TryGetValue(NormalizeHeader(key), out var index))
-        {
-            return null;
-        }
-
-        var cells = row.Cells().ToList();
-        if (index >= cells.Count)
-        {
-            return null;
-        }
-
-        return cells[index];
-    }
-
-    private static string? GetCellValue(IXLRow row, Dictionary<string, int> headers, string key)
-    {
-        var cell = GetCell(row, headers, key);
-        return cell is null || cell.IsEmpty() ? null : cell.GetString().Trim();
-    }
-
-    private static long TryParseLong(IXLCell? cell)
-    {
-        if (cell is null || cell.IsEmpty()) return 0;
-        var text = cell.GetString().Trim();
-        if (long.TryParse(text, out var value)) return value;
-        if (double.TryParse(text, out var number)) return Convert.ToInt64(number);
-        return 0;
-    }
-
-    private static long? TryParseLongOrNull(IXLCell? cell)
-    {
-        if (cell is null || cell.IsEmpty()) return null;
-        var text = cell.GetString().Trim();
-        if (long.TryParse(text, out var value)) return value;
-        if (double.TryParse(text, out var number)) return Convert.ToInt64(number);
-        return null;
-    }
-
-    private static decimal? TryParseDecimal(IXLCell? cell)
-    {
-        if (cell is null || cell.IsEmpty()) return null;
-        var text = cell.GetString().Trim();
-        if (decimal.TryParse(text, out var value)) return value;
-        if (double.TryParse(text, out var number)) return Convert.ToDecimal(number);
-        return null;
-    }
-
-    private static int? TryParseInt(IXLCell? cell)
-    {
-        if (cell is null || cell.IsEmpty()) return null;
-        var text = cell.GetString().Trim();
-        if (int.TryParse(text, out var value)) return value;
-        if (double.TryParse(text, out var number)) return Convert.ToInt32(number);
-        return null;
-    }
-
-    private static DateTime? TryParseDateTime(IXLCell? cell)
-    {
-        if (cell is null || cell.IsEmpty()) return null;
-
-        var value = cell.Value;
-        if (value.IsDateTime) return value.GetDateTime();
-        if (value.IsNumber) return DateTime.FromOADate(value.GetNumber());
-
-        var text = cell.GetString().Trim();
-        if (DateTime.TryParseExact(text,"d/M/yyyy h:mm:ss tt", CultureInfo.InvariantCulture, DateTimeStyles.None,  out var dt)) return dt;         
-        return null;
-    }
-
     private async Task<Machine> GetMachineSalesAsync(NayaxMachine machine, List<Product> products)
     {
         var now = DateTime.Now;
@@ -318,50 +117,36 @@ public class MachineService : IMachineService
 
     private async Task SaveMachinesLastSalesAsync(List<long> machineIds, CancellationToken ct = default)
     {
-        foreach (long machineId in machineIds)
+        foreach (var machineId in machineIds)
         {
             var sales = await _nayaxLynxClient.GetMachineLastSalesAsync(machineId, ct);
-
             foreach (var sale in sales)
             {
-                var existing = await _db.NayaxSales.FindAsync(sale.TransactionID);
+                var existing = await _db.NayaxSales
+                    .FirstOrDefaultAsync(x => x.TransactionID == sale.TransactionID, ct);
                 if (existing is null)
                 {
-                    _db.NayaxSales.Add(new NayaxSales
+                    var added = new NayaxSales
                     {
                         TransactionID = sale.TransactionID,
-                        TransactionStatusId = sale.SettlementValue == 0
-                            ? NayaxTransactionStatusIds.CashlessCancelledProductNotDispensed
-                            : sale.TransactionStatusId ?? NayaxTransactionStatusIds.Completed,
+                        TransactionStatusId = sale.TransactionStatusId,
                         MachineID = sale.MachineID,
                         NayaxProductId = sale.NayaxProductId,
                         MachineName = sale.MachineName,
                         SettlementValue = sale.SettlementValue,
                         PaymentMethod = sale.PaymentMethod,
                         ProductName = sale.ProductName,
+                        NayaxProductCostPrice = sale.ProductCostPrice,
                         MachineAuthorizationTime = sale.MachineAuthorizationTime
-                    });
-                    var added = _db.NayaxSales.Local.Last();
+                    };
+                    _db.NayaxSales.Add(added);
                     await _saleCosting.CostSaleAsync(added, allowLegacyEstimate: true, cancellationToken: ct);
-                }
-                else
-                {
-                    existing.TransactionStatusId = sale.SettlementValue == 0
-                            ? NayaxTransactionStatusIds.CashlessCancelledProductNotDispensed
-                            : sale.TransactionStatusId ?? NayaxTransactionStatusIds.Completed;
-                    existing.MachineID = sale.MachineID;
-                    existing.NayaxProductId = sale.NayaxProductId;
-                    existing.MachineName = sale.MachineName;
-                    existing.SettlementValue = sale.SettlementValue;
-                    existing.PaymentMethod = sale.PaymentMethod;
-                    existing.ProductName = sale.ProductName;
-                    existing.MachineAuthorizationTime = sale.MachineAuthorizationTime;
-                    await _saleCosting.CostSaleAsync(existing, allowLegacyEstimate: true, cancellationToken: ct);
+                    continue;
                 }
             }
         }
 
-        await _db.SaveChangesAsync();
+        await _db.SaveChangesAsync(ct);
     }
 
     private async Task<decimal> CalculateRevenueAsync(List<NayaxSales> sales, List<NayaxMachineProduct> machineProducts, List<Product> products, DateTime from, DateTime to, long machineId)

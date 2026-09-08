@@ -21,7 +21,10 @@ public class NayaxTransactionStatusTests
     [InlineData(NayaxTransactionStatusIds.PendingSettlementNotFinal, NayaxTransactionStatus.Pending)]
     [InlineData(NayaxTransactionStatusIds.PendingBatch, NayaxTransactionStatus.Pending)]
     [InlineData(NayaxTransactionStatusIds.Refunded, NayaxTransactionStatus.Refunded)]
+    [InlineData(NayaxTransactionStatusIds.CancelledOrDeclined26, NayaxTransactionStatus.CancelledOrDeclined)]
     [InlineData(NayaxTransactionStatusIds.CashlessCancelledProductNotDispensed, NayaxTransactionStatus.CancelledOrDeclined)]
+    [InlineData(NayaxTransactionStatusIds.CancelledOrDeclined31, NayaxTransactionStatus.CancelledOrDeclined)]
+    [InlineData(NayaxTransactionStatusIds.CancelledOrDeclined250, NayaxTransactionStatus.CancelledOrDeclined)]
     [InlineData(null, NayaxTransactionStatus.Unknown)]
     [InlineData(21, NayaxTransactionStatus.Unknown)]
     public void Classifier_maps_raw_status_ids(int? statusId, NayaxTransactionStatus expected)
@@ -71,6 +74,7 @@ public class NayaxTransactionStatusTests
         Assert.Equal(2.10m, sale.UnitCostAtSale);
         Assert.Equal(2.10m, sale.CostOfGoodsSold);
         Assert.Equal(SaleCostingStatus.Costed, sale.CostingStatus);
+        Assert.Equal(SaleCostSource.InventoryLedger, sale.CostSource);
     }
 
     [Fact]

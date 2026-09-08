@@ -11,7 +11,9 @@ public class NayaxSales
     public string? PaymentMethod { get; set; }
     public string? ProductName { get; set; }
     public DateTime MachineAuthorizationTime { get; set; }
+    public decimal? NayaxProductCostPrice { get; set; }
     public decimal? UnitCostAtSale { get; set; }
     public decimal? CostOfGoodsSold { get; set; }
     public SaleCostingStatus CostingStatus { get; set; } = SaleCostingStatus.Pending;
+    public SaleCostSource CostSource { get; set; } = SaleCostSource.Unknown;
 }

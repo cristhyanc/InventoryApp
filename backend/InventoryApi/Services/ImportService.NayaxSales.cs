@@ -17,9 +17,8 @@ public sealed partial class ImportService
             throw new InvalidOperationException("Only .xlsx, .xls, or .csv files are supported.");
 
         using var stream = file.OpenReadStream();
-        using var workbook = file.FileName.EndsWith(".csv", StringComparison.OrdinalIgnoreCase)
-            ? CreateCsvWorkbook(stream)
-            : new XLWorkbook(stream);
+        using var workbook = NayaxSalesWorkbook.Open(
+            stream, file.FileName.EndsWith(".csv", StringComparison.OrdinalIgnoreCase));
         var worksheet = workbook.Worksheets.FirstOrDefault();
         if (worksheet is null) return new(0, 0, 0);
         var rows = worksheet.Rows().ToList();
@@ -45,13 +44,17 @@ public sealed partial class ImportService
 
             var sale = new NayaxSales
             {
-                TransactionID = transactionId, MachineID = machineId, MachineAuthorizationTime = authorizationTime.Value,
+                TransactionID = transactionId,
+                MachineID = machineId,
+                MachineAuthorizationTime = authorizationTime.Value,
                 TransactionStatusId = IntValue(Cell(row, headers, "TransactionStatusId")),
                 NayaxProductId = NullableLongValue(Cell(row, headers, "NayaxProductId")),
                 MachineName = TextValue(Cell(row, headers, "MachineName")),
                 SettlementValue = DecimalValue(Cell(row, headers, "SettlementValue")) ?? 0m,
                 PaymentMethod = TextValue(Cell(row, headers, "PaymentMethod")),
-                ProductName = TextValue(Cell(row, headers, "ProductName"))
+                ProductName = TextValue(Cell(row, headers, "ProductName")),
+                NayaxProductCostPrice = DecimalValue(Cell(row, headers,
+                    "ProductCostPrice", "ProductCost", "CostPrice"))
             };
             var existing = await _db.NayaxSales.FirstOrDefaultAsync(x => x.TransactionID == transactionId, cancellationToken);
             if (existing is null)
@@ -62,10 +65,17 @@ public sealed partial class ImportService
             }
             else
             {
-                existing.MachineID = sale.MachineID; existing.TransactionStatusId = sale.TransactionStatusId;
-                existing.NayaxProductId = sale.NayaxProductId; existing.MachineName = sale.MachineName;
-                existing.SettlementValue = sale.SettlementValue; existing.PaymentMethod = sale.PaymentMethod;
-                existing.ProductName = sale.ProductName; existing.MachineAuthorizationTime = sale.MachineAuthorizationTime;
+                existing.MachineID = sale.MachineID;
+                existing.TransactionStatusId = sale.TransactionStatusId;
+                existing.NayaxProductId = sale.NayaxProductId; 
+                existing.MachineName = sale.MachineName;
+                existing.SettlementValue = sale.SettlementValue; 
+                existing.PaymentMethod = sale.PaymentMethod;
+                existing.ProductName = sale.ProductName; 
+                existing.MachineAuthorizationTime = sale.MachineAuthorizationTime;
+
+                if (sale.NayaxProductCostPrice.HasValue)
+                    existing.NayaxProductCostPrice = sale.NayaxProductCostPrice;
                 await _saleCosting.CostSaleAsync(existing, allowLegacyEstimate: true, cancellationToken: cancellationToken);
                 updated++;
             }
@@ -74,16 +84,14 @@ public sealed partial class ImportService
         return new(imported, updated, skipped);
     }
 
-    private static IXLWorkbook CreateCsvWorkbook(Stream stream)
-    {
-        var path = Path.GetTempFileName();
-        using var destination = File.Create(path);
-        stream.CopyTo(destination);
-        return new XLWorkbook(path);
-    }
     private static string NormalizeHeader(string value) => new string(value.Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
-    private static IXLCell? Cell(IXLRow row, IReadOnlyDictionary<string, int> headers, string name) =>
-        headers.TryGetValue(NormalizeHeader(name), out var index) ? row.Cell(index) : null;
+    private static IXLCell? Cell(IXLRow row, IReadOnlyDictionary<string, int> headers, params string[] names)
+    {
+        foreach (var name in names)
+            if (headers.TryGetValue(NormalizeHeader(name), out var index))
+                return row.Cell(index);
+        return null;
+    }
     private static string? TextValue(IXLCell? cell) => cell is null || cell.IsEmpty() ? null : cell.GetString().Trim();
     private static long LongValue(IXLCell? cell) => long.TryParse(TextValue(cell), out var value) ? value : 0;
     private static long? NullableLongValue(IXLCell? cell) => long.TryParse(TextValue(cell), out var value) ? value : null;

@@ -23,4 +23,26 @@ public sealed class SaleCostingController : ControllerBase
 
         return Ok(await _service.BackfillAsync(dryRun, force, cancellationToken));
     }
+
+    [HttpPost("nayax-cost-backfill/dry-run")]
+    public async Task<ActionResult<NayaxCostBackfillResult>> DryRunNayaxCostBackfill(
+        [FromQuery] DateTime? from = null,
+        [FromQuery] DateTime? to = null,
+        [FromQuery] long? productId = null,
+        [FromQuery] bool force = false,
+        CancellationToken cancellationToken = default) =>
+        Ok(await _service.BackfillHistoricalCostsFromNayaxAsync(
+            dryRun: true, force: force, from: from, to: to, productId: productId,
+            cancellationToken: cancellationToken));
+
+    [HttpPost("nayax-cost-backfill/apply")]
+    public async Task<ActionResult<NayaxCostBackfillResult>> ApplyNayaxCostBackfill(
+        [FromQuery] DateTime? from = null,
+        [FromQuery] DateTime? to = null,
+        [FromQuery] long? productId = null,
+        [FromQuery] bool force = false,
+        CancellationToken cancellationToken = default) =>
+        Ok(await _service.BackfillHistoricalCostsFromNayaxAsync(
+            dryRun: false, force: force, from: from, to: to, productId: productId,
+            cancellationToken: cancellationToken));
 }

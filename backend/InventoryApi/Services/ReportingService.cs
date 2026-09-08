@@ -588,6 +588,9 @@ public sealed class ReportingService : IReportingService
             notes.Add("Overlapping site commission agreements cover one or more transactions; their direct profit is unavailable.");
         if (rows.Any(x => x.FeeSource == "Estimated"))
             notes.Add("Transaction fees are configured estimates. Imported Nayax fees are period/device-level and are not allocated to transactions.");
+        var nayaxCosted = rows.Count(x => x.CostSource == "Nayax Historical Export");
+        if (nayaxCosted > 0)
+            notes.Add($"Historical COGS includes {nayaxCosted} transaction(s) costed from the Nayax transaction export.");
         var quality = new ReportingDataQualityDto(
             MissingStatus: missingStatus > 0,
             HistoricalCostUnavailable: totals.UncostedCompletedTransactionCount > 0,
@@ -656,8 +659,9 @@ public sealed class ReportingService : IReportingService
             detail.Sale.MachineAuthorizationTime, detail.Sale.TransactionID, detail.Sale.MachineID,
             detail.Sale.MachineName ?? $"Machine {detail.Sale.MachineID}", detail.SiteId, detail.SiteName,
             detail.ProductId, detail.ProductName, detail.PaymentType.ToString(), detail.Sale.PaymentMethod,
-            sale.SettlementValue, detail.Sale.UnitCostAtSale, detail.Sale.CostOfGoodsSold,
-            detail.Sale.CostingStatus.ToString(), grossProfit,
+            sale.SettlementValue, detail.Sale.NayaxProductCostPrice, detail.Sale.UnitCostAtSale,
+            detail.Sale.CostOfGoodsSold, detail.Sale.CostingStatus.ToString(),
+            CostSourceLabel(detail.Sale), grossProfit,
             grossProfit.HasValue ? ReportingCalculations.PercentageOf(grossProfit.Value, sale.SettlementValue) : null,
             directProfit,
             directProfit.HasValue ? ReportingCalculations.PercentageOf(directProfit.Value, sale.SettlementValue) : null,
@@ -665,6 +669,22 @@ public sealed class ReportingService : IReportingService
             agreement?.CommissionRate, agreement?.Basis.ToString(), commissionAmount,
             detail.Sale.TransactionStatusId, NayaxTransactionStatusClassifier.Describe(detail.Sale.TransactionStatusId),
             detail.Status == NayaxTransactionStatus.Completed), feeUnavailable, hasOverlappingCommission);
+    }
+
+    private static string CostSourceLabel(NayaxSales sale)
+    {
+        if (sale.CostingStatus == SaleCostingStatus.Pending)
+            return "Pending";
+        if (sale.CostingStatus == SaleCostingStatus.LegacyEstimated)
+            return "Estimated";
+
+        return sale.CostSource switch
+        {
+            SaleCostSource.InventoryLedger => "Inventory Ledger",
+            SaleCostSource.NayaxTransactionExport => "Nayax Historical Export",
+            SaleCostSource.Estimated => "Estimated",
+            _ => "Unknown"
+        };
     }
 
     private static IEnumerable<TransactionSalesRowDto> SortTransactionRows(
@@ -776,7 +796,8 @@ public sealed class ReportingService : IReportingService
             {
                 "TransactionDate", "TransactionId", "MachineId", "Machine", "SiteId", "Site",
                 "ProductId", "Product", "PaymentType", "RawPaymentMethod", "Sale", "UnitCostAtSale",
-                "CostOfGoods", "CostingStatus", "GrossProfit", "GrossMarginPercent", "DirectProfit",
+                "NayaxProductCostPrice", "CostOfGoods", "CostingStatus", "CostSource",
+                "GrossProfit", "GrossMarginPercent", "DirectProfit",
                 "DirectMarginPercent", "FeeExGst", "FeeGST", "FeeIncGST", "FeeSource",
                 "CommissionRate", "CommissionBasis", "CommissionAmount", "TransactionStatusId",
                 "TransactionStatus", "IsCompleted"
@@ -788,7 +809,8 @@ public sealed class ReportingService : IReportingService
             x.TransactionId.ToString(CultureInfo.InvariantCulture), x.MachineId.ToString(CultureInfo.InvariantCulture),
             x.MachineName, Number(x.SiteId), x.SiteName ?? string.Empty, Number(x.ProductId), x.ProductName,
             x.PaymentType, x.RawPaymentMethod ?? string.Empty, Number(x.Sale), Number(x.UnitCostAtSale),
-            Number(x.CostOfGoods), x.CostingStatus, Number(x.GrossProfit), Number(x.GrossMarginPercent),
+            Number(x.NayaxProductCostPrice), Number(x.CostOfGoods), x.CostingStatus, x.CostSource,
+            Number(x.GrossProfit), Number(x.GrossMarginPercent),
             Number(x.DirectProfit), Number(x.DirectMarginPercent), Number(x.FeeExGst), Number(x.FeeGst),
             Number(x.FeeIncGst), x.FeeSource, Number(x.CommissionRate), x.CommissionBasis ?? string.Empty,
             Number(x.CommissionAmount), Number(x.TransactionStatusId), x.TransactionStatus, x.IsCompleted.ToString()

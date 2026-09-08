@@ -130,7 +130,7 @@ public sealed class InventoryCostRebuildService : IInventoryCostRebuildService
 
             var sale = entry.Sale!;
             var unitCost = AverageUnitCost(costingQuantity, inventoryValue);
-            if (!unitCost.HasValue || unitCost.Value <= 0)
+            if (!unitCost.HasValue || unitCost.Value < 0)
             {
                 issues.Add(new(hasCostedAcquisition ? "UnknownCost" : "MissingOpening",
                     $"Completed Nayax sale {sale.TransactionID} for product {product.Id} has no known opening cost at {sale.MachineAuthorizationTime:O}."));
@@ -144,9 +144,10 @@ public sealed class InventoryCostRebuildService : IInventoryCostRebuildService
 
             if (mutate && recostCompletedSalesFrom.HasValue && sale.MachineAuthorizationTime >= recostCompletedSalesFrom.Value)
             {
-                sale.UnitCostAtSale = unitCost is > 0 ? unitCost : null;
-                sale.CostOfGoodsSold = unitCost is > 0 ? unitCost : null;
-                sale.CostingStatus = unitCost is > 0 ? SaleCostingStatus.Costed : SaleCostingStatus.Pending;
+                sale.UnitCostAtSale = unitCost is >= 0 ? unitCost : null;
+                sale.CostOfGoodsSold = unitCost is >= 0 ? unitCost : null;
+                sale.CostingStatus = unitCost is >= 0 ? SaleCostingStatus.Costed : SaleCostingStatus.Pending;
+                sale.CostSource = unitCost is >= 0 ? SaleCostSource.InventoryLedger : SaleCostSource.Unknown;
                 recostedSaleCount++;
             }
         }
@@ -201,17 +202,17 @@ public sealed class InventoryCostRebuildService : IInventoryCostRebuildService
 
         var quantity = checked(-adjustment.QuantityChange);
         var unitCost = AverageUnitCost(costingQuantity, inventoryValue);
-        if (!unitCost.HasValue || unitCost.Value <= 0)
+        if (!unitCost.HasValue || unitCost.Value < 0)
             issues.Add(new(hasCostedAcquisition ? "UnknownCost" : "MissingOpening",
                 $"{adjustment.Reason} adjustment {adjustment.Id} for product {productId} has no known cost."));
 
         costingQuantity -= quantity;
         if (costingQuantity < 0)
             issues.Add(new("NegativeCostingStock", $"Product {productId} becomes cost-negative at adjustment {adjustment.Id}."));
-        if (unitCost.HasValue && unitCost.Value > 0)
+        if (unitCost.HasValue && unitCost.Value >= 0)
             inventoryValue -= quantity * unitCost.Value;
 
-        if (mutate && unitCost is > 0)
+        if (mutate && unitCost is >= 0)
         {
             adjustment.UnitCost = unitCost;
             adjustment.TotalCost = quantity * unitCost.Value;

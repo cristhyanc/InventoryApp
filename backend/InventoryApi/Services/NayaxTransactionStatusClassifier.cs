@@ -15,10 +15,13 @@ public enum NayaxTransactionStatus
 public static class NayaxTransactionStatusIds
 {
     public const int Completed = 12;
+    public const int CancelledOrDeclined26 = 26;
     public const int CashlessCancelledProductNotDispensed = 28;
+    public const int CancelledOrDeclined31 = 31;
     public const int PendingSettlementNotFinal = 55;
     public const int Refunded = 62;
     public const int PendingBatch = 80;
+    public const int CancelledOrDeclined250 = 250;
 }
 
 public static class NayaxTransactionStatusClassifier
@@ -32,7 +35,10 @@ public static class NayaxTransactionStatusClassifier
             NayaxTransactionStatusIds.Completed => NayaxTransactionStatus.Completed,
             NayaxTransactionStatusIds.PendingSettlementNotFinal or NayaxTransactionStatusIds.PendingBatch => NayaxTransactionStatus.Pending,
             NayaxTransactionStatusIds.Refunded => NayaxTransactionStatus.Refunded,
-            NayaxTransactionStatusIds.CashlessCancelledProductNotDispensed => NayaxTransactionStatus.CancelledOrDeclined,
+            NayaxTransactionStatusIds.CancelledOrDeclined26 or
+            NayaxTransactionStatusIds.CashlessCancelledProductNotDispensed or
+            NayaxTransactionStatusIds.CancelledOrDeclined31 or
+            NayaxTransactionStatusIds.CancelledOrDeclined250 => NayaxTransactionStatus.CancelledOrDeclined,
             null => NayaxTransactionStatus.Unknown,
             _ => NayaxTransactionStatus.Unknown
         };
@@ -46,8 +52,11 @@ public static class NayaxTransactionStatusClassifier
             NayaxTransactionStatusIds.Completed => "Approved / Completed",
             NayaxTransactionStatusIds.PendingSettlementNotFinal => "Pending / Settlement not final",
             NayaxTransactionStatusIds.Refunded => "Refunded",
+            NayaxTransactionStatusIds.CancelledOrDeclined26 => "Cancelled / declined",
             NayaxTransactionStatusIds.CashlessCancelledProductNotDispensed => "Cashless cancelled - Product could not be dispensed",
+            NayaxTransactionStatusIds.CancelledOrDeclined31 => "Cancelled / declined",
             NayaxTransactionStatusIds.PendingBatch => "Pending batch",
+            NayaxTransactionStatusIds.CancelledOrDeclined250 => "Cancelled / declined",
             null => "Unknown",
             _ => $"Status {transactionStatusId}"
         };

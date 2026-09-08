@@ -19,7 +19,8 @@ export interface TransactionSalesRow {
   transactionDate: string; transactionId: number; machineId: number; machineName: string;
   siteId?: number | null; siteName?: string | null; productId?: number | null; productName: string;
   paymentType: string; rawPaymentMethod?: string | null; sale: number; unitCostAtSale?: number | null;
-  costOfGoods?: number | null; costingStatus: string; grossProfit?: number | null; grossMarginPercent?: number | null;
+  nayaxProductCostPrice?: number | null; costOfGoods?: number | null; costingStatus: string; costSource: string;
+  grossProfit?: number | null; grossMarginPercent?: number | null;
   directProfit?: number | null; directMarginPercent?: number | null; feeExGst?: number | null;
   feeGst?: number | null; feeIncGst?: number | null; feeSource: string; commissionRate?: number | null;
   commissionBasis?: string | null; commissionAmount?: number | null; transactionStatusId?: number | null;
@@ -176,6 +177,16 @@ export interface SaleCostingBackfillResult {
   alreadyFinalizedCount: number;
   dryRun: boolean;
 }
+export interface NayaxCostBackfillResult {
+  salesReviewed: number;
+  salesWithNayaxCost: number;
+  salesWouldBeCosted: number;
+  salesAlreadyCosted: number;
+  salesStillPending: number;
+  invalidCostRows: number;
+  errorRows: number;
+  dryRun: boolean;
+}
 
 @Injectable({ providedIn: 'root' })
 export class ReportingService {
@@ -213,6 +224,12 @@ export class ReportingService {
     return this.http.post<SaleCostingBackfillResult>(url, null, {
       params: { dryRun, force }
     });
+  }
+
+  backfillNayaxSaleCosts(dryRun = true): Observable<NayaxCostBackfillResult> {
+    const action = dryRun ? 'dry-run' : 'apply';
+    const url = `${this.config.apiBaseUrl.replace(/\/$/, '')}/sale-costing/nayax-cost-backfill/${action}`;
+    return this.http.post<NayaxCostBackfillResult>(url, null);
   }
 
   export(report: string, format: 'csv' | 'xlsx', filter: ReportingFilter | TransactionSalesFilter): Observable<Blob> {

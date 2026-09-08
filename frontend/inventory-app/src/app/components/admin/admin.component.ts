@@ -2,7 +2,7 @@ import { Component } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ImportService } from '../../services/import.service';
-import { ReportingService, SaleCostingBackfillResult, SiteCommissionAgreement } from '../../services/reporting.service';
+import { NayaxCostBackfillResult, ReportingService, SiteCommissionAgreement } from '../../services/reporting.service';
 import { ToastService } from '../../services/toast.service';
 import { NayaxProcessingFeeRate, NayaxSettingsService } from '../../services/nayax-settings.service';
 import { Site } from '../../models/models';
@@ -32,7 +32,37 @@ import { SiteService } from '../../services/site.service';
           </label>
         </div>
         <button type="button" class="mt-3 rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50" [disabled]="loading" (click)="saveFeeRate()">Save rate</button>
-        @if (feeRates.length) { <div class="mt-3 text-xs text-slate-500">Rate history: @for (rate of feeRates; track rate.effectiveFrom) { <span class="mr-3">{{ rate.effectiveFrom | date:'dd/MM/yyyy' }}: {{ rate.feeExGst | currency:'AUD' }}</span> }</div> }
+        <div class="mt-5 border-t border-slate-100 pt-4">
+          <h3 class="mb-2 text-sm font-semibold text-slate-700">Configured settings</h3>
+          @if (feeRates.length) {
+            <div class="overflow-x-auto">
+              <table class="min-w-full text-left text-sm">
+                <thead class="bg-slate-50 text-xs text-slate-600">
+                  <tr><th class="px-3 py-2">Effective from</th><th class="px-3 py-2">Fee per card transaction (ex GST)</th><th class="px-3 py-2">Status</th></tr>
+                </thead>
+                <tbody>
+                  @for (rate of feeRates; track rate.id ?? rate.effectiveFrom) {
+                    <tr class="border-t border-slate-100">
+                      <td class="px-3 py-2">{{ rate.effectiveFrom | date:'dd/MM/yyyy' }}</td>
+                      <td class="px-3 py-2">{{ rate.feeExGst | currency:'AUD':'symbol':'1.4-4' }}</td>
+                      <td class="px-3 py-2">
+                        @if (isCurrentFeeRate(rate)) {
+                          <span class="rounded-full bg-emerald-100 px-2 py-1 text-xs font-medium text-emerald-700">Current</span>
+                        } @else if (isFutureFeeRate(rate)) {
+                          <span class="rounded-full bg-blue-100 px-2 py-1 text-xs font-medium text-blue-700">Scheduled</span>
+                        } @else {
+                          <span class="text-xs text-slate-500">Previous</span>
+                        }
+                      </td>
+                    </tr>
+                  }
+                </tbody>
+              </table>
+            </div>
+          } @else {
+            <p class="text-sm text-slate-500">No Nayax processing-fee settings configured.</p>
+          }
+        </div>
       </section>
 
       <section class="rounded-xl bg-white p-6 shadow-sm">
@@ -81,18 +111,20 @@ import { SiteService } from '../../services/site.service';
       </section>
 
       <section class="rounded-xl bg-white p-6 shadow-sm">
-        <h2 class="text-lg font-semibold text-slate-800">COGS backfill</h2>
-        <p class="mt-1 text-sm text-slate-500">Preview historical sale costing before applying changes.</p>
+        <h2 class="text-lg font-semibold text-slate-800">Nayax Historical Cost Recovery</h2>
+        <p class="mt-1 text-sm text-slate-500">Recover pending completed-sale COGS from transaction-level Nayax Product Cost Price without replacing finalized inventory-ledger costs.</p>
         <div class="mt-4 flex flex-wrap gap-2">
-          <button type="button" class="rounded-md border border-blue-300 px-3 py-2 text-sm text-blue-700" [disabled]="loading" (click)="backfill(true)">Dry run</button>
-          <button type="button" class="rounded-md bg-amber-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50" [disabled]="loading" (click)="executeBackfill()">Execute backfill</button>
+          <button type="button" class="rounded-md border border-blue-300 px-3 py-2 text-sm text-blue-700" [disabled]="loading" (click)="backfillNayax(true)">Dry Run</button>
+          <button type="button" class="rounded-md bg-amber-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50" [disabled]="loading" (click)="applyNayaxBackfill()">Apply Nayax Cost Backfill</button>
         </div>
-        @if (backfillResult) {
+        @if (nayaxBackfillResult) {
           <div class="mt-4 grid grid-cols-2 gap-2 text-sm text-slate-600">
-            <div>Costed: <strong>{{ backfillResult.costedCount }}</strong></div>
-            <div>Estimated: <strong>{{ backfillResult.legacyEstimatedCount }}</strong></div>
-            <div>Pending: <strong>{{ backfillResult.pendingCount }}</strong></div>
-            <div>Error: <strong>{{ backfillResult.errorCount }}</strong></div>
+            <div>Pending completed sales: <strong>{{ nayaxBackfillResult.salesWouldBeCosted + nayaxBackfillResult.salesStillPending }}</strong></div>
+            <div>With Nayax historical cost: <strong>{{ nayaxBackfillResult.salesWithNayaxCost }}</strong></div>
+            <div>Recoverable: <strong>{{ nayaxBackfillResult.salesWouldBeCosted }}</strong></div>
+            <div>Still missing cost: <strong>{{ nayaxBackfillResult.salesStillPending }}</strong></div>
+            <div>Already costed: <strong>{{ nayaxBackfillResult.salesAlreadyCosted }}</strong></div>
+            <div>Invalid cost rows: <strong>{{ nayaxBackfillResult.invalidCostRows }}</strong></div>
           </div>
         }
       </section>
@@ -102,7 +134,7 @@ import { SiteService } from '../../services/site.service';
 export class AdminComponent {
   loading = false;
   error = '';
-  backfillResult: SaleCostingBackfillResult | null = null;
+  nayaxBackfillResult: NayaxCostBackfillResult | null = null;
   feeRates: NayaxProcessingFeeRate[] = [];
   feeExGst = 0.17;
   effectiveFrom = new Date().toISOString().slice(0, 10);
@@ -145,6 +177,17 @@ export class AdminComponent {
   siteName(siteId: number): string { return this.sites.find(site => site.siteId === siteId)?.siteName ?? `Site ${siteId}`; }
   frequencyLabel(frequency: number): string { return ['None', 'Monthly', 'Quarterly'][frequency] ?? 'Unknown'; }
   basisLabel(basis: number): string { return ['Gross Sales', 'Card Sales', 'Sales ex GST'][basis] ?? 'Unknown'; }
+  isCurrentFeeRate(rate: NayaxProcessingFeeRate): boolean {
+    return this.currentFeeRate?.effectiveFrom === rate.effectiveFrom;
+  }
+  isFutureFeeRate(rate: NayaxProcessingFeeRate): boolean {
+    return new Date(`${rate.effectiveFrom.slice(0, 10)}T00:00:00`).getTime() > new Date().setHours(0, 0, 0, 0);
+  }
+  private get currentFeeRate(): NayaxProcessingFeeRate | undefined {
+    const today = new Date().setHours(23, 59, 59, 999);
+    return this.feeRates.find(rate =>
+      new Date(`${rate.effectiveFrom.slice(0, 10)}T00:00:00`).getTime() <= today);
+  }
 
   loadFeeRates(): void {
     this.nayaxSettings.getRates().subscribe({
@@ -185,8 +228,8 @@ export class AdminComponent {
   }
 
   downloadTemplate(): void {
-    const headers = ['TransactionID', 'TransactionStatusId', 'MachineID', 'NayaxProductId', 'MachineName', 'SettlementValue', 'PaymentMethod', 'ProductName', 'MachineAuthorizationTime'];
-    const sample = ['1001', '12', '42', '987654', 'Machine A', '12.50', 'Card', 'Coke Zero', '2026-09-02 14:30:00'];
+    const headers = ['TransactionID', 'TransactionStatusId', 'MachineID', 'NayaxProductId', 'MachineName', 'SettlementValue', 'PaymentMethod', 'ProductName', 'Product Cost Price', 'MachineAuthorizationTime'];
+    const sample = ['1001', '12', '42', '987654', 'Machine A', '12.50', 'Card', 'Coke Zero', '1.100000', '2026-09-02 14:30:00'];
     const url = URL.createObjectURL(new Blob([[headers.join(','), sample.join(',')].join('\n')], { type: 'text/csv;charset=utf-8;' }));
     const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'nayax-sales-import-template.csv'; anchor.click(); URL.revokeObjectURL(url);
   }
@@ -207,15 +250,18 @@ export class AdminComponent {
     });
   }
 
-  executeBackfill(): void {
-    if (window.confirm('This will write historical sale costs to the database. Continue?')) this.backfill(false, true);
+  applyNayaxBackfill(): void {
+    if (window.confirm('Apply transaction-level Nayax historical costs to eligible pending completed sales?')) {
+      this.backfillNayax(false);
+    }
   }
 
-  backfill(dryRun: boolean, force = false): void {
+  backfillNayax(dryRun: boolean): void {
     this.loading = true;
-    this.reportingService.backfillSaleCosts(dryRun, force).subscribe({
-      next: result => { this.backfillResult = result; this.loading = false; },
-      error: err => { this.error = typeof err?.error === 'string' ? err.error : 'Unable to run the COGS backfill.'; this.loading = false; }
+    this.error = '';
+    this.reportingService.backfillNayaxSaleCosts(dryRun).subscribe({
+      next: result => { this.nayaxBackfillResult = result; this.loading = false; },
+      error: err => { this.error = typeof err?.error === 'string' ? err.error : 'Unable to run the Nayax cost backfill.'; this.loading = false; }
     });
   }
 }

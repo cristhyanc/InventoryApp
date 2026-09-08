@@ -45,7 +45,7 @@ import { ReportFiltersComponent } from './report-filters.component';
       <td class="px-3 py-3">{{ row.productName }}</td>
       <td class="px-3 py-3">{{ row.paymentType }}<div class="text-xs text-slate-500">{{ row.rawPaymentMethod || '—' }}</div></td>
       <td class="px-3 py-3">{{ money(row.sale) }}</td>
-      <td class="px-3 py-3" [class.text-amber-700]="row.costOfGoods == null">{{ moneyOrDash(row.costOfGoods) }}<div class="text-xs text-slate-500">{{ row.costingStatus }}</div></td>
+      <td class="px-3 py-3" [class.text-amber-700]="row.costOfGoods == null">{{ moneyOrDash(row.costOfGoods) }}<div class="text-xs text-slate-500">{{ cogsSource(row) }}</div></td>
       <td class="px-3 py-3" [class.text-amber-700]="row.grossProfit == null">{{ moneyOrDash(row.grossProfit) }} @if (row.grossMarginPercent != null) {<div class="text-xs text-slate-500">{{ row.grossMarginPercent | number:'1.1-1' }}%</div>}</td>
       <td class="px-3 py-3" [class.text-amber-700]="row.directProfit == null">{{ moneyOrDash(row.directProfit) }} @if (row.directMarginPercent != null) {<div class="text-xs text-slate-500">{{ row.directMarginPercent | number:'1.1-1' }}%</div>}</td>
       <td class="px-3 py-3">{{ row.transactionStatus }}</td>
@@ -79,5 +79,10 @@ export class TransactionSalesReportComponent implements OnInit {
   export(format: 'csv' | 'xlsx'): void { this.reports.export('transactions', format, this.filter).subscribe(blob => { const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = `transactions.${format}`; link.click(); URL.revokeObjectURL(url); }); }
   money(value: number | null | undefined): string { return new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD' }).format(value ?? 0); }
   moneyOrDash(value: number | null | undefined): string { return value == null ? '—' : this.money(value); }
+  cogsSource(row: TransactionSalesRow): string {
+    if (row.costingStatus === 'Error') return 'Error';
+    if (row.costOfGoods == null || row.costingStatus === 'Pending') return 'Pending';
+    return row.costSource === 'Unknown' ? row.costingStatus : row.costSource;
+  }
   private isoDate(date: Date): string { return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`; }
 }

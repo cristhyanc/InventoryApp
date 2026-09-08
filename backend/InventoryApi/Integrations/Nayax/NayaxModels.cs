@@ -98,7 +98,7 @@ public class NayaxLastSalesReport
 {
     public long TransactionID { get; set; }
     [JsonPropertyName("TransactionStatusID")]
-    public int? TransactionStatusId { get; set; } = NayaxTransactionStatusIds.Completed;
+    public int? TransactionStatusId { get; set; }
 
     public long MachineID { get; set; }
 
@@ -112,6 +112,8 @@ public class NayaxLastSalesReport
 
     public string? ProductName { get; set; }
 
+    [JsonPropertyName("ProductCostPrice")]
+    public decimal? ProductCostPrice { get; set; }
 
     public DateTime MachineAuthorizationTime { get; set; }
 }
