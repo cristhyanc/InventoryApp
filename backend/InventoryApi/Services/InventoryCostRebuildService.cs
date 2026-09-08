@@ -29,8 +29,12 @@ public sealed class InventoryCostRebuildService : IInventoryCostRebuildService
                 .ToListAsync(cancellationToken))
             .Where(s => NayaxProductMatcher.Match(products, s.NayaxProductId, s.ProductName)?.Id == productId)
             .ToList();
+        var baseline = await _db.InventoryCostTransitionBaselines.AsNoTracking()
+            .Where(x => x.ProductId == productId)
+            .OrderByDescending(x => x.CutoffAt)
+            .FirstOrDefaultAsync(cancellationToken);
 
-        var outcome = Replay(product, adjustments, sales, recostCompletedSalesFrom, mutate: !dryRun);
+        var outcome = Replay(product, adjustments, sales, baseline, recostCompletedSalesFrom, mutate: !dryRun);
         var result = ToResult(productId, outcome, dryRun);
         ThrowIfFatal(result);
 
@@ -66,8 +70,12 @@ public sealed class InventoryCostRebuildService : IInventoryCostRebuildService
                 .ToListAsync(cancellationToken))
             .Where(s => NayaxProductMatcher.Match(products, s.NayaxProductId, s.ProductName)?.Id == productId)
             .ToList();
+        var baseline = await _db.InventoryCostTransitionBaselines.AsNoTracking()
+            .Where(x => x.ProductId == productId && x.CutoffAt <= saleTime)
+            .OrderByDescending(x => x.CutoffAt)
+            .FirstOrDefaultAsync(cancellationToken);
 
-        var outcome = Replay(product, adjustments, sales, null, mutate: false, saleTransactionId, saleTime);
+        var outcome = Replay(product, adjustments, sales, baseline, null, mutate: false, saleTransactionId, saleTime);
         return outcome.Issues.Any(IsFatal) ? null : outcome.TargetSaleUnitCost ?? outcome.AverageUnitCost;
     }
 
@@ -75,6 +83,7 @@ public sealed class InventoryCostRebuildService : IInventoryCostRebuildService
         Product product,
         IReadOnlyCollection<StockAdjustment> adjustments,
         IReadOnlyCollection<NayaxSales> sales,
+        InventoryCostTransitionBaseline? baseline,
         DateTime? recostCompletedSalesFrom,
         bool mutate,
         long? targetSaleTransactionId = null,
@@ -82,19 +91,20 @@ public sealed class InventoryCostRebuildService : IInventoryCostRebuildService
     {
         var events = adjustments.Select(x => new CostEvent(x)).Cast<CostEvent>()
             .Concat(sales.Select(x => new CostEvent(x)))
+            .Where(x => baseline is null || x.Timestamp > baseline.CutoffAt)
             .OrderBy(x => x.Timestamp)
             .ThenBy(x => x.Priority)
             .ThenBy(x => x.SourceId)
             .ToList();
         var issues = new List<InventoryCostDataQualityIssue>();
-        var physicalQuantity = 0;
-        var costingQuantity = 0;
-        decimal inventoryValue = 0;
+        var physicalQuantity = baseline?.HomeStockQuantity ?? 0;
+        var costingQuantity = baseline?.OpeningCostingQuantity ?? 0;
+        decimal inventoryValue = baseline?.InventoryValue ?? 0;
         decimal? targetSaleUnitCost = null;
-        var hasCostedAcquisition = false;
+        var hasCostedAcquisition = baseline is not null;
         var recostedSaleCount = 0;
 
-        if (events.Count == 0 && product.QuantityInStock != 0 &&
+        if (baseline is null && events.Count == 0 && product.QuantityInStock != 0 &&
             product.CostingQuantity is null && product.InventoryValue is null)
             issues.Add(new("MissingOpening", $"Product {product.Id} has physical stock but no opening stock movement."));
 
@@ -152,7 +162,7 @@ public sealed class InventoryCostRebuildService : IInventoryCostRebuildService
             }
         }
 
-        if (product.CostingQuantity is null && product.InventoryValue is null &&
+        if (baseline is null && product.CostingQuantity is null && product.InventoryValue is null &&
             product.QuantityInStock != physicalQuantity)
         {
             issues.Add(new("MissingOpening",

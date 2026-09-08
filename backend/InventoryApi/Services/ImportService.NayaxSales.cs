@@ -30,6 +30,8 @@ public sealed partial class ImportService
         var imported = 0;
         var updated = 0;
         var skipped = 0;
+        var products = await _db.Products.AsNoTracking().ToListAsync(cancellationToken);
+        var affected = new Dictionary<long, DateTime>();
 
         foreach (var row in rows.Skip(1))
         {
@@ -65,6 +67,7 @@ public sealed partial class ImportService
             }
             else
             {
+                TrackAffectedProduct(products, existing, affected);
                 existing.MachineID = sale.MachineID;
                 existing.TransactionStatusId = sale.TransactionStatusId;
                 existing.NayaxProductId = sale.NayaxProductId; 
@@ -79,9 +82,42 @@ public sealed partial class ImportService
                 await _saleCosting.CostSaleAsync(existing, allowLegacyEstimate: true, cancellationToken: cancellationToken);
                 updated++;
             }
+            TrackAffectedProduct(products, existing ?? sale, affected);
         }
-        if (imported > 0 || updated > 0) await _db.SaveChangesAsync(cancellationToken);
+        if (imported > 0 || updated > 0)
+        {
+            await _db.SaveChangesAsync(cancellationToken);
+            await RebuildPostTransitionProductsAsync(affected, cancellationToken);
+            await _db.SaveChangesAsync(cancellationToken);
+        }
         return new(imported, updated, skipped);
+    }
+
+    private static void TrackAffectedProduct(
+        IReadOnlyCollection<Product> products,
+        NayaxSales sale,
+        IDictionary<long, DateTime> affected)
+    {
+        if (!NayaxTransactionStatusClassifier.IsCompletedSale(sale))
+            return;
+        var product = NayaxProductMatcher.Match(products, sale.NayaxProductId, sale.ProductName);
+        if (product is not null &&
+            (!affected.TryGetValue(product.Id, out var existing) || sale.MachineAuthorizationTime < existing))
+            affected[product.Id] = sale.MachineAuthorizationTime;
+    }
+
+    private async Task RebuildPostTransitionProductsAsync(
+        IReadOnlyDictionary<long, DateTime> affected,
+        CancellationToken cancellationToken)
+    {
+        if (affected.Count == 0)
+            return;
+        var baselines = await _db.InventoryCostTransitionBaselines.AsNoTracking()
+            .Where(x => affected.Keys.Contains(x.ProductId))
+            .ToDictionaryAsync(x => x.ProductId, x => x.CutoffAt, cancellationToken);
+        foreach (var item in affected)
+            if (baselines.TryGetValue(item.Key, out var cutoff) && item.Value > cutoff)
+                await _inventoryCostRebuild.RebuildAsync(item.Key, item.Value, cancellationToken: cancellationToken);
     }
 
     private static string NormalizeHeader(string value) => new string(value.Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant();

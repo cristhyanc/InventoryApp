@@ -70,6 +70,10 @@ public class ReceiptService : IReceiptService
         if (supplierId.HasValue && !await _db.Suppliers.AnyAsync(s => s.Id == supplierId)) return null;
 
         var receiptItems = await ValidateItemsAsync(items ?? Array.Empty<ReceiptItemDto>());
+        var effectivePurchaseDate = purchaseDate ?? DateTime.UtcNow;
+        await ValidatePurchaseDatesAfterBaselinesAsync(
+            receiptItems.Select(x => x.ProductId),
+            effectivePurchaseDate);
         var storedFileName = $"{Guid.NewGuid()}{ext}";
         var fullPath = Path.Combine(ReceiptsFolder, storedFileName);
 
@@ -85,7 +89,7 @@ public class ReceiptService : IReceiptService
             TotalAmount = totalAmount,
             DeliveryCost = deliveryCost,
             PackageCost = packageCost,
-            PurchaseDate = purchaseDate ?? DateTime.UtcNow,
+            PurchaseDate = effectivePurchaseDate,
             SupplierId = supplierId,
             FileName = file.FileName,
             StoredFileName = storedFileName,
@@ -130,6 +134,7 @@ public class ReceiptService : IReceiptService
         if (supplierId.HasValue && !await _db.Suppliers.AnyAsync(s => s.Id == supplierId)) return null;
 
         var originalPurchaseDate = receipt.PurchaseDate;
+        var originalItems = receipt.Items.ToList();
         receipt.Title = string.IsNullOrWhiteSpace(title) ? receipt.Title : title;
         receipt.Notes = notes;
         receipt.TotalAmount = totalAmount;
@@ -142,6 +147,14 @@ public class ReceiptService : IReceiptService
         if (items is not null)
         {
             var validated = await ValidateItemsAsync(items);
+            await EnsureLegacyReceiptMovementsArePreservedAsync(
+                originalItems,
+                validated,
+                originalPurchaseDate,
+                receipt.PurchaseDate);
+            await ValidatePurchaseDatesAfterBaselinesAsync(
+                validated.Select(x => x.ProductId),
+                receipt.PurchaseDate);
             ApplyTotalWarning(receipt, validated);
             var existingItems = receipt.Items.ToList();
             var existingMovements = await _db.StockAdjustments
@@ -211,6 +224,14 @@ public class ReceiptService : IReceiptService
         else if (receipt.PurchaseDate != originalPurchaseDate)
         {
             var existingItems = receipt.Items.ToList();
+            await EnsureLegacyReceiptMovementsArePreservedAsync(
+                originalItems,
+                null,
+                originalPurchaseDate,
+                receipt.PurchaseDate);
+            await ValidatePurchaseDatesAfterBaselinesAsync(
+                existingItems.Select(x => x.ProductId),
+                receipt.PurchaseDate);
             var movements = await _db.StockAdjustments
                 .Where(movement => movement.ReceiptItemId.HasValue &&
                     existingItems.Select(item => item.Id).Contains(movement.ReceiptItemId.Value))
@@ -239,6 +260,7 @@ public class ReceiptService : IReceiptService
             .Where(movement => movement.ReceiptItemId.HasValue &&
                 receipt.Items.Select(item => item.Id).Contains(movement.ReceiptItemId.Value))
             .ToListAsync();
+        await EnsureNoPreCutoffMovementsAsync(movements);
         var affected = movements.Select(movement => (movement.ProductId, movement.EffectiveAt)).ToList();
         await using var transaction = await BeginTransactionAsync();
         _db.StockAdjustments.RemoveRange(movements);
@@ -299,6 +321,61 @@ public class ReceiptService : IReceiptService
         foreach (var product in affected.GroupBy(x => x.ProductId)
                      .Select(group => (ProductId: group.Key, ChangedAt: group.Min(x => x.ChangedAt))))
             await _rebuild.RebuildAsync(product.ProductId, product.ChangedAt);
+    }
+
+    private async Task ValidatePurchaseDatesAfterBaselinesAsync(
+        IEnumerable<long> productIds,
+        DateTime purchaseDate)
+    {
+        var ids = productIds.Distinct().ToList();
+        var conflicting = await _db.InventoryCostTransitionBaselines.AsNoTracking()
+            .Where(x => ids.Contains(x.ProductId) && purchaseDate <= x.CutoffAt)
+            .Select(x => new { x.ProductId, x.CutoffAt })
+            .FirstOrDefaultAsync();
+        if (conflicting is not null)
+            throw new InvalidOperationException(
+                $"Purchase date must be after the inventory-cost transition cutoff {conflicting.CutoffAt:O} for product {conflicting.ProductId}.");
+    }
+
+    private async Task EnsureLegacyReceiptMovementsArePreservedAsync(
+        IReadOnlyCollection<ReceiptItem> existingItems,
+        IReadOnlyCollection<ReceiptItemDto>? requestedItems,
+        DateTime originalPurchaseDate,
+        DateTime proposedPurchaseDate)
+    {
+        var itemIds = existingItems.Select(x => x.Id).ToList();
+        var movements = await _db.StockAdjustments.AsNoTracking()
+            .Where(x => x.ReceiptItemId.HasValue && itemIds.Contains(x.ReceiptItemId.Value))
+            .ToListAsync();
+        var productIds = movements.Select(x => x.ProductId).Distinct().ToList();
+        var cutoffs = await _db.InventoryCostTransitionBaselines.AsNoTracking()
+            .Where(x => productIds.Contains(x.ProductId))
+            .ToDictionaryAsync(x => x.ProductId, x => x.CutoffAt);
+        if (!movements.Any(x => cutoffs.TryGetValue(x.ProductId, out var cutoff) && x.EffectiveAt <= cutoff))
+            return;
+        var itemsChanged = requestedItems is not null &&
+            !existingItems
+                .Select(x => (x.ProductId, x.Quantity, x.UnitCost))
+                .OrderBy(x => x.ProductId).ThenBy(x => x.Quantity).ThenBy(x => x.UnitCost)
+                .SequenceEqual(requestedItems
+                    .Select(x => (x.ProductId, x.Quantity, x.UnitCost))
+                    .OrderBy(x => x.ProductId).ThenBy(x => x.Quantity).ThenBy(x => x.UnitCost));
+        if (proposedPurchaseDate != originalPurchaseDate || itemsChanged)
+            throw new InvalidOperationException(
+                "This receipt contains preserved pre-cutover inventory movements. Its date, products, quantities, and costs cannot be changed.");
+    }
+
+    private async Task EnsureNoPreCutoffMovementsAsync(IReadOnlyCollection<StockAdjustment> movements)
+    {
+        var productIds = movements.Select(x => x.ProductId).Distinct().ToList();
+        var cutoffs = await _db.InventoryCostTransitionBaselines.AsNoTracking()
+            .Where(x => productIds.Contains(x.ProductId))
+            .ToDictionaryAsync(x => x.ProductId, x => x.CutoffAt);
+        var protectedMovement = movements.FirstOrDefault(x =>
+            cutoffs.TryGetValue(x.ProductId, out var cutoff) && x.EffectiveAt <= cutoff);
+        if (protectedMovement is not null)
+            throw new InvalidOperationException(
+                $"Receipt movement {protectedMovement.Id} is part of preserved pre-cutover history and cannot be changed or deleted.");
     }
 
     private async Task<Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction?> BeginTransactionAsync()

@@ -12,19 +12,22 @@ public sealed partial class ImportService : IImportService
     private readonly ILogger<ImportService> _logger;
     private readonly INayaxLynxClient _nayaxLynxClient;
     private readonly ISaleCostingService _saleCosting;
+    private readonly IInventoryCostRebuildService _inventoryCostRebuild;
 
     public ImportService(
         AppDbContext db,
         IWebHostEnvironment environment,
         ILogger<ImportService> logger,
         INayaxLynxClient nayaxLynxClient,
-        ISaleCostingService saleCosting)
+        ISaleCostingService saleCosting,
+        IInventoryCostRebuildService inventoryCostRebuild)
     {
         _db = db;
         _environment = environment;
         _logger = logger;
         _nayaxLynxClient = nayaxLynxClient;
         _saleCosting = saleCosting;
+        _inventoryCostRebuild = inventoryCostRebuild;
     }
 
 }

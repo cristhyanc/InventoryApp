@@ -201,4 +201,68 @@ public class ReceiptServiceTests
         Assert.Equal(1.00m, movement.UnitCost);
         Assert.Equal(24.00m, movement.TotalCost);
     }
+
+    [Fact]
+    public async Task Upload_after_transition_ignores_invalid_legacy_history()
+    {
+        using var db = CreateDbContext(Guid.NewGuid().ToString());
+        var cutoff = DateTime.UtcNow.AddHours(-1);
+        db.Products.Add(new Product { Id = 1, Name = "M&M", QuantityInStock = 19, AverageUnitCost = 1.25m });
+        db.StockAdjustments.Add(new StockAdjustment
+        {
+            ProductId = 1,
+            QuantityChange = 31,
+            Reason = StockAdjustmentReason.Restock,
+            UnitCost = null,
+            EffectiveAt = cutoff.AddDays(-30)
+        });
+        db.InventoryCostTransitionBaselines.Add(new InventoryCostTransitionBaseline
+        {
+            ProductId = 1,
+            CutoffAt = cutoff,
+            HomeStockQuantity = 19,
+            MachineStockQuantity = 11,
+            OpeningCostingQuantity = 30,
+            AverageUnitCost = 1.25m,
+            InventoryValue = 37.50m,
+            CostSource = InventoryCostBaselineSource.ManualAuthoritative,
+            LegacyReplayedPhysicalQuantity = 31,
+            LegacyPhysicalDiscrepancy = -12,
+            DataQualityNote = "Legacy discrepancy retired at cutover."
+        });
+        await db.SaveChangesAsync();
+        var envMock = new Mock<IWebHostEnvironment>();
+        var temp = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(temp);
+        envMock.Setup(e => e.WebRootPath).Returns(temp);
+        envMock.Setup(e => e.ContentRootPath).Returns(temp);
+        IReceiptService svc = new ReceiptService(db, envMock.Object);
+        var content = new MemoryStream(new byte[] { 1 });
+        var fileMock = new Mock<IFormFile>();
+        fileMock.Setup(f => f.Length).Returns(1);
+        fileMock.Setup(f => f.FileName).Returns("t.jpg");
+        fileMock.Setup(f => f.ContentType).Returns("image/jpeg");
+        fileMock.Setup(f => f.OpenReadStream()).Returns(content);
+        fileMock.Setup(f => f.CopyToAsync(It.IsAny<Stream>(), default))
+            .Returns((Stream s, System.Threading.CancellationToken ct) => content.CopyToAsync(s, ct));
+
+        var receipt = await svc.Upload(
+            fileMock.Object,
+            "Purchase",
+            null,
+            20m,
+            null,
+            null,
+            cutoff.AddMinutes(30),
+            null,
+            new[] { new ReceiptItemDto(1, 10m, 2m) });
+
+        Assert.NotNull(receipt);
+        var product = await db.Products.SingleAsync();
+        Assert.Equal(29, product.QuantityInStock);
+        Assert.Equal(40, product.CostingQuantity);
+        Assert.Equal(57.50m, product.InventoryValue);
+        Assert.Equal(1.4375m, product.AverageUnitCost);
+        Assert.Null((await db.StockAdjustments.OrderBy(x => x.EffectiveAt).FirstAsync()).UnitCost);
+    }
 }

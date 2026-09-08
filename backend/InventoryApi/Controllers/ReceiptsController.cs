@@ -96,8 +96,15 @@ public class ReceiptsController : ControllerBase
     [HttpDelete("{id:int}")]
     public async Task<IActionResult> Delete(int id)
     {
-        var ok = await _service.Delete(id);
-        return ok ? NoContent() : NotFound();
+        try
+        {
+            var ok = await _service.Delete(id);
+            return ok ? NoContent() : NotFound();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(ex.Message);
+        }
     }
 
     private static IReadOnlyList<ReceiptItemDto>? ParseItems(string? items) =>

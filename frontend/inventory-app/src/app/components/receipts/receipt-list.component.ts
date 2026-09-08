@@ -62,7 +62,7 @@ export class ReceiptListComponent implements OnInit {
       totalAmount: receipt.totalAmount ?? null,
       deliveryCost: receipt.deliveryCost ?? null,
       packageCost: receipt.packageCost ?? null,
-      purchaseDate: receipt.purchaseDate ? new Date(receipt.purchaseDate).toISOString().substring(0, 10) : '',
+      purchaseDate: receipt.purchaseDate ? this.localDate(new Date(receipt.purchaseDate)) : '',
       supplierId: receipt.supplierId ?? ''
     };
     this.editItems = (receipt.items ?? []).map(item => ({
@@ -84,7 +84,7 @@ export class ReceiptListComponent implements OnInit {
         totalAmount: this.editForm.totalAmount,
         deliveryCost: this.editForm.deliveryCost,
         packageCost: this.editForm.packageCost,
-        purchaseDate: this.editForm.purchaseDate ? new Date(this.editForm.purchaseDate).toISOString() : null,
+        purchaseDate: this.editPurchaseTimestamp(receipt),
         supplierId: this.editForm.supplierId === '' ? null : this.editForm.supplierId
         , items: this.editItems
       })
@@ -111,5 +111,24 @@ export class ReceiptListComponent implements OnInit {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  private editPurchaseTimestamp(receipt: Receipt): string | null {
+    if (!this.editForm.purchaseDate) return null;
+    const original = new Date(receipt.purchaseDate);
+    if (this.editForm.purchaseDate === this.localDate(original))
+      return original.toISOString();
+    const selected = new Date(`${this.editForm.purchaseDate}T00:00:00`);
+    const now = new Date();
+    if (this.editForm.purchaseDate === this.localDate(now))
+      return now.toISOString();
+    return selected.toISOString();
+  }
+
+  private localDate(value: Date): string {
+    const year = value.getFullYear();
+    const month = String(value.getMonth() + 1).padStart(2, '0');
+    const day = String(value.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
   }
 }

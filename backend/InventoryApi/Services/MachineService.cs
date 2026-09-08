@@ -16,13 +16,15 @@ public class MachineService : IMachineService
     private readonly INayaxLynxClient _nayaxLynxClient;
     private readonly ISaleCostingService _saleCosting;
     private readonly INayaxProcessingFeeService _nayaxProcessingFees;
+    private readonly IInventoryCostRebuildService _inventoryCostRebuild;
 
-    public MachineService(AppDbContext db, INayaxLynxClient nayaxLynxClient, ISaleCostingService? saleCosting = null, INayaxProcessingFeeService? nayaxProcessingFees = null)
+    public MachineService(AppDbContext db, INayaxLynxClient nayaxLynxClient, ISaleCostingService? saleCosting = null, INayaxProcessingFeeService? nayaxProcessingFees = null, IInventoryCostRebuildService? inventoryCostRebuild = null)
     {
         _db = db;
         _nayaxLynxClient = nayaxLynxClient;
         _saleCosting = saleCosting ?? new SaleCostingService(db);
         _nayaxProcessingFees = nayaxProcessingFees ?? new NayaxProcessingFeeService(db);
+        _inventoryCostRebuild = inventoryCostRebuild ?? new InventoryCostRebuildService(db);
     }
 
     public async Task<Machine?> GetById(long id)
@@ -117,6 +119,8 @@ public class MachineService : IMachineService
 
     private async Task SaveMachinesLastSalesAsync(List<long> machineIds, CancellationToken ct = default)
     {
+        var products = await _db.Products.AsNoTracking().ToListAsync(ct);
+        var affected = new Dictionary<long, DateTime>();
         foreach (var machineId in machineIds)
         {
             var sales = await _nayaxLynxClient.GetMachineLastSalesAsync(machineId, ct);
@@ -141,11 +145,27 @@ public class MachineService : IMachineService
                     };
                     _db.NayaxSales.Add(added);
                     await _saleCosting.CostSaleAsync(added, allowLegacyEstimate: true, cancellationToken: ct);
+                    if (NayaxTransactionStatusClassifier.IsCompletedSale(added))
+                    {
+                        var product = NayaxProductMatcher.Match(products, added.NayaxProductId, added.ProductName);
+                        if (product is not null &&
+                            (!affected.TryGetValue(product.Id, out var existingAt) || added.MachineAuthorizationTime < existingAt))
+                            affected[product.Id] = added.MachineAuthorizationTime;
+                    }
                     continue;
                 }
             }
         }
 
+        await _db.SaveChangesAsync(ct);
+        if (affected.Count == 0)
+            return;
+        var baselines = await _db.InventoryCostTransitionBaselines.AsNoTracking()
+            .Where(x => affected.Keys.Contains(x.ProductId))
+            .ToDictionaryAsync(x => x.ProductId, x => x.CutoffAt, ct);
+        foreach (var item in affected)
+            if (baselines.TryGetValue(item.Key, out var cutoff) && item.Value > cutoff)
+                await _inventoryCostRebuild.RebuildAsync(item.Key, item.Value, cancellationToken: ct);
         await _db.SaveChangesAsync(ct);
     }
 

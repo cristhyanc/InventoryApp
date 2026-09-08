@@ -24,6 +24,9 @@ public class AppDbContext : DbContext
     public DbSet<NayaxProcessingFeeRate> NayaxProcessingFeeRates => Set<NayaxProcessingFeeRate>();
     public DbSet<SiteCommissionAgreement> SiteCommissionAgreements => Set<SiteCommissionAgreement>();
     public DbSet<CommissionPayment> CommissionPayments => Set<CommissionPayment>();
+    public DbSet<InventoryCostTransitionBaseline> InventoryCostTransitionBaselines => Set<InventoryCostTransitionBaseline>();
+    public DbSet<InventoryCostTransitionMachineStock> InventoryCostTransitionMachineStocks => Set<InventoryCostTransitionMachineStock>();
+    public DbSet<InventoryCostTransitionPreviewDraft> InventoryCostTransitionPreviewDrafts => Set<InventoryCostTransitionPreviewDraft>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -36,6 +39,25 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<Product>()
             .Property(p => p.InventoryValue)
             .HasColumnType("decimal(18,6)");
+        modelBuilder.Entity<InventoryCostTransitionBaseline>()
+            .Property(x => x.AverageUnitCost)
+            .HasColumnType("decimal(18,6)");
+        modelBuilder.Entity<InventoryCostTransitionBaseline>()
+            .Property(x => x.InventoryValue)
+            .HasColumnType("decimal(18,6)");
+        modelBuilder.Entity<InventoryCostTransitionBaseline>()
+            .HasIndex(x => x.ProductId)
+            .IsUnique();
+        modelBuilder.Entity<InventoryCostTransitionBaseline>()
+            .HasOne(x => x.Product)
+            .WithMany()
+            .HasForeignKey(x => x.ProductId)
+            .OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<InventoryCostTransitionMachineStock>()
+            .HasOne(x => x.InventoryCostTransitionBaseline)
+            .WithMany(x => x.MachineStocks)
+            .HasForeignKey(x => x.InventoryCostTransitionBaselineId)
+            .OnDelete(DeleteBehavior.Cascade);
 
         modelBuilder.Entity<Receipt>()
             .Property(r => r.TotalAmount)

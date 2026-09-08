@@ -29,7 +29,7 @@ export class ReceiptUploadComponent implements OnInit {
     totalAmount: null as number | null,
     deliveryCost: null as number | null,
     packageCost: null as number | null,
-    purchaseDate: new Date().toISOString().substring(0, 10),
+    purchaseDate: ReceiptUploadComponent.localDate(new Date()),
     supplierId: '' as number | ''
   };
 
@@ -82,7 +82,7 @@ export class ReceiptUploadComponent implements OnInit {
         totalAmount: this.form.totalAmount,
         deliveryCost: this.form.deliveryCost,
         packageCost: this.form.packageCost,
-        purchaseDate: this.form.purchaseDate ? new Date(this.form.purchaseDate).toISOString() : null,
+        purchaseDate: this.purchaseTimestamp(),
         supplierId: this.form.supplierId === '' ? null : this.form.supplierId
         , items: this.items
       })
@@ -100,4 +100,23 @@ export class ReceiptUploadComponent implements OnInit {
   itemProduct(item: ReceiptItemPayload): Product | undefined { return this.products.find(p => p.id === Number(item.productId)); }
   lineTotal(item: ReceiptItemPayload): number { return Number(item.quantity || 0) * Number(item.unitCost || 0); }
   get itemsSubtotal(): number { return this.items.reduce((sum, item) => sum + this.lineTotal(item), 0); }
+
+  private purchaseTimestamp(): string | null {
+    if (!this.form.purchaseDate) return null;
+    const selected = new Date(`${this.form.purchaseDate}T00:00:00`);
+    const now = new Date();
+    if (selected.getFullYear() === now.getFullYear() &&
+        selected.getMonth() === now.getMonth() &&
+        selected.getDate() === now.getDate()) {
+      return now.toISOString();
+    }
+    return selected.toISOString();
+  }
+
+  private static localDate(value: Date): string {
+    const year = value.getFullYear();
+    const month = String(value.getMonth() + 1).padStart(2, '0');
+    const day = String(value.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
 }

@@ -42,7 +42,13 @@ public sealed class SaleCostingService : ISaleCostingService
             sale.NayaxProductId,
             sale.ProductName);
 
-        var cost = product is null
+        var baselineCutoff = product is null
+            ? null
+            : await _db.InventoryCostTransitionBaselines.AsNoTracking()
+                .Where(x => x.ProductId == product.Id)
+                .Select(x => (DateTime?)x.CutoffAt)
+                .SingleOrDefaultAsync(cancellationToken);
+        var cost = product is null || baselineCutoff.HasValue && sale.MachineAuthorizationTime <= baselineCutoff.Value
             ? null
             : await GetAverageUnitCostAtAsync(product.Id, sale.MachineAuthorizationTime, sale.TransactionID, cancellationToken);
         if (cost is >= 0)
