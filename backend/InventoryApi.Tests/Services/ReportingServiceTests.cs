@@ -1,7 +1,10 @@
 using System;
+using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using InventoryApi.Data;
 using InventoryApi.DTOs;
+using InventoryApi.Integrations.Nayax;
 using InventoryApi.Models;
 using InventoryApi.Services;
 using Microsoft.Data.Sqlite;
@@ -18,6 +21,67 @@ public class ReportingServiceTests
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options;
         return new AppDbContext(options);
+    }
+
+    [Fact]
+    public async Task Transaction_sales_uses_filters_estimated_fees_commission_and_full_totals()
+    {
+        using var db = CreateDbContext();
+        db.Products.Add(new Product { Id = 1, Name = "Water", UnitPrice = 3m });
+        db.NayaxProcessingFeeRates.Add(new NayaxProcessingFeeRate { EffectiveFrom = new DateTime(2025, 1, 1), FeeExGst = .20m });
+        db.SiteCommissionAgreements.Add(new SiteCommissionAgreement
+        {
+            SiteId = 91, EffectiveFrom = new DateTime(2025, 1, 1), CommissionRate = .10m,
+            Basis = CommissionBasis.CardSales
+        });
+        db.NayaxSales.AddRange(
+            new NayaxSales { TransactionID = 1, MachineID = 10, MachineName = "Alpha One", NayaxProductId = 1, ProductName = "Water", PaymentMethod = "Credit Card", SettlementValue = 10m, UnitCostAtSale = 4m, CostOfGoodsSold = 4m, CostingStatus = SaleCostingStatus.Costed, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
+            new NayaxSales { TransactionID = 2, MachineID = 10, MachineName = "Alpha One", NayaxProductId = 1, ProductName = "Water", PaymentMethod = "Cash", SettlementValue = 5m, UnitCostAtSale = 2m, CostOfGoodsSold = 2m, CostingStatus = SaleCostingStatus.Costed, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
+            new NayaxSales { TransactionID = 3, MachineID = 10, MachineName = "Alpha One", NayaxProductId = 1, ProductName = "Water", PaymentMethod = "Credit Card", SettlementValue = 2m, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
+            new NayaxSales { TransactionID = 4, MachineID = 10, NayaxProductId = 1, PaymentMethod = "Credit Card", SettlementValue = 9m, TransactionStatusId = NayaxTransactionStatusIds.PendingSettlementNotFinal, MachineAuthorizationTime = new DateTime(2025, 8, 1) });
+        await db.SaveChangesAsync();
+
+        var service = new ReportingService(db, new TransactionTestNayaxClient());
+        var report = await service.GetTransactionsAsync(new TransactionSalesFilterDto(
+            new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), Page: 2, PageSize: 50));
+
+        Assert.Empty(report.Rows);
+        Assert.Equal(3, report.TotalCount);
+        Assert.Equal(17m, report.Totals.Sales);
+        Assert.False(report.Totals.IsCogsComplete);
+        Assert.Null(report.Totals.GrossProfit);
+
+        var costedCard = await service.GetTransactionsAsync(new TransactionSalesFilterDto(
+            new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), ProductId: 1, PaymentType: "card", CogsStatus: "costed"));
+        var row = Assert.Single(costedCard.Rows);
+        Assert.Equal(1m, row.CommissionAmount);
+        Assert.Equal(.20m, row.FeeExGst);
+        Assert.Equal(.22m, row.FeeIncGst);
+        Assert.Equal(4.78m, row.DirectProfit);
+        Assert.Equal("Estimated", row.FeeSource);
+
+        var cash = await service.GetTransactionsAsync(new TransactionSalesFilterDto(
+            new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), PaymentType: "cash", CogsStatus: "costed"));
+        var cashRow = Assert.Single(cash.Rows);
+        Assert.Equal(0m, cashRow.FeeIncGst);
+        Assert.Equal("Not applicable", cashRow.FeeSource);
+        Assert.Equal(0m, cashRow.CommissionAmount);
+
+        var pending = await service.GetTransactionsAsync(new TransactionSalesFilterDto(
+            new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), Status: "pending"));
+        Assert.Equal(4, Assert.Single(pending.Rows).TransactionId);
+    }
+
+    private sealed class TransactionTestNayaxClient : INayaxLynxClient
+    {
+        public Task<List<NayaxDevice>> GetDevicesAsync(CancellationToken ct = default) => Task.FromResult(new List<NayaxDevice>());
+        public Task<List<NayaxMachine>> GetMachinesAsync(CancellationToken ct = default) => Task.FromResult(new List<NayaxMachine> { new() { MachineID = 10, MachineName = "Alpha One", CustomerID = 91 } });
+        public Task<List<NayaxMachineProduct>> GetMachineProductsAsync(long machineId, CancellationToken ct = default) => Task.FromResult(new List<NayaxMachineProduct>());
+        public Task<List<NayaxMachineProduct>> CreateMachineProductsAsync(long machineId, List<NayaxMachineProduct> products, CancellationToken ct = default) => Task.FromResult(products);
+        public Task<List<NayaxProduct>> GetProductsAsync(CancellationToken ct = default) => Task.FromResult(new List<NayaxProduct>());
+        public Task<List<NayaxProductGroup>> GetProductGroupssAsync(CancellationToken ct = default) => Task.FromResult(new List<NayaxProductGroup>());
+        public Task<List<NayaxLastSalesReport>> GetMachineLastSalesAsync(long machineId, CancellationToken ct = default) => Task.FromResult(new List<NayaxLastSalesReport>());
+        public Task<NayaxMachine> GetMachineAsync(long machineId, CancellationToken ct = default) => Task.FromResult(new NayaxMachine { MachineID = machineId });
     }
 
     [Fact]

@@ -18,6 +18,9 @@ public interface IReportingService
     Task<ProductProfitabilityReportDto> GetProductProfitabilityAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default);
     Task<GstAccountingAidDto> GetGstAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default);
     Task<DashboardReportDto> GetDashboardAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default);
+    Task<TransactionSalesReportDto> GetTransactionsAsync(TransactionSalesFilterDto filter, CancellationToken cancellationToken = default);
     Task<byte[]> ExportCsvAsync(string report, ReportingFilterDto filter, CancellationToken cancellationToken = default);
     Task<byte[]> ExportXlsxAsync(string report, ReportingFilterDto filter, CancellationToken cancellationToken = default);
+    Task<byte[]> ExportCsvAsync(string report, TransactionSalesFilterDto filter, CancellationToken cancellationToken = default);
+    Task<byte[]> ExportXlsxAsync(string report, TransactionSalesFilterDto filter, CancellationToken cancellationToken = default);
 }

@@ -69,7 +69,7 @@ public class SiteService : ISiteService
 
         return new SiteSummaryDto(
             siteId,
-            GetSiteName(machines),
+            SiteNameResolver.FromMachines(machines, siteId),
             machines.Count,
             stock.MaxStock == 0 ? 100 : (decimal)stock.QuantityInStock / stock.MaxStock * 100,
             stockCounts.LowProductCount,
@@ -161,14 +161,4 @@ public class SiteService : ISiteService
                 totals.MaxStock + (product.PAR ?? 0)));
     }
 
-    private static string GetSiteName(IEnumerable<NayaxMachine> machines)
-    {
-        var machineName = machines
-            .Select(machine => machine.MachineName)
-            .FirstOrDefault(name => !string.IsNullOrWhiteSpace(name));
-
-        return machineName?
-            .Split(' ', StringSplitOptions.RemoveEmptyEntries)
-            .FirstOrDefault() ?? "Unnamed site";
-    }
 }

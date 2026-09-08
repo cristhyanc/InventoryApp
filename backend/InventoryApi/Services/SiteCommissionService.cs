@@ -62,17 +62,12 @@ public sealed class SiteCommissionService : ISiteCommissionService
                     }
                     var agreement = matching[0];
                     var paymentType = PaymentMethodClassifier.Classify(sale.PaymentMethod);
-                    var saleEligible = agreement.Basis switch
-                    {
-                        CommissionBasis.CardSales => paymentType == NayaxPaymentType.Card ? sale.SettlementValue : 0m,
-                        CommissionBasis.SalesExGst => sale.SettlementValue - ReportingCalculations.GstFromInclusive(sale.SettlementValue),
-                        _ => sale.SettlementValue
-                    };
+                    var saleEligible = SiteCommissionCalculator.EligibleSales(agreement.Basis, sale.SettlementValue, paymentType);
                     machineGross += sale.SettlementValue;
                     if (paymentType == NayaxPaymentType.Card) machineCard += sale.SettlementValue;
                     if (paymentType == NayaxPaymentType.Cash) machineCash += sale.SettlementValue;
                     machineEligible += saleEligible;
-                    machineDue += saleEligible * agreement.CommissionRate;
+                    machineDue += SiteCommissionCalculator.CommissionAmount(agreement, sale.SettlementValue, paymentType);
                 }
                 var machine = site.First(x => x.MachineID == machineSales.Key);
                 machineRows.Add(new(machine.MachineID, machine.MachineName ?? $"Machine {machine.MachineID}", machineSales.Count(), machineGross, machineCard, machineCash, machineEligible, machineDue));
@@ -91,7 +86,7 @@ public sealed class SiteCommissionService : ISiteCommissionService
             DateTime? dueDate = current?.PaymentDueDaysAfterPeriodEnd is int days ? to.AddDays(days) : null;
             var status = due == 0m ? "—" : paid >= due - Tolerance ? "Paid" : paid > Tolerance ? "Partially Paid" :
                 dueDate.HasValue && DateTime.Today > dueDate ? "Overdue" : "Due";
-            rows.Add(new(site.Key, site.First().MachineName?.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? $"Site {site.Key}",
+            rows.Add(new(site.Key, SiteNameResolver.FromMachines(site, site.Key),
                 from, to, current?.Frequency ?? CommissionFrequency.None, current?.Basis ?? CommissionBasis.GrossSales, gross, card, cash, eligible,
                 current?.CommissionRate ?? 0m, due, paid, outstanding, dueDate, status, machineRows, productRows, paidRows,
                 dataQuality.Distinct().Any() ? string.Join(" ", dataQuality.Distinct()) : null));

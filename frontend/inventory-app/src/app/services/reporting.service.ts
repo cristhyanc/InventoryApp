@@ -9,6 +9,35 @@ export interface ReportingFilter {
   machineId?: number | null;
   financialYear?: string;
 }
+export interface TransactionSalesFilter {
+  from?: string; to?: string; machineId?: number | null; siteId?: number | null; productId?: number | null;
+  paymentType?: string | null; status?: string | null; cogsStatus?: string | null; search?: string | null;
+  page?: number; pageSize?: number; sortBy?: string; sortDescending?: boolean;
+}
+export interface TransactionSalesFilterOption { id: number | null; name: string; }
+export interface TransactionSalesRow {
+  transactionDate: string; transactionId: number; machineId: number; machineName: string;
+  siteId?: number | null; siteName?: string | null; productId?: number | null; productName: string;
+  paymentType: string; rawPaymentMethod?: string | null; sale: number; unitCostAtSale?: number | null;
+  costOfGoods?: number | null; costingStatus: string; grossProfit?: number | null; grossMarginPercent?: number | null;
+  directProfit?: number | null; directMarginPercent?: number | null; feeExGst?: number | null;
+  feeGst?: number | null; feeIncGst?: number | null; feeSource: string; commissionRate?: number | null;
+  commissionBasis?: string | null; commissionAmount?: number | null; transactionStatusId?: number | null;
+  transactionStatus: string; isCompleted: boolean;
+}
+export interface TransactionSalesTotals {
+  transactionCount: number; completedTransactionCount: number; sales: number; cardSales: number; cashSales: number;
+  costedCompletedTransactionCount: number; uncostedCompletedTransactionCount: number; isCogsComplete: boolean;
+  costOfGoods?: number | null; partialCostOfGoods: number; grossProfit?: number | null; grossMarginPercent?: number | null;
+  directProfit?: number | null; directMarginPercent?: number | null; partialGrossProfit?: number | null;
+  partialDirectProfit?: number | null; estimatedFeeExGst: number; estimatedFeeGst: number;
+  estimatedFeeIncGst: number; commissionAmount: number;
+}
+export interface TransactionSalesReport {
+  from: string; to: string; rows: TransactionSalesRow[]; totals: TransactionSalesTotals; dataQuality: ReportQuality;
+  page: number; pageSize: number; totalCount: number;
+  filterOptions: { sites: TransactionSalesFilterOption[]; products: TransactionSalesFilterOption[]; };
+}
 
 export interface ReportQuality {
   missingStatus: boolean;
@@ -159,6 +188,9 @@ export class ReportingService {
   reconciliation(filter: ReportingFilter): Observable<ReconciliationReport> { return this.http.get<ReconciliationReport>(`${this.baseUrl}/reconciliation`, { params: this.params(filter) }); }
   machines(filter: ReportingFilter): Observable<MachineReport> { return this.http.get<MachineReport>(`${this.baseUrl}/machine-profitability`, { params: this.params(filter) }); }
   products(filter: ReportingFilter): Observable<ProductReport> { return this.http.get<ProductReport>(`${this.baseUrl}/product-profitability`, { params: this.params(filter) }); }
+  transactions(filter: TransactionSalesFilter): Observable<TransactionSalesReport> {
+    return this.http.get<TransactionSalesReport>(`${this.baseUrl}/transactions`, { params: this.params(filter) });
+  }
   siteCommissions(filter: ReportingFilter, siteId?: number | null): Observable<SiteCommissionReport> {
     let params = this.params(filter);
     if (siteId != null) params = params.set('siteId', siteId);
@@ -183,16 +215,26 @@ export class ReportingService {
     });
   }
 
-  export(report: string, format: 'csv' | 'xlsx', filter: ReportingFilter): Observable<Blob> {
+  export(report: string, format: 'csv' | 'xlsx', filter: ReportingFilter | TransactionSalesFilter): Observable<Blob> {
     return this.http.get(`${this.baseUrl}/${report}/export`, { params: this.params(filter).set('format', format), responseType: 'blob' });
   }
 
-  private params(filter: ReportingFilter): HttpParams {
+  private params(filter: ReportingFilter | TransactionSalesFilter): HttpParams {
     let params = new HttpParams();
     if (filter.from) params = params.set('from', filter.from);
     if (filter.to) params = params.set('to', filter.to);
-    if (filter.machineId) params = params.set('machineId', filter.machineId);
-    if (filter.financialYear) params = params.set('financialYear', filter.financialYear);
+    if (filter.machineId != null) params = params.set('machineId', filter.machineId);
+    if ('financialYear' in filter && filter.financialYear) params = params.set('financialYear', filter.financialYear);
+    if ('siteId' in filter && filter.siteId != null) params = params.set('siteId', filter.siteId);
+    if ('productId' in filter && filter.productId != null) params = params.set('productId', filter.productId);
+    if ('paymentType' in filter && filter.paymentType) params = params.set('paymentType', filter.paymentType);
+    if ('status' in filter && filter.status) params = params.set('status', filter.status);
+    if ('cogsStatus' in filter && filter.cogsStatus) params = params.set('cogsStatus', filter.cogsStatus);
+    if ('search' in filter && filter.search) params = params.set('search', filter.search);
+    if ('page' in filter && filter.page != null) params = params.set('page', filter.page);
+    if ('pageSize' in filter && filter.pageSize != null) params = params.set('pageSize', filter.pageSize);
+    if ('sortBy' in filter && filter.sortBy) params = params.set('sortBy', filter.sortBy);
+    if ('sortDescending' in filter && filter.sortDescending != null) params = params.set('sortDescending', filter.sortDescending);
     return params;
   }
 }

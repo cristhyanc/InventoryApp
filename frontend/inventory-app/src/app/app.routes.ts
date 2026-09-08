@@ -19,6 +19,7 @@ import { GstReportComponent } from './components/reports/gst-report.component';
 import { AdminComponent } from './components/admin/admin.component';
 import { OperatingExpenseComponent } from './components/expenses/operating-expense.component';
 import { SiteCommissionsReportComponent } from './components/reports/site-commissions-report.component';
+import { TransactionSalesReportComponent } from './components/reports/transaction-sales-report.component';
 
 export const routes: Routes = [
   { path: '', component: DashboardComponent },
@@ -34,6 +35,7 @@ export const routes: Routes = [
   { path: 'reports', component: DashboardReportComponent },
   { path: 'reports/bookkeeping', component: BookkeepingReportComponent },
   { path: 'reports/daily', component: DailyReportComponent },
+  { path: 'reports/transactions', component: TransactionSalesReportComponent },
   { path: 'reports/reconciliation', component: ReconciliationReportComponent },
   { path: 'reports/machines', component: MachineReportComponent },
   { path: 'reports/products', component: ProductReportComponent },
