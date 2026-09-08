@@ -12,7 +12,6 @@ public record OperatingExpenseDto(
     int? SupplierId = null,
     long? SiteId = null,
     long? MachineId = null,
-    int? ReceiptId = null,
     DateTime? ServicePeriodStart = null,
     DateTime? ServicePeriodEnd = null,
     string? Notes = null);
@@ -29,8 +28,8 @@ public record OperatingExpenseReportRowDto(
     string? SupplierName,
     long? SiteId,
     long? MachineId,
-    int? ReceiptId,
-    string? ReceiptFileName,
+    string? AttachmentFileName,
+    long? AttachmentFileSizeBytes,
     DateTime? ServicePeriodStart,
     DateTime? ServicePeriodEnd,
     string? Notes);

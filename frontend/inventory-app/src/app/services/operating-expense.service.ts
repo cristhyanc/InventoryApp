@@ -27,8 +27,10 @@ export interface OperatingExpense {
   supplierName?: string | null;
   siteId?: number | null;
   machineId?: number | null;
-  receiptId?: number | null;
-  receiptFileName?: string | null;
+  attachmentFileName?: string | null;
+  attachmentStoredFileName?: string | null;
+  attachmentContentType?: string | null;
+  attachmentFileSizeBytes?: number | null;
   servicePeriodStart?: string | null;
   servicePeriodEnd?: string | null;
   notes?: string | null;
@@ -44,7 +46,6 @@ export interface OperatingExpensePayload {
   supplierId?: number | null;
   siteId?: number | null;
   machineId?: number | null;
-  receiptId?: number | null;
   servicePeriodStart?: string | null;
   servicePeriodEnd?: string | null;
   notes?: string | null;
@@ -62,22 +63,22 @@ export class OperatingExpenseService {
     if (filters.supplierId !== undefined) params = params.set('supplierId', filters.supplierId);
     return this.http.get<OperatingExpense[]>(this.baseUrl, { params });
   }
-  create(payload: OperatingExpensePayload, receipt?: File | null): Observable<OperatingExpense> {
-    return receipt
-      ? this.http.post<OperatingExpense>(this.baseUrl, this.toFormData(payload, receipt))
+  create(payload: OperatingExpensePayload, attachment?: File | null): Observable<OperatingExpense> {
+    return attachment
+      ? this.http.post<OperatingExpense>(this.baseUrl, this.toFormData(payload, attachment))
       : this.http.post<OperatingExpense>(this.baseUrl, payload);
   }
 
-  update(id: number, payload: OperatingExpensePayload, receipt?: File | null): Observable<OperatingExpense> {
-    return receipt
-      ? this.http.put<OperatingExpense>(`${this.baseUrl}/${id}`, this.toFormData(payload, receipt))
+  update(id: number, payload: OperatingExpensePayload, attachment?: File | null): Observable<OperatingExpense> {
+    return attachment
+      ? this.http.put<OperatingExpense>(`${this.baseUrl}/${id}`, this.toFormData(payload, attachment))
       : this.http.put<OperatingExpense>(`${this.baseUrl}/${id}`, payload);
   }
 
   delete(id: number): Observable<void> { return this.http.delete<void>(`${this.baseUrl}/${id}`); }
-  receiptUrl(id: number): string { return `${this.baseUrl}/${id}/receipt`; }
+  attachmentUrl(id: number): string { return `${this.baseUrl}/${id}/attachment`; }
 
-  private toFormData(payload: OperatingExpensePayload, receipt: File): FormData {
+  private toFormData(payload: OperatingExpensePayload, attachment: File): FormData {
     const formData = new FormData();
     formData.append('expenseDate', payload.expenseDate);
     formData.append('category', String(payload.category));
@@ -88,11 +89,10 @@ export class OperatingExpenseService {
     if (payload.supplierId != null) formData.append('supplierId', String(payload.supplierId));
     if (payload.siteId != null) formData.append('siteId', String(payload.siteId));
     if (payload.machineId != null) formData.append('machineId', String(payload.machineId));
-    if (payload.receiptId != null) formData.append('receiptId', String(payload.receiptId));
     if (payload.servicePeriodStart) formData.append('servicePeriodStart', payload.servicePeriodStart);
     if (payload.servicePeriodEnd) formData.append('servicePeriodEnd', payload.servicePeriodEnd);
     if (payload.notes != null) formData.append('notes', payload.notes);
-    formData.append('receipt', receipt);
+    formData.append('attachment', attachment);
     return formData;
   }
 }

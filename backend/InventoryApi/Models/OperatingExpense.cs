@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace InventoryApi.Models;
 
 public class OperatingExpense
@@ -13,11 +15,11 @@ public class OperatingExpense
     public virtual Supplier? Supplier { get; set; }
     public long? SiteId { get; set; }
     public long? MachineId { get; set; }
-    public int? ReceiptId { get; set; }
-    public virtual Receipt? Receipt { get; set; }
-    public string? ReceiptFileName { get; set; }
-    public string? ReceiptStoredFileName { get; set; }
-    public string? ReceiptContentType { get; set; }
+    public string? AttachmentFileName { get; set; }
+    [JsonIgnore]
+    public string? AttachmentStoredFileName { get; set; }
+    public string? AttachmentContentType { get; set; }
+    public long? AttachmentFileSizeBytes { get; set; }
     public DateTime? ServicePeriodStart { get; set; }
     public DateTime? ServicePeriodEnd { get; set; }
     public string? Notes { get; set; }

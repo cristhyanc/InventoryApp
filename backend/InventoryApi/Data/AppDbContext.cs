@@ -159,11 +159,6 @@ public class AppDbContext : DbContext
             .WithMany()
             .HasForeignKey(e => e.SupplierId)
             .OnDelete(DeleteBehavior.SetNull);
-        modelBuilder.Entity<OperatingExpense>()
-            .HasOne(e => e.Receipt)
-            .WithMany()
-            .HasForeignKey(e => e.ReceiptId)
-            .OnDelete(DeleteBehavior.SetNull);
         modelBuilder.Entity<OperatingExpense>().HasIndex(e => e.ExpenseDate);
         modelBuilder.Entity<OperatingExpense>().HasIndex(e => e.Category);
         modelBuilder.Entity<OperatingExpense>().HasIndex(e => e.SupplierId);
