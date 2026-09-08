@@ -19,7 +19,6 @@ public sealed class SaleCostingService : ISaleCostingService
 
     public async Task CostSaleAsync(
         NayaxSales sale,
-        bool allowLegacyEstimate = false,
         bool force = false,
         CancellationToken cancellationToken = default)
     {
@@ -76,7 +75,7 @@ public sealed class SaleCostingService : ISaleCostingService
         }
     }
 
-    public async Task<int> CostPendingSalesAsync(long? productId = null, bool allowLegacyEstimate = false, CancellationToken cancellationToken = default)
+    public async Task<int> CostPendingSalesAsync(long? productId = null, CancellationToken cancellationToken = default)
     {
         var products = await _db.Products.AsNoTracking().ToListAsync(cancellationToken);
         var sales = (await _db.NayaxSales
@@ -89,7 +88,7 @@ public sealed class SaleCostingService : ISaleCostingService
             .ToList();
 
         foreach (var sale in sales)
-            await CostSaleAsync(sale, allowLegacyEstimate, cancellationToken: cancellationToken);
+            await CostSaleAsync(sale, cancellationToken: cancellationToken);
 
         if (sales.Count > 0)
             await _db.SaveChangesAsync(cancellationToken);
@@ -117,7 +116,7 @@ public sealed class SaleCostingService : ISaleCostingService
                 continue;
             }
 
-            await CostSaleAsync(sale, allowLegacyEstimate: false, force: force, cancellationToken: cancellationToken);
+            await CostSaleAsync(sale, force: force, cancellationToken: cancellationToken);
             switch (sale.CostingStatus)
             {
                 case SaleCostingStatus.Costed: costed++; break;

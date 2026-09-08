@@ -126,6 +126,10 @@ public class MachineService : IMachineService
             var sales = await _nayaxLynxClient.GetMachineLastSalesAsync(machineId, ct);
             foreach (var sale in sales)
             {
+                var matchedProduct = NayaxProductMatcher.Match(
+                    products,
+                    sale.NayaxProductId,
+                    sale.ProductName);
                 var existing = await _db.NayaxSales
                     .FirstOrDefaultAsync(x => x.TransactionID == sale.TransactionID, ct);
                 if (existing is null)
@@ -133,9 +137,9 @@ public class MachineService : IMachineService
                     var added = new NayaxSales
                     {
                         TransactionID = sale.TransactionID,
-                        TransactionStatusId = sale.TransactionStatusId,
+                        TransactionStatusId = sale.TransactionStatusId ?? NayaxTransactionStatusIds.Completed,
                         MachineID = sale.MachineID,
-                        NayaxProductId = sale.NayaxProductId,
+                        NayaxProductId = matchedProduct?.Id ?? sale.NayaxProductId,
                         MachineName = sale.MachineName,
                         SettlementValue = sale.SettlementValue,
                         PaymentMethod = sale.PaymentMethod,
@@ -144,15 +148,50 @@ public class MachineService : IMachineService
                         MachineAuthorizationTime = sale.MachineAuthorizationTime
                     };
                     _db.NayaxSales.Add(added);
-                    await _saleCosting.CostSaleAsync(added, allowLegacyEstimate: true, cancellationToken: ct);
+                    await _saleCosting.CostSaleAsync(added, cancellationToken: ct);
                     if (NayaxTransactionStatusClassifier.IsCompletedSale(added))
                     {
-                        var product = NayaxProductMatcher.Match(products, added.NayaxProductId, added.ProductName);
-                        if (product is not null &&
-                            (!affected.TryGetValue(product.Id, out var existingAt) || added.MachineAuthorizationTime < existingAt))
-                            affected[product.Id] = added.MachineAuthorizationTime;
+                        if (matchedProduct is not null &&
+                            (!affected.TryGetValue(matchedProduct.Id, out var existingAt) || added.MachineAuthorizationTime < existingAt))
+                            affected[matchedProduct.Id] = added.MachineAuthorizationTime;
                     }
                     continue;
+                }
+
+                var enriched = false;
+                if (!existing.NayaxProductId.HasValue)
+                {
+                    var existingMatch = NayaxProductMatcher.Match(
+                        products,
+                        sale.NayaxProductId,
+                        sale.ProductName ?? existing.ProductName);
+                    if (existingMatch is not null)
+                    {
+                        existing.NayaxProductId = existingMatch.Id;
+                        matchedProduct = existingMatch;
+                        enriched = true;
+                    }
+                }
+                if (!existing.TransactionStatusId.HasValue)
+                {
+                    existing.TransactionStatusId =
+                        sale.TransactionStatusId ?? NayaxTransactionStatusIds.Completed;
+                    enriched = true;
+                }
+                if (enriched)
+                {
+                    await _saleCosting.CostSaleAsync(
+                        existing,
+                        cancellationToken: ct);
+                    if (NayaxTransactionStatusClassifier.IsCompletedSale(existing))
+                    {
+                        matchedProduct ??= NayaxProductMatcher.Match(
+                            products, existing.NayaxProductId, existing.ProductName);
+                        if (matchedProduct is not null &&
+                            (!affected.TryGetValue(matchedProduct.Id, out var existingAt) ||
+                             existing.MachineAuthorizationTime < existingAt))
+                            affected[matchedProduct.Id] = existing.MachineAuthorizationTime;
+                    }
                 }
             }
         }

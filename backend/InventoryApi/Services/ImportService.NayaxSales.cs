@@ -62,7 +62,7 @@ public sealed partial class ImportService
             if (existing is null)
             {
                 _db.NayaxSales.Add(sale);
-                await _saleCosting.CostSaleAsync(sale, allowLegacyEstimate: true, cancellationToken: cancellationToken);
+                await _saleCosting.CostSaleAsync(sale, cancellationToken: cancellationToken);
                 imported++;
             }
             else
@@ -79,7 +79,7 @@ public sealed partial class ImportService
 
                 if (sale.NayaxProductCostPrice.HasValue)
                     existing.NayaxProductCostPrice = sale.NayaxProductCostPrice;
-                await _saleCosting.CostSaleAsync(existing, allowLegacyEstimate: true, cancellationToken: cancellationToken);
+                await _saleCosting.CostSaleAsync(existing, cancellationToken: cancellationToken);
                 updated++;
             }
             TrackAffectedProduct(products, existing ?? sale, affected);

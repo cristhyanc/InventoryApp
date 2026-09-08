@@ -210,9 +210,7 @@ public class InventoryCostTransitionServiceTests
                 new()
                 {
                     TransactionID = 4,
-                    TransactionStatusId = NayaxTransactionStatusIds.Completed,
                     MachineID = 1,
-                    NayaxProductId = 10,
                     ProductName = "Snack",
                     SettlementValue = 4m,
                     MachineAuthorizationTime = cutoff.AddMinutes(30)
@@ -236,6 +234,8 @@ public class InventoryCostTransitionServiceTests
         var sale = await db.NayaxSales.SingleAsync();
         Assert.Equal(9, product.CostingQuantity);
         Assert.Equal(18m, product.InventoryValue);
+        Assert.Equal(10, sale.NayaxProductId);
+        Assert.Equal(NayaxTransactionStatusIds.Completed, sale.TransactionStatusId);
         Assert.Equal(2m, sale.CostOfGoodsSold);
         Assert.Equal(SaleCostSource.InventoryLedger, sale.CostSource);
     }
@@ -277,6 +277,49 @@ public class InventoryCostTransitionServiceTests
         Assert.Equal(14, products[1].CostingQuantity);
         Assert.Equal(13.50m, products[0].InventoryValue);
         Assert.Equal(28m, products[1].InventoryValue);
+    }
+
+    [Fact]
+    public async Task Live_sales_defaults_missing_status_for_existing_rows_without_overwriting_known_status()
+    {
+        await using var db = CreateDb();
+        db.NayaxSales.AddRange(
+            new NayaxSales
+            {
+                TransactionID = 40,
+                MachineID = 1,
+                TransactionStatusId = null,
+                NayaxProductCostPrice = 1m,
+                MachineAuthorizationTime = DateTime.UtcNow
+            },
+            new NayaxSales
+            {
+                TransactionID = 41,
+                MachineID = 1,
+                TransactionStatusId = NayaxTransactionStatusIds.CancelledOrDeclined31,
+                MachineAuthorizationTime = DateTime.UtcNow
+            });
+        await db.SaveChangesAsync();
+        var nayax = new Mock<INayaxLynxClient>();
+        nayax.Setup(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<NayaxMachine> { new() { MachineID = 1 } });
+        nayax.Setup(x => x.GetMachineLastSalesAsync(1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<NayaxLastSalesReport>
+            {
+                new() { TransactionID = 40, MachineID = 1, MachineAuthorizationTime = DateTime.UtcNow },
+                new() { TransactionID = 41, MachineID = 1, MachineAuthorizationTime = DateTime.UtcNow }
+            });
+        nayax.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<NayaxMachineProduct>());
+
+        await new MachineService(db, nayax.Object).GetAll();
+
+        Assert.Equal(
+            NayaxTransactionStatusIds.Completed,
+            (await db.NayaxSales.FindAsync(40L))!.TransactionStatusId);
+        Assert.Equal(
+            NayaxTransactionStatusIds.CancelledOrDeclined31,
+            (await db.NayaxSales.FindAsync(41L))!.TransactionStatusId);
     }
 
     private static AppDbContext CreateDb() =>
