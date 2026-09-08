@@ -1,4 +1,7 @@
-<h1 class="mb-6 text-2xl font-semibold text-slate-800">Upload Receipt</h1>
+<div class="mb-6">
+  <h1 class="text-2xl font-semibold text-slate-800">Add Purchase</h1>
+  <p class="mt-1 text-sm text-slate-500">Record stock purchased from a supplier and attach the receipt or invoice.</p>
+</div>
 
 <div class="mx-auto w-full max-w-5xl rounded-xl bg-white p-6 shadow-sm">
   @if (error) {
@@ -7,18 +10,19 @@
 
   <form class="space-y-4" (ngSubmit)="upload()">
     <div>
-      <label class="mb-1 block text-sm font-medium text-slate-700">Receipt File (image or PDF) *</label>
+      <label class="mb-1 block text-sm font-medium text-slate-700">Supporting Document *</label>
+      <p class="mb-1 text-xs text-slate-500">Receipt or invoice (PDF/image)</p>
       <input type="file" accept="image/*,.pdf" (change)="onFileSelected($event)" />
     </div>
 
     @if (previewUrl) {
       <div>
-        <img [src]="previewUrl" alt="Receipt preview" class="max-h-72 rounded-lg object-contain" />
+        <img [src]="previewUrl" alt="Supporting document preview" class="max-h-72 rounded-lg object-contain" />
       </div>
     }
 
     <div>
-      <label class="mb-1 block text-sm font-medium text-slate-700">Title *</label>
+      <label class="mb-1 block text-sm font-medium text-slate-700">Purchase Title *</label>
       <input [(ngModel)]="form.title" name="title" required placeholder="e.g. Weekly snack restock" />
     </div>
 
@@ -44,7 +48,7 @@
       </div>
 
       <div class="border-t border-slate-200 pt-4 md:col-span-2">
-        <div class="mb-2 flex items-center justify-between"><h2 class="font-medium text-slate-800">Purchased items</h2><button type="button" class="rounded border px-2 py-1 text-sm" (click)="addItem()">Add Product</button></div>
+        <div class="mb-2 flex items-center justify-between"><h2 class="font-medium text-slate-800">Purchased Items</h2><button type="button" class="rounded border px-2 py-1 text-sm" (click)="addItem()">Add Product</button></div>
         @for (item of items; track $index) {
           <div class="mb-2 grid gap-2 md:grid-cols-[minmax(0,3fr)_minmax(7rem,1fr)_minmax(9rem,1fr)_auto]">
             <select [(ngModel)]="item.productId" [name]="'product' + $index"><option [ngValue]="0">Select product</option>@for (p of products; track p.id) {<option [ngValue]="p.id">{{ p.name }}</option>}</select>
@@ -71,7 +75,7 @@
     </div>
 
     <div class="flex flex-wrap gap-3">
-      <button type="submit" class="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60" [disabled]="saving">Upload Receipt</button>
+      <button type="submit" class="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60" [disabled]="saving">Add Purchase</button>
       <a routerLink="/receipts" class="inline-flex items-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Cancel</a>
     </div>
   </form>

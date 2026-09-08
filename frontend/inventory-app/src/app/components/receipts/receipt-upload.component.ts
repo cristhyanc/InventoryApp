@@ -63,11 +63,11 @@ export class ReceiptUploadComponent implements OnInit {
 
   upload(): void {
     if (!this.selectedFile) {
-      this.error = 'Please select a receipt image or PDF to upload.';
+      this.error = 'Please select a receipt or invoice (PDF/image).';
       return;
     }
     if (!this.form.title.trim()) {
-      this.error = 'Please enter a title.';
+      this.error = 'Please enter a purchase title.';
       return;
     }
 
@@ -89,7 +89,7 @@ export class ReceiptUploadComponent implements OnInit {
       .subscribe({
         next: () => this.router.navigate(['/receipts']),
         error: (err) => {
-          this.error = err?.error ?? 'Failed to upload receipt.';
+          this.error = err?.error ?? 'Failed to add purchase.';
           this.saving = false;
         }
       });

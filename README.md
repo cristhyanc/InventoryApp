@@ -4,7 +4,7 @@ A full-stack inventory management app:
 
 - **Backend:** .NET 10 Web API, EF Core (code-first) targeting **SQLite**
 - **Frontend:** Angular (standalone components) + TypeScript
-- **Features:** Product CRUD (snacks & drinks), categories, suppliers, stock adjustments with history, low-stock alerts, and receipt upload (image/PDF scans) with a gallery viewer.
+- **Features:** Product CRUD (snacks & drinks), categories, suppliers, stock adjustments with history, low-stock alerts, and purchase recording with receipt/invoice attachment (image/PDF scans) and a gallery viewer.
 
 ## Project Structure
 
@@ -41,7 +41,7 @@ The database (`inventory.db`, a SQLite file) is created automatically on first r
 > ```
 > Then replace the `DbInitializer.Seed` call's `EnsureCreated()` with a `context.Database.Migrate()` call.
 
-Uploaded receipt files are stored on disk under `backend/InventoryApi/wwwroot/receipts/`.
+Uploaded purchase supporting documents are stored on disk under `backend/InventoryApi/wwwroot/receipts/`.
 
 ## 2. Run the Frontend
 
@@ -66,14 +66,14 @@ Open **http://localhost:4200** in your browser.
 | `GET/POST/PUT/DELETE /api/products` | Product CRUD (filter by `search`, `type`, `categoryId`, `supplierId`, `lowStockOnly`) |
 | `GET /api/products/alerts/low-stock` | Products at or below their low-stock threshold |
 | `GET/POST /api/products/{id}/stock` | Stock adjustment history / apply an adjustment |
-| `GET /api/receipts` | List receipts (optionally `?supplierId=`) |
-| `POST /api/receipts` | Upload a receipt (multipart form: `file`, `title`, `notes`, `totalAmount`, `deliveryCost`, `packageCost`, `purchaseDate`, `supplierId`) |
-| `PUT /api/receipts/{id}` | Update receipt metadata (same fields as upload) |
-| `GET /api/receipts/{id}/file` | Download/view the stored receipt scan |
-| `DELETE /api/receipts/{id}` | Delete a receipt and its file |
+| `GET /api/receipts` | List purchases (optionally `?supplierId=`) |
+| `POST /api/receipts` | Record a purchase with a receipt or invoice (multipart form: `file`, `title`, `notes`, `totalAmount`, `deliveryCost`, `packageCost`, `purchaseDate`, `supplierId`) |
+| `PUT /api/receipts/{id}` | Update purchase metadata (same fields as upload) |
+| `GET /api/receipts/{id}/file` | Download/view the purchase supporting document |
+| `DELETE /api/receipts/{id}` | Delete a purchase and its supporting document |
 
 ## Notes
 
-- Receipt uploads accept `.jpg`, `.jpeg`, `.png`, `.webp`, `.heic`, and `.pdf`, capped at 10 MB.
+- Purchase supporting documents accept `.jpg`, `.jpeg`, `.png`, `.webp`, `.heic`, and `.pdf`, capped at 10 MB.
 - CORS is pre-configured to allow `http://localhost:4200` to call the API during development.
 - For production, build the Angular app (`npm run build`) and either serve the static output from the API's `wwwroot`, or host it separately and update CORS/API base URL accordingly.

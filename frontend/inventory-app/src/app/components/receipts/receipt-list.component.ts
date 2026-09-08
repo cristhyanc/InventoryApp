@@ -103,7 +103,7 @@ export class ReceiptListComponent implements OnInit {
   get editItemsSubtotal(): number { return this.editItems.reduce((sum, item) => sum + this.editLineTotal(item), 0); }
 
   remove(receipt: Receipt): void {
-    if (!confirm(`Delete receipt "${receipt.title}"?`)) return;
+    if (!confirm(`Delete purchase "${receipt.title}"?`)) return;
     this.receiptService.delete(receipt.id).subscribe(() => this.load());
   }
 
