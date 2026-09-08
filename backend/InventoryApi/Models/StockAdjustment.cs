@@ -28,6 +28,9 @@ public class StockAdjustment
     public int QuantityAfter { get; set; }
     public decimal? UnitCost { get; set; }
     public decimal? TotalCost { get; set; }
+    public int? CostingQuantityAfter { get; set; }
+    public decimal? AverageUnitCostAfter { get; set; }
+    public decimal? InventoryValueAfter { get; set; }
 
     public StockAdjustmentReason Reason { get; set; } = StockAdjustmentReason.MachineRefill;
     public long? MachineId { get; set; }

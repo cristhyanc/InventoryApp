@@ -110,15 +110,15 @@ public class ReceiptServiceTests
             new[] { new ReceiptItemDto(1, 24m, 1.00m), new ReceiptItemDto(2, 36m, 1.15m) });
 
         Assert.NotNull(receipt);
-        Assert.Equal(26, (await db.Products.FindAsync(1L))!.QuantityInStock);
-        Assert.Equal(40, (await db.Products.FindAsync(2L))!.QuantityInStock);
+        Assert.Equal(24, (await db.Products.FindAsync(1L))!.QuantityInStock);
+        Assert.Equal(36, (await db.Products.FindAsync(2L))!.QuantityInStock);
         Assert.Equal(2, await db.ReceiptItems.CountAsync());
         Assert.Equal(2, await db.StockAdjustments.CountAsync(x => x.Reason == StockAdjustmentReason.Restock));
         Assert.Empty(await db.StockAdjustments.Where(x => x.Reason == StockAdjustmentReason.MachineRefill).ToListAsync());
     }
 
     [Fact]
-    public async Task Update_and_delete_receipt_apply_inventory_deltas_and_reversal()
+    public async Task Update_and_delete_receipt_maintain_linked_purchase_movement_without_reversal()
     {
         using var db = CreateDbContext("receipt_edit_test");
         db.Products.Add(new Product { Id = 1, Name = "M&M", QuantityInStock = 0 });
@@ -143,14 +143,21 @@ public class ReceiptServiceTests
             new[] { new ReceiptItemDto(1, 10m, 1m) });
         Assert.NotNull(receipt);
         Assert.Equal(10, (await db.Products.FindAsync(1L))!.QuantityInStock);
+        var originalItemId = (await db.ReceiptItems.SingleAsync()).Id;
 
         await svc.Update(receipt!.Id, "Purchase", null, 12m, null, null, null, null,
-            new[] { new ReceiptItemDto(1, 6m, 2m) });
-        Assert.Equal(6, (await db.Products.FindAsync(1L))!.QuantityInStock);
+            new[] { new ReceiptItemDto(1, 10m, 2m) });
+        Assert.Equal(10, (await db.Products.FindAsync(1L))!.QuantityInStock);
+        Assert.Equal(2m, (await db.Products.FindAsync(1L))!.AverageUnitCost);
+        var item = await db.ReceiptItems.SingleAsync();
+        Assert.Equal(originalItemId, item.Id);
+        var movement = await db.StockAdjustments.SingleAsync(x => x.ReceiptItemId.HasValue);
+        Assert.Equal(item.Id, movement.ReceiptItemId);
+        Assert.Equal(2m, movement.UnitCost);
 
         Assert.True(await svc.Delete(receipt.Id));
         Assert.Equal(0, (await db.Products.FindAsync(1L))!.QuantityInStock);
-        Assert.Equal(3, await db.StockAdjustments.CountAsync());
+        Assert.Empty(await db.StockAdjustments.ToListAsync());
     }
 
     [Fact]
@@ -158,6 +165,15 @@ public class ReceiptServiceTests
     {
         using var db = CreateDbContext("receipt_avco_test");
         db.Products.Add(new Product { Id = 1, Name = "M&M", QuantityInStock = 10, AverageUnitCost = 2.10m });
+        db.StockAdjustments.Add(new StockAdjustment
+        {
+            ProductId = 1,
+            QuantityChange = 10,
+            Reason = StockAdjustmentReason.Restock,
+            UnitCost = 2.10m,
+            EffectiveAt = DateTime.UtcNow.AddMinutes(-1),
+            Notes = "Initial stock on product creation"
+        });
         await db.SaveChangesAsync();
         var envMock = new Mock<IWebHostEnvironment>();
         var temp = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
@@ -181,7 +197,7 @@ public class ReceiptServiceTests
         var product = await db.Products.FindAsync(1L);
         Assert.Equal(34, product!.QuantityInStock);
         Assert.Equal((10m * 2.10m + 24m) / 34m, product.AverageUnitCost);
-        var movement = await db.StockAdjustments.SingleAsync();
+        var movement = await db.StockAdjustments.SingleAsync(x => x.ReceiptItemId.HasValue);
         Assert.Equal(1.00m, movement.UnitCost);
         Assert.Equal(24.00m, movement.TotalCost);
     }

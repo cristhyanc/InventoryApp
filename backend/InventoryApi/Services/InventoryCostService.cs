@@ -24,30 +24,14 @@ public sealed class InventoryCostService : IInventoryCostService
         if (product is null)
             throw new InvalidOperationException($"Product {productId} was not loaded.");
 
-        if (quantityChange > 0 && reason == StockAdjustmentReason.Restock)
-        {
-            if (purchaseUnitCost.HasValue && purchaseUnitCost.Value < 0)
-                throw new InvalidOperationException($"Purchase cost cannot be negative for product {productId}.");
-            if (product.QuantityInStock < 0)
-                throw new InventoryCostDataQualityException(
-                    $"Product {productId} has negative stock and cannot be weighted-average costed.");
-
-            if (purchaseUnitCost.HasValue)
-            {
-                var oldQuantity = product.QuantityInStock;
-                var newQuantity = checked(oldQuantity + quantityChange);
-                product.AverageUnitCost = oldQuantity == 0
-                    ? purchaseUnitCost.Value
-                    : ((oldQuantity * product.AverageUnitCost) +
-                       (quantityChange * purchaseUnitCost.Value)) / newQuantity;
-            }
-        }
+        if (purchaseUnitCost is < 0)
+            throw new InvalidOperationException($"Purchase cost cannot be negative for product {productId}.");
 
         var newStockQuantity = checked(product.QuantityInStock + quantityChange);
         if (newStockQuantity < 0)
             throw new InsufficientStockException(product.QuantityInStock);
 
-        var movementUnitCost = quantityChange < 0
+        var movementUnitCost = quantityChange < 0 && product.CostingQuantity is > 0 && product.AverageUnitCost > 0
             ? product.AverageUnitCost
             : reason == StockAdjustmentReason.Restock
                 ? purchaseUnitCost

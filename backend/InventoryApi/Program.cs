@@ -44,6 +44,7 @@ builder.Services.AddScoped<InventoryApi.Services.Interfaces.ICategoryService, In
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.ISupplierService, InventoryApi.Services.SupplierService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IStockService, InventoryApi.Services.StockService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IInventoryCostService, InventoryApi.Services.InventoryCostService>();
+builder.Services.AddScoped<InventoryApi.Services.Interfaces.IInventoryCostRebuildService, InventoryApi.Services.InventoryCostRebuildService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.ISaleCostingService, InventoryApi.Services.SaleCostingService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IReceiptService, InventoryApi.Services.ReceiptService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IMachineService, InventoryApi.Services.MachineService>();

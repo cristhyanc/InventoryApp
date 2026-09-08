@@ -37,7 +37,6 @@ public sealed partial class ImportService
                 product = new Product
                 {
                     Id = item.NayaxProductId,
-                    AverageUnitCost = item.ProductCostPrice ?? 0m,
                     CreatedAt = DateTime.UtcNow
                 };
                 newProducts.Add(product);

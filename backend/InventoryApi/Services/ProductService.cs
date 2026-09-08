@@ -11,11 +11,16 @@ public class ProductService : IProductService
 {
     private readonly AppDbContext _db;
     private readonly INayaxLynxClient _nayaxLynxClient;
+    private readonly IInventoryCostRebuildService _rebuild;
 
-    public ProductService(AppDbContext db, INayaxLynxClient nayaxLynxClient)
+    public ProductService(
+        AppDbContext db,
+        INayaxLynxClient nayaxLynxClient,
+        IInventoryCostRebuildService? rebuild = null)
     {
         _db = db;
         _nayaxLynxClient = nayaxLynxClient;
+        _rebuild = rebuild ?? new InventoryCostRebuildService(db);
     }
 
     public async Task<IEnumerable<Product>> GetAll(string? search, long? categoryId, int? supplierId, bool? lowStockOnly)
@@ -79,13 +84,16 @@ public class ProductService : IProductService
 
     public async Task<Product> Create(ProductCreateDto dto)
     {
+        if (dto.InitialUnitCost is < 0)
+            throw new InvalidOperationException("Initial unit cost cannot be negative.");
+
         var product = new Product
         {
             Name = dto.Name,
             Sku = dto.Sku,
             Description = dto.Description,
             UnitPrice = dto.UnitPrice,
-            AverageUnitCost = dto.UnitPrice,
+            AverageUnitCost = dto.InitialUnitCost ?? 0m,
             IsActive = dto.IsActive,
             QuantityInStock = dto.QuantityInStock,
             LowStockThreshold = dto.LowStockThreshold,
@@ -106,11 +114,17 @@ public class ProductService : IProductService
                 QuantityChange = product.QuantityInStock,
                 QuantityAfter = product.QuantityInStock,
                 Reason = StockAdjustmentReason.Restock,
-                UnitCost = product.AverageUnitCost,
-                TotalCost = product.AverageUnitCost * product.QuantityInStock,
-                Notes = "Initial stock on product creation"
+                UnitCost = dto.InitialUnitCost,
+                TotalCost = dto.InitialUnitCost * product.QuantityInStock,
+                Notes = "Initial stock on product creation",
+                EffectiveAt = product.CreatedAt
             });
             await _db.SaveChangesAsync();
+            if (dto.InitialUnitCost.HasValue)
+            {
+                await _rebuild.RebuildAsync(product.Id);
+                await _db.SaveChangesAsync();
+            }
         }
 
         return product;

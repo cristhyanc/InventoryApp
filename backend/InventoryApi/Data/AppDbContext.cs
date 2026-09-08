@@ -33,6 +33,9 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<Product>()
             .Property(p => p.AverageUnitCost)
             .HasColumnType("decimal(18,6)");
+        modelBuilder.Entity<Product>()
+            .Property(p => p.InventoryValue)
+            .HasColumnType("decimal(18,6)");
 
         modelBuilder.Entity<Receipt>()
             .Property(r => r.TotalAmount)
@@ -108,6 +111,8 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<OperatingExpense>().Property(e => e.TotalAmount).HasColumnType("decimal(18,2)");
         modelBuilder.Entity<StockAdjustment>().Property(a => a.UnitCost).HasColumnType("decimal(18,6)");
         modelBuilder.Entity<StockAdjustment>().Property(a => a.TotalCost).HasColumnType("decimal(18,6)");
+        modelBuilder.Entity<StockAdjustment>().Property(a => a.AverageUnitCostAfter).HasColumnType("decimal(18,6)");
+        modelBuilder.Entity<StockAdjustment>().Property(a => a.InventoryValueAfter).HasColumnType("decimal(18,6)");
 
         modelBuilder.Entity<Category>().HasIndex(c => c.Name);
         modelBuilder.Entity<Supplier>().HasIndex(s => s.Name);

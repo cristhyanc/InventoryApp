@@ -10,10 +10,15 @@ public class StockService : IStockService
 {
     private readonly AppDbContext _db;
     private readonly IInventoryCostService _costing;
-    public StockService(AppDbContext db, IInventoryCostService? costing = null)
+    private readonly IInventoryCostRebuildService _rebuild;
+    public StockService(
+        AppDbContext db,
+        IInventoryCostService? costing = null,
+        IInventoryCostRebuildService? rebuild = null)
     {
         _db = db;
         _costing = costing ?? new InventoryCostService(db);
+        _rebuild = rebuild ?? new InventoryCostRebuildService(db);
     }
 
     public async Task<IEnumerable<StockAdjustment>> History(long productId)
@@ -36,6 +41,8 @@ public class StockService : IStockService
             dto.Notes ?? string.Empty);
         adjustment.MachineId = dto.MachineId;
         adjustment.EatBefore = dto.EatBefore;
+        await _db.SaveChangesAsync();
+        await _rebuild.RebuildAsync(productId);
         await _db.SaveChangesAsync();
 
         return adjustment;

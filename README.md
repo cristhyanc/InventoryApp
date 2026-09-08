@@ -75,5 +75,6 @@ Open **http://localhost:4200** in your browser.
 ## Notes
 
 - Purchase supporting documents accept `.jpg`, `.jpeg`, `.png`, `.webp`, `.heic`, and `.pdf`, capped at 10 MB.
+- Inventory cost is a historical perpetual weighted-average ledger. Receipt-item-linked restocks are replayed chronologically with completed Nayax sales and costed write-offs; machine refills remain internal transfers. Legacy inventory with no costed opening movement is reported as a data-quality issue rather than receiving an inferred selling-price cost.
 - CORS is pre-configured to allow `http://localhost:4200` to call the API during development.
 - For production, build the Angular app (`npm run build`) and either serve the static output from the API's `wwwroot`, or host it separately and update CORS/API base URL accordingly.

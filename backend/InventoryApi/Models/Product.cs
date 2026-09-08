@@ -12,6 +12,8 @@ public class Product
     public string? Description { get; set; }
     public decimal UnitPrice { get; set; }
     public decimal AverageUnitCost { get; set; }
+    public int? CostingQuantity { get; set; }
+    public decimal? InventoryValue { get; set; }
     [NotMapped]
     public decimal MachinePrice { get; set; }
     [NotMapped]

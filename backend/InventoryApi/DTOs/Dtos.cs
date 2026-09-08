@@ -12,7 +12,8 @@ public record ProductCreateDto(
     string? Unit,
     int? CategoryId,
     int? SupplierId,
-    bool IsActive
+    bool IsActive,
+    decimal? InitialUnitCost = null
 );
 
 public record ProductUpdateDto(

@@ -9,8 +9,13 @@ namespace InventoryApi.Services;
 public sealed class SaleCostingService : ISaleCostingService
 {
     private readonly AppDbContext _db;
+    private readonly IInventoryCostRebuildService _rebuild;
 
-    public SaleCostingService(AppDbContext db) => _db = db;
+    public SaleCostingService(AppDbContext db, IInventoryCostRebuildService? rebuild = null)
+    {
+        _db = db;
+        _rebuild = rebuild ?? new InventoryCostRebuildService(db);
+    }
 
     public async Task CostSaleAsync(NayaxSales sale, bool allowLegacyEstimate = false, CancellationToken cancellationToken = default)
     {
@@ -35,18 +40,12 @@ public sealed class SaleCostingService : ISaleCostingService
             return;
         }
 
-        var cost = await GetAverageUnitCostAtAsync(product.Id, sale.MachineAuthorizationTime, cancellationToken);
-        if (cost.HasValue)
+        var cost = await GetAverageUnitCostAtAsync(product.Id, sale.MachineAuthorizationTime, sale.TransactionID, cancellationToken);
+        if (cost is > 0)
         {
             sale.UnitCostAtSale = cost.Value;
             sale.CostOfGoodsSold = cost.Value;
             sale.CostingStatus = SaleCostingStatus.Costed;
-        }
-        else if (allowLegacyEstimate && product.AverageUnitCost > 0)
-        {
-            sale.UnitCostAtSale = product.AverageUnitCost;
-            sale.CostOfGoodsSold = product.AverageUnitCost;
-            sale.CostingStatus = SaleCostingStatus.LegacyEstimated;
         }
         else
         {
@@ -58,12 +57,15 @@ public sealed class SaleCostingService : ISaleCostingService
 
     public async Task<int> CostPendingSalesAsync(long? productId = null, bool allowLegacyEstimate = false, CancellationToken cancellationToken = default)
     {
-        var sales = await _db.NayaxSales
+        var products = await _db.Products.AsNoTracking().ToListAsync(cancellationToken);
+        var sales = (await _db.NayaxSales
             .Where(s => s.CostingStatus == SaleCostingStatus.Pending &&
-                        s.TransactionStatusId == NayaxTransactionStatusIds.Completed &&
-                        (!productId.HasValue || s.NayaxProductId == productId.Value))
+                        s.TransactionStatusId == NayaxTransactionStatusIds.Completed)
             .OrderBy(s => s.MachineAuthorizationTime)
-            .ToListAsync(cancellationToken);
+            .ToListAsync(cancellationToken))
+            .Where(s => !productId.HasValue ||
+                NayaxProductMatcher.Match(products, s.NayaxProductId, s.ProductName)?.Id == productId.Value)
+            .ToList();
 
         foreach (var sale in sales)
             await CostSaleAsync(sale, allowLegacyEstimate, cancellationToken);
@@ -94,7 +96,7 @@ public sealed class SaleCostingService : ISaleCostingService
                 continue;
             }
 
-            await CostSaleAsync(sale, allowLegacyEstimate: true, cancellationToken);
+            await CostSaleAsync(sale, allowLegacyEstimate: false, cancellationToken);
             switch (sale.CostingStatus)
             {
                 case SaleCostingStatus.Costed: costed++; break;
@@ -112,29 +114,13 @@ public sealed class SaleCostingService : ISaleCostingService
         return new SaleCostingBackfillResult(costed, estimated, pending, errors, finalized, dryRun);
     }
 
-    public async Task<decimal?> GetAverageUnitCostAtAsync(long productId, DateTime saleTime, CancellationToken cancellationToken = default)
-    {
-        var movements = await _db.StockAdjustments.AsNoTracking()
-            .Where(x => x.ProductId == productId &&
-                        x.Reason == StockAdjustmentReason.Restock &&
-                        x.QuantityChange > 0 &&
-                        x.UnitCost.HasValue &&
-                        x.EffectiveAt <= saleTime)
-            .OrderBy(x => x.EffectiveAt)
-            .ThenBy(x => x.Id)
-            .ToListAsync(cancellationToken);
+    public Task<decimal?> GetAverageUnitCostAtAsync(long productId, DateTime saleTime, CancellationToken cancellationToken = default) =>
+        _rebuild.GetAverageUnitCostAtAsync(productId, saleTime, cancellationToken: cancellationToken);
 
-        if (movements.Count == 0)
-            return null;
-
-        decimal quantity = 0;
-        decimal value = 0;
-        foreach (var movement in movements)
-        {
-            quantity += movement.QuantityChange;
-            value += movement.QuantityChange * movement.UnitCost!.Value;
-        }
-
-        return quantity <= 0 ? null : value / quantity;
-    }
+    private Task<decimal?> GetAverageUnitCostAtAsync(
+        long productId,
+        DateTime saleTime,
+        long saleTransactionId,
+        CancellationToken cancellationToken) =>
+        _rebuild.GetAverageUnitCostAtAsync(productId, saleTime, saleTransactionId, cancellationToken);
 }

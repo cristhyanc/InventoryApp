@@ -28,6 +28,9 @@ export interface Product {
   sku?: string | null;
   description?: string | null;
   unitPrice: number;
+  averageUnitCost: number;
+  costingQuantity?: number | null;
+  inventoryValue?: number | null;
   machinePrice: number | null;
   commissionValue: number | null;
   suggestedNetValue: number | null;
@@ -110,6 +113,11 @@ export interface StockAdjustment {
   productId: number;
   quantityChange: number;
   quantityAfter: number;
+  costingQuantityAfter?: number | null;
+  averageUnitCostAfter?: number | null;
+  inventoryValueAfter?: number | null;
+  unitCost?: number | null;
+  totalCost?: number | null;
   reason: StockAdjustmentReason;
   machineId?: number | null;
   notes?: string | null;
