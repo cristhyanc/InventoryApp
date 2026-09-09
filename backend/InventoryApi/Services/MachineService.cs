@@ -149,23 +149,23 @@ public class MachineService : IMachineService
         var monthToDateSales = lastSales.Where(s => s.MachineAuthorizationTime >= monthToDate.Start && s.MachineAuthorizationTime <= monthToDate.End && NayaxTransactionStatusClassifier.IsCompletedSale(s)).ToList();
         var twoWeeksAgoSales = lastSales.Where(s => s.MachineAuthorizationTime >= twoWeeksAgo.Start && s.MachineAuthorizationTime <= twoWeeksAgo.End && NayaxTransactionStatusClassifier.IsCompletedSale(s)).ToList();
 
-        results.CurrentWeekNetRevenue = await CalculateRevenueAsync(currentWeekSales, agreements, machine.CustomerID, currentWeek.Start, currentWeek.End, machine.MachineID);
-        results.PreviousComparableWeekNetRevenue = await CalculateRevenueAsync(previousComparableWeekSales, agreements, machine.CustomerID, previousComparableWeek.Start, previousComparableWeek.End, machine.MachineID);
-        results.LastWeekNetRevenue = await CalculateRevenueAsync(lastWeekSales, agreements, machine.CustomerID, lastWeek.Start, lastWeek.End, machine.MachineID);
-        results.TodayNetRevenue = await CalculateRevenueAsync(todaySales, agreements, machine.CustomerID, today, now, machine.MachineID);
-        results.MonthToDateNetRevenue = await CalculateRevenueAsync(monthToDateSales, agreements, machine.CustomerID, monthToDate.Start, monthToDate.End, machine.MachineID);
-        results.TwoWeeksAgoNetRevenue = await CalculateRevenueAsync(twoWeeksAgoSales, agreements, machine.CustomerID, twoWeeksAgo.Start, twoWeeksAgo.End, machine.MachineID);
+        results.CurrentWeekDirectProfit = await CalculateDirectProfitAsync(currentWeekSales, agreements, machine.CustomerID, currentWeek.Start, currentWeek.End, machine.MachineID);
+        results.PreviousComparableWeekDirectProfit = await CalculateDirectProfitAsync(previousComparableWeekSales, agreements, machine.CustomerID, previousComparableWeek.Start, previousComparableWeek.End, machine.MachineID);
+        results.LastWeekDirectProfit = await CalculateDirectProfitAsync(lastWeekSales, agreements, machine.CustomerID, lastWeek.Start, lastWeek.End, machine.MachineID);
+        results.TodayDirectProfit = await CalculateDirectProfitAsync(todaySales, agreements, machine.CustomerID, today, now, machine.MachineID);
+        results.MonthToDateDirectProfit = await CalculateDirectProfitAsync(monthToDateSales, agreements, machine.CustomerID, monthToDate.Start, monthToDate.End, machine.MachineID);
+        results.TwoWeeksAgoDirectProfit = await CalculateDirectProfitAsync(twoWeeksAgoSales, agreements, machine.CustomerID, twoWeeksAgo.Start, twoWeeksAgo.End, machine.MachineID);
         var completedSales = lastSales.Where(NayaxTransactionStatusClassifier.IsCompletedSale).ToList();
         results.ProfitabilityStatus = GetProfitabilityStatus(completedSales, agreements, machine.CustomerID);
         if (results.ProfitabilityStatus is null && completedSales.Count > 0 &&
             new[]
             {
-                results.TodayNetRevenue,
-                results.CurrentWeekNetRevenue,
-                results.PreviousComparableWeekNetRevenue,
-                results.LastWeekNetRevenue,
-                results.MonthToDateNetRevenue,
-                results.TwoWeeksAgoNetRevenue
+                results.TodayDirectProfit,
+                results.CurrentWeekDirectProfit,
+                results.PreviousComparableWeekDirectProfit,
+                results.LastWeekDirectProfit,
+                results.MonthToDateDirectProfit,
+                results.TwoWeeksAgoDirectProfit
             }.Any(x => !x.HasValue))
             results.ProfitabilityStatus = "Unavailable: an effective Nayax processing fee rate is missing.";
 
@@ -270,7 +270,7 @@ public class MachineService : IMachineService
         await _db.SaveChangesAsync(ct);
     }
 
-    private async Task<decimal?> CalculateRevenueAsync(
+    private async Task<decimal?> CalculateDirectProfitAsync(
         List<NayaxSales> sales,
         IReadOnlyList<SiteCommissionAgreement> agreements,
         long? siteId,
