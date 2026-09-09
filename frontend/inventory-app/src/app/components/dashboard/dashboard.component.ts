@@ -143,11 +143,11 @@ export class DashboardComponent implements OnInit {
     return this.machines.every(m => m.monthToDateDirectProfit != null);
   }
 
-  get totalNetMargin(): number {
+  get totalDirectMargin(): number {
     return this.margin(this.totalCurrentWeekDirectProfit, this.totalCurrentWeekSales);
   }
 
-  netMargin(directProfit: number, sales: number): number {
+  directMargin(directProfit: number, sales: number): number {
     return this.margin(directProfit, sales);
   }
 
@@ -167,8 +167,8 @@ export class DashboardComponent implements OnInit {
     return value >= 0 ? 'text-emerald-600' : 'text-rose-600';
   }
 
-  private margin(netProfit: number, sales: number): number {
-    return sales === 0 ? 0 : (netProfit / sales) * 100;
+  private margin(profit: number, sales: number): number {
+    return sales === 0 ? 0 : (profit / sales) * 100;
   }
 
   siteStockClass(site: Site): string {

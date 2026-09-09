@@ -115,22 +115,22 @@
               <td class="px-4 py-3 text-slate-700">{{ machine.machineName || 'Unnamed machine' }}</td>
               <td class="px-4 py-3 text-right text-slate-600">
                 <div>${{ machine.todayGrossRevenue.toFixed(2) }} sales</div>
-                <div class="text-xs text-slate-500">{{ machine.todayDirectProfit == null ? 'Profit unavailable' : ('$' + machine.todayDirectProfit.toFixed(2) + ' direct profit · ' + netMargin(machine.todayDirectProfit, machine.todayGrossRevenue).toFixed(1) + '% direct margin') }}</div>
+                <div class="text-xs text-slate-500">{{ machine.todayDirectProfit == null ? 'Profit unavailable' : ('$' + machine.todayDirectProfit.toFixed(2) + ' direct profit · ' + directMargin(machine.todayDirectProfit, machine.todayGrossRevenue).toFixed(1) + '% direct margin') }}</div>
               </td>
               <td class="px-4 py-3 text-right text-slate-600">
                 <div>${{ machine.currentWeekGrossRevenue.toFixed(2) }} sales</div>
-                <div class="text-xs text-slate-500">{{ machine.currentWeekDirectProfit == null ? 'Profit unavailable' : ('$' + machine.currentWeekDirectProfit.toFixed(2) + ' direct profit · ' + netMargin(machine.currentWeekDirectProfit, machine.currentWeekGrossRevenue).toFixed(1) + '% direct margin') }}</div>
+                <div class="text-xs text-slate-500">{{ machine.currentWeekDirectProfit == null ? 'Profit unavailable' : ('$' + machine.currentWeekDirectProfit.toFixed(2) + ' direct profit · ' + directMargin(machine.currentWeekDirectProfit, machine.currentWeekGrossRevenue).toFixed(1) + '% direct margin') }}</div>
               </td>
               <td class="px-4 py-3 text-right text-slate-600">
                 <div>${{ machine.lastWeekGrossRevenue.toFixed(2) }} sales</div>
-                <div class="text-xs text-slate-500">{{ machine.lastWeekDirectProfit == null ? 'Profit unavailable' : ('$' + machine.lastWeekDirectProfit.toFixed(2) + ' direct profit · ' + netMargin(machine.lastWeekDirectProfit, machine.lastWeekGrossRevenue).toFixed(1) + '% direct margin') }}</div>
+                <div class="text-xs text-slate-500">{{ machine.lastWeekDirectProfit == null ? 'Profit unavailable' : ('$' + machine.lastWeekDirectProfit.toFixed(2) + ' direct profit · ' + directMargin(machine.lastWeekDirectProfit, machine.lastWeekGrossRevenue).toFixed(1) + '% direct margin') }}</div>
               </td>
               <td class="px-4 py-3 text-right" [ngClass]="trendClass(machine.currentWeekGrossRevenue, machine.previousComparableWeekGrossRevenue)">
                 {{ trendLabel(machine.currentWeekGrossRevenue, machine.previousComparableWeekGrossRevenue) }}
               </td>
               <td class="px-4 py-3 text-right text-slate-600">
                 <div>${{ machine.monthToDateGrossRevenue.toFixed(2) }} sales</div>
-                <div class="text-xs text-slate-500">{{ machine.monthToDateDirectProfit == null ? 'Profit unavailable' : ('$' + machine.monthToDateDirectProfit.toFixed(2) + ' direct profit · ' + netMargin(machine.monthToDateDirectProfit, machine.monthToDateGrossRevenue).toFixed(1) + '% direct margin') }}</div>
+                <div class="text-xs text-slate-500">{{ machine.monthToDateDirectProfit == null ? 'Profit unavailable' : ('$' + machine.monthToDateDirectProfit.toFixed(2) + ' direct profit · ' + directMargin(machine.monthToDateDirectProfit, machine.monthToDateGrossRevenue).toFixed(1) + '% direct margin') }}</div>
               </td>
               <td class="px-4 py-3 text-right"><a [routerLink]="['/machines', machine.machineID]" class="inline-flex items-center rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700">Details</a></td>
             </tr>
@@ -141,22 +141,22 @@
             <td class="px-4 py-3">Totals</td>          
             <td class="px-4 py-3 text-right">
               <div>${{ totalTodaySales.toFixed(2) }} sales</div>
-              <div class="text-xs text-slate-500">{{ isTodayProfitComplete ? ('$' + totalTodayDirectProfit.toFixed(2) + ' direct profit · ' + netMargin(totalTodayDirectProfit, totalTodaySales).toFixed(1) + '% direct margin') : 'Profit unavailable' }}</div>
+              <div class="text-xs text-slate-500">{{ isTodayProfitComplete ? ('$' + totalTodayDirectProfit.toFixed(2) + ' direct profit · ' + directMargin(totalTodayDirectProfit, totalTodaySales).toFixed(1) + '% direct margin') : 'Profit unavailable' }}</div>
             </td>
             <td class="px-4 py-3 text-right">
               <div>${{ totalCurrentWeekSales.toFixed(2) }} sales</div>
-              <div class="text-xs text-slate-500">{{ isCurrentWeekProfitComplete ? ('$' + totalCurrentWeekDirectProfit.toFixed(2) + ' direct profit · ' + totalNetMargin.toFixed(1) + '% direct margin') : 'Profit unavailable' }}</div>
+              <div class="text-xs text-slate-500">{{ isCurrentWeekProfitComplete ? ('$' + totalCurrentWeekDirectProfit.toFixed(2) + ' direct profit · ' + totalDirectMargin.toFixed(1) + '% direct margin') : 'Profit unavailable' }}</div>
             </td>
             <td class="px-4 py-3 text-right">
               <div>${{ totalLastWeekSales.toFixed(2) }} sales</div>
-              <div class="text-xs text-slate-500">{{ isLastWeekProfitComplete ? ('$' + totalLastWeekDirectProfit.toFixed(2) + ' direct profit · ' + netMargin(totalLastWeekDirectProfit, totalLastWeekSales).toFixed(1) + '% direct margin') : 'Profit unavailable' }}</div>
+              <div class="text-xs text-slate-500">{{ isLastWeekProfitComplete ? ('$' + totalLastWeekDirectProfit.toFixed(2) + ' direct profit · ' + directMargin(totalLastWeekDirectProfit, totalLastWeekSales).toFixed(1) + '% direct margin') : 'Profit unavailable' }}</div>
             </td>
             <td class="px-4 py-3 text-right" [ngClass]="trendClass(totalCurrentWeekSales, totalPreviousComparableWeekSales)">
               {{ trendLabel(totalCurrentWeekSales, totalPreviousComparableWeekSales) }}
             </td>
             <td class="px-4 py-3 text-right">
               <div>${{ totalMonthToDateSales.toFixed(2) }} sales</div>
-              <div class="text-xs text-slate-500">{{ isMonthToDateProfitComplete ? ('$' + totalMonthToDateDirectProfit.toFixed(2) + ' direct profit · ' + netMargin(totalMonthToDateDirectProfit, totalMonthToDateSales).toFixed(1) + '% direct margin') : 'Profit unavailable' }}</div>
+              <div class="text-xs text-slate-500">{{ isMonthToDateProfitComplete ? ('$' + totalMonthToDateDirectProfit.toFixed(2) + ' direct profit · ' + directMargin(totalMonthToDateDirectProfit, totalMonthToDateSales).toFixed(1) + '% direct margin') : 'Profit unavailable' }}</div>
             </td>
             <td class="px-4 py-3"></td>
           </tr>
