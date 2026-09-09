@@ -76,6 +76,10 @@ export abstract class ReportPageBase<T> implements OnInit {
     return new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD' }).format(value ?? 0);
   }
 
+  moneyOrUnavailable(value: number | null | undefined): string {
+    return value == null ? 'Profit unavailable' : this.money(value);
+  }
+
   quality(): string[] {
     return (this.report as any)?.dataQuality?.notes ?? [];
   }

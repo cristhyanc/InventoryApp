@@ -102,16 +102,16 @@ public record BookkeepingReportDto(
     DateTime To,
     string FinancialYear,
     decimal Sales,
-    decimal CostOfGoods,
-    decimal GrossProfit,
+    decimal? CostOfGoods,
+    decimal? GrossProfit,
     decimal Fees,
     decimal NetSettlement,
     decimal GstOnSales,
     decimal GstOnFees,
     ReportingDataQualityDto DataQuality,
     decimal SiteCommission = 0m,
-    decimal NetProfit = 0m,
-    decimal NetMarginPercent = 0m,
+    decimal? NetProfit = null,
+    decimal? NetMarginPercent = null,
     decimal NayaxFeesExGst = 0m,
     decimal NayaxFeesIncludingGst = 0m,
     decimal DeliveryCosts = 0m,
@@ -127,6 +127,10 @@ public record BookkeepingReportDto(
     int DeclinedOrCancelledTransactionCount = 0,
     int UnknownStatusTransactionCount = 0)
 {
+    public decimal PartialCostOfGoods { get; init; }
+    public bool IsCogsComplete { get; init; } = true;
+    public int UncostedTransactionCount { get; init; }
+    public decimal UncostedSalesAmount { get; init; }
     public decimal StructuredOperatingExpenses { get; init; }
     public decimal OperatingExpenseGst { get; init; }
     public IReadOnlyDictionary<string, decimal> OperatingExpensesByCategory { get; init; } =
@@ -138,8 +142,8 @@ public record DailyReportRowDto(
     DateTime Date,
     decimal Sales,
     decimal Quantity,
-    decimal CostOfGoods,
-    decimal GrossProfit,
+    decimal? CostOfGoods,
+    decimal? GrossProfit,
     int TransactionCount,
     decimal GrossSales = 0m,
     decimal CardSales = 0m,
@@ -148,7 +152,7 @@ public record DailyReportRowDto(
     bool IsCogsComplete = true,
     int UncostedTransactionCount = 0,
     decimal UncostedSalesAmount = 0m,
-    decimal GrossMarginPercent = 0m,
+    decimal? GrossMarginPercent = null,
     decimal NayaxFeesExGst = 0m,
     decimal NayaxFeesIncludingGst = 0m,
     decimal ImportedReimbursement = 0m,
@@ -160,21 +164,24 @@ public record DailyReportRowDto(
     int DeclinedOrCancelledTransactionCount = 0,
     int RefundedTransactionCount = 0,
     int UnknownStatusTransactionCount = 0,
-    string NayaxFeeSource = "None");
+    string NayaxFeeSource = "None")
+{
+    public decimal PartialCostOfGoods { get; init; }
+}
 
 public record DailyReportTotalsDto(
     decimal GrossSales,
     decimal CardSales,
     decimal CashSales,
     decimal Quantity,
-    decimal CostOfGoods,
-    decimal GrossProfit,
+    decimal? CostOfGoods,
+    decimal? GrossProfit,
     int TransactionCount,
     decimal AverageSale,
     bool IsCogsComplete,
     int UncostedTransactionCount,
     decimal UncostedSalesAmount,
-    decimal GrossMarginPercent,
+    decimal? GrossMarginPercent,
     decimal NayaxFeesExGst,
     decimal NayaxFeesIncludingGst,
     decimal ImportedReimbursement,
@@ -185,6 +192,7 @@ public record DailyReportTotalsDto(
     int RefundedTransactionCount = 0,
     int UnknownStatusTransactionCount = 0)
 {
+    public decimal PartialCostOfGoods { get; init; }
     public NayaxProcessingFeeResult NayaxProcessingFees { get; init; } = new(0m, 0m, 0m, 0m, 0m, 0m, 0, null, null);
 }
 
@@ -304,17 +312,21 @@ public record MachineProfitabilityRowDto(
     string MachineName,
     decimal Sales,
     decimal Quantity,
-    decimal CostOfGoods,
-    decimal GrossProfit,
-    decimal MarginPercent,
+    decimal? CostOfGoods,
+    decimal? GrossProfit,
+    decimal? MarginPercent,
     int TransactionCount,
     decimal SiteCommission = 0m,
-    decimal NetProfit = 0m,
-    decimal NetMarginPercent = 0m,
+    decimal? NetProfit = null,
+    decimal? NetMarginPercent = null,
     decimal CommissionPercent = 0m,
     decimal CardSales = 0m,
     decimal CashSales = 0m)
 {
+    public decimal PartialCostOfGoods { get; init; }
+    public bool IsCogsComplete { get; init; } = true;
+    public int UncostedTransactionCount { get; init; }
+    public decimal UncostedSalesAmount { get; init; }
     public decimal DirectOperatingExpenses { get; init; }
     public NayaxProcessingFeeResult NayaxProcessingFees { get; init; } = new(0m, 0m, 0m, 0m, 0m, 0m, 0, null, null);
 }
@@ -331,14 +343,20 @@ public record ProductProfitabilityRowDto(
     string? CategoryName,
     decimal Sales,
     decimal Quantity,
-    decimal CostOfGoods,
-    decimal GrossProfit,
-    decimal MarginPercent,
+    decimal? CostOfGoods,
+    decimal? GrossProfit,
+    decimal? MarginPercent,
     int TransactionCount,
     bool IsUnmapped,
     bool HistoricalCostAvailable,
     decimal CardRevenue = 0m,
-    decimal CashRevenue = 0m);
+    decimal CashRevenue = 0m)
+{
+    public decimal PartialCostOfGoods { get; init; }
+    public bool IsCogsComplete { get; init; } = true;
+    public int UncostedTransactionCount { get; init; }
+    public decimal UncostedSalesAmount { get; init; }
+}
 
 public record ProductProfitabilityReportDto(
     DateTime From,
@@ -365,7 +383,7 @@ public record DashboardReportDto(
     DateTime From,
     DateTime To,
     decimal Sales,
-    decimal GrossProfit,
+    decimal? GrossProfit,
     int Transactions,
     decimal Quantity,
     int MachineCount,
@@ -375,8 +393,8 @@ public record DashboardReportDto(
     decimal NayaxFees = 0m,
     decimal NetReimbursement = 0m,
     decimal SiteCommission = 0m,
-    decimal NetProfit = 0m,
-    decimal NetMarginPercent = 0m,
+    decimal? NetProfit = null,
+    decimal? NetMarginPercent = null,
     decimal NayaxFeesExGst = 0m,
     decimal DeliveryCosts = 0m,
     decimal PackageCosts = 0m,
@@ -389,9 +407,13 @@ public record DashboardReportDto(
     public decimal StructuredOperatingExpenses { get; init; }
     public decimal OperatingExpenseGst { get; init; }
     public decimal TotalSales { get; init; } = Sales;
-    public decimal CostOfGoodsSold { get; init; } = 0m;
+    public decimal? CostOfGoodsSold { get; init; }
+    public decimal PartialCostOfGoods { get; init; }
+    public bool IsCogsComplete { get; init; } = true;
+    public int UncostedTransactionCount { get; init; }
+    public decimal UncostedSalesAmount { get; init; }
     public decimal AverageSale { get; init; } = Transactions == 0 ? 0m : Sales / Transactions;
-    public decimal GrossMarginPercent { get; init; } = Sales == 0m ? 0m : GrossProfit / Sales * 100m;
+    public decimal? GrossMarginPercent { get; init; } = GrossProfit.HasValue && Sales != 0m ? GrossProfit / Sales * 100m : null;
     public decimal NayaxFeesIncludingGst { get; init; } = 0m;
     public decimal ExpectedReimbursement { get; init; } = 0m;
     public decimal ActualReimbursement { get; init; } = NetReimbursement;

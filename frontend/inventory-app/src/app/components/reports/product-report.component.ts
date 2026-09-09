@@ -19,6 +19,10 @@ export class ProductReportComponent extends ReportPageBase<ProductReport> {
   constructor(route: ActivatedRoute, reports: ReportingService, machines: MachineService) { super(route, reports, machines); }
   request(filter: ReportingFilter): Observable<ProductReport> { return this.reports.products(filter); }
 
+  override money(value: number | null | undefined): string {
+    return value == null ? 'COGS incomplete' : super.money(value);
+  }
+
   get sortedRows(): ProductRow[] {
     return [...(this.report?.rows ?? [])].sort((left, right) => {
       const leftValue = left[this.sortColumn];

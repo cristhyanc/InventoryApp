@@ -47,7 +47,10 @@ public sealed class ReportingService : IReportingService
         var paymentSummary = await GetPaymentSummaryAsync(range, MachineId(filter), cancellationToken);
         var sales = paymentSummary.GrossSales;
 
-        var cost = await CostQuery(range, MachineId(filter)).Select(x => x.Cost).SumAsync(cancellationToken);
+        var saleCosts = await CostQuery(range, MachineId(filter)).ToListAsync(cancellationToken);
+        var partialCost = saleCosts.Sum(x => x.CostOfGoodsSold ?? 0m);
+        var uncosted = saleCosts.Where(x => !x.HasCost).ToList();
+        var isCogsComplete = uncosted.Count == 0;
         var receiptCosts = await ReceiptCostsAsync(range, cancellationToken);
         var imported = await ImportedSummaryAsync(range, MachineId(filter), cancellationToken);
         var processingFees = await _nayaxProcessingFees.GetProcessingFeesAsync(range.From, range.ToDate, MachineId(filter), cancellationToken);
@@ -57,7 +60,10 @@ public sealed class ReportingService : IReportingService
         var fees = processingFees.TotalFeeExGst;
         var feesIncludingGst = processingFees.TotalFeeIncGst;
         var netSettlement = imported.HasNetSettlement ? imported.NetSettlement : paymentSummary.CardSales - feesIncludingGst;
-        var netProfit = sales - cost - feesIncludingGst - siteCommission - receiptCosts.Total - operatingExpenses.Total;
+        decimal? grossProfit = isCogsComplete ? ReportingCalculations.GrossProfit(sales, partialCost) : null;
+        decimal? netProfit = grossProfit.HasValue
+            ? grossProfit.Value - feesIncludingGst - siteCommission - receiptCosts.Total - operatingExpenses.Total
+            : null;
         var gstOnFees = processingFees.TotalFeeGst;
         var qualityNotes = new List<string>();
         if (paymentSummary.UnknownTransactions > 0)
@@ -68,17 +74,23 @@ public sealed class ReportingService : IReportingService
             qualityNotes.Add("Imported fees are account-level amounts and are not allocated to a selected machine.");
         if (processingFees.HasMissingRates)
             qualityNotes.Add($"{processingFees.MissingRateTransactionCount} card transaction(s) have no effective Nayax processing fee rate; profit is provisional.");
+        if (!isCogsComplete)
+            qualityNotes.Add("One or more completed sales have no persisted COGS; profit is incomplete.");
         AddCommissionQualityNotes(qualityNotes, commissions);
         var quality = Quality(imported.ContainsRows, imported.ContainsGstClassification, false,
             qualityNotes.Count == 0 ? null : string.Join(" ", qualityNotes));
         return new BookkeepingReportDto(range.From, range.ToDate, AustralianFyHelper.Label(range.From),
-            sales, cost, ReportingCalculations.GrossProfit(sales, cost), fees, netSettlement,
+            sales, isCogsComplete ? partialCost : null, grossProfit, fees, netSettlement,
             ReportingCalculations.GstFromInclusive(sales), gstOnFees, quality, siteCommission, netProfit,
-            ReportingCalculations.MarginPercent(sales, cost + feesIncludingGst + siteCommission + receiptCosts.Total + operatingExpenses.Total),
+            netProfit.HasValue ? ReportingCalculations.MarginPercent(sales, partialCost + feesIncludingGst + siteCommission + receiptCosts.Total + operatingExpenses.Total) : null,
             fees, feesIncludingGst, receiptCosts.Delivery, receiptCosts.Package, operatingExpenses.Total,
             paymentSummary.CardSales, paymentSummary.CashSales, paymentSummary.CardTransactions,
             paymentSummary.CashTransactions, ReportingCalculations.PercentageOf(feesIncludingGst, paymentSummary.CardSales))
         {
+            PartialCostOfGoods = partialCost,
+            IsCogsComplete = isCogsComplete,
+            UncostedTransactionCount = uncosted.Count,
+            UncostedSalesAmount = uncosted.Sum(x => x.SettlementValue),
             StructuredOperatingExpenses = operatingExpenses.Total,
             OperatingExpenseGst = operatingExpenses.Gst,
             OperatingExpensesByCategory = operatingExpenses.ByCategory,
@@ -102,7 +114,8 @@ public sealed class ReportingService : IReportingService
             .Select(g =>
             {
                 var grossSales = g.Sum(x => x.SettlementValue);
-                var cost = g.Sum(x => x.Cost);
+                var partialCost = g.Sum(x => x.CostOfGoodsSold ?? 0m);
+                var isCogsComplete = g.All(x => x.HasCost);
                 var cardSales = g.Where(x => PaymentMethodClassifier.Classify(x.PaymentMethod) == NayaxPaymentType.Card)
                     .Sum(x => x.SettlementValue);
                 var cashSales = g.Where(x => PaymentMethodClassifier.Classify(x.PaymentMethod) == NayaxPaymentType.Cash)
@@ -118,12 +131,12 @@ public sealed class ReportingService : IReportingService
                 var hasImported = imported?.HasReimbursement ?? false;
                 var fee = feeByDate[g.Key];
                 return new DailyReportRowDto(
-                    g.Key, grossSales, g.Count(), cost,
-                    ReportingCalculations.GrossProfit(grossSales, cost), g.Count(),
+                    g.Key, grossSales, g.Count(), isCogsComplete ? partialCost : null,
+                    isCogsComplete ? ReportingCalculations.GrossProfit(grossSales, partialCost) : null, g.Count(),
                     grossSales, cardSales, cashSales,
                     ReportingCalculations.Average(grossSales, g.Count()),
                     uncosted.Count == 0, uncosted.Count, uncosted.Sum(x => x.SettlementValue),
-                    ReportingCalculations.MarginPercent(grossSales, cost),
+                    isCogsComplete ? ReportingCalculations.MarginPercent(grossSales, partialCost) : null,
                     fee.TotalFeeExGst, fee.TotalFeeIncGst,
                     importedReimbursement, imported?.NetReimbursement ?? 0m,
                     hasImported && IsReconciled(difference, 0.01m),
@@ -138,15 +151,23 @@ public sealed class ReportingService : IReportingService
                     statusRows.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Refunded),
                     statusRows.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Unknown),
                     fee.HasEstimatedFees ? (fee.ActualFeeExGst != 0m ? "Actual and Estimated" : "Estimated") :
-                        fee.ActualFeeExGst != 0m ? "Actual" : "None");
+                        fee.ActualFeeExGst != 0m ? "Actual" : "None")
+                {
+                    PartialCostOfGoods = partialCost
+                };
             }).ToList();
         var totalFees = await _nayaxProcessingFees.GetProcessingFeesAsync(range.From, range.ToDate, MachineId(filter), cancellationToken);
+        var totalPartialCost = sales.Sum(x => x.CostOfGoodsSold ?? 0m);
+        var totalCogsComplete = sales.All(x => x.HasCost);
+        var totalGrossSales = rows.Sum(x => x.GrossSales);
+        var totalTransactionCount = rows.Sum(x => x.TransactionCount);
         var totals = new DailyReportTotalsDto(
-            rows.Sum(x => x.GrossSales), rows.Sum(x => x.CardSales), rows.Sum(x => x.CashSales),
-            rows.Sum(x => x.Quantity), rows.Sum(x => x.CostOfGoods), rows.Sum(x => x.GrossProfit),
-            rows.Sum(x => x.TransactionCount), ReportingCalculations.Average(rows.Sum(x => x.GrossSales), rows.Sum(x => x.TransactionCount)),
-            rows.All(x => x.IsCogsComplete), rows.Sum(x => x.UncostedTransactionCount), rows.Sum(x => x.UncostedSalesAmount),
-            ReportingCalculations.MarginPercent(rows.Sum(x => x.GrossSales), rows.Sum(x => x.CostOfGoods)),
+            totalGrossSales, rows.Sum(x => x.CardSales), rows.Sum(x => x.CashSales),
+            rows.Sum(x => x.Quantity), totalCogsComplete ? totalPartialCost : null,
+            totalCogsComplete ? ReportingCalculations.GrossProfit(totalGrossSales, totalPartialCost) : null,
+            totalTransactionCount, ReportingCalculations.Average(totalGrossSales, totalTransactionCount),
+            totalCogsComplete, rows.Sum(x => x.UncostedTransactionCount), rows.Sum(x => x.UncostedSalesAmount),
+            totalCogsComplete ? ReportingCalculations.MarginPercent(totalGrossSales, totalPartialCost) : null,
             totalFees.TotalFeeExGst,
             totalFees.TotalFeeIncGst,
             importedPeriod.ContainsRows ? importedPeriod.Settlement : rows.Sum(x => x.ImportedReimbursement),
@@ -157,6 +178,7 @@ public sealed class ReportingService : IReportingService
             statusSales.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Refunded),
             statusSales.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Unknown))
         {
+            PartialCostOfGoods = totalPartialCost,
             NayaxProcessingFees = totalFees
         };
         var note = importedPeriod.FeesMachineFilterLimited
@@ -168,6 +190,8 @@ public sealed class ReportingService : IReportingService
         if (note is not null) qualityNotes.Add(note);
         if (totalFees.HasMissingRates)
             qualityNotes.Add($"{totalFees.MissingRateTransactionCount} card transaction(s) have no effective Nayax processing fee rate; fee totals are provisional.");
+        if (!totals.IsCogsComplete)
+            qualityNotes.Add("One or more completed sales have no persisted COGS; profit is incomplete.");
         AddStatusQualityNotes(qualityNotes, statusSales);
         var quality = Quality(importedPeriod.ContainsRows, importedPeriod.ContainsGstClassification, false,
             qualityNotes.Count == 0 ? null : string.Join(" ", qualityNotes));
@@ -292,7 +316,10 @@ public sealed class ReportingService : IReportingService
                 CashSales = g.Where(x => PaymentMethodClassifier.Classify(x.PaymentMethod) == NayaxPaymentType.Cash).Sum(x => x.SettlementValue),
                 Sales = g.Sum(x => x.SettlementValue),
                 Quantity = g.Count(),
-                Cost = g.Sum(x => x.Cost),
+                PartialCost = g.Sum(x => x.CostOfGoodsSold ?? 0m),
+                IsCogsComplete = g.All(x => x.HasCost),
+                UncostedTransactionCount = g.Count(x => !x.HasCost),
+                UncostedSalesAmount = g.Where(x => !x.HasCost).Sum(x => x.SettlementValue),
                 Transactions = g.Count()
             }).OrderByDescending(x => x.Sales).ToList();
         var commissions = await GetMachineCommissionsAsync(range, MachineId(filter), cancellationToken);
@@ -308,15 +335,21 @@ public sealed class ReportingService : IReportingService
             var fees = await _nayaxProcessingFees.GetProcessingFeesAsync(range.From, range.ToDate, x.MachineID, cancellationToken);
             missingFeeRateTransactions += fees.MissingRateTransactionCount;
             results.Add(new MachineProfitabilityRowDto(x.MachineID, x.MachineName ?? $"Machine {x.MachineID}",
-                x.Sales, x.Quantity, x.Cost, ReportingCalculations.GrossProfit(x.Sales, x.Cost), ReportingCalculations.MarginPercent(x.Sales, x.Cost), x.Transactions,
+                x.Sales, x.Quantity, x.IsCogsComplete ? x.PartialCost : null,
+                x.IsCogsComplete ? ReportingCalculations.GrossProfit(x.Sales, x.PartialCost) : null,
+                x.IsCogsComplete ? ReportingCalculations.MarginPercent(x.Sales, x.PartialCost) : null, x.Transactions,
                 commissions.Machines.GetValueOrDefault(x.MachineID).Due,
-                x.Sales - x.Cost - commissions.Machines.GetValueOrDefault(x.MachineID).Due -
-                    operatingExpenses.GetValueOrDefault(x.MachineID) - fees.TotalFeeIncGst,
-                ReportingCalculations.MarginPercent(x.Sales, x.Cost + commissions.Machines.GetValueOrDefault(x.MachineID).Due +
-                    operatingExpenses.GetValueOrDefault(x.MachineID) + fees.TotalFeeIncGst),
+                x.IsCogsComplete ? x.Sales - x.PartialCost - commissions.Machines.GetValueOrDefault(x.MachineID).Due -
+                    operatingExpenses.GetValueOrDefault(x.MachineID) - fees.TotalFeeIncGst : null,
+                x.IsCogsComplete ? ReportingCalculations.MarginPercent(x.Sales, x.PartialCost + commissions.Machines.GetValueOrDefault(x.MachineID).Due +
+                    operatingExpenses.GetValueOrDefault(x.MachineID) + fees.TotalFeeIncGst) : null,
                 commissions.Machines.GetValueOrDefault(x.MachineID).Percent,
                 x.CardSales, x.CashSales)
             {
+                PartialCostOfGoods = x.PartialCost,
+                IsCogsComplete = x.IsCogsComplete,
+                UncostedTransactionCount = x.UncostedTransactionCount,
+                UncostedSalesAmount = x.UncostedSalesAmount,
                 DirectOperatingExpenses = operatingExpenses.GetValueOrDefault(x.MachineID),
                 NayaxProcessingFees = fees
             });
@@ -324,6 +357,8 @@ public sealed class ReportingService : IReportingService
         var qualityNotes = new List<string>();
         if (missingFeeRateTransactions > 0)
             qualityNotes.Add($"{missingFeeRateTransactions} card transaction(s) have no effective Nayax processing fee rate; machine profit is provisional.");
+        if (results.Any(x => !x.IsCogsComplete))
+            qualityNotes.Add("One or more machines have completed sales with no persisted COGS; profit is incomplete.");
         AddCommissionQualityNotes(qualityNotes, commissions);
         return new MachineProfitabilityReportDto(range.From, range.ToDate, results,
             Quality(false, false, false, qualityNotes.Count == 0 ? null : string.Join(" ", qualityNotes)));
@@ -341,8 +376,10 @@ public sealed class ReportingService : IReportingService
                 g.Key.ProductName,
                 Sales = g.Sum(x => x.SettlementValue),
                 Quantity = g.Count(),
-                CostOfGoodsSold = g.Sum(x => x.CostOfGoodsSold ?? 0m),
-                HasCompleteCost = g.All(x => x.CostOfGoodsSold.HasValue && x.CostingStatus == SaleCostingStatus.Costed),
+                PartialCostOfGoodsSold = g.Sum(x => x.CostOfGoodsSold ?? 0m),
+                IsCogsComplete = g.All(x => x.CostOfGoodsSold.HasValue),
+                UncostedTransactionCount = g.Count(x => !x.CostOfGoodsSold.HasValue),
+                UncostedSalesAmount = g.Where(x => !x.CostOfGoodsSold.HasValue).Sum(x => x.SettlementValue),
                 Transactions = g.Count(),
                 CardRevenue = g.Where(x => x.PaymentMethod == "Credit Card" || x.PaymentMethod == "Prepaid Credit").Sum(x => x.SettlementValue),
                 CashRevenue = g.Where(x => x.PaymentMethod == "Cash").Sum(x => x.SettlementValue)
@@ -361,8 +398,10 @@ public sealed class ReportingService : IReportingService
                         : NayaxProductMatcher.NormalizeName(x.ProductName),
                     x.Sales,
                     x.Quantity,
-                    x.CostOfGoodsSold,
-                    x.HasCompleteCost,
+                    x.PartialCostOfGoodsSold,
+                    x.IsCogsComplete,
+                    x.UncostedTransactionCount,
+                    x.UncostedSalesAmount,
                     x.Transactions,
                     x.CardRevenue,
                     x.CashRevenue
@@ -375,7 +414,8 @@ public sealed class ReportingService : IReportingService
             {
                 var first = g.First();
                 var sales = g.Sum(x => x.Sales);
-                var cost = g.Sum(x => x.CostOfGoodsSold);
+                var partialCost = g.Sum(x => x.PartialCostOfGoodsSold);
+                var isCogsComplete = g.All(x => x.IsCogsComplete);
                 var isUnmapped = first.Product is null;
                 return new ProductProfitabilityRowDto(
                     first.Product?.Id ?? first.NayaxProductId,
@@ -383,19 +423,28 @@ public sealed class ReportingService : IReportingService
                     first.Product?.Category?.Name,
                     sales,
                     g.Sum(x => x.Quantity),
-                    cost,
-                    ReportingCalculations.GrossProfit(sales, cost),
-                    ReportingCalculations.MarginPercent(sales, cost),
+                    isCogsComplete ? partialCost : null,
+                    isCogsComplete ? ReportingCalculations.GrossProfit(sales, partialCost) : null,
+                    isCogsComplete ? ReportingCalculations.MarginPercent(sales, partialCost) : null,
                     g.Sum(x => x.Transactions),
                     isUnmapped,
-                    !isUnmapped && g.All(x => x.HasCompleteCost),
+                    !isUnmapped && isCogsComplete,
                     g.Sum(x => x.CardRevenue),
-                    g.Sum(x => x.CashRevenue));
+                    g.Sum(x => x.CashRevenue))
+                {
+                    PartialCostOfGoods = partialCost,
+                    IsCogsComplete = isCogsComplete,
+                    UncostedTransactionCount = g.Sum(x => x.UncostedTransactionCount),
+                    UncostedSalesAmount = g.Sum(x => x.UncostedSalesAmount)
+                };
             })
             .OrderByDescending(x => x.Sales)
             .ToList();
+        var qualityNotes = new List<string>();
+        if (result.Any(x => x.IsUnmapped)) qualityNotes.Add("One or more sales could not be mapped to a Product.");
+        if (result.Any(x => !x.IsCogsComplete)) qualityNotes.Add("One or more completed sales have no persisted COGS; profit is incomplete.");
         var quality = Quality(false, false, result.Any(x => x.IsUnmapped),
-            result.Any(x => x.IsUnmapped) ? "One or more sales could not be mapped to a Product." : null);
+            qualityNotes.Count == 0 ? null : string.Join(" ", qualityNotes));
         return new ProductProfitabilityReportDto(range.From, range.ToDate, result, quality);
     }
 
@@ -423,7 +472,10 @@ public sealed class ReportingService : IReportingService
             {
                 Sales = g.Sum(x => x.SettlementValue),
                 Quantity = g.Count(),
-                Cost = g.Sum(x => x.Cost),
+                PartialCost = g.Sum(x => x.CostOfGoodsSold ?? 0m),
+                IsCogsComplete = g.All(x => x.HasCost),
+                UncostedTransactionCount = g.Count(x => !x.HasCost),
+                UncostedSalesAmount = g.Where(x => !x.HasCost).Sum(x => x.SettlementValue),
                 Transactions = g.Count(),
                 Machines = g.Select(x => x.MachineID).Distinct().Count(),
                 Products = g.Select(x => x.NayaxProductId).Where(x => x.HasValue).Distinct().Count()
@@ -438,10 +490,14 @@ public sealed class ReportingService : IReportingService
         var operatingExpenses = await OperatingExpenseSummaryAsync(range, MachineId(filter), cancellationToken);
         var fees = processingFees.TotalFeeIncGst;
         var totalSales = paymentSummary.GrossSales;
-        var costOfGoods = summary?.Cost ?? 0m;
-        var grossProfit = ReportingCalculations.GrossProfit(totalSales, costOfGoods);
+        var partialCostOfGoods = summary?.PartialCost ?? 0m;
+        var isCogsComplete = summary?.IsCogsComplete ?? true;
+        decimal? costOfGoods = isCogsComplete ? partialCostOfGoods : null;
+        decimal? grossProfit = isCogsComplete ? ReportingCalculations.GrossProfit(totalSales, partialCostOfGoods) : null;
         var otherOperatingExpenses = operatingExpenses.Total;
-        var netProfit = grossProfit - fees - siteCommission - receiptCosts.Total - otherOperatingExpenses;
+        decimal? netProfit = grossProfit.HasValue
+            ? grossProfit.Value - fees - siteCommission - receiptCosts.Total - otherOperatingExpenses
+            : null;
         var expectedReimbursement = paymentSummary.CardSales - fees;
         var actualReimbursement = imported.NetSettlement;
         var reimbursementDifference = actualReimbursement - expectedReimbursement;
@@ -449,6 +505,12 @@ public sealed class ReportingService : IReportingService
             ? "Pending"
             : Math.Abs(reimbursementDifference) <= 0.01m ? "Reconciled" : "Needs Review";
         var dashboardQuality = productReport.DataQuality;
+        if (!isCogsComplete)
+        {
+            var notes = dashboardQuality.Notes?.ToList() ?? [];
+            notes.Add("One or more completed sales have no persisted COGS; profitability is unavailable.");
+            dashboardQuality = dashboardQuality with { Notes = notes };
+        }
         if (processingFees.HasMissingRates)
         {
             var notes = dashboardQuality.Notes?.ToList() ?? [];
@@ -464,14 +526,18 @@ public sealed class ReportingService : IReportingService
             productReport.Rows.Count(x => x.IsUnmapped), dashboardQuality, fees,
             actualReimbursement,
             siteCommission, netProfit,
-            ReportingCalculations.MarginPercent(totalSales, costOfGoods + fees + siteCommission + receiptCosts.Total + otherOperatingExpenses),
+            netProfit.HasValue ? ReportingCalculations.MarginPercent(totalSales, partialCostOfGoods + fees + siteCommission + receiptCosts.Total + otherOperatingExpenses) : null,
             processingFees.TotalFeeExGst, receiptCosts.Delivery, receiptCosts.Package, otherOperatingExpenses,
             paymentSummary.CardSales, paymentSummary.CashSales, paymentSummary.CardTransactions, paymentSummary.CashTransactions)
         {
             TotalSales = totalSales,
             CostOfGoodsSold = costOfGoods,
+            PartialCostOfGoods = partialCostOfGoods,
+            IsCogsComplete = isCogsComplete,
+            UncostedTransactionCount = summary?.UncostedTransactionCount ?? 0,
+            UncostedSalesAmount = summary?.UncostedSalesAmount ?? 0m,
             AverageSale = ReportingCalculations.Average(totalSales, summary?.Transactions ?? 0),
-            GrossMarginPercent = ReportingCalculations.MarginPercent(totalSales, grossProfit),
+            GrossMarginPercent = grossProfit.HasValue ? ReportingCalculations.MarginPercent(totalSales, partialCostOfGoods) : null,
             NayaxFeesIncludingGst = fees,
             OtherOperatingExpenses = otherOperatingExpenses,
             ExpectedReimbursement = expectedReimbursement,
@@ -877,8 +943,8 @@ public sealed class ReportingService : IReportingService
                     x.Date.ToString("yyyy-MM-dd"), x.GrossSales.ToString(CultureInfo.InvariantCulture),
                     x.CardSales.ToString(CultureInfo.InvariantCulture), x.CashSales.ToString(CultureInfo.InvariantCulture),
                     x.AverageSale.ToString(CultureInfo.InvariantCulture), x.Quantity.ToString(CultureInfo.InvariantCulture),
-                    x.CostOfGoods.ToString(CultureInfo.InvariantCulture), x.GrossProfit.ToString(CultureInfo.InvariantCulture),
-                    x.GrossMarginPercent.ToString(CultureInfo.InvariantCulture), x.TransactionCount.ToString(),
+                    Number(x.CostOfGoods), Number(x.GrossProfit),
+                    Number(x.GrossMarginPercent), x.TransactionCount.ToString(),
                     x.IsCogsComplete.ToString(), x.UncostedTransactionCount.ToString(),
                     x.UncostedSalesAmount.ToString(CultureInfo.InvariantCulture),
                     x.NayaxFeesExGst.ToString(CultureInfo.InvariantCulture), (x.NayaxFeesIncludingGst - x.NayaxFeesExGst).ToString(CultureInfo.InvariantCulture), x.NayaxFeesIncludingGst.ToString(CultureInfo.InvariantCulture), x.NayaxFeeSource,
@@ -891,8 +957,8 @@ public sealed class ReportingService : IReportingService
                     "TOTAL", value.Totals.GrossSales.ToString(CultureInfo.InvariantCulture),
                     value.Totals.CardSales.ToString(CultureInfo.InvariantCulture), value.Totals.CashSales.ToString(CultureInfo.InvariantCulture),
                     value.Totals.AverageSale.ToString(CultureInfo.InvariantCulture), value.Totals.Quantity.ToString(CultureInfo.InvariantCulture),
-                    value.Totals.CostOfGoods.ToString(CultureInfo.InvariantCulture), value.Totals.GrossProfit.ToString(CultureInfo.InvariantCulture),
-                    value.Totals.GrossMarginPercent.ToString(CultureInfo.InvariantCulture), value.Totals.TransactionCount.ToString(),
+                    Number(value.Totals.CostOfGoods), Number(value.Totals.GrossProfit),
+                    Number(value.Totals.GrossMarginPercent), value.Totals.TransactionCount.ToString(),
                     value.Totals.IsCogsComplete.ToString(), value.Totals.UncostedTransactionCount.ToString(),
                     value.Totals.UncostedSalesAmount.ToString(CultureInfo.InvariantCulture),
                     value.Totals.NayaxFeesExGst.ToString(CultureInfo.InvariantCulture), value.Totals.NayaxFeesIncludingGst.ToString(CultureInfo.InvariantCulture),
@@ -907,7 +973,7 @@ public sealed class ReportingService : IReportingService
             return new List<List<string>>
             {
                 new() { "From", "To", "FinancialYear", "GrossSales", "CardSales", "CashSales", "CardTransactions", "CashTransactions", "COGS", "GrossProfit",                 "NayaxFeeExGst", "NayaxFeeGST", "NayaxFeeIncGST", "ActualNayaxFee", "EstimatedNayaxFee", "EstimatedCardTransactionCount", "HasEstimates", "DeliveryCosts", "PackageCosts", "OtherOperatingExpenses", "NetSettlement", "SiteCommission", "NetProfit", "NetMargin", "GstOnSales", "GstOnFees" },
-                new() { value.From.ToString("yyyy-MM-dd"), value.To.ToString("yyyy-MM-dd"), value.FinancialYear, value.Sales.ToString(CultureInfo.InvariantCulture), value.CardSales.ToString(CultureInfo.InvariantCulture), value.CashSales.ToString(CultureInfo.InvariantCulture), value.CardTransactionCount.ToString(), value.CashTransactionCount.ToString(), value.CostOfGoods.ToString(CultureInfo.InvariantCulture), value.GrossProfit.ToString(CultureInfo.InvariantCulture), value.NayaxProcessingFees.TotalFeeExGst.ToString(CultureInfo.InvariantCulture), value.NayaxProcessingFees.TotalFeeGst.ToString(CultureInfo.InvariantCulture), value.NayaxProcessingFees.TotalFeeIncGst.ToString(CultureInfo.InvariantCulture), value.NayaxProcessingFees.ActualFeeIncGst.ToString(CultureInfo.InvariantCulture), value.NayaxProcessingFees.EstimatedFeeIncGst.ToString(CultureInfo.InvariantCulture), value.NayaxProcessingFees.EstimatedCardTransactionCount.ToString(), value.NayaxProcessingFees.HasEstimatedFees.ToString(), value.DeliveryCosts.ToString(CultureInfo.InvariantCulture), value.PackageCosts.ToString(CultureInfo.InvariantCulture), value.OtherOperatingExpenses.ToString(CultureInfo.InvariantCulture), value.NetSettlement.ToString(CultureInfo.InvariantCulture), value.SiteCommission.ToString(CultureInfo.InvariantCulture), value.NetProfit.ToString(CultureInfo.InvariantCulture), value.NetMarginPercent.ToString(CultureInfo.InvariantCulture), value.GstOnSales.ToString(CultureInfo.InvariantCulture), value.GstOnFees.ToString(CultureInfo.InvariantCulture) }
+                new() { value.From.ToString("yyyy-MM-dd"), value.To.ToString("yyyy-MM-dd"), value.FinancialYear, value.Sales.ToString(CultureInfo.InvariantCulture), value.CardSales.ToString(CultureInfo.InvariantCulture), value.CashSales.ToString(CultureInfo.InvariantCulture), value.CardTransactionCount.ToString(), value.CashTransactionCount.ToString(), Number(value.CostOfGoods), Number(value.GrossProfit), value.NayaxProcessingFees.TotalFeeExGst.ToString(CultureInfo.InvariantCulture), value.NayaxProcessingFees.TotalFeeGst.ToString(CultureInfo.InvariantCulture), value.NayaxProcessingFees.TotalFeeIncGst.ToString(CultureInfo.InvariantCulture), value.NayaxProcessingFees.ActualFeeIncGst.ToString(CultureInfo.InvariantCulture), value.NayaxProcessingFees.EstimatedFeeIncGst.ToString(CultureInfo.InvariantCulture), value.NayaxProcessingFees.EstimatedCardTransactionCount.ToString(), value.NayaxProcessingFees.HasEstimatedFees.ToString(), value.DeliveryCosts.ToString(CultureInfo.InvariantCulture), value.PackageCosts.ToString(CultureInfo.InvariantCulture), value.OtherOperatingExpenses.ToString(CultureInfo.InvariantCulture), value.NetSettlement.ToString(CultureInfo.InvariantCulture), value.SiteCommission.ToString(CultureInfo.InvariantCulture), Number(value.NetProfit), Number(value.NetMarginPercent), value.GstOnSales.ToString(CultureInfo.InvariantCulture), value.GstOnFees.ToString(CultureInfo.InvariantCulture) }
             };
         }
         if (report is "reconciliation")
@@ -953,7 +1019,7 @@ public sealed class ReportingService : IReportingService
         {
             var value = await GetMachineProfitabilityAsync(filter, cancellationToken);
             return new[] { new List<string> { "MachineId", "MachineName", "Sales", "CardSales", "CashSales", "Quantity", "CostOfGoods", "GrossProfit", "NayaxFeeExGst", "NayaxFeeGST", "NayaxFeeIncGST", "ActualNayaxFee", "EstimatedNayaxFee", "EstimatedCardTransactionCount", "HasEstimates", "CommissionPercent", "SiteCommission", "NetProfit", "NetMarginPercent", "Transactions" } }
-                .Concat(value.Rows.Select(x => new List<string> { x.MachineId.ToString(), x.MachineName, x.Sales.ToString(CultureInfo.InvariantCulture), x.CardSales.ToString(CultureInfo.InvariantCulture), x.CashSales.ToString(CultureInfo.InvariantCulture), x.Quantity.ToString(CultureInfo.InvariantCulture), x.CostOfGoods.ToString(CultureInfo.InvariantCulture), x.GrossProfit.ToString(CultureInfo.InvariantCulture), x.NayaxProcessingFees.TotalFeeExGst.ToString(CultureInfo.InvariantCulture), x.NayaxProcessingFees.TotalFeeGst.ToString(CultureInfo.InvariantCulture), x.NayaxProcessingFees.TotalFeeIncGst.ToString(CultureInfo.InvariantCulture), x.NayaxProcessingFees.ActualFeeIncGst.ToString(CultureInfo.InvariantCulture), x.NayaxProcessingFees.EstimatedFeeIncGst.ToString(CultureInfo.InvariantCulture), x.NayaxProcessingFees.EstimatedCardTransactionCount.ToString(), x.NayaxProcessingFees.HasEstimatedFees.ToString(), x.CommissionPercent.ToString(CultureInfo.InvariantCulture), x.SiteCommission.ToString(CultureInfo.InvariantCulture), x.NetProfit.ToString(CultureInfo.InvariantCulture), x.NetMarginPercent.ToString(CultureInfo.InvariantCulture), x.TransactionCount.ToString(CultureInfo.InvariantCulture) })).ToList();
+                .Concat(value.Rows.Select(x => new List<string> { x.MachineId.ToString(), x.MachineName, x.Sales.ToString(CultureInfo.InvariantCulture), x.CardSales.ToString(CultureInfo.InvariantCulture), x.CashSales.ToString(CultureInfo.InvariantCulture), x.Quantity.ToString(CultureInfo.InvariantCulture), Number(x.CostOfGoods), Number(x.GrossProfit), x.NayaxProcessingFees.TotalFeeExGst.ToString(CultureInfo.InvariantCulture), x.NayaxProcessingFees.TotalFeeGst.ToString(CultureInfo.InvariantCulture), x.NayaxProcessingFees.TotalFeeIncGst.ToString(CultureInfo.InvariantCulture), x.NayaxProcessingFees.ActualFeeIncGst.ToString(CultureInfo.InvariantCulture), x.NayaxProcessingFees.EstimatedFeeIncGst.ToString(CultureInfo.InvariantCulture), x.NayaxProcessingFees.EstimatedCardTransactionCount.ToString(), x.NayaxProcessingFees.HasEstimatedFees.ToString(), x.CommissionPercent.ToString(CultureInfo.InvariantCulture), x.SiteCommission.ToString(CultureInfo.InvariantCulture), Number(x.NetProfit), Number(x.NetMarginPercent), x.TransactionCount.ToString(CultureInfo.InvariantCulture) })).ToList();
         }
         if (report is "gst" or "gst-accounting")
         {
@@ -970,12 +1036,12 @@ public sealed class ReportingService : IReportingService
             return new List<List<string>>
             {
                 new() { "From", "To", "Sales", "GrossProfit", "Transactions", "Quantity", "MachineCount", "ProductCount", "UnmappedProductCount" },
-                new() { value.From.ToString("yyyy-MM-dd"), value.To.ToString("yyyy-MM-dd"), value.Sales.ToString(CultureInfo.InvariantCulture), value.GrossProfit.ToString(CultureInfo.InvariantCulture), value.Transactions.ToString(CultureInfo.InvariantCulture), value.Quantity.ToString(CultureInfo.InvariantCulture), value.MachineCount.ToString(), value.ProductCount.ToString(), value.UnmappedProductCount.ToString() }
+                new() { value.From.ToString("yyyy-MM-dd"), value.To.ToString("yyyy-MM-dd"), value.Sales.ToString(CultureInfo.InvariantCulture), Number(value.GrossProfit), value.Transactions.ToString(CultureInfo.InvariantCulture), value.Quantity.ToString(CultureInfo.InvariantCulture), value.MachineCount.ToString(), value.ProductCount.ToString(), value.UnmappedProductCount.ToString() }
             };
         }
         var products = await GetProductProfitabilityAsync(filter, cancellationToken);
         return new[] { new List<string> { "Product", "Sales", "Quantity", "CostOfGoods", "GrossProfit", "MarginPercent", "Transactions", "Unmapped" } }
-            .Concat(products.Rows.Select(x => new List<string> { x.ProductName, x.Sales.ToString(CultureInfo.InvariantCulture), x.Quantity.ToString(CultureInfo.InvariantCulture), x.CostOfGoods.ToString(CultureInfo.InvariantCulture), x.GrossProfit.ToString(CultureInfo.InvariantCulture), x.MarginPercent.ToString(CultureInfo.InvariantCulture), x.TransactionCount.ToString(CultureInfo.InvariantCulture), x.IsUnmapped.ToString() })).ToList();
+            .Concat(products.Rows.Select(x => new List<string> { x.ProductName, x.Sales.ToString(CultureInfo.InvariantCulture), x.Quantity.ToString(CultureInfo.InvariantCulture), Number(x.CostOfGoods), Number(x.GrossProfit), Number(x.MarginPercent), x.TransactionCount.ToString(CultureInfo.InvariantCulture), x.IsUnmapped.ToString() })).ToList();
     }
 
     private IQueryable<NayaxSales> SalesQuery(DateRange range, long? machineId) =>
