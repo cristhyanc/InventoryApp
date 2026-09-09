@@ -79,12 +79,12 @@ export class SiteProductsComponent implements OnInit {
   exportProducts(site: Site): void {
     if (!this.products.length) return;
 
-    const headers = ['Product', 'Unit Price', 'Site Price', 'Profit', 'Stock', 'Max Stock'];
+    const headers = ['Product', 'Average Unit Cost', 'Site Price', 'Estimated Card Profit', 'Stock', 'Max Stock'];
     const rows = this.products.map(product => [
       product.name,
-      product.unitPrice.toFixed(2),
+      product.averageUnitCost?.toFixed(2) ?? 'Unavailable',
       product.sitePrice.toFixed(2),
-      product.profit.toFixed(2),
+      product.estimatedCardProfit?.toFixed(2) ?? 'Unavailable',
       product.quantityInStock.toString(),
       product.maxStock.toString()
     ]);

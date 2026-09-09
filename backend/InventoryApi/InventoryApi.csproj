@@ -29,7 +29,9 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Folder Include="wwwroot\expenses\" />
     <Folder Include="wwwroot\ImportedFiles\" />
+    <Folder Include="wwwroot\receipts\" />
   </ItemGroup>
 
 </Project>

@@ -287,11 +287,12 @@ public class ReceiptService : IReceiptService
     private static void ApplyTotalWarning(Receipt receipt, IEnumerable<ReceiptItemDto> items)
     {
         if (!receipt.TotalAmount.HasValue) return;
-        var subtotal = items.Sum(i => i.Quantity * i.UnitCost);
-        if (Math.Abs(subtotal - receipt.TotalAmount.Value) > ReceiptTotalTolerance)
+        var itemSubtotal = items.Sum(i => i.Quantity * i.UnitCost);
+        var calculatedTotal = itemSubtotal + (receipt.DeliveryCost ?? 0m) + (receipt.PackageCost ?? 0m);
+        if (Math.Abs(calculatedTotal - receipt.TotalAmount.Value) > ReceiptTotalTolerance)
             receipt.Notes = string.IsNullOrWhiteSpace(receipt.Notes)
-                ? $"Warning: item subtotal {subtotal:0.00} differs from receipt total {receipt.TotalAmount.Value:0.00}."
-                : $"{receipt.Notes} Warning: item subtotal {subtotal:0.00} differs from receipt total {receipt.TotalAmount.Value:0.00}.";
+                ? $"Warning: calculated total {calculatedTotal:0.00} (items {itemSubtotal:0.00}, delivery {(receipt.DeliveryCost ?? 0m):0.00}, package {(receipt.PackageCost ?? 0m):0.00}) differs from receipt total {receipt.TotalAmount.Value:0.00}."
+                : $"{receipt.Notes} Warning: calculated total {calculatedTotal:0.00} (items {itemSubtotal:0.00}, delivery {(receipt.DeliveryCost ?? 0m):0.00}, package {(receipt.PackageCost ?? 0m):0.00}) differs from receipt total {receipt.TotalAmount.Value:0.00}.";
     }
 
     private static int ToStockQuantity(decimal quantity) =>

@@ -70,6 +70,7 @@ public sealed class NayaxProcessingFeeService : INayaxProcessingFeeService
             .ToListAsync(cancellationToken);
 
         var estimatedCardTransactions = 0;
+        var missingRateTransactions = 0;
         var estimatedExGst = 0m;
         DateTime? estimatedFrom = null;
         foreach (var sale in eligibleSales)
@@ -78,8 +79,14 @@ public sealed class NayaxProcessingFeeService : INayaxProcessingFeeService
             if (actualByDay.ContainsKey(day) || PaymentMethodClassifier.Classify(sale.PaymentMethod) != NayaxPaymentType.Card)
                 continue;
 
-            var rate = rates.LastOrDefault(r => r.EffectiveFrom.Date <= day)?.FeeExGst ?? 0m;
-            estimatedExGst += rate;
+            var rate = EffectiveFinancialConfiguration.ResolveNayaxFeeRate(rates, day);
+            if (rate is null)
+            {
+                missingRateTransactions++;
+                continue;
+            }
+
+            estimatedExGst += rate.FeeExGst;
             estimatedCardTransactions++;
             estimatedFrom = estimatedFrom is null || day < estimatedFrom ? day : estimatedFrom;
         }
@@ -90,7 +97,8 @@ public sealed class NayaxProcessingFeeService : INayaxProcessingFeeService
         return new NayaxProcessingFeeResult(
             actualExGst, actualGst, actualExGst + actualGst,
             estimatedExGst, estimatedGst, estimatedExGst + estimatedGst,
-            estimatedCardTransactions, actualByDay.Count == 0 ? null : actualByDay.Keys.Max(), estimatedFrom);
+            estimatedCardTransactions, actualByDay.Count == 0 ? null : actualByDay.Keys.Max(), estimatedFrom,
+            missingRateTransactions);
     }
 
     private static bool IsProcessingFee(ImportedFee fee) =>

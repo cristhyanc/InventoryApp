@@ -10,13 +10,14 @@
         public decimal CurrentWeekGrossRevenue { get; set; } = 0;
         public decimal LastWeekGrossRevenue { get; set; } = 0;
         public decimal TwoWeeksAgoGrossRevenue { get; set; } = 0;
-        public decimal TodayNetRevenue { get; set; } = 0;
-        public decimal TwoWeeksAgoNetRevenue { get; set; } = 0;
-        public decimal LastWeekNetRevenue { get; set; } = 0;
-        public decimal CurrentWeekNetRevenue { get; set; } = 0;
+        public decimal? TodayNetRevenue { get; set; }
+        public decimal? TwoWeeksAgoNetRevenue { get; set; }
+        public decimal? LastWeekNetRevenue { get; set; }
+        public decimal? CurrentWeekNetRevenue { get; set; }
         public decimal PreviousComparableWeekGrossRevenue { get; set; } = 0;
-        public decimal PreviousComparableWeekNetRevenue { get; set; } = 0;
+        public decimal? PreviousComparableWeekNetRevenue { get; set; }
         public decimal MonthToDateGrossRevenue { get; set; } = 0;
-        public decimal MonthToDateNetRevenue { get; set; } = 0;
+        public decimal? MonthToDateNetRevenue { get; set; }
+        public string? ProfitabilityStatus { get; set; }
     }
 }

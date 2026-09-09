@@ -1,3 +1,5 @@
+using System;
+using System.Threading.Tasks;
 using InventoryApi.Data;
 using InventoryApi.Models;
 using InventoryApi.Services;
@@ -75,6 +77,60 @@ public class NayaxProcessingFeeServiceTests
         Assert.Equal(.25m, machine.ActualFeeExGst);
         Assert.Equal(.19m, machine.EstimatedFeeExGst);
         Assert.Equal(1, machine.EstimatedCardTransactionCount);
+    }
+
+    [Fact]
+    public async Task Uses_effective_dated_rates_and_cash_has_no_fee()
+    {
+        using var db = Db();
+        db.NayaxProcessingFeeRates.AddRange(
+            new NayaxProcessingFeeRate { EffectiveFrom = new DateTime(2026, 1, 1), FeeExGst = .17m },
+            new NayaxProcessingFeeRate { EffectiveFrom = new DateTime(2026, 7, 1), FeeExGst = .20m });
+        db.NayaxSales.AddRange(
+            new NayaxSales
+            {
+                TransactionID = 10, MachineID = 1, PaymentMethod = "Credit Card",
+                TransactionStatusId = NayaxTransactionStatusIds.Completed,
+                MachineAuthorizationTime = new DateTime(2026, 6, 30)
+            },
+            new NayaxSales
+            {
+                TransactionID = 11, MachineID = 1, PaymentMethod = "Credit Card",
+                TransactionStatusId = NayaxTransactionStatusIds.Completed,
+                MachineAuthorizationTime = new DateTime(2026, 7, 1)
+            },
+            new NayaxSales
+            {
+                TransactionID = 12, MachineID = 1, PaymentMethod = "Cash",
+                TransactionStatusId = NayaxTransactionStatusIds.Completed,
+                MachineAuthorizationTime = new DateTime(2026, 7, 1)
+            });
+        await db.SaveChangesAsync();
+
+        var service = new NayaxProcessingFeeService(db);
+        var june = await service.GetProcessingFeesAsync(
+            new DateTime(2026, 6, 30), new DateTime(2026, 6, 30));
+        var july = await service.GetProcessingFeesAsync(
+            new DateTime(2026, 7, 1), new DateTime(2026, 7, 1));
+
+        Assert.Equal(.17m, june.EstimatedFeeExGst);
+        Assert.Equal(.20m, july.EstimatedFeeExGst);
+        Assert.Equal(1, july.EstimatedCardTransactionCount);
+    }
+
+    [Fact]
+    public async Task Missing_effective_rate_is_reported_instead_of_estimated_as_zero()
+    {
+        using var db = Db();
+        db.NayaxSales.Add(Sale(20, 1, "Credit Card", NayaxTransactionStatusIds.Completed));
+        await db.SaveChangesAsync();
+
+        var result = await new NayaxProcessingFeeService(db).GetProcessingFeesAsync(
+            new DateTime(2026, 9, 1), new DateTime(2026, 9, 1));
+
+        Assert.True(result.HasMissingRates);
+        Assert.Equal(1, result.MissingRateTransactionCount);
+        Assert.Equal(0, result.EstimatedCardTransactionCount);
     }
 
     private static NayaxSales Sale(long id, long machine, string paymentMethod, int? status, int day = 1) =>

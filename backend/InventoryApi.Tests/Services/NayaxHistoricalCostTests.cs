@@ -260,7 +260,8 @@ public class NayaxHistoricalCostTests
         });
         await db.SaveChangesAsync();
 
-        var csv = Encoding.UTF8.GetString(await new ReportingService(db).ExportCsvAsync(
+        var csv = Encoding.UTF8.GetString(await new ReportingService(db, new NayaxProcessingFeeService(db),
+            Mock.Of<ISiteCommissionService>()).ExportCsvAsync(
             "transactions",
             new InventoryApi.DTOs.TransactionSalesFilterDto(
                 From: new DateTime(2026, 9, 2), To: new DateTime(2026, 9, 2))));

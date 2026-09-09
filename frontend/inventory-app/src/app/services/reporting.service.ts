@@ -70,6 +70,7 @@ export interface NayaxProcessingFeeResult {
   estimatedFeeExGst: number; estimatedFeeGst: number; estimatedFeeIncGst: number;
   totalFeeExGst: number; totalFeeGst: number; totalFeeIncGst: number;
   estimatedCardTransactionCount: number; hasEstimatedFees: boolean; isFullyActual: boolean;
+  missingRateTransactionCount?: number; hasMissingRates?: boolean;
   actualFeeCoverageEndDate?: string; estimatedFeeFromDate?: string;
 }
 export interface BookkeepingReport {

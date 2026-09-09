@@ -99,12 +99,20 @@ export class DashboardComponent implements OnInit {
     return this.machines.reduce((sum, m) => sum + (m.todayNetRevenue ?? 0), 0);
   }
 
+  get isTodayProfitComplete(): boolean {
+    return this.machines.every(m => m.todayNetRevenue != null);
+  }
+
   get totalCurrentWeekSales(): number {
     return this.machines.reduce((sum, m) => sum + (m.currentWeekGrossRevenue ?? 0), 0);
   }
 
   get totalCurrentWeekNetProfit(): number {
     return this.machines.reduce((sum, m) => sum + (m.currentWeekNetRevenue ?? 0), 0);
+  }
+
+  get isCurrentWeekProfitComplete(): boolean {
+    return this.machines.every(m => m.currentWeekNetRevenue != null);
   }
 
   get totalPreviousComparableWeekSales(): number {
@@ -119,12 +127,20 @@ export class DashboardComponent implements OnInit {
     return this.machines.reduce((sum, m) => sum + (m.lastWeekNetRevenue ?? 0), 0);
   }
 
+  get isLastWeekProfitComplete(): boolean {
+    return this.machines.every(m => m.lastWeekNetRevenue != null);
+  }
+
   get totalMonthToDateSales(): number {
     return this.machines.reduce((sum, m) => sum + (m.monthToDateGrossRevenue ?? 0), 0);
   }
 
   get totalMonthToDateNetProfit(): number {
     return this.machines.reduce((sum, m) => sum + (m.monthToDateNetRevenue ?? 0), 0);
+  }
+
+  get isMonthToDateProfitComplete(): boolean {
+    return this.machines.every(m => m.monthToDateNetRevenue != null);
   }
 
   get totalNetMargin(): number {

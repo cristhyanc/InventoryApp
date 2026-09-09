@@ -15,14 +15,14 @@ public sealed class ReportingService : IReportingService
     private readonly AppDbContext _db;
     private readonly INayaxLynxClient? _nayaxLynxClient;
     private readonly INayaxProcessingFeeService _nayaxProcessingFees;
-    private readonly ISiteCommissionService? _siteCommissions;
+    private readonly ISiteCommissionService _siteCommissions;
 
-    public ReportingService(AppDbContext db, INayaxLynxClient? nayaxLynxClient = null, INayaxProcessingFeeService? nayaxProcessingFees = null,
-        ISiteCommissionService? siteCommissions = null)
+    public ReportingService(AppDbContext db, INayaxProcessingFeeService nayaxProcessingFees,
+        ISiteCommissionService siteCommissions, INayaxLynxClient? nayaxLynxClient = null)
     {
         _db = db;
         _nayaxLynxClient = nayaxLynxClient;
-        _nayaxProcessingFees = nayaxProcessingFees ?? new NayaxProcessingFeeService(db);
+        _nayaxProcessingFees = nayaxProcessingFees;
         _siteCommissions = siteCommissions;
     }
 
@@ -66,6 +66,9 @@ public sealed class ReportingService : IReportingService
             qualityNotes.Add("No reimbursement device row matched the selected machine ID.");
         if (imported.FeesMachineFilterLimited)
             qualityNotes.Add("Imported fees are account-level amounts and are not allocated to a selected machine.");
+        if (processingFees.HasMissingRates)
+            qualityNotes.Add($"{processingFees.MissingRateTransactionCount} card transaction(s) have no effective Nayax processing fee rate; profit is provisional.");
+        AddCommissionQualityNotes(qualityNotes, commissions);
         var quality = Quality(imported.ContainsRows, imported.ContainsGstClassification, false,
             qualityNotes.Count == 0 ? null : string.Join(" ", qualityNotes));
         return new BookkeepingReportDto(range.From, range.ToDate, AustralianFyHelper.Label(range.From),
@@ -163,6 +166,8 @@ public sealed class ReportingService : IReportingService
                 : null;
         var qualityNotes = new List<string>();
         if (note is not null) qualityNotes.Add(note);
+        if (totalFees.HasMissingRates)
+            qualityNotes.Add($"{totalFees.MissingRateTransactionCount} card transaction(s) have no effective Nayax processing fee rate; fee totals are provisional.");
         AddStatusQualityNotes(qualityNotes, statusSales);
         var quality = Quality(importedPeriod.ContainsRows, importedPeriod.ContainsGstClassification, false,
             qualityNotes.Count == 0 ? null : string.Join(" ", qualityNotes));
@@ -297,25 +302,31 @@ public sealed class ReportingService : IReportingService
             .Select(g => new { MachineId = g.Key, Total = g.Sum(x => x.TotalAmount) })
             .ToDictionaryAsync(x => x.MachineId, x => x.Total, cancellationToken);
         var results = new List<MachineProfitabilityRowDto>();
+        var missingFeeRateTransactions = 0;
         foreach (var x in rows)
         {
             var fees = await _nayaxProcessingFees.GetProcessingFeesAsync(range.From, range.ToDate, x.MachineID, cancellationToken);
+            missingFeeRateTransactions += fees.MissingRateTransactionCount;
             results.Add(new MachineProfitabilityRowDto(x.MachineID, x.MachineName ?? $"Machine {x.MachineID}",
                 x.Sales, x.Quantity, x.Cost, ReportingCalculations.GrossProfit(x.Sales, x.Cost), ReportingCalculations.MarginPercent(x.Sales, x.Cost), x.Transactions,
-                commissions.GetValueOrDefault(x.MachineID).Due,
-                x.Sales - x.Cost - commissions.GetValueOrDefault(x.MachineID).Due -
+                commissions.Machines.GetValueOrDefault(x.MachineID).Due,
+                x.Sales - x.Cost - commissions.Machines.GetValueOrDefault(x.MachineID).Due -
                     operatingExpenses.GetValueOrDefault(x.MachineID) - fees.TotalFeeIncGst,
-                ReportingCalculations.MarginPercent(x.Sales, x.Cost + commissions.GetValueOrDefault(x.MachineID).Due +
+                ReportingCalculations.MarginPercent(x.Sales, x.Cost + commissions.Machines.GetValueOrDefault(x.MachineID).Due +
                     operatingExpenses.GetValueOrDefault(x.MachineID) + fees.TotalFeeIncGst),
-                commissions.GetValueOrDefault(x.MachineID).Percent,
+                commissions.Machines.GetValueOrDefault(x.MachineID).Percent,
                 x.CardSales, x.CashSales)
             {
                 DirectOperatingExpenses = operatingExpenses.GetValueOrDefault(x.MachineID),
                 NayaxProcessingFees = fees
             });
         }
+        var qualityNotes = new List<string>();
+        if (missingFeeRateTransactions > 0)
+            qualityNotes.Add($"{missingFeeRateTransactions} card transaction(s) have no effective Nayax processing fee rate; machine profit is provisional.");
+        AddCommissionQualityNotes(qualityNotes, commissions);
         return new MachineProfitabilityReportDto(range.From, range.ToDate, results,
-            Quality(false, false, false));
+            Quality(false, false, false, qualityNotes.Count == 0 ? null : string.Join(" ", qualityNotes)));
     }
 
     public async Task<ProductProfitabilityReportDto> GetProductProfitabilityAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default)
@@ -437,10 +448,20 @@ public sealed class ReportingService : IReportingService
         var reconciliationStatus = !imported.ContainsRows
             ? "Pending"
             : Math.Abs(reimbursementDifference) <= 0.01m ? "Reconciled" : "Needs Review";
+        var dashboardQuality = productReport.DataQuality;
+        if (processingFees.HasMissingRates)
+        {
+            var notes = dashboardQuality.Notes?.ToList() ?? [];
+            notes.Add($"{processingFees.MissingRateTransactionCount} card transaction(s) have no effective Nayax processing fee rate; net profit is provisional.");
+            dashboardQuality = dashboardQuality with { Notes = notes };
+        }
+        var commissionNotes = dashboardQuality.Notes?.ToList() ?? [];
+        AddCommissionQualityNotes(commissionNotes, commissions, "net profit");
+        dashboardQuality = dashboardQuality with { Notes = commissionNotes };
         return new DashboardReportDto(range.From, range.ToDate, summary?.Sales ?? 0m,
             grossProfit, summary?.Transactions ?? 0,
             summary?.Quantity ?? 0m, summary?.Machines ?? 0, summary?.Products ?? 0,
-            productReport.Rows.Count(x => x.IsUnmapped), productReport.DataQuality, fees,
+            productReport.Rows.Count(x => x.IsUnmapped), dashboardQuality, fees,
             actualReimbursement,
             siteCommission, netProfit,
             ReportingCalculations.MarginPercent(totalSales, costOfGoods + fees + siteCommission + receiptCosts.Total + otherOperatingExpenses),
@@ -495,6 +516,10 @@ public sealed class ReportingService : IReportingService
             try
             {
                 liveMachines = await _nayaxLynxClient.GetMachinesAsync(cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch
             {
@@ -586,6 +611,8 @@ public sealed class ReportingService : IReportingService
             notes.Add("An effective-dated estimated card fee is unavailable for one or more completed card transactions.");
         if (builds.Any(x => x.HasOverlappingCommission))
             notes.Add("Overlapping site commission agreements cover one or more transactions; their direct profit is unavailable.");
+        if (builds.Any(x => x.CommissionUnavailable))
+            notes.Add("Site mapping or effective commission agreement coverage is unavailable for one or more completed transactions.");
         if (rows.Any(x => x.FeeSource == "Estimated"))
             notes.Add("Transaction fees are configured estimates. Imported Nayax fees are period/device-level and are not allocated to transactions.");
         var nayaxCosted = rows.Count(x => x.CostSource == "Nayax Historical Export");
@@ -640,15 +667,27 @@ public sealed class ReportingService : IReportingService
 
         SiteCommissionAgreement? agreement = null;
         var hasOverlappingCommission = false;
+        var commissionUnavailable = false;
         if (detail.Status == NayaxTransactionStatus.Completed && detail.SiteId.HasValue)
         {
-            var matches = agreements.Where(x => x.SiteId == detail.SiteId.Value &&
-                x.EffectiveFrom.Date <= detail.Sale.MachineAuthorizationTime.Date &&
-                (!x.EffectiveTo.HasValue || x.EffectiveTo.Value.Date >= detail.Sale.MachineAuthorizationTime.Date)).ToList();
-            agreement = matches.Count == 1 ? matches[0] : null;
-            hasOverlappingCommission = matches.Count > 1;
+            var siteAgreements = agreements.Where(x => x.SiteId == detail.SiteId.Value).ToList();
+            try
+            {
+                agreement = EffectiveFinancialConfiguration.ResolveAgreement(
+                    siteAgreements, detail.SiteId.Value, detail.Sale.MachineAuthorizationTime);
+                commissionUnavailable = agreement is null && siteAgreements.Count > 0;
+            }
+            catch (InvalidOperationException)
+            {
+                hasOverlappingCommission = true;
+                commissionUnavailable = true;
+            }
         }
-        decimal? commissionAmount = agreement is null ? (hasOverlappingCommission ? null : 0m) :
+        else if (detail.Status == NayaxTransactionStatus.Completed)
+        {
+            commissionUnavailable = true;
+        }
+        decimal? commissionAmount = agreement is null ? (commissionUnavailable ? null : 0m) :
             SiteCommissionCalculator.CommissionAmount(agreement, sale.SettlementValue, detail.PaymentType);
         var isCosted = detail.IsCosted && detail.Status == NayaxTransactionStatus.Completed;
         decimal? grossProfit = isCosted ? sale.SettlementValue - detail.Sale.CostOfGoodsSold!.Value : null;
@@ -668,7 +707,8 @@ public sealed class ReportingService : IReportingService
             feeExGst, feeGst, feeIncGst, feeSource,
             agreement?.CommissionRate, agreement?.Basis.ToString(), commissionAmount,
             detail.Sale.TransactionStatusId, NayaxTransactionStatusClassifier.Describe(detail.Sale.TransactionStatusId),
-            detail.Status == NayaxTransactionStatus.Completed), feeUnavailable, hasOverlappingCommission);
+            detail.Status == NayaxTransactionStatus.Completed), feeUnavailable, hasOverlappingCommission,
+            commissionUnavailable);
     }
 
     private static string CostSourceLabel(NayaxSales sale)
@@ -1323,34 +1363,44 @@ public sealed class ReportingService : IReportingService
     private static string ReconciliationStatus(bool hasImported, decimal difference, decimal tolerance, bool hasWarning = false, bool hasPeriodOnlyData = false) =>
         StatusFor(!hasImported && !hasPeriodOnlyData, difference, tolerance, hasWarning || hasPeriodOnlyData);
 
-    private async Task<Dictionary<long, MachineCommission>> GetMachineCommissionsAsync(DateRange range, long? machineId, CancellationToken cancellationToken)
+    private async Task<CommissionResolutionResult> GetMachineCommissionsAsync(DateRange range, long? machineId, CancellationToken cancellationToken)
     {
-        if (_siteCommissions is not null)
+        var report = await _siteCommissions.GetReportAsync(range.From, range.ToDate, null, cancellationToken);
+
+        var relevantRows = report.Rows.Where(site => !machineId.HasValue || site.Machines.Any(machine => machine.MachineId == machineId.Value)).ToList();
+        var machines = relevantRows.SelectMany(site => site.Machines.Select(machine =>
+            (machine.MachineId, new MachineCommission(site.CommissionRate, machine.CommissionDue))))
+            .ToDictionary(x => x.MachineId, x => x.Item2);
+        var warnings = relevantRows.Where(x => !string.IsNullOrWhiteSpace(x.DataQuality))
+            .Select(x => x.DataQuality!).Distinct().ToList();
+        var hasConfigurationGap = relevantRows.Any(x => x.HasConfigurationGap);
+        var hasOverlap = relevantRows.Any(x => x.HasOverlap);
+        var usesMultipleRates = relevantRows.Any(x => x.UsesMultipleRates);
+        var hasMissingSiteMapping = false;
+        var saleMachineIds = await SalesQuery(range, machineId).Select(x => x.MachineID).Distinct().ToListAsync(cancellationToken);
+        if (saleMachineIds.Any(id => !machines.ContainsKey(id)))
         {
-            var report = await _siteCommissions.GetReportAsync(range.From, range.ToDate, null, cancellationToken);
-            return report.Rows.SelectMany(site => site.Machines.Select(machine =>
-                (machine.MachineId, new MachineCommission(site.CommissionRate, machine.CommissionDue))))
-                .Where(x => !machineId.HasValue || x.MachineId == machineId.Value)
-                .ToDictionary(x => x.MachineId, x => x.Item2);
+            warnings.Add("Current site mapping is unavailable for one or more completed sales; commission and profitability are incomplete.");
+            hasMissingSiteMapping = true;
         }
-        if (_nayaxLynxClient is null) return new();
-        var machineIds = await SalesQuery(range, machineId).Select(x => x.MachineID).Distinct().ToListAsync(cancellationToken);
-        var results = await Task.WhenAll(machineIds.Select(async id =>
-        {
-            var products = await _nayaxLynxClient.GetMachineProductsAsync(id, cancellationToken);
-            var commission = products.FirstOrDefault(x => x.CommissionValue.HasValue)?.CommissionValue ?? 0m;
-            return (id, commission);
-        }));
-        return results.ToDictionary(x => x.id, x => new MachineCommission(x.commission / 100m, 0m));
+        return new(machines, !hasConfigurationGap && !hasOverlap && !hasMissingSiteMapping,
+            hasConfigurationGap, hasOverlap, hasMissingSiteMapping, usesMultipleRates, warnings.Distinct().ToList());
     }
 
-    private async Task<decimal> GetSiteCommissionAsync(DateRange range, long? machineId, Dictionary<long, MachineCommission> commissions, CancellationToken cancellationToken)
+    private async Task<decimal> GetSiteCommissionAsync(DateRange range, long? machineId, CommissionResolutionResult commissions, CancellationToken cancellationToken)
     {
         var salesByMachine = await SalesQuery(range, machineId)
             .GroupBy(x => x.MachineID)
             .Select(g => new { MachineId = g.Key, Sales = g.Sum(x => x.SettlementValue) })
             .ToListAsync(cancellationToken);
-        return salesByMachine.Sum(x => commissions.GetValueOrDefault(x.MachineId).Due);
+        return salesByMachine.Sum(x => commissions.Machines.GetValueOrDefault(x.MachineId).Due);
+    }
+
+    private static void AddCommissionQualityNotes(List<string> notes, CommissionResolutionResult commissions, string profitLabel = "profit")
+    {
+        if (!commissions.IsComplete)
+            notes.Add($"Commission configuration is incomplete; {profitLabel} is provisional.");
+        notes.AddRange(commissions.Warnings);
     }
 
     private static void AddStatusQualityNotes(List<string> notes, IEnumerable<NayaxSales> sales)
@@ -1369,7 +1419,7 @@ public sealed class ReportingService : IReportingService
 
     private static ReportingDataQualityDto Quality(bool importedRows, bool gstClassification, bool unmapped, string? note = null) =>
         new(false, true, true, true, unmapped,
-            new[] { "Nayax status IDs are stored raw; existing historical rows were backfilled to status 12 by migration; rows still missing a status are excluded.", "Historical COGS uses the persisted sale cost; unresolved completed sales are reported as incomplete.", "Commission is read from Nayax machine products; the first product with a commission defines the machine rate.", "GST classification is not persisted on sales; GST amounts are an indicative 10% inclusive calculation." }
+            new[] { "Nayax status IDs are stored raw; existing historical rows were backfilled to status 12 by migration; rows still missing a status are excluded.", "Historical COGS uses the persisted sale cost; unresolved completed sales are reported as incomplete.", "Commission is calculated from effective-dated site commission agreements.", "GST classification is not persisted on sales; GST amounts are an indicative 10% inclusive calculation." }
                 .Concat(note is null ? Array.Empty<string>() : new[] { note }).ToList());
 
     private static string Csv(string value) => $"\"{value.Replace("\"", "\"\"")}\"";
@@ -1424,7 +1474,8 @@ public sealed class ReportingService : IReportingService
     private sealed record TransactionRowBuild(
         TransactionSalesRowDto Row,
         bool FeeUnavailable,
-        bool HasOverlappingCommission);
+        bool HasOverlappingCommission,
+        bool CommissionUnavailable);
 
     private sealed class ImportedReimbursementRow
     {
@@ -1488,6 +1539,14 @@ public sealed class ReportingService : IReportingService
     }
 
     private readonly record struct MachineCommission(decimal Percent, decimal Due);
+    private sealed record CommissionResolutionResult(
+        IReadOnlyDictionary<long, MachineCommission> Machines,
+        bool IsComplete,
+        bool HasConfigurationGap,
+        bool HasOverlap,
+        bool HasMissingSiteMapping,
+        bool UsesMultipleRates,
+        IReadOnlyList<string> Warnings);
     private readonly record struct SalesPaymentSummary(
         decimal GrossSales,
         int Transactions,

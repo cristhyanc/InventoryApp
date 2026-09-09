@@ -33,7 +33,7 @@ public sealed class SiteCommissionService : ISiteCommissionService
             .Where(NayaxTransactionStatusClassifier.CompletedSalePredicate)
             .ToListAsync(cancellationToken);
         var agreements = await _db.SiteCommissionAgreements.AsNoTracking()
-            .Where(x => (!siteId.HasValue || x.SiteId == siteId) && x.EffectiveFrom <= to && (x.EffectiveTo == null || x.EffectiveTo >= from))
+            .Where(x => !siteId.HasValue || x.SiteId == siteId)
             .OrderBy(x => x.EffectiveFrom).ToListAsync(cancellationToken);
         var payments = await _db.CommissionPayments.AsNoTracking()
             .Where(x => (!siteId.HasValue || x.SiteId == siteId) && x.PeriodStart == from && x.PeriodEnd == to)
@@ -47,25 +47,43 @@ public sealed class SiteCommissionService : ISiteCommissionService
             var salesByMachine = siteSales.GroupBy(x => x.MachineID);
             var machineRows = new List<SiteCommissionMachineDto>();
             var dataQuality = new List<string>();
+            var effectiveRates = new HashSet<decimal>();
+            var hasConfigurationGap = false;
+            var hasOverlap = false;
             decimal gross = 0, card = 0, cash = 0, eligible = 0, due = 0;
             foreach (var machineSales in salesByMachine)
             {
                 decimal machineGross = 0, machineCard = 0, machineCash = 0, machineEligible = 0, machineDue = 0;
                 foreach (var sale in machineSales)
                 {
-                    var matching = siteAgreements.Where(a => a.EffectiveFrom.Date <= sale.MachineAuthorizationTime.Date &&
-                        (!a.EffectiveTo.HasValue || a.EffectiveTo.Value.Date >= sale.MachineAuthorizationTime.Date)).ToList();
-                    if (matching.Count != 1)
-                    {
-                        dataQuality.Add(matching.Count == 0 ? "No commission agreement covers one or more sales." : "Overlapping commission agreements cover one or more sales.");
-                        continue;
-                    }
-                    var agreement = matching[0];
                     var paymentType = PaymentMethodClassifier.Classify(sale.PaymentMethod);
-                    var saleEligible = SiteCommissionCalculator.EligibleSales(agreement.Basis, sale.SettlementValue, paymentType);
                     machineGross += sale.SettlementValue;
                     if (paymentType == NayaxPaymentType.Card) machineCard += sale.SettlementValue;
                     if (paymentType == NayaxPaymentType.Cash) machineCash += sale.SettlementValue;
+
+                    SiteCommissionAgreement? agreement;
+                    try
+                    {
+                        agreement = EffectiveFinancialConfiguration.ResolveAgreement(
+                            siteAgreements, site.Key, sale.MachineAuthorizationTime);
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        dataQuality.Add("Overlapping commission agreements cover one or more sales.");
+                        hasOverlap = true;
+                        continue;
+                    }
+                    if (agreement is null)
+                    {
+                        if (siteAgreements.Count > 0)
+                        {
+                            dataQuality.Add("Commission agreements exist but do not cover one or more sales.");
+                            hasConfigurationGap = true;
+                        }
+                        continue;
+                    }
+                    effectiveRates.Add(agreement.CommissionRate);
+                    var saleEligible = SiteCommissionCalculator.EligibleSales(agreement.Basis, sale.SettlementValue, paymentType);
                     machineEligible += saleEligible;
                     machineDue += SiteCommissionCalculator.CommissionAmount(agreement, sale.SettlementValue, paymentType);
                 }
@@ -74,7 +92,8 @@ public sealed class SiteCommissionService : ISiteCommissionService
                 gross += machineGross; card += machineCard; cash += machineCash; eligible += machineEligible; due += machineDue;
             }
             var current = siteAgreements.LastOrDefault(x => x.EffectiveFrom <= to) ?? siteAgreements.LastOrDefault();
-            if (current is null) dataQuality.Add("Site has no commission configuration.");
+            if (effectiveRates.Count > 1)
+                dataQuality.Add("Multiple commission rates were used in this period; the displayed rate is representative.");
             var paidRows = payments.Where(x => x.SiteId == site.Key).ToList();
             var paid = paidRows.Sum(x => x.Amount);
             var outstanding = due - paid;
@@ -89,7 +108,12 @@ public sealed class SiteCommissionService : ISiteCommissionService
             rows.Add(new(site.Key, SiteNameResolver.FromMachines(site, site.Key),
                 from, to, current?.Frequency ?? CommissionFrequency.None, current?.Basis ?? CommissionBasis.GrossSales, gross, card, cash, eligible,
                 current?.CommissionRate ?? 0m, due, paid, outstanding, dueDate, status, machineRows, productRows, paidRows,
-                dataQuality.Distinct().Any() ? string.Join(" ", dataQuality.Distinct()) : null));
+                dataQuality.Distinct().Any() ? string.Join(" ", dataQuality.Distinct()) : null)
+            {
+                HasConfigurationGap = hasConfigurationGap,
+                HasOverlap = hasOverlap,
+                UsesMultipleRates = effectiveRates.Count > 1
+            });
         }
         return new(from, to, rows.OrderBy(x => x.SiteName).ToList());
     }

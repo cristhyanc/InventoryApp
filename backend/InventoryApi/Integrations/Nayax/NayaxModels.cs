@@ -33,6 +33,7 @@ public class NayaxMachineProduct
     public decimal? CashPrice { get; set; }
     public decimal? CreditCardPrice { get; set; }
     public decimal? RetailPrice { get; set; }
+    // Raw Nayax metadata; SiteCommissionAgreement is authoritative for application commission.
     public decimal? CommissionValue { get; set; }
     public long? ProductGroupID { get; set; }
     public string? DEXProductName { get; set; }
@@ -175,6 +176,7 @@ public class NayaxProduct
     public decimal? MachinePrice { get; set; }
 
     [JsonPropertyName("CommissionValue")]
+    // Raw Nayax metadata; SiteCommissionAgreement is authoritative for application commission.
     public decimal? CommissionValue { get; set; }
 
     [JsonPropertyName("OperatorButtonCode")]

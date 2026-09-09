@@ -34,18 +34,18 @@
           <thead class="bg-slate-50">
             <tr>
               <th class="px-4 py-3 text-left font-semibold text-slate-700">Name</th>
-              <th class="px-4 py-3 text-left font-semibold text-slate-700">Unit Price</th>
+              <th class="px-4 py-3 text-left font-semibold text-slate-700">Average Unit Cost</th>
               <th class="px-4 py-3 text-left font-semibold text-slate-700">Site Price</th>
-              <th class="px-4 py-3 text-left font-semibold text-slate-700">Profit</th>
+              <th class="px-4 py-3 text-left font-semibold text-slate-700">Estimated Card Profit</th>
               <th class="px-4 py-3 text-left font-semibold text-slate-700">Stock</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-slate-100 bg-white">
             <tr *ngFor="let product of products">
               <td class="px-4 py-3 text-slate-700">{{ product.name }}</td>
-              <td class="px-4 py-3 text-slate-600">${{ product.unitPrice.toFixed(2) }}</td>
+              <td class="px-4 py-3 text-slate-600">{{ product.averageUnitCost == null ? 'Unavailable' : ('$' + product.averageUnitCost.toFixed(2)) }}</td>
               <td class="px-4 py-3 text-slate-600">${{ product.sitePrice.toFixed(2) }}</td>
-              <td class="px-4 py-3 text-slate-600">${{ product.profit.toFixed(2) }}</td>
+              <td class="px-4 py-3 text-slate-600">{{ product.estimatedCardProfit == null ? 'Unavailable' : ('$' + product.estimatedCardProfit.toFixed(2)) }}</td>
               <td class="px-4 py-3">
                 <span class="inline-flex rounded-full px-2.5 py-1 text-xs font-semibold" [ngClass]="stockClass(product)">
                   {{ product.quantityInStock }} / {{ product.maxStock }}

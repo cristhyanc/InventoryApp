@@ -5,4 +5,6 @@ obj/
 *.db-wal
 wwwroot/receipts/*
 !wwwroot/receipts/.gitkeep
+wwwroot/expenses/*
+!wwwroot/expenses/.gitkeep
 .vs/
