@@ -64,14 +64,14 @@ export interface Machine {
   currentWeekGrossRevenue: number;
   lastWeekGrossRevenue: number;
   twoWeeksAgoGrossRevenue: number;
-  todayNetRevenue: number | null;
-  twoWeeksAgoNetRevenue: number | null;
-  lastWeekNetRevenue: number | null;
-  currentWeekNetRevenue: number | null;
+  todayDirectProfit: number | null;
+  twoWeeksAgoDirectProfit: number | null;
+  lastWeekDirectProfit: number | null;
+  currentWeekDirectProfit: number | null;
   previousComparableWeekGrossRevenue: number;
-  previousComparableWeekNetRevenue: number | null;
+  previousComparableWeekDirectProfit: number | null;
   monthToDateGrossRevenue: number;
-  monthToDateNetRevenue: number | null;
+  monthToDateDirectProfit: number | null;
   profitabilityStatus?: string | null;
 }
 

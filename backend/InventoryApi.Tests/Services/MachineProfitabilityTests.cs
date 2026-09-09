@@ -112,7 +112,7 @@ public class MachineProfitabilityTests
         var machine = await new MachineService(db, nayax.Object).GetById(1);
 
         Assert.NotNull(machine);
-        Assert.Null(machine.TodayNetRevenue);
+        Assert.Null(machine.TodayDirectProfit);
         Assert.Contains("persisted COGS", machine.ProfitabilityStatus!);
     }
 

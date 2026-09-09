@@ -95,24 +95,24 @@ export class DashboardComponent implements OnInit {
     return this.machines.reduce((sum, m) => sum + (m.todayGrossRevenue ?? 0), 0);
   }
 
-  get totalTodayNetProfit(): number {
-    return this.machines.reduce((sum, m) => sum + (m.todayNetRevenue ?? 0), 0);
+  get totalTodayDirectProfit(): number {
+    return this.machines.reduce((sum, m) => sum + (m.todayDirectProfit ?? 0), 0);
   }
 
   get isTodayProfitComplete(): boolean {
-    return this.machines.every(m => m.todayNetRevenue != null);
+    return this.machines.every(m => m.todayDirectProfit != null);
   }
 
   get totalCurrentWeekSales(): number {
     return this.machines.reduce((sum, m) => sum + (m.currentWeekGrossRevenue ?? 0), 0);
   }
 
-  get totalCurrentWeekNetProfit(): number {
-    return this.machines.reduce((sum, m) => sum + (m.currentWeekNetRevenue ?? 0), 0);
+  get totalCurrentWeekDirectProfit(): number {
+    return this.machines.reduce((sum, m) => sum + (m.currentWeekDirectProfit ?? 0), 0);
   }
 
   get isCurrentWeekProfitComplete(): boolean {
-    return this.machines.every(m => m.currentWeekNetRevenue != null);
+    return this.machines.every(m => m.currentWeekDirectProfit != null);
   }
 
   get totalPreviousComparableWeekSales(): number {
@@ -123,32 +123,32 @@ export class DashboardComponent implements OnInit {
     return this.machines.reduce((sum, m) => sum + (m.lastWeekGrossRevenue ?? 0), 0);
   }
 
-  get totalLastWeekNetProfit(): number {
-    return this.machines.reduce((sum, m) => sum + (m.lastWeekNetRevenue ?? 0), 0);
+  get totalLastWeekDirectProfit(): number {
+    return this.machines.reduce((sum, m) => sum + (m.lastWeekDirectProfit ?? 0), 0);
   }
 
   get isLastWeekProfitComplete(): boolean {
-    return this.machines.every(m => m.lastWeekNetRevenue != null);
+    return this.machines.every(m => m.lastWeekDirectProfit != null);
   }
 
   get totalMonthToDateSales(): number {
     return this.machines.reduce((sum, m) => sum + (m.monthToDateGrossRevenue ?? 0), 0);
   }
 
-  get totalMonthToDateNetProfit(): number {
-    return this.machines.reduce((sum, m) => sum + (m.monthToDateNetRevenue ?? 0), 0);
+  get totalMonthToDateDirectProfit(): number {
+    return this.machines.reduce((sum, m) => sum + (m.monthToDateDirectProfit ?? 0), 0);
   }
 
   get isMonthToDateProfitComplete(): boolean {
-    return this.machines.every(m => m.monthToDateNetRevenue != null);
+    return this.machines.every(m => m.monthToDateDirectProfit != null);
   }
 
   get totalNetMargin(): number {
-    return this.margin(this.totalCurrentWeekNetProfit, this.totalCurrentWeekSales);
+    return this.margin(this.totalCurrentWeekDirectProfit, this.totalCurrentWeekSales);
   }
 
-  netMargin(netProfit: number, sales: number): number {
-    return this.margin(netProfit, sales);
+  netMargin(directProfit: number, sales: number): number {
+    return this.margin(directProfit, sales);
   }
 
   trend(current: number, previous: number): number | null {
