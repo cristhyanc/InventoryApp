@@ -96,7 +96,6 @@ public class ReceiptService : IReceiptService
             ContentType = file.ContentType,
             FileSizeBytes = file.Length
         };
-        ApplyTotalWarning(receipt, receiptItems);
         receipt.Items = receiptItems.Select(x => new ReceiptItem
         {
             ProductId = x.ProductId,
@@ -155,7 +154,6 @@ public class ReceiptService : IReceiptService
             await ValidatePurchaseDatesAfterBaselinesAsync(
                 validated.Select(x => x.ProductId),
                 receipt.PurchaseDate);
-            ApplyTotalWarning(receipt, validated);
             var existingItems = receipt.Items.ToList();
             var existingMovements = await _db.StockAdjustments
                 .Where(movement => movement.ReceiptItemId.HasValue &&
@@ -284,15 +282,29 @@ public class ReceiptService : IReceiptService
         return items.ToList();
     }
 
-    private static void ApplyTotalWarning(Receipt receipt, IEnumerable<ReceiptItemDto> items)
+    public ReceiptValidationDto? ComputeValidation(Receipt receipt)
     {
-        if (!receipt.TotalAmount.HasValue) return;
+        var items = receipt.Items ?? new List<ReceiptItem>();
+        var dtos = items.Select(i => new ReceiptItemDto(i.ProductId, i.Quantity, i.UnitCost));
+        return ComputeTotalValidation(receipt, dtos);
+    }
+
+    private static ReceiptValidationDto ComputeTotalValidation(Receipt receipt, IEnumerable<ReceiptItemDto> items)
+    {
+        if (!receipt.TotalAmount.HasValue)
+            return new ReceiptValidationDto(false, null, null, null);
+
         var itemSubtotal = items.Sum(i => i.Quantity * i.UnitCost);
         var calculatedTotal = itemSubtotal + (receipt.DeliveryCost ?? 0m) + (receipt.PackageCost ?? 0m);
-        if (Math.Abs(calculatedTotal - receipt.TotalAmount.Value) > ReceiptTotalTolerance)
-            receipt.Notes = string.IsNullOrWhiteSpace(receipt.Notes)
-                ? $"Warning: calculated total {calculatedTotal:0.00} (items {itemSubtotal:0.00}, delivery {(receipt.DeliveryCost ?? 0m):0.00}, package {(receipt.PackageCost ?? 0m):0.00}) differs from receipt total {receipt.TotalAmount.Value:0.00}."
-                : $"{receipt.Notes} Warning: calculated total {calculatedTotal:0.00} (items {itemSubtotal:0.00}, delivery {(receipt.DeliveryCost ?? 0m):0.00}, package {(receipt.PackageCost ?? 0m):0.00}) differs from receipt total {receipt.TotalAmount.Value:0.00}.";
+        var difference = Math.Abs(calculatedTotal - receipt.TotalAmount.Value);
+        var hasMismatch = difference > ReceiptTotalTolerance;
+
+        return new ReceiptValidationDto(
+            hasMismatch,
+            itemSubtotal,
+            calculatedTotal,
+            hasMismatch ? difference : null
+        );
     }
 
     private static int ToStockQuantity(decimal quantity) =>

@@ -1,7 +1,7 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { Observable } from 'rxjs';
-import { Receipt, ReceiptItem } from '../models/models';
+import { Observable, map } from 'rxjs';
+import { Receipt, ReceiptItem, ReceiptResponse, ReceiptValidation } from '../models/models';
 import { ConfigService } from './config.service';
 
 export interface ReceiptUploadPayload {
@@ -30,15 +30,40 @@ export class ReceiptService {
     return `${this.config.apiBaseUrl.replace(/\/$/, '')}/receipts`;
   }
 
+  private lastValidation: ReceiptValidation | null = null;
+  private validationsByReceiptId: Map<number, ReceiptValidation | null> = new Map();
+
   constructor(private http: HttpClient, private config: ConfigService) {}
 
   getAll(supplierId?: number): Observable<Receipt[]> {
     const url = supplierId ? `${this.baseUrl}?supplierId=${supplierId}` : this.baseUrl;
-    return this.http.get<Receipt[]>(url);
+    return this.http.get<ReceiptResponse[]>(url).pipe(
+      map(responses => {
+        // Store validations for each receipt
+        responses.forEach(r => {
+          this.validationsByReceiptId.set(r.receipt.id, r.validation ?? null);
+        });
+        return responses.map(r => r.receipt);
+      })
+    );
   }
 
   get(id: number): Observable<Receipt> {
-    return this.http.get<Receipt>(`${this.baseUrl}/${id}`);
+    return this.http.get<ReceiptResponse>(`${this.baseUrl}/${id}`).pipe(
+      map(response => {
+        this.lastValidation = response.validation ?? null;
+        this.validationsByReceiptId.set(response.receipt.id, response.validation ?? null);
+        return response.receipt;
+      })
+    );
+  }
+
+  getValidation(): ReceiptValidation | null {
+    return this.lastValidation;
+  }
+
+  getValidationFor(receiptId: number): ReceiptValidation | null {
+    return this.validationsByReceiptId.get(receiptId) ?? null;
   }
 
   fileUrl(id: number): string {
@@ -62,7 +87,13 @@ export class ReceiptService {
       formData.append('supplierId', String(payload.supplierId));
     formData.append('items', JSON.stringify(payload.items ?? []));
 
-    return this.http.post<Receipt>(this.baseUrl, formData);
+    return this.http.post<ReceiptResponse>(this.baseUrl, formData).pipe(
+      map(response => {
+        this.lastValidation = response.validation ?? null;
+        this.validationsByReceiptId.set(response.receipt.id, response.validation ?? null);
+        return response.receipt;
+      })
+    );
   }
 
   update(id: number, payload: ReceiptUpdatePayload): Observable<Receipt> {
@@ -81,7 +112,13 @@ export class ReceiptService {
       formData.append('supplierId', String(payload.supplierId));
     if (payload.items !== undefined) formData.append('items', JSON.stringify(payload.items));
 
-    return this.http.put<Receipt>(`${this.baseUrl}/${id}`, formData);
+    return this.http.put<ReceiptResponse>(`${this.baseUrl}/${id}`, formData).pipe(
+      map(response => {
+        this.lastValidation = response.validation ?? null;
+        this.validationsByReceiptId.set(response.receipt.id, response.validation ?? null);
+        return response.receipt;
+      })
+    );
   }
 
   delete(id: number): Observable<void> {

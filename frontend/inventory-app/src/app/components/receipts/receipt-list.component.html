@@ -61,6 +61,38 @@
             </td>
           </tr>
 
+          @if (getValidation(r)?.hasTotalMismatch) {
+            <tr class="bg-amber-50 border-b border-slate-200">
+              <td colspan="7" class="px-4 py-3">
+                <div class="flex items-start gap-2 text-sm text-amber-900">
+                  <div class="mt-0.5 text-amber-600">⚠️</div>
+                  <div>
+                    <strong>Purchase total does not match calculated total.</strong>
+                    @if (getValidation(r)?.calculatedTotal !== null && getValidation(r)?.calculatedTotal !== undefined) {
+                      <div class="mt-1 space-y-1 text-xs text-slate-600">
+                        <div>Entered total: <strong>{{ r.totalAmount | currency }}</strong></div>
+                        <div>Calculated total: <strong>{{ getValidation(r)?.calculatedTotal | currency }}</strong></div>
+                        @if (getValidation(r)?.totalDifference !== null && getValidation(r)?.totalDifference !== undefined) {
+                          <div>Difference: <strong>{{ getValidation(r)?.totalDifference | currency }}</strong></div>
+                        }
+                      </div>
+                    }
+                  </div>
+                </div>
+              </td>
+            </tr>
+          }
+
+          @if (r.notes) {
+            <tr class="bg-slate-50 border-b border-slate-200">
+              <td colspan="7" class="px-4 py-3">
+                <div class="text-sm text-slate-600">
+                  <strong class="text-slate-700">Notes:</strong> {{ r.notes }}
+                </div>
+              </td>
+            </tr>
+          }
+
           @if (editingReceiptId === r.id) {
             <tr>
               <td colspan="7" class="bg-slate-50 px-4 py-5">

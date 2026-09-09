@@ -43,6 +43,18 @@ public record SupplierDto(string Name, string? ContactName, string? Phone, strin
 public record ReceiptItemDto(long ProductId, decimal Quantity, decimal UnitCost);
 public record ReceiptCreateMetaDto(string Title, string? Notes, decimal? TotalAmount, decimal? DeliveryCost, decimal? PackageCost, DateTime? PurchaseDate, int? SupplierId, IReadOnlyList<ReceiptItemDto>? Items = null);
 
+public record ReceiptValidationDto(
+    bool HasTotalMismatch,
+    decimal? CalculatedItemSubtotal,
+    decimal? CalculatedTotal,
+    decimal? TotalDifference
+);
+
+public record ReceiptResponseDto(
+    Receipt Receipt,
+    ReceiptValidationDto? Validation = null
+);
+
 public record SiteSummaryDto(
     long SiteId,
     string SiteName,
