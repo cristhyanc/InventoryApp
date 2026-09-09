@@ -463,4 +463,77 @@ public class ReceiptServiceTests
         var validation = svc.ComputeValidation(updated);
         Assert.True(validation!.HasTotalMismatch);
     }
+
+    [Fact]
+    public async Task ComputeValidation_empty_items_with_delivery_package_detects_mismatch()
+    {
+        // Empty items, delivery = 5, package = 2, entered total = 20
+        // Calculated = 0 + 5 + 2 = 7
+        // Difference = 13 (exceeds tolerance)
+        using var db = CreateDbContext("receipt_empty_items_mismatch_test");
+        var envMock = new Mock<IWebHostEnvironment>();
+        var temp = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(temp);
+        envMock.Setup(e => e.WebRootPath).Returns(temp);
+        envMock.Setup(e => e.ContentRootPath).Returns(temp);
+        IReceiptService svc = new ReceiptService(db, envMock.Object);
+
+        var content = new MemoryStream(new byte[] { 1 });
+        var fileMock = new Mock<IFormFile>();
+        fileMock.Setup(f => f.Length).Returns(1);
+        fileMock.Setup(f => f.FileName).Returns("t.jpg");
+        fileMock.Setup(f => f.ContentType).Returns("image/jpeg");
+        fileMock.Setup(f => f.OpenReadStream()).Returns(content);
+        fileMock.Setup(f => f.CopyToAsync(It.IsAny<Stream>(), default))
+            .Returns((Stream s, System.Threading.CancellationToken ct) => content.CopyToAsync(s, ct));
+
+        var receipt = await svc.Upload(fileMock.Object, "Delivery Only", null,
+            20m, 5m, 2m, null, null,
+            Array.Empty<ReceiptItemDto>());
+
+        Assert.NotNull(receipt);
+        var validation = svc.ComputeValidation(receipt);
+        
+        Assert.NotNull(validation);
+        Assert.True(validation.HasTotalMismatch);
+        Assert.Equal(0m, validation.CalculatedItemSubtotal);
+        Assert.Equal(7m, validation.CalculatedTotal);
+        Assert.Equal(13m, validation.TotalDifference);
+    }
+
+    [Fact]
+    public async Task ComputeValidation_empty_items_null_total_no_mismatch()
+    {
+        // Empty items, no delivery/package, null total
+        // Should not compute validation
+        using var db = CreateDbContext("receipt_empty_items_null_total_test");
+        var envMock = new Mock<IWebHostEnvironment>();
+        var temp = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(temp);
+        envMock.Setup(e => e.WebRootPath).Returns(temp);
+        envMock.Setup(e => e.ContentRootPath).Returns(temp);
+        IReceiptService svc = new ReceiptService(db, envMock.Object);
+
+        var content = new MemoryStream(new byte[] { 1 });
+        var fileMock = new Mock<IFormFile>();
+        fileMock.Setup(f => f.Length).Returns(1);
+        fileMock.Setup(f => f.FileName).Returns("t.jpg");
+        fileMock.Setup(f => f.ContentType).Returns("image/jpeg");
+        fileMock.Setup(f => f.OpenReadStream()).Returns(content);
+        fileMock.Setup(f => f.CopyToAsync(It.IsAny<Stream>(), default))
+            .Returns((Stream s, System.Threading.CancellationToken ct) => content.CopyToAsync(s, ct));
+
+        var receipt = await svc.Upload(fileMock.Object, "No Total", null,
+            null, null, null, null, null,
+            Array.Empty<ReceiptItemDto>());
+
+        Assert.NotNull(receipt);
+        var validation = svc.ComputeValidation(receipt);
+        
+        Assert.NotNull(validation);
+        Assert.False(validation.HasTotalMismatch);
+        Assert.Null(validation.CalculatedItemSubtotal);
+        Assert.Null(validation.CalculatedTotal);
+        Assert.Null(validation.TotalDifference);
+    }
 }

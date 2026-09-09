@@ -90,6 +90,7 @@ export class ReceiptService {
     return this.http.post<ReceiptResponse>(this.baseUrl, formData).pipe(
       map(response => {
         this.lastValidation = response.validation ?? null;
+        this.validationsByReceiptId.set(response.receipt.id, response.validation ?? null);
         return response.receipt;
       })
     );
@@ -114,6 +115,7 @@ export class ReceiptService {
     return this.http.put<ReceiptResponse>(`${this.baseUrl}/${id}`, formData).pipe(
       map(response => {
         this.lastValidation = response.validation ?? null;
+        this.validationsByReceiptId.set(response.receipt.id, response.validation ?? null);
         return response.receipt;
       })
     );

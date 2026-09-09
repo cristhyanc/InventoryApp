@@ -284,10 +284,8 @@ public class ReceiptService : IReceiptService
 
     public ReceiptValidationDto? ComputeValidation(Receipt receipt)
     {
-        if (receipt.Items == null || !receipt.Items.Any())
-            return new ReceiptValidationDto(false, 0m, 0m, null);
-
-        var dtos = receipt.Items.Select(i => new ReceiptItemDto(i.ProductId, i.Quantity, i.UnitCost));
+        var items = receipt.Items ?? new List<ReceiptItem>();
+        var dtos = items.Select(i => new ReceiptItemDto(i.ProductId, i.Quantity, i.UnitCost));
         return ComputeTotalValidation(receipt, dtos);
     }
 
