@@ -4,7 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
 import { ReceiptService } from '../../services/receipt.service';
 import { SupplierService } from '../../services/supplier.service';
-import { Product, Receipt, Supplier } from '../../models/models';
+import { Product, Receipt, Supplier, ReceiptValidation } from '../../models/models';
 import { ProductService } from '../../services/product.service';
 import { ReceiptItemPayload } from '../../services/receipt.service';
 
@@ -44,6 +44,10 @@ export class ReceiptListComponent implements OnInit {
 
   load(): void {
     this.receiptService.getAll().subscribe((r) => (this.receipts = r));
+  }
+
+  getValidation(receipt: Receipt): ReceiptValidation | null {
+    return this.receiptService.getValidationFor(receipt.id);
   }
 
   fileUrl(receipt: Receipt): string {

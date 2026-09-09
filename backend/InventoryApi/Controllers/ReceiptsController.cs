@@ -18,17 +18,20 @@ public class ReceiptsController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<ActionResult<IEnumerable<Receipt>>> GetAll([FromQuery] int? supplierId)
+    public async Task<ActionResult<IEnumerable<ReceiptResponseDto>>> GetAll([FromQuery] int? supplierId)
     {
         var receipts = await _service.GetAll(supplierId);
-        return Ok(receipts);
+        var result = receipts.Select(r => new ReceiptResponseDto(r, _service.ComputeValidation(r)));
+        return Ok(result);
     }
 
     [HttpGet("{id:int}")]
-    public async Task<ActionResult<Receipt>> Get(int id)
+    public async Task<ActionResult<ReceiptResponseDto>> Get(int id)
     {
         var receipt = await _service.Get(id);
-        return receipt is null ? NotFound() : Ok(receipt);
+        if (receipt is null) return NotFound();
+        var validation = _service.ComputeValidation(receipt);
+        return Ok(new ReceiptResponseDto(receipt, validation));
     }
 
     [HttpGet("{id:int}/file")]
@@ -42,7 +45,7 @@ public class ReceiptsController : ControllerBase
     // multipart/form-data: file + title + notes + totalAmount + deliveryCost + packageCost + purchaseDate + supplierId
     [HttpPost]
     [RequestSizeLimit(10485760)]
-    public async Task<ActionResult<Receipt>> Upload(
+    public async Task<ActionResult<ReceiptResponseDto>> Upload(
         [FromForm] IFormFile file,
         [FromForm] string title,
         [FromForm] string? notes,
@@ -64,11 +67,12 @@ public class ReceiptsController : ControllerBase
             return BadRequest(ex.Message);
         }
         if (receipt is null) return BadRequest("Invalid file or supplier");
-        return CreatedAtAction(nameof(Get), new { id = receipt.Id }, receipt);
+        var validation = _service.ComputeValidation(receipt);
+        return CreatedAtAction(nameof(Get), new { id = receipt.Id }, new ReceiptResponseDto(receipt, validation));
     }
 
     [HttpPut("{id:int}")]
-    public async Task<ActionResult<Receipt>> Update(
+    public async Task<ActionResult<ReceiptResponseDto>> Update(
         int id,
         [FromForm] string? title,
         [FromForm] string? notes,
@@ -90,7 +94,8 @@ public class ReceiptsController : ControllerBase
             return BadRequest(ex.Message);
         }
         if (receipt is null) return NotFound();
-        return Ok(receipt);
+        var validation = _service.ComputeValidation(receipt);
+        return Ok(new ReceiptResponseDto(receipt, validation));
     }
 
     [HttpDelete("{id:int}")]

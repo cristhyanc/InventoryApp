@@ -150,7 +150,18 @@ export interface Receipt {
   fileSizeBytes: number;
   createdAt: string;
   items?: ReceiptItem[];
+}
 
+export interface ReceiptValidation {
+  hasTotalMismatch: boolean;
+  calculatedItemSubtotal?: number | null;
+  calculatedTotal?: number | null;
+  totalDifference?: number | null;
+}
+
+export interface ReceiptResponse {
+  receipt: Receipt;
+  validation?: ReceiptValidation | null;
 }
 
 export interface ReceiptItem {
