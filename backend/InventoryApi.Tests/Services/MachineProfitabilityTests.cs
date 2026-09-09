@@ -53,6 +53,38 @@ public class MachineProfitabilityTests
     }
 
     [Fact]
+    public async Task Product_pricing_with_no_agreements_uses_valid_zero_commission()
+    {
+        await using var db = Db();
+        db.Products.Add(new Product { Id = 200, Name = "Product", AverageUnitCost = 2m });
+        db.NayaxProcessingFeeRates.Add(new NayaxProcessingFeeRate { EffectiveFrom = DateTime.Today.AddYears(-1), FeeExGst = .20m });
+        await db.SaveChangesAsync();
+
+        var nayax = PreviewClient();
+        var product = Assert.Single(await new MachineService(db, nayax.Object).GetMachineProducts(1));
+
+        Assert.Equal(2.78m, product.SuggestedNetValue);
+        Assert.Equal(4.44m, product.SuggestedPriceValue);
+    }
+
+    [Fact]
+    public async Task Product_pricing_with_overlapping_agreements_is_unavailable()
+    {
+        await using var db = Db();
+        db.Products.Add(new Product { Id = 200, Name = "Product", AverageUnitCost = 2m });
+        db.NayaxProcessingFeeRates.Add(new NayaxProcessingFeeRate { EffectiveFrom = DateTime.Today.AddYears(-1), FeeExGst = .20m });
+        db.SiteCommissionAgreements.AddRange(
+            new SiteCommissionAgreement { SiteId = 91, EffectiveFrom = DateTime.Today.AddYears(-1), CommissionRate = .10m, Basis = CommissionBasis.GrossSales },
+            new SiteCommissionAgreement { SiteId = 91, EffectiveFrom = DateTime.Today.AddMonths(-1), CommissionRate = .12m, Basis = CommissionBasis.GrossSales });
+        await db.SaveChangesAsync();
+
+        var product = Assert.Single(await new MachineService(db, PreviewClient().Object).GetMachineProducts(1));
+
+        Assert.Null(product.SuggestedNetValue);
+        Assert.Null(product.SuggestedPriceValue);
+    }
+
+    [Fact]
     public async Task Missing_persisted_cogs_makes_machine_profit_unavailable()
     {
         await using var db = Db();
@@ -88,4 +120,15 @@ public class MachineProfitabilityTests
         new(new DbContextOptionsBuilder<AppDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options);
+
+    private static Mock<INayaxLynxClient> PreviewClient()
+    {
+        var nayax = new Mock<INayaxLynxClient>();
+        nayax.Setup(x => x.GetMachineAsync(1, default)).ReturnsAsync(new NayaxMachine { MachineID = 1, CustomerID = 91 });
+        nayax.Setup(x => x.GetMachineProductsAsync(1, default)).ReturnsAsync(new List<NayaxMachineProduct>
+        {
+            new() { NayaxProductID = 200, RetailPrice = 5m }
+        });
+        return nayax;
+    }
 }

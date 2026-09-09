@@ -209,6 +209,19 @@ public class ReportingServiceTests
     }
 
     [Fact]
+    public async Task Cancelled_commission_lookup_propagates_from_reporting()
+    {
+        using var db = CreateDbContext();
+        var commissions = new Mock<ISiteCommissionService>();
+        commissions.Setup(x => x.GetReportAsync(It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new OperationCanceledException());
+        var service = Reporting(db, siteCommissionService: commissions.Object);
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() => service.GetBookkeepingAsync(
+            new ReportingFilterDto(new DateTime(2025, 7, 1), new DateTime(2025, 7, 1))));
+    }
+
+    [Fact]
     public async Task Machine_profitability_classifies_payment_methods_with_sqlite()
     {
         await using var connection = new SqliteConnection("Data Source=:memory:");

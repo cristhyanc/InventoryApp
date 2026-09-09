@@ -517,6 +517,10 @@ public sealed class ReportingService : IReportingService
             {
                 liveMachines = await _nayaxLynxClient.GetMachinesAsync(cancellationToken);
             }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
             catch
             {
                 siteMappingUnavailable = true;
@@ -1361,16 +1365,7 @@ public sealed class ReportingService : IReportingService
 
     private async Task<CommissionResolutionResult> GetMachineCommissionsAsync(DateRange range, long? machineId, CancellationToken cancellationToken)
     {
-        SiteCommissionReportDto report;
-        try
-        {
-            report = await _siteCommissions.GetReportAsync(range.From, range.ToDate, null, cancellationToken);
-        }
-        catch
-        {
-            return new(new Dictionary<long, MachineCommission>(), false, false, false, true, false,
-                ["Current site mapping is unavailable; commission and profitability are incomplete."]);
-        }
+        var report = await _siteCommissions.GetReportAsync(range.From, range.ToDate, null, cancellationToken);
 
         var relevantRows = report.Rows.Where(site => !machineId.HasValue || site.Machines.Any(machine => machine.MachineId == machineId.Value)).ToList();
         var machines = relevantRows.SelectMany(site => site.Machines.Select(machine =>

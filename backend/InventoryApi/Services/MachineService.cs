@@ -59,11 +59,20 @@ public class MachineService : IMachineService
             .Where(x => x.EffectiveFrom <= today)
             .OrderBy(x => x.EffectiveFrom)
             .ToListAsync();
-        var agreement = machine?.CustomerID is long currentSiteId
-            ? EffectiveFinancialConfiguration.ResolveAgreement(agreements, currentSiteId, today)
-            : null;
-        var hasCommissionConfigurationGap = machine?.CustomerID.HasValue == true &&
-            agreements.Count > 0 && agreement is null;
+        SiteCommissionAgreement? agreement = null;
+        var commissionConfigurationUnavailable = false;
+        if (machine?.CustomerID is long currentSiteId)
+        {
+            try
+            {
+                agreement = EffectiveFinancialConfiguration.ResolveAgreement(agreements, currentSiteId, today);
+                commissionConfigurationUnavailable = agreement is null && agreements.Count > 0;
+            }
+            catch (InvalidOperationException)
+            {
+                commissionConfigurationUnavailable = true;
+            }
+        }
         var feeRate = EffectiveFinancialConfiguration.ResolveNayaxFeeRate(rates, today);
         var feeIncGst = feeRate is null ? 0m : feeRate.FeeExGst + ReportingCalculations.GstFromExcluding(feeRate.FeeExGst);
 
@@ -75,7 +84,7 @@ public class MachineService : IMachineService
             result.MachinePrice = mp.RetailPrice ?? 0;
             result.CommissionValue = mp.CommissionValue ?? 0;
             var hasCostBasis = result.AverageUnitCost > 0m;
-            if (machine?.CustomerID.HasValue == true && !hasCommissionConfigurationGap && feeRate is not null && hasCostBasis)
+            if (machine?.CustomerID.HasValue == true && !commissionConfigurationUnavailable && feeRate is not null && hasCostBasis)
             {
                 var commission = agreement is null
                     ? 0m

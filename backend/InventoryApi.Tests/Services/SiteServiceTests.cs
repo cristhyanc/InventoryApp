@@ -105,4 +105,28 @@ public class SiteServiceTests
         Assert.Equal(2.725m, second.EstimatedCardProfit!.Value);
         Assert.Equal(.055m, first.EstimatedCardProfit.Value - second.EstimatedCardProfit.Value);
     }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Product_preview_handles_no_agreement_and_overlap_without_throwing(bool overlapping)
+    {
+        var options = new DbContextOptionsBuilder<AppDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        using var db = new AppDbContext(options);
+        db.Products.Add(new Product { Id = 1, Name = "Product", AverageUnitCost = 2m });
+        db.NayaxProcessingFeeRates.Add(new NayaxProcessingFeeRate { EffectiveFrom = DateTime.Today.AddYears(-1), FeeExGst = .20m });
+        if (overlapping)
+            db.SiteCommissionAgreements.AddRange(
+                new SiteCommissionAgreement { SiteId = 42, EffectiveFrom = DateTime.Today.AddYears(-1), CommissionRate = .10m, Basis = CommissionBasis.GrossSales },
+                new SiteCommissionAgreement { SiteId = 42, EffectiveFrom = DateTime.Today.AddMonths(-1), CommissionRate = .12m, Basis = CommissionBasis.GrossSales });
+        await db.SaveChangesAsync();
+
+        var nayax = new Mock<INayaxLynxClient>();
+        nayax.Setup(x => x.GetMachinesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([new NayaxMachine { MachineID = 10, CustomerID = 42 }]);
+        nayax.Setup(x => x.GetMachineProductsAsync(10, It.IsAny<CancellationToken>())).ReturnsAsync([new NayaxMachineProduct { MachineID = 10, NayaxProductID = 1, RetailPrice = 5m }]);
+
+        var product = Assert.Single(await new SiteService(db, nayax.Object, Mock.Of<IMachineService>()).GetProducts(42));
+
+        Assert.Equal(overlapping ? null : 2.78m, product.EstimatedCardProfit);
+    }
 }
