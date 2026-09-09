@@ -1,3 +1,4 @@
 ﻿################################################################################
 # This .gitignore file was automatically created by Microsoft(R) Visual Studio.
 ################################################################################
+/backend/InventoryApi/Properties/PublishProfiles/vm-manager - Zip Deploy.pubxml.user
