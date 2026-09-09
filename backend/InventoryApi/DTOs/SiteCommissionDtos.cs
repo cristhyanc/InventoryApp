@@ -5,7 +5,7 @@ namespace InventoryApi.DTOs;
 public record SiteCommissionAgreementDto(long SiteId, DateTime EffectiveFrom, DateTime? EffectiveTo, decimal CommissionRate,
     CommissionFrequency Frequency, CommissionBasis Basis, int? PaymentDueDaysAfterPeriodEnd);
 public record CommissionPaymentDto(DateTime PaymentDate, decimal Amount, string? Notes);
-public record SiteCommissionMachineDto(long MachineId, string MachineName, int TransactionCount, decimal GrossSales, decimal CardSales, decimal CashSales, decimal EligibleSales, decimal CommissionDue, bool IsComplete = true);
+public record SiteCommissionMachineDto(long MachineId, string MachineName, int TransactionCount, decimal GrossSales, decimal CardSales, decimal CashSales, decimal EligibleSales, decimal CommissionDue, bool IsComplete = true, bool HasConfigurationGap = false, bool HasOverlap = false);
 public record SiteCommissionProductDto(string ProductName, int TotalVends, decimal TotalSales);
 public record SiteCommissionRowDto(long SiteId, string SiteName, DateTime PeriodStart, DateTime PeriodEnd, CommissionFrequency Frequency,
     CommissionBasis Basis, decimal GrossSales, decimal CardSales, decimal CashSales, decimal EligibleSales, decimal CommissionRate,

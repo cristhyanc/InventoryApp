@@ -93,7 +93,7 @@ public sealed class SiteCommissionService : ISiteCommissionService
                 }
                 var machine = site.First(x => x.MachineID == machineSales.Key);
                 machineRows.Add(new(machine.MachineID, machine.MachineName ?? $"Machine {machine.MachineID}", machineSales.Count(), machineGross, machineCard, machineCash, machineEligible, machineDue,
-                    !machineHasConfigurationGap && !machineHasOverlap));
+                    !machineHasConfigurationGap && !machineHasOverlap, machineHasConfigurationGap, machineHasOverlap));
                 gross += machineGross; card += machineCard; cash += machineCash; eligible += machineEligible; due += machineDue;
             }
             var current = siteAgreements.LastOrDefault(x => x.EffectiveFrom <= to) ?? siteAgreements.LastOrDefault();

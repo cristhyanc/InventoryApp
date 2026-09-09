@@ -63,7 +63,10 @@ public sealed class ReportingService : IReportingService
         var feesIncludingGst = processingFees.TotalFeeIncGst;
         var netSettlement = imported.HasNetSettlement ? imported.NetSettlement : paymentSummary.CardSales - feesIncludingGst;
         decimal? grossProfit = isCogsComplete ? ReportingCalculations.GrossProfit(sales, partialCost) : null;
-        var isProfitComplete = grossProfit.HasValue && !processingFees.HasMissingRates && commissions.IsComplete;
+        var commissionCompleteForScope = isMachineFiltered
+            ? commissions.Machines.GetValueOrDefault(machineId!.Value).IsComplete
+            : commissions.IsComplete;
+        var isProfitComplete = grossProfit.HasValue && !processingFees.HasMissingRates && commissionCompleteForScope;
         decimal? directProfit = isMachineFiltered && isProfitComplete
             ? grossProfit!.Value - feesIncludingGst - siteCommission - operatingExpenses.Total
             : null;
@@ -511,7 +514,10 @@ public sealed class ReportingService : IReportingService
         decimal? costOfGoods = isCogsComplete ? partialCostOfGoods : null;
         decimal? grossProfit = isCogsComplete ? ReportingCalculations.GrossProfit(totalSales, partialCostOfGoods) : null;
         var otherOperatingExpenses = operatingExpenses.Total;
-        var isProfitComplete = grossProfit.HasValue && !processingFees.HasMissingRates && commissions.IsComplete;
+        var commissionCompleteForScope = isMachineFiltered
+            ? commissions.Machines.GetValueOrDefault(machineId!.Value).IsComplete
+            : commissions.IsComplete;
+        var isProfitComplete = grossProfit.HasValue && !processingFees.HasMissingRates && commissionCompleteForScope;
         decimal? directProfit = isMachineFiltered && isProfitComplete
             ? grossProfit!.Value - fees - siteCommission - otherOperatingExpenses
             : null;
@@ -1464,11 +1470,20 @@ public sealed class ReportingService : IReportingService
         var machines = relevantRows.SelectMany(site => site.Machines.Select(machine =>
             (machine.MachineId, new MachineCommission(site.CommissionRate, machine.CommissionDue, machine.IsComplete))))
             .ToDictionary(x => x.MachineId, x => x.Item2);
-        var warnings = relevantRows.Where(x => !string.IsNullOrWhiteSpace(x.DataQuality))
-            .Select(x => x.DataQuality!).Distinct().ToList();
-        var hasConfigurationGap = relevantRows.Any(x => x.HasConfigurationGap);
-        var hasOverlap = relevantRows.Any(x => x.HasOverlap);
-        var usesMultipleRates = relevantRows.Any(x => x.UsesMultipleRates);
+        var selectedMachine = machineId.HasValue
+            ? relevantRows.SelectMany(x => x.Machines).SingleOrDefault(x => x.MachineId == machineId.Value)
+            : null;
+        var warnings = machineId.HasValue
+            ? SelectedMachineCommissionWarnings(selectedMachine)
+            : relevantRows.Where(x => !string.IsNullOrWhiteSpace(x.DataQuality))
+                .Select(x => x.DataQuality!).Distinct().ToList();
+        var hasConfigurationGap = machineId.HasValue
+            ? selectedMachine?.HasConfigurationGap ?? false
+            : relevantRows.Any(x => x.HasConfigurationGap);
+        var hasOverlap = machineId.HasValue
+            ? selectedMachine?.HasOverlap ?? false
+            : relevantRows.Any(x => x.HasOverlap);
+        var usesMultipleRates = !machineId.HasValue && relevantRows.Any(x => x.UsesMultipleRates);
         var hasMissingSiteMapping = false;
         var saleMachineIds = await SalesQuery(range, machineId).Select(x => x.MachineID).Distinct().ToListAsync(cancellationToken);
         if (saleMachineIds.Any(id => !machines.ContainsKey(id)))
@@ -1478,6 +1493,16 @@ public sealed class ReportingService : IReportingService
         }
         return new(machines, !hasConfigurationGap && !hasOverlap && !hasMissingSiteMapping,
             hasConfigurationGap, hasOverlap, hasMissingSiteMapping, usesMultipleRates, warnings.Distinct().ToList());
+    }
+
+    private static List<string> SelectedMachineCommissionWarnings(SiteCommissionMachineDto? machine)
+    {
+        var warnings = new List<string>();
+        if (machine?.HasConfigurationGap == true)
+            warnings.Add("Commission agreements exist but do not cover one or more sales for the selected machine.");
+        if (machine?.HasOverlap == true)
+            warnings.Add("Overlapping commission agreements cover one or more sales for the selected machine.");
+        return warnings;
     }
 
     private async Task<decimal> GetSiteCommissionAsync(DateRange range, long? machineId, CommissionResolutionResult commissions, CancellationToken cancellationToken)
@@ -1492,7 +1517,7 @@ public sealed class ReportingService : IReportingService
     private static void AddCommissionQualityNotes(List<string> notes, CommissionResolutionResult commissions, string profitLabel = "profit")
     {
         if (!commissions.IsComplete)
-            notes.Add($"Commission configuration is incomplete; {profitLabel} is provisional.");
+            notes.Add($"Commission configuration is incomplete; {profitLabel} is unavailable.");
         notes.AddRange(commissions.Warnings);
     }
 
