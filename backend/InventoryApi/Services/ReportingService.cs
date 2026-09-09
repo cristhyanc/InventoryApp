@@ -15,14 +15,14 @@ public sealed class ReportingService : IReportingService
     private readonly AppDbContext _db;
     private readonly INayaxLynxClient? _nayaxLynxClient;
     private readonly INayaxProcessingFeeService _nayaxProcessingFees;
-    private readonly ISiteCommissionService? _siteCommissions;
+    private readonly ISiteCommissionService _siteCommissions;
 
-    public ReportingService(AppDbContext db, INayaxLynxClient? nayaxLynxClient = null, INayaxProcessingFeeService? nayaxProcessingFees = null,
-        ISiteCommissionService? siteCommissions = null)
+    public ReportingService(AppDbContext db, INayaxProcessingFeeService nayaxProcessingFees,
+        ISiteCommissionService siteCommissions, INayaxLynxClient? nayaxLynxClient = null)
     {
         _db = db;
         _nayaxLynxClient = nayaxLynxClient;
-        _nayaxProcessingFees = nayaxProcessingFees ?? new NayaxProcessingFeeService(db);
+        _nayaxProcessingFees = nayaxProcessingFees;
         _siteCommissions = siteCommissions;
     }
 
@@ -68,6 +68,7 @@ public sealed class ReportingService : IReportingService
             qualityNotes.Add("Imported fees are account-level amounts and are not allocated to a selected machine.");
         if (processingFees.HasMissingRates)
             qualityNotes.Add($"{processingFees.MissingRateTransactionCount} card transaction(s) have no effective Nayax processing fee rate; profit is provisional.");
+        AddCommissionQualityNotes(qualityNotes, commissions);
         var quality = Quality(imported.ContainsRows, imported.ContainsGstClassification, false,
             qualityNotes.Count == 0 ? null : string.Join(" ", qualityNotes));
         return new BookkeepingReportDto(range.From, range.ToDate, AustralianFyHelper.Label(range.From),
@@ -308,22 +309,24 @@ public sealed class ReportingService : IReportingService
             missingFeeRateTransactions += fees.MissingRateTransactionCount;
             results.Add(new MachineProfitabilityRowDto(x.MachineID, x.MachineName ?? $"Machine {x.MachineID}",
                 x.Sales, x.Quantity, x.Cost, ReportingCalculations.GrossProfit(x.Sales, x.Cost), ReportingCalculations.MarginPercent(x.Sales, x.Cost), x.Transactions,
-                commissions.GetValueOrDefault(x.MachineID).Due,
-                x.Sales - x.Cost - commissions.GetValueOrDefault(x.MachineID).Due -
+                commissions.Machines.GetValueOrDefault(x.MachineID).Due,
+                x.Sales - x.Cost - commissions.Machines.GetValueOrDefault(x.MachineID).Due -
                     operatingExpenses.GetValueOrDefault(x.MachineID) - fees.TotalFeeIncGst,
-                ReportingCalculations.MarginPercent(x.Sales, x.Cost + commissions.GetValueOrDefault(x.MachineID).Due +
+                ReportingCalculations.MarginPercent(x.Sales, x.Cost + commissions.Machines.GetValueOrDefault(x.MachineID).Due +
                     operatingExpenses.GetValueOrDefault(x.MachineID) + fees.TotalFeeIncGst),
-                commissions.GetValueOrDefault(x.MachineID).Percent,
+                commissions.Machines.GetValueOrDefault(x.MachineID).Percent,
                 x.CardSales, x.CashSales)
             {
                 DirectOperatingExpenses = operatingExpenses.GetValueOrDefault(x.MachineID),
                 NayaxProcessingFees = fees
             });
         }
+        var qualityNotes = new List<string>();
+        if (missingFeeRateTransactions > 0)
+            qualityNotes.Add($"{missingFeeRateTransactions} card transaction(s) have no effective Nayax processing fee rate; machine profit is provisional.");
+        AddCommissionQualityNotes(qualityNotes, commissions);
         return new MachineProfitabilityReportDto(range.From, range.ToDate, results,
-            Quality(false, false, false, missingFeeRateTransactions == 0
-                ? null
-                : $"{missingFeeRateTransactions} card transaction(s) have no effective Nayax processing fee rate; machine profit is provisional."));
+            Quality(false, false, false, qualityNotes.Count == 0 ? null : string.Join(" ", qualityNotes)));
     }
 
     public async Task<ProductProfitabilityReportDto> GetProductProfitabilityAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default)
@@ -452,6 +455,9 @@ public sealed class ReportingService : IReportingService
             notes.Add($"{processingFees.MissingRateTransactionCount} card transaction(s) have no effective Nayax processing fee rate; net profit is provisional.");
             dashboardQuality = dashboardQuality with { Notes = notes };
         }
+        var commissionNotes = dashboardQuality.Notes?.ToList() ?? [];
+        AddCommissionQualityNotes(commissionNotes, commissions, "net profit");
+        dashboardQuality = dashboardQuality with { Notes = commissionNotes };
         return new DashboardReportDto(range.From, range.ToDate, summary?.Sales ?? 0m,
             grossProfit, summary?.Transactions ?? 0,
             summary?.Quantity ?? 0m, summary?.Machines ?? 0, summary?.Products ?? 0,
@@ -1353,25 +1359,49 @@ public sealed class ReportingService : IReportingService
     private static string ReconciliationStatus(bool hasImported, decimal difference, decimal tolerance, bool hasWarning = false, bool hasPeriodOnlyData = false) =>
         StatusFor(!hasImported && !hasPeriodOnlyData, difference, tolerance, hasWarning || hasPeriodOnlyData);
 
-    private async Task<Dictionary<long, MachineCommission>> GetMachineCommissionsAsync(DateRange range, long? machineId, CancellationToken cancellationToken)
+    private async Task<CommissionResolutionResult> GetMachineCommissionsAsync(DateRange range, long? machineId, CancellationToken cancellationToken)
     {
-        if (_siteCommissions is null)
-            throw new InvalidOperationException("ISiteCommissionService is required for profitability reporting.");
+        SiteCommissionReportDto report;
+        try
+        {
+            report = await _siteCommissions.GetReportAsync(range.From, range.ToDate, null, cancellationToken);
+        }
+        catch
+        {
+            return new(new Dictionary<long, MachineCommission>(), false,
+                ["Current site mapping is unavailable; commission and profitability are incomplete."]);
+        }
 
-        var report = await _siteCommissions.GetReportAsync(range.From, range.ToDate, null, cancellationToken);
-        return report.Rows.SelectMany(site => site.Machines.Select(machine =>
+        var machines = report.Rows.SelectMany(site => site.Machines.Select(machine =>
             (machine.MachineId, new MachineCommission(site.CommissionRate, machine.CommissionDue))))
             .Where(x => !machineId.HasValue || x.MachineId == machineId.Value)
             .ToDictionary(x => x.MachineId, x => x.Item2);
+        var warnings = report.Rows.Where(x => !string.IsNullOrWhiteSpace(x.DataQuality))
+            .Select(x => x.DataQuality!).Distinct().ToList();
+        var isComplete = warnings.All(x => !x.StartsWith("Multiple commission rates were used", StringComparison.Ordinal));
+        var saleMachineIds = await SalesQuery(range, machineId).Select(x => x.MachineID).Distinct().ToListAsync(cancellationToken);
+        if (saleMachineIds.Any(id => !machines.ContainsKey(id)))
+        {
+            warnings.Add("Current site mapping is unavailable for one or more completed sales; commission and profitability are incomplete.");
+            isComplete = false;
+        }
+        return new(machines, isComplete, warnings.Distinct().ToList());
     }
 
-    private async Task<decimal> GetSiteCommissionAsync(DateRange range, long? machineId, Dictionary<long, MachineCommission> commissions, CancellationToken cancellationToken)
+    private async Task<decimal> GetSiteCommissionAsync(DateRange range, long? machineId, CommissionResolutionResult commissions, CancellationToken cancellationToken)
     {
         var salesByMachine = await SalesQuery(range, machineId)
             .GroupBy(x => x.MachineID)
             .Select(g => new { MachineId = g.Key, Sales = g.Sum(x => x.SettlementValue) })
             .ToListAsync(cancellationToken);
-        return salesByMachine.Sum(x => commissions.GetValueOrDefault(x.MachineId).Due);
+        return salesByMachine.Sum(x => commissions.Machines.GetValueOrDefault(x.MachineId).Due);
+    }
+
+    private static void AddCommissionQualityNotes(List<string> notes, CommissionResolutionResult commissions, string profitLabel = "profit")
+    {
+        if (!commissions.IsComplete)
+            notes.Add($"Commission configuration is incomplete; {profitLabel} is provisional.");
+        notes.AddRange(commissions.Warnings);
     }
 
     private static void AddStatusQualityNotes(List<string> notes, IEnumerable<NayaxSales> sales)
@@ -1510,6 +1540,10 @@ public sealed class ReportingService : IReportingService
     }
 
     private readonly record struct MachineCommission(decimal Percent, decimal Due);
+    private sealed record CommissionResolutionResult(
+        IReadOnlyDictionary<long, MachineCommission> Machines,
+        bool IsComplete,
+        IReadOnlyList<string> Warnings);
     private readonly record struct SalesPaymentSummary(
         decimal GrossSales,
         int Transactions,

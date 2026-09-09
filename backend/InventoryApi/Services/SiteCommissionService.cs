@@ -33,7 +33,7 @@ public sealed class SiteCommissionService : ISiteCommissionService
             .Where(NayaxTransactionStatusClassifier.CompletedSalePredicate)
             .ToListAsync(cancellationToken);
         var agreements = await _db.SiteCommissionAgreements.AsNoTracking()
-            .Where(x => (!siteId.HasValue || x.SiteId == siteId) && x.EffectiveFrom <= to && (x.EffectiveTo == null || x.EffectiveTo >= from))
+            .Where(x => !siteId.HasValue || x.SiteId == siteId)
             .OrderBy(x => x.EffectiveFrom).ToListAsync(cancellationToken);
         var payments = await _db.CommissionPayments.AsNoTracking()
             .Where(x => (!siteId.HasValue || x.SiteId == siteId) && x.PeriodStart == from && x.PeriodEnd == to)
@@ -47,6 +47,7 @@ public sealed class SiteCommissionService : ISiteCommissionService
             var salesByMachine = siteSales.GroupBy(x => x.MachineID);
             var machineRows = new List<SiteCommissionMachineDto>();
             var dataQuality = new List<string>();
+            var effectiveRates = new HashSet<decimal>();
             decimal gross = 0, card = 0, cash = 0, eligible = 0, due = 0;
             foreach (var machineSales in salesByMachine)
             {
@@ -66,9 +67,11 @@ public sealed class SiteCommissionService : ISiteCommissionService
                     }
                     if (agreement is null)
                     {
-                        dataQuality.Add("No commission agreement covers one or more sales.");
+                        if (siteAgreements.Count > 0)
+                            dataQuality.Add("Commission agreements exist but do not cover one or more sales.");
                         continue;
                     }
+                    effectiveRates.Add(agreement.CommissionRate);
                     var paymentType = PaymentMethodClassifier.Classify(sale.PaymentMethod);
                     var saleEligible = SiteCommissionCalculator.EligibleSales(agreement.Basis, sale.SettlementValue, paymentType);
                     machineGross += sale.SettlementValue;
@@ -82,7 +85,8 @@ public sealed class SiteCommissionService : ISiteCommissionService
                 gross += machineGross; card += machineCard; cash += machineCash; eligible += machineEligible; due += machineDue;
             }
             var current = siteAgreements.LastOrDefault(x => x.EffectiveFrom <= to) ?? siteAgreements.LastOrDefault();
-            if (current is null) dataQuality.Add("Site has no commission configuration.");
+            if (effectiveRates.Count > 1)
+                dataQuality.Add("Multiple commission rates were used in this period; the displayed rate is representative.");
             var paidRows = payments.Where(x => x.SiteId == site.Key).ToList();
             var paid = paidRows.Sum(x => x.Amount);
             var outstanding = due - paid;

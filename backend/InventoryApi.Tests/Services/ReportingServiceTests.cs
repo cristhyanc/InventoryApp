@@ -10,6 +10,7 @@ using InventoryApi.Services;
 using InventoryApi.Services.Interfaces;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using Xunit;
 
@@ -25,15 +26,16 @@ public class ReportingServiceTests
         return new AppDbContext(options);
     }
 
-    private static ReportingService Reporting(AppDbContext db)
+    private static ReportingService Reporting(AppDbContext db, INayaxLynxClient nayaxLynxClient = null,
+        ISiteCommissionService siteCommissionService = null)
     {
-        var commissions = new Mock<ISiteCommissionService>();
-        commissions.Setup(x => x.GetReportAsync(
+        var commissions = siteCommissionService is null ? new Mock<ISiteCommissionService>() : null;
+        commissions?.Setup(x => x.GetReportAsync(
                 It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((DateTime from, DateTime to, long? _, CancellationToken _) =>
                 new SiteCommissionReportDto(from, to, []));
-        return new ReportingService(db, nayaxProcessingFees: new NayaxProcessingFeeService(db),
-            siteCommissions: commissions.Object);
+        return new ReportingService(db, new NayaxProcessingFeeService(db),
+            siteCommissionService ?? commissions!.Object, nayaxLynxClient);
     }
 
     [Fact]
@@ -54,7 +56,7 @@ public class ReportingServiceTests
             new NayaxSales { TransactionID = 4, MachineID = 10, NayaxProductId = 1, PaymentMethod = "Credit Card", SettlementValue = 9m, TransactionStatusId = NayaxTransactionStatusIds.PendingSettlementNotFinal, MachineAuthorizationTime = new DateTime(2025, 8, 1) });
         await db.SaveChangesAsync();
 
-        var service = new ReportingService(db, new TransactionTestNayaxClient());
+        var service = Reporting(db, new TransactionTestNayaxClient());
         var report = await service.GetTransactionsAsync(new TransactionSalesFilterDto(
             new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), Page: 2, PageSize: 50));
 
@@ -97,6 +99,91 @@ public class ReportingServiceTests
         public Task<List<NayaxProductGroup>> GetProductGroupssAsync(CancellationToken ct = default) => Task.FromResult(new List<NayaxProductGroup>());
         public Task<List<NayaxLastSalesReport>> GetMachineLastSalesAsync(long machineId, CancellationToken ct = default) => Task.FromResult(new List<NayaxLastSalesReport>());
         public Task<NayaxMachine> GetMachineAsync(long machineId, CancellationToken ct = default) => Task.FromResult(new NayaxMachine { MachineID = machineId });
+    }
+
+    [Theory]
+    [InlineData(false, "Commission agreements exist")]
+    [InlineData(true, "Overlapping commission agreements")]
+    public async Task Commission_configuration_failures_make_financial_reports_provisional(bool overlaps, string expectedWarning)
+    {
+        using var db = CreateDbContext();
+        db.NayaxSales.Add(new NayaxSales
+        {
+            TransactionID = 100, MachineID = 10, MachineName = "Alpha One", SettlementValue = 10m,
+            PaymentMethod = "Credit Card", TransactionStatusId = NayaxTransactionStatusIds.Completed,
+            CostOfGoodsSold = 2m, CostingStatus = SaleCostingStatus.Costed,
+            MachineAuthorizationTime = new DateTime(2025, 7, 15)
+        });
+        db.NayaxProcessingFeeRates.Add(new NayaxProcessingFeeRate { EffectiveFrom = new DateTime(2025, 1, 1), FeeExGst = .20m });
+        db.SiteCommissionAgreements.Add(new SiteCommissionAgreement
+        {
+            SiteId = 91, EffectiveFrom = new DateTime(2025, 1, 1),
+            EffectiveTo = overlaps ? null : new DateTime(2025, 6, 30), CommissionRate = .10m,
+            Basis = CommissionBasis.GrossSales
+        });
+        if (overlaps)
+            db.SiteCommissionAgreements.Add(new SiteCommissionAgreement
+            {
+                SiteId = 91, EffectiveFrom = new DateTime(2025, 7, 1), CommissionRate = .12m,
+                Basis = CommissionBasis.GrossSales
+            });
+        await db.SaveChangesAsync();
+
+        var nayax = new TransactionTestNayaxClient();
+        var service = Reporting(db, nayax, new SiteCommissionService(db, nayax));
+        var filter = new ReportingFilterDto(new DateTime(2025, 7, 15), new DateTime(2025, 7, 15));
+
+        var bookkeeping = await service.GetBookkeepingAsync(filter);
+        var machineProfitability = await service.GetMachineProfitabilityAsync(filter);
+        var dashboard = await service.GetDashboardAsync(filter);
+        var transactions = await service.GetTransactionsAsync(new TransactionSalesFilterDto(filter.From, filter.To));
+
+        Assert.Contains(bookkeeping.DataQuality.Notes!, x => x.Contains("Commission configuration is incomplete"));
+        Assert.Contains(machineProfitability.DataQuality.Notes!, x => x.Contains("Commission configuration is incomplete"));
+        Assert.Contains(dashboard.DataQuality.Notes!, x => x.Contains("Commission configuration is incomplete"));
+        Assert.Contains(bookkeeping.DataQuality.Notes!, x => x.Contains(expectedWarning));
+        Assert.Null(Assert.Single(transactions.Rows).DirectProfit);
+    }
+
+    [Fact]
+    public async Task Site_with_no_agreements_is_a_valid_zero_commission_case()
+    {
+        using var db = CreateDbContext();
+        db.NayaxSales.Add(new NayaxSales
+        {
+            TransactionID = 101, MachineID = 10, MachineName = "Alpha One", SettlementValue = 10m,
+            PaymentMethod = "Credit Card", TransactionStatusId = NayaxTransactionStatusIds.Completed,
+            CostOfGoodsSold = 2m, CostingStatus = SaleCostingStatus.Costed,
+            MachineAuthorizationTime = new DateTime(2025, 7, 15)
+        });
+        db.NayaxProcessingFeeRates.Add(new NayaxProcessingFeeRate { EffectiveFrom = new DateTime(2025, 1, 1), FeeExGst = .20m });
+        await db.SaveChangesAsync();
+
+        var nayax = new TransactionTestNayaxClient();
+        var service = Reporting(db, nayax, new SiteCommissionService(db, nayax));
+        var report = await service.GetTransactionsAsync(new TransactionSalesFilterDto(
+            new DateTime(2025, 7, 15), new DateTime(2025, 7, 15)));
+
+        var row = Assert.Single(report.Rows);
+        Assert.Equal(0m, row.CommissionAmount);
+        Assert.Equal(7.78m, row.DirectProfit);
+        Assert.DoesNotContain(report.DataQuality.Notes!, x => x.Contains("commission agreement coverage"));
+    }
+
+    [Fact]
+    public void Reporting_service_resolves_with_required_financial_dependencies()
+    {
+        var services = new ServiceCollection();
+        services.AddDbContext<AppDbContext>(options => options.UseInMemoryDatabase(Guid.NewGuid().ToString()));
+        services.AddScoped<INayaxLynxClient>(_ => new TransactionTestNayaxClient());
+        services.AddScoped<INayaxProcessingFeeService, NayaxProcessingFeeService>();
+        services.AddScoped<ISiteCommissionService, SiteCommissionService>();
+        services.AddScoped<IReportingService, ReportingService>();
+
+        using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+
+        Assert.IsType<ReportingService>(scope.ServiceProvider.GetRequiredService<IReportingService>());
     }
 
     [Fact]
@@ -155,7 +242,7 @@ public class ReportingServiceTests
         });
         await db.SaveChangesAsync();
 
-        var report = await new ReportingService(db).GetProductProfitabilityAsync(
+        var report = await Reporting(db).GetProductProfitabilityAsync(
             new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)));
 
         var known = Assert.Single(report.Rows, x => !x.IsUnmapped);
@@ -180,7 +267,7 @@ public class ReportingServiceTests
         });
         await db.SaveChangesAsync();
 
-        var report = await new ReportingService(db).GetProductProfitabilityAsync(
+        var report = await Reporting(db).GetProductProfitabilityAsync(
             new ReportingFilterDto(new DateTime(2026, 9, 1), new DateTime(2026, 9, 1)));
 
         var row = Assert.Single(report.Rows);
@@ -210,7 +297,7 @@ public class ReportingServiceTests
             });
         await db.SaveChangesAsync();
 
-        var report = await new ReportingService(db).GetProductProfitabilityAsync(
+        var report = await Reporting(db).GetProductProfitabilityAsync(
             new ReportingFilterDto(new DateTime(2026, 9, 1), new DateTime(2026, 9, 1)));
 
         var row = Assert.Single(report.Rows);
@@ -233,7 +320,7 @@ public class ReportingServiceTests
             new NayaxSales { TransactionID = 5, MachineID = 10, SettlementValue = 7m, TransactionStatusId = null, MachineAuthorizationTime = new DateTime(2025, 8, 1) });
         await db.SaveChangesAsync();
 
-        var report = await new ReportingService(db).GetDailyAsync(
+        var report = await Reporting(db).GetDailyAsync(
             new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)));
 
         var row = Assert.Single(report.Rows);
@@ -254,7 +341,7 @@ public class ReportingServiceTests
             new NayaxSales { TransactionID = 3, MachineID = 10, SettlementValue = 9m, MachineAuthorizationTime = new DateTime(2025, 7, 2) });
         await db.SaveChangesAsync();
 
-        var report = await new ReportingService(db).GetDailyAsync(
+        var report = await Reporting(db).GetDailyAsync(
             new ReportingFilterDto(new DateTime(2025, 7, 1), new DateTime(2025, 7, 1), 10));
 
         var row = Assert.Single(report.Rows);
@@ -290,7 +377,7 @@ public class ReportingServiceTests
         });
         await db.SaveChangesAsync();
 
-        var report = await new ReportingService(db).GetDailyAsync(
+        var report = await Reporting(db).GetDailyAsync(
             new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)));
 
         var row = Assert.Single(report.Rows);
@@ -392,7 +479,7 @@ public class ReportingServiceTests
         db.ImportedFiles.Add(file);
         await db.SaveChangesAsync();
 
-        var report = await new ReportingService(db).GetReconciliationAsync(
+        var report = await Reporting(db).GetReconciliationAsync(
             new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31)), 0.01m);
 
         Assert.Equal(-0.005m, report.Difference);
@@ -416,7 +503,7 @@ public class ReportingServiceTests
         });
         await db.SaveChangesAsync();
 
-        var report = await new ReportingService(db).GetReconciliationAsync(
+        var report = await Reporting(db).GetReconciliationAsync(
             new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31)));
 
         Assert.Equal(0m, report.ImportedReimbursement);
@@ -467,7 +554,7 @@ public class ReportingServiceTests
         db.ImportedFiles.Add(file);
         await db.SaveChangesAsync();
 
-        var report = await new ReportingService(db).GetReconciliationAsync(
+        var report = await Reporting(db).GetReconciliationAsync(
             new ReportingFilterDto(new DateTime(2025, 8, 12), new DateTime(2025, 8, 12), 1216029552));
 
         Assert.Equal(90.30m, report.NayaxSales);
@@ -520,7 +607,7 @@ public class ReportingServiceTests
         });
         await db.SaveChangesAsync();
 
-        var report = await new ReportingService(db).GetReconciliationAsync(
+        var report = await Reporting(db).GetReconciliationAsync(
             new ReportingFilterDto(new DateTime(2025, 8, 12), new DateTime(2025, 8, 12)));
 
         Assert.Equal(125m, report.TotalVendingSales);

@@ -28,7 +28,7 @@ public class MachineProfitabilityTests
         db.NayaxProcessingFeeRates.Add(new NayaxProcessingFeeRate
         {
             EffectiveFrom = new DateTime(2020, 1, 1),
-            FeeExGst = .10m
+            FeeExGst = .20m
         });
         await db.SaveChangesAsync();
 
@@ -48,7 +48,8 @@ public class MachineProfitabilityTests
 
         var product = Assert.Single(await new MachineService(db, nayax.Object).GetMachineProducts(1));
 
-        Assert.Equal(6.90m, product.SuggestedNetValue!.Value);
+        Assert.Equal(6.78m, product.SuggestedNetValue!.Value);
+        Assert.Equal(5.55m, product.SuggestedPriceValue!.Value);
     }
 
     [Fact]

@@ -52,8 +52,7 @@ public class MachineService : IMachineService
         var today = DateTime.Today;
         var agreements = machine?.CustomerID is long siteId
             ? await _db.SiteCommissionAgreements.AsNoTracking()
-                .Where(x => x.SiteId == siteId && x.EffectiveFrom <= today &&
-                    (x.EffectiveTo == null || x.EffectiveTo >= today))
+                .Where(x => x.SiteId == siteId)
                 .ToListAsync()
             : [];
         var rates = await _db.NayaxProcessingFeeRates.AsNoTracking()
@@ -63,7 +62,10 @@ public class MachineService : IMachineService
         var agreement = machine?.CustomerID is long currentSiteId
             ? EffectiveFinancialConfiguration.ResolveAgreement(agreements, currentSiteId, today)
             : null;
+        var hasCommissionConfigurationGap = machine?.CustomerID.HasValue == true &&
+            agreements.Count > 0 && agreement is null;
         var feeRate = EffectiveFinancialConfiguration.ResolveNayaxFeeRate(rates, today);
+        var feeIncGst = feeRate is null ? 0m : feeRate.FeeExGst + ReportingCalculations.GstFromExcluding(feeRate.FeeExGst);
 
         var products = nayaxMachineProducts.Select(mp =>
         {
@@ -73,14 +75,14 @@ public class MachineService : IMachineService
             result.MachinePrice = mp.RetailPrice ?? 0;
             result.CommissionValue = mp.CommissionValue ?? 0;
             var hasCostBasis = result.AverageUnitCost > 0m;
-            if (machine?.CustomerID.HasValue == true && feeRate is not null && hasCostBasis)
+            if (machine?.CustomerID.HasValue == true && !hasCommissionConfigurationGap && feeRate is not null && hasCostBasis)
             {
                 var commission = agreement is null
                     ? 0m
                     : SiteCommissionCalculator.CommissionAmount(
                         agreement, result.MachinePrice, NayaxPaymentType.Card);
                 result.SuggestedNetValue =
-                    result.MachinePrice - result.AverageUnitCost - commission - feeRate.FeeExGst;
+                    result.MachinePrice - result.AverageUnitCost - commission - feeIncGst;
 
                 var commissionPerDollar = agreement is null
                     ? 0m
@@ -88,7 +90,7 @@ public class MachineService : IMachineService
                         agreement, 1m, NayaxPaymentType.Card);
                 var denominator = 0.5m - commissionPerDollar;
                 result.SuggestedPriceValue = denominator > 0m
-                    ? (result.AverageUnitCost + feeRate.FeeExGst) / denominator
+                    ? (result.AverageUnitCost + feeIncGst) / denominator
                     : null;
             }
             result.MdbCode = mp.MDBCode;

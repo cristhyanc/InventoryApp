@@ -44,17 +44,18 @@ public class SiteService : ISiteService
             machines.Select(machine => _nayaxLynxClient.GetMachineProductsAsync(machine.MachineID)));
         var today = DateTime.Today;
         var agreements = await _db.SiteCommissionAgreements.AsNoTracking()
-            .Where(x => x.SiteId == siteId && x.EffectiveFrom <= today &&
-                (x.EffectiveTo == null || x.EffectiveTo >= today))
+            .Where(x => x.SiteId == siteId)
             .ToListAsync();
         var agreement = EffectiveFinancialConfiguration.ResolveAgreement(agreements, siteId, today);
+        var hasCommissionConfigurationGap = agreements.Count > 0 && agreement is null;
         var rates = await _db.NayaxProcessingFeeRates.AsNoTracking()
             .Where(x => x.EffectiveFrom <= today)
             .OrderBy(x => x.EffectiveFrom)
             .ToListAsync();
         var feeRate = EffectiveFinancialConfiguration.ResolveNayaxFeeRate(rates, today);
 
-        return AggregateProducts(machineProducts.SelectMany(items => items), products, agreement, feeRate);
+        return AggregateProducts(machineProducts.SelectMany(items => items), products, agreement, feeRate,
+            hasCommissionConfigurationGap);
     }
 
     private async Task<SiteSummaryDto> BuildSummary(
@@ -124,7 +125,8 @@ public class SiteService : ISiteService
         IEnumerable<NayaxMachineProduct> machineProducts,
         Dictionary<long, Models.Product> products,
         SiteCommissionAgreement? agreement,
-        NayaxProcessingFeeRate? feeRate)
+        NayaxProcessingFeeRate? feeRate,
+        bool hasCommissionConfigurationGap)
     {
         var grouped = machineProducts
             .Where(machineProduct => machineProduct.NayaxProductID.HasValue &&
@@ -141,7 +143,7 @@ public class SiteService : ISiteService
                     ? 0
                     : pricedItems.Average(item => item.RetailPrice!.Value);
                 var hasCostBasis = product.AverageUnitCost > 0m;
-                decimal? estimatedCardProfit = pricedItems.Count == 0 || feeRate is null || !hasCostBasis
+                decimal? estimatedCardProfit = pricedItems.Count == 0 || feeRate is null || !hasCostBasis || hasCommissionConfigurationGap
                     ? null
                     : pricedItems.Average(item =>
                     {
@@ -152,7 +154,7 @@ public class SiteService : ISiteService
                         return item.RetailPrice!.Value -
                                commission -
                                product.AverageUnitCost -
-                               feeRate.FeeExGst;
+                               (feeRate.FeeExGst + ReportingCalculations.GstFromExcluding(feeRate.FeeExGst));
                     });
 
                 return new SiteProductDto(

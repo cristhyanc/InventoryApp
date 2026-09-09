@@ -78,7 +78,7 @@ public class SiteServiceTests
         var rate = new NayaxProcessingFeeRate
         {
             EffectiveFrom = new DateTime(2020, 1, 1),
-            FeeExGst = .10m
+            FeeExGst = .20m
         };
         db.NayaxProcessingFeeRates.Add(rate);
         await db.SaveChangesAsync();
@@ -101,8 +101,8 @@ public class SiteServiceTests
         await db.SaveChangesAsync();
         var second = Assert.Single(await service.GetProducts(42));
 
-        Assert.Equal(2.90m, first.EstimatedCardProfit!.Value);
-        Assert.Equal(2.75m, second.EstimatedCardProfit!.Value);
-        Assert.Equal(.15m, first.EstimatedCardProfit.Value - second.EstimatedCardProfit.Value);
+        Assert.Equal(2.78m, first.EstimatedCardProfit!.Value);
+        Assert.Equal(2.725m, second.EstimatedCardProfit!.Value);
+        Assert.Equal(.055m, first.EstimatedCardProfit.Value - second.EstimatedCardProfit.Value);
     }
 }
