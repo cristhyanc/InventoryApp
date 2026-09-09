@@ -26,5 +26,8 @@ public static class EffectiveFinancialConfiguration
     public static NayaxProcessingFeeRate? ResolveNayaxFeeRate(
         IEnumerable<NayaxProcessingFeeRate> rates,
         DateTime effectiveAt) =>
-        rates.LastOrDefault(x => x.EffectiveFrom.Date <= effectiveAt.Date);
+        rates
+            .Where(x => x.EffectiveFrom.Date <= effectiveAt.Date)
+            .OrderByDescending(x => x.EffectiveFrom)
+            .FirstOrDefault();
 }

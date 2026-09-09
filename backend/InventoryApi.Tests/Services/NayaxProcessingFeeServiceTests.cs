@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Threading.Tasks;
 using InventoryApi.Data;
 using InventoryApi.Models;
@@ -131,6 +132,80 @@ public class NayaxProcessingFeeServiceTests
         Assert.True(result.HasMissingRates);
         Assert.Equal(1, result.MissingRateTransactionCount);
         Assert.Equal(0, result.EstimatedCardTransactionCount);
+    }
+
+    [Fact]
+    public void ResolveNayaxFeeRate_is_independent_of_input_order()
+    {
+        var rates = new[]
+        {
+            new NayaxProcessingFeeRate { EffectiveFrom = new DateTime(2026, 7, 1), FeeExGst = .20m },
+            new NayaxProcessingFeeRate { EffectiveFrom = new DateTime(2026, 1, 1), FeeExGst = .10m },
+            new NayaxProcessingFeeRate { EffectiveFrom = new DateTime(2026, 4, 1), FeeExGst = .15m },
+        };
+
+        var effectiveAt = new DateTime(2026, 5, 1);
+        var expected = .15m;
+
+        Assert.Equal(expected, EffectiveFinancialConfiguration.ResolveNayaxFeeRate(rates, effectiveAt)!.FeeExGst);
+        Assert.Equal(expected, EffectiveFinancialConfiguration.ResolveNayaxFeeRate(rates.Reverse().ToArray(), effectiveAt)!.FeeExGst);
+        Assert.Equal(expected, EffectiveFinancialConfiguration.ResolveNayaxFeeRate(rates.OrderByDescending(x => x.EffectiveFrom).ToArray(), effectiveAt)!.FeeExGst);
+    }
+
+    [Fact]
+    public void ResolveNayaxFeeRate_uses_latest_applicable_rate()
+    {
+        var rates = new[]
+        {
+            new NayaxProcessingFeeRate { EffectiveFrom = new DateTime(2026, 1, 1), FeeExGst = .10m },
+            new NayaxProcessingFeeRate { EffectiveFrom = new DateTime(2026, 4, 1), FeeExGst = .15m },
+            new NayaxProcessingFeeRate { EffectiveFrom = new DateTime(2026, 7, 1), FeeExGst = .20m },
+        };
+
+        var result = EffectiveFinancialConfiguration.ResolveNayaxFeeRate(rates, new DateTime(2026, 8, 1));
+
+        Assert.Equal(.20m, result!.FeeExGst);
+    }
+
+    [Fact]
+    public void ResolveNayaxFeeRate_ignores_future_rates()
+    {
+        var rates = new[]
+        {
+            new NayaxProcessingFeeRate { EffectiveFrom = new DateTime(2026, 1, 1), FeeExGst = .10m },
+            new NayaxProcessingFeeRate { EffectiveFrom = new DateTime(2026, 4, 1), FeeExGst = .15m },
+            new NayaxProcessingFeeRate { EffectiveFrom = new DateTime(2026, 12, 1), FeeExGst = .30m },
+        };
+
+        var result = EffectiveFinancialConfiguration.ResolveNayaxFeeRate(rates, new DateTime(2026, 6, 1));
+
+        Assert.Equal(.15m, result!.FeeExGst);
+    }
+
+    [Fact]
+    public void ResolveNayaxFeeRate_uses_exact_effective_date()
+    {
+        var rates = new[]
+        {
+            new NayaxProcessingFeeRate { EffectiveFrom = new DateTime(2026, 4, 1), FeeExGst = .15m },
+        };
+
+        var result = EffectiveFinancialConfiguration.ResolveNayaxFeeRate(rates, new DateTime(2026, 4, 1));
+
+        Assert.Equal(.15m, result!.FeeExGst);
+    }
+
+    [Fact]
+    public void ResolveNayaxFeeRate_returns_null_when_no_rate_applies()
+    {
+        var rates = new[]
+        {
+            new NayaxProcessingFeeRate { EffectiveFrom = new DateTime(2026, 4, 1), FeeExGst = .15m },
+        };
+
+        var result = EffectiveFinancialConfiguration.ResolveNayaxFeeRate(rates, new DateTime(2026, 3, 1));
+
+        Assert.Null(result);
     }
 
     private static NayaxSales Sale(long id, long machine, string paymentMethod, int? status, int day = 1) =>
