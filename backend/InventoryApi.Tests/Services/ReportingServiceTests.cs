@@ -495,6 +495,105 @@ public class ReportingServiceTests
     }
 
     [Fact]
+    public async Task Bookkeeping_marks_profit_unavailable_when_completed_sale_has_no_persisted_cogs()
+    {
+        using var db = CreateDbContext();
+        db.NayaxSales.AddRange(
+            new NayaxSales { TransactionID = 201, MachineID = 10, SettlementValue = 10m, CostOfGoodsSold = 4m, CostingStatus = SaleCostingStatus.Costed, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
+            new NayaxSales { TransactionID = 202, MachineID = 10, SettlementValue = 5m, CostOfGoodsSold = null, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) });
+        await db.SaveChangesAsync();
+
+        var report = await Reporting(db).GetBookkeepingAsync(new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)));
+
+        Assert.Equal(15m, report.Sales);
+        Assert.Equal(4m, report.PartialCostOfGoods);
+        Assert.False(report.IsCogsComplete);
+        Assert.Equal(1, report.UncostedTransactionCount);
+        Assert.Equal(5m, report.UncostedSalesAmount);
+        Assert.Null(report.CostOfGoods);
+        Assert.Null(report.GrossProfit);
+        Assert.Null(report.NetProfit);
+        Assert.Null(report.NetMarginPercent);
+        Assert.Contains(report.DataQuality.Notes!, x => x.Contains("no persisted COGS"));
+    }
+
+    [Fact]
+    public async Task Machine_profitability_is_unavailable_only_for_machine_with_incomplete_cogs()
+    {
+        using var db = CreateDbContext();
+        db.NayaxSales.AddRange(
+            new NayaxSales { TransactionID = 203, MachineID = 10, MachineName = "A", SettlementValue = 10m, CostOfGoodsSold = 4m, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
+            new NayaxSales { TransactionID = 204, MachineID = 11, MachineName = "B", SettlementValue = 10m, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) });
+        await db.SaveChangesAsync();
+
+        var report = await Reporting(db).GetMachineProfitabilityAsync(new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)));
+
+        Assert.Equal(6m, Assert.Single(report.Rows, x => x.MachineId == 10).GrossProfit);
+        var incomplete = Assert.Single(report.Rows, x => x.MachineId == 11);
+        Assert.False(incomplete.IsCogsComplete);
+        Assert.Null(incomplete.GrossProfit);
+        Assert.Null(incomplete.NetProfit);
+        Assert.Contains(report.DataQuality.Notes!, x => x.Contains("machines have completed sales with no persisted COGS"));
+    }
+
+    [Fact]
+    public async Task Product_profitability_does_not_treat_missing_cogs_as_zero()
+    {
+        using var db = CreateDbContext();
+        db.Products.AddRange(new Product { Id = 1, Name = "A" }, new Product { Id = 2, Name = "B" });
+        db.NayaxSales.AddRange(
+            new NayaxSales { TransactionID = 205, MachineID = 10, NayaxProductId = 1, SettlementValue = 10m, CostOfGoodsSold = 4m, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
+            new NayaxSales { TransactionID = 206, MachineID = 10, NayaxProductId = 1, SettlementValue = 10m, CostOfGoodsSold = 4m, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
+            new NayaxSales { TransactionID = 207, MachineID = 10, NayaxProductId = 2, SettlementValue = 10m, CostOfGoodsSold = 4m, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
+            new NayaxSales { TransactionID = 208, MachineID = 10, NayaxProductId = 2, SettlementValue = 10m, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) });
+        await db.SaveChangesAsync();
+
+        var report = await Reporting(db).GetProductProfitabilityAsync(new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)));
+
+        Assert.Equal(12m, Assert.Single(report.Rows, x => x.ProductId == 1).GrossProfit);
+        var incomplete = Assert.Single(report.Rows, x => x.ProductId == 2);
+        Assert.Equal(4m, incomplete.PartialCostOfGoods);
+        Assert.False(incomplete.IsCogsComplete);
+        Assert.Null(incomplete.GrossProfit);
+        Assert.Null(incomplete.MarginPercent);
+    }
+
+    [Fact]
+    public async Task Dashboard_profit_is_unavailable_when_completed_cogs_is_incomplete()
+    {
+        using var db = CreateDbContext();
+        db.NayaxSales.AddRange(
+            new NayaxSales { TransactionID = 209, MachineID = 10, SettlementValue = 10m, CostOfGoodsSold = 4m, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
+            new NayaxSales { TransactionID = 210, MachineID = 10, SettlementValue = 5m, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) });
+        await db.SaveChangesAsync();
+
+        var report = await Reporting(db).GetDashboardAsync(new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)));
+
+        Assert.Equal(15m, report.Sales);
+        Assert.False(report.IsCogsComplete);
+        Assert.Null(report.GrossProfit);
+        Assert.Null(report.NetProfit);
+        Assert.Null(report.NetMarginPercent);
+        Assert.Contains(report.DataQuality.Notes!, x => x.Contains("profitability is unavailable"));
+    }
+
+    [Fact]
+    public async Task Zero_persisted_cost_is_complete_and_non_completed_missing_cost_is_ignored()
+    {
+        using var db = CreateDbContext();
+        db.NayaxSales.AddRange(
+            new NayaxSales { TransactionID = 211, MachineID = 10, SettlementValue = 10m, CostOfGoodsSold = 0m, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
+            new NayaxSales { TransactionID = 212, MachineID = 10, SettlementValue = 10m, TransactionStatusId = NayaxTransactionStatusIds.PendingSettlementNotFinal, MachineAuthorizationTime = new DateTime(2025, 8, 1) });
+        await db.SaveChangesAsync();
+
+        var report = await Reporting(db).GetBookkeepingAsync(new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)));
+
+        Assert.True(report.IsCogsComplete);
+        Assert.Equal(0m, report.CostOfGoods);
+        Assert.Equal(10m, report.GrossProfit);
+    }
+
+    [Fact]
     public async Task Reconciliation_matches_period_and_applies_tolerance()
     {
         using var db = CreateDbContext();
