@@ -346,17 +346,18 @@ public sealed class ReportingService : IReportingService
         {
             var fees = await _nayaxProcessingFees.GetProcessingFeesAsync(range.From, range.ToDate, x.MachineID, cancellationToken);
             missingFeeRateTransactions += fees.MissingRateTransactionCount;
-            var isDirectProfitComplete = x.IsCogsComplete && !fees.HasMissingRates && commissions.IsComplete;
+            var machineCommission = commissions.Machines.GetValueOrDefault(x.MachineID);
+            var isDirectProfitComplete = x.IsCogsComplete && !fees.HasMissingRates && machineCommission.IsComplete;
             results.Add(new MachineProfitabilityRowDto(x.MachineID, x.MachineName ?? $"Machine {x.MachineID}",
                 x.Sales, x.Quantity, x.IsCogsComplete ? x.PartialCost : null,
                 x.IsCogsComplete ? ReportingCalculations.GrossProfit(x.Sales, x.PartialCost) : null,
                 x.IsCogsComplete ? ReportingCalculations.MarginPercent(x.Sales, x.PartialCost) : null, x.Transactions,
-                commissions.Machines.GetValueOrDefault(x.MachineID).Due,
-                isDirectProfitComplete ? x.Sales - x.PartialCost - commissions.Machines.GetValueOrDefault(x.MachineID).Due -
+                machineCommission.Due,
+                isDirectProfitComplete ? x.Sales - x.PartialCost - machineCommission.Due -
                     operatingExpenses.GetValueOrDefault(x.MachineID) - fees.TotalFeeIncGst : null,
-                isDirectProfitComplete ? ReportingCalculations.MarginPercent(x.Sales, x.PartialCost + commissions.Machines.GetValueOrDefault(x.MachineID).Due +
+                isDirectProfitComplete ? ReportingCalculations.MarginPercent(x.Sales, x.PartialCost + machineCommission.Due +
                     operatingExpenses.GetValueOrDefault(x.MachineID) + fees.TotalFeeIncGst) : null,
-                commissions.Machines.GetValueOrDefault(x.MachineID).Percent,
+                machineCommission.Percent,
                 x.CardSales, x.CashSales)
             {
                 PartialCostOfGoods = x.PartialCost,
@@ -1461,7 +1462,7 @@ public sealed class ReportingService : IReportingService
 
         var relevantRows = report.Rows.Where(site => !machineId.HasValue || site.Machines.Any(machine => machine.MachineId == machineId.Value)).ToList();
         var machines = relevantRows.SelectMany(site => site.Machines.Select(machine =>
-            (machine.MachineId, new MachineCommission(site.CommissionRate, machine.CommissionDue))))
+            (machine.MachineId, new MachineCommission(site.CommissionRate, machine.CommissionDue, machine.IsComplete))))
             .ToDictionary(x => x.MachineId, x => x.Item2);
         var warnings = relevantRows.Where(x => !string.IsNullOrWhiteSpace(x.DataQuality))
             .Select(x => x.DataQuality!).Distinct().ToList();
@@ -1630,7 +1631,7 @@ public sealed class ReportingService : IReportingService
         public List<ImportedPaymentNet> Payments { get; set; } = new();
     }
 
-    private readonly record struct MachineCommission(decimal Percent, decimal Due);
+    private readonly record struct MachineCommission(decimal Percent, decimal Due, bool IsComplete = false);
     private sealed record CommissionResolutionResult(
         IReadOnlyDictionary<long, MachineCommission> Machines,
         bool IsComplete,

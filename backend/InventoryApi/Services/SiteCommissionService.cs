@@ -54,6 +54,8 @@ public sealed class SiteCommissionService : ISiteCommissionService
             foreach (var machineSales in salesByMachine)
             {
                 decimal machineGross = 0, machineCard = 0, machineCash = 0, machineEligible = 0, machineDue = 0;
+                var machineHasConfigurationGap = false;
+                var machineHasOverlap = false;
                 foreach (var sale in machineSales)
                 {
                     var paymentType = PaymentMethodClassifier.Classify(sale.PaymentMethod);
@@ -71,6 +73,7 @@ public sealed class SiteCommissionService : ISiteCommissionService
                     {
                         dataQuality.Add("Overlapping commission agreements cover one or more sales.");
                         hasOverlap = true;
+                        machineHasOverlap = true;
                         continue;
                     }
                     if (agreement is null)
@@ -79,6 +82,7 @@ public sealed class SiteCommissionService : ISiteCommissionService
                         {
                             dataQuality.Add("Commission agreements exist but do not cover one or more sales.");
                             hasConfigurationGap = true;
+                            machineHasConfigurationGap = true;
                         }
                         continue;
                     }
@@ -88,7 +92,8 @@ public sealed class SiteCommissionService : ISiteCommissionService
                     machineDue += SiteCommissionCalculator.CommissionAmount(agreement, sale.SettlementValue, paymentType);
                 }
                 var machine = site.First(x => x.MachineID == machineSales.Key);
-                machineRows.Add(new(machine.MachineID, machine.MachineName ?? $"Machine {machine.MachineID}", machineSales.Count(), machineGross, machineCard, machineCash, machineEligible, machineDue));
+                machineRows.Add(new(machine.MachineID, machine.MachineName ?? $"Machine {machine.MachineID}", machineSales.Count(), machineGross, machineCard, machineCash, machineEligible, machineDue,
+                    !machineHasConfigurationGap && !machineHasOverlap));
                 gross += machineGross; card += machineCard; cash += machineCash; eligible += machineEligible; due += machineDue;
             }
             var current = siteAgreements.LastOrDefault(x => x.EffectiveFrom <= to) ?? siteAgreements.LastOrDefault();
