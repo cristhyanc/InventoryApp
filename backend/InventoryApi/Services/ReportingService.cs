@@ -1368,24 +1368,28 @@ public sealed class ReportingService : IReportingService
         }
         catch
         {
-            return new(new Dictionary<long, MachineCommission>(), false,
+            return new(new Dictionary<long, MachineCommission>(), false, false, false, true, false,
                 ["Current site mapping is unavailable; commission and profitability are incomplete."]);
         }
 
-        var machines = report.Rows.SelectMany(site => site.Machines.Select(machine =>
+        var relevantRows = report.Rows.Where(site => !machineId.HasValue || site.Machines.Any(machine => machine.MachineId == machineId.Value)).ToList();
+        var machines = relevantRows.SelectMany(site => site.Machines.Select(machine =>
             (machine.MachineId, new MachineCommission(site.CommissionRate, machine.CommissionDue))))
-            .Where(x => !machineId.HasValue || x.MachineId == machineId.Value)
             .ToDictionary(x => x.MachineId, x => x.Item2);
-        var warnings = report.Rows.Where(x => !string.IsNullOrWhiteSpace(x.DataQuality))
+        var warnings = relevantRows.Where(x => !string.IsNullOrWhiteSpace(x.DataQuality))
             .Select(x => x.DataQuality!).Distinct().ToList();
-        var isComplete = warnings.All(x => !x.StartsWith("Multiple commission rates were used", StringComparison.Ordinal));
+        var hasConfigurationGap = relevantRows.Any(x => x.HasConfigurationGap);
+        var hasOverlap = relevantRows.Any(x => x.HasOverlap);
+        var usesMultipleRates = relevantRows.Any(x => x.UsesMultipleRates);
+        var hasMissingSiteMapping = false;
         var saleMachineIds = await SalesQuery(range, machineId).Select(x => x.MachineID).Distinct().ToListAsync(cancellationToken);
         if (saleMachineIds.Any(id => !machines.ContainsKey(id)))
         {
             warnings.Add("Current site mapping is unavailable for one or more completed sales; commission and profitability are incomplete.");
-            isComplete = false;
+            hasMissingSiteMapping = true;
         }
-        return new(machines, isComplete, warnings.Distinct().ToList());
+        return new(machines, !hasConfigurationGap && !hasOverlap && !hasMissingSiteMapping,
+            hasConfigurationGap, hasOverlap, hasMissingSiteMapping, usesMultipleRates, warnings.Distinct().ToList());
     }
 
     private async Task<decimal> GetSiteCommissionAsync(DateRange range, long? machineId, CommissionResolutionResult commissions, CancellationToken cancellationToken)
@@ -1543,6 +1547,10 @@ public sealed class ReportingService : IReportingService
     private sealed record CommissionResolutionResult(
         IReadOnlyDictionary<long, MachineCommission> Machines,
         bool IsComplete,
+        bool HasConfigurationGap,
+        bool HasOverlap,
+        bool HasMissingSiteMapping,
+        bool UsesMultipleRates,
         IReadOnlyList<string> Warnings);
     private readonly record struct SalesPaymentSummary(
         decimal GrossSales,

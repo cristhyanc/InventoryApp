@@ -171,6 +171,28 @@ public class ReportingServiceTests
     }
 
     [Fact]
+    public async Task Multiple_valid_commission_rates_do_not_make_profit_provisional()
+    {
+        using var db = CreateDbContext();
+        db.NayaxSales.AddRange(
+            new NayaxSales { TransactionID = 102, MachineID = 10, SettlementValue = 10m, PaymentMethod = "Credit Card", TransactionStatusId = NayaxTransactionStatusIds.Completed, CostOfGoodsSold = 2m, CostingStatus = SaleCostingStatus.Costed, MachineAuthorizationTime = new DateTime(2025, 6, 15) },
+            new NayaxSales { TransactionID = 103, MachineID = 10, SettlementValue = 10m, PaymentMethod = "Credit Card", TransactionStatusId = NayaxTransactionStatusIds.Completed, CostOfGoodsSold = 2m, CostingStatus = SaleCostingStatus.Costed, MachineAuthorizationTime = new DateTime(2025, 7, 15) });
+        db.NayaxProcessingFeeRates.Add(new NayaxProcessingFeeRate { EffectiveFrom = new DateTime(2025, 1, 1), FeeExGst = .20m });
+        db.SiteCommissionAgreements.AddRange(
+            new SiteCommissionAgreement { SiteId = 91, EffectiveFrom = new DateTime(2025, 1, 1), EffectiveTo = new DateTime(2025, 6, 30), CommissionRate = .10m, Basis = CommissionBasis.GrossSales },
+            new SiteCommissionAgreement { SiteId = 91, EffectiveFrom = new DateTime(2025, 7, 1), CommissionRate = .12m, Basis = CommissionBasis.GrossSales });
+        await db.SaveChangesAsync();
+
+        var nayax = new TransactionTestNayaxClient();
+        var report = await Reporting(db, nayax, new SiteCommissionService(db, nayax)).GetBookkeepingAsync(
+            new ReportingFilterDto(new DateTime(2025, 6, 1), new DateTime(2025, 7, 31)));
+
+        Assert.Equal(2.20m, report.SiteCommission);
+        Assert.Contains(report.DataQuality.Notes!, x => x.Contains("Multiple commission rates were used"));
+        Assert.DoesNotContain(report.DataQuality.Notes!, x => x.Contains("Commission configuration is incomplete"));
+    }
+
+    [Fact]
     public void Reporting_service_resolves_with_required_financial_dependencies()
     {
         var services = new ServiceCollection();
