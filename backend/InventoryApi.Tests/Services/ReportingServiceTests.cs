@@ -723,6 +723,42 @@ public class ReportingServiceTests
     }
 
     [Fact]
+    public async Task Product_profitability_classifies_revenue_with_centralized_payment_classifier()
+    {
+        // SQLite-backed so the EF query really executes in SQL (translation safety);
+        // expected values are derived from PaymentMethodClassifier rather than a re-stated mapping.
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseSqlite(connection)
+            .Options;
+        await using var db = new AppDbContext(options);
+        await db.Database.EnsureCreatedAsync();
+        db.Products.Add(new Product { Id = 1, Name = "Water", UnitPrice = 3m });
+        db.NayaxSales.AddRange(
+            new NayaxSales { TransactionID = 1, MachineID = 10, NayaxProductId = 1, ProductName = "Water", PaymentMethod = "Credit Card", SettlementValue = 10m, CostOfGoodsSold = 1m, CostingStatus = SaleCostingStatus.Costed, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
+            new NayaxSales { TransactionID = 2, MachineID = 10, NayaxProductId = 1, ProductName = "Water", PaymentMethod = "Prepaid Credit", SettlementValue = 20m, CostOfGoodsSold = 1m, CostingStatus = SaleCostingStatus.Costed, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
+            new NayaxSales { TransactionID = 3, MachineID = 10, NayaxProductId = 1, ProductName = "Water", PaymentMethod = "Cash", SettlementValue = 15m, CostOfGoodsSold = 1m, CostingStatus = SaleCostingStatus.Costed, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
+            new NayaxSales { TransactionID = 4, MachineID = 10, NayaxProductId = 1, ProductName = "Water", PaymentMethod = "Staff Voucher", SettlementValue = 7m, CostOfGoodsSold = 1m, CostingStatus = SaleCostingStatus.Costed, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) });
+        await db.SaveChangesAsync();
+
+        var sales = db.NayaxSales.ToList();
+        var expectedCard = sales.Where(x => PaymentMethodClassifier.Classify(x.PaymentMethod) == NayaxPaymentType.Card).Sum(x => x.SettlementValue);
+        var expectedCash = sales.Where(x => PaymentMethodClassifier.Classify(x.PaymentMethod) == NayaxPaymentType.Cash).Sum(x => x.SettlementValue);
+        Assert.Equal(30m, expectedCard);
+        Assert.Equal(15m, expectedCash);
+        Assert.Equal(NayaxPaymentType.Unknown, PaymentMethodClassifier.Classify("Staff Voucher"));
+
+        var report = await Reporting(db).GetProductProfitabilityAsync(
+            new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)));
+
+        var row = Assert.Single(report.Rows);
+        Assert.Equal(expectedCard, row.CardRevenue);
+        Assert.Equal(expectedCash, row.CashRevenue);
+        Assert.Equal(52m, row.Sales); // gross sales unchanged: includes the unknown payment method
+    }
+
+    [Fact]
     public async Task Product_profitability_does_not_treat_missing_cogs_as_zero()
     {
         using var db = CreateDbContext();

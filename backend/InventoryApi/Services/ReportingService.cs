@@ -385,7 +385,12 @@ public sealed class ReportingService : IReportingService
     {
         var range = ResolveRange(filter);
         var products = await _db.Products.AsNoTracking().Include(p => p.Category).ToDictionaryAsync(p => p.Id, cancellationToken);
-        var rows = await SalesQuery(range, MachineId(filter))
+        // Payment classification is not EF-translatable, so materialize only the required columns
+        // and group in memory (same pattern as machine profitability) to use PaymentMethodClassifier.
+        var sales = await SalesQuery(range, MachineId(filter))
+            .Select(x => new { x.NayaxProductId, x.ProductName, x.SettlementValue, x.CostOfGoodsSold, x.PaymentMethod })
+            .ToListAsync(cancellationToken);
+        var rows = sales
             .GroupBy(x => new { x.NayaxProductId, x.ProductName })
             .Select(g => new
             {
@@ -398,9 +403,9 @@ public sealed class ReportingService : IReportingService
                 UncostedTransactionCount = g.Count(x => !x.CostOfGoodsSold.HasValue),
                 UncostedSalesAmount = g.Where(x => !x.CostOfGoodsSold.HasValue).Sum(x => x.SettlementValue),
                 Transactions = g.Count(),
-                CardRevenue = g.Where(x => x.PaymentMethod == "Credit Card" || x.PaymentMethod == "Prepaid Credit").Sum(x => x.SettlementValue),
-                CashRevenue = g.Where(x => x.PaymentMethod == "Cash").Sum(x => x.SettlementValue)
-            }).OrderByDescending(x => x.Sales).ToListAsync(cancellationToken);
+                CardRevenue = g.Where(x => PaymentMethodClassifier.Classify(x.PaymentMethod) == NayaxPaymentType.Card).Sum(x => x.SettlementValue),
+                CashRevenue = g.Where(x => PaymentMethodClassifier.Classify(x.PaymentMethod) == NayaxPaymentType.Cash).Sum(x => x.SettlementValue)
+            }).OrderByDescending(x => x.Sales).ToList();
 
         var result = rows
             .Select(x =>
