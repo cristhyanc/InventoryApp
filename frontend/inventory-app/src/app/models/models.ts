@@ -64,14 +64,15 @@ export interface Machine {
   currentWeekGrossRevenue: number;
   lastWeekGrossRevenue: number;
   twoWeeksAgoGrossRevenue: number;
-  todayNetRevenue: number;
-  twoWeeksAgoNetRevenue: number;
-  lastWeekNetRevenue: number;
-  currentWeekNetRevenue: number;
+  todayNetRevenue: number | null;
+  twoWeeksAgoNetRevenue: number | null;
+  lastWeekNetRevenue: number | null;
+  currentWeekNetRevenue: number | null;
   previousComparableWeekGrossRevenue: number;
-  previousComparableWeekNetRevenue: number;
+  previousComparableWeekNetRevenue: number | null;
   monthToDateGrossRevenue: number;
-  monthToDateNetRevenue: number;
+  monthToDateNetRevenue: number | null;
+  profitabilityStatus?: string | null;
 }
 
 export interface Site {
@@ -89,9 +90,9 @@ export interface Site {
 export interface SiteProduct {
   productId: number;
   name: string;
-  unitPrice: number;
+  averageUnitCost: number | null;
   sitePrice: number;
-  profit: number;
+  estimatedCardProfit: number | null;
   quantityInStock: number;
   maxStock: number;
 }

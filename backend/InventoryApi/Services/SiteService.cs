@@ -1,6 +1,7 @@
 using InventoryApi.Data;
 using InventoryApi.DTOs;
 using InventoryApi.Integrations.Nayax;
+using InventoryApi.Models;
 using InventoryApi.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
 
@@ -8,7 +9,6 @@ namespace InventoryApi.Services;
 
 public class SiteService : ISiteService
 {
-    private const decimal PaymentFee = 0.18m;
     private readonly AppDbContext _db;
     private readonly INayaxLynxClient _nayaxLynxClient;
 
@@ -42,8 +42,19 @@ public class SiteService : ISiteService
         var products = await _db.Products.AsNoTracking().ToDictionaryAsync(product => product.Id);
         var machineProducts = await Task.WhenAll(
             machines.Select(machine => _nayaxLynxClient.GetMachineProductsAsync(machine.MachineID)));
+        var today = DateTime.Today;
+        var agreements = await _db.SiteCommissionAgreements.AsNoTracking()
+            .Where(x => x.SiteId == siteId && x.EffectiveFrom <= today &&
+                (x.EffectiveTo == null || x.EffectiveTo >= today))
+            .ToListAsync();
+        var agreement = EffectiveFinancialConfiguration.ResolveAgreement(agreements, siteId, today);
+        var rates = await _db.NayaxProcessingFeeRates.AsNoTracking()
+            .Where(x => x.EffectiveFrom <= today)
+            .OrderBy(x => x.EffectiveFrom)
+            .ToListAsync();
+        var feeRate = EffectiveFinancialConfiguration.ResolveNayaxFeeRate(rates, today);
 
-        return AggregateProducts(machineProducts.SelectMany(items => items), products);
+        return AggregateProducts(machineProducts.SelectMany(items => items), products, agreement, feeRate);
     }
 
     private async Task<SiteSummaryDto> BuildSummary(
@@ -111,7 +122,9 @@ public class SiteService : ISiteService
 
     private static List<SiteProductDto> AggregateProducts(
         IEnumerable<NayaxMachineProduct> machineProducts,
-        Dictionary<long, Models.Product> products)
+        Dictionary<long, Models.Product> products,
+        SiteCommissionAgreement? agreement,
+        NayaxProcessingFeeRate? feeRate)
     {
         var grouped = machineProducts
             .Where(machineProduct => machineProduct.NayaxProductID.HasValue &&
@@ -127,23 +140,27 @@ public class SiteService : ISiteService
                 var sitePrice = pricedItems.Count == 0
                     ? 0
                     : pricedItems.Average(item => item.RetailPrice!.Value);
-                var profit = pricedItems.Count == 0
-                    ? 0
+                var hasCostBasis = product.AverageUnitCost > 0m;
+                decimal? estimatedCardProfit = pricedItems.Count == 0 || feeRate is null || !hasCostBasis
+                    ? null
                     : pricedItems.Average(item =>
                     {
-                        var commission = item.CommissionValue ?? 0;
+                        var commission = agreement is null
+                            ? 0m
+                            : SiteCommissionCalculator.CommissionAmount(
+                                agreement, item.RetailPrice!.Value, NayaxPaymentType.Card);
                         return item.RetailPrice!.Value -
-                               (item.RetailPrice.Value * commission / 100) -
-                               product.UnitPrice -
-                               PaymentFee;
+                               commission -
+                               product.AverageUnitCost -
+                               feeRate.FeeExGst;
                     });
 
                 return new SiteProductDto(
                     product.Id,
                     product.Name,
-                    product.UnitPrice,
+                    hasCostBasis ? product.AverageUnitCost : null,
                     sitePrice,
-                    profit,
+                    estimatedCardProfit,
                     items.Sum(item => (item.PAR ?? 0) - (item.MissingStockByMDB ?? 0)),
                     items.Sum(item => item.PAR ?? 0));
             })

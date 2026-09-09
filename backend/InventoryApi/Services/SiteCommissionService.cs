@@ -53,14 +53,22 @@ public sealed class SiteCommissionService : ISiteCommissionService
                 decimal machineGross = 0, machineCard = 0, machineCash = 0, machineEligible = 0, machineDue = 0;
                 foreach (var sale in machineSales)
                 {
-                    var matching = siteAgreements.Where(a => a.EffectiveFrom.Date <= sale.MachineAuthorizationTime.Date &&
-                        (!a.EffectiveTo.HasValue || a.EffectiveTo.Value.Date >= sale.MachineAuthorizationTime.Date)).ToList();
-                    if (matching.Count != 1)
+                    SiteCommissionAgreement? agreement;
+                    try
                     {
-                        dataQuality.Add(matching.Count == 0 ? "No commission agreement covers one or more sales." : "Overlapping commission agreements cover one or more sales.");
+                        agreement = EffectiveFinancialConfiguration.ResolveAgreement(
+                            siteAgreements, site.Key, sale.MachineAuthorizationTime);
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        dataQuality.Add("Overlapping commission agreements cover one or more sales.");
                         continue;
                     }
-                    var agreement = matching[0];
+                    if (agreement is null)
+                    {
+                        dataQuality.Add("No commission agreement covers one or more sales.");
+                        continue;
+                    }
                     var paymentType = PaymentMethodClassifier.Classify(sale.PaymentMethod);
                     var saleEligible = SiteCommissionCalculator.EligibleSales(agreement.Basis, sale.SettlementValue, paymentType);
                     machineGross += sale.SettlementValue;

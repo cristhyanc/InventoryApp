@@ -59,4 +59,50 @@ public class SiteServiceTests
         Assert.Equal(1, summary.LowProductCount);
         Assert.Equal(1, summary.EmptyProductCount);
     }
+
+    [Fact]
+    public async Task Configured_fee_changes_estimated_card_profit_without_hidden_literal()
+    {
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .Options;
+        using var db = new AppDbContext(options);
+        db.Products.Add(new Product { Id = 1, Name = "Product", AverageUnitCost = 2m });
+        db.SiteCommissionAgreements.Add(new SiteCommissionAgreement
+        {
+            SiteId = 42,
+            EffectiveFrom = new DateTime(2020, 1, 1),
+            CommissionRate = 0m,
+            Basis = CommissionBasis.GrossSales
+        });
+        var rate = new NayaxProcessingFeeRate
+        {
+            EffectiveFrom = new DateTime(2020, 1, 1),
+            FeeExGst = .10m
+        };
+        db.NayaxProcessingFeeRates.Add(rate);
+        await db.SaveChangesAsync();
+
+        var nayax = new Mock<INayaxLynxClient>();
+        nayax.Setup(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<NayaxMachine>
+            {
+                new() { MachineID = 10, CustomerID = 42 }
+            });
+        nayax.Setup(x => x.GetMachineProductsAsync(10, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<NayaxMachineProduct>
+            {
+                new() { MachineID = 10, NayaxProductID = 1, RetailPrice = 5m }
+            });
+        var service = new SiteService(db, nayax.Object, Mock.Of<IMachineService>());
+
+        var first = Assert.Single(await service.GetProducts(42));
+        rate.FeeExGst = .25m;
+        await db.SaveChangesAsync();
+        var second = Assert.Single(await service.GetProducts(42));
+
+        Assert.Equal(2.90m, first.EstimatedCardProfit!.Value);
+        Assert.Equal(2.75m, second.EstimatedCardProfit!.Value);
+        Assert.Equal(.15m, first.EstimatedCardProfit.Value - second.EstimatedCardProfit.Value);
+    }
 }

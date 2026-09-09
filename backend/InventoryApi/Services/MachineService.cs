@@ -31,42 +31,76 @@ public class MachineService : IMachineService
     {
         var nayaxMachine = await _nayaxLynxClient.GetMachineAsync(id);
         if (nayaxMachine == null) return null;
-        var products = await _db.Products.ToListAsync();
-        return await GetMachineSalesAsync(nayaxMachine, products);
+        return await GetMachineSalesAsync(nayaxMachine);
     }
 
     public async Task<List<Machine>> GetAll()
     {
         var nayaxMachines = await _nayaxLynxClient.GetMachinesAsync();
         await SaveMachinesLastSalesAsync(nayaxMachines.Select(x => x.MachineID).ToList());
-        var products = await _db.Products.ToListAsync();
         var machines = new List<Machine>();
         foreach (var machine in nayaxMachines)
-            machines.Add(await GetMachineSalesAsync(machine, products));
+            machines.Add(await GetMachineSalesAsync(machine));
         return machines;
     }
 
     public async Task<List<Product>> GetMachineProducts(long id)
     {
+        var machine = await _nayaxLynxClient.GetMachineAsync(id);
         var nayaxMachineProducts = await _nayaxLynxClient.GetMachineProductsAsync(id);
         var productList = await _db.Products.Include(x => x.Category).AsNoTracking().ToListAsync();
+        var today = DateTime.Today;
+        var agreements = machine?.CustomerID is long siteId
+            ? await _db.SiteCommissionAgreements.AsNoTracking()
+                .Where(x => x.SiteId == siteId && x.EffectiveFrom <= today &&
+                    (x.EffectiveTo == null || x.EffectiveTo >= today))
+                .ToListAsync()
+            : [];
+        var rates = await _db.NayaxProcessingFeeRates.AsNoTracking()
+            .Where(x => x.EffectiveFrom <= today)
+            .OrderBy(x => x.EffectiveFrom)
+            .ToListAsync();
+        var agreement = machine?.CustomerID is long currentSiteId
+            ? EffectiveFinancialConfiguration.ResolveAgreement(agreements, currentSiteId, today)
+            : null;
+        var feeRate = EffectiveFinancialConfiguration.ResolveNayaxFeeRate(rates, today);
+
         var products = nayaxMachineProducts.Select(mp =>
         {
-            var result = productList.First(p => p.Id == mp.NayaxProductID).Clone();
+            var source = productList.FirstOrDefault(p => p.Id == mp.NayaxProductID);
+            if (source is null) return null;
+            var result = source.Clone();
             result.MachinePrice = mp.RetailPrice ?? 0;
             result.CommissionValue = mp.CommissionValue ?? 0;
-            result.SuggestedNetValue = result.MachinePrice - (result.MachinePrice * result.CommissionValue / 100) - result.UnitPrice - (decimal)0.18;
-            result.SuggestedPriceValue = ((decimal)0.18 + result.UnitPrice) / ((decimal)0.5 - (result.CommissionValue / 100));
+            var hasCostBasis = result.AverageUnitCost > 0m;
+            if (machine?.CustomerID.HasValue == true && feeRate is not null && hasCostBasis)
+            {
+                var commission = agreement is null
+                    ? 0m
+                    : SiteCommissionCalculator.CommissionAmount(
+                        agreement, result.MachinePrice, NayaxPaymentType.Card);
+                result.SuggestedNetValue =
+                    result.MachinePrice - result.AverageUnitCost - commission - feeRate.FeeExGst;
+
+                var commissionPerDollar = agreement is null
+                    ? 0m
+                    : SiteCommissionCalculator.CommissionAmount(
+                        agreement, 1m, NayaxPaymentType.Card);
+                var denominator = 0.5m - commissionPerDollar;
+                result.SuggestedPriceValue = denominator > 0m
+                    ? (result.AverageUnitCost + feeRate.FeeExGst) / denominator
+                    : null;
+            }
             result.MdbCode = mp.MDBCode;
             result.QuantityInStock = (mp.PAR - mp.MissingStockByMDB) ?? 0;
             result.MaxStockInMachine = mp.PAR;
             return result;
-        }).ToList().OrderBy(x => x.MdbCode).ToList();
+        }).Where(x => x is not null).Cast<Product>().OrderBy(x => x.MdbCode).ToList();
 
         return products;
     }
 
-    private async Task<Machine> GetMachineSalesAsync(NayaxMachine machine, List<Product> products)
+    private async Task<Machine> GetMachineSalesAsync(NayaxMachine machine)
     {
         var now = DateTime.Now;
         var today = now.Date;
@@ -77,12 +111,16 @@ public class MachineService : IMachineService
         var twoWeeksAgo = GetWeekRange(today, -2);
 
         var lastSalesTask = _db.NayaxSales.Where(s => s.MachineID == machine.MachineID && s.MachineAuthorizationTime > DateTime.Now.AddMonths(-1)).ToListAsync();
-        var machineProductsTask = _nayaxLynxClient.GetMachineProductsAsync(machine.MachineID);
-
-        await Task.WhenAll(lastSalesTask, machineProductsTask);
-
         var lastSales = await lastSalesTask;
-        var machineProducts = await machineProductsTask;
+        var agreementFrom = lastSales.Count == 0 ? today : lastSales.Min(x => x.MachineAuthorizationTime.Date);
+        var agreements = machine.CustomerID.HasValue
+            ? await _db.SiteCommissionAgreements.AsNoTracking()
+                .Where(x => x.SiteId == machine.CustomerID.Value &&
+                    x.EffectiveFrom <= now &&
+                    (x.EffectiveTo == null || x.EffectiveTo >= agreementFrom))
+                .OrderBy(x => x.EffectiveFrom)
+                .ToListAsync()
+            : [];
 
         var results = new Machine
         {
@@ -100,12 +138,25 @@ public class MachineService : IMachineService
         var monthToDateSales = lastSales.Where(s => s.MachineAuthorizationTime >= monthToDate.Start && s.MachineAuthorizationTime <= monthToDate.End && NayaxTransactionStatusClassifier.IsCompletedSale(s)).ToList();
         var twoWeeksAgoSales = lastSales.Where(s => s.MachineAuthorizationTime >= twoWeeksAgo.Start && s.MachineAuthorizationTime <= twoWeeksAgo.End && NayaxTransactionStatusClassifier.IsCompletedSale(s)).ToList();
 
-        results.CurrentWeekNetRevenue = await CalculateRevenueAsync(currentWeekSales, machineProducts, products, currentWeek.Start, currentWeek.End, machine.MachineID);
-        results.PreviousComparableWeekNetRevenue = await CalculateRevenueAsync(previousComparableWeekSales, machineProducts, products, previousComparableWeek.Start, previousComparableWeek.End, machine.MachineID);
-        results.LastWeekNetRevenue = await CalculateRevenueAsync(lastWeekSales, machineProducts, products, lastWeek.Start, lastWeek.End, machine.MachineID);
-        results.TodayNetRevenue = await CalculateRevenueAsync(todaySales, machineProducts, products, today, now, machine.MachineID);
-        results.MonthToDateNetRevenue = await CalculateRevenueAsync(monthToDateSales, machineProducts, products, monthToDate.Start, monthToDate.End, machine.MachineID);
-        results.TwoWeeksAgoNetRevenue = await CalculateRevenueAsync(twoWeeksAgoSales, machineProducts, products, twoWeeksAgo.Start, twoWeeksAgo.End, machine.MachineID);
+        results.CurrentWeekNetRevenue = await CalculateRevenueAsync(currentWeekSales, agreements, machine.CustomerID, currentWeek.Start, currentWeek.End, machine.MachineID);
+        results.PreviousComparableWeekNetRevenue = await CalculateRevenueAsync(previousComparableWeekSales, agreements, machine.CustomerID, previousComparableWeek.Start, previousComparableWeek.End, machine.MachineID);
+        results.LastWeekNetRevenue = await CalculateRevenueAsync(lastWeekSales, agreements, machine.CustomerID, lastWeek.Start, lastWeek.End, machine.MachineID);
+        results.TodayNetRevenue = await CalculateRevenueAsync(todaySales, agreements, machine.CustomerID, today, now, machine.MachineID);
+        results.MonthToDateNetRevenue = await CalculateRevenueAsync(monthToDateSales, agreements, machine.CustomerID, monthToDate.Start, monthToDate.End, machine.MachineID);
+        results.TwoWeeksAgoNetRevenue = await CalculateRevenueAsync(twoWeeksAgoSales, agreements, machine.CustomerID, twoWeeksAgo.Start, twoWeeksAgo.End, machine.MachineID);
+        var completedSales = lastSales.Where(NayaxTransactionStatusClassifier.IsCompletedSale).ToList();
+        results.ProfitabilityStatus = GetProfitabilityStatus(completedSales, agreements, machine.CustomerID);
+        if (results.ProfitabilityStatus is null && completedSales.Count > 0 &&
+            new[]
+            {
+                results.TodayNetRevenue,
+                results.CurrentWeekNetRevenue,
+                results.PreviousComparableWeekNetRevenue,
+                results.LastWeekNetRevenue,
+                results.MonthToDateNetRevenue,
+                results.TwoWeeksAgoNetRevenue
+            }.Any(x => !x.HasValue))
+            results.ProfitabilityStatus = "Unavailable: an effective Nayax processing fee rate is missing.";
 
         results.TodayGrossRevenue = todaySales.Sum(s => s.SettlementValue);
         results.CurrentWeekGrossRevenue = currentWeekSales.Sum(s => s.SettlementValue);
@@ -208,26 +259,61 @@ public class MachineService : IMachineService
         await _db.SaveChangesAsync(ct);
     }
 
-    private async Task<decimal> CalculateRevenueAsync(List<NayaxSales> sales, List<NayaxMachineProduct> machineProducts, List<Product> products, DateTime from, DateTime to, long machineId)
+    private async Task<decimal?> CalculateRevenueAsync(
+        List<NayaxSales> sales,
+        IReadOnlyList<SiteCommissionAgreement> agreements,
+        long? siteId,
+        DateTime from,
+        DateTime to,
+        long machineId)
     {
-        decimal totalRevenue = 0;
-        decimal machineCommission = machineProducts
-            .FirstOrDefault(x => x.CommissionValue.HasValue && x.CommissionValue.Value > 0)
-            ?.CommissionValue ?? 0m;
+        if (sales.Count > 0 && (!siteId.HasValue || sales.Any(x => !x.CostOfGoodsSold.HasValue)))
+            return null;
 
+        decimal totalRevenue = 0m;
+        var resolvedSiteId = siteId.GetValueOrDefault();
         foreach (var sale in sales)
         {
-            var product = NayaxProductMatcher.Match(products, sale.NayaxProductId, sale.ProductName);
-
-            if (product != null)
+            SiteCommissionAgreement? agreement;
+            try
             {
-                decimal productCost = sale.CostOfGoodsSold ?? 0m;
-                decimal commission = machineCommission != 0 ? sale.SettlementValue * machineCommission / 100 : 0;
-                totalRevenue += sale.SettlementValue - productCost - commission;
+                agreement = EffectiveFinancialConfiguration.ResolveAgreement(
+                    agreements, resolvedSiteId, sale.MachineAuthorizationTime);
             }
+            catch (InvalidOperationException)
+            {
+                return null;
+            }
+
+            if (agreement is null && agreements.Count > 0) return null;
+            var commission = agreement is null
+                ? 0m
+                : SiteCommissionCalculator.CommissionAmount(
+                    agreement,
+                    sale.SettlementValue,
+                    PaymentMethodClassifier.Classify(sale.PaymentMethod));
+            totalRevenue += sale.SettlementValue - sale.CostOfGoodsSold!.Value - commission;
         }
         var fees = await _nayaxProcessingFees.GetProcessingFeesAsync(from, to, machineId);
+        if (fees.HasMissingRates) return null;
         return totalRevenue - fees.TotalFeeIncGst;
+    }
+
+    private static string? GetProfitabilityStatus(
+        IReadOnlyCollection<NayaxSales> sales,
+        IReadOnlyList<SiteCommissionAgreement> agreements,
+        long? siteId)
+    {
+        if (sales.Any(x => !x.CostOfGoodsSold.HasValue))
+            return "Unavailable: one or more completed sales have no persisted COGS.";
+        if (!siteId.HasValue && sales.Count > 0)
+            return "Unavailable: the machine is not mapped to a site.";
+        if (siteId.HasValue && agreements.Count > 0 && sales.Any(sale =>
+                agreements.Count(x => x.SiteId == siteId.Value &&
+                    x.EffectiveFrom.Date <= sale.MachineAuthorizationTime.Date &&
+                    (!x.EffectiveTo.HasValue || x.EffectiveTo.Value.Date >= sale.MachineAuthorizationTime.Date)) != 1))
+            return "Unavailable: commission agreement coverage is missing or ambiguous.";
+        return null;
     }
 
     public static (DateTime Start, DateTime End) GetWeekRange(DateTime referenceDate, int weeksOffset = 0)

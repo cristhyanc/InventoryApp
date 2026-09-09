@@ -7,8 +7,10 @@ using InventoryApi.DTOs;
 using InventoryApi.Integrations.Nayax;
 using InventoryApi.Models;
 using InventoryApi.Services;
+using InventoryApi.Services.Interfaces;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Moq;
 using Xunit;
 
 namespace InventoryApi.Tests.Services;
@@ -21,6 +23,17 @@ public class ReportingServiceTests
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options;
         return new AppDbContext(options);
+    }
+
+    private static ReportingService Reporting(AppDbContext db)
+    {
+        var commissions = new Mock<ISiteCommissionService>();
+        commissions.Setup(x => x.GetReportAsync(
+                It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((DateTime from, DateTime to, long? _, CancellationToken _) =>
+                new SiteCommissionReportDto(from, to, []));
+        return new ReportingService(db, nayaxProcessingFees: new NayaxProcessingFeeService(db),
+            siteCommissions: commissions.Object);
     }
 
     [Fact]
@@ -113,7 +126,7 @@ public class ReportingServiceTests
             });
         await db.SaveChangesAsync();
 
-        var report = await new ReportingService(db).GetMachineProfitabilityAsync(
+        var report = await Reporting(db).GetMachineProfitabilityAsync(
             new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)));
 
         var row = Assert.Single(report.Rows);
@@ -322,7 +335,7 @@ public class ReportingServiceTests
         });
         await db.SaveChangesAsync();
 
-        var service = new ReportingService(db);
+        var service = Reporting(db);
         var bookkeeping = await service.GetBookkeepingAsync(new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31)));
         var gst = await service.GetGstAsync(new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31)));
 
@@ -352,7 +365,7 @@ public class ReportingServiceTests
         });
         await db.SaveChangesAsync();
 
-        var report = await new ReportingService(db).GetBookkeepingAsync(
+        var report = await Reporting(db).GetBookkeepingAsync(
             new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31)));
 
         Assert.Equal(5m, report.OtherOperatingExpenses);

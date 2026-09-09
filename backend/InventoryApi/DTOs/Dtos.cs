@@ -58,9 +58,9 @@ public record SiteSummaryDto(
 public record SiteProductDto(
     long ProductId,
     string Name,
-    decimal UnitPrice,
+    decimal? AverageUnitCost,
     decimal SitePrice,
-    decimal Profit,
+    decimal? EstimatedCardProfit,
     int QuantityInStock,
     int MaxStock
 );

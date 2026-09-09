@@ -17,11 +17,12 @@ public class Product
     [NotMapped]
     public decimal MachinePrice { get; set; }
     [NotMapped]
+    // Raw Nayax metadata only. Application commission calculations use SiteCommissionAgreement.
     public decimal CommissionValue { get; set; }
     [NotMapped]
-    public decimal SuggestedNetValue { get; set; }
+    public decimal? SuggestedNetValue { get; set; }
     [NotMapped]
-    public decimal SuggestedPriceValue { get; set; }
+    public decimal? SuggestedPriceValue { get; set; }
     [NotMapped]
     public int? MdbCode { get; set; }
     [NotMapped]
