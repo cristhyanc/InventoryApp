@@ -429,6 +429,38 @@ public class ReportingServiceTests
         Assert.Equal(15m, report.Totals!.GrossSales);
     }
 
+    [Fact]
+    public async Task Daily_totals_do_not_treat_missing_completed_cogs_as_authoritative_zero()
+    {
+        using var db = CreateDbContext();
+        db.NayaxSales.AddRange(
+            new NayaxSales { TransactionID = 213, MachineID = 10, SettlementValue = 10m, CostOfGoodsSold = 4m, CostingStatus = SaleCostingStatus.Costed, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
+            new NayaxSales { TransactionID = 214, MachineID = 10, SettlementValue = 5m, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) });
+        await db.SaveChangesAsync();
+
+        var report = await Reporting(db).GetDailyAsync(new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)));
+
+        var row = Assert.Single(report.Rows);
+        Assert.Equal(15m, row.GrossSales);
+        Assert.Equal(4m, row.PartialCostOfGoods);
+        Assert.Null(row.CostOfGoods);
+        Assert.False(row.IsCogsComplete);
+        Assert.Equal(1, row.UncostedTransactionCount);
+        Assert.Equal(5m, row.UncostedSalesAmount);
+        Assert.Null(row.GrossProfit);
+        Assert.Null(row.GrossMarginPercent);
+
+        var totals = report.Totals!;
+        Assert.Equal(15m, totals.GrossSales);
+        Assert.Equal(4m, totals.PartialCostOfGoods);
+        Assert.Null(totals.CostOfGoods);
+        Assert.False(totals.IsCogsComplete);
+        Assert.Equal(1, totals.UncostedTransactionCount);
+        Assert.Equal(5m, totals.UncostedSalesAmount);
+        Assert.Null(totals.GrossProfit);
+        Assert.Null(totals.GrossMarginPercent);
+    }
+
     [Theory]
     [InlineData("2025-06-30", "FY2024-25")]
     [InlineData("2025-07-01", "FY2025-26")]
@@ -571,10 +603,33 @@ public class ReportingServiceTests
 
         Assert.Equal(15m, report.Sales);
         Assert.False(report.IsCogsComplete);
+        Assert.Null(report.CostOfGoodsSold);
+        Assert.Equal(4m, report.PartialCostOfGoods);
         Assert.Null(report.GrossProfit);
+        Assert.Null(report.GrossMarginPercent);
         Assert.Null(report.NetProfit);
         Assert.Null(report.NetMarginPercent);
         Assert.Contains(report.DataQuality.Notes!, x => x.Contains("profitability is unavailable"));
+    }
+
+    [Fact]
+    public async Task Dashboard_gross_margin_uses_cogs_not_gross_profit_as_its_cost_basis()
+    {
+        using var db = CreateDbContext();
+        db.NayaxSales.Add(new NayaxSales
+        {
+            TransactionID = 215, MachineID = 10, SettlementValue = 100m, CostOfGoodsSold = 40m,
+            CostingStatus = SaleCostingStatus.Costed, TransactionStatusId = NayaxTransactionStatusIds.Completed,
+            MachineAuthorizationTime = new DateTime(2025, 8, 1)
+        });
+        await db.SaveChangesAsync();
+
+        var report = await Reporting(db).GetDashboardAsync(new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)));
+
+        Assert.True(report.IsCogsComplete);
+        Assert.Equal(40m, report.CostOfGoodsSold);
+        Assert.Equal(60m, report.GrossProfit);
+        Assert.Equal(60m, report.GrossMarginPercent);
     }
 
     [Fact]

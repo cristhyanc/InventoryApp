@@ -157,13 +157,17 @@ public sealed class ReportingService : IReportingService
                 };
             }).ToList();
         var totalFees = await _nayaxProcessingFees.GetProcessingFeesAsync(range.From, range.ToDate, MachineId(filter), cancellationToken);
+        var totalPartialCost = sales.Sum(x => x.CostOfGoodsSold ?? 0m);
+        var totalCogsComplete = sales.All(x => x.HasCost);
+        var totalGrossSales = rows.Sum(x => x.GrossSales);
+        var totalTransactionCount = rows.Sum(x => x.TransactionCount);
         var totals = new DailyReportTotalsDto(
-            rows.Sum(x => x.GrossSales), rows.Sum(x => x.CardSales), rows.Sum(x => x.CashSales),
-            rows.Sum(x => x.Quantity), sales.Sum(x => x.CostOfGoodsSold ?? 0m),
-            sales.All(x => x.HasCost) ? ReportingCalculations.GrossProfit(sales.Sum(x => x.SettlementValue), sales.Sum(x => x.CostOfGoodsSold ?? 0m)) : null,
-            rows.Sum(x => x.TransactionCount), ReportingCalculations.Average(rows.Sum(x => x.GrossSales), rows.Sum(x => x.TransactionCount)),
-            rows.All(x => x.IsCogsComplete), rows.Sum(x => x.UncostedTransactionCount), rows.Sum(x => x.UncostedSalesAmount),
-            sales.All(x => x.HasCost) ? ReportingCalculations.MarginPercent(sales.Sum(x => x.SettlementValue), sales.Sum(x => x.CostOfGoodsSold ?? 0m)) : null,
+            totalGrossSales, rows.Sum(x => x.CardSales), rows.Sum(x => x.CashSales),
+            rows.Sum(x => x.Quantity), totalCogsComplete ? totalPartialCost : null,
+            totalCogsComplete ? ReportingCalculations.GrossProfit(totalGrossSales, totalPartialCost) : null,
+            totalTransactionCount, ReportingCalculations.Average(totalGrossSales, totalTransactionCount),
+            totalCogsComplete, rows.Sum(x => x.UncostedTransactionCount), rows.Sum(x => x.UncostedSalesAmount),
+            totalCogsComplete ? ReportingCalculations.MarginPercent(totalGrossSales, totalPartialCost) : null,
             totalFees.TotalFeeExGst,
             totalFees.TotalFeeIncGst,
             importedPeriod.ContainsRows ? importedPeriod.Settlement : rows.Sum(x => x.ImportedReimbursement),
@@ -174,7 +178,7 @@ public sealed class ReportingService : IReportingService
             statusSales.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Refunded),
             statusSales.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Unknown))
         {
-            PartialCostOfGoods = sales.Sum(x => x.CostOfGoodsSold ?? 0m),
+            PartialCostOfGoods = totalPartialCost,
             NayaxProcessingFees = totalFees
         };
         var note = importedPeriod.FeesMachineFilterLimited
@@ -533,7 +537,7 @@ public sealed class ReportingService : IReportingService
             UncostedTransactionCount = summary?.UncostedTransactionCount ?? 0,
             UncostedSalesAmount = summary?.UncostedSalesAmount ?? 0m,
             AverageSale = ReportingCalculations.Average(totalSales, summary?.Transactions ?? 0),
-            GrossMarginPercent = grossProfit.HasValue ? ReportingCalculations.MarginPercent(totalSales, grossProfit.Value) : null,
+            GrossMarginPercent = grossProfit.HasValue ? ReportingCalculations.MarginPercent(totalSales, partialCostOfGoods) : null,
             NayaxFeesIncludingGst = fees,
             OtherOperatingExpenses = otherOperatingExpenses,
             ExpectedReimbursement = expectedReimbursement,

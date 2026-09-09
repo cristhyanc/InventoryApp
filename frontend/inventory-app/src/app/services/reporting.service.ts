@@ -79,7 +79,7 @@ export interface BookkeepingReport {
   partialCostOfGoods?: number; isCogsComplete?: boolean; uncostedTransactionCount?: number; uncostedSalesAmount?: number;
   grossProfit?: number | null; fees: number; netSettlement: number; gstOnSales: number; gstOnFees: number;
   dataQuality: ReportQuality;
-  siteCommission?: number; netProfit?: number; netMarginPercent?: number;
+  siteCommission?: number; netProfit?: number | null; netMarginPercent?: number | null;
   nayaxFeesExGst?: number; nayaxFeesIncludingGst?: number;
   deliveryCosts?: number; packageCosts?: number; otherOperatingExpenses?: number;
   cardSales?: number; cashSales?: number; cardTransactionCount?: number; cashTransactionCount?: number;
@@ -91,7 +91,7 @@ export interface DailyRow {
   date: string; sales: number; grossSales?: number; cardSales?: number; cashSales?: number;
   quantity: number; costOfGoods?: number | null; partialCostOfGoods?: number; grossProfit?: number | null; transactionCount: number;
   averageSale?: number; isCogsComplete?: boolean; uncostedTransactionCount?: number;
-  uncostedSalesAmount?: number; grossMarginPercent?: number;
+  uncostedSalesAmount?: number; grossMarginPercent?: number | null;
   nayaxFeesExGst?: number; nayaxFeesIncludingGst?: number;
   importedReimbursement?: number; netReimbursement?: number;
   isReconciled?: boolean; reconciliationStatus?: string;
