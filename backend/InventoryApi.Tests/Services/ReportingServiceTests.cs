@@ -564,8 +564,54 @@ public class ReportingServiceTests
         var incomplete = Assert.Single(report.Rows, x => x.MachineId == 11);
         Assert.False(incomplete.IsCogsComplete);
         Assert.Null(incomplete.GrossProfit);
-        Assert.Null(incomplete.NetProfit);
+        Assert.Null(incomplete.DirectProfit);
+        Assert.Null(incomplete.DirectMarginPercent);
         Assert.Contains(report.DataQuality.Notes!, x => x.Contains("machines have completed sales with no persisted COGS"));
+    }
+
+    [Fact]
+    public async Task Machine_direct_profit_excludes_unallocated_overhead_and_filtered_reports_do_not_return_net_profit()
+    {
+        using var db = CreateDbContext();
+        var date = new DateTime(2025, 8, 1);
+        db.NayaxSales.Add(new NayaxSales
+        {
+            TransactionID = 300, MachineID = 10, MachineName = "Alpha One", SettlementValue = 100m,
+            PaymentMethod = "Credit Card", TransactionStatusId = NayaxTransactionStatusIds.Completed,
+            CostOfGoodsSold = 40m, CostingStatus = SaleCostingStatus.Costed, MachineAuthorizationTime = date
+        });
+        db.NayaxProcessingFeeRates.Add(new NayaxProcessingFeeRate { EffectiveFrom = new DateTime(2025, 1, 1), FeeExGst = 5m / 1.1m });
+        db.SiteCommissionAgreements.Add(new SiteCommissionAgreement
+        {
+            SiteId = 91, EffectiveFrom = new DateTime(2025, 1, 1), CommissionRate = .10m,
+            Basis = CommissionBasis.GrossSales
+        });
+        db.OperatingExpenses.AddRange(
+            new OperatingExpense { ExpenseDate = date, MachineId = 10, TotalAmount = 5m },
+            new OperatingExpense { ExpenseDate = date, TotalAmount = 20m });
+        db.Receipts.Add(new Receipt { Title = "Delivery", PurchaseDate = date, DeliveryCost = 5m });
+        await db.SaveChangesAsync();
+
+        var nayax = new TransactionTestNayaxClient();
+        var service = Reporting(db, nayax, new SiteCommissionService(db, nayax));
+        var filter = new ReportingFilterDto(date, date, MachineId: 10);
+
+        var machine = Assert.Single((await service.GetMachineProfitabilityAsync(filter)).Rows);
+        Assert.Equal(60m, machine.GrossProfit);
+        Assert.Equal(40m, machine.DirectProfit);
+        Assert.Equal(40m, machine.DirectMarginPercent);
+
+        var dashboard = await service.GetDashboardAsync(filter);
+        Assert.Equal(40m, dashboard.DirectProfit);
+        Assert.Equal(40m, dashboard.DirectMarginPercent);
+        Assert.Null(dashboard.NetProfit);
+        Assert.Contains(dashboard.DataQuality.Notes!, x => x.Contains("shared business overhead"));
+
+        var bookkeeping = await service.GetBookkeepingAsync(filter);
+        Assert.Equal(40m, bookkeeping.DirectProfit);
+        Assert.Equal(40m, bookkeeping.DirectMarginPercent);
+        Assert.Null(bookkeeping.NetProfit);
+        Assert.Contains(bookkeeping.DataQuality.Notes!, x => x.Contains("shared business overhead"));
     }
 
     [Fact]

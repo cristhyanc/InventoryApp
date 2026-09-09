@@ -135,6 +135,8 @@ public record BookkeepingReportDto(
     public decimal OperatingExpenseGst { get; init; }
     public IReadOnlyDictionary<string, decimal> OperatingExpensesByCategory { get; init; } =
         new Dictionary<string, decimal>();
+    public decimal? DirectProfit { get; init; }
+    public decimal? DirectMarginPercent { get; init; }
     public NayaxProcessingFeeResult NayaxProcessingFees { get; init; } = new(0m, 0m, 0m, 0m, 0m, 0m, 0, null, null);
 }
 
@@ -317,8 +319,8 @@ public record MachineProfitabilityRowDto(
     decimal? MarginPercent,
     int TransactionCount,
     decimal SiteCommission = 0m,
-    decimal? NetProfit = null,
-    decimal? NetMarginPercent = null,
+    decimal? DirectProfit = null,
+    decimal? DirectMarginPercent = null,
     decimal CommissionPercent = 0m,
     decimal CardSales = 0m,
     decimal CashSales = 0m)
@@ -422,5 +424,7 @@ public record DashboardReportDto(
     public string ReconciliationStatus { get; init; } = "Pending";
     public decimal ReconciliationTolerance { get; init; } = 0.01m;
     public bool AdjustmentsSupported { get; init; }
+    public decimal? DirectProfit { get; init; }
+    public decimal? DirectMarginPercent { get; init; }
     public NayaxProcessingFeeResult NayaxProcessingFees { get; init; } = new(0m, 0m, 0m, 0m, 0m, 0m, 0, null, null);
 }
