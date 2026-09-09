@@ -91,8 +91,15 @@ public class ReportingServiceTests
 
     private sealed class TransactionTestNayaxClient : INayaxLynxClient
     {
+        private readonly List<NayaxMachine> _machines;
+
+        public TransactionTestNayaxClient(params NayaxMachine[] machines) =>
+            _machines = machines.Length == 0
+                ? [new NayaxMachine { MachineID = 10, MachineName = "Alpha One", CustomerID = 91 }]
+                : new List<NayaxMachine>(machines);
+
         public Task<List<NayaxDevice>> GetDevicesAsync(CancellationToken ct = default) => Task.FromResult(new List<NayaxDevice>());
-        public Task<List<NayaxMachine>> GetMachinesAsync(CancellationToken ct = default) => Task.FromResult(new List<NayaxMachine> { new() { MachineID = 10, MachineName = "Alpha One", CustomerID = 91 } });
+        public Task<List<NayaxMachine>> GetMachinesAsync(CancellationToken ct = default) => Task.FromResult(_machines);
         public Task<List<NayaxMachineProduct>> GetMachineProductsAsync(long machineId, CancellationToken ct = default) => Task.FromResult(new List<NayaxMachineProduct>());
         public Task<List<NayaxMachineProduct>> CreateMachineProductsAsync(long machineId, List<NayaxMachineProduct> products, CancellationToken ct = default) => Task.FromResult(products);
         public Task<List<NayaxProduct>> GetProductsAsync(CancellationToken ct = default) => Task.FromResult(new List<NayaxProduct>());
@@ -564,8 +571,155 @@ public class ReportingServiceTests
         var incomplete = Assert.Single(report.Rows, x => x.MachineId == 11);
         Assert.False(incomplete.IsCogsComplete);
         Assert.Null(incomplete.GrossProfit);
-        Assert.Null(incomplete.NetProfit);
+        Assert.Null(incomplete.DirectProfit);
+        Assert.Null(incomplete.DirectMarginPercent);
         Assert.Contains(report.DataQuality.Notes!, x => x.Contains("machines have completed sales with no persisted COGS"));
+    }
+
+    [Fact]
+    public async Task Machine_profitability_keeps_valid_machine_direct_profit_when_another_machine_has_overlapping_commissions()
+    {
+        using var db = CreateDbContext();
+        var date = new DateTime(2025, 8, 1);
+        db.NayaxSales.AddRange(
+            new NayaxSales { TransactionID = 301, MachineID = 10, MachineName = "Valid", SettlementValue = 100m, PaymentMethod = "Credit Card", CostOfGoodsSold = 40m, CostingStatus = SaleCostingStatus.Costed, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = date },
+            new NayaxSales { TransactionID = 302, MachineID = 11, MachineName = "Invalid", SettlementValue = 100m, PaymentMethod = "Credit Card", CostOfGoodsSold = 40m, CostingStatus = SaleCostingStatus.Costed, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = date });
+        db.NayaxProcessingFeeRates.Add(new NayaxProcessingFeeRate { EffectiveFrom = new DateTime(2025, 1, 1), FeeExGst = .20m });
+        db.SiteCommissionAgreements.AddRange(
+            new SiteCommissionAgreement { SiteId = 91, EffectiveFrom = new DateTime(2025, 1, 1), CommissionRate = .10m, Basis = CommissionBasis.GrossSales },
+            new SiteCommissionAgreement { SiteId = 92, EffectiveFrom = new DateTime(2025, 1, 1), CommissionRate = .10m, Basis = CommissionBasis.GrossSales },
+            new SiteCommissionAgreement { SiteId = 92, EffectiveFrom = new DateTime(2025, 7, 1), CommissionRate = .12m, Basis = CommissionBasis.GrossSales });
+        await db.SaveChangesAsync();
+
+        var nayax = new TransactionTestNayaxClient(
+            new NayaxMachine { MachineID = 10, MachineName = "Valid", CustomerID = 91 },
+            new NayaxMachine { MachineID = 11, MachineName = "Invalid", CustomerID = 92 });
+        var report = await Reporting(db, nayax, new SiteCommissionService(db, nayax)).GetMachineProfitabilityAsync(
+            new ReportingFilterDto(date, date));
+
+        var valid = Assert.Single(report.Rows, x => x.MachineId == 10);
+        Assert.Equal(49.78m, valid.DirectProfit);
+        Assert.Equal(49.78m, valid.DirectMarginPercent);
+        var invalid = Assert.Single(report.Rows, x => x.MachineId == 11);
+        Assert.Null(invalid.DirectProfit);
+        Assert.Null(invalid.DirectMarginPercent);
+        Assert.Contains(report.DataQuality.Notes!, x => x.Contains("Commission configuration is incomplete"));
+    }
+
+    [Fact]
+    public async Task Machine_profitability_keeps_valid_zero_commission_machine_when_another_machine_has_no_site_mapping()
+    {
+        using var db = CreateDbContext();
+        var date = new DateTime(2025, 8, 1);
+        db.NayaxSales.AddRange(
+            new NayaxSales { TransactionID = 303, MachineID = 10, MachineName = "Mapped", SettlementValue = 100m, PaymentMethod = "Credit Card", CostOfGoodsSold = 40m, CostingStatus = SaleCostingStatus.Costed, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = date },
+            new NayaxSales { TransactionID = 304, MachineID = 11, MachineName = "Unmapped", SettlementValue = 100m, PaymentMethod = "Credit Card", CostOfGoodsSold = 40m, CostingStatus = SaleCostingStatus.Costed, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = date });
+        db.NayaxProcessingFeeRates.Add(new NayaxProcessingFeeRate { EffectiveFrom = new DateTime(2025, 1, 1), FeeExGst = .20m });
+        await db.SaveChangesAsync();
+
+        var nayax = new TransactionTestNayaxClient(new NayaxMachine { MachineID = 10, MachineName = "Mapped", CustomerID = 91 });
+        var report = await Reporting(db, nayax, new SiteCommissionService(db, nayax)).GetMachineProfitabilityAsync(
+            new ReportingFilterDto(date, date));
+
+        var mapped = Assert.Single(report.Rows, x => x.MachineId == 10);
+        Assert.Equal(0m, mapped.SiteCommission);
+        Assert.Equal(59.78m, mapped.DirectProfit);
+        Assert.Equal(59.78m, mapped.DirectMarginPercent);
+        var unmapped = Assert.Single(report.Rows, x => x.MachineId == 11);
+        Assert.Null(unmapped.DirectProfit);
+        Assert.Null(unmapped.DirectMarginPercent);
+        Assert.Contains(report.DataQuality.Notes!, x => x.Contains("site mapping is unavailable"));
+    }
+
+    [Fact]
+    public async Task Machine_filtered_reports_scope_commission_completeness_to_the_selected_machine()
+    {
+        using var db = CreateDbContext();
+        var validDate = new DateTime(2025, 6, 15);
+        var invalidDate = new DateTime(2025, 8, 1);
+        db.NayaxSales.AddRange(
+            new NayaxSales { TransactionID = 305, MachineID = 10, MachineName = "Valid", SettlementValue = 100m, PaymentMethod = "Credit Card", CostOfGoodsSold = 40m, CostingStatus = SaleCostingStatus.Costed, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = validDate },
+            new NayaxSales { TransactionID = 306, MachineID = 11, MachineName = "Invalid", SettlementValue = 100m, PaymentMethod = "Credit Card", CostOfGoodsSold = 40m, CostingStatus = SaleCostingStatus.Costed, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = invalidDate });
+        db.NayaxProcessingFeeRates.Add(new NayaxProcessingFeeRate { EffectiveFrom = new DateTime(2025, 1, 1), FeeExGst = .20m });
+        db.SiteCommissionAgreements.Add(new SiteCommissionAgreement
+        {
+            SiteId = 91, EffectiveFrom = new DateTime(2025, 1, 1), EffectiveTo = new DateTime(2025, 6, 30),
+            CommissionRate = .10m, Basis = CommissionBasis.GrossSales
+        });
+        await db.SaveChangesAsync();
+
+        var nayax = new TransactionTestNayaxClient(
+            new NayaxMachine { MachineID = 10, MachineName = "Valid", CustomerID = 91 },
+            new NayaxMachine { MachineID = 11, MachineName = "Invalid", CustomerID = 91 });
+        var service = Reporting(db, nayax, new SiteCommissionService(db, nayax));
+        var from = new DateTime(2025, 6, 1);
+
+        var validFilter = new ReportingFilterDto(from, invalidDate, MachineId: 10);
+        var validDashboard = await service.GetDashboardAsync(validFilter);
+        var validBookkeeping = await service.GetBookkeepingAsync(validFilter);
+        Assert.Equal(49.78m, validDashboard.DirectProfit);
+        Assert.Equal(49.78m, validDashboard.DirectMarginPercent);
+        Assert.Null(validDashboard.NetProfit);
+        Assert.Equal(49.78m, validBookkeeping.DirectProfit);
+        Assert.Equal(49.78m, validBookkeeping.DirectMarginPercent);
+        Assert.Null(validBookkeeping.NetProfit);
+        Assert.DoesNotContain(validDashboard.DataQuality.Notes!, x => x.Contains("Commission configuration is incomplete"));
+        Assert.DoesNotContain(validBookkeeping.DataQuality.Notes!, x => x.Contains("Commission configuration is incomplete"));
+
+        var invalidFilter = new ReportingFilterDto(from, invalidDate, MachineId: 11);
+        var invalidDashboard = await service.GetDashboardAsync(invalidFilter);
+        var invalidBookkeeping = await service.GetBookkeepingAsync(invalidFilter);
+        Assert.Null(invalidDashboard.DirectProfit);
+        Assert.Null(invalidDashboard.DirectMarginPercent);
+        Assert.Null(invalidBookkeeping.DirectProfit);
+        Assert.Null(invalidBookkeeping.DirectMarginPercent);
+        Assert.Contains(invalidDashboard.DataQuality.Notes!, x => x.Contains("Commission configuration is incomplete"));
+        Assert.Contains(invalidBookkeeping.DataQuality.Notes!, x => x.Contains("Commission configuration is incomplete"));
+    }
+
+    [Fact]
+    public async Task Machine_direct_profit_excludes_unallocated_overhead_and_filtered_reports_do_not_return_net_profit()
+    {
+        using var db = CreateDbContext();
+        var date = new DateTime(2025, 8, 1);
+        db.NayaxSales.Add(new NayaxSales
+        {
+            TransactionID = 300, MachineID = 10, MachineName = "Alpha One", SettlementValue = 100m,
+            PaymentMethod = "Credit Card", TransactionStatusId = NayaxTransactionStatusIds.Completed,
+            CostOfGoodsSold = 40m, CostingStatus = SaleCostingStatus.Costed, MachineAuthorizationTime = date
+        });
+        db.NayaxProcessingFeeRates.Add(new NayaxProcessingFeeRate { EffectiveFrom = new DateTime(2025, 1, 1), FeeExGst = 5m / 1.1m });
+        db.SiteCommissionAgreements.Add(new SiteCommissionAgreement
+        {
+            SiteId = 91, EffectiveFrom = new DateTime(2025, 1, 1), CommissionRate = .10m,
+            Basis = CommissionBasis.GrossSales
+        });
+        db.OperatingExpenses.AddRange(
+            new OperatingExpense { ExpenseDate = date, MachineId = 10, TotalAmount = 5m },
+            new OperatingExpense { ExpenseDate = date, TotalAmount = 20m });
+        db.Receipts.Add(new Receipt { Title = "Delivery", PurchaseDate = date, DeliveryCost = 5m });
+        await db.SaveChangesAsync();
+
+        var nayax = new TransactionTestNayaxClient();
+        var service = Reporting(db, nayax, new SiteCommissionService(db, nayax));
+        var filter = new ReportingFilterDto(date, date, MachineId: 10);
+
+        var machine = Assert.Single((await service.GetMachineProfitabilityAsync(filter)).Rows);
+        Assert.Equal(60m, machine.GrossProfit);
+        Assert.Equal(40m, machine.DirectProfit);
+        Assert.Equal(40m, machine.DirectMarginPercent);
+
+        var dashboard = await service.GetDashboardAsync(filter);
+        Assert.Equal(40m, dashboard.DirectProfit);
+        Assert.Equal(40m, dashboard.DirectMarginPercent);
+        Assert.Null(dashboard.NetProfit);
+        Assert.Contains(dashboard.DataQuality.Notes!, x => x.Contains("shared business overhead"));
+
+        var bookkeeping = await service.GetBookkeepingAsync(filter);
+        Assert.Equal(40m, bookkeeping.DirectProfit);
+        Assert.Equal(40m, bookkeeping.DirectMarginPercent);
+        Assert.Null(bookkeeping.NetProfit);
+        Assert.Contains(bookkeeping.DataQuality.Notes!, x => x.Contains("shared business overhead"));
     }
 
     [Fact]

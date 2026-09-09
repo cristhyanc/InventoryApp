@@ -55,6 +55,7 @@ export interface DashboardReport {
   dataQuality: ReportQuality;
   nayaxFeesExGst?: number; netReimbursement?: number; siteCommission?: number;
   netProfit?: number | null; netMarginPercent?: number | null;
+  directProfit?: number | null; directMarginPercent?: number | null;
   deliveryCosts?: number; packageCosts?: number; otherOperatingExpenses?: number;
   structuredOperatingExpenses?: number; operatingExpenseGst?: number; operatingExpensesByCategory?: Record<string, number>;
   cardSales?: number; cashSales?: number; cardTransactionCount?: number; cashTransactionCount?: number;
@@ -80,6 +81,7 @@ export interface BookkeepingReport {
   grossProfit?: number | null; fees: number; netSettlement: number; gstOnSales: number; gstOnFees: number;
   dataQuality: ReportQuality;
   siteCommission?: number; netProfit?: number | null; netMarginPercent?: number | null;
+  directProfit?: number | null; directMarginPercent?: number | null;
   nayaxFeesExGst?: number; nayaxFeesIncludingGst?: number;
   deliveryCosts?: number; packageCosts?: number; otherOperatingExpenses?: number;
   cardSales?: number; cashSales?: number; cardTransactionCount?: number; cashTransactionCount?: number;
@@ -149,7 +151,7 @@ export interface MachineRow {
   machineId: number; machineName: string; sales: number; quantity: number; costOfGoods?: number | null;
   partialCostOfGoods?: number; isCogsComplete?: boolean; uncostedTransactionCount?: number; uncostedSalesAmount?: number;
   grossProfit?: number | null; marginPercent?: number | null; transactionCount: number;
-  siteCommission?: number; netProfit?: number | null; netMarginPercent?: number | null; commissionPercent?: number;
+  siteCommission?: number; directProfit?: number | null; directMarginPercent?: number | null; commissionPercent?: number;
   cardSales?: number; cashSales?: number;
   directOperatingExpenses?: number;
   nayaxProcessingFees?: NayaxProcessingFeeResult;
