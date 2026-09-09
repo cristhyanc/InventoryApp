@@ -17,11 +17,13 @@ env:
   SWASHBUCLE_ASPNET_CORE_CLI_PACKAGE_VERSION: 8.1.1
   SWASHBUCKLE_DOTNET_CORE_VERSION: 8.x
   API_IMPORT_SPECIFICATION_PATH: ./publish/swagger.json
-  API_IMPORT_DLL: .\bin\Release\net10.0\InventoryApi.dll
   API_IMPORT_VERSION: v1
   CONFIGURATION: Release
   DOTNET_CORE_VERSION: 10.0.x
-  WORKING_DIRECTORY: .
+  API_PROJECT: ./backend/InventoryApi/InventoryApi.csproj
+  TEST_PROJECT: ./backend/InventoryApi.Tests/InventoryApi.Tests.csproj
+  API_PROJECT_DIRECTORY: ./backend/InventoryApi
+  API_IMPORT_DLL: ./backend/InventoryApi/bin/Release/net10.0/InventoryApi.dll
 jobs:
   build:
     environment: VmInventoryApi_Env
@@ -37,16 +39,16 @@ jobs:
       with:
         dotnet-version: ${{ env.SWASHBUCKLE_DOTNET_CORE_VERSION }}
     - name: Restore
-      run: dotnet restore "${{ env.WORKING_DIRECTORY }}"
+      run: dotnet restore "${{ env.TEST_PROJECT }}"
     - name: Build
-      run: dotnet build "${{ env.WORKING_DIRECTORY }}" --configuration ${{ env.CONFIGURATION }} --no-restore
+      run: dotnet build "${{ env.TEST_PROJECT }}" --configuration ${{ env.CONFIGURATION }} --no-restore
     - name: Test
-      run: dotnet test "${{ env.WORKING_DIRECTORY }}" --no-build
+      run: dotnet test "${{ env.TEST_PROJECT }}" --configuration ${{ env.CONFIGURATION }} --no-build
     - name: Publish
-      run: dotnet publish "${{ env.WORKING_DIRECTORY }}" --configuration ${{ env.CONFIGURATION }} --no-build --output "${{ env.AZURE_WEBAPP_PACKAGE_PATH }}"
+      run: dotnet publish "${{ env.API_PROJECT }}" --configuration ${{ env.CONFIGURATION }} --no-build --output "${{ env.AZURE_WEBAPP_PACKAGE_PATH }}"
     - name: Install Swashbuckle CLI .NET Global Tool
       run: dotnet tool install --global Swashbuckle.AspNetCore.Cli --version ${{ env.SWASHBUCLE_ASPNET_CORE_CLI_PACKAGE_VERSION }}
-      working-directory: ${{ env.WORKING_DIRECTORY }}
+      working-directory: ${{ env.API_PROJECT_DIRECTORY }}
     - name: Generate Open API Specification Document
       run: swagger tofile --serializeasv2 --output "${{ env.API_IMPORT_SPECIFICATION_PATH }}" "${{ env.API_IMPORT_DLL }}" "${{ env.API_IMPORT_VERSION }}"
     - name: Publish Artifacts
