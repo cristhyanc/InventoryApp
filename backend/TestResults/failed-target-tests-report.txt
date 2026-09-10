@@ -1,0 +1,223 @@
+﻿TEST: InventoryApi.Tests.Services.StockServiceTests.Machine_refill_decreases_stock_without_changing_average_cost
+MESSAGE: InventoryApi.Services.InventoryCostDataQualityException : Product 1 becomes physically negative at stock adjustment 1. Product 1 stored physical quantity 26 does not reconcile to its movement history (-8).
+STACK:    at InventoryApi.Services.InventoryCostRebuildService.ThrowIfFatal(InventoryCostRebuildResult result) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\InventoryCostRebuildService.cs:line 255
+   at InventoryApi.Services.InventoryCostRebuildService.RebuildAsync(Int64 productId, Nullable`1 recostCompletedSalesFrom, Boolean dryRun, CancellationToken cancellationToken) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\InventoryCostRebuildService.cs:line 39
+   at InventoryApi.Services.StockService.Adjust(Int64 productId, StockAdjustmentDto dto) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\StockService.cs:line 45
+   at InventoryApi.Tests.Services.StockServiceTests.Machine_refill_decreases_stock_without_changing_average_cost() in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\Services\StockServiceTests.cs:line 71
+--- End of stack trace from previous location ---
+
+TEST: InventoryApi.Tests.Services.InventoryCostRebuildServiceTests.Rebuild_keeps_machine_refills_out_of_business_cost_quantity
+MESSAGE: InventoryApi.Services.InventoryCostDataQualityException : Product 1 stored physical quantity 0 does not reconcile to its movement history (12).
+STACK:    at InventoryApi.Services.InventoryCostRebuildService.ThrowIfFatal(InventoryCostRebuildResult result) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\InventoryCostRebuildService.cs:line 255
+   at InventoryApi.Services.InventoryCostRebuildService.RebuildAsync(Int64 productId, Nullable`1 recostCompletedSalesFrom, Boolean dryRun, CancellationToken cancellationToken) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\InventoryCostRebuildService.cs:line 39
+   at InventoryApi.Tests.Services.InventoryCostRebuildServiceTests.Rebuild_keeps_machine_refills_out_of_business_cost_quantity() in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\Services\InventoryCostRebuildServiceTests.cs:line 25
+   at InventoryApi.Tests.Services.InventoryCostRebuildServiceTests.Rebuild_keeps_machine_refills_out_of_business_cost_quantity() in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\Services\InventoryCostRebuildServiceTests.cs:line 36
+--- End of stack trace from previous location ---
+
+TEST: InventoryApi.Tests.Services.InventoryCostRebuildServiceTests.Rebuild_historical_purchase_change_recosts_later_sales_and_purchases
+MESSAGE: InventoryApi.Services.InventoryCostDataQualityException : Product 1 stored physical quantity 0 does not reconcile to its movement history (20).
+STACK:    at InventoryApi.Services.InventoryCostRebuildService.ThrowIfFatal(InventoryCostRebuildResult result) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\InventoryCostRebuildService.cs:line 255
+   at InventoryApi.Services.InventoryCostRebuildService.RebuildAsync(Int64 productId, Nullable`1 recostCompletedSalesFrom, Boolean dryRun, CancellationToken cancellationToken) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\InventoryCostRebuildService.cs:line 39
+   at InventoryApi.Tests.Services.InventoryCostRebuildServiceTests.Rebuild_historical_purchase_change_recosts_later_sales_and_purchases() in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\Services\InventoryCostRebuildServiceTests.cs:line 116
+   at InventoryApi.Tests.Services.InventoryCostRebuildServiceTests.Rebuild_historical_purchase_change_recosts_later_sales_and_purchases() in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\Services\InventoryCostRebuildServiceTests.cs:line 125
+--- End of stack trace from previous location ---
+
+TEST: InventoryApi.Tests.Services.ReceiptServiceTests.Upload_uses_weighted_average_cost_and_records_cost_ledger
+MESSAGE: InventoryApi.Services.InventoryCostDataQualityException : Product 1 stored physical quantity 10 does not reconcile to its movement history (34).
+STACK:    at InventoryApi.Services.InventoryCostRebuildService.ThrowIfFatal(InventoryCostRebuildResult result) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\InventoryCostRebuildService.cs:line 255
+   at InventoryApi.Services.InventoryCostRebuildService.RebuildAsync(Int64 productId, Nullable`1 recostCompletedSalesFrom, Boolean dryRun, CancellationToken cancellationToken) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\InventoryCostRebuildService.cs:line 39
+   at InventoryApi.Services.ReceiptService.RebuildAffectedAsync(IEnumerable`1 affected) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\ReceiptService.cs:line 336
+   at InventoryApi.Services.ReceiptService.Upload(IFormFile file, String title, String notes, Nullable`1 totalAmount, Nullable`1 deliveryCost, Nullable`1 packageCost, Nullable`1 purchaseDate, Nullable`1 supplierId, IReadOnlyList`1 items) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\ReceiptService.cs:line 114
+   at InventoryApi.Services.ReceiptService.Upload(IFormFile file, String title, String notes, Nullable`1 totalAmount, Nullable`1 deliveryCost, Nullable`1 packageCost, Nullable`1 purchaseDate, Nullable`1 supplierId, IReadOnlyList`1 items) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\ReceiptService.cs:line 116
+   at InventoryApi.Tests.Services.ReceiptServiceTests.Upload_uses_weighted_average_cost_and_records_cost_ledger() in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\Services\ReceiptServiceTests.cs:line 194
+--- End of stack trace from previous location ---
+
+TEST: InventoryApi.Tests.Services.ReportingServiceTests.Reconciliation_flags_period_mismatch
+MESSAGE: Assert.False() Failure
+Expected: False
+Actual:   True
+STACK:    at InventoryApi.Tests.Services.ReportingServiceTests.Reconciliation_flags_period_mismatch() in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\Services\ReportingServiceTests.cs:line 890
+--- End of stack trace from previous location ---
+
+TEST: InventoryApi.Tests.Services.ReportingServiceTests.Commission_configuration_failures_make_financial_reports_provisional(overlaps: False, expectedWarning: "Commission agreements exist")
+MESSAGE: Assert.Null() Failure: Value of type 'Nullable<decimal>' has a value
+Expected: null
+Actual:   7.78
+STACK:    at InventoryApi.Tests.Services.ReportingServiceTests.Commission_configuration_failures_make_financial_reports_provisional(Boolean overlaps, String expectedWarning) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\Services\ReportingServiceTests.cs:line 153
+--- End of stack trace from previous location ---
+
+TEST: InventoryApi.Tests.Services.InventoryCostRebuildServiceTests.Rebuild_consumes_completed_sales_and_recosts_from_changed_date
+MESSAGE: InventoryApi.Services.InventoryCostDataQualityException : Product 1 stored physical quantity 0 does not reconcile to its movement history (20).
+STACK:    at InventoryApi.Services.InventoryCostRebuildService.ThrowIfFatal(InventoryCostRebuildResult result) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\InventoryCostRebuildService.cs:line 255
+   at InventoryApi.Services.InventoryCostRebuildService.RebuildAsync(Int64 productId, Nullable`1 recostCompletedSalesFrom, Boolean dryRun, CancellationToken cancellationToken) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\InventoryCostRebuildService.cs:line 39
+   at InventoryApi.Tests.Services.InventoryCostRebuildServiceTests.Rebuild_consumes_completed_sales_and_recosts_from_changed_date() in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\Services\InventoryCostRebuildServiceTests.cs:line 49
+   at InventoryApi.Tests.Services.InventoryCostRebuildServiceTests.Rebuild_consumes_completed_sales_and_recosts_from_changed_date() in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\Services\InventoryCostRebuildServiceTests.cs:line 57
+--- End of stack trace from previous location ---
+
+TEST: InventoryApi.Tests.Services.ReportingServiceTests.Date_and_machine_filters_are_inclusive_and_machine_specific
+MESSAGE: Assert.Single() Failure: The collection was empty
+STACK:    at InventoryApi.Tests.Services.ReportingServiceTests.Date_and_machine_filters_are_inclusive_and_machine_specific() in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\Services\ReportingServiceTests.cs:line 390
+--- End of stack trace from previous location ---
+
+TEST: InventoryApi.Tests.Services.NayaxTransactionStatusTests.Completed_sale_is_costed_from_historical_receipt_movement
+MESSAGE: Assert.Equal() Failure: Values differ
+Expected: 2.10
+Actual:   null
+STACK:    at InventoryApi.Tests.Services.NayaxTransactionStatusTests.Completed_sale_is_costed_from_historical_receipt_movement() in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\Services\NayaxTransactionStatusTests.cs:line 82
+--- End of stack trace from previous location ---
+
+TEST: InventoryApi.Tests.Services.ReportingServiceTests.Bookkeeping_net_profit_deducts_receipt_operating_costs
+MESSAGE: Assert.Equal() Failure: Values differ
+Expected: 5
+Actual:   0
+STACK:    at InventoryApi.Tests.Services.ReportingServiceTests.Bookkeeping_net_profit_deducts_receipt_operating_costs() in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\Services\ReportingServiceTests.cs:line 533
+--- End of stack trace from previous location ---
+
+TEST: InventoryApi.Tests.Services.ReportingServiceTests.Reconciliation_matches_reimbursement_device_to_selected_machine
+MESSAGE: Assert.Equal() Failure: Values differ
+Expected: 90.30
+Actual:   0
+STACK:    at InventoryApi.Tests.Services.ReportingServiceTests.Reconciliation_matches_reimbursement_device_to_selected_machine() in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\Services\ReportingServiceTests.cs:line 940
+--- End of stack trace from previous location ---
+
+TEST: InventoryApi.Tests.Services.ReportingServiceTests.Bookkeeping_and_gst_use_centralised_decimal_formulas
+MESSAGE: Assert.Equal() Failure: Values differ
+Expected: 110
+Actual:   0
+STACK:    at InventoryApi.Tests.Services.ReportingServiceTests.Bookkeeping_and_gst_use_centralised_decimal_formulas() in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\Services\ReportingServiceTests.cs:line 504
+--- End of stack trace from previous location ---
+
+TEST: InventoryApi.Tests.Services.ReceiptServiceTests.ComputeValidation_no_mismatch_when_totals_match
+MESSAGE: InventoryApi.Services.InventoryCostDataQualityException : Product 1 stored physical quantity 0 does not reconcile to its movement history (20).
+STACK:    at InventoryApi.Services.InventoryCostRebuildService.ThrowIfFatal(InventoryCostRebuildResult result) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\InventoryCostRebuildService.cs:line 255
+   at InventoryApi.Services.InventoryCostRebuildService.RebuildAsync(Int64 productId, Nullable`1 recostCompletedSalesFrom, Boolean dryRun, CancellationToken cancellationToken) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\InventoryCostRebuildService.cs:line 39
+   at InventoryApi.Services.ReceiptService.RebuildAffectedAsync(IEnumerable`1 affected) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\ReceiptService.cs:line 336
+   at InventoryApi.Services.ReceiptService.Upload(IFormFile file, String title, String notes, Nullable`1 totalAmount, Nullable`1 deliveryCost, Nullable`1 packageCost, Nullable`1 purchaseDate, Nullable`1 supplierId, IReadOnlyList`1 items) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\ReceiptService.cs:line 114
+   at InventoryApi.Services.ReceiptService.Upload(IFormFile file, String title, String notes, Nullable`1 totalAmount, Nullable`1 deliveryCost, Nullable`1 packageCost, Nullable`1 purchaseDate, Nullable`1 supplierId, IReadOnlyList`1 items) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\ReceiptService.cs:line 116
+   at InventoryApi.Tests.Services.ReceiptServiceTests.ComputeValidation_no_mismatch_when_totals_match() in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\Services\ReceiptServiceTests.cs:line 413
+--- End of stack trace from previous location ---
+
+TEST: InventoryApi.Tests.Services.ReceiptServiceTests.Upload_preserves_user_notes_when_total_mismatches
+MESSAGE: InventoryApi.Services.InventoryCostDataQualityException : Product 1 stored physical quantity 0 does not reconcile to its movement history (20).
+STACK:    at InventoryApi.Services.InventoryCostRebuildService.ThrowIfFatal(InventoryCostRebuildResult result) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\InventoryCostRebuildService.cs:line 255
+   at InventoryApi.Services.InventoryCostRebuildService.RebuildAsync(Int64 productId, Nullable`1 recostCompletedSalesFrom, Boolean dryRun, CancellationToken cancellationToken) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\InventoryCostRebuildService.cs:line 39
+   at InventoryApi.Services.ReceiptService.RebuildAffectedAsync(IEnumerable`1 affected) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\ReceiptService.cs:line 336
+   at InventoryApi.Services.ReceiptService.Upload(IFormFile file, String title, String notes, Nullable`1 totalAmount, Nullable`1 deliveryCost, Nullable`1 packageCost, Nullable`1 purchaseDate, Nullable`1 supplierId, IReadOnlyList`1 items) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\ReceiptService.cs:line 114
+   at InventoryApi.Services.ReceiptService.Upload(IFormFile file, String title, String notes, Nullable`1 totalAmount, Nullable`1 deliveryCost, Nullable`1 packageCost, Nullable`1 purchaseDate, Nullable`1 supplierId, IReadOnlyList`1 items) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\ReceiptService.cs:line 116
+   at InventoryApi.Tests.Services.ReceiptServiceTests.Upload_preserves_user_notes_when_total_mismatches() in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\Services\ReceiptServiceTests.cs:line 337
+--- End of stack trace from previous location ---
+
+TEST: InventoryApi.Tests.Services.ReceiptServiceTests.Upload_Posts_receipt_items_to_storage_without_machine_refill
+MESSAGE: InventoryApi.Services.InventoryCostDataQualityException : Product 1 stored physical quantity 2 does not reconcile to its movement history (24).
+STACK:    at InventoryApi.Services.InventoryCostRebuildService.ThrowIfFatal(InventoryCostRebuildResult result) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\InventoryCostRebuildService.cs:line 255
+   at InventoryApi.Services.InventoryCostRebuildService.RebuildAsync(Int64 productId, Nullable`1 recostCompletedSalesFrom, Boolean dryRun, CancellationToken cancellationToken) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\InventoryCostRebuildService.cs:line 39
+   at InventoryApi.Services.ReceiptService.RebuildAffectedAsync(IEnumerable`1 affected) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\ReceiptService.cs:line 336
+   at InventoryApi.Services.ReceiptService.Upload(IFormFile file, String title, String notes, Nullable`1 totalAmount, Nullable`1 deliveryCost, Nullable`1 packageCost, Nullable`1 purchaseDate, Nullable`1 supplierId, IReadOnlyList`1 items) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\ReceiptService.cs:line 114
+   at InventoryApi.Services.ReceiptService.Upload(IFormFile file, String title, String notes, Nullable`1 totalAmount, Nullable`1 deliveryCost, Nullable`1 packageCost, Nullable`1 purchaseDate, Nullable`1 supplierId, IReadOnlyList`1 items) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\ReceiptService.cs:line 116
+   at InventoryApi.Tests.Services.ReceiptServiceTests.Upload_Posts_receipt_items_to_storage_without_machine_refill() in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\Services\ReceiptServiceTests.cs:line 109
+--- End of stack trace from previous location ---
+
+TEST: InventoryApi.Tests.Services.InventoryCostRebuildServiceTests.Rebuild_applies_cost_only_purchase_edit
+MESSAGE: InventoryApi.Services.InventoryCostDataQualityException : Product 1 stored physical quantity 0 does not reconcile to its movement history (10).
+STACK:    at InventoryApi.Services.InventoryCostRebuildService.ThrowIfFatal(InventoryCostRebuildResult result) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\InventoryCostRebuildService.cs:line 255
+   at InventoryApi.Services.InventoryCostRebuildService.RebuildAsync(Int64 productId, Nullable`1 recostCompletedSalesFrom, Boolean dryRun, CancellationToken cancellationToken) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\InventoryCostRebuildService.cs:line 39
+   at InventoryApi.Tests.Services.InventoryCostRebuildServiceTests.Rebuild_applies_cost_only_purchase_edit() in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\Services\InventoryCostRebuildServiceTests.cs:line 94
+   at InventoryApi.Tests.Services.InventoryCostRebuildServiceTests.Rebuild_applies_cost_only_purchase_edit() in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\Services\InventoryCostRebuildServiceTests.cs:line 102
+--- End of stack trace from previous location ---
+
+TEST: InventoryApi.Tests.Services.ReceiptServiceTests.ComputeValidation_detects_total_mismatch
+MESSAGE: InventoryApi.Services.InventoryCostDataQualityException : Product 1 stored physical quantity 0 does not reconcile to its movement history (20).
+STACK:    at InventoryApi.Services.InventoryCostRebuildService.ThrowIfFatal(InventoryCostRebuildResult result) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\InventoryCostRebuildService.cs:line 255
+   at InventoryApi.Services.InventoryCostRebuildService.RebuildAsync(Int64 productId, Nullable`1 recostCompletedSalesFrom, Boolean dryRun, CancellationToken cancellationToken) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\InventoryCostRebuildService.cs:line 39
+   at InventoryApi.Services.ReceiptService.RebuildAffectedAsync(IEnumerable`1 affected) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\ReceiptService.cs:line 336
+   at InventoryApi.Services.ReceiptService.Upload(IFormFile file, String title, String notes, Nullable`1 totalAmount, Nullable`1 deliveryCost, Nullable`1 packageCost, Nullable`1 purchaseDate, Nullable`1 supplierId, IReadOnlyList`1 items) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\ReceiptService.cs:line 114
+   at InventoryApi.Services.ReceiptService.Upload(IFormFile file, String title, String notes, Nullable`1 totalAmount, Nullable`1 deliveryCost, Nullable`1 packageCost, Nullable`1 purchaseDate, Nullable`1 supplierId, IReadOnlyList`1 items) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\ReceiptService.cs:line 116
+   at InventoryApi.Tests.Services.ReceiptServiceTests.ComputeValidation_detects_total_mismatch() in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\Services\ReceiptServiceTests.cs:line 374
+--- End of stack trace from previous location ---
+
+TEST: InventoryApi.Tests.Services.ReportingServiceTests.Reconciliation_exposes_sales_fee_and_settlement_breakdown
+MESSAGE: Assert.Equal() Failure: Values differ
+Expected: 125
+Actual:   0
+STACK:    at InventoryApi.Tests.Services.ReportingServiceTests.Reconciliation_exposes_sales_fee_and_settlement_breakdown() in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\Services\ReportingServiceTests.cs:line 993
+--- End of stack trace from previous location ---
+
+TEST: InventoryApi.Tests.Services.ReportingServiceTests.Reconciliation_matches_period_and_applies_tolerance
+MESSAGE: Assert.Equal() Failure: Values differ
+Expected: -0.005
+Actual:   -100.005
+STACK:    at InventoryApi.Tests.Services.ReportingServiceTests.Reconciliation_matches_period_and_applies_tolerance() in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\Services\ReportingServiceTests.cs:line 865
+--- End of stack trace from previous location ---
+
+TEST: InventoryApi.Tests.Services.SiteServiceTests.Site_summary_aggregates_all_machines_and_separates_low_and_empty_products
+MESSAGE: Assert.Equal() Failure: Values differ
+Expected: 12
+Actual:   0
+STACK:    at InventoryApi.Tests.Services.SiteServiceTests.Site_summary_aggregates_all_machines_and_separates_low_and_empty_products() in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\Services\SiteServiceTests.cs:line 56
+--- End of stack trace from previous location ---
+
+TEST: InventoryApi.Tests.Services.ReportingServiceTests.Daily_report_includes_payment_split_cogs_quality_and_period_reimbursement
+MESSAGE: Assert.Equal() Failure: Values differ
+Expected: 15
+Actual:   10
+STACK:    at InventoryApi.Tests.Services.ReportingServiceTests.Daily_report_includes_payment_split_cogs_quality_and_period_reimbursement() in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\Services\ReportingServiceTests.cs:line 427
+--- End of stack trace from previous location ---
+
+TEST: InventoryApi.Tests.Services.NayaxTransactionStatusTests.Historical_cost_is_stable_after_a_later_purchase
+MESSAGE: Assert.Equal() Failure: Values differ
+Expected: 2.10
+Actual:   null
+STACK:    at InventoryApi.Tests.Services.NayaxTransactionStatusTests.Historical_cost_is_stable_after_a_later_purchase() in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\Services\NayaxTransactionStatusTests.cs:line 140
+--- End of stack trace from previous location ---
+
+TEST: InventoryApi.Tests.Services.ReportingServiceTests.Product_profitability_uses_decimal_cost_and_zero_safe_margin
+MESSAGE: Assert.Single() Failure: The collection did not contain any matching items
+Expected:   (predicate expression)
+Collection: [ProductProfitabilityRowDto { ProductId = 1, ProductName = Known, CategoryName = , Sales = 10, Quantity = 1, CostOfGoods = 6, GrossProfit = 4, MarginPercent = 40.0, TransactionCount = 1, IsUnmapped = False, HistoricalCostAvailable = True, CardRevenue = 0, CashRevenue = 0, PartialCostOfGoods = 6, IsCogsComplete = True, UncostedTransactionCount = 0, UncostedSalesAmount = 0 }]
+STACK:    at InventoryApi.Tests.Services.ReportingServiceTests.Product_profitability_uses_decimal_cost_and_zero_safe_margin() in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\Services\ReportingServiceTests.cs:line 295
+--- End of stack trace from previous location ---
+
+TEST: InventoryApi.Tests.Services.ReceiptServiceTests.Update_preserves_user_notes_and_computes_validation
+MESSAGE: InventoryApi.Services.InventoryCostDataQualityException : Product 1 stored physical quantity 0 does not reconcile to its movement history (20).
+STACK:    at InventoryApi.Services.InventoryCostRebuildService.ThrowIfFatal(InventoryCostRebuildResult result) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\InventoryCostRebuildService.cs:line 255
+   at InventoryApi.Services.InventoryCostRebuildService.RebuildAsync(Int64 productId, Nullable`1 recostCompletedSalesFrom, Boolean dryRun, CancellationToken cancellationToken) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\InventoryCostRebuildService.cs:line 39
+   at InventoryApi.Services.ReceiptService.RebuildAffectedAsync(IEnumerable`1 affected) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\ReceiptService.cs:line 336
+   at InventoryApi.Services.ReceiptService.Upload(IFormFile file, String title, String notes, Nullable`1 totalAmount, Nullable`1 deliveryCost, Nullable`1 packageCost, Nullable`1 purchaseDate, Nullable`1 supplierId, IReadOnlyList`1 items) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\ReceiptService.cs:line 114
+   at InventoryApi.Services.ReceiptService.Upload(IFormFile file, String title, String notes, Nullable`1 totalAmount, Nullable`1 deliveryCost, Nullable`1 packageCost, Nullable`1 purchaseDate, Nullable`1 supplierId, IReadOnlyList`1 items) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\ReceiptService.cs:line 116
+   at InventoryApi.Tests.Services.ReceiptServiceTests.Update_preserves_user_notes_and_computes_validation() in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\Services\ReceiptServiceTests.cs:line 452
+--- End of stack trace from previous location ---
+
+TEST: InventoryApi.Tests.Services.StockServiceTests.Positive_adjustment_without_cost_does_not_invent_average_cost
+MESSAGE: InventoryApi.Services.InventoryCostDataQualityException : Positive correction adjustment 1 for product 1 has no explicit cost. Product 1 stored physical quantity 5 does not reconcile to its movement history (3).
+STACK:    at InventoryApi.Services.InventoryCostRebuildService.ThrowIfFatal(InventoryCostRebuildResult result) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\InventoryCostRebuildService.cs:line 255
+   at InventoryApi.Services.InventoryCostRebuildService.RebuildAsync(Int64 productId, Nullable`1 recostCompletedSalesFrom, Boolean dryRun, CancellationToken cancellationToken) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\InventoryCostRebuildService.cs:line 39
+   at InventoryApi.Services.StockService.Adjust(Int64 productId, StockAdjustmentDto dto) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\StockService.cs:line 45
+   at InventoryApi.Tests.Services.StockServiceTests.Positive_adjustment_without_cost_does_not_invent_average_cost() in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\Services\StockServiceTests.cs:line 89
+--- End of stack trace from previous location ---
+
+TEST: InventoryApi.Tests.Services.ReceiptServiceTests.Update_and_delete_receipt_maintain_linked_purchase_movement_without_reversal
+MESSAGE: InventoryApi.Services.InventoryCostDataQualityException : Product 1 stored physical quantity 0 does not reconcile to its movement history (10).
+STACK:    at InventoryApi.Services.InventoryCostRebuildService.ThrowIfFatal(InventoryCostRebuildResult result) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\InventoryCostRebuildService.cs:line 255
+   at InventoryApi.Services.InventoryCostRebuildService.RebuildAsync(Int64 productId, Nullable`1 recostCompletedSalesFrom, Boolean dryRun, CancellationToken cancellationToken) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\InventoryCostRebuildService.cs:line 39
+   at InventoryApi.Services.ReceiptService.RebuildAffectedAsync(IEnumerable`1 affected) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\ReceiptService.cs:line 336
+   at InventoryApi.Services.ReceiptService.Upload(IFormFile file, String title, String notes, Nullable`1 totalAmount, Nullable`1 deliveryCost, Nullable`1 packageCost, Nullable`1 purchaseDate, Nullable`1 supplierId, IReadOnlyList`1 items) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\ReceiptService.cs:line 114
+   at InventoryApi.Services.ReceiptService.Upload(IFormFile file, String title, String notes, Nullable`1 totalAmount, Nullable`1 deliveryCost, Nullable`1 packageCost, Nullable`1 purchaseDate, Nullable`1 supplierId, IReadOnlyList`1 items) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\ReceiptService.cs:line 116
+   at InventoryApi.Tests.Services.ReceiptServiceTests.Update_and_delete_receipt_maintain_linked_purchase_movement_without_reversal() in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\Services\ReceiptServiceTests.cs:line 142
+--- End of stack trace from previous location ---
+
+TEST: InventoryApi.Tests.Services.StockServiceTests.Adjust_Increases_Quantity_And_Creates_Adjustment
+MESSAGE: InventoryApi.Services.InventoryCostDataQualityException : Restock adjustment 1 for product 1 has no valid unit cost. Product 1 stored physical quantity 5 does not reconcile to its movement history (3).
+STACK:    at InventoryApi.Services.InventoryCostRebuildService.ThrowIfFatal(InventoryCostRebuildResult result) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\InventoryCostRebuildService.cs:line 255
+   at InventoryApi.Services.InventoryCostRebuildService.RebuildAsync(Int64 productId, Nullable`1 recostCompletedSalesFrom, Boolean dryRun, CancellationToken cancellationToken) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\InventoryCostRebuildService.cs:line 39
+   at InventoryApi.Services.StockService.Adjust(Int64 productId, StockAdjustmentDto dto) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\StockService.cs:line 45
+   at InventoryApi.Tests.Services.StockServiceTests.Adjust_Increases_Quantity_And_Creates_Adjustment() in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\Services\StockServiceTests.cs:line 30
+--- End of stack trace from previous location ---
+
+TEST: InventoryApi.Tests.Services.InventoryCostRebuildServiceTests.Rebuild_only_consumes_sales_when_machine_refills_precede_sales
+MESSAGE: InventoryApi.Services.InventoryCostDataQualityException : Product 1 stored physical quantity 0 does not reconcile to its movement history (2).
+STACK:    at InventoryApi.Services.InventoryCostRebuildService.ThrowIfFatal(InventoryCostRebuildResult result) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\InventoryCostRebuildService.cs:line 255
+   at InventoryApi.Services.InventoryCostRebuildService.RebuildAsync(Int64 productId, Nullable`1 recostCompletedSalesFrom, Boolean dryRun, CancellationToken cancellationToken) in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi\Services\InventoryCostRebuildService.cs:line 39
+   at InventoryApi.Tests.Services.InventoryCostRebuildServiceTests.Rebuild_only_consumes_sales_when_machine_refills_precede_sales() in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\Services\InventoryCostRebuildServiceTests.cs:line 75
+   at InventoryApi.Tests.Services.InventoryCostRebuildServiceTests.Rebuild_only_consumes_sales_when_machine_refills_precede_sales() in C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\Services\InventoryCostRebuildServiceTests.cs:line 81
+--- End of stack trace from previous location ---
+

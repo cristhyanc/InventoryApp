@@ -20,18 +20,18 @@ public class StockServiceTests
     }
 
     [Fact]
-    public async Task Adjust_Increases_Quantity_And_Creates_Adjustment()
+    public async Task Uncosted_restock_is_rejected_by_the_inventory_ledger()
     {
         using var db = CreateDbContext("stock_test");
-        db.Products.Add(new Product { Id = 1, Name = "p", QuantityInStock = 2 });
+        db.Products.Add(new Product { Id = 1, Name = "p", QuantityInStock = 2, CostingQuantity = 2, InventoryValue = 6m, AverageUnitCost = 3m });
+        db.StockAdjustments.Add(new StockAdjustment { ProductId = 1, QuantityChange = 2, Reason = StockAdjustmentReason.Restock, UnitCost = 3m, EffectiveAt = System.DateTime.UtcNow.AddMinutes(-1) });
         await db.SaveChangesAsync();
 
         IStockService svc = new StockService(db);
-        var adj = await svc.Adjust(1, new StockAdjustmentDto(3, StockAdjustmentReason.Restock, "note", null, System.DateTime.UtcNow.AddDays(30)));
-        Assert.NotNull(adj);
+        var exception = await Assert.ThrowsAsync<InventoryCostDataQualityException>(() =>
+            svc.Adjust(1, new StockAdjustmentDto(3, StockAdjustmentReason.Restock, "note", null, System.DateTime.UtcNow.AddDays(30))));
 
-        var product = await db.Products.FindAsync(1L);
-        Assert.Equal(5, product.QuantityInStock);
+        Assert.Contains("has no valid unit cost", exception.Message);
     }
 
     [Fact]
@@ -64,7 +64,8 @@ public class StockServiceTests
     public async Task Machine_refill_decreases_stock_without_changing_average_cost()
     {
         using var db = CreateDbContext("stock_avco_refill_test");
-        db.Products.Add(new Product { Id = 1, Name = "p", QuantityInStock = 34, AverageUnitCost = 1.323529411764705882m });
+        db.Products.Add(new Product { Id = 1, Name = "p", QuantityInStock = 34, CostingQuantity = 34, InventoryValue = 45m, AverageUnitCost = 1.323529411764705882m });
+        db.StockAdjustments.Add(new StockAdjustment { ProductId = 1, QuantityChange = 34, Reason = StockAdjustmentReason.Restock, UnitCost = 1.323529411764705882m, EffectiveAt = System.DateTime.UtcNow.AddMinutes(-1) });
         await db.SaveChangesAsync();
 
         IStockService svc = new StockService(db);
@@ -73,25 +74,25 @@ public class StockServiceTests
         var product = await db.Products.FindAsync(1L);
         Assert.Equal(26, product!.QuantityInStock);
         Assert.Equal(1.323529411764705882m, product.AverageUnitCost);
-        var movement = await db.StockAdjustments.SingleAsync();
+        var movement = await db.StockAdjustments.SingleAsync(x => x.Reason == StockAdjustmentReason.MachineRefill);
         Assert.Equal(1.323529411764705882m, movement.UnitCost);
         Assert.Equal(8 * product.AverageUnitCost, movement.TotalCost);
     }
 
     [Fact]
-    public async Task Positive_adjustment_without_cost_does_not_invent_average_cost()
+    public async Task Positive_adjustment_without_cost_is_rejected_without_inventing_average_cost()
     {
         using var db = CreateDbContext("stock_unknown_cost_test");
-        db.Products.Add(new Product { Id = 1, Name = "p", QuantityInStock = 2, AverageUnitCost = 3m });
+        db.Products.Add(new Product { Id = 1, Name = "p", QuantityInStock = 2, CostingQuantity = 2, InventoryValue = 6m, AverageUnitCost = 3m });
+        db.StockAdjustments.Add(new StockAdjustment { ProductId = 1, QuantityChange = 2, Reason = StockAdjustmentReason.Restock, UnitCost = 3m, EffectiveAt = System.DateTime.UtcNow.AddMinutes(-1) });
         await db.SaveChangesAsync();
 
         IStockService svc = new StockService(db);
-        await svc.Adjust(1, new StockAdjustmentDto(3, StockAdjustmentReason.Correction, "count correction", null, null));
+        var exception = await Assert.ThrowsAsync<InventoryCostDataQualityException>(() =>
+            svc.Adjust(1, new StockAdjustmentDto(3, StockAdjustmentReason.Correction, "count correction", null, null)));
 
-        var product = await db.Products.FindAsync(1L);
-        Assert.Equal(5, product!.QuantityInStock);
-        Assert.Equal(3m, product.AverageUnitCost);
-        var movement = await db.StockAdjustments.SingleAsync();
+        Assert.Contains("has no explicit cost", exception.Message);
+        var movement = await db.StockAdjustments.SingleAsync(x => x.Reason == StockAdjustmentReason.Correction);
         Assert.Null(movement.UnitCost);
         Assert.Null(movement.TotalCost);
     }

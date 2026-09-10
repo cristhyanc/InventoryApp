@@ -15,7 +15,7 @@ public class InventoryCostRebuildServiceTests
     public async Task Rebuild_keeps_machine_refills_out_of_business_cost_quantity()
     {
         await using var db = CreateDb();
-        db.Products.Add(new Product { Id = 1, Name = "Snack" });
+        db.Products.Add(new Product { Id = 1, Name = "Snack", QuantityInStock = 12 });
         db.StockAdjustments.AddRange(
             Movement(1, 10, 2m, StockAdjustmentReason.Restock, Day(1)),
             Movement(1, -8, null, StockAdjustmentReason.MachineRefill, Day(2)),
@@ -40,7 +40,7 @@ public class InventoryCostRebuildServiceTests
     public async Task Rebuild_consumes_completed_sales_and_recosts_from_changed_date()
     {
         await using var db = CreateDb();
-        db.Products.Add(new Product { Id = 1, Name = "Snack" });
+        db.Products.Add(new Product { Id = 1, Name = "Snack", QuantityInStock = 20 });
         db.StockAdjustments.Add(Movement(1, 10, 2m, StockAdjustmentReason.Restock, Day(1)));
         db.NayaxSales.AddRange(Enumerable.Range(1, 8).Select(index => Sale(index, Day(1).AddMinutes(index))));
         db.StockAdjustments.Add(Movement(1, 10, 4m, StockAdjustmentReason.Restock, Day(2)));
@@ -65,7 +65,7 @@ public class InventoryCostRebuildServiceTests
     public async Task Rebuild_only_consumes_sales_when_machine_refills_precede_sales()
     {
         await using var db = CreateDb();
-        db.Products.Add(new Product { Id = 1, Name = "Snack" });
+        db.Products.Add(new Product { Id = 1, Name = "Snack", QuantityInStock = 2 });
         db.StockAdjustments.AddRange(
             Movement(1, 10, 2m, StockAdjustmentReason.Restock, Day(1)),
             Movement(1, -8, null, StockAdjustmentReason.MachineRefill, Day(2)));
@@ -85,7 +85,7 @@ public class InventoryCostRebuildServiceTests
     public async Task Rebuild_applies_cost_only_purchase_edit()
     {
         await using var db = CreateDb();
-        db.Products.Add(new Product { Id = 1, Name = "Snack" });
+        db.Products.Add(new Product { Id = 1, Name = "Snack", QuantityInStock = 10 });
         var purchase = Movement(1, 10, 1m, StockAdjustmentReason.Restock, Day(1));
         db.StockAdjustments.Add(purchase);
         await db.SaveChangesAsync();
@@ -106,7 +106,7 @@ public class InventoryCostRebuildServiceTests
     public async Task Rebuild_historical_purchase_change_recosts_later_sales_and_purchases()
     {
         await using var db = CreateDb();
-        db.Products.Add(new Product { Id = 1, Name = "Snack" });
+        db.Products.Add(new Product { Id = 1, Name = "Snack", QuantityInStock = 20 });
         var opening = Movement(1, 10, 2m, StockAdjustmentReason.Restock, Day(1));
         db.StockAdjustments.AddRange(opening, Movement(1, 10, 4m, StockAdjustmentReason.Restock, Day(3)));
         db.NayaxSales.Add(Sale(1, Day(2)));

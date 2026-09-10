@@ -1,0 +1,52 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TestRun id="9a6d11a1-8389-4254-a7ad-185134b68280" name="crist@HOME-PC 2026-09-10 10:39:32" runUser="HOME-PC\crist" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Times creation="2026-09-10T10:39:32.2911750+10:00" queuing="2026-09-10T10:39:32.2911752+10:00" start="2026-09-10T10:39:31.1683087+10:00" finish="2026-09-10T10:39:32.2941070+10:00" />
+  <TestSettings name="default" id="2d5c6835-3da4-4fbb-b7a5-542f7adb68cf">
+    <Deployment runDeploymentRoot="crist_HOME-PC_2026-09-10_10_39_32" />
+  </TestSettings>
+  <Results>
+    <UnitTestResult executionId="13586256-bb4d-4dce-8147-e694a75a76aa" testId="93974707-0abb-e980-685a-9b556c486998" testName="InventoryApi.Tests.Services.ReportingServiceTests.Reconciliation_matches_reimbursement_device_to_selected_machine" computerName="HOME-PC" duration="00:00:00.0221396" startTime="2026-09-10T10:39:32.2340512+10:00" endTime="2026-09-10T10:39:32.2340514+10:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="13586256-bb4d-4dce-8147-e694a75a76aa" />
+    <UnitTestResult executionId="efa7af30-ee5d-453e-b7d9-aa16330929be" testId="1dc9a33f-72af-4b56-a980-7b40cf8ccae2" testName="InventoryApi.Tests.Services.ReportingServiceTests.Reconciliation_flags_period_mismatch" computerName="HOME-PC" duration="00:00:00.0017109" startTime="2026-09-10T10:39:32.2357868+10:00" endTime="2026-09-10T10:39:32.2357869+10:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="efa7af30-ee5d-453e-b7d9-aa16330929be" />
+    <UnitTestResult executionId="a9c37bf5-7f7b-4968-b750-cf6c6061eb59" testId="52ca937f-d839-fdb5-ade0-02d0ada9ea62" testName="InventoryApi.Tests.Services.ReportingServiceTests.Reconciliation_exposes_sales_fee_and_settlement_breakdown" computerName="HOME-PC" duration="00:00:00.6061931" startTime="2026-09-10T10:39:32.1808931+10:00" endTime="2026-09-10T10:39:32.1809096+10:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="a9c37bf5-7f7b-4968-b750-cf6c6061eb59" />
+    <UnitTestResult executionId="a0e3f3a3-65c0-4894-922b-c926a5b14d2c" testId="1738536c-84a5-3bc5-5b59-4860e336f20f" testName="InventoryApi.Tests.Services.ReportingServiceTests.Reconciliation_matches_period_and_applies_tolerance" computerName="HOME-PC" duration="00:00:00.0313211" startTime="2026-09-10T10:39:32.2119405+10:00" endTime="2026-09-10T10:39:32.2119406+10:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="a0e3f3a3-65c0-4894-922b-c926a5b14d2c" />
+  </Results>
+  <TestDefinitions>
+    <UnitTest name="InventoryApi.Tests.Services.ReportingServiceTests.Reconciliation_exposes_sales_fee_and_settlement_breakdown" storage="c:\users\crist\source\inventoryapp2\inventoryapp\backend\inventoryapi.tests\bin\release\net10.0\inventoryapi.tests.dll" id="52ca937f-d839-fdb5-ade0-02d0ada9ea62">
+      <Execution id="a9c37bf5-7f7b-4968-b750-cf6c6061eb59" />
+      <TestMethod codeBase="C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\bin\Release\net10.0\InventoryApi.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="InventoryApi.Tests.Services.ReportingServiceTests" name="Reconciliation_exposes_sales_fee_and_settlement_breakdown" />
+    </UnitTest>
+    <UnitTest name="InventoryApi.Tests.Services.ReportingServiceTests.Reconciliation_matches_reimbursement_device_to_selected_machine" storage="c:\users\crist\source\inventoryapp2\inventoryapp\backend\inventoryapi.tests\bin\release\net10.0\inventoryapi.tests.dll" id="93974707-0abb-e980-685a-9b556c486998">
+      <Execution id="13586256-bb4d-4dce-8147-e694a75a76aa" />
+      <TestMethod codeBase="C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\bin\Release\net10.0\InventoryApi.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="InventoryApi.Tests.Services.ReportingServiceTests" name="Reconciliation_matches_reimbursement_device_to_selected_machine" />
+    </UnitTest>
+    <UnitTest name="InventoryApi.Tests.Services.ReportingServiceTests.Reconciliation_matches_period_and_applies_tolerance" storage="c:\users\crist\source\inventoryapp2\inventoryapp\backend\inventoryapi.tests\bin\release\net10.0\inventoryapi.tests.dll" id="1738536c-84a5-3bc5-5b59-4860e336f20f">
+      <Execution id="a0e3f3a3-65c0-4894-922b-c926a5b14d2c" />
+      <TestMethod codeBase="C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\bin\Release\net10.0\InventoryApi.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="InventoryApi.Tests.Services.ReportingServiceTests" name="Reconciliation_matches_period_and_applies_tolerance" />
+    </UnitTest>
+    <UnitTest name="InventoryApi.Tests.Services.ReportingServiceTests.Reconciliation_flags_period_mismatch" storage="c:\users\crist\source\inventoryapp2\inventoryapp\backend\inventoryapi.tests\bin\release\net10.0\inventoryapi.tests.dll" id="1dc9a33f-72af-4b56-a980-7b40cf8ccae2">
+      <Execution id="efa7af30-ee5d-453e-b7d9-aa16330929be" />
+      <TestMethod codeBase="C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\bin\Release\net10.0\InventoryApi.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="InventoryApi.Tests.Services.ReportingServiceTests" name="Reconciliation_flags_period_mismatch" />
+    </UnitTest>
+  </TestDefinitions>
+  <TestEntries>
+    <TestEntry testId="93974707-0abb-e980-685a-9b556c486998" executionId="13586256-bb4d-4dce-8147-e694a75a76aa" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="1dc9a33f-72af-4b56-a980-7b40cf8ccae2" executionId="efa7af30-ee5d-453e-b7d9-aa16330929be" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="52ca937f-d839-fdb5-ade0-02d0ada9ea62" executionId="a9c37bf5-7f7b-4968-b750-cf6c6061eb59" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="1738536c-84a5-3bc5-5b59-4860e336f20f" executionId="a0e3f3a3-65c0-4894-922b-c926a5b14d2c" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+  </TestEntries>
+  <TestLists>
+    <TestList name="Results Not in a List" id="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestList name="All Loaded Results" id="19431567-8539-422a-85d7-44ee4e166bda" />
+  </TestLists>
+  <ResultSummary outcome="Completed">
+    <Counters total="4" executed="4" passed="4" failed="0" error="0" timeout="0" aborted="0" inconclusive="0" passedButRunAborted="0" notRunnable="0" notExecuted="0" disconnected="0" warning="0" completed="0" inProgress="0" pending="0" />
+    <Output>
+      <StdOut>[xUnit.net 00:00:00.00] xUnit.net VSTest Adapter v2.5.3.1+6b60a9e56a (64-bit .NET 10.0.12)&#xD;
+[xUnit.net 00:00:00.05]   Discovering: InventoryApi.Tests&#xD;
+[xUnit.net 00:00:00.09]   Discovered:  InventoryApi.Tests&#xD;
+[xUnit.net 00:00:00.09]   Starting:    InventoryApi.Tests&#xD;
+[xUnit.net 00:00:00.79]   Finished:    InventoryApi.Tests&#xD;
+</StdOut>
+    </Output>
+  </ResultSummary>
+</TestRun>

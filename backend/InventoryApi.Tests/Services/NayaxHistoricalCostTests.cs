@@ -333,7 +333,8 @@ public class NayaxHistoricalCostTests
             new Mock<IWebHostEnvironment>().Object,
             new Mock<ILogger<ImportService>>().Object,
             new Mock<INayaxLynxClient>().Object,
-            new SaleCostingService(db));
+            new SaleCostingService(db),
+            new Mock<IInventoryCostRebuildService>().Object);
 
     private static NayaxSales Sale(long id, long productId, decimal? nayaxCost, string paymentMethod) =>
         new()

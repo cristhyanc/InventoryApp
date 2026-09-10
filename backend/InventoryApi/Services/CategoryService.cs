@@ -12,5 +12,5 @@ public class CategoryService : ICategoryService
 
     public async Task<IEnumerable<Category>> GetAll() => await _db.Categories.OrderBy(c => c.Name).ToListAsync();
 
-    public async Task<Category?> Get(int id) => await _db.Categories.FindAsync(id);
+    public async Task<Category?> Get(int id) => await _db.Categories.FindAsync((long)id);
 }

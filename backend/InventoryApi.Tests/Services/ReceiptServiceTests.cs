@@ -89,6 +89,8 @@ public class ReceiptServiceTests
         db.Products.AddRange(
             new Product { Id = 1, Name = "M&M", QuantityInStock = 2 },
             new Product { Id = 2, Name = "Coke", QuantityInStock = 4 });
+        AddTransitionBaseline(db, 1, 2);
+        AddTransitionBaseline(db, 2, 4);
         await db.SaveChangesAsync();
         var envMock = new Mock<IWebHostEnvironment>();
         var temp = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
@@ -110,8 +112,8 @@ public class ReceiptServiceTests
             new[] { new ReceiptItemDto(1, 24m, 1.00m), new ReceiptItemDto(2, 36m, 1.15m) });
 
         Assert.NotNull(receipt);
-        Assert.Equal(24, (await db.Products.FindAsync(1L))!.QuantityInStock);
-        Assert.Equal(36, (await db.Products.FindAsync(2L))!.QuantityInStock);
+        Assert.Equal(26, (await db.Products.FindAsync(1L))!.QuantityInStock);
+        Assert.Equal(40, (await db.Products.FindAsync(2L))!.QuantityInStock);
         Assert.Equal(2, await db.ReceiptItems.CountAsync());
         Assert.Equal(2, await db.StockAdjustments.CountAsync(x => x.Reason == StockAdjustmentReason.Restock));
         Assert.Empty(await db.StockAdjustments.Where(x => x.Reason == StockAdjustmentReason.MachineRefill).ToListAsync());
@@ -122,6 +124,7 @@ public class ReceiptServiceTests
     {
         using var db = CreateDbContext("receipt_edit_test");
         db.Products.Add(new Product { Id = 1, Name = "M&M", QuantityInStock = 0 });
+        AddTransitionBaseline(db, 1, 0);
         await db.SaveChangesAsync();
         var envMock = new Mock<IWebHostEnvironment>();
         var temp = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
@@ -165,15 +168,7 @@ public class ReceiptServiceTests
     {
         using var db = CreateDbContext("receipt_avco_test");
         db.Products.Add(new Product { Id = 1, Name = "M&M", QuantityInStock = 10, AverageUnitCost = 2.10m });
-        db.StockAdjustments.Add(new StockAdjustment
-        {
-            ProductId = 1,
-            QuantityChange = 10,
-            Reason = StockAdjustmentReason.Restock,
-            UnitCost = 2.10m,
-            EffectiveAt = DateTime.UtcNow.AddMinutes(-1),
-            Notes = "Initial stock on product creation"
-        });
+        AddTransitionBaseline(db, 1, 10, 10, 21m, 2.10m);
         await db.SaveChangesAsync();
         var envMock = new Mock<IWebHostEnvironment>();
         var temp = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
@@ -315,6 +310,7 @@ public class ReceiptServiceTests
         // Regression test: Receipt.Notes should never be mutated by validation warning
         using var db = CreateDbContext("receipt_notes_test");
         db.Products.Add(new Product { Id = 1, Name = "M&M", QuantityInStock = 0 });
+        AddTransitionBaseline(db, 1, 0);
         await db.SaveChangesAsync();
 
         var envMock = new Mock<IWebHostEnvironment>();
@@ -353,6 +349,7 @@ public class ReceiptServiceTests
         // Calculated total = 20, difference = 10 (exceeds 0.02 tolerance)
         using var db = CreateDbContext("receipt_validation_mismatch_test");
         db.Products.Add(new Product { Id = 1, Name = "M&M", QuantityInStock = 0 });
+        AddTransitionBaseline(db, 1, 0);
         await db.SaveChangesAsync();
 
         var envMock = new Mock<IWebHostEnvironment>();
@@ -392,6 +389,7 @@ public class ReceiptServiceTests
         // Calculated total = 27, no mismatch
         using var db = CreateDbContext("receipt_validation_match_test");
         db.Products.Add(new Product { Id = 1, Name = "M&M", QuantityInStock = 0 });
+        AddTransitionBaseline(db, 1, 0);
         await db.SaveChangesAsync();
 
         var envMock = new Mock<IWebHostEnvironment>();
@@ -430,6 +428,7 @@ public class ReceiptServiceTests
         // Ensure update also preserves notes and provides new validation
         using var db = CreateDbContext("receipt_update_notes_test");
         db.Products.Add(new Product { Id = 1, Name = "M&M", QuantityInStock = 0 });
+        AddTransitionBaseline(db, 1, 0);
         await db.SaveChangesAsync();
 
         var envMock = new Mock<IWebHostEnvironment>();
@@ -463,6 +462,19 @@ public class ReceiptServiceTests
         var validation = svc.ComputeValidation(updated);
         Assert.True(validation!.HasTotalMismatch);
     }
+
+    private static void AddTransitionBaseline(AppDbContext db, long productId, int homeStockQuantity,
+        int openingCostingQuantity = 0, decimal inventoryValue = 0m, decimal averageUnitCost = 0m) =>
+        db.InventoryCostTransitionBaselines.Add(new InventoryCostTransitionBaseline
+        {
+            ProductId = productId,
+            CutoffAt = DateTime.UtcNow.AddDays(-1),
+            HomeStockQuantity = homeStockQuantity,
+            OpeningCostingQuantity = openingCostingQuantity,
+            InventoryValue = inventoryValue,
+            AverageUnitCost = averageUnitCost,
+            CostSource = InventoryCostBaselineSource.ManualAuthoritative
+        });
 
     [Fact]
     public async Task ComputeValidation_empty_items_with_delivery_package_detects_mismatch()

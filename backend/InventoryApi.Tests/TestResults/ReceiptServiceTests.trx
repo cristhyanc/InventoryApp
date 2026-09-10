@@ -1,0 +1,106 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TestRun id="1bb5fe3e-7c68-47e2-a69b-9366592b2264" name="crist@HOME-PC 2026-09-10 10:36:15" runUser="HOME-PC\crist" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Times creation="2026-09-10T10:36:15.0054453+10:00" queuing="2026-09-10T10:36:15.0054455+10:00" start="2026-09-10T10:36:13.8281979+10:00" finish="2026-09-10T10:36:15.0343167+10:00" />
+  <TestSettings name="default" id="d4f9e7fd-db1e-4d29-bd29-f87218754a0f">
+    <Deployment runDeploymentRoot="crist_HOME-PC_2026-09-10_10_36_15" />
+  </TestSettings>
+  <Results>
+    <UnitTestResult executionId="bccedcbc-a602-4d55-8f29-3e9bd39d4241" testId="734c3c3d-d3f2-0702-f3f0-98e702724fce" testName="InventoryApi.Tests.Services.ReceiptServiceTests.Update_preserves_user_notes_and_computes_validation" computerName="HOME-PC" duration="00:00:00.0037320" startTime="2026-09-10T10:36:14.9977131+10:00" endTime="2026-09-10T10:36:14.9977132+10:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="bccedcbc-a602-4d55-8f29-3e9bd39d4241" />
+    <UnitTestResult executionId="71a00425-7bee-4422-9fce-c817f825d302" testId="0c776db6-d814-dbbf-2781-a8b51e88697b" testName="InventoryApi.Tests.Services.ReceiptServiceTests.Upload_uses_weighted_average_cost_and_records_cost_ledger" computerName="HOME-PC" duration="00:00:00.0106542" startTime="2026-09-10T10:36:14.8687128+10:00" endTime="2026-09-10T10:36:14.8687130+10:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="71a00425-7bee-4422-9fce-c817f825d302" />
+    <UnitTestResult executionId="be235817-83bb-4888-821d-63326c970aad" testId="40369de9-80fa-a07b-459f-79376465b653" testName="InventoryApi.Tests.Services.ReceiptServiceTests.ComputeValidation_no_mismatch_when_totals_match" computerName="HOME-PC" duration="00:00:00.5956160" startTime="2026-09-10T10:36:14.8174538+10:00" endTime="2026-09-10T10:36:14.8174734+10:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="be235817-83bb-4888-821d-63326c970aad" />
+    <UnitTestResult executionId="c5532365-40d6-47d3-b1a5-bcd4568edecc" testId="a438b664-5cbe-4dec-0149-8c16726ff022" testName="InventoryApi.Tests.Services.ReceiptServiceTests.Update_Changes_Receipt_MetaData" computerName="HOME-PC" duration="00:00:00.0450732" startTime="2026-09-10T10:36:14.9138541+10:00" endTime="2026-09-10T10:36:14.9138542+10:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="c5532365-40d6-47d3-b1a5-bcd4568edecc" />
+    <UnitTestResult executionId="cd9d8f44-a990-4620-9823-fcef7079ab94" testId="6ea05ee4-59fe-8857-a474-2f71f25cd554" testName="InventoryApi.Tests.Services.ReceiptServiceTests.Update_and_delete_receipt_maintain_linked_purchase_movement_without_reversal" computerName="HOME-PC" duration="00:00:00.0423409" startTime="2026-09-10T10:36:14.9635392+10:00" endTime="2026-09-10T10:36:14.9635392+10:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="cd9d8f44-a990-4620-9823-fcef7079ab94" />
+    <UnitTestResult executionId="c83822b6-4438-4ec7-bb61-ba592222f26f" testId="3832d36e-06fb-19ba-04ca-7940314d4009" testName="InventoryApi.Tests.Services.ReceiptServiceTests.Upload_after_transition_ignores_invalid_legacy_history" computerName="HOME-PC" duration="00:00:00.0110413" startTime="2026-09-10T10:36:14.9746304+10:00" endTime="2026-09-10T10:36:14.9746305+10:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="c83822b6-4438-4ec7-bb61-ba592222f26f" />
+    <UnitTestResult executionId="cb27ba43-ea5e-46fa-80cd-053b34319f14" testId="984d4be6-db8c-fd4e-ac67-2f5ae81fc4fd" testName="InventoryApi.Tests.Services.ReceiptServiceTests.ComputeValidation_empty_items_null_total_no_mismatch" computerName="HOME-PC" duration="00:00:00.0023969" startTime="2026-09-10T10:36:14.9905067+10:00" endTime="2026-09-10T10:36:14.9905068+10:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="cb27ba43-ea5e-46fa-80cd-053b34319f14" />
+    <UnitTestResult executionId="7e14c1ab-9162-4605-bd9c-b723e6c36d48" testId="50bcdff6-cfdf-6b3e-eda6-c0987945697c" testName="InventoryApi.Tests.Services.ReceiptServiceTests.ComputeValidation_detects_total_mismatch" computerName="HOME-PC" duration="00:00:00.0031998" startTime="2026-09-10T10:36:14.9904357+10:00" endTime="2026-09-10T10:36:14.9904357+10:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="7e14c1ab-9162-4605-bd9c-b723e6c36d48" />
+    <UnitTestResult executionId="9579e8bd-f056-4dd8-ad37-bb8435c229a7" testId="f60267a1-1a92-1c12-3e13-685e4ed0199c" testName="InventoryApi.Tests.Services.ReceiptServiceTests.Upload_Posts_receipt_items_to_storage_without_machine_refill" computerName="HOME-PC" duration="00:00:00.0098362" startTime="2026-09-10T10:36:14.9845601+10:00" endTime="2026-09-10T10:36:14.9845602+10:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="9579e8bd-f056-4dd8-ad37-bb8435c229a7" />
+    <UnitTestResult executionId="67ea20ee-c58e-42aa-8728-c3293fc7d115" testId="da5372a7-586a-1e05-1833-e78ee2c00590" testName="InventoryApi.Tests.Services.ReceiptServiceTests.ComputeValidation_empty_items_with_delivery_package_detects_mismatch" computerName="HOME-PC" duration="00:00:00.0258149" startTime="2026-09-10T10:36:14.8437827+10:00" endTime="2026-09-10T10:36:14.8437827+10:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="67ea20ee-c58e-42aa-8728-c3293fc7d115" />
+    <UnitTestResult executionId="c969ebc5-1c46-463f-8edf-b0740b53cd6a" testId="9eda1aa5-39f6-ee6b-c0ee-08149c3400f7" testName="InventoryApi.Tests.Services.ReceiptServiceTests.Upload_Saves_Receipt" computerName="HOME-PC" duration="00:00:00.0141197" startTime="2026-09-10T10:36:14.8579577+10:00" endTime="2026-09-10T10:36:14.8579578+10:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="c969ebc5-1c46-463f-8edf-b0740b53cd6a" />
+    <UnitTestResult executionId="e3470d5f-5db4-4098-bca4-5bea81c3187b" testId="61d75ce0-f172-860d-cb89-24fd87d87b69" testName="InventoryApi.Tests.Services.ReceiptServiceTests.Upload_preserves_user_notes_when_total_mismatches" computerName="HOME-PC" duration="00:00:00.0035972" startTime="2026-09-10T10:36:14.9939329+10:00" endTime="2026-09-10T10:36:14.9939330+10:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="e3470d5f-5db4-4098-bca4-5bea81c3187b" />
+    <UnitTestResult executionId="b946fad5-1d0a-4bdc-98bb-ebae87cd164c" testId="7e461664-fcf8-cc7c-3d7b-6a9125d2521f" testName="InventoryApi.Tests.Services.ReceiptServiceTests.Upload_total_validation_includes_delivery_and_package_fees" computerName="HOME-PC" duration="00:00:00.0072202" startTime="2026-09-10T10:36:14.9211171+10:00" endTime="2026-09-10T10:36:14.9211172+10:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="b946fad5-1d0a-4bdc-98bb-ebae87cd164c" />
+  </Results>
+  <TestDefinitions>
+    <UnitTest name="InventoryApi.Tests.Services.ReceiptServiceTests.Update_Changes_Receipt_MetaData" storage="c:\users\crist\source\inventoryapp2\inventoryapp\backend\inventoryapi.tests\bin\release\net10.0\inventoryapi.tests.dll" id="a438b664-5cbe-4dec-0149-8c16726ff022">
+      <Execution id="c5532365-40d6-47d3-b1a5-bcd4568edecc" />
+      <TestMethod codeBase="C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\bin\Release\net10.0\InventoryApi.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="InventoryApi.Tests.Services.ReceiptServiceTests" name="Update_Changes_Receipt_MetaData" />
+    </UnitTest>
+    <UnitTest name="InventoryApi.Tests.Services.ReceiptServiceTests.ComputeValidation_empty_items_with_delivery_package_detects_mismatch" storage="c:\users\crist\source\inventoryapp2\inventoryapp\backend\inventoryapi.tests\bin\release\net10.0\inventoryapi.tests.dll" id="da5372a7-586a-1e05-1833-e78ee2c00590">
+      <Execution id="67ea20ee-c58e-42aa-8728-c3293fc7d115" />
+      <TestMethod codeBase="C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\bin\Release\net10.0\InventoryApi.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="InventoryApi.Tests.Services.ReceiptServiceTests" name="ComputeValidation_empty_items_with_delivery_package_detects_mismatch" />
+    </UnitTest>
+    <UnitTest name="InventoryApi.Tests.Services.ReceiptServiceTests.Upload_preserves_user_notes_when_total_mismatches" storage="c:\users\crist\source\inventoryapp2\inventoryapp\backend\inventoryapi.tests\bin\release\net10.0\inventoryapi.tests.dll" id="61d75ce0-f172-860d-cb89-24fd87d87b69">
+      <Execution id="e3470d5f-5db4-4098-bca4-5bea81c3187b" />
+      <TestMethod codeBase="C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\bin\Release\net10.0\InventoryApi.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="InventoryApi.Tests.Services.ReceiptServiceTests" name="Upload_preserves_user_notes_when_total_mismatches" />
+    </UnitTest>
+    <UnitTest name="InventoryApi.Tests.Services.ReceiptServiceTests.Update_preserves_user_notes_and_computes_validation" storage="c:\users\crist\source\inventoryapp2\inventoryapp\backend\inventoryapi.tests\bin\release\net10.0\inventoryapi.tests.dll" id="734c3c3d-d3f2-0702-f3f0-98e702724fce">
+      <Execution id="bccedcbc-a602-4d55-8f29-3e9bd39d4241" />
+      <TestMethod codeBase="C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\bin\Release\net10.0\InventoryApi.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="InventoryApi.Tests.Services.ReceiptServiceTests" name="Update_preserves_user_notes_and_computes_validation" />
+    </UnitTest>
+    <UnitTest name="InventoryApi.Tests.Services.ReceiptServiceTests.Update_and_delete_receipt_maintain_linked_purchase_movement_without_reversal" storage="c:\users\crist\source\inventoryapp2\inventoryapp\backend\inventoryapi.tests\bin\release\net10.0\inventoryapi.tests.dll" id="6ea05ee4-59fe-8857-a474-2f71f25cd554">
+      <Execution id="cd9d8f44-a990-4620-9823-fcef7079ab94" />
+      <TestMethod codeBase="C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\bin\Release\net10.0\InventoryApi.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="InventoryApi.Tests.Services.ReceiptServiceTests" name="Update_and_delete_receipt_maintain_linked_purchase_movement_without_reversal" />
+    </UnitTest>
+    <UnitTest name="InventoryApi.Tests.Services.ReceiptServiceTests.Upload_Saves_Receipt" storage="c:\users\crist\source\inventoryapp2\inventoryapp\backend\inventoryapi.tests\bin\release\net10.0\inventoryapi.tests.dll" id="9eda1aa5-39f6-ee6b-c0ee-08149c3400f7">
+      <Execution id="c969ebc5-1c46-463f-8edf-b0740b53cd6a" />
+      <TestMethod codeBase="C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\bin\Release\net10.0\InventoryApi.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="InventoryApi.Tests.Services.ReceiptServiceTests" name="Upload_Saves_Receipt" />
+    </UnitTest>
+    <UnitTest name="InventoryApi.Tests.Services.ReceiptServiceTests.ComputeValidation_detects_total_mismatch" storage="c:\users\crist\source\inventoryapp2\inventoryapp\backend\inventoryapi.tests\bin\release\net10.0\inventoryapi.tests.dll" id="50bcdff6-cfdf-6b3e-eda6-c0987945697c">
+      <Execution id="7e14c1ab-9162-4605-bd9c-b723e6c36d48" />
+      <TestMethod codeBase="C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\bin\Release\net10.0\InventoryApi.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="InventoryApi.Tests.Services.ReceiptServiceTests" name="ComputeValidation_detects_total_mismatch" />
+    </UnitTest>
+    <UnitTest name="InventoryApi.Tests.Services.ReceiptServiceTests.Upload_total_validation_includes_delivery_and_package_fees" storage="c:\users\crist\source\inventoryapp2\inventoryapp\backend\inventoryapi.tests\bin\release\net10.0\inventoryapi.tests.dll" id="7e461664-fcf8-cc7c-3d7b-6a9125d2521f">
+      <Execution id="b946fad5-1d0a-4bdc-98bb-ebae87cd164c" />
+      <TestMethod codeBase="C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\bin\Release\net10.0\InventoryApi.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="InventoryApi.Tests.Services.ReceiptServiceTests" name="Upload_total_validation_includes_delivery_and_package_fees" />
+    </UnitTest>
+    <UnitTest name="InventoryApi.Tests.Services.ReceiptServiceTests.ComputeValidation_no_mismatch_when_totals_match" storage="c:\users\crist\source\inventoryapp2\inventoryapp\backend\inventoryapi.tests\bin\release\net10.0\inventoryapi.tests.dll" id="40369de9-80fa-a07b-459f-79376465b653">
+      <Execution id="be235817-83bb-4888-821d-63326c970aad" />
+      <TestMethod codeBase="C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\bin\Release\net10.0\InventoryApi.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="InventoryApi.Tests.Services.ReceiptServiceTests" name="ComputeValidation_no_mismatch_when_totals_match" />
+    </UnitTest>
+    <UnitTest name="InventoryApi.Tests.Services.ReceiptServiceTests.Upload_uses_weighted_average_cost_and_records_cost_ledger" storage="c:\users\crist\source\inventoryapp2\inventoryapp\backend\inventoryapi.tests\bin\release\net10.0\inventoryapi.tests.dll" id="0c776db6-d814-dbbf-2781-a8b51e88697b">
+      <Execution id="71a00425-7bee-4422-9fce-c817f825d302" />
+      <TestMethod codeBase="C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\bin\Release\net10.0\InventoryApi.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="InventoryApi.Tests.Services.ReceiptServiceTests" name="Upload_uses_weighted_average_cost_and_records_cost_ledger" />
+    </UnitTest>
+    <UnitTest name="InventoryApi.Tests.Services.ReceiptServiceTests.Upload_Posts_receipt_items_to_storage_without_machine_refill" storage="c:\users\crist\source\inventoryapp2\inventoryapp\backend\inventoryapi.tests\bin\release\net10.0\inventoryapi.tests.dll" id="f60267a1-1a92-1c12-3e13-685e4ed0199c">
+      <Execution id="9579e8bd-f056-4dd8-ad37-bb8435c229a7" />
+      <TestMethod codeBase="C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\bin\Release\net10.0\InventoryApi.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="InventoryApi.Tests.Services.ReceiptServiceTests" name="Upload_Posts_receipt_items_to_storage_without_machine_refill" />
+    </UnitTest>
+    <UnitTest name="InventoryApi.Tests.Services.ReceiptServiceTests.Upload_after_transition_ignores_invalid_legacy_history" storage="c:\users\crist\source\inventoryapp2\inventoryapp\backend\inventoryapi.tests\bin\release\net10.0\inventoryapi.tests.dll" id="3832d36e-06fb-19ba-04ca-7940314d4009">
+      <Execution id="c83822b6-4438-4ec7-bb61-ba592222f26f" />
+      <TestMethod codeBase="C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\bin\Release\net10.0\InventoryApi.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="InventoryApi.Tests.Services.ReceiptServiceTests" name="Upload_after_transition_ignores_invalid_legacy_history" />
+    </UnitTest>
+    <UnitTest name="InventoryApi.Tests.Services.ReceiptServiceTests.ComputeValidation_empty_items_null_total_no_mismatch" storage="c:\users\crist\source\inventoryapp2\inventoryapp\backend\inventoryapi.tests\bin\release\net10.0\inventoryapi.tests.dll" id="984d4be6-db8c-fd4e-ac67-2f5ae81fc4fd">
+      <Execution id="cb27ba43-ea5e-46fa-80cd-053b34319f14" />
+      <TestMethod codeBase="C:\Users\crist\source\InventoryApp2\InventoryApp\backend\InventoryApi.Tests\bin\Release\net10.0\InventoryApi.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="InventoryApi.Tests.Services.ReceiptServiceTests" name="ComputeValidation_empty_items_null_total_no_mismatch" />
+    </UnitTest>
+  </TestDefinitions>
+  <TestEntries>
+    <TestEntry testId="734c3c3d-d3f2-0702-f3f0-98e702724fce" executionId="bccedcbc-a602-4d55-8f29-3e9bd39d4241" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="0c776db6-d814-dbbf-2781-a8b51e88697b" executionId="71a00425-7bee-4422-9fce-c817f825d302" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="40369de9-80fa-a07b-459f-79376465b653" executionId="be235817-83bb-4888-821d-63326c970aad" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="a438b664-5cbe-4dec-0149-8c16726ff022" executionId="c5532365-40d6-47d3-b1a5-bcd4568edecc" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="6ea05ee4-59fe-8857-a474-2f71f25cd554" executionId="cd9d8f44-a990-4620-9823-fcef7079ab94" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="3832d36e-06fb-19ba-04ca-7940314d4009" executionId="c83822b6-4438-4ec7-bb61-ba592222f26f" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="984d4be6-db8c-fd4e-ac67-2f5ae81fc4fd" executionId="cb27ba43-ea5e-46fa-80cd-053b34319f14" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="50bcdff6-cfdf-6b3e-eda6-c0987945697c" executionId="7e14c1ab-9162-4605-bd9c-b723e6c36d48" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="f60267a1-1a92-1c12-3e13-685e4ed0199c" executionId="9579e8bd-f056-4dd8-ad37-bb8435c229a7" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="da5372a7-586a-1e05-1833-e78ee2c00590" executionId="67ea20ee-c58e-42aa-8728-c3293fc7d115" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="9eda1aa5-39f6-ee6b-c0ee-08149c3400f7" executionId="c969ebc5-1c46-463f-8edf-b0740b53cd6a" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="61d75ce0-f172-860d-cb89-24fd87d87b69" executionId="e3470d5f-5db4-4098-bca4-5bea81c3187b" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="7e461664-fcf8-cc7c-3d7b-6a9125d2521f" executionId="b946fad5-1d0a-4bdc-98bb-ebae87cd164c" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+  </TestEntries>
+  <TestLists>
+    <TestList name="Results Not in a List" id="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestList name="All Loaded Results" id="19431567-8539-422a-85d7-44ee4e166bda" />
+  </TestLists>
+  <ResultSummary outcome="Completed">
+    <Counters total="13" executed="13" passed="13" failed="0" error="0" timeout="0" aborted="0" inconclusive="0" passedButRunAborted="0" notRunnable="0" notExecuted="0" disconnected="0" warning="0" completed="0" inProgress="0" pending="0" />
+    <Output>
+      <StdOut>[xUnit.net 00:00:00.00] xUnit.net VSTest Adapter v2.5.3.1+6b60a9e56a (64-bit .NET 10.0.12)&#xD;
+[xUnit.net 00:00:00.05]   Discovering: InventoryApi.Tests&#xD;
+[xUnit.net 00:00:00.09]   Discovered:  InventoryApi.Tests&#xD;
+[xUnit.net 00:00:00.09]   Starting:    InventoryApi.Tests&#xD;
+[xUnit.net 00:00:00.90]   Finished:    InventoryApi.Tests&#xD;
+</StdOut>
+    </Output>
+  </ResultSummary>
+</TestRun>
