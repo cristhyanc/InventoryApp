@@ -5,5 +5,5 @@ namespace InventoryApi.Services.Interfaces;
 public interface ICategoryService
 {
     Task<IEnumerable<Category>> GetAll();
-    Task<Category?> Get(int id);
+    Task<Category?> Get(long id);
 }

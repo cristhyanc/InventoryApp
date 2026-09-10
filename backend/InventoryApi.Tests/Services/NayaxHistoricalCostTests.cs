@@ -327,13 +327,17 @@ public class NayaxHistoricalCostTests
         new(new DbContextOptionsBuilder<AppDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
 
-    private static ImportService CreateImportService(AppDbContext db) =>
+    private static ImportService CreateImportService(
+        AppDbContext db,
+        INayaxLynxClient? nayaxClient = null,
+        IInventoryCostRebuildService? inventoryCostRebuild = null) =>
         new(
             db,
             new Mock<IWebHostEnvironment>().Object,
             new Mock<ILogger<ImportService>>().Object,
-            new Mock<INayaxLynxClient>().Object,
-            new SaleCostingService(db));
+            nayaxClient ?? new Mock<INayaxLynxClient>().Object,
+            new SaleCostingService(db),
+            inventoryCostRebuild ?? new Mock<IInventoryCostRebuildService>().Object);
 
     private static NayaxSales Sale(long id, long productId, decimal? nayaxCost, string paymentMethod) =>
         new()

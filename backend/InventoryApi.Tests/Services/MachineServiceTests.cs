@@ -7,7 +7,10 @@ using InventoryApi.Integrations.Nayax;
 using InventoryApi.Models;
 using InventoryApi.Services;
 using InventoryApi.Services.Interfaces;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Moq;
 using Xunit;
 
@@ -58,11 +61,12 @@ public class MachineServiceTests
     public async Task Sales_import_recosts_an_updated_transaction()
     {
         using var db = CreateDbContext(Guid.NewGuid().ToString());
-        db.Products.Add(new Product { Id = 10, Name = "Snack", AverageUnitCost = 2m });
+        db.Products.Add(new Product { Id = 10, Name = "Snack", AverageUnitCost = 2m, QuantityInStock = 10, CostingQuantity = 10, InventoryValue = 20m });
         db.StockAdjustments.Add(new StockAdjustment
         {
             ProductId = 10, QuantityChange = 10, QuantityAfter = 10, Reason = StockAdjustmentReason.Restock,
-            UnitCost = 2m, EffectiveAt = new DateTime(2026, 9, 1)
+            UnitCost = 2m, EffectiveAt = new DateTime(2026, 9, 1),
+            CostingQuantityAfter = 10, InventoryValueAfter = 20m, AverageUnitCostAfter = 2m
         });
         db.NayaxSales.Add(new NayaxSales
         {
@@ -72,8 +76,15 @@ public class MachineServiceTests
         });
         await db.SaveChangesAsync();
 
-        var service = new MachineService(db, new Mock<INayaxLynxClient>().Object);
-        await service.ImportNayaxSalesFromExcelAsync(Csv(
+        var importService = new ImportService(
+            db,
+            new Mock<IWebHostEnvironment>().Object,
+            new Mock<ILogger<ImportService>>().Object,
+            new Mock<INayaxLynxClient>().Object,
+            new SaleCostingService(db),
+            new Mock<IInventoryCostRebuildService>().Object);
+
+        await importService.ImportNayaxSalesFromExcelAsync(Csv(
             "TransactionID,TransactionStatusId,MachineID,NayaxProductId,SettlementValue,ProductName,MachineAuthorizationTime\n" +
             "1,12,1,10,5,Snack,2/9/2026 2:30:00 PM"));
 
@@ -105,9 +116,9 @@ public class MachineServiceTests
         Assert.Equal(new System.DateTime(2026, 9, 4, 14, 30, 0), range.End);
     }
 
-    private static Microsoft.AspNetCore.Http.IFormFile Csv(string content)
+    private static IFormFile Csv(string content)
     {
         var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(content));
-        return new Microsoft.AspNetCore.Http.FormFile(stream, 0, stream.Length, "file", "sales.csv");
+        return new FormFile(stream, 0, stream.Length, "file", "sales.csv");
     }
 }

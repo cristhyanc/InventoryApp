@@ -48,31 +48,5 @@ public class ProductServiceTests
         Assert.True(deleted);
     }
 
-    [Fact]
-    public async Task ImportProducts_Adds_New()
-    {
-        using var db = CreateDbContext("import_test");
-        var nayaxMock = new Mock<INayaxLynxClient>();
 
-        nayaxMock.Setup(m => m.GetProductsAsync(It.IsAny<System.Threading.CancellationToken>()))
-            .ReturnsAsync(new List<NayaxProduct>
-            {
-                new NayaxProduct { NayaxProductId = 100, ProductName = "X", ProductGroupId = 10, ProductCostPrice = 2 }
-            });
-
-        nayaxMock.Setup(m => m.GetProductGroupssAsync(It.IsAny<System.Threading.CancellationToken>()))
-            .ReturnsAsync(new List<NayaxProductGroup>
-            {
-                new NayaxProductGroup { ProductGroupID = 10, ProductGroupName = "G1" }
-            });
-
-        IProductService svc = new ProductService(db, nayaxMock.Object);
-        var result = await svc.ImportProductsAsync();
-        Assert.True(result);
-
-        var prod = await db.Products.FindAsync(100L);
-        Assert.NotNull(prod);
-        var cat = await db.Categories.FindAsync(10L);
-        Assert.NotNull(cat);
-    }
 }

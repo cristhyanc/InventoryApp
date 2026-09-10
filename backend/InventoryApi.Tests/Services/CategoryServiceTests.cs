@@ -1,7 +1,8 @@
+using System.Linq;
 using System.Threading.Tasks;
 using InventoryApi.Data;
+using InventoryApi.Models;
 using InventoryApi.Services;
-using InventoryApi.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
 
@@ -18,22 +19,40 @@ public class CategoryServiceTests
     }
 
     [Fact]
-    public async Task Create_Update_Delete_Category()
+    public async Task GetAll_returns_categories()
     {
-        using var db = CreateDbContext("cat_test");
-        ICategoryService svc = new CategoryService(db);
+        using var db = CreateDbContext("cat_getall");
+        db.Categories.AddRange(
+            new Category { Id = 1, Name = "Beverages" },
+            new Category { Id = 2, Name = "Snacks" });
+        await db.SaveChangesAsync();
 
-        var created = await svc.Create("c1", "desc");
-        Assert.NotNull(created);
-        Assert.Equal("c1", created.Name);
+        var categories = (await new CategoryService(db).GetAll()).ToList();
 
-        var got = await svc.Get(created.Id);
-        Assert.NotNull(got);
+        Assert.Equal(2, categories.Count);
+        Assert.Equal(new[] { "Beverages", "Snacks" }, categories.Select(x => x.Name).ToArray());
+    }
 
-        var ok = await svc.Update(created.Id, "c1-up", "d2");
-        Assert.True(ok);
+    [Fact]
+    public async Task Get_returns_existing_category()
+    {
+        using var db = CreateDbContext("cat_get");
+        db.Categories.Add(new Category { Id = 7, Name = "Snacks" });
+        await db.SaveChangesAsync();
 
-        var deleted = await svc.Delete(created.Id);
-        Assert.True(deleted);
+        var category = await new CategoryService(db).Get(7);
+
+        Assert.NotNull(category);
+        Assert.Equal("Snacks", category!.Name);
+    }
+
+    [Fact]
+    public async Task Get_returns_null_for_missing_category()
+    {
+        using var db = CreateDbContext("cat_missing");
+
+        var category = await new CategoryService(db).Get(999L);
+
+        Assert.Null(category);
     }
 }
