@@ -6,9 +6,12 @@ using InventoryApi.Data;
 using InventoryApi.Integrations.Nayax;
 using InventoryApi.Models;
 using InventoryApi.Services;
+using InventoryApi.Services.Interfaces;
 using InventoryApi.DTOs;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Moq;
 using Xunit;
 
@@ -38,8 +41,13 @@ public class NayaxTransactionStatusTests
         var options = new DbContextOptionsBuilder<AppDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
         using var db = new AppDbContext(options);
-        var client = new Mock<INayaxLynxClient>().Object;
-        var service = new MachineService(db, client);
+        var service = new ImportService(
+            db,
+            Mock.Of<IWebHostEnvironment>(),
+            Mock.Of<ILogger<ImportService>>(),
+            Mock.Of<INayaxLynxClient>(),
+            new SaleCostingService(db),
+            Mock.Of<IInventoryCostRebuildService>());
 
         await service.ImportNayaxSalesFromExcelAsync(File("TransactionID,TransactionStatusId,MachineID,SettlementValue,MachineAuthorizationTime\n1,55,10,5,2/9/2026 2:30:00 PM"));
         await service.ImportNayaxSalesFromExcelAsync(File("TransactionID,TransactionStatusId,MachineID,SettlementValue,MachineAuthorizationTime\n1,12,10,5,2/9/2026 2:30:00 PM"));
@@ -54,7 +62,7 @@ public class NayaxTransactionStatusTests
         var options = new DbContextOptionsBuilder<AppDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
         using var db = new AppDbContext(options);
-        db.Products.Add(new Product { Id = 10, Name = "Snack", AverageUnitCost = 9m });
+        db.Products.Add(new Product { Id = 10, Name = "Snack", QuantityInStock = 10, CostingQuantity = 10, InventoryValue = 21m, AverageUnitCost = 2.10m });
         db.StockAdjustments.Add(new StockAdjustment
         {
             ProductId = 10, QuantityChange = 10, QuantityAfter = 10,
@@ -103,7 +111,7 @@ public class NayaxTransactionStatusTests
         var options = new DbContextOptionsBuilder<AppDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
         using var db = new AppDbContext(options);
-        db.Products.Add(new Product { Id = 10, Name = "Snack", AverageUnitCost = 2.10m });
+        db.Products.Add(new Product { Id = 10, Name = "Snack", QuantityInStock = 10, CostingQuantity = 10, InventoryValue = 21m, AverageUnitCost = 2.10m });
         db.StockAdjustments.Add(new StockAdjustment
         {
             ProductId = 10, QuantityChange = 10, QuantityAfter = 10,

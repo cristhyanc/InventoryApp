@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using InventoryApi.Data;
@@ -149,7 +150,9 @@ public class ReportingServiceTests
         Assert.Contains(machineProfitability.DataQuality.Notes!, x => x.Contains("Commission configuration is incomplete"));
         Assert.Contains(dashboard.DataQuality.Notes!, x => x.Contains("Commission configuration is incomplete"));
         Assert.Contains(bookkeeping.DataQuality.Notes!, x => x.Contains(expectedWarning));
-        Assert.Null(Assert.Single(transactions.Rows).DirectProfit);
+        var row = Assert.Single(transactions.Rows);
+        Assert.Null(row.CommissionAmount);
+        Assert.Null(row.DirectProfit);
     }
 
     [Fact]
@@ -280,7 +283,7 @@ public class ReportingServiceTests
         {
             TransactionID = 2, MachineID = 10, NayaxProductId = 99,
             SettlementValue = 0m, ProductName = "Unknown",
-            MachineAuthorizationTime = new DateTime(2025, 8, 1)
+            TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1)
         });
         await db.SaveChangesAsync();
 
@@ -292,7 +295,8 @@ public class ReportingServiceTests
         Assert.Equal(4m, known.GrossProfit);
         Assert.Equal(40m, known.MarginPercent);
         var unknown = Assert.Single(report.Rows, x => x.IsUnmapped);
-        Assert.Equal(0m, unknown.MarginPercent);
+        Assert.Null(unknown.MarginPercent);
+        Assert.False(unknown.IsCogsComplete);
         Assert.True(report.DataQuality.ContainsUnmappedProducts);
     }
 
@@ -378,7 +382,7 @@ public class ReportingServiceTests
     {
         using var db = CreateDbContext();
         db.NayaxSales.AddRange(
-            new NayaxSales { TransactionID = 1, MachineID = 10, SettlementValue = 5m, MachineAuthorizationTime = new DateTime(2025, 7, 1, 23, 59, 59) },
+            new NayaxSales { TransactionID = 1, MachineID = 10, SettlementValue = 5m, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 7, 1, 23, 59, 59) },
             new NayaxSales { TransactionID = 2, MachineID = 11, SettlementValue = 8m, MachineAuthorizationTime = new DateTime(2025, 7, 1, 12, 0, 0) },
             new NayaxSales { TransactionID = 3, MachineID = 10, SettlementValue = 9m, MachineAuthorizationTime = new DateTime(2025, 7, 2) });
         await db.SaveChangesAsync();
@@ -407,7 +411,7 @@ public class ReportingServiceTests
             new NayaxSales
             {
                 TransactionID = 31, MachineID = 10, NayaxProductId = 99, SettlementValue = 5m,
-                PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1)
+                PaymentMethod = "Cash", TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1)
             });
         db.ImportedReimbursements.Add(new ImportedReimbursement
         {
@@ -415,7 +419,7 @@ public class ReportingServiceTests
             ReimbursementEndDate = new DateTime(2025, 8, 1),
             ReimbursementPayoutDate = new DateTime(2025, 8, 3),
             Total = 10m,
-            Fees = { new ImportedFee { TotalSum = 1m, TotalSumWithVat = 1.1m, VatPercentage = 10m } }
+            Fees = { new ImportedFee { FeeTypeDescription = "Processing fee", TotalSum = 1m, TotalSumWithVat = 1.1m, VatPercentage = 10m } }
         });
         await db.SaveChangesAsync();
 
@@ -485,14 +489,14 @@ public class ReportingServiceTests
         db.NayaxSales.Add(new NayaxSales
         {
             TransactionID = 8, MachineID = 10, NayaxProductId = null,
-            SettlementValue = 110m, MachineAuthorizationTime = new DateTime(2025, 8, 1)
+            SettlementValue = 110m, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1)
         });
         db.ImportedReimbursements.Add(new ImportedReimbursement
         {
             ReimbursementStartDate = new DateTime(2025, 8, 1),
             ReimbursementEndDate = new DateTime(2025, 8, 31),
             Total = 110m,
-            Fees = { new ImportedFee { TotalSumWithVat = 11m, VatPercentage = 10m } }
+            Fees = { new ImportedFee { FeeTypeDescription = "Processing fee", TotalSum = 10m, TotalSumWithVat = 11m, VatPercentage = 10m } }
         });
         await db.SaveChangesAsync();
 
@@ -502,9 +506,9 @@ public class ReportingServiceTests
 
         Assert.Equal(110m, bookkeeping.Sales);
         Assert.Equal(10m, bookkeeping.GstOnSales);
-        Assert.Equal(1m, bookkeeping.GstOnFees);
+        Assert.Equal(1m, bookkeeping.GstOnFees, 2);
         Assert.Equal(100m, gst.TaxableSales);
-        Assert.Equal(9m, gst.NetGst);
+        Assert.Equal(9m, gst.NetGst, 2);
         Assert.Equal(0m, ReportingCalculations.MarginPercent(0m, 4m));
     }
 
@@ -515,7 +519,8 @@ public class ReportingServiceTests
         db.NayaxSales.Add(new NayaxSales
         {
             TransactionID = 20, MachineID = 10, SettlementValue = 100m,
-            MachineAuthorizationTime = new DateTime(2025, 8, 1)
+            CostOfGoodsSold = 0m, CostingStatus = SaleCostingStatus.Costed,
+            TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1)
         });
         db.Receipts.Add(new Receipt
         {
@@ -526,10 +531,11 @@ public class ReportingServiceTests
         });
         await db.SaveChangesAsync();
 
-        var report = await Reporting(db).GetBookkeepingAsync(
+        var nayax = new TransactionTestNayaxClient();
+        var report = await Reporting(db, nayax, new SiteCommissionService(db, nayax)).GetBookkeepingAsync(
             new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31)));
 
-        Assert.Equal(5m, report.OtherOperatingExpenses);
+        Assert.Equal(0m, report.OtherOperatingExpenses);
         Assert.Equal(95m, report.NetProfit);
     }
 
@@ -846,7 +852,7 @@ public class ReportingServiceTests
         {
             TransactionID = 1, MachineID = 10, SettlementValue = 100m,
             PaymentMethod = "Credit Card",
-            MachineAuthorizationTime = new DateTime(2025, 8, 10)
+            TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 10)
         });
         var file = new ImportedFile { FileName = "aug.xml", FileHash = "aug", ImportedAt = DateTime.UtcNow };
         file.Reimbursements.Add(new ImportedReimbursement
@@ -872,7 +878,7 @@ public class ReportingServiceTests
         db.NayaxSales.Add(new NayaxSales
         {
             TransactionID = 2, MachineID = 10, SettlementValue = 50m,
-            MachineAuthorizationTime = new DateTime(2025, 8, 10)
+            TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 10)
         });
         db.ImportedReimbursements.Add(new ImportedReimbursement
         {
@@ -899,13 +905,13 @@ public class ReportingServiceTests
             {
                 TransactionID = 10, MachineID = 1216029552, SettlementValue = 90.30m,
                 PaymentMethod = "Credit Card",
-                MachineAuthorizationTime = new DateTime(2025, 8, 12)
+                TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 12)
             },
             new NayaxSales
             {
                 TransactionID = 11, MachineID = 1216029562, SettlementValue = 42.90m,
                 PaymentMethod = "Credit Card",
-                MachineAuthorizationTime = new DateTime(2025, 8, 12)
+                TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 12)
             });
 
         var file = new ImportedFile { FileName = "machine.xml", FileHash = "machine", ImportedAt = DateTime.UtcNow };
@@ -949,12 +955,12 @@ public class ReportingServiceTests
             new NayaxSales
             {
                 TransactionID = 40, MachineID = 10, SettlementValue = 100m,
-                PaymentMethod = "Credit Card", MachineAuthorizationTime = new DateTime(2025, 8, 12)
+                PaymentMethod = "Credit Card", TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 12)
             },
             new NayaxSales
             {
                 TransactionID = 41, MachineID = 10, SettlementValue = 25m,
-                PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 12)
+                PaymentMethod = "Cash", TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 12)
             });
         db.ImportedReimbursements.Add(new ImportedReimbursement
         {

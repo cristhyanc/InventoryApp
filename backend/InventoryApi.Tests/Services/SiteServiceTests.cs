@@ -26,8 +26,8 @@ public class SiteServiceTests
             new Product { Id = 1, Name = "Low", UnitPrice = 1m, LowStockThreshold = 0 },
             new Product { Id = 2, Name = "Empty", UnitPrice = 1m, LowStockThreshold = 0 });
         db.NayaxSales.AddRange(
-            new NayaxSales { TransactionID = 1, MachineID = 10, SettlementValue = 5m, MachineAuthorizationTime = DateTime.Now },
-            new NayaxSales { TransactionID = 2, MachineID = 11, SettlementValue = 7m, MachineAuthorizationTime = DateTime.Now });
+            new NayaxSales { TransactionID = 1, MachineID = 10, SettlementValue = 5m, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = DateTime.Now },
+            new NayaxSales { TransactionID = 2, MachineID = 11, SettlementValue = 7m, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = DateTime.Now });
         await db.SaveChangesAsync();
 
         var nayax = new Mock<INayaxLynxClient>();

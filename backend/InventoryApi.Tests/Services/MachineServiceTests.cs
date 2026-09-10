@@ -55,34 +55,6 @@ public class MachineServiceTests
     }
 
     [Fact]
-    public async Task Sales_import_recosts_an_updated_transaction()
-    {
-        using var db = CreateDbContext(Guid.NewGuid().ToString());
-        db.Products.Add(new Product { Id = 10, Name = "Snack", AverageUnitCost = 2m });
-        db.StockAdjustments.Add(new StockAdjustment
-        {
-            ProductId = 10, QuantityChange = 10, QuantityAfter = 10, Reason = StockAdjustmentReason.Restock,
-            UnitCost = 2m, EffectiveAt = new DateTime(2026, 9, 1)
-        });
-        db.NayaxSales.Add(new NayaxSales
-        {
-            TransactionID = 1, MachineID = 1, NayaxProductId = 999, ProductName = "Unknown",
-            SettlementValue = 5m, TransactionStatusId = NayaxTransactionStatusIds.Completed,
-            MachineAuthorizationTime = new DateTime(2026, 9, 2)
-        });
-        await db.SaveChangesAsync();
-
-        var service = new MachineService(db, new Mock<INayaxLynxClient>().Object);
-        await service.ImportNayaxSalesFromExcelAsync(Csv(
-            "TransactionID,TransactionStatusId,MachineID,NayaxProductId,SettlementValue,ProductName,MachineAuthorizationTime\n" +
-            "1,12,1,10,5,Snack,2/9/2026 2:30:00 PM"));
-
-        var sale = await db.NayaxSales.SingleAsync();
-        Assert.Equal(2m, sale.CostOfGoodsSold);
-        Assert.Equal(SaleCostingStatus.Costed, sale.CostingStatus);
-    }
-
-    [Fact]
     public void Week_to_date_comparison_uses_same_elapsed_period()
     {
         var reference = new System.DateTime(2026, 9, 4, 14, 30, 0);
@@ -105,9 +77,4 @@ public class MachineServiceTests
         Assert.Equal(new System.DateTime(2026, 9, 4, 14, 30, 0), range.End);
     }
 
-    private static Microsoft.AspNetCore.Http.IFormFile Csv(string content)
-    {
-        var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(content));
-        return new Microsoft.AspNetCore.Http.FormFile(stream, 0, stream.Length, "file", "sales.csv");
-    }
 }
