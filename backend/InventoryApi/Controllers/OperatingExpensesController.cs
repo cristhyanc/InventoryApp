@@ -65,7 +65,6 @@ public sealed class OperatingExpensesController : ControllerBase
     public async Task<ActionResult<OperatingExpense>> CreateWithAttachment(
         [FromForm] OperatingExpenseDto dto,
         [FromForm(Name = "attachment")] IFormFile? attachment,
-        [FromForm(Name = "receipt")] IFormFile? legacyReceipt,
         CancellationToken cancellationToken)
     {
         var validation = Validate(dto);
@@ -75,7 +74,7 @@ public sealed class OperatingExpensesController : ControllerBase
         string? attachmentPath = null;
         try
         {
-            attachmentPath = await SaveAttachmentAsync(expense, attachment ?? legacyReceipt, cancellationToken);
+            attachmentPath = await SaveAttachmentAsync(expense, attachment, cancellationToken);
             _db.OperatingExpenses.Add(expense);
             await _db.SaveChangesAsync(cancellationToken);
         }
@@ -120,7 +119,6 @@ public sealed class OperatingExpensesController : ControllerBase
         int id,
         [FromForm] OperatingExpenseDto dto,
         [FromForm(Name = "attachment")] IFormFile? attachment,
-        [FromForm(Name = "receipt")] IFormFile? legacyReceipt,
         CancellationToken cancellationToken)
     {
         var validation = Validate(dto);
@@ -133,7 +131,7 @@ public sealed class OperatingExpensesController : ControllerBase
         try
         {
             Apply(expense, dto);
-            newAttachmentPath = await SaveAttachmentAsync(expense, attachment ?? legacyReceipt, cancellationToken);
+            newAttachmentPath = await SaveAttachmentAsync(expense, attachment, cancellationToken);
             expense.UpdatedAt = DateTime.UtcNow;
             await _db.SaveChangesAsync(cancellationToken);
         }
