@@ -285,7 +285,7 @@ public sealed class ReportingService : IReportingService
         var first = periodRows[0];
         return new ReconciliationReportDto(range.From, range.ToDate, totals.CardTransactionSales,
             totals.NayaxReportedGrossCardSales, grossDifference, Math.Abs(tolerance),
-            IsReconciled(grossDifference, tolerance), quality,
+            hasImported && IsReconciled(grossDifference, tolerance), quality,
             totals.CardTransactionCount, totals.NayaxReportedCardTransactionCount, totals.CountDifference,
             totals.ProcessingFeesExGst, actualNet, first.PayoutDate)
         {
@@ -608,7 +608,6 @@ public sealed class ReportingService : IReportingService
             .OrderBy(x => x.EffectiveFrom)
             .ToListAsync(cancellationToken);
         var agreements = await _db.SiteCommissionAgreements.AsNoTracking()
-            .Where(x => x.EffectiveFrom <= range.ToDate && (x.EffectiveTo == null || x.EffectiveTo >= range.From))
             .OrderBy(x => x.EffectiveFrom)
             .ToListAsync(cancellationToken);
 

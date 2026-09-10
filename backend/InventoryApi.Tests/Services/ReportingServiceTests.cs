@@ -150,7 +150,9 @@ public class ReportingServiceTests
         Assert.Contains(machineProfitability.DataQuality.Notes!, x => x.Contains("Commission configuration is incomplete"));
         Assert.Contains(dashboard.DataQuality.Notes!, x => x.Contains("Commission configuration is incomplete"));
         Assert.Contains(bookkeeping.DataQuality.Notes!, x => x.Contains(expectedWarning));
-        Assert.Equal(overlaps ? null : 7.78m, Assert.Single(transactions.Rows).DirectProfit);
+        var row = Assert.Single(transactions.Rows);
+        Assert.Null(row.CommissionAmount);
+        Assert.Null(row.DirectProfit);
     }
 
     [Fact]
@@ -417,7 +419,7 @@ public class ReportingServiceTests
             ReimbursementEndDate = new DateTime(2025, 8, 1),
             ReimbursementPayoutDate = new DateTime(2025, 8, 3),
             Total = 10m,
-            Fees = { new ImportedFee { TotalSum = 1m, TotalSumWithVat = 1.1m, VatPercentage = 10m } }
+            Fees = { new ImportedFee { FeeTypeDescription = "Processing fee", TotalSum = 1m, TotalSumWithVat = 1.1m, VatPercentage = 10m } }
         });
         await db.SaveChangesAsync();
 
@@ -433,7 +435,7 @@ public class ReportingServiceTests
         Assert.Equal(1, row.UncostedTransactionCount);
         Assert.Equal(5m, row.UncostedSalesAmount);
         Assert.Equal(10m, row.ImportedReimbursement);
-        Assert.Equal(0m, row.NayaxFeesIncludingGst);
+        Assert.Equal(1.1m, row.NayaxFeesIncludingGst);
         Assert.Equal("Warning", row.ReconciliationStatus);
         Assert.Equal(15m, report.Totals!.GrossSales);
     }
@@ -494,7 +496,7 @@ public class ReportingServiceTests
             ReimbursementStartDate = new DateTime(2025, 8, 1),
             ReimbursementEndDate = new DateTime(2025, 8, 31),
             Total = 110m,
-            Fees = { new ImportedFee { TotalSumWithVat = 11m, VatPercentage = 10m } }
+            Fees = { new ImportedFee { FeeTypeDescription = "Processing fee", TotalSum = 10m, TotalSumWithVat = 11m, VatPercentage = 10m } }
         });
         await db.SaveChangesAsync();
 
@@ -504,9 +506,9 @@ public class ReportingServiceTests
 
         Assert.Equal(110m, bookkeeping.Sales);
         Assert.Equal(10m, bookkeeping.GstOnSales);
-        Assert.Equal(0m, bookkeeping.GstOnFees);
+        Assert.Equal(1m, bookkeeping.GstOnFees, 2);
         Assert.Equal(100m, gst.TaxableSales);
-        Assert.Equal(10m, gst.NetGst);
+        Assert.Equal(9m, gst.NetGst, 2);
         Assert.Equal(0m, ReportingCalculations.MarginPercent(0m, 4m));
     }
 
@@ -890,7 +892,7 @@ public class ReportingServiceTests
             new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31)));
 
         Assert.Equal(0m, report.ImportedReimbursement);
-        Assert.True(report.IsMatch);
+        Assert.False(report.IsMatch);
         Assert.Contains(report.DataQuality.Notes!, x => x.Contains("No imported reimbursement"));
     }
 

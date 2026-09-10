@@ -8,3 +8,5 @@ wwwroot/receipts/*
 wwwroot/expenses/*
 !wwwroot/expenses/.gitkeep
 .vs/
+TestResults/
+**/TestResults/
