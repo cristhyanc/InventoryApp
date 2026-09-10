@@ -1097,10 +1097,8 @@ public sealed class ReportingService : IReportingService
             MachineID = sale.MachineID, MachineName = sale.MachineName, NayaxProductId = sale.NayaxProductId,
             ProductName = sale.ProductName, PaymentMethod = sale.PaymentMethod, SettlementValue = sale.SettlementValue,
             MachineAuthorizationTime = sale.MachineAuthorizationTime,
-            Cost = sale.CostOfGoodsSold ?? 0m,
             CostOfGoodsSold = sale.CostOfGoodsSold,
-            HasCost = sale.CostOfGoodsSold.HasValue,
-            HasCompleteCost = sale.CostingStatus == SaleCostingStatus.Costed
+            HasCost = sale.CostOfGoodsSold.HasValue
         };
 
     private async Task<SalesPaymentSummary> GetPaymentSummaryAsync(DateRange range, long? machineId, CancellationToken cancellationToken)
@@ -1577,10 +1575,8 @@ public sealed class ReportingService : IReportingService
         public string? PaymentMethod { get; set; }
         public decimal SettlementValue { get; set; }
         public DateTime MachineAuthorizationTime { get; set; }
-        public decimal Cost { get; set; }
         public bool HasCost { get; set; }
         public decimal? CostOfGoodsSold { get; set; }
-        public bool HasCompleteCost { get; set; }
     }
 
     private sealed record TransactionSaleDetail(
