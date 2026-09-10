@@ -44,9 +44,10 @@ public class ReceiptsController : ControllerBase
 
     // multipart/form-data: file + title + notes + totalAmount + deliveryCost + packageCost + purchaseDate + supplierId
     [HttpPost]
+    [Consumes("multipart/form-data")]
     [RequestSizeLimit(10485760)]
     public async Task<ActionResult<ReceiptResponseDto>> Upload(
-        [FromForm] IFormFile file,
+        IFormFile file,
         [FromForm] string title,
         [FromForm] string? notes,
         [FromForm] decimal? totalAmount,

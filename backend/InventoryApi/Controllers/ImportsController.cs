@@ -16,10 +16,11 @@ public sealed class ImportsController : ControllerBase
         Ok(await _service.ImportProductsAsync());
 
     [HttpPost("nayax-sales")]
+    [Consumes("multipart/form-data")]
     [RequestSizeLimit(10485760)]
     public async Task<ActionResult<NayaxSalesImportResult>> ImportNayaxSales(
-        [FromForm] IFormFile file,
-        CancellationToken cancellationToken)
+    IFormFile file,
+    CancellationToken cancellationToken)
     {
         if (file is null || file.Length == 0)
             return BadRequest("An Excel file is required.");

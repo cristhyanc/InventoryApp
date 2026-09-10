@@ -44,7 +44,7 @@ public sealed class OperatingExpensesControllerTests : IDisposable
         var controller = CreateController(db);
 
         var result = await controller.CreateWithAttachment(
-            CreateDto(), CreateFile(fileName), null, CancellationToken.None);
+            CreateDto(), CreateFile(fileName), CancellationToken.None);
 
         var created = Assert.IsType<CreatedAtActionResult>(result.Result);
         var expense = Assert.IsType<OperatingExpense>(created.Value);
@@ -66,7 +66,7 @@ public sealed class OperatingExpensesControllerTests : IDisposable
         var controller = CreateController(db);
 
         var result = await controller.CreateWithAttachment(
-            CreateDto(), CreateFile("invoice.exe"), null, CancellationToken.None);
+            CreateDto(), CreateFile("invoice.exe"), CancellationToken.None);
 
         var badRequest = Assert.IsType<BadRequestObjectResult>(result.Result);
         Assert.Equal("Supporting document must be an image or PDF.", badRequest.Value);
@@ -82,7 +82,7 @@ public sealed class OperatingExpensesControllerTests : IDisposable
         var oldPath = Path.Combine(_webRoot, "expenses", created.AttachmentStoredFileName!);
 
         var result = await controller.UpdateWithAttachment(
-            created.Id, CreateDto(description: "Updated"), CreateFile("new.png"), null, CancellationToken.None);
+            created.Id, CreateDto(description: "Updated"), CreateFile("new.png"), CancellationToken.None);
 
         Assert.IsType<OkObjectResult>(result.Result);
         var updated = await db.OperatingExpenses.SingleAsync();
@@ -100,7 +100,7 @@ public sealed class OperatingExpensesControllerTests : IDisposable
         var oldPath = Path.Combine(_webRoot, "expenses", created.AttachmentStoredFileName!);
 
         var result = await controller.UpdateWithAttachment(
-            created.Id, CreateDto(description: "Updated"), CreateFile("new.exe"), null, CancellationToken.None);
+            created.Id, CreateDto(description: "Updated"), CreateFile("new.exe"), CancellationToken.None);
 
         Assert.IsType<BadRequestObjectResult>(result.Result);
         Assert.True(File.Exists(oldPath));
@@ -140,7 +140,7 @@ public sealed class OperatingExpensesControllerTests : IDisposable
         OperatingExpensesController controller, string fileName)
     {
         var result = await controller.CreateWithAttachment(
-            CreateDto(), CreateFile(fileName), null, CancellationToken.None);
+            CreateDto(), CreateFile(fileName), CancellationToken.None);
         var created = Assert.IsType<CreatedAtActionResult>(result.Result);
         return Assert.IsType<OperatingExpense>(created.Value);
     }
