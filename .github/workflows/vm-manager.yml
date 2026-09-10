@@ -14,7 +14,7 @@ env:
   AZURE_APIM_SERVICENAME: VmInventoryApi
   AZURE_APIM_API_ID: InventoryApi
   AZURE_APIM_APPSERVICEURL: https://vm-manager-axhadxh5hjehayh0.australiaeast-01.azurewebsites.net
-  SWASHBUCLE_ASPNET_CORE_CLI_PACKAGE_VERSION: 8.1.1
+  SWASHBUCLE_ASPNET_CORE_CLI_PACKAGE_VERSION: 7.2.0
   SWASHBUCKLE_DOTNET_CORE_VERSION: 8.x
   API_IMPORT_SPECIFICATION_PATH: ./publish/swagger.json
   API_IMPORT_VERSION: v1
@@ -23,7 +23,7 @@ env:
   API_PROJECT: ./backend/InventoryApi/InventoryApi.csproj
   TEST_PROJECT: ./backend/InventoryApi.Tests/InventoryApi.Tests.csproj
   API_PROJECT_DIRECTORY: ./backend/InventoryApi
-  API_IMPORT_DLL: ./backend/InventoryApi/bin/Release/net10.0/InventoryApi.dll
+  API_IMPORT_DLL: ./publish/InventoryApi.dll
 jobs:
   build:
     environment: VmInventoryApi_Env
@@ -49,6 +49,8 @@ jobs:
     - name: Install Swashbuckle CLI .NET Global Tool
       run: dotnet tool install --global Swashbuckle.AspNetCore.Cli --version ${{ env.SWASHBUCLE_ASPNET_CORE_CLI_PACKAGE_VERSION }}
       working-directory: ${{ env.API_PROJECT_DIRECTORY }}
+    - name: Generate Open API Specification Document
+      run: swagger tofile --output "${{ env.API_IMPORT_SPECIFICATION_PATH }}" "${{ env.API_IMPORT_DLL }}" "${{ env.API_IMPORT_VERSION }}"
     - name: Publish Artifacts
       uses: actions/upload-artifact@v4
       with:
