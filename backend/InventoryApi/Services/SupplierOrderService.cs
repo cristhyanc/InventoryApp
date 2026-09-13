@@ -22,6 +22,13 @@ public class SupplierOrderService : ISupplierOrderService
         .ThenBy(order => order.Id)
         .ToListAsync();
 
+    public async Task<SupplierOrder?> GetById(int id) => await _db.SupplierOrders
+        .AsNoTracking()
+        .Include(order => order.Supplier)
+        .Include(order => order.Lines)
+            .ThenInclude(line => line.Product)
+        .FirstOrDefaultAsync(order => order.Id == id);
+
     public async Task<SupplierOrder?> Create(SupplierOrderCreateDto dto)
     {
         if (dto.Lines.Count == 0 || dto.Lines.Any(line => line.QuantityOrdered <= 0 || line.QuantityOrdered != decimal.Truncate(line.QuantityOrdered)))

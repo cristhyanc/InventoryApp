@@ -16,6 +16,10 @@ export class SupplierOrderService {
     return this.http.get<SupplierOrder[]>(this.baseUrl);
   }
 
+  getById(id: number): Observable<SupplierOrder> {
+    return this.http.get<SupplierOrder>(`${this.baseUrl}/${id}`);
+  }
+
   create(payload: SupplierOrderCreateDto): Observable<SupplierOrder> {
     return this.http.post<SupplierOrder>(this.baseUrl, payload);
   }

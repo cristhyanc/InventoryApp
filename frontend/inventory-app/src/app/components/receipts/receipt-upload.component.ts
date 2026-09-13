@@ -1,12 +1,14 @@
 import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { Router, RouterLink } from '@angular/router';
+import { Router, RouterLink, ActivatedRoute } from '@angular/router';
 import { ReceiptService } from '../../services/receipt.service';
 import { SupplierService } from '../../services/supplier.service';
-import { Product, Supplier } from '../../models/models';
+import { SupplierOrderService } from '../../services/supplier-order.service';
+import { Product, Supplier, SupplierOrder, SupplierOrderLine } from '../../models/models';
 import { ReceiptItemPayload } from '../../services/receipt.service';
 import { ProductService } from '../../services/product.service';
+import { ToastService } from '../../services/toast.service';
 
 @Component({
   selector: 'app-receipt-upload',
@@ -22,6 +24,11 @@ export class ReceiptUploadComponent implements OnInit {
   previewUrl: string | null = null;
   saving = false;
   error = '';
+  
+  supplierOrderId: number | null = null;
+  supplierOrder: SupplierOrder | null = null;
+  loadingSupplierOrder = false;
+  noOutstandingItems = false;
 
   form = {
     title: '',
@@ -36,13 +43,71 @@ export class ReceiptUploadComponent implements OnInit {
   constructor(
     private receiptService: ReceiptService,
     private supplierService: SupplierService,
+    private supplierOrderService: SupplierOrderService,
     private productService: ProductService,
-    private router: Router
+    private route: ActivatedRoute,
+    private router: Router,
+    private toastService: ToastService
   ) {}
 
   ngOnInit(): void {
     this.supplierService.getAll().subscribe((s) => (this.suppliers = s));
     this.productService.getAll().subscribe((p) => (this.products = p));
+    
+    // Check for supplierOrderId query parameter
+    this.route.queryParams.subscribe((params) => {
+      const id = params['supplierOrderId'];
+      if (id) {
+        this.loadSupplierOrder(Number(id));
+      }
+    });
+  }
+
+  private loadSupplierOrder(id: number): void {
+    this.loadingSupplierOrder = true;
+    this.supplierOrderService.getById(id).subscribe({
+      next: (order) => {
+        this.supplierOrderId = id;
+        this.supplierOrder = order;
+        this.prefillFromSupplierOrder(order);
+        this.loadingSupplierOrder = false;
+      },
+      error: () => {
+        this.error = 'Unable to load supplier order.';
+        this.loadingSupplierOrder = false;
+      }
+    });
+  }
+
+  private prefillFromSupplierOrder(order: SupplierOrder): void {
+    // Prefill supplier
+    if (order.supplierId) {
+      this.form.supplierId = order.supplierId;
+    }
+
+    // Set purchase date to today
+    this.form.purchaseDate = ReceiptUploadComponent.localDate(new Date());
+
+    // Prefill reference/notes with order information
+    if (order.reference) {
+      this.form.notes = `Supplier Order #${order.id}: ${order.reference}`;
+    } else {
+      this.form.notes = `Supplier Order #${order.id}`;
+    }
+
+    // Prefill items from outstanding quantities only
+    const outstandingLines = order.lines.filter((line) => line.outstandingQuantity > 0);
+
+    if (outstandingLines.length === 0) {
+      this.noOutstandingItems = true;
+      return;
+    }
+
+    this.items = outstandingLines.map((line) => ({
+      productId: line.productId,
+      quantity: line.outstandingQuantity,
+      unitCost: line.unitPrice ?? 0
+    }));
   }
 
   onFileSelected(event: Event): void {
@@ -62,6 +127,11 @@ export class ReceiptUploadComponent implements OnInit {
   }
 
   upload(): void {
+    if (this.noOutstandingItems) {
+      this.error = 'This supplier order has no outstanding items to receive.';
+      return;
+    }
+
     if (!this.selectedFile) {
       this.error = 'Please select a receipt or invoice (PDF/image).';
       return;
@@ -87,7 +157,15 @@ export class ReceiptUploadComponent implements OnInit {
         , items: this.items
       })
       .subscribe({
-        next: () => this.router.navigate(['/receipts']),
+        next: () => {
+          if (this.supplierOrderId) {
+            this.toastService.success('Purchase created from supplier order.');
+            this.router.navigate(['/products'], { queryParams: { reorderView: 'onOrder' } });
+          } else {
+            this.toastService.success('Purchase created.');
+            this.router.navigate(['/receipts']);
+          }
+        },
         error: (err) => {
           this.error = err?.error ?? 'Failed to add purchase.';
           this.saving = false;
