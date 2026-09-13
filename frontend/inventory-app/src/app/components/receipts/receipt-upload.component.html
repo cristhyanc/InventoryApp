@@ -14,6 +14,13 @@
       <strong>Loading supplier order...</strong>
       <p class="mt-1">Please wait while we load the order details before you can proceed.</p>
     </div>
+  } @else if (supplierOrderLoadFailed) {
+    <div class="rounded-lg bg-red-50 p-4 text-sm text-red-900">
+      <strong>Unable to load supplier order</strong>
+      <p class="mt-2">
+        <a routerLink="/products" [queryParams]="{ reorderView: 'onOrder' }" class="inline-flex items-center rounded-md border border-red-300 bg-white px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50">Back to On Order</a>
+      </p>
+    </div>
   } @else if (noOutstandingItems) {
     <div class="rounded-lg bg-amber-50 p-4 text-sm text-amber-900">
       <strong>This supplier order has no outstanding items to receive.</strong>
@@ -44,7 +51,7 @@
             <div class="text-right">{{ line.quantityOrdered }}</div>
             <div class="text-right">{{ line.quantityReceived }}</div>
             <div class="text-right font-medium">{{ line.outstandingQuantity }}</div>
-            <div class="text-right">{{ line.unitPrice ? ('$' + line.unitPrice.toFixed(4)) : '—' }}</div>
+            <div class="text-right">{{ line.unitPrice != null ? ('$' + line.unitPrice.toFixed(4)) : '—' }}</div>
           </div>
         }
       </div>
@@ -55,7 +62,7 @@
     <p class="mb-4 text-sm text-red-600">{{ error }}</p>
   }
 
-  @if (!noOutstandingItems && !loadingSupplierOrder) {
+  @if (!loadingSupplierOrder && !supplierOrderLoadFailed && !noOutstandingItems) {
     <form class="space-y-4" (ngSubmit)="upload()">
       <div>
         <label class="mb-1 block text-sm font-medium text-slate-700">Supporting Document *</label>

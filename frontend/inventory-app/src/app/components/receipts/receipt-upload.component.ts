@@ -36,6 +36,7 @@ export class ReceiptUploadComponent implements OnInit {
   supplierOrder: SupplierOrder | null = null;
   loadingSupplierOrder = false;
   noOutstandingItems = false;
+  supplierOrderLoadFailed = false;
 
   form = {
     title: '',
@@ -64,15 +65,16 @@ export class ReceiptUploadComponent implements OnInit {
     // Check for supplierOrderId query parameter
     this.route.queryParams.subscribe((params) => {
       const id = params['supplierOrderId'];
+      // Reset all supplier-order-related state on every query param change
+      this.loadingSupplierOrder = false;
+      this.noOutstandingItems = false;
+      this.supplierOrderLoadFailed = false;
+      this.supplierOrderId = null;
+      this.supplierOrder = null;
+      this.error = '';
+
       if (id) {
         this.loadSupplierOrder(Number(id));
-      } else {
-        // If no supplierOrderId, reset the loading state and error
-        this.loadingSupplierOrder = false;
-        this.noOutstandingItems = false;
-        if (!this.supplierOrderId) {
-          this.error = '';
-        }
       }
     });
   }
@@ -81,6 +83,7 @@ export class ReceiptUploadComponent implements OnInit {
     this.loadingSupplierOrder = true;
     this.error = '';
     this.noOutstandingItems = false;
+    this.supplierOrderLoadFailed = false;
     this.supplierOrderService.getById(id).subscribe({
       next: (order) => {
         this.supplierOrderId = id;
@@ -89,9 +92,9 @@ export class ReceiptUploadComponent implements OnInit {
         this.loadingSupplierOrder = false;
       },
       error: () => {
-        this.error = 'Unable to load supplier order.';
+        this.supplierOrderLoadFailed = true;
         this.loadingSupplierOrder = false;
-        this.supplierOrderId = null;
+        this.supplierOrderId = id;
         this.supplierOrder = null;
       }
     });
@@ -148,6 +151,11 @@ export class ReceiptUploadComponent implements OnInit {
   upload(): void {
     if (this.loadingSupplierOrder) {
       this.error = 'Please wait while the supplier order is loading.';
+      return;
+    }
+
+    if (this.supplierOrderLoadFailed) {
+      this.error = 'Unable to load supplier order.';
       return;
     }
 

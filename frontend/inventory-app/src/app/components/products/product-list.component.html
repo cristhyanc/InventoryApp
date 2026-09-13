@@ -81,7 +81,7 @@
                       <td class="px-4 py-2 text-right">{{ line.quantityOrdered }}</td>
                       <td class="px-4 py-2 text-right">{{ line.quantityReceived }}</td>
                       <td class="px-4 py-2 text-right font-semibold">{{ line.outstandingQuantity }}</td>
-                      <td class="px-4 py-2">{{ line.unitPrice ? ('$' + line.unitPrice.toFixed(4)) : '—' }}</td>
+                      <td class="px-4 py-2">{{ line.unitPrice != null ? ('$' + line.unitPrice.toFixed(4)) : '—' }}</td>
                       <td class="px-4 py-2">{{ orderStatus(order.status) }}</td>
                     </tr>
                   }
