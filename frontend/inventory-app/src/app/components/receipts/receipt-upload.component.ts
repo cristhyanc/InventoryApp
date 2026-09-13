@@ -2,6 +2,8 @@ import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink, ActivatedRoute } from '@angular/router';
+import { of } from 'rxjs';
+import { switchMap, tap, map, catchError } from 'rxjs/operators';
 import { ReceiptService } from '../../services/receipt.service';
 import { SupplierService } from '../../services/supplier.service';
 import { SupplierOrderService } from '../../services/supplier-order.service';
@@ -62,18 +64,42 @@ export class ReceiptUploadComponent implements OnInit {
     this.supplierService.getAll().subscribe((s) => (this.suppliers = s));
     this.productService.getAll().subscribe((p) => (this.products = p));
 
-    // Check for supplierOrderId query parameter
-    this.route.queryParams.subscribe((params) => {
-      const id = params['supplierOrderId'];
+    // switchMap cancels any in-flight supplier order request whenever the
+    // id changes, so a stale response can never overwrite a newer one.
+    this.route.queryParamMap
+      .pipe(
+        map((params) => {
+          const raw = params.get('supplierOrderId');
+          return raw ? Number(raw) : null;
+        }),
+        tap(() => this.resetPurchaseForm()),
+        switchMap((id) => {
+          if (id === null) {
+            return of(null);
+          }
+          this.loadingSupplierOrder = true;
+          return this.supplierOrderService.getById(id).pipe(
+            map((order) => ({ id, order })),
+            catchError(() => of({ id, order: null }))
+          );
+        })
+      )
+      .subscribe((result) => {
+        if (result === null) {
+          return;
+        }
 
-      // Always start from a clean Purchase form so stale data from a
-      // previously viewed supplier order never leaks into the new state.
-      this.resetPurchaseForm();
+        this.loadingSupplierOrder = false;
+        this.supplierOrderId = result.id;
 
-      if (id) {
-        this.loadSupplierOrder(Number(id));
-      }
-    });
+        if (result.order) {
+          this.supplierOrder = result.order;
+          this.prefillFromSupplierOrder(result.order);
+        } else {
+          this.supplierOrderLoadFailed = true;
+          this.supplierOrder = null;
+        }
+      });
   }
 
   // Restores a fresh, empty Create Purchase form (manual-purchase defaults).
@@ -99,27 +125,6 @@ export class ReceiptUploadComponent implements OnInit {
     this.loadingSupplierOrder = false;
     this.noOutstandingItems = false;
     this.supplierOrderLoadFailed = false;
-  }
-
-  private loadSupplierOrder(id: number): void {
-    this.loadingSupplierOrder = true;
-    this.error = '';
-    this.noOutstandingItems = false;
-    this.supplierOrderLoadFailed = false;
-    this.supplierOrderService.getById(id).subscribe({
-      next: (order) => {
-        this.supplierOrderId = id;
-        this.supplierOrder = order;
-        this.prefillFromSupplierOrder(order);
-        this.loadingSupplierOrder = false;
-      },
-      error: () => {
-        this.supplierOrderLoadFailed = true;
-        this.loadingSupplierOrder = false;
-        this.supplierOrderId = id;
-        this.supplierOrder = null;
-      }
-    });
   }
 
   private prefillFromSupplierOrder(order: SupplierOrder): void {
