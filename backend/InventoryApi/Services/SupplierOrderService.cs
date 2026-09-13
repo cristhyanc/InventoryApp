@@ -24,8 +24,8 @@ public class SupplierOrderService : ISupplierOrderService
 
     public async Task<SupplierOrder?> Create(SupplierOrderCreateDto dto)
     {
-        if (dto.Lines.Count == 0 || dto.Lines.Any(line => line.QuantityOrdered <= 0))
-            throw new InvalidOperationException("An order must include at least one positive quantity.");
+        if (dto.Lines.Count == 0 || dto.Lines.Any(line => line.QuantityOrdered <= 0 || line.QuantityOrdered != decimal.Truncate(line.QuantityOrdered)))
+            throw new InvalidOperationException("An order must include at least one positive whole-unit quantity.");
         if (!await _db.Suppliers.AnyAsync(supplier => supplier.Id == dto.SupplierId)) return null;
 
         var productIds = dto.Lines.Select(line => line.ProductId).Distinct().ToList();

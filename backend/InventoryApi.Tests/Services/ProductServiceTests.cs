@@ -100,6 +100,20 @@ public class ProductServiceTests
         Assert.Equal(16m, product.ReorderShortfall);
     }
 
+    [Fact]
+    public async Task SupplierOrder_Create_RejectsFractionalQuantities()
+    {
+        using var db = CreateDbContext(Guid.NewGuid().ToString());
+        db.Suppliers.Add(new Supplier { Id = 1, Name = "Supplier" });
+        db.Products.Add(new Product { Id = 1, Name = "Coke" });
+        await db.SaveChangesAsync();
+
+        var service = new SupplierOrderService(db);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.Create(
+            new SupplierOrderCreateDto(1, DateTime.UtcNow, null, null, null,
+                new[] { new SupplierOrderLineCreateDto(1, 1.5m) })));
+    }
+
     private static ProductService CreateService(AppDbContext db)
     {
         var nayaxMock = new Mock<INayaxLynxClient>();

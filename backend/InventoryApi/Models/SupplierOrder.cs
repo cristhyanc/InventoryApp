@@ -38,9 +38,24 @@ public class SupplierOrderLine
     public decimal QuantityReceived { get; set; }
     public decimal? UnitPrice { get; set; }
     public string? Notes { get; set; }
+    [JsonIgnore]
+    public virtual ICollection<SupplierOrderReceiptAllocation> ReceiptAllocations { get; set; } = new List<SupplierOrderReceiptAllocation>();
 
     [NotMapped]
     public decimal OutstandingQuantity => SupplierOrder.Status == SupplierOrderStatus.Cancelled
         ? 0m
         : Math.Max(0m, QuantityOrdered - QuantityReceived);
+}
+
+public class SupplierOrderReceiptAllocation
+{
+    public int Id { get; set; }
+    public int SupplierOrderLineId { get; set; }
+    [JsonIgnore]
+    public virtual SupplierOrderLine SupplierOrderLine { get; set; } = null!;
+    public int ReceiptItemId { get; set; }
+    [JsonIgnore]
+    public virtual ReceiptItem ReceiptItem { get; set; } = null!;
+    public decimal QuantityApplied { get; set; }
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }

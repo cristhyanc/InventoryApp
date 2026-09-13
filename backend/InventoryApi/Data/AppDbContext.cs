@@ -22,6 +22,7 @@ public class AppDbContext : DbContext
     public DbSet<ReceiptItem> ReceiptItems => Set<ReceiptItem>();
     public DbSet<SupplierOrder> SupplierOrders => Set<SupplierOrder>();
     public DbSet<SupplierOrderLine> SupplierOrderLines => Set<SupplierOrderLine>();
+    public DbSet<SupplierOrderReceiptAllocation> SupplierOrderReceiptAllocations => Set<SupplierOrderReceiptAllocation>();
     public DbSet<OperatingExpense> OperatingExpenses => Set<OperatingExpense>();
     public DbSet<NayaxProcessingFeeRate> NayaxProcessingFeeRates => Set<NayaxProcessingFeeRate>();
     public DbSet<SiteCommissionAgreement> SiteCommissionAgreements => Set<SiteCommissionAgreement>();
@@ -151,6 +152,17 @@ public class AppDbContext : DbContext
             .WithMany()
             .HasForeignKey(line => line.ProductId)
             .OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<SupplierOrderReceiptAllocation>().Property(item => item.QuantityApplied).HasColumnType("decimal(18,4)");
+        modelBuilder.Entity<SupplierOrderReceiptAllocation>()
+            .HasOne(allocation => allocation.SupplierOrderLine)
+            .WithMany(line => line.ReceiptAllocations)
+            .HasForeignKey(allocation => allocation.SupplierOrderLineId)
+            .OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<SupplierOrderReceiptAllocation>()
+            .HasOne(allocation => allocation.ReceiptItem)
+            .WithMany(item => item.SupplierOrderAllocations)
+            .HasForeignKey(allocation => allocation.ReceiptItemId)
+            .OnDelete(DeleteBehavior.Cascade);
         modelBuilder.Entity<OperatingExpense>().Property(e => e.AmountExGst).HasColumnType("decimal(18,2)");
         modelBuilder.Entity<OperatingExpense>().Property(e => e.GstAmount).HasColumnType("decimal(18,2)");
         modelBuilder.Entity<OperatingExpense>().Property(e => e.TotalAmount).HasColumnType("decimal(18,2)");
@@ -164,6 +176,8 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<Product>().HasIndex(p => p.Sku);
         modelBuilder.Entity<SupplierOrder>().HasIndex(order => new { order.SupplierId, order.Status, order.OrderDate });
         modelBuilder.Entity<SupplierOrderLine>().HasIndex(line => new { line.ProductId, line.SupplierOrderId });
+        modelBuilder.Entity<SupplierOrderReceiptAllocation>().HasIndex(allocation => allocation.ReceiptItemId);
+        modelBuilder.Entity<SupplierOrderReceiptAllocation>().HasIndex(allocation => allocation.SupplierOrderLineId);
         modelBuilder.Entity<ImportedFile>().HasIndex(f => f.FileHash).IsUnique();
         modelBuilder.Entity<ImportedReimbursement>()
             .HasOne(r => r.ImportedFile)

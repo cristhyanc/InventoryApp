@@ -68,6 +68,7 @@
             @if (lowStockOnly) {
               <th class="px-4 py-3 text-left font-semibold text-slate-700">Machine need</th>
               <th class="px-4 py-3 text-left font-semibold text-slate-700">Reorder level</th>
+              <th class="px-4 py-3 text-left font-semibold text-slate-700">On order</th>
               <th class="px-4 py-3 text-left font-semibold text-slate-700">Shortfall</th>
             }
             <th class="px-4 py-3 text-left font-semibold text-slate-700">Status</th>
@@ -125,7 +126,7 @@
         <label>Reference<input name="reference" [(ngModel)]="orderForm.reference" /></label>
       </div>
       <label class="mt-4 block">Notes<textarea name="notes" [(ngModel)]="orderForm.notes"></textarea></label>
-      <div class="mt-4 overflow-x-auto"><table class="min-w-full text-sm"><thead><tr><th class="text-left">Product</th><th class="text-left">Current stock</th><th class="text-left">On order</th><th class="text-left">Order quantity</th></tr></thead><tbody>@for (product of selectedProducts(); track product.id) { <tr><td>{{ product.name }}</td><td>{{ product.quantityInStock }}</td><td>{{ product.onOrderQuantity }}</td><td><input class="max-w-24" type="number" min="0.0001" step="0.0001" [name]="'quantity-' + product.id" [(ngModel)]="orderQuantities[product.id]" /></td></tr> }</tbody></table></div>
+      <div class="mt-4 overflow-x-auto"><table class="min-w-full text-sm"><thead><tr><th class="text-left">Product</th><th class="text-left">Current stock</th><th class="text-left">On order</th><th class="text-left">Order quantity</th></tr></thead><tbody>@for (product of selectedProducts(); track product.id) { <tr><td>{{ product.name }}</td><td>{{ product.quantityInStock }}</td><td>{{ product.onOrderQuantity }}</td><td><input class="max-w-24" type="number" min="1" step="1" [name]="'quantity-' + product.id" [(ngModel)]="orderQuantities[product.id]" /></td></tr> }</tbody></table></div>
       <div class="mt-6 flex justify-end gap-3"><button type="button" class="rounded-md border border-slate-300 px-3 py-2" (click)="showOrderForm = false">Cancel</button><button type="submit" class="rounded-md bg-blue-600 px-3 py-2 text-white disabled:opacity-50" [disabled]="savingOrder">Create order</button></div>
     </form>
   </div>
