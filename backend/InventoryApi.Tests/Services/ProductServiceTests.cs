@@ -1,4 +1,6 @@
+using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using InventoryApi.Data;
 using InventoryApi.DTOs;
@@ -45,6 +47,65 @@ public class ProductServiceTests
 
         var deleted = await svc.Delete(product.Id);
         Assert.True(deleted);
+    }
+
+    [Fact]
+    public async Task LowStock_OpenOrder_ReducesRemainingReorderRequirement()
+    {
+        using var db = CreateDbContext(Guid.NewGuid().ToString());
+        db.Products.Add(new Product { Id = 1, Name = "Coke", QuantityInStock = 4, LowStockThreshold = 20 });
+        db.SupplierOrders.Add(new SupplierOrder { SupplierId = 1, Lines = { new SupplierOrderLine { ProductId = 1, QuantityOrdered = 12 } } });
+        await db.SaveChangesAsync();
+
+        var alerts = await CreateService(db).LowStock();
+        var product = Assert.Single(alerts);
+        Assert.Equal(12m, product.OnOrderQuantity);
+        Assert.Equal(4m, product.ReorderShortfall);
+    }
+
+    [Fact]
+    public async Task LowStock_FullyCoveredOrder_DoesNotAppearInNeedsOrdering()
+    {
+        using var db = CreateDbContext(Guid.NewGuid().ToString());
+        db.Products.Add(new Product { Id = 1, Name = "Coke", QuantityInStock = 4, LowStockThreshold = 16 });
+        db.SupplierOrders.Add(new SupplierOrder { SupplierId = 1, Lines = { new SupplierOrderLine { ProductId = 1, QuantityOrdered = 12 } } });
+        await db.SaveChangesAsync();
+
+        Assert.Empty(await CreateService(db).LowStock());
+    }
+
+    [Fact]
+    public async Task LowStock_PartialOutstandingOrder_UsesOnlyOutstandingQuantity()
+    {
+        using var db = CreateDbContext(Guid.NewGuid().ToString());
+        db.Products.Add(new Product { Id = 1, Name = "Coke", QuantityInStock = 4, LowStockThreshold = 20 });
+        db.SupplierOrders.Add(new SupplierOrder { SupplierId = 1, Status = SupplierOrderStatus.PartiallyReceived, Lines = { new SupplierOrderLine { ProductId = 1, QuantityOrdered = 12, QuantityReceived = 8 } } });
+        await db.SaveChangesAsync();
+
+        var product = Assert.Single(await CreateService(db).LowStock());
+        Assert.Equal(4m, product.OnOrderQuantity);
+        Assert.Equal(12m, product.ReorderShortfall);
+    }
+
+    [Fact]
+    public async Task LowStock_CancelledOrder_DoesNotCountAsInboundStock()
+    {
+        using var db = CreateDbContext(Guid.NewGuid().ToString());
+        db.Products.Add(new Product { Id = 1, Name = "Coke", QuantityInStock = 4, LowStockThreshold = 20 });
+        db.SupplierOrders.Add(new SupplierOrder { SupplierId = 1, Status = SupplierOrderStatus.Cancelled, Lines = { new SupplierOrderLine { ProductId = 1, QuantityOrdered = 12 } } });
+        await db.SaveChangesAsync();
+
+        var product = Assert.Single(await CreateService(db).LowStock());
+        Assert.Equal(0m, product.OnOrderQuantity);
+        Assert.Equal(16m, product.ReorderShortfall);
+    }
+
+    private static ProductService CreateService(AppDbContext db)
+    {
+        var nayaxMock = new Mock<INayaxLynxClient>();
+        nayaxMock.Setup(client => client.GetMachinesAsync(It.IsAny<System.Threading.CancellationToken>()))
+            .ReturnsAsync(new List<NayaxMachine>());
+        return new ProductService(db, nayaxMock.Object);
     }
 
 }

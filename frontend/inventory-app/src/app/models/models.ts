@@ -40,6 +40,7 @@ export interface Product {
   machineReplenishmentNeed: number;
   reorderLevel: number;
   reorderShortfall: number;
+  onOrderQuantity: number;
   lowStockThreshold: number;
   mdbCode: number | null;
   unit?: string | null;
@@ -107,6 +108,38 @@ export interface ProductUpdateDto {
   categoryId?: number | null;
   supplierId?: number | null;
   isActive: boolean;
+}
+
+export interface SupplierOrderLine {
+  id: number;
+  productId: number;
+  product?: Product | null;
+  quantityOrdered: number;
+  quantityReceived: number;
+  outstandingQuantity: number;
+  unitPrice?: number | null;
+  notes?: string | null;
+}
+
+export interface SupplierOrder {
+  id: number;
+  supplierId?: number | null;
+  supplier?: Supplier | null;
+  orderDate: string;
+  expectedDate?: string | null;
+  reference?: string | null;
+  notes?: string | null;
+  status: number;
+  lines: SupplierOrderLine[];
+}
+
+export interface SupplierOrderCreateDto {
+  supplierId: number;
+  orderDate: string;
+  expectedDate?: string | null;
+  reference?: string | null;
+  notes?: string | null;
+  lines: Array<{ productId: number; quantityOrdered: number; unitPrice?: number | null; notes?: string | null }>;
 }
 
 export interface StockAdjustment {

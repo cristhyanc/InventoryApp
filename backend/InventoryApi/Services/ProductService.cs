@@ -76,6 +76,15 @@ public class ProductService : IProductService
             }
         }
 
+        var outstandingByProduct = await _db.SupplierOrderLines
+            .Where(line => line.SupplierOrder.Status != SupplierOrderStatus.Cancelled &&
+                           line.SupplierOrder.Status != SupplierOrderStatus.Received)
+            .GroupBy(line => line.ProductId)
+            .Select(group => new { ProductId = group.Key, Quantity = group.Sum(line => line.QuantityOrdered - line.QuantityReceived) })
+            .ToDictionaryAsync(item => item.ProductId, item => item.Quantity);
+        foreach (var product in products)
+            product.OnOrderQuantity = Math.Max(0m, outstandingByProduct.GetValueOrDefault(product.Id));
+
         return products.Where(p => p.IsReorderAlert)
             .OrderByDescending(p => p.ReorderShortfall)
             .ThenBy(p => p.Name)

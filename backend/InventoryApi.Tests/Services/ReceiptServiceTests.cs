@@ -26,6 +26,150 @@ public class ReceiptServiceTests
     }
 
     [Fact]
+    public async Task Upload_ReceivesMatchingSupplierOrderLine()
+    {
+        using var db = CreateDbContext(Guid.NewGuid().ToString());
+        SeedOrder(db, supplierId: 1, productId: 1, quantity: 24);
+        await db.SaveChangesAsync();
+
+        await UploadPurchase(CreateService(db), supplierId: 1, productId: 1, quantity: 24);
+
+        var line = await db.SupplierOrderLines.SingleAsync();
+        Assert.Equal(24m, line.QuantityReceived);
+        Assert.Equal(SupplierOrderStatus.Received, (await db.SupplierOrders.SingleAsync()).Status);
+    }
+
+    [Fact]
+    public async Task Upload_PartialPurchase_LeavesOutstandingQuantity()
+    {
+        using var db = CreateDbContext(Guid.NewGuid().ToString());
+        SeedOrder(db, supplierId: 1, productId: 1, quantity: 24);
+        await db.SaveChangesAsync();
+
+        await UploadPurchase(CreateService(db), supplierId: 1, productId: 1, quantity: 18);
+
+        var line = await db.SupplierOrderLines.SingleAsync();
+        Assert.Equal(18m, line.QuantityReceived);
+        Assert.Equal(6m, line.QuantityOrdered - line.QuantityReceived);
+        Assert.Equal(SupplierOrderStatus.PartiallyReceived, (await db.SupplierOrders.SingleAsync()).Status);
+    }
+
+    [Fact]
+    public async Task Upload_SecondPurchase_CompletesOutstandingOrder()
+    {
+        using var db = CreateDbContext(Guid.NewGuid().ToString());
+        SeedOrder(db, supplierId: 1, productId: 1, quantity: 24);
+        await db.SaveChangesAsync();
+        var service = CreateService(db);
+
+        await UploadPurchase(service, 1, 1, 18);
+        await UploadPurchase(service, 1, 1, 6);
+
+        var line = await db.SupplierOrderLines.SingleAsync();
+        Assert.Equal(24m, line.QuantityReceived);
+        Assert.Equal(SupplierOrderStatus.Received, (await db.SupplierOrders.SingleAsync()).Status);
+    }
+
+    [Fact]
+    public async Task Upload_ExcessPurchase_ClosesOrderAndKeepsPurchaseStockMovement()
+    {
+        using var db = CreateDbContext(Guid.NewGuid().ToString());
+        SeedOrder(db, supplierId: 1, productId: 1, quantity: 6);
+        await db.SaveChangesAsync();
+
+        await UploadPurchase(CreateService(db), 1, 1, 10);
+
+        Assert.Equal(6m, (await db.SupplierOrderLines.SingleAsync()).QuantityReceived);
+        Assert.Equal(10, (await db.Products.FindAsync(1L))!.QuantityInStock);
+        Assert.Single(await db.StockAdjustments.Where(item => item.Reason == StockAdjustmentReason.Restock).ToListAsync());
+    }
+
+    [Fact]
+    public async Task Upload_ReceivingOrder_DoesNotCreateDuplicateStockMovements()
+    {
+        using var db = CreateDbContext(Guid.NewGuid().ToString());
+        SeedOrder(db, supplierId: 1, productId: 1, quantity: 10);
+        await db.SaveChangesAsync();
+
+        await UploadPurchase(CreateService(db), 1, 1, 10);
+
+        Assert.Single(await db.StockAdjustments.Where(item => item.ProductId == 1).ToListAsync());
+    }
+
+    [Fact]
+    public async Task Upload_MultipleOpenOrders_ConsumesOldestOutstandingFirst()
+    {
+        using var db = CreateDbContext(Guid.NewGuid().ToString());
+        db.Products.Add(new Product { Id = 1, Name = "Coke" });
+        AddTransitionBaseline(db, 1, 0);
+        SeedSupplier(db, 1);
+        db.SupplierOrders.AddRange(
+            new SupplierOrder { SupplierId = 1, OrderDate = new DateTime(2026, 1, 1), Lines = { new SupplierOrderLine { ProductId = 1, QuantityOrdered = 10 } } },
+            new SupplierOrder { SupplierId = 1, OrderDate = new DateTime(2026, 1, 2), Lines = { new SupplierOrderLine { ProductId = 1, QuantityOrdered = 10 } } });
+        await db.SaveChangesAsync();
+
+        await UploadPurchase(CreateService(db), 1, 1, 12);
+
+        var lines = await db.SupplierOrderLines.Include(line => line.SupplierOrder).OrderBy(line => line.SupplierOrder.OrderDate).ToListAsync();
+        Assert.Equal(10m, lines[0].QuantityReceived);
+        Assert.Equal(2m, lines[1].QuantityReceived);
+    }
+
+    [Fact]
+    public async Task Upload_DifferentSupplierOrder_IsNotMatched()
+    {
+        using var db = CreateDbContext(Guid.NewGuid().ToString());
+        SeedOrder(db, supplierId: 2, productId: 1, quantity: 10);
+        SeedSupplier(db, 1);
+        await db.SaveChangesAsync();
+
+        await UploadPurchase(CreateService(db), 1, 1, 10);
+
+        Assert.Equal(0m, (await db.SupplierOrderLines.SingleAsync()).QuantityReceived);
+    }
+
+    private static void SeedOrder(AppDbContext db, int supplierId, long productId, decimal quantity)
+    {
+        db.Products.Add(new Product { Id = productId, Name = "Coke" });
+        AddTransitionBaseline(db, productId, 0);
+        SeedSupplier(db, supplierId);
+        db.SupplierOrders.Add(new SupplierOrder
+        {
+            SupplierId = supplierId,
+            Lines = { new SupplierOrderLine { ProductId = productId, QuantityOrdered = quantity } }
+        });
+    }
+
+    private static void SeedSupplier(AppDbContext db, int supplierId)
+    {
+        if (db.Suppliers.Local.All(supplier => supplier.Id != supplierId))
+            db.Suppliers.Add(new Supplier { Id = supplierId, Name = $"Supplier {supplierId}" });
+    }
+
+    private static IReceiptService CreateService(AppDbContext db)
+    {
+        var environment = new Mock<IWebHostEnvironment>();
+        var temp = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(temp);
+        environment.Setup(item => item.WebRootPath).Returns(temp);
+        environment.Setup(item => item.ContentRootPath).Returns(temp);
+        return new ReceiptService(db, environment.Object);
+    }
+
+    private static async Task UploadPurchase(IReceiptService service, int supplierId, long productId, decimal quantity)
+    {
+        var content = new MemoryStream(new byte[] { 1 });
+        var file = new Mock<IFormFile>();
+        file.Setup(item => item.Length).Returns(1);
+        file.Setup(item => item.FileName).Returns("purchase.jpg");
+        file.Setup(item => item.ContentType).Returns("image/jpeg");
+        file.Setup(item => item.CopyToAsync(It.IsAny<Stream>(), default))
+            .Returns((Stream stream, System.Threading.CancellationToken token) => content.CopyToAsync(stream, token));
+        await service.Upload(file.Object, "Purchase", null, null, null, null, null, supplierId,
+            new[] { new ReceiptItemDto(productId, quantity, 1m) });
+    }
+
+    [Fact]
     public async Task Upload_Saves_Receipt()
     {
         using var db = CreateDbContext("receipt_test");

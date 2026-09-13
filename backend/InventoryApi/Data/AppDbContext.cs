@@ -20,6 +20,8 @@ public class AppDbContext : DbContext
     public DbSet<ImportedFee> ImportedFees => Set<ImportedFee>();
     public DbSet<ImportedPaymentMethod> ImportedPaymentMethods => Set<ImportedPaymentMethod>();
     public DbSet<ReceiptItem> ReceiptItems => Set<ReceiptItem>();
+    public DbSet<SupplierOrder> SupplierOrders => Set<SupplierOrder>();
+    public DbSet<SupplierOrderLine> SupplierOrderLines => Set<SupplierOrderLine>();
     public DbSet<OperatingExpense> OperatingExpenses => Set<OperatingExpense>();
     public DbSet<NayaxProcessingFeeRate> NayaxProcessingFeeRates => Set<NayaxProcessingFeeRate>();
     public DbSet<SiteCommissionAgreement> SiteCommissionAgreements => Set<SiteCommissionAgreement>();
@@ -131,6 +133,24 @@ public class AppDbContext : DbContext
             .OnDelete(DeleteBehavior.SetNull);
         modelBuilder.Entity<ReceiptItem>().Property(i => i.Quantity).HasColumnType("decimal(18,4)");
         modelBuilder.Entity<ReceiptItem>().Property(i => i.UnitCost).HasColumnType("decimal(18,4)");
+        modelBuilder.Entity<SupplierOrderLine>().Property(i => i.QuantityOrdered).HasColumnType("decimal(18,4)");
+        modelBuilder.Entity<SupplierOrderLine>().Property(i => i.QuantityReceived).HasColumnType("decimal(18,4)");
+        modelBuilder.Entity<SupplierOrderLine>().Property(i => i.UnitPrice).HasColumnType("decimal(18,4)");
+        modelBuilder.Entity<SupplierOrder>()
+            .HasOne(order => order.Supplier)
+            .WithMany()
+            .HasForeignKey(order => order.SupplierId)
+            .OnDelete(DeleteBehavior.SetNull);
+        modelBuilder.Entity<SupplierOrderLine>()
+            .HasOne(line => line.SupplierOrder)
+            .WithMany(order => order.Lines)
+            .HasForeignKey(line => line.SupplierOrderId)
+            .OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<SupplierOrderLine>()
+            .HasOne(line => line.Product)
+            .WithMany()
+            .HasForeignKey(line => line.ProductId)
+            .OnDelete(DeleteBehavior.Restrict);
         modelBuilder.Entity<OperatingExpense>().Property(e => e.AmountExGst).HasColumnType("decimal(18,2)");
         modelBuilder.Entity<OperatingExpense>().Property(e => e.GstAmount).HasColumnType("decimal(18,2)");
         modelBuilder.Entity<OperatingExpense>().Property(e => e.TotalAmount).HasColumnType("decimal(18,2)");
@@ -142,6 +162,8 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<Category>().HasIndex(c => c.Name);
         modelBuilder.Entity<Supplier>().HasIndex(s => s.Name);
         modelBuilder.Entity<Product>().HasIndex(p => p.Sku);
+        modelBuilder.Entity<SupplierOrder>().HasIndex(order => new { order.SupplierId, order.Status, order.OrderDate });
+        modelBuilder.Entity<SupplierOrderLine>().HasIndex(line => new { line.ProductId, line.SupplierOrderId });
         modelBuilder.Entity<ImportedFile>().HasIndex(f => f.FileHash).IsUnique();
         modelBuilder.Entity<ImportedReimbursement>()
             .HasOne(r => r.ImportedFile)

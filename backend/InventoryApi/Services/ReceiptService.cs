@@ -108,6 +108,7 @@ public class ReceiptService : IReceiptService
             await using var transaction = await BeginTransactionAsync();
             _db.Receipts.Add(receipt);
             await _db.SaveChangesAsync();
+            await ReceiveSupplierOrdersAsync(receipt.SupplierId, receipt.Items);
             foreach (var item in receipt.Items)
                 _db.StockAdjustments.Add(CreatePurchaseMovement(item, receipt.PurchaseDate));
             await _db.SaveChangesAsync();
@@ -122,6 +123,44 @@ public class ReceiptService : IReceiptService
         }
 
         return receipt;
+    }
+
+    private async Task ReceiveSupplierOrdersAsync(int? supplierId, IEnumerable<ReceiptItem> receiptItems)
+    {
+        foreach (var receiptItem in receiptItems)
+        {
+            var remainingQuantity = receiptItem.Quantity;
+            var lines = await _db.SupplierOrderLines
+                .Include(line => line.SupplierOrder)
+                .Where(line => line.ProductId == receiptItem.ProductId &&
+                    line.SupplierOrder.SupplierId == supplierId &&
+                    line.SupplierOrder.Status != SupplierOrderStatus.Cancelled &&
+                    line.SupplierOrder.Status != SupplierOrderStatus.Received &&
+                    line.QuantityReceived < line.QuantityOrdered)
+                .OrderBy(line => line.SupplierOrder.OrderDate)
+                .ThenBy(line => line.SupplierOrder.Id)
+                .ThenBy(line => line.Id)
+                .ToListAsync();
+
+            foreach (var line in lines)
+            {
+                if (remainingQuantity <= 0) break;
+                var receivedQuantity = Math.Min(remainingQuantity, line.QuantityOrdered - line.QuantityReceived);
+                line.QuantityReceived += receivedQuantity;
+                line.SupplierOrder.UpdatedAt = DateTime.UtcNow;
+                remainingQuantity -= receivedQuantity;
+            }
+
+            foreach (var order in lines.Select(line => line.SupplierOrder).Distinct())
+                order.Status = await CalculateOrderStatusAsync(order.Id);
+        }
+    }
+
+    private async Task<SupplierOrderStatus> CalculateOrderStatusAsync(int orderId)
+    {
+        var lines = await _db.SupplierOrderLines.Where(line => line.SupplierOrderId == orderId).ToListAsync();
+        if (lines.All(line => line.QuantityReceived >= line.QuantityOrdered)) return SupplierOrderStatus.Received;
+        return lines.Any(line => line.QuantityReceived > 0) ? SupplierOrderStatus.PartiallyReceived : SupplierOrderStatus.Ordered;
     }
 
     public async Task<Receipt?> Update(int id, string? title, string? notes, decimal? totalAmount, decimal? deliveryCost, decimal? packageCost, DateTime? purchaseDate, int? supplierId, IReadOnlyList<ReceiptItemDto>? items = null)

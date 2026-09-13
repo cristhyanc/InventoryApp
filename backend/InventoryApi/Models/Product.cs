@@ -32,7 +32,9 @@ public class Product
     [NotMapped]
     public int ReorderLevel => Math.Max(LowStockThreshold, MachineReplenishmentNeed);
     [NotMapped]
-    public int ReorderShortfall => Math.Max(0, ReorderLevel - QuantityInStock);
+    public decimal OnOrderQuantity { get; set; }
+    [NotMapped]
+    public decimal ReorderShortfall => Math.Max(0m, ReorderLevel - QuantityInStock - OnOrderQuantity);
     public int QuantityInStock { get; set; }
     public int LowStockThreshold { get; set; } = 0;
     public string? Unit { get; set; } = "unit";
@@ -53,5 +55,5 @@ public class Product
     public virtual ICollection<StockAdjustment> StockAdjustments { get; set; } = new List<StockAdjustment>();
 
     public bool IsLowStock => QuantityInStock <= LowStockThreshold;
-    public bool IsReorderAlert => IsActive && QuantityInStock <= ReorderLevel;
+    public bool IsReorderAlert => IsActive && ReorderShortfall > 0;
 }
