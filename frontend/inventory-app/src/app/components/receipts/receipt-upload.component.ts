@@ -61,22 +61,44 @@ export class ReceiptUploadComponent implements OnInit {
   ngOnInit(): void {
     this.supplierService.getAll().subscribe((s) => (this.suppliers = s));
     this.productService.getAll().subscribe((p) => (this.products = p));
-    
+
     // Check for supplierOrderId query parameter
     this.route.queryParams.subscribe((params) => {
       const id = params['supplierOrderId'];
-      // Reset all supplier-order-related state on every query param change
-      this.loadingSupplierOrder = false;
-      this.noOutstandingItems = false;
-      this.supplierOrderLoadFailed = false;
-      this.supplierOrderId = null;
-      this.supplierOrder = null;
-      this.error = '';
+
+      // Always start from a clean Purchase form so stale data from a
+      // previously viewed supplier order never leaks into the new state.
+      this.resetPurchaseForm();
 
       if (id) {
         this.loadSupplierOrder(Number(id));
       }
     });
+  }
+
+  // Restores a fresh, empty Create Purchase form (manual-purchase defaults).
+  private resetPurchaseForm(): void {
+    this.items = [];
+    this.selectedFile = null;
+    this.previewUrl = null;
+    this.error = '';
+    this.saving = false;
+
+    this.form = {
+      title: '',
+      notes: '',
+      totalAmount: null,
+      deliveryCost: null,
+      packageCost: null,
+      purchaseDate: ReceiptUploadComponent.localDate(new Date()),
+      supplierId: ''
+    };
+
+    this.supplierOrderId = null;
+    this.supplierOrder = null;
+    this.loadingSupplierOrder = false;
+    this.noOutstandingItems = false;
+    this.supplierOrderLoadFailed = false;
   }
 
   private loadSupplierOrder(id: number): void {
