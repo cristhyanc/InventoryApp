@@ -129,6 +129,8 @@ public class ReceiptService : IReceiptService
     {
         if (!receipt.SupplierId.HasValue) return;
         var affectedOrderIds = new HashSet<int>();
+        var allocatedByLineId = new Dictionary<int, decimal>();
+        var purchaseDayEnd = receipt.PurchaseDate.Date.AddDays(1);
         foreach (var receiptItem in receipt.Items)
         {
             var remainingQuantity = receiptItem.Quantity;
@@ -136,7 +138,7 @@ public class ReceiptService : IReceiptService
                 .Include(line => line.SupplierOrder)
                 .Where(line => line.ProductId == receiptItem.ProductId &&
                     line.SupplierOrder.SupplierId == receipt.SupplierId &&
-                    line.SupplierOrder.OrderDate <= receipt.PurchaseDate &&
+                    line.SupplierOrder.OrderDate < purchaseDayEnd &&
                     line.SupplierOrder.Status != SupplierOrderStatus.Cancelled &&
                     line.SupplierOrder.Status != SupplierOrderStatus.Received &&
                     line.QuantityReceived < line.QuantityOrdered)
@@ -148,7 +150,10 @@ public class ReceiptService : IReceiptService
             foreach (var line in lines)
             {
                 if (remainingQuantity <= 0) break;
-                var receivedQuantity = Math.Min(remainingQuantity, line.QuantityOrdered - line.QuantityReceived);
+                var outstandingQuantity = line.QuantityOrdered - line.QuantityReceived -
+                    allocatedByLineId.GetValueOrDefault(line.Id);
+                if (outstandingQuantity <= 0) continue;
+                var receivedQuantity = Math.Min(remainingQuantity, outstandingQuantity);
                 _db.SupplierOrderReceiptAllocations.Add(new SupplierOrderReceiptAllocation
                 {
                     SupplierOrderLineId = line.Id,
@@ -156,6 +161,7 @@ public class ReceiptService : IReceiptService
                     QuantityApplied = receivedQuantity
                 });
                 affectedOrderIds.Add(line.SupplierOrderId);
+                allocatedByLineId[line.Id] = allocatedByLineId.GetValueOrDefault(line.Id) + receivedQuantity;
                 remainingQuantity -= receivedQuantity;
             }
         }

@@ -235,6 +235,39 @@ public class ReceiptServiceTests
         Assert.Equal(SupplierOrderStatus.Ordered, (await db.SupplierOrders.SingleAsync()).Status);
     }
 
+    [Fact]
+    public async Task Upload_DuplicateProductLines_CapsFulfillmentAtOrderQuantity()
+    {
+        using var db = CreateDbContext(Guid.NewGuid().ToString());
+        SeedOrder(db, 1, 1, 10);
+        await db.SaveChangesAsync();
+
+        await UploadPurchaseItems(CreateService(db), 1,
+            new ReceiptItemDto(1, 8m, 1m),
+            new ReceiptItemDto(1, 8m, 1m));
+
+        var line = await db.SupplierOrderLines.SingleAsync();
+        Assert.Equal(10m, line.QuantityReceived);
+        Assert.Equal(10m, await db.SupplierOrderReceiptAllocations.SumAsync(allocation => allocation.QuantityApplied));
+        Assert.Equal(16, (await db.Products.FindAsync(1L))!.QuantityInStock);
+        Assert.Equal(2, await db.StockAdjustments.CountAsync(movement => movement.Reason == StockAdjustmentReason.Restock));
+    }
+
+    [Fact]
+    public async Task Upload_SameCalendarDateWithDifferentTimes_FulfillsOrder()
+    {
+        using var db = CreateDbContext(Guid.NewGuid().ToString());
+        SeedOrder(db, 1, 1, 10);
+        db.SupplierOrders.Local.Single().OrderDate = new DateTime(2026, 9, 13, 23, 0, 0);
+        db.InventoryCostTransitionBaselines.Local.Single().CutoffAt = new DateTime(2026, 9, 1);
+        await db.SaveChangesAsync();
+
+        await UploadPurchase(CreateService(db), 1, 1, 10, new DateTime(2026, 9, 13, 0, 1, 0));
+
+        Assert.Equal(10m, (await db.SupplierOrderLines.SingleAsync()).QuantityReceived);
+        Assert.Equal(SupplierOrderStatus.Received, (await db.SupplierOrders.SingleAsync()).Status);
+    }
+
     private static void SeedOrder(AppDbContext db, int supplierId, long productId, decimal quantity)
     {
         db.Products.Add(new Product { Id = productId, Name = "Coke" });
@@ -265,6 +298,16 @@ public class ReceiptServiceTests
 
     private static async Task UploadPurchase(IReceiptService service, int supplierId, long productId, decimal quantity, DateTime? purchaseDate = null)
     {
+        await UploadPurchaseItems(service, supplierId, new[] { new ReceiptItemDto(productId, quantity, 1m) }, purchaseDate);
+    }
+
+    private static async Task UploadPurchaseItems(IReceiptService service, int supplierId, params ReceiptItemDto[] items)
+    {
+        await UploadPurchaseItems(service, supplierId, items, null);
+    }
+
+    private static async Task UploadPurchaseItems(IReceiptService service, int supplierId, ReceiptItemDto[] items, DateTime? purchaseDate)
+    {
         var content = new MemoryStream(new byte[] { 1 });
         var file = new Mock<IFormFile>();
         file.Setup(item => item.Length).Returns(1);
@@ -273,7 +316,7 @@ public class ReceiptServiceTests
         file.Setup(item => item.CopyToAsync(It.IsAny<Stream>(), default))
             .Returns((Stream stream, System.Threading.CancellationToken token) => content.CopyToAsync(stream, token));
         await service.Upload(file.Object, "Purchase", null, null, null, null, purchaseDate, supplierId,
-            new[] { new ReceiptItemDto(productId, quantity, 1m) });
+            items);
     }
 
     [Fact]
