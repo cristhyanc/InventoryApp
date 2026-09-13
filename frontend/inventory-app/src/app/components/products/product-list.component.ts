@@ -1,7 +1,7 @@
 import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { RouterLink, ActivatedRoute } from '@angular/router';
+import { RouterLink, ActivatedRoute, Router } from '@angular/router';
 import { ProductService } from '../../services/product.service';
 import { CategoryService } from '../../services/category.service';
 import { SupplierService } from '../../services/supplier.service';
@@ -46,6 +46,7 @@ export class ProductListComponent implements OnInit {
     private supplierService: SupplierService,
     private supplierOrderService: SupplierOrderService,
     private route: ActivatedRoute,
+    private router: Router,
     private toastService: ToastService
   ) {}
 
@@ -54,8 +55,16 @@ export class ProductListComponent implements OnInit {
     this.supplierService.getAll().subscribe((s) => (this.suppliers = s));
 
     this.route.queryParams.subscribe((params) => {
-      if (params['lowStockOnly'] === 'true') this.lowStockOnly = true;
-      this.reorderView = this.lowStockOnly ? 'needs' : 'all';
+      // Handle reorderView parameter
+      if (params['reorderView']) {
+        this.reorderView = params['reorderView'] as 'needs' | 'onOrder' | 'all';
+      } else if (params['lowStockOnly'] === 'true') {
+        // Backward compatibility with lowStockOnly parameter
+        this.reorderView = 'needs';
+      } else {
+        this.reorderView = 'all';
+      }
+      this.lowStockOnly = this.reorderView === 'needs';
       this.applyFilters();
     });
   }
@@ -157,6 +166,10 @@ export class ProductListComponent implements OnInit {
       },
       error: () => this.toastService.error('Unable to cancel this supplier order.')
     });
+  }
+
+  receiveOrder(order: SupplierOrder): void {
+    this.router.navigate(['/receipts/new'], { queryParams: { supplierOrderId: order.id } });
   }
 
   orderStatus(status: number): string {

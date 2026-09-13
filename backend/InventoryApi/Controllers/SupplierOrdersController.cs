@@ -16,6 +16,13 @@ public class SupplierOrdersController : ControllerBase
     [HttpGet]
     public async Task<ActionResult<IEnumerable<SupplierOrder>>> GetActive() => Ok(await _service.GetActive());
 
+    [HttpGet("{id:int}")]
+    public async Task<ActionResult<SupplierOrder>> GetById(int id)
+    {
+        var order = await _service.GetById(id);
+        return order is null ? NotFound() : Ok(order);
+    }
+
     [HttpPost]
     public async Task<ActionResult<SupplierOrder>> Create(SupplierOrderCreateDto dto)
     {
