@@ -1,5 +1,10 @@
 <div class="mb-6 flex flex-wrap items-center justify-between gap-4">
   <h1 class="text-2xl font-semibold text-slate-800">Products</h1>
+  <div class="flex overflow-hidden rounded-md border border-slate-300 text-sm">
+    <button type="button" class="px-3 py-2" [ngClass]="reorderView === 'needs' ? 'bg-blue-600 text-white' : 'bg-white text-slate-700'" (click)="setReorderView('needs')">Needs ordering</button>
+    <button type="button" class="border-x border-slate-300 px-3 py-2" [ngClass]="reorderView === 'onOrder' ? 'bg-blue-600 text-white' : 'bg-white text-slate-700'" (click)="setReorderView('onOrder')">On order</button>
+    <button type="button" class="px-3 py-2" [ngClass]="reorderView === 'all' ? 'bg-blue-600 text-white' : 'bg-white text-slate-700'" (click)="setReorderView('all')">All</button>
+  </div>
 </div>
 
 <div class="mb-6 rounded-xl bg-white p-6 shadow-sm">
@@ -29,6 +34,23 @@
   </div>
 </div>
 
+@if (reorderView === 'needs') {
+  <div class="mb-4 flex justify-end">
+    <button type="button" class="rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50" [disabled]="selectedProductIds.size === 0" (click)="openOrderForm()">Mark as ordered</button>
+  </div>
+}
+
+@if (reorderView === 'onOrder') {
+  <div class="rounded-xl bg-white p-6 shadow-sm">
+    @if (orders.length === 0) {
+      <p class="text-sm text-slate-500">No active supplier orders.</p>
+    } @else {
+      <div class="overflow-x-auto"><table class="min-w-full divide-y divide-slate-200 text-sm"><thead class="bg-slate-50"><tr><th class="px-4 py-3 text-left">Supplier</th><th class="px-4 py-3 text-left">Product</th><th class="px-4 py-3 text-left">Ordered</th><th class="px-4 py-3 text-left">Received</th><th class="px-4 py-3 text-left">Outstanding</th><th class="px-4 py-3 text-left">Order date</th><th class="px-4 py-3 text-left">Expected</th><th class="px-4 py-3 text-left">Reference</th><th class="px-4 py-3 text-left">Status</th><th></th></tr></thead><tbody class="divide-y divide-slate-100">
+        @for (order of orders; track order.id) { @for (line of order.lines; track line.id) { <tr><td class="px-4 py-3">{{ order.supplier?.name || 'Unknown' }}</td><td class="px-4 py-3">{{ line.product?.name }}</td><td class="px-4 py-3">{{ line.quantityOrdered }}</td><td class="px-4 py-3">{{ line.quantityReceived }}</td><td class="px-4 py-3 font-semibold">{{ line.outstandingQuantity }}</td><td class="px-4 py-3">{{ order.orderDate | date:'mediumDate' }}</td><td class="px-4 py-3">{{ order.expectedDate ? (order.expectedDate | date:'mediumDate') : '—' }}</td><td class="px-4 py-3">{{ order.reference || '—' }}</td><td class="px-4 py-3">{{ orderStatus(order.status) }}</td><td class="px-4 py-3">@if (order.status < 2) { <button type="button" class="text-red-700" (click)="cancelOrder(order)">Cancel</button> }</td></tr> } }
+      </tbody></table></div>
+    }
+  </div>
+} @else {
 <div class="rounded-xl bg-white p-6 shadow-sm">
   @if (products.length === 0) {
     <p class="text-sm text-slate-500">No products match your filters.</p>
@@ -37,6 +59,7 @@
       <table class="min-w-full divide-y divide-slate-200 text-sm">
         <thead class="bg-slate-50">
           <tr>
+            @if (reorderView === 'needs') { <th class="px-4 py-3 text-left font-semibold text-slate-700"></th> }
             <th class="px-4 py-3 text-left font-semibold text-slate-700">Name</th>            
             <th class="px-4 py-3 text-left font-semibold text-slate-700">Category</th>
             <th class="px-4 py-3 text-left font-semibold text-slate-700">Supplier</th>
@@ -45,6 +68,7 @@
             @if (lowStockOnly) {
               <th class="px-4 py-3 text-left font-semibold text-slate-700">Machine need</th>
               <th class="px-4 py-3 text-left font-semibold text-slate-700">Reorder level</th>
+              <th class="px-4 py-3 text-left font-semibold text-slate-700">On order</th>
               <th class="px-4 py-3 text-left font-semibold text-slate-700">Shortfall</th>
             }
             <th class="px-4 py-3 text-left font-semibold text-slate-700">Status</th>
@@ -54,6 +78,7 @@
         <tbody class="divide-y divide-slate-100 bg-white">
           @for (p of products; track p.id) {
             <tr>
+              @if (reorderView === 'needs') { <td class="px-4 py-3"><input type="checkbox" [checked]="selectedProductIds.has(p.id)" (change)="toggleSelection(p.id, $any($event.target).checked)" /></td> }
               <td class="px-4 py-3 text-slate-700">{{ p.name }}</td>              
               <td class="px-4 py-3 text-slate-600">{{ p.category?.name }}</td>
               <td class="px-4 py-3 text-slate-600">{{ p.supplier?.name }}</td>
@@ -66,6 +91,7 @@
               @if (lowStockOnly) {
                 <td class="px-4 py-3 text-slate-600">{{ p.machineReplenishmentNeed }}</td>
                 <td class="px-4 py-3 text-slate-600">{{ p.reorderLevel }}</td>
+                <td class="px-4 py-3 text-slate-600">{{ p.onOrderQuantity }}</td>
                 <td class="px-4 py-3 font-semibold text-red-700">{{ p.reorderShortfall }}</td>
               }
               <td class="px-4 py-3">
@@ -87,6 +113,24 @@
     </div>
   }
 </div>
+}
+
+@if (showOrderForm) {
+  <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+    <form class="w-full max-w-2xl rounded-lg bg-white p-6 shadow-xl" (ngSubmit)="saveOrder()">
+      <h2 class="mb-4 text-lg font-semibold text-slate-800">Mark products as ordered</h2>
+      <div class="grid gap-4 sm:grid-cols-2">
+        <label>Supplier<select required name="orderSupplier" [(ngModel)]="orderForm.supplierId"><option [ngValue]="null">Select supplier</option>@for (supplier of suppliers; track supplier.id) { <option [ngValue]="supplier.id">{{ supplier.name }}</option> }</select></label>
+        <label>Order date<input required type="date" name="orderDate" [(ngModel)]="orderForm.orderDate" /></label>
+        <label>Expected date<input type="date" name="expectedDate" [(ngModel)]="orderForm.expectedDate" /></label>
+        <label>Reference<input name="reference" [(ngModel)]="orderForm.reference" /></label>
+      </div>
+      <label class="mt-4 block">Notes<textarea name="notes" [(ngModel)]="orderForm.notes"></textarea></label>
+      <div class="mt-4 overflow-x-auto"><table class="min-w-full text-sm"><thead><tr><th class="text-left">Product</th><th class="text-left">Current stock</th><th class="text-left">On order</th><th class="text-left">Order quantity</th></tr></thead><tbody>@for (product of selectedProducts(); track product.id) { <tr><td>{{ product.name }}</td><td>{{ product.quantityInStock }}</td><td>{{ product.onOrderQuantity }}</td><td><input class="max-w-24" type="number" min="1" step="1" [name]="'quantity-' + product.id" [(ngModel)]="orderQuantities[product.id]" /></td></tr> }</tbody></table></div>
+      <div class="mt-6 flex justify-end gap-3"><button type="button" class="rounded-md border border-slate-300 px-3 py-2" (click)="showOrderForm = false">Cancel</button><button type="submit" class="rounded-md bg-blue-600 px-3 py-2 text-white disabled:opacity-50" [disabled]="savingOrder">Create order</button></div>
+    </form>
+  </div>
+}
 
 <app-confirmation-dialog 
   confirmLabel="Delete"

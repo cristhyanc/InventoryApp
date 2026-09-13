@@ -3,6 +3,7 @@ using System;
 using InventoryApi.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace InventoryApi.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260913005745_AddSupplierOrders")]
+    partial class AddSupplierOrders
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -972,33 +975,6 @@ namespace InventoryApi.Migrations
                     b.ToTable("SupplierOrderLines");
                 });
 
-            modelBuilder.Entity("InventoryApi.Models.SupplierOrderReceiptAllocation", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<decimal>("QuantityApplied")
-                        .HasColumnType("decimal(18,4)");
-
-                    b.Property<int>("ReceiptItemId")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<int>("SupplierOrderLineId")
-                        .HasColumnType("INTEGER");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("ReceiptItemId");
-
-                    b.HasIndex("SupplierOrderLineId");
-
-                    b.ToTable("SupplierOrderReceiptAllocations");
-                });
-
             modelBuilder.Entity("InventoryApi.Models.ImportedDevicePayment", b =>
                 {
                     b.HasOne("InventoryApi.Models.ImportedReimbursement", "ImportedReimbursement")
@@ -1179,25 +1155,6 @@ namespace InventoryApi.Migrations
                     b.Navigation("SupplierOrder");
                 });
 
-            modelBuilder.Entity("InventoryApi.Models.SupplierOrderReceiptAllocation", b =>
-                {
-                    b.HasOne("InventoryApi.Models.ReceiptItem", "ReceiptItem")
-                        .WithMany("SupplierOrderAllocations")
-                        .HasForeignKey("ReceiptItemId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("InventoryApi.Models.SupplierOrderLine", "SupplierOrderLine")
-                        .WithMany("ReceiptAllocations")
-                        .HasForeignKey("SupplierOrderLineId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("ReceiptItem");
-
-                    b.Navigation("SupplierOrderLine");
-                });
-
             modelBuilder.Entity("InventoryApi.Models.Category", b =>
                 {
                     b.Navigation("Products");
@@ -1234,11 +1191,6 @@ namespace InventoryApi.Migrations
                     b.Navigation("Items");
                 });
 
-            modelBuilder.Entity("InventoryApi.Models.ReceiptItem", b =>
-                {
-                    b.Navigation("SupplierOrderAllocations");
-                });
-
             modelBuilder.Entity("InventoryApi.Models.Supplier", b =>
                 {
                     b.Navigation("Products");
@@ -1247,11 +1199,6 @@ namespace InventoryApi.Migrations
             modelBuilder.Entity("InventoryApi.Models.SupplierOrder", b =>
                 {
                     b.Navigation("Lines");
-                });
-
-            modelBuilder.Entity("InventoryApi.Models.SupplierOrderLine", b =>
-                {
-                    b.Navigation("ReceiptAllocations");
                 });
 #pragma warning restore 612, 618
         }

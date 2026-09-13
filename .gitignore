@@ -1,4 +1,58 @@
 ﻿################################################################################
 # This .gitignore file was automatically created by Microsoft(R) Visual Studio.
 ################################################################################
-/backend/InventoryApi/Properties/PublishProfiles/vm-manager - Zip Deploy.pubxml.user
+
+# Build output
+[Bb]in/
+[Oo]bj/
+dist/
+out/
+.angular/cache/
+node_modules/
+
+# Test output and coverage
+TestResults/
+**/TestResults/
+coverage/
+*.trx
+*.coverage
+*.coveragexml
+
+# Visual Studio / VS Code local state
+.vs/
+*.user
+*.rsuser
+*.suo
+*.userosscache
+*.sln.docstates
+*.pubxml.user
+.vscode/*.local.json
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+*.swp
+*.bak
+*.orig
+tmp/
+temp/
+**/tmp/
+**/temp/
+
+# Local/runtime database copies
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+
+# Local upload/temp output
+uploads/tmp/
+uploads/temp/
+**/uploads/tmp/
+**/uploads/temp/

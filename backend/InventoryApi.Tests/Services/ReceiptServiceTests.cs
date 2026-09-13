@@ -26,6 +26,300 @@ public class ReceiptServiceTests
     }
 
     [Fact]
+    public async Task Upload_ReceivesMatchingSupplierOrderLine()
+    {
+        using var db = CreateDbContext(Guid.NewGuid().ToString());
+        SeedOrder(db, supplierId: 1, productId: 1, quantity: 24);
+        await db.SaveChangesAsync();
+
+        await UploadPurchase(CreateService(db), supplierId: 1, productId: 1, quantity: 24);
+
+        var line = await db.SupplierOrderLines.SingleAsync();
+        Assert.Equal(24m, line.QuantityReceived);
+        Assert.Equal(SupplierOrderStatus.Received, (await db.SupplierOrders.SingleAsync()).Status);
+    }
+
+    [Fact]
+    public async Task Upload_PartialPurchase_LeavesOutstandingQuantity()
+    {
+        using var db = CreateDbContext(Guid.NewGuid().ToString());
+        SeedOrder(db, supplierId: 1, productId: 1, quantity: 24);
+        await db.SaveChangesAsync();
+
+        await UploadPurchase(CreateService(db), supplierId: 1, productId: 1, quantity: 18);
+
+        var line = await db.SupplierOrderLines.SingleAsync();
+        Assert.Equal(18m, line.QuantityReceived);
+        Assert.Equal(6m, line.QuantityOrdered - line.QuantityReceived);
+        Assert.Equal(SupplierOrderStatus.PartiallyReceived, (await db.SupplierOrders.SingleAsync()).Status);
+    }
+
+    [Fact]
+    public async Task Upload_SecondPurchase_CompletesOutstandingOrder()
+    {
+        using var db = CreateDbContext(Guid.NewGuid().ToString());
+        SeedOrder(db, supplierId: 1, productId: 1, quantity: 24);
+        await db.SaveChangesAsync();
+        var service = CreateService(db);
+
+        await UploadPurchase(service, 1, 1, 18);
+        await UploadPurchase(service, 1, 1, 6);
+
+        var line = await db.SupplierOrderLines.SingleAsync();
+        Assert.Equal(24m, line.QuantityReceived);
+        Assert.Equal(SupplierOrderStatus.Received, (await db.SupplierOrders.SingleAsync()).Status);
+    }
+
+    [Fact]
+    public async Task Upload_ExcessPurchase_ClosesOrderAndKeepsPurchaseStockMovement()
+    {
+        using var db = CreateDbContext(Guid.NewGuid().ToString());
+        SeedOrder(db, supplierId: 1, productId: 1, quantity: 6);
+        await db.SaveChangesAsync();
+
+        await UploadPurchase(CreateService(db), 1, 1, 10);
+
+        Assert.Equal(6m, (await db.SupplierOrderLines.SingleAsync()).QuantityReceived);
+        Assert.Equal(6m, (await db.SupplierOrderReceiptAllocations.SingleAsync()).QuantityApplied);
+        Assert.Equal(10, (await db.Products.FindAsync(1L))!.QuantityInStock);
+        Assert.Single(await db.StockAdjustments.Where(item => item.Reason == StockAdjustmentReason.Restock).ToListAsync());
+    }
+
+    [Fact]
+    public async Task Upload_ReceivingOrder_DoesNotCreateDuplicateStockMovements()
+    {
+        using var db = CreateDbContext(Guid.NewGuid().ToString());
+        SeedOrder(db, supplierId: 1, productId: 1, quantity: 10);
+        await db.SaveChangesAsync();
+
+        await UploadPurchase(CreateService(db), 1, 1, 10);
+
+        Assert.Single(await db.StockAdjustments.Where(item => item.ProductId == 1).ToListAsync());
+    }
+
+    [Fact]
+    public async Task Upload_MultipleOpenOrders_ConsumesOldestOutstandingFirst()
+    {
+        using var db = CreateDbContext(Guid.NewGuid().ToString());
+        db.Products.Add(new Product { Id = 1, Name = "Coke" });
+        AddTransitionBaseline(db, 1, 0);
+        SeedSupplier(db, 1);
+        db.SupplierOrders.AddRange(
+            new SupplierOrder { SupplierId = 1, OrderDate = new DateTime(2026, 1, 1), Lines = { new SupplierOrderLine { ProductId = 1, QuantityOrdered = 10 } } },
+            new SupplierOrder { SupplierId = 1, OrderDate = new DateTime(2026, 1, 2), Lines = { new SupplierOrderLine { ProductId = 1, QuantityOrdered = 10 } } });
+        await db.SaveChangesAsync();
+
+        await UploadPurchase(CreateService(db), 1, 1, 12);
+
+        var lines = await db.SupplierOrderLines.Include(line => line.SupplierOrder).OrderBy(line => line.SupplierOrder.OrderDate).ToListAsync();
+        Assert.Equal(10m, lines[0].QuantityReceived);
+        Assert.Equal(2m, lines[1].QuantityReceived);
+    }
+
+    [Fact]
+    public async Task Upload_DifferentSupplierOrder_IsNotMatched()
+    {
+        using var db = CreateDbContext(Guid.NewGuid().ToString());
+        SeedOrder(db, supplierId: 2, productId: 1, quantity: 10);
+        SeedSupplier(db, 1);
+        await db.SaveChangesAsync();
+
+        await UploadPurchase(CreateService(db), 1, 1, 10);
+
+        Assert.Equal(0m, (await db.SupplierOrderLines.SingleAsync()).QuantityReceived);
+    }
+
+    [Fact]
+    public async Task Delete_ReopensSupplierOrderAndRemovesFulfillmentAllocation()
+    {
+        using var db = CreateDbContext(Guid.NewGuid().ToString());
+        SeedOrder(db, 1, 1, 10);
+        await db.SaveChangesAsync();
+        var service = CreateService(db);
+        await UploadPurchase(service, 1, 1, 10);
+        var receiptId = (await db.Receipts.SingleAsync()).Id;
+
+        Assert.True(await service.Delete(receiptId));
+
+        Assert.Equal(0m, (await db.SupplierOrderLines.SingleAsync()).QuantityReceived);
+        Assert.Equal(SupplierOrderStatus.Ordered, (await db.SupplierOrders.SingleAsync()).Status);
+        Assert.Empty(await db.SupplierOrderReceiptAllocations.ToListAsync());
+    }
+
+    [Fact]
+    public async Task Update_ReducingPurchaseQuantity_ReconcilesFulfillment()
+    {
+        using var db = CreateDbContext(Guid.NewGuid().ToString());
+        SeedOrder(db, 1, 1, 24);
+        await db.SaveChangesAsync();
+        var service = CreateService(db);
+        await UploadPurchase(service, 1, 1, 24);
+        var receipt = await db.Receipts.SingleAsync();
+
+        await service.Update(receipt.Id, null, null, null, null, null, null, 1,
+            new[] { new ReceiptItemDto(1, 18m, 1m) });
+
+        Assert.Equal(18m, (await db.SupplierOrderLines.SingleAsync()).QuantityReceived);
+        Assert.Equal(SupplierOrderStatus.PartiallyReceived, (await db.SupplierOrders.SingleAsync()).Status);
+    }
+
+    [Fact]
+    public async Task Update_IncreasingPurchaseQuantity_ConsumesAdditionalOutstandingQuantity()
+    {
+        using var db = CreateDbContext(Guid.NewGuid().ToString());
+        SeedOrder(db, 1, 1, 24);
+        await db.SaveChangesAsync();
+        var service = CreateService(db);
+        await UploadPurchase(service, 1, 1, 18);
+        var receipt = await db.Receipts.SingleAsync();
+
+        await service.Update(receipt.Id, null, null, null, null, null, null, 1,
+            new[] { new ReceiptItemDto(1, 24m, 1m) });
+
+        Assert.Equal(24m, (await db.SupplierOrderLines.SingleAsync()).QuantityReceived);
+        Assert.Equal(SupplierOrderStatus.Received, (await db.SupplierOrders.SingleAsync()).Status);
+    }
+
+    [Fact]
+    public async Task Update_ChangingSupplier_RemovesOldSupplierFulfillment()
+    {
+        using var db = CreateDbContext(Guid.NewGuid().ToString());
+        SeedOrder(db, 1, 1, 10);
+        SeedSupplier(db, 2);
+        await db.SaveChangesAsync();
+        var service = CreateService(db);
+        await UploadPurchase(service, 1, 1, 10);
+        var receipt = await db.Receipts.SingleAsync();
+
+        await service.Update(receipt.Id, null, null, null, null, null, null, 2,
+            new[] { new ReceiptItemDto(1, 10m, 1m) });
+
+        Assert.Equal(0m, (await db.SupplierOrderLines.SingleAsync()).QuantityReceived);
+        Assert.Empty(await db.SupplierOrderReceiptAllocations.ToListAsync());
+    }
+
+    [Fact]
+    public async Task Update_ChangingProducts_RematchesFulfillment()
+    {
+        using var db = CreateDbContext(Guid.NewGuid().ToString());
+        SeedOrder(db, 1, 1, 10);
+        db.Products.Add(new Product { Id = 2, Name = "Water" });
+        AddTransitionBaseline(db, 2, 0);
+        db.SupplierOrders.Add(new SupplierOrder { SupplierId = 1, Lines = { new SupplierOrderLine { ProductId = 2, QuantityOrdered = 10 } } });
+        await db.SaveChangesAsync();
+        var service = CreateService(db);
+        await UploadPurchase(service, 1, 1, 10);
+        var receipt = await db.Receipts.SingleAsync();
+
+        await service.Update(receipt.Id, null, null, null, null, null, null, 1,
+            new[] { new ReceiptItemDto(2, 10m, 1m) });
+
+        var lines = await db.SupplierOrderLines.OrderBy(line => line.ProductId).ToListAsync();
+        Assert.Equal(0m, lines[0].QuantityReceived);
+        Assert.Equal(10m, lines[1].QuantityReceived);
+    }
+
+    [Fact]
+    public async Task Upload_HistoricalPurchase_DoesNotFulfillFutureOrder()
+    {
+        using var db = CreateDbContext(Guid.NewGuid().ToString());
+        SeedOrder(db, 1, 1, 10);
+        var order = db.SupplierOrders.Local.Single();
+        order.OrderDate = new DateTime(2026, 9, 13);
+        db.InventoryCostTransitionBaselines.Local.Single().CutoffAt = new DateTime(2026, 9, 1);
+        await db.SaveChangesAsync();
+
+        await UploadPurchase(CreateService(db), 1, 1, 10, new DateTime(2026, 9, 5));
+
+        Assert.Equal(0m, (await db.SupplierOrderLines.SingleAsync()).QuantityReceived);
+        Assert.Equal(SupplierOrderStatus.Ordered, (await db.SupplierOrders.SingleAsync()).Status);
+    }
+
+    [Fact]
+    public async Task Upload_DuplicateProductLines_CapsFulfillmentAtOrderQuantity()
+    {
+        using var db = CreateDbContext(Guid.NewGuid().ToString());
+        SeedOrder(db, 1, 1, 10);
+        await db.SaveChangesAsync();
+
+        await UploadPurchaseItems(CreateService(db), 1,
+            new ReceiptItemDto(1, 8m, 1m),
+            new ReceiptItemDto(1, 8m, 1m));
+
+        var line = await db.SupplierOrderLines.SingleAsync();
+        Assert.Equal(10m, line.QuantityReceived);
+        Assert.Equal(10m, await db.SupplierOrderReceiptAllocations.SumAsync(allocation => allocation.QuantityApplied));
+        Assert.Equal(16, (await db.Products.FindAsync(1L))!.QuantityInStock);
+        Assert.Equal(2, await db.StockAdjustments.CountAsync(movement => movement.Reason == StockAdjustmentReason.Restock));
+    }
+
+    [Fact]
+    public async Task Upload_SameCalendarDateWithDifferentTimes_FulfillsOrder()
+    {
+        using var db = CreateDbContext(Guid.NewGuid().ToString());
+        SeedOrder(db, 1, 1, 10);
+        db.SupplierOrders.Local.Single().OrderDate = new DateTime(2026, 9, 13, 23, 0, 0);
+        db.InventoryCostTransitionBaselines.Local.Single().CutoffAt = new DateTime(2026, 9, 1);
+        await db.SaveChangesAsync();
+
+        await UploadPurchase(CreateService(db), 1, 1, 10, new DateTime(2026, 9, 13, 0, 1, 0));
+
+        Assert.Equal(10m, (await db.SupplierOrderLines.SingleAsync()).QuantityReceived);
+        Assert.Equal(SupplierOrderStatus.Received, (await db.SupplierOrders.SingleAsync()).Status);
+    }
+
+    private static void SeedOrder(AppDbContext db, int supplierId, long productId, decimal quantity)
+    {
+        db.Products.Add(new Product { Id = productId, Name = "Coke" });
+        AddTransitionBaseline(db, productId, 0);
+        SeedSupplier(db, supplierId);
+        db.SupplierOrders.Add(new SupplierOrder
+        {
+            SupplierId = supplierId,
+            Lines = { new SupplierOrderLine { ProductId = productId, QuantityOrdered = quantity } }
+        });
+    }
+
+    private static void SeedSupplier(AppDbContext db, int supplierId)
+    {
+        if (db.Suppliers.Local.All(supplier => supplier.Id != supplierId))
+            db.Suppliers.Add(new Supplier { Id = supplierId, Name = $"Supplier {supplierId}" });
+    }
+
+    private static IReceiptService CreateService(AppDbContext db)
+    {
+        var environment = new Mock<IWebHostEnvironment>();
+        var temp = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(temp);
+        environment.Setup(item => item.WebRootPath).Returns(temp);
+        environment.Setup(item => item.ContentRootPath).Returns(temp);
+        return new ReceiptService(db, environment.Object);
+    }
+
+    private static async Task UploadPurchase(IReceiptService service, int supplierId, long productId, decimal quantity, DateTime? purchaseDate = null)
+    {
+        await UploadPurchaseItems(service, supplierId, new[] { new ReceiptItemDto(productId, quantity, 1m) }, purchaseDate);
+    }
+
+    private static async Task UploadPurchaseItems(IReceiptService service, int supplierId, params ReceiptItemDto[] items)
+    {
+        await UploadPurchaseItems(service, supplierId, items, null);
+    }
+
+    private static async Task UploadPurchaseItems(IReceiptService service, int supplierId, ReceiptItemDto[] items, DateTime? purchaseDate)
+    {
+        var content = new MemoryStream(new byte[] { 1 });
+        var file = new Mock<IFormFile>();
+        file.Setup(item => item.Length).Returns(1);
+        file.Setup(item => item.FileName).Returns("purchase.jpg");
+        file.Setup(item => item.ContentType).Returns("image/jpeg");
+        file.Setup(item => item.CopyToAsync(It.IsAny<Stream>(), default))
+            .Returns((Stream stream, System.Threading.CancellationToken token) => content.CopyToAsync(stream, token));
+        await service.Upload(file.Object, "Purchase", null, null, null, null, purchaseDate, supplierId,
+            items);
+    }
+
+    [Fact]
     public async Task Upload_Saves_Receipt()
     {
         using var db = CreateDbContext("receipt_test");
