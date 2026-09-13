@@ -55,8 +55,16 @@ export class ProductListComponent implements OnInit {
     this.supplierService.getAll().subscribe((s) => (this.suppliers = s));
 
     this.route.queryParams.subscribe((params) => {
-      if (params['lowStockOnly'] === 'true') this.lowStockOnly = true;
-      this.reorderView = this.lowStockOnly ? 'needs' : 'all';
+      // Handle reorderView parameter
+      if (params['reorderView']) {
+        this.reorderView = params['reorderView'] as 'needs' | 'onOrder' | 'all';
+      } else if (params['lowStockOnly'] === 'true') {
+        // Backward compatibility with lowStockOnly parameter
+        this.reorderView = 'needs';
+      } else {
+        this.reorderView = 'all';
+      }
+      this.lowStockOnly = this.reorderView === 'needs';
       this.applyFilters();
     });
   }

@@ -10,7 +10,10 @@
 
 <div class="mx-auto w-full max-w-5xl rounded-xl bg-white p-6 shadow-sm">
   @if (loadingSupplierOrder) {
-    <p class="text-sm text-slate-600">Loading supplier order...</p>
+    <div class="rounded-lg bg-blue-50 p-4 text-sm text-blue-900">
+      <strong>Loading supplier order...</strong>
+      <p class="mt-1">Please wait while we load the order details before you can proceed.</p>
+    </div>
   } @else if (noOutstandingItems) {
     <div class="rounded-lg bg-amber-50 p-4 text-sm text-amber-900">
       <strong>This supplier order has no outstanding items to receive.</strong>
@@ -52,7 +55,7 @@
     <p class="mb-4 text-sm text-red-600">{{ error }}</p>
   }
 
-  @if (!noOutstandingItems) {
+  @if (!noOutstandingItems && !loadingSupplierOrder) {
     <form class="space-y-4" (ngSubmit)="upload()">
       <div>
         <label class="mb-1 block text-sm font-medium text-slate-700">Supporting Document *</label>
@@ -98,7 +101,13 @@
             <div class="mb-2 grid gap-2 md:grid-cols-[minmax(0,3fr)_minmax(7rem,1fr)_minmax(9rem,1fr)_auto]">
               <select [(ngModel)]="item.productId" [name]="'product' + $index"><option [ngValue]="0">Select product</option>@for (p of products; track p.id) {<option [ngValue]="p.id">{{ p.name }}</option>}</select>
               <input type="number" min="1" step="1" [(ngModel)]="item.quantity" [name]="'quantity' + $index" placeholder="Quantity" />
-              <div><input type="number" min="0" step="0.0001" [(ngModel)]="item.unitCost" [name]="'unitCost' + $index" placeholder="Unit cost" /><div class="text-xs text-slate-500">{{ lineTotal(item) | currency }}</div></div>
+              <div>
+                <input type="number" min="0" step="0.0001" [(ngModel)]="item.unitCost" [name]="'unitCost' + $index" placeholder="Unit cost" [class.border-red-300]="item.unitCost === null || item.unitCost === undefined" />
+                <div class="text-xs text-slate-500">{{ lineTotal(item) | currency }}</div>
+                @if (item.unitCost === null || item.unitCost === undefined) {
+                  <div class="text-xs text-red-600">Cost required</div>
+                }
+              </div>
               <button type="button" class="text-sm text-red-600" (click)="removeItem($index)">Remove</button>
             </div>
           }
@@ -121,7 +130,7 @@
 
       <div class="flex flex-wrap gap-3">
         <button type="submit" class="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60" [disabled]="saving">Add Purchase</button>
-        <a [routerLink]="supplierOrder ? '/products' : '/receipts'" class="inline-flex items-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Cancel</a>
+        <a [routerLink]="supplierOrderId ? '/products' : '/receipts'" [queryParams]="supplierOrderId ? { reorderView: 'onOrder' } : {}" class="inline-flex items-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Cancel</a>
       </div>
     </form>
   }

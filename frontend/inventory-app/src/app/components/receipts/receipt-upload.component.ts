@@ -5,10 +5,17 @@ import { Router, RouterLink, ActivatedRoute } from '@angular/router';
 import { ReceiptService } from '../../services/receipt.service';
 import { SupplierService } from '../../services/supplier.service';
 import { SupplierOrderService } from '../../services/supplier-order.service';
-import { Product, Supplier, SupplierOrder, SupplierOrderLine } from '../../models/models';
+import { Product, Supplier, SupplierOrder } from '../../models/models';
 import { ReceiptItemPayload } from '../../services/receipt.service';
 import { ProductService } from '../../services/product.service';
 import { ToastService } from '../../services/toast.service';
+
+// Draft item representation where unitCost may be null
+interface DraftReceiptItem {
+  productId: number;
+  quantity: number;
+  unitCost: number | null;
+}
 
 @Component({
   selector: 'app-receipt-upload',
@@ -19,7 +26,7 @@ import { ToastService } from '../../services/toast.service';
 export class ReceiptUploadComponent implements OnInit {
   suppliers: Supplier[] = [];
   products: Product[] = [];
-  items: ReceiptItemPayload[] = [];
+  items: DraftReceiptItem[] = [];
   selectedFile: File | null = null;
   previewUrl: string | null = null;
   saving = false;
@@ -59,12 +66,21 @@ export class ReceiptUploadComponent implements OnInit {
       const id = params['supplierOrderId'];
       if (id) {
         this.loadSupplierOrder(Number(id));
+      } else {
+        // If no supplierOrderId, reset the loading state and error
+        this.loadingSupplierOrder = false;
+        this.noOutstandingItems = false;
+        if (!this.supplierOrderId) {
+          this.error = '';
+        }
       }
     });
   }
 
   private loadSupplierOrder(id: number): void {
     this.loadingSupplierOrder = true;
+    this.error = '';
+    this.noOutstandingItems = false;
     this.supplierOrderService.getById(id).subscribe({
       next: (order) => {
         this.supplierOrderId = id;
@@ -75,6 +91,8 @@ export class ReceiptUploadComponent implements OnInit {
       error: () => {
         this.error = 'Unable to load supplier order.';
         this.loadingSupplierOrder = false;
+        this.supplierOrderId = null;
+        this.supplierOrder = null;
       }
     });
   }
@@ -103,10 +121,11 @@ export class ReceiptUploadComponent implements OnInit {
       return;
     }
 
+    // Use draft items with nullable unitCost - do NOT convert null to 0
     this.items = outstandingLines.map((line) => ({
       productId: line.productId,
       quantity: line.outstandingQuantity,
-      unitCost: line.unitPrice ?? 0
+      unitCost: line.unitPrice ?? null
     }));
   }
 
@@ -127,6 +146,11 @@ export class ReceiptUploadComponent implements OnInit {
   }
 
   upload(): void {
+    if (this.loadingSupplierOrder) {
+      this.error = 'Please wait while the supplier order is loading.';
+      return;
+    }
+
     if (this.noOutstandingItems) {
       this.error = 'This supplier order has no outstanding items to receive.';
       return;
@@ -141,8 +165,22 @@ export class ReceiptUploadComponent implements OnInit {
       return;
     }
 
+    // Validate that all items have a valid unitCost
+    const invalidItems = this.items.filter(item => item.unitCost === null || item.unitCost === undefined || item.unitCost < 0);
+    if (invalidItems.length > 0) {
+      this.error = `Please enter a unit cost for all items. ${invalidItems.length} item(s) have missing or invalid cost.`;
+      return;
+    }
+
     this.error = '';
     this.saving = true;
+
+    // Map draft items to ReceiptItemPayload only after validation
+    const validItems: ReceiptItemPayload[] = this.items.map(item => ({
+      productId: item.productId,
+      quantity: item.quantity,
+      unitCost: item.unitCost as number  // Safe to cast after validation
+    }));
 
     this.receiptService
       .upload({
@@ -153,8 +191,8 @@ export class ReceiptUploadComponent implements OnInit {
         deliveryCost: this.form.deliveryCost,
         packageCost: this.form.packageCost,
         purchaseDate: this.purchaseTimestamp(),
-        supplierId: this.form.supplierId === '' ? null : this.form.supplierId
-        , items: this.items
+        supplierId: this.form.supplierId === '' ? null : this.form.supplierId,
+        items: validItems
       })
       .subscribe({
         next: () => {
@@ -173,10 +211,10 @@ export class ReceiptUploadComponent implements OnInit {
       });
   }
 
-  addItem(): void { this.items.push({ productId: this.products[0]?.id ?? 0, quantity: 1, unitCost: 0 }); }
+  addItem(): void { this.items.push({ productId: this.products[0]?.id ?? 0, quantity: 1, unitCost: null }); }
   removeItem(index: number): void { this.items.splice(index, 1); }
-  itemProduct(item: ReceiptItemPayload): Product | undefined { return this.products.find(p => p.id === Number(item.productId)); }
-  lineTotal(item: ReceiptItemPayload): number { return Number(item.quantity || 0) * Number(item.unitCost || 0); }
+  itemProduct(item: DraftReceiptItem): Product | undefined { return this.products.find(p => p.id === Number(item.productId)); }
+  lineTotal(item: DraftReceiptItem): number { return Number(item.quantity || 0) * Number(item.unitCost || 0); }
   get itemsSubtotal(): number { return this.items.reduce((sum, item) => sum + this.lineTotal(item), 0); }
 
   private purchaseTimestamp(): string | null {

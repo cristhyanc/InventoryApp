@@ -6,15 +6,15 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
-//builder.Services.AddSwaggerGen(c =>
-//{
-//    c.SwaggerDoc("v1", new Microsoft.OpenApi.Models.OpenApiInfo
-//    {
-//        Title = "Inventory API",
-//        Version = "v1",
-//        Description = "Manage inventory for snacks and drinks, including suppliers, categories, stock adjustments, and receipt uploads."
-//    });
-//});
+builder.Services.AddSwaggerGen(c =>
+{
+    c.SwaggerDoc("v1", new Microsoft.OpenApi.Models.OpenApiInfo
+    {
+        Title = "Inventory API",
+        Version = "v1",
+        Description = "Manage inventory for snacks and drinks, including suppliers, categories, stock adjustments, and receipt uploads."
+    });
+});
 
 builder.Services.AddDbContext<AppDbContext>(options =>
 {
@@ -66,11 +66,11 @@ using (var scope = app.Services.CreateScope())
     //DbInitializer.Seed(db);
 }
 
-//if (app.Environment.IsDevelopment())
-//{
-//    app.UseSwagger();
-//    app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "Inventory API v1"));
-//}
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "Inventory API v1"));
+}
 
 app.UseStaticFiles(); // serves wwwroot/receipts if direct static access is desired
 app.UseCors("AllowAngularDevClient");
