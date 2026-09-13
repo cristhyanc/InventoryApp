@@ -108,6 +108,7 @@ public class ReceiptService : IReceiptService
             await using var transaction = await BeginTransactionAsync();
             _db.Receipts.Add(receipt);
             await _db.SaveChangesAsync();
+            await AllocateSupplierOrderFulfillmentAsync(receipt);
             foreach (var item in receipt.Items)
                 _db.StockAdjustments.Add(CreatePurchaseMovement(item, receipt.PurchaseDate));
             await _db.SaveChangesAsync();
@@ -124,6 +125,92 @@ public class ReceiptService : IReceiptService
         return receipt;
     }
 
+    private async Task AllocateSupplierOrderFulfillmentAsync(Receipt receipt)
+    {
+        if (!receipt.SupplierId.HasValue) return;
+        var affectedOrderIds = new HashSet<int>();
+        var allocatedByLineId = new Dictionary<int, decimal>();
+        var purchaseDayEnd = receipt.PurchaseDate.Date.AddDays(1);
+        foreach (var receiptItem in receipt.Items)
+        {
+            var remainingQuantity = receiptItem.Quantity;
+            var lines = await _db.SupplierOrderLines
+                .Include(line => line.SupplierOrder)
+                .Where(line => line.ProductId == receiptItem.ProductId &&
+                    line.SupplierOrder.SupplierId == receipt.SupplierId &&
+                    line.SupplierOrder.OrderDate < purchaseDayEnd &&
+                    line.SupplierOrder.Status != SupplierOrderStatus.Cancelled &&
+                    line.SupplierOrder.Status != SupplierOrderStatus.Received &&
+                    line.QuantityReceived < line.QuantityOrdered)
+                .OrderBy(line => line.SupplierOrder.OrderDate)
+                .ThenBy(line => line.SupplierOrder.Id)
+                .ThenBy(line => line.Id)
+                .ToListAsync();
+
+            foreach (var line in lines)
+            {
+                if (remainingQuantity <= 0) break;
+                var outstandingQuantity = line.QuantityOrdered - line.QuantityReceived -
+                    allocatedByLineId.GetValueOrDefault(line.Id);
+                if (outstandingQuantity <= 0) continue;
+                var receivedQuantity = Math.Min(remainingQuantity, outstandingQuantity);
+                _db.SupplierOrderReceiptAllocations.Add(new SupplierOrderReceiptAllocation
+                {
+                    SupplierOrderLineId = line.Id,
+                    ReceiptItemId = receiptItem.Id,
+                    QuantityApplied = receivedQuantity
+                });
+                affectedOrderIds.Add(line.SupplierOrderId);
+                allocatedByLineId[line.Id] = allocatedByLineId.GetValueOrDefault(line.Id) + receivedQuantity;
+                remainingQuantity -= receivedQuantity;
+            }
+        }
+
+        await _db.SaveChangesAsync();
+        await RecalculateSupplierOrderFulfillmentAsync(affectedOrderIds);
+    }
+
+    private async Task RemoveSupplierOrderFulfillmentAsync(IEnumerable<int> receiptItemIds)
+    {
+        var allocations = await _db.SupplierOrderReceiptAllocations
+            .Where(allocation => receiptItemIds.Contains(allocation.ReceiptItemId))
+            .ToListAsync();
+        if (allocations.Count == 0) return;
+
+        var orderIds = await _db.SupplierOrderLines
+            .Where(line => allocations.Select(allocation => allocation.SupplierOrderLineId).Contains(line.Id))
+            .Select(line => line.SupplierOrderId)
+            .Distinct()
+            .ToListAsync();
+        _db.SupplierOrderReceiptAllocations.RemoveRange(allocations);
+        await _db.SaveChangesAsync();
+        await RecalculateSupplierOrderFulfillmentAsync(orderIds);
+    }
+
+    private async Task RecalculateSupplierOrderFulfillmentAsync(IEnumerable<int> orderIds)
+    {
+        var ids = orderIds.Distinct().ToList();
+        if (ids.Count == 0) return;
+        var orders = await _db.SupplierOrders
+            .Include(order => order.Lines)
+                .ThenInclude(line => line.ReceiptAllocations)
+            .Where(order => ids.Contains(order.Id))
+            .ToListAsync();
+        foreach (var order in orders)
+        {
+            foreach (var line in order.Lines)
+                line.QuantityReceived = line.ReceiptAllocations.Sum(allocation => allocation.QuantityApplied);
+            if (order.Status != SupplierOrderStatus.Cancelled)
+                order.Status = order.Lines.All(line => line.QuantityReceived >= line.QuantityOrdered)
+                    ? SupplierOrderStatus.Received
+                    : order.Lines.Any(line => line.QuantityReceived > 0)
+                        ? SupplierOrderStatus.PartiallyReceived
+                        : SupplierOrderStatus.Ordered;
+            order.UpdatedAt = DateTime.UtcNow;
+        }
+        await _db.SaveChangesAsync();
+    }
+
     public async Task<Receipt?> Update(int id, string? title, string? notes, decimal? totalAmount, decimal? deliveryCost, decimal? packageCost, DateTime? purchaseDate, int? supplierId, IReadOnlyList<ReceiptItemDto>? items = null)
     {
         var receipt = await _db.Receipts.Include(r => r.Supplier).Include(r => r.Items)
@@ -133,6 +220,7 @@ public class ReceiptService : IReceiptService
         if (supplierId.HasValue && !await _db.Suppliers.AnyAsync(s => s.Id == supplierId)) return null;
 
         var originalPurchaseDate = receipt.PurchaseDate;
+        var originalSupplierId = receipt.SupplierId;
         var originalItems = receipt.Items.ToList();
         receipt.Title = string.IsNullOrWhiteSpace(title) ? receipt.Title : title;
         receipt.Notes = notes;
@@ -141,8 +229,12 @@ public class ReceiptService : IReceiptService
         receipt.PackageCost = packageCost;
         receipt.PurchaseDate = purchaseDate ?? receipt.PurchaseDate;
         receipt.SupplierId = supplierId;
+        var requiresFulfillmentReconciliation = items is not null ||
+            originalSupplierId != receipt.SupplierId || originalPurchaseDate != receipt.PurchaseDate;
         var affected = new Dictionary<long, DateTime>();
         await using var transaction = await BeginTransactionAsync();
+        if (requiresFulfillmentReconciliation)
+            await RemoveSupplierOrderFulfillmentAsync(originalItems.Select(item => item.Id));
         if (items is not null)
         {
             var validated = await ValidateItemsAsync(items);
@@ -242,6 +334,8 @@ public class ReceiptService : IReceiptService
             }
         }
         await _db.SaveChangesAsync();
+        if (requiresFulfillmentReconciliation)
+            await AllocateSupplierOrderFulfillmentAsync(receipt);
         await RebuildAffectedAsync(affected.Select(item => (item.Key, item.Value)));
         await _db.SaveChangesAsync();
         if (transaction is not null) await transaction.CommitAsync();
@@ -261,6 +355,7 @@ public class ReceiptService : IReceiptService
         await EnsureNoPreCutoffMovementsAsync(movements);
         var affected = movements.Select(movement => (movement.ProductId, movement.EffectiveAt)).ToList();
         await using var transaction = await BeginTransactionAsync();
+        await RemoveSupplierOrderFulfillmentAsync(receipt.Items.Select(item => item.Id));
         _db.StockAdjustments.RemoveRange(movements);
         _db.Receipts.Remove(receipt);
         await _db.SaveChangesAsync();

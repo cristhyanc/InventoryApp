@@ -13,6 +13,8 @@ public class ReceiptItem
     public virtual Product? Product { get; set; }
     public decimal Quantity { get; set; }
     public decimal UnitCost { get; set; }
+    [JsonIgnore]
+    public virtual ICollection<SupplierOrderReceiptAllocation> SupplierOrderAllocations { get; set; } = new List<SupplierOrderReceiptAllocation>();
 
     [NotMapped]
     public decimal LineTotal => Quantity * UnitCost;
