@@ -165,6 +165,13 @@ export interface StockAdjustmentDto {
   notes?: string | null;
   machineId?: number | null;
   EatBefore?: string | null;
+  unitCost?: number | null;
+}
+
+export interface RestockCostSuggestion {
+  unitCost: number | null;
+  source: 'LastPurchase' | 'AverageUnitCost' | 'None';
+  purchaseDate: string | null;
 }
 
 export interface Receipt {

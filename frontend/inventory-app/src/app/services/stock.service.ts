@@ -1,7 +1,7 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
-import { StockAdjustment, StockAdjustmentDto } from '../models/models';
+import { RestockCostSuggestion, StockAdjustment, StockAdjustmentDto } from '../models/models';
 import { ConfigService } from './config.service';
 
 @Injectable({ providedIn: 'root' })
@@ -14,6 +14,10 @@ export class StockService {
 
   history(productId: number): Observable<StockAdjustment[]> {
     return this.http.get<StockAdjustment[]>(`${this.baseUrl}/${productId}/stock`);
+  }
+
+  restockCostSuggestion(productId: number): Observable<RestockCostSuggestion> {
+    return this.http.get<RestockCostSuggestion>(`${this.baseUrl}/${productId}/stock/restock-cost-suggestion`);
   }
 
   adjust(productId: number, payload: StockAdjustmentDto): Observable<StockAdjustment> {
