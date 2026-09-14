@@ -27,16 +27,23 @@
     <form class="space-y-4" (ngSubmit)="adjust()">
       <div>
         <label class="mb-1 block text-sm font-medium text-slate-700">Quantity Change *</label>
-        <input [(ngModel)]="form.quantityChange" name="quantityChange" type="number" required placeholder="e.g. 20 to add, -5 to remove" />
+        <input [(ngModel)]="form.quantityChange" (ngModelChange)="onAdjustmentInputsChanged()" name="quantityChange" type="number" required placeholder="e.g. 20 to add, -5 to remove" />
       </div>
       <div>
         <label class="mb-1 block text-sm font-medium text-slate-700">Reason</label>
-        <select [(ngModel)]="form.reason" name="reason">
+        <select [(ngModel)]="form.reason" (ngModelChange)="onAdjustmentInputsChanged()" name="reason">
           @for (r of reasonOptions; track r.value) {
             <option [ngValue]="r.value">{{ r.label }}</option>
           }
         </select>
       </div>
+      @if (requiresRestockCost) {
+        <div>
+          <label class="mb-1 block text-sm font-medium text-slate-700">Unit Cost *</label>
+          <input [(ngModel)]="form.unitCost" name="unitCost" type="number" min="0" step="0.0001" required placeholder="Acquisition cost per unit" />
+          <p class="mt-1 text-xs text-slate-500">{{ restockCostHelp }}</p>
+        </div>
+      }
       <div>
         <label class="mb-1 block text-sm font-medium text-slate-700">Machine (optional)</label>
         <select [(ngModel)]="form.machineId" name="machineId">

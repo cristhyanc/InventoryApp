@@ -33,7 +33,14 @@ public record StockAdjustmentDto(
     StockAdjustmentReason Reason,
     string? Notes,
     long? MachineId,
-    DateTime? EatBefore
+    DateTime? EatBefore,
+    decimal? UnitCost = null
+);
+
+public record RestockCostSuggestionDto(
+    decimal? UnitCost,
+    string Source,
+    DateTime? PurchaseDate
 );
 
 public record CategoryDto(string Name, string? Description);
