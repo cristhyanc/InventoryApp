@@ -21,6 +21,13 @@ public class StockController : ControllerBase
         return Ok(history);
     }
 
+    [HttpGet("restock-cost-suggestion")]
+    public async Task<ActionResult<RestockCostSuggestionDto>> GetRestockCostSuggestion(long productId)
+    {
+        var suggestion = await _service.GetRestockCostSuggestion(productId);
+        return suggestion is null ? NotFound() : Ok(suggestion);
+    }
+
     [HttpPost]
     public async Task<ActionResult<StockAdjustment>> Adjust(long productId, StockAdjustmentDto dto)
     {
@@ -30,6 +37,10 @@ public class StockController : ControllerBase
             adjustment = await _service.Adjust(productId, dto);
         }
         catch (InventoryApi.Services.InsufficientStockException exception)
+        {
+            return BadRequest(exception.Message);
+        }
+        catch (ArgumentException exception)
         {
             return BadRequest(exception.Message);
         }

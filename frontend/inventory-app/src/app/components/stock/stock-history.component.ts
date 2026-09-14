@@ -5,7 +5,7 @@ import { ActivatedRoute, RouterLink } from '@angular/router';
 import { StockService } from '../../services/stock.service';
 import { ProductService } from '../../services/product.service';
 import { MachineService } from '../../services/machine.service';
-import { Product, StockAdjustment, StockAdjustmentReason, Machine } from '../../models/models';
+import { Product, StockAdjustment, StockAdjustmentReason, Machine, RestockCostSuggestion } from '../../models/models';
 
 @Component({
   selector: 'app-stock-history',
@@ -19,13 +19,16 @@ export class StockHistoryComponent implements OnInit {
   machines: Machine[] = [];
   StockAdjustmentReason = StockAdjustmentReason;
   error = '';
+  restockCostSuggestion: RestockCostSuggestion | null = null;
+  private restockCostRequired = false;
 
   form = {
     quantityChange: 0,
     reason: StockAdjustmentReason.Restock,
     machineId: null as number | null,
     notes: '',
-    EatBefore: null as string | null
+    EatBefore: null as string | null,
+    unitCost: null as number | null
   };
 
   reasonOptions = [
@@ -67,16 +70,70 @@ export class StockHistoryComponent implements OnInit {
     return m?.machineName ?? String(machineId);
   }
 
+  get requiresRestockCost(): boolean {
+    return this.form.reason === StockAdjustmentReason.Restock && this.form.quantityChange > 0;
+  }
+
+  get restockCostHelp(): string {
+    if (this.restockCostSuggestion?.source === 'LastPurchase' && this.restockCostSuggestion.unitCost !== null) {
+      return `Last purchase cost: $${this.restockCostSuggestion.unitCost.toFixed(2)}`;
+    }
+    if (this.restockCostSuggestion?.source === 'AverageUnitCost' && this.restockCostSuggestion.unitCost !== null) {
+      return `Using current average cost: $${this.restockCostSuggestion.unitCost.toFixed(2)} - verify before saving`;
+    }
+    return 'No previous purchase cost is available. Enter the actual unit cost.';
+  }
+
+  onAdjustmentInputsChanged(): void {
+    if (this.requiresRestockCost && !this.restockCostRequired) {
+      this.restockCostRequired = true;
+      this.stockService.restockCostSuggestion(this.productId).subscribe({
+        next: (suggestion) => {
+          this.restockCostSuggestion = suggestion;
+          this.form.unitCost = suggestion.unitCost;
+        },
+        error: () => {
+          this.restockCostSuggestion = null;
+          this.form.unitCost = null;
+        }
+      });
+      return;
+    }
+
+    if (!this.requiresRestockCost) {
+      this.restockCostRequired = false;
+      this.restockCostSuggestion = null;
+      this.form.unitCost = null;
+    }
+  }
+
   adjust(): void {
     if (!this.form.quantityChange) {
       this.error = 'Enter a non-zero quantity (use negative numbers to remove stock).';
       return;
     }
+    const unitCost = this.form.unitCost;
+    if (this.requiresRestockCost) {
+      if (unitCost === null || unitCost === undefined) {
+        this.error = 'Unit cost is required for a positive Restock adjustment.';
+        return;
+      }
+      if (unitCost < 0) {
+        this.error = 'Unit cost cannot be negative for a positive Restock adjustment.';
+        return;
+      }
+    }
     this.error = '';
 
-    this.stockService.adjust(this.productId, this.form).subscribe({
+    const payload = {
+      ...this.form,
+      unitCost: this.requiresRestockCost ? this.form.unitCost : null
+    };
+    this.stockService.adjust(this.productId, payload).subscribe({
       next: () => {
-        this.form = { quantityChange: 0, reason: StockAdjustmentReason.Restock, machineId: null, notes: '', EatBefore: '' };
+        this.form = { quantityChange: 0, reason: StockAdjustmentReason.Restock, machineId: null, notes: '', EatBefore: '', unitCost: null };
+        this.restockCostRequired = false;
+        this.restockCostSuggestion = null;
         this.load();
       },
       error: (err) => {

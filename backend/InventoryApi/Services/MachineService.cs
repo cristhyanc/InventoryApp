@@ -199,7 +199,7 @@ public class MachineService : IMachineService
                     var added = new NayaxSales
                     {
                         TransactionID = sale.TransactionID,
-                        TransactionStatusId = sale.TransactionStatusId ?? NayaxTransactionStatusIds.Completed,
+                        TransactionStatusId = sale.SettlementValue>0? NayaxTransactionStatusIds.Completed: NayaxTransactionStatusIds.CancelledOrDeclined250,
                         MachineID = sale.MachineID,
                         NayaxProductId = matchedProduct?.Id ?? sale.NayaxProductId,
                         MachineName = sale.MachineName,
@@ -237,7 +237,7 @@ public class MachineService : IMachineService
                 if (!existing.TransactionStatusId.HasValue)
                 {
                     existing.TransactionStatusId =
-                        sale.TransactionStatusId ?? NayaxTransactionStatusIds.Completed;
+                        sale.SettlementValue>0? NayaxTransactionStatusIds.Completed: NayaxTransactionStatusIds.CancelledOrDeclined250;
                     enriched = true;
                 }
                 if (enriched)

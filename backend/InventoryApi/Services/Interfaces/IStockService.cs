@@ -6,5 +6,6 @@ namespace InventoryApi.Services.Interfaces;
 public interface IStockService
 {
     Task<IEnumerable<StockAdjustment>> History(long productId);
+    Task<RestockCostSuggestionDto?> GetRestockCostSuggestion(long productId);
     Task<StockAdjustment?> Adjust(long productId, StockAdjustmentDto dto);
 }
