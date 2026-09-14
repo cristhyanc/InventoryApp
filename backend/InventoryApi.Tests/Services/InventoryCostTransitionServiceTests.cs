@@ -306,8 +306,9 @@ public class InventoryCostTransitionServiceTests
         nayax.Setup(x => x.GetMachineLastSalesAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxLastSalesReport>
             {
-                new() { TransactionID = 40, MachineID = 1, MachineAuthorizationTime = DateTime.UtcNow },
-                new() { TransactionID = 41, MachineID = 1, MachineAuthorizationTime = DateTime.UtcNow }
+                new() { TransactionID = 40, MachineID = 1, MachineAuthorizationTime = DateTime.UtcNow, SettlementValue = 1 },
+                new() { TransactionID = 41, MachineID = 1, MachineAuthorizationTime = DateTime.UtcNow, SettlementValue = 1 },
+                new() { TransactionID = 42, MachineID = 1, MachineAuthorizationTime = DateTime.UtcNow }
             });
         nayax.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct>());
@@ -320,6 +321,9 @@ public class InventoryCostTransitionServiceTests
         Assert.Equal(
             NayaxTransactionStatusIds.CancelledOrDeclined31,
             (await db.NayaxSales.FindAsync(41L))!.TransactionStatusId);
+        Assert.Equal(
+            NayaxTransactionStatusIds.CancelledOrDeclined250,
+            (await db.NayaxSales.FindAsync(42L))!.TransactionStatusId);
     }
 
     private static AppDbContext CreateDb() =>
