@@ -117,7 +117,7 @@ export class ProductListComponent implements OnInit {
     const selectedProducts = this.products.filter((product) => this.selectedProductIds.has(product.id));
     const supplierIds = [...new Set(selectedProducts.map((product) => product.supplierId).filter((id): id is number => id != null))];
     this.orderForm.supplierId = supplierIds.length === 1 ? supplierIds[0] : null;
-    this.orderQuantities = Object.fromEntries(selectedProducts.map((product) => [product.id, product.reorderShortfall]));
+    this.orderQuantities = Object.fromEntries(selectedProducts.map((product) => [product.id, product.needToOrder]));
     this.showOrderForm = true;
   }
 
@@ -199,6 +199,7 @@ export class ProductListComponent implements OnInit {
       description: product.description ?? null,
       unitPrice: product.unitPrice,
       lowStockThreshold: product.lowStockThreshold,
+      restockTo: product.restockTo,
       unit: product.unit ?? null,
       categoryId: product.categoryId ?? null,
       supplierId: product.supplierId ?? null,

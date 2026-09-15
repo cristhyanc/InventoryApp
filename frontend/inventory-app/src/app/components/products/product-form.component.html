@@ -53,10 +53,21 @@
       <input [(ngModel)]="form.unitPrice" name="unitPrice" type="number" readonly />
     </div>
 
-    <div>
-      <label class="mb-1 block text-sm font-medium text-slate-700">Low Stock Threshold *</label>
-      <input [(ngModel)]="form.lowStockThreshold" name="lowStockThreshold" type="number" min="0" required />
+    <div class="grid gap-4 sm:grid-cols-2">
+      <div>
+        <label class="mb-1 block text-sm font-medium text-slate-700">Low Stock Threshold *</label>
+        <input [(ngModel)]="form.lowStockThreshold" name="lowStockThreshold" type="number" min="0" step="1" required />
+        <p class="mt-1 text-xs text-slate-500">Minimum home stock before a new order is needed.</p>
+      </div>
+      <div>
+        <label class="mb-1 block text-sm font-medium text-slate-700">Restock To *</label>
+        <input [(ngModel)]="form.restockTo" name="restockTo" type="number" min="0" step="1" required />
+        <p class="mt-1 text-xs text-slate-500">Target home stock after machines are replenished and the order is received.</p>
+      </div>
     </div>
+    @if (form.restockTo < form.lowStockThreshold) {
+      <p class="text-sm text-red-600">Restock To must be greater than or equal to the Low Stock Threshold.</p>
+    }
 
     <div>
       <label class="mb-1 block text-sm font-medium text-slate-700">Unit Label</label>
@@ -64,7 +75,7 @@
     </div>
 
     <div class="flex flex-wrap gap-3 pt-2">
-      <button type="submit" class="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60" [disabled]="saving">Update Product</button>
+      <button type="submit" class="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60" [disabled]="saving || form.restockTo < form.lowStockThreshold">Update Product</button>
       <a routerLink="/products" class="inline-flex items-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Cancel</a>
     </div>
   </form>

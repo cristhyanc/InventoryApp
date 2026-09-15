@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using InventoryApi.Data;
@@ -31,43 +32,137 @@ public class ProductServiceTests
         var nayaxMock = new Mock<INayaxLynxClient>();
         IProductService svc = new ProductService(db, nayaxMock.Object);
 
-        var dto = new ProductCreateDto("p1", null, null, 10m, 5, 1, "unit", null, null, true);
-        var product = await svc.Create(new ProductCreateDto("p1", null, null, 10m, 5, 1, "unit", null, null, true));
+        var dto = new ProductCreateDto("p1", null, null, 10m, 5, 1, 10, "unit", null, null, true);
+        var product = await svc.Create(new ProductCreateDto("p1", null, null, 10m, 5, 1, 10, "unit", null, null, true));
 
         Assert.NotNull(product);
         Assert.Equal("p1", product.Name);
+        Assert.Equal(10, product.RestockTo);
 
         // Verify stock adjustment created
         var adjustments = await db.StockAdjustments.ToListAsync();
         Assert.Single(adjustments);
 
-        var updateDto = new ProductUpdateDto("p1-up", null, null, 12m, 1, "unit", null, null, true);
+        var updateDto = new ProductUpdateDto("p1-up", null, null, 12m, 1, 12, "unit", null, null, true);
         var ok = await svc.Update(product.Id, updateDto);
         Assert.True(ok);
+        Assert.Equal(12, (await db.Products.FindAsync(product.Id))!.RestockTo);
 
         var deleted = await svc.Delete(product.Id);
         Assert.True(deleted);
     }
 
     [Fact]
-    public async Task LowStock_OpenOrder_ReducesRemainingReorderRequirement()
+    public async Task AddProductRestockTo_BackfillsExistingProductsFromLowStockThreshold()
+    {
+        var databasePath = Path.Combine(Path.GetTempPath(), $"inventory-migration-{Guid.NewGuid()}.db");
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseSqlite($"Data Source={databasePath};Pooling=False")
+            .Options;
+
+        try
+        {
+            await using (var db = new AppDbContext(options))
+            {
+                await db.Database.MigrateAsync("20260913011850_AddSupplierOrderReceiptAllocations");
+                await db.Database.ExecuteSqlRawAsync("""
+                    INSERT INTO "Products" ("Name", "UnitPrice", "AverageUnitCost", "QuantityInStock", "LowStockThreshold", "IsActive", "CreatedAt", "UpdatedAt")
+                    VALUES ('Legacy product', 1, 0, 7, 23, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+                    """);
+
+                await db.Database.MigrateAsync();
+                var product = await db.Products.SingleAsync(product => product.Name == "Legacy product");
+
+                Assert.Equal(23, product.RestockTo);
+            }
+        }
+        finally
+        {
+            File.Delete(databasePath);
+        }
+    }
+
+    [Theory]
+    [InlineData(32, 3, 57, 114, 0, 85)]
+    [InlineData(32, 3, 57, 114, 20, 65)]
+    [InlineData(70, 0, 57, 114, 0, 0)]
+    [InlineData(60, 3, 57, 114, 0, 57)]
+    [InlineData(32, 3, 57, 114, 85, 0)]
+    public void NeedToOrder_UsesProjectedHomeStockAndOutstandingOrders(
+        int stock, int machineNeed, int threshold, int restockTo, decimal onOrder, decimal expectedNeed)
+    {
+        var product = new Product
+        {
+            QuantityInStock = stock,
+            MachineReplenishmentNeed = machineNeed,
+            LowStockThreshold = threshold,
+            RestockTo = restockTo,
+            OnOrderQuantity = onOrder
+        };
+
+        Assert.Equal(expectedNeed, product.NeedToOrder);
+        Assert.Equal(expectedNeed > 0, product.IsReorderAlert);
+    }
+
+    [Fact]
+    public async Task Create_RejectsInvalidRestockSettings()
     {
         using var db = CreateDbContext(Guid.NewGuid().ToString());
-        db.Products.Add(new Product { Id = 1, Name = "Coke", QuantityInStock = 4, LowStockThreshold = 20 });
+        var service = CreateService(db);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.Create(
+            new ProductCreateDto("Coke", null, null, 1m, 0, 10, 9, "unit", null, null, true)));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.Create(
+            new ProductCreateDto("Coke", null, null, 1m, 0, -1, 0, "unit", null, null, true)));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.Create(
+            new ProductCreateDto("Coke", null, null, 1m, 0, 0, -1, "unit", null, null, true)));
+    }
+
+    [Fact]
+    public async Task Update_RejectsInvalidRestockSettings()
+    {
+        using var db = CreateDbContext(Guid.NewGuid().ToString());
+        db.Products.Add(new Product { Id = 1, Name = "Coke", LowStockThreshold = 5, RestockTo = 10 });
+        await db.SaveChangesAsync();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => CreateService(db).Update(1,
+            new ProductUpdateDto("Coke", null, null, 1m, 10, 9, "unit", null, null, true)));
+    }
+
+    [Fact]
+    public async Task LowStock_OrdersByNeedToOrderDescendingThenName()
+    {
+        using var db = CreateDbContext(Guid.NewGuid().ToString());
+        db.Products.AddRange(
+            new Product { Id = 1, Name = "Zulu", QuantityInStock = 10, LowStockThreshold = 20, RestockTo = 40 },
+            new Product { Id = 2, Name = "Alpha", QuantityInStock = 10, LowStockThreshold = 20, RestockTo = 40 },
+            new Product { Id = 3, Name = "Middle", QuantityInStock = 10, LowStockThreshold = 20, RestockTo = 30 });
+        await db.SaveChangesAsync();
+
+        var alerts = (await CreateService(db).LowStock()).ToList();
+
+        Assert.Equal(new[] { "Alpha", "Zulu", "Middle" }, alerts.Select(product => product.Name));
+    }
+
+    [Fact]
+    public async Task LowStock_OpenOrder_ReducesNeedToOrder()
+    {
+        using var db = CreateDbContext(Guid.NewGuid().ToString());
+        db.Products.Add(new Product { Id = 1, Name = "Coke", QuantityInStock = 4, LowStockThreshold = 20, RestockTo = 20 });
         db.SupplierOrders.Add(new SupplierOrder { SupplierId = 1, Lines = { new SupplierOrderLine { ProductId = 1, QuantityOrdered = 12 } } });
         await db.SaveChangesAsync();
 
         var alerts = await CreateService(db).LowStock();
         var product = Assert.Single(alerts);
         Assert.Equal(12m, product.OnOrderQuantity);
-        Assert.Equal(4m, product.ReorderShortfall);
+        Assert.Equal(4m, product.NeedToOrder);
     }
 
     [Fact]
     public async Task LowStock_FullyCoveredOrder_DoesNotAppearInNeedsOrdering()
     {
         using var db = CreateDbContext(Guid.NewGuid().ToString());
-        db.Products.Add(new Product { Id = 1, Name = "Coke", QuantityInStock = 4, LowStockThreshold = 16 });
+        db.Products.Add(new Product { Id = 1, Name = "Coke", QuantityInStock = 4, LowStockThreshold = 16, RestockTo = 16 });
         db.SupplierOrders.Add(new SupplierOrder { SupplierId = 1, Lines = { new SupplierOrderLine { ProductId = 1, QuantityOrdered = 12 } } });
         await db.SaveChangesAsync();
 
@@ -78,26 +173,26 @@ public class ProductServiceTests
     public async Task LowStock_PartialOutstandingOrder_UsesOnlyOutstandingQuantity()
     {
         using var db = CreateDbContext(Guid.NewGuid().ToString());
-        db.Products.Add(new Product { Id = 1, Name = "Coke", QuantityInStock = 4, LowStockThreshold = 20 });
+        db.Products.Add(new Product { Id = 1, Name = "Coke", QuantityInStock = 4, LowStockThreshold = 20, RestockTo = 20 });
         db.SupplierOrders.Add(new SupplierOrder { SupplierId = 1, Status = SupplierOrderStatus.PartiallyReceived, Lines = { new SupplierOrderLine { ProductId = 1, QuantityOrdered = 12, QuantityReceived = 8 } } });
         await db.SaveChangesAsync();
 
         var product = Assert.Single(await CreateService(db).LowStock());
         Assert.Equal(4m, product.OnOrderQuantity);
-        Assert.Equal(12m, product.ReorderShortfall);
+        Assert.Equal(12m, product.NeedToOrder);
     }
 
     [Fact]
     public async Task LowStock_CancelledOrder_DoesNotCountAsInboundStock()
     {
         using var db = CreateDbContext(Guid.NewGuid().ToString());
-        db.Products.Add(new Product { Id = 1, Name = "Coke", QuantityInStock = 4, LowStockThreshold = 20 });
+        db.Products.Add(new Product { Id = 1, Name = "Coke", QuantityInStock = 4, LowStockThreshold = 20, RestockTo = 20 });
         db.SupplierOrders.Add(new SupplierOrder { SupplierId = 1, Status = SupplierOrderStatus.Cancelled, Lines = { new SupplierOrderLine { ProductId = 1, QuantityOrdered = 12 } } });
         await db.SaveChangesAsync();
 
         var product = Assert.Single(await CreateService(db).LowStock());
         Assert.Equal(0m, product.OnOrderQuantity);
-        Assert.Equal(16m, product.ReorderShortfall);
+        Assert.Equal(16m, product.NeedToOrder);
     }
 
     [Fact]

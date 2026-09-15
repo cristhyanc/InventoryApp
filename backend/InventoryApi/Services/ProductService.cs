@@ -86,7 +86,7 @@ public class ProductService : IProductService
             product.OnOrderQuantity = Math.Max(0m, outstandingByProduct.GetValueOrDefault(product.Id));
 
         return products.Where(p => p.IsReorderAlert)
-            .OrderByDescending(p => p.ReorderShortfall)
+            .OrderByDescending(p => p.NeedToOrder)
             .ThenBy(p => p.Name)
             .ToList();
     }
@@ -95,6 +95,7 @@ public class ProductService : IProductService
     {
         if (dto.InitialUnitCost is < 0)
             throw new InvalidOperationException("Initial unit cost cannot be negative.");
+        ValidateRestockSettings(dto.LowStockThreshold, dto.RestockTo);
 
         var product = new Product
         {
@@ -106,6 +107,7 @@ public class ProductService : IProductService
             IsActive = dto.IsActive,
             QuantityInStock = dto.QuantityInStock,
             LowStockThreshold = dto.LowStockThreshold,
+            RestockTo = dto.RestockTo,
             Unit = dto.Unit,
             CategoryId = dto.CategoryId,
             SupplierId = dto.SupplierId,
@@ -144,16 +146,29 @@ public class ProductService : IProductService
         var product = await _db.Products.FindAsync(id);
         if (product is null) return false;
 
+        ValidateRestockSettings(dto.LowStockThreshold, dto.RestockTo);
+
         product.Sku = dto.Sku;
         product.Description = dto.Description;
         product.IsActive = dto.IsActive;
         product.LowStockThreshold = dto.LowStockThreshold;
+        product.RestockTo = dto.RestockTo;
         product.Unit = dto.Unit;
         product.SupplierId = dto.SupplierId;
         product.UpdatedAt = DateTime.UtcNow;
 
         await _db.SaveChangesAsync();
         return true;
+    }
+
+    private static void ValidateRestockSettings(int lowStockThreshold, int restockTo)
+    {
+        if (lowStockThreshold < 0)
+            throw new InvalidOperationException("Low Stock Threshold cannot be negative.");
+        if (restockTo < 0)
+            throw new InvalidOperationException("Restock To cannot be negative.");
+        if (restockTo < lowStockThreshold)
+            throw new InvalidOperationException("Restock To must be greater than or equal to the Low Stock Threshold.");
     }
 
     public async Task<bool> Delete(long id)

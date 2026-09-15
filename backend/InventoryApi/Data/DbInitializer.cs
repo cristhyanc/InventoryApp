@@ -32,6 +32,7 @@ public static class DbInitializer
                 UnitPrice = 2.50m,
                 QuantityInStock = 40,
                 LowStockThreshold = 10,
+                RestockTo = 10,
                 Unit = "bag",
                 CategoryId = snacksCat.Id,
                 SupplierId = supplier.Id
@@ -43,6 +44,7 @@ public static class DbInitializer
                 UnitPrice = 1.75m,
                 QuantityInStock = 8,
                 LowStockThreshold = 10,
+                RestockTo = 10,
                 Unit = "bar",
                 CategoryId = snacksCat.Id,
                 SupplierId = supplier.Id
@@ -54,6 +56,7 @@ public static class DbInitializer
                 UnitPrice = 1.25m,
                 QuantityInStock = 60,
                 LowStockThreshold = 20,
+                RestockTo = 20,
                 Unit = "can",
                 CategoryId = drinksCat.Id,
                 SupplierId = supplier.Id
@@ -65,6 +68,7 @@ public static class DbInitializer
                 UnitPrice = 1.00m,
                 QuantityInStock = 5,
                 LowStockThreshold = 15,
+                RestockTo = 15,
                 Unit = "bottle",
                 CategoryId = drinksCat.Id,
                 SupplierId = supplier.Id
