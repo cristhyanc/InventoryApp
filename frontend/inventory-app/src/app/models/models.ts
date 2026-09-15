@@ -38,10 +38,10 @@ export interface Product {
   quantityInStock: number;
   maxStockInMachine: number;
   machineReplenishmentNeed: number;
-  reorderLevel: number;
-  reorderShortfall: number;
   onOrderQuantity: number;
   lowStockThreshold: number;
+  restockTo: number;
+  needToOrder: number;
   mdbCode: number | null;
   unit?: string | null;
   lastEatBefore1?: string | null;
@@ -104,6 +104,7 @@ export interface ProductUpdateDto {
   description?: string | null;
   unitPrice: number;
   lowStockThreshold: number;
+  restockTo: number;
   unit?: string | null;
   categoryId?: number | null;
   supplierId?: number | null;

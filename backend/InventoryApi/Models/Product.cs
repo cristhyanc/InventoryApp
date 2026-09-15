@@ -30,13 +30,16 @@ public class Product
     [NotMapped]
     public int MachineReplenishmentNeed { get; set; }
     [NotMapped]
-    public int ReorderLevel => Math.Max(LowStockThreshold, MachineReplenishmentNeed);
-    [NotMapped]
     public decimal OnOrderQuantity { get; set; }
     [NotMapped]
-    public decimal ReorderShortfall => Math.Max(0m, ReorderLevel - QuantityInStock - OnOrderQuantity);
+    public int ProjectedHomeStockAfterMachineNeed => QuantityInStock - MachineReplenishmentNeed;
     public int QuantityInStock { get; set; }
     public int LowStockThreshold { get; set; } = 0;
+    public int RestockTo { get; set; }
+    [NotMapped]
+    public decimal NeedToOrder => ProjectedHomeStockAfterMachineNeed > LowStockThreshold
+        ? 0m
+        : Math.Max(0m, RestockTo + MachineReplenishmentNeed - QuantityInStock - OnOrderQuantity);
     public string? Unit { get; set; } = "unit";
     public bool IsActive { get; set; } = true;
     [NotMapped]
@@ -55,5 +58,5 @@ public class Product
     public virtual ICollection<StockAdjustment> StockAdjustments { get; set; } = new List<StockAdjustment>();
 
     public bool IsLowStock => QuantityInStock <= LowStockThreshold;
-    public bool IsReorderAlert => IsActive && ReorderShortfall > 0;
+    public bool IsReorderAlert => IsActive && NeedToOrder > 0;
 }

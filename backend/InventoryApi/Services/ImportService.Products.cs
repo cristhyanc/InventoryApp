@@ -37,6 +37,7 @@ public sealed partial class ImportService
                 product = new Product
                 {
                     Id = item.NayaxProductId,
+                    RestockTo = 0,
                     CreatedAt = DateTime.UtcNow
                 };
                 newProducts.Add(product);
