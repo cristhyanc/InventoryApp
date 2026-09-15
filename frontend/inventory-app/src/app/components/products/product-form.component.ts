@@ -26,6 +26,7 @@ export class ProductFormComponent implements OnInit {
     description: '',
     unitPrice: 0,
     lowStockThreshold: 5,
+    restockTo: 5,
     unit: 'unit',
     categoryId: '' as number | '',
     supplierId: '' as number | '',
@@ -54,6 +55,7 @@ export class ProductFormComponent implements OnInit {
           description: p.description ?? '',
           unitPrice: p.unitPrice,
           lowStockThreshold: p.lowStockThreshold,
+          restockTo: p.restockTo,
           unit: p.unit ?? 'unit',
           categoryId: p.categoryId ?? '',
           supplierId: p.supplierId ?? '',
@@ -68,6 +70,18 @@ export class ProductFormComponent implements OnInit {
       this.error = 'Name is required.';
       return;
     }
+    if (this.form.lowStockThreshold < 0) {
+      this.error = 'Low Stock Threshold cannot be negative.';
+      return;
+    }
+    if (this.form.restockTo < 0) {
+      this.error = 'Restock To cannot be negative.';
+      return;
+    }
+    if (this.form.restockTo < this.form.lowStockThreshold) {
+      this.error = 'Restock To must be greater than or equal to the Low Stock Threshold.';
+      return;
+    }
     this.error = '';
     this.saving = true;
 
@@ -77,6 +91,7 @@ export class ProductFormComponent implements OnInit {
       description: this.form.description || null,
       unitPrice: this.form.unitPrice,
       lowStockThreshold: this.form.lowStockThreshold,
+      restockTo: this.form.restockTo,
       unit: this.form.unit || null,
       categoryId: this.form.categoryId === '' ? null : this.form.categoryId,
       supplierId: this.form.supplierId === '' ? null : this.form.supplierId,
