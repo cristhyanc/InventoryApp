@@ -32,12 +32,12 @@ public class Product
     [NotMapped]
     public decimal OnOrderQuantity { get; set; }
     [NotMapped]
-    public int ProjectedHomeStockAfterMachineNeed => QuantityInStock - MachineReplenishmentNeed;
+    public decimal ProjectedStockForReorder => QuantityInStock + OnOrderQuantity - MachineReplenishmentNeed;
     public int QuantityInStock { get; set; }
     public int LowStockThreshold { get; set; } = 0;
     public int RestockTo { get; set; }
     [NotMapped]
-    public decimal NeedToOrder => ProjectedHomeStockAfterMachineNeed > LowStockThreshold
+    public decimal NeedToOrder => ProjectedStockForReorder > LowStockThreshold
         ? 0m
         : Math.Max(0m, RestockTo + MachineReplenishmentNeed - QuantityInStock - OnOrderQuantity);
     public string? Unit { get; set; } = "unit";

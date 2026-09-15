@@ -88,7 +88,7 @@ public class ProductServiceTests
     [InlineData(70, 0, 57, 114, 0, 0)]
     [InlineData(60, 3, 57, 114, 0, 57)]
     [InlineData(32, 3, 57, 114, 85, 0)]
-    public void NeedToOrder_UsesProjectedHomeStockAndOutstandingOrders(
+    public void NeedToOrder_UsesProjectedStockForReorderAndOutstandingOrders(
         int stock, int machineNeed, int threshold, int restockTo, decimal onOrder, decimal expectedNeed)
     {
         var product = new Product
@@ -102,6 +102,57 @@ public class ProductServiceTests
 
         Assert.Equal(expectedNeed, product.NeedToOrder);
         Assert.Equal(expectedNeed > 0, product.IsReorderAlert);
+    }
+
+    [Theory]
+    [InlineData(2, 1, 10, 17, 12, 13, 0, false)] // Party Mix regression: outstanding order covers projected need
+    [InlineData(2, 1, 10, 17, 8, 9, 8, true)]   // Incoming order is not sufficient
+    [InlineData(2, 1, 10, 17, 9, 10, 7, true)]  // Exactly at threshold remains reorder-triggered (inclusive)
+    [InlineData(5, 1, 4, 6, 0, 4, 2, true)]      // No outstanding order preserves existing behavior
+    public void NeedToOrder_RegressionCases(
+        int stock, int machineNeed, int threshold, int restockTo, decimal onOrder,
+        decimal expectedProjectedStock, decimal expectedNeed, bool expectedAlert)
+    {
+        var product = new Product
+        {
+            QuantityInStock = stock,
+            MachineReplenishmentNeed = machineNeed,
+            LowStockThreshold = threshold,
+            RestockTo = restockTo,
+            OnOrderQuantity = onOrder
+        };
+
+        Assert.Equal(expectedProjectedStock, product.ProjectedStockForReorder);
+        Assert.Equal(expectedNeed, product.NeedToOrder);
+        Assert.Equal(expectedAlert, product.IsReorderAlert);
+    }
+
+    [Fact]
+    public async Task LowStock_PartyMix_FullyCoveredByOutstandingOrder_IsNotReturned()
+    {
+        using var db = CreateDbContext(Guid.NewGuid().ToString());
+        db.Products.Add(new Product { Id = 1, Name = "Party Mix", QuantityInStock = 2, LowStockThreshold = 10, RestockTo = 17 });
+        db.SupplierOrders.Add(new SupplierOrder { SupplierId = 1, Lines = { new SupplierOrderLine { ProductId = 1, QuantityOrdered = 12 } } });
+        await db.SaveChangesAsync();
+
+        var alerts = await CreateService(db).LowStock();
+
+        Assert.Empty(alerts);
+    }
+
+    [Fact]
+    public async Task LowStock_OnOrderQuantity_IsRetainedOnReturnedProduct()
+    {
+        using var db = CreateDbContext(Guid.NewGuid().ToString());
+        db.Products.Add(new Product { Id = 1, Name = "Party Mix", QuantityInStock = 2, LowStockThreshold = 10, RestockTo = 17 });
+        db.SupplierOrders.Add(new SupplierOrder { SupplierId = 1, Lines = { new SupplierOrderLine { ProductId = 1, QuantityOrdered = 8 } } });
+        await db.SaveChangesAsync();
+
+        var product = Assert.Single(await CreateService(db).LowStock());
+
+        Assert.Equal(8m, product.OnOrderQuantity);
+        Assert.Equal(7m, product.NeedToOrder);
+        Assert.True(product.IsReorderAlert);
     }
 
     [Fact]
