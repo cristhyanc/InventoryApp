@@ -143,10 +143,10 @@ public class ProductService : IProductService
 
     public async Task<bool> Update(long id, ProductUpdateDto dto)
     {
-        ValidateRestockSettings(dto.LowStockThreshold, dto.RestockTo);
-
         var product = await _db.Products.FindAsync(id);
         if (product is null) return false;
+
+        ValidateRestockSettings(dto.LowStockThreshold, dto.RestockTo);
 
         product.Sku = dto.Sku;
         product.Description = dto.Description;
