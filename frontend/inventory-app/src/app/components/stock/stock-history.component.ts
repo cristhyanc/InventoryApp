@@ -23,7 +23,7 @@ export class StockHistoryComponent implements OnInit {
   private restockCostRequired = false;
 
   form = {
-    quantityChange: 0,
+    quantityChange: null as number | null,
     reason: StockAdjustmentReason.Restock,
     machineId: null as number | null,
     notes: '',
@@ -71,7 +71,11 @@ export class StockHistoryComponent implements OnInit {
   }
 
   get requiresRestockCost(): boolean {
-    return this.form.reason === StockAdjustmentReason.Restock && this.form.quantityChange > 0;
+    return this.form.reason === StockAdjustmentReason.Restock && (this.form.quantityChange ?? 0) > 0;
+  }
+
+  get isCorrection(): boolean {
+    return this.form.reason === StockAdjustmentReason.Correction;
   }
 
   get restockCostHelp(): string {
@@ -85,6 +89,10 @@ export class StockHistoryComponent implements OnInit {
   }
 
   onAdjustmentInputsChanged(): void {
+    if (this.isCorrection && this.form.quantityChange !== null) {
+      this.form.quantityChange = Math.abs(this.form.quantityChange);
+    }
+
     if (this.requiresRestockCost && !this.restockCostRequired) {
       this.restockCostRequired = true;
       this.stockService.restockCostSuggestion(this.productId).subscribe({
@@ -108,8 +116,13 @@ export class StockHistoryComponent implements OnInit {
   }
 
   adjust(): void {
-    if (!this.form.quantityChange) {
-      this.error = 'Enter a non-zero quantity (use negative numbers to remove stock).';
+    const quantityChange = this.isCorrection
+      ? -(Math.abs(this.form.quantityChange ?? 0))
+      : this.form.quantityChange;
+    if (quantityChange === null || quantityChange === 0) {
+      this.error = this.isCorrection
+        ? 'Enter a positive quantity to remove.'
+        : 'Enter a non-zero quantity (use negative numbers to remove stock).';
       return;
     }
     const unitCost = this.form.unitCost;
@@ -127,11 +140,12 @@ export class StockHistoryComponent implements OnInit {
 
     const payload = {
       ...this.form,
+      quantityChange,
       unitCost: this.requiresRestockCost ? this.form.unitCost : null
     };
     this.stockService.adjust(this.productId, payload).subscribe({
       next: () => {
-        this.form = { quantityChange: 0, reason: StockAdjustmentReason.Restock, machineId: null, notes: '', EatBefore: '', unitCost: null };
+        this.form = { quantityChange: null, reason: StockAdjustmentReason.Restock, machineId: null, notes: '', EatBefore: '', unitCost: null };
         this.restockCostRequired = false;
         this.restockCostSuggestion = null;
         this.load();
