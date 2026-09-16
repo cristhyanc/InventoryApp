@@ -61,6 +61,9 @@ public class StockService : IStockService
         var productExists = await _db.Products.AnyAsync(p => p.Id == productId);
         if (!productExists) return null;
 
+        if (dto.Reason == StockAdjustmentReason.Correction && dto.QuantityChange >= 0)
+            throw new ArgumentException("Correction quantity must remove stock.");
+
         if (dto.Reason == StockAdjustmentReason.Restock && dto.QuantityChange > 0)
         {
             if (!dto.UnitCost.HasValue)

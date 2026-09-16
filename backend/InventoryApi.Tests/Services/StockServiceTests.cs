@@ -107,7 +107,7 @@ public class StockServiceTests
     }
 
     [Fact]
-    public async Task Failed_rebuild_rolls_back_manual_restock_in_relational_database()
+    public async Task Positive_correction_request_is_rejected_before_persistence()
     {
         await using var connection = new SqliteConnection("Data Source=:memory:");
         await connection.OpenAsync();
@@ -122,8 +122,9 @@ public class StockServiceTests
 
         await using (var db = new AppDbContext(options))
         {
-            await Assert.ThrowsAsync<InventoryCostDataQualityException>(() => new StockService(db).Adjust(
+            var exception = await Assert.ThrowsAsync<ArgumentException>(() => new StockService(db).Adjust(
                 1, new StockAdjustmentDto(3, StockAdjustmentReason.Correction, null, null, null)));
+            Assert.Equal("Correction quantity must remove stock.", exception.Message);
         }
 
         await using var verification = new AppDbContext(options);
@@ -177,7 +178,7 @@ public class StockServiceTests
     }
 
     [Fact]
-    public async Task Positive_adjustment_without_cost_is_rejected_without_inventing_average_cost()
+    public async Task Zero_correction_request_is_rejected_before_persistence()
     {
         using var db = CreateDbContext("stock_unknown_cost_test");
         db.Products.Add(new Product { Id = 1, Name = "p", QuantityInStock = 2, CostingQuantity = 2, InventoryValue = 6m, AverageUnitCost = 3m });
@@ -185,12 +186,30 @@ public class StockServiceTests
         await db.SaveChangesAsync();
 
         IStockService svc = new StockService(db);
-        var exception = await Assert.ThrowsAsync<InventoryCostDataQualityException>(() =>
-            svc.Adjust(1, new StockAdjustmentDto(3, StockAdjustmentReason.Correction, "count correction", null, null)));
+        var exception = await Assert.ThrowsAsync<ArgumentException>(() =>
+            svc.Adjust(1, new StockAdjustmentDto(0, StockAdjustmentReason.Correction, "count correction", null, null)));
 
-        Assert.Contains("has no explicit cost", exception.Message);
-        var movement = await db.StockAdjustments.SingleAsync(x => x.Reason == StockAdjustmentReason.Correction);
-        Assert.Null(movement.UnitCost);
-        Assert.Null(movement.TotalCost);
+        Assert.Equal("Correction quantity must remove stock.", exception.Message);
+        Assert.Single(await db.StockAdjustments.ToListAsync());
+    }
+
+    [Fact]
+    public async Task Negative_correction_rebuilds_using_current_average_cost()
+    {
+        using var db = CreateDbContext("stock_negative_correction_test");
+        db.Products.Add(new Product { Id = 1, Name = "p", QuantityInStock = 8, CostingQuantity = 8, InventoryValue = 14m, AverageUnitCost = 1.75m });
+        db.StockAdjustments.Add(new StockAdjustment { ProductId = 1, QuantityChange = 8, Reason = StockAdjustmentReason.Restock, UnitCost = 1.75m, EffectiveAt = DateTime.UtcNow.AddMinutes(-1) });
+        await db.SaveChangesAsync();
+
+        var adjustment = await new StockService(db).Adjust(
+            1, new StockAdjustmentDto(-4, StockAdjustmentReason.Correction, null, null, null));
+
+        var product = await db.Products.SingleAsync();
+        Assert.Equal(4, product.QuantityInStock);
+        Assert.Equal(4, product.CostingQuantity);
+        Assert.Equal(7m, product.InventoryValue);
+        Assert.Equal(1.75m, product.AverageUnitCost);
+        Assert.Equal(1.75m, adjustment!.UnitCost);
+        Assert.Equal(7m, adjustment.TotalCost);
     }
 }

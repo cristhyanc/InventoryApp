@@ -27,7 +27,10 @@
     <form class="space-y-4" (ngSubmit)="adjust()">
       <div>
         <label class="mb-1 block text-sm font-medium text-slate-700">Quantity Change *</label>
-        <input [(ngModel)]="form.quantityChange" (ngModelChange)="onAdjustmentInputsChanged()" name="quantityChange" type="number" required placeholder="e.g. 20 to add, -5 to remove" />
+        <input [(ngModel)]="form.quantityChange" (ngModelChange)="onAdjustmentInputsChanged()" name="quantityChange" type="number" [min]="isCorrection ? 1 : null" step="1" required [placeholder]="isCorrection ? 'e.g. 4' : 'e.g. 20 to add, -5 to remove'" />
+        @if (isCorrection) {
+          <p class="mt-1 text-xs text-slate-500">Enter the quantity to remove. It will be recorded as a negative stock correction.</p>
+        }
       </div>
       <div>
         <label class="mb-1 block text-sm font-medium text-slate-700">Reason</label>

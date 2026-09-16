@@ -31,7 +31,7 @@ public sealed class InventoryCostService : IInventoryCostService
         if (newStockQuantity < 0)
             throw new InsufficientStockException(product.QuantityInStock);
 
-        var movementUnitCost = quantityChange < 0 && product.CostingQuantity is > 0 && product.AverageUnitCost > 0
+        var movementUnitCost = quantityChange < 0 && product.CostingQuantity is > 0 && product.AverageUnitCost >= 0
             ? product.AverageUnitCost
             : reason == StockAdjustmentReason.Restock
                 ? purchaseUnitCost

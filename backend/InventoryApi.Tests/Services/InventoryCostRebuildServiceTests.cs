@@ -142,6 +142,69 @@ public class InventoryCostRebuildServiceTests
         Assert.Null(product.InventoryValue);
     }
 
+    [Fact]
+    public async Task Rebuild_costs_historical_positive_correction_at_baseline_average()
+    {
+        await using var db = CreateDb();
+        db.Products.Add(new Product { Id = 1, Name = "Snack", QuantityInStock = 8 });
+        db.InventoryCostTransitionBaselines.Add(Baseline(1, homeStockQuantity: 4, openingCostingQuantity: 8, inventoryValue: 14m, Day(1)));
+        db.StockAdjustments.Add(Movement(1, 4, null, StockAdjustmentReason.Correction, Day(2)));
+        await db.SaveChangesAsync();
+
+        var result = await new InventoryCostRebuildService(db).RebuildAsync(1);
+        await db.SaveChangesAsync();
+
+        var product = await db.Products.SingleAsync();
+        var correction = await db.StockAdjustments.SingleAsync();
+        Assert.DoesNotContain(result.Issues, issue => issue.Code == "UnknownCost");
+        Assert.Equal(8, product.QuantityInStock);
+        Assert.Equal(12, product.CostingQuantity);
+        Assert.Equal(21m, product.InventoryValue);
+        Assert.Equal(1.75m, product.AverageUnitCost);
+        Assert.Equal(1.75m, correction.UnitCost);
+        Assert.Equal(7m, correction.TotalCost);
+    }
+
+    [Fact]
+    public async Task Rebuild_costs_negative_correction_at_historical_average()
+    {
+        await using var db = CreateDb();
+        db.Products.Add(new Product { Id = 1, Name = "Snack", QuantityInStock = 2 });
+        db.InventoryCostTransitionBaselines.Add(Baseline(1, homeStockQuantity: 4, openingCostingQuantity: 8, inventoryValue: 14m, Day(1)));
+        db.StockAdjustments.Add(Movement(1, -2, null, StockAdjustmentReason.Correction, Day(2)));
+        await db.SaveChangesAsync();
+
+        await new InventoryCostRebuildService(db).RebuildAsync(1);
+        await db.SaveChangesAsync();
+
+        var product = await db.Products.SingleAsync();
+        var correction = await db.StockAdjustments.SingleAsync();
+        Assert.Equal(6, product.CostingQuantity);
+        Assert.Equal(10.50m, product.InventoryValue);
+        Assert.Equal(1.75m, product.AverageUnitCost);
+        Assert.Equal(1.75m, correction.UnitCost);
+        Assert.Equal(3.50m, correction.TotalCost);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(-1)]
+    public async Task Rebuild_reports_fatal_issue_for_correction_without_known_average(int quantityChange)
+    {
+        await using var db = CreateDb();
+        db.Products.Add(new Product { Id = 1, Name = "Snack", QuantityInStock = 2 });
+        db.InventoryCostTransitionBaselines.Add(Baseline(1, homeStockQuantity: 2, openingCostingQuantity: 0, inventoryValue: 0m, Day(1)));
+        db.StockAdjustments.Add(Movement(1, quantityChange, null, StockAdjustmentReason.Correction, Day(2)));
+        await db.SaveChangesAsync();
+
+        var result = await new InventoryCostRebuildService(db).RebuildAsync(1, dryRun: true);
+
+        Assert.Contains(result.Issues, issue => issue.Code == "UnknownCost");
+        var correction = await db.StockAdjustments.SingleAsync();
+        Assert.Null(correction.UnitCost);
+        Assert.Null(correction.TotalCost);
+    }
+
     private static AppDbContext CreateDb() =>
         new(new DbContextOptionsBuilder<AppDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
 
@@ -153,6 +216,22 @@ public class InventoryCostRebuildServiceTests
             Reason = reason,
             UnitCost = unitCost,
             EffectiveAt = effectiveAt
+        };
+
+    private static InventoryCostTransitionBaseline Baseline(
+        long productId,
+        int homeStockQuantity,
+        int openingCostingQuantity,
+        decimal inventoryValue,
+        DateTime cutoffAt) =>
+        new()
+        {
+            ProductId = productId,
+            HomeStockQuantity = homeStockQuantity,
+            OpeningCostingQuantity = openingCostingQuantity,
+            InventoryValue = inventoryValue,
+            AverageUnitCost = openingCostingQuantity > 0 ? inventoryValue / openingCostingQuantity : 0m,
+            CutoffAt = cutoffAt
         };
 
     private static NayaxSales Sale(long id, DateTime at) =>
