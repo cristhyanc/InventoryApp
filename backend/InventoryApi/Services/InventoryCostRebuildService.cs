@@ -202,11 +202,32 @@ public sealed class InventoryCostRebuildService : IInventoryCostRebuildService
             return;
         }
 
+        if (adjustment.Reason == StockAdjustmentReason.Correction && adjustment.QuantityChange != 0)
+        {
+            var correctionUnitCost = AverageUnitCost(costingQuantity, inventoryValue);
+            if (!correctionUnitCost.HasValue || correctionUnitCost.Value < 0)
+            {
+                issues.Add(new(hasCostedAcquisition ? "UnknownCost" : "MissingOpening",
+                    $"Correction adjustment {adjustment.Id} for product {productId} has no known cost."));
+                return;
+            }
+
+            costingQuantity = checked(costingQuantity + adjustment.QuantityChange);
+            if (costingQuantity < 0)
+                issues.Add(new("NegativeCostingStock", $"Product {productId} becomes cost-negative at adjustment {adjustment.Id}."));
+            inventoryValue += adjustment.QuantityChange * correctionUnitCost.Value;
+
+            if (mutate)
+            {
+                adjustment.UnitCost = correctionUnitCost;
+                adjustment.TotalCost = Math.Abs(adjustment.QuantityChange) * correctionUnitCost.Value;
+            }
+            return;
+        }
+
         if (adjustment.Reason is not (StockAdjustmentReason.Damaged or StockAdjustmentReason.Expired or StockAdjustmentReason.Sale) ||
             adjustment.QuantityChange >= 0)
         {
-            if (adjustment.QuantityChange > 0 && adjustment.Reason == StockAdjustmentReason.Correction)
-                issues.Add(new("UnknownCost", $"Positive correction adjustment {adjustment.Id} for product {productId} has no explicit cost."));
             return;
         }
 
