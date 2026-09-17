@@ -1,80 +1,152 @@
-# Inventory Manager — Snacks & Drinks
+# InventoryApp
 
-A full-stack inventory management app:
+InventoryApp is a full-stack operations and bookkeeping system for a vending-machine business. It manages the path from purchasing and stock through machine replenishment and Nayax sales, then turns those records into auditable cost, reconciliation, GST, and profitability reports.
 
-- **Backend:** .NET 10 Web API, EF Core (code-first) targeting **SQLite**
-- **Frontend:** Angular (standalone components) + TypeScript
-- **Features:** Product CRUD (snacks & drinks), categories, suppliers, stock adjustments with history, low-stock alerts, and purchase recording with receipt/invoice attachment (image/PDF scans) and a gallery viewer.
+## Capabilities
 
-## Project Structure
+- Product, category, supplier, and low-stock management.
+- Purchase receipts, supporting documents, supplier orders, and stock movements.
+- Sites, vending machines, product assignments, and machine refills.
+- Nayax product and transaction imports with explicit payment/status handling.
+- Historical weighted-average inventory costing and persisted COGS provenance.
+- Effective-dated Nayax processing fees and site commission agreements.
+- Operating expenses, reimbursement imports, and settlement reconciliation.
+- Dashboard, bookkeeping, daily-sales, transaction, GST, commission, machine, and product reports.
+- CSV/XLSX exports that use the same backend calculations as the UI.
 
+## Technology
+
+| Area | Stack |
+| --- | --- |
+| API | ASP.NET Core Web API, .NET 10 |
+| Persistence | EF Core 10, SQLite, code-first migrations |
+| Frontend | Angular 19 standalone components, TypeScript, RxJS, Tailwind CSS |
+| Tests | xUnit, Moq, EF Core InMemory and SQLite |
+| Integrations | Nayax Lynx API and imported reimbursement/workbook data |
+| Hosting | Azure App Service and Azure Static Web Apps |
+| Automation | GitHub Actions |
+
+## Architecture
+
+The application is a modular monolith with separate API and browser deployments. The backend is being evolved incrementally toward pragmatic Clean Architecture with vertical feature slices. The Angular frontend remains standalone and is moving toward feature-local pages, components, data access, and contracts.
+
+```mermaid
+flowchart LR
+    UI["Angular UI"] --> Client["Typed API services"]
+    Client --> API["ASP.NET API"]
+    API --> Data["EF Core / SQLite"]
+    API --> External["Nayax and documents"]
 ```
+
+Business calculations stay authoritative on the backend. The UI owns navigation, interaction state, accessibility, and presentation without recreating inventory or accounting formulas.
+
+See [docs/architecture.md](docs/architecture.md) for the current system, target boundaries, frontend structure, financial rules, and incremental migration tracks.
+
+## Repository map
+
+```text
 InventoryApp/
-  backend/InventoryApi/      .NET 10 Web API
-  frontend/inventory-app/    Angular app
+├── backend/InventoryApi/          ASP.NET Core API, EF migrations, and solution
+├── backend/InventoryApi.Tests/    Backend test suite
+├── frontend/inventory-app/        Angular application
+├── docs/architecture.md           Current and target architecture
+├── scripts/validate.ps1           Windows/PowerShell validation
+├── scripts/validate.sh            Bash validation
+└── AGENTS.md                      Engineering and agent safeguards
 ```
 
 ## Prerequisites
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download)
-- [Node.js 20+](https://nodejs.org) and npm
-- Angular CLI: `npm install -g @angular/cli`
+- [Node.js 20 or later](https://nodejs.org/) and npm
 
-## 1. Run the Backend
+A global Angular CLI installation is not required; the npm scripts use the repository's locked CLI version.
 
-```bash
-cd backend/InventoryApi
-dotnet restore
-dotnet run
-```
+## Run locally
 
-The API starts at **http://localhost:5000** (see `Properties/launchSettings.json`) and opens Swagger UI at `/swagger`.
+### 1. Start the API
 
-The database (`inventory.db`, a SQLite file) is created automatically on first run via `DbContext.Database.EnsureCreated()` in `Data/DbInitializer.cs`, and is seeded with sample categories, a supplier, and a few snack/drink products.
-
-> **Using EF Core Migrations instead (optional):** the project currently uses `EnsureCreated()` for zero-friction first-run setup. If you'd prefer versioned migrations instead (recommended as the schema evolves), install the EF tool and run:
-> ```bash
-> dotnet tool install --global dotnet-ef
-> cd backend/InventoryApi
-> dotnet ef migrations add InitialCreate
-> dotnet ef database update
-> ```
-> Then replace the `DbInitializer.Seed` call's `EnsureCreated()` with a `context.Database.Migrate()` call.
-
-Uploaded purchase supporting documents are stored on disk under `backend/InventoryApi/wwwroot/receipts/`.
-
-## 2. Run the Frontend
-
-In a separate terminal:
+From the repository root:
 
 ```bash
-cd frontend/inventory-app
-npm install
-npm start
+dotnet restore backend/InventoryApi/InventoryApi.slnx
+dotnet run --project backend/InventoryApi/InventoryApi.csproj
 ```
 
-This starts the Angular dev server at **http://localhost:4200** and proxies all `/api/*` calls to the backend at `http://localhost:5000` (see `proxy.conf.json`), so make sure the backend is already running.
+The development API listens at <http://localhost:5000>. Swagger UI is available at <http://localhost:5000/swagger> while the API is running in the Development environment.
 
-Open **http://localhost:4200** in your browser.
+EF Core migrations are applied at startup. The default SQLite database is `inventory.db`, resolved from the API process's working directory; local database files must not be committed.
 
-## API Overview
+### 2. Point the frontend at the local API
 
-| Endpoint | Description |
-|---|---|
-| `GET/POST/PUT/DELETE /api/categories` | Category CRUD |
-| `GET/POST/PUT/DELETE /api/suppliers` | Supplier CRUD |
-| `GET/POST/PUT/DELETE /api/products` | Product CRUD (filter by `search`, `type`, `categoryId`, `supplierId`, `lowStockOnly`) |
-| `GET /api/products/alerts/low-stock` | Products at or below their low-stock threshold |
-| `GET/POST /api/products/{id}/stock` | Stock adjustment history / apply an adjustment |
-| `GET /api/receipts` | List purchases (optionally `?supplierId=`) |
-| `POST /api/receipts` | Record a purchase with a receipt or invoice (multipart form: `file`, `title`, `notes`, `totalAmount`, `deliveryCost`, `packageCost`, `purchaseDate`, `supplierId`) |
-| `PUT /api/receipts/{id}` | Update purchase metadata (same fields as upload) |
-| `GET /api/receipts/{id}/file` | Download/view the purchase supporting document |
-| `DELETE /api/receipts/{id}` | Delete a purchase and its supporting document |
+The Angular application loads its API base URL from `frontend/inventory-app/src/assets/config.json`. For local full-stack development, use:
 
-## Notes
+```json
+{
+  "apiBaseUrl": "/api"
+}
+```
 
-- Purchase supporting documents accept `.jpg`, `.jpeg`, `.png`, `.webp`, `.heic`, and `.pdf`, capped at 10 MB.
-- Inventory cost is a historical perpetual weighted-average ledger. Receipt-item-linked restocks are replayed chronologically with completed Nayax sales and costed write-offs; machine refills remain internal transfers. Legacy inventory with no costed opening movement is reported as a data-quality issue rather than receiving an inferred selling-price cost.
-- CORS is pre-configured to allow `http://localhost:4200` to call the API during development.
-- For production, build the Angular app (`npm run build`) and either serve the static output from the API's `wwwroot`, or host it separately and update CORS/API base URL accordingly.
+The development proxy forwards `/api` to `http://localhost:5000`. Do not commit a personal endpoint or temporary configuration change.
+
+### 3. Start the frontend
+
+In a second terminal, from the repository root:
+
+```bash
+npm --prefix frontend/inventory-app ci
+npm --prefix frontend/inventory-app start
+```
+
+Open <http://localhost:4200>. The `start` script builds the Tailwind stylesheet and starts the Angular development server.
+
+## Configuration and secrets
+
+Backend configuration follows normal ASP.NET Core precedence. Override local or deployed values with user-secrets, environment variables, or the hosting platform's configuration instead of committing credentials.
+
+Common environment-variable names include:
+
+```text
+ConnectionStrings__DefaultConnection
+NayaxLynx__BaseUrl
+NayaxLynx__AccessToken
+NayaxLynx__OperatorId
+```
+
+Uploaded receipt and expense documents are stored beneath the API web root with their metadata in SQLite. Do not commit uploaded business documents, local databases, or credentials.
+
+## Validate a change
+
+Run the repository-level validation from the root:
+
+```bash
+# macOS, Linux, or Git Bash
+bash scripts/validate.sh
+
+# PowerShell 7
+pwsh -File scripts/validate.ps1
+
+# Windows PowerShell
+powershell -ExecutionPolicy Bypass -File scripts/validate.ps1
+```
+
+The scripts restore, build, and test the backend, then perform a clean frontend install and production build. The frontend does not yet have configured test or lint scripts; its current automated gate is the production build.
+
+## Important domain rules
+
+- Gross vending sales are not the same as a Nayax payout. Card and cash revenue remain distinct.
+- A machine refill is an internal stock transfer, not COGS or an expense.
+- Historical sale cost is persisted from internal AVCO when reliable, with transaction-level Nayax product cost as a fallback.
+- Missing COGS or profit remains unknown; it is never silently converted to zero.
+- Australian financial years run from 1 July to 30 June, using `Australia/Sydney` for business reporting.
+- UI reports and CSV/XLSX exports must use the same backend calculations and quality states.
+
+The complete invariants and change rules are in [AGENTS.md](AGENTS.md).
+
+## Delivery workflow
+
+Changes are made on feature branches and validated through pull requests. A merge to `main` can trigger the Azure API and frontend deployment workflows, so automated engineering agents stop after opening a pull request unless a human explicitly authorizes merge or deployment.
+
+## License
+
+See [LICENSE](LICENSE).
