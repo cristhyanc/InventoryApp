@@ -1,0 +1,234 @@
+# InventoryApp agent instructions
+
+These instructions apply to the entire repository. More specific `AGENTS.md` files may refine them for a subtree, but may not weaken the financial, inventory, security, or deployment safeguards in this file.
+
+## Mission
+
+InventoryApp manages a real vending-machine business. Treat inventory quantities, historical cost, sales, fees, commissions, reimbursements, GST fields, and profitability as financial data. Prefer a small, reviewable, tested change over a broad rewrite.
+
+The repository is also being prepared for reliable AI-assisted engineering. Every change must be understandable from its issue, diff, tests, and validation output.
+
+## Repository map
+
+```text
+backend/InventoryApi/                 ASP.NET Core .NET 10 API
+  Controllers/                        HTTP boundary
+  DTOs/                               Current API/report contracts
+  Data/AppDbContext.cs                EF Core model and mappings
+  Integrations/Nayax/                 Nayax Lynx HTTP integration
+  Migrations/                         SQLite schema history
+  Models/                             Current entities and enums
+  Services/                           Current application/domain logic
+  Services/Interfaces/                Current service contracts
+backend/InventoryApi.Tests/           xUnit backend tests
+frontend/inventory-app/               Angular 19 standalone application
+.github/workflows/                    Azure build and deployment workflows
+docs/architecture.md                  Current and target architecture
+scripts/validate.ps1                  Complete Windows validation
+scripts/validate.sh                   Complete Bash validation
+```
+
+Read the nearest relevant production code and tests before changing behavior. For financial or inventory changes, also read the corresponding models, migrations, import logic, and reporting tests.
+
+## Required workflow
+
+1. Work on a feature branch. Never commit directly to `main`.
+2. Restate the issue's acceptance criteria and identify affected domain rules.
+3. Inspect existing implementations and tests before proposing a design.
+4. Make the smallest coherent change. Do not mix unrelated cleanup with feature work.
+5. Add or update tests for the behavior and meaningful edge cases.
+6. Run the complete repository validation from the repository root:
+
+   - Windows: `powershell -ExecutionPolicy Bypass -File scripts/validate.ps1`
+   - PowerShell 7: `pwsh -File scripts/validate.ps1`
+   - macOS/Linux/Git Bash: `bash scripts/validate.sh`
+
+7. Review the final diff for secrets, accidental schema changes, generated files, and unrelated edits.
+8. Open a pull request with the reason for the change, tests run, financial/data risks, migration impact, and any known limitations.
+9. Stop after the pull request. Do not merge or deploy unless a human explicitly asks.
+
+If complete validation cannot run, state exactly which command failed or was unavailable. Never claim a test or build passed unless it ran successfully.
+
+## Commands
+
+Backend solution:
+
+```bash
+dotnet restore backend/InventoryApi/InventoryApi.slnx
+dotnet build backend/InventoryApi/InventoryApi.slnx --configuration Release --no-restore
+dotnet test backend/InventoryApi/InventoryApi.slnx --configuration Release --no-build --no-restore
+```
+
+Frontend:
+
+```bash
+npm --prefix frontend/inventory-app ci
+npm --prefix frontend/inventory-app run build
+```
+
+The frontend currently has no configured `test` or `lint` script. Do not claim either ran. If one is added, include it in both validation scripts in the same change.
+
+## Architecture rules
+
+The current backend is one project with a service layer. Its target is an incremental, pragmatic Clean Architecture described in `docs/architecture.md`.
+
+- Keep the application a modular monolith; do not introduce microservices.
+- New controllers must be thin: bind/validate transport input, invoke a use case, and map its result to HTTP.
+- Do not inject `AppDbContext`, `IWebHostEnvironment`, filesystem APIs, or Nayax HTTP clients into new controllers.
+- Existing direct-access controllers should be migrated feature by feature, not rewritten together.
+- Organize new application code by business feature/use case, not only by technical type.
+- Keep domain calculations deterministic and free of EF Core, ASP.NET Core, HTTP, filesystem, ClosedXML, and configuration dependencies.
+- Define narrow ports for external behavior such as `INayaxClient`, document storage, or report export. Avoid a generic `IRepository<T>` abstraction.
+- Do not add MediatR, an event bus, mapping frameworks, or other architectural machinery without an issue that justifies the dependency.
+- Preserve public API contracts unless the issue explicitly permits a breaking change.
+- Use `CancellationToken` for asynchronous I/O and pass it through to EF Core and HTTP operations.
+- Do not duplicate business formulas in controllers, Angular components, exports, and reports. One authoritative calculation must feed all presentations.
+
+## Database and migrations
+
+- EF Core migrations are the schema source of truth. Application startup currently calls `Database.Migrate()`.
+- Never replace migrations with `EnsureCreated()`.
+- Never delete or rewrite an applied migration merely to simplify a change.
+- Do not edit an existing migration unless the issue explicitly concerns an unapplied migration and a human confirms it is safe.
+- Add a new migration for schema changes and test upgrade behavior from the prior schema where practical.
+- Never commit `inventory.db`, local databases, uploaded receipts, imported production files, build output, or credentials.
+- Prefer relational SQLite tests for behavior that depends on constraints, transactions, SQL translation, ordering, or migrations. EF Core InMemory tests do not prove relational behavior.
+- Do not run destructive production data operations, mass backfills, or irreversible corrections automatically at startup.
+- A backfill/rebuild must be explicit, idempotent or safely restartable, observable, and covered by regression tests.
+
+## Core bookkeeping and reporting invariants
+
+These rules come from the application's established bookkeeping design. Changing one requires an explicit issue, updated tests, and a clear migration/recalculation plan.
+
+### Sales, payment methods, and statuses
+
+- Gross vending sales are not the same as a Nayax payout or bank deposit.
+- Keep total sales, card sales, and cash sales distinct. Cash sales contribute to vending revenue but are excluded from Nayax reimbursement/settlement calculations.
+- Use `PaymentMethodClassifier` as the central card/cash/unknown classification. Do not add report-specific string matching.
+- Only status ID `12` is an approved/completed sale.
+- Status IDs `55` and `80` are pending and are not final sales.
+- Status ID `62` is refunded.
+- Status IDs `26`, `28`, `31`, and `250` are cancelled or declined.
+- Null or unrecognised statuses remain unknown. Pending, refunded, cancelled/declined, and unknown rows must remain visible in data-quality/status reporting; never silently treat them as completed or discard them.
+- Avoid double counting imported transactions. A duplicate or conflicting transaction must be surfaced and handled deliberately.
+
+### Reimbursements and reconciliation
+
+- Reconcile completed card transactions to Nayax-reported gross card sales. Never reconcile total sales, including cash, to a Nayax transfer.
+- Match a reimbursement to its `ReimbursementStartDate`/`ReimbursementEndDate` sales period, not its payout/import/bank date.
+- Preserve the distinction between gross amount, reimburse-by-Nayax amount, non-reimbursed amount, processing fee, fee GST, other fees, adjustments, expected net reimbursement, actual net reimbursement, and amount transferred.
+- A period is reconciled only when the absolute difference is at most `$0.01`.
+- Do not force an overlapping or partial reimbursement into a different requested reporting period. Surface pending or unmatched periods.
+- When imported data cannot support adjustments or machine-level allocation, expose that limitation through data-quality fields/notes instead of inventing an allocation.
+
+### Nayax processing fees and GST
+
+- Keep processing fee excluding GST, fee GST, and fee including GST as separate values.
+- Imported reimbursement fee data is authoritative for the dates it covers.
+- Estimate fees only for completed card transactions on dates not covered by authoritative imported fee data, using the effective-dated configured rate.
+- Never charge or estimate a Nayax processing fee for cash transactions.
+- Never double count actual and estimated fees for the same covered date.
+- If no effective rate exists, report missing-rate transactions and make affected profit results provisional/unavailable as appropriate. Do not assume zero.
+- GST-inclusive sales GST is `inclusive amount / 11` under the current Australian GST assumption. GST on an exclusive fee is `exclusive amount * 10%`. Reuse the central calculation functions.
+- Do not infer unsupported purchase GST. Missing GST classification remains a data-quality limitation.
+
+### Site commissions
+
+- Commissions are based on effective-dated `SiteCommissionAgreement` records.
+- Supported bases are gross sales, card sales, and sales excluding GST. Preserve their existing meanings in `SiteCommissionCalculator`.
+- No agreement is a valid zero-commission case. Incomplete coverage and overlapping agreements are configuration problems and must make affected reports provisional rather than selecting one silently.
+- A payment cannot exceed commission due beyond the established `$0.01` tolerance.
+
+### Profit calculations
+
+- Calculate gross profit only when COGS is complete: `gross sales - COGS`.
+- Missing COGS is `null`/unknown, never zero. Preserve partial COGS, uncosted transaction count, and uncosted sales amount separately.
+- Direct profit subtracts applicable COGS, Nayax fees including GST, site commission, and direct operating expenses from sales.
+- Whole-business net profit additionally includes shared receipt delivery/package costs and other operating expenses. Do not present whole-business net profit for a machine-filtered report when shared overhead is unallocated.
+- Margin percentages must use the same authoritative profit/cost calculation and must handle zero sales without division errors.
+- Dashboard, detail reports, transaction reports, CSV, and XLSX must use the same calculation engine. A presentation/export must not reimplement financial formulas.
+
+### Reporting dates and filters
+
+- Australian financial years run from 1 July through 30 June.
+- Reporting ranges are inclusive calendar dates. Preserve the distinction between sale/authorization date, reimbursement coverage dates, and payout date.
+- The business reporting timezone is `Australia/Sydney`. Store true instants consistently and do not introduce server-local or browser-local date shifts. Any timezone behavior change requires boundary tests, including daylight-saving transitions.
+- Machine, site, product, payment type, status, COGS status, date, financial-year, search, paging, and sorting filters must not silently change totals or reconciliation scope.
+- CSV/XLSX exports must represent the same filters, definitions, data-quality state, and totals as their API/UI report.
+
+## Inventory and historical costing invariants
+
+- `QuantityInStock` represents physical storage/home stock used for replenishment planning.
+- `CostingQuantity` and `InventoryValue` represent business-owned inventory for perpetual weighted-average costing; they are not synonyms for storage quantity.
+- A receipt-linked restock increases costing quantity/value at its purchase unit cost.
+- `MachineRefill` is an internal transfer from storage to a vending machine. It can reduce storage quantity, but must not reduce business costing quantity/value and must not create COGS.
+- A completed sale reduces costing inventory and records historical unit cost and COGS.
+- Cost-bearing write-offs such as damaged/expired stock must follow their explicit inventory movement semantics and remain auditable.
+- Never infer historical COGS from the product's current cost or selling price.
+- Historical sale-cost precedence is:
+  1. persisted internal AVCO/ledger cost when the ledger is reliable;
+  2. otherwise, the transaction-level Nayax `Product Cost Price` persisted on that sale;
+  3. otherwise, leave the sale uncosted.
+- Persist `UnitCostAtSale`, `CostOfGoodsSold`, `CostingStatus`, and `CostSource` on the sale. Do not recalculate old reports from today's product cost.
+- Rebuild inventory and sale costs chronologically and deterministically. Never fabricate purchases or opening costs to make a report balance.
+- Cost rebuilds must preserve provenance and visibly report data-quality failures.
+- Product reorder behavior must continue to account for physical stock, machine replenishment need, outstanding supplier orders, low-stock threshold, and restock target.
+
+## Nayax integration
+
+- Treat remote Nayax identifiers as external identities; do not repurpose local entity IDs.
+- Do not call Nayax once per row when a batched read is available.
+- Pass cancellation tokens and handle partial/unavailable remote data without corrupting local state.
+- Never log API tokens, authorization headers, connection strings, raw credentials, or sensitive imported payloads.
+- Keep raw imported facts separate from derived accounting values so calculations can be rerun and audited.
+
+## Files and attachments
+
+- Validate extension, content type, size, and generated storage name on the server. Do not trust the uploaded filename or client MIME type alone.
+- Prevent path traversal and never allow a request to choose an arbitrary filesystem path.
+- Keep database changes and file replacement/deletion behavior consistent when an operation fails.
+- Do not expose physical server paths through API responses or logs.
+
+## Frontend rules
+
+- The frontend is Angular 19 using standalone components and TypeScript.
+- Use `ConfigService` for the API base URL; do not hardcode production or local API URLs in feature code.
+- Keep money as numeric values through the API/client boundary and format it only for display.
+- Preserve nullable financial values. Do not convert unavailable profit/COGS to `0` in TypeScript or templates.
+- Display provisional, incomplete, pending, unknown, and reconciliation-warning states instead of hiding them.
+- Keep calculations on the backend unless a UI-only display calculation is explicitly safe and tested.
+- Maintain accessible labels, keyboard behavior, loading states, empty states, and actionable error messages.
+
+## Tests required by change type
+
+- Domain formula/rule: focused unit tests, including boundaries and failure cases.
+- EF query or persistence: relational SQLite integration test where SQL/transactions/constraints matter.
+- Migration: upgrade test from the previous migration and verification of preserved data.
+- Nayax import/status/payment behavior: representative imported rows plus unknown/duplicate/missing cases.
+- Financial report: totals, card/cash split, COGS-complete and incomplete paths, fee source, commission coverage, reconciliation, filters, and export parity as applicable.
+- File operation: valid file, invalid extension/type/size, replacement failure, cleanup, and path safety.
+- API contract: success response plus validation/not-found/conflict cases.
+- Regression fix: a test that fails before the fix and passes after it.
+
+Do not weaken or delete a failing test merely to obtain a green build. If an established rule intentionally changes, explain it in the PR and update all affected tests and documentation together.
+
+## Security and deployment safeguards
+
+- Never add secrets to source, test fixtures, logs, screenshots, documentation, or pull-request text.
+- Do not alter GitHub/Azure credentials, environment variables, production CORS origins, deployment environments, or infrastructure unless explicitly requested.
+- A push to `main` can deploy both the API and frontend. Agents must create a branch and pull request and must not merge it.
+- Do not deploy, run production migrations, import production statements, modify production data, or invoke destructive remote operations without explicit human approval.
+- Do not use `git push --force`, destructive resets, or history rewriting.
+
+## Definition of done
+
+A change is complete only when:
+
+- Acceptance criteria are met without unrelated behavior changes.
+- Relevant tests cover success, important edge cases, and regression risk.
+- Complete validation succeeds, or the exact environmental blocker is documented.
+- Schema/API/configuration changes are documented and backward compatibility is considered.
+- Financial and inventory definitions remain internally consistent across API, UI, and exports.
+- The diff contains no secret, local database, uploaded business document, generated output, or accidental large file.
+- The pull request explains what changed, why, how it was verified, and any data or deployment risk.
+
