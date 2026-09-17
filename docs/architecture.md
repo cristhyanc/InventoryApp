@@ -36,16 +36,30 @@ InventoryApp/
 │   │   └── InventoryApi.csproj
 │   └── InventoryApi.Tests/
 ├── frontend/inventory-app/
+│   ├── src/app/
+│   │   ├── components/          Feature pages and shared UI
+│   │   ├── models/              Shared TypeScript contracts
+│   │   ├── services/            API clients and UI services
+│   │   ├── app.config.ts        Angular providers and startup
+│   │   └── app.routes.ts        Application routes
+│   ├── src/assets/config.json       Runtime API configuration
+│   ├── proxy.conf.json              Local API proxy
+│   └── package.json
 ├── .github/workflows/
 ├── AGENTS.md
 └── scripts/
 ```
 
+The Angular application uses standalone components. `app.config.ts` registers the router, HTTP client, and a startup initializer that loads the API base URL. Routes currently load page components eagerly. Pages keep their own view state and call singleton services, which use `HttpClient` to reach the API.
+
 The API is currently a single assembly. Controllers generally call service interfaces, while services use `AppDbContext` and, where required, Nayax or filesystem facilities. `Program.cs` is the composition root and applies EF Core migrations at startup.
 
 ```mermaid
 flowchart TD
-    UI["Angular frontend"] --> API["ASP.NET controllers"]
+    Router["Angular router"] --> UI["Feature pages"]
+    Config["Runtime config"] --> Clients["Angular API services"]
+    UI --> Clients
+    Clients --> API["ASP.NET controllers"]
     API --> Services["Application services"]
     Services --> DB["EF Core / SQLite"]
     Services --> Nayax["Nayax Lynx + imports"]
@@ -59,6 +73,8 @@ flowchart TD
 - Nayax transaction status and payment-method classification are centralized.
 - Historical sale cost and its provenance are persisted.
 - Reconciliation and incomplete-data states are represented explicitly.
+- The frontend has a centralized runtime API configuration, typed services, reusable report-page behavior, and shared toast/confirmation UI.
+- Standalone Angular components keep feature code independent of NgModule structure.
 - Backend CI restores, builds, and tests before a `main` deployment.
 
 ## Current pressure points
@@ -70,11 +86,16 @@ flowchart TD
 - `Product` contains persistence state, business calculations, and transient Nayax/UI fields.
 - Reporting contracts are concentrated in a large DTO file.
 - Several tests use EF Core InMemory where SQLite behavior may be more representative.
+- All frontend routes are eager-loaded, and route definitions directly import every page component.
+- Frontend contracts are split between a broad `models.ts` file and service-local report interfaces. `reporting.service.ts` is already a large multi-report API client.
+- Some page components, especially administration and reporting pages, contain substantial orchestration and presentation logic.
+- Report state is locally managed, but date-range logic and financial formatting can accidentally erase `null`/unknown meaning if reused without care.
+- The frontend package has no automated test or lint command; its current validation gate is a production build.
 - The deployment workflows currently do not provide a complete backend-and-frontend validation gate for every pull request.
 
 These are reasons to improve boundaries, not reasons for a wholesale rewrite.
 
-## Target: pragmatic Clean Architecture with vertical slices
+## Backend target: pragmatic Clean Architecture with vertical slices
 
 The application remains a single deployable modular monolith. The intended projects are:
 
@@ -153,6 +174,118 @@ Contains:
 - HTTP error/result mapping.
 
 Controllers do not implement accounting, inventory, persistence, or filesystem rules.
+
+## Frontend architecture
+
+The frontend is an application boundary in its own right. It owns navigation, interaction state, accessibility, presentation, and communication with the API. It does not own inventory or accounting truth.
+
+### Current composition
+
+| Area | Current responsibility |
+| --- | --- |
+| `app.component.*` | Application shell, primary navigation, report menu, router outlet, and toast host |
+| `app.routes.ts` | Product, stock, supplier, machine, site, receipt, report, expense, and administration routes |
+| `components/` | Routed feature pages plus a small set of shared components |
+| `services/` | Typed HTTP calls, runtime configuration, toast state, and feature-specific client behavior |
+| `models/models.ts` | Shared inventory, purchasing, site, machine, and receipt contracts |
+| Report base/classes | Common report filters, loading/error state, financial-year presets, and export behavior |
+| `assets/config.json` | Deploy-time API base URL loaded before the application starts |
+
+The application currently uses component-local state and RxJS-backed singleton services. That is appropriate for its present size. Do not introduce a global state library merely to reorganize files. Add one only when there is demonstrated cross-feature state, cache invalidation, or event-coordination complexity that local state and focused services cannot handle clearly.
+
+```mermaid
+flowchart TD
+    Route["Route"] --> Page["Feature page"]
+    Page --> View["Feature/shared UI"]
+    Page --> Client["Typed API client"]
+    Config["ConfigService"] --> Client
+    Client --> API["Backend API"]
+```
+
+### Target feature boundaries
+
+Keep Angular standalone and migrate incrementally toward feature-local code:
+
+```text
+src/app/
+├── core/
+│   ├── config/                    Runtime configuration
+│   └── http/                      Cross-cutting HTTP concerns only
+├── layout/                            Application shell and navigation
+├── shared/
+│   ├── ui/                        Reusable presentation components
+│   └── formatting/                Presentation-only helpers
+├── features/
+│   ├── products/
+│   │   ├── pages/
+│   │   ├── components/
+│   │   ├── data-access/
+│   │   └── models/
+│   ├── stock/
+│   ├── receipts/
+│   ├── machines/
+│   ├── sites/
+│   ├── expenses/
+│   ├── admin/
+│   └── reports/
+│       ├── shared/                Filters and report-page behavior
+│       ├── bookkeeping/
+│       ├── reconciliation/
+│       └── profitability/
+├── app.config.ts
+└── app.routes.ts
+```
+
+This is a direction, not a required big-bang move. Move a feature when it is being changed, keep each move behavior-preserving, and avoid empty abstraction folders.
+
+Use these ownership rules:
+
+- **Pages** read route/query parameters, coordinate loading and mutation state, and compose the view.
+- **Presentational components** receive typed inputs and emit user intent. They do not fetch unrelated application data.
+- **Feature data-access services** own HTTP calls and transport mapping for one feature. They do not calculate financial results already supplied by the API.
+- **Feature models** describe API contracts and view-specific types for that feature. Promote a type to `shared` only when multiple features genuinely use the same meaning.
+- **Core services** are limited to application-wide infrastructure such as configuration and HTTP concerns. `core` is not a home for miscellaneous business logic.
+- **The backend** remains authoritative for stock transitions, historical COGS, fees, commissions, reconciliation, and report calculations.
+
+### Routing and loading
+
+Routes are currently declared centrally and import every routed component eagerly. Preserve route URLs, but convert top-level features to `loadComponent` or feature route files as those areas are migrated. This keeps initial bundles smaller and creates an enforceable feature boundary without introducing NgModules.
+
+The static host must rewrite unknown application paths to `index.html`; otherwise refreshing a deep link such as `/reports/bookkeeping` will bypass Angular and return a host-level 404. API paths must remain excluded from that fallback where the hosting topology requires it.
+
+### Runtime configuration and API contracts
+
+`ConfigService` loads `/assets/config.json` through an application initializer before feature services issue requests and falls back to `/api` if that load fails. `proxy.conf.json` forwards `/api` to `http://localhost:5000/` for local development; a deployed static config can provide the hosted API base URL. Do not hard-code API hosts in components or feature services.
+
+Backend contract changes are full-stack changes. When an endpoint changes:
+
+1. update the backend request/response DTO and its tests;
+2. update the matching frontend type and feature client;
+3. preserve optionality and `null` explicitly rather than coercing missing financial data to zero;
+4. update the page, exports, and error/empty states that consume the contract;
+5. verify both the API tests and Angular production build.
+
+Until a generated OpenAPI client is deliberately adopted, keep manually maintained TypeScript contracts close to their feature client. Do not introduce a generated client incidentally in an unrelated feature.
+
+### Financial presentation rules
+
+The UI may format and explain backend results, but it must not recreate authoritative accounting formulas. In particular:
+
+- Display sales, fees, commission, COGS, and profit values returned by the API.
+- Preserve quality/status fields so partial, estimated, unmatched, or uncosted results remain visible.
+- Use an unavailable/unknown presentation for nullable COGS or profit. A generic formatter that turns `null` into `$0.00` is unsafe for these fields.
+- Keep card and cash amounts visibly distinct where settlement is discussed.
+- Keep ex-GST, GST, and GST-inclusive fee amounts distinct.
+- Send explicit inclusive date filters. Business-period interpretation remains based on `Australia/Sydney`, not the browser's accidental timezone.
+- Keep on-screen reports and downloaded exports aligned to the same backend calculation path.
+
+### Interaction and presentation
+
+Every routed page should provide intentional loading, empty, error, and success states. Use shared toast notifications for transient mutation outcomes and inline errors when a report or form cannot be understood without the message. Confirm destructive actions and keep server validation details available to the user without exposing stack traces.
+
+New UI must remain keyboard-operable, associate labels with controls, expose meaningful button/link names, and not rely on color alone for reconciliation or quality status.
+
+Tailwind classes in templates, `src/styles.scss`, and component styles are the styling sources. `npm run build:styles` generates `src/styles.css` before Angular builds, so do not make a manual fix only in the generated CSS. Keep production bundle and component-style budgets in `angular.json` passing.
 
 ## Domain model and financial boundaries
 
@@ -253,6 +386,10 @@ Timezone migration is not part of an incidental feature. Changes require explici
 
 Each step is a separate, passing pull request. Existing endpoints stay operational throughout.
 
+Backend and frontend tracks can progress independently when their contracts do not change. A vertical feature change that touches both sides should still be delivered as one coherent, tested pull request.
+
+### Backend migration track
+
 1. **Safety baseline**
    - Add repository instructions, architecture documentation, and cross-platform validation scripts.
    - Correct documentation/CI drift in focused follow-up changes.
@@ -283,7 +420,36 @@ Each step is a separate, passing pull request. Existing endpoints stay operation
 8. **Remove legacy structure**
    - Only after every feature is migrated and tests prove equivalent behavior.
 
+### Frontend migration track
+
+1. **Frontend safety baseline**
+   - Add a pinned unit-test runner and lint command in a focused pull request.
+   - Test runtime configuration and one representative feature client before moving files.
+
+2. **Feature boundaries**
+   - Move one routed area at a time under `features/<feature>`.
+   - Keep pages, feature UI, contracts, and data access together and preserve public route URLs.
+
+3. **Lazy top-level routes**
+   - Convert migrated features to `loadComponent` or a small feature route file.
+   - Verify direct navigation, refresh behavior, and production bundle budgets.
+
+4. **Reporting slices**
+   - Split the broad reporting client and service-local interfaces by report family.
+   - Retain shared filters/export behavior without centralizing every report in another large class.
+   - Preserve nullable financial values, quality counts, and backend/export parity.
+
+5. **Large page decomposition**
+   - Extract cohesive forms, tables, and panels from large administration and report pages.
+   - Keep orchestration in the routed page and make child components input/output driven.
+
+6. **Critical workflow coverage**
+   - Add browser-level smoke tests for product maintenance, receipt/restock, machine refill, import, and a representative financial report.
+   - Run frontend tests and the production build in pull-request validation before changing the deployment gate.
+
 ## Testing architecture
+
+### Backend tests
 
 Use three complementary levels:
 
@@ -305,9 +471,28 @@ Financial regression tests should cover at least:
 - machine-filtered versus whole-business profit;
 - date/FY filters and export parity.
 
+### Frontend tests
+
+The current package has no automated test command, so the first frontend testing change must choose, configure, and pin the runner explicitly. The target test mix is:
+
+1. **Pure unit tests** for date presets, display-only transformations, validation, and nullable financial presentation.
+2. **HTTP client tests** for endpoint, query-parameter, request-body, response, and error mapping behavior.
+3. **Component tests** for loading, empty, error, success, confirmation, and accessibility states.
+4. **Router tests** for route parameters, redirects, lazy features, and direct report navigation.
+5. **Browser smoke tests** for a small number of business-critical workflows against a controlled API/database.
+
+Do not duplicate backend formula tests in Angular. Frontend assertions should prove that authoritative values and quality states are requested and presented correctly.
+
 ## Build and delivery
 
-The canonical local validation entry points are `scripts/validate.ps1` and `scripts/validate.sh`. They restore, build, and test the backend and install/build the frontend.
+The canonical local validation entry points are `scripts/validate.ps1` and `scripts/validate.sh`. They restore, build, and test the backend and run a clean install plus production build for the frontend. When frontend test and lint scripts are added, these validation entry points and pull-request CI must call them.
+
+Frontend build flow is:
+
+1. `npm ci` installs the locked dependency graph.
+2. `npm run build:styles` generates Tailwind output from `src/styles.scss` and template/TypeScript content.
+3. `ng build` creates `dist/inventory-app` and enforces the production budgets in `angular.json`.
+4. Azure Static Web Apps serves the compiled assets and runtime configuration; the host must provide Angular navigation fallback.
 
 Current production delivery is triggered from `main`:
 
@@ -327,3 +512,11 @@ Use this order when considering new structure:
 
 Do not use Clean Architecture as a reason to introduce layers without behavior, duplicate models mechanically, or move a large class unchanged into a differently named project. The objective is explicit domain rules, replaceable external boundaries, reliable tests, and small changes that humans and agents can understand.
 
+For frontend structure, ask the corresponding questions:
+
+1. Which routed feature owns the behavior?
+2. Is the code page orchestration, reusable presentation, API data access, or an API contract?
+3. Is sharing based on proven reuse with the same meaning, or only on similar-looking code?
+4. Does the API already own this business calculation?
+
+Prefer a complete vertical change over disconnected backend and frontend abstractions. A feature is complete only when its contract, UI states, validation, tests, and any report/export implications agree.
