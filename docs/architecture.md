@@ -91,7 +91,7 @@ flowchart TD
 - Some page components, especially administration and reporting pages, contain substantial orchestration and presentation logic.
 - Report state is locally managed, but date-range logic and financial formatting can accidentally erase `null`/unknown meaning if reused without care.
 - The frontend package has no automated test or lint command; its current validation gate is a production build.
-- The deployment workflows currently do not provide a complete backend-and-frontend validation gate for every pull request.
+- Branch protection and required-check configuration live in GitHub repository settings and must be enabled separately from source-controlled workflows.
 
 These are reasons to improve boundaries, not reasons for a wholesale rewrite.
 
@@ -485,7 +485,7 @@ Do not duplicate backend formula tests in Angular. Frontend assertions should pr
 
 ## Build and delivery
 
-The canonical local validation entry points are `scripts/validate.ps1` and `scripts/validate.sh`. They restore, build, and test the backend and run a clean install plus production build for the frontend. When frontend test and lint scripts are added, these validation entry points and pull-request CI must call them.
+The canonical local validation entry points are `scripts/validate.ps1` and `scripts/validate.sh`. They restore, build, and test the backend and run a clean install plus production build for the frontend. `.github/workflows/validate.yml` runs the Bash entry point for every pull request targeting `main` without deploying. When frontend test and lint scripts are added, these validation entry points and pull-request CI must call them.
 
 Frontend build flow is:
 
