@@ -1,10 +1,15 @@
 using Microsoft.EntityFrameworkCore;
 using InventoryApi.Data;
+using InventoryApi.Http;
 using InventoryApi.Integrations.Nayax;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
+
+// Controlled RFC 7807 responses for Nayax upstream failures.
+builder.Services.AddProblemDetails();
+builder.Services.AddExceptionHandler<NayaxUpstreamExceptionHandler>();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
@@ -65,6 +70,10 @@ using (var scope = app.Services.CreateScope())
     db.Database.Migrate();
     //DbInitializer.Seed(db);
 }
+
+// First in the pipeline so exceptions from controllers, services, and the Nayax
+// client are all caught.
+app.UseExceptionHandler();
 
 if (app.Environment.IsDevelopment())
 {
