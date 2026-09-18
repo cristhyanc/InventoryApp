@@ -24,20 +24,20 @@ public class NayaxLynxClient : INayaxLynxClient
 {
     private readonly HttpClient _http;
     private readonly string operatorId;
-    public NayaxLynxClient(HttpClient http, IOptions<NayaxLynxOptions> options)
+    public NayaxLynxClient(HttpClient http, IOptions<NayaxLynxOptions> options, IConfiguration configuration)
     {
         _http = http;
         var opts = options.Value;
-
+        var _token = configuration["Nayax:Token"];
         operatorId = opts.OperatorId;
         _http.BaseAddress = new Uri(opts.BaseUrl.TrimEnd('/') + "/operational/v1/");
         _http.DefaultRequestHeaders.Accept.Clear();
         _http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
-        if (!string.IsNullOrWhiteSpace(opts.AccessToken))
+        if (!string.IsNullOrWhiteSpace(_token))
         {
             _http.DefaultRequestHeaders.Authorization =
-                new AuthenticationHeaderValue("Bearer", opts.AccessToken);
+                new AuthenticationHeaderValue("Bearer", _token);
         }
     }
 
