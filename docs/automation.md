@@ -112,15 +112,19 @@ The authority matrix below applies to every phase. "Future" marks a participant 
 | Broaden acceptance criteria | Yes | **No** | No | No | No |
 | Approve a pull request | Yes | No | May recommend | Reports status | No |
 | Merge to `develop` | Yes | **No** | **No** | No | No |
-| Create or merge a `develop` → `main` release PR | Yes | **No** | **No** | No | No |
-| Deploy an environment | Yes (through a merge to `main`) | **No** | **No** | No | Yes, on `push` to `main` |
+| Prepare or update a `develop` → `main` release PR | Yes | Only when a human explicitly and separately requests it | **No** | No | No |
+| Approve or merge a release PR | Yes | **No** | **No** | No | No |
+| Deploy an environment | Yes, indirectly, by merging a release PR to `main` | **No** | **No** | No | Yes, on `push` to `main` |
 | Run production migrations | Yes (application startup on deploy) | **No** | **No** | No | Indirectly, on deploy |
 | Modify production data | Yes | **No** | **No** | No | No |
-| Access or expose production secrets | Yes (never in source) | **No** | **No** | No | Uses configured secrets |
+| Access production secrets | Only through approved secure platform administration when required | **No** | **No** | No | Consume configured secrets without displaying or returning them |
+| Expose production secrets | **No** | **No** | **No** | **No** | **No** |
 | Change GitHub or Azure credentials | Yes | **No** | **No** | No | No |
 | Modify branch protection or repository settings | Yes | **No** | **No** | No | No |
 | Perform destructive remote operations | Yes, deliberately | **No** | **No** | No | No |
 | Force-push or rewrite history | Discouraged | **No** | **No** | No | No |
+
+No participant may expose a production secret. Secrets must never appear in source, logs, issues, pull requests, test fixtures, screenshots, build output, or public responses.
 
 ### Implementation agent
 
@@ -139,12 +143,14 @@ The implementation agent **may not**:
 
 - Mark its own issue `agent-ready`.
 - Broaden acceptance criteria.
-- Merge a pull request.
+- Merge any pull request, feature or release.
+- Prepare a release pull request on its own initiative; it does so only on a separate, explicit human request, and never approves or merges it.
 - Push directly to `develop` or `main`.
 - Deploy an environment.
 - Modify production data.
 - Run production migrations.
-- Access or expose production secrets.
+- Access production secrets.
+- Expose production secrets (no participant may).
 - Change GitHub or Azure credentials.
 - Modify branch protection or repository settings.
 - Perform destructive remote operations.
@@ -226,7 +232,7 @@ The following are always high risk and require explicit human scrutiny of both t
 - Authentication or authorization.
 - Secrets or environment configuration.
 - GitHub Actions, Azure, or deployment changes.
-- Nayax write operations.
+- Any Nayax or other external-integration change, whether it reads, writes, imports, synchronises, maps errors, changes authentication, or handles remote payloads.
 - Imports or reconciliation behaviour (transaction, product, and reimbursement imports; status/payment classification; settlement matching).
 - Public API contract changes.
 - File upload or filesystem security.
@@ -236,7 +242,7 @@ The detailed invariants for these areas are defined in `AGENTS.md` and `docs/arc
 
 ### Merge policy by risk
 
-**During the initial automation phases (1–5), all merges remain human-controlled regardless of risk.** Risk level affects how much scrutiny a human applies and, in later phases, whether a task is eligible for automation at all. It never authorises an agent to merge.
+**During the initial automation phases (1–5), all merges remain human-controlled regardless of risk.** Risk level affects how much scrutiny a human applies and, in later phases, whether a task is eligible for automation at all. Agents never merge, whatever the risk level.
 
 ## Failure and retry policy
 
@@ -271,7 +277,7 @@ A change whose chain is broken (for example a PR without an issue, or a validati
 - `develop` is the integration branch. A push to `develop` runs backend build and tests (`vm-manager.yml` build job) but does not deploy.
 - Production releases use a **separate** pull request from `develop` to `main`.
 - A merge or push to `main` deploys the API and the frontend to Azure through the existing workflows, and the API applies EF Core migrations at startup.
-- Agents do not create, merge, or deploy a production release unless a human explicitly initiates and authorises that separate operation. Authorisation for a feature PR never extends to a release.
+- An agent may prepare or update a `develop` to `main` release pull request only when a human explicitly requests it. Permission to implement a feature never grants permission to create a release pull request. Agents never merge or deploy: a human reviews and merges the release pull request, and the existing workflow performs the deployment.
 - Production deployments and production migrations require human control. There is no automated path from an issue to production.
 
 ## Recommended repository protection checklist
@@ -304,6 +310,6 @@ Each phase is delivered as its own pull request and must be proven reliable befo
 | 4 | Staging deployment and smoke tests: a non-production environment deployed from `develop` with automated smoke checks. No staging environment exists today. | Proposed |
 | 5 | Controlled release PR and production approval: a `develop` → `main` release PR process with human environment approval. | Proposed |
 | 6 | Production monitoring and proposed issue creation: monitoring that can draft issues for humans to review; it must not apply `agent-ready`. | Proposed |
-| 7 | Possible low-risk auto-merge, only after the earlier phases have proven reliable and only for `risk:low` tasks, with a human able to disable it at any time. | Proposed, not committed |
+| 7 | Possible low-risk auto-merge, only after the earlier phases have proven reliable and only for `risk:low` tasks, with a human able to disable it at any time. Any such merge would be performed by repository automation configured by a human, never by the implementation or review agent, and would require an explicit update to this document. | Proposed, not committed |
 
 Phases 2–7 are not implemented by this repository at the time of writing. Any claim that one of them exists must be backed by a workflow or configuration file in this repository and a corresponding update to this document.

@@ -9,7 +9,7 @@ body:
 
         - **Never paste credentials, access tokens, connection strings, customer data, imported business files, or other secrets into an issue.** Describe where configuration lives instead.
         - **Creating this issue does not authorize any work, deployment, or production change.** A human must review it and apply `agent-ready` before an implementation agent may begin.
-        - **The agent stops after opening the pull request.** Merge, release, deployment, and production migrations remain human-controlled.
+        - **The agent stops after opening the pull request.** Agents never merge or deploy. Merge, release, deployment, and production migrations remain human-controlled.
 
         The lifecycle, authority model, and risk rules are in [docs/automation.md](https://github.com/cristhyanc/InventoryApp/blob/develop/docs/automation.md). Engineering invariants are in [AGENTS.md](https://github.com/cristhyanc/InventoryApp/blob/develop/AGENTS.md).
 
@@ -90,9 +90,9 @@ body:
       label: Proposed risk level
       description: Use the classification in docs/automation.md. A human confirms or changes this before applying `agent-ready`.
       options:
-        - "Low - documentation, tests only, or cleanup with no runtime behaviour change"
-        - "Medium - normal API/UI behaviour, non-financial feature, or refactoring covered by existing tests"
-        - "High - financial, inventory/costing, database/migration, security, secrets, deployment, Nayax write, import/reconciliation, public API contract, or file/filesystem"
+        - "Low — documentation, tests only, or cleanup with no runtime behaviour change"
+        - "Medium — other backend/application behaviour, frontend-only behaviour, non-financial feature, or refactoring covered by existing tests"
+        - "High — financial calculations, inventory/historical costing, database/migration, authentication/authorization, secrets/configuration, deployment/infrastructure, any Nayax or other external-integration change (read, write, import, sync, error mapping, authentication, or remote payloads), public API contract, or file upload/filesystem"
     validations:
       required: true
 
@@ -100,21 +100,22 @@ body:
     id: risk-areas
     attributes:
       label: Risk areas
-      description: Select every area this task touches. Selecting any of the first nine areas makes the task high risk.
+      description: Select every applicable area. Any `High` option requires proposed risk level `High`. `Unknown` must be resolved by a human before `agent-ready` is applied. When multiple levels apply, use the highest one.
       multiple: true
       options:
-        - Financial calculations
-        - Inventory or historical costing
-        - Database or migration
-        - Authentication or authorization
-        - Secrets or configuration
-        - Deployment or infrastructure
-        - Nayax or another external integration
-        - Public API contract
-        - File upload or filesystem
-        - Frontend-only behaviour
-        - Documentation or tests only
-        - None or unknown
+        - "High — Financial calculations"
+        - "High — Inventory or historical costing"
+        - "High — Database or migration"
+        - "High — Authentication or authorization"
+        - "High — Secrets or configuration"
+        - "High — Deployment or infrastructure"
+        - "High — Nayax or another external integration"
+        - "High — Public API contract"
+        - "High — File upload or filesystem"
+        - "Medium — Other backend or application behaviour"
+        - "Medium — Frontend-only behaviour"
+        - "Low — Documentation or tests only"
+        - "Unknown — Human triage required"
     validations:
       required: true
 

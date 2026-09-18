@@ -148,7 +148,7 @@ The complete invariants and change rules are in [AGENTS.md](AGENTS.md).
 
 ## Delivery workflow
 
-Changes are made on feature branches created from `develop` and validated through pull requests that target `develop`. Every pull request to `develop` or `main` runs the validation workflow. A push to `develop` builds and tests the backend without deploying. Production releases are separate pull requests from `develop` to `main`; a merge to `main` triggers the Azure API and frontend deployment workflows, so automated engineering agents stop after opening a pull request unless a human explicitly authorizes merge or deployment.
+Changes are made on feature branches created from `develop` and validated through pull requests that target `develop`. Every pull request to `develop` or `main` runs the validation workflow. A push to `develop` builds and tests the backend without deploying. Production releases are separate pull requests from `develop` to `main`; a merge to `main` triggers the Azure API and frontend deployment workflows. Automated engineering agents stop after opening a pull request and never merge or deploy. An agent may prepare a release pull request only when a human explicitly requests it; a human reviews and merges that pull request, and the existing workflow performs the deployment.
 
 Tasks intended for an implementation agent use the **Agent task** issue form, and every pull request uses the repository pull request template. The full lifecycle, authority model, task labels, risk classification, and retry policy are in [docs/automation.md](docs/automation.md).
 

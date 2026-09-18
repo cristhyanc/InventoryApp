@@ -48,7 +48,7 @@ Read the nearest relevant production code and tests before changing behavior. Fo
 
 7. Review the final diff for secrets, accidental schema changes, generated files, and unrelated edits.
 8. Open a pull request targeting `develop`, using the repository pull request template, with the reason for the change, tests run, financial/data risks, migration impact, and any known limitations.
-9. Stop after the pull request. Do not merge or deploy unless a human explicitly asks.
+9. Stop after the pull request. Agents never merge or deploy; a human reviews and merges the pull request.
 
 If complete validation cannot run, state exactly which command failed or was unavailable. Never claim a test or build passed unless it ran successfully.
 
@@ -57,7 +57,7 @@ If complete validation cannot run, state exactly which command failed or was una
 - The default base branch for normal work is `develop`. Create feature branches from the latest `develop`.
 - Normal feature and fix pull requests target `develop`, which is the integration branch. A push to `develop` runs backend build and tests but does not deploy.
 - Production releases are separate pull requests from `develop` to `main`. A merge to `main` deploys the API and frontend to Azure.
-- Agents do not create, merge, or deploy a release unless a human explicitly initiates and authorizes that separate operation.
+- An agent may prepare or update a `develop` to `main` release pull request only when a human explicitly requests it. Permission to implement a feature never grants permission to create a release pull request. Agents never merge or deploy: a human reviews and merges the release pull request, and the existing workflow performs the deployment.
 
 ## Automated task contract
 
@@ -68,8 +68,8 @@ These rules govern any current or future automated agent that implements a GitHu
 - When requirements are materially ambiguous, conflict with each other, or conflict with this file, `docs/architecture.md`, or existing tests, stop and request a human decision. State exactly which decision is needed.
 - Do not expand scope, broaden acceptance criteria, or reinterpret exclusions. Propose follow-up work in the pull request instead.
 - After a pull request fails validation or review, an agent may make at most two automated repair attempts. After that, or as soon as a repair would require weakening a test or changing an established rule, the task is blocked and returns to a human.
-- Agents stop after opening the pull request. They cannot merge, push to `develop` or `main`, create or merge a release, deploy, run production migrations, or modify production data.
-- High-risk categories require explicit human scrutiny of both the issue and the pull request: financial or profit calculations, inventory quantity or historical costing, database schema or migrations, backfills or destructive data operations, authentication or authorization, secrets or environment configuration, GitHub Actions/Azure/deployment changes, Nayax write operations, imports or reconciliation, public API contract changes, file upload or filesystem security, and any production-impacting operation.
+- Agents stop after opening the pull request. They never merge a feature or release pull request, never push to `develop` or `main`, never deploy, and never run production migrations or modify production data. An agent prepares a release pull request only on a separate, explicit human request, and only a human approves and merges it.
+- High-risk categories require explicit human scrutiny of both the issue and the pull request: financial or profit calculations, inventory quantity or historical costing, database schema or migrations, backfills or destructive data operations, authentication or authorization, secrets or environment configuration, GitHub Actions/Azure/deployment changes, any Nayax or other external-integration change (whether it reads, writes, imports, synchronises, maps errors, changes authentication, or handles remote payloads), imports or reconciliation, public API contract changes, file upload or filesystem security, and any production-impacting operation.
 - Every automated change must be traceable through its issue, branch, commits, pull request, validation result, review result, and human merge decision.
 
 ## Commands
@@ -237,10 +237,10 @@ Do not weaken or delete a failing test merely to obtain a green build. If an est
 
 ## Security and deployment safeguards
 
-- Never add secrets to source, test fixtures, logs, screenshots, documentation, or pull-request text.
+- Never add secrets to source, test fixtures, logs, screenshots, documentation, issues, pull-request text, build output, or API responses. No participant, human or agent, may expose a production secret; humans access production secrets only through approved secure platform administration when required.
 - Do not alter GitHub/Azure credentials, environment variables, production CORS origins, deployment environments, or infrastructure unless explicitly requested.
-- A push to `main` can deploy both the API and frontend. Agents must create a branch and a pull request targeting `develop` and must not merge it. Production releases are separate, human-controlled `develop` to `main` pull requests.
-- Do not deploy, run production migrations, import production statements, modify production data, or invoke destructive remote operations without explicit human approval.
+- A push to `main` deploys both the API and frontend. Agents must create a branch and a pull request targeting `develop`. Agents never merge or deploy. Production releases are separate `develop` to `main` pull requests that an agent prepares only on explicit human request and that only a human approves and merges; the existing workflow performs the deployment after that merge.
+- Agents never deploy, run production migrations, import production statements, modify production data, or invoke destructive remote operations. These remain human-controlled operations performed outside the agent's authority.
 - Do not use `git push --force`, destructive resets, or history rewriting.
 
 ## Definition of done
