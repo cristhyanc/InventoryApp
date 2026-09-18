@@ -33,7 +33,6 @@ public class NayaxLynxClient : INayaxLynxClient
         _http.BaseAddress = new Uri(opts.BaseUrl.TrimEnd('/') + "/operational/v1/");
         _http.DefaultRequestHeaders.Accept.Clear();
         _http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-        System.Diagnostics.Trace.TraceError("Nayax token: " + _token);
         if (!string.IsNullOrWhiteSpace(_token))
         {
             _http.DefaultRequestHeaders.Authorization =
