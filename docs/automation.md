@@ -91,7 +91,7 @@ There is no staging environment, no automated review workflow, and no issue-to-p
 
 ### Where agents stop today
 
-`AGENTS.md` requires every agent to work on a feature branch, run complete validation, open a pull request, and stop. Agents do not merge and do not deploy. Because a merge to `main` deploys production, this boundary is a safety control, not a convention.
+`AGENTS.md` requires every agent to work on a feature branch, run complete validation, and open a pull request targeting `develop`. After that, the agent may update only its feature branch, for at most two permitted repair attempts in response to CI or review failures, and then stops and returns control to a human. Agents do not merge and do not deploy. Because a merge to `main` deploys production, this boundary is a safety control, not a convention.
 
 ## Roles and authority
 

@@ -9,7 +9,7 @@ body:
 
         - **Never paste credentials, access tokens, connection strings, customer data, imported business files, or other secrets into an issue.** Describe where configuration lives instead.
         - **Creating this issue does not authorize any work, deployment, or production change.** A human must review it and apply `agent-ready` before an implementation agent may begin.
-        - **The agent stops after opening the pull request.** Agents never merge or deploy. Merge, release, deployment, and production migrations remain human-controlled.
+        - **The agent's work ends at the pull request.** After opening it, the agent may update only its feature branch, for at most two permitted repair attempts, and then returns control to a human. Agents never merge or deploy. Merge, release, deployment, and production migrations remain human-controlled.
 
         The lifecycle, authority model, and risk rules are in [docs/automation.md](https://github.com/cristhyanc/InventoryApp/blob/develop/docs/automation.md). Engineering invariants are in [AGENTS.md](https://github.com/cristhyanc/InventoryApp/blob/develop/AGENTS.md).
 
@@ -141,5 +141,5 @@ body:
           required: true
         - label: No secrets, credentials, customer data, or imported business files are included in this issue.
           required: true
-        - label: I understand that merge, release, and deployment remain human-controlled and that the agent stops after opening a pull request.
+        - label: I understand that merge, release, and deployment remain human-controlled, and that after opening a pull request the agent may only update its feature branch for at most two permitted repair attempts before returning control to a human.
           required: true
