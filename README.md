@@ -40,7 +40,7 @@ flowchart LR
 
 Business calculations stay authoritative on the backend. The UI owns navigation, interaction state, accessibility, and presentation without recreating inventory or accounting formulas.
 
-See [docs/architecture.md](docs/architecture.md) for the current system, target boundaries, frontend structure, financial rules, and incremental migration tracks.
+See [docs/architecture.md](docs/architecture.md) for the current system, target boundaries, frontend structure, financial rules, and incremental migration tracks, and [docs/automation.md](docs/automation.md) for the controlled automated-development lifecycle.
 
 ## Repository map
 
@@ -50,6 +50,9 @@ InventoryApp/
 ├── backend/InventoryApi.Tests/    Backend test suite
 ├── frontend/inventory-app/        Angular application
 ├── docs/architecture.md           Current and target architecture
+├── docs/automation.md             Automated development lifecycle and authority model
+├── .github/ISSUE_TEMPLATE/        Agent task issue form
+├── .github/pull_request_template.md
 ├── scripts/validate.ps1           Windows/PowerShell validation
 ├── scripts/validate.sh            Bash validation
 └── AGENTS.md                      Engineering and agent safeguards
@@ -145,7 +148,9 @@ The complete invariants and change rules are in [AGENTS.md](AGENTS.md).
 
 ## Delivery workflow
 
-Changes are made on feature branches and validated through pull requests. A merge to `main` can trigger the Azure API and frontend deployment workflows, so automated engineering agents stop after opening a pull request unless a human explicitly authorizes merge or deployment.
+Changes are made on feature branches created from `develop` and validated through pull requests that target `develop`. Every pull request to `develop` or `main` runs the validation workflow. A push to `develop` builds and tests the backend without deploying. Production releases are separate pull requests from `develop` to `main`; a merge to `main` triggers the Azure API and frontend deployment workflows, so automated engineering agents stop after opening a pull request unless a human explicitly authorizes merge or deployment.
+
+Tasks intended for an implementation agent use the **Agent task** issue form, and every pull request uses the repository pull request template. The full lifecycle, authority model, task labels, risk classification, and retry policy are in [docs/automation.md](docs/automation.md).
 
 ## License
 

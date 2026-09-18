@@ -1,0 +1,144 @@
+name: Agent task
+description: Define a bounded engineering task that an implementation agent may pick up after human review.
+title: "[Agent task] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Before you start
+
+        - **Never paste credentials, access tokens, connection strings, customer data, imported business files, or other secrets into an issue.** Describe where configuration lives instead.
+        - **Creating this issue does not authorize any work, deployment, or production change.** A human must review it and apply `agent-ready` before an implementation agent may begin.
+        - **The agent stops after opening the pull request.** Merge, release, deployment, and production migrations remain human-controlled.
+
+        The lifecycle, authority model, and risk rules are in [docs/automation.md](https://github.com/cristhyanc/InventoryApp/blob/develop/docs/automation.md). Engineering invariants are in [AGENTS.md](https://github.com/cristhyanc/InventoryApp/blob/develop/AGENTS.md).
+
+  - type: textarea
+    id: business-outcome
+    attributes:
+      label: Business outcome
+      description: What should be true for the business or the user once this task is complete? One or two sentences.
+      placeholder: Operators can see which reimbursement periods are still unmatched without opening each period.
+    validations:
+      required: true
+
+  - type: textarea
+    id: current-problem
+    attributes:
+      label: Current problem or requested behaviour
+      description: Describe what happens today and what should happen instead. Include the affected screen, endpoint, report, or command.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance criteria
+      description: Testable statements. Each one should be verifiable by a test, a validation command, or an observable result. These criteria and the exclusions below define the full extent of the agent's authority.
+      placeholder: |
+        - [ ] Given ..., when ..., then ...
+        - [ ] Given ..., when ..., then ...
+      value: |
+        - [ ]
+        - [ ]
+    validations:
+      required: true
+
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: Explicitly out of scope
+      description: Related work the agent must not do, even if it looks useful. Write "None identified" only after considering nearby cleanup, refactoring, and contract changes.
+    validations:
+      required: true
+
+  - type: textarea
+    id: validation-evidence
+    attributes:
+      label: Expected validation or test evidence
+      description: Which tests should be added or changed, and what evidence the pull request must show. Complete repository validation (`scripts/validate.sh` or `scripts/validate.ps1`) is always required.
+      placeholder: |
+        - New unit tests for ... covering success, boundary, and failure cases
+        - Existing report tests continue to pass
+        - Complete repository validation
+    validations:
+      required: true
+
+  - type: textarea
+    id: data-impact
+    attributes:
+      label: Migration, data and deployment impact
+      description: Does this change require an EF Core migration, a data backfill, a configuration change, or anything that affects deployment? If none, state "None".
+    validations:
+      required: true
+
+  - type: textarea
+    id: references
+    attributes:
+      label: Relevant files, documentation or references
+      description: Files, folders, tests, documentation sections, or prior issues/pull requests the agent should read first.
+      placeholder: |
+        - backend/InventoryApi/Services/...
+        - AGENTS.md § Reimbursements and reconciliation
+        - docs/architecture.md § Reimbursement import and reconciliation
+    validations:
+      required: true
+
+  - type: dropdown
+    id: risk-level
+    attributes:
+      label: Proposed risk level
+      description: Use the classification in docs/automation.md. A human confirms or changes this before applying `agent-ready`.
+      options:
+        - "Low - documentation, tests only, or cleanup with no runtime behaviour change"
+        - "Medium - normal API/UI behaviour, non-financial feature, or refactoring covered by existing tests"
+        - "High - financial, inventory/costing, database/migration, security, secrets, deployment, Nayax write, import/reconciliation, public API contract, or file/filesystem"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: risk-areas
+    attributes:
+      label: Risk areas
+      description: Select every area this task touches. Selecting any of the first nine areas makes the task high risk.
+      multiple: true
+      options:
+        - Financial calculations
+        - Inventory or historical costing
+        - Database or migration
+        - Authentication or authorization
+        - Secrets or configuration
+        - Deployment or infrastructure
+        - Nayax or another external integration
+        - Public API contract
+        - File upload or filesystem
+        - Frontend-only behaviour
+        - Documentation or tests only
+        - None or unknown
+    validations:
+      required: true
+
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Known constraints or open decisions
+      description: Constraints the agent must respect, and any decision that is still open. An open decision that affects the acceptance criteria must be resolved before `agent-ready` is applied. Write "None" if there are none.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: readiness
+    attributes:
+      label: Readiness
+      description: Confirm each item. These confirmations are reviewed by a human; they do not apply `agent-ready` and do not authorize work by themselves.
+      options:
+        - label: The acceptance criteria are testable.
+          required: true
+        - label: Out-of-scope work is identified.
+          required: true
+        - label: Risk has been considered and the proposed level matches the risk areas.
+          required: true
+        - label: No secrets, credentials, customer data, or imported business files are included in this issue.
+          required: true
+        - label: I understand that merge, release, and deployment remain human-controlled and that the agent stops after opening a pull request.
+          required: true

@@ -24,6 +24,9 @@ backend/InventoryApi.Tests/           xUnit backend tests
 frontend/inventory-app/               Angular 19 standalone application
 .github/workflows/                    Azure build and deployment workflows
 docs/architecture.md                  Current and target architecture
+docs/automation.md                    Automated development lifecycle and authority model
+.github/ISSUE_TEMPLATE/agent-task.yml Agent task issue form
+.github/pull_request_template.md      Pull request template
 scripts/validate.ps1                  Complete Windows validation
 scripts/validate.sh                   Complete Bash validation
 ```
@@ -32,7 +35,7 @@ Read the nearest relevant production code and tests before changing behavior. Fo
 
 ## Required workflow
 
-1. Work on a feature branch. Never commit directly to `main`.
+1. Work on a feature branch created from the latest `develop`. Never commit directly to `develop` or `main`.
 2. Restate the issue's acceptance criteria and identify affected domain rules.
 3. Inspect existing implementations and tests before proposing a design.
 4. Make the smallest coherent change. Do not mix unrelated cleanup with feature work.
@@ -44,10 +47,30 @@ Read the nearest relevant production code and tests before changing behavior. Fo
    - macOS/Linux/Git Bash: `bash scripts/validate.sh`
 
 7. Review the final diff for secrets, accidental schema changes, generated files, and unrelated edits.
-8. Open a pull request with the reason for the change, tests run, financial/data risks, migration impact, and any known limitations.
+8. Open a pull request targeting `develop`, using the repository pull request template, with the reason for the change, tests run, financial/data risks, migration impact, and any known limitations.
 9. Stop after the pull request. Do not merge or deploy unless a human explicitly asks.
 
 If complete validation cannot run, state exactly which command failed or was unavailable. Never claim a test or build passed unless it ran successfully.
+
+## Branches and releases
+
+- The default base branch for normal work is `develop`. Create feature branches from the latest `develop`.
+- Normal feature and fix pull requests target `develop`, which is the integration branch. A push to `develop` runs backend build and tests but does not deploy.
+- Production releases are separate pull requests from `develop` to `main`. A merge to `main` deploys the API and frontend to Azure.
+- Agents do not create, merge, or deploy a release unless a human explicitly initiates and authorizes that separate operation.
+
+## Automated task contract
+
+These rules govern any current or future automated agent that implements a GitHub issue. `docs/automation.md` contains the complete lifecycle, authority model, task states, risk classification, and retry policy; this section is the binding summary.
+
+- A human must review an issue and mark it `agent-ready` before an automated agent begins implementation. An agent must not start from an unreviewed issue and must never apply `agent-ready` itself.
+- The issue's acceptance criteria and explicit exclusions define the agent's authority. Work outside them is out of scope even when it is nearby, related, or looks like useful cleanup.
+- When requirements are materially ambiguous, conflict with each other, or conflict with this file, `docs/architecture.md`, or existing tests, stop and request a human decision. State exactly which decision is needed.
+- Do not expand scope, broaden acceptance criteria, or reinterpret exclusions. Propose follow-up work in the pull request instead.
+- After a pull request fails validation or review, an agent may make at most two automated repair attempts. After that, or as soon as a repair would require weakening a test or changing an established rule, the task is blocked and returns to a human.
+- Agents stop after opening the pull request. They cannot merge, push to `develop` or `main`, create or merge a release, deploy, run production migrations, or modify production data.
+- High-risk categories require explicit human scrutiny of both the issue and the pull request: financial or profit calculations, inventory quantity or historical costing, database schema or migrations, backfills or destructive data operations, authentication or authorization, secrets or environment configuration, GitHub Actions/Azure/deployment changes, Nayax write operations, imports or reconciliation, public API contract changes, file upload or filesystem security, and any production-impacting operation.
+- Every automated change must be traceable through its issue, branch, commits, pull request, validation result, review result, and human merge decision.
 
 ## Commands
 
@@ -216,7 +239,7 @@ Do not weaken or delete a failing test merely to obtain a green build. If an est
 
 - Never add secrets to source, test fixtures, logs, screenshots, documentation, or pull-request text.
 - Do not alter GitHub/Azure credentials, environment variables, production CORS origins, deployment environments, or infrastructure unless explicitly requested.
-- A push to `main` can deploy both the API and frontend. Agents must create a branch and pull request and must not merge it.
+- A push to `main` can deploy both the API and frontend. Agents must create a branch and a pull request targeting `develop` and must not merge it. Production releases are separate, human-controlled `develop` to `main` pull requests.
 - Do not deploy, run production migrations, import production statements, modify production data, or invoke destructive remote operations without explicit human approval.
 - Do not use `git push --force`, destructive resets, or history rewriting.
 

@@ -493,7 +493,7 @@ Do not duplicate backend formula tests in Angular. Frontend assertions should pr
 
 ## Build and delivery
 
-The canonical local validation entry points are `scripts/validate.ps1` and `scripts/validate.sh`. They restore, build, and test the backend and run a clean install plus production build for the frontend. `.github/workflows/validate.yml` runs the Bash entry point for every pull request targeting `main` without deploying. When frontend test and lint scripts are added, these validation entry points and pull-request CI must call them.
+The canonical local validation entry points are `scripts/validate.ps1` and `scripts/validate.sh`. They restore, build, and test the backend and run a clean install plus production build for the frontend. `.github/workflows/validate.yml` runs the Bash entry point for every pull request targeting `develop` or `main` without deploying. When frontend test and lint scripts are added, these validation entry points and pull-request CI must call them.
 
 Frontend build flow is:
 
@@ -507,7 +507,7 @@ Current production delivery is triggered from `main`:
 - `.github/workflows/vm-manager.yml` builds/tests and deploys the API.
 - `.github/workflows/azure-static-web-apps-red-island-0c128c000.yml` builds/deploys the Angular frontend.
 
-Consequently, automated engineering agents stop at a pull request. Merge and production deployment remain human-controlled.
+Consequently, automated engineering agents stop at a pull request. Merge and production deployment remain human-controlled. The branch flow, agent authority model, task states, and risk classification for automated changes are defined in [docs/automation.md](automation.md).
 
 ## Architectural decision rules
 
