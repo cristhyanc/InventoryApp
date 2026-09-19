@@ -1,6 +1,5 @@
 import { Routes } from '@angular/router';
 import { DashboardComponent } from './components/dashboard/dashboard.component';
-import { ProductListComponent } from './components/products/product-list.component';
 import { ProductFormComponent } from './components/products/product-form.component';
 import { CategoryListComponent } from './components/categories/category-list.component';
 import { SupplierListComponent } from './components/suppliers/supplier-list.component';
@@ -20,12 +19,32 @@ import { AdminComponent } from './components/admin/admin.component';
 import { OperatingExpenseComponent } from './components/expenses/operating-expense.component';
 import { SiteCommissionsReportComponent } from './components/reports/site-commissions-report.component';
 import { TransactionSalesReportComponent } from './components/reports/transaction-sales-report.component';
+import { productsLegacyRouteGuard } from './components/products/products-legacy-route.guard';
 
 export const routes: Routes = [
   { path: '', component: DashboardComponent },
-  { path: 'products', component: ProductListComponent },
   { path: 'products/:id/edit', component: ProductFormComponent },
   { path: 'products/:id/stock', component: StockHistoryComponent },
+  {
+    path: 'products',
+    canActivate: [productsLegacyRouteGuard],
+    loadComponent: () => import('./components/products/products-shell.component').then((m) => m.ProductsShellComponent),
+    children: [
+      {
+        path: '',
+        pathMatch: 'full',
+        loadComponent: () => import('./components/products/product-list.component').then((m) => m.ProductListComponent)
+      },
+      {
+        path: 'needs-ordering',
+        loadComponent: () => import('./components/products/product-needs-ordering.component').then((m) => m.ProductNeedsOrderingComponent)
+      },
+      {
+        path: 'on-order',
+        loadComponent: () => import('./components/products/product-on-order.component').then((m) => m.ProductOnOrderComponent)
+      }
+    ]
+  },
   { path: 'categories', component: CategoryListComponent },
   { path: 'suppliers', component: SupplierListComponent },
   { path: 'machines/:id', component: MachineDetailComponent },
