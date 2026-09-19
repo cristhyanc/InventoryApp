@@ -28,6 +28,8 @@ export const routes: Routes = [
   {
     path: 'products',
     canActivate: [productsLegacyRouteGuard],
+    // Re-run the legacy guard on query-param-only changes; the reused shell route would otherwise skip it.
+    runGuardsAndResolvers: 'paramsOrQueryParamsChange',
     loadComponent: () => import('./components/products/products-shell.component').then((m) => m.ProductsShellComponent),
     children: [
       {
