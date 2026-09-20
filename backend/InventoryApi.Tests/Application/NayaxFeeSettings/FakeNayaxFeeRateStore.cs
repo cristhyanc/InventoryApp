@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -23,8 +25,8 @@ public sealed class FakeNayaxFeeRateStore : INayaxFeeRateStore
         Task.FromResult<IReadOnlyList<NayaxFeeRateRecord>>(
             _rates.OrderByDescending(x => x.EffectiveFrom).ToList());
 
-    public Task<NayaxFeeRateRecord> FindByEffectiveDateAsync(DateTime effectiveDate, CancellationToken cancellationToken) =>
-        Task.FromResult(_rates.SingleOrDefault(x => x.EffectiveFrom.Date == effectiveDate.Date));
+    public Task<NayaxFeeRateRecord?> FindByEffectiveDateAsync(DateTime effectiveDate, CancellationToken cancellationToken) =>
+        Task.FromResult<NayaxFeeRateRecord?>(_rates.SingleOrDefault(x => x.EffectiveFrom.Date == effectiveDate.Date));
 
     public Task<NayaxFeeRateRecord> AddAsync(DateTime effectiveDate, decimal feeExGst, DateTime createdAtUtc, CancellationToken cancellationToken)
     {
