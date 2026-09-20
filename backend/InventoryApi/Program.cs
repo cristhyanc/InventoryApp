@@ -1,6 +1,8 @@
 using Microsoft.EntityFrameworkCore;
 using Inventory.Application;
+using Inventory.Application.NayaxFeeSettings;
 using Inventory.Infrastructure;
+using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using InventoryApi.Http;
 using InventoryApi.Integrations.Nayax;
@@ -64,6 +66,9 @@ builder.Services.AddScoped<InventoryApi.Services.Interfaces.IImportService, Inve
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IReportingService, InventoryApi.Services.ReportingService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.INayaxProcessingFeeService, InventoryApi.Services.NayaxProcessingFeeService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.ISiteCommissionService, InventoryApi.Services.SiteCommissionService>();
+
+// Temporary API-owned adapter for the Nayax fee-settings persistence port; see EfNayaxFeeRateStore.
+builder.Services.AddScoped<INayaxFeeRateStore, EfNayaxFeeRateStore>();
 
 var app = builder.Build();
 
