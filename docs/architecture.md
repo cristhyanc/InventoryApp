@@ -34,6 +34,9 @@ InventoryApp/
 │   │   ├── Services/
 │   │   ├── Program.cs
 │   │   └── InventoryApi.csproj
+│   ├── Inventory.Domain/            NayaxFeeSettings rule; other features not yet migrated
+│   ├── Inventory.Application/       NayaxFeeSettings use cases/ports; other features not yet migrated
+│   ├── Inventory.Infrastructure/    SystemClock adapter; other features not yet migrated
 │   └── InventoryApi.Tests/
 ├── frontend/inventory-app/
 │   ├── src/app/
@@ -52,7 +55,7 @@ InventoryApp/
 
 The Angular application uses standalone components. `app.config.ts` registers the router, HTTP client, and a startup initializer that loads the API base URL. Routes currently load page components eagerly. Pages keep their own view state and call singleton services, which use `HttpClient` to reach the API.
 
-The API is currently a single assembly. Controllers generally call service interfaces, while services use `AppDbContext` and, where required, Nayax or filesystem facilities. `Program.cs` is the composition root and applies EF Core migrations at startup.
+The API's production dependency skeleton (`Inventory.Domain`, `Inventory.Application`, `Inventory.Infrastructure`) is wired into the `InventoryApi` composition root through `AddApplicationServices()`/`AddInfrastructureServices()` extension methods. The Nayax fee-settings slice (GET/POST `api/settings/nayax-processing-fee-rates`) is the first feature moved into this shape: `Inventory.Domain.NayaxFeeSettings.NayaxFeeRate` validates the configured rate, `Inventory.Application.NayaxFeeSettings` holds the `ListNayaxFeeRates`/`SaveNayaxFeeRate` use cases and the `INayaxFeeRateStore`/`IClock` ports, `Inventory.Infrastructure.Clock.SystemClock` implements `IClock`, and `SettingsController` only binds HTTP input and maps the use-case result. Because `AppDbContext` and its EF entities still live in `InventoryApi`, `INayaxFeeRateStore` is implemented by `InventoryApi.Adapters.Persistence.EfNayaxFeeRateStore` — a deliberately temporary API-owned adapter, registered directly in `Program.cs` rather than through `AddInfrastructureServices()`, so that `Inventory.Infrastructure` does not need to reference `InventoryApi`. It must move into `Inventory.Infrastructure` once `AppDbContext` and the shared persistence models relocate there; no other Nayax fee calculation, reporting, or persistence migration has happened yet. Every other feature implementation still lives in `InventoryApi`: controllers generally call service interfaces, while services use `AppDbContext` and, where required, Nayax or filesystem facilities. `Program.cs` is the composition root and applies EF Core migrations at startup.
 
 ```mermaid
 flowchart TD
@@ -82,7 +85,7 @@ flowchart TD
 - HTTP, use cases, domain calculations, EF Core, Nayax, file storage, and export generation live in one project.
 - `ReportingService` owns many report types, shared queries, reconciliation, and CSV/XLSX generation and has grown to roughly 110 KB.
 - Receipt, machine, and inventory-cost-transition services combine orchestration and persistence and are large.
-- Operating-expense, fee-setting, and site-commission controllers directly access `AppDbContext`; operating expenses also manipulate files.
+- Operating-expense and site-commission controllers directly access `AppDbContext`; operating expenses also manipulate files. Fee-setting no longer does (see the Nayax fee-settings slice above), except through its temporary API-owned persistence adapter.
 - `Product` contains persistence state, business calculations, and transient Nayax/UI fields.
 - Reporting contracts are concentrated in a large DTO file.
 - Several tests use EF Core InMemory where SQLite behavior may be more representative.
@@ -402,13 +405,14 @@ Backend and frontend tracks can progress independently when their contracts do n
    - Add repository instructions, architecture documentation, and cross-platform validation scripts.
    - Correct documentation/CI drift in focused follow-up changes.
 
-2. **Project skeleton**
-   - Add Domain, Application, and Infrastructure projects and dependency-registration extensions.
-   - Move no complex feature merely to populate the projects.
+2. **Project skeleton** — done.
+   - Added `Inventory.Domain`, `Inventory.Application`, and `Inventory.Infrastructure` projects, the allowed reference directions, no-op dependency-registration extensions wired into `InventoryApi`, and architecture tests that fail on a prohibited reverse dependency.
+   - No feature was moved; every controller, service, model, and adapter still lives in `InventoryApi`.
 
-3. **Nayax fee settings slice**
-   - Move validation/use cases out of `SettingsController`.
-   - Prove persistence port, result mapping, DI, and test patterns.
+3. **Nayax fee settings slice** — done.
+   - Moved validation and use cases out of `SettingsController` into `Inventory.Domain.NayaxFeeSettings`/`Inventory.Application.NayaxFeeSettings`.
+   - Proved the persistence port (`INayaxFeeRateStore`), a temporary API-owned EF adapter (`InventoryApi.Adapters.Persistence.EfNayaxFeeRateStore`), result mapping, DI registration, and the unit/Application/SQLite/API test pattern this migration will reuse.
+   - The EF adapter remains temporarily in `InventoryApi` until `AppDbContext` and its persistence models move into `Inventory.Infrastructure`.
 
 4. **Operating expenses slice**
    - Extract use cases, persistence, and `IDocumentStorage`.
