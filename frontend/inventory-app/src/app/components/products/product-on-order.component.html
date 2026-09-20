@@ -1,0 +1,52 @@
+<div class="rounded-xl bg-white p-6 shadow-sm">
+  @if (orders.length === 0) {
+    <p class="text-sm text-slate-500">No active supplier orders.</p>
+  } @else {
+    <div class="space-y-4">
+      @for (order of orders; track order.id) {
+        <div class="border border-slate-200 rounded-lg p-4">
+          <div class="mb-3 flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <h3 class="font-semibold text-slate-800">Order #{{ order.id }} - {{ order.supplier?.name || 'Unknown' }}</h3>
+              <p class="text-sm text-slate-500">{{ order.orderDate | date:'mediumDate' }}@if (order.expectedDate) { · Expected {{ order.expectedDate | date:'mediumDate' }} }@if (order.reference) { · {{ order.reference }} }</p>
+            </div>
+            <div class="flex flex-wrap gap-2">
+              @if (order.status !== 3 && order.status !== 2) {
+                <button type="button" class="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700" (click)="receiveOrder(order)">Receive / Create Purchase</button>
+              }
+              @if (order.status < 2) {
+                <button type="button" class="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50" (click)="cancelOrder(order)">Cancel</button>
+              }
+            </div>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="min-w-full text-sm">
+              <thead class="bg-slate-50">
+                <tr>
+                  <th class="px-4 py-2 text-left font-medium text-slate-700">Product</th>
+                  <th class="px-4 py-2 text-right font-medium text-slate-700">Ordered</th>
+                  <th class="px-4 py-2 text-right font-medium text-slate-700">Received</th>
+                  <th class="px-4 py-2 text-right font-medium text-slate-700">Outstanding</th>
+                  <th class="px-4 py-2 text-left font-medium text-slate-700">Unit Price</th>
+                  <th class="px-4 py-2 text-left font-medium text-slate-700">Status</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-100">
+                @for (line of order.lines; track line.id) {
+                  <tr>
+                    <td class="px-4 py-2 text-slate-700">{{ line.product?.name }}</td>
+                    <td class="px-4 py-2 text-right">{{ line.quantityOrdered }}</td>
+                    <td class="px-4 py-2 text-right">{{ line.quantityReceived }}</td>
+                    <td class="px-4 py-2 text-right font-semibold">{{ line.outstandingQuantity }}</td>
+                    <td class="px-4 py-2">{{ line.unitPrice != null ? ('$' + line.unitPrice.toFixed(4)) : '—' }}</td>
+                    <td class="px-4 py-2">{{ orderStatus(order.status) }}</td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+        </div>
+      }
+    </div>
+  }
+</div>

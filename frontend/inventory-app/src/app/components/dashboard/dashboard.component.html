@@ -169,7 +169,7 @@
 <div class="rounded-xl bg-white p-6 shadow-sm">
   <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
     <h2 class="text-lg font-semibold text-slate-800">⚠️ Reorder Alerts</h2>
-    <a routerLink="/products" [queryParams]="{ lowStockOnly: true }" class="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">View all products</a>
+    <a routerLink="/products/needs-ordering" class="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">View reorder alerts</a>
   </div>
 
   @if (isLoadingLowStock) {
