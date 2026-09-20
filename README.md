@@ -55,7 +55,8 @@ InventoryApp/
 ├── .github/pull_request_template.md
 ├── scripts/validate.ps1           Windows/PowerShell validation
 ├── scripts/validate.sh            Bash validation
-└── AGENTS.md                      Engineering and agent safeguards
+├── AGENTS.md                      Engineering and agent safeguards
+└── CLAUDE.md                      Claude Code entry point (points to AGENTS.md and docs)
 ```
 
 ## Prerequisites
@@ -150,7 +151,7 @@ The complete invariants and change rules are in [AGENTS.md](AGENTS.md).
 
 Changes are made on feature branches created from `develop` and validated through pull requests that target `develop`. Every pull request to `develop` or `main` runs the validation workflow. A push to `develop` builds and tests the backend without deploying. Production releases are separate pull requests from `develop` to `main`; a merge to `main` triggers the Azure API and frontend deployment workflows. After opening a pull request, an automated engineering agent may update only its feature branch, for at most two permitted repair attempts in response to CI or review failures, and then returns control to a human. It never merges or deploys. An agent may prepare a release pull request only when a human explicitly requests it; a human reviews and merges that pull request, and the existing workflow performs the deployment.
 
-Tasks intended for an implementation agent use the **Agent task** issue form, and every pull request uses the repository pull request template. The full lifecycle, authority model, task labels, risk classification, and retry policy are in [docs/automation.md](docs/automation.md).
+Tasks intended for an implementation agent use the **Agent task** issue form, and every pull request uses the repository pull request template. The agent provider is Claude Code: applying `agent-ready` to a reviewed issue starts the implementation workflow, applying `agent-review` to the resulting pull request starts an independent review, and a human may request at most two repairs by commenting `@claude repair` on that pull request. The full lifecycle, authority model, task labels, risk classification, and retry policy are in [docs/automation.md](docs/automation.md).
 
 ## License
 

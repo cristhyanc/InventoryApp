@@ -1,0 +1,148 @@
+name: Agent repair
+
+# Human-invoked repair attempt (Claude Code) on a pull request that carries `agent-review`.
+#
+# Authority and lifecycle: AGENTS.md ("Automated task contract") and docs/automation.md ("Failure and retry policy").
+# - Runs only when a user with write access comments `@claude repair ...` on an open, non-draft
+#   pull request that targets `develop`, carries `agent-review`, and whose head branch is in this repository.
+# - Updates only that pull request's head branch. Never merges, deploys, or pushes anywhere else.
+# - Repair counting is human-controlled: the human who comments decides whether an attempt is still
+#   permitted (at most two per pull request). This workflow does not count attempts or start on its own.
+# - After a repair the human confirms CI and re-applies `agent-review` to request a fresh independent review.
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions: {}
+
+concurrency:
+  group: agent-repair-pr-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  repair:
+    name: Repair pull request on explicit request
+    if: |
+      github.event.issue.pull_request != null &&
+      github.event.issue.state == 'open' &&
+      contains(github.event.issue.labels.*.name, 'agent-review') &&
+      startsWith(github.event.comment.body, '@claude repair') &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      actions: read
+      checks: read
+      statuses: read
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PR_NUMBER: ${{ github.event.issue.number }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+    steps:
+      - name: Resolve and verify pull request head
+        id: pr
+        run: |
+          set -euo pipefail
+          pr_json="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --json headRefName,baseRefName,isDraft,headRepository,headRepositoryOwner)"
+          head_ref="$(jq -r '.headRefName' <<<"$pr_json")"
+          base_ref="$(jq -r '.baseRefName' <<<"$pr_json")"
+          is_draft="$(jq -r '.isDraft' <<<"$pr_json")"
+          head_repo="$(jq -r '"\(.headRepositoryOwner.login)/\(.headRepository.name)"' <<<"$pr_json")"
+
+          fail() { echo "::error::$1"; exit 1; }
+          [ "$base_ref" = "develop" ] || fail "Repair is only permitted for pull requests targeting develop (base is '$base_ref')."
+          [ "$is_draft" = "false" ] || fail "Repair is not permitted on a draft pull request."
+          [ "$head_repo" = "$GITHUB_REPOSITORY" ] || fail "Repair is only permitted for branches in this repository (head is '$head_repo')."
+          case "$head_ref" in develop|main) fail "Refusing to operate on protected branch '$head_ref'.";; esac
+          [[ "$head_ref" =~ ^[A-Za-z0-9._/-]+$ ]] || fail "Unexpected characters in head branch name."
+
+          echo "head_ref=$head_ref" >> "$GITHUB_OUTPUT"
+
+      - name: Check out pull request head branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ steps.pr.outputs.head_ref }}
+          fetch-depth: 0
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/inventory-app/package-lock.json
+
+      - name: Run Claude Code repair agent
+        id: claude
+        uses: anthropics/claude-code-action@cfc3eb22bfed5c26ef66e3223c982af27e4524de # v1.0.231
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          base_branch: develop
+          additional_permissions: |
+            actions: read
+          prompt: |
+            You are the InventoryApp implementation agent performing ONE human-authorised repair attempt in GitHub Actions.
+
+            REPOSITORY: ${{ github.repository }}
+            PULL REQUEST: #${{ github.event.issue.number }}
+            HEAD BRANCH (checked out; the only branch you may change): ${{ steps.pr.outputs.head_ref }}
+            BASE BRANCH: develop
+            REQUESTED BY: ${{ github.event.comment.user.login }}
+            REQUEST COMMENT:
+            ${{ github.event.comment.body }}
+
+            Follow CLAUDE.md, AGENTS.md and docs/automation.md exactly. Repair attempts are limited to two per pull request and are counted by humans; this run is one attempt. Do not start another one, and do not attempt anything the request or the review findings do not require.
+
+            Procedure:
+            1. Read the pull request with its reviews and comments (`gh pr view ${{ github.event.issue.number }} --comments`), its diff (`gh pr diff ${{ github.event.issue.number }}`), the CI state (`gh pr checks ${{ github.event.issue.number }}`, `gh run view`, and the github_ci tools for failing job logs), and the linked issue (`gh issue view <n>`) so the repair stays inside the issue's acceptance criteria and exclusions.
+            2. Identify the concrete CI or review failures the request refers to. If a repair would require weakening, skipping, or deleting a test, changing an established rule in AGENTS.md or docs/architecture.md, or working outside the issue's scope, stop: post one comment with `gh pr comment` explaining exactly which human decision is needed, change nothing, and finish.
+            3. Make the smallest coherent fix on the checked-out head branch. Add or adjust tests as AGENTS.md requires.
+            4. Run the complete repository validation with exactly `bash scripts/validate.sh`. Record the real result.
+            5. Review the diff for secrets, local databases, generated output, accidental migrations, and unrelated edits.
+            6. Commit with a focused message and push with exactly `git push origin ${{ steps.pr.outputs.head_ref }}`. Never force-push, rebase, or rewrite history.
+            7. Post one comment with `gh pr comment` describing what was changed and why, which findings it addresses, the exact validation command and its actual result, and anything you could not resolve. Do not change labels, do not edit the PR description, do not merge.
+
+            Hard limits: do not merge, approve, deploy, run migrations against any environment, modify labels, change workflows, secrets or repository settings, touch anything outside the acceptance criteria, or claim a command passed unless it ran and succeeded in this session.
+          claude_args: |
+            --max-turns 200
+            --allowedTools "Edit,MultiEdit,Write,mcp__github_ci__get_ci_status,mcp__github_ci__get_workflow_run_details,mcp__github_ci__download_job_log"
+            "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh pr comment *),Bash(gh issue view *),Bash(gh run view *),Bash(gh run list *)"
+            "Bash(git status *),Bash(git diff *),Bash(git log *),Bash(git show *),Bash(git branch --show-current),Bash(git rev-parse *)"
+            "Bash(git add *),Bash(git commit *),Bash(git push origin ${{ steps.pr.outputs.head_ref }} *)"
+            "Bash(bash scripts/validate.sh),Bash(dotnet *),Bash(npm --prefix frontend/inventory-app *)"
+            --disallowedTools "WebFetch,WebSearch"
+            "Bash(git push * --force *),Bash(git push * -f *),Bash(git push * --force-with-lease *),Bash(git push --force *),Bash(git push -f *)"
+            "Bash(git reset --hard *),Bash(git rebase *),Bash(git checkout *),Bash(git switch *),Bash(git merge *)"
+            "Bash(gh pr merge *),Bash(gh pr review *),Bash(gh pr edit *),Bash(gh pr create *),Bash(gh issue edit *),Bash(gh issue comment *),Bash(gh api *),Bash(gh workflow *),Bash(gh run rerun *),Bash(gh run cancel *),Bash(gh release *),Bash(gh secret *),Bash(gh variable *),Bash(gh label *)"
+
+      - name: Record outcome on the pull request
+        if: always()
+        env:
+          CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
+          HEAD_REF: ${{ steps.pr.outputs.head_ref }}
+        run: |
+          set -euo pipefail
+          if [ "$CLAUDE_OUTCOME" = "cancelled" ]; then
+            gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+              --body "Repair run was cancelled (superseded by a newer repair request on this pull request). Run: ${RUN_URL}"
+            exit 0
+          fi
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body "$(cat <<EOF
+          Repair run finished on \`${HEAD_REF}\` (agent step outcome: ${CLAUDE_OUTCOME}). Read the agent's comment above for what changed and the actual validation result.
+
+          Next steps are human-controlled: confirm the CI check on the new head (GitHub does not start pull-request workflows for pushes made with the workflow token; close and reopen the pull request if the check is missing), then remove and re-apply \`agent-review\` to request a fresh independent review. Repair attempts are limited to two per pull request and are counted by you; after the second failed attempt, label the issue \`agent-blocked\` and take over.
+
+          Run: ${RUN_URL}
+          EOF
+          )"
