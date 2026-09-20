@@ -233,7 +233,7 @@ export class ReceiptUploadComponent implements OnInit {
         next: () => {
           if (this.supplierOrderId) {
             this.toastService.success('Purchase created from supplier order.');
-            this.router.navigate(['/products'], { queryParams: { reorderView: 'onOrder' } });
+            this.router.navigate(['/products/on-order']);
           } else {
             this.toastService.success('Purchase created.');
             this.router.navigate(['/receipts']);

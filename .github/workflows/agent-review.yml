@@ -1,0 +1,116 @@
+name: Agent review
+
+# Independent review agent (Claude Code) for pull requests that carry `agent-review`.
+#
+# Authority and lifecycle: AGENTS.md ("Automated task contract") and docs/automation.md ("Review agent").
+# - Runs only for a non-draft pull request that targets `develop` and carries the `agent-review` label,
+#   when a human applies that label, when new commits arrive while it is applied, or when the PR
+#   leaves draft state while it is applied.
+# - Every run is a fresh review of the pull request's current head SHA in a new job with its own context.
+#   It shares the Anthropic billing credential with the implementation workflow but never its invocation,
+#   working tree, conversation, or GitHub permissions.
+# - The review posts inline comments and exactly one `gh pr review --comment` whose body carries an
+#   explicit verdict line. It never uses --approve or --request-changes: the agent PRs are authored by
+#   github-actions[bot], and GitHub rejects approve/request-changes reviews from the PR's own author.
+#   Human approval and branch protection remain the merge gate.
+# - Read-only code access: it cannot modify files, commits, branches, or labels, and it never merges.
+# - Does not use the multi-agent code-review plugin.
+#
+# Runs caused by the workflow token (for example a `synchronize` event after an automated repair push)
+# are queued until a human clicks "Approve workflows to run"; `allowed_bots` lets the action accept
+# github-actions[bot] as the triggering actor for those approved runs.
+
+on:
+  pull_request:
+    types: [labeled, synchronize, ready_for_review]
+    branches:
+      - develop
+
+permissions: {}
+
+concurrency:
+  group: agent-review-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: Independent review of current head
+    if: |
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.base.ref == 'develop' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      contains(github.event.pull_request.labels.*.name, 'agent-review') &&
+      (github.event.action != 'labeled' || github.event.label.name == 'agent-review')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+      actions: read
+      checks: read
+      statuses: read
+
+    steps:
+      - name: Check out pull request head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Run Claude Code review agent
+        uses: anthropics/claude-code-action@cfc3eb22bfed5c26ef66e3223c982af27e4524de # v1.0.231
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          allowed_bots: "github-actions[bot]"
+          additional_permissions: |
+            actions: read
+          prompt: |
+            You are the InventoryApp independent review agent running in GitHub Actions. You are a separate invocation from the implementation agent: do not rely on anything it may have claimed; verify it.
+
+            REPOSITORY: ${{ github.repository }}
+            PULL REQUEST: #${{ github.event.pull_request.number }}
+            HEAD SHA UNDER REVIEW: ${{ github.event.pull_request.head.sha }} (checked out in the working tree)
+            BASE BRANCH: ${{ github.event.pull_request.base.ref }}
+
+            Produce a fresh, complete review of exactly this head SHA. Ignore earlier review rounds except to check whether previously raised problems are resolved.
+
+            Read, in this order, before judging anything:
+            1. CLAUDE.md, AGENTS.md and docs/automation.md (the binding engineering, safety and authority rules); docs/architecture.md where the change touches structure, EF Core, reporting, Nayax, or the Angular layout.
+            2. The pull request (`gh pr view ${{ github.event.pull_request.number }} --comments`) and its full diff (`gh pr diff ${{ github.event.pull_request.number }}` or `git diff origin/${{ github.event.pull_request.base.ref }}...HEAD`).
+            3. The linked issue named in the PR body (`gh issue view <n> --comments`): its acceptance criteria and explicit exclusions define what the PR was allowed to do.
+            4. The validation evidence: the "Validation commands and actual results" section of the PR body and the actual CI state (`gh pr checks ${{ github.event.pull_request.number }}`, and the github_ci tools or `gh run view` for logs). A claim without a matching passing check is not evidence.
+
+            Evaluate and report on each of:
+            - Requirements: every acceptance criterion met; nothing outside the criteria or inside the exclusions was changed; no scope creep, no unrelated cleanup.
+            - Correctness and safety against AGENTS.md invariants (financial, inventory/costing, reconciliation, GST, commissions, migrations, Nayax, files/security, frontend rules). Cite the invariant you are applying.
+            - Architecture against docs/architecture.md and the AGENTS.md architecture rules.
+            - Tests: the tests AGENTS.md requires for this change type exist, are meaningful, and no failing test was weakened, skipped, or deleted.
+            - Validation evidence: the PR states real commands and results consistent with CI. Flag any unsupported "passed" claim.
+            - Secrets, local databases, generated output, accidental migrations, unrelated files, and public API contract changes.
+            - Risk classification per docs/automation.md; for high-risk areas confirm the PR cites the invariants it touches.
+
+            Deliver the result on the pull request:
+            - Inline comments (mcp__github_inline_comment__create_inline_comment) for specific lines that need a change, each stating the problem, why it matters, and the rule or criterion it violates.
+            - Exactly one summary review, always submitted with `gh pr review ${{ github.event.pull_request.number }} --comment --body "..."`. Never use --approve or --request-changes: this pull request is authored by github-actions[bot] and GitHub rejects approve/request-changes reviews from the same account; the verdict line below carries the outcome instead. Do not post any other top-level comment.
+            - The review body must have this structure, in this order:
+              1. `Head SHA reviewed: <sha>`
+              2. Exactly one verdict line, verbatim, on its own line: `VERDICT: CHANGES REQUESTED` when anything blocks the change, otherwise `VERDICT: READY FOR HUMAN REVIEW`.
+              3. `Blockers:` followed by a numbered list of every blocking finding (file, line where applicable, what is wrong, which rule or acceptance criterion it violates). Write `Blockers: none` when there are none.
+              4. The acceptance criteria checklist with met / not met per item.
+              5. Non-blocking suggestions.
+              6. The validation evidence you confirmed (checks, runs, commands and their real results).
+              7. The sentence: "This is an advisory review. Human approval and branch protection remain the merge gate."
+
+            Hard limits: never approve, request changes, merge, edit files, commit, push, change labels, edit the PR or issue, trigger workflows, or run write operations of any kind. If a tool call is denied, do not look for another route; report what you could not verify instead.
+          claude_args: |
+            --max-turns 80
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,mcp__github_ci__get_ci_status,mcp__github_ci__get_workflow_run_details,mcp__github_ci__download_job_log"
+            "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh issue view *),Bash(gh run view *),Bash(gh run list *)"
+            "Bash(gh pr review * --comment *)"
+            "Bash(git status *),Bash(git diff *),Bash(git log *),Bash(git show *),Bash(git rev-parse *),Bash(git branch *)"
+            --disallowedTools "Edit,MultiEdit,Write,NotebookEdit,WebFetch,WebSearch"
+            "Bash(gh pr review * --approve *),Bash(gh pr review * --request-changes *),Bash(gh pr review --approve *),Bash(gh pr review --request-changes *),Bash(gh pr comment *),Bash(gh pr merge *),Bash(gh pr edit *),Bash(gh pr close *),Bash(gh pr reopen *),Bash(gh pr ready *),Bash(gh issue edit *),Bash(gh issue comment *),Bash(gh api *),Bash(gh workflow *),Bash(gh run rerun *),Bash(gh run cancel *),Bash(gh label *)"
+            "Bash(git push *),Bash(git commit *),Bash(git add *),Bash(git checkout *),Bash(git switch *),Bash(git reset *),Bash(git rebase *),Bash(git merge *),Bash(git stash *),Bash(git restore *),Bash(git clean *)"
