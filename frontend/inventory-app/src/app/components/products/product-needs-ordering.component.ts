@@ -7,6 +7,7 @@ import { CategoryService } from '../../services/category.service';
 import { SupplierService } from '../../services/supplier.service';
 import { Product, Category, Supplier } from '../../models/models';
 import { ConfirmationDialogComponent } from '../shared/confirmation-dialog.component';
+import { ListLoadState } from '../shared/list-load-state';
 import { ToastService } from '../../services/toast.service';
 import { SupplierOrderService } from '../../services/supplier-order.service';
 
@@ -20,7 +21,7 @@ export class ProductNeedsOrderingComponent implements OnInit {
   products: Product[] = [];
   categories: Category[] = [];
   suppliers: Supplier[] = [];
-  loaded = false;
+  readonly loadState = new ListLoadState();
   confirmingProduct: Product | null = null;
   search = '';
   categoryId: number | '' = '';
@@ -58,14 +59,16 @@ export class ProductNeedsOrderingComponent implements OnInit {
       supplierId: this.supplierId === '' ? undefined : this.supplierId
     };
 
-    this.loaded = false;
+    const token = this.loadState.start();
     this.productService.getLowStock(filters).subscribe({
       next: (products) => {
-        this.products = products;
-        this.loaded = true;
+        if (this.loadState.isCurrent(token)) {
+          this.products = products;
+        }
+        this.loadState.succeed(token);
       },
       error: () => {
-        this.loaded = true;
+        this.loadState.fail(token);
         this.toastService.error('Failed to load products needing ordering.');
       }
     });

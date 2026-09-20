@@ -1,7 +1,9 @@
 <div class="rounded-xl bg-white p-6 shadow-sm">
-  @if (loaded && orders.length === 0) {
+  @if (loadState.loadFailed) {
+    <p class="text-sm text-red-600">Failed to load supplier orders. Reload the page to try again.</p>
+  } @else if (loadState.loaded && orders.length === 0) {
     <p class="text-sm text-slate-500">No active supplier orders.</p>
-  } @else if (loaded) {
+  } @else if (loadState.loaded) {
     <div class="space-y-4">
       @for (order of orders; track order.id) {
         <div class="border border-slate-200 rounded-lg p-4">

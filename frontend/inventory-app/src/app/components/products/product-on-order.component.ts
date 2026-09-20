@@ -1,6 +1,7 @@
 import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Router } from '@angular/router';
+import { ListLoadState } from '../shared/list-load-state';
 import { ToastService } from '../../services/toast.service';
 import { SupplierOrderService } from '../../services/supplier-order.service';
 import { SupplierOrder } from '../../models/models';
@@ -13,7 +14,7 @@ import { SupplierOrder } from '../../models/models';
 })
 export class ProductOnOrderComponent implements OnInit {
   orders: SupplierOrder[] = [];
-  loaded = false;
+  readonly loadState = new ListLoadState();
 
   constructor(
     private supplierOrderService: SupplierOrderService,
@@ -26,13 +27,16 @@ export class ProductOnOrderComponent implements OnInit {
   }
 
   loadOrders(): void {
+    const token = this.loadState.start();
     this.supplierOrderService.getActive().subscribe({
       next: (orders) => {
-        this.orders = orders;
-        this.loaded = true;
+        if (this.loadState.isCurrent(token)) {
+          this.orders = orders;
+        }
+        this.loadState.succeed(token);
       },
       error: () => {
-        this.loaded = true;
+        this.loadState.fail(token);
         this.toastService.error('Failed to load supplier orders.');
       }
     });
