@@ -89,12 +89,13 @@ public class ProjectDependencyDirectionTests
     }
 
     [Fact]
-    public void Api_references_application_and_infrastructure()
+    public void Api_references_only_application_and_infrastructure()
     {
         var references = ProjectReferencesOf("InventoryApi", "InventoryApi.csproj");
 
-        Assert.Contains("Inventory.Application", references);
-        Assert.Contains("Inventory.Infrastructure", references);
+        Assert.Equal(
+            new[] { "Inventory.Application", "Inventory.Infrastructure" },
+            references.OrderBy(name => name, StringComparer.Ordinal));
     }
 
     [Fact]
