@@ -1,7 +1,7 @@
 <div class="rounded-xl bg-white p-6 shadow-sm">
-  @if (orders.length === 0) {
+  @if (loaded && orders.length === 0) {
     <p class="text-sm text-slate-500">No active supplier orders.</p>
-  } @else {
+  } @else if (loaded) {
     <div class="space-y-4">
       @for (order of orders; track order.id) {
         <div class="border border-slate-200 rounded-lg p-4">

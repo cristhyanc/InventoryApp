@@ -20,6 +20,7 @@ export class ProductNeedsOrderingComponent implements OnInit {
   products: Product[] = [];
   categories: Category[] = [];
   suppliers: Supplier[] = [];
+  loaded = false;
   confirmingProduct: Product | null = null;
   search = '';
   categoryId: number | '' = '';
@@ -57,8 +58,14 @@ export class ProductNeedsOrderingComponent implements OnInit {
       supplierId: this.supplierId === '' ? undefined : this.supplierId
     };
 
-    this.productService.getLowStock(filters).subscribe((products) => {
-      this.products = products;
+    this.productService.getLowStock(filters).subscribe({
+      next: (products) => {
+        this.products = products;
+        this.loaded = true;
+      },
+      error: () => {
+        this.loaded = true;
+      }
     });
   }
 

@@ -13,6 +13,7 @@ import { SupplierOrder } from '../../models/models';
 })
 export class ProductOnOrderComponent implements OnInit {
   orders: SupplierOrder[] = [];
+  loaded = false;
 
   constructor(
     private supplierOrderService: SupplierOrderService,
@@ -26,8 +27,14 @@ export class ProductOnOrderComponent implements OnInit {
 
   loadOrders(): void {
     this.supplierOrderService.getActive().subscribe({
-      next: (orders) => (this.orders = orders),
-      error: () => this.toastService.error('Failed to load supplier orders.')
+      next: (orders) => {
+        this.orders = orders;
+        this.loaded = true;
+      },
+      error: () => {
+        this.loaded = true;
+        this.toastService.error('Failed to load supplier orders.');
+      }
     });
   }
 

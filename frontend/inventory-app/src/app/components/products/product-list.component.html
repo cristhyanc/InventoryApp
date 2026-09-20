@@ -21,9 +21,9 @@
 </div>
 
 <div class="rounded-xl bg-white p-6 shadow-sm">
-  @if (products.length === 0) {
+  @if (loaded && products.length === 0) {
     <p class="text-sm text-slate-500">No products match your filters.</p>
-  } @else {
+  } @else if (loaded) {
     <div class="overflow-x-auto">
       <table class="min-w-full divide-y divide-slate-200 text-sm">
         <thead class="bg-slate-50">

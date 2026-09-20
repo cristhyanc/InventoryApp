@@ -19,6 +19,7 @@ export class ProductListComponent implements OnInit {
   products: Product[] = [];
   categories: Category[] = [];
   suppliers: Supplier[] = [];
+  loaded = false;
   confirmingProduct: Product | null = null;
   search = '';
   categoryId: number | '' = '';
@@ -44,8 +45,14 @@ export class ProductListComponent implements OnInit {
       supplierId: this.supplierId === '' ? undefined : this.supplierId
     };
 
-    this.productService.getAll(filters).subscribe((products) => {
-      this.products = products;
+    this.productService.getAll(filters).subscribe({
+      next: (products) => {
+        this.products = products;
+        this.loaded = true;
+      },
+      error: () => {
+        this.loaded = true;
+      }
     });
   }
 
