@@ -34,6 +34,9 @@ InventoryApp/
 │   │   ├── Services/
 │   │   ├── Program.cs
 │   │   └── InventoryApi.csproj
+│   ├── Inventory.Domain/            Empty skeleton project; no features migrated yet
+│   ├── Inventory.Application/       Empty skeleton project with a no-op DI entry point
+│   ├── Inventory.Infrastructure/    Empty skeleton project with a no-op DI entry point
 │   └── InventoryApi.Tests/
 ├── frontend/inventory-app/
 │   ├── src/app/
@@ -52,7 +55,7 @@ InventoryApp/
 
 The Angular application uses standalone components. `app.config.ts` registers the router, HTTP client, and a startup initializer that loads the API base URL. Routes currently load page components eagerly. Pages keep their own view state and call singleton services, which use `HttpClient` to reach the API.
 
-The API is currently a single assembly. Controllers generally call service interfaces, while services use `AppDbContext` and, where required, Nayax or filesystem facilities. `Program.cs` is the composition root and applies EF Core migrations at startup.
+The API's production dependency skeleton (`Inventory.Domain`, `Inventory.Application`, `Inventory.Infrastructure`) exists and is wired into the `InventoryApi` composition root through no-op `AddApplicationServices()`/`AddInfrastructureServices()` extension methods, but every feature implementation still lives in `InventoryApi`. Controllers generally call service interfaces, while services use `AppDbContext` and, where required, Nayax or filesystem facilities. `Program.cs` is the composition root and applies EF Core migrations at startup.
 
 ```mermaid
 flowchart TD
@@ -402,9 +405,9 @@ Backend and frontend tracks can progress independently when their contracts do n
    - Add repository instructions, architecture documentation, and cross-platform validation scripts.
    - Correct documentation/CI drift in focused follow-up changes.
 
-2. **Project skeleton**
-   - Add Domain, Application, and Infrastructure projects and dependency-registration extensions.
-   - Move no complex feature merely to populate the projects.
+2. **Project skeleton** — done.
+   - Added `Inventory.Domain`, `Inventory.Application`, and `Inventory.Infrastructure` projects, the allowed reference directions, no-op dependency-registration extensions wired into `InventoryApi`, and architecture tests that fail on a prohibited reverse dependency.
+   - No feature was moved; every controller, service, model, and adapter still lives in `InventoryApi`.
 
 3. **Nayax fee settings slice**
    - Move validation/use cases out of `SettingsController`.

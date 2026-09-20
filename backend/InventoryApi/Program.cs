@@ -1,4 +1,6 @@
 using Microsoft.EntityFrameworkCore;
+using Inventory.Application;
+using Inventory.Infrastructure;
 using InventoryApi.Data;
 using InventoryApi.Http;
 using InventoryApi.Integrations.Nayax;
@@ -6,6 +8,8 @@ using InventoryApi.Integrations.Nayax;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
+builder.Services.AddApplicationServices();
+builder.Services.AddInfrastructureServices();
 
 // Controlled RFC 7807 responses for Nayax upstream failures.
 builder.Services.AddProblemDetails();
