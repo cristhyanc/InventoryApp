@@ -22,7 +22,8 @@ backend/InventoryApi/                 ASP.NET Core .NET 10 API
   Services/Interfaces/                Current service contracts
 backend/InventoryApi.Tests/           xUnit backend tests
 frontend/inventory-app/               Angular 19 standalone application
-.github/workflows/                    Azure build and deployment workflows
+.github/workflows/                    Validation, Claude Code agent, and Azure deployment workflows
+CLAUDE.md                             Claude Code entry point: read and obey this file and the docs
 docs/architecture.md                  Current and target architecture
 docs/automation.md                    Automated development lifecycle and authority model
 .github/ISSUE_TEMPLATE/agent-task.yml Agent task issue form
