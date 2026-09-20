@@ -9,9 +9,10 @@ name: Agent implementation
 # - Never merges, deploys, or pushes to `develop`/`main`. Branch protection must also enforce this.
 # - The GitHub token is the job-scoped GITHUB_TOKEN; the Anthropic credential is CLAUDE_CODE_OAUTH_TOKEN.
 #
-# Because the pull request is opened with GITHUB_TOKEN, GitHub does not start `pull_request`
-# workflows for it automatically. A human confirms CI (for example by closing and reopening the
-# PR) and applies `agent-review` to the PR to request the independent review.
+# The pull request is opened with the workflow token, so its `opened` event creates workflow runs
+# that wait until a human clicks "Approve workflows to run" on the pull request. A human approves
+# those runs, checks the validation result, and applies `agent-review` to the PR to request the
+# independent review. Other token-generated activity on the PR (such as labels) creates no runs.
 
 on:
   issues:
@@ -121,7 +122,7 @@ jobs:
             gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "$(cat <<EOF
           Implementation run finished and opened ${pr_url}.
 
-          Next steps are human-controlled: confirm the CI check on the pull request (GitHub does not start pull-request workflows for a PR opened with the workflow token; close and reopen it if the check is missing), then apply the \`agent-review\` label to the pull request to request the independent review.
+          Next steps are human-controlled: open the pull request and click "Approve workflows to run" (the PR was opened with the workflow token, so its validation run waits for that approval), check the validation result, then apply the \`agent-review\` label to the pull request to request the independent review.
 
           Run: ${RUN_URL}
           EOF

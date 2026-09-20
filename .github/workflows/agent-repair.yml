@@ -3,12 +3,14 @@ name: Agent repair
 # Human-invoked repair attempt (Claude Code) on a pull request that carries `agent-review`.
 #
 # Authority and lifecycle: AGENTS.md ("Automated task contract") and docs/automation.md ("Failure and retry policy").
-# - Runs only when a user with write access comments `@claude repair ...` on an open, non-draft
+# - Runs only when the repository owner comments `@claude repair ...` on an open, non-draft
 #   pull request that targets `develop`, carries `agent-review`, and whose head branch is in this repository.
+#   (Restricted to the owner for now; widening it to other collaborators is a deliberate later change.)
 # - Updates only that pull request's head branch. Never merges, deploys, or pushes anywhere else.
 # - Repair counting is human-controlled: the human who comments decides whether an attempt is still
 #   permitted (at most two per pull request). This workflow does not count attempts or start on its own.
-# - After a repair the human confirms CI and re-applies `agent-review` to request a fresh independent review.
+# - The repair push is made with the workflow token, so the resulting `synchronize` event queues the
+#   validation and review runs until a human clicks "Approve workflows to run" on the pull request.
 
 on:
   issue_comment:
@@ -28,6 +30,7 @@ jobs:
       github.event.issue.state == 'open' &&
       contains(github.event.issue.labels.*.name, 'agent-review') &&
       startsWith(github.event.comment.body, '@claude repair') &&
+      github.event.comment.user.login == github.repository_owner &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -141,7 +144,7 @@ jobs:
           gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body "$(cat <<EOF
           Repair run finished on \`${HEAD_REF}\` (agent step outcome: ${CLAUDE_OUTCOME}). Read the agent's comment above for what changed and the actual validation result.
 
-          Next steps are human-controlled: confirm the CI check on the new head (GitHub does not start pull-request workflows for pushes made with the workflow token; close and reopen the pull request if the check is missing), then remove and re-apply \`agent-review\` to request a fresh independent review. Repair attempts are limited to two per pull request and are counted by you; after the second failed attempt, label the issue \`agent-blocked\` and take over.
+          Next steps are human-controlled: this push was made with the workflow token, so the \`synchronize\` event has queued the validation and review runs for the new head; open the pull request and click "Approve workflows to run", then wait for the check and the fresh review. Repair attempts are limited to two per pull request and are counted by you; after the second failed attempt, label the issue \`agent-blocked\` and take over.
 
           Run: ${RUN_URL}
           EOF

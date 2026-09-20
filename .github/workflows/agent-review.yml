@@ -9,9 +9,16 @@ name: Agent review
 # - Every run is a fresh review of the pull request's current head SHA in a new job with its own context.
 #   It shares the Anthropic billing credential with the implementation workflow but never its invocation,
 #   working tree, conversation, or GitHub permissions.
-# - The review may post comments or a review (comment or request-changes). It has read-only code access:
-#   it cannot modify files, commits, branches, or labels, and it never approves or merges.
+# - The review posts inline comments and exactly one `gh pr review --comment` whose body carries an
+#   explicit verdict line. It never uses --approve or --request-changes: the agent PRs are authored by
+#   github-actions[bot], and GitHub rejects approve/request-changes reviews from the PR's own author.
+#   Human approval and branch protection remain the merge gate.
+# - Read-only code access: it cannot modify files, commits, branches, or labels, and it never merges.
 # - Does not use the multi-agent code-review plugin.
+#
+# Runs caused by the workflow token (for example a `synchronize` event after an automated repair push)
+# are queued until a human clicks "Approve workflows to run"; `allowed_bots` lets the action accept
+# github-actions[bot] as the triggering actor for those approved runs.
 
 on:
   pull_request:
@@ -57,6 +64,7 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          allowed_bots: "github-actions[bot]"
           additional_permissions: |
             actions: read
           prompt: |
@@ -86,15 +94,23 @@ jobs:
 
             Deliver the result on the pull request:
             - Inline comments (mcp__github_inline_comment__create_inline_comment) for specific lines that need a change, each stating the problem, why it matters, and the rule or criterion it violates.
-            - Exactly one summary review with `gh pr review ${{ github.event.pull_request.number }} --request-changes --body "..."` when anything blocks the change, otherwise `gh pr review ${{ github.event.pull_request.number }} --comment --body "..."`. The body must contain: the head SHA reviewed, a verdict ("Ready for human review" or "Changes requested"), the acceptance criteria checklist with met / not met per item, the blocking findings, non-blocking suggestions, and the validation evidence you confirmed. State plainly that the final approval and merge decision belongs to a human.
+            - Exactly one summary review, always submitted with `gh pr review ${{ github.event.pull_request.number }} --comment --body "..."`. Never use --approve or --request-changes: this pull request is authored by github-actions[bot] and GitHub rejects approve/request-changes reviews from the same account; the verdict line below carries the outcome instead. Do not post any other top-level comment.
+            - The review body must have this structure, in this order:
+              1. `Head SHA reviewed: <sha>`
+              2. Exactly one verdict line, verbatim, on its own line: `VERDICT: CHANGES REQUESTED` when anything blocks the change, otherwise `VERDICT: READY FOR HUMAN REVIEW`.
+              3. `Blockers:` followed by a numbered list of every blocking finding (file, line where applicable, what is wrong, which rule or acceptance criterion it violates). Write `Blockers: none` when there are none.
+              4. The acceptance criteria checklist with met / not met per item.
+              5. Non-blocking suggestions.
+              6. The validation evidence you confirmed (checks, runs, commands and their real results).
+              7. The sentence: "This is an advisory review. Human approval and branch protection remain the merge gate."
 
-            Hard limits: never approve, merge, edit files, commit, push, change labels, edit the PR or issue, trigger workflows, or run write operations of any kind. If a tool call is denied, do not look for another route; report what you could not verify instead.
+            Hard limits: never approve, request changes, merge, edit files, commit, push, change labels, edit the PR or issue, trigger workflows, or run write operations of any kind. If a tool call is denied, do not look for another route; report what you could not verify instead.
           claude_args: |
             --max-turns 80
             --allowedTools "mcp__github_inline_comment__create_inline_comment,mcp__github_ci__get_ci_status,mcp__github_ci__get_workflow_run_details,mcp__github_ci__download_job_log"
-            "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh pr comment *),Bash(gh issue view *),Bash(gh run view *),Bash(gh run list *)"
-            "Bash(gh pr review * --comment *),Bash(gh pr review * --request-changes *)"
+            "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh issue view *),Bash(gh run view *),Bash(gh run list *)"
+            "Bash(gh pr review * --comment *)"
             "Bash(git status *),Bash(git diff *),Bash(git log *),Bash(git show *),Bash(git rev-parse *),Bash(git branch *)"
             --disallowedTools "Edit,MultiEdit,Write,NotebookEdit,WebFetch,WebSearch"
-            "Bash(gh pr review * --approve *),Bash(gh pr merge *),Bash(gh pr edit *),Bash(gh pr close *),Bash(gh pr reopen *),Bash(gh pr ready *),Bash(gh issue edit *),Bash(gh issue comment *),Bash(gh api *),Bash(gh workflow *),Bash(gh run rerun *),Bash(gh run cancel *),Bash(gh label *)"
+            "Bash(gh pr review * --approve *),Bash(gh pr review * --request-changes *),Bash(gh pr review --approve *),Bash(gh pr review --request-changes *),Bash(gh pr comment *),Bash(gh pr merge *),Bash(gh pr edit *),Bash(gh pr close *),Bash(gh pr reopen *),Bash(gh pr ready *),Bash(gh issue edit *),Bash(gh issue comment *),Bash(gh api *),Bash(gh workflow *),Bash(gh run rerun *),Bash(gh run cancel *),Bash(gh label *)"
             "Bash(git push *),Bash(git commit *),Bash(git add *),Bash(git checkout *),Bash(git switch *),Bash(git reset *),Bash(git rebase *),Bash(git merge *),Bash(git stash *),Bash(git restore *),Bash(git clean *)"
