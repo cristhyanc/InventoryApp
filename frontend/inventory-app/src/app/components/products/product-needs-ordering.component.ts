@@ -58,6 +58,7 @@ export class ProductNeedsOrderingComponent implements OnInit {
       supplierId: this.supplierId === '' ? undefined : this.supplierId
     };
 
+    this.loaded = false;
     this.productService.getLowStock(filters).subscribe({
       next: (products) => {
         this.products = products;
@@ -65,6 +66,7 @@ export class ProductNeedsOrderingComponent implements OnInit {
       },
       error: () => {
         this.loaded = true;
+        this.toastService.error('Failed to load products needing ordering.');
       }
     });
   }
