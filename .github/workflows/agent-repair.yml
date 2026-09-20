@@ -9,8 +9,10 @@ name: Agent repair
 # - Updates only that pull request's head branch. Never merges, deploys, or pushes anywhere else.
 # - Repair counting is human-controlled: the human who comments decides whether an attempt is still
 #   permitted (at most two per pull request). This workflow does not count attempts or start on its own.
-# - The repair push is made with the workflow token, so the resulting `synchronize` event queues the
-#   validation and review runs until a human clicks "Approve workflows to run" on the pull request.
+# - When a repair pushes a commit, that push is made with the workflow token, so the resulting
+#   `synchronize` event queues the validation and review runs until a human clicks "Approve workflows
+#   to run" on the pull request. The closing comment compares the PR head SHA before and after the
+#   run and only claims a push, and queued workflows, when the head actually changed.
 
 on:
   issue_comment:
@@ -52,8 +54,9 @@ jobs:
         run: |
           set -euo pipefail
           pr_json="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
-            --json headRefName,baseRefName,isDraft,headRepository,headRepositoryOwner)"
+            --json headRefName,headRefOid,baseRefName,isDraft,headRepository,headRepositoryOwner)"
           head_ref="$(jq -r '.headRefName' <<<"$pr_json")"
+          start_sha="$(jq -r '.headRefOid // empty' <<<"$pr_json")"
           base_ref="$(jq -r '.baseRefName' <<<"$pr_json")"
           is_draft="$(jq -r '.isDraft' <<<"$pr_json")"
           head_repo="$(jq -r '"\(.headRepositoryOwner.login)/\(.headRepository.name)"' <<<"$pr_json")"
@@ -64,8 +67,10 @@ jobs:
           [ "$head_repo" = "$GITHUB_REPOSITORY" ] || fail "Repair is only permitted for branches in this repository (head is '$head_repo')."
           case "$head_ref" in develop|main) fail "Refusing to operate on protected branch '$head_ref'.";; esac
           [[ "$head_ref" =~ ^[A-Za-z0-9._/-]+$ ]] || fail "Unexpected characters in head branch name."
+          [[ "$start_sha" =~ ^[0-9a-f]{40}$ ]] || fail "Could not determine the pull request head SHA before the repair."
 
           echo "head_ref=$head_ref" >> "$GITHUB_OUTPUT"
+          echo "start_sha=$start_sha" >> "$GITHUB_OUTPUT"
 
       - name: Check out pull request head branch
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -134,18 +139,60 @@ jobs:
         env:
           CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
           HEAD_REF: ${{ steps.pr.outputs.head_ref }}
+          START_SHA: ${{ steps.pr.outputs.start_sha }}
         run: |
           set -euo pipefail
-          if [ "$CLAUDE_OUTCOME" = "cancelled" ]; then
-            gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
-              --body "Repair run was cancelled (superseded by a newer repair request on this pull request). Run: ${RUN_URL}"
-            exit 0
+
+          # Determine the PR head after the run. A failure here must not fail the step:
+          # the comment then reports that the head could not be verified.
+          end_sha=""
+          if end_json="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json headRefOid 2>/dev/null)"; then
+            end_sha="$(jq -r '.headRefOid // empty' <<<"$end_json" 2>/dev/null || true)"
           fi
-          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body "$(cat <<EOF
-          Repair run finished on \`${HEAD_REF}\` (agent step outcome: ${CLAUDE_OUTCOME}). Read the agent's comment above for what changed and the actual validation result.
+          [[ "$end_sha" =~ ^[0-9a-f]{40}$ ]] || end_sha=""
 
-          Next steps are human-controlled: this push was made with the workflow token, so the \`synchronize\` event has queued the validation and review runs for the new head; open the pull request and click "Approve workflows to run", then wait for the check and the fresh review. Repair attempts are limited to two per pull request and are counted by you; after the second failed attempt, label the issue \`agent-blocked\` and take over.
+          case "$CLAUDE_OUTCOME" in
+            cancelled) status_line="This repair run was cancelled (superseded by a newer repair request on this pull request)." ;;
+            success)   status_line="The repair agent step finished successfully." ;;
+            *)         status_line="The repair agent step did not finish successfully (outcome: ${CLAUDE_OUTCOME:-unknown})." ;;
+          esac
 
+          if [ -n "$START_SHA" ] && [ -n "$end_sha" ] && [ "$START_SHA" != "$end_sha" ]; then
+            body="$(cat <<EOF
+          Repair run on branch ${HEAD_REF} finished. ${status_line}
+
+          The pull request head changed from ${START_SHA} to ${end_sha}. That push was made with the workflow token, so the synchronize event has queued the validation and review workflow runs for the new head; open the pull request and click "Approve workflows to run", then wait for the check and the fresh review. Read the agent's comment above for what changed and the actual validation result.
+
+          Repair attempts are limited to two per pull request and are counted by you; after the second failed attempt, label the issue agent-blocked and take over.
+
+          Agent step outcome: ${CLAUDE_OUTCOME:-unknown}
           Run: ${RUN_URL}
           EOF
           )"
+          elif [ -n "$START_SHA" ] && [ -n "$end_sha" ]; then
+            body="$(cat <<EOF
+          Repair run on branch ${HEAD_REF} finished. ${status_line}
+
+          No new commit was pushed by this repair run: the pull request head is still ${end_sha}. No synchronize workflows were queued by this repair, so there is no new validation or review run to approve. Read the agent's comment above (if any) and the run log to see why nothing was pushed before deciding whether another repair attempt is warranted.
+
+          Repair attempts are limited to two per pull request and are counted by you; after the second failed attempt, label the issue agent-blocked and take over.
+
+          Agent step outcome: ${CLAUDE_OUTCOME:-unknown}
+          Run: ${RUN_URL}
+          EOF
+          )"
+          else
+            body="$(cat <<EOF
+          Repair run on branch ${HEAD_REF:-unknown} finished. ${status_line}
+
+          This workflow could not verify whether the pull request head changed during the run (head SHA before: ${START_SHA:-unavailable}; after: ${end_sha:-unavailable}). It is not claiming that a push occurred. Inspect the pull request's commits and checks and the run log to determine whether a new commit was pushed and whether any workflow runs are waiting for "Approve workflows to run".
+
+          Repair attempts are limited to two per pull request and are counted by you; after the second failed attempt, label the issue agent-blocked and take over.
+
+          Agent step outcome: ${CLAUDE_OUTCOME:-unknown}
+          Run: ${RUN_URL}
+          EOF
+          )"
+          fi
+
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body "$body"
