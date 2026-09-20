@@ -1,25 +1,25 @@
 <div class="mb-6 flex flex-wrap items-center justify-between gap-4">
   <h1 class="text-2xl font-semibold text-slate-800">Products</h1>
-  <nav class="flex overflow-hidden rounded-md border border-slate-300 text-sm" aria-label="Products views">
+  <nav class="flex overflow-hidden rounded-md border border-slate-300 bg-white text-sm text-slate-700" aria-label="Products views">
     <a
       routerLink="/products"
       [routerLinkActiveOptions]="{ exact: true }"
       routerLinkActive="bg-blue-600 text-white"
-      class="px-3 py-2 bg-white text-slate-700"
+      class="px-3 py-2"
     >
       All products
     </a>
     <a
       routerLink="/products/needs-ordering"
       routerLinkActive="bg-blue-600 text-white"
-      class="border-x border-slate-300 px-3 py-2 bg-white text-slate-700"
+      class="border-x border-slate-300 px-3 py-2"
     >
       Needs ordering
     </a>
     <a
       routerLink="/products/on-order"
       routerLinkActive="bg-blue-600 text-white"
-      class="px-3 py-2 bg-white text-slate-700"
+      class="px-3 py-2"
     >
       On order
     </a>
