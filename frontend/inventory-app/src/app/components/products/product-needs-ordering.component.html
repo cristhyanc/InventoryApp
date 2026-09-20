@@ -1,6 +1,6 @@
 <div class="mb-6 rounded-xl bg-white p-6 shadow-sm">
   <div class="flex flex-wrap gap-4">
-    <input class="max-w-[220px]" [(ngModel)]="search" (ngModelChange)="applyFilters()" placeholder="Search name or SKU" />
+    <input class="max-w-[220px]" [ngModel]="search" (ngModelChange)="onSearchChange($event)" placeholder="Search name or SKU" />
 
     <select class="max-w-[180px]" [(ngModel)]="categoryId" (ngModelChange)="applyFilters()">
       <option value="">All Categories</option>
