@@ -1,11 +1,12 @@
 import { Component } from '@angular/core';
 import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { ToastContainerComponent } from "./components/shared/toast-container.component";
+import { LoadingIndicatorComponent } from './components/shared/loading-indicator.component';
 
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [RouterLink, RouterLinkActive, RouterOutlet, ToastContainerComponent],
+  imports: [RouterLink, RouterLinkActive, RouterOutlet, ToastContainerComponent, LoadingIndicatorComponent],
   templateUrl: './app.component.html',
   styleUrl: './app.component.scss'
 })

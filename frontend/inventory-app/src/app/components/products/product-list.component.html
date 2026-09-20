@@ -21,9 +21,11 @@
 </div>
 
 <div class="rounded-xl bg-white p-6 shadow-sm">
-  @if (products.length === 0) {
+  @if (loadState.loadFailed) {
+    <p class="text-sm text-red-600">Failed to load products. Change a filter or reload the page to try again.</p>
+  } @else if (loadState.loaded && products.length === 0) {
     <p class="text-sm text-slate-500">No products match your filters.</p>
-  } @else {
+  } @else if (loadState.loaded) {
     <div class="overflow-x-auto">
       <table class="min-w-full divide-y divide-slate-200 text-sm">
         <thead class="bg-slate-50">
