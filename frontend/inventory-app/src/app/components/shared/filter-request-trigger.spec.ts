@@ -11,13 +11,14 @@ const TEST_DEBOUNCE_MS = 3;
  * and is not part of `bash scripts/validate.sh`. It is a deterministic,
  * framework-free verification of the debounce/merge contract behind issue
  * #41, using RxJS's own `TestScheduler` (virtual time) and Node's built-in
- * `assert`. Run it manually after compiling, e.g. from the repository root:
+ * `assert`. Run it manually from the repository root with the `jiti` runner
+ * that is already present in the frontend's dependency tree:
  *
- *   npm --prefix frontend/inventory-app exec -- tsc --module commonjs --target es2020 \
- *     --esModuleInterop --outDir /tmp/filter-trigger-check \
- *     frontend/inventory-app/src/app/components/shared/filter-request-trigger.ts \
+ *   npm --prefix frontend/inventory-app ci
+ *   npm --prefix frontend/inventory-app exec -- jiti \
  *     frontend/inventory-app/src/app/components/shared/filter-request-trigger.spec.ts
- *   npm --prefix frontend/inventory-app exec -- node /tmp/filter-trigger-check/filter-request-trigger.spec.js
+ *
+ * It prints one `PASS:` line per check and exits non-zero on the first failure.
  */
 
 function runScheduler(name: string, run: (helpers: Parameters<TestScheduler['run']>[0] extends (h: infer H) => unknown ? H : never) => void): void {
@@ -39,6 +40,19 @@ runScheduler('ignores an unchanged consecutive search value', ({ cold, expectObs
   const immediate$ = cold<void>('--------|');
 
   expectObservable(createFilterTrigger$(search$, immediate$, TEST_DEBOUNCE_MS)).toBe('---a----|', { a: 'pro' });
+});
+
+runScheduler('re-emits a search value repeated after an intervening immediate trigger', ({ cold, expectObservable }) => {
+  // "coffee" is applied, Reset Filters (or a category change) refreshes immediately,
+  // then "coffee" is typed again: the second search must still reach the API.
+  const search$ = cold('a-----b---|', { a: 'coffee', b: 'coffee' });
+  const immediate$ = cold('----i-----|', { i: undefined });
+
+  expectObservable(createFilterTrigger$(search$, immediate$, TEST_DEBOUNCE_MS)).toBe('---xy----z|', {
+    x: 'coffee',
+    y: undefined,
+    z: 'coffee'
+  });
 });
 
 runScheduler('passes immediate (category/supplier) changes through without the search debounce', ({ cold, expectObservable }) => {
