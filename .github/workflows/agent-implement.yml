@@ -9,10 +9,10 @@ name: Agent implementation
 # - Never merges, deploys, or pushes to `develop`/`main`. Branch protection must also enforce this.
 # - The GitHub token is the job-scoped GITHUB_TOKEN; the Anthropic credential is CLAUDE_CODE_OAUTH_TOKEN.
 #
-# The pull request is opened with the workflow token, so its `opened` event creates workflow runs
-# that wait until a human clicks "Approve workflows to run" on the pull request. A human approves
-# those runs, checks the validation result, and applies `agent-review` to the PR to request the
-# independent review. Other token-generated activity on the PR (such as labels) creates no runs.
+# The pull request is opened with the workflow token. A separate least-privilege job verifies the
+# resulting PR and dispatches trusted validation from `main` for its exact head SHA. The initial
+# independent review remains human-authorised: a human applies `agent-review` to the PR after
+# validation succeeds. Nothing here approves, merges, releases, or deploys.
 
 on:
   issues:
@@ -34,6 +34,10 @@ jobs:
       contents: write
       pull-requests: write
       issues: write
+    outputs:
+      dispatch_validation: ${{ steps.outcome.outputs.dispatch_validation }}
+      pr_number: ${{ steps.outcome.outputs.pr_number }}
+      head_sha: ${{ steps.outcome.outputs.head_sha }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       ISSUE_NUMBER: ${{ github.event.issue.number }}
@@ -105,38 +109,106 @@ jobs:
             "Bash(git push * --force *),Bash(git push * -f *),Bash(git push * --force-with-lease *),Bash(git push --force *),Bash(git push -f *)"
             "Bash(git reset --hard *),Bash(git rebase *),Bash(git checkout develop *),Bash(git checkout main *),Bash(git switch develop *),Bash(git switch main *)"
             "Bash(gh pr merge *),Bash(gh pr review *),Bash(gh pr edit *),Bash(gh issue edit *),Bash(gh api *),Bash(gh workflow *),Bash(gh run *),Bash(gh release *),Bash(gh secret *),Bash(gh variable *)"
-
       - name: Record outcome on the issue
+        id: outcome
         if: always()
         env:
           CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
         run: |
           set -euo pipefail
-          prefix="agent/issue-${ISSUE_NUMBER}-"
-          pr_url="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --base develop --json url,headRefName \
-            | jq -r --arg p "$prefix" '[.[] | select(.headRefName | startswith($p))][0].url // empty')"
+          {
+            echo "dispatch_validation=false"
+            echo "pr_number="
+            echo "head_sha="
+          } >> "$GITHUB_OUTPUT"
 
-          if [ "$CLAUDE_OUTCOME" = "success" ] && [ -n "$pr_url" ]; then
+          prefix="agent/issue-$ISSUE_NUMBER-"
+          pr_json="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --base develop \
+            --json number,url,headRefName,headRefOid \
+            | jq -c --arg p "$prefix" '[.[] | select(.headRefName | startswith($p))][0] // {}')"
+          pr_url="$(jq -r '.url // empty' <<<"$pr_json")"
+          pr_number="$(jq -r '.number // empty' <<<"$pr_json")"
+          head_sha="$(jq -r '.headRefOid // empty' <<<"$pr_json")"
+
+          if [ "$CLAUDE_OUTCOME" = "success" ] &&
+             [ -n "$pr_url" ] &&
+             [[ "$pr_number" =~ ^[1-9][0-9]*$ ]] &&
+             [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            {
+              echo "dispatch_validation=true"
+              echo "pr_number=$pr_number"
+              echo "head_sha=$head_sha"
+            } >> "$GITHUB_OUTPUT"
+
             gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
               --remove-label agent-working --add-label agent-review
             gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "$(cat <<EOF
-          Implementation run finished and opened ${pr_url}.
+          Implementation run finished and opened $pr_url at head $head_sha.
 
-          Next steps are human-controlled: open the pull request and click "Approve workflows to run" (the PR was opened with the workflow token, so its validation run waits for that approval), check the validation result, then apply the \`agent-review\` label to the pull request to request the independent review.
+          A separate follow-up job will dispatch trusted validation for that exact SHA. After the \`agent-validation\` status passes, apply the \`agent-review\` label to the pull request to request the initial independent review. Human approval and merge remain required.
 
-          Run: ${RUN_URL}
+          Run: $RUN_URL
           EOF
           )"
           elif [ "$CLAUDE_OUTCOME" = "cancelled" ]; then
             gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
-              --body "Implementation run was cancelled (superseded by a newer run for this issue). Run: ${RUN_URL}"
+              --body "Implementation run was cancelled (superseded by a newer run for this issue). Run: $RUN_URL"
           else
             gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
               --remove-label agent-working --add-label agent-blocked
             gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "$(cat <<EOF
-          Implementation run ended without an open pull request targeting develop from a \`${prefix}*\` branch (agent step outcome: ${CLAUDE_OUTCOME}). The task is now \`agent-blocked\` and needs a human decision. Read the run log and any comment the agent left above, resolve the blocker, then remove \`agent-blocked\` and re-apply \`agent-ready\` to start again.
+          Implementation run ended without a verified open pull request targeting develop from a \`$prefix*\` branch (agent step outcome: $CLAUDE_OUTCOME). The task is now \`agent-blocked\` and needs a human decision. Read the run log and any comment the agent left above, resolve the blocker, then remove \`agent-blocked\` and re-apply \`agent-ready\` to start again.
 
-          Run: ${RUN_URL}
+          Run: $RUN_URL
           EOF
           )"
           fi
+
+  dispatch-validation:
+    name: Dispatch exact-SHA validation
+    needs: implement
+    if: always() && needs.implement.outputs.dispatch_validation == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      pull-requests: read
+
+    steps:
+      - name: Verify pull request and dispatch trusted validation
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ needs.implement.outputs.pr_number }}
+          HEAD_SHA: ${{ needs.implement.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          pr_json="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --json state,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,author)"
+          state="$(jq -r '.state' <<<"$pr_json")"
+          is_draft="$(jq -r '.isDraft' <<<"$pr_json")"
+          base_ref="$(jq -r '.baseRefName' <<<"$pr_json")"
+          head_ref="$(jq -r '.headRefName' <<<"$pr_json")"
+          current_sha="$(jq -r '.headRefOid // empty' <<<"$pr_json")"
+          head_repo="$(jq -r '"\(.headRepositoryOwner.login)/\(.headRepository.name)"' <<<"$pr_json")"
+          author="$(jq -r '.author.login // empty' <<<"$pr_json")"
+
+          [ "$state" = "OPEN" ] || fail "Pull request #$PR_NUMBER is not open."
+          [ "$is_draft" = "false" ] || fail "Pull request #$PR_NUMBER is a draft."
+          [ "$base_ref" = "develop" ] || fail "Automated validation is limited to pull requests targeting develop."
+          [ "$head_repo" = "$GITHUB_REPOSITORY" ] || fail "Automated validation is limited to same-repository branches."
+          [[ "$head_ref" == agent/issue-* ]] || fail "Automated validation requires an agent/issue-* head branch."
+          [ "$author" = "github-actions[bot]" ] || fail "Automated validation requires github-actions[bot] as the pull request author."
+          [ "$current_sha" = "$HEAD_SHA" ] || fail "Refusing stale validation dispatch: pull request head is $current_sha, expected $HEAD_SHA."
+
+          changed_files="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" --jq '.[].filename')"
+          if grep -Eq '^\.github/workflows/' <<<"$changed_files"; then
+            fail "Pull requests that change .github/workflows/** require manual validation and review."
+          fi
+
+          gh workflow run validate.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref main \
+            -f pr_number="$PR_NUMBER" \
+            -f head_sha="$HEAD_SHA" \
+            -f dispatch_review=false
