@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text.Json;
 using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Reporting.Dashboard;
+using Inventory.Application.Reporting.Gst;
 using Inventory.Application.Reporting.MachineProfitability;
 using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Shared;
@@ -61,6 +62,29 @@ public class ReportingContractJsonSerializationTests
         Assert.Equal(JsonValueKind.Null, document.RootElement.GetProperty("costOfGoods").ValueKind);
         Assert.Equal(JsonValueKind.Null, document.RootElement.GetProperty("grossProfit").ValueKind);
         Assert.Equal(1000m, document.RootElement.GetProperty("sales").GetDecimal());
+    }
+
+    [Fact]
+    public void Gst_report_serializes_expected_properties_and_preserves_the_wire_shape()
+    {
+        var report = new GstAccountingAidDto(
+            new DateTime(2026, 7, 1), new DateTime(2026, 7, 31),
+            TaxableSales: 909.09m, GstOnSales: 90.91m, TaxableFees: 20m, GstOnFees: 2m, NetGst: 88.91m,
+            DataQuality: new ReportingDataQualityDto());
+
+        var json = JsonSerializer.Serialize(report, WebDefaults);
+
+        Assert.Equal(
+            new[]
+            {
+                "from", "to", "taxableSales", "gstOnSales", "taxableFees", "gstOnFees", "netGst",
+                "dataQuality", "gstFreeSales", "inventoryPurchaseGst", "operatingExpenseGst",
+            },
+            PropertyNames(json));
+
+        using var document = JsonDocument.Parse(json);
+        Assert.Equal(909.09m, document.RootElement.GetProperty("taxableSales").GetDecimal());
+        Assert.Equal(88.91m, document.RootElement.GetProperty("netGst").GetDecimal());
     }
 
     [Fact]

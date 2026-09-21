@@ -17,7 +17,6 @@ using InventoryApi.Integrations.Nayax;
 using InventoryApi.Models;
 using InventoryApi.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
-using static Inventory.Application.Reporting.Shared.ReportingQuality;
 
 namespace InventoryApi.Services;
 
@@ -32,12 +31,14 @@ public sealed class ReportingService : IReportingService
     private readonly GetReconciliationReport _getReconciliationReport;
     private readonly GetMachineProfitabilityReport _getMachineProfitabilityReport;
     private readonly GetProductProfitabilityReport _getProductProfitabilityReport;
+    private readonly GetGstAccountingAid _getGstAccountingAid;
 
     public ReportingService(AppDbContext db, INayaxProcessingFeeService nayaxProcessingFees,
         ISiteCommissionService siteCommissions, GetBookkeepingReport getBookkeepingReport,
         GetDailyReport getDailyReport, GetReconciliationReport getReconciliationReport,
         GetMachineProfitabilityReport getMachineProfitabilityReport,
         GetProductProfitabilityReport getProductProfitabilityReport,
+        GetGstAccountingAid getGstAccountingAid,
         INayaxLynxClient? nayaxLynxClient = null)
     {
         _db = db;
@@ -49,6 +50,7 @@ public sealed class ReportingService : IReportingService
         _getReconciliationReport = getReconciliationReport;
         _getMachineProfitabilityReport = getMachineProfitabilityReport;
         _getProductProfitabilityReport = getProductProfitabilityReport;
+        _getGstAccountingAid = getGstAccountingAid;
     }
 
     public Task<BookkeepingReportDto> GetBookkeeping(ReportingFilterDto filter, CancellationToken cancellationToken = default) =>
@@ -81,21 +83,8 @@ public sealed class ReportingService : IReportingService
     public Task<ProductProfitabilityReportDto> GetProductProfitabilityAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default) =>
         _getProductProfitabilityReport.Handle(filter, cancellationToken);
 
-    public async Task<GstAccountingAidDto> GetGstAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default)
-    {
-        var bookkeeping = await GetBookkeepingAsync(filter, cancellationToken);
-        var imported = await ImportedSummaryAsync(ResolveRange(filter), MachineId(filter), cancellationToken);
-        var quality = Quality(imported.ContainsRows, imported.ContainsGstClassification, false);
-        var taxableSales = bookkeeping.Sales - bookkeeping.GstOnSales;
-        var taxableFees = bookkeeping.NayaxFeesExGst;
-        var operatingExpenseGst = bookkeeping.OperatingExpenseGst;
-        return new GstAccountingAidDto(bookkeeping.From, bookkeeping.To, taxableSales,
-            bookkeeping.GstOnSales, taxableFees, bookkeeping.GstOnFees,
-            bookkeeping.GstOnSales - bookkeeping.GstOnFees - operatingExpenseGst, quality)
-        {
-            OperatingExpenseGst = operatingExpenseGst
-        };
-    }
+    public Task<GstAccountingAidDto> GetGstAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default) =>
+        _getGstAccountingAid.Handle(filter, cancellationToken);
 
     public async Task<DashboardReportDto> GetDashboardAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default)
     {
