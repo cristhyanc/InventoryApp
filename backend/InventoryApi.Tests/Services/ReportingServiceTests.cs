@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Inventory.Application.Reporting.Shared;
+using Inventory.Application.Reporting.Transactions;
 using InventoryApi.Data;
 using InventoryApi.DTOs;
 using InventoryApi.Integrations.Nayax;
