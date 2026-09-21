@@ -1,4 +1,4 @@
-using InventoryApi.DTOs;
+using Inventory.Application.Reporting.Shared;
 
 namespace InventoryApi.Services.Interfaces;
 

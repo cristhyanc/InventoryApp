@@ -434,6 +434,7 @@ Backend and frontend tracks can progress independently when their contracts do n
 7. **Reporting slices**
    - Split bookkeeping, daily, reconciliation, machine/product profitability, GST, dashboard, and transactions into separate query handlers.
    - Split CSV/XLSX formatting from report calculation.
+   - **Contract placement done.** Report request/result contracts moved from `InventoryApi/DTOs/ReportingDtos.cs` into `Inventory.Application.Reporting.<Feature>` namespaces (`Shared`, `Bookkeeping`, `Daily`, `Reconciliation`, `MachineProfitability`, `ProductProfitability`, `Gst`, `Dashboard`, `Transactions`), with no JSON/API contract change. `ReportsController` and `IReportingService`/`ReportingService` still bind directly to these application types; the query-handler split and CSV/XLSX separation above remain future work (tracked in issue #43).
 
 8. **Remove legacy structure**
    - Only after every feature is migrated and tests prove equivalent behavior.
@@ -456,6 +457,7 @@ Backend and frontend tracks can progress independently when their contracts do n
    - Split the broad reporting client and service-local interfaces by report family.
    - Retain shared filters/export behavior without centralizing every report in another large class.
    - Preserve nullable financial values, quality counts, and backend/export parity.
+   - **Contract placement done.** Report interfaces moved from `services/reporting.service.ts` into `features/reports/<feature>/models/` (`shared`, `bookkeeping`, `daily`, `reconciliation`, `machine-profitability`, `product-profitability`, `gst`, `dashboard`, `transactions`); `ReportingService` re-exports them from their new location so existing component imports are unaffected. The service itself, its HTTP calls, and the routed report pages/components have not moved into `features/reports/` yet.
 
 5. **Large page decomposition**
    - Extract cohesive forms, tables, and panels from large administration and report pages.

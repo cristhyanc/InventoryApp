@@ -263,7 +263,7 @@ public class NayaxHistoricalCostTests
         var csv = Encoding.UTF8.GetString(await new ReportingService(db, new NayaxProcessingFeeService(db),
             Mock.Of<ISiteCommissionService>()).ExportCsvAsync(
             "transactions",
-            new InventoryApi.DTOs.TransactionSalesFilterDto(
+            new Inventory.Application.Reporting.Transactions.TransactionSalesFilterDto(
                 From: new DateTime(2026, 9, 2), To: new DateTime(2026, 9, 2))));
 
         Assert.Contains("NayaxProductCostPrice", csv);
