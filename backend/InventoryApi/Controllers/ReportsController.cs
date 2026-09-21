@@ -17,10 +17,16 @@ namespace InventoryApi.Controllers;
 public sealed class ReportsController : ControllerBase
 {
     private readonly IReportingService _service;
-    public ReportsController(IReportingService service) => _service = service;
+    private readonly GetBookkeepingReport _getBookkeepingReport;
+
+    public ReportsController(IReportingService service, GetBookkeepingReport getBookkeepingReport)
+    {
+        _service = service;
+        _getBookkeepingReport = getBookkeepingReport;
+    }
 
     [HttpGet("bookkeeping")]
-    public Task<BookkeepingReportDto> Bookkeeping([FromQuery] ReportingFilterDto filter, CancellationToken ct) => _service.GetBookkeepingAsync(filter, ct);
+    public Task<BookkeepingReportDto> Bookkeeping([FromQuery] ReportingFilterDto filter, CancellationToken ct) => _getBookkeepingReport.Handle(filter, ct);
     [HttpGet("daily")]
     public Task<DailyReportDto> Daily([FromQuery] ReportingFilterDto filter, CancellationToken ct) => _service.GetDailyAsync(filter, ct);
     [HttpGet("reconciliation")]

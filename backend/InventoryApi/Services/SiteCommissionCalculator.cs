@@ -1,3 +1,4 @@
+using Inventory.Domain.Reporting;
 using InventoryApi.Models;
 
 namespace InventoryApi.Services;

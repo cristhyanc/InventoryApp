@@ -10,12 +10,14 @@ using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Shared;
 using Inventory.Application.Reporting.Transactions;
+using Inventory.Domain.Reporting;
 using InventoryApi.Data;
 using InventoryApi.DTOs;
 using InventoryApi.Integrations.Nayax;
 using InventoryApi.Models;
 using InventoryApi.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
+using static Inventory.Application.Reporting.Shared.ReportingQuality;
 
 namespace InventoryApi.Services;
 
@@ -25,14 +27,17 @@ public sealed class ReportingService : IReportingService
     private readonly INayaxLynxClient? _nayaxLynxClient;
     private readonly INayaxProcessingFeeService _nayaxProcessingFees;
     private readonly ISiteCommissionService _siteCommissions;
+    private readonly GetBookkeepingReport _getBookkeepingReport;
 
     public ReportingService(AppDbContext db, INayaxProcessingFeeService nayaxProcessingFees,
-        ISiteCommissionService siteCommissions, INayaxLynxClient? nayaxLynxClient = null)
+        ISiteCommissionService siteCommissions, GetBookkeepingReport getBookkeepingReport,
+        INayaxLynxClient? nayaxLynxClient = null)
     {
         _db = db;
         _nayaxLynxClient = nayaxLynxClient;
         _nayaxProcessingFees = nayaxProcessingFees;
         _siteCommissions = siteCommissions;
+        _getBookkeepingReport = getBookkeepingReport;
     }
 
     public Task<BookkeepingReportDto> GetBookkeeping(ReportingFilterDto filter, CancellationToken cancellationToken = default) =>
@@ -50,77 +55,8 @@ public sealed class ReportingService : IReportingService
     public Task<DashboardReportDto> GetDashboard(ReportingFilterDto filter, CancellationToken cancellationToken = default) =>
         GetDashboardAsync(filter, cancellationToken);
 
-    public async Task<BookkeepingReportDto> GetBookkeepingAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default)
-    {
-        var range = ResolveRange(filter);
-        var machineId = MachineId(filter);
-        var isMachineFiltered = machineId.HasValue;
-        var paymentSummary = await GetPaymentSummaryAsync(range, machineId, cancellationToken);
-        var sales = paymentSummary.GrossSales;
-
-        var saleCosts = await CostQuery(range, machineId).ToListAsync(cancellationToken);
-        var partialCost = saleCosts.Sum(x => x.CostOfGoodsSold ?? 0m);
-        var uncosted = saleCosts.Where(x => !x.HasCost).ToList();
-        var isCogsComplete = uncosted.Count == 0;
-        var receiptCosts = isMachineFiltered ? new ReceiptCostSummary(0m, 0m) : await ReceiptCostsAsync(range, cancellationToken);
-        var imported = await ImportedSummaryAsync(range, machineId, cancellationToken);
-        var processingFees = await _nayaxProcessingFees.GetProcessingFeesAsync(range.From, range.ToDate, machineId, cancellationToken);
-        var operatingExpenses = await OperatingExpenseSummaryAsync(range, machineId, cancellationToken);
-        var commissions = await GetMachineCommissionsAsync(range, machineId, cancellationToken);
-        var siteCommission = await GetSiteCommissionAsync(range, machineId, commissions, cancellationToken);
-        var fees = processingFees.TotalFeeExGst;
-        var feesIncludingGst = processingFees.TotalFeeIncGst;
-        var netSettlement = imported.HasNetSettlement ? imported.NetSettlement : paymentSummary.CardSales - feesIncludingGst;
-        decimal? grossProfit = isCogsComplete ? ReportingCalculations.GrossProfit(sales, partialCost) : null;
-        var commissionCompleteForScope = isMachineFiltered
-            ? commissions.Machines.GetValueOrDefault(machineId!.Value).IsComplete
-            : commissions.IsComplete;
-        var isProfitComplete = grossProfit.HasValue && !processingFees.HasMissingRates && commissionCompleteForScope;
-        decimal? directProfit = isMachineFiltered && isProfitComplete
-            ? grossProfit!.Value - feesIncludingGst - siteCommission - operatingExpenses.Total
-            : null;
-        decimal? netProfit = !isMachineFiltered && isProfitComplete
-            ? grossProfit.Value - feesIncludingGst - siteCommission - receiptCosts.Total - operatingExpenses.Total
-            : null;
-        var gstOnFees = processingFees.TotalFeeGst;
-        var qualityNotes = new List<string>();
-        if (paymentSummary.UnknownTransactions > 0)
-            qualityNotes.Add("One or more transactions have an unknown payment method.");
-        if (isMachineFiltered && !imported.MachineFilterMatched)
-            qualityNotes.Add("No reimbursement device row matched the selected machine ID.");
-        if (imported.FeesMachineFilterLimited)
-            qualityNotes.Add("Imported fees are account-level amounts and are not allocated to a selected machine.");
-        if (processingFees.HasMissingRates)
-            qualityNotes.Add($"{processingFees.MissingRateTransactionCount} card transaction(s) have no effective Nayax processing fee rate; profit is unavailable.");
-        if (!isCogsComplete)
-            qualityNotes.Add("One or more completed sales have no persisted COGS; profit is incomplete.");
-        if (isMachineFiltered)
-            qualityNotes.Add("Net profit is unavailable for a machine-filtered report because shared business overhead is not allocated to individual machines.");
-        AddCommissionQualityNotes(qualityNotes, commissions, isMachineFiltered ? "direct profit" : "net profit");
-        var quality = Quality(imported.ContainsRows, imported.ContainsGstClassification, false,
-            qualityNotes.Count == 0 ? null : string.Join(" ", qualityNotes));
-        return new BookkeepingReportDto(range.From, range.ToDate, AustralianFyHelper.Label(range.From),
-            sales, isCogsComplete ? partialCost : null, grossProfit, fees, netSettlement,
-            ReportingCalculations.GstFromInclusive(sales), gstOnFees, quality, siteCommission, netProfit,
-            netProfit.HasValue ? ReportingCalculations.MarginPercent(sales, partialCost + feesIncludingGst + siteCommission + receiptCosts.Total + operatingExpenses.Total) : null,
-            fees, feesIncludingGst, receiptCosts.Delivery, receiptCosts.Package, operatingExpenses.Total,
-            paymentSummary.CardSales, paymentSummary.CashSales, paymentSummary.CardTransactions,
-            paymentSummary.CashTransactions, ReportingCalculations.PercentageOf(feesIncludingGst, paymentSummary.CardSales))
-        {
-            PartialCostOfGoods = partialCost,
-            IsCogsComplete = isCogsComplete,
-            UncostedTransactionCount = uncosted.Count,
-            UncostedSalesAmount = uncosted.Sum(x => x.SettlementValue),
-            StructuredOperatingExpenses = operatingExpenses.Total,
-            OperatingExpenseGst = operatingExpenses.Gst,
-            OperatingExpensesByCategory = operatingExpenses.ByCategory,
-            DirectProfit = directProfit,
-            DirectMarginPercent = directProfit.HasValue
-                ? ReportingCalculations.MarginPercent(sales, partialCost + feesIncludingGst + siteCommission + operatingExpenses.Total)
-                : null,
-            NayaxProcessingFees = processingFees
-        };
-    }
+    public Task<BookkeepingReportDto> GetBookkeepingAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default) =>
+        _getBookkeepingReport.Handle(filter, cancellationToken);
 
     public async Task<DailyReportDto> GetDailyAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default)
     {
@@ -1546,32 +1482,12 @@ public sealed class ReportingService : IReportingService
         if (unknownStatus > 0) notes.Add($"{unknownStatus} Nayax transaction(s) have no status ID and are excluded from completed sales.");
     }
 
-    private static ReportingDataQualityDto Quality(bool importedRows, bool gstClassification, bool unmapped, string? note = null) =>
-        new(false, true, true, true, unmapped,
-            new[] { "Nayax status IDs are stored raw; existing historical rows were backfilled to status 12 by migration; rows still missing a status are excluded.", "Historical COGS uses the persisted sale cost; unresolved completed sales are reported as incomplete.", "Commission is calculated from effective-dated site commission agreements.", "GST classification is not persisted on sales; GST amounts are an indicative 10% inclusive calculation." }
-                .Concat(note is null ? Array.Empty<string>() : new[] { note }).ToList());
-
     private static string Csv(string value) => $"\"{value.Replace("\"", "\"\"")}\"";
 
-    private static DateRange ResolveRange(ReportingFilterDto filter)
-    {
-        var from = (filter.From ?? filter.StartDate)?.Date ?? new DateTime(1900, 1, 1);
-        var to = (filter.To ?? filter.EndDate)?.Date ?? new DateTime(9999, 12, 30);
-        if (!string.IsNullOrWhiteSpace(filter.FinancialYear) && AustralianFyHelper.TryParse(filter.FinancialYear, out var fyFrom))
-        {
-            from = fyFrom;
-            to = fyFrom.AddYears(1).AddDays(-1);
-        }
-        if (to < from) (from, to) = (to, from);
-        return new DateRange(from, to);
-    }
+    private static DateRange ResolveRange(ReportingFilterDto filter) =>
+        ReportingRangeResolver.Resolve(filter.From, filter.To, filter.StartDate, filter.EndDate, filter.FinancialYear);
 
     private static long? MachineId(ReportingFilterDto filter) => filter.MachineId ?? filter.MachineID;
-
-    private readonly record struct DateRange(DateTime From, DateTime ToDate)
-    {
-        public DateTime EndExclusive => ToDate.Date.AddDays(1);
-    }
 
     private sealed record OperatingExpenseSummary(decimal Total, decimal Gst, IReadOnlyDictionary<string, decimal> ByCategory);
 
@@ -1729,42 +1645,4 @@ public sealed class ReportingService : IReportingService
         DateTime? PayoutDate = null,
         int CardTransactionCount = 0,
         bool FeesMachineFilterLimited = false);
-}
-
-public static class AustralianFyHelper
-{
-    public static DateTime Start(DateTime date) => new(date.Month >= 7 ? date.Year : date.Year - 1, 7, 1);
-    public static string Label(DateTime date) { var start = Start(date); return $"FY{start.Year}-{(start.Year + 1) % 100:00}"; }
-    public static bool TryParse(string value, out DateTime start)
-    {
-        start = default;
-        var text = value.Trim().ToUpperInvariant().Replace("FY", string.Empty).Replace("/", "-").Trim();
-        var parts = text.Split('-', StringSplitOptions.RemoveEmptyEntries);
-        if (!int.TryParse(parts[0], out var year) || year < 1900) return false;
-        var startYear = parts.Length > 1 && year < 100 ? year + 2000 : (parts.Length > 1 ? year : year - 1);
-        if (parts.Length == 1 && year >= 1900) startYear = year - 1;
-        start = new DateTime(startYear, 7, 1);
-        return true;
-    }
-
-}
-
-public static class AustralianFinancialYear
-{
-    public static DateTime Start(DateTime date) => AustralianFyHelper.Start(date);
-    public static DateTime End(DateTime date) => Start(date).AddYears(1).AddDays(-1);
-    public static string Label(DateTime date) => AustralianFyHelper.Label(date);
-    public static bool TryParse(string value, out DateTime start) => AustralianFyHelper.TryParse(value, out start);
-}
-
-public static class ReportingCalculations
-{
-    public static decimal GrossProfit(decimal sales, decimal costOfGoods) => sales - costOfGoods;
-    public static decimal MarginPercent(decimal sales, decimal costOfGoods) =>
-        sales == 0m ? 0m : GrossProfit(sales, costOfGoods) / sales * 100m;
-    public static decimal PercentageOf(decimal amount, decimal denominator) =>
-        denominator == 0m ? 0m : amount / denominator * 100m;
-    public static decimal GstFromInclusive(decimal amount) => amount * 10m / 110m;
-    public static decimal GstFromExcluding(decimal amount) => amount * 10m / 100m;
-    public static decimal Average(decimal amount, int count) => count == 0 ? 0m : amount / count;
 }

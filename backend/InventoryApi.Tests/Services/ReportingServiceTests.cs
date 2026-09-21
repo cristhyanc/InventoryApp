@@ -1,10 +1,15 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Reporting.Shared;
 using Inventory.Application.Reporting.Transactions;
+using Inventory.Domain.Reporting;
+using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using InventoryApi.DTOs;
 using InventoryApi.Integrations.Nayax;
@@ -37,8 +42,10 @@ public class ReportingServiceTests
                 It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((DateTime from, DateTime to, long? _, CancellationToken _) =>
                 new SiteCommissionReportDto(from, to, []));
-        return new ReportingService(db, new NayaxProcessingFeeService(db),
-            siteCommissionService ?? commissions!.Object, nayaxLynxClient);
+        var nayaxFees = new NayaxProcessingFeeService(db);
+        var siteCommissions = siteCommissionService ?? commissions!.Object;
+        var getBookkeepingReport = new GetBookkeepingReport(new EfBookkeepingReportFactsProvider(db, nayaxFees, siteCommissions));
+        return new ReportingService(db, nayaxFees, siteCommissions, getBookkeepingReport, nayaxLynxClient);
     }
 
     [Fact]
@@ -212,6 +219,8 @@ public class ReportingServiceTests
         services.AddScoped<INayaxLynxClient>(_ => new TransactionTestNayaxClient());
         services.AddScoped<INayaxProcessingFeeService, NayaxProcessingFeeService>();
         services.AddScoped<ISiteCommissionService, SiteCommissionService>();
+        services.AddScoped<IBookkeepingReportFactsProvider, EfBookkeepingReportFactsProvider>();
+        services.AddScoped<GetBookkeepingReport>();
         services.AddScoped<IReportingService, ReportingService>();
 
         using var provider = services.BuildServiceProvider();
@@ -539,6 +548,43 @@ public class ReportingServiceTests
 
         Assert.Equal(0m, report.OtherOperatingExpenses);
         Assert.Equal(95m, report.NetProfit);
+    }
+
+    [Fact]
+    public async Task Bookkeeping_csv_export_uses_the_same_authoritative_values_as_the_api_report()
+    {
+        using var db = CreateDbContext();
+        db.NayaxSales.Add(new NayaxSales
+        {
+            TransactionID = 20, MachineID = 10, SettlementValue = 100m,
+            CostOfGoodsSold = 0m, CostingStatus = SaleCostingStatus.Costed,
+            TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1)
+        });
+        db.Receipts.Add(new Receipt
+        {
+            Title = "Supplier receipt", PurchaseDate = new DateTime(2025, 8, 15), DeliveryCost = 2m, PackageCost = 3m
+        });
+        await db.SaveChangesAsync();
+
+        var nayax = new TransactionTestNayaxClient();
+        var service = Reporting(db, nayax, new SiteCommissionService(db, nayax));
+        var filter = new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31));
+
+        var report = await service.GetBookkeepingAsync(filter);
+        var csv = Encoding.UTF8.GetString(await service.ExportCsvAsync("bookkeeping", filter));
+        var lines = csv.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        var header = lines[0].Trim('"').Split("\",\"");
+        var values = lines[1].Trim('"').Split("\",\"");
+        var row = header.Zip(values, (h, v) => (h, v)).ToDictionary(x => x.h, x => x.v);
+
+        Assert.Equal(report.Sales.ToString(CultureInfo.InvariantCulture), row["GrossSales"]);
+        Assert.Equal(report.NetProfit!.Value.ToString(CultureInfo.InvariantCulture), row["NetProfit"]);
+        Assert.Equal(report.GstOnSales.ToString(CultureInfo.InvariantCulture), row["GstOnSales"]);
+        Assert.Equal(report.GstOnFees.ToString(CultureInfo.InvariantCulture), row["GstOnFees"]);
+        Assert.Equal(report.DeliveryCosts.ToString(CultureInfo.InvariantCulture), row["DeliveryCosts"]);
+        Assert.Equal(report.PackageCosts.ToString(CultureInfo.InvariantCulture), row["PackageCosts"]);
+        Assert.Equal(report.NetSettlement.ToString(CultureInfo.InvariantCulture), row["NetSettlement"]);
+        Assert.Equal(report.SiteCommission.ToString(CultureInfo.InvariantCulture), row["SiteCommission"]);
     }
 
     [Fact]

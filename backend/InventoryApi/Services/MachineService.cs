@@ -1,4 +1,5 @@
 using ClosedXML.Excel;
+using Inventory.Domain.Reporting;
 using InventoryApi.Data;
 using InventoryApi.Integrations.Nayax;
 using InventoryApi.Models;
