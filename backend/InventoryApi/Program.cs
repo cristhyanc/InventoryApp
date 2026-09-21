@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Inventory.Application;
 using Inventory.Application.NayaxFeeSettings;
 using Inventory.Application.Reporting.Bookkeeping;
+using Inventory.Application.Reporting.Daily;
 using Inventory.Infrastructure;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
@@ -73,6 +74,9 @@ builder.Services.AddScoped<INayaxFeeRateStore, EfNayaxFeeRateStore>();
 
 // Temporary API-owned adapter for the bookkeeping report facts port; see EfBookkeepingReportFactsProvider.
 builder.Services.AddScoped<IBookkeepingReportFactsProvider, EfBookkeepingReportFactsProvider>();
+
+// Temporary API-owned adapter for the daily report facts port; see EfDailyReportFactsProvider.
+builder.Services.AddScoped<IDailyReportFactsProvider, EfDailyReportFactsProvider>();
 
 var app = builder.Build();
 

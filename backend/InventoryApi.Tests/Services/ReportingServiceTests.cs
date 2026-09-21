@@ -6,6 +6,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Inventory.Application.Reporting.Bookkeeping;
+using Inventory.Application.Reporting.Daily;
 using Inventory.Application.Reporting.Shared;
 using Inventory.Application.Reporting.Transactions;
 using Inventory.Domain.Reporting;
@@ -45,7 +46,8 @@ public class ReportingServiceTests
         var nayaxFees = new NayaxProcessingFeeService(db);
         var siteCommissions = siteCommissionService ?? commissions!.Object;
         var getBookkeepingReport = new GetBookkeepingReport(new EfBookkeepingReportFactsProvider(db, nayaxFees, siteCommissions));
-        return new ReportingService(db, nayaxFees, siteCommissions, getBookkeepingReport, nayaxLynxClient);
+        var getDailyReport = new GetDailyReport(new EfDailyReportFactsProvider(db, nayaxFees));
+        return new ReportingService(db, nayaxFees, siteCommissions, getBookkeepingReport, getDailyReport, nayaxLynxClient);
     }
 
     [Fact]
@@ -221,6 +223,8 @@ public class ReportingServiceTests
         services.AddScoped<ISiteCommissionService, SiteCommissionService>();
         services.AddScoped<IBookkeepingReportFactsProvider, EfBookkeepingReportFactsProvider>();
         services.AddScoped<GetBookkeepingReport>();
+        services.AddScoped<IDailyReportFactsProvider, EfDailyReportFactsProvider>();
+        services.AddScoped<GetDailyReport>();
         services.AddScoped<IReportingService, ReportingService>();
 
         using var provider = services.BuildServiceProvider();
@@ -481,6 +485,39 @@ public class ReportingServiceTests
         Assert.Equal(5m, totals.UncostedSalesAmount);
         Assert.Null(totals.GrossProfit);
         Assert.Null(totals.GrossMarginPercent);
+    }
+
+    [Fact]
+    public async Task Daily_csv_export_uses_the_same_authoritative_values_as_the_api_report()
+    {
+        using var db = CreateDbContext();
+        db.NayaxSales.AddRange(
+            new NayaxSales { TransactionID = 40, MachineID = 10, SettlementValue = 10m, PaymentMethod = "Credit Card", TransactionStatusId = NayaxTransactionStatusIds.Completed, CostOfGoodsSold = 4m, CostingStatus = SaleCostingStatus.Costed, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
+            new NayaxSales { TransactionID = 41, MachineID = 10, SettlementValue = 5m, PaymentMethod = "Cash", TransactionStatusId = NayaxTransactionStatusIds.Completed, CostOfGoodsSold = 2m, CostingStatus = SaleCostingStatus.Costed, MachineAuthorizationTime = new DateTime(2025, 8, 1) });
+        db.ImportedReimbursements.Add(new ImportedReimbursement
+        {
+            ReimbursementStartDate = new DateTime(2025, 8, 1),
+            ReimbursementEndDate = new DateTime(2025, 8, 1),
+            Total = 10m
+        });
+        await db.SaveChangesAsync();
+
+        var service = Reporting(db);
+        var filter = new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1));
+
+        var report = await service.GetDailyAsync(filter);
+        var csv = Encoding.UTF8.GetString(await service.ExportCsvAsync("daily", filter));
+        var lines = csv.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        var header = lines[0].Trim('"').Split("\",\"");
+        var values = lines[1].Trim('"').Split("\",\"");
+        var row = header.Zip(values, (h, v) => (h, v)).ToDictionary(x => x.h, x => x.v);
+
+        var apiRow = Assert.Single(report.Rows);
+        Assert.Equal(apiRow.GrossSales.ToString(CultureInfo.InvariantCulture), row["GrossSales"]);
+        Assert.Equal(apiRow.CardSales.ToString(CultureInfo.InvariantCulture), row["CardSales"]);
+        Assert.Equal(apiRow.CashSales.ToString(CultureInfo.InvariantCulture), row["CashSales"]);
+        Assert.Equal(apiRow.ImportedReimbursement.ToString(CultureInfo.InvariantCulture), row["ImportedReimbursement"]);
+        Assert.Equal(apiRow.ReconciliationStatus, row["ReconciliationStatus"]);
     }
 
     [Theory]

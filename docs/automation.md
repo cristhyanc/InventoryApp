@@ -55,12 +55,14 @@ This section is derived from the triggers, conditions, and jobs in `.github/work
 `.github/workflows/validate.yml` ("Validate pull request"):
 
 - Triggers on `pull_request` events whose base branch is `develop` or `main`, and on `workflow_dispatch` with required `pr_number` and `head_sha` inputs plus an optional `dispatch_review` boolean.
-- For a normal `pull_request` event, preserves merge-result validation. For a dispatch, the trusted workflow definition runs from `main`, verifies that the PR is open, non-draft, targets `develop`, is authored by `github-actions[bot]`, has a same-repository `agent/issue-*` branch, still has the supplied exact head SHA, and does not change `.github/workflows/**`; it then checks out only that SHA.
-- Publishes a stable `agent-validation` commit status on same-repository PR heads, linked to the run. The status is `pending` before validation and `success` or `failure` afterward.
-- Runs **"Backend tests and frontend build"** in a separate job with only `contents: read`, `persist-credentials: false`, and no Anthropic or deployment secret. It installs .NET 10 and Node.js 20, runs `node scripts/validate-agent-workflows.mjs` to enforce the dispatcher/permission/guard contract, and then runs `bash scripts/validate.sh`.
+- Runs in one of two **validation modes**, which never share a concurrency group or a commit-status context (see [Validation modes](#validation-modes)):
+  - For a normal `pull_request` event, preserves **merge-result validation**: it checks out the event's merge commit and publishes the `merge-validation` commit status on same-repository PR heads.
+  - For a `workflow_dispatch`, performs **exact-SHA validation**: the trusted workflow definition runs from `main`, verifies that the PR is open, non-draft, targets `develop`, is authored by `github-actions[bot]`, has a same-repository `agent/issue-*` branch, still has the supplied exact head SHA, and does not change `.github/workflows/**`; it then checks out only that SHA and publishes the authoritative `agent-validation` commit status.
+- Each status is linked to its run and is `pending` before validation and `success` or `failure` afterward. The context job resolves the status context once, from `github.event_name`, and refuses to continue if the mode and the context disagree; the status job publishes only that resolved context.
+- Runs **"Backend tests and frontend build"** in a separate job with only `contents: read`, `persist-credentials: false`, and no Anthropic or deployment secret. It installs .NET 10 and Node.js 20, runs `node scripts/validate-agent-workflows.mjs` to enforce the dispatcher/permission/guard/concurrency/status contract, runs `node --test scripts/validate-agent-workflows.test.mjs` (the deterministic contract tests), and then runs `bash scripts/validate.sh`.
 - `scripts/validate.sh` and `scripts/validate.ps1` perform the same steps: `dotnet restore`, `dotnet build --configuration Release`, `dotnet test`, `npm ci`, and `npm run build` for the Angular application. The frontend has no configured test or lint script; its gate is the production build.
 - When a dispatched repair validation succeeds with `dispatch_review: true`, a separate job with `actions: write` and no checkout reverifies the current SHA and guards, requires `agent-review`, and dispatches `agent-review.yml` from `main`.
-- Concurrency is scoped by PR number; a newer run for the same PR cancels older work without cancelling another PR's validation.
+- Concurrency is scoped by validation mode **and** PR number (`validation-<workflow>-<event_name>-<pr_number>`): a newer run of the same mode for the same PR cancels the superseded one, while `pull_request` and `workflow_dispatch` validation of the same PR run independently and cannot cancel each other, and another PR's validation is never affected.
 - Does not approve, merge, release, deploy, change labels, or start a repair.
 
 ### Push to `develop`
@@ -136,11 +138,33 @@ The agent workflows act on GitHub with the job-scoped `GITHUB_TOKEN`. GitHub tre
 - `workflow_dispatch` is an explicit exception: a job with `actions: write` may create the trusted run without a human clicking **"Approve workflows to run"**. InventoryApp uses that exception only from no-checkout dispatcher jobs after verifying the PR number, current head SHA, base, author, head repository/branch, and workflow-file exclusion.
 - **The bot-author check reads the canonical login from the REST pull request endpoint.** Every guarded section resolves the author with `gh api "repos/$GITHUB_REPOSITORY/pulls/<number>" --jq '.user.login // empty'` and compares it for exact equality with `github-actions[bot]`. It must not use `gh pr view --json author`: that field resolves the GraphQL *actor*, which for the Actions bot reports the login as `github-actions` (rendered `app/github-actions` by `gh` 2.101.0). Neither spelling equals `github-actions[bot]`, and the spelling is a `gh`/GraphQL presentation detail that can change between CLI versions. Only REST `.user.login` returns the canonical, stable value the guard compares against, so reading the GraphQL actor made every dispatcher reject its own genuinely bot-authored pull request. The guard is deliberately not relaxed to accept both spellings: `github-actions` is a claimable ordinary account name, while `github-actions[bot]` cannot be registered by a user, so exact equality against the REST value is what makes the check a real authenticity test. `scripts/validate-agent-workflows.mjs` enforces the REST lookup in all five guarded sections and fails if `.author.login` reappears.
 - The dispatched workflow definition always comes from `main`. The validation job then checks out the separately verified PR SHA with a read-only token and persisted credentials disabled.
-- The `agent-validation` status linked to the dispatched run is the authoritative exact-SHA validation result for a bot-created or bot-updated PR. An approval-required duplicate run is not evidence that the dispatched validation failed and does not need to be approved when that exact-SHA status exists.
+- The `agent-validation` status linked to the dispatched run is the authoritative exact-SHA validation result for a bot-created or bot-updated PR. Only `workflow_dispatch` validation publishes it; `pull_request` validation publishes `merge-validation` and can never overwrite it. An approval-required duplicate run is not evidence that the dispatched validation failed and does not need to be approved when that exact-SHA status exists.
 - Other token-generated pull request activity, such as labels added by a workflow, does not create another workflow run. The implementation workflow never labels the pull request: a human applies `agent-review` to request the initial review.
 - Labels the implementation workflow applies to the *issue* are state bookkeeping only and start nothing.
 
 The human's normal initial path is therefore: wait for `agent-validation`, apply `agent-review`, read the verdict, and decide. After a human-authorised repair pushes a new head, validation and the already-authorised fresh review run automatically; no repair or merge is started automatically. No PAT, GitHub App credential, or long-lived GitHub secret is introduced.
+
+### Validation modes
+
+`validate.yml` serves two callers that can fire for the same pull request at the same time: GitHub's own `pull_request` event (for every PR, including a human approving the duplicate run on an agent PR) and the trusted `workflow_dispatch` from the implementation and repair dispatchers. Before this contract existed, both shared one concurrency group and one `agent-validation` status context, so the later event could cancel the earlier run and the last status written, whichever mode produced it, became the "authoritative" exact-SHA result that `agent-review.yml` trusts. The contract is now:
+
+| | `pull_request` event | `workflow_dispatch` |
+| --- | --- | --- |
+| Mode | Merge-result validation | Exact-SHA validation |
+| Workflow definition | The PR's base branch | Trusted `main` |
+| Checkout | The event's merge commit (`github.sha`) | The verified current head SHA only |
+| Guards | Same-repository check before publishing a status | Open, non-draft, `develop` base, same repository, `agent/issue-*` branch, `github-actions[bot]` author, exact current head SHA, no `.github/workflows/**` change |
+| Concurrency group | `validation-<workflow>-pull_request-<pr>` | `validation-<workflow>-workflow_dispatch-<pr>` |
+| Commit status | `merge-validation` | `agent-validation` |
+| Consumed by | Humans and branch protection | `agent-review.yml` dispatched review, humans, branch protection |
+| Dispatches review | Never | Only with `dispatch_review: true`, after success, while `agent-review` is present |
+
+Rules enforced by `scripts/validate-agent-workflows.mjs` and proven by `scripts/validate-agent-workflows.test.mjs`:
+
+- The concurrency group must contain `github.event_name` so the two modes for one PR never share a group, and must still contain the PR number so a newer run of the same mode supersedes the older one.
+- The status context is a single workflow-level expression (`github.event_name == 'workflow_dispatch' && 'agent-validation' || 'merge-validation'`). The context job's bash refuses a mismatching context for its mode, the status job publishes only the context the context job resolved, and no job may hard-code a status context.
+- `agent-review.yml` accepts only a successful latest `agent-validation` status on the exact head SHA as validation evidence and never `merge-validation`.
+- The tests simulate both events for the same PR against the committed workflow text and also prove that the pre-fix expressions (a group without the event name, or one shared status context) are rejected.
 
 ### Which workflows can deploy
 
@@ -248,7 +272,7 @@ The Anthropic credential only meters usage; it grants no authority over the repo
 
 ### CI
 
-CI (`validate.yml`) validates pull requests independently of the agent's own validation run and publishes `agent-validation` on the exact head SHA. For a successful repair validation it may dispatch the already-authorised review, but it does not modify code or labels, start a repair, approve, merge, release, or deploy.
+CI (`validate.yml`) validates pull requests independently of the agent's own validation run. Dispatched exact-SHA validation publishes `agent-validation` on the exact head SHA; event-driven merge-result validation publishes `merge-validation`. For a successful repair validation it may dispatch the already-authorised review, but it does not modify code or labels, start a repair, approve, merge, release, or deploy.
 
 ### Deployment workflows
 
@@ -368,7 +392,7 @@ A change whose chain is broken (for example a PR without an issue, or a validati
 | Setting | Recommendation |
 | --- | --- |
 | Pull requests required | Require a pull request before merging into `develop` and `main`. |
-| Required status check | Require the stable `agent-validation` status on `develop` and `main` once this workflow is present on both branches and its live test has passed. It is published by normal same-repository PR validation and by trusted exact-SHA dispatch for agent PRs. |
+| Required status check | Two stable statuses exist once this workflow is present on both branches and its live test has passed: `merge-validation`, published by normal same-repository `pull_request` validation of every PR, and `agent-validation`, published only by trusted exact-SHA dispatch for agent PRs. Requiring `merge-validation` gates human PRs and, for agent PRs, requires a human to approve the bot-created duplicate `pull_request` run; requiring `agent-validation` gates only agent PRs. Choose the combination deliberately: a human decides which statuses branch protection requires, and this document does not verify the setting. |
 | Force pushes | Block force pushes to `develop` and `main`. |
 | Branch deletion | Block deletion of `develop` and `main`. |
 | Conversation resolution | Require all review conversations to be resolved before merging, where available. |

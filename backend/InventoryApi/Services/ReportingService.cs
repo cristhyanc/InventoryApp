@@ -28,16 +28,18 @@ public sealed class ReportingService : IReportingService
     private readonly INayaxProcessingFeeService _nayaxProcessingFees;
     private readonly ISiteCommissionService _siteCommissions;
     private readonly GetBookkeepingReport _getBookkeepingReport;
+    private readonly GetDailyReport _getDailyReport;
 
     public ReportingService(AppDbContext db, INayaxProcessingFeeService nayaxProcessingFees,
         ISiteCommissionService siteCommissions, GetBookkeepingReport getBookkeepingReport,
-        INayaxLynxClient? nayaxLynxClient = null)
+        GetDailyReport getDailyReport, INayaxLynxClient? nayaxLynxClient = null)
     {
         _db = db;
         _nayaxLynxClient = nayaxLynxClient;
         _nayaxProcessingFees = nayaxProcessingFees;
         _siteCommissions = siteCommissions;
         _getBookkeepingReport = getBookkeepingReport;
+        _getDailyReport = getDailyReport;
     }
 
     public Task<BookkeepingReportDto> GetBookkeeping(ReportingFilterDto filter, CancellationToken cancellationToken = default) =>
@@ -58,107 +60,8 @@ public sealed class ReportingService : IReportingService
     public Task<BookkeepingReportDto> GetBookkeepingAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default) =>
         _getBookkeepingReport.Handle(filter, cancellationToken);
 
-    public async Task<DailyReportDto> GetDailyAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default)
-    {
-        var range = ResolveRange(filter);
-        var sales = await CostQuery(range, MachineId(filter)).ToListAsync(cancellationToken);
-        var statusSales = await AllSalesQuery(range, MachineId(filter)).ToListAsync(cancellationToken);
-        var importedByDate = await DailyImportedSummaryAsync(range, MachineId(filter), cancellationToken);
-        var importedPeriod = await ImportedSummaryAsync(range, MachineId(filter), cancellationToken);
-        var feeByDate = new Dictionary<DateTime, NayaxProcessingFeeResult>();
-        foreach (var date in sales.Select(x => x.MachineAuthorizationTime.Date).Distinct())
-            feeByDate[date] = await _nayaxProcessingFees.GetProcessingFeesAsync(date, date, MachineId(filter), cancellationToken);
-        var rows = sales
-            .GroupBy(x => x.MachineAuthorizationTime.Date)
-            .OrderBy(g => g.Key)
-            .Select(g =>
-            {
-                var grossSales = g.Sum(x => x.SettlementValue);
-                var partialCost = g.Sum(x => x.CostOfGoodsSold ?? 0m);
-                var isCogsComplete = g.All(x => x.HasCost);
-                var cardSales = g.Where(x => PaymentMethodClassifier.Classify(x.PaymentMethod) == NayaxPaymentType.Card)
-                    .Sum(x => x.SettlementValue);
-                var cashSales = g.Where(x => PaymentMethodClassifier.Classify(x.PaymentMethod) == NayaxPaymentType.Cash)
-                    .Sum(x => x.SettlementValue);
-                var uncosted = g.Where(x => !x.HasCost).ToList();
-                var unknownTransactions = g.Count(x => PaymentMethodClassifier.Classify(x.PaymentMethod) == NayaxPaymentType.Unknown);
-                var imported = importedByDate.TryGetValue(g.Key, out var importedValue)
-                    ? importedValue
-                    : (DailyImportedSummary?)null;
-                var statusRows = statusSales.Where(x => x.MachineAuthorizationTime.Date == g.Key).ToList();
-                var importedReimbursement = imported?.Reimbursement ?? 0m;
-                var difference = cardSales - importedReimbursement;
-                var hasImported = imported?.HasReimbursement ?? false;
-                var fee = feeByDate[g.Key];
-                return new DailyReportRowDto(
-                    g.Key, grossSales, g.Count(), isCogsComplete ? partialCost : null,
-                    isCogsComplete ? ReportingCalculations.GrossProfit(grossSales, partialCost) : null, g.Count(),
-                    grossSales, cardSales, cashSales,
-                    ReportingCalculations.Average(grossSales, g.Count()),
-                    uncosted.Count == 0, uncosted.Count, uncosted.Sum(x => x.SettlementValue),
-                    isCogsComplete ? ReportingCalculations.MarginPercent(grossSales, partialCost) : null,
-                    fee.TotalFeeExGst, fee.TotalFeeIncGst,
-                    importedReimbursement, imported?.NetReimbursement ?? 0m,
-                    hasImported && IsReconciled(difference, 0.01m),
-                    ReconciliationStatus(hasImported, difference, 0.01m,
-                    uncosted.Count != 0 || unknownTransactions != 0 ||
-                        statusRows.Any(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) != NayaxTransactionStatus.Completed &&
-                                            x.TransactionStatusId is not null),
-                    imported?.HasPeriodOnlyData == true),
-                    statusRows.Count(x => NayaxTransactionStatusClassifier.IsCompletedSale(x)),
-                    statusRows.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Pending),
-                    statusRows.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.CancelledOrDeclined),
-                    statusRows.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Refunded),
-                    statusRows.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Unknown),
-                    fee.HasEstimatedFees ? (fee.ActualFeeExGst != 0m ? "Actual and Estimated" : "Estimated") :
-                        fee.ActualFeeExGst != 0m ? "Actual" : "None")
-                {
-                    PartialCostOfGoods = partialCost
-                };
-            }).ToList();
-        var totalFees = await _nayaxProcessingFees.GetProcessingFeesAsync(range.From, range.ToDate, MachineId(filter), cancellationToken);
-        var totalPartialCost = sales.Sum(x => x.CostOfGoodsSold ?? 0m);
-        var totalCogsComplete = sales.All(x => x.HasCost);
-        var totalGrossSales = rows.Sum(x => x.GrossSales);
-        var totalTransactionCount = rows.Sum(x => x.TransactionCount);
-        var totals = new DailyReportTotalsDto(
-            totalGrossSales, rows.Sum(x => x.CardSales), rows.Sum(x => x.CashSales),
-            rows.Sum(x => x.Quantity), totalCogsComplete ? totalPartialCost : null,
-            totalCogsComplete ? ReportingCalculations.GrossProfit(totalGrossSales, totalPartialCost) : null,
-            totalTransactionCount, ReportingCalculations.Average(totalGrossSales, totalTransactionCount),
-            totalCogsComplete, rows.Sum(x => x.UncostedTransactionCount), rows.Sum(x => x.UncostedSalesAmount),
-            totalCogsComplete ? ReportingCalculations.MarginPercent(totalGrossSales, totalPartialCost) : null,
-            totalFees.TotalFeeExGst,
-            totalFees.TotalFeeIncGst,
-            importedPeriod.ContainsRows ? importedPeriod.Settlement : rows.Sum(x => x.ImportedReimbursement),
-            importedPeriod.ContainsRows ? importedPeriod.NetSettlement : rows.Sum(x => x.NetReimbursement),
-            statusSales.Count(x => NayaxTransactionStatusClassifier.IsCompletedSale(x)),
-            statusSales.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Pending),
-            statusSales.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.CancelledOrDeclined),
-            statusSales.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Refunded),
-            statusSales.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Unknown))
-        {
-            PartialCostOfGoods = totalPartialCost,
-            NayaxProcessingFees = totalFees
-        };
-        var note = importedPeriod.FeesMachineFilterLimited
-            ? "Imported fees are account-level amounts and are not allocated to a selected machine."
-            : importedByDate.Values.Any(x => x.HasPeriodOnlyData)
-                ? "Some reimbursements cover a period longer than one day and are not allocated to daily rows."
-                : null;
-        var qualityNotes = new List<string>();
-        if (note is not null) qualityNotes.Add(note);
-        if (totalFees.HasMissingRates)
-            qualityNotes.Add($"{totalFees.MissingRateTransactionCount} card transaction(s) have no effective Nayax processing fee rate; fee totals are provisional.");
-        if (!totals.IsCogsComplete)
-            qualityNotes.Add("One or more completed sales have no persisted COGS; profit is incomplete.");
-        AddStatusQualityNotes(qualityNotes, statusSales);
-        var quality = Quality(importedPeriod.ContainsRows, importedPeriod.ContainsGstClassification, false,
-            qualityNotes.Count == 0 ? null : string.Join(" ", qualityNotes));
-        return new DailyReportDto(range.From, range.ToDate, rows,
-            quality,
-            totals);
-    }
+    public Task<DailyReportDto> GetDailyAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default) =>
+        _getDailyReport.Handle(filter, cancellationToken);
 
     public async Task<ReconciliationReportDto> GetReconciliationAsync(ReportingFilterDto filter, decimal tolerance = 0.01m, CancellationToken cancellationToken = default)
     {
@@ -1089,87 +992,6 @@ public sealed class ReportingService : IReportingService
             rows.GroupBy(x => x.Category.ToString()).ToDictionary(g => g.Key, g => g.Sum(x => x.TotalAmount)));
     }
 
-    private async Task<Dictionary<DateTime, DailyImportedSummary>> DailyImportedSummaryAsync(
-        DateRange range, long? machineId, CancellationToken cancellationToken)
-    {
-        var reimbursements = await _db.ImportedReimbursements.AsNoTracking()
-            .Where(x => x.ReimbursementStartDate.HasValue && x.ReimbursementEndDate.HasValue &&
-                x.ReimbursementStartDate < range.EndExclusive && x.ReimbursementEndDate >= range.From)
-            .Select(x => new
-            {
-                x.Id,
-                Start = x.ReimbursementStartDate!.Value,
-                End = x.ReimbursementEndDate!.Value,
-                x.Total
-            })
-            .ToListAsync(cancellationToken);
-        if (reimbursements.Count == 0)
-            return new();
-
-        var ids = reimbursements.Select(x => x.Id).ToList();
-        var fees = await _db.ImportedFees.AsNoTracking()
-            .Where(x => ids.Contains(x.ImportedReimbursementId) && !x.IsPreviousPeriod)
-            .Select(x => new
-            {
-                x.ImportedReimbursementId,
-                x.TotalSum,
-                x.TotalSumWithVat,
-                x.VatPercentage
-            })
-            .ToListAsync(cancellationToken);
-        var devices = machineId.HasValue
-            ? await _db.ImportedReimbursementDevices.AsNoTracking()
-                .Where(x => ids.Contains(x.ImportedReimbursementId))
-                .Select(x => new { x.ImportedReimbursementId, x.MachineNumber, x.TotalBillableTransactionAmount })
-                .ToListAsync(cancellationToken)
-            : new();
-
-        var result = new Dictionary<DateTime, DailyImportedSummary>();
-        foreach (var reimbursement in reimbursements)
-        {
-            var start = reimbursement.Start.Date;
-            var end = reimbursement.End.Date;
-            var matchingMachine = machineId.HasValue && devices.Any(x =>
-                x.ImportedReimbursementId == reimbursement.Id &&
-                long.TryParse(x.MachineNumber, out var parsed) && parsed == machineId.Value);
-            if (machineId.HasValue && !matchingMachine)
-                continue;
-
-            var daily = start == end && start >= range.From && start <= range.ToDate;
-            if (!daily)
-            {
-                if (start <= range.ToDate && end >= range.From)
-                {
-                    var periodStart = start < range.From.Date ? range.From.Date : start;
-                    var periodEnd = end > range.ToDate.Date ? range.ToDate.Date : end;
-                    for (var date = periodStart; date <= periodEnd; date = date.AddDays(1))
-                    {
-                        var existingPeriod = result.GetValueOrDefault(date);
-                        result[date] = existingPeriod with { HasPeriodOnlyData = true };
-                    }
-                }
-                continue;
-            }
-
-            var reimbursementFees = fees.Where(x => x.ImportedReimbursementId == reimbursement.Id).ToList();
-            var reimbursementAmount = machineId.HasValue
-                ? devices.Where(x => x.ImportedReimbursementId == reimbursement.Id &&
-                    long.TryParse(x.MachineNumber, out var parsed) && parsed == machineId.Value)
-                    .Sum(x => x.TotalBillableTransactionAmount ?? 0m)
-                : reimbursement.Total ?? 0m;
-            var summary = new DailyImportedSummary(
-                reimbursementAmount,
-                machineId.HasValue ? 0m : reimbursementFees.Sum(x => x.TotalSum ?? 0m),
-                machineId.HasValue ? 0m : reimbursementFees.Sum(x => x.TotalSumWithVat ?? x.TotalSum ?? 0m),
-                reimbursementFees.Any(x => x.VatPercentage.HasValue),
-                true,
-                reimbursement.Total ?? 0m,
-                machineId.HasValue);
-            result[start] = result.GetValueOrDefault(start) + summary;
-        }
-        return result;
-    }
-
     private async Task<ImportedSummary> ImportedSummaryAsync(DateRange range, long? machineId, CancellationToken cancellationToken)
     {
         var reimbursements = _db.ImportedReimbursements.AsNoTracking()
@@ -1392,11 +1214,13 @@ public sealed class ReportingService : IReportingService
     private static decimal FeeExGst(ImportedFee fee) =>
         fee.TotalSum ?? (fee.TotalSumWithVat.HasValue ? fee.TotalSumWithVat.Value - FeeGst(fee) : 0m);
 
+    // Delegates to the shared Domain policy so daily and reconciliation call one authoritative
+    // reconciliation-status implementation instead of duplicating it; see ReconciliationStatusPolicy.
     private static bool IsReconciled(decimal difference, decimal tolerance) =>
-        Math.Abs(difference) <= Math.Abs(tolerance);
+        ReconciliationStatusPolicy.IsReconciled(difference, tolerance);
 
     private static string StatusFor(bool pending, decimal difference, decimal tolerance, bool warning) =>
-        pending ? "Pending" : !IsReconciled(difference, tolerance) ? "Mismatch" : warning ? "Warning" : "Reconciled";
+        ReconciliationStatusPolicy.StatusFor(pending, difference, tolerance, warning);
 
     private static string StatusFor(bool pending, bool mismatch, bool warning) =>
         pending ? "Pending" : mismatch ? "Mismatch" : warning ? "Warning" : "Reconciled";
@@ -1405,9 +1229,6 @@ public sealed class ReportingService : IReportingService
         grossStatus == "Mismatch" || settlementStatus == "Mismatch" ? "Mismatch" :
         grossStatus == "Pending" || settlementStatus == "Pending" ? "Pending" :
         grossStatus == "Warning" || settlementStatus == "Warning" ? "Warning" : "Reconciled";
-
-    private static string ReconciliationStatus(bool hasImported, decimal difference, decimal tolerance, bool hasWarning = false, bool hasPeriodOnlyData = false) =>
-        StatusFor(!hasImported && !hasPeriodOnlyData, difference, tolerance, hasWarning || hasPeriodOnlyData);
 
     private async Task<CommissionResolutionResult> GetMachineCommissionsAsync(DateRange range, long? machineId, CancellationToken cancellationToken)
     {
@@ -1610,27 +1431,6 @@ public sealed class ReportingService : IReportingService
         decimal Amount,
         decimal Fees,
         int Count = 1);
-
-    private readonly record struct DailyImportedSummary(
-        decimal Reimbursement,
-        decimal FeesExGst,
-        decimal FeesIncludingGst,
-        bool HasGstClassification,
-        bool HasReimbursement,
-        decimal NetReimbursement,
-        bool FeesMachineFilterLimited,
-        bool HasPeriodOnlyData = false)
-    {
-        public static DailyImportedSummary operator +(DailyImportedSummary left, DailyImportedSummary right) =>
-            new(left.Reimbursement + right.Reimbursement,
-                left.FeesExGst + right.FeesExGst,
-                left.FeesIncludingGst + right.FeesIncludingGst,
-                left.HasGstClassification || right.HasGstClassification,
-                left.HasReimbursement || right.HasReimbursement,
-                left.NetReimbursement + right.NetReimbursement,
-                left.FeesMachineFilterLimited || right.FeesMachineFilterLimited,
-                left.HasPeriodOnlyData || right.HasPeriodOnlyData);
-    }
 
     private readonly record struct ImportedSummary(
         decimal Settlement,
