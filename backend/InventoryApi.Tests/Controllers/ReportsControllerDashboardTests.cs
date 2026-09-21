@@ -23,30 +23,32 @@ using Xunit;
 
 namespace InventoryApi.Tests.Controllers;
 
-public class ReportsControllerBookkeepingTests
+public class ReportsControllerDashboardTests
 {
     [Fact]
-    public async Task Bookkeeping_action_routes_through_the_application_use_case_not_the_legacy_service()
+    public async Task Dashboard_action_routes_through_the_application_use_case_not_the_legacy_service()
     {
-        var facts = FakeBookkeepingReportFactsProvider.Complete(sales: 250m, cost: 90m);
-        var useCase = new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(facts));
+        var bookkeepingFacts = FakeBookkeepingReportFactsProvider.Complete(sales: 300m, cost: 100m);
+        var bookkeepingUseCase = new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(bookkeepingFacts));
+        var productFacts = FakeProductProfitabilityReportFactsProvider.SingleMappedProduct(productId: 7, productName: "Soda", sales: 60m, cost: 20m);
+        var productProfitabilityUseCase = new GetProductProfitabilityReport(new FakeProductProfitabilityReportFactsProvider(productFacts));
         var dailyUseCase = new GetDailyReport(new FakeDailyReportFactsProvider(FakeDailyReportFactsProvider.SingleDay()));
         var reconciliationUseCase = new GetReconciliationReport(new FakeReconciliationReportFactsProvider(FakeReconciliationReportFactsProvider.SinglePeriod()));
         var machineProfitabilityUseCase = new GetMachineProfitabilityReport(new FakeMachineProfitabilityReportFactsProvider(FakeMachineProfitabilityReportFactsProvider.Empty()));
-        var productProfitabilityUseCase = new GetProductProfitabilityReport(new FakeProductProfitabilityReportFactsProvider(FakeProductProfitabilityReportFactsProvider.Empty()));
-        var gstUseCase = new GetGstAccountingAid(useCase, new FakeGstReportFactsProvider(FakeGstReportFactsProvider.Complete()));
-        var dashboardUseCase = new GetDashboardReport(useCase,
-            new FakeGetProductProfitabilityReport(new ProductProfitabilityReportDto(default, default, [], new ReportingDataQualityDto())),
-            new FakeDashboardReportFactsProvider(FakeDashboardReportFactsProvider.Complete()));
+        var gstUseCase = new GetGstAccountingAid(bookkeepingUseCase, new FakeGstReportFactsProvider(FakeGstReportFactsProvider.Complete()));
+        var dashboardUseCase = new GetDashboardReport(bookkeepingUseCase, productProfitabilityUseCase,
+            new FakeDashboardReportFactsProvider(FakeDashboardReportFactsProvider.Complete(transactionCount: 12, machineCount: 3, productCount: 4)));
         var legacyService = new Mock<IReportingService>(MockBehavior.Strict);
-        var controller = new ReportsController(legacyService.Object, useCase, dailyUseCase, reconciliationUseCase,
+        var controller = new ReportsController(legacyService.Object, bookkeepingUseCase, dailyUseCase, reconciliationUseCase,
             machineProfitabilityUseCase, productProfitabilityUseCase, gstUseCase, dashboardUseCase);
 
-        var report = await controller.Bookkeeping(
+        var report = await controller.Dashboard(
             new ReportingFilterDto(new DateTime(2025, 7, 1), new DateTime(2025, 7, 31)), CancellationToken.None);
 
-        Assert.Equal(250m, report.Sales);
-        Assert.Equal(90m, report.CostOfGoods);
+        Assert.Equal(300m, report.Sales);
+        Assert.Equal(12, report.Transactions);
+        Assert.Equal(3, report.MachineCount);
+        Assert.Equal(4, report.ProductCount);
         legacyService.VerifyNoOtherCalls();
     }
 }
