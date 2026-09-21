@@ -143,3 +143,27 @@ body:
           required: true
         - label: I understand that merge, release, and deployment remain human-controlled, and that after opening a pull request the agent may only update its feature branch for at most two permitted repair attempts before returning control to a human.
           required: true
+
+  - type: dropdown
+    id: documentation-impact-decision
+    attributes:
+      label: Documentation impact decision
+      description: Decide whether this task requires documentation changes before applying agent-ready.
+      options:
+        - Documentation changes required
+        - No documentation changes required
+    validations:
+      required: true
+
+  - type: textarea
+    id: documentation-impact-details
+    attributes:
+      label: Documentation impact details
+      description: List the documentation files/sections to update, or explain why no documentation change is required. “None” by itself is insufficient.
+      placeholder: |
+        Required:
+        - docs/architecture.md — document the new dependency boundary
+        OR
+        Not required because this is an internal implementation fix with no change to behaviour, contracts, architecture, configuration, operations, or user workflow.
+    validations:
+      required: true
