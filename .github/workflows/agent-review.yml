@@ -77,14 +77,15 @@ jobs:
             [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || fail "A full 40-character lowercase head SHA is required."
 
             pr_json="$(gh pr view "$pr_number" --repo "$GITHUB_REPOSITORY" \
-              --json state,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,author,labels)"
+              --json state,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,labels)"
             state="$(jq -r '.state' <<<"$pr_json")"
             is_draft="$(jq -r '.isDraft' <<<"$pr_json")"
             base_ref="$(jq -r '.baseRefName' <<<"$pr_json")"
             head_ref="$(jq -r '.headRefName' <<<"$pr_json")"
             current_sha="$(jq -r '.headRefOid // empty' <<<"$pr_json")"
             head_repo="$(jq -r '"\(.headRepositoryOwner.login)/\(.headRepository.name)"' <<<"$pr_json")"
-            author="$(jq -r '.author.login // empty' <<<"$pr_json")"
+            author="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr_number" \
+              --jq '.user.login // empty')"
 
             [ "$state" = "OPEN" ] || fail "Pull request #$pr_number is not open."
             [ "$is_draft" = "false" ] || fail "Pull request #$pr_number is a draft."

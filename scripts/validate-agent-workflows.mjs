@@ -53,20 +53,39 @@ function verifySafeDispatcher(text, source) {
   }
 }
 
+// The dispatched context jobs hold the pull request number and head SHA in lowercase
+// locals; the dispatcher jobs hold them in uppercase step environment variables. Normalise
+// both so a single guard contract covers every guarded section.
+function normalizeGuardVariables(text) {
+  return text.replaceAll('$head_sha', '$HEAD_SHA').replaceAll('$pr_number', '$PR_NUMBER');
+}
+
+// Only the REST pull request endpoint returns the canonical author login. `gh pr view
+// --json author` resolves the GraphQL actor, which reports `github-actions` without the
+// `[bot]` suffix, so every guarded section must read `.user.login` over REST instead.
 function verifyAgentPrGuards(text, source, staleMessage) {
   for (const required of [
-    '--json state,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,author',
+    '--json state,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner',
     '[ "$state" = "OPEN" ]',
     '[ "$is_draft" = "false" ]',
     '[ "$base_ref" = "develop" ]',
     '[ "$head_repo" = "$GITHUB_REPOSITORY" ]',
     '[[ "$head_ref" == agent/issue-* ]]',
+    'author="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER"',
+    "--jq '.user.login // empty'",
     '[ "$author" = "github-actions[bot]" ]',
     '[ "$current_sha" = "$HEAD_SHA" ]',
     staleMessage,
     "grep -Eq '^\\.github/workflows/'",
   ]) {
     requireText(text, required, source);
+  }
+
+  for (const forbidden of [
+    '.author.login',
+    'headRepositoryOwner,author',
+  ]) {
+    forbidText(text, forbidden, source);
   }
 }
 
@@ -92,7 +111,7 @@ requireText(validationContext, 'statuses/$head_sha', 'validate.yml context job')
 requireText(validationContext, 'target_url="$RUN_URL"', 'validate.yml context job');
 forbidText(validationContext, 'actions/checkout', 'validate.yml context job');
 forbidText(validationContext, 'CLAUDE_CODE_OAUTH_TOKEN', 'validate.yml context job');
-verifyAgentPrGuards(validationContext.replaceAll('$head_sha', '$HEAD_SHA'), 'validate.yml dispatched context', 'Refusing stale validation');
+verifyAgentPrGuards(normalizeGuardVariables(validationContext), 'validate.yml dispatched context', 'Refusing stale validation');
 
 const validationJob = section(validate, '  validate:\n', '  report-status:\n', validatePath);
 requireText(validationJob, 'contents: read', 'validate.yml validate job');
@@ -155,7 +174,7 @@ for (const required of [
 
 
 const reviewContext = section(review, '  context:\n', '  review:\n', reviewPath);
-verifyAgentPrGuards(reviewContext.replaceAll('$head_sha', '$HEAD_SHA'), 'agent-review.yml dispatched context', 'Refusing stale review');
+verifyAgentPrGuards(normalizeGuardVariables(reviewContext), 'agent-review.yml dispatched context', 'Refusing stale review');
 requireText(reviewContext, 'statuses: read', 'agent-review.yml dispatched context');
 requireText(reviewContext, 'any(.labels[]?; .name == "agent-review")', 'agent-review.yml dispatched context');
 requireText(reviewContext, 'validation_state', 'agent-review.yml dispatched context');
@@ -172,6 +191,17 @@ const reviewAllowedTools = section(
 );
 for (const forbidden of ['gh pr merge', 'gh pr review * --approve', 'gh pr review * --request-changes']) {
   forbidText(reviewAllowedTools, forbidden, 'agent-review.yml allowed tools');
+}
+
+// Defence in depth: no agent workflow may resolve a pull request author through the
+// GraphQL actor login anywhere, including in a guard added after this contract was written.
+for (const path of [
+  '.github/workflows/agent-implement.yml',
+  '.github/workflows/agent-repair.yml',
+  '.github/workflows/agent-review.yml',
+  validatePath,
+]) {
+  forbidText(read(path), '.author.login', path);
 }
 
 console.log('Agent workflow contract validation passed.');

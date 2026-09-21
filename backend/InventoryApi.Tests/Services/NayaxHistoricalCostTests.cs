@@ -5,6 +5,8 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Inventory.Application.Reporting.Bookkeeping;
+using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using InventoryApi.Integrations.Nayax;
 using InventoryApi.Models;
@@ -260,8 +262,11 @@ public class NayaxHistoricalCostTests
         });
         await db.SaveChangesAsync();
 
-        var csv = Encoding.UTF8.GetString(await new ReportingService(db, new NayaxProcessingFeeService(db),
-            Mock.Of<ISiteCommissionService>()).ExportCsvAsync(
+        var nayaxFees = new NayaxProcessingFeeService(db);
+        var siteCommissions = Mock.Of<ISiteCommissionService>();
+        var getBookkeepingReport = new GetBookkeepingReport(new EfBookkeepingReportFactsProvider(db, nayaxFees, siteCommissions));
+        var csv = Encoding.UTF8.GetString(await new ReportingService(db, nayaxFees,
+            siteCommissions, getBookkeepingReport).ExportCsvAsync(
             "transactions",
             new Inventory.Application.Reporting.Transactions.TransactionSalesFilterDto(
                 From: new DateTime(2026, 9, 2), To: new DateTime(2026, 9, 2))));

@@ -1,4 +1,5 @@
 using Inventory.Application.NayaxFeeSettings;
+using Inventory.Application.Reporting.Bookkeeping;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Inventory.Application;
@@ -9,6 +10,7 @@ public static class ApplicationServiceCollectionExtensions
     {
         services.AddScoped<ListNayaxFeeRates>();
         services.AddScoped<SaveNayaxFeeRate>();
+        services.AddScoped<GetBookkeepingReport>();
 
         return services;
     }
