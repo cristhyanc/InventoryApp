@@ -58,8 +58,10 @@ public class ReportingServiceTests
         var getGstAccountingAid = new GetGstAccountingAid(getBookkeepingReport, new EfGstReportFactsProvider(db));
         var getDashboardReport = new GetDashboardReport(getBookkeepingReport, getProductProfitabilityReport,
             new EfDashboardReportFactsProvider(db, siteCommissions));
+        var getTransactionSalesReport = new GetTransactionSalesReport(new EfTransactionSalesReportFactsProvider(db, nayaxLynxClient));
         return new ReportingService(db, getBookkeepingReport, getDailyReport, getReconciliationReport,
-            getMachineProfitabilityReport, getProductProfitabilityReport, getGstAccountingAid, getDashboardReport, nayaxLynxClient);
+            getMachineProfitabilityReport, getProductProfitabilityReport, getGstAccountingAid, getDashboardReport,
+            getTransactionSalesReport, nayaxLynxClient);
     }
 
     [Fact]
@@ -111,6 +113,42 @@ public class ReportingServiceTests
         var pending = await service.GetTransactionsAsync(new TransactionSalesFilterDto(
             new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), Status: "pending"));
         Assert.Equal(4, Assert.Single(pending.Rows).TransactionId);
+    }
+
+    [Fact]
+    public async Task Transaction_csv_export_values_match_the_api_response_for_the_same_unpaginated_filter()
+    {
+        using var db = CreateDbContext();
+        db.Products.Add(new Product { Id = 1, Name = "Water", UnitPrice = 3m });
+        db.NayaxProcessingFeeRates.Add(new NayaxProcessingFeeRate { EffectiveFrom = new DateTime(2025, 1, 1), FeeExGst = .20m });
+        db.SiteCommissionAgreements.Add(new SiteCommissionAgreement
+        {
+            SiteId = 91, EffectiveFrom = new DateTime(2025, 1, 1), CommissionRate = .10m,
+            Basis = CommissionBasis.CardSales
+        });
+        db.NayaxSales.AddRange(
+            new NayaxSales { TransactionID = 1, MachineID = 10, MachineName = "Alpha One", NayaxProductId = 1, ProductName = "Water", PaymentMethod = "Credit Card", SettlementValue = 10m, NayaxProductCostPrice = 4.10m, UnitCostAtSale = 4m, CostOfGoodsSold = 4m, CostingStatus = SaleCostingStatus.Costed, CostSource = SaleCostSource.InventoryLedger, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
+            new NayaxSales { TransactionID = 2, MachineID = 10, MachineName = "Alpha One", NayaxProductId = 1, ProductName = "Water", PaymentMethod = "Cash", SettlementValue = 5m, UnitCostAtSale = 2m, CostOfGoodsSold = 2m, CostingStatus = SaleCostingStatus.Costed, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) });
+        await db.SaveChangesAsync();
+
+        var service = Reporting(db, new TransactionTestNayaxClient());
+        var filter = new TransactionSalesFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), Status: "all");
+        var apiReport = await service.GetTransactionsAsync(filter);
+        var csv = Encoding.UTF8.GetString(await service.ExportCsvAsync("transactions", filter));
+        var csvLines = csv.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        Assert.Equal(apiReport.Rows.Count + 1, csvLines.Length); // header row plus one row per transaction
+        Assert.Equal(apiReport.TotalCount, apiReport.Rows.Count); // the fixture fits on one page, so no export-only rows are hidden
+        foreach (var row in apiReport.Rows)
+        {
+            // TransactionDate and TransactionId are the first two CSV columns, so this prefix
+            // uniquely identifies the row's export line even though other columns (e.g. a shared
+            // ProductId) can repeat the same digits across rows.
+            var rowPrefix = $"\"{row.TransactionDate:yyyy-MM-dd HH:mm:ss}\",\"{row.TransactionId}\"";
+            var csvLine = Assert.Single(csvLines, line => line.StartsWith(rowPrefix, StringComparison.Ordinal));
+            Assert.Contains($"\"{row.Sale.ToString(CultureInfo.InvariantCulture)}\"", csvLine);
+            Assert.Contains($"\"{row.FeeSource}\"", csvLine);
+        }
     }
 
     private sealed class TransactionTestNayaxClient : INayaxLynxClient
@@ -249,6 +287,8 @@ public class ReportingServiceTests
         services.AddScoped<GetGstAccountingAid>();
         services.AddScoped<IDashboardReportFactsProvider, EfDashboardReportFactsProvider>();
         services.AddScoped<GetDashboardReport>();
+        services.AddScoped<ITransactionSalesReportFactsProvider, EfTransactionSalesReportFactsProvider>();
+        services.AddScoped<GetTransactionSalesReport>();
         services.AddScoped<IReportingService, ReportingService>();
 
         using var provider = services.BuildServiceProvider();

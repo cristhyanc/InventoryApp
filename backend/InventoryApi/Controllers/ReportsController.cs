@@ -24,13 +24,15 @@ public sealed class ReportsController : ControllerBase
     private readonly GetProductProfitabilityReport _getProductProfitabilityReport;
     private readonly GetGstAccountingAid _getGstAccountingAid;
     private readonly GetDashboardReport _getDashboardReport;
+    private readonly GetTransactionSalesReport _getTransactionSalesReport;
 
     public ReportsController(IReportingService service, GetBookkeepingReport getBookkeepingReport,
         GetDailyReport getDailyReport, GetReconciliationReport getReconciliationReport,
         GetMachineProfitabilityReport getMachineProfitabilityReport,
         GetProductProfitabilityReport getProductProfitabilityReport,
         GetGstAccountingAid getGstAccountingAid,
-        GetDashboardReport getDashboardReport)
+        GetDashboardReport getDashboardReport,
+        GetTransactionSalesReport getTransactionSalesReport)
     {
         _service = service;
         _getBookkeepingReport = getBookkeepingReport;
@@ -40,6 +42,7 @@ public sealed class ReportsController : ControllerBase
         _getProductProfitabilityReport = getProductProfitabilityReport;
         _getGstAccountingAid = getGstAccountingAid;
         _getDashboardReport = getDashboardReport;
+        _getTransactionSalesReport = getTransactionSalesReport;
     }
 
     [HttpGet("bookkeeping")]
@@ -58,7 +61,7 @@ public sealed class ReportsController : ControllerBase
     public Task<DashboardReportDto> Dashboard([FromQuery] ReportingFilterDto filter, CancellationToken ct) => _getDashboardReport.Handle(filter, ct);
     [HttpGet("transactions")]
     public Task<TransactionSalesReportDto> Transactions([FromQuery] TransactionSalesFilterDto filter, CancellationToken ct) =>
-        _service.GetTransactionsAsync(filter, ct);
+        _getTransactionSalesReport.Handle(filter, ct);
 
     [HttpGet("{report}/export")]
     public async Task<IActionResult> Export(string report, [FromQuery] string format = "csv",

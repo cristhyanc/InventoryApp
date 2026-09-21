@@ -31,6 +31,7 @@ public sealed class ReportingService : IReportingService
     private readonly GetProductProfitabilityReport _getProductProfitabilityReport;
     private readonly GetGstAccountingAid _getGstAccountingAid;
     private readonly GetDashboardReport _getDashboardReport;
+    private readonly GetTransactionSalesReport _getTransactionSalesReport;
 
     public ReportingService(AppDbContext db, GetBookkeepingReport getBookkeepingReport,
         GetDailyReport getDailyReport, GetReconciliationReport getReconciliationReport,
@@ -38,6 +39,7 @@ public sealed class ReportingService : IReportingService
         GetProductProfitabilityReport getProductProfitabilityReport,
         GetGstAccountingAid getGstAccountingAid,
         GetDashboardReport getDashboardReport,
+        GetTransactionSalesReport getTransactionSalesReport,
         INayaxLynxClient? nayaxLynxClient = null)
     {
         _db = db;
@@ -49,6 +51,7 @@ public sealed class ReportingService : IReportingService
         _getProductProfitabilityReport = getProductProfitabilityReport;
         _getGstAccountingAid = getGstAccountingAid;
         _getDashboardReport = getDashboardReport;
+        _getTransactionSalesReport = getTransactionSalesReport;
     }
 
     public Task<BookkeepingReportDto> GetBookkeeping(ReportingFilterDto filter, CancellationToken cancellationToken = default) =>
@@ -89,290 +92,7 @@ public sealed class ReportingService : IReportingService
 
     public Task<TransactionSalesReportDto> GetTransactionsAsync(
         TransactionSalesFilterDto filter, CancellationToken cancellationToken = default) =>
-        GetTransactionsInternalAsync(filter, paginate: true, cancellationToken);
-
-    private async Task<TransactionSalesReportDto> GetTransactionsInternalAsync(
-        TransactionSalesFilterDto filter, bool paginate, CancellationToken cancellationToken)
-    {
-        var range = new DateRange((filter.From ?? new DateTime(1900, 1, 1)).Date,
-            (filter.To ?? new DateTime(9999, 12, 30)).Date);
-        if (range.ToDate < range.From) range = new DateRange(range.ToDate, range.From);
-
-        var sales = await AllSalesQuery(range, filter.MachineId).ToListAsync(cancellationToken);
-        var products = await _db.Products.AsNoTracking().ToListAsync(cancellationToken);
-        var rates = await _db.NayaxProcessingFeeRates.AsNoTracking()
-            .Where(x => x.EffectiveFrom <= range.ToDate)
-            .OrderBy(x => x.EffectiveFrom)
-            .ToListAsync(cancellationToken);
-        var agreements = await _db.SiteCommissionAgreements.AsNoTracking()
-            .OrderBy(x => x.EffectiveFrom)
-            .ToListAsync(cancellationToken);
-
-        var siteMappingUnavailable = _nayaxLynxClient is null;
-        var liveMachines = new List<NayaxMachine>();
-        if (_nayaxLynxClient is not null)
-        {
-            try
-            {
-                liveMachines = await _nayaxLynxClient.GetMachinesAsync(cancellationToken);
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch
-            {
-                siteMappingUnavailable = true;
-            }
-        }
-
-        var machineById = liveMachines.GroupBy(x => x.MachineID).ToDictionary(x => x.Key, x => x.First());
-        var machinesBySite = liveMachines.Where(x => x.CustomerID.HasValue)
-            .GroupBy(x => x.CustomerID!.Value)
-            .ToDictionary(x => x.Key, x => x.ToList());
-        var details = sales.Select(sale =>
-        {
-            machineById.TryGetValue(sale.MachineID, out var machine);
-            var product = NayaxProductMatcher.Match(products, sale.NayaxProductId, sale.ProductName);
-            var siteId = machine?.CustomerID;
-            return new TransactionSaleDetail(
-                sale,
-                product?.Id,
-                product?.Name ?? (string.IsNullOrWhiteSpace(sale.ProductName) ? "Unmapped product" : NayaxProductMatcher.NormalizeName(sale.ProductName)),
-                siteId,
-                siteId.HasValue && machinesBySite.TryGetValue(siteId.Value, out var siteMachines)
-                    ? SiteNameResolver.FromMachines(siteMachines, siteId.Value)
-                    : null,
-                PaymentMethodClassifier.Classify(sale.PaymentMethod),
-                NayaxTransactionStatusClassifier.Classify(sale.TransactionStatusId),
-                sale.CostingStatus == SaleCostingStatus.Costed && sale.CostOfGoodsSold.HasValue);
-        }).ToList();
-
-        var options = new TransactionSalesFilterOptionsDto(
-            details.Where(x => x.SiteId.HasValue).GroupBy(x => x.SiteId!.Value)
-                .Select(x => new TransactionSalesFilterOptionDto(x.Key, x.First().SiteName ?? $"Site {x.Key}"))
-                .OrderBy(x => x.Name).ToList(),
-            details.Where(x => x.ProductId.HasValue).GroupBy(x => x.ProductId!.Value)
-                .Select(x => new TransactionSalesFilterOptionDto(x.Key, x.First().ProductName))
-                .OrderBy(x => x.Name).ToList());
-
-        var status = FilterValue(filter.Status);
-        if (string.IsNullOrWhiteSpace(status)) status = "completed";
-        var payment = FilterValue(filter.PaymentType);
-        var cogs = FilterValue(filter.CogsStatus);
-        var search = filter.Search?.Trim();
-        var filtered = details.Where(x =>
-            (!filter.SiteId.HasValue || x.SiteId == filter.SiteId) &&
-            (!filter.ProductId.HasValue || x.ProductId == filter.ProductId) &&
-            MatchesPayment(payment, x.PaymentType) &&
-            MatchesStatus(status, x.Status) &&
-            MatchesCogs(cogs, x.IsCosted) &&
-            MatchesSearch(search, x)).ToList();
-
-        var builds = filtered.Select(x => CreateTransactionRow(x, rates, agreements)).ToList();
-        var rows = SortTransactionRows(builds.Select(x => x.Row), filter.SortBy, filter.SortDescending).ToList();
-        var completedRows = rows.Where(x => x.IsCompleted).ToList();
-        var costedRows = completedRows.Where(x => x.CostingStatus == SaleCostingStatus.Costed.ToString() && x.CostOfGoods.HasValue).ToList();
-        var isCogsComplete = completedRows.All(x => x.CostingStatus == SaleCostingStatus.Costed.ToString() && x.CostOfGoods.HasValue);
-        var partialCost = costedRows.Sum(x => x.CostOfGoods!.Value);
-        decimal? cost = isCogsComplete ? partialCost : null;
-        decimal? grossProfit = isCogsComplete ? completedRows.Sum(x => x.GrossProfit ?? 0m) : null;
-        var directComplete = isCogsComplete && completedRows.All(x => x.DirectProfit.HasValue);
-        decimal? directProfit = directComplete ? completedRows.Sum(x => x.DirectProfit!.Value) : null;
-        var completedSales = completedRows.Sum(x => x.Sale);
-        decimal? partialGross = costedRows.Count == 0 ? null : costedRows.Sum(x => x.GrossProfit!.Value);
-        var directRows = completedRows.Where(x => x.DirectProfit.HasValue).ToList();
-        decimal? partialDirect = directRows.Count == 0 ? null : directRows.Sum(x => x.DirectProfit!.Value);
-        var totals = new TransactionSalesTotalsDto(
-            rows.Count, completedRows.Count, rows.Sum(x => x.Sale),
-            rows.Where(x => x.PaymentType == NayaxPaymentType.Card.ToString()).Sum(x => x.Sale),
-            rows.Where(x => x.PaymentType == NayaxPaymentType.Cash.ToString()).Sum(x => x.Sale),
-            costedRows.Count, completedRows.Count - costedRows.Count, isCogsComplete,
-            cost, partialCost, grossProfit,
-            grossProfit.HasValue ? ReportingCalculations.PercentageOf(grossProfit.Value, completedSales) : null,
-            directProfit,
-            directProfit.HasValue ? ReportingCalculations.PercentageOf(directProfit.Value, completedSales) : null,
-            partialGross, partialDirect,
-            rows.Where(x => x.FeeSource == "Estimated").Sum(x => x.FeeExGst ?? 0m),
-            rows.Where(x => x.FeeSource == "Estimated").Sum(x => x.FeeGst ?? 0m),
-            rows.Where(x => x.FeeSource == "Estimated").Sum(x => x.FeeIncGst ?? 0m),
-            completedRows.Sum(x => x.CommissionAmount ?? 0m));
-
-        var notes = new List<string>();
-        var missingStatus = rows.Count(x => x.TransactionStatusId is null);
-        if (missingStatus > 0) notes.Add($"{missingStatus} transaction(s) have no Nayax status ID.");
-        if (totals.UncostedCompletedTransactionCount > 0)
-            notes.Add($"{totals.UncostedCompletedTransactionCount} completed transaction(s) have incomplete persisted COGS; full profit totals are unavailable.");
-        if (rows.Any(x => x.ProductId is null)) notes.Add("One or more transactions could not be mapped to a catalogue product.");
-        if (siteMappingUnavailable && rows.Count > 0)
-            notes.Add("Current site mapping is unavailable because it comes only from the live Nayax machine CustomerID.");
-        if (builds.Any(x => x.FeeUnavailable))
-            notes.Add("An effective-dated estimated card fee is unavailable for one or more completed card transactions.");
-        if (builds.Any(x => x.HasOverlappingCommission))
-            notes.Add("Overlapping site commission agreements cover one or more transactions; their direct profit is unavailable.");
-        if (builds.Any(x => x.CommissionUnavailable))
-            notes.Add("Site mapping or effective commission agreement coverage is unavailable for one or more completed transactions.");
-        if (rows.Any(x => x.FeeSource == "Estimated"))
-            notes.Add("Transaction fees are configured estimates. Imported Nayax fees are period/device-level and are not allocated to transactions.");
-        var nayaxCosted = rows.Count(x => x.CostSource == "Nayax Historical Export");
-        if (nayaxCosted > 0)
-            notes.Add($"Historical COGS includes {nayaxCosted} transaction(s) costed from the Nayax transaction export.");
-        var quality = new ReportingDataQualityDto(
-            MissingStatus: missingStatus > 0,
-            HistoricalCostUnavailable: totals.UncostedCompletedTransactionCount > 0,
-            GstClassificationMissing: false,
-            CommissionNotPersisted: false,
-            ContainsUnmappedProducts: rows.Any(x => x.ProductId is null),
-            Notes: notes);
-
-        var pageSize = filter.PageSize is 50 or 100 or 250 ? filter.PageSize : 50;
-        var page = Math.Max(1, filter.Page);
-        var resultRows = paginate ? rows.Skip((page - 1) * pageSize).Take(pageSize).ToList() : rows;
-        return new TransactionSalesReportDto(range.From, range.ToDate, resultRows, totals, quality,
-            page, pageSize, rows.Count, options);
-    }
-
-    private static TransactionRowBuild CreateTransactionRow(
-        TransactionSaleDetail detail, IReadOnlyList<NayaxProcessingFeeRate> rates,
-        IReadOnlyList<SiteCommissionAgreement> agreements)
-    {
-        var sale = detail.Sale;
-        decimal? feeExGst = 0m, feeGst = 0m, feeIncGst = 0m;
-        var feeSource = "Not applicable";
-        var feeUnavailable = false;
-        if (detail.Status == NayaxTransactionStatus.Completed && detail.PaymentType == NayaxPaymentType.Card)
-        {
-            var rate = rates.LastOrDefault(x => x.EffectiveFrom.Date <= detail.Sale.MachineAuthorizationTime.Date);
-            if (rate is null)
-            {
-                feeExGst = feeGst = feeIncGst = null;
-                feeSource = "Unavailable";
-                feeUnavailable = true;
-            }
-            else
-            {
-                feeExGst = rate.FeeExGst;
-                feeGst = ReportingCalculations.GstFromExcluding(rate.FeeExGst);
-                feeIncGst = feeExGst + feeGst;
-                feeSource = "Estimated";
-            }
-        }
-        else if (detail.Status == NayaxTransactionStatus.Completed && detail.PaymentType == NayaxPaymentType.Unknown)
-        {
-            feeExGst = feeGst = feeIncGst = null;
-            feeSource = "Unavailable";
-            feeUnavailable = true;
-        }
-
-        SiteCommissionAgreement? agreement = null;
-        var hasOverlappingCommission = false;
-        var commissionUnavailable = false;
-        if (detail.Status == NayaxTransactionStatus.Completed && detail.SiteId.HasValue)
-        {
-            var siteAgreements = agreements.Where(x => x.SiteId == detail.SiteId.Value).ToList();
-            try
-            {
-                agreement = EffectiveFinancialConfiguration.ResolveAgreement(
-                    siteAgreements, detail.SiteId.Value, detail.Sale.MachineAuthorizationTime);
-                commissionUnavailable = agreement is null && siteAgreements.Count > 0;
-            }
-            catch (InvalidOperationException)
-            {
-                hasOverlappingCommission = true;
-                commissionUnavailable = true;
-            }
-        }
-        else if (detail.Status == NayaxTransactionStatus.Completed)
-        {
-            commissionUnavailable = true;
-        }
-        decimal? commissionAmount = agreement is null ? (commissionUnavailable ? null : 0m) :
-            SiteCommissionCalculator.CommissionAmount(agreement, sale.SettlementValue, detail.PaymentType);
-        var isCosted = detail.IsCosted && detail.Status == NayaxTransactionStatus.Completed;
-        decimal? grossProfit = isCosted ? sale.SettlementValue - detail.Sale.CostOfGoodsSold!.Value : null;
-        decimal? directProfit = grossProfit.HasValue && feeIncGst.HasValue && commissionAmount.HasValue
-            ? grossProfit.Value - feeIncGst.Value - commissionAmount.Value
-            : null;
-        return new TransactionRowBuild(new TransactionSalesRowDto(
-            detail.Sale.MachineAuthorizationTime, detail.Sale.TransactionID, detail.Sale.MachineID,
-            detail.Sale.MachineName ?? $"Machine {detail.Sale.MachineID}", detail.SiteId, detail.SiteName,
-            detail.ProductId, detail.ProductName, detail.PaymentType.ToString(), detail.Sale.PaymentMethod,
-            sale.SettlementValue, detail.Sale.NayaxProductCostPrice, detail.Sale.UnitCostAtSale,
-            detail.Sale.CostOfGoodsSold, detail.Sale.CostingStatus.ToString(),
-            CostSourceLabel(detail.Sale), grossProfit,
-            grossProfit.HasValue ? ReportingCalculations.PercentageOf(grossProfit.Value, sale.SettlementValue) : null,
-            directProfit,
-            directProfit.HasValue ? ReportingCalculations.PercentageOf(directProfit.Value, sale.SettlementValue) : null,
-            feeExGst, feeGst, feeIncGst, feeSource,
-            agreement?.CommissionRate, agreement?.Basis.ToString(), commissionAmount,
-            detail.Sale.TransactionStatusId, NayaxTransactionStatusClassifier.Describe(detail.Sale.TransactionStatusId),
-            detail.Status == NayaxTransactionStatus.Completed), feeUnavailable, hasOverlappingCommission,
-            commissionUnavailable);
-    }
-
-    private static string CostSourceLabel(NayaxSales sale)
-    {
-        if (sale.CostingStatus == SaleCostingStatus.Pending)
-            return "Pending";
-        if (sale.CostingStatus == SaleCostingStatus.LegacyEstimated)
-            return "Estimated";
-
-        return sale.CostSource switch
-        {
-            SaleCostSource.InventoryLedger => "Inventory Ledger",
-            SaleCostSource.NayaxTransactionExport => "Nayax Historical Export",
-            SaleCostSource.Estimated => "Estimated",
-            _ => "Unknown"
-        };
-    }
-
-    private static IEnumerable<TransactionSalesRowDto> SortTransactionRows(
-        IEnumerable<TransactionSalesRowDto> rows, string? sortBy, bool descending)
-    {
-        var key = FilterValue(sortBy);
-        return (key, descending) switch
-        {
-            ("machine", true) => rows.OrderByDescending(x => x.MachineName).ThenByDescending(x => x.TransactionId),
-            ("machine", false) => rows.OrderBy(x => x.MachineName).ThenBy(x => x.TransactionId),
-            ("product", true) => rows.OrderByDescending(x => x.ProductName).ThenByDescending(x => x.TransactionId),
-            ("product", false) => rows.OrderBy(x => x.ProductName).ThenBy(x => x.TransactionId),
-            ("sale", true) => rows.OrderByDescending(x => x.Sale).ThenByDescending(x => x.TransactionId),
-            ("sale", false) => rows.OrderBy(x => x.Sale).ThenBy(x => x.TransactionId),
-            ("cogs", true) => rows.OrderByDescending(x => x.CostOfGoods).ThenByDescending(x => x.TransactionId),
-            ("cogs", false) => rows.OrderBy(x => x.CostOfGoods).ThenBy(x => x.TransactionId),
-            ("gross" or "grossprofit", true) => rows.OrderByDescending(x => x.GrossProfit).ThenByDescending(x => x.TransactionId),
-            ("gross" or "grossprofit", false) => rows.OrderBy(x => x.GrossProfit).ThenBy(x => x.TransactionId),
-            ("direct" or "directprofit", true) => rows.OrderByDescending(x => x.DirectProfit).ThenByDescending(x => x.TransactionId),
-            ("direct" or "directprofit", false) => rows.OrderBy(x => x.DirectProfit).ThenBy(x => x.TransactionId),
-            ("status", true) => rows.OrderByDescending(x => x.TransactionStatus).ThenByDescending(x => x.TransactionId),
-            ("status", false) => rows.OrderBy(x => x.TransactionStatus).ThenBy(x => x.TransactionId),
-            (_, false) => rows.OrderBy(x => x.TransactionDate).ThenBy(x => x.TransactionId),
-            _ => rows.OrderByDescending(x => x.TransactionDate).ThenByDescending(x => x.TransactionId)
-        };
-    }
-
-    private static bool MatchesPayment(string value, NayaxPaymentType paymentType) =>
-        value is "" or "all" || value == FilterValue(paymentType.ToString());
-
-    private static bool MatchesStatus(string value, NayaxTransactionStatus status) =>
-        value is "" or "all" || value == FilterValue(status.ToString()) ||
-        (value is "cancelled" or "declined" && status == NayaxTransactionStatus.CancelledOrDeclined);
-
-    private static bool MatchesCogs(string value, bool isCosted) =>
-        value is "" or "all" || (value == "costed" && isCosted) ||
-        (value is "uncosted" or "incomplete" && !isCosted);
-
-    private static bool MatchesSearch(string? search, TransactionSaleDetail detail) =>
-        string.IsNullOrWhiteSpace(search) ||
-        detail.Sale.TransactionID.ToString(CultureInfo.InvariantCulture).Contains(search, StringComparison.OrdinalIgnoreCase) ||
-        detail.Sale.MachineID.ToString(CultureInfo.InvariantCulture).Contains(search, StringComparison.OrdinalIgnoreCase) ||
-        (detail.Sale.MachineName?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false) ||
-        detail.ProductName.Contains(search, StringComparison.OrdinalIgnoreCase) ||
-        (detail.SiteName?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false) ||
-        (detail.Sale.PaymentMethod?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false);
-
-    private static string FilterValue(string? value) =>
-        value?.Trim().Replace("-", string.Empty).Replace(" ", string.Empty).ToLowerInvariant() ?? string.Empty;
+        _getTransactionSalesReport.Handle(filter, paginate: true, cancellationToken);
 
     private static string Number(decimal? value) => value?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
     private static string Number(long? value) => value?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
@@ -428,7 +148,7 @@ public sealed class ReportingService : IReportingService
         if (report.Trim().ToLowerInvariant() is not ("transactions" or "transaction-sales"))
             throw new ArgumentException("Unsupported transaction report.", nameof(report));
 
-        var value = await GetTransactionsInternalAsync(filter, paginate: false, cancellationToken);
+        var value = await _getTransactionSalesReport.Handle(filter, paginate: false, cancellationToken);
         var rows = new List<List<string>>
         {
             new()
@@ -578,13 +298,6 @@ public sealed class ReportingService : IReportingService
             .Concat(products.Rows.Select(x => new List<string> { x.ProductName, x.Sales.ToString(CultureInfo.InvariantCulture), x.Quantity.ToString(CultureInfo.InvariantCulture), Number(x.CostOfGoods), Number(x.GrossProfit), Number(x.MarginPercent), x.TransactionCount.ToString(CultureInfo.InvariantCulture), x.IsUnmapped.ToString() })).ToList();
     }
 
-    private IQueryable<NayaxSales> SalesQuery(DateRange range, long? machineId) =>
-        AllSalesQuery(range, machineId).Where(NayaxTransactionStatusClassifier.CompletedSalePredicate);
-
-    private IQueryable<NayaxSales> AllSalesQuery(DateRange range, long? machineId) =>
-        _db.NayaxSales.AsNoTracking().Where(x => x.MachineAuthorizationTime >= range.From && x.MachineAuthorizationTime < range.EndExclusive &&
-            (!machineId.HasValue || x.MachineID == machineId.Value));
-
     private static void AddStatusQualityNotes(List<string> notes, IEnumerable<NayaxSales> sales)
     {
         var pending = sales.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Pending);
@@ -605,20 +318,4 @@ public sealed class ReportingService : IReportingService
         ReportingRangeResolver.Resolve(filter.From, filter.To, filter.StartDate, filter.EndDate, filter.FinancialYear);
 
     private static long? MachineId(ReportingFilterDto filter) => filter.MachineId ?? filter.MachineID;
-
-    private sealed record TransactionSaleDetail(
-        NayaxSales Sale,
-        long? ProductId,
-        string ProductName,
-        long? SiteId,
-        string? SiteName,
-        NayaxPaymentType PaymentType,
-        NayaxTransactionStatus Status,
-        bool IsCosted);
-
-    private sealed record TransactionRowBuild(
-        TransactionSalesRowDto Row,
-        bool FeeUnavailable,
-        bool HasOverlappingCommission,
-        bool CommissionUnavailable);
 }
