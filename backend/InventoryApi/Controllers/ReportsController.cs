@@ -22,11 +22,13 @@ public sealed class ReportsController : ControllerBase
     private readonly GetReconciliationReport _getReconciliationReport;
     private readonly GetMachineProfitabilityReport _getMachineProfitabilityReport;
     private readonly GetProductProfitabilityReport _getProductProfitabilityReport;
+    private readonly GetGstAccountingAid _getGstAccountingAid;
 
     public ReportsController(IReportingService service, GetBookkeepingReport getBookkeepingReport,
         GetDailyReport getDailyReport, GetReconciliationReport getReconciliationReport,
         GetMachineProfitabilityReport getMachineProfitabilityReport,
-        GetProductProfitabilityReport getProductProfitabilityReport)
+        GetProductProfitabilityReport getProductProfitabilityReport,
+        GetGstAccountingAid getGstAccountingAid)
     {
         _service = service;
         _getBookkeepingReport = getBookkeepingReport;
@@ -34,6 +36,7 @@ public sealed class ReportsController : ControllerBase
         _getReconciliationReport = getReconciliationReport;
         _getMachineProfitabilityReport = getMachineProfitabilityReport;
         _getProductProfitabilityReport = getProductProfitabilityReport;
+        _getGstAccountingAid = getGstAccountingAid;
     }
 
     [HttpGet("bookkeeping")]
@@ -47,7 +50,7 @@ public sealed class ReportsController : ControllerBase
     [HttpGet("product-profitability")]
     public Task<ProductProfitabilityReportDto> ProductProfitability([FromQuery] ReportingFilterDto filter, CancellationToken ct) => _getProductProfitabilityReport.Handle(filter, ct);
     [HttpGet("gst")]
-    public Task<GstAccountingAidDto> Gst([FromQuery] ReportingFilterDto filter, CancellationToken ct) => _service.GetGstAsync(filter, ct);
+    public Task<GstAccountingAidDto> Gst([FromQuery] ReportingFilterDto filter, CancellationToken ct) => _getGstAccountingAid.Handle(filter, ct);
     [HttpGet("dashboard")]
     public Task<DashboardReportDto> Dashboard([FromQuery] ReportingFilterDto filter, CancellationToken ct) => _service.GetDashboardAsync(filter, ct);
     [HttpGet("transactions")]

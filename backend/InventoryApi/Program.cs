@@ -3,6 +3,7 @@ using Inventory.Application;
 using Inventory.Application.NayaxFeeSettings;
 using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Reporting.Daily;
+using Inventory.Application.Reporting.Gst;
 using Inventory.Application.Reporting.MachineProfitability;
 using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Reconciliation;
@@ -89,6 +90,9 @@ builder.Services.AddScoped<IMachineProfitabilityReportFactsProvider, EfMachinePr
 
 // Temporary API-owned adapter for the product profitability report facts port; see EfProductProfitabilityReportFactsProvider.
 builder.Services.AddScoped<IProductProfitabilityReportFactsProvider, EfProductProfitabilityReportFactsProvider>();
+
+// Temporary API-owned adapter for the GST accounting-aid report facts port; see EfGstReportFactsProvider.
+builder.Services.AddScoped<IGstReportFactsProvider, EfGstReportFactsProvider>();
 
 var app = builder.Build();
 

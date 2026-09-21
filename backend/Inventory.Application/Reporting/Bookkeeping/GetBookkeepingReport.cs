@@ -10,7 +10,7 @@ namespace Inventory.Application.Reporting.Bookkeeping;
 /// Domain profit/margin/GST policy, and builds the authoritative <see cref="BookkeepingReportDto"/>
 /// consumed by both the API response and the CSV/XLSX export.
 /// </summary>
-public sealed class GetBookkeepingReport
+public sealed class GetBookkeepingReport : IGetBookkeepingReport
 {
     private readonly IBookkeepingReportFactsProvider _facts;
 

@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Reporting.Daily;
+using Inventory.Application.Reporting.Gst;
 using Inventory.Application.Reporting.MachineProfitability;
 using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Reconciliation;
@@ -53,8 +54,9 @@ public class ReportingServiceTests
         var getReconciliationReport = new GetReconciliationReport(new EfReconciliationReportFactsProvider(db));
         var getMachineProfitabilityReport = new GetMachineProfitabilityReport(new EfMachineProfitabilityReportFactsProvider(db, nayaxFees, siteCommissions));
         var getProductProfitabilityReport = new GetProductProfitabilityReport(new EfProductProfitabilityReportFactsProvider(db));
+        var getGstAccountingAid = new GetGstAccountingAid(getBookkeepingReport, new EfGstReportFactsProvider(db));
         return new ReportingService(db, nayaxFees, siteCommissions, getBookkeepingReport, getDailyReport, getReconciliationReport,
-            getMachineProfitabilityReport, getProductProfitabilityReport, nayaxLynxClient);
+            getMachineProfitabilityReport, getProductProfitabilityReport, getGstAccountingAid, nayaxLynxClient);
     }
 
     [Fact]
@@ -238,6 +240,9 @@ public class ReportingServiceTests
         services.AddScoped<GetMachineProfitabilityReport>();
         services.AddScoped<IProductProfitabilityReportFactsProvider, EfProductProfitabilityReportFactsProvider>();
         services.AddScoped<GetProductProfitabilityReport>();
+        services.AddScoped<IGetBookkeepingReport>(sp => sp.GetRequiredService<GetBookkeepingReport>());
+        services.AddScoped<IGstReportFactsProvider, EfGstReportFactsProvider>();
+        services.AddScoped<GetGstAccountingAid>();
         services.AddScoped<IReportingService, ReportingService>();
 
         using var provider = services.BuildServiceProvider();
@@ -635,6 +640,41 @@ public class ReportingServiceTests
         Assert.Equal(report.PackageCosts.ToString(CultureInfo.InvariantCulture), row["PackageCosts"]);
         Assert.Equal(report.NetSettlement.ToString(CultureInfo.InvariantCulture), row["NetSettlement"]);
         Assert.Equal(report.SiteCommission.ToString(CultureInfo.InvariantCulture), row["SiteCommission"]);
+    }
+
+    [Fact]
+    public async Task Gst_csv_export_uses_the_same_authoritative_values_as_the_api_report()
+    {
+        using var db = CreateDbContext();
+        db.NayaxSales.Add(new NayaxSales
+        {
+            TransactionID = 8, MachineID = 10, SettlementValue = 110m,
+            TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1)
+        });
+        db.ImportedReimbursements.Add(new ImportedReimbursement
+        {
+            ReimbursementStartDate = new DateTime(2025, 8, 1),
+            ReimbursementEndDate = new DateTime(2025, 8, 31),
+            Total = 110m,
+            Fees = { new ImportedFee { FeeTypeDescription = "Processing fee", TotalSum = 10m, TotalSumWithVat = 11m, VatPercentage = 10m } }
+        });
+        await db.SaveChangesAsync();
+
+        var service = Reporting(db);
+        var filter = new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31));
+
+        var report = await service.GetGstAsync(filter);
+        var csv = Encoding.UTF8.GetString(await service.ExportCsvAsync("gst", filter));
+        var lines = csv.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        var header = lines[0].Trim('"').Split("\",\"");
+        var values = lines[1].Trim('"').Split("\",\"");
+        var row = header.Zip(values, (h, v) => (h, v)).ToDictionary(x => x.h, x => x.v);
+
+        Assert.Equal(report.TaxableSales.ToString(CultureInfo.InvariantCulture), row["TaxableSales"]);
+        Assert.Equal(report.GstOnSales.ToString(CultureInfo.InvariantCulture), row["GstOnSales"]);
+        Assert.Equal(report.TaxableFees.ToString(CultureInfo.InvariantCulture), row["TaxableFees"]);
+        Assert.Equal(report.GstOnFees.ToString(CultureInfo.InvariantCulture), row["GstOnFees"]);
+        Assert.Equal(report.NetGst.ToString(CultureInfo.InvariantCulture), row["NetGst"]);
     }
 
     [Fact]
