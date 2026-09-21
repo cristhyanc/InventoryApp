@@ -198,6 +198,13 @@ describe('issue body: details', () => {
     assertInvalid(validateIssueBody(issueBody({ details: 'docs/architecture.md' })), /must say what changed/);
   });
 
+  it('regression: details made of file names plus documentation-impact vocabulary do not count as listing what to update', () => {
+    for (const details of ['AGENTS.md — documentation file updated', 'AGENTS.md, docs/automation.md — documentation files to update']) {
+      assertInvalid(validateIssueBody(issueBody({ details })), /must say what changed in each documentation file/);
+    }
+    assert.equal(validateIssueBody(issueBody({ details: 'AGENTS.md § Definition of done — record the documentation-impact rule for every pull request' })).valid, true);
+  });
+
   it('rejects unreplaced template placeholders', () => {
     assertInvalid(validateIssueBody(issueBody({ details: '- <file> — <what changed>' })), /template placeholder/);
     assertInvalid(validateIssueBody(issueBody({ details: '<!-- describe the impact' })), /template placeholder/);
@@ -329,6 +336,36 @@ describe('pull request body: evidence', () => {
   it('requires UPDATED evidence to name documentation files and what changed', () => {
     assertInvalid(validatePullRequestBody(pullRequestBody({ evidence: 'Updated the reporting guide to describe the new filter semantics.' })), /must name at least one documentation file/);
     assertInvalid(validatePullRequestBody(pullRequestBody({ evidence: 'docs/automation.md, AGENTS.md' })), /must say what changed/);
+  });
+
+  it('regression: UPDATED evidence made of file names plus documentation-impact vocabulary is rejected', () => {
+    // Before the fix, "documentation", "file(s)" and "updated" counted as specific words, so
+    // naming a file and adding those words satisfied the "what changed" requirement.
+    for (const evidence of [
+      'AGENTS.md — documentation file updated',
+      'AGENTS.md, docs/automation.md — documentation files updated',
+      'docs/automation.md — updated documentation',
+      'docs/automation.md — documentation section changed and updated',
+      'AGENTS.md — documented the documentation changes',
+      'README.md — see the updated documentation for the new documentation requirements',
+    ]) {
+      assertInvalid(validatePullRequestBody(pullRequestBody({ decision: PR_DECISION_UPDATED, evidence })), /bare or generic answer|must say what changed in each documentation file/);
+    }
+  });
+
+  it('regression: repeating one specific word does not make UPDATED evidence specific', () => {
+    assertInvalid(validatePullRequestBody(pullRequestBody({ evidence: 'AGENTS.md — gate gate gate gate' })), /must say what changed/);
+  });
+
+  it('accepts UPDATED evidence that says specifically what changed in each file', () => {
+    for (const evidence of [
+      'AGENTS.md — documented the documentation-impact definition-of-done requirements',
+      'docs/automation.md — documented the new read-only issue preflight and PR validation flow',
+      '- AGENTS.md — added the documentation-impact gate to the definition of done\n- docs/automation.md — documented the preflight job and the validation step',
+    ]) {
+      const result = validatePullRequestBody(pullRequestBody({ decision: PR_DECISION_UPDATED, evidence }));
+      assert.deepEqual(result, { valid: true, decision: PR_DECISION_UPDATED, errors: [] }, evidence);
+    }
   });
 
   it('requires NOT REQUIRED evidence to be a specific explanation rather than a short label', () => {

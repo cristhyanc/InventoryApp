@@ -106,14 +106,17 @@ const FUNCTION_WORDS = new Set([
   'etc', 'yes', 'own', 'into', 'out', 'up', 'about', 'over', 'under', 'still', 'already', 'e', 'g',
 ]);
 
-// Vocabulary of the documentation-impact question itself. An explanation of why documentation
-// is unaffected that consists only of these words restates the question instead of answering it.
+// Vocabulary of the documentation-impact question itself. An answer that consists only of
+// these words restates the question instead of answering it: for NOT REQUIRED it does not say
+// what the change touches, and for UPDATED ("documentation file updated") it does not say what
+// changed. `documented` is deliberately absent: it is the verb of an UPDATED answer, and on its
+// own it never makes a NOT REQUIRED answer specific.
 const CATEGORY_WORDS = new Set([
   'behaviour', 'behavior', 'behaviours', 'behaviors', 'contract', 'contracts', 'api', 'apis',
   'architecture', 'architectural', 'configuration', 'configurations', 'config', 'automation',
   'automated', 'deployment', 'deployments', 'deploy', 'operation', 'operations', 'operational',
   'user', 'users', 'workflow', 'workflows', 'documentation', 'docs', 'doc', 'document',
-  'documents', 'documented', 'unaffected', 'affected', 'affect', 'affects', 'affecting',
+  'documents', 'unaffected', 'affected', 'affect', 'affects', 'affecting',
   'unchanged', 'change', 'changes', 'changed', 'changing', 'required', 'require', 'requires',
   'requirement', 'needed', 'need', 'needs', 'impact', 'impacts', 'impacted', 'applicable',
   'apply', 'applies', 'internal', 'implementation', 'fix', 'fixes', 'code', 'refactor',
@@ -182,6 +185,12 @@ export function findDocumentationReferences(text) {
   return references;
 }
 
+// Distinct words that are neither function words nor documentation-impact vocabulary. Only
+// these make an answer specific to the change; repeating one does not add specificity.
+export function countSpecificWords(words) {
+  return new Set(words.filter((word) => !FUNCTION_WORDS.has(word) && !CATEGORY_WORDS.has(word))).size;
+}
+
 /**
  * Judges whether one free-text answer is meaningful for the given decision.
  *
@@ -221,10 +230,14 @@ export function assessEvidence(text, { kind, field }) {
           '(for example docs/automation.md, AGENTS.md, README, or a Markdown file).',
       );
     }
+    // Documentation-impact vocabulary ("documentation file updated") does not say what changed
+    // any more than the file name does, so it is excluded exactly as for NOT REQUIRED.
     const withoutReferences = answer.replace(DOCUMENTATION_REFERENCE_PATTERN, ' ');
-    const specific = normaliseWords(withoutReferences).filter((word) => !FUNCTION_WORDS.has(word));
-    if (specific.length < MINIMUM_SPECIFIC_WORDS) {
-      errors.push(`${field} must say what changed in each documentation file, not only name the file.`);
+    if (countSpecificWords(normaliseWords(withoutReferences)) < MINIMUM_SPECIFIC_WORDS) {
+      errors.push(
+        `${field} must say what changed in each documentation file: naming the file and adding generic words ` +
+          'such as "documentation", "file", "section" or "updated" is not enough.',
+      );
     }
     return errors;
   }
@@ -235,8 +248,7 @@ export function assessEvidence(text, { kind, field }) {
         'Explain, for this specific change, why behaviour, contracts, architecture, configuration, automation, deployment, operations and user workflows are unaffected.',
     );
   }
-  const specific = words.filter((word) => !FUNCTION_WORDS.has(word) && !CATEGORY_WORDS.has(word));
-  if (specific.length < MINIMUM_SPECIFIC_WORDS) {
+  if (countSpecificWords(words) < MINIMUM_SPECIFIC_WORDS) {
     errors.push(
       `${field} is generic: it restates the documentation categories without saying what this change does or does not touch. ` +
         'Name the code, feature, report, endpoint or file involved and why documentation stays accurate.',
