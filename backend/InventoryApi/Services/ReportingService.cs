@@ -24,33 +24,31 @@ public sealed class ReportingService : IReportingService
 {
     private readonly AppDbContext _db;
     private readonly INayaxLynxClient? _nayaxLynxClient;
-    private readonly INayaxProcessingFeeService _nayaxProcessingFees;
-    private readonly ISiteCommissionService _siteCommissions;
     private readonly GetBookkeepingReport _getBookkeepingReport;
     private readonly GetDailyReport _getDailyReport;
     private readonly GetReconciliationReport _getReconciliationReport;
     private readonly GetMachineProfitabilityReport _getMachineProfitabilityReport;
     private readonly GetProductProfitabilityReport _getProductProfitabilityReport;
     private readonly GetGstAccountingAid _getGstAccountingAid;
+    private readonly GetDashboardReport _getDashboardReport;
 
-    public ReportingService(AppDbContext db, INayaxProcessingFeeService nayaxProcessingFees,
-        ISiteCommissionService siteCommissions, GetBookkeepingReport getBookkeepingReport,
+    public ReportingService(AppDbContext db, GetBookkeepingReport getBookkeepingReport,
         GetDailyReport getDailyReport, GetReconciliationReport getReconciliationReport,
         GetMachineProfitabilityReport getMachineProfitabilityReport,
         GetProductProfitabilityReport getProductProfitabilityReport,
         GetGstAccountingAid getGstAccountingAid,
+        GetDashboardReport getDashboardReport,
         INayaxLynxClient? nayaxLynxClient = null)
     {
         _db = db;
         _nayaxLynxClient = nayaxLynxClient;
-        _nayaxProcessingFees = nayaxProcessingFees;
-        _siteCommissions = siteCommissions;
         _getBookkeepingReport = getBookkeepingReport;
         _getDailyReport = getDailyReport;
         _getReconciliationReport = getReconciliationReport;
         _getMachineProfitabilityReport = getMachineProfitabilityReport;
         _getProductProfitabilityReport = getProductProfitabilityReport;
         _getGstAccountingAid = getGstAccountingAid;
+        _getDashboardReport = getDashboardReport;
     }
 
     public Task<BookkeepingReportDto> GetBookkeeping(ReportingFilterDto filter, CancellationToken cancellationToken = default) =>
@@ -86,109 +84,8 @@ public sealed class ReportingService : IReportingService
     public Task<GstAccountingAidDto> GetGstAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default) =>
         _getGstAccountingAid.Handle(filter, cancellationToken);
 
-    public async Task<DashboardReportDto> GetDashboardAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default)
-    {
-        var range = ResolveRange(filter);
-        var machineId = MachineId(filter);
-        var isMachineFiltered = machineId.HasValue;
-        var summary = await CostQuery(range, machineId).GroupBy(_ => 1)
-            .Select(g => new
-            {
-                Sales = g.Sum(x => x.SettlementValue),
-                Quantity = g.Count(),
-                PartialCost = g.Sum(x => x.CostOfGoodsSold ?? 0m),
-                IsCogsComplete = g.All(x => x.HasCost),
-                UncostedTransactionCount = g.Count(x => !x.HasCost),
-                UncostedSalesAmount = g.Where(x => !x.HasCost).Sum(x => x.SettlementValue),
-                Transactions = g.Count(),
-                Machines = g.Select(x => x.MachineID).Distinct().Count(),
-                Products = g.Select(x => x.NayaxProductId).Where(x => x.HasValue).Distinct().Count()
-            }).SingleOrDefaultAsync(cancellationToken);
-        var productReport = await GetProductProfitabilityAsync(filter, cancellationToken);
-        var paymentSummary = await GetPaymentSummaryAsync(range, machineId, cancellationToken);
-        var imported = await ImportedSummaryAsync(range, machineId, cancellationToken);
-        var processingFees = await _nayaxProcessingFees.GetProcessingFeesAsync(range.From, range.ToDate, machineId, cancellationToken);
-        var commissions = await GetMachineCommissionsAsync(range, machineId, cancellationToken);
-        var siteCommission = await GetSiteCommissionAsync(range, machineId, commissions, cancellationToken);
-        var receiptCosts = isMachineFiltered ? new ReceiptCostSummary(0m, 0m) : await ReceiptCostsAsync(range, cancellationToken);
-        var operatingExpenses = await OperatingExpenseSummaryAsync(range, machineId, cancellationToken);
-        var fees = processingFees.TotalFeeIncGst;
-        var totalSales = paymentSummary.GrossSales;
-        var partialCostOfGoods = summary?.PartialCost ?? 0m;
-        var isCogsComplete = summary?.IsCogsComplete ?? true;
-        decimal? costOfGoods = isCogsComplete ? partialCostOfGoods : null;
-        decimal? grossProfit = isCogsComplete ? ReportingCalculations.GrossProfit(totalSales, partialCostOfGoods) : null;
-        var otherOperatingExpenses = operatingExpenses.Total;
-        var commissionCompleteForScope = isMachineFiltered
-            ? commissions.Machines.GetValueOrDefault(machineId!.Value).IsComplete
-            : commissions.IsComplete;
-        var isProfitComplete = grossProfit.HasValue && !processingFees.HasMissingRates && commissionCompleteForScope;
-        decimal? directProfit = isMachineFiltered && isProfitComplete
-            ? grossProfit!.Value - fees - siteCommission - otherOperatingExpenses
-            : null;
-        decimal? netProfit = !isMachineFiltered && isProfitComplete
-            ? grossProfit.Value - fees - siteCommission - receiptCosts.Total - otherOperatingExpenses
-            : null;
-        var expectedReimbursement = paymentSummary.CardSales - fees;
-        var actualReimbursement = imported.NetSettlement;
-        var reimbursementDifference = actualReimbursement - expectedReimbursement;
-        var reconciliationStatus = !imported.ContainsRows
-            ? "Pending"
-            : Math.Abs(reimbursementDifference) <= 0.01m ? "Reconciled" : "Needs Review";
-        var dashboardQuality = productReport.DataQuality;
-        if (!isCogsComplete)
-        {
-            var notes = dashboardQuality.Notes?.ToList() ?? [];
-            notes.Add("One or more completed sales have no persisted COGS; profitability is unavailable.");
-            dashboardQuality = dashboardQuality with { Notes = notes };
-        }
-        if (processingFees.HasMissingRates)
-        {
-            var notes = dashboardQuality.Notes?.ToList() ?? [];
-            notes.Add($"{processingFees.MissingRateTransactionCount} card transaction(s) have no effective Nayax processing fee rate; profit is unavailable.");
-            dashboardQuality = dashboardQuality with { Notes = notes };
-        }
-        var commissionNotes = dashboardQuality.Notes?.ToList() ?? [];
-        if (isMachineFiltered)
-            commissionNotes.Add("Net profit is unavailable for a machine-filtered report because shared business overhead is not allocated to individual machines.");
-        AddCommissionQualityNotes(commissionNotes, commissions, isMachineFiltered ? "direct profit" : "net profit");
-        dashboardQuality = dashboardQuality with { Notes = commissionNotes };
-        return new DashboardReportDto(range.From, range.ToDate, summary?.Sales ?? 0m,
-            grossProfit, summary?.Transactions ?? 0,
-            summary?.Quantity ?? 0m, summary?.Machines ?? 0, summary?.Products ?? 0,
-            productReport.Rows.Count(x => x.IsUnmapped), dashboardQuality, fees,
-            actualReimbursement,
-            siteCommission, netProfit,
-            netProfit.HasValue ? ReportingCalculations.MarginPercent(totalSales, partialCostOfGoods + fees + siteCommission + receiptCosts.Total + otherOperatingExpenses) : null,
-            processingFees.TotalFeeExGst, receiptCosts.Delivery, receiptCosts.Package, otherOperatingExpenses,
-            paymentSummary.CardSales, paymentSummary.CashSales, paymentSummary.CardTransactions, paymentSummary.CashTransactions)
-        {
-            TotalSales = totalSales,
-            CostOfGoodsSold = costOfGoods,
-            PartialCostOfGoods = partialCostOfGoods,
-            IsCogsComplete = isCogsComplete,
-            UncostedTransactionCount = summary?.UncostedTransactionCount ?? 0,
-            UncostedSalesAmount = summary?.UncostedSalesAmount ?? 0m,
-            AverageSale = ReportingCalculations.Average(totalSales, summary?.Transactions ?? 0),
-            GrossMarginPercent = grossProfit.HasValue ? ReportingCalculations.MarginPercent(totalSales, partialCostOfGoods) : null,
-            NayaxFeesIncludingGst = fees,
-            OtherOperatingExpenses = otherOperatingExpenses,
-            ExpectedReimbursement = expectedReimbursement,
-            ActualReimbursement = actualReimbursement,
-            ReimbursementDifference = reimbursementDifference,
-            IsReconciled = imported.ContainsRows && Math.Abs(reimbursementDifference) <= 0.01m,
-            ReconciliationStatus = reconciliationStatus,
-            ReconciliationTolerance = 0.01m,
-            AdjustmentsSupported = false,
-            DirectProfit = directProfit,
-            DirectMarginPercent = directProfit.HasValue
-                ? ReportingCalculations.MarginPercent(totalSales, partialCostOfGoods + fees + siteCommission + otherOperatingExpenses)
-                : null,
-            StructuredOperatingExpenses = operatingExpenses.Total,
-            OperatingExpenseGst = operatingExpenses.Gst,
-            NayaxProcessingFees = processingFees
-        };
-    }
+    public Task<DashboardReportDto> GetDashboardAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default) =>
+        _getDashboardReport.Handle(filter, cancellationToken);
 
     public Task<TransactionSalesReportDto> GetTransactionsAsync(
         TransactionSalesFilterDto filter, CancellationToken cancellationToken = default) =>
@@ -688,242 +585,6 @@ public sealed class ReportingService : IReportingService
         _db.NayaxSales.AsNoTracking().Where(x => x.MachineAuthorizationTime >= range.From && x.MachineAuthorizationTime < range.EndExclusive &&
             (!machineId.HasValue || x.MachineID == machineId.Value));
 
-    private IQueryable<SaleCost> CostQuery(DateRange range, long? machineId) =>
-        from sale in SalesQuery(range, machineId)
-        join product in _db.Products.AsNoTracking() on sale.NayaxProductId equals product.Id into productJoin
-        from product in productJoin.DefaultIfEmpty()
-        select new SaleCost
-        {
-            MachineID = sale.MachineID, MachineName = sale.MachineName, NayaxProductId = sale.NayaxProductId,
-            ProductName = sale.ProductName, PaymentMethod = sale.PaymentMethod, SettlementValue = sale.SettlementValue,
-            MachineAuthorizationTime = sale.MachineAuthorizationTime,
-            CostOfGoodsSold = sale.CostOfGoodsSold,
-            HasCost = sale.CostOfGoodsSold.HasValue
-        };
-
-    private async Task<SalesPaymentSummary> GetPaymentSummaryAsync(DateRange range, long? machineId, CancellationToken cancellationToken)
-    {
-        var rows = await SalesQuery(range, machineId)
-            .Select(x => new { x.PaymentMethod, x.SettlementValue })
-            .ToListAsync(cancellationToken);
-        var classified = rows.GroupBy(x => PaymentMethodClassifier.Classify(x.PaymentMethod))
-            .ToDictionary(x => x.Key, x => new { Sales = x.Sum(y => y.SettlementValue), Count = x.Count() });
-        var card = classified.GetValueOrDefault(NayaxPaymentType.Card);
-        var cash = classified.GetValueOrDefault(NayaxPaymentType.Cash);
-        var unknown = classified.GetValueOrDefault(NayaxPaymentType.Unknown);
-        return new SalesPaymentSummary(
-            rows.Sum(x => x.SettlementValue),
-            rows.Count,
-            card?.Sales ?? 0m,
-            card?.Count ?? 0,
-            cash?.Sales ?? 0m,
-            cash?.Count ?? 0,
-            unknown?.Sales ?? 0m,
-            unknown?.Count ?? 0);
-    }
-
-    private async Task<ReceiptCostSummary> ReceiptCostsAsync(DateRange range, CancellationToken cancellationToken)
-    {
-        var costs = await _db.Receipts.AsNoTracking()
-            .Where(x => x.PurchaseDate >= range.From && x.PurchaseDate < range.EndExclusive)
-            .GroupBy(_ => 1)
-            .Select(g => new ReceiptCostSummary(
-                g.Sum(x => x.DeliveryCost ?? 0m),
-                g.Sum(x => x.PackageCost ?? 0m)))
-            .SingleOrDefaultAsync(cancellationToken);
-        return costs;
-    }
-
-    private async Task<OperatingExpenseSummary> OperatingExpenseSummaryAsync(DateRange range, long? machineId, CancellationToken cancellationToken)
-    {
-        var query = _db.OperatingExpenses.AsNoTracking()
-            .Where(x => x.ExpenseDate >= range.From && x.ExpenseDate < range.EndExclusive &&
-                (!machineId.HasValue || x.MachineId == machineId.Value));
-        var rows = await query.Select(x => new { x.Category, x.TotalAmount, x.GstAmount }).ToListAsync(cancellationToken);
-        return new OperatingExpenseSummary(rows.Sum(x => x.TotalAmount), rows.Sum(x => x.GstAmount),
-            rows.GroupBy(x => x.Category.ToString()).ToDictionary(g => g.Key, g => g.Sum(x => x.TotalAmount)));
-    }
-
-    private async Task<ImportedSummary> ImportedSummaryAsync(DateRange range, long? machineId, CancellationToken cancellationToken)
-    {
-        var reimbursements = _db.ImportedReimbursements.AsNoTracking()
-            .Where(x => x.ReimbursementStartDate < range.EndExclusive && x.ReimbursementEndDate >= range.From);
-        var reimbursementRows = await reimbursements
-            .Select(x => new ImportedReimbursementRow
-            {
-                Id = x.Id,
-                Total = x.Total,
-                PayoutDate = x.ReimbursementPayoutDate
-            })
-            .ToListAsync(cancellationToken);
-        if (reimbursementRows.Count == 0)
-            return new ImportedSummary(0m, 0m, 0m, 0m, 0m, false, false, false, false);
-
-        var reimbursementIds = reimbursementRows.Select(x => x.Id).ToList();
-        var feeRows = await _db.ImportedFees.AsNoTracking()
-            .Where(x => reimbursementIds.Contains(x.ImportedReimbursementId))
-            .Select(x => new ImportedFeeRow
-            {
-                ReimbursementId = x.ImportedReimbursementId,
-                IsPreviousPeriod = x.IsPreviousPeriod,
-                TotalSum = x.TotalSum,
-                TotalSumWithVat = x.TotalSumWithVat,
-                VatPercentage = x.VatPercentage
-            })
-            .ToListAsync(cancellationToken);
-        var deviceRows = await _db.ImportedReimbursementDevices.AsNoTracking()
-            .Where(x => reimbursementIds.Contains(x.ImportedReimbursementId))
-            .Select(x => new ImportedDeviceRow
-            {
-                ReimbursementId = x.ImportedReimbursementId,
-                EntityId = x.EntityId,
-                MachineNumber = x.MachineNumber,
-                Gross = x.TotalBillableTransactionAmount ?? 0m,
-                NetAmount = x.NetAmount,
-                HasNetAmount = x.NetAmount.HasValue
-            })
-            .ToListAsync(cancellationToken);
-        var entityIds = deviceRows
-            .Where(x => x.EntityId != null)
-            .Select(x => x.EntityId!)
-            .Distinct()
-            .ToList();
-        var paymentRows = await _db.ImportedDevicePayments.AsNoTracking()
-            .Where(x => reimbursementIds.Contains(x.ImportedReimbursementId) && entityIds.Contains(x.EntityId!))
-            .Select(x => new ImportedPaymentRow
-            {
-                ReimbursementId = x.ImportedReimbursementId,
-                EntityId = x.EntityId,
-                PaymentMethodDescription = x.PaymentMethodDescription,
-                RecognitionDescription = x.RecognitionDescription,
-                Amount = x.TotalSum ?? 0m,
-                Fees = (x.ProcessingFees ?? 0m) + (x.ServiceFees ?? 0m),
-                Count = x.SalesCount ?? 1
-            })
-            .ToListAsync(cancellationToken);
-
-        var rows = reimbursementRows.Select(x => new ImportedReportRow
-        {
-            Id = x.Id,
-            Settlement = x.Total ?? 0m,
-            NetSettlement = x.Total ?? 0m,
-            HasImportedTotal = x.Total.HasValue,
-            PayoutDate = x.PayoutDate,
-            FeesExGst = feeRows.Where(f => f.ReimbursementId == x.Id && !f.IsPreviousPeriod).Sum(f => f.TotalSum ?? 0m),
-            FeesIncludingGst = feeRows.Where(f => f.ReimbursementId == x.Id && !f.IsPreviousPeriod).Sum(f => f.TotalSumWithVat ?? f.TotalSum ?? 0m),
-            Gst = feeRows.Where(f => f.ReimbursementId == x.Id && !f.IsPreviousPeriod).Sum(f =>
-                f.TotalSumWithVat.HasValue && f.TotalSum.HasValue
-                    ? f.TotalSumWithVat.Value - f.TotalSum.Value
-                    : f.TotalSumWithVat.HasValue && f.VatPercentage.HasValue
-                        ? f.TotalSumWithVat.Value * f.VatPercentage.Value / (100m + f.VatPercentage.Value)
-                        : 0m),
-            HasNet = deviceRows.Any(d => d.ReimbursementId == x.Id && d.HasNetAmount),
-            HasGst = feeRows.Any(f => f.ReimbursementId == x.Id && f.VatPercentage.HasValue),
-            Devices = deviceRows.Where(d => d.ReimbursementId == x.Id).Select(d => new ImportedReportDevice
-            {
-                EntityId = d.EntityId,
-                MachineNumber = d.MachineNumber,
-                Gross = d.Gross,
-                NetAmount = d.NetAmount,
-                Payments = paymentRows.Where(p => p.ReimbursementId == x.Id && p.EntityId == d.EntityId)
-                    .Select(p => new ImportedPaymentNet(p.PaymentMethodDescription, p.RecognitionDescription, p.Amount, p.Fees, p.Count))
-                    .ToList()
-            }).ToList()
-        }).ToList();
-
-        var importedCardTransactionCount = rows.SelectMany(x => x.Devices)
-            .SelectMany(d => d.Payments)
-            .Where(p => PaymentMethodClassifier.Classify(p.PaymentMethodDescription, p.RecognitionDescription) == NayaxPaymentType.Card)
-            .Sum(p => p.Count);
-
-        if (!machineId.HasValue)
-            return new ImportedSummary(rows.Sum(x => x.Settlement), rows.Sum(x => x.FeesExGst),
-                rows.Sum(x => x.FeesIncludingGst), rows.Sum(x => x.Gst),
-                rows.Sum(x => x.NetSettlement),
-                rows.Count != 0, rows.Any(x => x.HasGst), rows.Any(x => x.HasImportedTotal), rows.Count != 0, rows.Select(x => x.PayoutDate).FirstOrDefault(), importedCardTransactionCount);
-
-        var matchingDevices = rows.SelectMany(x => x.Devices)
-            .Where(d => long.TryParse(d.MachineNumber, out var parsed) && parsed == machineId.Value)
-            .ToList();
-        var matchingReimbursementIds = rows
-            .Where(row => row.Devices.Any(device => long.TryParse(device.MachineNumber, out var parsed) && parsed == machineId.Value))
-            .Select(row => row.Id)
-            .ToHashSet();
-        var matchingRows = rows.Where(row => matchingReimbursementIds.Contains(row.Id)).ToList();
-        var matchingSettlement = matchingDevices
-            .Sum(d => d.Payments.Count != 0
-                ? d.Payments.Where(p => PaymentMethodClassifier.Classify(p.PaymentMethodDescription, p.RecognitionDescription) == NayaxPaymentType.Card).Sum(p => p.Amount)
-                : d.Gross);
-        return new ImportedSummary(matchingSettlement, 0m,
-            0m, 0m,
-            matchingRows.Sum(x => x.NetSettlement),
-            rows.Count != 0, matchingRows.Any(x => x.HasGst), matchingRows.Any(x => x.HasImportedTotal), matchingDevices.Count != 0,
-            matchingRows.Select(x => x.PayoutDate).FirstOrDefault(),
-            matchingDevices.SelectMany(d => d.Payments)
-                .Where(p => PaymentMethodClassifier.Classify(p.PaymentMethodDescription, p.RecognitionDescription) == NayaxPaymentType.Card)
-                .Sum(p => p.Count),
-            true);
-    }
-
-    private async Task<CommissionResolutionResult> GetMachineCommissionsAsync(DateRange range, long? machineId, CancellationToken cancellationToken)
-    {
-        var report = await _siteCommissions.GetReportAsync(range.From, range.ToDate, null, cancellationToken);
-
-        var relevantRows = report.Rows.Where(site => !machineId.HasValue || site.Machines.Any(machine => machine.MachineId == machineId.Value)).ToList();
-        var machines = relevantRows.SelectMany(site => site.Machines.Select(machine =>
-            (machine.MachineId, new MachineCommission(site.CommissionRate, machine.CommissionDue, machine.IsComplete))))
-            .ToDictionary(x => x.MachineId, x => x.Item2);
-        var selectedMachine = machineId.HasValue
-            ? relevantRows.SelectMany(x => x.Machines).SingleOrDefault(x => x.MachineId == machineId.Value)
-            : null;
-        var warnings = machineId.HasValue
-            ? SelectedMachineCommissionWarnings(selectedMachine)
-            : relevantRows.Where(x => !string.IsNullOrWhiteSpace(x.DataQuality))
-                .Select(x => x.DataQuality!).Distinct().ToList();
-        var hasConfigurationGap = machineId.HasValue
-            ? selectedMachine?.HasConfigurationGap ?? false
-            : relevantRows.Any(x => x.HasConfigurationGap);
-        var hasOverlap = machineId.HasValue
-            ? selectedMachine?.HasOverlap ?? false
-            : relevantRows.Any(x => x.HasOverlap);
-        var usesMultipleRates = !machineId.HasValue && relevantRows.Any(x => x.UsesMultipleRates);
-        var hasMissingSiteMapping = false;
-        var saleMachineIds = await SalesQuery(range, machineId).Select(x => x.MachineID).Distinct().ToListAsync(cancellationToken);
-        if (saleMachineIds.Any(id => !machines.ContainsKey(id)))
-        {
-            warnings.Add("Current site mapping is unavailable for one or more completed sales; commission and profitability are incomplete.");
-            hasMissingSiteMapping = true;
-        }
-        return new(machines, !hasConfigurationGap && !hasOverlap && !hasMissingSiteMapping,
-            hasConfigurationGap, hasOverlap, hasMissingSiteMapping, usesMultipleRates, warnings.Distinct().ToList());
-    }
-
-    private static List<string> SelectedMachineCommissionWarnings(SiteCommissionMachineDto? machine)
-    {
-        var warnings = new List<string>();
-        if (machine?.HasConfigurationGap == true)
-            warnings.Add("Commission agreements exist but do not cover one or more sales for the selected machine.");
-        if (machine?.HasOverlap == true)
-            warnings.Add("Overlapping commission agreements cover one or more sales for the selected machine.");
-        return warnings;
-    }
-
-    private async Task<decimal> GetSiteCommissionAsync(DateRange range, long? machineId, CommissionResolutionResult commissions, CancellationToken cancellationToken)
-    {
-        var salesByMachine = await SalesQuery(range, machineId)
-            .GroupBy(x => x.MachineID)
-            .Select(g => new { MachineId = g.Key, Sales = g.Sum(x => x.SettlementValue) })
-            .ToListAsync(cancellationToken);
-        return salesByMachine.Sum(x => commissions.Machines.GetValueOrDefault(x.MachineId).Due);
-    }
-
-    private static void AddCommissionQualityNotes(List<string> notes, CommissionResolutionResult commissions, string profitLabel = "profit")
-    {
-        if (!commissions.IsComplete)
-            notes.Add($"Commission configuration is incomplete; {profitLabel} is unavailable.");
-        notes.AddRange(commissions.Warnings);
-    }
-
     private static void AddStatusQualityNotes(List<string> notes, IEnumerable<NayaxSales> sales)
     {
         var pending = sales.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Pending);
@@ -945,21 +606,6 @@ public sealed class ReportingService : IReportingService
 
     private static long? MachineId(ReportingFilterDto filter) => filter.MachineId ?? filter.MachineID;
 
-    private sealed record OperatingExpenseSummary(decimal Total, decimal Gst, IReadOnlyDictionary<string, decimal> ByCategory);
-
-    private sealed class SaleCost
-    {
-        public long MachineID { get; set; }
-        public string? MachineName { get; set; }
-        public long? NayaxProductId { get; set; }
-        public string? ProductName { get; set; }
-        public string? PaymentMethod { get; set; }
-        public decimal SettlementValue { get; set; }
-        public DateTime MachineAuthorizationTime { get; set; }
-        public bool HasCost { get; set; }
-        public decimal? CostOfGoodsSold { get; set; }
-    }
-
     private sealed record TransactionSaleDetail(
         NayaxSales Sale,
         long? ProductId,
@@ -975,109 +621,4 @@ public sealed class ReportingService : IReportingService
         bool FeeUnavailable,
         bool HasOverlappingCommission,
         bool CommissionUnavailable);
-
-    private sealed class ImportedReimbursementRow
-    {
-        public int Id { get; set; }
-        public decimal? Total { get; set; }
-        public DateTime? PayoutDate { get; set; }
-    }
-
-    private sealed class ImportedFeeRow
-    {
-        public int ReimbursementId { get; set; }
-        public bool IsPreviousPeriod { get; set; }
-        public decimal? TotalSum { get; set; }
-        public decimal? TotalSumWithVat { get; set; }
-        public decimal? VatPercentage { get; set; }
-    }
-
-    private sealed class ImportedDeviceRow
-    {
-        public int ReimbursementId { get; set; }
-        public string? EntityId { get; set; }
-        public string? MachineNumber { get; set; }
-        public decimal Gross { get; set; }
-        public decimal? NetAmount { get; set; }
-        public bool HasNetAmount { get; set; }
-    }
-
-    private sealed class ImportedPaymentRow
-    {
-        public int ReimbursementId { get; set; }
-        public string? EntityId { get; set; }
-        public string? PaymentMethodDescription { get; set; }
-        public string? RecognitionDescription { get; set; }
-        public decimal Amount { get; set; }
-        public decimal Fees { get; set; }
-        public int Count { get; set; }
-    }
-
-    private sealed class ImportedReportRow
-    {
-        public int Id { get; set; }
-        public decimal Settlement { get; set; }
-        public decimal NetSettlement { get; set; }
-        public bool HasImportedTotal { get; set; }
-        public decimal FeesExGst { get; set; }
-        public decimal FeesIncludingGst { get; set; }
-        public decimal Gst { get; set; }
-        public DateTime? PayoutDate { get; set; }
-        public bool HasNet { get; set; }
-        public bool HasGst { get; set; }
-        public List<ImportedReportDevice> Devices { get; set; } = new();
-    }
-
-    private sealed class ImportedReportDevice
-    {
-        public string? EntityId { get; set; }
-        public string? MachineNumber { get; set; }
-        public decimal Gross { get; set; }
-        public decimal? NetAmount { get; set; }
-        public List<ImportedPaymentNet> Payments { get; set; } = new();
-    }
-
-    private readonly record struct MachineCommission(decimal Percent, decimal Due, bool IsComplete = false);
-    private sealed record CommissionResolutionResult(
-        IReadOnlyDictionary<long, MachineCommission> Machines,
-        bool IsComplete,
-        bool HasConfigurationGap,
-        bool HasOverlap,
-        bool HasMissingSiteMapping,
-        bool UsesMultipleRates,
-        IReadOnlyList<string> Warnings);
-    private readonly record struct SalesPaymentSummary(
-        decimal GrossSales,
-        int Transactions,
-        decimal CardSales,
-        int CardTransactions,
-        decimal CashSales,
-        int CashTransactions,
-        decimal UnknownSales,
-        int UnknownTransactions);
-    private readonly record struct ReceiptCostSummary(decimal Delivery, decimal Package)
-    {
-        public decimal Total => Delivery + Package;
-    }
-
-    private readonly record struct ImportedPaymentNet(
-        string? PaymentMethodDescription,
-        string? RecognitionDescription,
-        decimal Amount,
-        decimal Fees,
-        int Count = 1);
-
-    private readonly record struct ImportedSummary(
-        decimal Settlement,
-        decimal FeesExGst,
-        decimal FeesIncludingGst,
-        decimal GstOnFees,
-        decimal NetSettlement,
-        bool ContainsRows,
-        bool ContainsGstClassification,
-        bool HasNetSettlement,
-        bool MachineFilterMatched,
-        DateTime? PayoutDate = null,
-        int CardTransactionCount = 0,
-        bool FeesMachineFilterLimited = false);
 }

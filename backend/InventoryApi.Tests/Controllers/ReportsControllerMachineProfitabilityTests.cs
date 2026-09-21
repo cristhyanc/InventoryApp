@@ -2,6 +2,7 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using Inventory.Application.Reporting.Bookkeeping;
+using Inventory.Application.Reporting.Dashboard;
 using Inventory.Application.Reporting.Daily;
 using Inventory.Application.Reporting.Gst;
 using Inventory.Application.Reporting.MachineProfitability;
@@ -11,6 +12,7 @@ using Inventory.Application.Reporting.Shared;
 using InventoryApi.Controllers;
 using InventoryApi.Services.Interfaces;
 using InventoryApi.Tests.Application.Reporting.Bookkeeping;
+using InventoryApi.Tests.Application.Reporting.Dashboard;
 using InventoryApi.Tests.Application.Reporting.Daily;
 using InventoryApi.Tests.Application.Reporting.Gst;
 using InventoryApi.Tests.Application.Reporting.MachineProfitability;
@@ -33,9 +35,12 @@ public class ReportsControllerMachineProfitabilityTests
         var reconciliationUseCase = new GetReconciliationReport(new FakeReconciliationReportFactsProvider(FakeReconciliationReportFactsProvider.SinglePeriod()));
         var productProfitabilityUseCase = new GetProductProfitabilityReport(new FakeProductProfitabilityReportFactsProvider(FakeProductProfitabilityReportFactsProvider.Empty()));
         var gstUseCase = new GetGstAccountingAid(bookkeepingUseCase, new FakeGstReportFactsProvider(FakeGstReportFactsProvider.Complete()));
+        var dashboardUseCase = new GetDashboardReport(bookkeepingUseCase,
+            new FakeGetProductProfitabilityReport(new ProductProfitabilityReportDto(default, default, [], new ReportingDataQualityDto())),
+            new FakeDashboardReportFactsProvider(FakeDashboardReportFactsProvider.Complete()));
         var legacyService = new Mock<IReportingService>(MockBehavior.Strict);
         var controller = new ReportsController(legacyService.Object, bookkeepingUseCase, dailyUseCase, reconciliationUseCase,
-            useCase, productProfitabilityUseCase, gstUseCase);
+            useCase, productProfitabilityUseCase, gstUseCase, dashboardUseCase);
 
         var report = await controller.MachineProfitability(
             new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)), CancellationToken.None);

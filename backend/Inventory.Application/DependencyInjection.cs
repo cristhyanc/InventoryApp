@@ -1,5 +1,6 @@
 using Inventory.Application.NayaxFeeSettings;
 using Inventory.Application.Reporting.Bookkeeping;
+using Inventory.Application.Reporting.Dashboard;
 using Inventory.Application.Reporting.Daily;
 using Inventory.Application.Reporting.Gst;
 using Inventory.Application.Reporting.MachineProfitability;
@@ -21,7 +22,9 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<GetReconciliationReport>();
         services.AddScoped<GetMachineProfitabilityReport>();
         services.AddScoped<GetProductProfitabilityReport>();
+        services.AddScoped<IGetProductProfitabilityReport>(sp => sp.GetRequiredService<GetProductProfitabilityReport>());
         services.AddScoped<GetGstAccountingAid>();
+        services.AddScoped<GetDashboardReport>();
 
         return services;
     }

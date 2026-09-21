@@ -6,6 +6,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Inventory.Application.Reporting.Bookkeeping;
+using Inventory.Application.Reporting.Dashboard;
 using Inventory.Application.Reporting.Daily;
 using Inventory.Application.Reporting.Gst;
 using Inventory.Application.Reporting.MachineProfitability;
@@ -275,9 +276,11 @@ public class NayaxHistoricalCostTests
         var getMachineProfitabilityReport = new GetMachineProfitabilityReport(new EfMachineProfitabilityReportFactsProvider(db, nayaxFees, siteCommissions));
         var getProductProfitabilityReport = new GetProductProfitabilityReport(new EfProductProfitabilityReportFactsProvider(db));
         var getGstAccountingAid = new GetGstAccountingAid(getBookkeepingReport, new EfGstReportFactsProvider(db));
-        var csv = Encoding.UTF8.GetString(await new ReportingService(db, nayaxFees,
-            siteCommissions, getBookkeepingReport, getDailyReport, getReconciliationReport,
-            getMachineProfitabilityReport, getProductProfitabilityReport, getGstAccountingAid).ExportCsvAsync(
+        var getDashboardReport = new GetDashboardReport(getBookkeepingReport, getProductProfitabilityReport,
+            new EfDashboardReportFactsProvider(db, siteCommissions));
+        var csv = Encoding.UTF8.GetString(await new ReportingService(db,
+            getBookkeepingReport, getDailyReport, getReconciliationReport,
+            getMachineProfitabilityReport, getProductProfitabilityReport, getGstAccountingAid, getDashboardReport).ExportCsvAsync(
             "transactions",
             new Inventory.Application.Reporting.Transactions.TransactionSalesFilterDto(
                 From: new DateTime(2026, 9, 2), To: new DateTime(2026, 9, 2))));

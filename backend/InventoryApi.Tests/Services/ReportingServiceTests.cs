@@ -6,6 +6,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Inventory.Application.Reporting.Bookkeeping;
+using Inventory.Application.Reporting.Dashboard;
 using Inventory.Application.Reporting.Daily;
 using Inventory.Application.Reporting.Gst;
 using Inventory.Application.Reporting.MachineProfitability;
@@ -55,8 +56,10 @@ public class ReportingServiceTests
         var getMachineProfitabilityReport = new GetMachineProfitabilityReport(new EfMachineProfitabilityReportFactsProvider(db, nayaxFees, siteCommissions));
         var getProductProfitabilityReport = new GetProductProfitabilityReport(new EfProductProfitabilityReportFactsProvider(db));
         var getGstAccountingAid = new GetGstAccountingAid(getBookkeepingReport, new EfGstReportFactsProvider(db));
-        return new ReportingService(db, nayaxFees, siteCommissions, getBookkeepingReport, getDailyReport, getReconciliationReport,
-            getMachineProfitabilityReport, getProductProfitabilityReport, getGstAccountingAid, nayaxLynxClient);
+        var getDashboardReport = new GetDashboardReport(getBookkeepingReport, getProductProfitabilityReport,
+            new EfDashboardReportFactsProvider(db, siteCommissions));
+        return new ReportingService(db, getBookkeepingReport, getDailyReport, getReconciliationReport,
+            getMachineProfitabilityReport, getProductProfitabilityReport, getGstAccountingAid, getDashboardReport, nayaxLynxClient);
     }
 
     [Fact]
@@ -241,8 +244,11 @@ public class ReportingServiceTests
         services.AddScoped<IProductProfitabilityReportFactsProvider, EfProductProfitabilityReportFactsProvider>();
         services.AddScoped<GetProductProfitabilityReport>();
         services.AddScoped<IGetBookkeepingReport>(sp => sp.GetRequiredService<GetBookkeepingReport>());
+        services.AddScoped<IGetProductProfitabilityReport>(sp => sp.GetRequiredService<GetProductProfitabilityReport>());
         services.AddScoped<IGstReportFactsProvider, EfGstReportFactsProvider>();
         services.AddScoped<GetGstAccountingAid>();
+        services.AddScoped<IDashboardReportFactsProvider, EfDashboardReportFactsProvider>();
+        services.AddScoped<GetDashboardReport>();
         services.AddScoped<IReportingService, ReportingService>();
 
         using var provider = services.BuildServiceProvider();
