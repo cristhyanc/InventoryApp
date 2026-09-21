@@ -17,13 +17,14 @@ namespace InventoryApi.Adapters.Persistence;
 /// shared AppDbContext and persistence models relocate there.
 ///
 /// Its completed-sale cost query and period-level imported-reimbursement summary are shared with
-/// <see cref="EfDailyReportFactsProvider"/> through <see cref="EfReportingSharedQueries"/>. Its
-/// remaining private EF query helpers (receipts, operating expenses, commissions) intentionally
-/// mirror equivalent private helpers still used by the other, not-yet-migrated report families in
-/// <see cref="InventoryApi.Services.ReportingService"/> (reconciliation, machine/product
-/// profitability, GST, dashboard). They are query mechanics, not financial formulas, and will be
-/// de-duplicated as those report families are migrated in their own issues (see the reporting
-/// migration track in docs/architecture.md).
+/// <see cref="EfDailyReportFactsProvider"/> and <see cref="EfReconciliationReportFactsProvider"/>
+/// through <see cref="EfReportingSharedQueries"/>. Its remaining private EF query helpers
+/// (receipts, operating expenses, commissions) intentionally mirror equivalent private helpers
+/// still used by the other, not-yet-migrated report families in
+/// <see cref="InventoryApi.Services.ReportingService"/> (machine/product profitability, GST,
+/// dashboard). They are query mechanics, not financial formulas, and will be de-duplicated as
+/// those report families are migrated in their own issues (see the reporting migration track in
+/// docs/architecture.md).
 /// </summary>
 public sealed class EfBookkeepingReportFactsProvider : IBookkeepingReportFactsProvider
 {

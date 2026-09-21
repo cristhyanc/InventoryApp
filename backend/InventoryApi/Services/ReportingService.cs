@@ -29,10 +29,12 @@ public sealed class ReportingService : IReportingService
     private readonly ISiteCommissionService _siteCommissions;
     private readonly GetBookkeepingReport _getBookkeepingReport;
     private readonly GetDailyReport _getDailyReport;
+    private readonly GetReconciliationReport _getReconciliationReport;
 
     public ReportingService(AppDbContext db, INayaxProcessingFeeService nayaxProcessingFees,
         ISiteCommissionService siteCommissions, GetBookkeepingReport getBookkeepingReport,
-        GetDailyReport getDailyReport, INayaxLynxClient? nayaxLynxClient = null)
+        GetDailyReport getDailyReport, GetReconciliationReport getReconciliationReport,
+        INayaxLynxClient? nayaxLynxClient = null)
     {
         _db = db;
         _nayaxLynxClient = nayaxLynxClient;
@@ -40,6 +42,7 @@ public sealed class ReportingService : IReportingService
         _siteCommissions = siteCommissions;
         _getBookkeepingReport = getBookkeepingReport;
         _getDailyReport = getDailyReport;
+        _getReconciliationReport = getReconciliationReport;
     }
 
     public Task<BookkeepingReportDto> GetBookkeeping(ReportingFilterDto filter, CancellationToken cancellationToken = default) =>
@@ -63,107 +66,8 @@ public sealed class ReportingService : IReportingService
     public Task<DailyReportDto> GetDailyAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default) =>
         _getDailyReport.Handle(filter, cancellationToken);
 
-    public async Task<ReconciliationReportDto> GetReconciliationAsync(ReportingFilterDto filter, decimal tolerance = 0.01m, CancellationToken cancellationToken = default)
-    {
-        var range = ResolveRange(filter);
-        var machineId = MachineId(filter);
-        var paymentSummary = await GetPaymentSummaryAsync(range, machineId, cancellationToken);
-        var sales = await SalesQuery(range, machineId).ToListAsync(cancellationToken);
-        var statusSales = await AllSalesQuery(range, machineId).ToListAsync(cancellationToken);
-        var reimbursements = await _db.ImportedReimbursements.AsNoTracking()
-            .Where(x => x.ReimbursementStartDate.HasValue && x.ReimbursementEndDate.HasValue)
-            .Include(x => x.Devices)
-            .Include(x => x.DevicePayments)
-            .Include(x => x.PaymentMethods)
-            .Include(x => x.Fees)
-            .ToListAsync(cancellationToken);
-
-        // Reconciliation is deliberately period based: an overlapping reimbursement is not
-        // silently attributed to a different requested period.
-        var matching = reimbursements
-            .Where(x => x.ReimbursementStartDate!.Value.Date >= range.From.Date &&
-                x.ReimbursementEndDate!.Value.Date <= range.ToDate.Date)
-            .OrderBy(x => x.Id)
-            .ToList();
-        var periodRows = new List<ReconciliationPeriodDto>();
-        foreach (var reimbursement in matching)
-        {
-            var periodSales = sales.Where(x => x.MachineAuthorizationTime.Date >= reimbursement.ReimbursementStartDate!.Value.Date &&
-                x.MachineAuthorizationTime.Date <= reimbursement.ReimbursementEndDate!.Value.Date).ToList();
-            periodRows.Add(BuildReconciliationPeriod(reimbursement, periodSales, machineId, tolerance));
-        }
-
-        if (periodRows.Count == 0)
-            periodRows.Add(BuildReconciliationPeriod(null, sales, machineId, tolerance, range.From, range.ToDate));
-
-        var importedGross = periodRows.Sum(x => x.NayaxReportedGrossCardSales);
-        var grossDifference = paymentSummary.CardSales - importedGross;
-        var hasImported = matching.Count != 0;
-        var aggregateWarning = periodRows.Any(x => x.GrossStatus == "Warning" || x.SettlementStatus == "Warning") ||
-            statusSales.Any(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Pending);
-        var aggregateSettlementDifference = periodRows.Sum(x => x.SettlementDifference);
-        var grossStatus = StatusFor(!hasImported, grossDifference, tolerance, aggregateWarning);
-        var settlementStatus = StatusFor(!hasImported, aggregateSettlementDifference, tolerance, aggregateWarning);
-        var totals = new ReconciliationTotalsDto(
-            paymentSummary.GrossSales, paymentSummary.CardSales, paymentSummary.CashSales,
-            paymentSummary.CardSales, importedGross,
-            paymentSummary.CardTransactions, periodRows.Sum(x => x.NayaxReportedCardTransactionCount),
-            paymentSummary.CardTransactions - periodRows.Sum(x => x.NayaxReportedCardTransactionCount), grossDifference,
-            periodRows.Sum(x => x.ProcessingFeesExGst), periodRows.Sum(x => x.FeeGst), periodRows.Sum(x => x.OtherFees),
-            periodRows.Sum(x => x.Adjustments), periodRows.Sum(x => x.ExpectedNetReimbursement),
-            periodRows.Sum(x => x.ActualNetReimbursement), periodRows.Sum(x => x.SettlementDifference),
-            grossStatus, settlementStatus, OverallStatus(grossStatus, settlementStatus))
-        {
-            TotalTransactionCount = sales.Count,
-            CashTransactionCount = paymentSummary.CashTransactions
-        };
-
-        var actualNet = totals.ActualNetReimbursement;
-        var qualityNotes = new List<string>();
-        if (!hasImported)
-            qualityNotes.Add("No imported reimbursement row matched the requested start and end dates.");
-        if (paymentSummary.UnknownTransactions > 0)
-            qualityNotes.Add("One or more transactions have an unknown payment method.");
-        AddStatusQualityNotes(qualityNotes, statusSales);
-        if (machineId.HasValue)
-            qualityNotes.Add("Imported fees are account-level amounts and are not allocated to a selected machine.");
-        qualityNotes.Add("Adjustments are unsupported by the imported reimbursement model and are treated as zero.");
-        var quality = Quality(hasImported, periodRows.Any(x => x.DataQuality.GstClassificationMissing == false), false,
-            string.Join(" ", qualityNotes) is { Length: > 0 } note ? note : null);
-        var first = periodRows[0];
-        return new ReconciliationReportDto(range.From, range.ToDate, totals.CardTransactionSales,
-            totals.NayaxReportedGrossCardSales, grossDifference, Math.Abs(tolerance),
-            hasImported && IsReconciled(grossDifference, tolerance), quality,
-            totals.CardTransactionCount, totals.NayaxReportedCardTransactionCount, totals.CountDifference,
-            totals.ProcessingFeesExGst, actualNet, first.PayoutDate)
-        {
-            TotalVendingSales = totals.TotalVendingSales,
-            CardSales = totals.CardSales,
-            CashSales = totals.CashSales,
-            TotalTransactionCount = sales.Count,
-            CashTransactionCount = paymentSummary.CashTransactions,
-            PendingTransactionCount = statusSales.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Pending),
-            RefundedTransactionCount = statusSales.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Refunded),
-            DeclinedOrCancelledTransactionCount = statusSales.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.CancelledOrDeclined),
-            UnknownStatusTransactionCount = statusSales.Count(x => x.TransactionStatusId is not null && NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Unknown),
-            CardTransactionSales = totals.CardTransactionSales,
-            NayaxReportedGrossCardSales = totals.NayaxReportedGrossCardSales,
-            NayaxReportedCardTransactionCount = totals.NayaxReportedCardTransactionCount,
-            GrossDifference = totals.GrossDifference,
-            GrossStatus = totals.GrossStatus,
-            ProcessingFeesExGst = totals.ProcessingFeesExGst,
-            FeeGst = totals.FeeGst,
-            OtherFees = totals.OtherFees,
-            Adjustments = totals.Adjustments,
-            ExpectedNetReimbursement = totals.ExpectedNetReimbursement,
-            ActualNetReimbursement = actualNet,
-            SettlementDifference = totals.SettlementDifference,
-            SettlementStatus = totals.SettlementStatus,
-            Status = totals.Status,
-            PeriodRows = periodRows,
-            Totals = totals
-        };
-    }
+    public Task<ReconciliationReportDto> GetReconciliationAsync(ReportingFilterDto filter, decimal tolerance = 0.01m, CancellationToken cancellationToken = default) =>
+        _getReconciliationReport.Handle(filter, tolerance, cancellationToken);
 
     public async Task<MachineProfitabilityReportDto> GetMachineProfitabilityAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default)
     {
@@ -1112,123 +1016,6 @@ public sealed class ReportingService : IReportingService
                 .Sum(p => p.Count),
             true);
     }
-
-    private ReconciliationPeriodDto BuildReconciliationPeriod(
-        ImportedReimbursement? reimbursement,
-        IReadOnlyList<NayaxSales> sales,
-        long? machineId,
-        decimal tolerance,
-        DateTime? fallbackFrom = null,
-        DateTime? fallbackTo = null)
-    {
-        var totalVendingSales = sales.Sum(x => x.SettlementValue);
-        var cardSales = sales.Where(x => PaymentMethodClassifier.Classify(x.PaymentMethod) == NayaxPaymentType.Card)
-            .Sum(x => x.SettlementValue);
-        var cashSales = sales.Where(x => PaymentMethodClassifier.Classify(x.PaymentMethod) == NayaxPaymentType.Cash)
-            .Sum(x => x.SettlementValue);
-        var cardTransactionCount = sales.Count(x => PaymentMethodClassifier.Classify(x.PaymentMethod) == NayaxPaymentType.Card);
-        var hasImported = reimbursement is not null;
-        var devices = reimbursement?.Devices
-            .Where(x => !machineId.HasValue ||
-                (long.TryParse(x.MachineNumber, out var parsed) && parsed == machineId.Value))
-            .ToList() ?? new List<ImportedReimbursementDevice>();
-        var paymentRows = devices.Count == 0
-            ? (!machineId.HasValue ? reimbursement?.DevicePayments.ToList() ?? new List<ImportedDevicePayment>() : new List<ImportedDevicePayment>())
-            : reimbursement!.DevicePayments.Where(x =>
-                devices.Any(d => d.EntityId is not null && d.EntityId == x.EntityId) ||
-                (devices.Count == 1 && devices[0].EntityId is null && x.EntityId is null)).ToList();
-        var hasPaymentRows = paymentRows.Count != 0;
-        var paymentMethodRows = !machineId.HasValue
-            ? reimbursement?.PaymentMethods.Where(x => !x.IsPreviousPeriod).ToList() ?? new List<ImportedPaymentMethod>()
-            : new List<ImportedPaymentMethod>();
-        var hasAccountPaymentRows = paymentMethodRows.Count != 0;
-        var reportedGross = hasPaymentRows
-            ? paymentRows.Where(x => PaymentMethodClassifier.Classify(x.PaymentMethodDescription, x.RecognitionDescription) == NayaxPaymentType.Card)
-                .Sum(x => x.TotalSum ?? 0m)
-            : hasAccountPaymentRows
-                ? paymentMethodRows.Where(x => PaymentMethodClassifier.Classify(x.PaymentMethodDescription, x.RecognitionDescription) == NayaxPaymentType.Card)
-                    .Sum(x => x.TotalSalesSum ?? 0m)
-            : devices.Count != 0
-                ? devices.Sum(x => x.TotalBillableTransactionAmount ?? 0m)
-                : machineId.HasValue ? 0m : reimbursement?.Total ?? 0m;
-        var reportedCount = hasPaymentRows
-            ? paymentRows.Where(x => PaymentMethodClassifier.Classify(x.PaymentMethodDescription, x.RecognitionDescription) == NayaxPaymentType.Card)
-                .Sum(x => x.SalesCount ?? 1)
-            : hasAccountPaymentRows
-                ? paymentMethodRows.Where(x => PaymentMethodClassifier.Classify(x.PaymentMethodDescription, x.RecognitionDescription) == NayaxPaymentType.Card)
-                    .Sum(x => x.TotalSalesCount ?? 1)
-            : devices.Sum(x => x.TotalBillableTransactionCount ?? 0);
-
-        var fees = reimbursement?.Fees.Where(x => !x.IsPreviousPeriod).ToList() ?? new List<ImportedFee>();
-        var processingFees = fees.Where(IsProcessingFee).Sum(FeeExGst);
-        var otherFees = fees.Where(x => !IsProcessingFee(x)).Sum(FeeExGst);
-        var feeGst = fees.Sum(FeeGst);
-        var adjustments = 0m;
-        var expectedNet = reportedGross - processingFees - otherFees - feeGst - adjustments;
-        var actualNet = reimbursement?.Total ?? 0m;
-        var grossDifference = cardSales - reportedGross;
-        var settlementDifference = expectedNet - actualNet;
-        var paymentDetailMissing = hasImported && !hasPaymentRows && !hasAccountPaymentRows;
-        var warning = machineId.HasValue || paymentDetailMissing ||
-            sales.Any(x => PaymentMethodClassifier.Classify(x.PaymentMethod) == NayaxPaymentType.Unknown);
-        var grossStatus = StatusFor(!hasImported, grossDifference, tolerance, warning);
-        var settlementStatus = StatusFor(!hasImported, settlementDifference, tolerance, warning);
-        var notes = new List<string>();
-        if (!hasImported)
-            notes.Add("No imported reimbursement row matched the requested start and end dates.");
-        if (machineId.HasValue)
-            notes.Add("Imported fees are account-level amounts and are not allocated to a selected machine.");
-        if (paymentDetailMissing)
-            notes.Add("Imported card payment detail was unavailable; device or reimbursement gross was used as the card gross.");
-        if (adjustments == 0m)
-            notes.Add("Adjustments are unsupported by the imported reimbursement model and are treated as zero.");
-        var quality = Quality(hasImported, fees.Any(x => x.VatPercentage.HasValue), false,
-            string.Join(" ", notes));
-        return new ReconciliationPeriodDto(
-            reimbursement?.ReimbursementStartDate?.Date ?? fallbackFrom!.Value.Date,
-            reimbursement?.ReimbursementEndDate?.Date ?? fallbackTo!.Value.Date,
-            totalVendingSales, cardSales, cashSales, cardSales, reportedGross,
-            cardTransactionCount, reportedCount, cardTransactionCount - reportedCount,
-            grossDifference, grossStatus, processingFees, feeGst, otherFees, adjustments,
-            expectedNet, actualNet, settlementDifference, settlementStatus,
-            OverallStatus(grossStatus, settlementStatus), reimbursement?.ReimbursementPayoutDate, quality)
-        {
-            TotalTransactionCount = sales.Count,
-            CashTransactionCount = sales.Count(x => PaymentMethodClassifier.Classify(x.PaymentMethod) == NayaxPaymentType.Cash)
-        };
-    }
-
-    private static bool IsProcessingFee(ImportedFee fee) =>
-        (fee.FeesTypeId ?? string.Empty).Contains("processing", StringComparison.OrdinalIgnoreCase) ||
-        (fee.FeeTypeDescription ?? string.Empty).Contains("processing", StringComparison.OrdinalIgnoreCase);
-
-    private static decimal FeeGst(ImportedFee fee)
-    {
-        if (fee.TotalSumWithVat.HasValue && fee.TotalSum.HasValue)
-            return fee.TotalSumWithVat.Value - fee.TotalSum.Value;
-        if (fee.TotalSumWithVat.HasValue && fee.VatPercentage.HasValue)
-            return fee.TotalSumWithVat.Value * fee.VatPercentage.Value / (100m + fee.VatPercentage.Value);
-        return 0m;
-    }
-
-    private static decimal FeeExGst(ImportedFee fee) =>
-        fee.TotalSum ?? (fee.TotalSumWithVat.HasValue ? fee.TotalSumWithVat.Value - FeeGst(fee) : 0m);
-
-    // Delegates to the shared Domain policy so daily and reconciliation call one authoritative
-    // reconciliation-status implementation instead of duplicating it; see ReconciliationStatusPolicy.
-    private static bool IsReconciled(decimal difference, decimal tolerance) =>
-        ReconciliationStatusPolicy.IsReconciled(difference, tolerance);
-
-    private static string StatusFor(bool pending, decimal difference, decimal tolerance, bool warning) =>
-        ReconciliationStatusPolicy.StatusFor(pending, difference, tolerance, warning);
-
-    private static string StatusFor(bool pending, bool mismatch, bool warning) =>
-        pending ? "Pending" : mismatch ? "Mismatch" : warning ? "Warning" : "Reconciled";
-
-    private static string OverallStatus(string grossStatus, string settlementStatus) =>
-        grossStatus == "Mismatch" || settlementStatus == "Mismatch" ? "Mismatch" :
-        grossStatus == "Pending" || settlementStatus == "Pending" ? "Pending" :
-        grossStatus == "Warning" || settlementStatus == "Warning" ? "Warning" : "Reconciled";
 
     private async Task<CommissionResolutionResult> GetMachineCommissionsAsync(DateRange range, long? machineId, CancellationToken cancellationToken)
     {

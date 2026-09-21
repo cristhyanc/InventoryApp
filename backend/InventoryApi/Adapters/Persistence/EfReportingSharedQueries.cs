@@ -6,16 +6,17 @@ using Microsoft.EntityFrameworkCore;
 namespace InventoryApi.Adapters.Persistence;
 
 /// <summary>
-/// Temporary EF Core query helpers shared by the migrated bookkeeping and daily report facts
-/// providers (<see cref="EfBookkeepingReportFactsProvider"/>, <see cref="EfDailyReportFactsProvider"/>).
+/// Temporary EF Core query helpers shared by the migrated bookkeeping, daily, and reconciliation
+/// report facts providers (<see cref="EfBookkeepingReportFactsProvider"/>,
+/// <see cref="EfDailyReportFactsProvider"/>, <see cref="EfReconciliationReportFactsProvider"/>).
 /// They depend on <see cref="AppDbContext"/> and live in InventoryApi for the same reason those
 /// adapters do; move into Inventory.Infrastructure once AppDbContext and the shared persistence
 /// models relocate there.
 ///
 /// The still-legacy <see cref="InventoryApi.Services.ReportingService"/> keeps its own equivalent
-/// private helpers for the report families that have not migrated yet (reconciliation,
-/// machine/product profitability, GST, dashboard, transactions); de-duplicating those is out of
-/// scope until each family migrates (see the reporting migration track in docs/architecture.md).
+/// private helpers for the report families that have not migrated yet (machine/product
+/// profitability, GST, dashboard, transactions); de-duplicating those is out of scope until each
+/// family migrates (see the reporting migration track in docs/architecture.md).
 /// </summary>
 internal static class EfReportingSharedQueries
 {
