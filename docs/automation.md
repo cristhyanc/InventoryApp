@@ -44,7 +44,7 @@ The target lifecycle for one automated change is:
 13. A separate release pull request from `develop` to `main` controls production deployment.
 14. Production deployment and any production migration remain human-controlled.
 
-Today: steps 1–3 are human. Steps 4–7 are performed by the Claude Code implementation workflow (`agent-implement.yml`) when a human applies `agent-ready`. Step 8 is `validate.yml`; because the agent opens the pull request with the workflow token, its run waits for a human to click "Approve workflows to run" (see [Workflow-token behaviour](#workflow-token-behaviour)). Step 9 is the Claude Code review workflow (`agent-review.yml`), which a human requests by applying `agent-review` to the pull request and which posts a comment-only review with an explicit verdict line, followed by human review. Step 10 exists only as a human-invoked repair (`agent-repair.yml`, started by an `@claude repair` comment); the two-attempt limit is counted by the human, not by a workflow. Step 11 is partly automatic (the implementation workflow labels the issue `agent-blocked` when its run ends without a pull request) and otherwise human. Steps 12–14 are human.
+Today: steps 1–3 are human. Steps 4–7 are performed by the Claude Code implementation workflow (`agent-implement.yml`) when a human applies `agent-ready`. For step 8, the implementation workflow's separate dispatcher job verifies the resulting PR and invokes the trusted `validate.yml` from `main` for the exact current head SHA; validation publishes the stable `agent-validation` commit status. For step 9, a human still requests the initial Claude Code review by applying `agent-review` to the pull request. Step 10 exists only as a human-invoked repair (`agent-repair.yml`, started by an `@claude repair` comment); the two-attempt limit is counted by the human, not by a workflow. When a repair actually pushes a new head, its separate dispatcher invokes exact-SHA validation, and successful validation dispatches a fresh review only while the human-applied `agent-review` label remains present. Step 11 is partly automatic (the implementation workflow labels the issue `agent-blocked` when its run ends without a pull request) and otherwise human. Steps 12–14 are human.
 
 ## Current repository behaviour
 
@@ -54,11 +54,14 @@ This section is derived from the triggers, conditions, and jobs in `.github/work
 
 `.github/workflows/validate.yml` ("Validate pull request"):
 
-- Triggers on `pull_request` events whose base branch is `develop` or `main`, and on manual `workflow_dispatch`.
-- Runs one job, **"Backend tests and frontend build"**, which checks out the repository, installs .NET 10 and Node.js 20, and runs `bash scripts/validate.sh`.
+- Triggers on `pull_request` events whose base branch is `develop` or `main`, and on `workflow_dispatch` with required `pr_number` and `head_sha` inputs plus an optional `dispatch_review` boolean.
+- For a normal `pull_request` event, preserves merge-result validation. For a dispatch, the trusted workflow definition runs from `main`, verifies that the PR is open, non-draft, targets `develop`, is authored by `github-actions[bot]`, has a same-repository `agent/issue-*` branch, still has the supplied exact head SHA, and does not change `.github/workflows/**`; it then checks out only that SHA.
+- Publishes a stable `agent-validation` commit status on same-repository PR heads, linked to the run. The status is `pending` before validation and `success` or `failure` afterward.
+- Runs **"Backend tests and frontend build"** in a separate job with only `contents: read`, `persist-credentials: false`, and no Anthropic or deployment secret. It installs .NET 10 and Node.js 20, runs `node scripts/validate-agent-workflows.mjs` to enforce the dispatcher/permission/guard contract, and then runs `bash scripts/validate.sh`.
 - `scripts/validate.sh` and `scripts/validate.ps1` perform the same steps: `dotnet restore`, `dotnet build --configuration Release`, `dotnet test`, `npm ci`, and `npm run build` for the Angular application. The frontend has no configured test or lint script; its gate is the production build.
-- Has `contents: read` permission only and does not deploy anything.
-- Cancels an in-progress run for the same pull request when a new run starts.
+- When a dispatched repair validation succeeds with `dispatch_review: true`, a separate job with `actions: write` and no checkout reverifies the current SHA and guards, requires `agent-review`, and dispatches `agent-review.yml` from `main`.
+- Concurrency is scoped by PR number; a newer run for the same PR cancels older work without cancelling another PR's validation.
+- Does not approve, merge, release, deploy, change labels, or start a repair.
 
 ### Push to `develop`
 
@@ -85,10 +88,12 @@ A merge of a pull request into `main` is a push to `main` and triggers two deplo
 `.github/workflows/agent-implement.yml` ("Agent implementation"):
 
 - Triggers only on `issues` / `labeled`, and its single job runs only when the added label is `agent-ready` (and the entity is an issue, not a pull request). No other event, comment, mention, or label starts it. Like every `issues`-triggered workflow, GitHub runs the copy on the default branch (`main`).
-- Job permissions: `contents: write`, `pull-requests: write`, `issues: write`. Nothing else; no `id-token`, no `actions: write`.
+- The implementation job permissions remain `contents: write`, `pull-requests: write`, and `issues: write`. It has no `actions: write` and cannot dispatch a workflow.
 - Checks out `develop` at its latest commit, installs .NET 10 and Node.js 20, and moves the issue from `agent-ready` to `agent-working`.
 - Runs Claude Code with a fixed prompt that requires it to read the issue, restate the acceptance criteria and exclusions, create `agent/issue-<n>-<slug>` from the checked-out `develop`, make the smallest change with tests, run `bash scripts/validate.sh`, push that branch only, and open one pull request targeting `develop` using the pull request template. Tool permissions enforce the same limits: file edits, `dotnet`, `npm --prefix frontend/inventory-app`, `bash scripts/validate.sh`, read-only `git`, `git add`/`commit`, `git checkout -b agent/issue-<n>-*`, `git push -u origin agent/issue-<n>-*`, `gh issue view`/`comment`, and `gh pr create`/`view`/`list`. Force pushes, resets, rebases, switching to `develop`/`main`, `gh pr merge`/`review`/`edit`, `gh issue edit`, `gh api`, `gh workflow`, `gh run`, and web access are denied.
-- When the Claude step succeeds and an open pull request targeting `develop` from an `agent/issue-<n>-*` branch exists, the workflow moves the issue to `agent-review` and comments with the pull request link. When the step fails or no such pull request exists, it moves the issue to `agent-blocked` and comments with the run link. A cancelled (superseded) run only comments.
+- When the Claude step succeeds and a verified open pull request targeting `develop` from an `agent/issue-<n>-*` branch exists, the implementation job outputs its PR number and exact head SHA, moves the issue to `agent-review`, and comments with the pull request link. When the step fails or no verified PR/head exists, it moves the issue to `agent-blocked` and comments with the run link. A cancelled (superseded) run only comments.
+- A separate `dispatch-validation` job has `actions: write` and `pull-requests: read`, but no checkout and no Anthropic or deployment secret. It reverifies the open, non-draft, same-repository, bot-authored `agent/issue-*` PR, exact current SHA, `develop` base, and workflow-file exclusion, then dispatches `validate.yml` from trusted `main` with `dispatch_review: false`.
+- The workflow does not apply `agent-review` to the pull request. After `agent-validation` succeeds, a human applies that label to request the initial independent review.
 - Concurrency group `agent-implement-issue-<n>` with `cancel-in-progress: true`: re-applying `agent-ready` while a run is in progress cancels the older run.
 - Does not merge, deploy, apply `agent-ready`, or push to `develop` or `main`.
 
@@ -96,12 +101,13 @@ A merge of a pull request into `main` is a push to `main` and triggers two deplo
 
 `.github/workflows/agent-review.yml` ("Agent review"):
 
-- Triggers only on `pull_request` events `labeled`, `synchronize`, and `ready_for_review` for pull requests whose base branch is `develop`. The job additionally requires that the pull request is not a draft, carries `agent-review`, comes from a branch in this repository, and, for `labeled`, that the label just added is `agent-review`. A human applies `agent-review` to the pull request to request a review; pushes to a labelled pull request re-run it.
-- Job permissions: `contents: read`, `pull-requests: write`, `issues: read`, `actions: read`, `checks: read`, `statuses: read`. It cannot push, cannot change labels, and cannot approve or merge. The action is given `allowed_bots: "github-actions[bot]"` so that a run whose triggering actor is the workflow token (a `synchronize` event after an automated repair push, once a human has approved the run) is accepted; the run itself still only starts after that human approval.
-- Checks out the pull request's current head SHA and passes that SHA into the prompt. Every run is a fresh review of that SHA; it is instructed to disregard earlier review rounds except to check that earlier findings are resolved.
+- Triggers on `pull_request` events `labeled`, `synchronize`, and `ready_for_review` for pull requests whose base branch is `develop`, and on `workflow_dispatch` with required `pr_number` and `head_sha` inputs. For a `pull_request` event, the context job requires a non-draft, same-repository PR carrying `agent-review`; for `labeled`, the label just added must be `agent-review`. A human applies `agent-review` to request the initial review.
+- A dispatched post-repair review uses the trusted workflow from `main` and additionally requires an open, non-draft, bot-authored, same-repository `agent/issue-*` PR targeting `develop`, the supplied current head SHA, the existing `agent-review` label, no `.github/workflows/**` change, and a successful latest `agent-validation` status on that exact SHA.
+- Review-job permissions are `contents: read`, `pull-requests: write`, `issues: read`, `actions: read`, `checks: read`, and `statuses: read`. It cannot push, change labels, approve, or merge. The action is given `allowed_bots: "github-actions[bot]"` so it accepts the trusted post-validation dispatch created with the workflow token.
+- The context job resolves one PR number, base, and exact head SHA. The review job checks out that SHA with persisted credentials disabled and passes it into the prompt. Every run is a fresh review of that SHA; it is instructed to disregard earlier review rounds except to check that earlier findings are resolved.
 - The prompt requires it to read `CLAUDE.md`, `AGENTS.md`, this document, `docs/architecture.md` where relevant, the pull request and its diff, the linked issue's acceptance criteria and exclusions, the pull request's validation evidence, and the actual CI state, then evaluate requirements, invariants, architecture, tests, evidence, hygiene, and risk classification.
 - It may post inline comments and exactly one review, always submitted with `gh pr review --comment`. The review body starts with the head SHA and exactly one verdict line, `VERDICT: CHANGES REQUESTED` or `VERDICT: READY FOR HUMAN REVIEW`, followed by the numbered blockers (or `Blockers: none`), the acceptance-criteria checklist, non-blocking suggestions, and the validation evidence confirmed. It never uses `--approve` or `--request-changes`: agent pull requests are authored by `github-actions[bot]`, and GitHub rejects approve/request-changes reviews from a pull request's own author, so the verdict line carries the outcome. Tool permissions allow only `gh pr review --comment`, inline comments, read-only `gh`/`git` commands, and the CI log tools; `gh pr review --approve`/`--request-changes`, `gh pr comment`, file editing, `git push`/`commit`, `gh pr merge`/`edit`, label changes, `gh api`, and web access are denied. Human approval and branch protection remain the merge gate.
-- Concurrency group `agent-review-pr-<n>` with `cancel-in-progress: true`: a newer head cancels a review of an older head.
+- Concurrency group `agent-review-pr-<n>` with `cancel-in-progress: true` covers both event and dispatched runs: a newer review for the same PR cancels an older one.
 - It does not use the multi-agent code-review plugin.
 
 ### Repair workflow
@@ -109,27 +115,31 @@ A merge of a pull request into `main` is a push to `main` and triggers two deplo
 `.github/workflows/agent-repair.yml` ("Agent repair"):
 
 - Triggers only on `issue_comment` / `created`. The job runs only when the comment is on an open pull request that carries `agent-review`, the comment body starts with `@claude repair`, and the commenter is the repository owner (`github.event.comment.user.login == github.repository_owner`; the owner/member/collaborator association check is kept as well). Widening this to other collaborators is a deliberate later change. Before checking anything out it verifies through the API that the pull request targets `develop`, is not a draft, and that its head branch is in this repository and is not `develop` or `main`.
-- Job permissions: `contents: write`, `pull-requests: write`, `issues: write`, `actions: read`, `checks: read`, `statuses: read`.
+- The repair job permissions remain `contents: write`, `pull-requests: write`, `issues: write`, `actions: read`, `checks: read`, and `statuses: read`. It has no `actions: write`.
 - Checks out the pull request's head branch, installs .NET 10 and Node.js 20, and runs Claude Code with the human's request comment, the review findings, and the CI state as input. Tool permissions allow file edits, validation and build commands, `git add`/`commit`, and `git push origin <that head branch>` only; force pushes, `git checkout`/`switch`/`rebase`/`merge`, `gh pr create`/`merge`/`review`/`edit`, label changes, and `gh api` are denied.
-- Always posts a closing comment on the pull request with the outcome and the human next steps. The comment compares the pull request head SHA recorded before the run with the head SHA after it: if the head changed, it reports the old and new SHA and that the `synchronize` event (caused by a push made with the workflow token) has queued `validate.yml` and `agent-review.yml` until a human clicks "Approve workflows to run"; if the head is unchanged (the agent failed, was cancelled, ran out of budget, or stopped without committing), it states that no commit was pushed and no workflow runs were queued; if either SHA cannot be read, it says so and asks the human to inspect the commits, checks, and run log instead of claiming a push.
+- Always posts a closing comment on the pull request with the outcome and human next steps. It compares the starting and ending head SHAs. When the head changed, it outputs the new SHA for a follow-up job; when unchanged or unverifiable, it does not dispatch validation or review and does not claim that it did.
+- A separate `dispatch-validation` job has `actions: write` and `pull-requests: read`, but no checkout and no Anthropic or deployment secret. It reverifies the open, non-draft, bot-authored, same-repository `agent/issue-*` PR, exact current SHA, `develop` base, existing `agent-review` label, and workflow-file exclusion, then dispatches `validate.yml` from trusted `main` with `dispatch_review: true`. Validation dispatches review only after it succeeds.
 - **Repair counting is human-controlled.** The workflow does not count attempts and never starts on its own. The human who comments `@claude repair` is responsible for the two-attempt limit in the [failure and retry policy](#failure-and-retry-policy) and for labelling the issue `agent-blocked` after the second failed attempt.
 - Concurrency group `agent-repair-pr-<n>` with `cancel-in-progress: true`.
 
 ### Credentials used by the agent workflows
 
 - **Anthropic:** all three workflows authenticate to Anthropic with the repository secret `CLAUDE_CODE_OAUTH_TOKEN` (a long-lived Claude Code OAuth token) through the action's `claude_code_oauth_token` input. Implementation and review are permitted to share this billing credential; see [Shared billing credential, separate invocations](#shared-billing-credential-separate-invocations).
-- **GitHub:** all three workflows pass the job-scoped `GITHUB_TOKEN` explicitly through the action's `github_token` input. Each job declares the minimum permissions listed above, so the token an agent operates with is exactly the job's permissions and expires when the job ends. The workflows do not request `id-token: write` and do not use the Claude GitHub App's installation token, a personal access token, or any Azure credential.
+- **GitHub:** all three agent workflows pass the job-scoped `GITHUB_TOKEN` explicitly through the action's `github_token` input. Each job declares the minimum permissions listed above, so the token an agent operates with is exactly the job's permissions and expires when the job ends. The Claude implementation and repair jobs do not receive `actions: write`; only their separate, no-checkout dispatcher jobs do. In `validate.yml`, status publication and review dispatch are likewise isolated from the read-only job that checks out and executes PR code. The workflows do not request `id-token: write` and do not use the Claude GitHub App's installation token, a personal access token, or any Azure credential.
 - **Pinned actions:** every third-party action in the agent workflows is pinned to a full commit SHA with the corresponding release tag in a comment: `anthropics/claude-code-action` v1.0.231, `actions/checkout` v4.4.0, `actions/setup-dotnet` v4.3.1, `actions/setup-node` v4.4.0.
 
 ### Workflow-token behaviour
 
-The agent workflows act on GitHub with the job-scoped `GITHUB_TOKEN`. GitHub treats activity created with that token differently from human activity, and the lifecycle depends on it:
+The agent workflows act on GitHub with the job-scoped `GITHUB_TOKEN`. GitHub treats activity created with that token differently from human activity:
 
-- A pull request `opened`, `synchronize`, or `reopened` event caused by the workflow token **does create** the corresponding `pull_request` workflow runs, but they are held until a human opens the pull request and clicks **"Approve workflows to run"**. So: when the implementation workflow opens a pull request, `validate.yml` is queued for approval; when the repair workflow pushes, the `synchronize` event queues `validate.yml` and, if the pull request carries `agent-review`, `agent-review.yml` for approval.
-- Other token-generated pull request activity, such as labels added by a workflow, does **not** create another workflow run. That is why the implementation workflow never labels the pull request: for the initial review a human applies `agent-review` to the pull request (or removes and re-applies it to request another review of the same head).
+- A pull request `opened`, `synchronize`, or `reopened` event caused by the workflow token creates the corresponding `pull_request` workflow runs in an approval-required state. Those duplicate event-driven runs may remain visible on the PR.
+- `workflow_dispatch` is an explicit exception: a job with `actions: write` may create the trusted run without a human clicking **"Approve workflows to run"**. InventoryApp uses that exception only from no-checkout dispatcher jobs after verifying the PR number, current head SHA, base, author, head repository/branch, and workflow-file exclusion.
+- The dispatched workflow definition always comes from `main`. The validation job then checks out the separately verified PR SHA with a read-only token and persisted credentials disabled.
+- The `agent-validation` status linked to the dispatched run is the authoritative exact-SHA validation result for a bot-created or bot-updated PR. An approval-required duplicate run is not evidence that the dispatched validation failed and does not need to be approved when that exact-SHA status exists.
+- Other token-generated pull request activity, such as labels added by a workflow, does not create another workflow run. The implementation workflow never labels the pull request: a human applies `agent-review` to request the initial review.
 - Labels the implementation workflow applies to the *issue* are state bookkeeping only and start nothing.
 
-The human's normal path is therefore: approve the queued runs, read the validation result, apply `agent-review`, read the verdict, decide. Closing and reopening the pull request is not part of the normal flow. This is a deliberate trade-off: it keeps every agent credential job-scoped and short-lived, and it keeps a human between each automated step. Replacing the workflow token with a GitHub App or personal token would remove the approval step and is a credential change requiring its own reviewed pull request.
+The human's normal initial path is therefore: wait for `agent-validation`, apply `agent-review`, read the verdict, and decide. After a human-authorised repair pushes a new head, validation and the already-authorised fresh review run automatically; no repair or merge is started automatically. No PAT, GitHub App credential, or long-lived GitHub secret is introduced.
 
 ### Which workflows can deploy
 
@@ -229,7 +239,7 @@ Its result is advisory. A human still reviews and decides whether to merge.
 
 The implementation and review workflows **may share the Anthropic billing credential** (`CLAUDE_CODE_OAUTH_TOKEN`). Independence is provided by separation of invocation, context, and authority, not by separate Anthropic accounts:
 
-- **Separate invocations:** implementation and review are different workflows started by different human actions (`agent-ready` on an issue; `agent-review` on a pull request). One never starts the other.
+- **Separate invocations:** implementation and review are different workflows with separate runs, working trees, prompts, and tokens. A human starts implementation with `agent-ready` and requests the initial review with `agent-review`; after a human starts a repair, successful exact-SHA validation may dispatch another independent review under that existing label.
 - **Separate contexts:** each run has its own checkout, prompt, conversation, and tool configuration. The reviewer receives the head SHA, the pull request, and the issue, not the implementation agent's transcript or reasoning.
 - **Separate, job-scoped GitHub permissions:** the implementation job has write access to contents, pull requests, and issues; the review job has read-only access to code and may only comment or review. Each job passes its own `GITHUB_TOKEN`, scoped to those permissions and expiring with the job.
 
@@ -237,7 +247,7 @@ The Anthropic credential only meters usage; it grants no authority over the repo
 
 ### CI
 
-CI (`validate.yml`) validates pull requests independently of the agent's own validation run. It reports status; it does not merge, deploy, or apply labels. See [Workflow-token behaviour](#workflow-token-behaviour) for when a human must approve its run.
+CI (`validate.yml`) validates pull requests independently of the agent's own validation run and publishes `agent-validation` on the exact head SHA. For a successful repair validation it may dispatch the already-authorised review, but it does not modify code or labels, start a repair, approve, merge, release, or deploy.
 
 ### Deployment workflows
 
@@ -251,7 +261,7 @@ The labels below exist in the repository's label settings, where a human created
 | --- | --- | --- |
 | `agent-ready` | A human has reviewed the issue, confirmed the acceptance criteria are complete and testable, and authorises an implementation agent to start. Applying it starts `agent-implement.yml`. | **Human only** |
 | `agent-working` | An implementation agent has started and owns a feature branch for this issue. | `agent-implement.yml`, at the start of its run (replaces `agent-ready`) |
-| `agent-review` | On an **issue**: a pull request is open and awaiting independent review. On a **pull request**: a human requests the independent review; `agent-review.yml` runs for the current head and again on later pushes while the label is present (a run queued by an automated repair push starts after a human approves it), and `agent-repair.yml` accepts the repository owner's `@claude repair` comments. | Issue: `agent-implement.yml` when its run ends with an open PR. Pull request: **human only** |
+| `agent-review` | On an **issue**: a pull request is open and awaiting independent review. On a **pull request**: a human requests the initial independent review and authorises fresh review after any later human-requested repair. `agent-repair.yml` accepts the repository owner's `@claude repair` comments while the label remains present; a pushed repair is validated and reviewed again automatically. | Issue: `agent-implement.yml` when its run ends with an open PR. Pull request: **human only** |
 | `agent-blocked` | The agent stopped because validation/review failed after the permitted repair attempts, or because a human decision or permission is required. The issue or PR must state the exact blocker. | `agent-implement.yml` when its run ends without an open PR; otherwise human (including after the second failed repair) |
 | `risk:low` | See risk classification. | Human at triage |
 | `risk:medium` | See risk classification. | Human at triage |
@@ -315,7 +325,7 @@ The detailed invariants for these areas are defined in `AGENTS.md` and `docs/arc
 ## Failure and retry policy
 
 - An implementation agent may make **at most two** repair attempts for a pull request failure (a failing CI check or a rejecting review). The original implementation does not count as an attempt.
-- **Repair counting is human-controlled.** A repair attempt happens only when the repository owner comments `@claude repair` (optionally followed by instructions) on the pull request while it carries `agent-review`; that starts `agent-repair.yml`. The workflow does not count attempts, does not start on a failed check or review, and does not chain into another run. The human who requests a repair is responsible for not requesting a third one. Mechanical enforcement of the limit is future work and is **not implemented**.
+- **Repair counting is human-controlled.** A repair attempt happens only when the repository owner comments `@claude repair` (optionally followed by instructions) on the pull request while it carries `agent-review`; that starts `agent-repair.yml`. The workflow does not count attempts, does not start a repair from a failed check or review, and never chains into another repair. If the repair pushes a new head, deterministic validation and the already-authorised independent review follow automatically. The human who requests a repair is responsible for not requesting a third one. Mechanical enforcement of the limit is future work and is **not implemented**.
 - After the second failed repair attempt, the human labels the issue `agent-blocked` and takes over. There is no third attempt and no implementation/review loop without a human in between.
 - The agent must stop **immediately**, without attempting a repair, when the acceptance criteria conflict with each other, with `AGENTS.md`, with `docs/architecture.md`, or with existing tests, or when the requirements are materially ambiguous.
 - The agent must never weaken, skip, or delete a failing test merely to obtain a green build. If an established rule is intentionally changing, that must be stated in the issue, and all affected tests and documentation are updated together as described in `AGENTS.md`.
@@ -332,7 +342,7 @@ Every automated change must maintain an unbroken, inspectable chain:
 | Feature branch | Git branch from `develop` | One branch per issue; name references the issue or its purpose. |
 | Commit | Git history | Focused commits; message describes the change; no history rewriting. |
 | Pull request | GitHub PR targeting `develop` | Uses the PR template; links the issue; describes validation, risk, and impact. |
-| Validation result | Agent's PR description and the CI check | Actual commands and actual results; never claimed without running. |
+| Validation result | Agent's PR description, dispatched run, and `agent-validation` status | Exact head SHA, actual commands, and actual results; never claimed without running. |
 | Agent run | GitHub Actions run of `agent-implement.yml`, `agent-review.yml`, or `agent-repair.yml`, linked from the closing comment | Full log of what the agent read, ran, and changed. |
 | Review result | PR review/comments | Review-agent comment review with its `VERDICT:` line, plus human review. |
 | Human merge decision | PR merge by a human | Records who accepted the change into `develop`. |
@@ -357,7 +367,7 @@ A change whose chain is broken (for example a PR without an issue, or a validati
 | Setting | Recommendation |
 | --- | --- |
 | Pull requests required | Require a pull request before merging into `develop` and `main`. |
-| Required status check | Require the existing `Validate pull request` / "Backend tests and frontend build" check on both branches. |
+| Required status check | Require the stable `agent-validation` status on `develop` and `main` once this workflow is present on both branches and its live test has passed. It is published by normal same-repository PR validation and by trusted exact-SHA dispatch for agent PRs. |
 | Force pushes | Block force pushes to `develop` and `main`. |
 | Branch deletion | Block deletion of `develop` and `main`. |
 | Conversation resolution | Require all review conversations to be resolved before merging, where available. |
@@ -377,8 +387,8 @@ Each phase is delivered as its own pull request and must be proven reliable befo
 | Phase | Scope | Status |
 | --- | --- | --- |
 | 1 | Automation documentation and templates: this document, the agent task issue form, the PR template, and `AGENTS.md`/`README.md` updates. | **Implemented** |
-| 2 | Issue label to implementation-agent PR creation: labels, an implementation agent connected to `agent-ready` issues, and `agent-working`/`agent-review`/`agent-blocked` transitions. No merge or deploy authority. | **Implemented** with Claude Code (`agent-implement.yml`, `CLAUDE.md`). Labels were created by a human in repository settings. Runs queued by the workflow token require human approval; see [Workflow-token behaviour](#workflow-token-behaviour). |
-| 3 | Independent automated review and bounded repair: a separate review step, its written result, and the two-attempt repair limit enforced mechanically. | **Partially implemented.** The independent review step exists (`agent-review.yml`), and a human-invoked repair step exists (`agent-repair.yml`). Mechanical enforcement of the two-attempt limit is **not implemented**: repair attempts are requested and counted by a human. |
+| 2 | Issue label to implementation-agent PR creation: labels, an implementation agent connected to `agent-ready` issues, and `agent-working`/`agent-review`/`agent-blocked` transitions. No merge or deploy authority. | **Implemented** with Claude Code (`agent-implement.yml`, `CLAUDE.md`). Labels were created by a human in repository settings. Exact-SHA validation is dispatched automatically from trusted `main`; see [Workflow-token behaviour](#workflow-token-behaviour). |
+| 3 | Independent automated review and bounded repair: a separate review step, its written result, and the two-attempt repair limit enforced mechanically. | **Partially implemented.** The independent review step exists (`agent-review.yml`), a human-invoked repair step exists (`agent-repair.yml`), and a pushed repair automatically receives exact-SHA validation followed by fresh review under the existing human-applied label. Mechanical enforcement of the two-attempt limit is **not implemented**: repair attempts are requested and counted by a human. |
 | 4 | Staging deployment and smoke tests: a non-production environment deployed from `develop` with automated smoke checks. No staging environment exists today. | Proposed |
 | 5 | Controlled release PR and production approval: a `develop` → `main` release PR process with human environment approval. | Proposed |
 | 6 | Production monitoring and proposed issue creation: monitoring that can draft issues for humans to review; it must not apply `agent-ready`. | Proposed |
