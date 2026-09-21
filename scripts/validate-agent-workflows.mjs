@@ -424,6 +424,257 @@ function verifyAgentPrGuards(text, source, staleMessage) {
 
 export const validatePath = '.github/workflows/validate.yml';
 export const reviewPath = '.github/workflows/agent-review.yml';
+export const implementPath = '.github/workflows/agent-implement.yml';
+export const repairPath = '.github/workflows/agent-repair.yml';
+export const issueTemplatePath = '.github/ISSUE_TEMPLATE/agent-task.yml';
+export const pullRequestTemplatePath = '.github/pull_request_template.md';
+
+// ---------------------------------------------------------------------------------------
+// Documentation-impact gate. The templates collect the decision, the preflight and validation
+// jobs prove that a meaningful declaration exists (scripts/validate-documentation-impact.mjs),
+// the review prompt requires the reviewer to judge whether it is truthful, and the repair
+// prompt requires repairs to keep documentation accurate without editing the PR description.
+// Every requirement below is a literal the workflows and templates must keep.
+// ---------------------------------------------------------------------------------------
+
+export const DOCUMENTATION_IMPACT_VALIDATOR = 'scripts/validate-documentation-impact.mjs';
+
+export const ISSUE_TEMPLATE_DOCUMENTATION_CONTRACT = Object.freeze({
+  decisionField: [
+    'id: documentation-impact-decision',
+    'label: Documentation impact decision',
+    '        - Documentation changes required\n        - No documentation changes required\n',
+    'required: true',
+  ],
+  detailsField: [
+    'id: documentation-impact-details',
+    'label: Documentation impact details',
+    'required: true',
+  ],
+  readinessConfirmation:
+    'The documentation impact decision is stated, and its details list the affected documentation files/sections or explain specifically why documentation is unaffected',
+});
+
+export const PULL_REQUEST_TEMPLATE_DOCUMENTATION_CONTRACT = Object.freeze({
+  heading: '## Documentation impact\n',
+  decisionLine: 'Decision: <UPDATED or NOT REQUIRED>',
+  evidenceLine: 'Evidence: <meaningful evidence>',
+  mustPrecede: '## Known limitations and follow-up work\n',
+});
+
+export const PREFLIGHT_JOB_CONTRACT = Object.freeze({
+  required: [
+    "if: github.event.label.name == 'agent-ready' && github.event.issue.pull_request == null",
+    'contents: read',
+    'issues: read',
+    'actions/checkout',
+    'ref: develop',
+    'persist-credentials: false',
+    `node ${DOCUMENTATION_IMPACT_VALIDATOR} --issue-body`,
+    '::error title=Documentation impact preflight failed::',
+  ],
+  forbidden: [
+    'contents: write',
+    'issues: write',
+    'pull-requests: write',
+    'actions: write',
+    'CLAUDE_CODE_OAUTH_TOKEN',
+    'claude-code-action',
+    'gh issue edit',
+    'gh issue comment',
+    '--add-label',
+    '--remove-label',
+    'git push',
+    'git checkout -b',
+  ],
+});
+
+export const IMPLEMENT_JOB_DOCUMENTATION_CONTRACT = Object.freeze({
+  needs: '    needs: preflight\n',
+  condition: "if: needs.preflight.result == 'success' && github.event.label.name == 'agent-ready' && github.event.issue.pull_request == null",
+  prompt: [
+    'Restate its acceptance criteria, its explicit exclusions, and its Documentation impact decision and Documentation impact details.',
+    "Follow the issue's Documentation impact decision exactly.",
+    'If it is "Documentation changes required", update every documentation file and section listed in the Documentation impact details',
+    'Never leave documentation that the change contradicts.',
+    'Fill the "## Documentation impact" section accurately with exactly one `Decision:` line and one `Evidence:` line',
+    '`Decision: UPDATED` when this pull request changes documentation, with Evidence listing each documentation file and what changed in it',
+    '`Decision: NOT REQUIRED` only when no documentation changed, with Evidence explaining for this specific change why behaviour, contracts, architecture, configuration, automation, deployment, operations and user workflows are unaffected',
+    `node ${DOCUMENTATION_IMPACT_VALIDATOR} --pr-body <file>`,
+  ],
+});
+
+export const VALIDATE_WORKFLOW_DOCUMENTATION_CONTRACT = Object.freeze({
+  pullRequestTypes: 'types: [opened, synchronize, reopened, edited]',
+  contextJob: [
+    'pr_body_b64: ${{ steps.context.outputs.pr_body_b64 }}',
+    'EVENT_PR_BODY: ${{ github.event.pull_request.body }}',
+    'pr_body="$(gh pr view "$pr_number" --repo "$GITHUB_REPOSITORY" --json body --jq \'.body // ""\')"',
+    'pr_body="$EVENT_PR_BODY"',
+    'pr_body_b64="$(printf \'%s\' "$pr_body" | base64 -w0)"',
+    'echo "pr_body_b64=$pr_body_b64"',
+  ],
+  validateJob: [
+    'PR_BODY_B64: ${{ needs.context.outputs.pr_body_b64 }}',
+    'body_file="$RUNNER_TEMP/pull-request-body.md"',
+    'printf \'%s\' "$PR_BODY_B64" | base64 -d > "$body_file"',
+    `node ${DOCUMENTATION_IMPACT_VALIDATOR} --pr-body "$body_file"`,
+    'node --test scripts/validate-documentation-impact.test.mjs',
+  ],
+  validateJobForbidden: ['GH_TOKEN', 'GITHUB_TOKEN', 'github.token', 'pull-requests: write'],
+  repositoryValidation: 'run: bash scripts/validate.sh',
+});
+
+export const REVIEW_PROMPT_DOCUMENTATION_CONTRACT = Object.freeze([
+  'Compare three things: the issue\'s Documentation impact decision and details, the pull request\'s "## Documentation impact" declaration (Decision and Evidence), and the actual diff.',
+  'Missing, inaccurate or incomplete required documentation is a blocker.',
+  'verify from the diff, not from filenames alone',
+]);
+
+export const REPAIR_PROMPT_DOCUMENTATION_CONTRACT = Object.freeze([
+  'update the affected documentation on the head branch in the same repair',
+  'You cannot and must not edit the pull request description.',
+  'state in your closing comment exactly what must be corrected',
+]);
+
+function requireOrder(text, first, second, source, description) {
+  const firstIndex = text.indexOf(first);
+  const secondIndex = text.indexOf(second);
+  if (firstIndex < 0) {
+    throw new Error(`${source}: missing required text: ${first.trim()}`);
+  }
+  if (secondIndex < 0) {
+    throw new Error(`${source}: missing required text: ${second.trim()}`);
+  }
+  if (firstIndex > secondIndex) {
+    throw new Error(`${source}: ${description}`);
+  }
+}
+
+function extractPromptText(jobText, source) {
+  return section(jobText, '          prompt: |\n', '          claude_args: |\n', source);
+}
+
+function extractAllowedTools(jobText, source) {
+  return section(jobText, '          claude_args: |\n', '            --disallowedTools', source);
+}
+
+export function verifyDocumentationImpactGate(read = readRepositoryFile) {
+  // Issue template: the decision dropdown with exactly the two options, the details textarea,
+  // both required, and a readiness confirmation that covers the decision.
+  const issueTemplate = read(issueTemplatePath);
+  const decisionField = section(issueTemplate, '  - type: dropdown\n    id: documentation-impact-decision\n', '\n  - type: ', `${issueTemplatePath} decision field`);
+  for (const required of ISSUE_TEMPLATE_DOCUMENTATION_CONTRACT.decisionField) {
+    requireText(decisionField, required, `${issueTemplatePath} decision field`);
+  }
+  const optionLines = decisionField.split('\n').filter((line) => /^        - /.test(line));
+  if (optionLines.length !== 2) {
+    throw new Error(`${issueTemplatePath} decision field: expected exactly two options, found ${optionLines.length}.`);
+  }
+  const detailsField = section(issueTemplate, '  - type: textarea\n    id: documentation-impact-details\n', '\n  - type: ', `${issueTemplatePath} details field`);
+  for (const required of ISSUE_TEMPLATE_DOCUMENTATION_CONTRACT.detailsField) {
+    requireText(detailsField, required, `${issueTemplatePath} details field`);
+  }
+  const readiness = section(issueTemplate, '    id: readiness\n', null, `${issueTemplatePath} readiness`);
+  requireText(readiness, ISSUE_TEMPLATE_DOCUMENTATION_CONTRACT.readinessConfirmation, `${issueTemplatePath} readiness`);
+  const readinessItem = section(readiness, ISSUE_TEMPLATE_DOCUMENTATION_CONTRACT.readinessConfirmation, '\n        - label:', `${issueTemplatePath} readiness`);
+  requireText(readinessItem, 'required: true', `${issueTemplatePath} readiness documentation confirmation`);
+
+  // Pull request template: the deterministic section, with its placeholders, before known limitations.
+  const pullRequestTemplate = read(pullRequestTemplatePath);
+  const prContract = PULL_REQUEST_TEMPLATE_DOCUMENTATION_CONTRACT;
+  if (pullRequestTemplate.split(prContract.heading).length !== 2) {
+    throw new Error(`${pullRequestTemplatePath}: the "${prContract.heading.trim()}" section must appear exactly once.`);
+  }
+  requireOrder(pullRequestTemplate, prContract.heading, prContract.mustPrecede, pullRequestTemplatePath, 'the Documentation impact section must come before Known limitations and follow-up work.');
+  const prSection = section(pullRequestTemplate, prContract.heading, prContract.mustPrecede, pullRequestTemplatePath);
+  requireText(prSection, prContract.decisionLine, `${pullRequestTemplatePath} Documentation impact section`);
+  requireText(prSection, prContract.evidenceLine, `${pullRequestTemplatePath} Documentation impact section`);
+  const uncommented = prSection.replace(/<!--[\s\S]*?-->/g, '');
+  for (const [field, count] of [['Decision:', (uncommented.match(/^Decision:/gm) ?? []).length], ['Evidence:', (uncommented.match(/^Evidence:/gm) ?? []).length]]) {
+    if (count !== 1) {
+      throw new Error(`${pullRequestTemplatePath} Documentation impact section: expected exactly one "${field}" line outside comments, found ${count}.`);
+    }
+  }
+
+  // Implementation workflow: a read-only preflight job before the implementation job, which
+  // must depend on it, and a prompt that carries the documentation requirements.
+  const implement = read(implementPath);
+  requireOrder(implement, '  preflight:\n', '  implement:\n', implementPath, 'the preflight job must be defined before the implementation job.');
+  const preflight = section(implement, '  preflight:\n', '  implement:\n', `${implementPath} preflight job`);
+  for (const required of PREFLIGHT_JOB_CONTRACT.required) {
+    requireText(preflight, required, `${implementPath} preflight job`);
+  }
+  for (const forbidden of PREFLIGHT_JOB_CONTRACT.forbidden) {
+    forbidText(preflight, forbidden, `${implementPath} preflight job`);
+  }
+  const implementJob = section(implement, '  implement:\n', '  dispatch-validation:\n', `${implementPath} implement job`);
+  requireText(implementJob, IMPLEMENT_JOB_DOCUMENTATION_CONTRACT.needs, `${implementPath} implement job`);
+  requireText(implementJob, IMPLEMENT_JOB_DOCUMENTATION_CONTRACT.condition, `${implementPath} implement job`);
+  requireOrder(implementJob, IMPLEMENT_JOB_DOCUMENTATION_CONTRACT.needs, '    steps:\n', `${implementPath} implement job`, 'needs: preflight must be declared on the job.');
+  const implementPrompt = extractPromptText(implementJob, `${implementPath} implement prompt`);
+  for (const required of IMPLEMENT_JOB_DOCUMENTATION_CONTRACT.prompt) {
+    requireText(implementPrompt, required, `${implementPath} implement prompt`);
+  }
+  const implementAllowedTools = extractAllowedTools(implementJob, `${implementPath} allowed tools`);
+  requireText(implementAllowedTools, `Bash(node ${DOCUMENTATION_IMPACT_VALIDATOR} --pr-body *)`, `${implementPath} allowed tools`);
+  for (const forbidden of ['gh pr edit', 'gh issue edit', 'gh label']) {
+    forbidText(implementAllowedTools, forbidden, `${implementPath} allowed tools`);
+  }
+
+  // Validation workflow: the body is obtained in the trusted context job for both events,
+  // handed over base64-encoded, decoded into a temporary file, and validated before the
+  // repository validation, by a job that still holds no GitHub token.
+  const validate = read(validatePath);
+  const validateContract = VALIDATE_WORKFLOW_DOCUMENTATION_CONTRACT;
+  requireText(validate, validateContract.pullRequestTypes, validatePath);
+  const validationContext = section(validate, '  context:\n', '  validate:\n', validatePath);
+  for (const required of validateContract.contextJob) {
+    requireText(validationContext, required, 'validate.yml context job');
+  }
+  const dispatchBranch = section(validationContext, 'if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then\n', '\n          else\n', 'validate.yml dispatched context');
+  requireText(dispatchBranch, 'pr_body="$(gh pr view "$pr_number"', 'validate.yml dispatched context');
+  const pullRequestBranch = section(validationContext, '\n          else\n', '\n          fi\n', 'validate.yml pull_request context');
+  requireText(pullRequestBranch, 'pr_body="$EVENT_PR_BODY"', 'validate.yml pull_request context');
+  const validationJob = section(validate, '  validate:\n', '  report-status:\n', validatePath);
+  for (const required of validateContract.validateJob) {
+    requireText(validationJob, required, 'validate.yml validate job');
+  }
+  for (const forbidden of validateContract.validateJobForbidden) {
+    forbidText(validationJob, forbidden, 'validate.yml validate job');
+  }
+  requireOrder(validationJob, `node ${DOCUMENTATION_IMPACT_VALIDATOR} --pr-body "$body_file"`, validateContract.repositoryValidation, 'validate.yml validate job', 'the documentation-impact validator must run before repository validation.');
+  requireOrder(validationJob, 'actions/checkout', `node ${DOCUMENTATION_IMPACT_VALIDATOR} --pr-body "$body_file"`, 'validate.yml validate job', 'the documentation-impact validator must run after checkout.');
+
+  // Review workflow: the prompt must compare the issue decision, the PR declaration and the
+  // diff, and treat missing documentation as a blocker, with no additional write authority.
+  const review = read(reviewPath);
+  const reviewJob = section(review, '  review:\n', null, reviewPath);
+  const reviewPrompt = extractPromptText(reviewJob, 'agent-review.yml review prompt');
+  for (const required of REVIEW_PROMPT_DOCUMENTATION_CONTRACT) {
+    requireText(reviewPrompt, required, 'agent-review.yml review prompt');
+  }
+  const reviewPermissions = section(reviewJob, '    permissions:\n', '\n    steps:\n', 'agent-review.yml review permissions');
+  for (const forbidden of ['contents: write', 'issues: write', 'actions: write', 'statuses: write', 'checks: write']) {
+    forbidText(reviewPermissions, forbidden, 'agent-review.yml review permissions');
+  }
+  const reviewAllowedTools = extractAllowedTools(reviewJob, 'agent-review.yml allowed tools');
+  for (const forbidden of ['gh pr edit', 'gh issue edit', 'gh pr comment', 'gh label', 'Edit,', 'Write']) {
+    forbidText(reviewAllowedTools, forbidden, 'agent-review.yml allowed tools');
+  }
+
+  // Repair workflow: repairs update documentation but never the PR description.
+  const repair = read(repairPath);
+  const repairJob = section(repair, '  repair:\n', '  dispatch-validation:\n', repairPath);
+  const repairPrompt = extractPromptText(repairJob, 'agent-repair.yml repair prompt');
+  for (const required of REPAIR_PROMPT_DOCUMENTATION_CONTRACT) {
+    requireText(repairPrompt, required, 'agent-repair.yml repair prompt');
+  }
+  const repairAllowedTools = extractAllowedTools(repairJob, 'agent-repair.yml allowed tools');
+  forbidText(repairAllowedTools, 'gh pr edit', 'agent-repair.yml allowed tools');
+  const repairDisallowedTools = section(repairJob, '            --disallowedTools', '\n      - name: Record outcome', 'agent-repair.yml disallowed tools');
+  requireText(repairDisallowedTools, 'Bash(gh pr edit *)', 'agent-repair.yml disallowed tools');
+}
 
 export const VALIDATION_CONCURRENCY_GROUP =
   'group: validation-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || inputs.pr_number || github.ref }}';
@@ -581,6 +832,8 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
   ]) {
     forbidText(read(path), '.author.login', path);
   }
+
+  verifyDocumentationImpactGate(read);
 }
 
 const invokedDirectly =
