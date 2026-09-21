@@ -7,6 +7,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Reporting.Daily;
+using Inventory.Application.Reporting.MachineProfitability;
+using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Shared;
 using Inventory.Application.Reporting.Transactions;
@@ -49,7 +51,10 @@ public class ReportingServiceTests
         var getBookkeepingReport = new GetBookkeepingReport(new EfBookkeepingReportFactsProvider(db, nayaxFees, siteCommissions));
         var getDailyReport = new GetDailyReport(new EfDailyReportFactsProvider(db, nayaxFees));
         var getReconciliationReport = new GetReconciliationReport(new EfReconciliationReportFactsProvider(db));
-        return new ReportingService(db, nayaxFees, siteCommissions, getBookkeepingReport, getDailyReport, getReconciliationReport, nayaxLynxClient);
+        var getMachineProfitabilityReport = new GetMachineProfitabilityReport(new EfMachineProfitabilityReportFactsProvider(db, nayaxFees, siteCommissions));
+        var getProductProfitabilityReport = new GetProductProfitabilityReport(new EfProductProfitabilityReportFactsProvider(db));
+        return new ReportingService(db, nayaxFees, siteCommissions, getBookkeepingReport, getDailyReport, getReconciliationReport,
+            getMachineProfitabilityReport, getProductProfitabilityReport, nayaxLynxClient);
     }
 
     [Fact]
@@ -229,6 +234,10 @@ public class ReportingServiceTests
         services.AddScoped<GetDailyReport>();
         services.AddScoped<IReconciliationReportFactsProvider, EfReconciliationReportFactsProvider>();
         services.AddScoped<GetReconciliationReport>();
+        services.AddScoped<IMachineProfitabilityReportFactsProvider, EfMachineProfitabilityReportFactsProvider>();
+        services.AddScoped<GetMachineProfitabilityReport>();
+        services.AddScoped<IProductProfitabilityReportFactsProvider, EfProductProfitabilityReportFactsProvider>();
+        services.AddScoped<GetProductProfitabilityReport>();
         services.AddScoped<IReportingService, ReportingService>();
 
         using var provider = services.BuildServiceProvider();
@@ -626,6 +635,70 @@ public class ReportingServiceTests
         Assert.Equal(report.PackageCosts.ToString(CultureInfo.InvariantCulture), row["PackageCosts"]);
         Assert.Equal(report.NetSettlement.ToString(CultureInfo.InvariantCulture), row["NetSettlement"]);
         Assert.Equal(report.SiteCommission.ToString(CultureInfo.InvariantCulture), row["SiteCommission"]);
+    }
+
+    [Fact]
+    public async Task Machine_profitability_csv_export_uses_the_same_authoritative_values_as_the_api_report()
+    {
+        using var db = CreateDbContext();
+        db.NayaxSales.AddRange(
+            new NayaxSales { TransactionID = 400, MachineID = 10, MachineName = "Alpha", SettlementValue = 60m, PaymentMethod = "Credit Card", CostOfGoodsSold = 20m, CostingStatus = SaleCostingStatus.Costed, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
+            new NayaxSales { TransactionID = 401, MachineID = 11, MachineName = "Beta", SettlementValue = 40m, PaymentMethod = "Cash", CostOfGoodsSold = null, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) });
+        await db.SaveChangesAsync();
+
+        var service = Reporting(db);
+        var filter = new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1));
+
+        var report = await service.GetMachineProfitabilityAsync(filter);
+        var csv = Encoding.UTF8.GetString(await service.ExportCsvAsync("machine-profitability", filter));
+        var lines = csv.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        var header = lines[0].Trim('"').Split("\",\"");
+
+        Assert.Equal(2, report.Rows.Count);
+        foreach (var apiRow in report.Rows)
+        {
+            var line = lines.Skip(1).Single(l => l.Trim('"').Split("\",\"")[0] == apiRow.MachineId.ToString(CultureInfo.InvariantCulture));
+            var values = line.Trim('"').Split("\",\"");
+            var row = header.Zip(values, (h, v) => (h, v)).ToDictionary(x => x.h, x => x.v);
+
+            Assert.Equal(apiRow.Sales.ToString(CultureInfo.InvariantCulture), row["Sales"]);
+            Assert.Equal(apiRow.CardSales.ToString(CultureInfo.InvariantCulture), row["CardSales"]);
+            Assert.Equal(apiRow.CashSales.ToString(CultureInfo.InvariantCulture), row["CashSales"]);
+            Assert.Equal(apiRow.CostOfGoods.HasValue ? apiRow.CostOfGoods.Value.ToString(CultureInfo.InvariantCulture) : string.Empty, row["CostOfGoods"]);
+            Assert.Equal(apiRow.GrossProfit.HasValue ? apiRow.GrossProfit.Value.ToString(CultureInfo.InvariantCulture) : string.Empty, row["GrossProfit"]);
+        }
+    }
+
+    [Fact]
+    public async Task Product_profitability_csv_export_uses_the_same_authoritative_values_as_the_api_report()
+    {
+        using var db = CreateDbContext();
+        db.Products.Add(new Product { Id = 1, Name = "Water", UnitPrice = 3m });
+        db.NayaxSales.AddRange(
+            new NayaxSales { TransactionID = 402, MachineID = 10, NayaxProductId = 1, ProductName = "Water", SettlementValue = 30m, CostOfGoodsSold = 10m, CostingStatus = SaleCostingStatus.Costed, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
+            new NayaxSales { TransactionID = 403, MachineID = 10, NayaxProductId = 999, ProductName = "Unmapped Thing", SettlementValue = 5m, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) });
+        await db.SaveChangesAsync();
+
+        var service = Reporting(db);
+        var filter = new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1));
+
+        var report = await service.GetProductProfitabilityAsync(filter);
+        var csv = Encoding.UTF8.GetString(await service.ExportCsvAsync("product-profitability", filter));
+        var lines = csv.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        var header = lines[0].Trim('"').Split("\",\"");
+
+        Assert.Equal(2, report.Rows.Count);
+        foreach (var apiRow in report.Rows)
+        {
+            var line = lines.Skip(1).Single(l => l.Trim('"').Split("\",\"")[0] == apiRow.ProductName);
+            var values = line.Trim('"').Split("\",\"");
+            var row = header.Zip(values, (h, v) => (h, v)).ToDictionary(x => x.h, x => x.v);
+
+            Assert.Equal(apiRow.Sales.ToString(CultureInfo.InvariantCulture), row["Sales"]);
+            Assert.Equal(apiRow.CostOfGoods.HasValue ? apiRow.CostOfGoods.Value.ToString(CultureInfo.InvariantCulture) : string.Empty, row["CostOfGoods"]);
+            Assert.Equal(apiRow.GrossProfit.HasValue ? apiRow.GrossProfit.Value.ToString(CultureInfo.InvariantCulture) : string.Empty, row["GrossProfit"]);
+            Assert.Equal(apiRow.IsUnmapped.ToString(), row["Unmapped"]);
+        }
     }
 
     [Fact]

@@ -3,6 +3,8 @@ using Inventory.Application;
 using Inventory.Application.NayaxFeeSettings;
 using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Reporting.Daily;
+using Inventory.Application.Reporting.MachineProfitability;
+using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Infrastructure;
 using InventoryApi.Adapters.Persistence;
@@ -81,6 +83,12 @@ builder.Services.AddScoped<IDailyReportFactsProvider, EfDailyReportFactsProvider
 
 // Temporary API-owned adapter for the reconciliation report facts port; see EfReconciliationReportFactsProvider.
 builder.Services.AddScoped<IReconciliationReportFactsProvider, EfReconciliationReportFactsProvider>();
+
+// Temporary API-owned adapter for the machine profitability report facts port; see EfMachineProfitabilityReportFactsProvider.
+builder.Services.AddScoped<IMachineProfitabilityReportFactsProvider, EfMachineProfitabilityReportFactsProvider>();
+
+// Temporary API-owned adapter for the product profitability report facts port; see EfProductProfitabilityReportFactsProvider.
+builder.Services.AddScoped<IProductProfitabilityReportFactsProvider, EfProductProfitabilityReportFactsProvider>();
 
 var app = builder.Build();
 

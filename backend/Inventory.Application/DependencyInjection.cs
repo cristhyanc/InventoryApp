@@ -1,6 +1,8 @@
 using Inventory.Application.NayaxFeeSettings;
 using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Reporting.Daily;
+using Inventory.Application.Reporting.MachineProfitability;
+using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Reconciliation;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -15,6 +17,8 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<GetBookkeepingReport>();
         services.AddScoped<GetDailyReport>();
         services.AddScoped<GetReconciliationReport>();
+        services.AddScoped<GetMachineProfitabilityReport>();
+        services.AddScoped<GetProductProfitabilityReport>();
 
         return services;
     }
