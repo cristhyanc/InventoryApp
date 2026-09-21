@@ -19,12 +19,15 @@ public sealed class ReportsController : ControllerBase
     private readonly IReportingService _service;
     private readonly GetBookkeepingReport _getBookkeepingReport;
     private readonly GetDailyReport _getDailyReport;
+    private readonly GetReconciliationReport _getReconciliationReport;
 
-    public ReportsController(IReportingService service, GetBookkeepingReport getBookkeepingReport, GetDailyReport getDailyReport)
+    public ReportsController(IReportingService service, GetBookkeepingReport getBookkeepingReport,
+        GetDailyReport getDailyReport, GetReconciliationReport getReconciliationReport)
     {
         _service = service;
         _getBookkeepingReport = getBookkeepingReport;
         _getDailyReport = getDailyReport;
+        _getReconciliationReport = getReconciliationReport;
     }
 
     [HttpGet("bookkeeping")]
@@ -32,7 +35,7 @@ public sealed class ReportsController : ControllerBase
     [HttpGet("daily")]
     public Task<DailyReportDto> Daily([FromQuery] ReportingFilterDto filter, CancellationToken ct) => _getDailyReport.Handle(filter, ct);
     [HttpGet("reconciliation")]
-    public Task<ReconciliationReportDto> Reconciliation([FromQuery] ReportingFilterDto filter, [FromQuery] decimal tolerance = 0.01m, CancellationToken ct = default) => _service.GetReconciliationAsync(filter, tolerance, ct);
+    public Task<ReconciliationReportDto> Reconciliation([FromQuery] ReportingFilterDto filter, [FromQuery] decimal tolerance = 0.01m, CancellationToken ct = default) => _getReconciliationReport.Handle(filter, tolerance, ct);
     [HttpGet("machine-profitability")]
     public Task<MachineProfitabilityReportDto> MachineProfitability([FromQuery] ReportingFilterDto filter, CancellationToken ct) => _service.GetMachineProfitabilityAsync(filter, ct);
     [HttpGet("product-profitability")]

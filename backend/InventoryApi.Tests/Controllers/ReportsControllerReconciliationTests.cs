@@ -15,24 +15,25 @@ using Xunit;
 
 namespace InventoryApi.Tests.Controllers;
 
-public class ReportsControllerDailyTests
+public class ReportsControllerReconciliationTests
 {
     [Fact]
-    public async Task Daily_action_routes_through_the_application_use_case_not_the_legacy_service()
+    public async Task Reconciliation_action_routes_through_the_application_use_case_not_the_legacy_service()
     {
-        var facts = FakeDailyReportFactsProvider.SingleDay(grossSales: 250m, partialCostOfGoods: 90m);
-        var dailyUseCase = new GetDailyReport(new FakeDailyReportFactsProvider(facts));
+        var period = FakeReconciliationReportFactsProvider.Period(reportedGross: 250m, cardSales: 250m,
+            processingFeesExGst: 5m, feeGst: 0.5m, actualNetReimbursement: 244.5m);
+        var facts = FakeReconciliationReportFactsProvider.SinglePeriod(period);
+        var reconciliationUseCase = new GetReconciliationReport(new FakeReconciliationReportFactsProvider(facts));
         var bookkeepingUseCase = new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(FakeBookkeepingReportFactsProvider.Complete()));
-        var reconciliationUseCase = new GetReconciliationReport(new FakeReconciliationReportFactsProvider(FakeReconciliationReportFactsProvider.SinglePeriod()));
+        var dailyUseCase = new GetDailyReport(new FakeDailyReportFactsProvider(FakeDailyReportFactsProvider.SingleDay()));
         var legacyService = new Mock<IReportingService>(MockBehavior.Strict);
         var controller = new ReportsController(legacyService.Object, bookkeepingUseCase, dailyUseCase, reconciliationUseCase);
 
-        var report = await controller.Daily(
-            new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)), CancellationToken.None);
+        var report = await controller.Reconciliation(
+            new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)), 0.01m, CancellationToken.None);
 
-        var row = Assert.Single(report.Rows);
-        Assert.Equal(250m, row.GrossSales);
-        Assert.Equal(90m, row.CostOfGoods);
+        Assert.Equal(250m, report.NayaxReportedGrossCardSales);
+        Assert.True(report.IsMatch);
         legacyService.VerifyNoOtherCalls();
     }
 }

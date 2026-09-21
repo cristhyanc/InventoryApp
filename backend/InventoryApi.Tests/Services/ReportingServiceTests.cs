@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Reporting.Daily;
+using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Shared;
 using Inventory.Application.Reporting.Transactions;
 using Inventory.Domain.Reporting;
@@ -47,7 +48,8 @@ public class ReportingServiceTests
         var siteCommissions = siteCommissionService ?? commissions!.Object;
         var getBookkeepingReport = new GetBookkeepingReport(new EfBookkeepingReportFactsProvider(db, nayaxFees, siteCommissions));
         var getDailyReport = new GetDailyReport(new EfDailyReportFactsProvider(db, nayaxFees));
-        return new ReportingService(db, nayaxFees, siteCommissions, getBookkeepingReport, getDailyReport, nayaxLynxClient);
+        var getReconciliationReport = new GetReconciliationReport(new EfReconciliationReportFactsProvider(db));
+        return new ReportingService(db, nayaxFees, siteCommissions, getBookkeepingReport, getDailyReport, getReconciliationReport, nayaxLynxClient);
     }
 
     [Fact]
@@ -225,6 +227,8 @@ public class ReportingServiceTests
         services.AddScoped<GetBookkeepingReport>();
         services.AddScoped<IDailyReportFactsProvider, EfDailyReportFactsProvider>();
         services.AddScoped<GetDailyReport>();
+        services.AddScoped<IReconciliationReportFactsProvider, EfReconciliationReportFactsProvider>();
+        services.AddScoped<GetReconciliationReport>();
         services.AddScoped<IReportingService, ReportingService>();
 
         using var provider = services.BuildServiceProvider();
