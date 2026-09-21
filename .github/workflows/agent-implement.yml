@@ -184,14 +184,15 @@ jobs:
           fail() { echo "::error::$1"; exit 1; }
 
           pr_json="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
-            --json state,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,author)"
+            --json state,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner)"
           state="$(jq -r '.state' <<<"$pr_json")"
           is_draft="$(jq -r '.isDraft' <<<"$pr_json")"
           base_ref="$(jq -r '.baseRefName' <<<"$pr_json")"
           head_ref="$(jq -r '.headRefName' <<<"$pr_json")"
           current_sha="$(jq -r '.headRefOid // empty' <<<"$pr_json")"
           head_repo="$(jq -r '"\(.headRepositoryOwner.login)/\(.headRepository.name)"' <<<"$pr_json")"
-          author="$(jq -r '.author.login // empty' <<<"$pr_json")"
+          author="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" \
+            --jq '.user.login // empty')"
 
           [ "$state" = "OPEN" ] || fail "Pull request #$PR_NUMBER is not open."
           [ "$is_draft" = "false" ] || fail "Pull request #$PR_NUMBER is a draft."
