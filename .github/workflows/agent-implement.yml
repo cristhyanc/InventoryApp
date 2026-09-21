@@ -116,6 +116,7 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           base_branch: develop
+          show_full_output: true
           branch_prefix: agent/
           prompt: |
             You are the InventoryApp implementation agent running in GitHub Actions.
