@@ -95,7 +95,7 @@ jobs:
             Hard limits: do not merge, approve, deploy, run migrations against any environment, modify labels, change workflows, secrets or repository settings, touch anything outside the acceptance criteria, or claim a command passed unless it ran and succeeded in this session.
           claude_args: |
             --max-turns 250
-            --allowedTools "Edit,MultiEdit,Write"
+            --allowedTools "Read,Glob,Grep,Edit,MultiEdit,Write"
             "Bash(gh issue view *),Bash(gh issue comment *),Bash(gh pr create *),Bash(gh pr view *),Bash(gh pr list *)"
             "Bash(git status *),Bash(git diff *),Bash(git log *),Bash(git show *),Bash(git branch --show-current),Bash(git rev-parse *)"
             "Bash(git checkout -b agent/issue-${{ github.event.issue.number }}-*),Bash(git switch -c agent/issue-${{ github.event.issue.number }}-*)"
