@@ -6,35 +6,246 @@ on:
       - develop
       - main
   workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number to validate
+        required: true
+        type: string
+      head_sha:
+        description: Exact pull request head SHA to validate
+        required: true
+        type: string
+      dispatch_review:
+        description: Dispatch an independent review after validation succeeds
+        required: false
+        default: false
+        type: boolean
 
-permissions:
-  contents: read
+permissions: {}
 
 concurrency:
-  group: validation-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: validation-${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number || github.ref }}
   cancel-in-progress: true
 
 jobs:
+  context:
+    name: Resolve validation context
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+      statuses: write
+    outputs:
+      pr_number: ${{ steps.context.outputs.pr_number }}
+      head_sha: ${{ steps.context.outputs.head_sha }}
+      checkout_ref: ${{ steps.context.outputs.checkout_ref }}
+      checkout_repository: ${{ steps.context.outputs.checkout_repository }}
+      publish_status: ${{ steps.context.outputs.publish_status }}
+
+    steps:
+      - name: Resolve and verify pull request
+        id: context
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EVENT_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          EVENT_CHECKOUT_REF: ${{ github.sha }}
+          INPUT_PR_NUMBER: ${{ inputs.pr_number }}
+          INPUT_HEAD_SHA: ${{ inputs.head_sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            pr_number="$INPUT_PR_NUMBER"
+            head_sha="$INPUT_HEAD_SHA"
+
+            [[ "$pr_number" =~ ^[1-9][0-9]*$ ]] || fail "A valid pull request number is required."
+            [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || fail "A full 40-character lowercase head SHA is required."
+
+            pr_json="$(gh pr view "$pr_number" --repo "$GITHUB_REPOSITORY" \
+              --json state,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,author)"
+            state="$(jq -r '.state' <<<"$pr_json")"
+            is_draft="$(jq -r '.isDraft' <<<"$pr_json")"
+            base_ref="$(jq -r '.baseRefName' <<<"$pr_json")"
+            head_ref="$(jq -r '.headRefName' <<<"$pr_json")"
+            current_sha="$(jq -r '.headRefOid // empty' <<<"$pr_json")"
+            head_repo="$(jq -r '"\(.headRepositoryOwner.login)/\(.headRepository.name)"' <<<"$pr_json")"
+            author="$(jq -r '.author.login // empty' <<<"$pr_json")"
+
+            [ "$state" = "OPEN" ] || fail "Pull request #$pr_number is not open."
+            [ "$is_draft" = "false" ] || fail "Pull request #$pr_number is a draft."
+            [ "$base_ref" = "develop" ] || fail "Automated validation is limited to pull requests targeting develop."
+            [ "$head_repo" = "$GITHUB_REPOSITORY" ] || fail "Automated validation is limited to same-repository branches."
+            [[ "$head_ref" == agent/issue-* ]] || fail "Automated validation requires an agent/issue-* head branch."
+            [ "$author" = "github-actions[bot]" ] || fail "Automated validation requires github-actions[bot] as the pull request author."
+            [ "$current_sha" = "$head_sha" ] || fail "Refusing stale validation: pull request head is $current_sha, requested SHA is $head_sha."
+
+            changed_files="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$pr_number/files?per_page=100" --jq '.[].filename')"
+            if grep -Eq '^\.github/workflows/' <<<"$changed_files"; then
+              fail "Pull requests that change .github/workflows/** require manual validation and review."
+            fi
+
+            checkout_ref="$head_sha"
+            checkout_repository="$GITHUB_REPOSITORY"
+            publish_status="true"
+
+          else
+            pr_number="$EVENT_PR_NUMBER"
+            head_sha="$EVENT_HEAD_SHA"
+            checkout_ref="$EVENT_CHECKOUT_REF"
+            checkout_repository="$GITHUB_REPOSITORY"
+            if [ "$EVENT_HEAD_REPOSITORY" = "$GITHUB_REPOSITORY" ]; then
+              publish_status="true"
+            else
+              publish_status="false"
+            fi
+
+            [[ "$pr_number" =~ ^[1-9][0-9]*$ ]] || fail "The pull_request event did not contain a valid pull request number."
+            [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || fail "The pull_request event did not contain a full head SHA."
+            [[ "$checkout_ref" =~ ^[0-9a-f]{40}$ ]] || fail "The pull_request event did not contain a full checkout SHA."
+          fi
+
+          if [ "$publish_status" = "true" ]; then
+            gh api \
+              --method POST \
+              "repos/$GITHUB_REPOSITORY/statuses/$head_sha" \
+              -f state=pending \
+              -f context=agent-validation \
+              -f description="Validation is running" \
+              -f target_url="$RUN_URL" >/dev/null
+          fi
+
+          {
+            echo "pr_number=$pr_number"
+            echo "head_sha=$head_sha"
+            echo "checkout_ref=$checkout_ref"
+            echo "checkout_repository=$checkout_repository"
+            echo "publish_status=$publish_status"
+          } >> "$GITHUB_OUTPUT"
+
   validate:
     name: Backend tests and frontend build
+    needs: context
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: ${{ needs.context.outputs.checkout_repository }}
+          ref: ${{ needs.context.outputs.checkout_ref }}
+          persist-credentials: false
 
       - name: Set up .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: 10.0.x
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 20
           cache: npm
           cache-dependency-path: frontend/inventory-app/package-lock.json
 
+      - name: Validate agent workflow contracts
+        run: node scripts/validate-agent-workflows.mjs
+
       - name: Validate repository
         run: bash scripts/validate.sh
+
+  report-status:
+    name: Report validation status
+    if: always() && needs.context.result == 'success' && needs.context.outputs.publish_status == 'true'
+    needs:
+      - context
+      - validate
+    runs-on: ubuntu-latest
+    permissions:
+      statuses: write
+
+    steps:
+      - name: Publish exact-SHA status
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ needs.context.outputs.head_sha }}
+          VALIDATION_RESULT: ${{ needs.validate.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ "$VALIDATION_RESULT" = "success" ]; then
+            state="success"
+            description="Validation passed"
+          else
+            state="failure"
+            description="Validation did not pass ($VALIDATION_RESULT)"
+          fi
+
+          gh api \
+            --method POST \
+            "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" \
+            -f state="$state" \
+            -f context=agent-validation \
+            -f description="$description" \
+            -f target_url="$RUN_URL" >/dev/null
+
+  dispatch-review:
+    name: Dispatch review after successful validation
+    if: github.event_name == 'workflow_dispatch' && inputs.dispatch_review == true && needs.validate.result == 'success' && needs.report-status.result == 'success'
+    needs:
+      - context
+      - validate
+      - report-status
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      pull-requests: read
+
+    steps:
+      - name: Reverify current head and dispatch review
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ needs.context.outputs.pr_number }}
+          HEAD_SHA: ${{ needs.context.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          pr_json="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --json state,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,author,labels)"
+          state="$(jq -r '.state' <<<"$pr_json")"
+          is_draft="$(jq -r '.isDraft' <<<"$pr_json")"
+          base_ref="$(jq -r '.baseRefName' <<<"$pr_json")"
+          head_ref="$(jq -r '.headRefName' <<<"$pr_json")"
+          current_sha="$(jq -r '.headRefOid // empty' <<<"$pr_json")"
+          head_repo="$(jq -r '"\(.headRepositoryOwner.login)/\(.headRepository.name)"' <<<"$pr_json")"
+          author="$(jq -r '.author.login // empty' <<<"$pr_json")"
+
+          [ "$state" = "OPEN" ] || fail "Pull request #$PR_NUMBER is no longer open."
+          [ "$is_draft" = "false" ] || fail "Pull request #$PR_NUMBER is now a draft."
+          [ "$base_ref" = "develop" ] || fail "Pull request #$PR_NUMBER no longer targets develop."
+          [ "$head_repo" = "$GITHUB_REPOSITORY" ] || fail "Pull request #$PR_NUMBER no longer uses a same-repository branch."
+          [[ "$head_ref" == agent/issue-* ]] || fail "Pull request #$PR_NUMBER no longer uses an agent/issue-* branch."
+          [ "$author" = "github-actions[bot]" ] || fail "Pull request #$PR_NUMBER is not authored by github-actions[bot]."
+          [ "$current_sha" = "$HEAD_SHA" ] || fail "Refusing stale review dispatch: pull request head is $current_sha, validated SHA is $HEAD_SHA."
+
+          changed_files="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" --jq '.[].filename')"
+          if grep -Eq '^\.github/workflows/' <<<"$changed_files"; then
+            fail "Pull requests that change .github/workflows/** require manual validation and review."
+          fi
+
+          if ! jq -e 'any(.labels[]?; .name == "agent-review")' <<<"$pr_json" >/dev/null; then
+            echo "::notice::The agent-review label is absent; validation passed, but no review was dispatched."
+            exit 0
+          fi
+
+          gh workflow run agent-review.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref main \
+            -f pr_number="$PR_NUMBER" \
+            -f head_sha="$HEAD_SHA"

@@ -9,10 +9,9 @@ name: Agent repair
 # - Updates only that pull request's head branch. Never merges, deploys, or pushes anywhere else.
 # - Repair counting is human-controlled: the human who comments decides whether an attempt is still
 #   permitted (at most two per pull request). This workflow does not count attempts or start on its own.
-# - When a repair pushes a commit, that push is made with the workflow token, so the resulting
-#   `synchronize` event queues the validation and review runs until a human clicks "Approve workflows
-#   to run" on the pull request. The closing comment compares the PR head SHA before and after the
-#   run and only claims a push, and queued workflows, when the head actually changed.
+# - When a repair pushes a commit, a separate least-privilege job verifies the new head and dispatches
+#   trusted validation from `main` for that exact SHA. Successful validation dispatches a fresh review
+#   only while the human-applied `agent-review` label remains present.
 
 on:
   issue_comment:
@@ -43,6 +42,10 @@ jobs:
       actions: read
       checks: read
       statuses: read
+    outputs:
+      dispatch_validation: ${{ steps.outcome.outputs.dispatch_validation }}
+      pr_number: ${{ steps.outcome.outputs.pr_number }}
+      head_sha: ${{ steps.outcome.outputs.head_sha }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       PR_NUMBER: ${{ github.event.issue.number }}
@@ -137,6 +140,7 @@ jobs:
             "Bash(gh pr merge *),Bash(gh pr review *),Bash(gh pr edit *),Bash(gh pr create *),Bash(gh issue edit *),Bash(gh issue comment *),Bash(gh api *),Bash(gh workflow *),Bash(gh run rerun *),Bash(gh run cancel *),Bash(gh release *),Bash(gh secret *),Bash(gh variable *),Bash(gh label *)"
 
       - name: Record outcome on the pull request
+        id: outcome
         if: always()
         env:
           CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
@@ -144,6 +148,11 @@ jobs:
           START_SHA: ${{ steps.pr.outputs.start_sha }}
         run: |
           set -euo pipefail
+          {
+            echo "dispatch_validation=false"
+            echo "pr_number=$PR_NUMBER"
+            echo "head_sha="
+          } >> "$GITHUB_OUTPUT"
 
           # Determine the PR head after the run. A failure here must not fail the step:
           # the comment then reports that the head could not be verified.
@@ -160,41 +169,97 @@ jobs:
           esac
 
           if [ -n "$START_SHA" ] && [ -n "$end_sha" ] && [ "$START_SHA" != "$end_sha" ]; then
-            body="$(cat <<EOF
-          Repair run on branch ${HEAD_REF} finished. ${status_line}
+            {
+              echo "dispatch_validation=true"
+              echo "head_sha=$end_sha"
+            } >> "$GITHUB_OUTPUT"
 
-          The pull request head changed from ${START_SHA} to ${end_sha}. That push was made with the workflow token, so the synchronize event has queued the validation and review workflow runs for the new head; open the pull request and click "Approve workflows to run", then wait for the check and the fresh review. Read the agent's comment above for what changed and the actual validation result.
+            body="$(cat <<EOF
+          Repair run on branch $HEAD_REF finished. $status_line
+
+          The pull request head changed from $START_SHA to $end_sha. A separate follow-up job will dispatch trusted validation for the new exact SHA. If validation passes and the human-applied \`agent-review\` label is still present, a fresh independent review will be dispatched automatically. Human approval and merge remain required.
 
           Repair attempts are limited to two per pull request and are counted by you; after the second failed attempt, label the issue agent-blocked and take over.
 
           Agent step outcome: ${CLAUDE_OUTCOME:-unknown}
-          Run: ${RUN_URL}
+          Run: $RUN_URL
           EOF
           )"
           elif [ -n "$START_SHA" ] && [ -n "$end_sha" ]; then
             body="$(cat <<EOF
-          Repair run on branch ${HEAD_REF} finished. ${status_line}
+          Repair run on branch $HEAD_REF finished. $status_line
 
-          No new commit was pushed by this repair run: the pull request head is still ${end_sha}. No synchronize workflows were queued by this repair, so there is no new validation or review run to approve. Read the agent's comment above (if any) and the run log to see why nothing was pushed before deciding whether another repair attempt is warranted.
+          No new commit was pushed by this repair run: the pull request head is still $end_sha. No exact-SHA validation or review was dispatched. Read the agent's comment above (if any) and the run log before deciding whether another repair attempt is warranted.
 
           Repair attempts are limited to two per pull request and are counted by you; after the second failed attempt, label the issue agent-blocked and take over.
 
           Agent step outcome: ${CLAUDE_OUTCOME:-unknown}
-          Run: ${RUN_URL}
+          Run: $RUN_URL
           EOF
           )"
           else
             body="$(cat <<EOF
-          Repair run on branch ${HEAD_REF:-unknown} finished. ${status_line}
+          Repair run on branch ${HEAD_REF:-unknown} finished. $status_line
 
-          This workflow could not verify whether the pull request head changed during the run (head SHA before: ${START_SHA:-unavailable}; after: ${end_sha:-unavailable}). It is not claiming that a push occurred. Inspect the pull request's commits and checks and the run log to determine whether a new commit was pushed and whether any workflow runs are waiting for "Approve workflows to run".
+          This workflow could not verify whether the pull request head changed during the run (head SHA before: ${START_SHA:-unavailable}; after: ${end_sha:-unavailable}). It is not claiming that a push occurred and did not dispatch validation or review. Inspect the pull request's commits, checks, and run log.
 
           Repair attempts are limited to two per pull request and are counted by you; after the second failed attempt, label the issue agent-blocked and take over.
 
           Agent step outcome: ${CLAUDE_OUTCOME:-unknown}
-          Run: ${RUN_URL}
+          Run: $RUN_URL
           EOF
           )"
           fi
 
           gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body "$body"
+
+  dispatch-validation:
+    name: Dispatch exact-SHA validation
+    needs: repair
+    if: always() && needs.repair.outputs.dispatch_validation == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      pull-requests: read
+
+    steps:
+      - name: Verify repaired head and dispatch trusted validation
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ needs.repair.outputs.pr_number }}
+          HEAD_SHA: ${{ needs.repair.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          pr_json="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --json state,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,author,labels)"
+          state="$(jq -r '.state' <<<"$pr_json")"
+          is_draft="$(jq -r '.isDraft' <<<"$pr_json")"
+          base_ref="$(jq -r '.baseRefName' <<<"$pr_json")"
+          head_ref="$(jq -r '.headRefName' <<<"$pr_json")"
+          current_sha="$(jq -r '.headRefOid // empty' <<<"$pr_json")"
+          head_repo="$(jq -r '"\(.headRepositoryOwner.login)/\(.headRepository.name)"' <<<"$pr_json")"
+          author="$(jq -r '.author.login // empty' <<<"$pr_json")"
+
+          [ "$state" = "OPEN" ] || fail "Pull request #$PR_NUMBER is not open."
+          [ "$is_draft" = "false" ] || fail "Pull request #$PR_NUMBER is a draft."
+          [ "$base_ref" = "develop" ] || fail "Automated validation is limited to pull requests targeting develop."
+          [ "$head_repo" = "$GITHUB_REPOSITORY" ] || fail "Automated validation is limited to same-repository branches."
+          [[ "$head_ref" == agent/issue-* ]] || fail "Automated validation requires an agent/issue-* head branch."
+          [ "$author" = "github-actions[bot]" ] || fail "Automated validation requires github-actions[bot] as the pull request author."
+          [ "$current_sha" = "$HEAD_SHA" ] || fail "Refusing stale validation dispatch: pull request head is $current_sha, expected $HEAD_SHA."
+          jq -e 'any(.labels[]?; .name == "agent-review")' <<<"$pr_json" >/dev/null \
+            || fail "The agent-review label is required before repair follow-up validation."
+
+          changed_files="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" --jq '.[].filename')"
+          if grep -Eq '^\.github/workflows/' <<<"$changed_files"; then
+            fail "Pull requests that change .github/workflows/** require manual validation and review."
+          fi
+
+          gh workflow run validate.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref main \
+            -f pr_number="$PR_NUMBER" \
+            -f head_sha="$HEAD_SHA" \
+            -f dispatch_review=true
