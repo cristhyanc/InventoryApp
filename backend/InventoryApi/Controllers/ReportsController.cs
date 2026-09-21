@@ -1,4 +1,12 @@
-using InventoryApi.DTOs;
+using Inventory.Application.Reporting.Bookkeeping;
+using Inventory.Application.Reporting.Dashboard;
+using Inventory.Application.Reporting.Daily;
+using Inventory.Application.Reporting.Gst;
+using Inventory.Application.Reporting.MachineProfitability;
+using Inventory.Application.Reporting.ProductProfitability;
+using Inventory.Application.Reporting.Reconciliation;
+using Inventory.Application.Reporting.Shared;
+using Inventory.Application.Reporting.Transactions;
 using InventoryApi.Services.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 

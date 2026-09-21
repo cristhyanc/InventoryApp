@@ -178,6 +178,12 @@ Contains:
 
 Controllers do not implement accounting, inventory, persistence, or filesystem rules.
 
+### API documentation policy
+
+`Swashbuckle.AspNetCore` (`AddSwaggerGen`/`UseSwagger`/`UseSwaggerUI` in `Program.cs`) is intentionally retained to give local developers an interactive view of the API surface. It is registered only behind `app.Environment.IsDevelopment()`, so it never runs, and never exposes `/swagger`, outside the Development environment; its `SwaggerDoc` metadata carries only a title, version, and description, with no authentication scheme or configuration values. `dotnet-tools.json` keeps the matching `swashbuckle.aspnetcore.cli` local tool so a developer can export `swagger.json` manually with `dotnet swagger tofile` if needed.
+
+No generated OpenAPI client is adopted (see [Runtime configuration and API contracts](#runtime-configuration-and-api-contracts)): the frontend uses manually maintained TypeScript contracts, and no `nswag.json` or `OpenApiReference` item exists anywhere in the repository. `Microsoft.Extensions.ApiDescription.Client` and `NSwag.ApiDescription.Client` were unused package references with no consumer and have been removed; re-add them only alongside an issue that deliberately adopts a generated client.
+
 ### External integration errors
 
 External service failures are represented by a typed integration exception rather than by a raw transport exception or a silently empty result. `NayaxLynxClient` validates every Nayax response in one place and throws `NayaxUpstreamException`, which carries only the operation name, HTTP method, relative endpoint, and upstream status code.
@@ -428,6 +434,7 @@ Backend and frontend tracks can progress independently when their contracts do n
 7. **Reporting slices**
    - Split bookkeeping, daily, reconciliation, machine/product profitability, GST, dashboard, and transactions into separate query handlers.
    - Split CSV/XLSX formatting from report calculation.
+   - **Contract placement done.** Report request/result contracts moved from `InventoryApi/DTOs/ReportingDtos.cs` into `Inventory.Application.Reporting.<Feature>` namespaces (`Shared`, `Bookkeeping`, `Daily`, `Reconciliation`, `MachineProfitability`, `ProductProfitability`, `Gst`, `Dashboard`, `Transactions`), with no JSON/API contract change. `ReportsController` and `IReportingService`/`ReportingService` still bind directly to these application types; the query-handler split and CSV/XLSX separation above remain future work (tracked in issue #43).
 
 8. **Remove legacy structure**
    - Only after every feature is migrated and tests prove equivalent behavior.
@@ -450,6 +457,7 @@ Backend and frontend tracks can progress independently when their contracts do n
    - Split the broad reporting client and service-local interfaces by report family.
    - Retain shared filters/export behavior without centralizing every report in another large class.
    - Preserve nullable financial values, quality counts, and backend/export parity.
+   - **Contract placement done.** Report interfaces moved from `services/reporting.service.ts` into `features/reports/<feature>/models/` (`shared`, `bookkeeping`, `daily`, `reconciliation`, `machine-profitability`, `product-profitability`, `gst`, `dashboard`, `transactions`); `ReportingService` re-exports them from their new location so existing component imports are unaffected. The service itself, its HTTP calls, and the routed report pages/components have not moved into `features/reports/` yet.
 
 5. **Large page decomposition**
    - Extract cohesive forms, tables, and panels from large administration and report pages.

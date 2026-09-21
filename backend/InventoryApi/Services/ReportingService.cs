@@ -1,6 +1,15 @@
 using System.Globalization;
 using System.Text;
 using ClosedXML.Excel;
+using Inventory.Application.Reporting.Bookkeeping;
+using Inventory.Application.Reporting.Dashboard;
+using Inventory.Application.Reporting.Daily;
+using Inventory.Application.Reporting.Gst;
+using Inventory.Application.Reporting.MachineProfitability;
+using Inventory.Application.Reporting.ProductProfitability;
+using Inventory.Application.Reporting.Reconciliation;
+using Inventory.Application.Reporting.Shared;
+using Inventory.Application.Reporting.Transactions;
 using InventoryApi.Data;
 using InventoryApi.DTOs;
 using InventoryApi.Integrations.Nayax;

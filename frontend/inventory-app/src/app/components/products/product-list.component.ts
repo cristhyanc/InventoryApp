@@ -1,13 +1,16 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
+import { EMPTY, Subject } from 'rxjs';
+import { catchError, switchMap, takeUntil, tap } from 'rxjs/operators';
 import { ProductService } from '../../services/product.service';
 import { CategoryService } from '../../services/category.service';
 import { SupplierService } from '../../services/supplier.service';
 import { Product, Category, Supplier } from '../../models/models';
 import { ConfirmationDialogComponent } from '../shared/confirmation-dialog.component';
 import { ListLoadState } from '../shared/list-load-state';
+import { createFilterTrigger$ } from '../shared/filter-request-trigger';
 import { ToastService } from '../../services/toast.service';
 
 @Component({
@@ -16,7 +19,7 @@ import { ToastService } from '../../services/toast.service';
   imports: [CommonModule, FormsModule, RouterLink, ConfirmationDialogComponent],
   templateUrl: './product-list.component.html'
 })
-export class ProductListComponent implements OnInit {
+export class ProductListComponent implements OnInit, OnDestroy {
   products: Product[] = [];
   categories: Category[] = [];
   suppliers: Supplier[] = [];
@@ -25,6 +28,10 @@ export class ProductListComponent implements OnInit {
   search = '';
   categoryId: number | '' = '';
   supplierId: number | '' = '';
+
+  private readonly search$ = new Subject<string>();
+  private readonly immediateFilter$ = new Subject<void>();
+  private readonly destroy$ = new Subject<void>();
 
   constructor(
     private productService: ProductService,
@@ -36,10 +43,23 @@ export class ProductListComponent implements OnInit {
   ngOnInit(): void {
     this.categoryService.getAll().subscribe((categories) => (this.categories = categories));
     this.supplierService.getAll().subscribe((suppliers) => (this.suppliers = suppliers));
+
+    createFilterTrigger$(this.search$, this.immediateFilter$)
+      .pipe(
+        switchMap(() => this.fetchProducts()),
+        takeUntil(this.destroy$)
+      )
+      .subscribe();
+
     this.applyFilters();
   }
 
-  applyFilters(): void {
+  ngOnDestroy(): void {
+    this.destroy$.next();
+    this.destroy$.complete();
+  }
+
+  private fetchProducts() {
     const filters = {
       search: this.search || undefined,
       categoryId: this.categoryId === '' ? undefined : this.categoryId,
@@ -47,18 +67,29 @@ export class ProductListComponent implements OnInit {
     };
 
     const token = this.loadState.start();
-    this.productService.getAll(filters).subscribe({
-      next: (products) => {
+    return this.productService.getAll(filters).pipe(
+      tap((products) => {
         if (this.loadState.isCurrent(token)) {
           this.products = products;
         }
         this.loadState.succeed(token);
-      },
-      error: () => {
+      }),
+      catchError(() => {
         this.loadState.fail(token);
         this.toastService.error('Failed to load products.');
-      }
-    });
+        return EMPTY;
+      })
+    );
+  }
+
+  onSearchChange(value: string): void {
+    this.search = value;
+    this.search$.next(value);
+  }
+
+  /** Triggers an immediate (non-debounced) refresh, e.g. for category/supplier changes. */
+  applyFilters(): void {
+    this.immediateFilter$.next();
   }
 
   resetFilters(): void {

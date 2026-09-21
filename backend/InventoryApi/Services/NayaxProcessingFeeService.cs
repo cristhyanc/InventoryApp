@@ -1,5 +1,5 @@
+using Inventory.Application.Reporting.Shared;
 using InventoryApi.Data;
-using InventoryApi.DTOs;
 using InventoryApi.Models;
 using InventoryApi.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
