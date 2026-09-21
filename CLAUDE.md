@@ -18,6 +18,7 @@ If these sources conflict with each other, with existing tests, or with the inst
 - Never merge, approve, deploy, run production migrations, touch production data, change GitHub/Azure credentials or repository settings, force-push, or rewrite history.
 - Never write secrets, tokens, connection strings, local databases, uploaded business documents, or generated build output into the repository, a pull request, an issue, a comment, or a log.
 - Do not weaken, skip, or delete a failing test to obtain a green build.
+- Honour the issue's documentation impact decision and fill the pull request's `## Documentation impact` section truthfully (`Decision: UPDATED` or `Decision: NOT REQUIRED` with specific evidence). CI rejects a missing, placeholder, or generic declaration; see `AGENTS.md` § Documentation impact gate.
 
 ## Validation commands
 

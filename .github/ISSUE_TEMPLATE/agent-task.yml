@@ -127,6 +127,31 @@ body:
     validations:
       required: true
 
+  - type: dropdown
+    id: documentation-impact-decision
+    attributes:
+      label: Documentation impact decision
+      description: Decide whether this task requires documentation changes. Automation checks that this decision and its details are present and meaningful before an implementation agent starts; the reviewer and the human who merges judge whether they are correct.
+      options:
+        - Documentation changes required
+        - No documentation changes required
+    validations:
+      required: true
+
+  - type: textarea
+    id: documentation-impact-details
+    attributes:
+      label: Documentation impact details
+      description: If documentation changes are required, list every documentation file and section to update (for example docs/architecture.md, docs/automation.md, AGENTS.md, README.md). If not, explain specifically for this task why behaviour, contracts, architecture, configuration, automation, deployment, operations and user workflows are unaffected. Bare "None", "N/A" or "Not applicable", and generic sentences that only restate those categories, are rejected by the preflight check.
+      placeholder: |
+        Required:
+        - docs/architecture.md § Reporting — describe the new use case and adapter
+        - AGENTS.md § Reporting dates and filters — record the new filter rule
+        OR
+        Not required: this task only renames the private helper BuildRows inside EfDailyReportFactsProvider and keeps every route, response shape and report total identical, so no documented behaviour, contract, configuration or workflow changes.
+    validations:
+      required: true
+
   - type: checkboxes
     id: readiness
     attributes:
@@ -140,6 +165,8 @@ body:
         - label: Risk has been considered and the proposed level matches the risk areas.
           required: true
         - label: No secrets, credentials, customer data, or imported business files are included in this issue.
+          required: true
+        - label: The documentation impact decision is stated, and its details list the affected documentation files/sections or explain specifically why documentation is unaffected (not a bare "None", "N/A" or "Not applicable").
           required: true
         - label: I understand that merge, release, and deployment remain human-controlled, and that after opening a pull request the agent may only update its feature branch for at most two permitted repair attempts before returning control to a human.
           required: true

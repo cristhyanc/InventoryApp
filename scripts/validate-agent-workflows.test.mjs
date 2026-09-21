@@ -5,21 +5,38 @@ import { describe, it } from 'node:test';
 
 import {
   AGENT_VALIDATION_STATUS,
+  DOCUMENTATION_IMPACT_VALIDATOR,
+  IMPLEMENT_JOB_DOCUMENTATION_CONTRACT,
+  ISSUE_TEMPLATE_DOCUMENTATION_CONTRACT,
   MERGE_VALIDATION_STATUS,
+  PREFLIGHT_JOB_CONTRACT,
+  PULL_REQUEST_TEMPLATE_DOCUMENTATION_CONTRACT,
+  REPAIR_PROMPT_DOCUMENTATION_CONTRACT,
+  REVIEW_PROMPT_DOCUMENTATION_CONTRACT,
   STATUS_CONTEXT_EXPRESSION,
+  VALIDATE_WORKFLOW_DOCUMENTATION_CONTRACT,
   VALIDATION_CONCURRENCY_GROUP,
   evaluateExpression,
+  implementPath,
+  issueTemplatePath,
+  pullRequestTemplatePath,
   readRepositoryFile,
   renderTemplate,
+  repairPath,
   reviewPath,
   runContractChecks,
   simulateValidationRun,
   validatePath,
+  verifyDocumentationImpactGate,
   verifyValidationModeIsolation,
 } from './validate-agent-workflows.mjs';
 
 const validateWorkflow = readRepositoryFile(validatePath);
 const reviewWorkflow = readRepositoryFile(reviewPath);
+const implementWorkflow = readRepositoryFile(implementPath);
+const repairWorkflow = readRepositoryFile(repairPath);
+const issueTemplate = readRepositoryFile(issueTemplatePath);
+const pullRequestTemplate = readRepositoryFile(pullRequestTemplatePath);
 
 const PR_NUMBER = 95;
 const HEAD_SHA = 'a'.repeat(40);
@@ -208,5 +225,208 @@ describe('preserved guards', () => {
 
     const workflowFilesAccepted = replaceOnce(validateWorkflow, "if grep -Eq '^\\.github/workflows/' <<<\"$changed_files\"; then\n              fail", '# removed\n              true');
     assert.throws(() => runContractChecks({ read: readWithOverrides({ [validatePath]: workflowFilesAccepted }) }));
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// Documentation-impact gate. Each test removes or weakens one requirement and proves the
+// contract rejects it, so the gate cannot be silently dismantled.
+// ---------------------------------------------------------------------------------------
+
+function assertGateRejects(overrides, pattern) {
+  assert.throws(() => verifyDocumentationImpactGate(readWithOverrides(overrides)), pattern);
+  assert.throws(() => runContractChecks({ read: readWithOverrides(overrides) }), pattern);
+}
+
+function removeAll(text, fragment) {
+  assert.ok(text.includes(fragment), `fixture must contain: ${fragment}`);
+  return text.replaceAll(fragment, '# removed');
+}
+
+describe('documentation-impact gate: templates', () => {
+  it('passes for the committed templates', () => {
+    assert.doesNotThrow(() => verifyDocumentationImpactGate());
+  });
+
+  it('rejects an issue template without the decision dropdown, with extra options, or with a changed option', () => {
+    assertGateRejects({ [issueTemplatePath]: replaceOnce(issueTemplate, 'id: documentation-impact-decision', 'id: docs-decision') }, /missing section start/);
+    assertGateRejects(
+      { [issueTemplatePath]: replaceOnce(issueTemplate, '        - No documentation changes required\n', '        - No documentation changes required\n        - Unsure\n') },
+      /expected exactly two options/,
+    );
+    assertGateRejects(
+      { [issueTemplatePath]: replaceOnce(issueTemplate, '        - No documentation changes required\n', '        - Documentation not needed\n') },
+      /decision field: missing required text/,
+    );
+  });
+
+  it('rejects an issue template whose decision or details field is optional', () => {
+    const decisionField = issueTemplate.slice(issueTemplate.indexOf('id: documentation-impact-decision'));
+    const optionalDecision = issueTemplate.replace(decisionField, decisionField.replace('required: true', 'required: false'));
+    assertGateRejects({ [issueTemplatePath]: optionalDecision }, /decision field: missing required text: required: true/);
+
+    const detailsField = issueTemplate.slice(issueTemplate.indexOf('id: documentation-impact-details'));
+    const optionalDetails = issueTemplate.replace(detailsField, detailsField.replace('required: true', 'required: false'));
+    assertGateRejects({ [issueTemplatePath]: optionalDetails }, /details field: missing required text: required: true/);
+  });
+
+  it('rejects an issue template without the details textarea or the readiness confirmation', () => {
+    assertGateRejects({ [issueTemplatePath]: replaceOnce(issueTemplate, 'id: documentation-impact-details', 'id: docs-details') }, /details field: missing section start/);
+    assertGateRejects(
+      { [issueTemplatePath]: replaceOnce(issueTemplate, ISSUE_TEMPLATE_DOCUMENTATION_CONTRACT.readinessConfirmation, 'I thought about documentation') },
+      /readiness: missing required text/,
+    );
+    const readiness = issueTemplate.slice(issueTemplate.indexOf(ISSUE_TEMPLATE_DOCUMENTATION_CONTRACT.readinessConfirmation));
+    const optionalConfirmation = issueTemplate.replace(readiness, readiness.replace('required: true', 'required: false'));
+    assertGateRejects({ [issueTemplatePath]: optionalConfirmation }, /readiness documentation confirmation: missing required text: required: true/);
+  });
+
+  it('rejects a pull request template without the section, with it duplicated, or after known limitations', () => {
+    const { heading, mustPrecede, decisionLine, evidenceLine } = PULL_REQUEST_TEMPLATE_DOCUMENTATION_CONTRACT;
+    assertGateRejects({ [pullRequestTemplatePath]: replaceOnce(pullRequestTemplate, heading, '## Docs\n') }, /must appear exactly once/);
+    assertGateRejects({ [pullRequestTemplatePath]: pullRequestTemplate + '\n' + heading }, /must appear exactly once/);
+
+    const sectionStart = pullRequestTemplate.indexOf(heading);
+    const sectionEnd = pullRequestTemplate.indexOf(mustPrecede);
+    const sectionText = pullRequestTemplate.slice(sectionStart, sectionEnd);
+    const moved = pullRequestTemplate.replace(sectionText, '').replace(mustPrecede, mustPrecede + '\n' + sectionText);
+    assertGateRejects({ [pullRequestTemplatePath]: moved }, /must come before Known limitations/);
+
+    assertGateRejects({ [pullRequestTemplatePath]: replaceOnce(pullRequestTemplate, decisionLine, 'Decision: UPDATED') }, /missing required text: Decision: <UPDATED or NOT REQUIRED>/);
+    assertGateRejects({ [pullRequestTemplatePath]: replaceOnce(pullRequestTemplate, evidenceLine, 'Evidence: see diff') }, /missing required text: Evidence: <meaningful evidence>/);
+    assertGateRejects({ [pullRequestTemplatePath]: replaceOnce(pullRequestTemplate, evidenceLine, evidenceLine + '\n\nEvidence: <meaningful evidence>') }, /expected exactly one "Evidence:" line/);
+  });
+});
+
+describe('documentation-impact gate: implementation workflow', () => {
+  it('requires the preflight job to exist before the implementation job', () => {
+    assertGateRejects({ [implementPath]: replaceOnce(implementWorkflow, '  preflight:\n', '  precheck:\n') }, /missing required text: preflight:/);
+
+    const preflightStart = implementWorkflow.indexOf('  preflight:\n');
+    const implementStart = implementWorkflow.indexOf('  implement:\n');
+    const dispatchStart = implementWorkflow.indexOf('  dispatch-validation:\n');
+    const preflightJob = implementWorkflow.slice(preflightStart, implementStart);
+    const implementJob = implementWorkflow.slice(implementStart, dispatchStart);
+    const reordered = implementWorkflow.slice(0, preflightStart) + implementJob + preflightJob + implementWorkflow.slice(dispatchStart);
+    assertGateRejects({ [implementPath]: reordered }, /preflight job must be defined before the implementation job/);
+  });
+
+  it('requires the preflight job to keep read-only permissions and no agent or write tooling', () => {
+    for (const [from, to] of [
+      ['      contents: read\n      issues: read\n', '      contents: write\n      issues: read\n'],
+      ['      contents: read\n      issues: read\n', '      contents: read\n      issues: write\n'],
+      ['      contents: read\n      issues: read\n', '      contents: read\n      issues: read\n      pull-requests: write\n'],
+    ]) {
+      assertGateRejects({ [implementPath]: replaceOnce(implementWorkflow, from, to) }, /preflight job: (contains forbidden text|missing required text)/);
+    }
+    const preflightEnd = implementWorkflow.indexOf('  implement:\n');
+    const withLabelChange = implementWorkflow.slice(0, preflightEnd) + '          gh issue edit "$ISSUE_NUMBER" --add-label agent-blocked\n' + implementWorkflow.slice(preflightEnd);
+    assertGateRejects({ [implementPath]: withLabelChange }, /preflight job: contains forbidden text: gh issue edit/);
+    const withClaude = implementWorkflow.slice(0, preflightEnd) + '          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\n' + implementWorkflow.slice(preflightEnd);
+    assertGateRejects({ [implementPath]: withClaude }, /preflight job: contains forbidden text: CLAUDE_CODE_OAUTH_TOKEN/);
+  });
+
+  it('requires the preflight job to check out develop without credentials and run the issue validator', () => {
+    for (const required of PREFLIGHT_JOB_CONTRACT.required) {
+      const preflightStart = implementWorkflow.indexOf('  preflight:\n');
+      const preflightEnd = implementWorkflow.indexOf('  implement:\n');
+      const preflight = implementWorkflow.slice(preflightStart, preflightEnd);
+      assert.ok(preflight.includes(required), `preflight must contain: ${required}`);
+      const weakened = implementWorkflow.slice(0, preflightStart) + preflight.replace(required, '# removed') + implementWorkflow.slice(preflightEnd);
+      assertGateRejects({ [implementPath]: weakened }, /preflight job: missing required text/);
+    }
+  });
+
+  it('requires the implementation job to depend on preflight and to gate on its success', () => {
+    assertGateRejects({ [implementPath]: replaceOnce(implementWorkflow, IMPLEMENT_JOB_DOCUMENTATION_CONTRACT.needs, '')}, /implement job: missing required text:\s+needs: preflight/);
+    assertGateRejects(
+      { [implementPath]: replaceOnce(implementWorkflow, IMPLEMENT_JOB_DOCUMENTATION_CONTRACT.condition, "if: always() && github.event.label.name == 'agent-ready' && github.event.issue.pull_request == null") },
+      /implement job: missing required text: if: needs.preflight.result == 'success'/,
+    );
+  });
+
+  it('requires every documentation requirement in the implementation prompt and the validator in its allowed tools', () => {
+    for (const required of IMPLEMENT_JOB_DOCUMENTATION_CONTRACT.prompt) {
+      assertGateRejects({ [implementPath]: replaceOnce(implementWorkflow, required, 'weakened') }, /implement prompt: missing required text/);
+    }
+    assertGateRejects(
+      { [implementPath]: replaceOnce(implementWorkflow, `,Bash(node ${DOCUMENTATION_IMPACT_VALIDATOR} --pr-body *)`, '') },
+      /allowed tools: missing required text/,
+    );
+    assertGateRejects(
+      { [implementPath]: replaceOnce(implementWorkflow, `Bash(node ${DOCUMENTATION_IMPACT_VALIDATOR} --pr-body *)`, `Bash(node ${DOCUMENTATION_IMPACT_VALIDATOR} --pr-body *),Bash(gh pr edit *)`) },
+      /allowed tools: contains forbidden text: gh pr edit/,
+    );
+  });
+});
+
+describe('documentation-impact gate: validation workflow', () => {
+  it('requires the edited pull-request activity type', () => {
+    assertGateRejects(
+      { [validatePath]: replaceOnce(validateWorkflow, VALIDATE_WORKFLOW_DOCUMENTATION_CONTRACT.pullRequestTypes, 'types: [opened, synchronize, reopened]') },
+      /missing required text: types: \[opened, synchronize, reopened, edited\]/,
+    );
+  });
+
+  it('requires the body to be obtained in the context job for both events and handed over base64-encoded', () => {
+    for (const required of VALIDATE_WORKFLOW_DOCUMENTATION_CONTRACT.contextJob) {
+      assertGateRejects({ [validatePath]: replaceOnce(validateWorkflow, required, '# removed') }, /context job: missing required text/);
+    }
+    const bodyFromPullRequestEventOnly = replaceOnce(validateWorkflow, 'pr_body="$(gh pr view "$pr_number" --repo "$GITHUB_REPOSITORY" --json body --jq \'.body // ""\')"', 'pr_body="$EVENT_PR_BODY"');
+    assertGateRejects({ [validatePath]: bodyFromPullRequestEventOnly }, /context job: missing required text: pr_body="\$\(gh pr view/);
+  });
+
+  it('requires the validate job to decode the body into a temporary file and run the validator before repository validation', () => {
+    for (const required of VALIDATE_WORKFLOW_DOCUMENTATION_CONTRACT.validateJob) {
+      assertGateRejects({ [validatePath]: replaceOnce(validateWorkflow, required, '# removed') }, /validate job: missing required text/);
+    }
+
+    const validatorStep = validateWorkflow.slice(
+      validateWorkflow.indexOf('      - name: Validate documentation-impact declaration\n'),
+      validateWorkflow.indexOf('      - name: Validate agent workflow contracts\n'),
+    );
+    const afterRepositoryValidation = validateWorkflow.replace(validatorStep, '').replace('      - name: Validate repository\n        run: bash scripts/validate.sh\n', '      - name: Validate repository\n        run: bash scripts/validate.sh\n\n' + validatorStep);
+    assertGateRejects({ [validatePath]: afterRepositoryValidation }, /must run before repository validation/);
+  });
+
+  it('never exposes a GitHub token or write permission to the job that checks out pull request code', () => {
+    const validateJobStart = validateWorkflow.indexOf('  validate:\n');
+    const withToken = validateWorkflow.slice(0, validateJobStart) + '  validate:\n    env:\n      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n' + validateWorkflow.slice(validateJobStart + '  validate:\n'.length);
+    assertGateRejects({ [validatePath]: withToken }, /validate job: contains forbidden text: GH_TOKEN/);
+    assertGateRejects({ [validatePath]: replaceOnce(validateWorkflow, '    permissions:\n      contents: read\n\n    steps:\n      - name: Check out repository', '    permissions:\n      contents: read\n      pull-requests: write\n\n    steps:\n      - name: Check out repository') }, /validate job: contains forbidden text: pull-requests: write/);
+  });
+
+  it('preserves the exact-SHA and merge-result status and concurrency behaviour with the gate in place', () => {
+    assert.doesNotThrow(() => verifyValidationModeIsolation(validateWorkflow, validatePath));
+    const pullRequestRun = simulateValidationRun(validateWorkflow, pullRequestEvent());
+    const dispatchRun = simulateValidationRun(validateWorkflow, dispatchEvent());
+    assert.equal(pullRequestRun.statusContext, MERGE_VALIDATION_STATUS);
+    assert.equal(dispatchRun.statusContext, AGENT_VALIDATION_STATUS);
+    assert.notEqual(pullRequestRun.concurrencyGroup, dispatchRun.concurrencyGroup);
+  });
+});
+
+describe('documentation-impact gate: review and repair workflows', () => {
+  it('requires the review prompt to compare the issue decision, the PR declaration and the diff, and to treat missing documentation as a blocker', () => {
+    for (const required of REVIEW_PROMPT_DOCUMENTATION_CONTRACT) {
+      assertGateRejects({ [reviewPath]: replaceOnce(reviewWorkflow, required, 'weakened')}, /review prompt: missing required text/);
+    }
+  });
+
+  it('does not let the review job gain write authority alongside the gate', () => {
+    assertGateRejects({ [reviewPath]: replaceOnce(reviewWorkflow, '      contents: read\n      pull-requests: write\n      issues: read\n', '      contents: write\n      pull-requests: write\n      issues: read\n') }, /contains forbidden text: contents: write/);
+    assertGateRejects({ [reviewPath]: replaceOnce(reviewWorkflow, '      contents: read\n      pull-requests: write\n      issues: read\n', '      contents: read\n      pull-requests: write\n      issues: write\n') }, /review permissions: contains forbidden text: issues: write/);
+    assertGateRejects({ [reviewPath]: replaceOnce(reviewWorkflow, '"Bash(gh pr review * --comment *)"', '"Bash(gh pr review * --comment *),Bash(gh pr edit *)"') }, /allowed tools: contains forbidden text: gh pr edit/);
+  });
+
+  it('requires repairs to update documentation and forbids editing the pull request description', () => {
+    for (const required of REPAIR_PROMPT_DOCUMENTATION_CONTRACT) {
+      assertGateRejects({ [repairPath]: replaceOnce(repairWorkflow, required, 'weakened') }, /repair prompt: missing required text/);
+    }
+    assertGateRejects({ [repairPath]: removeAll(repairWorkflow, 'Bash(gh pr edit *),') }, /disallowed tools: missing required text: Bash\(gh pr edit \*\)/);
+    assertGateRejects(
+      { [repairPath]: replaceOnce(repairWorkflow, '"Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh pr comment *)', '"Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh pr comment *),Bash(gh pr edit *)') },
+      /allowed tools: contains forbidden text: gh pr edit/,
+    );
   });
 });
