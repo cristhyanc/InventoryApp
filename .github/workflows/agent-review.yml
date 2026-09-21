@@ -166,6 +166,7 @@ jobs:
             2. The pull request (`gh pr view ${{ needs.context.outputs.pr_number }} --comments`) and its full diff (`gh pr diff ${{ needs.context.outputs.pr_number }}` or `git diff origin/${{ needs.context.outputs.base_ref }}...HEAD`).
             3. The linked issue named in the PR body (`gh issue view <n> --comments`): its acceptance criteria and explicit exclusions define what the PR was allowed to do.
             4. The validation evidence: the "Validation commands and actual results" section of the PR body and the actual CI state (`gh pr checks ${{ needs.context.outputs.pr_number }}`, and the github_ci tools or `gh run view` for logs). A claim without matching evidence is not proven. A successful `agent-validation` commit status linked to a dispatched validation run is valid exact-SHA evidence; an approval-required duplicate `pull_request` run for the same bot update is not a failure when that exact-SHA status succeeded.
+            5. The documentation-impact declarations. Compare three things: the issue's Documentation impact decision and details, the pull request's "## Documentation impact" declaration (Decision and Evidence), and the actual diff. CI only proves that a declaration exists; you decide whether it is truthful.
 
             Evaluate and report on each of:
             - Requirements: every acceptance criterion met; nothing outside the criteria or inside the exclusions was changed; no scope creep, no unrelated cleanup.
@@ -175,6 +176,7 @@ jobs:
             - Validation evidence: the PR states real commands and results consistent with CI. Flag any unsupported "passed" claim.
             - Secrets, local databases, generated output, accidental migrations, unrelated files, and public API contract changes.
             - Risk classification per docs/automation.md; for high-risk areas confirm the PR cites the invariants it touches.
+            - Documentation impact: the diff must match the declarations. With `Decision: UPDATED`, every documentation file named in the Evidence must actually change in the diff and describe the merged behaviour accurately, and every documentation change in the diff must be listed. With `Decision: NOT REQUIRED`, verify from the diff, not from filenames alone, that no documented behaviour, contract, architecture, configuration, automation, deployment, operation or user workflow changed; if the issue said "Documentation changes required", or the diff makes any documentation inaccurate, that decision is wrong. Missing, inaccurate or incomplete required documentation is a blocker. So is a declaration that contradicts the diff or an issue decision that the PR silently ignored.
 
             Deliver the result on the pull request:
             - Inline comments (mcp__github_inline_comment__create_inline_comment) for specific lines that need a change, each stating the problem, why it matters, and the rule or criterion it violates.

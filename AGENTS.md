@@ -30,6 +30,8 @@ docs/automation.md                    Automated development lifecycle and author
 .github/pull_request_template.md      Pull request template
 scripts/validate.ps1                  Complete Windows validation
 scripts/validate.sh                   Complete Bash validation
+scripts/validate-agent-workflows.mjs  Agent workflow and template contract checks (with .test.mjs)
+scripts/validate-documentation-impact.mjs  Documentation-impact declaration parser for issues and PRs (with .test.mjs)
 ```
 
 Read the nearest relevant production code and tests before changing behavior. For financial or inventory changes, also read the corresponding models, migrations, import logic, and reporting tests.
@@ -37,10 +39,11 @@ Read the nearest relevant production code and tests before changing behavior. Fo
 ## Required workflow
 
 1. Work on a feature branch created from the latest `develop`. Never commit directly to `develop` or `main`.
-2. Restate the issue's acceptance criteria and identify affected domain rules.
+2. Restate the issue's acceptance criteria, its explicit exclusions, and its documentation impact decision, and identify affected domain rules.
 3. Inspect existing implementations and tests before proposing a design.
 4. Make the smallest coherent change. Do not mix unrelated cleanup with feature work.
 5. Add or update tests for the behavior and meaningful edge cases.
+5a. Follow the issue's documentation impact decision. When it says documentation changes are required, update every listed documentation file and section in the same change. When it says none are required but the change nevertheless makes documentation inaccurate, update that documentation anyway and state the discrepancy in the pull request. Never leave documentation that the change contradicts.
 6. Run the complete repository validation from the repository root:
 
    - Windows: `powershell -ExecutionPolicy Bypass -File scripts/validate.ps1`
@@ -48,7 +51,7 @@ Read the nearest relevant production code and tests before changing behavior. Fo
    - macOS/Linux/Git Bash: `bash scripts/validate.sh`
 
 7. Review the final diff for secrets, accidental schema changes, generated files, and unrelated edits.
-8. Open a pull request targeting `develop`, using the repository pull request template, with the reason for the change, tests run, financial/data risks, migration impact, and any known limitations.
+8. Open a pull request targeting `develop`, using the repository pull request template, with the reason for the change, tests run, financial/data risks, migration impact, any known limitations, and an accurate `## Documentation impact` section (see [Documentation impact gate](#documentation-impact-gate)).
 9. After opening the pull request, update only the feature branch, and only for at most two permitted repair attempts in response to CI or review failures. Stop and return control to a human when validation and review succeed, after two failed repair attempts, or when requirements are ambiguous or conflicting. Agents never merge or deploy; a human reviews and merges the pull request.
 
 If complete validation cannot run, state exactly which command failed or was unavailable. Never claim a test or build passed unless it ran successfully.
@@ -72,6 +75,18 @@ These rules govern any current or future automated agent that implements a GitHu
 - After opening the pull request, the agent may update its feature branch for at most two permitted repair attempts in response to CI or review failures. It stops and returns control to a human when validation and review succeed, after two failed repair attempts, or when requirements are ambiguous or conflicting. It never merges a feature or release pull request, never pushes to `develop` or `main`, never deploys, and never runs production migrations or modifies production data. An agent prepares a release pull request only on a separate, explicit human request, and only a human approves and merges it.
 - High-risk categories require explicit human scrutiny of both the issue and the pull request: financial or profit calculations, inventory quantity or historical costing, database schema or migrations, backfills or destructive data operations, authentication or authorization, secrets or environment configuration, GitHub Actions/Azure/deployment changes, any Nayax or other external-integration change (whether it reads, writes, imports, synchronises, maps errors, changes authentication, or handles remote payloads), imports or reconciliation, public API contract changes, file upload or filesystem security, and any production-impacting operation.
 - Every automated change must be traceable through its issue, branch, commits, pull request, validation result, review result, and human merge decision.
+- Every agent task issue must carry a documentation impact decision and details, and every pull request must carry a `## Documentation impact` declaration. Automation only checks that these declarations exist and are meaningful; the reviewer decides whether they are truthful. See [Documentation impact gate](#documentation-impact-gate).
+
+## Documentation impact gate
+
+Documentation in this repository (`AGENTS.md`, `CLAUDE.md`, `docs/`, `README.md`, the issue and pull request templates) is part of the product: the agents obey it and the humans rely on it. Every change therefore makes an explicit, checked decision about documentation. The gate has four parts with separate owners:
+
+1. **Templates collect the decision.** The agent task issue form has a required `Documentation impact decision` dropdown with exactly two options, `Documentation changes required` and `No documentation changes required`, and a required `Documentation impact details` field that lists the affected documentation files/sections or explains, for that specific task, why documentation is unaffected. The pull request template has a `## Documentation impact` section with exactly one `Decision:` line, which must be exactly `UPDATED` or `NOT REQUIRED`, and exactly one `Evidence:` entry. `UPDATED` evidence lists each documentation file changed and what changed in it. `NOT REQUIRED` evidence explains why behaviour, contracts, architecture, configuration, automation, deployment, operations and user workflows are unaffected. Bare `None`, `N/A` or `Not applicable`, generic sentences that only restate those categories, and unreplaced template placeholders are invalid in both.
+2. **Automation validates that a meaningful declaration exists.** `scripts/validate-documentation-impact.mjs` parses both bodies deterministically. A read-only preflight job in `agent-implement.yml` validates the issue before Claude runs, a branch is created, or a label changes; when it fails, the issue is left unchanged and the run reports what to fix. `validate.yml` validates the pull request body before repository validation, for both the `pull_request` and the exact-SHA `workflow_dispatch` modes, so an invalid declaration fails the normal `merge-validation` or `agent-validation` status; editing the description reruns it. The parser never infers documentation impact from the changed files.
+3. **Independent review decides whether the declaration is correct.** `agent-review.yml` compares the issue decision, the pull request declaration and the actual diff. Missing, inaccurate or incomplete required documentation, or a declaration that contradicts the diff, is a blocker. Repairs update affected documentation on the head branch but never edit the pull request description; when the declaration must change, the repair comment states exactly what the human must correct.
+4. **Humans remain responsible for approval and merge.** A human confirms the decision when applying `agent-ready` and again when approving and merging.
+
+Issues #87 to #92 were created before this gate and lack the declaration. A human must backfill both fields on each of them (either as the form's `### Documentation impact decision` / `### Documentation impact details` headings or as the `## ...` headings those issues already use) before the preflight becomes active on the default workflow branch, or applying `agent-ready` to them will fail the preflight and leave them untouched.
 
 ## Commands
 
@@ -252,6 +267,7 @@ A change is complete only when:
 - Relevant tests cover success, important edge cases, and regression risk.
 - Complete validation succeeds, or the exact environmental blocker is documented.
 - Schema/API/configuration changes are documented and backward compatibility is considered.
+- The documentation impact decision has been honoured: documentation the issue required is updated, any documentation the change would otherwise contradict is updated, and the pull request's `## Documentation impact` declaration is accurate and passes `scripts/validate-documentation-impact.mjs`.
 - Financial and inventory definitions remain internally consistent across API, UI, and exports.
 - The diff contains no secret, local database, uploaded business document, generated output, or accidental large file.
 - The pull request explains what changed, why, how it was verified, and any data or deployment risk.

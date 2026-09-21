@@ -1,5 +1,6 @@
 <!--
 Keep this concise. Write "Not applicable" for a section that does not apply, but do not delete the section.
+The "Documentation impact" section is the exception: validation rejects "Not applicable", "None", "N/A", generic answers and unreplaced placeholders there.
 Never paste secrets, connection strings, production identifiers, customer data, or imported business files.
 Lifecycle and authority: docs/automation.md. Engineering rules: AGENTS.md.
 -->
@@ -57,6 +58,19 @@ Result:
 ## UI evidence
 
 <!-- Screenshots or a short description for UI changes, without production data. "Not applicable" otherwise. -->
+
+## Documentation impact
+
+<!--
+Exactly one "Decision:" line and exactly one "Evidence:" line. CI validates this section (scripts/validate-documentation-impact.mjs) and the independent review compares it with the issue's documentation impact decision and the actual diff.
+- Decision: UPDATED      -> Evidence lists every documentation file changed in this PR and what changed in it.
+- Decision: NOT REQUIRED -> Evidence explains, for this specific change, why behaviour, contracts, architecture, configuration, automation, deployment, operations and user workflows are unaffected.
+Any other decision, a missing/duplicate line, "None", "N/A", "Not applicable", a generic sentence, or the placeholders below fail validation.
+-->
+
+Decision: <UPDATED or NOT REQUIRED>
+
+Evidence: <meaningful evidence>
 
 ## Known limitations and follow-up work
 
