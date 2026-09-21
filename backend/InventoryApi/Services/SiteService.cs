@@ -1,3 +1,4 @@
+using Inventory.Domain.Reporting;
 using InventoryApi.Data;
 using InventoryApi.DTOs;
 using InventoryApi.Integrations.Nayax;

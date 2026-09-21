@@ -1,4 +1,5 @@
 using Inventory.Application.Reporting.Shared;
+using Inventory.Domain.Reporting;
 using InventoryApi.Data;
 using InventoryApi.Models;
 using InventoryApi.Services.Interfaces;

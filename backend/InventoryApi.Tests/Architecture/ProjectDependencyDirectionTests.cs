@@ -79,6 +79,24 @@ public class ProjectDependencyDirectionTests
     }
 
     [Fact]
+    public void Application_has_no_forbidden_package_dependencies()
+    {
+        var forbiddenPrefixes = new[]
+        {
+            "Microsoft.AspNetCore",
+            "Microsoft.EntityFrameworkCore",
+            "ClosedXML",
+            "System.Net.Http",
+            "Microsoft.Extensions.Configuration",
+        };
+
+        foreach (var package in PackageReferencesOf("Inventory.Application", "Inventory.Application.csproj"))
+        {
+            Assert.DoesNotContain(forbiddenPrefixes, prefix => package.StartsWith(prefix, StringComparison.Ordinal));
+        }
+    }
+
+    [Fact]
     public void Infrastructure_references_only_application_and_domain()
     {
         var references = ProjectReferencesOf("Inventory.Infrastructure", "Inventory.Infrastructure.csproj");
