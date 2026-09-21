@@ -16,15 +16,15 @@ namespace InventoryApi.Adapters.Persistence;
 /// services, which are not part of this migration. Move it into Inventory.Infrastructure once the
 /// shared AppDbContext and persistence models relocate there.
 ///
-/// Its completed-sale cost query and period-level imported-reimbursement summary are shared with
-/// <see cref="EfDailyReportFactsProvider"/> and <see cref="EfReconciliationReportFactsProvider"/>
-/// through <see cref="EfReportingSharedQueries"/>. Its remaining private EF query helpers
-/// (receipts, operating expenses, commissions) intentionally mirror equivalent private helpers
-/// still used by the other, not-yet-migrated report families in
-/// <see cref="InventoryApi.Services.ReportingService"/> (machine/product profitability, GST,
-/// dashboard). They are query mechanics, not financial formulas, and will be de-duplicated as
-/// those report families are migrated in their own issues (see the reporting migration track in
-/// docs/architecture.md).
+/// Its completed-sale cost query, period-level imported-reimbursement summary, and site-commission
+/// resolution are shared with <see cref="EfDailyReportFactsProvider"/>,
+/// <see cref="EfReconciliationReportFactsProvider"/>, and
+/// <see cref="EfMachineProfitabilityReportFactsProvider"/> through <see cref="EfReportingSharedQueries"/>.
+/// Its remaining private EF query helpers (receipts, operating expenses) intentionally mirror
+/// equivalent private helpers still used by the other, not-yet-migrated report families in
+/// <see cref="InventoryApi.Services.ReportingService"/> (dashboard). They are query mechanics,
+/// not financial formulas, and will be de-duplicated as those report families are migrated in
+/// their own issues (see the reporting migration track in docs/architecture.md).
 /// </summary>
 public sealed class EfBookkeepingReportFactsProvider : IBookkeepingReportFactsProvider
 {
@@ -67,8 +67,8 @@ public sealed class EfBookkeepingReportFactsProvider : IBookkeepingReportFactsPr
         var imported = await EfReportingSharedQueries.ImportedSummaryAsync(_db, from, endExclusive, machineId, cancellationToken);
         var processingFees = await _nayaxProcessingFees.GetProcessingFeesAsync(from, to, machineId, cancellationToken);
         var operatingExpenses = await OperatingExpenseSummaryAsync(from, endExclusive, machineId, cancellationToken);
-        var commissions = await GetMachineCommissionsAsync(from, to, endExclusive, machineId, cancellationToken);
-        var siteCommission = await GetSiteCommissionAsync(from, endExclusive, machineId, commissions, cancellationToken);
+        var commissions = await EfReportingSharedQueries.GetMachineCommissionsAsync(_db, _siteCommissions, from, to, endExclusive, machineId, cancellationToken);
+        var siteCommission = await EfReportingSharedQueries.GetSiteCommissionAsync(_db, from, endExclusive, machineId, commissions, cancellationToken);
 
         var commissionCompleteForScope = isMachineFiltered
             ? commissions.Machines.GetValueOrDefault(machineId!.Value).IsComplete
@@ -124,70 +124,5 @@ public sealed class EfBookkeepingReportFactsProvider : IBookkeepingReportFactsPr
             rows.GroupBy(x => x.Category.ToString()).ToDictionary(g => g.Key, g => g.Sum(x => x.TotalAmount)));
     }
 
-    private async Task<CommissionResolutionResult> GetMachineCommissionsAsync(
-        DateTime from, DateTime to, DateTime endExclusive, long? machineId, CancellationToken cancellationToken)
-    {
-        var report = await _siteCommissions.GetReportAsync(from, to, null, cancellationToken);
-
-        var relevantRows = report.Rows.Where(site => !machineId.HasValue || site.Machines.Any(machine => machine.MachineId == machineId.Value)).ToList();
-        var machines = relevantRows.SelectMany(site => site.Machines.Select(machine =>
-            (machine.MachineId, new MachineCommission(site.CommissionRate, machine.CommissionDue, machine.IsComplete))))
-            .ToDictionary(x => x.MachineId, x => x.Item2);
-        var selectedMachine = machineId.HasValue
-            ? relevantRows.SelectMany(x => x.Machines).SingleOrDefault(x => x.MachineId == machineId.Value)
-            : null;
-        var warnings = machineId.HasValue
-            ? SelectedMachineCommissionWarnings(selectedMachine)
-            : relevantRows.Where(x => !string.IsNullOrWhiteSpace(x.DataQuality))
-                .Select(x => x.DataQuality!).Distinct().ToList();
-        var hasConfigurationGap = machineId.HasValue
-            ? selectedMachine?.HasConfigurationGap ?? false
-            : relevantRows.Any(x => x.HasConfigurationGap);
-        var hasOverlap = machineId.HasValue
-            ? selectedMachine?.HasOverlap ?? false
-            : relevantRows.Any(x => x.HasOverlap);
-        var usesMultipleRates = !machineId.HasValue && relevantRows.Any(x => x.UsesMultipleRates);
-        var hasMissingSiteMapping = false;
-        var saleMachineIds = await EfReportingSharedQueries.SalesQuery(_db, from, endExclusive, machineId).Select(x => x.MachineID).Distinct().ToListAsync(cancellationToken);
-        if (saleMachineIds.Any(id => !machines.ContainsKey(id)))
-        {
-            warnings.Add("Current site mapping is unavailable for one or more completed sales; commission and profitability are incomplete.");
-            hasMissingSiteMapping = true;
-        }
-        return new(machines, !hasConfigurationGap && !hasOverlap && !hasMissingSiteMapping,
-            hasConfigurationGap, hasOverlap, hasMissingSiteMapping, usesMultipleRates, warnings.Distinct().ToList());
-    }
-
-    private static List<string> SelectedMachineCommissionWarnings(SiteCommissionMachineDto? machine)
-    {
-        var warnings = new List<string>();
-        if (machine?.HasConfigurationGap == true)
-            warnings.Add("Commission agreements exist but do not cover one or more sales for the selected machine.");
-        if (machine?.HasOverlap == true)
-            warnings.Add("Overlapping commission agreements cover one or more sales for the selected machine.");
-        return warnings;
-    }
-
-    private async Task<decimal> GetSiteCommissionAsync(
-        DateTime from, DateTime endExclusive, long? machineId, CommissionResolutionResult commissions, CancellationToken cancellationToken)
-    {
-        var salesByMachine = await EfReportingSharedQueries.SalesQuery(_db, from, endExclusive, machineId)
-            .GroupBy(x => x.MachineID)
-            .Select(g => new { MachineId = g.Key, Sales = g.Sum(x => x.SettlementValue) })
-            .ToListAsync(cancellationToken);
-        return salesByMachine.Sum(x => commissions.Machines.GetValueOrDefault(x.MachineId).Due);
-    }
-
     private sealed record OperatingExpenseSummary(decimal Total, decimal Gst, IReadOnlyDictionary<string, decimal> ByCategory);
-
-    private readonly record struct MachineCommission(decimal Percent, decimal Due, bool IsComplete = false);
-
-    private sealed record CommissionResolutionResult(
-        IReadOnlyDictionary<long, MachineCommission> Machines,
-        bool IsComplete,
-        bool HasConfigurationGap,
-        bool HasOverlap,
-        bool HasMissingSiteMapping,
-        bool UsesMultipleRates,
-        IReadOnlyList<string> Warnings);
 }

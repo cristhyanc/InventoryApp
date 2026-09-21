@@ -17,7 +17,6 @@ using InventoryApi.Integrations.Nayax;
 using InventoryApi.Models;
 using InventoryApi.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
-using static Inventory.Application.Reporting.Shared.ReportingQuality;
 
 namespace InventoryApi.Services;
 
@@ -30,10 +29,16 @@ public sealed class ReportingService : IReportingService
     private readonly GetBookkeepingReport _getBookkeepingReport;
     private readonly GetDailyReport _getDailyReport;
     private readonly GetReconciliationReport _getReconciliationReport;
+    private readonly GetMachineProfitabilityReport _getMachineProfitabilityReport;
+    private readonly GetProductProfitabilityReport _getProductProfitabilityReport;
+    private readonly GetGstAccountingAid _getGstAccountingAid;
 
     public ReportingService(AppDbContext db, INayaxProcessingFeeService nayaxProcessingFees,
         ISiteCommissionService siteCommissions, GetBookkeepingReport getBookkeepingReport,
         GetDailyReport getDailyReport, GetReconciliationReport getReconciliationReport,
+        GetMachineProfitabilityReport getMachineProfitabilityReport,
+        GetProductProfitabilityReport getProductProfitabilityReport,
+        GetGstAccountingAid getGstAccountingAid,
         INayaxLynxClient? nayaxLynxClient = null)
     {
         _db = db;
@@ -43,6 +48,9 @@ public sealed class ReportingService : IReportingService
         _getBookkeepingReport = getBookkeepingReport;
         _getDailyReport = getDailyReport;
         _getReconciliationReport = getReconciliationReport;
+        _getMachineProfitabilityReport = getMachineProfitabilityReport;
+        _getProductProfitabilityReport = getProductProfitabilityReport;
+        _getGstAccountingAid = getGstAccountingAid;
     }
 
     public Task<BookkeepingReportDto> GetBookkeeping(ReportingFilterDto filter, CancellationToken cancellationToken = default) =>
@@ -69,174 +77,14 @@ public sealed class ReportingService : IReportingService
     public Task<ReconciliationReportDto> GetReconciliationAsync(ReportingFilterDto filter, decimal tolerance = 0.01m, CancellationToken cancellationToken = default) =>
         _getReconciliationReport.Handle(filter, tolerance, cancellationToken);
 
-    public async Task<MachineProfitabilityReportDto> GetMachineProfitabilityAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default)
-    {
-        var range = ResolveRange(filter);
-        var sales = await CostQuery(range, MachineId(filter)).ToListAsync(cancellationToken);
-        var rows = sales
-            .GroupBy(x => new { x.MachineID, x.MachineName })
-            .Select(g => new
-            {
-                g.Key.MachineID,
-                g.Key.MachineName,
-                CardSales = g.Where(x => PaymentMethodClassifier.Classify(x.PaymentMethod) == NayaxPaymentType.Card).Sum(x => x.SettlementValue),
-                CashSales = g.Where(x => PaymentMethodClassifier.Classify(x.PaymentMethod) == NayaxPaymentType.Cash).Sum(x => x.SettlementValue),
-                Sales = g.Sum(x => x.SettlementValue),
-                Quantity = g.Count(),
-                PartialCost = g.Sum(x => x.CostOfGoodsSold ?? 0m),
-                IsCogsComplete = g.All(x => x.HasCost),
-                UncostedTransactionCount = g.Count(x => !x.HasCost),
-                UncostedSalesAmount = g.Where(x => !x.HasCost).Sum(x => x.SettlementValue),
-                Transactions = g.Count()
-            }).OrderByDescending(x => x.Sales).ToList();
-        var commissions = await GetMachineCommissionsAsync(range, MachineId(filter), cancellationToken);
-        var operatingExpenses = await _db.OperatingExpenses.AsNoTracking()
-            .Where(x => x.ExpenseDate >= range.From && x.ExpenseDate < range.EndExclusive && x.MachineId.HasValue)
-            .GroupBy(x => x.MachineId!.Value)
-            .Select(g => new { MachineId = g.Key, Total = g.Sum(x => x.TotalAmount) })
-            .ToDictionaryAsync(x => x.MachineId, x => x.Total, cancellationToken);
-        var results = new List<MachineProfitabilityRowDto>();
-        var missingFeeRateTransactions = 0;
-        foreach (var x in rows)
-        {
-            var fees = await _nayaxProcessingFees.GetProcessingFeesAsync(range.From, range.ToDate, x.MachineID, cancellationToken);
-            missingFeeRateTransactions += fees.MissingRateTransactionCount;
-            var machineCommission = commissions.Machines.GetValueOrDefault(x.MachineID);
-            var isDirectProfitComplete = x.IsCogsComplete && !fees.HasMissingRates && machineCommission.IsComplete;
-            results.Add(new MachineProfitabilityRowDto(x.MachineID, x.MachineName ?? $"Machine {x.MachineID}",
-                x.Sales, x.Quantity, x.IsCogsComplete ? x.PartialCost : null,
-                x.IsCogsComplete ? ReportingCalculations.GrossProfit(x.Sales, x.PartialCost) : null,
-                x.IsCogsComplete ? ReportingCalculations.MarginPercent(x.Sales, x.PartialCost) : null, x.Transactions,
-                machineCommission.Due,
-                isDirectProfitComplete ? x.Sales - x.PartialCost - machineCommission.Due -
-                    operatingExpenses.GetValueOrDefault(x.MachineID) - fees.TotalFeeIncGst : null,
-                isDirectProfitComplete ? ReportingCalculations.MarginPercent(x.Sales, x.PartialCost + machineCommission.Due +
-                    operatingExpenses.GetValueOrDefault(x.MachineID) + fees.TotalFeeIncGst) : null,
-                machineCommission.Percent,
-                x.CardSales, x.CashSales)
-            {
-                PartialCostOfGoods = x.PartialCost,
-                IsCogsComplete = x.IsCogsComplete,
-                UncostedTransactionCount = x.UncostedTransactionCount,
-                UncostedSalesAmount = x.UncostedSalesAmount,
-                DirectOperatingExpenses = operatingExpenses.GetValueOrDefault(x.MachineID),
-                NayaxProcessingFees = fees
-            });
-        }
-        var qualityNotes = new List<string>();
-        if (missingFeeRateTransactions > 0)
-            qualityNotes.Add($"{missingFeeRateTransactions} card transaction(s) have no effective Nayax processing fee rate; machine profit is provisional.");
-        if (results.Any(x => !x.IsCogsComplete))
-            qualityNotes.Add("One or more machines have completed sales with no persisted COGS; profit is incomplete.");
-        AddCommissionQualityNotes(qualityNotes, commissions);
-        return new MachineProfitabilityReportDto(range.From, range.ToDate, results,
-            Quality(false, false, false, qualityNotes.Count == 0 ? null : string.Join(" ", qualityNotes)));
-    }
+    public Task<MachineProfitabilityReportDto> GetMachineProfitabilityAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default) =>
+        _getMachineProfitabilityReport.Handle(filter, cancellationToken);
 
-    public async Task<ProductProfitabilityReportDto> GetProductProfitabilityAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default)
-    {
-        var range = ResolveRange(filter);
-        var products = await _db.Products.AsNoTracking().Include(p => p.Category).ToDictionaryAsync(p => p.Id, cancellationToken);
-        // Payment classification is not EF-translatable, so materialize only the required columns
-        // and group in memory (same pattern as machine profitability) to use PaymentMethodClassifier.
-        var sales = await SalesQuery(range, MachineId(filter))
-            .Select(x => new { x.NayaxProductId, x.ProductName, x.SettlementValue, x.CostOfGoodsSold, x.PaymentMethod })
-            .ToListAsync(cancellationToken);
-        var rows = sales
-            .GroupBy(x => new { x.NayaxProductId, x.ProductName })
-            .Select(g => new
-            {
-                g.Key.NayaxProductId,
-                g.Key.ProductName,
-                Sales = g.Sum(x => x.SettlementValue),
-                Quantity = g.Count(),
-                PartialCostOfGoodsSold = g.Sum(x => x.CostOfGoodsSold ?? 0m),
-                IsCogsComplete = g.All(x => x.CostOfGoodsSold.HasValue),
-                UncostedTransactionCount = g.Count(x => !x.CostOfGoodsSold.HasValue),
-                UncostedSalesAmount = g.Where(x => !x.CostOfGoodsSold.HasValue).Sum(x => x.SettlementValue),
-                Transactions = g.Count(),
-                CardRevenue = g.Where(x => PaymentMethodClassifier.Classify(x.PaymentMethod) == NayaxPaymentType.Card).Sum(x => x.SettlementValue),
-                CashRevenue = g.Where(x => PaymentMethodClassifier.Classify(x.PaymentMethod) == NayaxPaymentType.Cash).Sum(x => x.SettlementValue)
-            }).OrderByDescending(x => x.Sales).ToList();
+    public Task<ProductProfitabilityReportDto> GetProductProfitabilityAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default) =>
+        _getProductProfitabilityReport.Handle(filter, cancellationToken);
 
-        var result = rows
-            .Select(x =>
-            {
-                var product = NayaxProductMatcher.Match(products.Values, x.NayaxProductId, x.ProductName);
-                return new
-                {
-                    Product = product,
-                    x.NayaxProductId,
-                    UnmappedName = string.IsNullOrWhiteSpace(x.ProductName)
-                        ? "Unmapped product"
-                        : NayaxProductMatcher.NormalizeName(x.ProductName),
-                    x.Sales,
-                    x.Quantity,
-                    x.PartialCostOfGoodsSold,
-                    x.IsCogsComplete,
-                    x.UncostedTransactionCount,
-                    x.UncostedSalesAmount,
-                    x.Transactions,
-                    x.CardRevenue,
-                    x.CashRevenue
-                };
-            })
-            .GroupBy(x => x.Product is not null
-                ? $"product:{x.Product.Id}"
-                : $"unmapped:{x.NayaxProductId}:{x.UnmappedName}")
-            .Select(g =>
-            {
-                var first = g.First();
-                var sales = g.Sum(x => x.Sales);
-                var partialCost = g.Sum(x => x.PartialCostOfGoodsSold);
-                var isCogsComplete = g.All(x => x.IsCogsComplete);
-                var isUnmapped = first.Product is null;
-                return new ProductProfitabilityRowDto(
-                    first.Product?.Id ?? first.NayaxProductId,
-                    first.Product?.Name ?? first.UnmappedName,
-                    first.Product?.Category?.Name,
-                    sales,
-                    g.Sum(x => x.Quantity),
-                    isCogsComplete ? partialCost : null,
-                    isCogsComplete ? ReportingCalculations.GrossProfit(sales, partialCost) : null,
-                    isCogsComplete ? ReportingCalculations.MarginPercent(sales, partialCost) : null,
-                    g.Sum(x => x.Transactions),
-                    isUnmapped,
-                    !isUnmapped && isCogsComplete,
-                    g.Sum(x => x.CardRevenue),
-                    g.Sum(x => x.CashRevenue))
-                {
-                    PartialCostOfGoods = partialCost,
-                    IsCogsComplete = isCogsComplete,
-                    UncostedTransactionCount = g.Sum(x => x.UncostedTransactionCount),
-                    UncostedSalesAmount = g.Sum(x => x.UncostedSalesAmount)
-                };
-            })
-            .OrderByDescending(x => x.Sales)
-            .ToList();
-        var qualityNotes = new List<string>();
-        if (result.Any(x => x.IsUnmapped)) qualityNotes.Add("One or more sales could not be mapped to a Product.");
-        if (result.Any(x => !x.IsCogsComplete)) qualityNotes.Add("One or more completed sales have no persisted COGS; profit is incomplete.");
-        var quality = Quality(false, false, result.Any(x => x.IsUnmapped),
-            qualityNotes.Count == 0 ? null : string.Join(" ", qualityNotes));
-        return new ProductProfitabilityReportDto(range.From, range.ToDate, result, quality);
-    }
-
-    public async Task<GstAccountingAidDto> GetGstAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default)
-    {
-        var bookkeeping = await GetBookkeepingAsync(filter, cancellationToken);
-        var imported = await ImportedSummaryAsync(ResolveRange(filter), MachineId(filter), cancellationToken);
-        var quality = Quality(imported.ContainsRows, imported.ContainsGstClassification, false);
-        var taxableSales = bookkeeping.Sales - bookkeeping.GstOnSales;
-        var taxableFees = bookkeeping.NayaxFeesExGst;
-        var operatingExpenseGst = bookkeeping.OperatingExpenseGst;
-        return new GstAccountingAidDto(bookkeeping.From, bookkeeping.To, taxableSales,
-            bookkeeping.GstOnSales, taxableFees, bookkeeping.GstOnFees,
-            bookkeeping.GstOnSales - bookkeeping.GstOnFees - operatingExpenseGst, quality)
-        {
-            OperatingExpenseGst = operatingExpenseGst
-        };
-    }
+    public Task<GstAccountingAidDto> GetGstAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default) =>
+        _getGstAccountingAid.Handle(filter, cancellationToken);
 
     public async Task<DashboardReportDto> GetDashboardAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default)
     {

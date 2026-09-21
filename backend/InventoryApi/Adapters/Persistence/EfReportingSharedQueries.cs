@@ -1,22 +1,26 @@
 using InventoryApi.Data;
+using InventoryApi.DTOs;
 using InventoryApi.Models;
 using InventoryApi.Services;
+using InventoryApi.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
 
 namespace InventoryApi.Adapters.Persistence;
 
 /// <summary>
-/// Temporary EF Core query helpers shared by the migrated bookkeeping, daily, and reconciliation
-/// report facts providers (<see cref="EfBookkeepingReportFactsProvider"/>,
-/// <see cref="EfDailyReportFactsProvider"/>, <see cref="EfReconciliationReportFactsProvider"/>).
+/// Temporary EF Core query helpers shared by the migrated bookkeeping, daily, reconciliation,
+/// machine/product profitability, and GST accounting-aid report facts providers
+/// (<see cref="EfBookkeepingReportFactsProvider"/>, <see cref="EfDailyReportFactsProvider"/>,
+/// <see cref="EfReconciliationReportFactsProvider"/>, <see cref="EfMachineProfitabilityReportFactsProvider"/>,
+/// <see cref="EfProductProfitabilityReportFactsProvider"/>, <see cref="EfGstReportFactsProvider"/>).
 /// They depend on <see cref="AppDbContext"/> and live in InventoryApi for the same reason those
 /// adapters do; move into Inventory.Infrastructure once AppDbContext and the shared persistence
 /// models relocate there.
 ///
 /// The still-legacy <see cref="InventoryApi.Services.ReportingService"/> keeps its own equivalent
-/// private helpers for the report families that have not migrated yet (machine/product
-/// profitability, GST, dashboard, transactions); de-duplicating those is out of scope until each
-/// family migrates (see the reporting migration track in docs/architecture.md).
+/// private helpers for the report families that have not migrated yet (dashboard, transactions);
+/// de-duplicating those is out of scope until each family migrates (see the reporting migration
+/// track in docs/architecture.md).
 /// </summary>
 internal static class EfReportingSharedQueries
 {
@@ -38,6 +42,64 @@ internal static class EfReportingSharedQueries
             CostOfGoodsSold = sale.CostOfGoodsSold,
             HasCost = sale.CostOfGoodsSold.HasValue
         });
+
+    // Shared by EfBookkeepingReportFactsProvider and EfMachineProfitabilityReportFactsProvider: both
+    // resolve the same effective-dated site commission coverage/warnings for a date range and
+    // optional machine filter, gated on which completed-sale machine IDs actually have a mapped site.
+    public static async Task<CommissionResolutionResult> GetMachineCommissionsAsync(
+        AppDbContext db, ISiteCommissionService siteCommissions, DateTime from, DateTime to, DateTime endExclusive,
+        long? machineId, CancellationToken cancellationToken)
+    {
+        var report = await siteCommissions.GetReportAsync(from, to, null, cancellationToken);
+
+        var relevantRows = report.Rows.Where(site => !machineId.HasValue || site.Machines.Any(machine => machine.MachineId == machineId.Value)).ToList();
+        var machines = relevantRows.SelectMany(site => site.Machines.Select(machine =>
+            (machine.MachineId, new MachineCommission(site.CommissionRate, machine.CommissionDue, machine.IsComplete))))
+            .ToDictionary(x => x.MachineId, x => x.Item2);
+        var selectedMachine = machineId.HasValue
+            ? relevantRows.SelectMany(x => x.Machines).SingleOrDefault(x => x.MachineId == machineId.Value)
+            : null;
+        var warnings = machineId.HasValue
+            ? SelectedMachineCommissionWarnings(selectedMachine)
+            : relevantRows.Where(x => !string.IsNullOrWhiteSpace(x.DataQuality))
+                .Select(x => x.DataQuality!).Distinct().ToList();
+        var hasConfigurationGap = machineId.HasValue
+            ? selectedMachine?.HasConfigurationGap ?? false
+            : relevantRows.Any(x => x.HasConfigurationGap);
+        var hasOverlap = machineId.HasValue
+            ? selectedMachine?.HasOverlap ?? false
+            : relevantRows.Any(x => x.HasOverlap);
+        var usesMultipleRates = !machineId.HasValue && relevantRows.Any(x => x.UsesMultipleRates);
+        var hasMissingSiteMapping = false;
+        var saleMachineIds = await SalesQuery(db, from, endExclusive, machineId).Select(x => x.MachineID).Distinct().ToListAsync(cancellationToken);
+        if (saleMachineIds.Any(id => !machines.ContainsKey(id)))
+        {
+            warnings.Add("Current site mapping is unavailable for one or more completed sales; commission and profitability are incomplete.");
+            hasMissingSiteMapping = true;
+        }
+        return new(machines, !hasConfigurationGap && !hasOverlap && !hasMissingSiteMapping,
+            hasConfigurationGap, hasOverlap, hasMissingSiteMapping, usesMultipleRates, warnings.Distinct().ToList());
+    }
+
+    private static List<string> SelectedMachineCommissionWarnings(SiteCommissionMachineDto? machine)
+    {
+        var warnings = new List<string>();
+        if (machine?.HasConfigurationGap == true)
+            warnings.Add("Commission agreements exist but do not cover one or more sales for the selected machine.");
+        if (machine?.HasOverlap == true)
+            warnings.Add("Overlapping commission agreements cover one or more sales for the selected machine.");
+        return warnings;
+    }
+
+    public static async Task<decimal> GetSiteCommissionAsync(
+        AppDbContext db, DateTime from, DateTime endExclusive, long? machineId, CommissionResolutionResult commissions, CancellationToken cancellationToken)
+    {
+        var salesByMachine = await SalesQuery(db, from, endExclusive, machineId)
+            .GroupBy(x => x.MachineID)
+            .Select(g => new { MachineId = g.Key, Sales = g.Sum(x => x.SettlementValue) })
+            .ToListAsync(cancellationToken);
+        return salesByMachine.Sum(x => commissions.Machines.GetValueOrDefault(x.MachineId).Due);
+    }
 
     public static async Task<ImportedSummary> ImportedSummaryAsync(AppDbContext db, DateTime from, DateTime endExclusive, long? machineId, CancellationToken cancellationToken)
     {
@@ -168,6 +230,17 @@ internal static class EfReportingSharedQueries
         public decimal? CostOfGoodsSold { get; set; }
         public bool HasCost { get; set; }
     }
+
+    internal readonly record struct MachineCommission(decimal Percent, decimal Due, bool IsComplete = false);
+
+    internal sealed record CommissionResolutionResult(
+        IReadOnlyDictionary<long, MachineCommission> Machines,
+        bool IsComplete,
+        bool HasConfigurationGap,
+        bool HasOverlap,
+        bool HasMissingSiteMapping,
+        bool UsesMultipleRates,
+        IReadOnlyList<string> Warnings);
 
     internal readonly record struct ImportedSummary(
         decimal Settlement,
