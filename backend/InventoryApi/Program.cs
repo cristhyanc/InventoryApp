@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Inventory.Application;
 using Inventory.Application.NayaxFeeSettings;
 using Inventory.Application.Reporting.Bookkeeping;
+using Inventory.Application.Reporting.Dashboard;
 using Inventory.Application.Reporting.Daily;
 using Inventory.Application.Reporting.Gst;
 using Inventory.Application.Reporting.MachineProfitability;
@@ -93,6 +94,9 @@ builder.Services.AddScoped<IProductProfitabilityReportFactsProvider, EfProductPr
 
 // Temporary API-owned adapter for the GST accounting-aid report facts port; see EfGstReportFactsProvider.
 builder.Services.AddScoped<IGstReportFactsProvider, EfGstReportFactsProvider>();
+
+// Temporary API-owned adapter for the dashboard report facts port; see EfDashboardReportFactsProvider.
+builder.Services.AddScoped<IDashboardReportFactsProvider, EfDashboardReportFactsProvider>();
 
 var app = builder.Build();
 

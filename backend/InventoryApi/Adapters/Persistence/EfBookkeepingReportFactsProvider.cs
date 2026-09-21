@@ -21,10 +21,10 @@ namespace InventoryApi.Adapters.Persistence;
 /// <see cref="EfReconciliationReportFactsProvider"/>, and
 /// <see cref="EfMachineProfitabilityReportFactsProvider"/> through <see cref="EfReportingSharedQueries"/>.
 /// Its remaining private EF query helpers (receipts, operating expenses) intentionally mirror
-/// equivalent private helpers still used by the other, not-yet-migrated report families in
-/// <see cref="InventoryApi.Services.ReportingService"/> (dashboard). They are query mechanics,
-/// not financial formulas, and will be de-duplicated as those report families are migrated in
-/// their own issues (see the reporting migration track in docs/architecture.md).
+/// equivalent private helpers still used by the transactions report, the only report family in
+/// <see cref="InventoryApi.Services.ReportingService"/> not yet migrated. They are query mechanics,
+/// not financial formulas, and will be de-duplicated once that report family migrates in its own
+/// issue (see the reporting migration track in docs/architecture.md).
 /// </summary>
 public sealed class EfBookkeepingReportFactsProvider : IBookkeepingReportFactsProvider
 {

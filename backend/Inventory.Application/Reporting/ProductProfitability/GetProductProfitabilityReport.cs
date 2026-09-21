@@ -15,7 +15,7 @@ namespace Inventory.Application.Reporting.ProductProfitability;
 /// <see cref="ProductProfitabilityReportDto"/> consumed by both the API response and the
 /// CSV/XLSX export.
 /// </summary>
-public sealed class GetProductProfitabilityReport
+public sealed class GetProductProfitabilityReport : IGetProductProfitabilityReport
 {
     private readonly IProductProfitabilityReportFactsProvider _facts;
 

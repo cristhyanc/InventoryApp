@@ -23,12 +23,14 @@ public sealed class ReportsController : ControllerBase
     private readonly GetMachineProfitabilityReport _getMachineProfitabilityReport;
     private readonly GetProductProfitabilityReport _getProductProfitabilityReport;
     private readonly GetGstAccountingAid _getGstAccountingAid;
+    private readonly GetDashboardReport _getDashboardReport;
 
     public ReportsController(IReportingService service, GetBookkeepingReport getBookkeepingReport,
         GetDailyReport getDailyReport, GetReconciliationReport getReconciliationReport,
         GetMachineProfitabilityReport getMachineProfitabilityReport,
         GetProductProfitabilityReport getProductProfitabilityReport,
-        GetGstAccountingAid getGstAccountingAid)
+        GetGstAccountingAid getGstAccountingAid,
+        GetDashboardReport getDashboardReport)
     {
         _service = service;
         _getBookkeepingReport = getBookkeepingReport;
@@ -37,6 +39,7 @@ public sealed class ReportsController : ControllerBase
         _getMachineProfitabilityReport = getMachineProfitabilityReport;
         _getProductProfitabilityReport = getProductProfitabilityReport;
         _getGstAccountingAid = getGstAccountingAid;
+        _getDashboardReport = getDashboardReport;
     }
 
     [HttpGet("bookkeeping")]
@@ -52,7 +55,7 @@ public sealed class ReportsController : ControllerBase
     [HttpGet("gst")]
     public Task<GstAccountingAidDto> Gst([FromQuery] ReportingFilterDto filter, CancellationToken ct) => _getGstAccountingAid.Handle(filter, ct);
     [HttpGet("dashboard")]
-    public Task<DashboardReportDto> Dashboard([FromQuery] ReportingFilterDto filter, CancellationToken ct) => _service.GetDashboardAsync(filter, ct);
+    public Task<DashboardReportDto> Dashboard([FromQuery] ReportingFilterDto filter, CancellationToken ct) => _getDashboardReport.Handle(filter, ct);
     [HttpGet("transactions")]
     public Task<TransactionSalesReportDto> Transactions([FromQuery] TransactionSalesFilterDto filter, CancellationToken ct) =>
         _service.GetTransactionsAsync(filter, ct);
