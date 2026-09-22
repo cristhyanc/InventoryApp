@@ -256,4 +256,4 @@ jobs:
             --ref main \
             -f pr_number="$PR_NUMBER" \
             -f head_sha="$HEAD_SHA" \
-            -f dispatch_review=true
+            -f dispatch_review=false
