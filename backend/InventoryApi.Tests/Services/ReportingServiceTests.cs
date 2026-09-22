@@ -5,9 +5,11 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Inventory.Application;
 using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Reporting.Dashboard;
 using Inventory.Application.Reporting.Daily;
+using Inventory.Application.Reporting.Export;
 using Inventory.Application.Reporting.Gst;
 using Inventory.Application.Reporting.MachineProfitability;
 using Inventory.Application.Reporting.ProductProfitability;
@@ -15,6 +17,7 @@ using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Shared;
 using Inventory.Application.Reporting.Transactions;
 using Inventory.Domain.Reporting;
+using InventoryApi.Adapters.Export;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using InventoryApi.DTOs;
@@ -30,7 +33,11 @@ using Xunit;
 
 namespace InventoryApi.Tests.Services;
 
-public class ReportingServiceTests
+// Regression suite for the reporting calculations/exports the removed legacy reporting service used
+// to forward; it now drives the migrated use cases (and GetReportExportRows for export) directly
+// through the local ReportingHarness below, so every existing assertion keeps proving the same
+// authoritative behavior.
+public class ReportingRegressionTests
 {
     private static AppDbContext CreateDbContext()
     {
@@ -40,7 +47,7 @@ public class ReportingServiceTests
         return new AppDbContext(options);
     }
 
-    private static ReportingService Reporting(AppDbContext db, INayaxLynxClient nayaxLynxClient = null,
+    private static ReportingHarness Reporting(AppDbContext db, INayaxLynxClient nayaxLynxClient = null,
         ISiteCommissionService siteCommissionService = null)
     {
         var commissions = siteCommissionService is null ? new Mock<ISiteCommissionService>() : null;
@@ -59,9 +66,64 @@ public class ReportingServiceTests
         var getDashboardReport = new GetDashboardReport(getBookkeepingReport, getProductProfitabilityReport,
             new EfDashboardReportFactsProvider(db, siteCommissions));
         var getTransactionSalesReport = new GetTransactionSalesReport(new EfTransactionSalesReportFactsProvider(db, nayaxLynxClient));
-        return new ReportingService(db, getBookkeepingReport, getDailyReport, getReconciliationReport,
+        return new ReportingHarness(getBookkeepingReport, getDailyReport, getReconciliationReport,
             getMachineProfitabilityReport, getProductProfitabilityReport, getGstAccountingAid, getDashboardReport,
-            getTransactionSalesReport, nayaxLynxClient);
+            getTransactionSalesReport);
+    }
+
+    // Composes the same migrated use cases InventoryApi.Controllers.ReportsController calls, plus
+    // GetReportExportRows/ReportExportFileWriter for export, mirroring the removed legacy reporting
+    // service's method surface so the regression tests below did not need to change.
+    private sealed class ReportingHarness
+    {
+        private readonly GetBookkeepingReport _getBookkeepingReport;
+        private readonly GetDailyReport _getDailyReport;
+        private readonly GetReconciliationReport _getReconciliationReport;
+        private readonly GetMachineProfitabilityReport _getMachineProfitabilityReport;
+        private readonly GetProductProfitabilityReport _getProductProfitabilityReport;
+        private readonly GetGstAccountingAid _getGstAccountingAid;
+        private readonly GetDashboardReport _getDashboardReport;
+        private readonly GetTransactionSalesReport _getTransactionSalesReport;
+        private readonly GetReportExportRows _getReportExportRows;
+
+        public ReportingHarness(GetBookkeepingReport getBookkeepingReport, GetDailyReport getDailyReport,
+            GetReconciliationReport getReconciliationReport, GetMachineProfitabilityReport getMachineProfitabilityReport,
+            GetProductProfitabilityReport getProductProfitabilityReport, GetGstAccountingAid getGstAccountingAid,
+            GetDashboardReport getDashboardReport, GetTransactionSalesReport getTransactionSalesReport)
+        {
+            _getBookkeepingReport = getBookkeepingReport;
+            _getDailyReport = getDailyReport;
+            _getReconciliationReport = getReconciliationReport;
+            _getMachineProfitabilityReport = getMachineProfitabilityReport;
+            _getProductProfitabilityReport = getProductProfitabilityReport;
+            _getGstAccountingAid = getGstAccountingAid;
+            _getDashboardReport = getDashboardReport;
+            _getTransactionSalesReport = getTransactionSalesReport;
+            _getReportExportRows = new GetReportExportRows(getBookkeepingReport, getDailyReport, getReconciliationReport,
+                getMachineProfitabilityReport, getProductProfitabilityReport, getGstAccountingAid, getDashboardReport,
+                getTransactionSalesReport);
+        }
+
+        public Task<BookkeepingReportDto> GetBookkeepingAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default) =>
+            _getBookkeepingReport.Handle(filter, cancellationToken);
+        public Task<DailyReportDto> GetDailyAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default) =>
+            _getDailyReport.Handle(filter, cancellationToken);
+        public Task<ReconciliationReportDto> GetReconciliationAsync(ReportingFilterDto filter, decimal tolerance = 0.01m, CancellationToken cancellationToken = default) =>
+            _getReconciliationReport.Handle(filter, tolerance, cancellationToken);
+        public Task<MachineProfitabilityReportDto> GetMachineProfitabilityAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default) =>
+            _getMachineProfitabilityReport.Handle(filter, cancellationToken);
+        public Task<ProductProfitabilityReportDto> GetProductProfitabilityAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default) =>
+            _getProductProfitabilityReport.Handle(filter, cancellationToken);
+        public Task<GstAccountingAidDto> GetGstAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default) =>
+            _getGstAccountingAid.Handle(filter, cancellationToken);
+        public Task<DashboardReportDto> GetDashboardAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default) =>
+            _getDashboardReport.Handle(filter, cancellationToken);
+        public Task<TransactionSalesReportDto> GetTransactionsAsync(TransactionSalesFilterDto filter, CancellationToken cancellationToken = default) =>
+            _getTransactionSalesReport.Handle(filter, cancellationToken);
+        public async Task<byte[]> ExportCsvAsync(string report, ReportingFilterDto filter, CancellationToken cancellationToken = default) =>
+            ReportExportFileWriter.WriteCsv(await _getReportExportRows.Handle(report, filter, cancellationToken));
+        public async Task<byte[]> ExportCsvAsync(string report, TransactionSalesFilterDto filter, CancellationToken cancellationToken = default) =>
+            ReportExportFileWriter.WriteCsv(await _getReportExportRows.Handle(report, filter, cancellationToken));
     }
 
     [Fact]
@@ -264,7 +326,7 @@ public class ReportingServiceTests
     }
 
     [Fact]
-    public void Reporting_service_resolves_with_required_financial_dependencies()
+    public void Reporting_export_use_case_resolves_with_required_financial_dependencies()
     {
         var services = new ServiceCollection();
         services.AddDbContext<AppDbContext>(options => options.UseInMemoryDatabase(Guid.NewGuid().ToString()));
@@ -272,29 +334,19 @@ public class ReportingServiceTests
         services.AddScoped<INayaxProcessingFeeService, NayaxProcessingFeeService>();
         services.AddScoped<ISiteCommissionService, SiteCommissionService>();
         services.AddScoped<IBookkeepingReportFactsProvider, EfBookkeepingReportFactsProvider>();
-        services.AddScoped<GetBookkeepingReport>();
         services.AddScoped<IDailyReportFactsProvider, EfDailyReportFactsProvider>();
-        services.AddScoped<GetDailyReport>();
         services.AddScoped<IReconciliationReportFactsProvider, EfReconciliationReportFactsProvider>();
-        services.AddScoped<GetReconciliationReport>();
         services.AddScoped<IMachineProfitabilityReportFactsProvider, EfMachineProfitabilityReportFactsProvider>();
-        services.AddScoped<GetMachineProfitabilityReport>();
         services.AddScoped<IProductProfitabilityReportFactsProvider, EfProductProfitabilityReportFactsProvider>();
-        services.AddScoped<GetProductProfitabilityReport>();
-        services.AddScoped<IGetBookkeepingReport>(sp => sp.GetRequiredService<GetBookkeepingReport>());
-        services.AddScoped<IGetProductProfitabilityReport>(sp => sp.GetRequiredService<GetProductProfitabilityReport>());
         services.AddScoped<IGstReportFactsProvider, EfGstReportFactsProvider>();
-        services.AddScoped<GetGstAccountingAid>();
         services.AddScoped<IDashboardReportFactsProvider, EfDashboardReportFactsProvider>();
-        services.AddScoped<GetDashboardReport>();
         services.AddScoped<ITransactionSalesReportFactsProvider, EfTransactionSalesReportFactsProvider>();
-        services.AddScoped<GetTransactionSalesReport>();
-        services.AddScoped<IReportingService, ReportingService>();
+        services.AddApplicationServices();
 
         using var provider = services.BuildServiceProvider();
         using var scope = provider.CreateScope();
 
-        Assert.IsType<ReportingService>(scope.ServiceProvider.GetRequiredService<IReportingService>());
+        Assert.IsType<GetReportExportRows>(scope.ServiceProvider.GetRequiredService<GetReportExportRows>());
     }
 
     [Fact]

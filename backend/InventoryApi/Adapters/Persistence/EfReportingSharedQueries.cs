@@ -18,9 +18,10 @@ namespace InventoryApi.Adapters.Persistence;
 /// adapters do; move into Inventory.Infrastructure once AppDbContext and the shared persistence
 /// models relocate there.
 ///
-/// The still-legacy <see cref="InventoryApi.Services.ReportingService"/> keeps its own equivalent
-/// private helpers for the report family that has not migrated yet (transactions); de-duplicating
-/// those is out of scope until it migrates (see the reporting migration track in docs/architecture.md).
+/// <see cref="EfTransactionSalesReportFactsProvider"/>, the last migrated adapter, deliberately does
+/// not reuse these helpers: it needs every transaction status (not only completed sales) and its own
+/// site-name/product-catalogue facts, so its query shape is not equivalent to any helper here (see
+/// the reporting migration track in docs/architecture.md).
 /// </summary>
 internal static class EfReportingSharedQueries
 {
