@@ -16,9 +16,11 @@ name: Agent implementation
 # whose always-running outcome step would otherwise relabel the issue after a preflight failure.
 #
 # The pull request is opened with the workflow token. A separate least-privilege job verifies the
-# resulting PR and dispatches trusted validation from `main` for its exact head SHA. The initial
-# independent review remains human-authorised: a human applies `agent-review` to the PR after
-# validation succeeds. Nothing here approves, merges, releases, or deploys.
+# resulting PR, applies the `agent-review` label to it as a deterministic step (Claude itself is
+# never granted `gh pr edit`/`gh label`), and dispatches trusted validation from `main` for its
+# exact head SHA with dispatch_review=true, so the initial independent review starts automatically
+# once validation succeeds. Nothing here approves, merges, releases, or deploys; merge stays
+# human-controlled regardless of how the review is requested.
 
 on:
   issues:
@@ -189,7 +191,7 @@ jobs:
             gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "$(cat <<EOF
           Implementation run finished and opened $pr_url at head $head_sha.
 
-          A separate follow-up job will dispatch trusted validation for that exact SHA. After the \`agent-validation\` status passes, apply the \`agent-review\` label to the pull request to request the initial independent review. Human approval and merge remain required.
+          A separate follow-up job will apply the \`agent-review\` label and dispatch trusted validation for that exact SHA. Once the \`agent-validation\` status passes, the initial independent review starts automatically; no further action is needed to request it. Human approval and merge remain required.
 
           Run: $RUN_URL
           EOF
@@ -216,6 +218,7 @@ jobs:
     permissions:
       actions: write
       pull-requests: read
+      issues: write
 
     steps:
       - name: Verify pull request and dispatch trusted validation
@@ -251,9 +254,11 @@ jobs:
             fail "Pull requests that change .github/workflows/** require manual validation and review."
           fi
 
+          gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label agent-review
+
           gh workflow run validate.yml \
             --repo "$GITHUB_REPOSITORY" \
             --ref main \
             -f pr_number="$PR_NUMBER" \
             -f head_sha="$HEAD_SHA" \
-            -f dispatch_review=false
+            -f dispatch_review=true

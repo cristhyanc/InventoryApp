@@ -226,6 +226,33 @@ describe('preserved guards', () => {
     const workflowFilesAccepted = replaceOnce(validateWorkflow, "if grep -Eq '^\\.github/workflows/' <<<\"$changed_files\"; then\n              fail", '# removed\n              true');
     assert.throws(() => runContractChecks({ read: readWithOverrides({ [validatePath]: workflowFilesAccepted }) }));
   });
+
+  it('has the implementation dispatcher label the pull request agent-review and request review automatically', () => {
+    const dispatcher = implementWorkflow.slice(implementWorkflow.indexOf('  dispatch-validation:\n'));
+    assert.ok(dispatcher.includes('issues: write'));
+    assert.ok(dispatcher.includes('gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label agent-review'));
+    assert.ok(dispatcher.includes('-f dispatch_review=true'));
+
+    const noAutoReview = replaceOnce(implementWorkflow, '-f dispatch_review=true', '-f dispatch_review=false');
+    assert.throws(() => runContractChecks({ read: readWithOverrides({ [implementPath]: noAutoReview }) }), /missing required text: -f dispatch_review=true/);
+
+    const noLabelStep = replaceOnce(implementWorkflow,
+      '          gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label agent-review\n\n', '');
+    assert.throws(() => runContractChecks({ read: readWithOverrides({ [implementPath]: noLabelStep }) }), /missing required text: gh pr edit/);
+
+    const noIssuesWrite = replaceOnce(implementWorkflow, '      actions: write\n      pull-requests: read\n      issues: write\n',
+      '      actions: write\n      pull-requests: read\n');
+    assert.throws(() => runContractChecks({ read: readWithOverrides({ [implementPath]: noIssuesWrite }) }), /missing required text: issues: write/);
+  });
+
+  it('keeps the repair dispatcher from gaining issue-label write access it does not need', () => {
+    const dispatcher = repairWorkflow.slice(repairWorkflow.indexOf('  dispatch-validation:\n'));
+    assert.ok(!dispatcher.includes('issues: write'));
+
+    const withIssuesWrite = replaceOnce(repairWorkflow, '      actions: write\n      pull-requests: read\n',
+      '      actions: write\n      pull-requests: read\n      issues: write\n');
+    assert.throws(() => runContractChecks({ read: readWithOverrides({ [repairPath]: withIssuesWrite }) }), /contains forbidden text: issues: write/);
+  });
 });
 
 // ---------------------------------------------------------------------------------------
