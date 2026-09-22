@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -23,8 +24,42 @@ public class GetTransactionSalesReportTests
     private static GetTransactionSalesReport UseCase(TransactionSalesReportFacts facts) =>
         new(new FakeTransactionSalesReportFactsProvider(facts));
 
-    private static TransactionSalesReportFacts Facts(params TransactionSalesReportFactsRow[] rows) => new(
-        rows, [], [], [], SiteMappingUnavailable: false);
+    private static TransactionSalesReportFacts Facts(params TransactionSalesReportFactsRow[] rows) =>
+        FakeTransactionSalesReportFactsProvider.Facts(rows);
+
+    private sealed class Counter { public int Value; }
+
+    private static async IAsyncEnumerable<TransactionSalesReportFactsRow> CountingStream(
+        IEnumerable<TransactionSalesReportFactsRow> rows, Counter counter)
+    {
+        foreach (var row in rows)
+        {
+            counter.Value++;
+            await Task.Yield();
+            yield return row;
+        }
+    }
+
+    // Deterministic pseudo-varied rows (no System.Random, for reproducibility) spanning every sort
+    // key's field with duplicates and a mix of completed/refunded rows so gross/direct profit are
+    // null for some rows, exercising the same nullable ordering both SortRows and the bounded
+    // selector's comparer must agree on.
+    private static TransactionSalesReportFactsRow[] SortTestRows() =>
+        Enumerable.Range(1, 137).Select(i => Row(
+            id: i,
+            status: i % 4 == 0 ? TransactionSaleStatus.Refunded : TransactionSaleStatus.Completed,
+            paymentType: TransactionPaymentType.Cash,
+            sale: 1000m - i * 7 % 997,
+            hasPersistedCost: true,
+            costOfGoodsSold: i * 13 % 53,
+            siteId: 90,
+            siteName: "Depot",
+            nayaxProductId: null,
+            rawProductName: $"Item {i * 5 % 11:D2}",
+            machineName: $"Machine {i * 3 % 9:D2}",
+            machineId: 10,
+            date: new DateTime(2025, 1, 1).AddHours(i * 17 % 5000)))
+        .ToArray();
 
     [Fact]
     public async Task Default_status_filter_only_returns_completed_transactions()
@@ -231,5 +266,99 @@ public class GetTransactionSalesReportTests
         var report = await useCase.Handle(new TransactionSalesFilterDto(), CancellationToken.None);
 
         Assert.Contains(report.DataQuality.Notes!, note => note.Contains("Current site mapping is unavailable"));
+    }
+
+    [Fact]
+    public async Task Each_raw_transaction_is_enumerated_and_processed_only_once_while_a_paginated_request_covers_the_full_scope()
+    {
+        var rows = Enumerable.Range(1, 500).Select(i => Row(i,
+            sale: i, siteId: 90 + i % 5, siteName: $"Site {90 + i % 5}",
+            nayaxProductId: 1 + i % 3, rawProductName: $"Product {1 + i % 3}")).ToArray();
+        var catalogue = new[]
+        {
+            new TransactionSalesCatalogueEntry(1, "Product 1"),
+            new TransactionSalesCatalogueEntry(2, "Product 2"),
+            new TransactionSalesCatalogueEntry(3, "Product 3"),
+        };
+        var counter = new Counter();
+        var facts = FakeTransactionSalesReportFactsProvider.Facts(rows, catalogue) with { Transactions = CountingStream(rows, counter) };
+        var useCase = UseCase(facts);
+
+        var report = await useCase.Handle(
+            new TransactionSalesFilterDto(Status: "all", Page: 2, PageSize: 50, SortBy: "sale", SortDescending: false),
+            CancellationToken.None);
+
+        Assert.Equal(500, counter.Value);
+        Assert.Equal(50, report.Rows.Count);
+        Assert.Equal(500, report.TotalCount);
+        Assert.Equal(500, report.Totals.TransactionCount);
+        Assert.Equal(5, report.FilterOptions.Sites.Count);
+        Assert.Equal(3, report.FilterOptions.Products.Count);
+        Assert.Equal(51, report.Rows.First().TransactionId);
+        Assert.Equal(100, report.Rows.Last().TransactionId);
+    }
+
+    [Theory]
+    [InlineData("machine", false)]
+    [InlineData("machine", true)]
+    [InlineData("product", false)]
+    [InlineData("product", true)]
+    [InlineData("sale", false)]
+    [InlineData("sale", true)]
+    [InlineData("cogs", false)]
+    [InlineData("cogs", true)]
+    [InlineData("gross", false)]
+    [InlineData("gross", true)]
+    [InlineData("direct", false)]
+    [InlineData("direct", true)]
+    [InlineData("status", false)]
+    [InlineData("status", true)]
+    [InlineData(null, false)]
+    [InlineData(null, true)]
+    public async Task Bounded_page_selection_matches_the_full_sort_order_for_every_supported_sort_key_and_direction(string sortBy, bool descending)
+    {
+        var facts = Facts(SortTestRows());
+        var useCase = UseCase(facts);
+
+        var full = await useCase.Handle(
+            new TransactionSalesFilterDto(Status: "all", SortBy: sortBy, SortDescending: descending), paginate: false, CancellationToken.None);
+        var page1 = await useCase.Handle(
+            new TransactionSalesFilterDto(Status: "all", SortBy: sortBy, SortDescending: descending, Page: 1, PageSize: 50), CancellationToken.None);
+        var page2 = await useCase.Handle(
+            new TransactionSalesFilterDto(Status: "all", SortBy: sortBy, SortDescending: descending, Page: 2, PageSize: 50), CancellationToken.None);
+
+        var expectedFirst100 = full.Rows.Take(100).Select(x => x.TransactionId).ToList();
+        var actualFirst100 = page1.Rows.Select(x => x.TransactionId).Concat(page2.Rows.Select(x => x.TransactionId)).ToList();
+
+        Assert.Equal(expectedFirst100, actualFirst100);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-5)]
+    public async Task Non_positive_page_numbers_clamp_to_page_one(int requestedPage)
+    {
+        var facts = Facts(Row(1), Row(2));
+        var useCase = UseCase(facts);
+
+        var report = await useCase.Handle(new TransactionSalesFilterDto(Status: "all", Page: requestedPage), CancellationToken.None);
+
+        Assert.Equal(1, report.Page);
+        Assert.Equal(2, report.Rows.Count);
+    }
+
+    [Fact]
+    public async Task Empty_scope_returns_an_empty_report_with_zero_totals_and_no_filter_options()
+    {
+        var facts = FakeTransactionSalesReportFactsProvider.Empty();
+        var useCase = UseCase(facts);
+
+        var report = await useCase.Handle(new TransactionSalesFilterDto(Status: "all"), CancellationToken.None);
+
+        Assert.Empty(report.Rows);
+        Assert.Equal(0, report.TotalCount);
+        Assert.Equal(0, report.Totals.TransactionCount);
+        Assert.Empty(report.FilterOptions.Sites);
+        Assert.Empty(report.FilterOptions.Products);
     }
 }
