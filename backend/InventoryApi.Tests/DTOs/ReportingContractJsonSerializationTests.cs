@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using Inventory.Application.Reporting.Bookkeeping;
+using Inventory.Application.Reporting.Daily;
 using Inventory.Application.Reporting.Dashboard;
 using Inventory.Application.Reporting.Gst;
 using Inventory.Application.Reporting.MachineProfitability;
@@ -187,6 +188,33 @@ public class ReportingContractJsonSerializationTests
         var jsonFilterOptions = document.RootElement.GetProperty("filterOptions");
         Assert.Equal("Site A", jsonFilterOptions.GetProperty("sites")[0].GetProperty("name").GetString());
         Assert.Equal("Cola", jsonFilterOptions.GetProperty("products")[0].GetProperty("name").GetString());
+    }
+
+    [Fact]
+    public void Daily_report_row_serializes_the_additive_row_level_fee_gst_field_alongside_the_existing_fee_fields()
+    {
+        var row = new DailyReportRowDto(
+            new DateTime(2026, 7, 1), Sales: 100m, Quantity: 5m, CostOfGoods: 40m, GrossProfit: 60m, TransactionCount: 10,
+            NayaxFeesExGst: 4m, NayaxFeesIncludingGst: 4.4m, NayaxFeesGst: 0.4m);
+
+        var json = JsonSerializer.Serialize(row, WebDefaults);
+
+        Assert.Equal(
+            new[]
+            {
+                "date", "sales", "quantity", "costOfGoods", "grossProfit", "transactionCount", "grossSales",
+                "cardSales", "cashSales", "averageSale", "isCogsComplete", "uncostedTransactionCount",
+                "uncostedSalesAmount", "grossMarginPercent", "nayaxFeesExGst", "nayaxFeesIncludingGst",
+                "nayaxFeesGst", "importedReimbursement", "netReimbursement", "isReconciled", "reconciliationStatus",
+                "completedTransactionCount", "pendingTransactionCount", "declinedOrCancelledTransactionCount",
+                "refundedTransactionCount", "unknownStatusTransactionCount", "nayaxFeeSource", "partialCostOfGoods",
+            },
+            PropertyNames(json));
+
+        using var document = JsonDocument.Parse(json);
+        Assert.Equal(4m, document.RootElement.GetProperty("nayaxFeesExGst").GetDecimal());
+        Assert.Equal(4.4m, document.RootElement.GetProperty("nayaxFeesIncludingGst").GetDecimal());
+        Assert.Equal(0.4m, document.RootElement.GetProperty("nayaxFeesGst").GetDecimal());
     }
 
     [Fact]

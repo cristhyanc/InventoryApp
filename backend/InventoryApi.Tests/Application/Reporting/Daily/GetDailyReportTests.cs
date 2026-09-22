@@ -29,6 +29,7 @@ public class GetDailyReportTests
         Assert.True(row.IsReconciled);
         Assert.Equal("Reconciled", row.ReconciliationStatus);
         Assert.Equal("Actual", row.NayaxFeeSource);
+        Assert.Equal(0.4m, row.NayaxFeesGst);
 
         Assert.Equal(100m, report.Totals!.GrossSales);
         Assert.Equal(80m, report.Totals.CardSales);
@@ -37,9 +38,52 @@ public class GetDailyReportTests
         Assert.Equal(60m, report.Totals.GrossProfit);
         Assert.Equal(4m, report.Totals.NayaxFeesExGst);
         Assert.Equal(4.4m, report.Totals.NayaxFeesIncludingGst);
+        Assert.Equal(0.4m, report.Totals.NayaxProcessingFees.TotalFeeGst);
         Assert.Equal(80m, report.Totals.ImportedReimbursement);
         Assert.Equal(78m, report.Totals.NetReimbursement);
         Assert.Equal(4, report.DataQuality.Notes!.Count);
+    }
+
+    [Theory]
+    [InlineData(4, 0.4, 4.4, 0, 0, 0, 0.4)]
+    [InlineData(0, 0, 0, 6, 0.6, 6.6, 0.6)]
+    [InlineData(4, 0.4, 4.4, 2, 0.2, 2.2, 0.6)]
+    [InlineData(0, 0, 0, 0, 0, 0, 0)]
+    [InlineData(3.33, 0.33, 3.66, 1.11, 0.11, 1.22, 0.44)]
+    public async Task Row_level_fee_gst_equals_the_authoritative_processing_fee_result(
+        decimal actualFeeExGst, decimal actualFeeGst, decimal actualFeeIncGst,
+        decimal estimatedFeeExGst, decimal estimatedFeeGst, decimal estimatedFeeIncGst,
+        decimal expectedFeeGst)
+    {
+        var processingFees = new NayaxProcessingFeeResult(
+            actualFeeExGst, actualFeeGst, actualFeeIncGst,
+            estimatedFeeExGst, estimatedFeeGst, estimatedFeeIncGst,
+            estimatedFeeGst == 0m ? 0 : 1, DateTime.UtcNow, null);
+        var facts = FakeDailyReportFactsProvider.SingleDay(processingFees: processingFees);
+        var useCase = new GetDailyReport(new FakeDailyReportFactsProvider(facts));
+
+        var report = await useCase.Handle(
+            new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)), CancellationToken.None);
+
+        var row = Assert.Single(report.Rows);
+        Assert.Equal(expectedFeeGst, row.NayaxFeesGst);
+        Assert.Equal(processingFees.TotalFeeGst, row.NayaxFeesGst);
+        Assert.Equal(processingFees.TotalFeeGst, report.Totals!.NayaxProcessingFees.TotalFeeGst);
+    }
+
+    [Fact]
+    public async Task Missing_rate_transactions_still_expose_the_authoritative_zero_fee_gst()
+    {
+        var processingFees = new NayaxProcessingFeeResult(0m, 0m, 0m, 0m, 0m, 0m, 0, null, null, MissingRateTransactionCount: 3);
+        var facts = FakeDailyReportFactsProvider.SingleDay(processingFees: processingFees);
+        var useCase = new GetDailyReport(new FakeDailyReportFactsProvider(facts));
+
+        var report = await useCase.Handle(
+            new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)), CancellationToken.None);
+
+        var row = Assert.Single(report.Rows);
+        Assert.Equal(0m, row.NayaxFeesGst);
+        Assert.Equal(0m, report.Totals!.NayaxProcessingFees.TotalFeeGst);
     }
 
     [Fact]

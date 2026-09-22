@@ -105,7 +105,7 @@ public sealed class GetReportExportRows
                     Number(x.GrossMarginPercent), x.TransactionCount.ToString(),
                     x.IsCogsComplete.ToString(), x.UncostedTransactionCount.ToString(),
                     x.UncostedSalesAmount.ToString(CultureInfo.InvariantCulture),
-                    x.NayaxFeesExGst.ToString(CultureInfo.InvariantCulture), (x.NayaxFeesIncludingGst - x.NayaxFeesExGst).ToString(CultureInfo.InvariantCulture), x.NayaxFeesIncludingGst.ToString(CultureInfo.InvariantCulture), x.NayaxFeeSource,
+                    x.NayaxFeesExGst.ToString(CultureInfo.InvariantCulture), x.NayaxFeesGst.ToString(CultureInfo.InvariantCulture), x.NayaxFeesIncludingGst.ToString(CultureInfo.InvariantCulture), x.NayaxFeeSource,
                     x.ImportedReimbursement.ToString(CultureInfo.InvariantCulture), x.NetReimbursement.ToString(CultureInfo.InvariantCulture),
                     x.ReconciliationStatus
                 })).ToList();
@@ -119,7 +119,10 @@ public sealed class GetReportExportRows
                     Number(value.Totals.GrossMarginPercent), value.Totals.TransactionCount.ToString(),
                     value.Totals.IsCogsComplete.ToString(), value.Totals.UncostedTransactionCount.ToString(),
                     value.Totals.UncostedSalesAmount.ToString(CultureInfo.InvariantCulture),
-                    value.Totals.NayaxFeesExGst.ToString(CultureInfo.InvariantCulture), value.Totals.NayaxFeesIncludingGst.ToString(CultureInfo.InvariantCulture),
+                    value.Totals.NayaxFeesExGst.ToString(CultureInfo.InvariantCulture),
+                    value.Totals.NayaxProcessingFees.TotalFeeGst.ToString(CultureInfo.InvariantCulture),
+                    value.Totals.NayaxFeesIncludingGst.ToString(CultureInfo.InvariantCulture),
+                    string.Empty,
                     value.Totals.ImportedReimbursement.ToString(CultureInfo.InvariantCulture), value.Totals.NetReimbursement.ToString(CultureInfo.InvariantCulture),
                     string.Empty
                 });

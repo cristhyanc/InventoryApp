@@ -17,6 +17,7 @@ public record DailyReportRowDto(
     decimal? GrossMarginPercent = null,
     decimal NayaxFeesExGst = 0m,
     decimal NayaxFeesIncludingGst = 0m,
+    decimal NayaxFeesGst = 0m,
     decimal ImportedReimbursement = 0m,
     decimal NetReimbursement = 0m,
     bool IsReconciled = false,
