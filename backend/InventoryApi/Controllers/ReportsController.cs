@@ -1,13 +1,14 @@
 using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Reporting.Dashboard;
 using Inventory.Application.Reporting.Daily;
+using Inventory.Application.Reporting.Export;
 using Inventory.Application.Reporting.Gst;
 using Inventory.Application.Reporting.MachineProfitability;
 using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Shared;
 using Inventory.Application.Reporting.Transactions;
-using InventoryApi.Services.Interfaces;
+using InventoryApi.Adapters.Export;
 using Microsoft.AspNetCore.Mvc;
 
 namespace InventoryApi.Controllers;
@@ -16,7 +17,7 @@ namespace InventoryApi.Controllers;
 [Route("api/reports")]
 public sealed class ReportsController : ControllerBase
 {
-    private readonly IReportingService _service;
+    private readonly GetReportExportRows _getReportExportRows;
     private readonly GetBookkeepingReport _getBookkeepingReport;
     private readonly GetDailyReport _getDailyReport;
     private readonly GetReconciliationReport _getReconciliationReport;
@@ -26,7 +27,7 @@ public sealed class ReportsController : ControllerBase
     private readonly GetDashboardReport _getDashboardReport;
     private readonly GetTransactionSalesReport _getTransactionSalesReport;
 
-    public ReportsController(IReportingService service, GetBookkeepingReport getBookkeepingReport,
+    public ReportsController(GetReportExportRows getReportExportRows, GetBookkeepingReport getBookkeepingReport,
         GetDailyReport getDailyReport, GetReconciliationReport getReconciliationReport,
         GetMachineProfitabilityReport getMachineProfitabilityReport,
         GetProductProfitabilityReport getProductProfitabilityReport,
@@ -34,7 +35,7 @@ public sealed class ReportsController : ControllerBase
         GetDashboardReport getDashboardReport,
         GetTransactionSalesReport getTransactionSalesReport)
     {
-        _service = service;
+        _getReportExportRows = getReportExportRows;
         _getBookkeepingReport = getBookkeepingReport;
         _getDailyReport = getDailyReport;
         _getReconciliationReport = getReconciliationReport;
@@ -72,13 +73,12 @@ public sealed class ReportsController : ControllerBase
             return BadRequest("format must be csv or xlsx.");
         var isTransactionReport = report.Equals("transactions", StringComparison.OrdinalIgnoreCase) ||
             report.Equals("transaction-sales", StringComparison.OrdinalIgnoreCase);
+        var table = isTransactionReport
+            ? await _getReportExportRows.Handle(report, transactionFilter ?? new TransactionSalesFilterDto(), ct)
+            : await _getReportExportRows.Handle(report, filter ?? new ReportingFilterDto(), ct);
         var bytes = string.Equals(format, "xlsx", StringComparison.OrdinalIgnoreCase)
-            ? isTransactionReport
-                ? await _service.ExportXlsxAsync(report, transactionFilter ?? new TransactionSalesFilterDto(), ct)
-                : await _service.ExportXlsxAsync(report, filter ?? new ReportingFilterDto(), ct)
-            : isTransactionReport
-                ? await _service.ExportCsvAsync(report, transactionFilter ?? new TransactionSalesFilterDto(), ct)
-                : await _service.ExportCsvAsync(report, filter ?? new ReportingFilterDto(), ct);
+            ? ReportExportFileWriter.WriteXlsx(table)
+            : ReportExportFileWriter.WriteCsv(table);
         return File(bytes, format.Equals("xlsx", StringComparison.OrdinalIgnoreCase)
             ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : "text/csv",
             $"{report}.{format.ToLowerInvariant()}");

@@ -1,6 +1,4 @@
 using System.Globalization;
-using System.Text;
-using ClosedXML.Excel;
 using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Reporting.Dashboard;
 using Inventory.Application.Reporting.Daily;
@@ -10,20 +8,18 @@ using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Shared;
 using Inventory.Application.Reporting.Transactions;
-using Inventory.Domain.Reporting;
-using InventoryApi.Data;
-using InventoryApi.DTOs;
-using InventoryApi.Integrations.Nayax;
-using InventoryApi.Models;
-using InventoryApi.Services.Interfaces;
-using Microsoft.EntityFrameworkCore;
 
-namespace InventoryApi.Services;
+namespace Inventory.Application.Reporting.Export;
 
-public sealed class ReportingService : IReportingService
+/// <summary>
+/// Builds export rows for every report family from the same authoritative use-case results the API
+/// responses use (each is already documented as "consumed by both the API response and the
+/// CSV/XLSX export"), so export never reimplements a financial formula. This is the use case the
+/// removed legacy reporting service's export row-building delegated to before that service was
+/// decommissioned (issue #92).
+/// </summary>
+public sealed class GetReportExportRows
 {
-    private readonly AppDbContext _db;
-    private readonly INayaxLynxClient? _nayaxLynxClient;
     private readonly GetBookkeepingReport _getBookkeepingReport;
     private readonly GetDailyReport _getDailyReport;
     private readonly GetReconciliationReport _getReconciliationReport;
@@ -33,17 +29,11 @@ public sealed class ReportingService : IReportingService
     private readonly GetDashboardReport _getDashboardReport;
     private readonly GetTransactionSalesReport _getTransactionSalesReport;
 
-    public ReportingService(AppDbContext db, GetBookkeepingReport getBookkeepingReport,
-        GetDailyReport getDailyReport, GetReconciliationReport getReconciliationReport,
-        GetMachineProfitabilityReport getMachineProfitabilityReport,
-        GetProductProfitabilityReport getProductProfitabilityReport,
-        GetGstAccountingAid getGstAccountingAid,
-        GetDashboardReport getDashboardReport,
-        GetTransactionSalesReport getTransactionSalesReport,
-        INayaxLynxClient? nayaxLynxClient = null)
+    public GetReportExportRows(GetBookkeepingReport getBookkeepingReport, GetDailyReport getDailyReport,
+        GetReconciliationReport getReconciliationReport, GetMachineProfitabilityReport getMachineProfitabilityReport,
+        GetProductProfitabilityReport getProductProfitabilityReport, GetGstAccountingAid getGstAccountingAid,
+        GetDashboardReport getDashboardReport, GetTransactionSalesReport getTransactionSalesReport)
     {
-        _db = db;
-        _nayaxLynxClient = nayaxLynxClient;
         _getBookkeepingReport = getBookkeepingReport;
         _getDailyReport = getDailyReport;
         _getReconciliationReport = getReconciliationReport;
@@ -54,96 +44,11 @@ public sealed class ReportingService : IReportingService
         _getTransactionSalesReport = getTransactionSalesReport;
     }
 
-    public Task<BookkeepingReportDto> GetBookkeeping(ReportingFilterDto filter, CancellationToken cancellationToken = default) =>
-        GetBookkeepingAsync(filter, cancellationToken);
-    public Task<DailyReportDto> GetDaily(ReportingFilterDto filter, CancellationToken cancellationToken = default) =>
-        GetDailyAsync(filter, cancellationToken);
-    public Task<ReconciliationReportDto> GetReconciliation(ReportingFilterDto filter, decimal tolerance = 0.01m, CancellationToken cancellationToken = default) =>
-        GetReconciliationAsync(filter, tolerance, cancellationToken);
-    public Task<MachineProfitabilityReportDto> GetMachineProfitability(ReportingFilterDto filter, CancellationToken cancellationToken = default) =>
-        GetMachineProfitabilityAsync(filter, cancellationToken);
-    public Task<ProductProfitabilityReportDto> GetProductProfitability(ReportingFilterDto filter, CancellationToken cancellationToken = default) =>
-        GetProductProfitabilityAsync(filter, cancellationToken);
-    public Task<GstAccountingAidDto> GetGst(ReportingFilterDto filter, CancellationToken cancellationToken = default) =>
-        GetGstAsync(filter, cancellationToken);
-    public Task<DashboardReportDto> GetDashboard(ReportingFilterDto filter, CancellationToken cancellationToken = default) =>
-        GetDashboardAsync(filter, cancellationToken);
-
-    public Task<BookkeepingReportDto> GetBookkeepingAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default) =>
-        _getBookkeepingReport.Handle(filter, cancellationToken);
-
-    public Task<DailyReportDto> GetDailyAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default) =>
-        _getDailyReport.Handle(filter, cancellationToken);
-
-    public Task<ReconciliationReportDto> GetReconciliationAsync(ReportingFilterDto filter, decimal tolerance = 0.01m, CancellationToken cancellationToken = default) =>
-        _getReconciliationReport.Handle(filter, tolerance, cancellationToken);
-
-    public Task<MachineProfitabilityReportDto> GetMachineProfitabilityAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default) =>
-        _getMachineProfitabilityReport.Handle(filter, cancellationToken);
-
-    public Task<ProductProfitabilityReportDto> GetProductProfitabilityAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default) =>
-        _getProductProfitabilityReport.Handle(filter, cancellationToken);
-
-    public Task<GstAccountingAidDto> GetGstAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default) =>
-        _getGstAccountingAid.Handle(filter, cancellationToken);
-
-    public Task<DashboardReportDto> GetDashboardAsync(ReportingFilterDto filter, CancellationToken cancellationToken = default) =>
-        _getDashboardReport.Handle(filter, cancellationToken);
-
-    public Task<TransactionSalesReportDto> GetTransactionsAsync(
-        TransactionSalesFilterDto filter, CancellationToken cancellationToken = default) =>
-        _getTransactionSalesReport.Handle(filter, paginate: true, cancellationToken);
-
     private static string Number(decimal? value) => value?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
     private static string Number(long? value) => value?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
     private static string Number(int? value) => value?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
 
-    public async Task<byte[]> ExportCsvAsync(string report, ReportingFilterDto filter, CancellationToken cancellationToken = default)
-    {
-        var rows = await ExportRowsAsync(report, filter, cancellationToken);
-        var builder = new StringBuilder();
-        foreach (var row in rows)
-            builder.AppendLine(string.Join(",", row.Select(Csv)));
-        return Encoding.UTF8.GetBytes(builder.ToString());
-    }
-
-    public async Task<byte[]> ExportXlsxAsync(string report, ReportingFilterDto filter, CancellationToken cancellationToken = default)
-    {
-        var rows = await ExportRowsAsync(report, filter, cancellationToken);
-        using var workbook = new XLWorkbook();
-        var sheet = workbook.Worksheets.Add("Report");
-        for (var r = 0; r < rows.Count; r++)
-            for (var c = 0; c < rows[r].Count; c++)
-                sheet.Cell(r + 1, c + 1).Value = rows[r][c];
-        using var stream = new MemoryStream();
-        workbook.SaveAs(stream);
-        return stream.ToArray();
-    }
-
-    public async Task<byte[]> ExportCsvAsync(string report, TransactionSalesFilterDto filter, CancellationToken cancellationToken = default)
-    {
-        var rows = await ExportTransactionRowsAsync(report, filter, cancellationToken);
-        var builder = new StringBuilder();
-        foreach (var row in rows)
-            builder.AppendLine(string.Join(",", row.Select(Csv)));
-        return Encoding.UTF8.GetBytes(builder.ToString());
-    }
-
-    public async Task<byte[]> ExportXlsxAsync(string report, TransactionSalesFilterDto filter, CancellationToken cancellationToken = default)
-    {
-        var rows = await ExportTransactionRowsAsync(report, filter, cancellationToken);
-        using var workbook = new XLWorkbook();
-        var sheet = workbook.Worksheets.Add("Transactions");
-        for (var r = 0; r < rows.Count; r++)
-            for (var c = 0; c < rows[r].Count; c++)
-                sheet.Cell(r + 1, c + 1).Value = rows[r][c];
-        using var stream = new MemoryStream();
-        workbook.SaveAs(stream);
-        return stream.ToArray();
-    }
-
-    private async Task<List<List<string>>> ExportTransactionRowsAsync(
-        string report, TransactionSalesFilterDto filter, CancellationToken cancellationToken)
+    public async Task<ReportExportTable> Handle(string report, TransactionSalesFilterDto filter, CancellationToken cancellationToken)
     {
         if (report.Trim().ToLowerInvariant() is not ("transactions" or "transaction-sales"))
             throw new ArgumentException("Unsupported transaction report.", nameof(report));
@@ -174,15 +79,15 @@ public sealed class ReportingService : IReportingService
             Number(x.FeeIncGst), x.FeeSource, Number(x.CommissionRate), x.CommissionBasis ?? string.Empty,
             Number(x.CommissionAmount), Number(x.TransactionStatusId), x.TransactionStatus, x.IsCompleted.ToString()
         }));
-        return rows;
+        return new ReportExportTable(rows, "Transactions");
     }
 
-    private async Task<List<List<string>>> ExportRowsAsync(string report, ReportingFilterDto filter, CancellationToken cancellationToken)
+    public async Task<ReportExportTable> Handle(string report, ReportingFilterDto filter, CancellationToken cancellationToken)
     {
         report = report.Trim().ToLowerInvariant();
         if (report is "daily")
         {
-            var value = await GetDailyAsync(filter, cancellationToken);
+            var value = await _getDailyReport.Handle(filter, cancellationToken);
             var rows = new[] { new List<string>
                 {
                     "Date", "GrossSales", "CardSales", "CashSales", "AverageSale", "Quantity",
@@ -218,21 +123,22 @@ public sealed class ReportingService : IReportingService
                     value.Totals.ImportedReimbursement.ToString(CultureInfo.InvariantCulture), value.Totals.NetReimbursement.ToString(CultureInfo.InvariantCulture),
                     string.Empty
                 });
-            return rows;
+            return new ReportExportTable(rows, "Report");
         }
         if (report is "bookkeeping")
         {
-            var value = await GetBookkeepingAsync(filter, cancellationToken);
+            var value = await _getBookkeepingReport.Handle(filter, cancellationToken);
             var isMachineFiltered = MachineId(filter).HasValue;
-            return new List<List<string>>
+            var rows = new List<List<string>>
             {
                 new() { "From", "To", "FinancialYear", "GrossSales", "CardSales", "CashSales", "CardTransactions", "CashTransactions", "COGS", "GrossProfit",                 "NayaxFeeExGst", "NayaxFeeGST", "NayaxFeeIncGST", "ActualNayaxFee", "EstimatedNayaxFee", "EstimatedCardTransactionCount", "HasEstimates", "DeliveryCosts", "PackageCosts", "OtherOperatingExpenses", "NetSettlement", "SiteCommission", isMachineFiltered ? "DirectProfit" : "NetProfit", isMachineFiltered ? "DirectMarginPercent" : "NetMargin", "GstOnSales", "GstOnFees" },
                 new() { value.From.ToString("yyyy-MM-dd"), value.To.ToString("yyyy-MM-dd"), value.FinancialYear, value.Sales.ToString(CultureInfo.InvariantCulture), value.CardSales.ToString(CultureInfo.InvariantCulture), value.CashSales.ToString(CultureInfo.InvariantCulture), value.CardTransactionCount.ToString(), value.CashTransactionCount.ToString(), Number(value.CostOfGoods), Number(value.GrossProfit), value.NayaxProcessingFees.TotalFeeExGst.ToString(CultureInfo.InvariantCulture), value.NayaxProcessingFees.TotalFeeGst.ToString(CultureInfo.InvariantCulture), value.NayaxProcessingFees.TotalFeeIncGst.ToString(CultureInfo.InvariantCulture), value.NayaxProcessingFees.ActualFeeIncGst.ToString(CultureInfo.InvariantCulture), value.NayaxProcessingFees.EstimatedFeeIncGst.ToString(CultureInfo.InvariantCulture), value.NayaxProcessingFees.EstimatedCardTransactionCount.ToString(), value.NayaxProcessingFees.HasEstimatedFees.ToString(), value.DeliveryCosts.ToString(CultureInfo.InvariantCulture), value.PackageCosts.ToString(CultureInfo.InvariantCulture), value.OtherOperatingExpenses.ToString(CultureInfo.InvariantCulture), value.NetSettlement.ToString(CultureInfo.InvariantCulture), value.SiteCommission.ToString(CultureInfo.InvariantCulture), Number(isMachineFiltered ? value.DirectProfit : value.NetProfit), Number(isMachineFiltered ? value.DirectMarginPercent : value.NetMarginPercent), value.GstOnSales.ToString(CultureInfo.InvariantCulture), value.GstOnFees.ToString(CultureInfo.InvariantCulture) }
             };
+            return new ReportExportTable(rows, "Report");
         }
         if (report is "reconciliation")
         {
-            var value = await GetReconciliationAsync(filter, cancellationToken: cancellationToken);
+            var value = await _getReconciliationReport.Handle(filter, 0.01m, cancellationToken);
             var rows = new List<List<string>>
             {
                 new() { "From", "To", "TotalVendingSales", "CardSales", "CashSales", "CardTransactionSales", "NayaxReportedGrossCardSales", "CardTransactionCount", "NayaxReportedCardTransactionCount", "CountDifference", "GrossDifference", "GrossStatus", "ProcessingFeesExGst", "FeeGst", "OtherFees", "Adjustments", "ExpectedNetReimbursement", "ActualNetReimbursement", "SettlementDifference", "SettlementStatus", "Status", "PayoutDate" }
@@ -267,55 +173,40 @@ public sealed class ReportingService : IReportingService
                     x.SettlementDifference.ToString(CultureInfo.InvariantCulture), x.SettlementStatus, x.Status, string.Empty
                 });
             }
-            return rows;
+            return new ReportExportTable(rows, "Report");
         }
         if (report is "machine-profitability" or "machines")
         {
-            var value = await GetMachineProfitabilityAsync(filter, cancellationToken);
-            return new[] { new List<string> { "MachineId", "MachineName", "Sales", "CardSales", "CashSales", "Quantity", "CostOfGoods", "GrossProfit", "NayaxFeeExGst", "NayaxFeeGST", "NayaxFeeIncGST", "ActualNayaxFee", "EstimatedNayaxFee", "EstimatedCardTransactionCount", "HasEstimates", "CommissionPercent", "SiteCommission", "DirectProfit", "DirectMarginPercent", "Transactions" } }
+            var value = await _getMachineProfitabilityReport.Handle(filter, cancellationToken);
+            var rows = new[] { new List<string> { "MachineId", "MachineName", "Sales", "CardSales", "CashSales", "Quantity", "CostOfGoods", "GrossProfit", "NayaxFeeExGst", "NayaxFeeGST", "NayaxFeeIncGST", "ActualNayaxFee", "EstimatedNayaxFee", "EstimatedCardTransactionCount", "HasEstimates", "CommissionPercent", "SiteCommission", "DirectProfit", "DirectMarginPercent", "Transactions" } }
                 .Concat(value.Rows.Select(x => new List<string> { x.MachineId.ToString(), x.MachineName, x.Sales.ToString(CultureInfo.InvariantCulture), x.CardSales.ToString(CultureInfo.InvariantCulture), x.CashSales.ToString(CultureInfo.InvariantCulture), x.Quantity.ToString(CultureInfo.InvariantCulture), Number(x.CostOfGoods), Number(x.GrossProfit), x.NayaxProcessingFees.TotalFeeExGst.ToString(CultureInfo.InvariantCulture), x.NayaxProcessingFees.TotalFeeGst.ToString(CultureInfo.InvariantCulture), x.NayaxProcessingFees.TotalFeeIncGst.ToString(CultureInfo.InvariantCulture), x.NayaxProcessingFees.ActualFeeIncGst.ToString(CultureInfo.InvariantCulture), x.NayaxProcessingFees.EstimatedFeeIncGst.ToString(CultureInfo.InvariantCulture), x.NayaxProcessingFees.EstimatedCardTransactionCount.ToString(), x.NayaxProcessingFees.HasEstimatedFees.ToString(), x.CommissionPercent.ToString(CultureInfo.InvariantCulture), x.SiteCommission.ToString(CultureInfo.InvariantCulture), Number(x.DirectProfit), Number(x.DirectMarginPercent), x.TransactionCount.ToString(CultureInfo.InvariantCulture) })).ToList();
+            return new ReportExportTable(rows, "Report");
         }
         if (report is "gst" or "gst-accounting")
         {
-            var value = await GetGstAsync(filter, cancellationToken);
-            return new List<List<string>>
+            var value = await _getGstAccountingAid.Handle(filter, cancellationToken);
+            var rows = new List<List<string>>
             {
                 new() { "From", "To", "TaxableSales", "GstOnSales", "TaxableFees", "GstOnFees", "NetGst" },
                 new() { value.From.ToString("yyyy-MM-dd"), value.To.ToString("yyyy-MM-dd"), value.TaxableSales.ToString(CultureInfo.InvariantCulture), value.GstOnSales.ToString(CultureInfo.InvariantCulture), value.TaxableFees.ToString(CultureInfo.InvariantCulture), value.GstOnFees.ToString(CultureInfo.InvariantCulture), value.NetGst.ToString(CultureInfo.InvariantCulture) }
             };
+            return new ReportExportTable(rows, "Report");
         }
         if (report is "dashboard")
         {
-            var value = await GetDashboardAsync(filter, cancellationToken);
-            return new List<List<string>>
+            var value = await _getDashboardReport.Handle(filter, cancellationToken);
+            var rows = new List<List<string>>
             {
                 new() { "From", "To", "Sales", "GrossProfit", "Transactions", "Quantity", "MachineCount", "ProductCount", "UnmappedProductCount" },
                 new() { value.From.ToString("yyyy-MM-dd"), value.To.ToString("yyyy-MM-dd"), value.Sales.ToString(CultureInfo.InvariantCulture), Number(value.GrossProfit), value.Transactions.ToString(CultureInfo.InvariantCulture), value.Quantity.ToString(CultureInfo.InvariantCulture), value.MachineCount.ToString(), value.ProductCount.ToString(), value.UnmappedProductCount.ToString() }
             };
+            return new ReportExportTable(rows, "Report");
         }
-        var products = await GetProductProfitabilityAsync(filter, cancellationToken);
-        return new[] { new List<string> { "Product", "Sales", "Quantity", "CostOfGoods", "GrossProfit", "MarginPercent", "Transactions", "Unmapped" } }
+        var products = await _getProductProfitabilityReport.Handle(filter, cancellationToken);
+        var productRows = new[] { new List<string> { "Product", "Sales", "Quantity", "CostOfGoods", "GrossProfit", "MarginPercent", "Transactions", "Unmapped" } }
             .Concat(products.Rows.Select(x => new List<string> { x.ProductName, x.Sales.ToString(CultureInfo.InvariantCulture), x.Quantity.ToString(CultureInfo.InvariantCulture), Number(x.CostOfGoods), Number(x.GrossProfit), Number(x.MarginPercent), x.TransactionCount.ToString(CultureInfo.InvariantCulture), x.IsUnmapped.ToString() })).ToList();
+        return new ReportExportTable(productRows, "Report");
     }
-
-    private static void AddStatusQualityNotes(List<string> notes, IEnumerable<NayaxSales> sales)
-    {
-        var pending = sales.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Pending);
-        var refunded = sales.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Refunded);
-        var declined = sales.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.CancelledOrDeclined);
-        var unknown = sales.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Unknown);
-        var unknownStatus = sales.Count(x => x.TransactionStatusId is null);
-        if (pending > 0) notes.Add($"{pending} pending Nayax transaction(s) are excluded from completed sales.");
-        if (refunded > 0) notes.Add($"{refunded} refunded Nayax transaction(s) are excluded from completed sales.");
-        if (declined > 0) notes.Add($"{declined} cancelled or declined Nayax transaction(s) are excluded from completed sales.");
-        if (unknown > 0) notes.Add($"{unknown} Nayax transaction(s) have unrecognised status IDs.");
-        if (unknownStatus > 0) notes.Add($"{unknownStatus} Nayax transaction(s) have no status ID and are excluded from completed sales.");
-    }
-
-    private static string Csv(string value) => $"\"{value.Replace("\"", "\"\"")}\"";
-
-    private static DateRange ResolveRange(ReportingFilterDto filter) =>
-        ReportingRangeResolver.Resolve(filter.From, filter.To, filter.StartDate, filter.EndDate, filter.FinancialYear);
 
     private static long? MachineId(ReportingFilterDto filter) => filter.MachineId ?? filter.MachineID;
 }

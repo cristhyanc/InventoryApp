@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Reporting.Dashboard;
 using Inventory.Application.Reporting.Daily;
+using Inventory.Application.Reporting.Export;
 using Inventory.Application.Reporting.Gst;
 using Inventory.Application.Reporting.MachineProfitability;
 using Inventory.Application.Reporting.ProductProfitability;
@@ -11,7 +12,6 @@ using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Shared;
 using Inventory.Application.Reporting.Transactions;
 using InventoryApi.Controllers;
-using InventoryApi.Services.Interfaces;
 using InventoryApi.Tests.Application.Reporting.Bookkeeping;
 using InventoryApi.Tests.Application.Reporting.Dashboard;
 using InventoryApi.Tests.Application.Reporting.Daily;
@@ -20,7 +20,6 @@ using InventoryApi.Tests.Application.Reporting.MachineProfitability;
 using InventoryApi.Tests.Application.Reporting.ProductProfitability;
 using InventoryApi.Tests.Application.Reporting.Reconciliation;
 using InventoryApi.Tests.Application.Reporting.Transactions;
-using Moq;
 using Xunit;
 
 namespace InventoryApi.Tests.Controllers;
@@ -28,7 +27,7 @@ namespace InventoryApi.Tests.Controllers;
 public class ReportsControllerBookkeepingTests
 {
     [Fact]
-    public async Task Bookkeeping_action_routes_through_the_application_use_case_not_the_legacy_service()
+    public async Task Bookkeeping_action_routes_through_the_application_use_case()
     {
         var facts = FakeBookkeepingReportFactsProvider.Complete(sales: 250m, cost: 90m);
         var useCase = new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(facts));
@@ -40,10 +39,11 @@ public class ReportsControllerBookkeepingTests
         var dashboardUseCase = new GetDashboardReport(useCase,
             new FakeGetProductProfitabilityReport(new ProductProfitabilityReportDto(default, default, [], new ReportingDataQualityDto())),
             new FakeDashboardReportFactsProvider(FakeDashboardReportFactsProvider.Complete()));
-        var legacyService = new Mock<IReportingService>(MockBehavior.Strict);
         var getTransactionSalesReport = new GetTransactionSalesReport(
             new FakeTransactionSalesReportFactsProvider(FakeTransactionSalesReportFactsProvider.Empty()));
-        var controller = new ReportsController(legacyService.Object, useCase, dailyUseCase, reconciliationUseCase,
+        var getReportExportRows = new GetReportExportRows(useCase, dailyUseCase, reconciliationUseCase,
+            machineProfitabilityUseCase, productProfitabilityUseCase, gstUseCase, dashboardUseCase, getTransactionSalesReport);
+        var controller = new ReportsController(getReportExportRows, useCase, dailyUseCase, reconciliationUseCase,
             machineProfitabilityUseCase, productProfitabilityUseCase, gstUseCase, dashboardUseCase, getTransactionSalesReport);
 
         var report = await controller.Bookkeeping(
@@ -51,6 +51,5 @@ public class ReportsControllerBookkeepingTests
 
         Assert.Equal(250m, report.Sales);
         Assert.Equal(90m, report.CostOfGoods);
-        legacyService.VerifyNoOtherCalls();
     }
 }

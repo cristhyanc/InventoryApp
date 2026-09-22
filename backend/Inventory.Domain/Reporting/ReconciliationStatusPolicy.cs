@@ -2,10 +2,10 @@ namespace Inventory.Domain.Reporting;
 
 /// <summary>
 /// Deterministic reconciliation-status policy for comparing a completed-sale amount against an
-/// imported Nayax reimbursement within a tolerance. Originally private to the legacy daily and
-/// reconciliation report methods on <c>InventoryApi.Services.ReportingService</c>; placed here,
-/// alongside <see cref="ReportingCalculations"/>, so the daily slice and the still-legacy
-/// reconciliation report call one authoritative implementation instead of duplicating it.
+/// imported Nayax reimbursement within a tolerance. Originally private to the pre-migration legacy
+/// daily and reconciliation report methods; placed here, alongside <see cref="ReportingCalculations"/>,
+/// so every migrated report family that needs this classification (daily, reconciliation, dashboard)
+/// calls one authoritative implementation instead of duplicating it.
 /// </summary>
 public static class ReconciliationStatusPolicy
 {

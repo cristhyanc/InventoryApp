@@ -8,11 +8,13 @@ using System.Threading.Tasks;
 using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Reporting.Dashboard;
 using Inventory.Application.Reporting.Daily;
+using Inventory.Application.Reporting.Export;
 using Inventory.Application.Reporting.Gst;
 using Inventory.Application.Reporting.MachineProfitability;
 using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Transactions;
+using InventoryApi.Adapters.Export;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using InventoryApi.Integrations.Nayax;
@@ -280,13 +282,14 @@ public class NayaxHistoricalCostTests
         var getDashboardReport = new GetDashboardReport(getBookkeepingReport, getProductProfitabilityReport,
             new EfDashboardReportFactsProvider(db, siteCommissions));
         var getTransactionSalesReport = new GetTransactionSalesReport(new EfTransactionSalesReportFactsProvider(db));
-        var csv = Encoding.UTF8.GetString(await new ReportingService(db,
-            getBookkeepingReport, getDailyReport, getReconciliationReport,
+        var getReportExportRows = new GetReportExportRows(getBookkeepingReport, getDailyReport, getReconciliationReport,
             getMachineProfitabilityReport, getProductProfitabilityReport, getGstAccountingAid, getDashboardReport,
-            getTransactionSalesReport).ExportCsvAsync(
+            getTransactionSalesReport);
+        var csv = Encoding.UTF8.GetString(ReportExportFileWriter.WriteCsv(await getReportExportRows.Handle(
             "transactions",
             new TransactionSalesFilterDto(
-                From: new DateTime(2026, 9, 2), To: new DateTime(2026, 9, 2))));
+                From: new DateTime(2026, 9, 2), To: new DateTime(2026, 9, 2)),
+            CancellationToken.None)));
 
         Assert.Contains("NayaxProductCostPrice", csv);
         Assert.Contains("UnitCostAtSale", csv);

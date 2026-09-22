@@ -20,11 +20,11 @@ namespace InventoryApi.Adapters.Persistence;
 /// resolution are shared with <see cref="EfDailyReportFactsProvider"/>,
 /// <see cref="EfReconciliationReportFactsProvider"/>, and
 /// <see cref="EfMachineProfitabilityReportFactsProvider"/> through <see cref="EfReportingSharedQueries"/>.
-/// Its remaining private EF query helpers (receipts, operating expenses) intentionally mirror
-/// equivalent private helpers still used by the transactions report, the only report family in
-/// <see cref="InventoryApi.Services.ReportingService"/> not yet migrated. They are query mechanics,
-/// not financial formulas, and will be de-duplicated once that report family migrates in its own
-/// issue (see the reporting migration track in docs/architecture.md).
+/// Its remaining private EF query helpers (receipts, operating expenses) compute the business-wide
+/// delivery/package cost and operating-expense totals bookkeeping's net-profit rule needs; audited
+/// against every other migrated adapter (issue #92), they have no equivalent to share: machine
+/// profitability's own operating-expense query is a per-machine breakdown with different grouping,
+/// not the same shape (see the reporting migration track in docs/architecture.md).
 /// </summary>
 public sealed class EfBookkeepingReportFactsProvider : IBookkeepingReportFactsProvider
 {

@@ -117,6 +117,32 @@ public class ProjectDependencyDirectionTests
     }
 
     [Fact]
+    public void No_other_source_file_references_the_removed_legacy_reporting_service()
+    {
+        // Issue #92 removed every caller of the legacy InventoryApi.Services.ReportingService/
+        // IReportingService (DI registration, ReportsController, and every test) in favour of the
+        // migrated Inventory.Application.Reporting.* use cases and GetReportExportRows. The two
+        // legacy files themselves are excluded here because their own class/interface declaration
+        // necessarily contains their own name; this file is excluded because it names them in this
+        // comment and in the exclusion list itself. Together they prove nothing else depends on them.
+        var legacyFiles = new[]
+        {
+            Path.GetFullPath(Path.Combine(BackendRoot, "InventoryApi", "Services", "ReportingService.cs")),
+            Path.GetFullPath(Path.Combine(BackendRoot, "InventoryApi", "Services", "Interfaces", "IReportingService.cs")),
+            Path.GetFullPath(Path.Combine(BackendRoot, "InventoryApi.Tests", "Architecture", "ProjectDependencyDirectionTests.cs")),
+        };
+
+        var offendingFiles = Directory.EnumerateFiles(BackendRoot, "*.cs", SearchOption.AllDirectories)
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .Where(path => !legacyFiles.Contains(Path.GetFullPath(path), StringComparer.OrdinalIgnoreCase))
+            .Where(path => File.ReadAllText(path).Contains("ReportingService", StringComparison.Ordinal))
+            .ToArray();
+
+        Assert.Empty(offendingFiles);
+    }
+
+    [Fact]
     public void No_production_project_references_the_api_project()
     {
         foreach (var (folder, file) in new[]
