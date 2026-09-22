@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Inventory.Application.Reporting.Transactions;
 using Inventory.Domain.Reporting.Transactions;
 using InventoryApi.Data;
@@ -38,10 +39,9 @@ public sealed class EfTransactionSalesReportFactsProvider : ITransactionSalesRep
     {
         var endExclusive = to.Date.AddDays(1);
 
-        var sales = await _db.NayaxSales.AsNoTracking()
+        var salesQuery = _db.NayaxSales.AsNoTracking()
             .Where(x => x.MachineAuthorizationTime >= from && x.MachineAuthorizationTime < endExclusive &&
-                (!machineId.HasValue || x.MachineID == machineId.Value))
-            .ToListAsync(cancellationToken);
+                (!machineId.HasValue || x.MachineID == machineId.Value));
 
         var catalogue = await _db.Products.AsNoTracking()
             .Select(x => new TransactionSalesCatalogueEntry(x.Id, x.Name))
@@ -83,7 +83,21 @@ public sealed class EfTransactionSalesReportFactsProvider : ITransactionSalesRep
             .GroupBy(x => x.CustomerID!.Value)
             .ToDictionary(x => x.Key, x => x.ToList());
 
-        var rows = sales.Select(sale =>
+        var rows = StreamRows(salesQuery, machineById, machinesBySite, cancellationToken);
+
+        return new TransactionSalesReportFacts(rows, catalogue, feeRates, agreements, siteMappingUnavailable);
+    }
+
+    // Consumes the date/machine-filtered EF query as an asynchronous stream instead of completing it
+    // with ToListAsync, so the Application use case can product-match and totals-accumulate each raw
+    // transaction as it arrives instead of first materialising the complete transaction list.
+    private static async IAsyncEnumerable<TransactionSalesReportFactsRow> StreamRows(
+        IQueryable<NayaxSales> salesQuery,
+        Dictionary<long, NayaxMachine> machineById,
+        Dictionary<long, List<NayaxMachine>> machinesBySite,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        await foreach (var sale in salesQuery.AsAsyncEnumerable().WithCancellation(cancellationToken))
         {
             machineById.TryGetValue(sale.MachineID, out var machine);
             var siteId = machine?.CustomerID;
@@ -92,7 +106,7 @@ public sealed class EfTransactionSalesReportFactsProvider : ITransactionSalesRep
                 : null;
             var hasPersistedCost = sale.CostingStatus == SaleCostingStatus.Costed && sale.CostOfGoodsSold.HasValue;
 
-            return new TransactionSalesReportFactsRow(
+            yield return new TransactionSalesReportFactsRow(
                 sale.TransactionID, sale.MachineAuthorizationTime, sale.MachineID, sale.MachineName,
                 siteId, siteName, sale.NayaxProductId, sale.ProductName,
                 ToDomain(PaymentMethodClassifier.Classify(sale.PaymentMethod)), sale.PaymentMethod, sale.SettlementValue,
@@ -100,9 +114,7 @@ public sealed class EfTransactionSalesReportFactsProvider : ITransactionSalesRep
                 sale.CostingStatus.ToString(), CostSourceLabel(sale), hasPersistedCost,
                 ToDomain(NayaxTransactionStatusClassifier.Classify(sale.TransactionStatusId)),
                 sale.TransactionStatusId, NayaxTransactionStatusClassifier.Describe(sale.TransactionStatusId));
-        }).ToList();
-
-        return new TransactionSalesReportFacts(rows, catalogue, feeRates, agreements, siteMappingUnavailable);
+        }
     }
 
     private static string CostSourceLabel(NayaxSales sale)

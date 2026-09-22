@@ -70,7 +70,7 @@ public class GetReportExportRowsTests
     public async Task Transactions_export_uses_the_transactions_sheet_name_and_the_unpaginated_result()
     {
         var row = FakeTransactionSalesReportFactsProvider.CompletedCardRow(transactionId: 7, sale: 42m);
-        var facts = new TransactionSalesReportFacts([row], [], [], [], SiteMappingUnavailable: false);
+        var facts = FakeTransactionSalesReportFactsProvider.Facts([row]);
         var transactions = new GetTransactionSalesReport(new FakeTransactionSalesReportFactsProvider(facts));
 
         var table = await Sut(transactions: transactions).Handle("transactions", new TransactionSalesFilterDto(), CancellationToken.None);

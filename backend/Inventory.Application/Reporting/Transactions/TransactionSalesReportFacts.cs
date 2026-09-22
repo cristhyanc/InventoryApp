@@ -6,10 +6,12 @@ namespace Inventory.Application.Reporting.Transactions;
 /// Raw, per-transaction facts needed to build the transaction sales report for a resolved date
 /// range and optional machine filter. Contains no financial formulas or product-matching logic:
 /// those live in <c>Inventory.Domain.Reporting.Transactions</c>/<c>ProductMatching</c> and in this
-/// feature's use case.
+/// feature's use case. <see cref="Transactions"/> is an asynchronous stream, not a materialised list:
+/// the provider consumes its underlying query one row at a time instead of completing it with
+/// <c>ToListAsync</c>, and the use case enumerates it exactly once.
 /// </summary>
 public sealed record TransactionSalesReportFacts(
-    IReadOnlyList<TransactionSalesReportFactsRow> Transactions,
+    IAsyncEnumerable<TransactionSalesReportFactsRow> Transactions,
     IReadOnlyList<TransactionSalesCatalogueEntry> ProductCatalogue,
     IReadOnlyList<EffectiveFeeRate> FeeRates,
     IReadOnlyList<EffectiveCommissionAgreement> CommissionAgreements,
