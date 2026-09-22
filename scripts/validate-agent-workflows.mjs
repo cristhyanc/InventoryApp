@@ -361,10 +361,14 @@ export function verifyValidationModeIsolation(workflowText, source) {
   }
 }
 
-function verifySafeDispatcher(text, source) {
+// pullRequestsPermission is 'read' for every dispatcher except the implementation dispatcher,
+// which needs 'write' to label its own already-guarded pull request (gh pr edit --add-label
+// resolves to the GraphQL addLabelsToLabelable mutation, which checks the pull-requests
+// permission, not issues, regardless of the labelable being a pull request).
+function verifySafeDispatcher(text, source, pullRequestsPermission = 'read') {
   for (const required of [
     'actions: write',
-    'pull-requests: read',
+    `pull-requests: ${pullRequestsPermission}`,
     '--ref main',
     'headRefOid',
     'github-actions[bot]',
@@ -373,6 +377,9 @@ function verifySafeDispatcher(text, source) {
   ]) {
     requireText(text, required, source);
   }
+
+  const otherPermission = pullRequestsPermission === 'write' ? 'read' : 'write';
+  forbidText(text, `pull-requests: ${otherPermission}`, source);
 
   for (const forbidden of [
     'actions/checkout',
@@ -771,18 +778,16 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
     forbidText(producer, 'actions: write', `${path} ${producerName} job`);
 
     const dispatcher = section(workflow, '  dispatch-validation:\n', null, path);
-    verifySafeDispatcher(dispatcher, `${path} validation dispatcher`);
+    verifySafeDispatcher(dispatcher, `${path} validation dispatcher`, producerName === 'implement' ? 'write' : 'read');
     verifyAgentPrGuards(dispatcher, `${path} validation dispatcher`, 'Refusing stale validation dispatch');
     requireText(dispatcher, 'validate.yml', `${path} validation dispatcher`);
     if (producerName === 'implement') {
       // The implementation dispatcher is the one place allowed to label the pull request
       // itself: it applies agent-review as a deterministic step (Claude is never granted
       // gh pr edit/gh label) before requesting review automatically via dispatch_review=true.
-      requireText(dispatcher, 'issues: write', `${path} validation dispatcher`);
       requireText(dispatcher, 'gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label agent-review', `${path} validation dispatcher`);
       requireText(dispatcher, '-f dispatch_review=true', `${path} validation dispatcher`);
     } else {
-      forbidText(dispatcher, 'issues: write', `${path} validation dispatcher`);
       requireText(dispatcher, '-f dispatch_review=true', `${path} validation dispatcher`);
       requireText(dispatcher, 'any(.labels[]?; .name == "agent-review")', `${path} validation dispatcher`);
     }
