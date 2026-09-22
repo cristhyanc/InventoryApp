@@ -50,5 +50,6 @@ public class ReportsControllerGstTests
             new ReportingFilterDto(new DateTime(2025, 7, 1), new DateTime(2025, 7, 31)), CancellationToken.None);
 
         Assert.Equal(100m, report.TaxableSales);
+        Assert.False(report.DataQuality.GstClassificationMissing);
     }
 }

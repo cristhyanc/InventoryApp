@@ -53,5 +53,7 @@ public class ReportsControllerReconciliationTests
 
         Assert.Equal(250m, report.NayaxReportedGrossCardSales);
         Assert.True(report.IsMatch);
+        Assert.False(report.DataQuality.GstClassificationMissing);
+        Assert.False(report.PeriodRows[0].DataQuality.GstClassificationMissing);
     }
 }

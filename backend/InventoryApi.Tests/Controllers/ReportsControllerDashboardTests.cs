@@ -53,5 +53,9 @@ public class ReportsControllerDashboardTests
         Assert.Equal(12, report.Transactions);
         Assert.Equal(3, report.MachineCount);
         Assert.Equal(4, report.ProductCount);
+        Assert.False(report.DataQuality.HistoricalCostUnavailable);
+        Assert.False(report.DataQuality.GstClassificationMissing);
+        Assert.False(report.DataQuality.CommissionNotPersisted);
+        Assert.False(report.DataQuality.ContainsUnmappedProducts);
     }
 }

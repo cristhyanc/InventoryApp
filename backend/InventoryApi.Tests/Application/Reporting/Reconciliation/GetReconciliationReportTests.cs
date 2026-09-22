@@ -146,6 +146,135 @@ public class GetReconciliationReportTests
     }
 
     [Fact]
+    public async Task Period_with_gst_classification_reports_the_flag_as_not_missing()
+    {
+        var period = FakeReconciliationReportFactsProvider.Period(hasGstClassification: true);
+        var facts = FakeReconciliationReportFactsProvider.SinglePeriod(period);
+        var useCase = new GetReconciliationReport(new FakeReconciliationReportFactsProvider(facts));
+
+        var report = await useCase.Handle(
+            new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)), 0.01m, CancellationToken.None);
+
+        var row = Assert.Single(report.PeriodRows);
+        Assert.False(row.DataQuality.GstClassificationMissing);
+    }
+
+    [Fact]
+    public async Task Period_without_gst_classification_reports_the_flag_as_missing()
+    {
+        var period = FakeReconciliationReportFactsProvider.Period(hasGstClassification: false);
+        var facts = FakeReconciliationReportFactsProvider.SinglePeriod(period);
+        var useCase = new GetReconciliationReport(new FakeReconciliationReportFactsProvider(facts));
+
+        var report = await useCase.Handle(
+            new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)), 0.01m, CancellationToken.None);
+
+        var row = Assert.Single(report.PeriodRows);
+        Assert.True(row.DataQuality.GstClassificationMissing);
+    }
+
+    [Fact]
+    public async Task Totals_gst_classification_missing_is_false_when_every_period_has_classification()
+    {
+        var periodA = FakeReconciliationReportFactsProvider.Period(
+            from: new DateTime(2025, 8, 1), to: new DateTime(2025, 8, 15), hasGstClassification: true);
+        var periodB = FakeReconciliationReportFactsProvider.Period(
+            from: new DateTime(2025, 8, 16), to: new DateTime(2025, 8, 31), hasGstClassification: true);
+        var facts = new ReconciliationReportFacts(
+            new List<ReconciliationPeriodFacts> { periodA, periodB }, true,
+            TotalVendingSales: 100m, CardSales: 80m, CashSales: 20m,
+            TotalTransactionCount: 10, CardTransactionCount: 8, CashTransactionCount: 2,
+            UnknownPaymentTransactionCount: 0, PendingTransactionCount: 0, RefundedTransactionCount: 0,
+            DeclinedOrCancelledTransactionCount: 0, UnknownStatusTransactionCount: 0, NullStatusTransactionCount: 0,
+            IsMachineFiltered: false);
+        var useCase = new GetReconciliationReport(new FakeReconciliationReportFactsProvider(facts));
+
+        var report = await useCase.Handle(
+            new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31)), 0.01m, CancellationToken.None);
+
+        Assert.False(report.DataQuality.GstClassificationMissing);
+    }
+
+    [Fact]
+    public async Task Totals_gst_classification_missing_is_true_when_any_period_lacks_classification()
+    {
+        var periodA = FakeReconciliationReportFactsProvider.Period(
+            from: new DateTime(2025, 8, 1), to: new DateTime(2025, 8, 15), hasGstClassification: true);
+        var periodB = FakeReconciliationReportFactsProvider.Period(
+            from: new DateTime(2025, 8, 16), to: new DateTime(2025, 8, 31), hasGstClassification: false);
+        var facts = new ReconciliationReportFacts(
+            new List<ReconciliationPeriodFacts> { periodA, periodB }, true,
+            TotalVendingSales: 100m, CardSales: 80m, CashSales: 20m,
+            TotalTransactionCount: 10, CardTransactionCount: 8, CashTransactionCount: 2,
+            UnknownPaymentTransactionCount: 0, PendingTransactionCount: 0, RefundedTransactionCount: 0,
+            DeclinedOrCancelledTransactionCount: 0, UnknownStatusTransactionCount: 0, NullStatusTransactionCount: 0,
+            IsMachineFiltered: false);
+        var useCase = new GetReconciliationReport(new FakeReconciliationReportFactsProvider(facts));
+
+        var report = await useCase.Handle(
+            new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31)), 0.01m, CancellationToken.None);
+
+        Assert.True(report.DataQuality.GstClassificationMissing);
+    }
+
+    [Fact]
+    public async Task Totals_gst_classification_missing_does_not_depend_on_per_period_data_quality_dtos()
+    {
+        // Both periods individually have GST classification, so each period row's own
+        // DataQuality.GstClassificationMissing is false. If the totals flag were (incorrectly)
+        // derived from periodRows[...].DataQuality again, "any period row reports GST classification
+        // present" would also evaluate true here and could be wired in with inverted polarity. The
+        // fix instead reads facts.Periods directly, so the totals flag reflects the true aggregate
+        // (every period has classification -> not missing) regardless of how the per-period DTOs
+        // were built.
+        var periodA = FakeReconciliationReportFactsProvider.Period(
+            from: new DateTime(2025, 8, 1), to: new DateTime(2025, 8, 15), hasGstClassification: true);
+        var periodB = FakeReconciliationReportFactsProvider.Period(
+            from: new DateTime(2025, 8, 16), to: new DateTime(2025, 8, 31), hasGstClassification: true);
+        var facts = new ReconciliationReportFacts(
+            new List<ReconciliationPeriodFacts> { periodA, periodB }, true,
+            TotalVendingSales: 100m, CardSales: 80m, CashSales: 20m,
+            TotalTransactionCount: 10, CardTransactionCount: 8, CashTransactionCount: 2,
+            UnknownPaymentTransactionCount: 0, PendingTransactionCount: 0, RefundedTransactionCount: 0,
+            DeclinedOrCancelledTransactionCount: 0, UnknownStatusTransactionCount: 0, NullStatusTransactionCount: 0,
+            IsMachineFiltered: false);
+        var useCase = new GetReconciliationReport(new FakeReconciliationReportFactsProvider(facts));
+
+        var report = await useCase.Handle(
+            new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31)), 0.01m, CancellationToken.None);
+
+        Assert.All(report.PeriodRows, row => Assert.False(row.DataQuality.GstClassificationMissing));
+        Assert.False(report.DataQuality.GstClassificationMissing);
+    }
+
+    [Fact]
+    public async Task Totals_missing_status_flag_reflects_null_and_unknown_status_counts()
+    {
+        var facts = FakeReconciliationReportFactsProvider.SinglePeriod(nullStatusTransactionCount: 1);
+        var useCase = new GetReconciliationReport(new FakeReconciliationReportFactsProvider(facts));
+
+        var report = await useCase.Handle(
+            new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)), 0.01m, CancellationToken.None);
+
+        Assert.True(report.DataQuality.MissingStatus);
+    }
+
+    [Fact]
+    public async Task No_status_irregularities_leave_the_missing_status_flag_false()
+    {
+        var facts = FakeReconciliationReportFactsProvider.SinglePeriod();
+        var useCase = new GetReconciliationReport(new FakeReconciliationReportFactsProvider(facts));
+
+        var report = await useCase.Handle(
+            new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)), 0.01m, CancellationToken.None);
+
+        Assert.False(report.DataQuality.MissingStatus);
+        Assert.True(report.DataQuality.HistoricalCostUnavailable);
+        Assert.True(report.DataQuality.CommissionNotPersisted);
+        Assert.False(report.DataQuality.ContainsUnmappedProducts);
+    }
+
+    [Fact]
     public async Task A_financial_year_filter_resolves_the_range_passed_to_the_facts_port()
     {
         var facts = FakeReconciliationReportFactsProvider.SinglePeriod();

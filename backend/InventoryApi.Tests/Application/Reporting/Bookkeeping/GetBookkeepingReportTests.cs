@@ -9,8 +9,6 @@ namespace InventoryApi.Tests.Application.Reporting.Bookkeeping;
 
 public class GetBookkeepingReportTests
 {
-    // The use case joins its per-condition notes into a single combined string before appending it
-    // to the boilerplate notes, so a note's text may share an array element with other notes.
     private static void AssertNoteContains(BookkeepingReportDto report, string text) =>
         Assert.Contains(text, string.Join(" ", report.DataQuality.Notes!));
 
@@ -31,6 +29,22 @@ public class GetBookkeepingReportTests
         Assert.Null(report.DirectProfit);
         Assert.Equal("FY2025-26", report.FinancialYear);
         Assert.Equal(4, report.DataQuality.Notes!.Count);
+        Assert.True(report.DataQuality.MissingStatus);
+        Assert.False(report.DataQuality.HistoricalCostUnavailable);
+        Assert.False(report.DataQuality.GstClassificationMissing);
+        Assert.False(report.DataQuality.CommissionNotPersisted);
+        Assert.False(report.DataQuality.ContainsUnmappedProducts);
+    }
+
+    [Fact]
+    public async Task Absent_imported_gst_classification_sets_the_gst_classification_missing_flag()
+    {
+        var facts = FakeBookkeepingReportFactsProvider.Complete() with { ImportedContainsGstClassification = false };
+        var useCase = new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(facts));
+
+        var report = await useCase.Handle(new ReportingFilterDto(new DateTime(2025, 7, 1), new DateTime(2025, 7, 31)), CancellationToken.None);
+
+        Assert.True(report.DataQuality.GstClassificationMissing);
     }
 
     [Fact]
@@ -66,6 +80,7 @@ public class GetBookkeepingReportTests
         Assert.False(report.IsCogsComplete);
         Assert.Equal(1, report.UncostedTransactionCount);
         Assert.Equal(10m, report.UncostedSalesAmount);
+        Assert.True(report.DataQuality.HistoricalCostUnavailable);
         AssertNoteContains(report, "One or more completed sales have no persisted COGS; profit is incomplete.");
     }
 
@@ -98,6 +113,7 @@ public class GetBookkeepingReportTests
         var report = await useCase.Handle(new ReportingFilterDto(new DateTime(2025, 7, 1), new DateTime(2025, 7, 31)), CancellationToken.None);
 
         Assert.Null(report.NetProfit);
+        Assert.True(report.DataQuality.CommissionNotPersisted);
         AssertNoteContains(report, "Commission configuration is incomplete; net profit is unavailable.");
         AssertNoteContains(report, "Overlapping commission agreements cover one or more sales for the selected machine.");
     }

@@ -37,7 +37,12 @@ public sealed class GetGstAccountingAid
             GstOnFees: bookkeeping.GstOnFees,
             OperatingExpenseGst: bookkeeping.OperatingExpenseGst));
 
-        var quality = Quality(facts.ImportedContainsRows, facts.ImportedContainsGstClassification, false);
+        var quality = Quality(
+            missingStatus: true,
+            historicalCostUnavailable: true,
+            gstClassificationMissing: !facts.ImportedContainsGstClassification,
+            commissionNotPersisted: true,
+            containsUnmappedProducts: false);
 
         return new GstAccountingAidDto(bookkeeping.From, bookkeeping.To, derived.TaxableSales,
             bookkeeping.GstOnSales, derived.TaxableFees, bookkeeping.GstOnFees, derived.NetGst, quality)

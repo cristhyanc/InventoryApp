@@ -40,9 +40,13 @@ public sealed class GetReconciliationReport
         if (facts.IsMachineFiltered)
             qualityNotes.Add("Imported fees are account-level amounts and are not allocated to a selected machine.");
         qualityNotes.Add("Adjustments are unsupported by the imported reimbursement model and are treated as zero.");
-        var quality = ReportingQuality.Quality(facts.HasMatchedReimbursement,
-            periodRows.Any(x => x.DataQuality.GstClassificationMissing == false), false,
-            string.Join(" ", qualityNotes) is { Length: > 0 } note ? note : null);
+        var quality = ReportingQuality.Quality(
+            missingStatus: facts.NullStatusTransactionCount > 0 || facts.UnknownStatusTransactionCount > 0,
+            historicalCostUnavailable: true,
+            gstClassificationMissing: facts.Periods.Any(period => !period.HasGstClassification),
+            commissionNotPersisted: true,
+            containsUnmappedProducts: false,
+            notes: qualityNotes);
 
         var first = periodRows[0];
         return new ReconciliationReportDto(range.From, range.ToDate, totals.CardTransactionSales,
@@ -103,7 +107,13 @@ public sealed class GetReconciliationReport
         if (period.PaymentDetailMissing)
             notes.Add("Imported card payment detail was unavailable; device or reimbursement gross was used as the card gross.");
         notes.Add("Adjustments are unsupported by the imported reimbursement model and are treated as zero.");
-        var quality = ReportingQuality.Quality(period.HasImported, period.HasGstClassification, false, string.Join(" ", notes));
+        var quality = ReportingQuality.Quality(
+            missingStatus: true,
+            historicalCostUnavailable: true,
+            gstClassificationMissing: !period.HasGstClassification,
+            commissionNotPersisted: true,
+            containsUnmappedProducts: false,
+            notes: notes);
 
         return new ReconciliationPeriodDto(
             period.From, period.To, period.TotalVendingSales, period.CardSales, period.CashSales, period.CardSales,

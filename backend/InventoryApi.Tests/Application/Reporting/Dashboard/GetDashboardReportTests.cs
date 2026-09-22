@@ -63,6 +63,38 @@ public class GetDashboardReportTests
         Assert.Equal(bookkeeping.NayaxFeesIncludingGst, report.NayaxFees);
         Assert.Equal(bookkeeping.CardSales, report.CardSales);
         Assert.Equal(bookkeeping.CashSales, report.CashSales);
+        Assert.True(report.DataQuality.MissingStatus);
+        Assert.False(report.DataQuality.HistoricalCostUnavailable);
+        Assert.False(report.DataQuality.CommissionNotPersisted);
+        Assert.False(report.DataQuality.ContainsUnmappedProducts);
+    }
+
+    [Fact]
+    public async Task Gst_classification_missing_is_reused_from_the_bookkeeping_reports_own_flag()
+    {
+        var bookkeeping = CompleteBookkeeping() with
+        {
+            DataQuality = new ReportingDataQualityDto(GstClassificationMissing: true)
+        };
+        var useCase = UseCase(bookkeeping, EmptyProductReport(), FakeDashboardReportFactsProvider.Complete());
+
+        var report = await useCase.Handle(new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31)), CancellationToken.None);
+
+        Assert.True(report.DataQuality.GstClassificationMissing);
+    }
+
+    [Fact]
+    public async Task Gst_classification_present_on_bookkeeping_is_reflected_as_not_missing()
+    {
+        var bookkeeping = CompleteBookkeeping() with
+        {
+            DataQuality = new ReportingDataQualityDto(GstClassificationMissing: false)
+        };
+        var useCase = UseCase(bookkeeping, EmptyProductReport(), FakeDashboardReportFactsProvider.Complete());
+
+        var report = await useCase.Handle(new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31)), CancellationToken.None);
+
+        Assert.False(report.DataQuality.GstClassificationMissing);
     }
 
     [Fact]
@@ -136,6 +168,7 @@ public class GetDashboardReportTests
         Assert.Null(report.CostOfGoodsSold);
         Assert.Null(report.GrossProfit);
         Assert.Null(report.GrossMarginPercent);
+        Assert.True(report.DataQuality.HistoricalCostUnavailable);
         Assert.Contains(report.DataQuality.Notes!, x => x.Contains("profitability is unavailable"));
     }
 
@@ -174,6 +207,7 @@ public class GetDashboardReportTests
 
         var report = await useCase.Handle(new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31)), CancellationToken.None);
 
+        Assert.True(report.DataQuality.CommissionNotPersisted);
         Assert.Contains(report.DataQuality.Notes!, x => x.Contains("Commission configuration is incomplete; net profit is unavailable"));
         Assert.Contains(report.DataQuality.Notes!, x => x.Contains("Overlapping commission agreements"));
     }

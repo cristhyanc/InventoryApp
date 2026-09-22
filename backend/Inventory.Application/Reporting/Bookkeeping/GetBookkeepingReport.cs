@@ -59,8 +59,13 @@ public sealed class GetBookkeepingReport : IGetBookkeepingReport
             qualityNotes.Add($"Commission configuration is incomplete; {(isMachineFiltered ? "direct profit" : "net profit")} is unavailable.");
         qualityNotes.AddRange(facts.CommissionWarnings);
 
-        var quality = ReportingQuality.Quality(facts.ImportedContainsRows, facts.ImportedContainsGstClassification, false,
-            qualityNotes.Count == 0 ? null : string.Join(" ", qualityNotes));
+        var quality = ReportingQuality.Quality(
+            missingStatus: true,
+            historicalCostUnavailable: !facts.IsCogsComplete,
+            gstClassificationMissing: !facts.ImportedContainsGstClassification,
+            commissionNotPersisted: !facts.CommissionIsComplete,
+            containsUnmappedProducts: false,
+            notes: qualityNotes);
 
         var fees = facts.ProcessingFees.TotalFeeExGst;
         var feesIncludingGst = facts.ProcessingFees.TotalFeeIncGst;
