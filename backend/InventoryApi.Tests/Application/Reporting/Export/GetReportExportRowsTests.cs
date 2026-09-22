@@ -19,11 +19,12 @@ namespace InventoryApi.Tests.Application.Reporting.Export;
 /// </summary>
 public class GetReportExportRowsTests
 {
-    private static GetReportExportRows Sut(GetBookkeepingReport bookkeeping = null, GetTransactionSalesReport transactions = null)
+    private static GetReportExportRows Sut(GetBookkeepingReport bookkeeping = null, GetTransactionSalesReport transactions = null,
+        Inventory.Application.Reporting.Daily.GetDailyReport daily = null)
     {
         bookkeeping ??= new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(FakeBookkeepingReportFactsProvider.Complete()));
         transactions ??= new GetTransactionSalesReport(new FakeTransactionSalesReportFactsProvider(FakeTransactionSalesReportFactsProvider.Empty()));
-        var daily = new Inventory.Application.Reporting.Daily.GetDailyReport(
+        daily ??= new Inventory.Application.Reporting.Daily.GetDailyReport(
             new InventoryApi.Tests.Application.Reporting.Daily.FakeDailyReportFactsProvider(
                 InventoryApi.Tests.Application.Reporting.Daily.FakeDailyReportFactsProvider.SingleDay()));
         var reconciliation = new Inventory.Application.Reporting.Reconciliation.GetReconciliationReport(
@@ -84,5 +85,51 @@ public class GetReportExportRowsTests
     {
         await Assert.ThrowsAsync<ArgumentException>(() =>
             Sut().Handle("not-a-report", new TransactionSalesFilterDto(), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Daily_export_header_detail_and_totals_rows_all_have_the_same_column_count()
+    {
+        var table = await Sut().Handle("daily", new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)), CancellationToken.None);
+
+        var headerLength = table.Rows[0].Count;
+        Assert.Equal(20, headerLength);
+        Assert.All(table.Rows, row => Assert.Equal(headerLength, row.Count));
+    }
+
+    [Fact]
+    public async Task Daily_detail_row_fee_gst_is_read_from_the_authoritative_processing_fee_result_not_derived_by_subtraction()
+    {
+        var processingFees = new NayaxProcessingFeeResult(4m, 0.5m, 4.4m, 0m, 0m, 0m, 0, DateTime.UtcNow, null);
+        var daily = new Inventory.Application.Reporting.Daily.GetDailyReport(
+            new InventoryApi.Tests.Application.Reporting.Daily.FakeDailyReportFactsProvider(
+                InventoryApi.Tests.Application.Reporting.Daily.FakeDailyReportFactsProvider.SingleDay(processingFees: processingFees)));
+
+        var table = await Sut(daily: daily).Handle("daily", new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)), CancellationToken.None);
+
+        var header = table.Rows[0];
+        var feeGstIndex = header.ToList().IndexOf("NayaxFeeGST");
+        var detailRow = table.Rows[1];
+        var totalsRow = table.Rows[2];
+
+        Assert.Equal("0.5", detailRow[feeGstIndex]);
+        Assert.Equal("0.5", totalsRow[feeGstIndex]);
+        Assert.NotEqual((4.4m - 4m).ToString(System.Globalization.CultureInfo.InvariantCulture), detailRow[feeGstIndex]);
+    }
+
+    [Fact]
+    public async Task Daily_totals_row_is_header_aligned_with_empty_fee_source_and_reconciliation_status()
+    {
+        var table = await Sut().Handle("daily", new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)), CancellationToken.None);
+
+        var header = table.Rows[0].ToList();
+        var totalsRow = table.Rows[^1];
+        Assert.Equal("TOTAL", totalsRow[0]);
+        Assert.Equal(string.Empty, totalsRow[header.IndexOf("FeeSource")]);
+        Assert.Equal(string.Empty, totalsRow[header.IndexOf("ReconciliationStatus")]);
+        Assert.Equal("80", totalsRow[header.IndexOf("ImportedReimbursement")]);
+        Assert.Equal("78", totalsRow[header.IndexOf("NetReimbursement")]);
+        Assert.Equal("4.4", totalsRow[header.IndexOf("NayaxFeeIncGST")]);
+        Assert.Equal("4", totalsRow[header.IndexOf("NayaxFeeExGst")]);
     }
 }

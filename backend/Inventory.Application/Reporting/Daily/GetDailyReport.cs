@@ -95,7 +95,7 @@ public sealed class GetDailyReport
             day.GrossSales, day.CardSales, day.CashSales, result.AverageSale,
             day.UncostedTransactionCount == 0, day.UncostedTransactionCount, day.UncostedSalesAmount,
             result.GrossMarginPercent, day.ProcessingFees.TotalFeeExGst, day.ProcessingFees.TotalFeeIncGst,
-            day.ImportedReimbursement, day.NetReimbursement, result.IsReconciled, result.ReconciliationStatus,
+            day.ProcessingFees.TotalFeeGst, day.ImportedReimbursement, day.NetReimbursement, result.IsReconciled, result.ReconciliationStatus,
             day.CompletedTransactionCount, day.PendingTransactionCount, day.DeclinedOrCancelledTransactionCount,
             day.RefundedTransactionCount, day.UnknownStatusTransactionCount, feeSource)
         {
