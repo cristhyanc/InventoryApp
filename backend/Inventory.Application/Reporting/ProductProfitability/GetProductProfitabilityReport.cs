@@ -85,8 +85,13 @@ public sealed class GetProductProfitabilityReport : IGetProductProfitabilityRepo
         if (rows.Any(x => !x.IsCogsComplete))
             qualityNotes.Add("One or more completed sales have no persisted COGS; profit is incomplete.");
 
-        var quality = ReportingQuality.Quality(false, false, rows.Any(x => x.IsUnmapped),
-            qualityNotes.Count == 0 ? null : string.Join(" ", qualityNotes));
+        var quality = ReportingQuality.Quality(
+            missingStatus: true,
+            historicalCostUnavailable: rows.Any(x => !x.IsCogsComplete),
+            gstClassificationMissing: true,
+            commissionNotPersisted: true,
+            containsUnmappedProducts: rows.Any(x => x.IsUnmapped),
+            notes: qualityNotes);
 
         return new ProductProfitabilityReportDto(range.From, range.ToDate, rows, quality);
     }

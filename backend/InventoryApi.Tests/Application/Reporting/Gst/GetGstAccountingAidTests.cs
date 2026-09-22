@@ -38,6 +38,24 @@ public class GetGstAccountingAidTests
         Assert.Equal(1m, report.GstOnFees);
         Assert.Equal(9m, report.NetGst);
         Assert.Equal(0m, report.OperatingExpenseGst);
+        Assert.True(report.DataQuality.MissingStatus);
+        Assert.True(report.DataQuality.HistoricalCostUnavailable);
+        Assert.False(report.DataQuality.GstClassificationMissing);
+        Assert.True(report.DataQuality.CommissionNotPersisted);
+        Assert.False(report.DataQuality.ContainsUnmappedProducts);
+    }
+
+    [Fact]
+    public async Task Absent_imported_gst_classification_sets_the_gst_classification_missing_flag()
+    {
+        var bookkeeping = CompleteBookkeeping();
+        var useCase = new GetGstAccountingAid(
+            new FakeGetBookkeepingReport(bookkeeping),
+            new FakeGstReportFactsProvider(FakeGstReportFactsProvider.Complete(importedContainsGstClassification: false)));
+
+        var report = await useCase.Handle(new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31)), CancellationToken.None);
+
+        Assert.True(report.DataQuality.GstClassificationMissing);
     }
 
     [Fact]

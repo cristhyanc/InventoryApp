@@ -37,6 +37,11 @@ public class GetMachineProfitabilityReportTests
         Assert.Equal(60m, row.GrossProfit);
         Assert.NotNull(row.DirectProfit);
         Assert.DoesNotContain(report.DataQuality.Notes!, x => x.Contains("no persisted COGS") || x.Contains("processing fee rate") || x.Contains("Commission configuration"));
+        Assert.True(report.DataQuality.MissingStatus);
+        Assert.False(report.DataQuality.HistoricalCostUnavailable);
+        Assert.True(report.DataQuality.GstClassificationMissing);
+        Assert.False(report.DataQuality.CommissionNotPersisted);
+        Assert.False(report.DataQuality.ContainsUnmappedProducts);
     }
 
     [Fact]
@@ -51,6 +56,7 @@ public class GetMachineProfitabilityReportTests
         Assert.Null(row.GrossProfit);
         Assert.Null(row.DirectProfit);
         Assert.Null(row.DirectMarginPercent);
+        Assert.True(report.DataQuality.HistoricalCostUnavailable);
         Assert.Contains(report.DataQuality.Notes!, x => x.Contains("no persisted COGS"));
     }
 
@@ -78,6 +84,7 @@ public class GetMachineProfitabilityReportTests
 
         var row = Assert.Single(report.Rows);
         Assert.Null(row.DirectProfit);
+        Assert.True(report.DataQuality.CommissionNotPersisted);
         Assert.Contains(report.DataQuality.Notes!, x => x.Contains("Commission configuration is incomplete"));
     }
 

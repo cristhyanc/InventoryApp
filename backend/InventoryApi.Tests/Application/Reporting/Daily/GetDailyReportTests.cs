@@ -123,6 +123,74 @@ public class GetDailyReportTests
     }
 
     [Fact]
+    public async Task Complete_day_reports_available_cost_and_gst_classification_and_no_status_or_product_claims()
+    {
+        var facts = FakeDailyReportFactsProvider.SingleDay();
+        var useCase = new GetDailyReport(new FakeDailyReportFactsProvider(facts));
+
+        var report = await useCase.Handle(
+            new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)), CancellationToken.None);
+
+        Assert.False(report.DataQuality.MissingStatus);
+        Assert.False(report.DataQuality.HistoricalCostUnavailable);
+        Assert.False(report.DataQuality.GstClassificationMissing);
+        Assert.True(report.DataQuality.CommissionNotPersisted);
+        Assert.False(report.DataQuality.ContainsUnmappedProducts);
+    }
+
+    [Fact]
+    public async Task Null_or_unknown_status_transactions_set_the_missing_status_flag()
+    {
+        var facts = FakeDailyReportFactsProvider.SingleDay(nullStatusTransactionCount: 1);
+        var useCase = new GetDailyReport(new FakeDailyReportFactsProvider(facts));
+
+        var report = await useCase.Handle(
+            new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)), CancellationToken.None);
+
+        Assert.True(report.DataQuality.MissingStatus);
+    }
+
+    [Fact]
+    public async Task Incomplete_cogs_sets_the_historical_cost_unavailable_flag()
+    {
+        var facts = FakeDailyReportFactsProvider.SingleDay(isCogsComplete: false, uncostedTransactionCount: 1, uncostedSalesAmount: 10m);
+        var useCase = new GetDailyReport(new FakeDailyReportFactsProvider(facts));
+
+        var report = await useCase.Handle(
+            new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)), CancellationToken.None);
+
+        Assert.True(report.DataQuality.HistoricalCostUnavailable);
+    }
+
+    [Fact]
+    public async Task Absent_imported_gst_classification_sets_the_gst_classification_missing_flag()
+    {
+        var facts = FakeDailyReportFactsProvider.SingleDay() with { ImportedContainsGstClassification = false };
+        var useCase = new GetDailyReport(new FakeDailyReportFactsProvider(facts));
+
+        var report = await useCase.Handle(
+            new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)), CancellationToken.None);
+
+        Assert.True(report.DataQuality.GstClassificationMissing);
+    }
+
+    [Fact]
+    public async Task Multiple_report_specific_notes_are_kept_as_separate_ordered_entries()
+    {
+        var facts = FakeDailyReportFactsProvider.SingleDay(
+            processingFees: new NayaxProcessingFeeResult(0m, 0m, 0m, 0m, 0m, 0m, 0, null, null, MissingRateTransactionCount: 3),
+            isCogsComplete: false, uncostedTransactionCount: 1, uncostedSalesAmount: 10m);
+        var useCase = new GetDailyReport(new FakeDailyReportFactsProvider(facts));
+
+        var report = await useCase.Handle(
+            new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)), CancellationToken.None);
+
+        Assert.Equal(6, report.DataQuality.Notes!.Count);
+        Assert.Equal("3 card transaction(s) have no effective Nayax processing fee rate; fee totals are provisional.", report.DataQuality.Notes[4]);
+        Assert.Equal("One or more completed sales have no persisted COGS; profit is incomplete.", report.DataQuality.Notes[5]);
+    }
+
+    [Fact]
     public async Task A_financial_year_filter_resolves_the_range_passed_to_the_facts_port()
     {
         var facts = FakeDailyReportFactsProvider.SingleDay();

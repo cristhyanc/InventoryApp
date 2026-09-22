@@ -57,8 +57,13 @@ public sealed class GetDashboardReport
             qualityNotes.Add($"Commission configuration is incomplete; {(isMachineFiltered ? "direct profit" : "net profit")} is unavailable.");
         qualityNotes.AddRange(facts.CommissionWarnings);
 
-        var quality = ReportingQuality.Quality(false, false, productReport.DataQuality.ContainsUnmappedProducts,
-            qualityNotes.Count == 0 ? null : string.Join(" ", qualityNotes));
+        var quality = ReportingQuality.Quality(
+            missingStatus: true,
+            historicalCostUnavailable: !bookkeeping.IsCogsComplete,
+            gstClassificationMissing: bookkeeping.DataQuality.GstClassificationMissing,
+            commissionNotPersisted: !facts.CommissionIsComplete,
+            containsUnmappedProducts: productReport.DataQuality.ContainsUnmappedProducts,
+            notes: qualityNotes);
 
         var grossMarginPercent = bookkeeping.GrossProfit.HasValue
             ? ReportingCalculations.MarginPercent(bookkeeping.Sales, bookkeeping.PartialCostOfGoods)

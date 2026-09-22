@@ -52,5 +52,8 @@ public class ReportsControllerDailyTests
         var row = Assert.Single(report.Rows);
         Assert.Equal(250m, row.GrossSales);
         Assert.Equal(90m, row.CostOfGoods);
+        Assert.False(report.DataQuality.MissingStatus);
+        Assert.False(report.DataQuality.HistoricalCostUnavailable);
+        Assert.False(report.DataQuality.GstClassificationMissing);
     }
 }

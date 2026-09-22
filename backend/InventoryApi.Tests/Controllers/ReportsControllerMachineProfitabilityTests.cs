@@ -54,5 +54,7 @@ public class ReportsControllerMachineProfitabilityTests
         Assert.Equal("Alpha", row.MachineName);
         Assert.Equal(250m, row.Sales);
         Assert.Equal(90m, row.CostOfGoods);
+        Assert.False(report.DataQuality.HistoricalCostUnavailable);
+        Assert.False(report.DataQuality.CommissionNotPersisted);
     }
 }

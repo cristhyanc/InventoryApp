@@ -34,6 +34,10 @@ public class GetProductProfitabilityReportTests
         Assert.Equal(20m, row.GrossProfit);
         Assert.Equal("Drinks", row.CategoryName);
         Assert.False(report.DataQuality.ContainsUnmappedProducts);
+        Assert.True(report.DataQuality.MissingStatus);
+        Assert.False(report.DataQuality.HistoricalCostUnavailable);
+        Assert.True(report.DataQuality.GstClassificationMissing);
+        Assert.True(report.DataQuality.CommissionNotPersisted);
     }
 
     [Fact]
@@ -100,6 +104,7 @@ public class GetProductProfitabilityReportTests
         var row = Assert.Single(report.Rows);
         Assert.False(row.IsCogsComplete);
         Assert.Null(row.GrossProfit);
+        Assert.True(report.DataQuality.HistoricalCostUnavailable);
         Assert.Contains(report.DataQuality.Notes!, x => x.Contains("no persisted COGS"));
     }
 
