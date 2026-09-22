@@ -15,7 +15,7 @@ public sealed class InventoryCostService : IInventoryCostService
         long productId,
         int quantityChange,
         StockAdjustmentReason reason,
-        ReceiptItem? receiptItem,
+        PurchaseItem? receiptItem,
         string notes,
         decimal? purchaseUnitCost = null)
     {

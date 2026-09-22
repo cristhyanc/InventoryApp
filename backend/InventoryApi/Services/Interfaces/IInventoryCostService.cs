@@ -8,7 +8,7 @@ public interface IInventoryCostService
         long productId,
         int quantityChange,
         StockAdjustmentReason reason,
-        ReceiptItem? receiptItem,
+        PurchaseItem? receiptItem,
         string notes,
         decimal? purchaseUnitCost = null);
 }

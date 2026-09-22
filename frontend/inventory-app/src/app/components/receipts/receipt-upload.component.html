@@ -137,7 +137,7 @@
 
       <div class="flex flex-wrap gap-3">
         <button type="submit" class="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60" [disabled]="saving">Add Purchase</button>
-        <a [routerLink]="supplierOrderId ? '/products/on-order' : '/receipts'" class="inline-flex items-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Cancel</a>
+        <a [routerLink]="supplierOrderId ? '/products/on-order' : '/purchases'" class="inline-flex items-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Cancel</a>
       </div>
     </form>
   }

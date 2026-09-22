@@ -1,10 +1,10 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable, map } from 'rxjs';
-import { Receipt, ReceiptItem, ReceiptResponse, ReceiptValidation } from '../models/models';
+import { Purchase, PurchaseItem, PurchaseResponse, PurchaseValidation } from '../models/models';
 import { ConfigService } from './config.service';
 
-export interface ReceiptUploadPayload {
+export interface PurchaseUploadPayload {
   file: File;
   title: string;
   notes?: string | null;
@@ -13,64 +13,66 @@ export interface ReceiptUploadPayload {
   packageCost?: number | null;
   purchaseDate?: string | null;
   supplierId?: number | null;
-  items?: ReceiptItemPayload[];
+  items?: PurchaseItemPayload[];
 }
 
-export interface ReceiptItemPayload {
+export interface PurchaseItemPayload {
   productId: number;
   quantity: number;
   unitCost: number;
 }
 
-export type ReceiptUpdatePayload = Omit<ReceiptUploadPayload, 'file'>;
+export type PurchaseUpdatePayload = Omit<PurchaseUploadPayload, 'file'>;
 
+// Base URL stays "/receipts": the existing, bookmarked "/api/receipts" API route for the
+// Purchase business record (see docs/architecture.md's Purchase rename plan).
 @Injectable({ providedIn: 'root' })
-export class ReceiptService {
+export class PurchaseService {
   private get baseUrl(): string {
     return `${this.config.apiBaseUrl.replace(/\/$/, '')}/receipts`;
   }
 
-  private lastValidation: ReceiptValidation | null = null;
-  private validationsByReceiptId: Map<number, ReceiptValidation | null> = new Map();
+  private lastValidation: PurchaseValidation | null = null;
+  private validationsByPurchaseId: Map<number, PurchaseValidation | null> = new Map();
 
   constructor(private http: HttpClient, private config: ConfigService) {}
 
-  getAll(supplierId?: number): Observable<Receipt[]> {
+  getAll(supplierId?: number): Observable<Purchase[]> {
     const url = supplierId ? `${this.baseUrl}?supplierId=${supplierId}` : this.baseUrl;
-    return this.http.get<ReceiptResponse[]>(url).pipe(
+    return this.http.get<PurchaseResponse[]>(url).pipe(
       map(responses => {
-        // Store validations for each receipt
+        // Store validations for each purchase
         responses.forEach(r => {
-          this.validationsByReceiptId.set(r.receipt.id, r.validation ?? null);
+          this.validationsByPurchaseId.set(r.receipt.id, r.validation ?? null);
         });
         return responses.map(r => r.receipt);
       })
     );
   }
 
-  get(id: number): Observable<Receipt> {
-    return this.http.get<ReceiptResponse>(`${this.baseUrl}/${id}`).pipe(
+  get(id: number): Observable<Purchase> {
+    return this.http.get<PurchaseResponse>(`${this.baseUrl}/${id}`).pipe(
       map(response => {
         this.lastValidation = response.validation ?? null;
-        this.validationsByReceiptId.set(response.receipt.id, response.validation ?? null);
+        this.validationsByPurchaseId.set(response.receipt.id, response.validation ?? null);
         return response.receipt;
       })
     );
   }
 
-  getValidation(): ReceiptValidation | null {
+  getValidation(): PurchaseValidation | null {
     return this.lastValidation;
   }
 
-  getValidationFor(receiptId: number): ReceiptValidation | null {
-    return this.validationsByReceiptId.get(receiptId) ?? null;
+  getValidationFor(purchaseId: number): PurchaseValidation | null {
+    return this.validationsByPurchaseId.get(purchaseId) ?? null;
   }
 
   fileUrl(id: number): string {
     return `${this.baseUrl}/${id}/file`;
   }
 
-  upload(payload: ReceiptUploadPayload): Observable<Receipt> {
+  upload(payload: PurchaseUploadPayload): Observable<Purchase> {
     const formData = new FormData();
     formData.append('file', payload.file);
     formData.append('title', payload.title);
@@ -87,16 +89,16 @@ export class ReceiptService {
       formData.append('supplierId', String(payload.supplierId));
     formData.append('items', JSON.stringify(payload.items ?? []));
 
-    return this.http.post<ReceiptResponse>(this.baseUrl, formData).pipe(
+    return this.http.post<PurchaseResponse>(this.baseUrl, formData).pipe(
       map(response => {
         this.lastValidation = response.validation ?? null;
-        this.validationsByReceiptId.set(response.receipt.id, response.validation ?? null);
+        this.validationsByPurchaseId.set(response.receipt.id, response.validation ?? null);
         return response.receipt;
       })
     );
   }
 
-  update(id: number, payload: ReceiptUpdatePayload): Observable<Receipt> {
+  update(id: number, payload: PurchaseUpdatePayload): Observable<Purchase> {
     const formData = new FormData();
     formData.append('title', payload.title);
     if (payload.notes !== undefined && payload.notes !== null)
@@ -112,10 +114,10 @@ export class ReceiptService {
       formData.append('supplierId', String(payload.supplierId));
     if (payload.items !== undefined) formData.append('items', JSON.stringify(payload.items));
 
-    return this.http.put<ReceiptResponse>(`${this.baseUrl}/${id}`, formData).pipe(
+    return this.http.put<PurchaseResponse>(`${this.baseUrl}/${id}`, formData).pipe(
       map(response => {
         this.lastValidation = response.validation ?? null;
-        this.validationsByReceiptId.set(response.receipt.id, response.validation ?? null);
+        this.validationsByPurchaseId.set(response.receipt.id, response.validation ?? null);
         return response.receipt;
       })
     );
