@@ -12,6 +12,7 @@ using Inventory.Application.Reporting.Gst;
 using Inventory.Application.Reporting.MachineProfitability;
 using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Reconciliation;
+using Inventory.Application.Reporting.Transactions;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using InventoryApi.Integrations.Nayax;
@@ -278,11 +279,13 @@ public class NayaxHistoricalCostTests
         var getGstAccountingAid = new GetGstAccountingAid(getBookkeepingReport, new EfGstReportFactsProvider(db));
         var getDashboardReport = new GetDashboardReport(getBookkeepingReport, getProductProfitabilityReport,
             new EfDashboardReportFactsProvider(db, siteCommissions));
+        var getTransactionSalesReport = new GetTransactionSalesReport(new EfTransactionSalesReportFactsProvider(db));
         var csv = Encoding.UTF8.GetString(await new ReportingService(db,
             getBookkeepingReport, getDailyReport, getReconciliationReport,
-            getMachineProfitabilityReport, getProductProfitabilityReport, getGstAccountingAid, getDashboardReport).ExportCsvAsync(
+            getMachineProfitabilityReport, getProductProfitabilityReport, getGstAccountingAid, getDashboardReport,
+            getTransactionSalesReport).ExportCsvAsync(
             "transactions",
-            new Inventory.Application.Reporting.Transactions.TransactionSalesFilterDto(
+            new TransactionSalesFilterDto(
                 From: new DateTime(2026, 9, 2), To: new DateTime(2026, 9, 2))));
 
         Assert.Contains("NayaxProductCostPrice", csv);

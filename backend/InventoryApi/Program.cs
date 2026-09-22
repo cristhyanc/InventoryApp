@@ -8,6 +8,7 @@ using Inventory.Application.Reporting.Gst;
 using Inventory.Application.Reporting.MachineProfitability;
 using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Reconciliation;
+using Inventory.Application.Reporting.Transactions;
 using Inventory.Infrastructure;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
@@ -97,6 +98,9 @@ builder.Services.AddScoped<IGstReportFactsProvider, EfGstReportFactsProvider>();
 
 // Temporary API-owned adapter for the dashboard report facts port; see EfDashboardReportFactsProvider.
 builder.Services.AddScoped<IDashboardReportFactsProvider, EfDashboardReportFactsProvider>();
+
+// Temporary API-owned adapter for the transaction sales report facts port; see EfTransactionSalesReportFactsProvider.
+builder.Services.AddScoped<ITransactionSalesReportFactsProvider, EfTransactionSalesReportFactsProvider>();
 
 var app = builder.Build();
 

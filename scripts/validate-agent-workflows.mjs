@@ -775,9 +775,14 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
     verifyAgentPrGuards(dispatcher, `${path} validation dispatcher`, 'Refusing stale validation dispatch');
     requireText(dispatcher, 'validate.yml', `${path} validation dispatcher`);
     if (producerName === 'implement') {
-      requireText(dispatcher, '-f dispatch_review=false', `${path} validation dispatcher`);
-      forbidText(dispatcher, '-f dispatch_review=true', `${path} validation dispatcher`);
+      // The implementation dispatcher is the one place allowed to label the pull request
+      // itself: it applies agent-review as a deterministic step (Claude is never granted
+      // gh pr edit/gh label) before requesting review automatically via dispatch_review=true.
+      requireText(dispatcher, 'issues: write', `${path} validation dispatcher`);
+      requireText(dispatcher, 'gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label agent-review', `${path} validation dispatcher`);
+      requireText(dispatcher, '-f dispatch_review=true', `${path} validation dispatcher`);
     } else {
+      forbidText(dispatcher, 'issues: write', `${path} validation dispatcher`);
       requireText(dispatcher, '-f dispatch_review=true', `${path} validation dispatcher`);
       requireText(dispatcher, 'any(.labels[]?; .name == "agent-review")', `${path} validation dispatcher`);
     }

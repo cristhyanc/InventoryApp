@@ -6,6 +6,7 @@ using Inventory.Application.Reporting.Gst;
 using Inventory.Application.Reporting.MachineProfitability;
 using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Reconciliation;
+using Inventory.Application.Reporting.Transactions;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Inventory.Application;
@@ -25,6 +26,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<IGetProductProfitabilityReport>(sp => sp.GetRequiredService<GetProductProfitabilityReport>());
         services.AddScoped<GetGstAccountingAid>();
         services.AddScoped<GetDashboardReport>();
+        services.AddScoped<GetTransactionSalesReport>();
 
         return services;
     }

@@ -9,6 +9,7 @@ using Inventory.Application.Reporting.MachineProfitability;
 using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Shared;
+using Inventory.Application.Reporting.Transactions;
 using InventoryApi.Controllers;
 using InventoryApi.Services.Interfaces;
 using InventoryApi.Tests.Application.Reporting.Bookkeeping;
@@ -18,6 +19,7 @@ using InventoryApi.Tests.Application.Reporting.Gst;
 using InventoryApi.Tests.Application.Reporting.MachineProfitability;
 using InventoryApi.Tests.Application.Reporting.ProductProfitability;
 using InventoryApi.Tests.Application.Reporting.Reconciliation;
+using InventoryApi.Tests.Application.Reporting.Transactions;
 using Moq;
 using Xunit;
 
@@ -39,8 +41,10 @@ public class ReportsControllerDashboardTests
         var dashboardUseCase = new GetDashboardReport(bookkeepingUseCase, productProfitabilityUseCase,
             new FakeDashboardReportFactsProvider(FakeDashboardReportFactsProvider.Complete(transactionCount: 12, machineCount: 3, productCount: 4)));
         var legacyService = new Mock<IReportingService>(MockBehavior.Strict);
+        var getTransactionSalesReport = new GetTransactionSalesReport(
+            new FakeTransactionSalesReportFactsProvider(FakeTransactionSalesReportFactsProvider.Empty()));
         var controller = new ReportsController(legacyService.Object, bookkeepingUseCase, dailyUseCase, reconciliationUseCase,
-            machineProfitabilityUseCase, productProfitabilityUseCase, gstUseCase, dashboardUseCase);
+            machineProfitabilityUseCase, productProfitabilityUseCase, gstUseCase, dashboardUseCase, getTransactionSalesReport);
 
         var report = await controller.Dashboard(
             new ReportingFilterDto(new DateTime(2025, 7, 1), new DateTime(2025, 7, 31)), CancellationToken.None);
