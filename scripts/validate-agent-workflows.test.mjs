@@ -229,7 +229,7 @@ describe('preserved guards', () => {
 
   it('has the implementation dispatcher label the pull request agent-review and request review automatically', () => {
     const dispatcher = implementWorkflow.slice(implementWorkflow.indexOf('  dispatch-validation:\n'));
-    assert.ok(dispatcher.includes('issues: write'));
+    assert.ok(dispatcher.includes('pull-requests: write'));
     assert.ok(dispatcher.includes('gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label agent-review'));
     assert.ok(dispatcher.includes('-f dispatch_review=true'));
 
@@ -240,18 +240,23 @@ describe('preserved guards', () => {
       '          gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label agent-review\n\n', '');
     assert.throws(() => runContractChecks({ read: readWithOverrides({ [implementPath]: noLabelStep }) }), /missing required text: gh pr edit/);
 
-    const noIssuesWrite = replaceOnce(implementWorkflow, '      actions: write\n      pull-requests: read\n      issues: write\n',
+    // gh pr edit --add-label needs pull-requests: write (it resolves to the GraphQL
+    // addLabelsToLabelable mutation, which checks the pull-requests permission even though
+    // the labelable is a pull request) -- issues: write is not sufficient and was the bug
+    // in the first version of this contract.
+    const readOnlyPullRequests = replaceOnce(implementWorkflow, '      actions: write\n      pull-requests: write\n',
       '      actions: write\n      pull-requests: read\n');
-    assert.throws(() => runContractChecks({ read: readWithOverrides({ [implementPath]: noIssuesWrite }) }), /missing required text: issues: write/);
+    assert.throws(() => runContractChecks({ read: readWithOverrides({ [implementPath]: readOnlyPullRequests }) }), /missing required text: pull-requests: write/);
   });
 
-  it('keeps the repair dispatcher from gaining issue-label write access it does not need', () => {
+  it('keeps the repair dispatcher read-only on pull requests, since it never labels one', () => {
     const dispatcher = repairWorkflow.slice(repairWorkflow.indexOf('  dispatch-validation:\n'));
-    assert.ok(!dispatcher.includes('issues: write'));
+    assert.ok(dispatcher.includes('pull-requests: read'));
+    assert.ok(!dispatcher.includes('pull-requests: write'));
 
-    const withIssuesWrite = replaceOnce(repairWorkflow, '      actions: write\n      pull-requests: read\n',
-      '      actions: write\n      pull-requests: read\n      issues: write\n');
-    assert.throws(() => runContractChecks({ read: readWithOverrides({ [repairPath]: withIssuesWrite }) }), /contains forbidden text: issues: write/);
+    const writablePullRequests = replaceOnce(repairWorkflow, '      actions: write\n      pull-requests: read\n',
+      '      actions: write\n      pull-requests: read\n      pull-requests: write\n');
+    assert.throws(() => runContractChecks({ read: readWithOverrides({ [repairPath]: writablePullRequests }) }), /contains forbidden text: pull-requests: write/);
   });
 });
 
