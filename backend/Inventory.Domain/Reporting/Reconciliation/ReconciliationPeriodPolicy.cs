@@ -35,10 +35,10 @@ public readonly record struct ReconciliationPeriodResult(
 /// to summed period facts yields the same totals as summing each period's own result, so one
 /// policy computes both without duplicating the formula. Reuses the shared
 /// <see cref="ReconciliationStatusPolicy"/> for the gross/settlement tolerance classification
-/// (originally private <c>StatusFor</c>/<c>IsReconciled</c> on
-/// <c>InventoryApi.Services.ReportingService</c>); <see cref="OverallStatus"/> combines the two
-/// independent gross/settlement statuses into one rollup and has no daily-report equivalent, so it
-/// is reconciliation-specific rather than part of the shared policy.
+/// (originally private <c>StatusFor</c>/<c>IsReconciled</c> helpers on the pre-migration legacy
+/// reporting service); <see cref="OverallStatus"/> combines the two independent gross/settlement
+/// statuses into one rollup and has no daily-report equivalent, so it is reconciliation-specific
+/// rather than part of the shared policy.
 /// </summary>
 public static class ReconciliationPeriodPolicy
 {

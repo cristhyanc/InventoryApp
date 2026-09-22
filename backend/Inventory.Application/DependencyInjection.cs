@@ -2,6 +2,7 @@ using Inventory.Application.NayaxFeeSettings;
 using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Reporting.Dashboard;
 using Inventory.Application.Reporting.Daily;
+using Inventory.Application.Reporting.Export;
 using Inventory.Application.Reporting.Gst;
 using Inventory.Application.Reporting.MachineProfitability;
 using Inventory.Application.Reporting.ProductProfitability;
@@ -27,6 +28,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<GetGstAccountingAid>();
         services.AddScoped<GetDashboardReport>();
         services.AddScoped<GetTransactionSalesReport>();
+        services.AddScoped<GetReportExportRows>();
 
         return services;
     }
