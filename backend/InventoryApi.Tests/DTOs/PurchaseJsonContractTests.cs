@@ -9,16 +9,15 @@ using Xunit;
 namespace InventoryApi.Tests.DTOs;
 
 /// <summary>
-/// Locks the wire contract of the "/api/receipts" endpoints (the Purchase business record) across
-/// the Receipt-to-Purchase internal rename (issue #60): renaming the CLR types must not rename the
-/// JSON keys deployed frontends and bookmarks already rely on.
+/// Locks the canonical wire contract of the "/api/purchases" endpoints (issue #127): the
+/// business record serializes under the "purchase" key, not the legacy "receipt" key.
 /// </summary>
 public class PurchaseJsonContractTests
 {
     private static readonly JsonSerializerOptions WebDefaults = new(JsonSerializerDefaults.Web);
 
     [Fact]
-    public void Response_still_serializes_with_the_receipt_and_validation_keys()
+    public void Response_serializes_with_the_purchase_and_validation_keys()
     {
         var purchase = new Purchase
         {
@@ -40,14 +39,14 @@ public class PurchaseJsonContractTests
         using var document = JsonDocument.Parse(json);
 
         Assert.Equal(
-            new[] { "receipt", "validation" },
+            new[] { "purchase", "validation" },
             document.RootElement.EnumerateObject().Select(property => property.Name));
 
-        var receiptElement = document.RootElement.GetProperty("receipt");
-        Assert.Equal(7, receiptElement.GetProperty("id").GetInt32());
-        Assert.Equal("Weekly restock", receiptElement.GetProperty("title").GetString());
+        var purchaseElement = document.RootElement.GetProperty("purchase");
+        Assert.Equal(7, purchaseElement.GetProperty("id").GetInt32());
+        Assert.Equal("Weekly restock", purchaseElement.GetProperty("title").GetString());
 
-        var itemElement = receiptElement.GetProperty("items")[0];
+        var itemElement = purchaseElement.GetProperty("items")[0];
         Assert.Equal(7, itemElement.GetProperty("receiptId").GetInt32());
         Assert.Equal(3, itemElement.GetProperty("productId").GetInt32());
     }

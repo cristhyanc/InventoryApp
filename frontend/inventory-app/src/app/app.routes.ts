@@ -21,7 +21,6 @@ import { AdminComponent } from './components/admin/admin.component';
 import { OperatingExpenseComponent } from './components/expenses/operating-expense.component';
 import { SiteCommissionsReportComponent } from './components/reports/site-commissions-report.component';
 import { TransactionSalesReportComponent } from './components/reports/transaction-sales-report.component';
-import { productsLegacyRouteGuard } from './components/products/products-legacy-route.guard';
 
 export const routes: Routes = [
   // Public: the Entra redirect callback must be reachable without authentication.
@@ -31,9 +30,7 @@ export const routes: Routes = [
   { path: 'products/:id/stock', component: StockHistoryComponent, canActivate: [MsalGuard] },
   {
     path: 'products',
-    canActivate: [MsalGuard, productsLegacyRouteGuard],
-    // Re-run the legacy guard on query-param-only changes; the reused shell route would otherwise skip it.
-    runGuardsAndResolvers: 'paramsOrQueryParamsChange',
+    canActivate: [MsalGuard],
     loadComponent: () => import('./components/products/products-shell.component').then((m) => m.ProductsShellComponent),
     children: [
       {
@@ -57,9 +54,6 @@ export const routes: Routes = [
   { path: 'sites/:id/products', component: SiteProductsComponent, canActivate: [MsalGuard] },
   { path: 'purchases', component: PurchaseListComponent, canActivate: [MsalGuard] },
   { path: 'purchases/new', component: PurchaseUploadComponent, canActivate: [MsalGuard] },
-  // Backward-compatible aliases for bookmarks/links to the old "/receipts" route.
-  { path: 'receipts', pathMatch: 'full', redirectTo: 'purchases' },
-  { path: 'receipts/new', pathMatch: 'full', redirectTo: 'purchases/new' },
   { path: 'reports', component: DashboardReportComponent, canActivate: [MsalGuard] },
   { path: 'reports/bookkeeping', component: BookkeepingReportComponent, canActivate: [MsalGuard] },
   { path: 'reports/daily', component: DailyReportComponent, canActivate: [MsalGuard] },

@@ -8,11 +8,8 @@ using Microsoft.Identity.Web.Resource;
 
 namespace InventoryApi.Controllers;
 
-// Route is explicit (not derived from the controller name) so it stays "api/receipts": the
-// existing, bookmarked API route for the Purchase business record. See docs/architecture.md's
-// Purchase rename plan.
 [ApiController]
-[Route("api/receipts")]
+[Route("api/purchases")]
 [Authorize]
 [RequiredScope("access_as_user")]
 public class PurchasesController : ControllerBase

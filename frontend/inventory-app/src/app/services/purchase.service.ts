@@ -24,12 +24,10 @@ export interface PurchaseItemPayload {
 
 export type PurchaseUpdatePayload = Omit<PurchaseUploadPayload, 'file'>;
 
-// Base URL stays "/receipts": the existing, bookmarked "/api/receipts" API route for the
-// Purchase business record (see docs/architecture.md's Purchase rename plan).
 @Injectable({ providedIn: 'root' })
 export class PurchaseService {
   private get baseUrl(): string {
-    return `${this.config.apiBaseUrl.replace(/\/$/, '')}/receipts`;
+    return `${this.config.apiBaseUrl.replace(/\/$/, '')}/purchases`;
   }
 
   private lastValidation: PurchaseValidation | null = null;
@@ -43,9 +41,9 @@ export class PurchaseService {
       map(responses => {
         // Store validations for each purchase
         responses.forEach(r => {
-          this.validationsByPurchaseId.set(r.receipt.id, r.validation ?? null);
+          this.validationsByPurchaseId.set(r.purchase.id, r.validation ?? null);
         });
-        return responses.map(r => r.receipt);
+        return responses.map(r => r.purchase);
       })
     );
   }
@@ -54,8 +52,8 @@ export class PurchaseService {
     return this.http.get<PurchaseResponse>(`${this.baseUrl}/${id}`).pipe(
       map(response => {
         this.lastValidation = response.validation ?? null;
-        this.validationsByPurchaseId.set(response.receipt.id, response.validation ?? null);
-        return response.receipt;
+        this.validationsByPurchaseId.set(response.purchase.id, response.validation ?? null);
+        return response.purchase;
       })
     );
   }
@@ -97,8 +95,8 @@ export class PurchaseService {
     return this.http.post<PurchaseResponse>(this.baseUrl, formData).pipe(
       map(response => {
         this.lastValidation = response.validation ?? null;
-        this.validationsByPurchaseId.set(response.receipt.id, response.validation ?? null);
-        return response.receipt;
+        this.validationsByPurchaseId.set(response.purchase.id, response.validation ?? null);
+        return response.purchase;
       })
     );
   }
@@ -122,8 +120,8 @@ export class PurchaseService {
     return this.http.put<PurchaseResponse>(`${this.baseUrl}/${id}`, formData).pipe(
       map(response => {
         this.lastValidation = response.validation ?? null;
-        this.validationsByPurchaseId.set(response.receipt.id, response.validation ?? null);
-        return response.receipt;
+        this.validationsByPurchaseId.set(response.purchase.id, response.validation ?? null);
+        return response.purchase;
       })
     );
   }

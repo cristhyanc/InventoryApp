@@ -32,7 +32,7 @@ public sealed class AuthenticationBoundaryTests : IClassFixture<AuthenticationBo
     [Theory]
     [InlineData("/api/products")]
     [InlineData("/api/categories")]
-    [InlineData("/api/receipts/1/file")]
+    [InlineData("/api/purchases/1/file")]
     [InlineData("/api/operating-expenses/1/attachment")]
     public async Task Unauthenticated_request_to_protected_endpoint_returns_401(string requestUri)
     {

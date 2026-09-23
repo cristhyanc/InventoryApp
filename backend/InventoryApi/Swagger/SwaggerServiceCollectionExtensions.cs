@@ -15,11 +15,8 @@ public static class SwaggerServiceCollectionExtensions
             {
                 Title = "Inventory API",
                 Version = "v1",
-                Description = "Manage inventory for snacks and drinks, including suppliers, categories, stock adjustments, and receipt uploads."
+                Description = "Manage inventory for snacks and drinks, including suppliers, categories, stock adjustments, and purchase uploads."
             });
-
-            // Keep the published schema ids and tags stable across the internal Purchase rename.
-            c.UseLegacyReceiptNames();
         });
 
         return services;
