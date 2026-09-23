@@ -14,7 +14,10 @@ public class Business
 {
     public int Id { get; set; }
 
-    /// <summary>Operator-facing name of the business. Not an identifier; never used for lookup.</summary>
+    /// <summary>
+    /// Operator-facing display name. It is not an identifier: nothing resolves a business by
+    /// name, it is not unique, and it may be changed without affecting data ownership.
+    /// </summary>
     public string Name { get; set; } = string.Empty;
 
     /// <summary>

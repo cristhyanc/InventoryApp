@@ -39,6 +39,56 @@ public class ActorIdentityTests
     }
 
     /// <summary>
+    /// tid and oid are Entra GUID identifiers. A value that is not a GUID is not an Entra
+    /// identifier, so it must be rejected outright rather than carried into a membership lookup
+    /// as an opaque string.
+    /// </summary>
+    [Theory]
+    [InlineData("not-a-guid")]
+    [InlineData("someone@example.com")]
+    [InlineData("12345")]
+    [InlineData("11111111-1111-1111-1111-11111111111")]
+    [InlineData("11111111-1111-1111-1111-1111111111111")]
+    [InlineData("11111111-1111-1111-1111-11111111111g")]
+    [InlineData("11111111111111111111111111111111'--")]
+    public void A_malformed_directory_tenant_id_is_rejected(string malformedTid)
+    {
+        Assert.False(ActorIdentity.TryCreate(malformedTid, Oid, out var identity));
+
+        Assert.Null(identity);
+    }
+
+    [Theory]
+    [InlineData("not-a-guid")]
+    [InlineData("someone@example.com")]
+    [InlineData("12345")]
+    [InlineData("22222222-2222-2222-2222-22222222222")]
+    [InlineData("22222222-2222-2222-2222-2222222222222")]
+    [InlineData("22222222-2222-2222-2222-22222222222g")]
+    [InlineData("22222222222222222222222222222222'--")]
+    public void A_malformed_object_id_is_rejected(string malformedOid)
+    {
+        Assert.False(ActorIdentity.TryCreate(Tid, malformedOid, out var identity));
+
+        Assert.Null(identity);
+    }
+
+    /// <summary>
+    /// The braced and dashless GUID spellings denote the same identifier, so they must normalize
+    /// to the same comparison key rather than producing a second, unmatchable identity.
+    /// </summary>
+    [Theory]
+    [InlineData("{11111111-1111-1111-1111-111111111111}")]
+    [InlineData("11111111111111111111111111111111")]
+    public void Equivalent_guid_spellings_normalize_to_the_same_identity(string equivalentTid)
+    {
+        Assert.True(ActorIdentity.TryCreate(Tid, Oid, out var canonical));
+        Assert.True(ActorIdentity.TryCreate(equivalentTid, Oid, out var variant));
+
+        Assert.Equal(canonical, variant);
+    }
+
+    /// <summary>
     /// Entra returns GUID claim values whose casing and surrounding whitespace are not
     /// significant; a membership lookup must not depend on them.
     /// </summary>

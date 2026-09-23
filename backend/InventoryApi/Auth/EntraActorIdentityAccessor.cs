@@ -53,27 +53,59 @@ public sealed class EntraActorIdentityAccessor : IAuthenticatedActorAccessor
             return ActorIdentityResult.NotAuthenticated();
         }
 
-        var directoryTenantId = FindFirstClaimValue(principal, DirectoryTenantIdClaimTypes);
-        var objectId = FindFirstClaimValue(principal, ObjectIdClaimTypes);
+        // Both halves are required, both must be well-formed GUIDs, and every recognized
+        // spelling present must agree. A validated token that fails any of those identifies no
+        // actor, so the caller is denied rather than resolved from a weaker substitute.
+        if (!TryResolveGuidClaim(principal, DirectoryTenantIdClaimTypes, out var directoryTenantId)
+            || !TryResolveGuidClaim(principal, ObjectIdClaimTypes, out var objectId))
+        {
+            return ActorIdentityResult.Unidentifiable();
+        }
 
-        // Both halves are required. A validated token that carries only one of them identifies
-        // no actor, so the caller is denied rather than resolved from a weaker substitute.
-        return ActorIdentity.TryCreate(directoryTenantId, objectId, out var actor) && actor is not null
-            ? ActorIdentityResult.Identified(actor)
-            : ActorIdentityResult.Unidentifiable();
+        return ActorIdentity.TryCreate(directoryTenantId.ToString("D"), objectId.ToString("D"), out var actor)
+            && actor is not null
+                ? ActorIdentityResult.Identified(actor)
+                : ActorIdentityResult.Unidentifiable();
     }
 
-    private static string? FindFirstClaimValue(ClaimsPrincipal principal, string[] claimTypes)
+    /// <summary>
+    /// Collapses every claim carrying this identifier - across both supported spellings, and
+    /// across repeated claims of the same type - into the single GUID they all agree on.
+    ///
+    /// It fails on a malformed value and on disagreement rather than preferring one spelling.
+    /// A token whose short and mapped claims name two different directories or two different
+    /// actors is not a token this application can attribute ownership from, and silently taking
+    /// whichever one happened to be checked first would let the choice of claim spelling decide
+    /// whose data the caller reads.
+    /// </summary>
+    private static bool TryResolveGuidClaim(ClaimsPrincipal principal, string[] claimTypes, out Guid value)
     {
+        Guid? agreed = null;
+
         foreach (var claimType in claimTypes)
         {
-            var value = principal.FindFirst(claimType)?.Value;
-            if (!string.IsNullOrWhiteSpace(value))
+            foreach (var claim in principal.FindAll(claimType))
             {
-                return value;
+                // Guid.TryParse rejects null, blank, and anything that is not a GUID.
+                if (!Guid.TryParse(claim.Value?.Trim(), out var parsed))
+                {
+                    value = default;
+                    return false;
+                }
+
+                if (agreed is null)
+                {
+                    agreed = parsed;
+                }
+                else if (agreed.Value != parsed)
+                {
+                    value = default;
+                    return false;
+                }
             }
         }
 
-        return null;
+        value = agreed ?? default;
+        return agreed.HasValue;
     }
 }

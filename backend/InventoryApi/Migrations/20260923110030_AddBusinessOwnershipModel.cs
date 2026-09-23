@@ -64,12 +64,6 @@ namespace InventoryApi.Migrations
                 table: "BusinessMemberships",
                 columns: new[] { "DirectoryTenantId", "ObjectId", "BusinessId" },
                 unique: true);
-
-            migrationBuilder.CreateIndex(
-                name: "IX_Businesses_Name",
-                table: "Businesses",
-                column: "Name",
-                unique: true);
         }
 
         /// <inheritdoc />

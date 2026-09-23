@@ -11,7 +11,7 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace InventoryApi.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    [Migration("20260923095846_AddBusinessOwnershipModel")]
+    [Migration("20260923110030_AddBusinessOwnershipModel")]
     partial class AddBusinessOwnershipModel
     {
         /// <inheritdoc />
@@ -41,9 +41,6 @@ namespace InventoryApi.Migrations
                         .HasColumnType("TEXT");
 
                     b.HasKey("Id");
-
-                    b.HasIndex("Name")
-                        .IsUnique();
 
                     b.ToTable("Businesses");
                 });

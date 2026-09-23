@@ -30,8 +30,12 @@ public class BusinessMembership
     public string ObjectId { get; set; } = string.Empty;
 
     /// <summary>
-    /// Revoking a membership sets this to false rather than deleting the row, so the approval
-    /// history stays auditable while access stops on the next request.
+    /// Revoking a membership sets this to false rather than deleting the row, so the revoked
+    /// approval stays visible and access stops on the next request.
+    ///
+    /// This is a current-state flag, not an audit trail: the row records only that the
+    /// membership is now inactive, not who revoked it or when. A historical audit log of
+    /// membership changes is not part of this change.
     /// </summary>
     public bool IsActive { get; set; } = true;
 

@@ -27,9 +27,11 @@ public sealed record ActorIdentity
     public string ObjectId { get; }
 
     /// <summary>
-    /// Builds an actor identity from raw claim values. Both halves are required: a token missing
-    /// either one cannot identify an actor, so the caller must fail closed rather than fall back
-    /// to a weaker identifier such as email or the directory tenant alone.
+    /// Builds an actor identity from raw claim values. Both halves are required and both must be
+    /// well-formed GUIDs: a token missing either one, or carrying a value that is not an Entra
+    /// identifier at all, cannot identify an actor. The caller must then fail closed rather than
+    /// fall back to a weaker identifier such as email, name, subject, or the directory tenant
+    /// alone.
     /// </summary>
     public static bool TryCreate(string? directoryTenantId, string? objectId, out ActorIdentity? identity)
     {
@@ -47,19 +49,25 @@ public sealed record ActorIdentity
     }
 
     /// <summary>
-    /// Trims and upper-cases the value so a lookup is not defeated by the casing a token or a
-    /// hand-entered membership row happens to use. Upper- rather than lower-casing is the
-    /// analyzer-approved normalization form (CA1308); these values are opaque comparison keys
-    /// and are never displayed.
+    /// Validates the value as a GUID and returns its canonical upper-case dashed form, or
+    /// <c>null</c> when it is missing, blank, or not a GUID at all.
+    ///
+    /// Parsing rather than string-trimming matters twice. It rejects a malformed value outright,
+    /// so a token carrying something that is not an Entra identifier cannot reach the membership
+    /// lookup. And it makes two spellings of the same GUID - different casing, or the braced or
+    /// dashless forms - normalize to one comparison key, so a lookup is never defeated by the
+    /// form a token or a hand-entered membership row happens to use. Upper- rather than
+    /// lower-casing is the analyzer-approved normalization form (CA1308); these values are
+    /// opaque comparison keys and are never displayed.
     /// </summary>
     private static string? Normalize(string? value)
     {
-        if (string.IsNullOrWhiteSpace(value))
+        if (!Guid.TryParse(value?.Trim(), out var parsed))
         {
             return null;
         }
 
-        return value.Trim().ToUpperInvariant();
+        return parsed.ToString("D").ToUpperInvariant();
     }
 
     public override string ToString() => $"{DirectoryTenantId}/{ObjectId}";

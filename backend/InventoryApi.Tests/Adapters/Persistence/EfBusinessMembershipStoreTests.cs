@@ -102,6 +102,27 @@ public class EfBusinessMembershipStoreTests
     }
 
     /// <summary>
+    /// Name is a display name, not an identifier. Two businesses may trade under the same name,
+    /// and ownership is decided by the key and the membership rows alone, so the schema must not
+    /// impose a global uniqueness constraint on it.
+    /// </summary>
+    [Fact]
+    public async Task Two_businesses_may_share_a_display_name()
+    {
+        var (connection, options) = await CreateSqliteAsync();
+        await using (connection)
+        {
+            await using var db = new AppDbContext(options);
+
+            var first = await AddBusinessAsync(db, "Vending Co");
+            var second = await AddBusinessAsync(db, "Vending Co");
+
+            Assert.NotEqual(first.Id, second.Id);
+            Assert.Equal(2, await db.Businesses.AsNoTracking().CountAsync());
+        }
+    }
+
+    /// <summary>
     /// The same object id in a different Entra directory is a different actor, so the lookup
     /// must not match on either half of the pair alone.
     /// </summary>

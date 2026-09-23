@@ -109,6 +109,134 @@ public class EntraActorIdentityAccessorTests
         Assert.Equal(BusinessAccessDenialReason.UnidentifiableActor, result.DenialReason);
     }
 
+    /// <summary>
+    /// The same GUID supplied through both supported spellings is not a conflict - it is the
+    /// ordinary shape of a token when claim mapping is partially applied - and must still
+    /// identify the actor.
+    /// </summary>
+    [Fact]
+    public void Identical_values_through_both_claim_spellings_identify_the_actor()
+    {
+        var accessor = CreateAccessor(AuthenticatedContext(
+            new Claim("tid", Tid),
+            new Claim(TenantIdUriClaim, Tid),
+            new Claim("oid", Oid),
+            new Claim(ObjectIdUriClaim, Oid)));
+
+        var result = accessor.GetCurrentActor();
+
+        Assert.Null(result.DenialReason);
+        Assert.True(ActorIdentity.TryCreate(Tid, Oid, out var expected));
+        Assert.Equal(expected, result.Actor);
+    }
+
+    /// <summary>
+    /// Casing and equivalent GUID spellings are not a conflict either: both claims denote one
+    /// identifier, so the actor is still identified.
+    /// </summary>
+    [Fact]
+    public void Equivalent_guid_spellings_across_claim_types_are_not_a_conflict()
+    {
+        var accessor = CreateAccessor(AuthenticatedContext(
+            new Claim("tid", Tid.ToUpperInvariant()),
+            new Claim(TenantIdUriClaim, $"{{{Tid}}}"),
+            new Claim("oid", Oid),
+            new Claim(ObjectIdUriClaim, Oid.Replace("-", string.Empty, StringComparison.Ordinal))));
+
+        var result = accessor.GetCurrentActor();
+
+        Assert.Null(result.DenialReason);
+        Assert.True(ActorIdentity.TryCreate(Tid, Oid, out var expected));
+        Assert.Equal(expected, result.Actor);
+    }
+
+    /// <summary>
+    /// Two recognized spellings naming different directories. Preferring whichever was checked
+    /// first would let the choice of claim spelling decide whose data the caller reads, so the
+    /// request fails closed instead.
+    /// </summary>
+    [Fact]
+    public void Conflicting_short_and_uri_tenant_id_claims_are_unidentifiable()
+    {
+        var result = CreateAccessor(AuthenticatedContext(
+            new Claim("tid", Tid),
+            new Claim(TenantIdUriClaim, "99999999-9999-9999-9999-999999999999"),
+            new Claim("oid", Oid))).GetCurrentActor();
+
+        Assert.Null(result.Actor);
+        Assert.Equal(BusinessAccessDenialReason.UnidentifiableActor, result.DenialReason);
+    }
+
+    /// <summary>Two recognized spellings naming different actors: same fail-closed rule.</summary>
+    [Fact]
+    public void Conflicting_short_and_uri_object_id_claims_are_unidentifiable()
+    {
+        var result = CreateAccessor(AuthenticatedContext(
+            new Claim("tid", Tid),
+            new Claim("oid", Oid),
+            new Claim(ObjectIdUriClaim, "99999999-9999-9999-9999-999999999999"))).GetCurrentActor();
+
+        Assert.Null(result.Actor);
+        Assert.Equal(BusinessAccessDenialReason.UnidentifiableActor, result.DenialReason);
+    }
+
+    /// <summary>Repeated claims of one spelling must agree too, not only across spellings.</summary>
+    [Fact]
+    public void Repeated_conflicting_claims_of_the_same_spelling_are_unidentifiable()
+    {
+        var result = CreateAccessor(AuthenticatedContext(
+            new Claim("tid", Tid),
+            new Claim("tid", "99999999-9999-9999-9999-999999999999"),
+            new Claim("oid", Oid))).GetCurrentActor();
+
+        Assert.Null(result.Actor);
+        Assert.Equal(BusinessAccessDenialReason.UnidentifiableActor, result.DenialReason);
+    }
+
+    [Theory]
+    [InlineData("not-a-guid")]
+    [InlineData("someone@example.com")]
+    [InlineData("11111111-1111-1111-1111-11111111111")]
+    public void A_malformed_tenant_id_claim_is_unidentifiable(string malformedTid)
+    {
+        var result = CreateAccessor(AuthenticatedContext(
+            new Claim("tid", malformedTid),
+            new Claim("oid", Oid))).GetCurrentActor();
+
+        Assert.Null(result.Actor);
+        Assert.Equal(BusinessAccessDenialReason.UnidentifiableActor, result.DenialReason);
+    }
+
+    [Theory]
+    [InlineData("not-a-guid")]
+    [InlineData("someone@example.com")]
+    [InlineData("22222222-2222-2222-2222-22222222222")]
+    public void A_malformed_object_id_claim_is_unidentifiable(string malformedOid)
+    {
+        var result = CreateAccessor(AuthenticatedContext(
+            new Claim("tid", Tid),
+            new Claim("oid", malformedOid))).GetCurrentActor();
+
+        Assert.Null(result.Actor);
+        Assert.Equal(BusinessAccessDenialReason.UnidentifiableActor, result.DenialReason);
+    }
+
+    /// <summary>
+    /// A malformed value in one spelling is not rescued by a well-formed value in the other:
+    /// the token is inconsistent, so it identifies no actor.
+    /// </summary>
+    [Fact]
+    public void A_malformed_value_alongside_a_valid_one_is_unidentifiable()
+    {
+        var result = CreateAccessor(AuthenticatedContext(
+            new Claim("tid", Tid),
+            new Claim(TenantIdUriClaim, "not-a-guid"),
+            new Claim("oid", Oid))).GetCurrentActor();
+
+        Assert.Null(result.Actor);
+        Assert.Equal(BusinessAccessDenialReason.UnidentifiableActor, result.DenialReason);
+    }
+
     [Fact]
     public void Blank_claim_values_are_unidentifiable()
     {

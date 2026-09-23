@@ -19,7 +19,7 @@ namespace InventoryApi.Tests.Adapters.Persistence;
 public class AddBusinessOwnershipModelMigrationTests
 {
     private const string PreviousMigration = "20260915064737_AddProductRestockTo";
-    private const string TenancyMigration = "20260923095846_AddBusinessOwnershipModel";
+    private const string TenancyMigration = "20260923110030_AddBusinessOwnershipModel";
 
     private static async Task MigrateToAsync(AppDbContext db, string targetMigration) =>
         await db.GetService<IMigrator>().MigrateAsync(targetMigration);

@@ -255,8 +255,10 @@ public class AppDbContext : DbContext
     /// </summary>
     private static void ConfigureTenancy(ModelBuilder modelBuilder)
     {
+        // Name is a display name, not an identifier: nothing resolves a business by it, so it
+        // carries no uniqueness constraint and no index. Two businesses may legitimately trade
+        // under the same name; ownership is decided by the key and the membership rows alone.
         modelBuilder.Entity<Business>().Property(b => b.Name).IsRequired();
-        modelBuilder.Entity<Business>().HasIndex(b => b.Name).IsUnique();
 
         modelBuilder.Entity<BusinessMembership>()
             .HasOne(m => m.Business)

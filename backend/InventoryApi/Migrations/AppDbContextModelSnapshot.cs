@@ -39,9 +39,6 @@ namespace InventoryApi.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("Name")
-                        .IsUnique();
-
                     b.ToTable("Businesses");
                 });
 
