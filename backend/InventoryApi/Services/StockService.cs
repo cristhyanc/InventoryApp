@@ -42,10 +42,10 @@ public class StockService : IStockService
         var lastPurchase = await _db.ReceiptItems
             .AsNoTracking()
             .Where(item => item.ProductId == productId)
-            .OrderByDescending(item => item.Receipt!.PurchaseDate)
+            .OrderByDescending(item => item.Purchase!.PurchaseDate)
             .ThenByDescending(item => item.ReceiptId)
             .ThenByDescending(item => item.Id)
-            .Select(item => new { item.UnitCost, item.Receipt!.PurchaseDate })
+            .Select(item => new { item.UnitCost, item.Purchase!.PurchaseDate })
             .FirstOrDefaultAsync();
         if (lastPurchase is not null)
             return new RestockCostSuggestionDto(lastPurchase.UnitCost, "LastPurchase", lastPurchase.PurchaseDate);

@@ -49,19 +49,21 @@ public record CategoryDto(string Name, string? Description);
 
 public record SupplierDto(string Name, string? ContactName, string? Phone, string? Email, string? Address);
 
-public record ReceiptItemDto(long ProductId, decimal Quantity, decimal UnitCost);
-public record ReceiptCreateMetaDto(string Title, string? Notes, decimal? TotalAmount, decimal? DeliveryCost, decimal? PackageCost, DateTime? PurchaseDate, int? SupplierId, IReadOnlyList<ReceiptItemDto>? Items = null);
+public record PurchaseItemDto(long ProductId, decimal Quantity, decimal UnitCost);
+public record PurchaseCreateMetaDto(string Title, string? Notes, decimal? TotalAmount, decimal? DeliveryCost, decimal? PackageCost, DateTime? PurchaseDate, int? SupplierId, IReadOnlyList<PurchaseItemDto>? Items = null);
 
-public record ReceiptValidationDto(
+public record PurchaseValidationDto(
     bool HasTotalMismatch,
     decimal? CalculatedItemSubtotal,
     decimal? CalculatedTotal,
     decimal? TotalDifference
 );
 
-public record ReceiptResponseDto(
-    Receipt Receipt,
-    ReceiptValidationDto? Validation = null
+// Property names stay "Receipt"/"Validation" (JSON keys "receipt"/"validation") to preserve
+// the existing API contract; only the referenced CLR type is the renamed Purchase business type.
+public record PurchaseResponseDto(
+    Purchase Receipt,
+    PurchaseValidationDto? Validation = null
 );
 
 public record SiteSummaryDto(

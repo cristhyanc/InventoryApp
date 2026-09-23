@@ -74,11 +74,11 @@ public class StockServiceTests
         using var db = CreateDbContext("stock_latest_purchase_suggestion_test");
         db.Products.Add(new Product { Id = 1, Name = "p", CostingQuantity = 2, InventoryValue = 8m, AverageUnitCost = 4m });
         db.Receipts.AddRange(
-            new Receipt { Id = 1, Title = "old", PurchaseDate = new DateTime(2025, 1, 1) },
-            new Receipt { Id = 2, Title = "new", PurchaseDate = new DateTime(2025, 2, 1) });
+            new Purchase { Id = 1, Title = "old", PurchaseDate = new DateTime(2025, 1, 1) },
+            new Purchase { Id = 2, Title = "new", PurchaseDate = new DateTime(2025, 2, 1) });
         db.ReceiptItems.AddRange(
-            new ReceiptItem { Id = 1, ReceiptId = 1, ProductId = 1, Quantity = 1, UnitCost = 1.25m },
-            new ReceiptItem { Id = 2, ReceiptId = 2, ProductId = 1, Quantity = 1, UnitCost = 2.50m });
+            new PurchaseItem { Id = 1, ReceiptId = 1, ProductId = 1, Quantity = 1, UnitCost = 1.25m },
+            new PurchaseItem { Id = 2, ReceiptId = 2, ProductId = 1, Quantity = 1, UnitCost = 2.50m });
         await db.SaveChangesAsync();
 
         var suggestion = await new StockService(db).GetRestockCostSuggestion(1);

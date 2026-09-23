@@ -3,27 +3,37 @@ using InventoryApi.Models;
 using InventoryApi.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
 using InventoryApi.DTOs;
+using Inventory.Application.Purchases;
+using Inventory.Domain.Purchases;
 
 namespace InventoryApi.Services;
 
-public class ReceiptService : IReceiptService
+public class PurchaseService : IPurchaseService
 {
     private readonly AppDbContext _db;
     private readonly IWebHostEnvironment _env;
     private readonly IInventoryCostRebuildService _rebuild;
+    private readonly ComputePurchaseTotalValidation _computeValidation;
 
     private static readonly string[] AllowedExtensions = { ".jpg", ".jpeg", ".png", ".pdf", ".webp", ".heic" };
     private const long MaxFileSizeBytes = 10 * 1024 * 1024;
-    private const decimal ReceiptTotalTolerance = 0.02m;
 
-    public ReceiptService(AppDbContext db, IWebHostEnvironment env, IInventoryCostRebuildService? rebuild = null)
+    public PurchaseService(
+        AppDbContext db,
+        IWebHostEnvironment env,
+        IInventoryCostRebuildService? rebuild = null,
+        ComputePurchaseTotalValidation? computeValidation = null)
     {
         _db = db;
         _env = env;
         _rebuild = rebuild ?? new InventoryCostRebuildService(db);
+        _computeValidation = computeValidation ?? new ComputePurchaseTotalValidation();
     }
 
-    private string ReceiptsFolder
+    // Physical storage for the uploaded scan/photo (the supporting document), distinct from
+    // the purchase business record. Kept at its legacy "receipts" path so already-uploaded
+    // files stay reachable; see Purchase.StoredFileName.
+    private string PurchaseDocumentsFolder
     {
         get
         {
@@ -34,14 +44,14 @@ public class ReceiptService : IReceiptService
         }
     }
 
-    public async Task<IEnumerable<Receipt>> GetAll(int? supplierId)
+    public async Task<IEnumerable<Purchase>> GetAll(int? supplierId)
     {
         var query = _db.Receipts.Include(r => r.Supplier).AsQueryable();
         if (supplierId.HasValue) query = query.Where(r => r.SupplierId == supplierId);
         return await query.Include(r => r.Items).ThenInclude(i => i.Product).OrderByDescending(r => r.PurchaseDate).ToListAsync();
     }
 
-    public async Task<Receipt?> Get(int id)
+    public async Task<Purchase?> Get(int id)
     {
         return await _db.Receipts.Include(r => r.Supplier).Include(r => r.Items).ThenInclude(i => i.Product)
             .FirstOrDefaultAsync(r => r.Id == id);
@@ -49,17 +59,17 @@ public class ReceiptService : IReceiptService
 
     public async Task<(byte[]? Content, string? ContentType, string? FileName)> GetFile(int id)
     {
-        var receipt = await _db.Receipts.FindAsync(id);
-        if (receipt is null) return (null, null, null);
+        var purchase = await _db.Receipts.FindAsync(id);
+        if (purchase is null) return (null, null, null);
 
-        var path = Path.Combine(ReceiptsFolder, receipt.StoredFileName);
+        var path = Path.Combine(PurchaseDocumentsFolder, purchase.StoredFileName);
         if (!System.IO.File.Exists(path)) return (null, null, null);
 
         var bytes = await System.IO.File.ReadAllBytesAsync(path);
-        return (bytes, receipt.ContentType, receipt.FileName);
+        return (bytes, purchase.ContentType, purchase.FileName);
     }
 
-    public async Task<Receipt?> Upload(IFormFile file, string title, string? notes, decimal? totalAmount, decimal? deliveryCost, decimal? packageCost, DateTime? purchaseDate, int? supplierId, IReadOnlyList<ReceiptItemDto>? items = null)
+    public async Task<Purchase?> Upload(IFormFile file, string title, string? notes, decimal? totalAmount, decimal? deliveryCost, decimal? packageCost, DateTime? purchaseDate, int? supplierId, IReadOnlyList<PurchaseItemDto>? items = null)
     {
         if (file is null || file.Length == 0) return null;
         if (file.Length > MaxFileSizeBytes) return null;
@@ -69,20 +79,20 @@ public class ReceiptService : IReceiptService
 
         if (supplierId.HasValue && !await _db.Suppliers.AnyAsync(s => s.Id == supplierId)) return null;
 
-        var receiptItems = await ValidateItemsAsync(items ?? Array.Empty<ReceiptItemDto>());
+        var purchaseItems = await ValidateItemsAsync(items ?? Array.Empty<PurchaseItemDto>());
         var effectivePurchaseDate = purchaseDate ?? DateTime.UtcNow;
         await ValidatePurchaseDatesAfterBaselinesAsync(
-            receiptItems.Select(x => x.ProductId),
+            purchaseItems.Select(x => x.ProductId),
             effectivePurchaseDate);
         var storedFileName = $"{Guid.NewGuid()}{ext}";
-        var fullPath = Path.Combine(ReceiptsFolder, storedFileName);
+        var fullPath = Path.Combine(PurchaseDocumentsFolder, storedFileName);
 
         await using (var stream = new FileStream(fullPath, FileMode.Create))
         {
             await file.CopyToAsync(stream);
         }
 
-        var receipt = new Receipt
+        var purchase = new Purchase
         {
             Title = string.IsNullOrWhiteSpace(title) ? file.FileName : title,
             Notes = notes,
@@ -96,7 +106,7 @@ public class ReceiptService : IReceiptService
             ContentType = file.ContentType,
             FileSizeBytes = file.Length
         };
-        receipt.Items = receiptItems.Select(x => new ReceiptItem
+        purchase.Items = purchaseItems.Select(x => new PurchaseItem
         {
             ProductId = x.ProductId,
             Quantity = x.Quantity,
@@ -106,13 +116,13 @@ public class ReceiptService : IReceiptService
         try
         {
             await using var transaction = await BeginTransactionAsync();
-            _db.Receipts.Add(receipt);
+            _db.Receipts.Add(purchase);
             await _db.SaveChangesAsync();
-            await AllocateSupplierOrderFulfillmentAsync(receipt);
-            foreach (var item in receipt.Items)
-                _db.StockAdjustments.Add(CreatePurchaseMovement(item, receipt.PurchaseDate));
+            await AllocateSupplierOrderFulfillmentAsync(purchase);
+            foreach (var item in purchase.Items)
+                _db.StockAdjustments.Add(CreatePurchaseMovement(item, purchase.PurchaseDate));
             await _db.SaveChangesAsync();
-            await RebuildAffectedAsync(receipt.Items.Select(item => (item.ProductId, receipt.PurchaseDate)));
+            await RebuildAffectedAsync(purchase.Items.Select(item => (item.ProductId, purchase.PurchaseDate)));
             await _db.SaveChangesAsync();
             if (transaction is not null) await transaction.CommitAsync();
         }
@@ -122,22 +132,22 @@ public class ReceiptService : IReceiptService
             throw;
         }
 
-        return receipt;
+        return purchase;
     }
 
-    private async Task AllocateSupplierOrderFulfillmentAsync(Receipt receipt)
+    private async Task AllocateSupplierOrderFulfillmentAsync(Purchase purchase)
     {
-        if (!receipt.SupplierId.HasValue) return;
+        if (!purchase.SupplierId.HasValue) return;
         var affectedOrderIds = new HashSet<int>();
         var allocatedByLineId = new Dictionary<int, decimal>();
-        var purchaseDayEnd = receipt.PurchaseDate.Date.AddDays(1);
-        foreach (var receiptItem in receipt.Items)
+        var purchaseDayEnd = purchase.PurchaseDate.Date.AddDays(1);
+        foreach (var purchaseItem in purchase.Items)
         {
-            var remainingQuantity = receiptItem.Quantity;
+            var remainingQuantity = purchaseItem.Quantity;
             var lines = await _db.SupplierOrderLines
                 .Include(line => line.SupplierOrder)
-                .Where(line => line.ProductId == receiptItem.ProductId &&
-                    line.SupplierOrder.SupplierId == receipt.SupplierId &&
+                .Where(line => line.ProductId == purchaseItem.ProductId &&
+                    line.SupplierOrder.SupplierId == purchase.SupplierId &&
                     line.SupplierOrder.OrderDate < purchaseDayEnd &&
                     line.SupplierOrder.Status != SupplierOrderStatus.Cancelled &&
                     line.SupplierOrder.Status != SupplierOrderStatus.Received &&
@@ -157,7 +167,7 @@ public class ReceiptService : IReceiptService
                 _db.SupplierOrderReceiptAllocations.Add(new SupplierOrderReceiptAllocation
                 {
                     SupplierOrderLineId = line.Id,
-                    ReceiptItemId = receiptItem.Id,
+                    ReceiptItemId = purchaseItem.Id,
                     QuantityApplied = receivedQuantity
                 });
                 affectedOrderIds.Add(line.SupplierOrderId);
@@ -170,10 +180,10 @@ public class ReceiptService : IReceiptService
         await RecalculateSupplierOrderFulfillmentAsync(affectedOrderIds);
     }
 
-    private async Task RemoveSupplierOrderFulfillmentAsync(IEnumerable<int> receiptItemIds)
+    private async Task RemoveSupplierOrderFulfillmentAsync(IEnumerable<int> purchaseItemIds)
     {
         var allocations = await _db.SupplierOrderReceiptAllocations
-            .Where(allocation => receiptItemIds.Contains(allocation.ReceiptItemId))
+            .Where(allocation => purchaseItemIds.Contains(allocation.ReceiptItemId))
             .ToListAsync();
         if (allocations.Count == 0) return;
 
@@ -211,26 +221,26 @@ public class ReceiptService : IReceiptService
         await _db.SaveChangesAsync();
     }
 
-    public async Task<Receipt?> Update(int id, string? title, string? notes, decimal? totalAmount, decimal? deliveryCost, decimal? packageCost, DateTime? purchaseDate, int? supplierId, IReadOnlyList<ReceiptItemDto>? items = null)
+    public async Task<Purchase?> Update(int id, string? title, string? notes, decimal? totalAmount, decimal? deliveryCost, decimal? packageCost, DateTime? purchaseDate, int? supplierId, IReadOnlyList<PurchaseItemDto>? items = null)
     {
-        var receipt = await _db.Receipts.Include(r => r.Supplier).Include(r => r.Items)
+        var purchase = await _db.Receipts.Include(r => r.Supplier).Include(r => r.Items)
             .FirstOrDefaultAsync(r => r.Id == id);
-        if (receipt is null) return null;
+        if (purchase is null) return null;
 
         if (supplierId.HasValue && !await _db.Suppliers.AnyAsync(s => s.Id == supplierId)) return null;
 
-        var originalPurchaseDate = receipt.PurchaseDate;
-        var originalSupplierId = receipt.SupplierId;
-        var originalItems = receipt.Items.ToList();
-        receipt.Title = string.IsNullOrWhiteSpace(title) ? receipt.Title : title;
-        receipt.Notes = notes;
-        receipt.TotalAmount = totalAmount;
-        receipt.DeliveryCost = deliveryCost;
-        receipt.PackageCost = packageCost;
-        receipt.PurchaseDate = purchaseDate ?? receipt.PurchaseDate;
-        receipt.SupplierId = supplierId;
+        var originalPurchaseDate = purchase.PurchaseDate;
+        var originalSupplierId = purchase.SupplierId;
+        var originalItems = purchase.Items.ToList();
+        purchase.Title = string.IsNullOrWhiteSpace(title) ? purchase.Title : title;
+        purchase.Notes = notes;
+        purchase.TotalAmount = totalAmount;
+        purchase.DeliveryCost = deliveryCost;
+        purchase.PackageCost = packageCost;
+        purchase.PurchaseDate = purchaseDate ?? purchase.PurchaseDate;
+        purchase.SupplierId = supplierId;
         var requiresFulfillmentReconciliation = items is not null ||
-            originalSupplierId != receipt.SupplierId || originalPurchaseDate != receipt.PurchaseDate;
+            originalSupplierId != purchase.SupplierId || originalPurchaseDate != purchase.PurchaseDate;
         var affected = new Dictionary<long, DateTime>();
         await using var transaction = await BeginTransactionAsync();
         if (requiresFulfillmentReconciliation)
@@ -238,35 +248,35 @@ public class ReceiptService : IReceiptService
         if (items is not null)
         {
             var validated = await ValidateItemsAsync(items);
-            await EnsureLegacyReceiptMovementsArePreservedAsync(
+            await EnsureLegacyPurchaseMovementsArePreservedAsync(
                 originalItems,
                 validated,
                 originalPurchaseDate,
-                receipt.PurchaseDate);
+                purchase.PurchaseDate);
             await ValidatePurchaseDatesAfterBaselinesAsync(
                 validated.Select(x => x.ProductId),
-                receipt.PurchaseDate);
-            var existingItems = receipt.Items.ToList();
+                purchase.PurchaseDate);
+            var existingItems = purchase.Items.ToList();
             var existingMovements = await _db.StockAdjustments
                 .Where(movement => movement.ReceiptItemId.HasValue &&
                     existingItems.Select(item => item.Id).Contains(movement.ReceiptItemId.Value))
                 .ToListAsync();
-            var movementByReceiptItem = existingMovements
+            var movementByPurchaseItem = existingMovements
                 .GroupBy(movement => movement.ReceiptItemId!.Value)
                 .ToDictionary(group => group.Key, group => group.Single());
             var availableByProduct = existingItems
                 .GroupBy(item => item.ProductId)
-                .ToDictionary(group => group.Key, group => new Queue<ReceiptItem>(group));
-            var newItems = new List<ReceiptItem>();
+                .ToDictionary(group => group.Key, group => new Queue<PurchaseItem>(group));
+            var newItems = new List<PurchaseItem>();
 
             foreach (var requested in validated)
             {
                 if (availableByProduct.TryGetValue(requested.ProductId, out var matches) && matches.Count > 0)
                 {
                     var item = matches.Dequeue();
-                    AddAffected(affected, item.ProductId, movementByReceiptItem.TryGetValue(item.Id, out var movement)
+                    AddAffected(affected, item.ProductId, movementByPurchaseItem.TryGetValue(item.Id, out var movement)
                         ? movement.EffectiveAt : originalPurchaseDate);
-                    AddAffected(affected, item.ProductId, receipt.PurchaseDate);
+                    AddAffected(affected, item.ProductId, purchase.PurchaseDate);
                     item.Quantity = requested.Quantity;
                     item.UnitCost = requested.UnitCost;
                     if (movement is not null)
@@ -274,7 +284,7 @@ public class ReceiptService : IReceiptService
                         movement.QuantityChange = ToStockQuantity(requested.Quantity);
                         movement.UnitCost = requested.UnitCost;
                         movement.TotalCost = requested.Quantity * requested.UnitCost;
-                        movement.EffectiveAt = receipt.PurchaseDate;
+                        movement.EffectiveAt = purchase.PurchaseDate;
                         movement.Notes = "Receipt purchase";
                     }
                     else
@@ -284,44 +294,44 @@ public class ReceiptService : IReceiptService
                 }
                 else
                 {
-                    var item = new ReceiptItem
+                    var item = new PurchaseItem
                     {
-                        ReceiptId = receipt.Id,
+                        ReceiptId = purchase.Id,
                         ProductId = requested.ProductId,
                         Quantity = requested.Quantity,
                         UnitCost = requested.UnitCost
                     };
-                    receipt.Items.Add(item);
+                    purchase.Items.Add(item);
                     newItems.Add(item);
-                    AddAffected(affected, item.ProductId, receipt.PurchaseDate);
+                    AddAffected(affected, item.ProductId, purchase.PurchaseDate);
                 }
             }
 
             foreach (var remaining in availableByProduct.Values.SelectMany(queue => queue))
             {
                 AddAffected(affected, remaining.ProductId,
-                    movementByReceiptItem.TryGetValue(remaining.Id, out var movement) ? movement.EffectiveAt : originalPurchaseDate);
+                    movementByPurchaseItem.TryGetValue(remaining.Id, out var movement) ? movement.EffectiveAt : originalPurchaseDate);
                 if (movement is not null)
                     _db.StockAdjustments.Remove(movement);
                 _db.ReceiptItems.Remove(remaining);
-                receipt.Items.Remove(remaining);
+                purchase.Items.Remove(remaining);
             }
 
             await _db.SaveChangesAsync();
             foreach (var item in newItems)
-                _db.StockAdjustments.Add(CreatePurchaseMovement(item, receipt.PurchaseDate));
+                _db.StockAdjustments.Add(CreatePurchaseMovement(item, purchase.PurchaseDate));
         }
-        else if (receipt.PurchaseDate != originalPurchaseDate)
+        else if (purchase.PurchaseDate != originalPurchaseDate)
         {
-            var existingItems = receipt.Items.ToList();
-            await EnsureLegacyReceiptMovementsArePreservedAsync(
+            var existingItems = purchase.Items.ToList();
+            await EnsureLegacyPurchaseMovementsArePreservedAsync(
                 originalItems,
                 null,
                 originalPurchaseDate,
-                receipt.PurchaseDate);
+                purchase.PurchaseDate);
             await ValidatePurchaseDatesAfterBaselinesAsync(
                 existingItems.Select(x => x.ProductId),
-                receipt.PurchaseDate);
+                purchase.PurchaseDate);
             var movements = await _db.StockAdjustments
                 .Where(movement => movement.ReceiptItemId.HasValue &&
                     existingItems.Select(item => item.Id).Contains(movement.ReceiptItemId.Value))
@@ -329,35 +339,35 @@ public class ReceiptService : IReceiptService
             foreach (var movement in movements)
             {
                 AddAffected(affected, movement.ProductId, movement.EffectiveAt);
-                AddAffected(affected, movement.ProductId, receipt.PurchaseDate);
-                movement.EffectiveAt = receipt.PurchaseDate;
+                AddAffected(affected, movement.ProductId, purchase.PurchaseDate);
+                movement.EffectiveAt = purchase.PurchaseDate;
             }
         }
         await _db.SaveChangesAsync();
         if (requiresFulfillmentReconciliation)
-            await AllocateSupplierOrderFulfillmentAsync(receipt);
+            await AllocateSupplierOrderFulfillmentAsync(purchase);
         await RebuildAffectedAsync(affected.Select(item => (item.Key, item.Value)));
         await _db.SaveChangesAsync();
         if (transaction is not null) await transaction.CommitAsync();
-        return receipt;
+        return purchase;
     }
 
     public async Task<bool> Delete(int id)
     {
-        var receipt = await _db.Receipts.Include(r => r.Items).FirstOrDefaultAsync(r => r.Id == id);
-        if (receipt is null) return false;
+        var purchase = await _db.Receipts.Include(r => r.Items).FirstOrDefaultAsync(r => r.Id == id);
+        if (purchase is null) return false;
 
-        var path = Path.Combine(ReceiptsFolder, receipt.StoredFileName);
+        var path = Path.Combine(PurchaseDocumentsFolder, purchase.StoredFileName);
         var movements = await _db.StockAdjustments
             .Where(movement => movement.ReceiptItemId.HasValue &&
-                receipt.Items.Select(item => item.Id).Contains(movement.ReceiptItemId.Value))
+                purchase.Items.Select(item => item.Id).Contains(movement.ReceiptItemId.Value))
             .ToListAsync();
         await EnsureNoPreCutoffMovementsAsync(movements);
         var affected = movements.Select(movement => (movement.ProductId, movement.EffectiveAt)).ToList();
         await using var transaction = await BeginTransactionAsync();
-        await RemoveSupplierOrderFulfillmentAsync(receipt.Items.Select(item => item.Id));
+        await RemoveSupplierOrderFulfillmentAsync(purchase.Items.Select(item => item.Id));
         _db.StockAdjustments.RemoveRange(movements);
-        _db.Receipts.Remove(receipt);
+        _db.Receipts.Remove(purchase);
         await _db.SaveChangesAsync();
         await RebuildAffectedAsync(affected);
         await _db.SaveChangesAsync();
@@ -366,46 +376,33 @@ public class ReceiptService : IReceiptService
         return true;
     }
 
-    private async Task<List<ReceiptItemDto>> ValidateItemsAsync(IReadOnlyList<ReceiptItemDto> items)
+    private async Task<List<PurchaseItemDto>> ValidateItemsAsync(IReadOnlyList<PurchaseItemDto> items)
     {
         if (items.Any(i => i.ProductId <= 0 || i.Quantity <= 0 || i.UnitCost < 0 ||
             i.Quantity != decimal.Truncate(i.Quantity)))
-            throw new InvalidOperationException("Receipt item products, quantities, and costs are invalid.");
+            throw new InvalidOperationException("Purchase item products, quantities, and costs are invalid.");
         var ids = items.Select(i => i.ProductId).Distinct().ToList();
         var count = await _db.Products.CountAsync(p => ids.Contains(p.Id));
-        if (count != ids.Count) throw new InvalidOperationException("One or more receipt products do not exist.");
+        if (count != ids.Count) throw new InvalidOperationException("One or more purchase products do not exist.");
         return items.ToList();
     }
 
-    public ReceiptValidationDto? ComputeValidation(Receipt receipt)
+    public PurchaseValidationDto? ComputeValidation(Purchase purchase)
     {
-        var items = receipt.Items ?? new List<ReceiptItem>();
-        var dtos = items.Select(i => new ReceiptItemDto(i.ProductId, i.Quantity, i.UnitCost));
-        return ComputeTotalValidation(receipt, dtos);
-    }
-
-    private static ReceiptValidationDto ComputeTotalValidation(Receipt receipt, IEnumerable<ReceiptItemDto> items)
-    {
-        if (!receipt.TotalAmount.HasValue)
-            return new ReceiptValidationDto(false, null, null, null);
-
-        var itemSubtotal = items.Sum(i => i.Quantity * i.UnitCost);
-        var calculatedTotal = itemSubtotal + (receipt.DeliveryCost ?? 0m) + (receipt.PackageCost ?? 0m);
-        var difference = Math.Abs(calculatedTotal - receipt.TotalAmount.Value);
-        var hasMismatch = difference > ReceiptTotalTolerance;
-
-        return new ReceiptValidationDto(
-            hasMismatch,
-            itemSubtotal,
-            calculatedTotal,
-            hasMismatch ? difference : null
-        );
+        var items = purchase.Items ?? new List<PurchaseItem>();
+        var validationItems = items.Select(i => new PurchaseTotalValidationItem(i.Quantity, i.UnitCost));
+        var result = _computeValidation.Handle(purchase.TotalAmount, purchase.DeliveryCost, purchase.PackageCost, validationItems);
+        return new PurchaseValidationDto(
+            result.HasMismatch,
+            result.ItemSubtotal,
+            result.CalculatedTotal,
+            result.Difference);
     }
 
     private static int ToStockQuantity(decimal quantity) =>
         checked((int)quantity);
 
-    private static StockAdjustment CreatePurchaseMovement(ReceiptItem item, DateTime purchaseDate) =>
+    private static StockAdjustment CreatePurchaseMovement(PurchaseItem item, DateTime purchaseDate) =>
         new()
         {
             ProductId = item.ProductId,
@@ -445,9 +442,9 @@ public class ReceiptService : IReceiptService
                 $"Purchase date must be after the inventory-cost transition cutoff {conflicting.CutoffAt:O} for product {conflicting.ProductId}.");
     }
 
-    private async Task EnsureLegacyReceiptMovementsArePreservedAsync(
-        IReadOnlyCollection<ReceiptItem> existingItems,
-        IReadOnlyCollection<ReceiptItemDto>? requestedItems,
+    private async Task EnsureLegacyPurchaseMovementsArePreservedAsync(
+        IReadOnlyCollection<PurchaseItem> existingItems,
+        IReadOnlyCollection<PurchaseItemDto>? requestedItems,
         DateTime originalPurchaseDate,
         DateTime proposedPurchaseDate)
     {
@@ -470,7 +467,7 @@ public class ReceiptService : IReceiptService
                     .OrderBy(x => x.ProductId).ThenBy(x => x.Quantity).ThenBy(x => x.UnitCost));
         if (proposedPurchaseDate != originalPurchaseDate || itemsChanged)
             throw new InvalidOperationException(
-                "This receipt contains preserved pre-cutover inventory movements. Its date, products, quantities, and costs cannot be changed.");
+                "This purchase contains preserved pre-cutover inventory movements. Its date, products, quantities, and costs cannot be changed.");
     }
 
     private async Task EnsureNoPreCutoffMovementsAsync(IReadOnlyCollection<StockAdjustment> movements)
@@ -483,7 +480,7 @@ public class ReceiptService : IReceiptService
             cutoffs.TryGetValue(x.ProductId, out var cutoff) && x.EffectiveAt <= cutoff);
         if (protectedMovement is not null)
             throw new InvalidOperationException(
-                $"Receipt movement {protectedMovement.Id} is part of preserved pre-cutover history and cannot be changed or deleted.");
+                $"Purchase movement {protectedMovement.Id} is part of preserved pre-cutover history and cannot be changed or deleted.");
     }
 
     private async Task<Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction?> BeginTransactionAsync()
