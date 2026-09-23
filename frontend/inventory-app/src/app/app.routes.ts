@@ -1,4 +1,6 @@
 import { Routes } from '@angular/router';
+import { MsalGuard } from '@azure/msal-angular';
+import { AuthCallbackComponent } from './auth/auth-callback.component';
 import { DashboardComponent } from './components/dashboard/dashboard.component';
 import { ProductFormComponent } from './components/products/product-form.component';
 import { CategoryListComponent } from './components/categories/category-list.component';
@@ -22,12 +24,14 @@ import { TransactionSalesReportComponent } from './components/reports/transactio
 import { productsLegacyRouteGuard } from './components/products/products-legacy-route.guard';
 
 export const routes: Routes = [
-  { path: '', component: DashboardComponent },
-  { path: 'products/:id/edit', component: ProductFormComponent },
-  { path: 'products/:id/stock', component: StockHistoryComponent },
+  // Public: the Entra redirect callback must be reachable without authentication.
+  { path: 'auth', component: AuthCallbackComponent },
+  { path: '', component: DashboardComponent, canActivate: [MsalGuard] },
+  { path: 'products/:id/edit', component: ProductFormComponent, canActivate: [MsalGuard] },
+  { path: 'products/:id/stock', component: StockHistoryComponent, canActivate: [MsalGuard] },
   {
     path: 'products',
-    canActivate: [productsLegacyRouteGuard],
+    canActivate: [MsalGuard, productsLegacyRouteGuard],
     // Re-run the legacy guard on query-param-only changes; the reused shell route would otherwise skip it.
     runGuardsAndResolvers: 'paramsOrQueryParamsChange',
     loadComponent: () => import('./components/products/products-shell.component').then((m) => m.ProductsShellComponent),
@@ -47,22 +51,22 @@ export const routes: Routes = [
       }
     ]
   },
-  { path: 'categories', component: CategoryListComponent },
-  { path: 'suppliers', component: SupplierListComponent },
-  { path: 'machines/:id', component: MachineDetailComponent },
-  { path: 'sites/:id/products', component: SiteProductsComponent },
-  { path: 'receipts', component: ReceiptListComponent },
-  { path: 'receipts/new', component: ReceiptUploadComponent },
-  { path: 'reports', component: DashboardReportComponent },
-  { path: 'reports/bookkeeping', component: BookkeepingReportComponent },
-  { path: 'reports/daily', component: DailyReportComponent },
-  { path: 'reports/transactions', component: TransactionSalesReportComponent },
-  { path: 'reports/reconciliation', component: ReconciliationReportComponent },
-  { path: 'reports/machines', component: MachineReportComponent },
-  { path: 'reports/products', component: ProductReportComponent },
-  { path: 'reports/gst', component: GstReportComponent },
-  { path: 'reports/site-commissions', component: SiteCommissionsReportComponent },
-  { path: 'admin', component: AdminComponent },
-  { path: 'expenses', component: OperatingExpenseComponent },
+  { path: 'categories', component: CategoryListComponent, canActivate: [MsalGuard] },
+  { path: 'suppliers', component: SupplierListComponent, canActivate: [MsalGuard] },
+  { path: 'machines/:id', component: MachineDetailComponent, canActivate: [MsalGuard] },
+  { path: 'sites/:id/products', component: SiteProductsComponent, canActivate: [MsalGuard] },
+  { path: 'receipts', component: ReceiptListComponent, canActivate: [MsalGuard] },
+  { path: 'receipts/new', component: ReceiptUploadComponent, canActivate: [MsalGuard] },
+  { path: 'reports', component: DashboardReportComponent, canActivate: [MsalGuard] },
+  { path: 'reports/bookkeeping', component: BookkeepingReportComponent, canActivate: [MsalGuard] },
+  { path: 'reports/daily', component: DailyReportComponent, canActivate: [MsalGuard] },
+  { path: 'reports/transactions', component: TransactionSalesReportComponent, canActivate: [MsalGuard] },
+  { path: 'reports/reconciliation', component: ReconciliationReportComponent, canActivate: [MsalGuard] },
+  { path: 'reports/machines', component: MachineReportComponent, canActivate: [MsalGuard] },
+  { path: 'reports/products', component: ProductReportComponent, canActivate: [MsalGuard] },
+  { path: 'reports/gst', component: GstReportComponent, canActivate: [MsalGuard] },
+  { path: 'reports/site-commissions', component: SiteCommissionsReportComponent, canActivate: [MsalGuard] },
+  { path: 'admin', component: AdminComponent, canActivate: [MsalGuard] },
+  { path: 'expenses', component: OperatingExpenseComponent, canActivate: [MsalGuard] },
   { path: '**', redirectTo: '' }
 ];

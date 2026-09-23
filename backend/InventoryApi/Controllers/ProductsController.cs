@@ -2,15 +2,19 @@ using InventoryApi.Data;
 using InventoryApi.DTOs;
 using InventoryApi.Integrations.Nayax;
 using InventoryApi.Models;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Identity.Web.Resource;
 using System.Xml.Linq;
 
 namespace InventoryApi.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
+[Authorize]
+[RequiredScope("access_as_user")]
 public class ProductsController : ControllerBase
 {
     private readonly InventoryApi.Services.Interfaces.IProductService _service;

@@ -9,12 +9,16 @@ using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Shared;
 using Inventory.Application.Reporting.Transactions;
 using InventoryApi.Adapters.Export;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Identity.Web.Resource;
 
 namespace InventoryApi.Controllers;
 
 [ApiController]
 [Route("api/reports")]
+[Authorize]
+[RequiredScope("access_as_user")]
 public sealed class ReportsController : ControllerBase
 {
     private readonly GetReportExportRows _getReportExportRows;

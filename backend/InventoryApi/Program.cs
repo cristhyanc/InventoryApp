@@ -14,8 +14,15 @@ using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using InventoryApi.Http;
 using InventoryApi.Integrations.Nayax;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.Identity.Web;
 
 var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddMicrosoftIdentityWebApi(builder.Configuration.GetSection("AzureAd"));
+
+builder.Services.AddAuthorization();
 
 builder.Services.AddControllers();
 builder.Services.AddApplicationServices();
@@ -123,7 +130,11 @@ if (app.Environment.IsDevelopment())
 
 app.UseStaticFiles(); // serves wwwroot/receipts if direct static access is desired
 app.UseCors("AllowAngularDevClient");
+app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
 
 app.Run();
+
+// Exposed so InventoryApi.Tests can host the API with WebApplicationFactory<Program>.
+public partial class Program;

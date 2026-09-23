@@ -13,6 +13,7 @@ InventoryApp is a full-stack operations and bookkeeping system for a vending-mac
 - Operating expenses, reimbursement imports, and settlement reconciliation.
 - Dashboard, bookkeeping, daily-sales, transaction, GST, commission, machine, and product reports.
 - CSV/XLSX exports that use the same backend calculations as the UI.
+- Microsoft Entra sign-in and delegated-scope API authorization (see [Authentication configuration](#authentication-configuration)).
 
 ## Technology
 
@@ -21,6 +22,7 @@ InventoryApp is a full-stack operations and bookkeeping system for a vending-mac
 | API | ASP.NET Core Web API, .NET 10 |
 | Persistence | EF Core 10, SQLite, code-first migrations |
 | Frontend | Angular 19 standalone components, TypeScript, RxJS, Tailwind CSS |
+| Authentication | Microsoft Entra ID, `Microsoft.Identity.Web` (API), MSAL (`@azure/msal-angular`/`@azure/msal-browser`, SPA) |
 | Tests | xUnit, Moq, EF Core InMemory and SQLite |
 | Integrations | Nayax Lynx API and imported reimbursement/workbook data |
 | Hosting | Azure App Service and Azure Static Web Apps |
@@ -103,6 +105,30 @@ npm --prefix frontend/inventory-app start
 ```
 
 Open <http://localhost:4200>. The `start` script builds the Tailwind stylesheet and starts the Angular development server.
+
+### 4. Sign in
+
+The application requires a Microsoft Entra sign-in. Click **Sign in** in the header; it redirects to Microsoft, and after sign-in redirects back to `/auth` (`AuthCallbackComponent`) before continuing to the requested page. `/auth` itself is intentionally public (not behind `MsalGuard`) so the redirect can complete; every other route requires an authenticated session with the delegated `access_as_user` scope, enforced again by the API (`401` with no token, `403` without the scope).
+
+## Authentication configuration
+
+Authentication uses Microsoft Entra ID (Azure AD): ASP.NET Core / `Microsoft.Identity.Web` validates bearer tokens on the API, and the Angular SPA signs users in with MSAL (`@azure/msal-angular`, `@azure/msal-browser`). See [docs/architecture.md](docs/architecture.md#authentication-and-authorization) for the full boundary description.
+
+Non-secret configuration already committed to the repository:
+
+- **API** (`backend/InventoryApi/appsettings.json`, `AzureAd` section): `Instance`, `TenantId` (`common`, multi-tenant), `ClientId` (the API app registration's public application ID), and `Scopes` (`access_as_user`). These identify the API for token validation; no client secret is used or required.
+- **SPA** (`frontend/inventory-app/src/app/auth-config.ts`): the SPA app registration's client ID, the API's `api://<api-client-id>/access_as_user` scope, and the redirect URI (`<origin>/auth`).
+
+Human-controlled Entra portal setup this configuration depends on (not part of this repository, and not something an agent may change):
+
+- App registrations for the API and the SPA, with the API exposing the `access_as_user` scope and the SPA's platform configured for the redirect URIs it actually uses (`http://localhost:4200/auth` for local development, and the deployed Static Web App origin's `/auth` for production).
+- The SPA registration's API permissions granting delegated `access_as_user` access to the API app registration.
+
+Local development points `frontend/inventory-app/src/assets/config.json` at `/api` (see [above](#2-point-the-frontend-at-the-local-api)); MSAL's protected-resource map (`buildProtectedResourceMap` in `auth-config.ts`) is built from that same `ConfigService.apiBaseUrl`, so the bearer token attaches correctly to `/api/*` locally and to the deployed absolute API URL in production, without any code change between environments.
+
+Azure Static Web Apps direct navigation (including the `/auth` redirect landing) is handled by `frontend/inventory-app/src/staticwebapp.config.json`, which rewrites unmatched paths to `/index.html` so the Angular router — not a platform 404 — handles them.
+
+**Multi-tenant data partitioning is out of scope.** Accepting sign-ins from multiple Microsoft Entra tenants (`TenantId: "common"`) authenticates a user; it does not isolate one tenant's business data from another's. Database-level tenant scoping is a separate, unimplemented concern.
 
 ## Configuration and secrets
 

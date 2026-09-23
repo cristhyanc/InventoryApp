@@ -1,13 +1,17 @@
+using InventoryApi.Data;
+using InventoryApi.DTOs;
+using InventoryApi.Models;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using InventoryApi.Data;
-using InventoryApi.Models;
-using InventoryApi.DTOs;
+using Microsoft.Identity.Web.Resource;
 
 namespace InventoryApi.Controllers;
 
 [ApiController]
 [Route("api/products/{productId:long}/stock")]
+[Authorize]
+[RequiredScope("access_as_user")]
 public class StockController : ControllerBase
 {
     private readonly InventoryApi.Services.Interfaces.IStockService _service;

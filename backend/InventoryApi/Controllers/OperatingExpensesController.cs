@@ -1,13 +1,17 @@
 using InventoryApi.Data;
 using InventoryApi.DTOs;
 using InventoryApi.Models;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Identity.Web.Resource;
 
 namespace InventoryApi.Controllers;
 
 [ApiController]
 [Route("api/operating-expenses")]
+[Authorize]
+[RequiredScope("access_as_user")]
 public sealed class OperatingExpensesController : ControllerBase
 {
     private const decimal GstTolerance = 0.02m;

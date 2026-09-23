@@ -2,13 +2,17 @@ using InventoryApi.Data;
 using InventoryApi.DTOs;
 using InventoryApi.Models;
 using InventoryApi.Services.Interfaces;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Identity.Web.Resource;
 
 namespace InventoryApi.Controllers;
 
 [ApiController]
 [Route("api/site-commissions")]
+[Authorize]
+[RequiredScope("access_as_user")]
 public sealed class SiteCommissionsController : ControllerBase
 {
     private const decimal Tolerance = 0.01m;

@@ -1,11 +1,15 @@
 using Inventory.Application.NayaxFeeSettings;
 using InventoryApi.DTOs;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Identity.Web.Resource;
 
 namespace InventoryApi.Controllers;
 
 [ApiController]
 [Route("api/settings/nayax-processing-fee-rates")]
+[Authorize]
+[RequiredScope("access_as_user")]
 public sealed class SettingsController : ControllerBase
 {
     private readonly ListNayaxFeeRates _listRates;
