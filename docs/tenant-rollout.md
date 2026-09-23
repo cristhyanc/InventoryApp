@@ -10,16 +10,25 @@ nothing in the application performs it on its own.
 
 | Action | Who |
 | --- | --- |
-| Apply schema migrations | API startup (`Database.Migrate()`), or a human running `dotnet ef database update` |
+| Apply schema migrations | **Human**, via `migrate-database --apply` |
 | Create the `Business` record | **Human**, via `bootstrap-business` |
 | Create `BusinessMembership` rows from the supplied Entra mapping | **Human**, via `bootstrap-business` |
 | Assign existing rows to that business | **Human**, via `bootstrap-business --apply` |
 | Back up the database | **Human** |
 | Deploy | **Human** |
 
+**Deploying the API does not apply the schema.** Outside Development, startup applies no
+migrations at all: if any are pending it logs a critical error naming them and refuses to start.
+That is deliberate — the tenancy migrations are high risk (the uniqueness one rebuilds the whole
+`NayaxSales` table), and issue #64 requires them to be applied and verified under human control.
+An API serving requests against a schema its code does not match is the failure this prevents.
+
+Development still migrates automatically, where the database is disposable and the convenience
+costs nothing.
+
 No migration in this repository moves data or assigns ownership. Migrations create tables,
 columns and indexes only. The backfill exists exclusively in the `bootstrap-business` command,
-which the API never invokes — starting the web host and running the command are mutually
+which the API never invokes — starting the web host and running either command are mutually
 exclusive paths through `Program.cs`.
 
 ## The state between schema and bootstrap
@@ -80,9 +89,28 @@ output.
 
 **1. Back up the database.** Verify the backup restores.
 
-**2. Apply the schema.** Deploy the API, or run `dotnet ef database update` against the target
-database. This creates the tenancy tables, the `BusinessId` columns and the audit table. It
-assigns no ownership.
+**2. Apply the schema, by hand.** First see what is pending:
+
+```bash
+dotnet run --project backend/InventoryApi -- migrate-database --dry-run
+```
+
+Read the list, confirm it is what review approved, then apply it:
+
+```bash
+dotnet run --project backend/InventoryApi -- migrate-database --apply
+```
+
+This creates the tenancy tables, the `BusinessId` columns and the audit table, and assigns no
+ownership. The command ships inside the API image, so it runs wherever the application already
+runs, against the connection string that environment already holds — no SDK, no EF tooling, and no
+copy of the production connection string on anyone's laptop.
+
+`--apply` and `--dry-run` are mutually exclusive; passing both, or any other flag, is refused
+rather than resolved by precedence.
+
+Do **not** deploy the API expecting it to migrate. Until this step completes, a deployed API in a
+non-Development environment will refuse to start and log which migrations are pending.
 
 **3. Dry run the bootstrap.**
 
@@ -116,7 +144,9 @@ rolls back automatically if any row count or financial total moved. Then check b
 - sign in as a configured operator and confirm the dashboards and reports show the expected
   figures;
 - compare a few known totals against the pre-rollout backup;
-- confirm the API's startup log no longer reports unassigned rows;
+- confirm the API's startup log now reports tenant ownership as bootstrapped — it requires no
+  unassigned rows, at least one business, and at least one active membership, so a partial
+  rollout will not report success;
 - read the `BusinessBackfillAudits` table — one row per table, recording rows assigned and rows
   left unassigned, for the permanent record.
 
@@ -130,6 +160,13 @@ rolls back automatically if any row count or financial total moved. Then check b
 - **The run was interrupted.** Re-run it. The backfill only ever touches rows that are still
   unassigned, so a partial run completes rather than double-applying, and the business and its
   memberships are reused rather than duplicated.
+- **"the business has no active membership".** Every configured actor matches only a revoked
+  membership, so assigning the data would hand it to a business nobody can reach. Nothing was
+  assigned. Either reactivate a membership deliberately, or add an actor who should have access
+  to `BusinessBootstrap:Members` and run again — the bootstrap will not reactivate a revoked
+  approval on your behalf.
+- **The API refuses to start with "pending migration(s)".** Step 2 has not been completed against
+  that database. Run `migrate-database --dry-run`, review, then `--apply`.
 - **Ownership was assigned to the wrong business.** Restore from the backup. Do not attempt to
   reassign rows by hand; ownership is immutable through the application and editing it directly
   bypasses every check in the boundary.
@@ -139,7 +176,10 @@ rolls back automatically if any row count or financial total moved. Then check b
 - **Onboarding a second business.** The Nayax integration still uses one operator account and
   token, so remote identifiers and imports are not yet partitioned. Do not add a second business
   until they are.
-- **Database foreign keys from `BusinessId` to `Businesses`.** Deliberately deferred: they can
-  only be added once no unassigned rows remain. They belong in a follow-up migration after this
-  rollout is verified in production.
+- **Database foreign keys from `BusinessId` to `Businesses`.** Deliberately deferred, and still
+  **required**. They cannot be added while unassigned rows exist, because the checkpoint-2 column
+  defaults to 0 and would violate the constraint on every legacy row. Once this rollout is
+  verified in production and no row is left unassigned, add them in a follow-up migration so
+  referential integrity backs up the application-level enforcement. This is an outstanding
+  integrity step, not a decision that the constraint is unnecessary.
 - **Document storage.** Issue #39 builds on the ownership key established here.

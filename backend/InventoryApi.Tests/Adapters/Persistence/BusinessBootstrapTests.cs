@@ -436,19 +436,107 @@ public class BusinessBootstrapTests : IDisposable
         SeedUnassignedBusinessData();
         await RunAsync(ValidOptions(), dryRun: false);
 
-        using (var db = TestAppDbContext.Unrestricted(_options))
-        {
-            var membership = db.BusinessMemberships.Single();
-            membership.IsActive = false;
-            db.SaveChanges();
-        }
+        RevokeEveryMembership();
 
+        // Nothing is left unassigned after the first apply, so there is no data to strand and the
+        // re-run is simply a no-op. What it must not do is quietly restore the revoked approval.
         var result = await RunAsync(ValidOptions(), dryRun: false);
 
         Assert.Equal(0, result.MembershipsCreated);
 
         using var verify = TestAppDbContext.Unrestricted(_options);
         Assert.False(Assert.Single(verify.BusinessMemberships.ToList()).IsActive);
+    }
+
+    /// <summary>
+    /// The complement of the rule above. Keeping a revoked membership revoked is correct, but it
+    /// must not be allowed to hand data to a business nobody can reach: if every configured actor
+    /// matches only a revoked membership, assigning the rows would strand them behind an
+    /// authorization boundary with no one on the other side.
+    /// </summary>
+    [Fact]
+    public async Task Unassigned_rows_are_refused_when_no_active_membership_remains()
+    {
+        SeedUnassignedBusinessData();
+        await RunAsync(ValidOptions(), dryRun: false);
+
+        RevokeEveryMembership();
+
+        // Put the data back into the unassigned state, as an interrupted rollout would leave it.
+        using (var db = TestAppDbContext.Unrestricted(_options))
+        {
+            db.Database.ExecuteSqlRaw("UPDATE Products SET BusinessId = 0;");
+            db.Database.ExecuteSqlRaw("UPDATE NayaxSales SET BusinessId = 0;");
+        }
+
+        var result = await RunAsync(ValidOptions(), dryRun: false);
+
+        Assert.Equal(BusinessBootstrapOutcome.NoActiveMembership, result.Outcome);
+        Assert.Contains("nobody can access", result.Message, StringComparison.Ordinal);
+
+        using var verify = TestAppDbContext.Unrestricted(_options);
+        Assert.Equal(2, verify.Products.Count(p => p.BusinessId == 0));
+        Assert.Equal(2, verify.NayaxSales.Count(s => s.BusinessId == 0));
+        Assert.False(Assert.Single(verify.BusinessMemberships.ToList()).IsActive);
+    }
+
+    /// <summary>
+    /// The guard is on the state the business will actually be in, so a dry run reports the same
+    /// refusal rather than predicting a success the apply would not deliver.
+    /// </summary>
+    [Fact]
+    public async Task A_dry_run_also_refuses_when_no_active_membership_remains()
+    {
+        SeedUnassignedBusinessData();
+        await RunAsync(ValidOptions(), dryRun: false);
+        RevokeEveryMembership();
+
+        using (var db = TestAppDbContext.Unrestricted(_options))
+        {
+            db.Database.ExecuteSqlRaw("UPDATE Products SET BusinessId = 0;");
+        }
+
+        var result = await RunAsync(ValidOptions(), dryRun: true);
+
+        Assert.Equal(BusinessBootstrapOutcome.NoActiveMembership, result.Outcome);
+    }
+
+    /// <summary>
+    /// Adding a second, active actor is the documented way out of the state above: the revoked
+    /// membership stays revoked and the rollout can continue.
+    /// </summary>
+    [Fact]
+    public async Task Configuring_another_actor_unblocks_a_business_whose_membership_was_revoked()
+    {
+        SeedUnassignedBusinessData();
+        await RunAsync(ValidOptions(), dryRun: false);
+        RevokeEveryMembership();
+
+        using (var db = TestAppDbContext.Unrestricted(_options))
+        {
+            db.Database.ExecuteSqlRaw("UPDATE Products SET BusinessId = 0;");
+        }
+
+        var result = await RunAsync(ValidOptions(Oid, SecondOid), dryRun: false);
+
+        Assert.True(result.Succeeded, result.Message);
+        Assert.Equal(1, result.MembershipsCreated);
+
+        using var verify = TestAppDbContext.Unrestricted(_options);
+        Assert.Equal(0, verify.Products.Count(p => p.BusinessId == 0));
+        Assert.False(verify.BusinessMemberships.Single(m => m.ObjectId == Oid.ToUpperInvariant()).IsActive);
+        Assert.True(verify.BusinessMemberships.Single(m => m.ObjectId == SecondOid.ToUpperInvariant()).IsActive);
+    }
+
+    private void RevokeEveryMembership()
+    {
+        using var db = TestAppDbContext.Unrestricted(_options);
+        foreach (var membership in db.BusinessMemberships.ToList())
+        {
+            membership.IsActive = false;
+        }
+
+        db.SaveChanges();
     }
 
     [Fact]
@@ -487,6 +575,98 @@ public class BusinessBootstrapTests : IDisposable
         Assert.Empty(db.BusinessBackfillAudits.ToList());
         Assert.Equal(2, db.Products.Count(p => p.BusinessId == 0));
         Assert.Equal(2, db.NayaxSales.Count(s => s.BusinessId == 0));
+    }
+
+    #endregion
+
+    #region Readiness reporting
+
+    /// <summary>
+    /// A freshly migrated database must not report itself as bootstrapped. It has no business and
+    /// nobody who can sign in, so the rollout has not started - whatever the unassigned-row count
+    /// happens to be.
+    ///
+    /// Note that "fresh" is not the same as "empty" here: the pre-existing
+    /// <c>AddNayaxProcessingFeeRates</c> migration seeds a default fee rate, which is tenant-owned
+    /// and therefore starts unassigned like any other legacy row. That is exactly why readiness
+    /// cannot be inferred from the row count alone.
+    /// </summary>
+    [Fact]
+    public void A_fresh_database_with_no_business_is_not_reported_as_bootstrapped()
+    {
+        using var db = TestAppDbContext.Unrestricted(_options);
+
+        var state = TenantOwnershipReadiness.Inspect(db);
+
+        Assert.Equal(0, state.BusinessCount);
+        Assert.Equal(0, state.ActiveMembershipCount);
+        Assert.False(state.IsReady);
+    }
+
+    /// <summary>
+    /// The specific trap the old check fell into: a database with no unassigned rows at all, but
+    /// also no business and no membership, must still be reported as not bootstrapped.
+    /// </summary>
+    [Fact]
+    public void A_database_with_no_unassigned_rows_but_no_business_is_not_ready()
+    {
+        using var db = TestAppDbContext.Unrestricted(_options);
+
+        // Clear the seeded fee rate so the unassigned count really is zero.
+        db.Database.ExecuteSqlRaw("DELETE FROM NayaxProcessingFeeRates;");
+
+        var state = TenantOwnershipReadiness.Inspect(db);
+
+        Assert.Equal(0, state.UnassignedRows);
+        Assert.Equal(0, state.BusinessCount);
+        Assert.False(state.IsReady);
+    }
+
+    [Fact]
+    public void A_database_with_unassigned_rows_is_not_ready()
+    {
+        SeedUnassignedBusinessData();
+
+        using var db = TestAppDbContext.Unrestricted(_options);
+        var state = TenantOwnershipReadiness.Inspect(db);
+
+        Assert.True(state.UnassignedRows > 0);
+        Assert.False(state.IsReady);
+    }
+
+    /// <summary>
+    /// Assigned data whose only membership has been revoked is not ready either: the rows have an
+    /// owner, but no one can reach them.
+    /// </summary>
+    [Fact]
+    public async Task Assigned_data_with_no_active_membership_is_not_ready()
+    {
+        SeedUnassignedBusinessData();
+        await RunAsync(ValidOptions(), dryRun: false);
+        RevokeEveryMembership();
+
+        using var db = TestAppDbContext.Unrestricted(_options);
+        var state = TenantOwnershipReadiness.Inspect(db);
+
+        Assert.Equal(0, state.UnassignedRows);
+        Assert.Equal(1, state.BusinessCount);
+        Assert.Equal(0, state.ActiveMembershipCount);
+        Assert.False(state.IsReady);
+    }
+
+    [Fact]
+    public async Task A_completed_bootstrap_is_reported_as_ready()
+    {
+        SeedUnassignedBusinessData();
+        await RunAsync(ValidOptions(), dryRun: false);
+
+        using var db = TestAppDbContext.Unrestricted(_options);
+        var state = TenantOwnershipReadiness.Inspect(db);
+
+        Assert.Equal(0, state.UnassignedRows);
+        Assert.Equal(1, state.BusinessCount);
+        Assert.Equal(1, state.ActiveMembershipCount);
+        Assert.True(state.IsReady);
     }
 
     #endregion

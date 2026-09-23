@@ -81,7 +81,14 @@ dotnet run --project backend/InventoryApi/InventoryApi.csproj
 
 The development API listens at <http://localhost:5000>. Swagger UI is available at <http://localhost:5000/swagger> while the API is running in the Development environment.
 
-EF Core migrations are applied at startup. The default SQLite database is `inventory.db`, resolved from the API process's working directory; local database files must not be committed. Migrations create schema only: no migration moves data or assigns business ownership, so starting the API never triggers a backfill.
+EF Core migrations are applied automatically at startup **in Development only**. The default SQLite database is `inventory.db`, resolved from the API process's working directory; local database files must not be committed. Migrations create schema only: no migration moves data or assigns business ownership, so starting the API never triggers a backfill.
+
+Outside Development the API applies no migrations and refuses to start while any are pending, because the tenancy migrations must be applied under human control (issue #64). Apply them explicitly:
+
+```bash
+dotnet run --project backend/InventoryApi -- migrate-database --dry-run
+dotnet run --project backend/InventoryApi -- migrate-database --apply
+```
 
 #### Business/tenant bootstrap
 

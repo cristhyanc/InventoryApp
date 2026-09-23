@@ -18,18 +18,26 @@ namespace InventoryApi.Bootstrap;
 /// </code>
 ///
 /// <c>--apply</c> must be typed explicitly; an invocation with neither flag is treated as a dry
-/// run, so a half-remembered command cannot mutate data.
+/// run, so a half-remembered command cannot mutate data. Passing both flags, or any flag this
+/// command does not define, is refused rather than resolved by precedence - see
+/// <see cref="BusinessBootstrapArguments"/>.
 /// </summary>
 public static class BusinessBootstrapCommand
 {
-    public const string CommandName = "bootstrap-business";
+    public const string CommandName = BusinessBootstrapArguments.CommandName;
 
-    public static bool Matches(string[] args) =>
-        args.Length > 0 && string.Equals(args[0], CommandName, StringComparison.OrdinalIgnoreCase);
+    public static bool Matches(string[] args) => BusinessBootstrapArguments.Matches(args);
 
     public static async Task<int> RunAsync(string[] args, CancellationToken cancellationToken)
     {
-        var apply = args.Contains("--apply", StringComparer.OrdinalIgnoreCase);
+        if (!BusinessBootstrapArguments.TryParse(args, out var apply, out var argumentError))
+        {
+            Console.WriteLine();
+            Console.WriteLine($"Business bootstrap - REFUSED: {argumentError}");
+            Console.WriteLine();
+            return 1;
+        }
+
         var dryRun = !apply;
 
         var builder = WebApplication.CreateBuilder(args);

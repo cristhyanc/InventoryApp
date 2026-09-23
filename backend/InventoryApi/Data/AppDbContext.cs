@@ -341,11 +341,15 @@ public class AppDbContext : DbContext
     /// The one place tenant scoping is applied to reads (issue #64).
     ///
     /// It walks the model rather than naming entities, so every <see cref="IBusinessOwned"/>
-    /// type gets the same treatment automatically: a required business key, a foreign key to
-    /// <see cref="Business"/>, an index for the scoped queries, and a global query filter. A new
-    /// tenant-owned entity is therefore protected the moment it implements the interface - there
-    /// is no per-entity list to forget to update, and no controller-level <c>Where</c> clause
-    /// anywhere that could be omitted on one endpoint.
+    /// type gets the same treatment automatically: a required business key, an index for the
+    /// scoped queries, and a global query filter. A new tenant-owned entity is therefore
+    /// protected the moment it implements the interface - there is no per-entity list to forget
+    /// to update, and no controller-level <c>Where</c> clause anywhere that could be omitted on
+    /// one endpoint.
+    ///
+    /// It deliberately does <em>not</em> add a database foreign key from the business key to
+    /// <see cref="Business"/>; see the comment at that point in the loop, and the required
+    /// post-backfill integrity step recorded in docs/tenant-rollout.md.
     ///
     /// <see cref="Business"/> and <see cref="BusinessMembership"/> are deliberately excluded.
     /// They are the tenancy tables themselves: membership is what resolves the scope in the
@@ -366,16 +370,21 @@ public class AppDbContext : DbContext
 
             entity.Property(nameof(IBusinessOwned.BusinessId)).IsRequired();
 
-            // Deliberately no database foreign key to Businesses.
+            // Deliberately no database foreign key to Businesses yet - this is a deferral, not a
+            // decision that one is unnecessary.
             //
-            // BusinessId is never supplied by a caller - it is stamped from resolved membership
-            // by BusinessOwnershipEnforcer - so a dangling value cannot be injected through the
-            // API, and the ownership boundary is enforced by the query filter and that enforcer
-            // rather than by referential integrity. Adding the constraint would also mean the
-            // additive column this migration introduces (default 0, owned by nobody) left every
-            // pre-existing row in violation of it, and would make the later backfill fight the
-            // constraint instead of simply assigning owners. Deleting a Business that still has
-            // members is already blocked by BusinessMembership's restricted foreign key.
+            // It cannot be added while unassigned rows exist: the checkpoint-2 column defaults to
+            // 0, which matches no Business, so the constraint would be violated by every
+            // pre-existing row and the backfill would have to fight it instead of simply
+            // assigning owners. Until then the boundary rests on the query filter and
+            // BusinessOwnershipEnforcer, which is sound because BusinessId is never supplied by a
+            // caller - it is stamped from resolved membership - so a dangling value cannot be
+            // injected through the API. Deleting a Business that still has members is already
+            // blocked by BusinessMembership's restricted foreign key.
+            //
+            // REQUIRED POST-BACKFILL STEP: once the human-controlled bootstrap has run and no row
+            // is left unassigned, add these foreign keys in a follow-up migration so referential
+            // integrity backs up the application-level enforcement. See docs/tenant-rollout.md.
 
             // Every tenant-scoped query starts with "BusinessId = @current", so it leads.
             entity.HasIndex(nameof(IBusinessOwned.BusinessId));

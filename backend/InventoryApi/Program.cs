@@ -29,6 +29,13 @@ if (BusinessBootstrapCommand.Matches(args))
     return await BusinessBootstrapCommand.RunAsync(args, CancellationToken.None);
 }
 
+// Applying schema migrations is likewise a human-invoked command, not something a deployment
+// performs. Normal startup below applies nothing outside Development.
+if (DatabaseMigrationCommand.Matches(args))
+{
+    return await DatabaseMigrationCommand.RunAsync(args, CancellationToken.None);
+}
+
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
@@ -130,16 +137,22 @@ builder.Services.AddScoped<ITransactionSalesReportFactsProvider, EfTransactionSa
 
 var app = builder.Build();
 
-// Apply code-first schema on startup. Schema only: no migration in this repository performs a
-// data backfill, and tenant ownership is assigned exclusively by the human-invoked
-// `bootstrap-business` command, so starting the API can never initiate one (issue #64).
+// Schema handling at startup (issue #64). Development applies migrations automatically; every
+// other environment applies nothing and fails closed if any are pending, because the tenancy
+// migrations - including the NayaxSales table rebuild - must be applied by a human under review.
+// See DatabaseSchemaStartup and docs/tenant-rollout.md.
+//
+// Nothing here touches data either way: no migration in this repository performs a backfill, and
+// tenant ownership is assigned exclusively by the human-invoked `bootstrap-business` command.
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    db.Database.Migrate();
+    var loggerFactory = app.Services.GetRequiredService<ILoggerFactory>();
+
+    DatabaseSchemaStartup.EnsureSchema(db, app.Environment, app.Configuration, loggerFactory);
     //DbInitializer.Seed(db);
 
-    TenantOwnershipReadiness.Report(db, app.Services.GetRequiredService<ILoggerFactory>());
+    TenantOwnershipReadiness.Report(db, loggerFactory);
 }
 
 // First in the pipeline so exceptions from controllers, services, and the Nayax

@@ -26,6 +26,13 @@ public enum BusinessBootstrapOutcome
 
     /// <summary>The schema is not at the expected migration level yet.</summary>
     SchemaNotReady = 4,
+
+    /// <summary>
+    /// The business would end up owning data while having no active membership, so nobody could
+    /// reach it. Every configured actor matched only a revoked membership, and reactivating one
+    /// is a human decision the bootstrap must not make on their behalf.
+    /// </summary>
+    NoActiveMembership = 5,
 }
 
 /// <summary>What one table looked like before and after the backfill touched it.</summary>

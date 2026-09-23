@@ -127,9 +127,34 @@ public sealed class BusinessBootstrapper
 
         var membershipsCreated = await EnsureMembershipsAsync(business.Id, configuredMembers, recordedAt, cancellationToken);
 
+        var tables = OwnedTableNames();
+
+        // Checked before a single row is assigned: data must never be handed to a business that
+        // nobody can sign in to. A revoked membership stays revoked - reactivating one is a
+        // human decision - so if every configured actor matches only revoked rows, the right
+        // answer is to stop and let a person resolve it, not to quietly strand the data.
+        var unassignedTotal = await CountUnassignedAsync(tables, cancellationToken);
+        if (unassignedTotal > 0)
+        {
+            var activeMemberships = await _db.BusinessMemberships
+                .CountAsync(m => m.BusinessId == business.Id && m.IsActive, cancellationToken);
+
+            if (activeMemberships == 0)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return Failure(
+                    BusinessBootstrapOutcome.NoActiveMembership,
+                    dryRun,
+                    $"{unassignedTotal} row(s) are unassigned, but the business has no active "
+                        + "membership, so the data would be owned by a business nobody can access. "
+                        + "Every configured actor matches only a revoked membership. Reactivate one "
+                        + "deliberately, or configure an actor who should have access, then run again. "
+                        + "Nothing was assigned.");
+            }
+        }
+
         var totalsBefore = await ReadTotalsAsync(cancellationToken);
 
-        var tables = OwnedTableNames();
         var reports = new List<BusinessBackfillTableReport>(tables.Count);
 
         foreach (var table in tables)
@@ -363,6 +388,22 @@ public sealed class BusinessBootstrapper
             .Distinct(StringComparer.Ordinal)
             .OrderBy(name => name, StringComparer.Ordinal)
             .ToList();
+
+    /// <summary>
+    /// Total rows still owned by nobody, across every tenant-owned table.
+    /// </summary>
+    private async Task<long> CountUnassignedAsync(IReadOnlyList<string> tables, CancellationToken cancellationToken)
+    {
+        var total = 0L;
+
+        foreach (var table in tables)
+        {
+            total += await CountAsync(
+                $"SELECT COUNT(*) FROM \"{table}\" WHERE BusinessId = {Unassigned}", cancellationToken);
+        }
+
+        return total;
+    }
 
     private async Task<Dictionary<string, decimal>> ReadTotalsAsync(CancellationToken cancellationToken)
     {
