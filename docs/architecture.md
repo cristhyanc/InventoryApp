@@ -176,6 +176,15 @@ Contains:
 
 Controllers do not implement accounting, inventory, persistence, or filesystem rules.
 
+### Authentication and authorization
+
+Authentication/authorization is an `InventoryApi`/frontend boundary concern (issue #38). Identity-provider types stay confined to that boundary:
+
+- **Backend.** `Program.cs` registers `AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddMicrosoftIdentityWebApi(builder.Configuration.GetSection("AzureAd"))` and calls `UseAuthentication()` before `UseAuthorization()`. Every controller carries `[Authorize]` plus `[RequiredScope("access_as_user")]` (`Microsoft.Identity.Web.Resource`), so a request without a bearer token is rejected `401 Unauthorized` and a request whose token lacks the delegated `access_as_user` scope is rejected `403 Forbidden`, both by ASP.NET Core's authentication/authorization middleware before any controller action runs. The non-secret `AzureAd` configuration (`Instance`, `TenantId`, `ClientId`, `Scopes`) lives in `appsettings.json`; the `ClientId` is the API app registration's public application ID, used only to validate the token audience, never a client secret. `Microsoft.Identity.Web`/`Microsoft.AspNetCore.Authorization`/JWT types are used only in `InventoryApi` (`Program.cs` and controllers) and must never appear in `Inventory.Domain` or `Inventory.Application`; if a use case ever needs the caller's identity, define a narrow neutral Application port instead of exposing Microsoft identity-provider types across that boundary.
+- **Frontend.** The Angular SPA authenticates through MSAL (`@azure/msal-angular`, `@azure/msal-browser`). `frontend/inventory-app/src/app/auth-config.ts` defines the SPA/API Entra application IDs, the delegated `access_as_user` scope (`loginRequest`), and `buildProtectedResourceMap(apiBaseUrl)`, which keys MSAL's protected-resource map off `ConfigService.apiBaseUrl` rather than a hard-coded host. `app.config.ts` wires `MsalInterceptor` (attaches `Authorization: Bearer <token>` to matching requests), `MsalGuard` (redirect-based route protection), and `MSAL_INTERCEPTOR_CONFIG` (built from that dynamic map), so the bearer token is attached correctly whether `ConfigService.apiBaseUrl` resolves to the local dev proxy (`/api`) or the deployed Azure API's absolute URL — see [Runtime configuration and API contracts](#runtime-configuration-and-api-contracts). `app.routes.ts` applies `MsalGuard` to every application route except the public `/auth` callback route (`AuthCallbackComponent`), which must stay reachable without authentication so the Entra redirect can complete. `AppComponent` drives sign-in/sign-out (`MsalService.loginRedirect`/`logoutRedirect`) and reflects the active account in the header.
+- **Protected documents.** Static-file middleware does not run controller authorization, so an uploaded document under `wwwroot` would be downloadable by anyone who knew its generated file name no matter what `[Authorize]` says. `Program.cs` therefore registers no static-file middleware at all — the API serves no public assets, since the Angular application is a separate Azure Static Web App — and `ProtectedFileStorage` stores purchase documents and operating-expense supporting documents under `{ContentRoot}/protected-files/{category}/`, outside the web root. The only way to read one is `GET /api/receipts/{id}/file` or `GET /api/operating-expenses/{id}/attachment`. Documents uploaded before this rule still sit in `wwwroot/{category}` and stay readable and deletable through the same endpoints (`ProtectedFileStorage.ExistingPath` falls back to that location) but no longer have an anonymous URL. Because these endpoints require a bearer token, the frontend must fetch them through `HttpClient` (`PurchaseService.getFile`, `OperatingExpenseService.getAttachment`, both `responseType: 'blob'`) and render them from an object URL; an `<a href>`/`<img src>` pointing straight at the endpoint is a plain browser request that carries no token and gets `401`.
+- **Multi-tenant scope.** Authentication accepts users from multiple Microsoft Entra tenants (`TenantId: "common"`), but this does not provide multi-tenant *data* isolation. Database-level tenant partitioning/scoping is a separate, unimplemented concern.
+
 ### API documentation policy
 
 `Swashbuckle.AspNetCore` (`AddSwaggerGen`/`UseSwagger`/`UseSwaggerUI` in `Program.cs`) is intentionally retained to give local developers an interactive view of the API surface. It is registered only behind `app.Environment.IsDevelopment()`, so it never runs, and never exposes `/swagger`, outside the Development environment; its `SwaggerDoc` metadata carries only a title, version, and description, with no authentication scheme or configuration values. `dotnet-tools.json` keeps the matching `swashbuckle.aspnetcore.cli` local tool so a developer can export `swagger.json` manually with `dotnet swagger tofile` if needed.
@@ -204,7 +213,8 @@ The frontend is an application boundary in its own right. It owns navigation, in
 | `services/` | Typed HTTP calls, runtime configuration, toast state, and feature-specific client behavior |
 | `models/models.ts` | Shared inventory, purchase, site, and machine contracts |
 | Report base/classes | Common report filters, loading/error state, financial-year presets, and export behavior |
-| `assets/config.json` | Deploy-time API base URL loaded before the application starts |
+| `assets/config.json`, `api-base-url.ts` | Deployed API base URL and the local-vs-deployed resolution rule applied before the application starts |
+| `auth-config.ts`, `auth/auth-callback.component.ts` | MSAL configuration, delegated `access_as_user` scope, protected-resource map, and the public Entra redirect callback route |
 
 The application currently uses component-local state and RxJS-backed singleton services. That is appropriate for its present size. Do not introduce a global state library merely to reorganize files. Add one only when there is demonstrated cross-feature state, cache invalidation, or event-coordination complexity that local state and focused services cannot handle clearly.
 
@@ -266,11 +276,13 @@ Use these ownership rules:
 
 Routes are currently declared centrally and import every routed component eagerly. Preserve route URLs, but convert top-level features to `loadComponent` or feature route files as those areas are migrated. This keeps initial bundles smaller and creates an enforceable feature boundary without introducing NgModules.
 
-The static host must rewrite unknown application paths to `index.html`; otherwise refreshing a deep link such as `/reports/bookkeeping` will bypass Angular and return a host-level 404. API paths must remain excluded from that fallback where the hosting topology requires it.
+The static host must rewrite unknown application paths to `index.html`; otherwise refreshing a deep link such as `/reports/bookkeeping` or the Entra redirect landing on `/auth` will bypass Angular and return a host-level 404. `frontend/inventory-app/src/staticwebapp.config.json` (copied to the deployed output root by the `assets` build option) declares that Azure Static Web Apps `navigationFallback`, rewriting unmatched paths to `/index.html` while excluding `/assets/*` and static file extensions.
 
 ### Runtime configuration and API contracts
 
-`ConfigService` loads `/assets/config.json` through an application initializer before feature services issue requests and falls back to `/api` if that load fails. `proxy.conf.json` forwards `/api` to `http://localhost:5000/` for local development; a deployed static config can provide the hosted API base URL. Do not hard-code API hosts in components or feature services.
+`ConfigService` resolves the API base URL through an application initializer, before feature services issue requests, and is the single source of truth for it. On `localhost`/`127.0.0.1` it resolves to `/api`, which `proxy.conf.json` forwards to `http://localhost:5000/`; on any other origin it uses `apiBaseUrl` from `/assets/config.json`, falling back to `/api` if that load fails or yields nothing usable (`api-base-url.ts` holds that framework-free resolution rule). No one therefore edits the tracked `assets/config.json` to move between local development and deployment. Do not hard-code API hosts in components or feature services.
+
+`ConfigService` fetches `/assets/config.json` with a dedicated `HttpClient` built on the raw `HttpBackend`, bypassing the interceptor chain. This is an ordering requirement, not a preference: `MSAL_INTERCEPTOR_CONFIG` is built from `ConfigService.apiBaseUrl` when `MsalInterceptor` is first constructed, which an intercepted configuration request would trigger before the initializer had finished, permanently freezing the protected-resource map on the fallback value. MSAL's protected-resource map is built from that same resolved value (`auth-config.ts`'s `buildProtectedResourceMap`) rather than a fixed host, so the bearer token attaches correctly in both local and deployed environments.
 
 Backend contract changes are full-stack changes. When an endpoint changes:
 
@@ -399,9 +411,12 @@ now agree:
 | `frontend/.../components/purchases/receipt-list.component.{ts,html}` | `.../purchase-list.component.{ts,html}` |
 | `frontend/.../components/purchases/receipt-upload.component.{ts,html}` | `.../purchase-upload.component.{ts,html}` |
 
-The `wwwroot/receipts` upload folder, the database tables and migration history, and the
+The `receipts` upload folder name, the database tables and migration history, and the
 `/api/receipts` route are *not* file renames and deliberately keep their names; see the compatibility
-table below.
+table below. (That upload folder has since moved out of `wwwroot` to
+`{ContentRoot}/protected-files/receipts` for the authorization boundary described in
+[Authentication and authorization](#authentication-and-authorization); only its location changed, not
+its name.)
 
 ##### OpenAPI compatibility
 
@@ -423,7 +438,7 @@ operations reference) and `InventoryApi.Tests.Controllers.PurchasesControllerRou
 | `Inventory.Domain` | `Purchases.PurchaseTotalValidationPolicy` (new) | — | New pure calculation; the one authoritative total-mismatch formula. |
 | `Inventory.Application` | `Purchases.ComputePurchaseTotalValidation` (new) | — | Thin use case wrapping the Domain policy; `InventoryApi.Services.PurchaseService` calls it instead of duplicating the formula. |
 | `InventoryApi.Models` | CLR types and files `Purchase.cs`, `PurchaseItem.cs` | DbSet properties `Receipts`/`ReceiptItems`, table names `Receipts`/`ReceiptItems` (now mapped explicitly with `ToTable`), `PurchaseItem.ReceiptId` column/property, `StockAdjustment.ReceiptItemId`/`ReceiptItem`, `SupplierOrderReceiptAllocation` (type and its `ReceiptItemId`/`ReceiptItem` members) | Schema/migration history must not change; `ReceiptId` and the `StockAdjustment`/`SupplierOrderReceiptAllocation` members are part of the JSON contract or are out of this issue's scope (supplier-order/stock-ledger naming belongs to the full slice above). |
-| `InventoryApi.Services` | `PurchaseService : IPurchaseService` (files `PurchaseService.cs`/`IPurchaseService.cs`) | Physical upload folder stays `wwwroot/receipts` | Already-uploaded purchase document scans must stay reachable at their stored path. |
+| `InventoryApi.Services` | `PurchaseService : IPurchaseService` (files `PurchaseService.cs`/`IPurchaseService.cs`) | Physical upload folder keeps the name `receipts` (`ProtectedFileStorage.PurchaseDocumentsCategory`), now under `{ContentRoot}/protected-files/` rather than `wwwroot/` | Already-uploaded purchase document scans must stay reachable by their stored file name; `ProtectedFileStorage.ExistingPath` still falls back to the old `wwwroot/receipts` location. |
 | `InventoryApi.Controllers` | `PurchasesController` (file `PurchasesController.cs`), explicit `[Route("api/receipts")]` | Route `api/receipts`, and the `Receipts` OpenAPI tag via `LegacyOpenApiCompatibility` | Preserves the existing, bookmarked API route (acceptance criterion). |
 | `InventoryApi.DTOs` | `PurchaseItemDto`, `PurchaseCreateMetaDto`, `PurchaseValidationDto`, `PurchaseResponseDto` | `PurchaseResponseDto`'s `Receipt`/`Validation` property names (JSON keys `receipt`/`validation`), and the published OpenAPI schema ids `Receipt`/`ReceiptItem`/`ReceiptItemDto`/`ReceiptCreateMetaDto`/`ReceiptValidationDto`/`ReceiptResponseDto` | JSON property names and schema ids are part of the public API contract; only the CLR type names changed. |
 | Frontend `models.ts`/`purchase.service.ts` | `Purchase`, `PurchaseItem`, `PurchaseValidation`, `PurchaseResponse`, `PurchaseService`, `PurchaseUploadPayload`/`PurchaseItemPayload`/`PurchaseUpdatePayload` (files `purchase.service.ts`, `components/purchases/purchase-{list,upload}.component.{ts,html}`) | JSON-bound fields `receipt`/`receiptId` | Matches the backend JSON contract above. |
@@ -553,6 +568,8 @@ Use three complementary levels:
 3. **API/adapter tests** for HTTP contracts, Nayax mapping, file storage, imports, and report exports.
 
 EF Core InMemory tests remain useful for fast service checks but must not be the only evidence for relational behavior.
+
+Most controller tests instantiate the controller directly and never exercise ASP.NET Core's middleware pipeline. Proving the `[Authorize]`/`[RequiredScope]` HTTP boundary (issue #38) instead requires a real pipeline: `AuthenticationBoundaryTests` (`backend/InventoryApi.Tests/Controllers/`) hosts the app with `WebApplicationFactory<Program>`, swapping `AppDbContext` for a shared open in-memory SQLite connection so `Program.cs`'s startup `Database.Migrate()` succeeds, then asserts that an unauthenticated request to a representative protected endpoint — including the receipt and operating-expense document endpoints — returns `401`, and that a file placed in the web root has no anonymous static URL. `Program.cs` exposes a trailing `public partial class Program;` solely so `WebApplicationFactory<Program>` can reference it from the test assembly.
 
 Financial regression tests should cover at least:
 

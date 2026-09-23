@@ -15,8 +15,15 @@ using InventoryApi.Data;
 using InventoryApi.Http;
 using InventoryApi.Integrations.Nayax;
 using InventoryApi.Swagger;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.Identity.Web;
 
 var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddMicrosoftIdentityWebApi(builder.Configuration.GetSection("AzureAd"));
+
+builder.Services.AddAuthorization();
 
 builder.Services.AddControllers();
 builder.Services.AddApplicationServices();
@@ -113,9 +120,17 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "Inventory API v1"));
 }
 
-app.UseStaticFiles(); // serves wwwroot/receipts if direct static access is desired
+// No static-file middleware: the API serves no public assets (the Angular application is a
+// separate Azure Static Web App), and static-file middleware does not run controller
+// authorization. Uploaded purchase and operating-expense documents are stored outside the
+// web root (see ProtectedFileStorage) and are only readable through the [Authorize]d
+// endpoints, so no business document has an anonymous URL.
 app.UseCors("AllowAngularDevClient");
+app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
 
 app.Run();
+
+// Exposed so InventoryApi.Tests can host the API with WebApplicationFactory<Program>.
+public partial class Program;

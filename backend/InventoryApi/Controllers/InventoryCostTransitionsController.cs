@@ -1,11 +1,15 @@
 using InventoryApi.DTOs;
 using InventoryApi.Services.Interfaces;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Identity.Web.Resource;
 
 namespace InventoryApi.Controllers;
 
 [ApiController]
 [Route("api/admin/inventory-cost-transition")]
+[Authorize]
+[RequiredScope("access_as_user")]
 public sealed class InventoryCostTransitionsController : ControllerBase
 {
     private readonly IInventoryCostTransitionService _service;

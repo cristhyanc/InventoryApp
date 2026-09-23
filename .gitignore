@@ -56,3 +56,9 @@ uploads/tmp/
 uploads/temp/
 **/uploads/tmp/
 **/uploads/temp/
+
+# Uploaded business documents: protected storage plus the legacy pre-protection locations
+**/protected-files/
+**/wwwroot/receipts/
+**/wwwroot/expenses/
+**/wwwroot/ImportedFiles/

@@ -31,18 +31,15 @@ public class PurchaseService : IPurchaseService
     }
 
     // Physical storage for the uploaded scan/photo (the supporting document), distinct from
-    // the purchase business record. Kept at its legacy "receipts" path so already-uploaded
-    // files stay reachable; see Purchase.StoredFileName.
-    private string PurchaseDocumentsFolder
-    {
-        get
-        {
-            var webRoot = _env.WebRootPath ?? Path.Combine(_env.ContentRootPath, "wwwroot");
-            var folder = Path.Combine(webRoot, "receipts");
-            Directory.CreateDirectory(folder);
-            return folder;
-        }
-    }
+    // the purchase business record; see Purchase.StoredFileName. The documents live outside
+    // the static web root and are only reachable through this service's [Authorize]d
+    // controller. The category folder keeps its legacy "receipts" name so already-uploaded
+    // files stay reachable; see ProtectedFileStorage.
+    private string StoragePathFor(string storedFileName) =>
+        ProtectedFileStorage.StoragePath(_env, ProtectedFileStorage.PurchaseDocumentsCategory, storedFileName);
+
+    private string? ExistingPathFor(string? storedFileName) =>
+        ProtectedFileStorage.ExistingPath(_env, ProtectedFileStorage.PurchaseDocumentsCategory, storedFileName);
 
     public async Task<IEnumerable<Purchase>> GetAll(int? supplierId)
     {
@@ -62,8 +59,8 @@ public class PurchaseService : IPurchaseService
         var purchase = await _db.Receipts.FindAsync(id);
         if (purchase is null) return (null, null, null);
 
-        var path = Path.Combine(PurchaseDocumentsFolder, purchase.StoredFileName);
-        if (!System.IO.File.Exists(path)) return (null, null, null);
+        var path = ExistingPathFor(purchase.StoredFileName);
+        if (path is null) return (null, null, null);
 
         var bytes = await System.IO.File.ReadAllBytesAsync(path);
         return (bytes, purchase.ContentType, purchase.FileName);
@@ -85,7 +82,7 @@ public class PurchaseService : IPurchaseService
             purchaseItems.Select(x => x.ProductId),
             effectivePurchaseDate);
         var storedFileName = $"{Guid.NewGuid()}{ext}";
-        var fullPath = Path.Combine(PurchaseDocumentsFolder, storedFileName);
+        var fullPath = StoragePathFor(storedFileName);
 
         await using (var stream = new FileStream(fullPath, FileMode.Create))
         {
@@ -357,7 +354,7 @@ public class PurchaseService : IPurchaseService
         var purchase = await _db.Receipts.Include(r => r.Items).FirstOrDefaultAsync(r => r.Id == id);
         if (purchase is null) return false;
 
-        var path = Path.Combine(PurchaseDocumentsFolder, purchase.StoredFileName);
+        var path = ExistingPathFor(purchase.StoredFileName);
         var movements = await _db.StockAdjustments
             .Where(movement => movement.ReceiptItemId.HasValue &&
                 purchase.Items.Select(item => item.Id).Contains(movement.ReceiptItemId.Value))
@@ -372,7 +369,7 @@ public class PurchaseService : IPurchaseService
         await RebuildAffectedAsync(affected);
         await _db.SaveChangesAsync();
         if (transaction is not null) await transaction.CommitAsync();
-        if (System.IO.File.Exists(path)) System.IO.File.Delete(path);
+        if (path is not null && System.IO.File.Exists(path)) System.IO.File.Delete(path);
         return true;
     }
 

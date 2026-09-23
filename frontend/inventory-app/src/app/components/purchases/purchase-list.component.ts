@@ -1,4 +1,4 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
@@ -7,6 +7,7 @@ import { SupplierService } from '../../services/supplier.service';
 import { Product, Purchase, Supplier, PurchaseValidation } from '../../models/models';
 import { ProductService } from '../../services/product.service';
 import { PurchaseItemPayload } from '../../services/purchase.service';
+import { ObjectUrlCache } from '../shared/object-url-cache';
 
 @Component({
   selector: 'app-purchase-list',
@@ -14,7 +15,7 @@ import { PurchaseItemPayload } from '../../services/purchase.service';
   imports: [CommonModule, FormsModule, RouterLink],
   templateUrl: './purchase-list.component.html'
 })
-export class PurchaseListComponent implements OnInit {
+export class PurchaseListComponent implements OnInit, OnDestroy {
   purchases: Purchase[] = [];
   suppliers: Supplier[] = [];
   products: Product[] = [];
@@ -30,6 +31,11 @@ export class PurchaseListComponent implements OnInit {
     supplierId: '' as number | ''
   };
 
+  // Purchase documents are protected by the API, so they are fetched through HttpClient (which
+  // attaches the bearer token) and rendered from a temporary object URL.
+  private readonly objectUrls = new ObjectUrlCache();
+  private thumbnailUrls = new Map<number, string>();
+
   constructor(
     private purchaseService: PurchaseService,
     private supplierService: SupplierService,
@@ -42,16 +48,43 @@ export class PurchaseListComponent implements OnInit {
     this.productService.getAll().subscribe((p) => (this.products = p));
   }
 
+  ngOnDestroy(): void {
+    this.objectUrls.releaseAll();
+  }
+
   load(): void {
-    this.purchaseService.getAll().subscribe((r) => (this.purchases = r));
+    this.purchaseService.getAll().subscribe((r) => {
+      this.purchases = r;
+      this.loadThumbnails();
+    });
   }
 
   getValidation(purchase: Purchase): PurchaseValidation | null {
     return this.purchaseService.getValidationFor(purchase.id);
   }
 
-  fileUrl(purchase: Purchase): string {
-    return this.purchaseService.fileUrl(purchase.id);
+  thumbnailUrl(purchase: Purchase): string | null {
+    return this.thumbnailUrls.get(purchase.id) ?? null;
+  }
+
+  openDocument(purchase: Purchase): void {
+    this.purchaseService.getFile(purchase.id).subscribe({
+      next: (blob) => window.open(this.objectUrls.create(blob), '_blank', 'noopener'),
+      error: (err) => console.error('Failed to open purchase document', err)
+    });
+  }
+
+  private loadThumbnails(): void {
+    this.objectUrls.releaseAll();
+    this.thumbnailUrls = new Map<number, string>();
+    this.purchases
+      .filter((purchase) => this.isImage(purchase))
+      .forEach((purchase) =>
+        this.purchaseService.getFile(purchase.id).subscribe({
+          next: (blob) => this.thumbnailUrls.set(purchase.id, this.objectUrls.create(blob)),
+          error: (err) => console.error('Failed to load purchase document', err)
+        })
+      );
   }
 
   isImage(purchase: Purchase): boolean {

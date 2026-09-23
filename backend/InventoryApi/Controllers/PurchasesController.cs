@@ -1,8 +1,10 @@
+using InventoryApi.Data;
+using InventoryApi.DTOs;
+using InventoryApi.Models;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using InventoryApi.Data;
-using InventoryApi.Models;
-using InventoryApi.DTOs;
+using Microsoft.Identity.Web.Resource;
 
 namespace InventoryApi.Controllers;
 
@@ -11,6 +13,8 @@ namespace InventoryApi.Controllers;
 // Purchase rename plan.
 [ApiController]
 [Route("api/receipts")]
+[Authorize]
+[RequiredScope("access_as_user")]
 public class PurchasesController : ControllerBase
 {
     private readonly InventoryApi.Services.Interfaces.IPurchaseService _service;
