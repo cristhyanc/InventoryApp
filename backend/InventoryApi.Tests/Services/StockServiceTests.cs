@@ -1,5 +1,3 @@
-using System;
-using System.Threading.Tasks;
 using InventoryApi.Data;
 using InventoryApi.DTOs;
 using InventoryApi.Models;
@@ -155,6 +153,7 @@ public class StockServiceTests
 
         Assert.Equal("Not enough products in stock. Available stock: 2", exception.Message);
         var product = await db.Products.FindAsync(1L);
+        Assert.NotNull(product);
         Assert.Equal(2, product.QuantityInStock);
     }
 

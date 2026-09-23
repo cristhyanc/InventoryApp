@@ -28,6 +28,9 @@ docs/architecture.md                  Current and target architecture
 docs/automation.md                    Automated development lifecycle and authority model
 .github/ISSUE_TEMPLATE/agent-task.yml Agent task issue form
 .github/pull_request_template.md      Pull request template
+.editorconfig                         Repository-wide formatting, naming and diagnostic severities
+Directory.Build.props                 Shared .NET build quality settings (nullable, analyzers, warnings-as-errors)
+frontend/inventory-app/eslint.config.js    Angular/TypeScript ESLint flat configuration
 scripts/validate.ps1                  Complete Windows validation
 scripts/validate.sh                   Complete Bash validation
 scripts/validate-agent-workflows.mjs  Agent workflow and template contract checks (with .test.mjs)
@@ -94,18 +97,29 @@ Backend solution:
 
 ```bash
 dotnet restore backend/InventoryApi/InventoryApi.slnx
+dotnet format backend/InventoryApi/InventoryApi.slnx --verify-no-changes --no-restore --exclude backend/InventoryApi/Migrations
 dotnet build backend/InventoryApi/InventoryApi.slnx --configuration Release --no-restore
-dotnet test backend/InventoryApi/InventoryApi.slnx --configuration Release --no-build --no-restore
+dotnet test backend/InventoryApi/InventoryApi.slnx --configuration Release --no-build --no-restore --collect:"XPlat Code Coverage"
+dotnet package list --project backend/InventoryApi/InventoryApi.slnx --vulnerable --include-transitive
 ```
 
 Frontend:
 
 ```bash
 npm --prefix frontend/inventory-app ci
+npm --prefix frontend/inventory-app run lint
 npm --prefix frontend/inventory-app run build
+npm --prefix frontend/inventory-app audit
 ```
 
-The frontend currently has no configured `test` or `lint` script. Do not claim either ran. If one is added, include it in both validation scripts in the same change.
+Both validation scripts run exactly this pipeline; run the script rather than the individual commands. Notes:
+
+- The backend builds with `TreatWarningsAsErrors`, .NET analyzers and `EnforceCodeStyleInBuild` (see `Directory.Build.props`). A new warning in application code fails the build. The only suppressed compiler diagnostic is `CS8981` on EF Core generated migrations, scoped in `.editorconfig` to `[**/Migrations/*.cs]`. Do not widen that scope and do not add a global `<NoWarn>`.
+- `dotnet format` excludes `backend/InventoryApi/Migrations` because an applied migration must not be rewritten.
+- Coverage is collected on every test run but has no minimum threshold yet. Coverage output is git-ignored; never commit it.
+- The frontend now has a configured `lint` script but still has no `test` script. Do not claim tests ran. `npm run lint` must report zero **errors**; warnings are visible but non-blocking.
+- `npm audit` is reported, not enforced: the outstanding high/critical advisories are in the Angular 19 build toolchain and clear only with a major Angular upgrade. Never run `npm audit fix --force`.
+- `dotnet package list --vulnerable` always exits 0, so the scripts parse its output. A vulnerable package fails validation; an unreachable nuget.org only warns.
 
 ## Architecture rules
 

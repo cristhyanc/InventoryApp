@@ -1,8 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
 using Inventory.Application.Reporting.Transactions;
 using Inventory.Domain.Reporting.Transactions;
 using InventoryApi.Adapters.Persistence;
@@ -121,9 +116,14 @@ public class EfTransactionSalesReportFactsProviderTests
         await using var db = await CreateSqliteAsync();
         db.NayaxSales.Add(new NayaxSales
         {
-            TransactionID = 1, MachineID = 10, SettlementValue = 10m, MachineAuthorizationTime = new DateTime(2025, 8, 1),
-            TransactionStatusId = NayaxTransactionStatusIds.Completed, CostOfGoodsSold = 4m,
-            CostingStatus = SaleCostingStatus.Costed, CostSource = SaleCostSource.InventoryLedger
+            TransactionID = 1,
+            MachineID = 10,
+            SettlementValue = 10m,
+            MachineAuthorizationTime = new DateTime(2025, 8, 1),
+            TransactionStatusId = NayaxTransactionStatusIds.Completed,
+            CostOfGoodsSold = 4m,
+            CostingStatus = SaleCostingStatus.Costed,
+            CostSource = SaleCostSource.InventoryLedger
         });
         await db.SaveChangesAsync();
         var provider = new EfTransactionSalesReportFactsProvider(db);
@@ -145,7 +145,10 @@ public class EfTransactionSalesReportFactsProviderTests
         db.NayaxProcessingFeeRates.Add(new NayaxProcessingFeeRate { EffectiveFrom = new DateTime(2025, 12, 1), FeeExGst = 0.9m });
         db.SiteCommissionAgreements.Add(new SiteCommissionAgreement
         {
-            SiteId = 91, EffectiveFrom = new DateTime(2025, 1, 1), CommissionRate = 0.1m, Basis = CommissionBasis.CardSales
+            SiteId = 91,
+            EffectiveFrom = new DateTime(2025, 1, 1),
+            CommissionRate = 0.1m,
+            Basis = CommissionBasis.CardSales
         });
         await db.SaveChangesAsync();
         var provider = new EfTransactionSalesReportFactsProvider(db);
@@ -165,8 +168,14 @@ public class EfTransactionSalesReportFactsProviderTests
         db.Products.Add(new Product { Id = 1, Name = "Water" });
         db.NayaxSales.Add(new NayaxSales
         {
-            TransactionID = 1, MachineID = 10, MachineName = "Alpha One", NayaxProductId = 1, ProductName = "Water",
-            SettlementValue = 10m, MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed
+            TransactionID = 1,
+            MachineID = 10,
+            MachineName = "Alpha One",
+            NayaxProductId = 1,
+            ProductName = "Water",
+            SettlementValue = 10m,
+            MachineAuthorizationTime = new DateTime(2025, 8, 1),
+            TransactionStatusId = NayaxTransactionStatusIds.Completed
         });
         await db.SaveChangesAsync();
         var nayax = new FakeNayaxLynxClient(new NayaxMachine { MachineID = 10, MachineName = "Alpha One", CustomerID = 91 });
@@ -188,8 +197,11 @@ public class EfTransactionSalesReportFactsProviderTests
         await using var db = await CreateSqliteAsync();
         db.NayaxSales.Add(new NayaxSales
         {
-            TransactionID = 1, MachineID = 10, SettlementValue = 10m,
-            MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed
+            TransactionID = 1,
+            MachineID = 10,
+            SettlementValue = 10m,
+            MachineAuthorizationTime = new DateTime(2025, 8, 1),
+            TransactionStatusId = NayaxTransactionStatusIds.Completed
         });
         await db.SaveChangesAsync();
         var provider = new EfTransactionSalesReportFactsProvider(db, null);

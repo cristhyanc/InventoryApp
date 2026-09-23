@@ -1,5 +1,3 @@
-using InventoryApi.Models;
-
 namespace InventoryApi.DTOs;
 
 public record SaleCostingBackfillResult(

@@ -1,7 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.Threading;
-using System.Threading.Tasks;
 using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Reporting.Dashboard;
 using Inventory.Application.Reporting.ProductProfitability;
@@ -27,17 +23,17 @@ public class GetDashboardReportTests
         NetMarginPercent: netMarginPercent, NayaxFeesExGst: nayaxFeesExGst, NayaxFeesIncludingGst: nayaxFeesIncludingGst,
         DeliveryCosts: 2m, PackageCosts: 1m, OtherOperatingExpenses: 1m, CardSales: cardSales, CashSales: cashSales,
         CardTransactionCount: cardTransactionCount, CashTransactionCount: cashTransactionCount)
-    {
-        PartialCostOfGoods = partialCostOfGoods,
-        IsCogsComplete = isCogsComplete,
-        DirectProfit = directProfit,
-        DirectMarginPercent = directMarginPercent,
-        NayaxProcessingFees = hasMissingFeeRates
+        {
+            PartialCostOfGoods = partialCostOfGoods,
+            IsCogsComplete = isCogsComplete,
+            DirectProfit = directProfit,
+            DirectMarginPercent = directMarginPercent,
+            NayaxProcessingFees = hasMissingFeeRates
             ? new NayaxProcessingFeeResult(0m, 0m, 0m, 0m, 0m, 0m, 0, null, null, MissingRateTransactionCount: 3)
             : new NayaxProcessingFeeResult(nayaxFeesExGst, 0.4m, nayaxFeesIncludingGst, 0m, 0m, 0m, 0, DateTime.UtcNow, null)
-    };
+        };
 
-    private static ProductProfitabilityReportDto EmptyProductReport(bool containsUnmapped = false, string note = null) => new(
+    private static ProductProfitabilityReportDto EmptyProductReport(bool containsUnmapped = false, string? note = null) => new(
         new DateTime(2025, 8, 1), new DateTime(2025, 8, 31), [],
         new ReportingDataQualityDto(ContainsUnmappedProducts: containsUnmapped,
             Notes: note is null ? null : new List<string> { note }));

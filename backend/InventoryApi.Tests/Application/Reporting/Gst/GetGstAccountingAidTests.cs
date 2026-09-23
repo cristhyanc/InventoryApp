@@ -1,6 +1,3 @@
-using System;
-using System.Threading;
-using System.Threading.Tasks;
 using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Reporting.Gst;
 using Inventory.Application.Reporting.Shared;
@@ -16,9 +13,9 @@ public class GetGstAccountingAidTests
         Sales: sales, CostOfGoods: 40m, GrossProfit: sales - 40m,
         Fees: nayaxFeesExGst, NetSettlement: sales - nayaxFeesExGst, GstOnSales: gstOnSales, GstOnFees: gstOnFees,
         DataQuality: new ReportingDataQualityDto(), NayaxFeesExGst: nayaxFeesExGst)
-    {
-        OperatingExpenseGst = operatingExpenseGst
-    };
+        {
+            OperatingExpenseGst = operatingExpenseGst
+        };
 
     [Fact]
     public async Task Derives_taxable_sales_and_net_gst_from_the_bookkeeping_reports_own_gst_figures()

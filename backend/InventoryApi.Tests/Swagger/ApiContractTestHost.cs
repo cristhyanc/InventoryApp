@@ -1,7 +1,4 @@
 #nullable enable
-using System;
-using System.Collections.Generic;
-using System.Linq;
 using InventoryApi.Controllers;
 using InventoryApi.Swagger;
 using Microsoft.AspNetCore.Mvc.ApiExplorer;
@@ -18,7 +15,7 @@ namespace InventoryApi.Tests.Swagger;
 
 /// <summary>
 /// Builds the real MVC API-explorer model and the real Swagger document from
-/// <see cref="SwaggerServiceCollectionExtensions.AddInventoryApiSwagger"/>, so the contract
+/// <see cref="InventoryApi.Swagger.SwaggerServiceCollectionExtensions.AddInventoryApiSwagger(Microsoft.Extensions.DependencyInjection.IServiceCollection)"/>, so the contract
 /// regression tests assert against what the application actually publishes rather than against
 /// a hand-written copy of it.
 /// </summary>

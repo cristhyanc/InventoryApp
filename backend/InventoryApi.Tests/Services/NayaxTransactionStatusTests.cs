@@ -1,13 +1,9 @@
-using System;
-using System.IO;
 using System.Text;
-using System.Threading.Tasks;
 using InventoryApi.Data;
 using InventoryApi.Integrations.Nayax;
 using InventoryApi.Models;
 using InventoryApi.Services;
 using InventoryApi.Services.Interfaces;
-using InventoryApi.DTOs;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.EntityFrameworkCore;
@@ -65,15 +61,23 @@ public class NayaxTransactionStatusTests
         db.Products.Add(new Product { Id = 10, Name = "Snack", QuantityInStock = 10, CostingQuantity = 10, InventoryValue = 21m, AverageUnitCost = 2.10m });
         db.StockAdjustments.Add(new StockAdjustment
         {
-            ProductId = 10, QuantityChange = 10, QuantityAfter = 10,
-            Reason = StockAdjustmentReason.Restock, UnitCost = 2.10m,
-            TotalCost = 21m, EffectiveAt = new DateTime(2025, 8, 1)
+            ProductId = 10,
+            QuantityChange = 10,
+            QuantityAfter = 10,
+            Reason = StockAdjustmentReason.Restock,
+            UnitCost = 2.10m,
+            TotalCost = 21m,
+            EffectiveAt = new DateTime(2025, 8, 1)
         });
         await db.SaveChangesAsync();
         var sale = new NayaxSales
         {
-            TransactionID = 1, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineID = 1, NayaxProductId = 10,
-            SettlementValue = 10m, MachineAuthorizationTime = new DateTime(2025, 8, 2)
+            TransactionID = 1,
+            TransactionStatusId = NayaxTransactionStatusIds.Completed,
+            MachineID = 1,
+            NayaxProductId = 10,
+            SettlementValue = 10m,
+            MachineAuthorizationTime = new DateTime(2025, 8, 2)
         };
         var service = new SaleCostingService(db);
 
@@ -94,7 +98,10 @@ public class NayaxTransactionStatusTests
         db.Products.Add(new Product { Id = 10, Name = "Snack", AverageUnitCost = 2m });
         db.NayaxSales.Add(new NayaxSales
         {
-            TransactionID = 1, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineID = 1, NayaxProductId = 10,
+            TransactionID = 1,
+            TransactionStatusId = NayaxTransactionStatusIds.Completed,
+            MachineID = 1,
+            NayaxProductId = 10,
             MachineAuthorizationTime = new DateTime(2025, 8, 2)
         });
         await db.SaveChangesAsync();
@@ -114,13 +121,19 @@ public class NayaxTransactionStatusTests
         db.Products.Add(new Product { Id = 10, Name = "Snack", QuantityInStock = 10, CostingQuantity = 10, InventoryValue = 21m, AverageUnitCost = 2.10m });
         db.StockAdjustments.Add(new StockAdjustment
         {
-            ProductId = 10, QuantityChange = 10, QuantityAfter = 10,
-            Reason = StockAdjustmentReason.Restock, UnitCost = 2.10m,
+            ProductId = 10,
+            QuantityChange = 10,
+            QuantityAfter = 10,
+            Reason = StockAdjustmentReason.Restock,
+            UnitCost = 2.10m,
             EffectiveAt = new DateTime(2025, 8, 1)
         });
         var sale = new NayaxSales
         {
-            TransactionID = 1, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineID = 1, NayaxProductId = 10,
+            TransactionID = 1,
+            TransactionStatusId = NayaxTransactionStatusIds.Completed,
+            MachineID = 1,
+            NayaxProductId = 10,
             MachineAuthorizationTime = new DateTime(2025, 8, 2)
         };
         db.NayaxSales.Add(sale);
@@ -131,8 +144,11 @@ public class NayaxTransactionStatusTests
 
         db.StockAdjustments.Add(new StockAdjustment
         {
-            ProductId = 10, QuantityChange = 10, QuantityAfter = 20,
-            Reason = StockAdjustmentReason.Restock, UnitCost = 4m,
+            ProductId = 10,
+            QuantityChange = 10,
+            QuantityAfter = 20,
+            Reason = StockAdjustmentReason.Restock,
+            UnitCost = 4m,
             EffectiveAt = new DateTime(2025, 8, 3)
         });
         await db.SaveChangesAsync();

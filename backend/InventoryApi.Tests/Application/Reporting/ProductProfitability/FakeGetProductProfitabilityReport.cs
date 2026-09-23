@@ -1,5 +1,3 @@
-using System.Threading;
-using System.Threading.Tasks;
 using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Shared;
 
@@ -16,7 +14,7 @@ public sealed class FakeGetProductProfitabilityReport : IGetProductProfitability
 
     public FakeGetProductProfitabilityReport(ProductProfitabilityReportDto report) => _report = report;
 
-    public ReportingFilterDto LastRequest { get; private set; }
+    public ReportingFilterDto? LastRequest { get; private set; }
 
     public Task<ProductProfitabilityReportDto> Handle(ReportingFilterDto filter, CancellationToken cancellationToken)
     {

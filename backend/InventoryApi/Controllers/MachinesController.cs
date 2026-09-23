@@ -1,4 +1,3 @@
-﻿using InventoryApi.Integrations.Nayax;
 using InventoryApi.Models;
 using InventoryApi.Services.Interfaces;
 using Microsoft.AspNetCore.Authorization;

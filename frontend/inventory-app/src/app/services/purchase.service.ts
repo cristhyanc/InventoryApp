@@ -1,7 +1,7 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable, map } from 'rxjs';
-import { Purchase, PurchaseItem, PurchaseResponse, PurchaseValidation } from '../models/models';
+import { Purchase, PurchaseResponse, PurchaseValidation } from '../models/models';
 import { ConfigService } from './config.service';
 
 export interface PurchaseUploadPayload {

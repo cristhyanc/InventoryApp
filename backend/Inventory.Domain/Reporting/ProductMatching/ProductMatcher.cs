@@ -31,10 +31,10 @@ public static class ProductMatcher
             .Where(candidate => string.Equals(NormalizeName(candidate.Name), normalizedName, StringComparison.OrdinalIgnoreCase))
             .Take(2)
             .ToArray() switch
-            {
-                [var candidate] => candidate.Id,
-                _ => null
-            };
+        {
+            [var candidate] => candidate.Id,
+            _ => null
+        };
     }
 
     public static string NormalizeName(string name)

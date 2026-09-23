@@ -1,4 +1,3 @@
-using System;
 using Inventory.Domain.Purchases;
 using Xunit;
 

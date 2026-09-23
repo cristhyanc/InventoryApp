@@ -1,6 +1,3 @@
-using System;
-using System.Threading;
-using System.Threading.Tasks;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using InventoryApi.DTOs;
@@ -46,17 +43,25 @@ public class EfBookkeepingReportFactsProviderTests
         db.NayaxSales.AddRange(
             new NayaxSales
             {
-                TransactionID = 1, MachineID = 10, MachineName = "Machine A",
-                SettlementValue = 10m, PaymentMethod = "Credit Card",
+                TransactionID = 1,
+                MachineID = 10,
+                MachineName = "Machine A",
+                SettlementValue = 10m,
+                PaymentMethod = "Credit Card",
                 MachineAuthorizationTime = new DateTime(2025, 8, 1),
-                TransactionStatusId = NayaxTransactionStatusIds.Completed, CostOfGoodsSold = 4m
+                TransactionStatusId = NayaxTransactionStatusIds.Completed,
+                CostOfGoodsSold = 4m
             },
             new NayaxSales
             {
-                TransactionID = 2, MachineID = 10, MachineName = "Machine A",
-                SettlementValue = 5m, PaymentMethod = "Cash",
+                TransactionID = 2,
+                MachineID = 10,
+                MachineName = "Machine A",
+                SettlementValue = 5m,
+                PaymentMethod = "Cash",
                 MachineAuthorizationTime = new DateTime(2025, 8, 1),
-                TransactionStatusId = NayaxTransactionStatusIds.Completed, CostOfGoodsSold = null
+                TransactionStatusId = NayaxTransactionStatusIds.Completed,
+                CostOfGoodsSold = null
             });
         await db.SaveChangesAsync();
         var provider = new EfBookkeepingReportFactsProvider(db, new NayaxProcessingFeeService(db), EmptyCommissions());

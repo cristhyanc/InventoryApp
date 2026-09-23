@@ -1,0 +1,36 @@
+<Project>
+
+  <!--
+    Repository-wide .NET build quality settings. MSBuild imports this file into every project
+    under the repository root, so the backend projects share one definition of "clean build".
+
+    Severities for individual code-style/analyzer rules live in .editorconfig, not here.
+    The EF Core migration warning (CS8981) is suppressed in .editorconfig scoped to
+    **/Migrations/*.cs - deliberately not with a global <NoWarn>, which would hide the same
+    diagnostic in hand-written application code.
+  -->
+
+  <PropertyGroup>
+    <!-- Language and nullability. Individual projects already set Nullable/ImplicitUsings;
+         centralising them keeps a newly added project consistent by default. -->
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+
+    <!-- Quality gates. EnforceCodeStyleInBuild runs the IDExxxx code-style rules during a
+         command-line build; AnalysisLevel=latest opts into the newest CAxxxx rule set. -->
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+
+    <!-- IDE0005 (unnecessary using directive) is only reported by a command-line build when
+         the documentation file is generated. CS1591 ("missing XML comment"), which this also
+         switches on, is turned off in .editorconfig. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+
+    <!-- Deterministic restore/build behaviour for local and CI runs alike. -->
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+</Project>

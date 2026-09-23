@@ -38,8 +38,16 @@ public sealed class SiteCommissionsController : ControllerBase
         var overlaps = await _db.SiteCommissionAgreements.AnyAsync(x => x.SiteId == dto.SiteId &&
             x.EffectiveFrom <= (dto.EffectiveTo ?? DateTime.MaxValue) && (x.EffectiveTo ?? DateTime.MaxValue) >= dto.EffectiveFrom, ct);
         if (overlaps) return Conflict("The agreement overlaps an existing agreement for this site.");
-        var agreement = new SiteCommissionAgreement { SiteId = dto.SiteId, EffectiveFrom = dto.EffectiveFrom.Date, EffectiveTo = dto.EffectiveTo?.Date,
-            CommissionRate = dto.CommissionRate, Frequency = dto.Frequency, Basis = dto.Basis, PaymentDueDaysAfterPeriodEnd = dto.PaymentDueDaysAfterPeriodEnd };
+        var agreement = new SiteCommissionAgreement
+        {
+            SiteId = dto.SiteId,
+            EffectiveFrom = dto.EffectiveFrom.Date,
+            EffectiveTo = dto.EffectiveTo?.Date,
+            CommissionRate = dto.CommissionRate,
+            Frequency = dto.Frequency,
+            Basis = dto.Basis,
+            PaymentDueDaysAfterPeriodEnd = dto.PaymentDueDaysAfterPeriodEnd
+        };
         _db.SiteCommissionAgreements.Add(agreement); await _db.SaveChangesAsync(ct); return CreatedAtAction(nameof(Agreements), new { siteId = agreement.SiteId }, agreement);
     }
 

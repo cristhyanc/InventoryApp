@@ -1,7 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.Threading;
-using System.Threading.Tasks;
 using Inventory.Application.Reporting.Daily;
 using Inventory.Application.Reporting.Shared;
 
@@ -35,7 +31,7 @@ public sealed class FakeDailyReportFactsProvider : IDailyReportFactsProvider
         decimal cashSales = 20m,
         int uncostedTransactionCount = 0,
         decimal uncostedSalesAmount = 0m,
-        NayaxProcessingFeeResult processingFees = null,
+        NayaxProcessingFeeResult? processingFees = null,
         decimal importedReimbursement = 80m,
         decimal netReimbursement = 78m,
         bool hasImportedReimbursement = true,

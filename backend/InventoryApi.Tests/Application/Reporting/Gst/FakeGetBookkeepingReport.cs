@@ -1,5 +1,3 @@
-using System.Threading;
-using System.Threading.Tasks;
 using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Reporting.Shared;
 
@@ -16,7 +14,7 @@ public sealed class FakeGetBookkeepingReport : IGetBookkeepingReport
 
     public FakeGetBookkeepingReport(BookkeepingReportDto report) => _report = report;
 
-    public ReportingFilterDto LastRequest { get; private set; }
+    public ReportingFilterDto? LastRequest { get; private set; }
 
     public Task<BookkeepingReportDto> Handle(ReportingFilterDto filter, CancellationToken cancellationToken)
     {

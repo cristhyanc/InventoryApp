@@ -1,4 +1,3 @@
-using System.Threading.Tasks;
 using InventoryApi.Data;
 using InventoryApi.Models;
 using InventoryApi.Services;

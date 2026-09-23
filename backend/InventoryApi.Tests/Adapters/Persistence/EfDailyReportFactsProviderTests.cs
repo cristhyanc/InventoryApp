@@ -1,7 +1,3 @@
-using System;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using InventoryApi.Models;
@@ -143,8 +139,13 @@ public class EfDailyReportFactsProviderTests
         await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
         db.NayaxSales.Add(new NayaxSales
         {
-            TransactionID = 1, MachineID = 10, SettlementValue = 10m, PaymentMethod = "Credit Card",
-            MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed, CostOfGoodsSold = 4m
+            TransactionID = 1,
+            MachineID = 10,
+            SettlementValue = 10m,
+            PaymentMethod = "Credit Card",
+            MachineAuthorizationTime = new DateTime(2025, 8, 1),
+            TransactionStatusId = NayaxTransactionStatusIds.Completed,
+            CostOfGoodsSold = 4m
         });
         var file = new ImportedFile { FileName = "aug.xml", FileHash = "aug", ImportedAt = DateTime.UtcNow };
         file.Reimbursements.Add(new ImportedReimbursement
@@ -172,8 +173,13 @@ public class EfDailyReportFactsProviderTests
         await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
         db.NayaxSales.Add(new NayaxSales
         {
-            TransactionID = 1, MachineID = 10, SettlementValue = 10m, PaymentMethod = "Credit Card",
-            MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed, CostOfGoodsSold = 4m
+            TransactionID = 1,
+            MachineID = 10,
+            SettlementValue = 10m,
+            PaymentMethod = "Credit Card",
+            MachineAuthorizationTime = new DateTime(2025, 8, 1),
+            TransactionStatusId = NayaxTransactionStatusIds.Completed,
+            CostOfGoodsSold = 4m
         });
         var file = new ImportedFile { FileName = "aug.xml", FileHash = "aug2", ImportedAt = DateTime.UtcNow };
         file.Reimbursements.Add(new ImportedReimbursement
