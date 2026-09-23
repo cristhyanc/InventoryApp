@@ -53,7 +53,7 @@ export class ProductOnOrderComponent implements OnInit {
   }
 
   receiveOrder(order: SupplierOrder): void {
-    this.router.navigate(['/receipts/new'], { queryParams: { supplierOrderId: order.id } });
+    this.router.navigate(['/purchases/new'], { queryParams: { supplierOrderId: order.id } });
   }
 
   orderStatus(status: number): string {

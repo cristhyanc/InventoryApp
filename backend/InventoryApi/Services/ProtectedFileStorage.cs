@@ -1,7 +1,7 @@
 namespace InventoryApi.Services;
 
 /// <summary>
-/// Resolves where uploaded business documents (purchase receipts and operating-expense
+/// Resolves where uploaded business documents (purchase documents and operating-expense
 /// supporting documents) live on disk.
 ///
 /// They are deliberately stored outside the static web root. Static-file middleware does
@@ -15,8 +15,11 @@ public static class ProtectedFileStorage
     /// <summary>Content-root-relative folder holding every protected uploaded document.</summary>
     public const string RootFolderName = "protected-files";
 
-    /// <summary>Category folder for purchase receipt documents.</summary>
-    public const string ReceiptsCategory = "receipts";
+    /// <summary>
+    /// Category folder for purchase documents. The value keeps its legacy "receipts" name so
+    /// documents uploaded before the Purchase rename stay reachable.
+    /// </summary>
+    public const string PurchaseDocumentsCategory = "receipts";
 
     /// <summary>Category folder for operating-expense supporting documents.</summary>
     public const string ExpenseAttachmentsCategory = "expenses";

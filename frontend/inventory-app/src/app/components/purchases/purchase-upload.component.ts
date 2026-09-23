@@ -4,36 +4,36 @@ import { FormsModule } from '@angular/forms';
 import { Router, RouterLink, ActivatedRoute } from '@angular/router';
 import { of } from 'rxjs';
 import { switchMap, tap, map, catchError } from 'rxjs/operators';
-import { ReceiptService } from '../../services/receipt.service';
+import { PurchaseService } from '../../services/purchase.service';
 import { SupplierService } from '../../services/supplier.service';
 import { SupplierOrderService } from '../../services/supplier-order.service';
 import { Product, Supplier, SupplierOrder } from '../../models/models';
-import { ReceiptItemPayload } from '../../services/receipt.service';
+import { PurchaseItemPayload } from '../../services/purchase.service';
 import { ProductService } from '../../services/product.service';
 import { ToastService } from '../../services/toast.service';
 
 // Draft item representation where unitCost may be null
-interface DraftReceiptItem {
+interface DraftPurchaseItem {
   productId: number;
   quantity: number;
   unitCost: number | null;
 }
 
 @Component({
-  selector: 'app-receipt-upload',
+  selector: 'app-purchase-upload',
   standalone: true,
   imports: [CommonModule, FormsModule, RouterLink],
-  templateUrl: './receipt-upload.component.html'
+  templateUrl: './purchase-upload.component.html'
 })
-export class ReceiptUploadComponent implements OnInit {
+export class PurchaseUploadComponent implements OnInit {
   suppliers: Supplier[] = [];
   products: Product[] = [];
-  items: DraftReceiptItem[] = [];
+  items: DraftPurchaseItem[] = [];
   selectedFile: File | null = null;
   previewUrl: string | null = null;
   saving = false;
   error = '';
-  
+
   supplierOrderId: number | null = null;
   supplierOrder: SupplierOrder | null = null;
   loadingSupplierOrder = false;
@@ -46,12 +46,12 @@ export class ReceiptUploadComponent implements OnInit {
     totalAmount: null as number | null,
     deliveryCost: null as number | null,
     packageCost: null as number | null,
-    purchaseDate: ReceiptUploadComponent.localDate(new Date()),
+    purchaseDate: PurchaseUploadComponent.localDate(new Date()),
     supplierId: '' as number | ''
   };
 
   constructor(
-    private receiptService: ReceiptService,
+    private purchaseService: PurchaseService,
     private supplierService: SupplierService,
     private supplierOrderService: SupplierOrderService,
     private productService: ProductService,
@@ -116,7 +116,7 @@ export class ReceiptUploadComponent implements OnInit {
       totalAmount: null,
       deliveryCost: null,
       packageCost: null,
-      purchaseDate: ReceiptUploadComponent.localDate(new Date()),
+      purchaseDate: PurchaseUploadComponent.localDate(new Date()),
       supplierId: ''
     };
 
@@ -134,7 +134,7 @@ export class ReceiptUploadComponent implements OnInit {
     }
 
     // Set purchase date to today
-    this.form.purchaseDate = ReceiptUploadComponent.localDate(new Date());
+    this.form.purchaseDate = PurchaseUploadComponent.localDate(new Date());
 
     // Prefill reference/notes with order information
     if (order.reference) {
@@ -210,14 +210,14 @@ export class ReceiptUploadComponent implements OnInit {
     this.error = '';
     this.saving = true;
 
-    // Map draft items to ReceiptItemPayload only after validation
-    const validItems: ReceiptItemPayload[] = this.items.map(item => ({
+    // Map draft items to PurchaseItemPayload only after validation
+    const validItems: PurchaseItemPayload[] = this.items.map(item => ({
       productId: item.productId,
       quantity: item.quantity,
       unitCost: item.unitCost as number  // Safe to cast after validation
     }));
 
-    this.receiptService
+    this.purchaseService
       .upload({
         file: this.selectedFile,
         title: this.form.title.trim(),
@@ -236,7 +236,7 @@ export class ReceiptUploadComponent implements OnInit {
             this.router.navigate(['/products/on-order']);
           } else {
             this.toastService.success('Purchase created.');
-            this.router.navigate(['/receipts']);
+            this.router.navigate(['/purchases']);
           }
         },
         error: (err) => {
@@ -248,8 +248,8 @@ export class ReceiptUploadComponent implements OnInit {
 
   addItem(): void { this.items.push({ productId: this.products[0]?.id ?? 0, quantity: 1, unitCost: null }); }
   removeItem(index: number): void { this.items.splice(index, 1); }
-  itemProduct(item: DraftReceiptItem): Product | undefined { return this.products.find(p => p.id === Number(item.productId)); }
-  lineTotal(item: DraftReceiptItem): number { return Number(item.quantity || 0) * Number(item.unitCost || 0); }
+  itemProduct(item: DraftPurchaseItem): Product | undefined { return this.products.find(p => p.id === Number(item.productId)); }
+  lineTotal(item: DraftPurchaseItem): number { return Number(item.quantity || 0) * Number(item.unitCost || 0); }
   get itemsSubtotal(): number { return this.items.reduce((sum, item) => sum + this.lineTotal(item), 0); }
 
   private purchaseTimestamp(): string | null {

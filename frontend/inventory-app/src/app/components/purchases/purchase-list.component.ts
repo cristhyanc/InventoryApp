@@ -2,25 +2,25 @@ import { Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
-import { ReceiptService } from '../../services/receipt.service';
+import { PurchaseService } from '../../services/purchase.service';
 import { SupplierService } from '../../services/supplier.service';
-import { Product, Receipt, Supplier, ReceiptValidation } from '../../models/models';
+import { Product, Purchase, Supplier, PurchaseValidation } from '../../models/models';
 import { ProductService } from '../../services/product.service';
-import { ReceiptItemPayload } from '../../services/receipt.service';
+import { PurchaseItemPayload } from '../../services/purchase.service';
 import { ObjectUrlCache } from '../shared/object-url-cache';
 
 @Component({
-  selector: 'app-receipt-list',
+  selector: 'app-purchase-list',
   standalone: true,
   imports: [CommonModule, FormsModule, RouterLink],
-  templateUrl: './receipt-list.component.html'
+  templateUrl: './purchase-list.component.html'
 })
-export class ReceiptListComponent implements OnInit, OnDestroy {
-  receipts: Receipt[] = [];
+export class PurchaseListComponent implements OnInit, OnDestroy {
+  purchases: Purchase[] = [];
   suppliers: Supplier[] = [];
   products: Product[] = [];
-  editItems: ReceiptItemPayload[] = [];
-  editingReceiptId: number | null = null;
+  editItems: PurchaseItemPayload[] = [];
+  editingPurchaseId: number | null = null;
   editForm = {
     title: '',
     notes: '',
@@ -31,13 +31,13 @@ export class ReceiptListComponent implements OnInit, OnDestroy {
     supplierId: '' as number | ''
   };
 
-  // Receipt documents are protected by the API, so they are fetched through HttpClient (which
+  // Purchase documents are protected by the API, so they are fetched through HttpClient (which
   // attaches the bearer token) and rendered from a temporary object URL.
   private readonly objectUrls = new ObjectUrlCache();
   private thumbnailUrls = new Map<number, string>();
 
   constructor(
-    private receiptService: ReceiptService,
+    private purchaseService: PurchaseService,
     private supplierService: SupplierService,
     private productService: ProductService
   ) {}
@@ -53,22 +53,22 @@ export class ReceiptListComponent implements OnInit, OnDestroy {
   }
 
   load(): void {
-    this.receiptService.getAll().subscribe((r) => {
-      this.receipts = r;
+    this.purchaseService.getAll().subscribe((r) => {
+      this.purchases = r;
       this.loadThumbnails();
     });
   }
 
-  getValidation(receipt: Receipt): ReceiptValidation | null {
-    return this.receiptService.getValidationFor(receipt.id);
+  getValidation(purchase: Purchase): PurchaseValidation | null {
+    return this.purchaseService.getValidationFor(purchase.id);
   }
 
-  thumbnailUrl(receipt: Receipt): string | null {
-    return this.thumbnailUrls.get(receipt.id) ?? null;
+  thumbnailUrl(purchase: Purchase): string | null {
+    return this.thumbnailUrls.get(purchase.id) ?? null;
   }
 
-  openDocument(receipt: Receipt): void {
-    this.receiptService.getFile(receipt.id).subscribe({
+  openDocument(purchase: Purchase): void {
+    this.purchaseService.getFile(purchase.id).subscribe({
       next: (blob) => window.open(this.objectUrls.create(blob), '_blank', 'noopener'),
       error: (err) => console.error('Failed to open purchase document', err)
     });
@@ -77,71 +77,71 @@ export class ReceiptListComponent implements OnInit, OnDestroy {
   private loadThumbnails(): void {
     this.objectUrls.releaseAll();
     this.thumbnailUrls = new Map<number, string>();
-    this.receipts
-      .filter((receipt) => this.isImage(receipt))
-      .forEach((receipt) =>
-        this.receiptService.getFile(receipt.id).subscribe({
-          next: (blob) => this.thumbnailUrls.set(receipt.id, this.objectUrls.create(blob)),
+    this.purchases
+      .filter((purchase) => this.isImage(purchase))
+      .forEach((purchase) =>
+        this.purchaseService.getFile(purchase.id).subscribe({
+          next: (blob) => this.thumbnailUrls.set(purchase.id, this.objectUrls.create(blob)),
           error: (err) => console.error('Failed to load purchase document', err)
         })
       );
   }
 
-  isImage(receipt: Receipt): boolean {
-    return receipt.contentType.startsWith('image/');
+  isImage(purchase: Purchase): boolean {
+    return purchase.contentType.startsWith('image/');
   }
 
-  startEdit(receipt: Receipt): void {
-    this.editingReceiptId = receipt.id;
+  startEdit(purchase: Purchase): void {
+    this.editingPurchaseId = purchase.id;
     this.editForm = {
-      title: receipt.title,
-      notes: receipt.notes ?? '',
-      totalAmount: receipt.totalAmount ?? null,
-      deliveryCost: receipt.deliveryCost ?? null,
-      packageCost: receipt.packageCost ?? null,
-      purchaseDate: receipt.purchaseDate ? this.localDate(new Date(receipt.purchaseDate)) : '',
-      supplierId: receipt.supplierId ?? ''
+      title: purchase.title,
+      notes: purchase.notes ?? '',
+      totalAmount: purchase.totalAmount ?? null,
+      deliveryCost: purchase.deliveryCost ?? null,
+      packageCost: purchase.packageCost ?? null,
+      purchaseDate: purchase.purchaseDate ? this.localDate(new Date(purchase.purchaseDate)) : '',
+      supplierId: purchase.supplierId ?? ''
     };
-    this.editItems = (receipt.items ?? []).map(item => ({
+    this.editItems = (purchase.items ?? []).map(item => ({
       productId: item.productId, quantity: item.quantity, unitCost: item.unitCost
     }));
   }
 
   cancelEdit(): void {
-    this.editingReceiptId = null;
+    this.editingPurchaseId = null;
   }
 
-  saveEdit(receipt: Receipt): void {
+  saveEdit(purchase: Purchase): void {
     if (!this.editForm.title.trim()) return;
 
-    this.receiptService
-      .update(receipt.id, {
+    this.purchaseService
+      .update(purchase.id, {
         title: this.editForm.title.trim(),
         notes: this.editForm.notes || null,
         totalAmount: this.editForm.totalAmount,
         deliveryCost: this.editForm.deliveryCost,
         packageCost: this.editForm.packageCost,
-        purchaseDate: this.editPurchaseTimestamp(receipt),
+        purchaseDate: this.editPurchaseTimestamp(purchase),
         supplierId: this.editForm.supplierId === '' ? null : this.editForm.supplierId
         , items: this.editItems
       })
       .subscribe({
         next: () => {
-          this.editingReceiptId = null;
+          this.editingPurchaseId = null;
           this.load();
         },
-        error: (err) => console.error('Failed to update receipt', err)
+        error: (err) => console.error('Failed to update purchase', err)
       });
   }
 
   addEditItem(): void { this.editItems.push({ productId: this.products[0]?.id ?? 0, quantity: 1, unitCost: 0 }); }
   removeEditItem(index: number): void { this.editItems.splice(index, 1); }
-  editLineTotal(item: ReceiptItemPayload): number { return Number(item.quantity || 0) * Number(item.unitCost || 0); }
+  editLineTotal(item: PurchaseItemPayload): number { return Number(item.quantity || 0) * Number(item.unitCost || 0); }
   get editItemsSubtotal(): number { return this.editItems.reduce((sum, item) => sum + this.editLineTotal(item), 0); }
 
-  remove(receipt: Receipt): void {
-    if (!confirm(`Delete purchase "${receipt.title}"?`)) return;
-    this.receiptService.delete(receipt.id).subscribe(() => this.load());
+  remove(purchase: Purchase): void {
+    if (!confirm(`Delete purchase "${purchase.title}"?`)) return;
+    this.purchaseService.delete(purchase.id).subscribe(() => this.load());
   }
 
   formatSize(bytes: number): string {
@@ -150,9 +150,9 @@ export class ReceiptListComponent implements OnInit, OnDestroy {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   }
 
-  private editPurchaseTimestamp(receipt: Receipt): string | null {
+  private editPurchaseTimestamp(purchase: Purchase): string | null {
     if (!this.editForm.purchaseDate) return null;
-    const original = new Date(receipt.purchaseDate);
+    const original = new Date(purchase.purchaseDate);
     if (this.editForm.purchaseDate === this.localDate(original))
       return original.toISOString();
     const selected = new Date(`${this.editForm.purchaseDate}T00:00:00`);

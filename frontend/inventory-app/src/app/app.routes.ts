@@ -6,8 +6,8 @@ import { ProductFormComponent } from './components/products/product-form.compone
 import { CategoryListComponent } from './components/categories/category-list.component';
 import { SupplierListComponent } from './components/suppliers/supplier-list.component';
 import { StockHistoryComponent } from './components/stock/stock-history.component';
-import { ReceiptListComponent } from './components/receipts/receipt-list.component';
-import { ReceiptUploadComponent } from './components/receipts/receipt-upload.component';
+import { PurchaseListComponent } from './components/purchases/purchase-list.component';
+import { PurchaseUploadComponent } from './components/purchases/purchase-upload.component';
 import { MachineDetailComponent } from './components/machines/machine-detail.component';
 import { SiteProductsComponent } from './components/sites/site-products.component';
 import { DashboardReportComponent } from './components/reports/dashboard-report.component';
@@ -55,8 +55,11 @@ export const routes: Routes = [
   { path: 'suppliers', component: SupplierListComponent, canActivate: [MsalGuard] },
   { path: 'machines/:id', component: MachineDetailComponent, canActivate: [MsalGuard] },
   { path: 'sites/:id/products', component: SiteProductsComponent, canActivate: [MsalGuard] },
-  { path: 'receipts', component: ReceiptListComponent, canActivate: [MsalGuard] },
-  { path: 'receipts/new', component: ReceiptUploadComponent, canActivate: [MsalGuard] },
+  { path: 'purchases', component: PurchaseListComponent, canActivate: [MsalGuard] },
+  { path: 'purchases/new', component: PurchaseUploadComponent, canActivate: [MsalGuard] },
+  // Backward-compatible aliases for bookmarks/links to the old "/receipts" route.
+  { path: 'receipts', pathMatch: 'full', redirectTo: 'purchases' },
+  { path: 'receipts/new', pathMatch: 'full', redirectTo: 'purchases/new' },
   { path: 'reports', component: DashboardReportComponent, canActivate: [MsalGuard] },
   { path: 'reports/bookkeeping', component: BookkeepingReportComponent, canActivate: [MsalGuard] },
   { path: 'reports/daily', component: DailyReportComponent, canActivate: [MsalGuard] },

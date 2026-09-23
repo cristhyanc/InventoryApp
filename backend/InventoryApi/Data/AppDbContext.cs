@@ -11,7 +11,7 @@ public class AppDbContext : DbContext
     public DbSet<Supplier> Suppliers => Set<Supplier>();
     public DbSet<Product> Products => Set<Product>();
     public DbSet<StockAdjustment> StockAdjustments => Set<StockAdjustment>();
-    public DbSet<Receipt> Receipts => Set<Receipt>();
+    public DbSet<Purchase> Receipts => Set<Purchase>();
     public DbSet<NayaxSales> NayaxSales => Set<NayaxSales>();
     public DbSet<ImportedFile> ImportedFiles => Set<ImportedFile>();
     public DbSet<ImportedReimbursement> ImportedReimbursements => Set<ImportedReimbursement>();
@@ -19,7 +19,7 @@ public class AppDbContext : DbContext
     public DbSet<ImportedDevicePayment> ImportedDevicePayments => Set<ImportedDevicePayment>();
     public DbSet<ImportedFee> ImportedFees => Set<ImportedFee>();
     public DbSet<ImportedPaymentMethod> ImportedPaymentMethods => Set<ImportedPaymentMethod>();
-    public DbSet<ReceiptItem> ReceiptItems => Set<ReceiptItem>();
+    public DbSet<PurchaseItem> ReceiptItems => Set<PurchaseItem>();
     public DbSet<SupplierOrder> SupplierOrders => Set<SupplierOrder>();
     public DbSet<SupplierOrderLine> SupplierOrderLines => Set<SupplierOrderLine>();
     public DbSet<SupplierOrderReceiptAllocation> SupplierOrderReceiptAllocations => Set<SupplierOrderReceiptAllocation>();
@@ -62,15 +62,20 @@ public class AppDbContext : DbContext
             .HasForeignKey(x => x.InventoryCostTransitionBaselineId)
             .OnDelete(DeleteBehavior.Cascade);
 
-        modelBuilder.Entity<Receipt>()
+        // Purchase/PurchaseItem are the Purchase-language CLR types; explicitly mapped to
+        // their legacy "Receipt"/"ReceiptItem" tables so the rename does not change the schema.
+        modelBuilder.Entity<Purchase>().ToTable("Receipts");
+        modelBuilder.Entity<PurchaseItem>().ToTable("ReceiptItems");
+
+        modelBuilder.Entity<Purchase>()
             .Property(r => r.TotalAmount)
             .HasColumnType("decimal(18,2)");
 
-        modelBuilder.Entity<Receipt>()
+        modelBuilder.Entity<Purchase>()
             .Property(r => r.DeliveryCost)
             .HasColumnType("decimal(18,2)");
 
-        modelBuilder.Entity<Receipt>()
+        modelBuilder.Entity<Purchase>()
             .Property(r => r.PackageCost)
             .HasColumnType("decimal(18,2)");
 
@@ -112,17 +117,17 @@ public class AppDbContext : DbContext
             .HasForeignKey(sa => sa.ProductId)
             .OnDelete(DeleteBehavior.Cascade);
 
-        modelBuilder.Entity<Receipt>()
+        modelBuilder.Entity<Purchase>()
             .HasOne(r => r.Supplier)
             .WithMany()
             .HasForeignKey(r => r.SupplierId)
             .OnDelete(DeleteBehavior.SetNull);
-        modelBuilder.Entity<ReceiptItem>()
-            .HasOne(i => i.Receipt)
+        modelBuilder.Entity<PurchaseItem>()
+            .HasOne(i => i.Purchase)
             .WithMany(r => r.Items)
             .HasForeignKey(i => i.ReceiptId)
             .OnDelete(DeleteBehavior.Cascade);
-        modelBuilder.Entity<ReceiptItem>()
+        modelBuilder.Entity<PurchaseItem>()
             .HasOne(i => i.Product)
             .WithMany()
             .HasForeignKey(i => i.ProductId)
@@ -132,8 +137,8 @@ public class AppDbContext : DbContext
             .WithMany()
             .HasForeignKey(a => a.ReceiptItemId)
             .OnDelete(DeleteBehavior.SetNull);
-        modelBuilder.Entity<ReceiptItem>().Property(i => i.Quantity).HasColumnType("decimal(18,4)");
-        modelBuilder.Entity<ReceiptItem>().Property(i => i.UnitCost).HasColumnType("decimal(18,4)");
+        modelBuilder.Entity<PurchaseItem>().Property(i => i.Quantity).HasColumnType("decimal(18,4)");
+        modelBuilder.Entity<PurchaseItem>().Property(i => i.UnitCost).HasColumnType("decimal(18,4)");
         modelBuilder.Entity<SupplierOrderLine>().Property(i => i.QuantityOrdered).HasColumnType("decimal(18,4)");
         modelBuilder.Entity<SupplierOrderLine>().Property(i => i.QuantityReceived).HasColumnType("decimal(18,4)");
         modelBuilder.Entity<SupplierOrderLine>().Property(i => i.UnitPrice).HasColumnType("decimal(18,4)");

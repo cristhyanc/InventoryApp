@@ -1,4 +1,5 @@
 using Inventory.Application.NayaxFeeSettings;
+using Inventory.Application.Purchases;
 using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Reporting.Dashboard;
 using Inventory.Application.Reporting.Daily;
@@ -18,6 +19,7 @@ public static class ApplicationServiceCollectionExtensions
     {
         services.AddScoped<ListNayaxFeeRates>();
         services.AddScoped<SaveNayaxFeeRate>();
+        services.AddScoped<ComputePurchaseTotalValidation>();
         services.AddScoped<GetBookkeepingReport>();
         services.AddScoped<IGetBookkeepingReport>(sp => sp.GetRequiredService<GetBookkeepingReport>());
         services.AddScoped<GetDailyReport>();

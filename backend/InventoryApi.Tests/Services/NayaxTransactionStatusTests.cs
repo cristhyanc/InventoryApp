@@ -57,7 +57,7 @@ public class NayaxTransactionStatusTests
     }
 
     [Fact]
-    public async Task Completed_sale_is_costed_from_historical_receipt_movement()
+    public async Task Completed_sale_is_costed_from_historical_purchase_movement()
     {
         var options = new DbContextOptionsBuilder<AppDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;

@@ -8,34 +8,37 @@ using Microsoft.Identity.Web.Resource;
 
 namespace InventoryApi.Controllers;
 
+// Route is explicit (not derived from the controller name) so it stays "api/receipts": the
+// existing, bookmarked API route for the Purchase business record. See docs/architecture.md's
+// Purchase rename plan.
 [ApiController]
-[Route("api/[controller]")]
+[Route("api/receipts")]
 [Authorize]
 [RequiredScope("access_as_user")]
-public class ReceiptsController : ControllerBase
+public class PurchasesController : ControllerBase
 {
-    private readonly InventoryApi.Services.Interfaces.IReceiptService _service;
+    private readonly InventoryApi.Services.Interfaces.IPurchaseService _service;
 
-    public ReceiptsController(InventoryApi.Services.Interfaces.IReceiptService service)
+    public PurchasesController(InventoryApi.Services.Interfaces.IPurchaseService service)
     {
         _service = service;
     }
 
     [HttpGet]
-    public async Task<ActionResult<IEnumerable<ReceiptResponseDto>>> GetAll([FromQuery] int? supplierId)
+    public async Task<ActionResult<IEnumerable<PurchaseResponseDto>>> GetAll([FromQuery] int? supplierId)
     {
-        var receipts = await _service.GetAll(supplierId);
-        var result = receipts.Select(r => new ReceiptResponseDto(r, _service.ComputeValidation(r)));
+        var purchases = await _service.GetAll(supplierId);
+        var result = purchases.Select(r => new PurchaseResponseDto(r, _service.ComputeValidation(r)));
         return Ok(result);
     }
 
     [HttpGet("{id:int}")]
-    public async Task<ActionResult<ReceiptResponseDto>> Get(int id)
+    public async Task<ActionResult<PurchaseResponseDto>> Get(int id)
     {
-        var receipt = await _service.Get(id);
-        if (receipt is null) return NotFound();
-        var validation = _service.ComputeValidation(receipt);
-        return Ok(new ReceiptResponseDto(receipt, validation));
+        var purchase = await _service.Get(id);
+        if (purchase is null) return NotFound();
+        var validation = _service.ComputeValidation(purchase);
+        return Ok(new PurchaseResponseDto(purchase, validation));
     }
 
     [HttpGet("{id:int}/file")]
@@ -50,7 +53,7 @@ public class ReceiptsController : ControllerBase
     [HttpPost]
     [Consumes("multipart/form-data")]
     [RequestSizeLimit(10485760)]
-    public async Task<ActionResult<ReceiptResponseDto>> Upload(
+    public async Task<ActionResult<PurchaseResponseDto>> Upload(
         IFormFile file,
         [FromForm] string title,
         [FromForm] string? notes,
@@ -61,23 +64,23 @@ public class ReceiptsController : ControllerBase
         [FromForm] int? supplierId,
         [FromForm] string? items)
     {
-        Receipt? receipt;
+        Purchase? purchase;
         try
         {
-            receipt = await _service.Upload(file, title, notes, totalAmount, deliveryCost, packageCost, purchaseDate, supplierId,
+            purchase = await _service.Upload(file, title, notes, totalAmount, deliveryCost, packageCost, purchaseDate, supplierId,
                 ParseItems(items));
         }
         catch (InvalidOperationException ex)
         {
             return BadRequest(ex.Message);
         }
-        if (receipt is null) return BadRequest("Invalid file or supplier");
-        var validation = _service.ComputeValidation(receipt);
-        return CreatedAtAction(nameof(Get), new { id = receipt.Id }, new ReceiptResponseDto(receipt, validation));
+        if (purchase is null) return BadRequest("Invalid file or supplier");
+        var validation = _service.ComputeValidation(purchase);
+        return CreatedAtAction(nameof(Get), new { id = purchase.Id }, new PurchaseResponseDto(purchase, validation));
     }
 
     [HttpPut("{id:int}")]
-    public async Task<ActionResult<ReceiptResponseDto>> Update(
+    public async Task<ActionResult<PurchaseResponseDto>> Update(
         int id,
         [FromForm] string? title,
         [FromForm] string? notes,
@@ -88,19 +91,19 @@ public class ReceiptsController : ControllerBase
         [FromForm] int? supplierId,
         [FromForm] string? items)
     {
-        Receipt? receipt;
+        Purchase? purchase;
         try
         {
-            receipt = await _service.Update(id, title, notes, totalAmount, deliveryCost, packageCost, purchaseDate, supplierId,
+            purchase = await _service.Update(id, title, notes, totalAmount, deliveryCost, packageCost, purchaseDate, supplierId,
                 ParseItems(items));
         }
         catch (InvalidOperationException ex)
         {
             return BadRequest(ex.Message);
         }
-        if (receipt is null) return NotFound();
-        var validation = _service.ComputeValidation(receipt);
-        return Ok(new ReceiptResponseDto(receipt, validation));
+        if (purchase is null) return NotFound();
+        var validation = _service.ComputeValidation(purchase);
+        return Ok(new PurchaseResponseDto(purchase, validation));
     }
 
     [HttpDelete("{id:int}")]
@@ -117,9 +120,9 @@ public class ReceiptsController : ControllerBase
         }
     }
 
-    private static IReadOnlyList<ReceiptItemDto>? ParseItems(string? items) =>
-        string.IsNullOrWhiteSpace(items) ? Array.Empty<ReceiptItemDto>() :
-        System.Text.Json.JsonSerializer.Deserialize<IReadOnlyList<ReceiptItemDto>>(
+    private static IReadOnlyList<PurchaseItemDto>? ParseItems(string? items) =>
+        string.IsNullOrWhiteSpace(items) ? Array.Empty<PurchaseItemDto>() :
+        System.Text.Json.JsonSerializer.Deserialize<IReadOnlyList<PurchaseItemDto>>(
             items,
             new System.Text.Json.JsonSerializerOptions
             {

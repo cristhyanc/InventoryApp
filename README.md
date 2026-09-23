@@ -5,7 +5,7 @@ InventoryApp is a full-stack operations and bookkeeping system for a vending-mac
 ## Capabilities
 
 - Product, category, supplier, and low-stock management.
-- Purchase receipts, supporting documents, supplier orders, and stock movements.
+- Purchases, their supporting documents, supplier orders, and stock movements.
 - Sites, vending machines, product assignments, and machine refills.
 - Nayax product and transaction imports with explicit payment/status handling.
 - Historical weighted-average inventory costing and persisted COGS provenance.
@@ -118,7 +118,7 @@ Human-controlled Entra portal setup this configuration depends on (not part of t
 
 MSAL's protected-resource map (`buildProtectedResourceMap` in `auth-config.ts`) is built from `ConfigService.apiBaseUrl`, the same value every HTTP call uses (see [above](#2-how-the-frontend-finds-the-api)), so the bearer token attaches correctly to `/api/*` locally and to the deployed absolute API URL in production, without any code or configuration change between environments. `ConfigService` loads `assets/config.json` on the raw `HttpBackend` rather than the intercepted `HttpClient`, so the MSAL interceptor cannot be constructed — and cannot capture a stale API base URL — before that load has finished.
 
-Protected business documents (purchase receipts and operating-expense supporting documents) are stored outside the API's web root and are served only by the authenticated `/api/receipts/{id}/file` and `/api/operating-expenses/{id}/attachment` endpoints. The API registers no static-file middleware, so these documents have no anonymous URL; the frontend fetches them through `HttpClient` and renders them from a temporary object URL.
+Protected business documents (purchase documents and operating-expense supporting documents) are stored outside the API's web root and are served only by the authenticated `/api/receipts/{id}/file` and `/api/operating-expenses/{id}/attachment` endpoints. The API registers no static-file middleware, so these documents have no anonymous URL; the frontend fetches them through `HttpClient` and renders them from a temporary object URL.
 
 Azure Static Web Apps direct navigation (including the `/auth` redirect landing) is handled by `frontend/inventory-app/src/staticwebapp.config.json`, which rewrites unmatched paths to `/index.html` so the Angular router — not a platform 404 — handles them.
 
@@ -137,7 +137,7 @@ Nayax__Token
 NayaxLynx__OperatorId
 ```
 
-Uploaded receipt and expense documents are stored beneath the API web root with their metadata in SQLite. Do not commit uploaded business documents, local databases, or credentials.
+Uploaded purchase and expense documents are stored outside the API web root, under the content root's `protected-files/` folder, with their metadata in SQLite; they are readable only through the authenticated API endpoints. Do not commit uploaded business documents, local databases, or credentials.
 
 ## Validate a change
 

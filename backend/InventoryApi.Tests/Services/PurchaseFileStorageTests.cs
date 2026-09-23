@@ -16,12 +16,12 @@ using Xunit;
 namespace InventoryApi.Tests.Services;
 
 /// <summary>
-/// Proves where purchase receipt documents live on disk. They must stay outside the static
-/// web root: static-file middleware does not run controller authorization, so a document
-/// under <c>wwwroot</c> would be downloadable by anyone who knows its generated file name,
-/// defeating the <c>[Authorize]</c> boundary on <c>ReceiptsController</c>.
+/// Proves where purchase documents live on disk. They must stay outside the static web
+/// root: static-file middleware does not run controller authorization, so a document under
+/// <c>wwwroot</c> would be downloadable by anyone who knows its generated file name,
+/// defeating the <c>[Authorize]</c> boundary on <c>PurchasesController</c>.
 /// </summary>
-public sealed class ReceiptFileStorageTests : IDisposable
+public sealed class PurchaseFileStorageTests : IDisposable
 {
     private readonly string _contentRoot = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
     private readonly string _webRoot = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
@@ -32,10 +32,10 @@ public sealed class ReceiptFileStorageTests : IDisposable
         using var db = CreateDbContext();
         var service = CreateService(db);
 
-        var receipt = await service.Upload(CreateFile("receipt.jpg"), "Purchase", null, null, null, null, null, null);
+        var purchase = await service.Upload(CreateFile("receipt.jpg"), "Purchase", null, null, null, null, null, null);
 
-        Assert.NotNull(receipt);
-        var storedFileName = receipt!.StoredFileName;
+        Assert.NotNull(purchase);
+        var storedFileName = purchase!.StoredFileName;
         Assert.True(File.Exists(Path.Combine(_contentRoot, "protected-files", "receipts", storedFileName)));
         Assert.False(File.Exists(Path.Combine(_webRoot, "receipts", storedFileName)));
         Assert.False(Directory.Exists(Path.Combine(_webRoot, "receipts")));
@@ -51,7 +51,7 @@ public sealed class ReceiptFileStorageTests : IDisposable
         Directory.CreateDirectory(legacyFolder);
         var legacyPath = Path.Combine(legacyFolder, storedFileName);
         await File.WriteAllBytesAsync(legacyPath, new byte[] { 1, 2, 3 });
-        db.Receipts.Add(new Receipt
+        db.Receipts.Add(new Purchase
         {
             Title = "Legacy purchase",
             FileName = "legacy.jpg",
@@ -61,15 +61,15 @@ public sealed class ReceiptFileStorageTests : IDisposable
             PurchaseDate = DateTime.UtcNow
         });
         await db.SaveChangesAsync();
-        var receiptId = (await db.Receipts.AsNoTracking().SingleAsync()).Id;
+        var purchaseId = (await db.Receipts.AsNoTracking().SingleAsync()).Id;
 
-        var (content, contentType, fileName) = await service.GetFile(receiptId);
+        var (content, contentType, fileName) = await service.GetFile(purchaseId);
 
         Assert.Equal(new byte[] { 1, 2, 3 }, content);
         Assert.Equal("image/jpeg", contentType);
         Assert.Equal("legacy.jpg", fileName);
 
-        Assert.True(await service.Delete(receiptId));
+        Assert.True(await service.Delete(purchaseId));
         Assert.False(File.Exists(legacyPath));
     }
 
@@ -84,8 +84,8 @@ public sealed class ReceiptFileStorageTests : IDisposable
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options);
 
-    private IReceiptService CreateService(AppDbContext db) =>
-        new ReceiptService(db, new TestWebHostEnvironment(_contentRoot, _webRoot));
+    private IPurchaseService CreateService(AppDbContext db) =>
+        new PurchaseService(db, new TestWebHostEnvironment(_contentRoot, _webRoot));
 
     private static IFormFile CreateFile(string fileName)
     {
