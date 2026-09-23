@@ -132,8 +132,8 @@ public class DatabaseSchemaStartupTests : IDisposable
     }
 
     /// <summary>
-    /// The escape hatch exists for disposable non-Development databases, and its configuration
-    /// key is named so that setting it in production is obviously wrong.
+    /// The escape hatch exists for disposable non-Production databases, and its configuration
+    /// key is named so that reaching for it in production is obviously wrong.
     /// </summary>
     [Fact]
     public void An_explicit_opt_in_allows_automatic_migration_outside_development()
@@ -143,6 +143,33 @@ public class DatabaseSchemaStartupTests : IDisposable
             Configuration((DatabaseSchemaStartup.AllowAutomaticMigrationKey, "true")));
 
         Assert.True(TenancyTablesExist());
+    }
+
+    /// <summary>
+    /// The regression this pins down: Production must never migrate automatically, and the unsafe
+    /// override must not be able to buy its way past that.
+    ///
+    /// A configuration value is the wrong thing to stake production data on. It can arrive from a
+    /// deployment template, an environment variable, or an App Service setting copied from
+    /// staging - none of which is the human review issue #64 requires before the tenancy
+    /// migrations run. So Production is decided by environment name alone.
+    /// </summary>
+    [Theory]
+    [InlineData("true")]
+    [InlineData("True")]
+    [InlineData("1")]
+    public void Production_never_migrates_automatically_even_with_the_unsafe_override(string overrideValue)
+    {
+        var exception = Assert.Throws<PendingMigrationsException>(() => EnsureSchema(
+            "Production",
+            Configuration((DatabaseSchemaStartup.AllowAutomaticMigrationKey, overrideValue))));
+
+        // Not one migration was applied on the way to failing.
+        Assert.False(TenancyTablesExist());
+        Assert.Contains(DatabaseMigrationArguments.CommandName, exception.Message, StringComparison.Ordinal);
+
+        using var db = TestAppDbContext.Unrestricted(_options);
+        Assert.Empty(db.Database.GetAppliedMigrations());
     }
 
     [Fact]

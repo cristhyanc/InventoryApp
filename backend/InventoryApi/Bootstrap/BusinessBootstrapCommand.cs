@@ -12,9 +12,16 @@ namespace InventoryApi.Bootstrap;
 /// them, rather than something a deployment performs. The API never invokes it: starting the web
 /// host and running this command are mutually exclusive paths through <c>Program.cs</c>.
 ///
+/// From a source tree, with the SDK installed:
 /// <code>
 ///   dotnet run --project backend/InventoryApi -- bootstrap-business --dry-run
 ///   dotnet run --project backend/InventoryApi -- bootstrap-business --apply
+/// </code>
+///
+/// From the deployed application, which is `dotnet publish` output and has no SDK or sources:
+/// <code>
+///   dotnet InventoryApi.dll bootstrap-business --dry-run
+///   dotnet InventoryApi.dll bootstrap-business --apply
 /// </code>
 ///
 /// <c>--apply</c> must be typed explicitly; an invocation with neither flag is treated as a dry

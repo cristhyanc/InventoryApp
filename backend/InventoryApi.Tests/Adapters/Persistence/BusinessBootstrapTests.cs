@@ -539,6 +539,86 @@ public class BusinessBootstrapTests : IDisposable
         db.SaveChanges();
     }
 
+    private void DeactivateEveryBusiness()
+    {
+        using var db = TestAppDbContext.Unrestricted(_options);
+        foreach (var business in db.Businesses.ToList())
+        {
+            business.IsActive = false;
+        }
+
+        db.SaveChanges();
+    }
+
+    private void UnassignProductsAndSales()
+    {
+        using var db = TestAppDbContext.Unrestricted(_options);
+        db.Database.ExecuteSqlRaw("UPDATE Products SET BusinessId = 0;");
+        db.Database.ExecuteSqlRaw("UPDATE NayaxSales SET BusinessId = 0;");
+    }
+
+    /// <summary>
+    /// A deactivated business cannot reach its own records, so assigning data to one would strand
+    /// it just as surely as having no member at all. The membership can be perfectly valid and it
+    /// still must not proceed.
+    /// </summary>
+    [Fact]
+    public async Task Unassigned_rows_are_refused_when_the_owning_business_is_inactive()
+    {
+        SeedUnassignedBusinessData();
+        await RunAsync(ValidOptions(), dryRun: false);
+
+        DeactivateEveryBusiness();
+        UnassignProductsAndSales();
+
+        var result = await RunAsync(ValidOptions(), dryRun: false);
+
+        Assert.Equal(BusinessBootstrapOutcome.BusinessInactive, result.Outcome);
+        Assert.Contains("deactivated", result.Message, StringComparison.Ordinal);
+
+        using var verify = TestAppDbContext.Unrestricted(_options);
+        Assert.Equal(2, verify.Products.Count(p => p.BusinessId == 0));
+        Assert.Equal(2, verify.NayaxSales.Count(s => s.BusinessId == 0));
+        Assert.False(Assert.Single(verify.Businesses.ToList()).IsActive);
+    }
+
+    /// <summary>
+    /// The inactive-business check has to come first: an active membership pointing at a
+    /// deactivated business grants nothing, so counting memberships alone would let this through.
+    /// </summary>
+    [Fact]
+    public async Task An_active_membership_does_not_excuse_an_inactive_business()
+    {
+        SeedUnassignedBusinessData();
+        await RunAsync(ValidOptions(), dryRun: false);
+
+        DeactivateEveryBusiness();
+        UnassignProductsAndSales();
+
+        using (var db = TestAppDbContext.Unrestricted(_options))
+        {
+            Assert.True(Assert.Single(db.BusinessMemberships.ToList()).IsActive);
+        }
+
+        var result = await RunAsync(ValidOptions(), dryRun: false);
+
+        Assert.Equal(BusinessBootstrapOutcome.BusinessInactive, result.Outcome);
+    }
+
+    [Fact]
+    public async Task A_dry_run_also_refuses_when_the_owning_business_is_inactive()
+    {
+        SeedUnassignedBusinessData();
+        await RunAsync(ValidOptions(), dryRun: false);
+
+        DeactivateEveryBusiness();
+        UnassignProductsAndSales();
+
+        var result = await RunAsync(ValidOptions(), dryRun: true);
+
+        Assert.Equal(BusinessBootstrapOutcome.BusinessInactive, result.Outcome);
+    }
+
     [Fact]
     public async Task Adding_a_second_configured_member_later_creates_only_the_new_membership()
     {
@@ -599,7 +679,7 @@ public class BusinessBootstrapTests : IDisposable
         var state = TenantOwnershipReadiness.Inspect(db);
 
         Assert.Equal(0, state.BusinessCount);
-        Assert.Equal(0, state.ActiveMembershipCount);
+        Assert.Equal(0, state.UsableMembershipCount);
         Assert.False(state.IsReady);
     }
 
@@ -650,7 +730,7 @@ public class BusinessBootstrapTests : IDisposable
 
         Assert.Equal(0, state.UnassignedRows);
         Assert.Equal(1, state.BusinessCount);
-        Assert.Equal(0, state.ActiveMembershipCount);
+        Assert.Equal(0, state.UsableMembershipCount);
         Assert.False(state.IsReady);
     }
 
@@ -665,8 +745,77 @@ public class BusinessBootstrapTests : IDisposable
 
         Assert.Equal(0, state.UnassignedRows);
         Assert.Equal(1, state.BusinessCount);
-        Assert.Equal(1, state.ActiveMembershipCount);
+        Assert.Equal(1, state.ActiveBusinessCount);
+        Assert.Equal(1, state.UsableMembershipCount);
         Assert.True(state.IsReady);
+    }
+
+    /// <summary>
+    /// A deactivated business serves nobody, however healthy its membership looks. Reporting this
+    /// as ready would tell an operator the rollout was fine while every caller saw nothing.
+    /// </summary>
+    [Fact]
+    public async Task An_inactive_business_with_an_active_membership_is_not_ready()
+    {
+        SeedUnassignedBusinessData();
+        await RunAsync(ValidOptions(), dryRun: false);
+        DeactivateEveryBusiness();
+
+        using var db = TestAppDbContext.Unrestricted(_options);
+        var state = TenantOwnershipReadiness.Inspect(db);
+
+        Assert.Equal(0, state.UnassignedRows);
+        Assert.Equal(1, state.BusinessCount);
+        Assert.Equal(0, state.ActiveBusinessCount);
+
+        // The membership row is still active, but it points at an inactive business, so it
+        // authorises nothing and must not be counted as access.
+        Assert.Equal(0, state.UsableMembershipCount);
+        Assert.False(state.IsReady);
+    }
+
+    /// <summary>
+    /// The same membership must stop counting the moment its business is deactivated, even while
+    /// a second, active business exists - the join has to be per business, not a global count.
+    /// </summary>
+    [Fact]
+    public async Task A_membership_attached_only_to_an_inactive_business_is_not_usable_access()
+    {
+        SeedUnassignedBusinessData();
+        await RunAsync(ValidOptions(), dryRun: false);
+        DeactivateEveryBusiness();
+
+        using var db = TestAppDbContext.Unrestricted(_options);
+        db.Businesses.Add(new Business { Name = "Another", IsActive = true, CreatedAtUtc = DateTime.UtcNow });
+        db.SaveChanges();
+
+        var state = TenantOwnershipReadiness.Inspect(db);
+
+        Assert.Equal(1, state.ActiveBusinessCount);
+        Assert.Equal(0, state.UsableMembershipCount);
+        Assert.False(state.IsReady);
+    }
+
+    /// <summary>
+    /// This rollout serves one vending business. A second one appearing is a state a human should
+    /// look at, not a healthy steady state to report as ready.
+    /// </summary>
+    [Fact]
+    public async Task More_than_one_business_is_not_ready()
+    {
+        SeedUnassignedBusinessData();
+        await RunAsync(ValidOptions(), dryRun: false);
+
+        using var db = TestAppDbContext.Unrestricted(_options);
+        db.Businesses.Add(new Business { Name = "Second", IsActive = true, CreatedAtUtc = DateTime.UtcNow });
+        db.SaveChanges();
+
+        var state = TenantOwnershipReadiness.Inspect(db);
+
+        Assert.Equal(2, state.BusinessCount);
+        Assert.Equal(2, state.ActiveBusinessCount);
+        Assert.Equal(1, state.UsableMembershipCount);
+        Assert.False(state.IsReady);
     }
 
     #endregion

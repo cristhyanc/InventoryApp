@@ -8,22 +8,35 @@ namespace InventoryApi.Bootstrap;
 /// What the startup readiness check found about tenant ownership.
 /// </summary>
 /// <param name="UnassignedRows">Tenant-owned rows still owned by nobody.</param>
-/// <param name="BusinessCount">Businesses configured in this database.</param>
-/// <param name="ActiveMembershipCount">Memberships that can currently authorise a caller.</param>
+/// <param name="BusinessCount">Businesses configured in this database, active or not.</param>
+/// <param name="ActiveBusinessCount">Businesses that are currently active.</param>
+/// <param name="UsableMembershipCount">
+/// Active memberships that belong to an <em>active</em> business. A membership pointing at a
+/// deactivated business grants nothing, so it is not counted as access.
+/// </param>
 public readonly record struct TenantOwnershipReadinessState(
     long UnassignedRows,
     int BusinessCount,
-    int ActiveMembershipCount)
+    int ActiveBusinessCount,
+    int UsableMembershipCount)
 {
     /// <summary>
     /// Ready means the rollout is actually usable, not merely that no row is unassigned.
     ///
-    /// Counting zero unassigned rows on its own is not evidence of anything: a fresh, empty
-    /// database satisfies it trivially while having no business and nobody who can sign in. For
-    /// this first single-business rollout all three must hold - the data has an owner, that
-    /// owner exists, and at least one actor can still reach it.
+    /// Counting zero unassigned rows on its own is not evidence of anything: a fresh database
+    /// satisfies it trivially while having no business and nobody who can sign in. For this
+    /// first single-business rollout every part must hold - the data has an owner, there is
+    /// exactly one business and it is active, and at least one actor can actually reach it.
+    ///
+    /// "Exactly one" is deliberate rather than "at least one": this rollout serves a single
+    /// vending business, so a second business appearing is a state a human should look at, not
+    /// something to report as a healthy steady state.
     /// </summary>
-    public bool IsReady => UnassignedRows == 0 && BusinessCount > 0 && ActiveMembershipCount > 0;
+    public bool IsReady =>
+        UnassignedRows == 0
+        && BusinessCount == 1
+        && ActiveBusinessCount == 1
+        && UsableMembershipCount > 0;
 }
 
 /// <summary>
@@ -44,11 +57,23 @@ public static class TenantOwnershipReadiness
 {
     private const int Unassigned = 0;
 
-    public static TenantOwnershipReadinessState Inspect(AppDbContext db) =>
-        new(
+    public static TenantOwnershipReadinessState Inspect(AppDbContext db)
+    {
+        var businesses = db.Businesses.IgnoreQueryFilters();
+
+        // The join is the point: an active membership on a deactivated business authorises
+        // nothing, so counting memberships alone would report access that does not exist.
+        var usableMemberships = db.BusinessMemberships
+            .IgnoreQueryFilters()
+            .Count(membership => membership.IsActive
+                && businesses.Any(business => business.Id == membership.BusinessId && business.IsActive));
+
+        return new TenantOwnershipReadinessState(
             CountUnassignedRows(db),
-            db.Businesses.IgnoreQueryFilters().Count(),
-            db.BusinessMemberships.IgnoreQueryFilters().Count(membership => membership.IsActive));
+            businesses.Count(),
+            businesses.Count(business => business.IsActive),
+            usableMemberships);
+    }
 
     public static void Report(AppDbContext db, ILoggerFactory loggerFactory)
     {
@@ -58,23 +83,25 @@ public static class TenantOwnershipReadiness
         if (state.IsReady)
         {
             logger.LogInformation(
-                "Tenant ownership is bootstrapped: {BusinessCount} business(es), "
-                    + "{ActiveMembershipCount} active membership(s), and no unassigned rows.",
-                state.BusinessCount,
-                state.ActiveMembershipCount);
+                "Tenant ownership is bootstrapped: one active business with "
+                    + "{UsableMembershipCount} usable membership(s), and no unassigned rows.",
+                state.UsableMembershipCount);
             return;
         }
 
         logger.LogError(
             "Tenant ownership is NOT bootstrapped: {UnassignedRows} unassigned row(s), "
-                + "{BusinessCount} business(es), {ActiveMembershipCount} active membership(s). "
-                + "Ready requires no unassigned rows, at least one business, and at least one active "
-                + "membership. Until then signed-in callers see an empty dataset - the safe state, not "
-                + "a corruption. Run the reviewed `{Command} --dry-run` and then `{Command} --apply` as "
-                + "described in docs/tenant-rollout.md. The API will not assign ownership on its own.",
+                + "{BusinessCount} business(es) of which {ActiveBusinessCount} active, "
+                + "{UsableMembershipCount} active membership(s) on an active business. Ready requires "
+                + "no unassigned rows, exactly one business which is active, and at least one active "
+                + "membership belonging to it. Until then signed-in callers see an empty dataset - the "
+                + "safe state, not a corruption. Run the reviewed `{Command} --dry-run` and then "
+                + "`{Command} --apply` as described in docs/tenant-rollout.md. The API will not assign "
+                + "ownership on its own.",
             state.UnassignedRows,
             state.BusinessCount,
-            state.ActiveMembershipCount,
+            state.ActiveBusinessCount,
+            state.UsableMembershipCount,
             BusinessBootstrapArguments.CommandName,
             BusinessBootstrapArguments.CommandName);
     }

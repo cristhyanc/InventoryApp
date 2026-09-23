@@ -63,17 +63,28 @@ public static class DatabaseMigrationArguments
 /// Applies schema migrations as a deliberate, human-invoked step (issue #64).
 ///
 /// This is the supported way to change a production schema now that startup refuses to. It ships
-/// inside the API image, so an operator can run it wherever the application already runs and
-/// against the connection string that environment already holds - no .NET SDK, no EF tooling,
-/// and no copy of the production connection string on someone's laptop.
+/// inside the published application, so an operator runs it where the application already runs
+/// and against the connection string that environment already holds - no EF tooling and no copy
+/// of the production connection string on someone's laptop.
 ///
+/// From a source tree, with the SDK installed:
 /// <code>
 ///   dotnet run --project backend/InventoryApi -- migrate-database --dry-run
 ///   dotnet run --project backend/InventoryApi -- migrate-database --apply
 /// </code>
 ///
-/// It never touches data. It applies migrations, which in this repository are schema only;
-/// assigning ownership remains the separate <c>bootstrap-business</c> step.
+/// From the deployed application, which is `dotnet publish` output and has no SDK or sources -
+/// `dotnet run --project` is not available there:
+/// <code>
+///   dotnet InventoryApi.dll migrate-database --dry-run
+///   dotnet InventoryApi.dll migrate-database --apply
+/// </code>
+///
+/// Schema migrations never assign tenant ownership or perform the business backfill; that
+/// remains the separate <c>bootstrap-business</c> step. They are not, however, free of data
+/// movement: some rebuild tables and copy every row across - the NayaxSales re-key does exactly
+/// that - which is precisely why applying them in production stays human-controlled and why the
+/// dry run above exists.
 /// </summary>
 public static class DatabaseMigrationCommand
 {
@@ -159,8 +170,9 @@ public static class DatabaseMigrationCommand
             readiness.IsReady
                 ? "Tenant ownership is bootstrapped; no further action needed."
                 : $"Tenant ownership is NOT yet bootstrapped: {readiness.UnassignedRows} unassigned row(s), "
-                    + $"{readiness.BusinessCount} business(es), {readiness.ActiveMembershipCount} active "
-                    + $"membership(s). Run `{BusinessBootstrapArguments.CommandName} "
+                    + $"{readiness.BusinessCount} business(es) of which {readiness.ActiveBusinessCount} active, "
+                    + $"{readiness.UsableMembershipCount} active membership(s) on an active business. "
+                    + $"Run `{BusinessBootstrapArguments.CommandName} "
                     + $"{BusinessBootstrapArguments.DryRunFlag}` next. See docs/tenant-rollout.md.");
         Console.WriteLine();
 

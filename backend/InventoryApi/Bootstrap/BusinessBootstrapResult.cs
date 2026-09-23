@@ -33,6 +33,12 @@ public enum BusinessBootstrapOutcome
     /// is a human decision the bootstrap must not make on their behalf.
     /// </summary>
     NoActiveMembership = 5,
+
+    /// <summary>
+    /// The business that would own the data is deactivated, so its records would be unreachable
+    /// however many active members it has. Reactivating a business is a human decision.
+    /// </summary>
+    BusinessInactive = 6,
 }
 
 /// <summary>What one table looked like before and after the backfill touched it.</summary>

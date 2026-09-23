@@ -142,8 +142,10 @@ var app = builder.Build();
 // migrations - including the NayaxSales table rebuild - must be applied by a human under review.
 // See DatabaseSchemaStartup and docs/tenant-rollout.md.
 //
-// Nothing here touches data either way: no migration in this repository performs a backfill, and
-// tenant ownership is assigned exclusively by the human-invoked `bootstrap-business` command.
+// Schema migrations never assign tenant ownership or perform the business backfill - that is
+// exclusively the human-invoked `bootstrap-business` command. Some of them do rebuild tables and
+// copy persisted rows (the NayaxSales re-key), which is a further reason production migration is
+// human-controlled rather than a deployment side effect.
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();

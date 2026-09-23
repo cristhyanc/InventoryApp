@@ -26,10 +26,43 @@ An API serving requests against a schema its code does not match is the failure 
 Development still migrates automatically, where the database is disposable and the convenience
 costs nothing.
 
-No migration in this repository moves data or assigns ownership. Migrations create tables,
-columns and indexes only. The backfill exists exclusively in the `bootstrap-business` command,
-which the API never invokes — starting the web host and running either command are mutually
-exclusive paths through `Program.cs`.
+Schema migrations never assign tenant ownership or perform the business backfill. That exists
+exclusively in the `bootstrap-business` command, which the API never invokes — starting the web
+host and running either command are mutually exclusive paths through `Program.cs`.
+
+Schema migrations are not, however, data-free. Several rebuild a table and copy every row into a
+new one; the `ScopeUniqueConstraintsByBusiness` migration does this to `NayaxSales` in order to
+re-key it. That is another reason production migration stays human-controlled, and why step 2
+below asks for a verified backup first.
+
+## Running the commands
+
+Both operator commands ship inside the application. How you invoke them depends on what you are
+standing in front of.
+
+**A source tree, with the .NET SDK installed** (local development, a build agent):
+
+```bash
+dotnet run --project backend/InventoryApi -- migrate-database --dry-run
+dotnet run --project backend/InventoryApi -- migrate-database --apply
+dotnet run --project backend/InventoryApi -- bootstrap-business --dry-run
+dotnet run --project backend/InventoryApi -- bootstrap-business --apply
+```
+
+**The deployed application** (Azure App Service, or anywhere the published output runs). The
+deployment is `dotnet publish` output: it contains no sources and no SDK, so `dotnet run
+--project` does not work there. From the directory holding `InventoryApi.dll`:
+
+```bash
+dotnet InventoryApi.dll migrate-database --dry-run
+dotnet InventoryApi.dll migrate-database --apply
+dotnet InventoryApi.dll bootstrap-business --dry-run
+dotnet InventoryApi.dll bootstrap-business --apply
+```
+
+On App Service, run these from the SSH/console session for the app, where the environment already
+holds the connection string and application settings. The rest of this document uses the source
+form for brevity; substitute the deployed form when working against a deployed environment.
 
 ## The state between schema and bootstrap
 
@@ -89,22 +122,23 @@ output.
 
 **1. Back up the database.** Verify the backup restores.
 
-**2. Apply the schema, by hand.** First see what is pending:
+**2. Apply the schema, by hand.** Using the form for your environment (see
+[Running the commands](#running-the-commands)), first see what is pending:
 
 ```bash
-dotnet run --project backend/InventoryApi -- migrate-database --dry-run
+migrate-database --dry-run
 ```
 
 Read the list, confirm it is what review approved, then apply it:
 
 ```bash
-dotnet run --project backend/InventoryApi -- migrate-database --apply
+migrate-database --apply
 ```
 
 This creates the tenancy tables, the `BusinessId` columns and the audit table, and assigns no
-ownership. The command ships inside the API image, so it runs wherever the application already
-runs, against the connection string that environment already holds — no SDK, no EF tooling, and no
-copy of the production connection string on anyone's laptop.
+ownership. Note that applying is not purely additive: `ScopeUniqueConstraintsByBusiness` rebuilds
+the `NayaxSales` table and copies every sale row into it, which is why step 1's backup is not
+optional.
 
 `--apply` and `--dry-run` are mutually exclusive; passing both, or any other flag, is refused
 rather than resolved by precedence.
@@ -115,7 +149,7 @@ non-Development environment will refuse to start and log which migrations are pe
 **3. Dry run the bootstrap.**
 
 ```bash
-dotnet run --project backend/InventoryApi -- bootstrap-business --dry-run
+bootstrap-business --dry-run
 ```
 
 This performs the whole operation inside a transaction, verifies it, prints the result and then
@@ -133,7 +167,7 @@ If anything looks wrong, stop. Nothing has been changed.
 **4. Apply the bootstrap.**
 
 ```bash
-dotnet run --project backend/InventoryApi -- bootstrap-business --apply
+bootstrap-business --apply
 ```
 
 `--apply` must be typed explicitly; an invocation with neither flag is a dry run.
@@ -166,7 +200,11 @@ rolls back automatically if any row count or financial total moved. Then check b
   to `BusinessBootstrap:Members` and run again — the bootstrap will not reactivate a revoked
   approval on your behalf.
 - **The API refuses to start with "pending migration(s)".** Step 2 has not been completed against
-  that database. Run `migrate-database --dry-run`, review, then `--apply`.
+  that database. Run `migrate-database --dry-run`, review, then `--apply`. Production ignores the
+  `Database:AllowAutomaticMigrationUnsafeOutsideDevelopment` setting entirely - there is no
+  configuration that makes a Production deployment migrate itself.
+- **"the business ... is deactivated".** The business that would own the data is inactive, so its
+  records would be unreachable whoever is a member. Reactivate it deliberately, then run again.
 - **Ownership was assigned to the wrong business.** Restore from the backup. Do not attempt to
   reassign rows by hand; ownership is immutable through the application and editing it directly
   bypasses every check in the boundary.

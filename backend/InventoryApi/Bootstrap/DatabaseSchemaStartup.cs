@@ -33,11 +33,13 @@ public sealed class PendingMigrationsException : Exception
 ///
 /// So the rule now depends on the environment:
 /// <list type="bullet">
+///   <item><b>Production never migrates automatically</b>, whatever the configuration says. The
+///   override below is checked only after Production has already been ruled out.</item>
 ///   <item><b>Development and testing</b> keep automatic migration, where a throwaway database
 ///   is the point and the convenience costs nothing.</item>
-///   <item><b>Everywhere else</b>, including Production, startup applies nothing. If migrations
-///   are pending it fails closed with an operator-facing error naming the exact command to run;
-///   deploying the API is no longer a way to change the schema.</item>
+///   <item><b>Everywhere else</b> startup applies nothing unless the unsafe override is set. If
+///   migrations are pending it fails closed with an operator-facing error naming the exact
+///   command to run; deploying the API is no longer a way to change the schema.</item>
 /// </list>
 ///
 /// Failing to start is the correct response rather than an over-reaction: the alternative is an
@@ -47,9 +49,14 @@ public sealed class PendingMigrationsException : Exception
 public static class DatabaseSchemaStartup
 {
     /// <summary>
-    /// Opt-in override, for an environment that is not named Development but is still
-    /// disposable - an ephemeral integration-test database, for example. It must never be set in
-    /// production, and the name says so.
+    /// Opt-in override for an environment that is not named Development but is still
+    /// disposable - an ephemeral integration-test or Staging database, for example.
+    ///
+    /// It has no effect in Production. A configuration value is the wrong thing to stake
+    /// production data on: it can be set by a deployment template, an environment variable, or a
+    /// copied App Service setting, none of which is the human review that issue #64 requires
+    /// before the tenancy migrations run. Production is therefore decided by the environment
+    /// name alone and cannot be talked out of it.
     /// </summary>
     public const string AllowAutomaticMigrationKey = "Database:AllowAutomaticMigrationUnsafeOutsideDevelopment";
 
@@ -101,8 +108,17 @@ public static class DatabaseSchemaStartup
         throw new PendingMigrationsException(message);
     }
 
-    private static bool MayMigrateAutomatically(IHostEnvironment environment, IConfiguration configuration) =>
-        environment.IsDevelopment()
-        || environment.IsEnvironment("Testing")
-        || configuration.GetValue<bool>(AllowAutomaticMigrationKey);
+    private static bool MayMigrateAutomatically(IHostEnvironment environment, IConfiguration configuration)
+    {
+        // Production is decided first and is not overridable. Everything below this line is a
+        // convenience for disposable databases; none of it may reach real business data.
+        if (environment.IsProduction())
+        {
+            return false;
+        }
+
+        return environment.IsDevelopment()
+            || environment.IsEnvironment("Testing")
+            || configuration.GetValue<bool>(AllowAutomaticMigrationKey);
+    }
 }

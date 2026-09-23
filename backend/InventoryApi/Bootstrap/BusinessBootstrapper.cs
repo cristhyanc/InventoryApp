@@ -136,6 +136,19 @@ public sealed class BusinessBootstrapper
         var unassignedTotal = await CountUnassignedAsync(tables, cancellationToken);
         if (unassignedTotal > 0)
         {
+            if (!business.IsActive)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return Failure(
+                    BusinessBootstrapOutcome.BusinessInactive,
+                    dryRun,
+                    $"{unassignedTotal} row(s) are unassigned, but the business that would own them "
+                        + "is deactivated, so its records would be unreachable whoever is a member. "
+                        + "Reactivate the business deliberately, then run again. Nothing was assigned.");
+            }
+
+            // An active membership on a deactivated business grants nothing, so the business
+            // check above has to come first: counting memberships alone would let this pass.
             var activeMemberships = await _db.BusinessMemberships
                 .CountAsync(m => m.BusinessId == business.Id && m.IsActive, cancellationToken);
 

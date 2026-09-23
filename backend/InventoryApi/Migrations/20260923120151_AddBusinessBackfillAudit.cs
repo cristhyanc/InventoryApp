@@ -8,10 +8,10 @@ namespace InventoryApi.Migrations
     /// <summary>
     /// Creates the table the business bootstrap writes its evidence to (issue #64, checkpoint 3).
     ///
-    /// Like every other migration in this repository, it is schema only. It assigns no owner to
-    /// any row and moves no data: the backfill is performed exclusively by the human-invoked
-    /// `bootstrap-business` command, so applying migrations - including the Database.Migrate()
-    /// call at API startup - can never initiate one.
+    /// This migration creates an empty table and touches no existing row. Like every migration
+    /// here it assigns no tenant ownership and performs no business backfill - that is exclusively
+    /// the human-invoked `bootstrap-business` command. (Other migrations in this repository do
+    /// rebuild tables and copy rows; this one does not.)
     ///
     /// The table is empty until that command runs. A populated row per table per run is the
     /// durable record of what the backfill did: rows unassigned before, rows assigned, rows left
