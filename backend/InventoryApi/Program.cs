@@ -9,8 +9,10 @@ using Inventory.Application.Reporting.MachineProfitability;
 using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Transactions;
+using Inventory.Application.Tenancy;
 using Inventory.Infrastructure;
 using InventoryApi.Adapters.Persistence;
+using InventoryApi.Auth;
 using InventoryApi.Data;
 using InventoryApi.Http;
 using InventoryApi.Integrations.Nayax;
@@ -24,6 +26,9 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddMicrosoftIdentityWebApi(builder.Configuration.GetSection("AzureAd"));
 
 builder.Services.AddAuthorization();
+
+// Required by EntraActorIdentityAccessor, which reads the current request's ClaimsPrincipal.
+builder.Services.AddHttpContextAccessor();
 
 builder.Services.AddControllers();
 builder.Services.AddApplicationServices();
@@ -72,6 +77,14 @@ builder.Services.AddScoped<InventoryApi.Services.Interfaces.ISiteService, Invent
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IImportService, InventoryApi.Services.ImportService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.INayaxProcessingFeeService, InventoryApi.Services.NayaxProcessingFeeService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.ISiteCommissionService, InventoryApi.Services.SiteCommissionService>();
+
+// Tenancy (issue #64). Claims parsing stays at this boundary: EntraActorIdentityAccessor is the
+// only implementation of the Application's actor port, and the current-business abstraction
+// itself (ICurrentBusinessProvider) is registered by AddApplicationServices().
+builder.Services.AddScoped<IAuthenticatedActorAccessor, EntraActorIdentityAccessor>();
+
+// Temporary API-owned adapter for the business membership port; see EfBusinessMembershipStore.
+builder.Services.AddScoped<IBusinessMembershipStore, EfBusinessMembershipStore>();
 
 // Temporary API-owned adapter for the Nayax fee-settings persistence port; see EfNayaxFeeRateStore.
 builder.Services.AddScoped<INayaxFeeRateStore, EfNayaxFeeRateStore>();

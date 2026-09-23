@@ -7,6 +7,8 @@ public class AppDbContext : DbContext
 {
     public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
 
+    public DbSet<Business> Businesses => Set<Business>();
+    public DbSet<BusinessMembership> BusinessMemberships => Set<BusinessMembership>();
     public DbSet<Category> Categories => Set<Category>();
     public DbSet<Supplier> Suppliers => Set<Supplier>();
     public DbSet<Product> Products => Set<Product>();
@@ -33,6 +35,8 @@ public class AppDbContext : DbContext
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        ConfigureTenancy(modelBuilder);
+
         modelBuilder.Entity<Product>()
             .Property(p => p.UnitPrice)
             .HasColumnType("decimal(18,2)");
@@ -240,5 +244,50 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<SiteCommissionAgreement>().HasIndex(x => new { x.SiteId, x.EffectiveFrom }).IsUnique();
         modelBuilder.Entity<CommissionPayment>().Property(x => x.Amount).HasColumnType("decimal(18,2)");
         modelBuilder.Entity<CommissionPayment>().HasIndex(x => new { x.SiteId, x.PeriodStart, x.PeriodEnd });
+    }
+
+    /// <summary>
+    /// Maps the application-owned tenancy tables introduced for issue #64: the Business that owns
+    /// data, and the BusinessMembership rows that approve an authenticated Entra actor for it.
+    ///
+    /// This step only establishes the ownership model. Adding a TenantId to the business entities
+    /// and backfilling existing records are separate, later changes.
+    /// </summary>
+    private static void ConfigureTenancy(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<Business>().Property(b => b.Name).IsRequired();
+        modelBuilder.Entity<Business>().HasIndex(b => b.Name).IsUnique();
+
+        modelBuilder.Entity<BusinessMembership>()
+            .HasOne(m => m.Business)
+            .WithMany(b => b.Memberships)
+            .HasForeignKey(m => m.BusinessId)
+            // Restrict, not Cascade: a business that still has approved actors must not be
+            // deletable in a way that silently drops its authorization rows.
+            .OnDelete(DeleteBehavior.Restrict);
+
+        // Entra tid/oid are case-insensitive GUID strings. ActorIdentity already normalizes them
+        // before a lookup; NOCASE additionally means a hand-seeded bootstrap row that used a
+        // different casing still matches, and still collides with the unique index below rather
+        // than creating a second, ambiguity-causing membership.
+        modelBuilder.Entity<BusinessMembership>()
+            .Property(m => m.DirectoryTenantId)
+            .IsRequired()
+            .UseCollation("NOCASE");
+        modelBuilder.Entity<BusinessMembership>()
+            .Property(m => m.ObjectId)
+            .IsRequired()
+            .UseCollation("NOCASE");
+
+        // One membership row per (actor, business). Cross-business ambiguity is not a schema
+        // constraint - it is deliberately left to BusinessMembershipResolutionPolicy, which
+        // denies access rather than picking one.
+        modelBuilder.Entity<BusinessMembership>()
+            .HasIndex(m => new { m.DirectoryTenantId, m.ObjectId, m.BusinessId })
+            .IsUnique();
+
+        // The resolution lookup path: every membership for one authenticated actor.
+        modelBuilder.Entity<BusinessMembership>()
+            .HasIndex(m => new { m.DirectoryTenantId, m.ObjectId });
     }
 }
