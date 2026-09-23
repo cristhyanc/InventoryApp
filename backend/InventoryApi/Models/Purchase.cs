@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace InventoryApi.Models;
 
 // The persistence entity behind the "Purchase" business record. The CLR type and this file
@@ -5,8 +7,15 @@ namespace InventoryApi.Models;
 // business language as Inventory.Domain.Purchases/Inventory.Application.Purchases. The
 // DbSet property ("Receipts") and the table name stay "Receipts" as the legacy persistence
 // compatibility surface (see docs/architecture.md's Purchase rename plan).
-public class Purchase
+public class Purchase : IBusinessOwned
 {
+    /// <summary>
+    /// The owning business (issue #64). Stamped from the caller's resolved business on insert
+    /// and immutable afterwards; never read from API input, and never serialised out.
+    /// </summary>
+    [JsonIgnore]
+    public int BusinessId { get; set; }
+
     public int Id { get; set; }
     public string Title { get; set; } = string.Empty;
     public string? Notes { get; set; }

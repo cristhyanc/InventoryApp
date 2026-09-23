@@ -83,6 +83,12 @@ builder.Services.AddScoped<InventoryApi.Services.Interfaces.ISiteCommissionServi
 // itself (ICurrentBusinessProvider) is registered by AddApplicationServices().
 builder.Services.AddScoped<IAuthenticatedActorAccessor, EntraActorIdentityAccessor>();
 
+// The per-request current business, published by BusinessScopeMiddleware and read by
+// AppDbContext's query filters and SaveChanges enforcement. Registered as the concrete type as
+// well, because only the middleware may resolve it; everything else consumes the read-only port.
+builder.Services.AddScoped<BusinessScope>();
+builder.Services.AddScoped<IBusinessScope>(sp => sp.GetRequiredService<BusinessScope>());
+
 // Temporary API-owned adapter for the business membership port; see EfBusinessMembershipStore.
 builder.Services.AddScoped<IBusinessMembershipStore, EfBusinessMembershipStore>();
 
@@ -141,6 +147,11 @@ if (app.Environment.IsDevelopment())
 app.UseCors("AllowAngularDevClient");
 app.UseAuthentication();
 app.UseAuthorization();
+
+// After authentication, so the caller's claims exist, and before the endpoint, so an
+// authenticated caller with no business membership is refused before any action reads data.
+app.UseMiddleware<BusinessScopeMiddleware>();
+
 app.MapControllers();
 
 app.Run();

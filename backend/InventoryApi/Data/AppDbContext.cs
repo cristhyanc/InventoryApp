@@ -1,3 +1,5 @@
+using System.Linq.Expressions;
+using Inventory.Application.Tenancy;
 using Microsoft.EntityFrameworkCore;
 using InventoryApi.Models;
 
@@ -5,7 +7,43 @@ namespace InventoryApi.Data;
 
 public class AppDbContext : DbContext
 {
-    public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
+    private readonly IBusinessScope _businessScope;
+
+    /// <summary>
+    /// The legacy direct-construction path. It applies no tenant scoping - see
+    /// <see cref="BusinessScopeState.Unscoped"/> - and exists for the code and tests written
+    /// before tenant ownership. The composition root always uses the injected overload.
+    /// </summary>
+    public AppDbContext(DbContextOptions<AppDbContext> options)
+        : this(options, UnscopedBusinessScope.Instance)
+    {
+    }
+
+    public AppDbContext(DbContextOptions<AppDbContext> options, IBusinessScope businessScope)
+        : base(options)
+    {
+        _businessScope = businessScope;
+    }
+
+    /// <summary>
+    /// Read by the global query filters below. It is an instance member rather than a captured
+    /// constant so EF re-evaluates it per query instead of baking the first request's business
+    /// into the compiled model.
+    ///
+    /// A denied scope yields <c>null</c>, and the filters compare against it with <c>==</c>, so
+    /// an unresolved caller matches no row at all. Failing closed here is deliberate: the
+    /// alternative - treating "no business" as "no filter" - would turn a resolution bug into a
+    /// silent cross-business data leak.
+    /// </summary>
+    public int? CurrentBusinessId => _businessScope.BusinessId;
+
+    public bool TenantFilteringEnabled => _businessScope.State != BusinessScopeState.Unscoped;
+
+    /// <summary>
+    /// Exposed for the SaveChanges enforcement in <see cref="BusinessOwnershipEnforcer"/>, which
+    /// needs the same answer this context filters reads by.
+    /// </summary>
+    internal IBusinessScope BusinessScope => _businessScope;
 
     public DbSet<Business> Businesses => Set<Business>();
     public DbSet<BusinessMembership> BusinessMemberships => Set<BusinessMembership>();
@@ -32,6 +70,25 @@ public class AppDbContext : DbContext
     public DbSet<InventoryCostTransitionBaseline> InventoryCostTransitionBaselines => Set<InventoryCostTransitionBaseline>();
     public DbSet<InventoryCostTransitionMachineStock> InventoryCostTransitionMachineStocks => Set<InventoryCostTransitionMachineStock>();
     public DbSet<InventoryCostTransitionPreviewDraft> InventoryCostTransitionPreviewDrafts => Set<InventoryCostTransitionPreviewDraft>();
+
+    /// <summary>
+    /// Both save paths funnel through <see cref="BusinessOwnershipEnforcer"/> so tenant
+    /// ownership is applied to every write, whichever overload a service happens to call. This
+    /// is why services do not, and must not, add their own business filters or stamping.
+    /// </summary>
+    public override int SaveChanges(bool acceptAllChangesOnSuccess)
+    {
+        BusinessOwnershipEnforcer.Enforce(this);
+        return base.SaveChanges(acceptAllChangesOnSuccess);
+    }
+
+    public override Task<int> SaveChangesAsync(
+        bool acceptAllChangesOnSuccess,
+        CancellationToken cancellationToken = default)
+    {
+        BusinessOwnershipEnforcer.Enforce(this);
+        return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+    }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -244,6 +301,77 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<SiteCommissionAgreement>().HasIndex(x => new { x.SiteId, x.EffectiveFrom }).IsUnique();
         modelBuilder.Entity<CommissionPayment>().Property(x => x.Amount).HasColumnType("decimal(18,2)");
         modelBuilder.Entity<CommissionPayment>().HasIndex(x => new { x.SiteId, x.PeriodStart, x.PeriodEnd });
+
+        ConfigureBusinessOwnership(modelBuilder);
+    }
+
+    /// <summary>
+    /// The one place tenant scoping is applied to reads (issue #64).
+    ///
+    /// It walks the model rather than naming entities, so every <see cref="IBusinessOwned"/>
+    /// type gets the same treatment automatically: a required business key, a foreign key to
+    /// <see cref="Business"/>, an index for the scoped queries, and a global query filter. A new
+    /// tenant-owned entity is therefore protected the moment it implements the interface - there
+    /// is no per-entity list to forget to update, and no controller-level <c>Where</c> clause
+    /// anywhere that could be omitted on one endpoint.
+    ///
+    /// <see cref="Business"/> and <see cref="BusinessMembership"/> are deliberately excluded.
+    /// They are the tenancy tables themselves: membership is what resolves the scope in the
+    /// first place, so filtering it by the scope would be circular and would deny every caller.
+    /// </summary>
+    private void ConfigureBusinessOwnership(ModelBuilder modelBuilder)
+    {
+        // Materialised first: the loop body adds configuration, which mutates the model.
+        foreach (var entityType in modelBuilder.Model.GetEntityTypes().ToList())
+        {
+            var clrType = entityType.ClrType;
+            if (!typeof(IBusinessOwned).IsAssignableFrom(clrType))
+            {
+                continue;
+            }
+
+            var entity = modelBuilder.Entity(clrType);
+
+            entity.Property(nameof(IBusinessOwned.BusinessId)).IsRequired();
+
+            // Deliberately no database foreign key to Businesses.
+            //
+            // BusinessId is never supplied by a caller - it is stamped from resolved membership
+            // by BusinessOwnershipEnforcer - so a dangling value cannot be injected through the
+            // API, and the ownership boundary is enforced by the query filter and that enforcer
+            // rather than by referential integrity. Adding the constraint would also mean the
+            // additive column this migration introduces (default 0, owned by nobody) left every
+            // pre-existing row in violation of it, and would make the later backfill fight the
+            // constraint instead of simply assigning owners. Deleting a Business that still has
+            // members is already blocked by BusinessMembership's restricted foreign key.
+
+            // Every tenant-scoped query starts with "BusinessId = @current", so it leads.
+            entity.HasIndex(nameof(IBusinessOwned.BusinessId));
+
+            entity.HasQueryFilter(BuildBusinessFilter(clrType));
+        }
+    }
+
+    /// <summary>
+    /// Builds <c>e =&gt; !TenantFilteringEnabled || e.BusinessId == CurrentBusinessId</c> for one
+    /// entity type. Both properties are read off this context instance, so the filter tracks the
+    /// current request rather than the model-building one.
+    /// </summary>
+    private LambdaExpression BuildBusinessFilter(Type clrType)
+    {
+        var entity = Expression.Parameter(clrType, "e");
+        var context = Expression.Constant(this);
+
+        var filteringDisabled = Expression.Not(
+            Expression.Property(context, nameof(TenantFilteringEnabled)));
+
+        var owned = Expression.Equal(
+            Expression.Convert(
+                Expression.Property(entity, nameof(IBusinessOwned.BusinessId)),
+                typeof(int?)),
+            Expression.Property(context, nameof(CurrentBusinessId)));
+
+        return Expression.Lambda(Expression.OrElse(filteringDisabled, owned), entity);
     }
 
     /// <summary>

@@ -1,7 +1,16 @@
+using System.Text.Json.Serialization;
+
 namespace InventoryApi.Models;
 
-public class ImportedFile
+public class ImportedFile : IBusinessOwned
 {
+    /// <summary>
+    /// The owning business (issue #64). Stamped from the caller's resolved business on insert
+    /// and immutable afterwards; never read from API input, and never serialised out.
+    /// </summary>
+    [JsonIgnore]
+    public int BusinessId { get; set; }
+
     public int Id { get; set; }
     public string FileName { get; set; } = string.Empty;
     public string FileHash { get; set; } = string.Empty;
@@ -9,8 +18,15 @@ public class ImportedFile
     public virtual ICollection<ImportedReimbursement> Reimbursements { get; set; } = new List<ImportedReimbursement>();
 }
 
-public class ImportedReimbursement
+public class ImportedReimbursement : IBusinessOwned
 {
+    /// <summary>
+    /// The owning business (issue #64). Stamped from the caller's resolved business on insert
+    /// and immutable afterwards; never read from API input, and never serialised out.
+    /// </summary>
+    [JsonIgnore]
+    public int BusinessId { get; set; }
+
     public int Id { get; set; }
     public int ImportedFileId { get; set; }
     public virtual ImportedFile ImportedFile { get; set; } = null!;
@@ -39,8 +55,15 @@ public class ImportedReimbursement
     public virtual ICollection<ImportedPaymentMethod> PaymentMethods { get; set; } = new List<ImportedPaymentMethod>();
 }
 
-public class ImportedReimbursementDevice
+public class ImportedReimbursementDevice : IBusinessOwned
 {
+    /// <summary>
+    /// The owning business (issue #64). Stamped from the caller's resolved business on insert
+    /// and immutable afterwards; never read from API input, and never serialised out.
+    /// </summary>
+    [JsonIgnore]
+    public int BusinessId { get; set; }
+
     public int Id { get; set; }
     public int ImportedReimbursementId { get; set; }
     public virtual ImportedReimbursement ImportedReimbursement { get; set; } = null!;
@@ -64,8 +87,15 @@ public class ImportedReimbursementDevice
     public string? RawAttributesJson { get; set; }
 }
 
-public class ImportedDevicePayment
+public class ImportedDevicePayment : IBusinessOwned
 {
+    /// <summary>
+    /// The owning business (issue #64). Stamped from the caller's resolved business on insert
+    /// and immutable afterwards; never read from API input, and never serialised out.
+    /// </summary>
+    [JsonIgnore]
+    public int BusinessId { get; set; }
+
     public int Id { get; set; }
     public int ImportedReimbursementId { get; set; }
     public virtual ImportedReimbursement ImportedReimbursement { get; set; } = null!;
@@ -79,8 +109,15 @@ public class ImportedDevicePayment
     public string? RawAttributesJson { get; set; }
 }
 
-public class ImportedFee
+public class ImportedFee : IBusinessOwned
 {
+    /// <summary>
+    /// The owning business (issue #64). Stamped from the caller's resolved business on insert
+    /// and immutable afterwards; never read from API input, and never serialised out.
+    /// </summary>
+    [JsonIgnore]
+    public int BusinessId { get; set; }
+
     public int Id { get; set; }
     public int ImportedReimbursementId { get; set; }
     public virtual ImportedReimbursement ImportedReimbursement { get; set; } = null!;
@@ -96,8 +133,15 @@ public class ImportedFee
     public string? RawAttributesJson { get; set; }
 }
 
-public class ImportedPaymentMethod
+public class ImportedPaymentMethod : IBusinessOwned
 {
+    /// <summary>
+    /// The owning business (issue #64). Stamped from the caller's resolved business on insert
+    /// and immutable afterwards; never read from API input, and never serialised out.
+    /// </summary>
+    [JsonIgnore]
+    public int BusinessId { get; set; }
+
     public int Id { get; set; }
     public int ImportedReimbursementId { get; set; }
     public virtual ImportedReimbursement ImportedReimbursement { get; set; } = null!;

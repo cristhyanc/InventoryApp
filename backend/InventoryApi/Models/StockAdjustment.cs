@@ -12,8 +12,15 @@ public enum StockAdjustmentReason
     MachineRefill = 5
 }
 
-public class StockAdjustment
+public class StockAdjustment : IBusinessOwned
 {
+    /// <summary>
+    /// The owning business (issue #64). Stamped from the caller's resolved business on insert
+    /// and immutable afterwards; never read from API input, and never serialised out.
+    /// </summary>
+    [JsonIgnore]
+    public int BusinessId { get; set; }
+
     public int Id { get; set; }
 
     public long ProductId { get; set; }

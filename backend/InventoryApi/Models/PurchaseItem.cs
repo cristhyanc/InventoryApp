@@ -5,8 +5,15 @@ namespace InventoryApi.Models;
 
 // See Purchase.cs for why the DB table/column naming stays "Receipt" while the CLR type
 // is PurchaseItem. ReceiptId is part of the JSON API contract and keeps its name.
-public class PurchaseItem
+public class PurchaseItem : IBusinessOwned
 {
+    /// <summary>
+    /// The owning business (issue #64). Stamped from the caller's resolved business on insert
+    /// and immutable afterwards; never read from API input, and never serialised out.
+    /// </summary>
+    [JsonIgnore]
+    public int BusinessId { get; set; }
+
     public int Id { get; set; }
     public int ReceiptId { get; set; }
     [JsonIgnore]
