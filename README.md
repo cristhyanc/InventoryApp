@@ -81,9 +81,9 @@ dotnet run --project backend/InventoryApi/InventoryApi.csproj
 
 The development API listens at <http://localhost:5000>. Swagger UI is available at <http://localhost:5000/swagger> while the API is running in the Development environment.
 
-EF Core migrations are applied automatically at startup **in Development only**. The default SQLite database is `inventory.db`, resolved from the API process's working directory; local database files must not be committed. Schema migrations never assign tenant ownership or perform the business backfill, so starting the API never triggers one. Some schema migrations do rebuild tables and copy persisted rows, which is one reason production migration is human-controlled.
+EF Core migrations are applied automatically at startup in **Development** and **Testing**, where the database is disposable. The default SQLite database is `inventory.db`, resolved from the API process's working directory; local database files must not be committed. Schema migrations never assign tenant ownership or perform the business backfill, so starting the API never triggers one. Some schema migrations do rebuild tables and copy persisted rows, which is one reason production migration is human-controlled.
 
-Outside Development the API applies no migrations and refuses to start while any are pending, because the tenancy migrations must be applied under human control (issue #64). Production never migrates automatically, whatever the configuration says. Apply them explicitly — from a source tree with the SDK:
+**Production never migrates automatically, whatever the configuration says**, and refuses to start while any migration is pending — the tenancy migrations must be applied under human control (issue #64). Any other non-Production environment behaves the same way unless `Database:AllowAutomaticMigrationUnsafeOutsideDevelopment` is set to `true`, which is intended only for a disposable database such as an ephemeral integration-test or staging one; it has no effect in Production. Apply migrations explicitly — from a source tree with the SDK:
 
 ```bash
 dotnet run --project backend/InventoryApi -- migrate-database --dry-run

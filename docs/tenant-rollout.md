@@ -17,14 +17,18 @@ nothing in the application performs it on its own.
 | Back up the database | **Human** |
 | Deploy | **Human** |
 
-**Deploying the API does not apply the schema.** Outside Development, startup applies no
-migrations at all: if any are pending it logs a critical error naming them and refuses to start.
-That is deliberate — the tenancy migrations are high risk (the uniqueness one rebuilds the whole
-`NayaxSales` table), and issue #64 requires them to be applied and verified under human control.
-An API serving requests against a schema its code does not match is the failure this prevents.
+**Deploying the API does not apply the schema.** In Production, startup applies no migrations at
+all, whatever the configuration says: if any are pending it logs a critical error naming them and
+refuses to start. That is deliberate — the tenancy migrations are high risk (the uniqueness one
+rebuilds the whole `NayaxSales` table), and issue #64 requires them to be applied and verified
+under human control. An API serving requests against a schema its code does not match is the
+failure this prevents.
 
-Development still migrates automatically, where the database is disposable and the convenience
-costs nothing.
+Disposable databases keep the convenience. Development and `Testing` migrate automatically, and
+any other non-Production environment does so only when
+`Database:AllowAutomaticMigrationUnsafeOutsideDevelopment` is `true` — intended for an ephemeral
+integration-test or staging database. Production is decided before that setting is read, so no
+configuration value can make a Production deployment migrate itself.
 
 Schema migrations never assign tenant ownership or perform the business backfill. That exists
 exclusively in the `bootstrap-business` command, which the API never invokes — starting the web
