@@ -40,6 +40,11 @@ export function MSALGuardConfigFactory(): MsalGuardConfiguration {
 
 // The map key must match the API URL this build actually calls (local dev proxy or
 // deployed Azure API), which ConfigService already resolves; see auth-config.ts.
+//
+// This factory reads ConfigService.apiBaseUrl once, when MsalInterceptor is first
+// constructed. That happens on the first request through HttpClient, which cannot occur
+// before the APP_INITIALIZER above has completed, because ConfigService deliberately loads
+// the runtime configuration on the raw HttpBackend rather than the intercepted HttpClient.
 export function MSALInterceptorConfigFactory(configService: ConfigService): MsalInterceptorConfiguration {
   return {
     interactionType: InteractionType.Redirect,

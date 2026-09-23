@@ -83,17 +83,9 @@ The development API listens at <http://localhost:5000>. Swagger UI is available 
 
 EF Core migrations are applied at startup. The default SQLite database is `inventory.db`, resolved from the API process's working directory; local database files must not be committed.
 
-### 2. Point the frontend at the local API
+### 2. How the frontend finds the API
 
-The Angular application loads its API base URL from `frontend/inventory-app/src/assets/config.json`. For local full-stack development, use:
-
-```json
-{
-  "apiBaseUrl": "/api"
-}
-```
-
-The development proxy forwards `/api` to `http://localhost:5000`. Do not commit a personal endpoint or temporary configuration change.
+Nothing to configure locally. `ConfigService` resolves the API base URL to `/api` whenever the application is served from `localhost` or `127.0.0.1`, and the development proxy forwards `/api` to <http://localhost:5000>. Any other origin is a deployed one and uses `apiBaseUrl` from `frontend/inventory-app/src/assets/config.json`, which holds the deployed Azure API URL. Do not edit that tracked file to switch between local development and deployment, and do not commit a personal endpoint.
 
 ### 3. Start the frontend
 
@@ -124,7 +116,9 @@ Human-controlled Entra portal setup this configuration depends on (not part of t
 - App registrations for the API and the SPA, with the API exposing the `access_as_user` scope and the SPA's platform configured for the redirect URIs it actually uses (`http://localhost:4200/auth` for local development, and the deployed Static Web App origin's `/auth` for production).
 - The SPA registration's API permissions granting delegated `access_as_user` access to the API app registration.
 
-Local development points `frontend/inventory-app/src/assets/config.json` at `/api` (see [above](#2-point-the-frontend-at-the-local-api)); MSAL's protected-resource map (`buildProtectedResourceMap` in `auth-config.ts`) is built from that same `ConfigService.apiBaseUrl`, so the bearer token attaches correctly to `/api/*` locally and to the deployed absolute API URL in production, without any code change between environments.
+MSAL's protected-resource map (`buildProtectedResourceMap` in `auth-config.ts`) is built from `ConfigService.apiBaseUrl`, the same value every HTTP call uses (see [above](#2-how-the-frontend-finds-the-api)), so the bearer token attaches correctly to `/api/*` locally and to the deployed absolute API URL in production, without any code or configuration change between environments. `ConfigService` loads `assets/config.json` on the raw `HttpBackend` rather than the intercepted `HttpClient`, so the MSAL interceptor cannot be constructed — and cannot capture a stale API base URL — before that load has finished.
+
+Protected business documents (purchase receipts and operating-expense supporting documents) are stored outside the API's web root and are served only by the authenticated `/api/receipts/{id}/file` and `/api/operating-expenses/{id}/attachment` endpoints. The API registers no static-file middleware, so these documents have no anonymous URL; the frontend fetches them through `HttpClient` and renders them from a temporary object URL.
 
 Azure Static Web Apps direct navigation (including the `/auth` redirect landing) is handled by `frontend/inventory-app/src/staticwebapp.config.json`, which rewrites unmatched paths to `/index.html` so the Angular router — not a platform 404 — handles them.
 

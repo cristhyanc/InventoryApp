@@ -1,5 +1,6 @@
 import * as assert from 'assert';
 import { buildProtectedResourceMap, inventoryApiScope, loginRequest } from './auth-config';
+import { LOCAL_API_BASE_URL, isLocalDevelopmentHost, resolveApiBaseUrl } from './api-base-url';
 
 /**
  * This repository has no configured Angular/Jasmine/Jest test runner (see
@@ -41,6 +42,49 @@ check('buildProtectedResourceMap matches an absolute deployed API base URL', () 
 
   assert.deepStrictEqual([...map.keys()], [`${deployedApiBaseUrl}/*`]);
   assert.deepStrictEqual(map.get(`${deployedApiBaseUrl}/*`), loginRequest.scopes);
+});
+
+check('local development resolves the API base URL to the dev proxy', () => {
+  const deployedConfig = { apiBaseUrl: 'https://example-api.azurewebsites.net/api' };
+
+  for (const hostname of ['localhost', '127.0.0.1', 'LOCALHOST']) {
+    assert.ok(isLocalDevelopmentHost(hostname));
+    // The tracked config.json holds the deployed URL and is still ignored locally, so no
+    // developer has to edit it to switch between local work and a deployment.
+    assert.strictEqual(resolveApiBaseUrl(hostname, deployedConfig), LOCAL_API_BASE_URL);
+  }
+});
+
+check('a deployed host resolves the API base URL from the runtime configuration', () => {
+  const deployedApiBaseUrl = 'https://example-api.azurewebsites.net/api';
+
+  assert.ok(!isLocalDevelopmentHost('inventory.example.com'));
+  assert.strictEqual(
+    resolveApiBaseUrl('inventory.example.com', { apiBaseUrl: deployedApiBaseUrl }),
+    deployedApiBaseUrl);
+  assert.strictEqual(
+    resolveApiBaseUrl('inventory.example.com', { apiBaseUrl: `${deployedApiBaseUrl}/` }),
+    deployedApiBaseUrl);
+});
+
+check('a deployed host falls back to the proxy path without usable configuration', () => {
+  assert.strictEqual(resolveApiBaseUrl('inventory.example.com', null), LOCAL_API_BASE_URL);
+  assert.strictEqual(resolveApiBaseUrl('inventory.example.com', { apiBaseUrl: '  ' }), LOCAL_API_BASE_URL);
+});
+
+check('the protected-resource map is keyed by the resolved API base URL', () => {
+  const deployedApiBaseUrl = 'https://example-api.azurewebsites.net/api';
+
+  for (const [hostname, config] of [
+    ['localhost', { apiBaseUrl: deployedApiBaseUrl }],
+    ['inventory.example.com', { apiBaseUrl: deployedApiBaseUrl }]
+  ] as const) {
+    const resolved = resolveApiBaseUrl(hostname, config);
+    const map = buildProtectedResourceMap(resolved);
+
+    assert.deepStrictEqual([...map.keys()], [`${resolved}/*`]);
+    assert.deepStrictEqual(map.get(`${resolved}/*`), loginRequest.scopes);
+  }
 });
 
 // eslint-disable-next-line no-console

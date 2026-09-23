@@ -1,6 +1,7 @@
 using InventoryApi.Data;
 using InventoryApi.DTOs;
 using InventoryApi.Models;
+using InventoryApi.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -130,7 +131,7 @@ public sealed class OperatingExpensesController : ControllerBase
         var expense = await _db.OperatingExpenses.FindAsync(new object[] { id }, cancellationToken);
         if (expense is null) return NotFound();
 
-        var previousAttachmentPath = AttachmentPath(expense.AttachmentStoredFileName);
+        var previousAttachmentPath = ExistingAttachmentPath(expense.AttachmentStoredFileName);
         string? newAttachmentPath = null;
         try
         {
@@ -162,8 +163,8 @@ public sealed class OperatingExpensesController : ControllerBase
             .SingleOrDefaultAsync(x => x.Id == id, cancellationToken);
         if (expense?.AttachmentStoredFileName is null) return NotFound();
 
-        var path = AttachmentPath(expense.AttachmentStoredFileName);
-        if (path is null || !System.IO.File.Exists(path)) return NotFound();
+        var path = ExistingAttachmentPath(expense.AttachmentStoredFileName);
+        if (path is null) return NotFound();
         return PhysicalFile(path, expense.AttachmentContentType ?? "application/octet-stream", expense.AttachmentFileName);
     }
 
@@ -174,7 +175,7 @@ public sealed class OperatingExpensesController : ControllerBase
         if (expense is null) return NotFound();
         _db.OperatingExpenses.Remove(expense);
         await _db.SaveChangesAsync(cancellationToken);
-        DeleteFile(AttachmentPath(expense.AttachmentStoredFileName));
+        DeleteFile(ExistingAttachmentPath(expense.AttachmentStoredFileName));
         return NoContent();
     }
 
@@ -221,7 +222,7 @@ public sealed class OperatingExpensesController : ControllerBase
             throw new InvalidOperationException("Supporting document must be an image or PDF.");
 
         var storedFileName = $"{Guid.NewGuid()}{extension}";
-        var path = AttachmentPath(storedFileName)!;
+        var path = AttachmentStoragePath(storedFileName);
         try
         {
             await using var stream = new FileStream(path, FileMode.CreateNew);
@@ -240,14 +241,13 @@ public sealed class OperatingExpensesController : ControllerBase
         return path;
     }
 
-    private string? AttachmentPath(string? storedFileName)
-    {
-        if (string.IsNullOrWhiteSpace(storedFileName)) return null;
-        var webRoot = _environment.WebRootPath ?? Path.Combine(_environment.ContentRootPath, "wwwroot");
-        var folder = Path.Combine(webRoot, "expenses");
-        Directory.CreateDirectory(folder);
-        return Path.Combine(folder, storedFileName);
-    }
+    // Supporting documents are stored outside the static web root and are only reachable
+    // through this [Authorize]d controller; see ProtectedFileStorage.
+    private string AttachmentStoragePath(string storedFileName) =>
+        ProtectedFileStorage.StoragePath(_environment, ProtectedFileStorage.ExpenseAttachmentsCategory, storedFileName);
+
+    private string? ExistingAttachmentPath(string? storedFileName) =>
+        ProtectedFileStorage.ExistingPath(_environment, ProtectedFileStorage.ExpenseAttachmentsCategory, storedFileName);
 
     private static string AttachmentContentType(string extension) => extension switch
     {

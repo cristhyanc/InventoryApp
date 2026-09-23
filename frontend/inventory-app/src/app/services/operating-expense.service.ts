@@ -76,7 +76,14 @@ export class OperatingExpenseService {
   }
 
   delete(id: number): Observable<void> { return this.http.delete<void>(`${this.baseUrl}/${id}`); }
-  attachmentUrl(id: number): string { return `${this.baseUrl}/${id}/attachment`; }
+  /**
+   * The attachment endpoint is behind the API's authorization boundary, so it must be
+   * fetched through HttpClient: only then does MsalInterceptor attach the bearer token. A
+   * direct `<a href>` to this URL is an unauthenticated browser request and gets 401.
+   */
+  getAttachment(id: number): Observable<Blob> {
+    return this.http.get(`${this.baseUrl}/${id}/attachment`, { responseType: 'blob' });
+  }
 
   private toFormData(payload: OperatingExpensePayload, attachment: File): FormData {
     const formData = new FormData();

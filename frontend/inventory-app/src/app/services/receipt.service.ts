@@ -66,8 +66,13 @@ export class ReceiptService {
     return this.validationsByReceiptId.get(receiptId) ?? null;
   }
 
-  fileUrl(id: number): string {
-    return `${this.baseUrl}/${id}/file`;
+  /**
+   * The document endpoint is behind the API's authorization boundary, so it must be fetched
+   * through HttpClient: only then does MsalInterceptor attach the bearer token. A direct
+   * `<a href>`/`<img src>` to this URL is an unauthenticated browser request and gets 401.
+   */
+  getFile(id: number): Observable<Blob> {
+    return this.http.get(`${this.baseUrl}/${id}/file`, { responseType: 'blob' });
   }
 
   upload(payload: ReceiptUploadPayload): Observable<Receipt> {

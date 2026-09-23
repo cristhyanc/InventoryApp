@@ -23,16 +23,13 @@ public class ReceiptService : IReceiptService
         _rebuild = rebuild ?? new InventoryCostRebuildService(db);
     }
 
-    private string ReceiptsFolder
-    {
-        get
-        {
-            var webRoot = _env.WebRootPath ?? Path.Combine(_env.ContentRootPath, "wwwroot");
-            var folder = Path.Combine(webRoot, "receipts");
-            Directory.CreateDirectory(folder);
-            return folder;
-        }
-    }
+    // Receipt documents are stored outside the static web root and are only reachable
+    // through this service's [Authorize]d controller; see ProtectedFileStorage.
+    private string StoragePathFor(string storedFileName) =>
+        ProtectedFileStorage.StoragePath(_env, ProtectedFileStorage.ReceiptsCategory, storedFileName);
+
+    private string? ExistingPathFor(string storedFileName) =>
+        ProtectedFileStorage.ExistingPath(_env, ProtectedFileStorage.ReceiptsCategory, storedFileName);
 
     public async Task<IEnumerable<Receipt>> GetAll(int? supplierId)
     {
@@ -52,8 +49,8 @@ public class ReceiptService : IReceiptService
         var receipt = await _db.Receipts.FindAsync(id);
         if (receipt is null) return (null, null, null);
 
-        var path = Path.Combine(ReceiptsFolder, receipt.StoredFileName);
-        if (!System.IO.File.Exists(path)) return (null, null, null);
+        var path = ExistingPathFor(receipt.StoredFileName);
+        if (path is null) return (null, null, null);
 
         var bytes = await System.IO.File.ReadAllBytesAsync(path);
         return (bytes, receipt.ContentType, receipt.FileName);
@@ -75,7 +72,7 @@ public class ReceiptService : IReceiptService
             receiptItems.Select(x => x.ProductId),
             effectivePurchaseDate);
         var storedFileName = $"{Guid.NewGuid()}{ext}";
-        var fullPath = Path.Combine(ReceiptsFolder, storedFileName);
+        var fullPath = StoragePathFor(storedFileName);
 
         await using (var stream = new FileStream(fullPath, FileMode.Create))
         {
@@ -347,7 +344,7 @@ public class ReceiptService : IReceiptService
         var receipt = await _db.Receipts.Include(r => r.Items).FirstOrDefaultAsync(r => r.Id == id);
         if (receipt is null) return false;
 
-        var path = Path.Combine(ReceiptsFolder, receipt.StoredFileName);
+        var path = ExistingPathFor(receipt.StoredFileName);
         var movements = await _db.StockAdjustments
             .Where(movement => movement.ReceiptItemId.HasValue &&
                 receipt.Items.Select(item => item.Id).Contains(movement.ReceiptItemId.Value))
@@ -362,7 +359,7 @@ public class ReceiptService : IReceiptService
         await RebuildAffectedAsync(affected);
         await _db.SaveChangesAsync();
         if (transaction is not null) await transaction.CommitAsync();
-        if (System.IO.File.Exists(path)) System.IO.File.Delete(path);
+        if (path is not null && System.IO.File.Exists(path)) System.IO.File.Delete(path);
         return true;
     }
 

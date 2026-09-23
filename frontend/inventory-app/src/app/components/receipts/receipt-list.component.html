@@ -26,13 +26,13 @@
           <tr class="align-top">
             <td class="px-4 py-4">
               <div class="flex min-w-56 items-center gap-3">
-                <a [href]="fileUrl(r)" target="_blank" rel="noopener" class="shrink-0">
-                  @if (isImage(r)) {
-                    <img [src]="fileUrl(r)" [alt]="r.title" class="h-14 w-14 rounded-lg object-cover" />
+                <button type="button" class="shrink-0" (click)="openDocument(r)" [attr.aria-label]="'Open document for ' + r.title">
+                  @if (isImage(r) && thumbnailUrl(r)) {
+                    <img [src]="thumbnailUrl(r)" [alt]="r.title" class="h-14 w-14 rounded-lg object-cover" />
                   } @else {
                     <div class="flex h-14 w-14 items-center justify-center rounded-lg bg-slate-100 text-xl">📄</div>
                   }
-                </a>
+                </button>
                 <strong class="font-semibold text-slate-800">{{ r.title }}</strong>
               </div>
             </td>

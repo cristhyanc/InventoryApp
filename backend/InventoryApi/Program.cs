@@ -128,7 +128,11 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "Inventory API v1"));
 }
 
-app.UseStaticFiles(); // serves wwwroot/receipts if direct static access is desired
+// No static-file middleware: the API serves no public assets (the Angular application is a
+// separate Azure Static Web App), and static-file middleware does not run controller
+// authorization. Uploaded receipts and operating-expense documents are stored outside the
+// web root (see ProtectedFileStorage) and are only readable through the [Authorize]d
+// endpoints, so no business document has an anonymous URL.
 app.UseCors("AllowAngularDevClient");
 app.UseAuthentication();
 app.UseAuthorization();

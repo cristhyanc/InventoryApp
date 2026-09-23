@@ -1,4 +1,4 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
@@ -7,6 +7,7 @@ import { SupplierService } from '../../services/supplier.service';
 import { Product, Receipt, Supplier, ReceiptValidation } from '../../models/models';
 import { ProductService } from '../../services/product.service';
 import { ReceiptItemPayload } from '../../services/receipt.service';
+import { ObjectUrlCache } from '../shared/object-url-cache';
 
 @Component({
   selector: 'app-receipt-list',
@@ -14,7 +15,7 @@ import { ReceiptItemPayload } from '../../services/receipt.service';
   imports: [CommonModule, FormsModule, RouterLink],
   templateUrl: './receipt-list.component.html'
 })
-export class ReceiptListComponent implements OnInit {
+export class ReceiptListComponent implements OnInit, OnDestroy {
   receipts: Receipt[] = [];
   suppliers: Supplier[] = [];
   products: Product[] = [];
@@ -30,6 +31,11 @@ export class ReceiptListComponent implements OnInit {
     supplierId: '' as number | ''
   };
 
+  // Receipt documents are protected by the API, so they are fetched through HttpClient (which
+  // attaches the bearer token) and rendered from a temporary object URL.
+  private readonly objectUrls = new ObjectUrlCache();
+  private thumbnailUrls = new Map<number, string>();
+
   constructor(
     private receiptService: ReceiptService,
     private supplierService: SupplierService,
@@ -42,16 +48,43 @@ export class ReceiptListComponent implements OnInit {
     this.productService.getAll().subscribe((p) => (this.products = p));
   }
 
+  ngOnDestroy(): void {
+    this.objectUrls.releaseAll();
+  }
+
   load(): void {
-    this.receiptService.getAll().subscribe((r) => (this.receipts = r));
+    this.receiptService.getAll().subscribe((r) => {
+      this.receipts = r;
+      this.loadThumbnails();
+    });
   }
 
   getValidation(receipt: Receipt): ReceiptValidation | null {
     return this.receiptService.getValidationFor(receipt.id);
   }
 
-  fileUrl(receipt: Receipt): string {
-    return this.receiptService.fileUrl(receipt.id);
+  thumbnailUrl(receipt: Receipt): string | null {
+    return this.thumbnailUrls.get(receipt.id) ?? null;
+  }
+
+  openDocument(receipt: Receipt): void {
+    this.receiptService.getFile(receipt.id).subscribe({
+      next: (blob) => window.open(this.objectUrls.create(blob), '_blank', 'noopener'),
+      error: (err) => console.error('Failed to open purchase document', err)
+    });
+  }
+
+  private loadThumbnails(): void {
+    this.objectUrls.releaseAll();
+    this.thumbnailUrls = new Map<number, string>();
+    this.receipts
+      .filter((receipt) => this.isImage(receipt))
+      .forEach((receipt) =>
+        this.receiptService.getFile(receipt.id).subscribe({
+          next: (blob) => this.thumbnailUrls.set(receipt.id, this.objectUrls.create(blob)),
+          error: (err) => console.error('Failed to load purchase document', err)
+        })
+      );
   }
 
   isImage(receipt: Receipt): boolean {
