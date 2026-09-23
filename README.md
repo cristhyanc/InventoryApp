@@ -81,7 +81,29 @@ dotnet run --project backend/InventoryApi/InventoryApi.csproj
 
 The development API listens at <http://localhost:5000>. Swagger UI is available at <http://localhost:5000/swagger> while the API is running in the Development environment.
 
-EF Core migrations are applied at startup. The default SQLite database is `inventory.db`, resolved from the API process's working directory; local database files must not be committed.
+EF Core migrations are applied at startup. The default SQLite database is `inventory.db`, resolved from the API process's working directory; local database files must not be committed. Migrations create schema only: no migration moves data or assigns business ownership, so starting the API never triggers a backfill.
+
+#### Business/tenant bootstrap
+
+Business data is owned by a `Business` record, and a freshly migrated database has no business and no owned rows — so a signed-in caller sees an empty dataset until the ownership bootstrap is run. This is the intended fail-closed state, and the API logs an error at startup while it persists.
+
+The mapping from Microsoft Entra identities to that business is human-supplied and is never committed. `appsettings.json` ships the `BusinessBootstrap` section empty; supply real values through user secrets locally:
+
+```bash
+cd backend/InventoryApi
+dotnet user-secrets set "BusinessBootstrap:BusinessName" "<business name>"
+dotnet user-secrets set "BusinessBootstrap:Members:0:DirectoryTenantId" "<your Entra tid claim>"
+dotnet user-secrets set "BusinessBootstrap:Members:0:ObjectId" "<your Entra oid claim>"
+```
+
+Then assign ownership. The dry run measures and rolls back; `--apply` must be typed explicitly:
+
+```bash
+dotnet run --project backend/InventoryApi -- bootstrap-business --dry-run
+dotnet run --project backend/InventoryApi -- bootstrap-business --apply
+```
+
+The command is restart-safe and idempotent: it only ever touches rows that are still unassigned. See [docs/tenant-rollout.md](docs/tenant-rollout.md) for the reviewed production sequence.
 
 ### 2. How the frontend finds the API
 

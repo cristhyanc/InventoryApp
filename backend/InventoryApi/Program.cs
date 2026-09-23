@@ -12,6 +12,7 @@ using Inventory.Application.Reporting.Transactions;
 using Inventory.Application.Tenancy;
 using Inventory.Infrastructure;
 using InventoryApi.Adapters.Persistence;
+using InventoryApi.Bootstrap;
 using InventoryApi.Auth;
 using InventoryApi.Data;
 using InventoryApi.Http;
@@ -19,6 +20,14 @@ using InventoryApi.Integrations.Nayax;
 using InventoryApi.Swagger;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Identity.Web;
+
+// The business bootstrap is a separate, human-invoked path (issue #64, checkpoint 3). It is
+// checked before the web host is built so that starting the API and backfilling ownership can
+// never be the same action: a deployment starts the API and does not reach this branch.
+if (BusinessBootstrapCommand.Matches(args))
+{
+    return await BusinessBootstrapCommand.RunAsync(args, CancellationToken.None);
+}
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -121,12 +130,16 @@ builder.Services.AddScoped<ITransactionSalesReportFactsProvider, EfTransactionSa
 
 var app = builder.Build();
 
-// Apply code-first schema + seed data on startup
+// Apply code-first schema on startup. Schema only: no migration in this repository performs a
+// data backfill, and tenant ownership is assigned exclusively by the human-invoked
+// `bootstrap-business` command, so starting the API can never initiate one (issue #64).
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     db.Database.Migrate();
     //DbInitializer.Seed(db);
+
+    TenantOwnershipReadiness.Report(db, app.Services.GetRequiredService<ILoggerFactory>());
 }
 
 // First in the pipeline so exceptions from controllers, services, and the Nayax
@@ -155,6 +168,8 @@ app.UseMiddleware<BusinessScopeMiddleware>();
 app.MapControllers();
 
 app.Run();
+
+return 0;
 
 // Exposed so InventoryApi.Tests can host the API with WebApplicationFactory<Program>.
 public partial class Program;

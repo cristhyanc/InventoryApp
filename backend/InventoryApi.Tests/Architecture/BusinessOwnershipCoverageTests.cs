@@ -24,6 +24,11 @@ public class BusinessOwnershipCoverageTests
     /// is what resolves a caller to one. Filtering membership by the current business would be
     /// circular - resolution reads it before any business is known - and would deny every caller.
     ///
+    /// <see cref="BusinessBackfillAudit"/> is an operational record of the tenancy rollout, not
+    /// business data. It carries a BusinessId as a fact about what the backfill did, and must stay
+    /// readable while diagnosing a run that assigned rows to the wrong business - exactly the case
+    /// where a tenant filter would hide the evidence being looked for.
+    ///
     /// Nothing else is exempt. In particular there is no "global reference data" in this schema:
     /// the enum-like constants (payment and costing status, expense category, commission basis,
     /// stock adjustment reason) live in code as C# enums, not tables, and every configuration
@@ -34,6 +39,7 @@ public class BusinessOwnershipCoverageTests
     [
         typeof(Business),
         typeof(BusinessMembership),
+        typeof(BusinessBackfillAudit),
     ];
 
     private static IModel BuildModel()

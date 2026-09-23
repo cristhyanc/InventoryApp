@@ -50,6 +50,13 @@ public class AppDbContext : DbContext
     internal IBusinessScope BusinessScope => _businessScope;
 
     public DbSet<Business> Businesses => Set<Business>();
+
+    /// <summary>
+    /// Operational audit of the tenancy backfill. Not business data and deliberately not
+    /// tenant-filtered; see BusinessBackfillAudit.
+    /// </summary>
+    public DbSet<BusinessBackfillAudit> BusinessBackfillAudits => Set<BusinessBackfillAudit>();
+
     public DbSet<BusinessMembership> BusinessMemberships => Set<BusinessMembership>();
     public DbSet<Category> Categories => Set<Category>();
     public DbSet<Supplier> Suppliers => Set<Supplier>();
@@ -412,6 +419,12 @@ public class AppDbContext : DbContext
         // carries no uniqueness constraint and no index. Two businesses may legitimately trade
         // under the same name; ownership is decided by the key and the membership rows alone.
         modelBuilder.Entity<Business>().Property(b => b.Name).IsRequired();
+
+        // The backfill audit is keyed only by its own id: it records what happened to a table,
+        // including runs that assigned rows to the wrong business, so it must stay queryable
+        // independently of the tenancy state it is evidence about.
+        modelBuilder.Entity<BusinessBackfillAudit>().Property(a => a.TableName).IsRequired();
+        modelBuilder.Entity<BusinessBackfillAudit>().HasIndex(a => a.RunId);
 
         modelBuilder.Entity<BusinessMembership>()
             .HasOne(m => m.Business)
