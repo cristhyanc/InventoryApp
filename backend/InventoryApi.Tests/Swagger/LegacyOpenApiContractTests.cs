@@ -103,6 +103,10 @@ public class PurchaseOpenApiContractTests
         Assert.Equal("Purchase", response.Properties["purchase"].Reference?.Id);
         Assert.Equal("PurchaseValidationDto", response.Properties["validation"].Reference?.Id);
         Assert.Equal("PurchaseItem", document.Components.Schemas["Purchase"].Properties["items"].Items.Reference?.Id);
+
+        // `receiptId` is the persistence-facing field issue #127 deliberately leaves unrenamed
+        // (the physical Receipt-named schema stays); keep it locked in the published contract.
+        Assert.Contains("receiptId", document.Components.Schemas["PurchaseItem"].Properties.Keys);
     }
 
     private static IEnumerable<OpenApiOperation> PurchaseOperations(OpenApiDocument document) =>
