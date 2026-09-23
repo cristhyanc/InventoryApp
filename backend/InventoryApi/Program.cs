@@ -14,6 +14,7 @@ using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using InventoryApi.Http;
 using InventoryApi.Integrations.Nayax;
+using InventoryApi.Swagger;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -24,16 +25,7 @@ builder.Services.AddInfrastructureServices();
 // Controlled RFC 7807 responses for Nayax upstream failures.
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<NayaxUpstreamExceptionHandler>();
-builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen(c =>
-{
-    c.SwaggerDoc("v1", new Microsoft.OpenApi.Models.OpenApiInfo
-    {
-        Title = "Inventory API",
-        Version = "v1",
-        Description = "Manage inventory for snacks and drinks, including suppliers, categories, stock adjustments, and receipt uploads."
-    });
-});
+builder.Services.AddInventoryApiSwagger();
 
 builder.Services.AddDbContext<AppDbContext>(options =>
 {

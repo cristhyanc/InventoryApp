@@ -83,7 +83,7 @@ flowchart TD
 ## Current pressure points
 
 - HTTP, use cases, domain calculations, EF Core, Nayax, file storage, and export generation live in one project for every feature area still pending migration (purchases, machine services, inventory-cost transition, and the remaining direct-`AppDbContext` controllers/services). Reporting is no longer part of this pressure point: its use cases live in `Inventory.Application.Reporting.<Feature>` and its calculations in `Inventory.Domain.Reporting.<Feature>`; only its temporary EF/Nayax adapters, HTTP controller, and CSV/XLSX byte encoding remain in `InventoryApi`. `Purchases.PurchaseTotalValidationPolicy`/`ComputePurchaseTotalValidation` are the first pieces of the purchase slice to move out (see the [Purchase rename plan](#purchase-rename-plan)); the purchase upload/update/delete orchestration itself is still in `InventoryApi`.
-- `PurchaseService` (machine services, and inventory-cost-transition services) combines orchestration and persistence and is large.
+- `PurchaseService`, the machine services, and the inventory-cost-transition services each combine orchestration and persistence, and are large.
 - Operating-expense and site-commission controllers directly access `AppDbContext`; operating expenses also manipulate files. Fee-setting no longer does (see the Nayax fee-settings slice above), except through its temporary API-owned persistence adapter.
 - `Product` contains persistence state, business calculations, and transient Nayax/UI fields.
 - Several tests use EF Core InMemory where SQLite behavior may be more representative.
@@ -202,7 +202,7 @@ The frontend is an application boundary in its own right. It owns navigation, in
 | `app.routes.ts` | Product, stock, supplier, machine, site, purchase, report, expense, and administration routes |
 | `components/` | Routed feature pages plus a small set of shared components |
 | `services/` | Typed HTTP calls, runtime configuration, toast state, and feature-specific client behavior |
-| `models/models.ts` | Shared inventory, purchasing, site, machine, and purchase contracts |
+| `models/models.ts` | Shared inventory, purchase, site, and machine contracts |
 | Report base/classes | Common report filters, loading/error state, financial-year presets, and export behavior |
 | `assets/config.json` | Deploy-time API base URL loaded before the application starts |
 
@@ -378,29 +378,63 @@ Timezone migration is not part of an incidental feature. Changes require explici
 #### Purchase rename plan
 
 The canonical internal business term is now **Purchase**/**PurchaseItem**, not Receipt/ReceiptItem
-(issue #60). The rename touched entity/service/component/DTO naming only; purchase accounting/inventory
-behaviour, the database schema, and the API/route contract are unchanged (verified with
-`dotnet ef migrations has-pending-model-changes`, which reports no pending changes). Because the
-implementation agent's git tooling does not include a file-rename/delete command, the C#/TypeScript
-*identifiers* were renamed but the six backend and two frontend source files listed below keep their
-legacy filenames; a human or a follow-up change may `git mv` them for consistency.
+(issue #60). The rename touched entity/service/component/DTO naming and the corresponding source file
+names only; purchase accounting/inventory behaviour, the database schema, and the API/route contract
+are unchanged (verified with `dotnet ef migrations has-pending-model-changes`, which reports no
+pending changes).
+
+The source files were renamed with `git mv` alongside their identifiers, so file names and type names
+now agree:
+
+| Renamed from | Renamed to |
+| --- | --- |
+| `backend/InventoryApi/Models/Receipt.cs` | `backend/InventoryApi/Models/Purchase.cs` |
+| `backend/InventoryApi/Models/ReceiptItem.cs` | `backend/InventoryApi/Models/PurchaseItem.cs` |
+| `backend/InventoryApi/Services/Interfaces/IReceiptService.cs` | `backend/InventoryApi/Services/Interfaces/IPurchaseService.cs` |
+| `backend/InventoryApi/Services/ReceiptService.cs` | `backend/InventoryApi/Services/PurchaseService.cs` |
+| `backend/InventoryApi/Controllers/ReceiptsController.cs` | `backend/InventoryApi/Controllers/PurchasesController.cs` |
+| `backend/InventoryApi.Tests/Services/ReceiptServiceTests.cs` | `backend/InventoryApi.Tests/Services/PurchaseServiceTests.cs` |
+| `frontend/.../services/receipt.service.ts` | `frontend/.../services/purchase.service.ts` |
+| `frontend/.../components/receipts/` | `frontend/.../components/purchases/` |
+| `frontend/.../components/purchases/receipt-list.component.{ts,html}` | `.../purchase-list.component.{ts,html}` |
+| `frontend/.../components/purchases/receipt-upload.component.{ts,html}` | `.../purchase-upload.component.{ts,html}` |
+
+The `wwwroot/receipts` upload folder, the database tables and migration history, and the
+`/api/receipts` route are *not* file renames and deliberately keep their names; see the compatibility
+table below.
+
+##### OpenAPI compatibility
+
+Swashbuckle derives schema ids from CLR type names and operation tags from controller names, so the
+rename would otherwise have republished the document's `Receipt`, `ReceiptItem`, `ReceiptResponseDto`
+and `ReceiptValidationDto` schemas and its `Receipts` tag under new `Purchase*` names — a breaking
+change for generated clients even though the routes and JSON keys are identical.
+`InventoryApi.Swagger.LegacyOpenApiCompatibility` is the compatibility boundary that prevents this: it
+maps the renamed CLR types back to their published schema ids and pins `PurchasesController`'s
+operations to the legacy `Receipts` tag, deferring to Swashbuckle's defaults for everything else. It
+is registered through `SwaggerServiceCollectionExtensions.AddInventoryApiSwagger`, the single
+registration shared by `Program.cs` and the contract tests, and is covered by
+`InventoryApi.Tests.Swagger.LegacyOpenApiContractTests` (schema ids, tag, and the schemas the purchase
+operations reference) and `InventoryApi.Tests.Controllers.PurchasesControllerRouteTests` (the effective
+`api/receipts` base route and its GET/POST/PUT/DELETE/file endpoints, read from the MVC API explorer).
 
 | Layer | Renamed to Purchase language | Left as a legacy/compatibility surface | Why |
 | --- | --- | --- | --- |
 | `Inventory.Domain` | `Purchases.PurchaseTotalValidationPolicy` (new) | — | New pure calculation; the one authoritative total-mismatch formula. |
 | `Inventory.Application` | `Purchases.ComputePurchaseTotalValidation` (new) | — | Thin use case wrapping the Domain policy; `InventoryApi.Services.PurchaseService` calls it instead of duplicating the formula. |
-| `InventoryApi.Models` | CLR types `Purchase`, `PurchaseItem` (file names stay `Receipt.cs`/`ReceiptItem.cs`) | DbSet properties `Receipts`/`ReceiptItems`, table names `Receipts`/`ReceiptItems` (now mapped explicitly with `ToTable`), `PurchaseItem.ReceiptId` column/property, `StockAdjustment.ReceiptItemId`/`ReceiptItem`, `SupplierOrderReceiptAllocation` (type and its `ReceiptItemId`/`ReceiptItem` members) | Schema/migration history must not change; `ReceiptId` and the `StockAdjustment`/`SupplierOrderReceiptAllocation` members are part of the JSON contract or are out of this issue's scope (supplier-order/stock-ledger naming belongs to the full slice above). |
-| `InventoryApi.Services` | `PurchaseService : IPurchaseService` (files stay `ReceiptService.cs`/`IReceiptService.cs`) | Physical upload folder stays `wwwroot/receipts` | Already-uploaded purchase document scans must stay reachable at their stored path. |
-| `InventoryApi.Controllers` | `PurchasesController` (file stays `ReceiptsController.cs`), explicit `[Route("api/receipts")]` | Route `api/receipts` | Preserves the existing, bookmarked API route (acceptance criterion). |
-| `InventoryApi.DTOs` | `PurchaseItemDto`, `PurchaseCreateMetaDto`, `PurchaseValidationDto`, `PurchaseResponseDto` | `PurchaseResponseDto`'s `Receipt`/`Validation` property names (JSON keys `receipt`/`validation`) | JSON property names are part of the public API contract; only the referenced CLR types changed. |
-| Frontend `models.ts`/`receipt.service.ts` | `Purchase`, `PurchaseItem`, `PurchaseValidation`, `PurchaseResponse`, `PurchaseService`, `PurchaseUploadPayload`/`PurchaseItemPayload`/`PurchaseUpdatePayload` (files stay `receipt.service.ts`, `components/receipts/*`) | JSON-bound fields `receipt`/`receiptId` | Matches the backend JSON contract above. |
+| `InventoryApi.Models` | CLR types and files `Purchase.cs`, `PurchaseItem.cs` | DbSet properties `Receipts`/`ReceiptItems`, table names `Receipts`/`ReceiptItems` (now mapped explicitly with `ToTable`), `PurchaseItem.ReceiptId` column/property, `StockAdjustment.ReceiptItemId`/`ReceiptItem`, `SupplierOrderReceiptAllocation` (type and its `ReceiptItemId`/`ReceiptItem` members) | Schema/migration history must not change; `ReceiptId` and the `StockAdjustment`/`SupplierOrderReceiptAllocation` members are part of the JSON contract or are out of this issue's scope (supplier-order/stock-ledger naming belongs to the full slice above). |
+| `InventoryApi.Services` | `PurchaseService : IPurchaseService` (files `PurchaseService.cs`/`IPurchaseService.cs`) | Physical upload folder stays `wwwroot/receipts` | Already-uploaded purchase document scans must stay reachable at their stored path. |
+| `InventoryApi.Controllers` | `PurchasesController` (file `PurchasesController.cs`), explicit `[Route("api/receipts")]` | Route `api/receipts`, and the `Receipts` OpenAPI tag via `LegacyOpenApiCompatibility` | Preserves the existing, bookmarked API route (acceptance criterion). |
+| `InventoryApi.DTOs` | `PurchaseItemDto`, `PurchaseCreateMetaDto`, `PurchaseValidationDto`, `PurchaseResponseDto` | `PurchaseResponseDto`'s `Receipt`/`Validation` property names (JSON keys `receipt`/`validation`), and the published OpenAPI schema ids `Receipt`/`ReceiptItem`/`ReceiptItemDto`/`ReceiptCreateMetaDto`/`ReceiptValidationDto`/`ReceiptResponseDto` | JSON property names and schema ids are part of the public API contract; only the CLR type names changed. |
+| Frontend `models.ts`/`purchase.service.ts` | `Purchase`, `PurchaseItem`, `PurchaseValidation`, `PurchaseResponse`, `PurchaseService`, `PurchaseUploadPayload`/`PurchaseItemPayload`/`PurchaseUpdatePayload` (files `purchase.service.ts`, `components/purchases/purchase-{list,upload}.component.{ts,html}`) | JSON-bound fields `receipt`/`receiptId` | Matches the backend JSON contract above. |
 | Frontend routing | Primary route `/purchases` (and `/purchases/new`) | `/receipts` and `/receipts/new` redirect to the new paths | Keeps existing bookmarks/links working while the URL bar now matches the "Purchases" nav label. |
 | Supporting documents | Not renamed: `Purchase.FileName`/`StoredFileName`/`ContentType`/`FileSizeBytes`, the "Receipt or invoice" upload copy, `OperatingExpense` receipt-attachment naming | — | A purchase's attached scan/photo, and an operating expense's attachment, are supporting *documents*, a distinct concept from the Purchase business record (acceptance criterion). |
 
 Out of scope for this rename (per issue #60): changing purchase accounting/inventory behaviour, the
-purchase GST/BAS model, and any destructive migration/table rename. Renaming the remaining compatibility
-surfaces above — including the six backend and two frontend source file names — is left to a follow-up
-change, ideally combined with the rest of the Purchasing and costing slice (item 6 above).
+purchase GST/BAS model, and any destructive migration/table rename. The compatibility surfaces listed
+above are deliberate and stay as they are; renaming any of them would be a schema or public-contract
+change needing its own issue, ideally combined with the rest of the Purchasing and costing slice
+(item 6 above).
 
 ### Machine refill
 
@@ -454,12 +488,13 @@ Backend and frontend tracks can progress independently when their contracts do n
    - Preserve supplier-order projection and low-stock semantics.
 
 6. **Purchasing and costing slice**
-   - Migrate receipts, supplier orders, stock ledger, AVCO, rebuilding, and sale costing as one coherent area.
+   - Migrate purchases, supplier orders, stock ledger, AVCO, rebuilding, and sale costing as one coherent area.
    - **Receipt-to-Purchase internal rename done** (issue #60), ahead of the full slice migration above. See
-     [Purchase rename plan](#purchase-rename-plan) for the entity/service/component/DTO renames and the
-     compatibility surfaces intentionally left on their legacy names. The rest of this slice — moving the
-     purchase upload/update/delete orchestration itself, and the supplier-order/stock-ledger/AVCO code it
-     touches, into `Inventory.Application`/`Inventory.Infrastructure` — remains future work.
+     [Purchase rename plan](#purchase-rename-plan) for the entity/service/component/DTO and source-file
+     renames, the OpenAPI compatibility boundary, and the compatibility surfaces intentionally left on
+     their legacy names. The rest of this slice — moving the purchase upload/update/delete orchestration
+     itself, and the supplier-order/stock-ledger/AVCO code it touches, into
+     `Inventory.Application`/`Inventory.Infrastructure` — remains future work.
 
 7. **Reporting slices**
    - Split bookkeeping, daily, reconciliation, machine/product profitability, GST, dashboard, and transactions into separate query handlers.

@@ -4,11 +4,11 @@ import { FormsModule } from '@angular/forms';
 import { Router, RouterLink, ActivatedRoute } from '@angular/router';
 import { of } from 'rxjs';
 import { switchMap, tap, map, catchError } from 'rxjs/operators';
-import { PurchaseService } from '../../services/receipt.service';
+import { PurchaseService } from '../../services/purchase.service';
 import { SupplierService } from '../../services/supplier.service';
 import { SupplierOrderService } from '../../services/supplier-order.service';
 import { Product, Supplier, SupplierOrder } from '../../models/models';
-import { PurchaseItemPayload } from '../../services/receipt.service';
+import { PurchaseItemPayload } from '../../services/purchase.service';
 import { ProductService } from '../../services/product.service';
 import { ToastService } from '../../services/toast.service';
 
@@ -23,7 +23,7 @@ interface DraftPurchaseItem {
   selector: 'app-purchase-upload',
   standalone: true,
   imports: [CommonModule, FormsModule, RouterLink],
-  templateUrl: './receipt-upload.component.html'
+  templateUrl: './purchase-upload.component.html'
 })
 export class PurchaseUploadComponent implements OnInit {
   suppliers: Supplier[] = [];

@@ -3,8 +3,8 @@ using System.Text.Json.Serialization;
 
 namespace InventoryApi.Models;
 
-// See Receipt.cs (Purchase) for why this file/DB-column naming stays "Receipt" while the
-// CLR type is PurchaseItem. ReceiptId is part of the JSON API contract and keeps its name.
+// See Purchase.cs for why the DB table/column naming stays "Receipt" while the CLR type
+// is PurchaseItem. ReceiptId is part of the JSON API contract and keeps its name.
 public class PurchaseItem
 {
     public int Id { get; set; }

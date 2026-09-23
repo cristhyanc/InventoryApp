@@ -1,9 +1,9 @@
 namespace InventoryApi.Models;
 
-// The persistence entity behind the "Purchase" business record. The CLR type is named
-// Purchase (not Receipt) so InventoryApi speaks the same Purchase/PurchaseItem business
-// language as Inventory.Domain.Purchases/Inventory.Application.Purchases; the file name,
-// DbSet property ("Receipts"), and table name stay "Receipt" as the legacy persistence/API
+// The persistence entity behind the "Purchase" business record. The CLR type and this file
+// are named Purchase (not Receipt) so InventoryApi speaks the same Purchase/PurchaseItem
+// business language as Inventory.Domain.Purchases/Inventory.Application.Purchases. The
+// DbSet property ("Receipts") and the table name stay "Receipts" as the legacy persistence
 // compatibility surface (see docs/architecture.md's Purchase rename plan).
 public class Purchase
 {

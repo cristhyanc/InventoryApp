@@ -15,7 +15,7 @@ public sealed class InventoryCostService : IInventoryCostService
         long productId,
         int quantityChange,
         StockAdjustmentReason reason,
-        PurchaseItem? receiptItem,
+        PurchaseItem? purchaseItem,
         string notes,
         decimal? purchaseUnitCost = null)
     {
@@ -46,7 +46,7 @@ public sealed class InventoryCostService : IInventoryCostService
             QuantityChange = quantityChange,
             QuantityAfter = newStockQuantity,
             Reason = reason,
-            ReceiptItem = receiptItem,
+            ReceiptItem = purchaseItem,
             UnitCost = movementUnitCost,
             TotalCost = movementUnitCost.HasValue
                 ? movementUnitCost.Value * Math.Abs(quantityChange)

@@ -4,8 +4,8 @@ import { ProductFormComponent } from './components/products/product-form.compone
 import { CategoryListComponent } from './components/categories/category-list.component';
 import { SupplierListComponent } from './components/suppliers/supplier-list.component';
 import { StockHistoryComponent } from './components/stock/stock-history.component';
-import { PurchaseListComponent } from './components/receipts/receipt-list.component';
-import { PurchaseUploadComponent } from './components/receipts/receipt-upload.component';
+import { PurchaseListComponent } from './components/purchases/purchase-list.component';
+import { PurchaseUploadComponent } from './components/purchases/purchase-upload.component';
 import { MachineDetailComponent } from './components/machines/machine-detail.component';
 import { SiteProductsComponent } from './components/sites/site-products.component';
 import { DashboardReportComponent } from './components/reports/dashboard-report.component';

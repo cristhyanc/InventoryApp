@@ -2,17 +2,17 @@ import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
-import { PurchaseService } from '../../services/receipt.service';
+import { PurchaseService } from '../../services/purchase.service';
 import { SupplierService } from '../../services/supplier.service';
 import { Product, Purchase, Supplier, PurchaseValidation } from '../../models/models';
 import { ProductService } from '../../services/product.service';
-import { PurchaseItemPayload } from '../../services/receipt.service';
+import { PurchaseItemPayload } from '../../services/purchase.service';
 
 @Component({
   selector: 'app-purchase-list',
   standalone: true,
   imports: [CommonModule, FormsModule, RouterLink],
-  templateUrl: './receipt-list.component.html'
+  templateUrl: './purchase-list.component.html'
 })
 export class PurchaseListComponent implements OnInit {
   purchases: Purchase[] = [];
