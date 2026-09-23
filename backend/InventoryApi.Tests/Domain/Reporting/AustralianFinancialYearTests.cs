@@ -1,4 +1,3 @@
-using System;
 using Inventory.Domain.Reporting;
 using Xunit;
 

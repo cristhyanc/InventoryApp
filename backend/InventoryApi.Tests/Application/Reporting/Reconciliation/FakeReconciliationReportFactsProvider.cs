@@ -1,7 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.Threading;
-using System.Threading.Tasks;
 using Inventory.Application.Reporting.Reconciliation;
 
 namespace InventoryApi.Tests.Application.Reporting.Reconciliation;
@@ -50,7 +46,7 @@ public sealed class FakeReconciliationReportFactsProvider : IReconciliationRepor
         paymentDetailMissing, actualNetReimbursement);
 
     public static ReconciliationReportFacts SinglePeriod(
-        ReconciliationPeriodFacts period = null,
+        ReconciliationPeriodFacts? period = null,
         bool hasMatchedReimbursement = true,
         int unknownPaymentTransactionCount = 0,
         int pendingTransactionCount = 0,

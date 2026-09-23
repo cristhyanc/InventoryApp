@@ -1,32 +1,25 @@
 #nullable enable
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using InventoryApi.Swagger;
 using Microsoft.OpenApi.Models;
 using Xunit;
 
 namespace InventoryApi.Tests.Swagger;
 
 /// <summary>
-/// Locks the generated OpenAPI document across the internal Receipt-to-Purchase rename
-/// (issue #60). Swashbuckle names schemas after CLR types and tags after controller names, so
-/// without <see cref="LegacyOpenApiCompatibility"/> the rename would republish
-/// <c>Receipt</c>/<c>ReceiptItem</c>/<c>ReceiptResponseDto</c>/<c>ReceiptValidationDto</c> and the
-/// <c>Receipts</c> tag under new <c>Purchase*</c> names, breaking generated clients even though the
-/// routes and JSON keys did not change.
+/// Locks the canonical generated OpenAPI document for the Purchase business record (issue
+/// #127): Swashbuckle's default schema ids (derived from CLR type names) and tag (derived from
+/// the controller name) are published as-is, with no legacy Receipt-named schema/tag surviving.
 /// </summary>
-public class LegacyOpenApiContractTests
+public class PurchaseOpenApiContractTests
 {
-    private const string PurchasesPath = "/api/receipts";
-    private const string PurchaseByIdPath = "/api/receipts/{id}";
+    private const string PurchasesPath = "/api/purchases";
+    private const string PurchaseByIdPath = "/api/purchases/{id}";
 
     [Theory]
-    [InlineData("Receipt")]
-    [InlineData("ReceiptItem")]
-    [InlineData("ReceiptResponseDto")]
-    [InlineData("ReceiptValidationDto")]
-    public void Legacy_schema_identifier_is_still_published(string schemaId)
+    [InlineData("Purchase")]
+    [InlineData("PurchaseItem")]
+    [InlineData("PurchaseResponseDto")]
+    [InlineData("PurchaseValidationDto")]
+    public void Canonical_schema_identifier_is_published(string schemaId)
     {
         var document = ApiContractTestHost.GetSwaggerDocument();
 
@@ -37,19 +30,19 @@ public class LegacyOpenApiContractTests
     }
 
     [Fact]
-    public void No_schema_was_republished_under_a_new_purchase_identifier()
+    public void No_schema_is_published_under_a_legacy_receipt_identifier()
     {
         var document = ApiContractTestHost.GetSwaggerDocument();
 
-        var renamed = document.Components.Schemas.Keys
-            .Where(key => key.StartsWith("Purchase", StringComparison.Ordinal))
+        var legacy = document.Components.Schemas.Keys
+            .Where(key => key.StartsWith("Receipt", StringComparison.Ordinal))
             .ToList();
 
-        Assert.Empty(renamed);
+        Assert.Empty(legacy);
     }
 
     [Fact]
-    public void Purchase_operations_keep_the_legacy_receipts_tag()
+    public void Purchase_operations_use_the_purchases_tag()
     {
         var document = ApiContractTestHost.GetSwaggerDocument();
 
@@ -58,12 +51,12 @@ public class LegacyOpenApiContractTests
         Assert.NotEmpty(operations);
         Assert.All(operations, operation =>
             Assert.Equal(
-                new[] { LegacyOpenApiCompatibility.LegacyPurchasesTag },
+                new[] { "Purchases" },
                 operation.Tags.Select(tag => tag.Name)));
     }
 
     [Fact]
-    public void No_operation_is_published_under_a_purchases_tag()
+    public void No_operation_is_published_under_the_legacy_receipts_tag()
     {
         var document = ApiContractTestHost.GetSwaggerDocument();
 
@@ -74,11 +67,11 @@ public class LegacyOpenApiContractTests
             .Distinct()
             .ToList();
 
-        Assert.DoesNotContain("Purchases", tags);
+        Assert.DoesNotContain("Receipts", tags);
     }
 
     [Fact]
-    public void Purchase_operations_reference_the_legacy_response_schema_identifiers()
+    public void Purchase_operations_reference_the_canonical_response_schema_identifiers()
     {
         var document = ApiContractTestHost.GetSwaggerDocument();
 
@@ -90,24 +83,27 @@ public class LegacyOpenApiContractTests
             .Distinct()
             .ToList();
 
-        Assert.Contains("ReceiptResponseDto", referencedSchemaIds);
-        Assert.DoesNotContain(referencedSchemaIds, id => id.StartsWith("Purchase", StringComparison.Ordinal));
+        Assert.Contains("PurchaseResponseDto", referencedSchemaIds);
+        Assert.DoesNotContain(referencedSchemaIds, id => id.StartsWith("Receipt", StringComparison.Ordinal));
     }
 
     [Fact]
-    public void Legacy_response_schema_still_exposes_the_receipt_and_validation_properties()
+    public void Canonical_response_schema_exposes_the_purchase_and_validation_properties()
     {
         var document = ApiContractTestHost.GetSwaggerDocument();
 
-        var response = document.Components.Schemas["ReceiptResponseDto"];
+        var response = document.Components.Schemas["PurchaseResponseDto"];
 
         Assert.Equal(
-            new[] { "receipt", "validation" },
+            new[] { "purchase", "validation" },
             response.Properties.Keys.Order().ToArray());
-        Assert.Equal("Receipt", response.Properties["receipt"].Reference?.Id);
-        Assert.Equal("ReceiptValidationDto", response.Properties["validation"].Reference?.Id);
-        Assert.Equal("ReceiptItem", document.Components.Schemas["Receipt"].Properties["items"].Items.Reference?.Id);
-        Assert.Contains("receiptId", document.Components.Schemas["ReceiptItem"].Properties.Keys);
+        Assert.Equal("Purchase", response.Properties["purchase"].Reference?.Id);
+        Assert.Equal("PurchaseValidationDto", response.Properties["validation"].Reference?.Id);
+        Assert.Equal("PurchaseItem", document.Components.Schemas["Purchase"].Properties["items"].Items.Reference?.Id);
+
+        // `receiptId` is the persistence-facing field issue #127 deliberately leaves unrenamed
+        // (the physical Receipt-named schema stays); keep it locked in the published contract.
+        Assert.Contains("receiptId", document.Components.Schemas["PurchaseItem"].Properties.Keys);
     }
 
     private static IEnumerable<OpenApiOperation> PurchaseOperations(OpenApiDocument document) =>
@@ -124,7 +120,7 @@ public class LegacyOpenApiContractTests
     }
 
     [Fact]
-    public void Purchase_by_id_path_is_published_for_the_legacy_route()
+    public void Purchase_by_id_path_is_published_for_the_canonical_route()
     {
         var document = ApiContractTestHost.GetSwaggerDocument();
 

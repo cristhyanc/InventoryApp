@@ -1,7 +1,3 @@
-using System;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using InventoryApi.Models;
@@ -35,8 +31,12 @@ public class EfReconciliationReportFactsProviderTests
         await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
         db.NayaxSales.Add(new NayaxSales
         {
-            TransactionID = 1, MachineID = 10, SettlementValue = 50m, PaymentMethod = "Credit Card",
-            TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 10)
+            TransactionID = 1,
+            MachineID = 10,
+            SettlementValue = 50m,
+            PaymentMethod = "Credit Card",
+            TransactionStatusId = NayaxTransactionStatusIds.Completed,
+            MachineAuthorizationTime = new DateTime(2025, 8, 10)
         });
         await db.SaveChangesAsync();
         var provider = new EfReconciliationReportFactsProvider(db);
@@ -58,8 +58,12 @@ public class EfReconciliationReportFactsProviderTests
         await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
         db.NayaxSales.Add(new NayaxSales
         {
-            TransactionID = 1, MachineID = 10, SettlementValue = 100m, PaymentMethod = "Credit Card",
-            TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 10)
+            TransactionID = 1,
+            MachineID = 10,
+            SettlementValue = 100m,
+            PaymentMethod = "Credit Card",
+            TransactionStatusId = NayaxTransactionStatusIds.Completed,
+            MachineAuthorizationTime = new DateTime(2025, 8, 10)
         });
         var file = new ImportedFile { FileName = "aug.xml", FileHash = "aug", ImportedAt = DateTime.UtcNow };
         file.Reimbursements.Add(new ImportedReimbursement
@@ -88,8 +92,11 @@ public class EfReconciliationReportFactsProviderTests
         await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
         db.NayaxSales.Add(new NayaxSales
         {
-            TransactionID = 2, MachineID = 10, SettlementValue = 50m,
-            TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 10)
+            TransactionID = 2,
+            MachineID = 10,
+            SettlementValue = 50m,
+            TransactionStatusId = NayaxTransactionStatusIds.Completed,
+            MachineAuthorizationTime = new DateTime(2025, 8, 10)
         });
         var file = new ImportedFile { FileName = "jul.xml", FileHash = "jul", ImportedAt = DateTime.UtcNow };
         file.Reimbursements.Add(new ImportedReimbursement
@@ -118,13 +125,21 @@ public class EfReconciliationReportFactsProviderTests
         db.NayaxSales.AddRange(
             new NayaxSales
             {
-                TransactionID = 10, MachineID = 1216029552, SettlementValue = 90.30m, PaymentMethod = "Credit Card",
-                TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 12)
+                TransactionID = 10,
+                MachineID = 1216029552,
+                SettlementValue = 90.30m,
+                PaymentMethod = "Credit Card",
+                TransactionStatusId = NayaxTransactionStatusIds.Completed,
+                MachineAuthorizationTime = new DateTime(2025, 8, 12)
             },
             new NayaxSales
             {
-                TransactionID = 11, MachineID = 1216029562, SettlementValue = 42.90m, PaymentMethod = "Credit Card",
-                TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 12)
+                TransactionID = 11,
+                MachineID = 1216029562,
+                SettlementValue = 42.90m,
+                PaymentMethod = "Credit Card",
+                TransactionStatusId = NayaxTransactionStatusIds.Completed,
+                MachineAuthorizationTime = new DateTime(2025, 8, 12)
             });
         var file = new ImportedFile { FileName = "machine.xml", FileHash = "machine", ImportedAt = DateTime.UtcNow };
         file.Reimbursements.Add(new ImportedReimbursement
@@ -157,13 +172,21 @@ public class EfReconciliationReportFactsProviderTests
         db.NayaxSales.AddRange(
             new NayaxSales
             {
-                TransactionID = 40, MachineID = 10, SettlementValue = 100m, PaymentMethod = "Credit Card",
-                TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 12)
+                TransactionID = 40,
+                MachineID = 10,
+                SettlementValue = 100m,
+                PaymentMethod = "Credit Card",
+                TransactionStatusId = NayaxTransactionStatusIds.Completed,
+                MachineAuthorizationTime = new DateTime(2025, 8, 12)
             },
             new NayaxSales
             {
-                TransactionID = 41, MachineID = 10, SettlementValue = 25m, PaymentMethod = "Cash",
-                TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 12)
+                TransactionID = 41,
+                MachineID = 10,
+                SettlementValue = 25m,
+                PaymentMethod = "Cash",
+                TransactionStatusId = NayaxTransactionStatusIds.Completed,
+                MachineAuthorizationTime = new DateTime(2025, 8, 12)
             });
         var file = new ImportedFile { FileName = "fees.xml", FileHash = "fees", ImportedAt = DateTime.UtcNow };
         file.Reimbursements.Add(new ImportedReimbursement

@@ -1,12 +1,7 @@
-using System;
 using System.Diagnostics;
-using System.IO;
 using System.Net;
-using System.Net.Http;
 using System.Text;
 using System.Text.Json;
-using System.Threading;
-using System.Threading.Tasks;
 using InventoryApi.Http;
 using InventoryApi.Integrations.Nayax;
 using Microsoft.AspNetCore.Http;

@@ -1,6 +1,3 @@
-using System;
-using System.Threading;
-using System.Threading.Tasks;
 using Inventory.Application.Reporting.Gst;
 
 namespace InventoryApi.Tests.Application.Reporting.Gst;

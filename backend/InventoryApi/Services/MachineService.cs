@@ -1,13 +1,9 @@
-using ClosedXML.Excel;
 using Inventory.Domain.Reporting;
 using InventoryApi.Data;
 using InventoryApi.Integrations.Nayax;
 using InventoryApi.Models;
 using InventoryApi.Services.Interfaces;
-using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
-using System.Globalization;
-using System.Reflection;
 
 namespace InventoryApi.Services;
 
@@ -200,7 +196,7 @@ public class MachineService : IMachineService
                     var added = new NayaxSales
                     {
                         TransactionID = sale.TransactionID,
-                        TransactionStatusId = sale.SettlementValue>0? NayaxTransactionStatusIds.Completed: NayaxTransactionStatusIds.CancelledOrDeclined250,
+                        TransactionStatusId = sale.SettlementValue > 0 ? NayaxTransactionStatusIds.Completed : NayaxTransactionStatusIds.CancelledOrDeclined250,
                         MachineID = sale.MachineID,
                         NayaxProductId = matchedProduct?.Id ?? sale.NayaxProductId,
                         MachineName = sale.MachineName,
@@ -238,7 +234,7 @@ public class MachineService : IMachineService
                 if (!existing.TransactionStatusId.HasValue)
                 {
                     existing.TransactionStatusId =
-                        sale.SettlementValue>0? NayaxTransactionStatusIds.Completed: NayaxTransactionStatusIds.CancelledOrDeclined250;
+                        sale.SettlementValue > 0 ? NayaxTransactionStatusIds.Completed : NayaxTransactionStatusIds.CancelledOrDeclined250;
                     enriched = true;
                 }
                 if (enriched)

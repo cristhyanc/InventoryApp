@@ -175,9 +175,8 @@ export interface RestockCostSuggestion {
   purchaseDate: string | null;
 }
 
-// The Purchase business record. Property names match the "/api/receipts" JSON contract
-// (see backend Purchase.cs / PurchaseResponseDto) which keeps its legacy "receipt"/"receiptId"
-// keys for API compatibility even though the CLR/TS type names are now Purchase-language.
+// The Purchase business record served under the "/api/purchases" JSON contract
+// (see backend Purchase.cs / PurchaseResponseDto).
 export interface Purchase {
   id: number;
   title: string;
@@ -204,7 +203,7 @@ export interface PurchaseValidation {
 }
 
 export interface PurchaseResponse {
-  receipt: Purchase;
+  purchase: Purchase;
   validation?: PurchaseValidation | null;
 }
 

@@ -1,4 +1,3 @@
-using InventoryApi.Integrations.Nayax;
 using InventoryApi.Models;
 
 namespace InventoryApi.Services.Interfaces;

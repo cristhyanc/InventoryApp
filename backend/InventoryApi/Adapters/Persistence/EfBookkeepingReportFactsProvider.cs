@@ -1,7 +1,5 @@
 using Inventory.Application.Reporting.Bookkeeping;
 using InventoryApi.Data;
-using InventoryApi.DTOs;
-using InventoryApi.Models;
 using InventoryApi.Services;
 using InventoryApi.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;

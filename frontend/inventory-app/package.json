@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "scripts": {
     "ng": "ng",
+    "lint": "ng lint",
     "build:styles": "npx tailwindcss -i src/styles.scss -o src/styles.css --content \"./src/**/*.{html,ts}\"",
     "start": "npm run build:styles && ng serve",
     "build": "npm run build:styles && ng build",
@@ -29,9 +30,12 @@
     "@angular/cli": "^19.0.0",
     "@angular/compiler-cli": "^19.0.0",
     "@tailwindcss/postcss": "^4.3.2",
+    "angular-eslint": "^19.8.1",
     "autoprefixer": "^10.5.2",
+    "eslint": "^9.39.5",
     "postcss": "^8.5.16",
     "tailwindcss": "^3.4.17",
-    "typescript": "~5.6.0"
+    "typescript": "~5.6.0",
+    "typescript-eslint": "^8.70.1"
   }
 }

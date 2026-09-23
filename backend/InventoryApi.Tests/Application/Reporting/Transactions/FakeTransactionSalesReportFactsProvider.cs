@@ -1,9 +1,4 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Runtime.CompilerServices;
-using System.Threading;
-using System.Threading.Tasks;
 using Inventory.Application.Reporting.Transactions;
 using Inventory.Domain.Reporting.Transactions;
 
@@ -31,9 +26,9 @@ public sealed class FakeTransactionSalesReportFactsProvider : ITransactionSalesR
     /// <summary>Builds a fact bundle from an in-memory row sequence, as an asynchronous stream.</summary>
     public static TransactionSalesReportFacts Facts(
         IReadOnlyList<TransactionSalesReportFactsRow> rows,
-        IReadOnlyList<TransactionSalesCatalogueEntry> productCatalogue = null,
-        IReadOnlyList<EffectiveFeeRate> feeRates = null,
-        IReadOnlyList<EffectiveCommissionAgreement> commissionAgreements = null,
+        IReadOnlyList<TransactionSalesCatalogueEntry>? productCatalogue = null,
+        IReadOnlyList<EffectiveFeeRate>? feeRates = null,
+        IReadOnlyList<EffectiveCommissionAgreement>? commissionAgreements = null,
         bool siteMappingUnavailable = false) => new(
         Stream(rows), productCatalogue ?? [], feeRates ?? [], commissionAgreements ?? [], siteMappingUnavailable);
 
@@ -55,7 +50,7 @@ public sealed class FakeTransactionSalesReportFactsProvider : ITransactionSalesR
         long machineId = 10,
         string machineName = "Machine A",
         long? siteId = null,
-        string siteName = null,
+        string? siteName = null,
         long? nayaxProductId = 1,
         string rawProductName = "Water",
         decimal sale = 10m,

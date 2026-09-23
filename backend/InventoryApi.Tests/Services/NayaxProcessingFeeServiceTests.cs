@@ -1,6 +1,3 @@
-using System;
-using System.Linq;
-using System.Threading.Tasks;
 using InventoryApi.Data;
 using InventoryApi.Models;
 using InventoryApi.Services;
@@ -44,7 +41,8 @@ public class NayaxProcessingFeeServiceTests
         db.NayaxSales.AddRange(Sale(1, 1, "Credit Card", 12, 1), Sale(2, 1, "Credit Card", 12, 2));
         db.ImportedReimbursements.Add(new ImportedReimbursement
         {
-            ReimbursementStartDate = new DateTime(2026, 9, 1), ReimbursementEndDate = new DateTime(2026, 9, 1),
+            ReimbursementStartDate = new DateTime(2026, 9, 1),
+            ReimbursementEndDate = new DateTime(2026, 9, 1),
             Fees = { new ImportedFee { FeeTypeDescription = "Processing fee", TotalSum = 1m, TotalSumWithVat = 1.1m } }
         });
         await db.SaveChangesAsync();
@@ -68,7 +66,8 @@ public class NayaxProcessingFeeServiceTests
         db.NayaxSales.AddRange(Sale(1, 10, "Credit Card", 12, 1), Sale(2, 10, "Credit Card", 12, 2), Sale(3, 11, "Credit Card", 12, 1));
         db.ImportedReimbursements.Add(new ImportedReimbursement
         {
-            ReimbursementStartDate = new DateTime(2026, 9, 1), ReimbursementEndDate = new DateTime(2026, 9, 1),
+            ReimbursementStartDate = new DateTime(2026, 9, 1),
+            ReimbursementEndDate = new DateTime(2026, 9, 1),
             Devices = { new ImportedReimbursementDevice { MachineNumber = "10", ProcessingFee = .25m } }
         });
         await db.SaveChangesAsync();
@@ -90,19 +89,25 @@ public class NayaxProcessingFeeServiceTests
         db.NayaxSales.AddRange(
             new NayaxSales
             {
-                TransactionID = 10, MachineID = 1, PaymentMethod = "Credit Card",
+                TransactionID = 10,
+                MachineID = 1,
+                PaymentMethod = "Credit Card",
                 TransactionStatusId = NayaxTransactionStatusIds.Completed,
                 MachineAuthorizationTime = new DateTime(2026, 6, 30)
             },
             new NayaxSales
             {
-                TransactionID = 11, MachineID = 1, PaymentMethod = "Credit Card",
+                TransactionID = 11,
+                MachineID = 1,
+                PaymentMethod = "Credit Card",
                 TransactionStatusId = NayaxTransactionStatusIds.Completed,
                 MachineAuthorizationTime = new DateTime(2026, 7, 1)
             },
             new NayaxSales
             {
-                TransactionID = 12, MachineID = 1, PaymentMethod = "Cash",
+                TransactionID = 12,
+                MachineID = 1,
+                PaymentMethod = "Cash",
                 TransactionStatusId = NayaxTransactionStatusIds.Completed,
                 MachineAuthorizationTime = new DateTime(2026, 7, 1)
             });
@@ -211,7 +216,11 @@ public class NayaxProcessingFeeServiceTests
     private static NayaxSales Sale(long id, long machine, string paymentMethod, int? status, int day = 1) =>
         new()
         {
-            TransactionID = id, MachineID = machine, PaymentMethod = paymentMethod, TransactionStatusId = status,
-            SettlementValue = 1m, MachineAuthorizationTime = new DateTime(2026, 9, day)
+            TransactionID = id,
+            MachineID = machine,
+            PaymentMethod = paymentMethod,
+            TransactionStatusId = status,
+            SettlementValue = 1m,
+            MachineAuthorizationTime = new DateTime(2026, 9, day)
         };
 }

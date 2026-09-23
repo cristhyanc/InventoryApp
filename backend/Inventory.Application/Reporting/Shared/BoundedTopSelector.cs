@@ -2,7 +2,7 @@ namespace Inventory.Application.Reporting.Shared;
 
 /// <summary>
 /// Retains at most <c>capacity</c> items from a sequence fed one at a time through <see cref="Add"/>,
-/// always keeping the items that would sort earliest under <paramref name="comparer"/>. Feeding every
+/// always keeping the items that would sort earliest under the supplied <c>comparer</c>. Feeding every
 /// item of a sequence and reading <see cref="Items"/> afterward yields the same ordered result as
 /// sorting the complete sequence with the same comparer and taking its first <c>capacity</c> items,
 /// without ever holding more than <c>capacity</c> items at once. Used to bound a paginated report's

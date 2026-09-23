@@ -1,6 +1,3 @@
-using InventoryApi.DTOs;
-using Microsoft.AspNetCore.Http;
-
 namespace InventoryApi.Services.Interfaces;
 
 public interface IImportService

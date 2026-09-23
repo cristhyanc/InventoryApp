@@ -1,6 +1,3 @@
-using System;
-using System.Threading;
-using System.Threading.Tasks;
 using Inventory.Application.NayaxFeeSettings;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
@@ -46,6 +43,8 @@ public class SaveNayaxFeeRateSqliteTests
 
             Assert.True(first.IsValid);
             Assert.True(second.IsValid);
+            Assert.NotNull(first.Record);
+            Assert.NotNull(second.Record);
 
             await using var verify = new AppDbContext(options);
             var row = Assert.Single(await verify.NayaxProcessingFeeRates.ToListAsync());

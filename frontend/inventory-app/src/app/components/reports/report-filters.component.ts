@@ -37,11 +37,11 @@ export class ReportFiltersComponent {
   @Input() machineId: number | null = null;
   @Input() machines: Machine[] = [];
   @Input() period = 'thisMonth';
-  @Output() fromChange = new EventEmitter<string>();
-  @Output() toChange = new EventEmitter<string>();
-  @Output() machineChange = new EventEmitter<number | null>();
-  @Output() periodChange = new EventEmitter<string>();
-  @Output() apply = new EventEmitter<void>();
+  @Output() readonly fromChange = new EventEmitter<string>();
+  @Output() readonly toChange = new EventEmitter<string>();
+  @Output() readonly machineChange = new EventEmitter<number | null>();
+  @Output() readonly periodChange = new EventEmitter<string>();
+  @Output() readonly apply = new EventEmitter<void>();
   options = [['thisMonth', 'This Month'], ['lastMonth', 'Last Month'], ['currentFy', 'Current FY'], ['previousFy', 'Previous FY'], ['custom', 'Custom']];
   machineLabel(machine: Machine): string { return machine.machineName || machine.machineNumber || `Machine ${machine.machineID}`; }
 }

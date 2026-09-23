@@ -182,7 +182,7 @@ Authentication/authorization is an `InventoryApi`/frontend boundary concern (iss
 
 - **Backend.** `Program.cs` registers `AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddMicrosoftIdentityWebApi(builder.Configuration.GetSection("AzureAd"))` and calls `UseAuthentication()` before `UseAuthorization()`. Every controller carries `[Authorize]` plus `[RequiredScope("access_as_user")]` (`Microsoft.Identity.Web.Resource`), so a request without a bearer token is rejected `401 Unauthorized` and a request whose token lacks the delegated `access_as_user` scope is rejected `403 Forbidden`, both by ASP.NET Core's authentication/authorization middleware before any controller action runs. The non-secret `AzureAd` configuration (`Instance`, `TenantId`, `ClientId`, `Scopes`) lives in `appsettings.json`; the `ClientId` is the API app registration's public application ID, used only to validate the token audience, never a client secret. `Microsoft.Identity.Web`/`Microsoft.AspNetCore.Authorization`/JWT types are used only in `InventoryApi` (`Program.cs` and controllers) and must never appear in `Inventory.Domain` or `Inventory.Application`; if a use case ever needs the caller's identity, define a narrow neutral Application port instead of exposing Microsoft identity-provider types across that boundary.
 - **Frontend.** The Angular SPA authenticates through MSAL (`@azure/msal-angular`, `@azure/msal-browser`). `frontend/inventory-app/src/app/auth-config.ts` defines the SPA/API Entra application IDs, the delegated `access_as_user` scope (`loginRequest`), and `buildProtectedResourceMap(apiBaseUrl)`, which keys MSAL's protected-resource map off `ConfigService.apiBaseUrl` rather than a hard-coded host. `app.config.ts` wires `MsalInterceptor` (attaches `Authorization: Bearer <token>` to matching requests), `MsalGuard` (redirect-based route protection), and `MSAL_INTERCEPTOR_CONFIG` (built from that dynamic map), so the bearer token is attached correctly whether `ConfigService.apiBaseUrl` resolves to the local dev proxy (`/api`) or the deployed Azure API's absolute URL — see [Runtime configuration and API contracts](#runtime-configuration-and-api-contracts). `app.routes.ts` applies `MsalGuard` to every application route except the public `/auth` callback route (`AuthCallbackComponent`), which must stay reachable without authentication so the Entra redirect can complete. `AppComponent` drives sign-in/sign-out (`MsalService.loginRedirect`/`logoutRedirect`) and reflects the active account in the header.
-- **Protected documents.** Static-file middleware does not run controller authorization, so an uploaded document under `wwwroot` would be downloadable by anyone who knew its generated file name no matter what `[Authorize]` says. `Program.cs` therefore registers no static-file middleware at all — the API serves no public assets, since the Angular application is a separate Azure Static Web App — and `ProtectedFileStorage` stores purchase documents and operating-expense supporting documents under `{ContentRoot}/protected-files/{category}/`, outside the web root. The only way to read one is `GET /api/receipts/{id}/file` or `GET /api/operating-expenses/{id}/attachment`. Documents uploaded before this rule still sit in `wwwroot/{category}` and stay readable and deletable through the same endpoints (`ProtectedFileStorage.ExistingPath` falls back to that location) but no longer have an anonymous URL. Because these endpoints require a bearer token, the frontend must fetch them through `HttpClient` (`PurchaseService.getFile`, `OperatingExpenseService.getAttachment`, both `responseType: 'blob'`) and render them from an object URL; an `<a href>`/`<img src>` pointing straight at the endpoint is a plain browser request that carries no token and gets `401`.
+- **Protected documents.** Static-file middleware does not run controller authorization, so an uploaded document under `wwwroot` would be downloadable by anyone who knew its generated file name no matter what `[Authorize]` says. `Program.cs` therefore registers no static-file middleware at all — the API serves no public assets, since the Angular application is a separate Azure Static Web App — and `ProtectedFileStorage` stores purchase documents and operating-expense supporting documents under `{ContentRoot}/protected-files/{category}/`, outside the web root. The only way to read one is `GET /api/purchases/{id}/file` or `GET /api/operating-expenses/{id}/attachment`. Documents uploaded before this rule still sit in `wwwroot/{category}` and stay readable and deletable through the same endpoints (`ProtectedFileStorage.ExistingPath` falls back to that location) but no longer have an anonymous URL. Because these endpoints require a bearer token, the frontend must fetch them through `HttpClient` (`PurchaseService.getFile`, `OperatingExpenseService.getAttachment`, both `responseType: 'blob'`) and render them from an object URL; an `<a href>`/`<img src>` pointing straight at the endpoint is a plain browser request that carries no token and gets `401`.
 - **Multi-tenant scope.** Authentication accepts users from multiple Microsoft Entra tenants (`TenantId: "common"`), but this does not provide multi-tenant *data* isolation. Database-level tenant partitioning/scoping is a separate, unimplemented concern.
 
 ### API documentation policy
@@ -389,11 +389,10 @@ Timezone migration is not part of an incidental feature. Changes require explici
 
 #### Purchase rename plan
 
-The canonical internal business term is now **Purchase**/**PurchaseItem**, not Receipt/ReceiptItem
+The canonical internal business term is **Purchase**/**PurchaseItem**, not Receipt/ReceiptItem
 (issue #60). The rename touched entity/service/component/DTO naming and the corresponding source file
-names only; purchase accounting/inventory behaviour, the database schema, and the API/route contract
-are unchanged (verified with `dotnet ef migrations has-pending-model-changes`, which reports no
-pending changes).
+names; purchase accounting/inventory behaviour and the database schema are unchanged (verified with
+`dotnet ef migrations has-pending-model-changes`, which reports no pending changes).
 
 The source files were renamed with `git mv` alongside their identifiers, so file names and type names
 now agree:
@@ -411,43 +410,48 @@ now agree:
 | `frontend/.../components/purchases/receipt-list.component.{ts,html}` | `.../purchase-list.component.{ts,html}` |
 | `frontend/.../components/purchases/receipt-upload.component.{ts,html}` | `.../purchase-upload.component.{ts,html}` |
 
-The `receipts` upload folder name, the database tables and migration history, and the
-`/api/receipts` route are *not* file renames and deliberately keep their names; see the compatibility
-table below. (That upload folder has since moved out of `wwwroot` to
+The `receipts` upload folder name, the database tables and migration history stay on their legacy
+names; see the compatibility table below. (That upload folder has since moved out of `wwwroot` to
 `{ContentRoot}/protected-files/receipts` for the authorization boundary described in
 [Authentication and authorization](#authentication-and-authorization); only its location changed, not
 its name.)
 
-##### OpenAPI compatibility
+Because InventoryApp is a single-user application with no supported external API client, issue #127
+removed the compatibility surfaces that existed only to preserve old bookmarks and generated clients:
+the HTTP route, JSON wrapper key, and published OpenAPI names are now canonical Purchase language
+end to end. Database/table/migration compatibility, listed in the table below, is a separate,
+deliberately preserved concern and was not touched.
 
-Swashbuckle derives schema ids from CLR type names and operation tags from controller names, so the
-rename would otherwise have republished the document's `Receipt`, `ReceiptItem`, `ReceiptResponseDto`
-and `ReceiptValidationDto` schemas and its `Receipts` tag under new `Purchase*` names — a breaking
-change for generated clients even though the routes and JSON keys are identical.
-`InventoryApi.Swagger.LegacyOpenApiCompatibility` is the compatibility boundary that prevents this: it
-maps the renamed CLR types back to their published schema ids and pins `PurchasesController`'s
-operations to the legacy `Receipts` tag, deferring to Swashbuckle's defaults for everything else. It
-is registered through `SwaggerServiceCollectionExtensions.AddInventoryApiSwagger`, the single
-registration shared by `Program.cs` and the contract tests, and is covered by
-`InventoryApi.Tests.Swagger.LegacyOpenApiContractTests` (schema ids, tag, and the schemas the purchase
-operations reference) and `InventoryApi.Tests.Controllers.PurchasesControllerRouteTests` (the effective
-`api/receipts` base route and its GET/POST/PUT/DELETE/file endpoints, read from the MVC API explorer).
+##### OpenAPI documentation
 
-| Layer | Renamed to Purchase language | Left as a legacy/compatibility surface | Why |
+`PurchasesController` no longer pins an explicit legacy route; its `[Route("api/purchases")]`
+publishes the canonical route, and Swashbuckle's default schema-id/tag derivation from CLR/controller
+names is used unmodified — there is no `LegacyOpenApiCompatibility`/`UseLegacyReceiptNames` step in
+`SwaggerServiceCollectionExtensions.AddInventoryApiSwagger` any more. The published document therefore
+carries the `Purchase`/`PurchaseItem`/`PurchaseResponseDto`/`PurchaseValidationDto` schema ids and the
+`Purchases` tag, with no remaining `Receipt*` schema id or `Receipts` tag.
+`InventoryApi.Tests.Swagger.PurchaseOpenApiContractTests` (schema ids, tag, and the schemas the
+purchase operations reference) and `InventoryApi.Tests.Controllers.PurchasesControllerRouteTests`
+(the effective `api/purchases` base route and its GET/POST/PUT/DELETE/file endpoints, read from the
+MVC API explorer) cover this contract.
+
+| Layer | Canonical Purchase language | Left as a legacy/compatibility surface | Why |
 | --- | --- | --- | --- |
-| `Inventory.Domain` | `Purchases.PurchaseTotalValidationPolicy` (new) | — | New pure calculation; the one authoritative total-mismatch formula. |
-| `Inventory.Application` | `Purchases.ComputePurchaseTotalValidation` (new) | — | Thin use case wrapping the Domain policy; `InventoryApi.Services.PurchaseService` calls it instead of duplicating the formula. |
-| `InventoryApi.Models` | CLR types and files `Purchase.cs`, `PurchaseItem.cs` | DbSet properties `Receipts`/`ReceiptItems`, table names `Receipts`/`ReceiptItems` (now mapped explicitly with `ToTable`), `PurchaseItem.ReceiptId` column/property, `StockAdjustment.ReceiptItemId`/`ReceiptItem`, `SupplierOrderReceiptAllocation` (type and its `ReceiptItemId`/`ReceiptItem` members) | Schema/migration history must not change; `ReceiptId` and the `StockAdjustment`/`SupplierOrderReceiptAllocation` members are part of the JSON contract or are out of this issue's scope (supplier-order/stock-ledger naming belongs to the full slice above). |
-| `InventoryApi.Services` | `PurchaseService : IPurchaseService` (files `PurchaseService.cs`/`IPurchaseService.cs`) | Physical upload folder keeps the name `receipts` (`ProtectedFileStorage.PurchaseDocumentsCategory`), now under `{ContentRoot}/protected-files/` rather than `wwwroot/` | Already-uploaded purchase document scans must stay reachable by their stored file name; `ProtectedFileStorage.ExistingPath` still falls back to the old `wwwroot/receipts` location. |
-| `InventoryApi.Controllers` | `PurchasesController` (file `PurchasesController.cs`), explicit `[Route("api/receipts")]` | Route `api/receipts`, and the `Receipts` OpenAPI tag via `LegacyOpenApiCompatibility` | Preserves the existing, bookmarked API route (acceptance criterion). |
-| `InventoryApi.DTOs` | `PurchaseItemDto`, `PurchaseCreateMetaDto`, `PurchaseValidationDto`, `PurchaseResponseDto` | `PurchaseResponseDto`'s `Receipt`/`Validation` property names (JSON keys `receipt`/`validation`), and the published OpenAPI schema ids `Receipt`/`ReceiptItem`/`ReceiptItemDto`/`ReceiptCreateMetaDto`/`ReceiptValidationDto`/`ReceiptResponseDto` | JSON property names and schema ids are part of the public API contract; only the CLR type names changed. |
-| Frontend `models.ts`/`purchase.service.ts` | `Purchase`, `PurchaseItem`, `PurchaseValidation`, `PurchaseResponse`, `PurchaseService`, `PurchaseUploadPayload`/`PurchaseItemPayload`/`PurchaseUpdatePayload` (files `purchase.service.ts`, `components/purchases/purchase-{list,upload}.component.{ts,html}`) | JSON-bound fields `receipt`/`receiptId` | Matches the backend JSON contract above. |
-| Frontend routing | Primary route `/purchases` (and `/purchases/new`) | `/receipts` and `/receipts/new` redirect to the new paths | Keeps existing bookmarks/links working while the URL bar now matches the "Purchases" nav label. |
-| Supporting documents | Not renamed: `Purchase.FileName`/`StoredFileName`/`ContentType`/`FileSizeBytes`, the "Receipt or invoice" upload copy, `OperatingExpense` receipt-attachment naming | — | A purchase's attached scan/photo, and an operating expense's attachment, are supporting *documents*, a distinct concept from the Purchase business record (acceptance criterion). |
+| `Inventory.Domain` | `Purchases.PurchaseTotalValidationPolicy` | — | New pure calculation; the one authoritative total-mismatch formula. |
+| `Inventory.Application` | `Purchases.ComputePurchaseTotalValidation` | — | Thin use case wrapping the Domain policy; `InventoryApi.Services.PurchaseService` calls it instead of duplicating the formula. |
+| `InventoryApi.Models` | CLR types and files `Purchase.cs`, `PurchaseItem.cs` | DbSet properties `Receipts`/`ReceiptItems`, table names `Receipts`/`ReceiptItems` (mapped explicitly with `ToTable`), `PurchaseItem.ReceiptId` column/property, `StockAdjustment.ReceiptItemId`/`ReceiptItem`, `SupplierOrderReceiptAllocation` (type and its `ReceiptItemId`/`ReceiptItem` members) | Schema/migration history must not change; these are persistence compatibility, not client/API compatibility, and stay out of scope until the purchasing/costing slice moves this persistence into `Inventory.Infrastructure`. |
+| `InventoryApi.Services` | `PurchaseService : IPurchaseService` (files `PurchaseService.cs`/`IPurchaseService.cs`) | Physical upload folder keeps the name `receipts` (`ProtectedFileStorage.PurchaseDocumentsCategory`), now under `{ContentRoot}/protected-files/` rather than `wwwroot/` | Already-uploaded purchase document scans must stay reachable by their stored file name; `ProtectedFileStorage.ExistingPath` still falls back to the old `wwwroot/receipts` location. Renaming the on-disk category needs its own verified file-migration. |
+| `InventoryApi.Controllers` | `PurchasesController` (file `PurchasesController.cs`), `[Route("api/purchases")]` | — | The route is now canonical; there is no supported external client left to preserve `api/receipts` for. |
+| `InventoryApi.DTOs` | `PurchaseItemDto`, `PurchaseCreateMetaDto`, `PurchaseValidationDto`, `PurchaseResponseDto` (JSON keys `purchase`/`validation`) | — | The `receipt`/`validation` wrapper existed only for old clients; `PurchaseResponseDto`'s property is now named `Purchase`. |
+| Frontend `models.ts`/`purchase.service.ts` | `Purchase`, `PurchaseItem`, `PurchaseValidation`, `PurchaseResponse` (`purchase` field), `PurchaseService` (canonical `/purchases` base URL), `PurchaseUploadPayload`/`PurchaseItemPayload`/`PurchaseUpdatePayload` | JSON-bound field `receiptId` on `PurchaseItem` | `receiptId` matches the backend `PurchaseItem.ReceiptId` persistence/JSON contract above, which is out of this issue's scope. |
+| Frontend routing | `/purchases` and `/purchases/new` are the only supported purchase routes | — | The `/receipts` and `/receipts/new` redirect aliases were removed; there is no supported bookmark to preserve. |
+| Supporting documents | Not renamed: `Purchase.FileName`/`StoredFileName`/`ContentType`/`FileSizeBytes`, the "Receipt or invoice" upload copy, `OperatingExpense` receipt-attachment naming | — | A purchase's attached scan/photo, and an operating expense's attachment, are supporting *documents*, a distinct concept from the Purchase business record. |
 
-Out of scope for this rename (per issue #60): changing purchase accounting/inventory behaviour, the
-purchase GST/BAS model, and any destructive migration/table rename. The compatibility surfaces listed
-above are deliberate and stay as they are; renaming any of them would be a schema or public-contract
+Out of scope for the Purchase/Products contract cleanup (per issues #60 and #127): changing purchase
+accounting/inventory behaviour, the purchase GST/BAS model, any destructive migration/table rename,
+the on-disk purchase-document category, the `InventoryCostTransitionBaseline` workflow, and the
+separate OperatingExpense `/{id}/receipt` alias (tracked by issue #61). The persistence compatibility
+surfaces listed above are deliberate and stay as they are; renaming any of them would be a schema
 change needing its own issue, ideally combined with the rest of the Purchasing and costing slice
 (item 6 above).
 
@@ -487,6 +491,7 @@ Backend and frontend tracks can progress independently when their contracts do n
 
 2. **Project skeleton** — done.
    - Added `Inventory.Domain`, `Inventory.Application`, and `Inventory.Infrastructure` projects, the allowed reference directions, no-op dependency-registration extensions wired into `InventoryApi`, and architecture tests that fail on a prohibited reverse dependency.
+   - The boundary is enforced from two directions, both in `backend/InventoryApi.Tests/Architecture/`: `ProjectDependencyDirectionTests` reads the `.csproj` files, so it catches a forbidden `ProjectReference` that is declared but not yet used (the compiler would trim it from assembly metadata); `CleanArchitectureDependencyTests` uses NetArchTest against the compiled assemblies, so it catches a forbidden dependency that arrives without a new project reference - through a transitive package or a shared source file - and also keeps ASP.NET Core, EF Core, `HttpClient` and ClosedXML types out of `Inventory.Domain` and `Inventory.Application`.
    - No feature was moved; every controller, service, model, and adapter still lives in `InventoryApi`.
 
 3. **Nayax fee settings slice** — done.
@@ -504,12 +509,13 @@ Backend and frontend tracks can progress independently when their contracts do n
 
 6. **Purchasing and costing slice**
    - Migrate purchases, supplier orders, stock ledger, AVCO, rebuilding, and sale costing as one coherent area.
-   - **Receipt-to-Purchase internal rename done** (issue #60), ahead of the full slice migration above. See
+   - **Receipt-to-Purchase internal rename done** (issue #60), ahead of the full slice migration above,
+     **and its client/API compatibility shims removed** (issue #127). See
      [Purchase rename plan](#purchase-rename-plan) for the entity/service/component/DTO and source-file
-     renames, the OpenAPI compatibility boundary, and the compatibility surfaces intentionally left on
-     their legacy names. The rest of this slice — moving the purchase upload/update/delete orchestration
-     itself, and the supplier-order/stock-ledger/AVCO code it touches, into
-     `Inventory.Application`/`Inventory.Infrastructure` — remains future work.
+     renames, the canonical `api/purchases` contract, and the persistence compatibility surfaces
+     intentionally left on their legacy names. The rest of this slice — moving the purchase
+     upload/update/delete orchestration itself, and the supplier-order/stock-ledger/AVCO code it
+     touches, into `Inventory.Application`/`Inventory.Infrastructure` — remains future work.
 
 7. **Reporting slices**
    - Split bookkeeping, daily, reconciliation, machine/product profitability, GST, dashboard, and transactions into separate query handlers.

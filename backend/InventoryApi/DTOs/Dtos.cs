@@ -59,10 +59,8 @@ public record PurchaseValidationDto(
     decimal? TotalDifference
 );
 
-// Property names stay "Receipt"/"Validation" (JSON keys "receipt"/"validation") to preserve
-// the existing API contract; only the referenced CLR type is the renamed Purchase business type.
 public record PurchaseResponseDto(
-    Purchase Receipt,
+    Purchase Purchase,
     PurchaseValidationDto? Validation = null
 );
 
