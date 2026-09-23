@@ -1,7 +1,3 @@
-using System;
-using System.IO;
-using System.Threading;
-using System.Threading.Tasks;
 using InventoryApi.Controllers;
 using InventoryApi.Data;
 using InventoryApi.DTOs;

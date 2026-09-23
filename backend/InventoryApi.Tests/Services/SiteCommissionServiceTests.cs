@@ -1,8 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
 using InventoryApi.Data;
 using InventoryApi.Integrations.Nayax;
 using InventoryApi.Models;
@@ -127,13 +122,20 @@ public class SiteCommissionServiceTests
 
     private static void AddSale(AppDbContext db, long id, long machineId, DateTime date) => db.NayaxSales.Add(new NayaxSales
     {
-        TransactionID = id, MachineID = machineId, SettlementValue = 10m, PaymentMethod = "Credit Card",
-        TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = date
+        TransactionID = id,
+        MachineID = machineId,
+        SettlementValue = 10m,
+        PaymentMethod = "Credit Card",
+        TransactionStatusId = NayaxTransactionStatusIds.Completed,
+        MachineAuthorizationTime = date
     });
 
     private static SiteCommissionAgreement Agreement(long siteId, DateTime from, DateTime? to, decimal rate) => new()
     {
-        SiteId = siteId, EffectiveFrom = from, EffectiveTo = to, CommissionRate = rate,
+        SiteId = siteId,
+        EffectiveFrom = from,
+        EffectiveTo = to,
+        CommissionRate = rate,
         Basis = CommissionBasis.GrossSales
     };
 }

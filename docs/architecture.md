@@ -491,6 +491,7 @@ Backend and frontend tracks can progress independently when their contracts do n
 
 2. **Project skeleton** — done.
    - Added `Inventory.Domain`, `Inventory.Application`, and `Inventory.Infrastructure` projects, the allowed reference directions, no-op dependency-registration extensions wired into `InventoryApi`, and architecture tests that fail on a prohibited reverse dependency.
+   - The boundary is enforced from two directions, both in `backend/InventoryApi.Tests/Architecture/`: `ProjectDependencyDirectionTests` reads the `.csproj` files, so it catches a forbidden `ProjectReference` that is declared but not yet used (the compiler would trim it from assembly metadata); `CleanArchitectureDependencyTests` uses NetArchTest against the compiled assemblies, so it catches a forbidden dependency that arrives without a new project reference - through a transitive package or a shared source file - and also keeps ASP.NET Core, EF Core, `HttpClient` and ClosedXML types out of `Inventory.Domain` and `Inventory.Application`.
    - No feature was moved; every controller, service, model, and adapter still lives in `InventoryApi`.
 
 3. **Nayax fee settings slice** — done.

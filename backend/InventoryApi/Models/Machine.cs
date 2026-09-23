@@ -1,4 +1,4 @@
-﻿namespace InventoryApi.Models
+namespace InventoryApi.Models
 {
     public class Machine
     {

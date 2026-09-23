@@ -1,12 +1,7 @@
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Threading.Tasks;
 using InventoryApi.Data;
 using InventoryApi.Integrations.Nayax;
 using InventoryApi.Models;
 using InventoryApi.Services;
-using InventoryApi.Services.Interfaces;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
@@ -48,13 +43,21 @@ public class ImportServiceTests
         db.Products.Add(new Product { Id = 10, Name = "Snack", QuantityInStock = 10, AverageUnitCost = 2m });
         db.StockAdjustments.Add(new StockAdjustment
         {
-            ProductId = 10, QuantityChange = 10, QuantityAfter = 10, Reason = StockAdjustmentReason.Restock,
-            UnitCost = 2m, EffectiveAt = new DateTime(2026, 9, 1)
+            ProductId = 10,
+            QuantityChange = 10,
+            QuantityAfter = 10,
+            Reason = StockAdjustmentReason.Restock,
+            UnitCost = 2m,
+            EffectiveAt = new DateTime(2026, 9, 1)
         });
         db.NayaxSales.Add(new NayaxSales
         {
-            TransactionID = 1, MachineID = 1, NayaxProductId = 999, ProductName = "Unknown",
-            SettlementValue = 5m, TransactionStatusId = NayaxTransactionStatusIds.Completed,
+            TransactionID = 1,
+            MachineID = 1,
+            NayaxProductId = 999,
+            ProductName = "Unknown",
+            SettlementValue = 5m,
+            TransactionStatusId = NayaxTransactionStatusIds.Completed,
             MachineAuthorizationTime = new DateTime(2026, 9, 2)
         });
         await db.SaveChangesAsync();
@@ -72,7 +75,7 @@ public class ImportServiceTests
         new(new DbContextOptionsBuilder<AppDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
 
-    private static ImportService CreateImportService(AppDbContext db, INayaxLynxClient nayax = null)
+    private static ImportService CreateImportService(AppDbContext db, INayaxLynxClient? nayax = null)
     {
         var rebuild = new InventoryCostRebuildService(db);
         return new ImportService(

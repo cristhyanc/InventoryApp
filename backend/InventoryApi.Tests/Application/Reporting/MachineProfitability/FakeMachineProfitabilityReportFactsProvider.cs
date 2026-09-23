@@ -1,7 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.Threading;
-using System.Threading.Tasks;
 using Inventory.Application.Reporting.MachineProfitability;
 using Inventory.Application.Reporting.Shared;
 

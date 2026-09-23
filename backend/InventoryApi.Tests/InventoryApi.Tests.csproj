@@ -3,7 +3,6 @@
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <IsPackable>false</IsPackable>
-    <LangVersion>latest</LangVersion>
   </PropertyGroup>
 
   <ItemGroup>
@@ -15,6 +14,17 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="2.5.3" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.9.0" />
     <PackageReference Include="Microsoft.AspNetCore.Http.Abstractions" Version="2.2.0" />
+
+    <!-- Architecture tests: asserts the Clean Architecture dependency direction against the
+         compiled assemblies (see Architecture/CleanArchitectureDependencyTests.cs). -->
+    <PackageReference Include="NetArchTest.Rules" Version="1.3.2" />
+
+    <!-- Code coverage. The "XPlat Code Coverage" data collector used by the validation scripts
+         needs this package on the test project; it never ships with the application. -->
+    <PackageReference Include="coverlet.collector" Version="10.0.1">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
   </ItemGroup>
 
   <ItemGroup>

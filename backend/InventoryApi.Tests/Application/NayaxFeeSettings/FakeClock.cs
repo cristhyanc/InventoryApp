@@ -1,4 +1,3 @@
-using System;
 using Inventory.Application.NayaxFeeSettings;
 
 namespace InventoryApi.Tests.Application.NayaxFeeSettings;

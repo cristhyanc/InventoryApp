@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 using Inventory.Domain.Reporting.Transactions;
 using Xunit;
 

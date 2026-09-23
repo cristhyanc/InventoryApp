@@ -1,13 +1,8 @@
-using InventoryApi.Data;
 using InventoryApi.DTOs;
-using InventoryApi.Integrations.Nayax;
 using InventoryApi.Models;
 using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Identity.Web.Resource;
-using System.Xml.Linq;
 
 namespace InventoryApi.Controllers;
 

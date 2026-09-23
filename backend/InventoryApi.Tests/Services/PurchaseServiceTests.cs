@@ -1,7 +1,3 @@
-using System;
-using System.IO;
-using System.Linq;
-using System.Threading.Tasks;
 using InventoryApi.Data;
 using InventoryApi.DTOs;
 using InventoryApi.Models;
@@ -668,7 +664,7 @@ public class PurchaseServiceTests
 
         Assert.NotNull(purchase);
         var validation = svc.ComputeValidation(purchase);
-        
+
         Assert.NotNull(validation);
         Assert.True(validation.HasTotalMismatch);
         Assert.Equal(20m, validation.CalculatedItemSubtotal);
@@ -708,7 +704,7 @@ public class PurchaseServiceTests
 
         Assert.NotNull(purchase);
         var validation = svc.ComputeValidation(purchase);
-        
+
         Assert.NotNull(validation);
         Assert.False(validation.HasTotalMismatch);
         Assert.Equal(20m, validation.CalculatedItemSubtotal);
@@ -799,7 +795,7 @@ public class PurchaseServiceTests
 
         Assert.NotNull(purchase);
         var validation = svc.ComputeValidation(purchase);
-        
+
         Assert.NotNull(validation);
         Assert.True(validation.HasTotalMismatch);
         Assert.Equal(0m, validation.CalculatedItemSubtotal);
@@ -835,7 +831,7 @@ public class PurchaseServiceTests
 
         Assert.NotNull(purchase);
         var validation = svc.ComputeValidation(purchase);
-        
+
         Assert.NotNull(validation);
         Assert.False(validation.HasTotalMismatch);
         Assert.Null(validation.CalculatedItemSubtotal);

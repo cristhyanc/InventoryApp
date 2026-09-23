@@ -1,7 +1,5 @@
 using System.Text.Json.Serialization;
 
-using InventoryApi.Services;
-
 namespace InventoryApi.Integrations.Nayax;
 
 public class NayaxDevice
@@ -16,7 +14,7 @@ public class NayaxMachine
     public long MachineID { get; set; }
     public string? MachineName { get; set; }
     public string? MachineNumber { get; set; }
-    public long? CustomerID { get; set; }    
+    public long? CustomerID { get; set; }
     public long? ActorID { get; set; }
 }
 
@@ -27,7 +25,7 @@ public class NayaxMachineProduct
     public string ProductName { get; set; } = string.Empty;
     public int? MDBCode { get; set; }
     public int? PAR { get; set; }
-    public int? VendOutAlertThreshold { get; set; }    
+    public int? VendOutAlertThreshold { get; set; }
     public int? MissingStockByMDB { get; set; }
     public int? ProductMinimumPickQTY { get; set; }
     public decimal? CashPrice { get; set; }
@@ -141,7 +139,7 @@ public class NayaxProduct
 
     [JsonPropertyName("DEXProductName")]
     public string? DexProductName { get; set; }
-    
+
     [JsonPropertyName("ProductDescription")]
     public string? ProductDescription { get; set; }
 

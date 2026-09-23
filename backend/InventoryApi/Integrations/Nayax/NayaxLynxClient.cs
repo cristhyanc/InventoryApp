@@ -1,7 +1,5 @@
 using Microsoft.Extensions.Options;
 using System.Net.Http.Headers;
-using System.Net.Http.Json;
-using System.Reflection.PortableExecutable;
 
 namespace InventoryApi.Integrations.Nayax;
 

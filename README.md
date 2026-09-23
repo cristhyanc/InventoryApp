@@ -154,7 +154,35 @@ pwsh -File scripts/validate.ps1
 powershell -ExecutionPolicy Bypass -File scripts/validate.ps1
 ```
 
-The scripts restore, build, and test the backend, then perform a clean frontend install and production build. The frontend does not yet have configured test or lint scripts; its current automated gate is the production build.
+`scripts/validate.sh` and `scripts/validate.ps1` are the single local entry point and run the same pipeline:
+
+| # | Step | What it checks | Blocking |
+| - | ---- | -------------- | -------- |
+| 1 | Restore backend | NuGet restore for `backend/InventoryApi/InventoryApi.slnx` | yes |
+| 2 | Verify C# formatting | `dotnet format --verify-no-changes` against the root `.editorconfig` | yes |
+| 3 | Build backend | Release build with .NET analyzers, code-style enforcement and warnings-as-errors | yes |
+| 4 | Test backend with coverage | xUnit suite plus Coverlet line/branch coverage | yes |
+| 5 | Check vulnerable NuGet packages | `dotnet package list --vulnerable --include-transitive` | yes, when a vulnerable package is reported |
+| 6 | Install frontend dependencies | `npm ci` against the committed lock file | yes |
+| 7 | Lint frontend | `npm run lint` (`ng lint`, ESLint + angular-eslint over TypeScript and templates) | yes, on lint **errors** |
+| 8 | Build frontend | Angular production build | yes |
+| 9 | Audit frontend dependencies | `npm audit` | no, report only |
+
+### Backend code quality
+
+Quality settings are centralised so every backend project gets them:
+
+- **`Directory.Build.props`** (repository root) enables nullable reference types, .NET analyzers at the latest analysis level, `EnforceCodeStyleInBuild`, and `TreatWarningsAsErrors`. A new warning in application code fails the build.
+- **`.editorconfig`** (repository root) holds formatting, naming and diagnostic severities for the whole repository, and is what `dotnet format` enforces. Rules set to `suggestion` are IDE guidance only; only `warning`/`error` rules can fail validation.
+- EF Core generated migrations are the one scoped exception. Their all-lowercase generated class names raise `CS8981`, which `.editorconfig` switches off under `[**/Migrations/*.cs]` only — never globally and never through `<NoWarn>` — because an applied migration must not be renamed. `dotnet format` skips the `Migrations` folder for the same reason.
+- Coverage is collected on every run (`--collect:"XPlat Code Coverage"`) and written to `backend/InventoryApi.Tests/TestResults/<run-id>/coverage.cobertura.xml`, which is git-ignored. There is deliberately **no** minimum-coverage threshold yet; this establishes the baseline.
+- Architecture tests in `backend/InventoryApi.Tests/Architecture/` enforce the Clean Architecture dependency direction (Domain ← Application ← Infrastructure ← InventoryApi) and keep ASP.NET/EF Core/HTTP types out of Domain and Application. `ProjectDependencyDirectionTests` reads the project files; `CleanArchitectureDependencyTests` (NetArchTest) checks the compiled assemblies.
+
+### Frontend code quality
+
+- `npm run lint` runs `ng lint`, configured through `frontend/inventory-app/eslint.config.js` (ESLint 9 flat config with `angular-eslint` and `typescript-eslint`).
+- Rules are chosen to catch defects rather than style: unused variables and imports, `==` vs `===`, unreachable and constant-condition code, Angular template errors, and Angular lifecycle/interface mistakes are **errors**. Accessibility findings, `trackBy`, `any` and stray `console.log` are **warnings** so they are visible without blocking a build.
+- `npm audit` is reported but not enforced. The outstanding high/critical advisories are all in the Angular 19 build toolchain (`@angular-devkit/build-angular` → `vite`, `webpack-dev-server`, `tar`, …) and every published fix requires a major Angular upgrade, which is a separate, deliberate piece of work. Review the printed report; do not run `npm audit fix --force`.
 
 ## Important domain rules
 

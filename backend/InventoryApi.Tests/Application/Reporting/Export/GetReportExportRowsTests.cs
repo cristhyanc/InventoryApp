@@ -1,7 +1,3 @@
-using System;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
 using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Reporting.Export;
 using Inventory.Application.Reporting.Shared;
@@ -19,8 +15,8 @@ namespace InventoryApi.Tests.Application.Reporting.Export;
 /// </summary>
 public class GetReportExportRowsTests
 {
-    private static GetReportExportRows Sut(GetBookkeepingReport bookkeeping = null, GetTransactionSalesReport transactions = null,
-        Inventory.Application.Reporting.Daily.GetDailyReport daily = null)
+    private static GetReportExportRows Sut(GetBookkeepingReport? bookkeeping = null, GetTransactionSalesReport? transactions = null,
+        Inventory.Application.Reporting.Daily.GetDailyReport? daily = null)
     {
         bookkeeping ??= new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(FakeBookkeepingReportFactsProvider.Complete()));
         transactions ??= new GetTransactionSalesReport(new FakeTransactionSalesReportFactsProvider(FakeTransactionSalesReportFactsProvider.Empty()));

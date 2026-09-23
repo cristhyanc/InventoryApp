@@ -1,4 +1,3 @@
-using System;
 using InventoryApi.Models;
 using InventoryApi.Services;
 using Xunit;

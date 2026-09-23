@@ -1,7 +1,6 @@
 using InventoryApi.Data;
 using InventoryApi.Integrations.Nayax;
 using InventoryApi.Services.Interfaces;
-using Microsoft.AspNetCore.Http;
 
 namespace InventoryApi.Services;
 

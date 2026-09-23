@@ -1,6 +1,3 @@
-using System;
-using System.Threading;
-using System.Threading.Tasks;
 using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Reporting.Shared;
 using Xunit;

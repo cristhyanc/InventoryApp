@@ -1,7 +1,6 @@
 using InventoryApi.Data;
 using InventoryApi.Models;
 using InventoryApi.Services.Interfaces;
-using Microsoft.EntityFrameworkCore;
 
 namespace InventoryApi.Services;
 

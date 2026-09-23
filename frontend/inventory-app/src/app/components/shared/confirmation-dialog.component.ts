@@ -64,8 +64,8 @@ export class ConfirmationDialogComponent {
   @Input() message = 'Are you sure?';
   @Input() confirmLabel = 'Confirm';
   @Input() cancelLabel = 'Cancel';
-  @Output() confirmed = new EventEmitter<void>();
-  @Output() canceled = new EventEmitter<void>();
+  @Output() readonly confirmed = new EventEmitter<void>();
+  @Output() readonly canceled = new EventEmitter<void>();
 
   confirmChoice(): void {
     this.confirmed.emit();

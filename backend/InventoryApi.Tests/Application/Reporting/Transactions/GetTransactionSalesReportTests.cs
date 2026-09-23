@@ -1,8 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
 using Inventory.Application.Reporting.Transactions;
 using Inventory.Domain.Reporting.Transactions;
 using Xunit;
@@ -13,7 +8,7 @@ public class GetTransactionSalesReportTests
 {
     private static TransactionSalesReportFactsRow Row(long id, TransactionSaleStatus status = TransactionSaleStatus.Completed,
         TransactionPaymentType paymentType = TransactionPaymentType.Card, decimal sale = 10m,
-        bool hasPersistedCost = true, decimal? costOfGoodsSold = 4m, long? siteId = null, string siteName = null,
+        bool hasPersistedCost = true, decimal? costOfGoodsSold = 4m, long? siteId = null, string? siteName = null,
         long? nayaxProductId = 1, string rawProductName = "Water", string machineName = "Machine A",
         long machineId = 10, DateTime? date = null) =>
         new(id, date ?? new DateTime(2025, 8, 1), machineId, machineName, siteId, siteName, nayaxProductId,

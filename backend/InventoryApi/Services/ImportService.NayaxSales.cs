@@ -1,7 +1,6 @@
 using ClosedXML.Excel;
 using InventoryApi.Models;
 using InventoryApi.Services.Interfaces;
-using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using System.Globalization;
 
@@ -70,11 +69,11 @@ public sealed partial class ImportService
                 TrackAffectedProduct(products, existing, affected);
                 existing.MachineID = sale.MachineID;
                 existing.TransactionStatusId = sale.TransactionStatusId;
-                existing.NayaxProductId = sale.NayaxProductId; 
+                existing.NayaxProductId = sale.NayaxProductId;
                 existing.MachineName = sale.MachineName;
-                existing.SettlementValue = sale.SettlementValue; 
+                existing.SettlementValue = sale.SettlementValue;
                 existing.PaymentMethod = sale.PaymentMethod;
-                existing.ProductName = sale.ProductName; 
+                existing.ProductName = sale.ProductName;
                 existing.MachineAuthorizationTime = sale.MachineAuthorizationTime;
 
                 if (sale.NayaxProductCostPrice.HasValue)

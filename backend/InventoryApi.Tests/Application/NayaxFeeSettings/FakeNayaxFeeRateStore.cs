@@ -1,10 +1,5 @@
 #nullable enable
 
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
 using Inventory.Application.NayaxFeeSettings;
 
 namespace InventoryApi.Tests.Application.NayaxFeeSettings;

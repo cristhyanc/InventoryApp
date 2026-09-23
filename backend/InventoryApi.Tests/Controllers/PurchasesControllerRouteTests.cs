@@ -1,6 +1,4 @@
 #nullable enable
-using System;
-using System.Linq;
 using InventoryApi.Controllers;
 using InventoryApi.Tests.Swagger;
 using Xunit;

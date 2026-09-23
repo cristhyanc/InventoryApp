@@ -1,6 +1,3 @@
-using System;
-using System.Linq;
-using System.Threading.Tasks;
 using InventoryApi.Data;
 using InventoryApi.DTOs;
 using InventoryApi.Models;
@@ -62,7 +59,7 @@ public class SupplierOrderServiceTests
     public async Task GetById_ReturnsNullForUnknownId()
     {
         using var db = CreateDbContext(Guid.NewGuid().ToString());
-        
+
         var service = new SupplierOrderService(db);
         var order = await service.GetById(999);
 
@@ -224,7 +221,7 @@ public class SupplierOrderServiceTests
     public async Task Cancel_ReturnsFalseForUnknownId()
     {
         using var db = CreateDbContext(Guid.NewGuid().ToString());
-        
+
         var service = new SupplierOrderService(db);
         var result = await service.Cancel(999);
 
