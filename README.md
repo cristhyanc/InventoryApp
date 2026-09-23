@@ -99,7 +99,7 @@ dotnet InventoryApi.dll migrate-database --apply
 
 #### Business/tenant bootstrap
 
-Business data is owned by a `Business` record, and a freshly migrated database has no business and no owned rows — so a signed-in caller sees an empty dataset until the ownership bootstrap is run. This is the intended fail-closed state, and the API logs an error at startup while it persists.
+Business data is owned by a `Business` record. Applying the schema creates no application `Business` — but it does not follow that there are no tenant-owned rows: seeded or pre-existing legacy rows carry `BusinessId = 0`, which matches no business, so they are invisible to every caller until the ownership bootstrap assigns them. Either way a signed-in caller sees an empty dataset until the bootstrap runs. This is the intended fail-closed state — the data is unowned, not lost — and the API logs an error at startup while it persists.
 
 The mapping from Microsoft Entra identities to that business is human-supplied and is never committed. `appsettings.json` ships the `BusinessBootstrap` section empty; supply real values through user secrets locally:
 
