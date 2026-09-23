@@ -179,8 +179,10 @@ rolls back automatically if any row count or financial total moved. Then check b
   figures;
 - compare a few known totals against the pre-rollout backup;
 - confirm the API's startup log now reports tenant ownership as bootstrapped — it requires no
-  unassigned rows, at least one business, and at least one active membership, so a partial
-  rollout will not report success;
+  unassigned rows, **exactly one** business which is **active**, and at least one active
+  membership on that active business, so a partial rollout will not report success. "Exactly
+  one" is deliberate for this single-business rollout: a second business appearing is a state a
+  human should look at, not a healthy steady state, so it stops reporting ready;
 - read the `BusinessBackfillAudits` table — one row per table, recording rows assigned and rows
   left unassigned, for the permanent record.
 
@@ -215,9 +217,38 @@ rolls back automatically if any row count or financial total moved. Then check b
   token, so remote identifiers and imports are not yet partitioned. Do not add a second business
   until they are.
 - **Database foreign keys from `BusinessId` to `Businesses`.** Deliberately deferred, and still
-  **required**. They cannot be added while unassigned rows exist, because the checkpoint-2 column
-  defaults to 0 and would violate the constraint on every legacy row. Once this rollout is
-  verified in production and no row is left unassigned, add them in a follow-up migration so
-  referential integrity backs up the application-level enforcement. This is an outstanding
-  integrity step, not a decision that the constraint is unnecessary.
+  **required**. This is an outstanding integrity step, not a decision that the constraint is
+  unnecessary.
+
+  They cannot be added yet. The checkpoint-2 column defaults to 0, which matches no `Business`,
+  so a migration adding these foreign keys would be violated by every not-yet-backfilled row.
+  Until the bootstrap has run, the constraint and the data are incompatible.
+
+  **Exact precondition for the follow-up migration**, which must hold in the target database
+  *before* it is applied:
+
+  1. **Zero unassigned rows** — no tenant-owned row is left with `BusinessId = 0`.
+  2. **Verified Business ownership** — every `BusinessId` in use names a row that exists in
+     `Businesses`, and the assignment has been confirmed to be the intended business, not merely
+     a non-zero value.
+
+  Both are observable without writing anything. `TenantOwnershipReadiness` reports the unassigned
+  row count, the business count and the usable membership count; it is printed at the end of
+  `migrate-database` and again in the startup log. A `bootstrap-business` run that reports
+  ownership assigned with matching before/after counts and unchanged financial totals is the
+  evidence for the second condition, and its `BusinessBackfillAudit` rows are the durable record.
+
+  The migration was **not** written in advance and left pending, deliberately. SQLite cannot add
+  a foreign key in place, so EF rebuilds each table — create, copy, drop, rename — across every
+  tenant-owned table at once. Carrying an unapplied, unexercised rebuild of the whole financial
+  schema in the repository is a larger standing risk than the missing constraint it would add,
+  and it could not be tested honestly while the fixtures it would run against have no owners.
+  Write it as its own reviewed change, against a database that already satisfies the precondition
+  above, with an upgrade test from the prior schema.
+
+  Until then the boundary rests on the query filters and `BusinessOwnershipEnforcer`. That is
+  sound rather than merely acceptable: `BusinessId` is never supplied by a caller — it is stamped
+  from resolved membership — so a dangling value cannot be injected through the API, and deleting
+  a `Business` that still has members is already blocked by `BusinessMembership`'s restricted
+  foreign key. The follow-up adds defence in depth, not the only defence.
 - **Document storage.** Issue #39 builds on the ownership key established here.

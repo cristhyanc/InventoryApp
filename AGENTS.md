@@ -139,7 +139,7 @@ The current backend is one project with a service layer. Its target is an increm
 
 ## Database and migrations
 
-- EF Core migrations are the schema source of truth. Application startup currently calls `Database.Migrate()`.
+- EF Core migrations are the schema source of truth. Startup does **not** apply them outside Development: `DatabaseSchemaStartup` applies migrations automatically only in Development, and in every other environment applies nothing and fails closed when migrations are pending. Production schema changes are applied by a human through the explicit `migrate-database` command (dry run first). Never reintroduce an unconditional `Database.Migrate()` at startup — some tenancy migrations rebuild tables and copy persisted rows, so applying them must never be a deployment side effect.
 - Never replace migrations with `EnsureCreated()`.
 - Never delete or rewrite an applied migration merely to simplify a change.
 - Do not edit an existing migration unless the issue explicitly concerns an unapplied migration and a human confirms it is safe.
@@ -148,6 +148,20 @@ The current backend is one project with a service layer. Its target is an increm
 - Prefer relational SQLite tests for behavior that depends on constraints, transactions, SQL translation, ordering, or migrations. EF Core InMemory tests do not prove relational behavior.
 - Do not run destructive production data operations, mass backfills, or irreversible corrections automatically at startup.
 - A backfill/rebuild must be explicit, idempotent or safely restartable, observable, and covered by regression tests.
+
+## Tenant ownership and data isolation
+
+Business data is owned by an application-owned `Business` (issue #64). These are repository-wide invariants, not feature-local choices. `docs/architecture.md` § Tenant ownership describes the design; `docs/tenant-rollout.md` describes the rollout.
+
+- **Ownership is central, never ad hoc.** Tenant-owned reads are scoped by the global query filters in `AppDbContext`, and every write goes through `BusinessOwnershipEnforcer` on `SaveChanges`. Do not add per-controller or per-service `Where(x => x.BusinessId == ...)` clauses: they are redundant, and they make the real boundary look optional. Fix the central mechanism instead.
+- **A new persisted entity is tenant-owned by default.** Implement `IBusinessOwned` and it is filtered, indexed, and stamped automatically. An entity that genuinely is not owned must be added to `DeliberatelyGlobalEntities` in `BusinessOwnershipCoverageTests` with the structural reason. That test fails if a new table arrives with no owner.
+- **Never accept a business or tenant ID from client input.** It is resolved from the authenticated actor's membership and stamped by the enforcer. No route, query, form, JSON, or header value may choose an owner, and no DTO carries one.
+- **Fail closed.** An unresolved business reads nothing and writes nothing. Never treat "no current business" as "no filter"; that turns a resolution bug into a cross-business data leak.
+- **Unrestricted access is an explicit opt-in.** Only the human-invoked `migrate-database` and `bootstrap-business` commands may pass `UnscopedBusinessScope.Instance`. No request path, controller, or service may run unrestricted. `IgnoreQueryFilters`, raw SQL, and direct `AppDbContext` construction in a request path are boundary violations.
+- **Ownership is immutable and relationships stay inside one business.** A record cannot be moved between businesses, and a foreign key between tenant-owned entities may not cross one.
+- **Uniqueness is per business.** Constraints over externally supplied values — Nayax transaction IDs, import file hashes, site agreements, fee effective dates — are scoped by business, because two businesses may legitimately hold the same external value.
+- **Claims parsing stays at the API boundary.** Domain and Application must not reference ASP.NET claims or principals; use the Application current-business abstraction.
+- **Isolation changes need two-business tests.** Any change to ownership, filtering, or enforcement requires relational tests with two synthetic businesses proving reads, writes, ID lookups, relationships, reports, imports, and document access cannot cross.
 
 ## Core bookkeeping and reporting invariants
 

@@ -638,9 +638,10 @@ public class BusinessBootstrapTests : IDisposable
     #region Nothing happens by itself
 
     /// <summary>
-    /// The defining property of this checkpoint: applying the schema assigns nothing. Migrations
-    /// run on every deployment, so if ownership were assigned by one of them, a routine deploy
-    /// would perform a high-risk production data operation unattended.
+    /// The defining property of this checkpoint: applying the schema assigns nothing. Schema and
+    /// ownership are separate, separately authorised steps - if a migration assigned ownership,
+    /// applying the schema would silently perform a high-risk production data operation as a side
+    /// effect, and the deliberate, verified, restartable bootstrap could be skipped by accident.
     /// </summary>
     [Fact]
     public void Applying_every_migration_assigns_no_ownership_and_creates_no_business()

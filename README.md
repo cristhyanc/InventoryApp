@@ -160,7 +160,9 @@ Protected business documents (purchase documents and operating-expense supportin
 
 Azure Static Web Apps direct navigation (including the `/auth` redirect landing) is handled by `frontend/inventory-app/src/staticwebapp.config.json`, which rewrites unmatched paths to `/index.html` so the Angular router — not a platform 404 — handles them.
 
-**Multi-tenant data partitioning is out of scope.** Accepting sign-ins from multiple Microsoft Entra tenants (`TenantId: "common"`) authenticates a user; it does not isolate one tenant's business data from another's. Database-level tenant scoping is a separate, unimplemented concern.
+**Authentication identifies a person; business ownership decides what they may see.** Accepting sign-ins from multiple Microsoft Entra tenants (`TenantId: "common"`) only authenticates a user. Data isolation is a separate boundary, established by issue #64: the validated `(tid, oid)` claim pair is mapped to an application-owned **Business** through explicit `BusinessMembership` rows, and every tenant-owned read and write is scoped to that business centrally in `AppDbContext`. A signed-in account with no usable membership receives `403` and no business data — it fails closed rather than falling back to "see everything". The business ID is never accepted from route, query, form, or JSON input.
+
+The first rollout serves **one** business. Adding a second live business is deliberately not enabled: the Nayax integration still uses a single operator/token configuration, so remote identifiers and imports are not yet partitioned per business. See [docs/tenant-rollout.md](docs/tenant-rollout.md) for the bootstrap procedure and [docs/architecture.md](docs/architecture.md#tenant-ownership-issue-64) for the design.
 
 ## Configuration and secrets
 
