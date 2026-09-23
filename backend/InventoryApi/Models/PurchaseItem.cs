@@ -3,12 +3,14 @@ using System.Text.Json.Serialization;
 
 namespace InventoryApi.Models;
 
-public class ReceiptItem
+// See Purchase.cs for why the DB table/column naming stays "Receipt" while the CLR type
+// is PurchaseItem. ReceiptId is part of the JSON API contract and keeps its name.
+public class PurchaseItem
 {
     public int Id { get; set; }
     public int ReceiptId { get; set; }
     [JsonIgnore]
-    public virtual Receipt? Receipt { get; set; }
+    public virtual Purchase? Purchase { get; set; }
     public long ProductId { get; set; }
     public virtual Product? Product { get; set; }
     public decimal Quantity { get; set; }

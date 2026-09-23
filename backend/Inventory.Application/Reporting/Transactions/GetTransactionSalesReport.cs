@@ -7,16 +7,19 @@ using Inventory.Domain.Reporting.Transactions;
 namespace Inventory.Application.Reporting.Transactions;
 
 /// <summary>
-/// The transaction sales report use case: resolves the requested date range/machine scope,
-/// retrieves per-transaction facts plus effective fee-rate/commission-agreement data through the
-/// narrow <see cref="ITransactionSalesReportFactsProvider"/> port, matches each raw Nayax product
+/// The transaction sales report use case: resolves the requested date range/machine scope, then
+/// streams per-transaction facts plus effective fee-rate/commission-agreement data through the
+/// narrow <see cref="ITransactionSalesReportFactsProvider"/> port, matching each raw Nayax product
 /// identifier/name to the catalogue through the deterministic
-/// <c>Inventory.Domain.Reporting.ProductMatching.ProductMatcher</c>, invokes the Domain per-row
-/// fee/commission/profit policy and totals policy, then applies status/payment/COGS/search
-/// filtering, user-selected sorting, pagination, page-size clamping, and filter-option construction
-/// (use-case/presentation concerns, not vending-business rules). Builds the authoritative
-/// <see cref="TransactionSalesReportDto"/> consumed by both the API response and the CSV/XLSX
-/// export.
+/// <c>Inventory.Domain.Reporting.ProductMatching.ProductMatcher</c>, invoking the Domain per-row
+/// fee/commission/profit policy, applying status/payment/COGS/search filtering, and accumulating
+/// totals, filter options, and quality facts in one pass over the stream (use-case/presentation
+/// concerns, not vending-business rules). Totals and filter options always cover the complete
+/// date/machine scope; for a paginated request, only the <c>page * pageSize</c> best-sorted filtered
+/// row candidates needed to answer that page are retained, via <see cref="BoundedTopSelector{T}"/>.
+/// An unpaginated (export) request intentionally retains every filtered row, since the complete
+/// result set is the answer. Builds the authoritative <see cref="TransactionSalesReportDto"/>
+/// consumed by both the API response and the CSV/XLSX export.
 /// </summary>
 public sealed class GetTransactionSalesReport
 {
@@ -39,7 +42,52 @@ public sealed class GetTransactionSalesReport
         var candidates = facts.ProductCatalogue.Select(x => new ProductMatchCandidate(x.Id, x.Name)).ToArray();
         var catalogueByName = facts.ProductCatalogue.ToDictionary(x => x.Id, x => x.Name);
 
-        var builds = facts.Transactions.Select(detail =>
+        var status = FilterValue(filter.Status);
+        if (string.IsNullOrWhiteSpace(status)) status = "completed";
+        var payment = FilterValue(filter.PaymentType);
+        var cogs = FilterValue(filter.CogsStatus);
+        var search = filter.Search?.Trim();
+
+        var pageSize = filter.PageSize is 50 or 100 or 250 ? filter.PageSize : 50;
+        var page = Math.Max(1, filter.Page);
+
+        bool MatchesFilters(RowBuild build) =>
+            (!filter.SiteId.HasValue || build.Detail.SiteId == filter.SiteId) &&
+            (!filter.ProductId.HasValue || build.ProductId == filter.ProductId) &&
+            MatchesPayment(payment, build.Detail.PaymentType) &&
+            MatchesStatus(status, build.Detail.Status) &&
+            MatchesCogs(cogs, build.Detail.HasPersistedCost) &&
+            MatchesSearch(search, build);
+
+        // Distinct site/product option state, keyed by identity: first-seen name wins, matching the
+        // prior GroupBy(...).First() semantics, since the stream preserves the same underlying query
+        // order the prior in-memory list did.
+        var siteOptions = new Dictionary<long, string>();
+        var productOptions = new Dictionary<long, string>();
+
+        var totalsAccumulator = new TransactionTotalsAccumulator();
+        var filteredCount = 0;
+        var missingStatusCount = 0;
+        var containsUnmappedProducts = false;
+        var anyFeeUnavailable = false;
+        var anyOverlappingCommission = false;
+        var anyCommissionUnavailable = false;
+        var anyEstimatedFee = false;
+        var nayaxCostedCount = 0;
+
+        BoundedTopSelector<RowBuild>? bounded = null;
+        List<RowBuild>? unboundedFiltered = null;
+        if (paginate)
+        {
+            var capacity = (int)Math.Min((long)page * pageSize, int.MaxValue);
+            bounded = new BoundedTopSelector<RowBuild>(BuildComparer(filter.SortBy, filter.SortDescending), capacity);
+        }
+        else
+        {
+            unboundedFiltered = [];
+        }
+
+        await foreach (var detail in facts.Transactions.WithCancellation(cancellationToken))
         {
             var matchedProductId = ProductMatcher.Match(candidates, detail.NayaxProductId, detail.RawProductName);
             var productName = matchedProductId.HasValue
@@ -51,40 +99,37 @@ public sealed class GetTransactionSalesReport
                     detail.SiteId, detail.CostOfGoodsSold, detail.HasPersistedCost),
                 facts.FeeRates, facts.CommissionAgreements);
 
-            return new RowBuild(detail, matchedProductId, productName, result);
-        }).ToList();
+            var build = new RowBuild(detail, matchedProductId, productName, result);
+
+            if (detail.SiteId.HasValue) siteOptions.TryAdd(detail.SiteId.Value, detail.SiteName ?? $"Site {detail.SiteId.Value}");
+            if (matchedProductId.HasValue) productOptions.TryAdd(matchedProductId.Value, productName);
+
+            if (!MatchesFilters(build)) continue;
+
+            filteredCount++;
+            totalsAccumulator.Add(new TransactionTotalsRowInputs(
+                detail.Status == TransactionSaleStatus.Completed, detail.Sale, detail.PaymentType, result.IsCosted,
+                detail.CostOfGoodsSold, result.GrossProfit, result.DirectProfit,
+                result.FeeSource == "Estimated", result.FeeExGst ?? 0m, result.FeeGst ?? 0m, result.FeeIncGst ?? 0m,
+                result.CommissionAmount ?? 0m));
+
+            if (detail.TransactionStatusId is null) missingStatusCount++;
+            if (matchedProductId is null) containsUnmappedProducts = true;
+            if (result.FeeUnavailable) anyFeeUnavailable = true;
+            if (result.HasOverlappingCommission) anyOverlappingCommission = true;
+            if (result.CommissionUnavailable) anyCommissionUnavailable = true;
+            if (result.FeeSource == "Estimated") anyEstimatedFee = true;
+            if (detail.CostSource == "Nayax Historical Export") nayaxCostedCount++;
+
+            if (paginate) bounded!.Add(build);
+            else unboundedFiltered!.Add(build);
+        }
 
         var options = new TransactionSalesFilterOptionsDto(
-            builds.Where(x => x.Detail.SiteId.HasValue).GroupBy(x => x.Detail.SiteId!.Value)
-                .Select(x => new TransactionSalesFilterOptionDto(x.Key, x.First().Detail.SiteName ?? $"Site {x.Key}"))
-                .OrderBy(x => x.Name).ToList(),
-            builds.Where(x => x.ProductId.HasValue).GroupBy(x => x.ProductId!.Value)
-                .Select(x => new TransactionSalesFilterOptionDto(x.Key, x.First().ProductName))
-                .OrderBy(x => x.Name).ToList());
+            siteOptions.Select(x => new TransactionSalesFilterOptionDto(x.Key, x.Value)).OrderBy(x => x.Name).ToList(),
+            productOptions.Select(x => new TransactionSalesFilterOptionDto(x.Key, x.Value)).OrderBy(x => x.Name).ToList());
 
-        var status = FilterValue(filter.Status);
-        if (string.IsNullOrWhiteSpace(status)) status = "completed";
-        var payment = FilterValue(filter.PaymentType);
-        var cogs = FilterValue(filter.CogsStatus);
-        var search = filter.Search?.Trim();
-
-        var filtered = builds.Where(x =>
-            (!filter.SiteId.HasValue || x.Detail.SiteId == filter.SiteId) &&
-            (!filter.ProductId.HasValue || x.ProductId == filter.ProductId) &&
-            MatchesPayment(payment, x.Detail.PaymentType) &&
-            MatchesStatus(status, x.Detail.Status) &&
-            MatchesCogs(cogs, x.Detail.HasPersistedCost) &&
-            MatchesSearch(search, x)).ToList();
-
-        var sorted = SortRows(filtered, filter.SortBy, filter.SortDescending).ToList();
-        var dtoRows = sorted.Select(ToRowDto).ToList();
-
-        var totalsInputs = filtered.Select(x => new TransactionTotalsRowInputs(
-            x.Detail.Status == TransactionSaleStatus.Completed, x.Detail.Sale, x.Detail.PaymentType, x.Result.IsCosted,
-            x.Detail.CostOfGoodsSold, x.Result.GrossProfit, x.Result.DirectProfit,
-            x.Result.FeeSource == "Estimated", x.Result.FeeExGst ?? 0m, x.Result.FeeGst ?? 0m, x.Result.FeeIncGst ?? 0m,
-            x.Result.CommissionAmount ?? 0m)).ToList();
-        var totalsResult = TransactionTotalsPolicy.Calculate(totalsInputs);
+        var totalsResult = totalsAccumulator.ToResult();
         var totals = new TransactionSalesTotalsDto(
             totalsResult.TransactionCount, totalsResult.CompletedTransactionCount, totalsResult.Sales,
             totalsResult.CardSales, totalsResult.CashSales,
@@ -96,37 +141,37 @@ public sealed class GetTransactionSalesReport
             totalsResult.CommissionAmount);
 
         var notes = new List<string>();
-        var missingStatus = filtered.Count(x => x.Detail.TransactionStatusId is null);
-        if (missingStatus > 0) notes.Add($"{missingStatus} transaction(s) have no Nayax status ID.");
+        if (missingStatusCount > 0) notes.Add($"{missingStatusCount} transaction(s) have no Nayax status ID.");
         if (totals.UncostedCompletedTransactionCount > 0)
             notes.Add($"{totals.UncostedCompletedTransactionCount} completed transaction(s) have incomplete persisted COGS; full profit totals are unavailable.");
-        if (filtered.Any(x => x.ProductId is null)) notes.Add("One or more transactions could not be mapped to a catalogue product.");
-        if (facts.SiteMappingUnavailable && filtered.Count > 0)
+        if (containsUnmappedProducts) notes.Add("One or more transactions could not be mapped to a catalogue product.");
+        if (facts.SiteMappingUnavailable && filteredCount > 0)
             notes.Add("Current site mapping is unavailable because it comes only from the live Nayax machine CustomerID.");
-        if (filtered.Any(x => x.Result.FeeUnavailable))
+        if (anyFeeUnavailable)
             notes.Add("An effective-dated estimated card fee is unavailable for one or more completed card transactions.");
-        if (filtered.Any(x => x.Result.HasOverlappingCommission))
+        if (anyOverlappingCommission)
             notes.Add("Overlapping site commission agreements cover one or more transactions; their direct profit is unavailable.");
-        if (filtered.Any(x => x.Result.CommissionUnavailable))
+        if (anyCommissionUnavailable)
             notes.Add("Site mapping or effective commission agreement coverage is unavailable for one or more completed transactions.");
-        if (filtered.Any(x => x.Result.FeeSource == "Estimated"))
+        if (anyEstimatedFee)
             notes.Add("Transaction fees are configured estimates. Imported Nayax fees are period/device-level and are not allocated to transactions.");
-        var nayaxCosted = filtered.Count(x => x.Detail.CostSource == "Nayax Historical Export");
-        if (nayaxCosted > 0)
-            notes.Add($"Historical COGS includes {nayaxCosted} transaction(s) costed from the Nayax transaction export.");
+        if (nayaxCostedCount > 0)
+            notes.Add($"Historical COGS includes {nayaxCostedCount} transaction(s) costed from the Nayax transaction export.");
         var quality = new ReportingDataQualityDto(
-            MissingStatus: missingStatus > 0,
+            MissingStatus: missingStatusCount > 0,
             HistoricalCostUnavailable: totals.UncostedCompletedTransactionCount > 0,
             GstClassificationMissing: false,
             CommissionNotPersisted: false,
-            ContainsUnmappedProducts: filtered.Any(x => x.ProductId is null),
+            ContainsUnmappedProducts: containsUnmappedProducts,
             Notes: notes);
 
-        var pageSize = filter.PageSize is 50 or 100 or 250 ? filter.PageSize : 50;
-        var page = Math.Max(1, filter.Page);
-        var resultRows = paginate ? dtoRows.Skip((page - 1) * pageSize).Take(pageSize).ToList() : dtoRows;
+        List<TransactionSalesRowDto> resultRows;
+        if (paginate)
+            resultRows = bounded!.Items.Skip((page - 1) * pageSize).Take(pageSize).Select(ToRowDto).ToList();
+        else
+            resultRows = SortRows(unboundedFiltered!, filter.SortBy, filter.SortDescending).Select(ToRowDto).ToList();
 
-        return new TransactionSalesReportDto(range.From, range.ToDate, resultRows, totals, quality, page, pageSize, dtoRows.Count, options);
+        return new TransactionSalesReportDto(range.From, range.ToDate, resultRows, totals, quality, page, pageSize, filteredCount, options);
     }
 
     private static TransactionSalesRowDto ToRowDto(RowBuild build)
@@ -171,6 +216,36 @@ public sealed class GetTransactionSalesReport
             (_, false) => rows.OrderBy(x => x.Detail.TransactionDate).ThenBy(x => x.Detail.TransactionId),
             _ => rows.OrderByDescending(x => x.Detail.TransactionDate).ThenByDescending(x => x.Detail.TransactionId)
         };
+    }
+
+    // Equivalent per-pair ordering to SortRows's OrderBy/OrderByDescending().ThenBy/ThenByDescending()
+    // chains, for feeding BoundedTopSelector<RowBuild> one row at a time instead of sorting a
+    // materialised list. Must stay in sync with SortRows: the export (paginate: false) path keeps
+    // using SortRows directly on its complete retained list, so both paths are covered by the same
+    // regression tests.
+    private static IComparer<RowBuild> BuildComparer(string? sortBy, bool descending)
+    {
+        var key = FilterValue(sortBy);
+        Comparison<RowBuild> comparison = key switch
+        {
+            "machine" => (a, b) => CompareWithTieBreak(DisplayMachineName(a.Detail), DisplayMachineName(b.Detail), a.Detail.TransactionId, b.Detail.TransactionId, descending),
+            "product" => (a, b) => CompareWithTieBreak(a.ProductName, b.ProductName, a.Detail.TransactionId, b.Detail.TransactionId, descending),
+            "sale" => (a, b) => CompareWithTieBreak(a.Detail.Sale, b.Detail.Sale, a.Detail.TransactionId, b.Detail.TransactionId, descending),
+            "cogs" => (a, b) => CompareWithTieBreak(a.Detail.CostOfGoodsSold, b.Detail.CostOfGoodsSold, a.Detail.TransactionId, b.Detail.TransactionId, descending),
+            "gross" or "grossprofit" => (a, b) => CompareWithTieBreak(a.Result.GrossProfit, b.Result.GrossProfit, a.Detail.TransactionId, b.Detail.TransactionId, descending),
+            "direct" or "directprofit" => (a, b) => CompareWithTieBreak(a.Result.DirectProfit, b.Result.DirectProfit, a.Detail.TransactionId, b.Detail.TransactionId, descending),
+            "status" => (a, b) => CompareWithTieBreak(a.Detail.TransactionStatusDescription, b.Detail.TransactionStatusDescription, a.Detail.TransactionId, b.Detail.TransactionId, descending),
+            _ => (a, b) => CompareWithTieBreak(a.Detail.TransactionDate, b.Detail.TransactionDate, a.Detail.TransactionId, b.Detail.TransactionId, descending)
+        };
+        return Comparer<RowBuild>.Create(comparison);
+    }
+
+    private static int CompareWithTieBreak<TKey>(TKey a, TKey b, long tieA, long tieB, bool descending)
+    {
+        var cmp = Comparer<TKey>.Default.Compare(a, b);
+        if (cmp != 0) return descending ? -cmp : cmp;
+        var tie = tieA.CompareTo(tieB);
+        return descending ? -tie : tie;
     }
 
     private static bool MatchesPayment(string value, TransactionPaymentType paymentType) =>

@@ -686,7 +686,7 @@ public class ReportingRegressionTests
             CostOfGoodsSold = 0m, CostingStatus = SaleCostingStatus.Costed,
             TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1)
         });
-        db.Receipts.Add(new Receipt
+        db.Receipts.Add(new Purchase
         {
             Title = "Supplier receipt",
             PurchaseDate = new DateTime(2025, 8, 15),
@@ -713,7 +713,7 @@ public class ReportingRegressionTests
             CostOfGoodsSold = 0m, CostingStatus = SaleCostingStatus.Costed,
             TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1)
         });
-        db.Receipts.Add(new Receipt
+        db.Receipts.Add(new Purchase
         {
             Title = "Supplier receipt", PurchaseDate = new DateTime(2025, 8, 15), DeliveryCost = 2m, PackageCost = 3m
         });
@@ -1003,7 +1003,7 @@ public class ReportingRegressionTests
         db.OperatingExpenses.AddRange(
             new OperatingExpense { ExpenseDate = date, MachineId = 10, TotalAmount = 5m },
             new OperatingExpense { ExpenseDate = date, TotalAmount = 20m });
-        db.Receipts.Add(new Receipt { Title = "Delivery", PurchaseDate = date, DeliveryCost = 5m });
+        db.Receipts.Add(new Purchase { Title = "Delivery", PurchaseDate = date, DeliveryCost = 5m });
         await db.SaveChangesAsync();
 
         var nayax = new TransactionTestNayaxClient();

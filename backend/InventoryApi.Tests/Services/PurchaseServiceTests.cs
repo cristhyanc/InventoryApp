@@ -15,7 +15,7 @@ using Xunit;
 
 namespace InventoryApi.Tests.Services;
 
-public class ReceiptServiceTests
+public class PurchaseServiceTests
 {
     private static AppDbContext CreateDbContext(string dbName)
     {
@@ -137,9 +137,9 @@ public class ReceiptServiceTests
         await db.SaveChangesAsync();
         var service = CreateService(db);
         await UploadPurchase(service, 1, 1, 10);
-        var receiptId = (await db.Receipts.SingleAsync()).Id;
+        var purchaseId = (await db.Receipts.SingleAsync()).Id;
 
-        Assert.True(await service.Delete(receiptId));
+        Assert.True(await service.Delete(purchaseId));
 
         Assert.Equal(0m, (await db.SupplierOrderLines.SingleAsync()).QuantityReceived);
         Assert.Equal(SupplierOrderStatus.Ordered, (await db.SupplierOrders.SingleAsync()).Status);
@@ -154,10 +154,10 @@ public class ReceiptServiceTests
         await db.SaveChangesAsync();
         var service = CreateService(db);
         await UploadPurchase(service, 1, 1, 24);
-        var receipt = await db.Receipts.SingleAsync();
+        var purchase = await db.Receipts.SingleAsync();
 
-        await service.Update(receipt.Id, null, null, null, null, null, null, 1,
-            new[] { new ReceiptItemDto(1, 18m, 1m) });
+        await service.Update(purchase.Id, null, null, null, null, null, null, 1,
+            new[] { new PurchaseItemDto(1, 18m, 1m) });
 
         Assert.Equal(18m, (await db.SupplierOrderLines.SingleAsync()).QuantityReceived);
         Assert.Equal(SupplierOrderStatus.PartiallyReceived, (await db.SupplierOrders.SingleAsync()).Status);
@@ -171,10 +171,10 @@ public class ReceiptServiceTests
         await db.SaveChangesAsync();
         var service = CreateService(db);
         await UploadPurchase(service, 1, 1, 18);
-        var receipt = await db.Receipts.SingleAsync();
+        var purchase = await db.Receipts.SingleAsync();
 
-        await service.Update(receipt.Id, null, null, null, null, null, null, 1,
-            new[] { new ReceiptItemDto(1, 24m, 1m) });
+        await service.Update(purchase.Id, null, null, null, null, null, null, 1,
+            new[] { new PurchaseItemDto(1, 24m, 1m) });
 
         Assert.Equal(24m, (await db.SupplierOrderLines.SingleAsync()).QuantityReceived);
         Assert.Equal(SupplierOrderStatus.Received, (await db.SupplierOrders.SingleAsync()).Status);
@@ -189,10 +189,10 @@ public class ReceiptServiceTests
         await db.SaveChangesAsync();
         var service = CreateService(db);
         await UploadPurchase(service, 1, 1, 10);
-        var receipt = await db.Receipts.SingleAsync();
+        var purchase = await db.Receipts.SingleAsync();
 
-        await service.Update(receipt.Id, null, null, null, null, null, null, 2,
-            new[] { new ReceiptItemDto(1, 10m, 1m) });
+        await service.Update(purchase.Id, null, null, null, null, null, null, 2,
+            new[] { new PurchaseItemDto(1, 10m, 1m) });
 
         Assert.Equal(0m, (await db.SupplierOrderLines.SingleAsync()).QuantityReceived);
         Assert.Empty(await db.SupplierOrderReceiptAllocations.ToListAsync());
@@ -209,10 +209,10 @@ public class ReceiptServiceTests
         await db.SaveChangesAsync();
         var service = CreateService(db);
         await UploadPurchase(service, 1, 1, 10);
-        var receipt = await db.Receipts.SingleAsync();
+        var purchase = await db.Receipts.SingleAsync();
 
-        await service.Update(receipt.Id, null, null, null, null, null, null, 1,
-            new[] { new ReceiptItemDto(2, 10m, 1m) });
+        await service.Update(purchase.Id, null, null, null, null, null, null, 1,
+            new[] { new PurchaseItemDto(2, 10m, 1m) });
 
         var lines = await db.SupplierOrderLines.OrderBy(line => line.ProductId).ToListAsync();
         Assert.Equal(0m, lines[0].QuantityReceived);
@@ -243,8 +243,8 @@ public class ReceiptServiceTests
         await db.SaveChangesAsync();
 
         await UploadPurchaseItems(CreateService(db), 1,
-            new ReceiptItemDto(1, 8m, 1m),
-            new ReceiptItemDto(1, 8m, 1m));
+            new PurchaseItemDto(1, 8m, 1m),
+            new PurchaseItemDto(1, 8m, 1m));
 
         var line = await db.SupplierOrderLines.SingleAsync();
         Assert.Equal(10m, line.QuantityReceived);
@@ -286,27 +286,27 @@ public class ReceiptServiceTests
             db.Suppliers.Add(new Supplier { Id = supplierId, Name = $"Supplier {supplierId}" });
     }
 
-    private static IReceiptService CreateService(AppDbContext db)
+    private static IPurchaseService CreateService(AppDbContext db)
     {
         var environment = new Mock<IWebHostEnvironment>();
         var temp = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         Directory.CreateDirectory(temp);
         environment.Setup(item => item.WebRootPath).Returns(temp);
         environment.Setup(item => item.ContentRootPath).Returns(temp);
-        return new ReceiptService(db, environment.Object);
+        return new PurchaseService(db, environment.Object);
     }
 
-    private static async Task UploadPurchase(IReceiptService service, int supplierId, long productId, decimal quantity, DateTime? purchaseDate = null)
+    private static async Task UploadPurchase(IPurchaseService service, int supplierId, long productId, decimal quantity, DateTime? purchaseDate = null)
     {
-        await UploadPurchaseItems(service, supplierId, new[] { new ReceiptItemDto(productId, quantity, 1m) }, purchaseDate);
+        await UploadPurchaseItems(service, supplierId, new[] { new PurchaseItemDto(productId, quantity, 1m) }, purchaseDate);
     }
 
-    private static async Task UploadPurchaseItems(IReceiptService service, int supplierId, params ReceiptItemDto[] items)
+    private static async Task UploadPurchaseItems(IPurchaseService service, int supplierId, params PurchaseItemDto[] items)
     {
         await UploadPurchaseItems(service, supplierId, items, null);
     }
 
-    private static async Task UploadPurchaseItems(IReceiptService service, int supplierId, ReceiptItemDto[] items, DateTime? purchaseDate)
+    private static async Task UploadPurchaseItems(IPurchaseService service, int supplierId, PurchaseItemDto[] items, DateTime? purchaseDate)
     {
         var content = new MemoryStream(new byte[] { 1 });
         var file = new Mock<IFormFile>();
@@ -320,16 +320,16 @@ public class ReceiptServiceTests
     }
 
     [Fact]
-    public async Task Upload_Saves_Receipt()
+    public async Task Upload_Saves_Purchase()
     {
-        using var db = CreateDbContext("receipt_test");
+        using var db = CreateDbContext("purchase_test");
         var envMock = new Mock<IWebHostEnvironment>();
         var temp = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         Directory.CreateDirectory(temp);
         envMock.Setup(e => e.WebRootPath).Returns(temp);
         envMock.Setup(e => e.ContentRootPath).Returns(temp);
 
-        IReceiptService svc = new ReceiptService(db, envMock.Object);
+        IPurchaseService svc = new PurchaseService(db, envMock.Object);
 
         var content = new MemoryStream(new byte[] { 1, 2, 3 });
         var fileMock = new Mock<IFormFile>();
@@ -339,23 +339,23 @@ public class ReceiptServiceTests
         fileMock.Setup(f => f.OpenReadStream()).Returns(content);
         fileMock.Setup(f => f.CopyToAsync(It.IsAny<Stream>(), default)).Returns((Stream s, System.Threading.CancellationToken ct) => content.CopyToAsync(s, ct));
 
-        var receipt = await svc.Upload(fileMock.Object, "t", null, null, null, null, null, null);
-        Assert.NotNull(receipt);
-        var stored = await db.Receipts.FindAsync(receipt.Id);
+        var purchase = await svc.Upload(fileMock.Object, "t", null, null, null, null, null, null);
+        Assert.NotNull(purchase);
+        var stored = await db.Receipts.FindAsync(purchase.Id);
         Assert.NotNull(stored);
     }
 
     [Fact]
-    public async Task Update_Changes_Receipt_MetaData()
+    public async Task Update_Changes_Purchase_MetaData()
     {
-        using var db = CreateDbContext("receipt_update_test");
+        using var db = CreateDbContext("purchase_update_test");
         var envMock = new Mock<IWebHostEnvironment>();
         var temp = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         Directory.CreateDirectory(temp);
         envMock.Setup(e => e.WebRootPath).Returns(temp);
         envMock.Setup(e => e.ContentRootPath).Returns(temp);
 
-        IReceiptService svc = new ReceiptService(db, envMock.Object);
+        IPurchaseService svc = new PurchaseService(db, envMock.Object);
 
         var content = new MemoryStream(new byte[] { 1, 2, 3 });
         var fileMock = new Mock<IFormFile>();
@@ -377,9 +377,9 @@ public class ReceiptServiceTests
     }
 
     [Fact]
-    public async Task Upload_Posts_receipt_items_to_storage_without_machine_refill()
+    public async Task Upload_Posts_purchase_items_to_storage_without_machine_refill()
     {
-        using var db = CreateDbContext("receipt_items_test");
+        using var db = CreateDbContext("purchase_items_test");
         db.Products.AddRange(
             new Product { Id = 1, Name = "M&M", QuantityInStock = 2 },
             new Product { Id = 2, Name = "Coke", QuantityInStock = 4 });
@@ -391,7 +391,7 @@ public class ReceiptServiceTests
         Directory.CreateDirectory(temp);
         envMock.Setup(e => e.WebRootPath).Returns(temp);
         envMock.Setup(e => e.ContentRootPath).Returns(temp);
-        IReceiptService svc = new ReceiptService(db, envMock.Object);
+        IPurchaseService svc = new PurchaseService(db, envMock.Object);
 
         var content = new MemoryStream(new byte[] { 1 });
         var fileMock = new Mock<IFormFile>();
@@ -402,10 +402,10 @@ public class ReceiptServiceTests
         fileMock.Setup(f => f.CopyToAsync(It.IsAny<Stream>(), default))
             .Returns((Stream s, System.Threading.CancellationToken ct) => content.CopyToAsync(s, ct));
 
-        var receipt = await svc.Upload(fileMock.Object, "Purchase", null, 65.40m, null, null, null, null,
-            new[] { new ReceiptItemDto(1, 24m, 1.00m), new ReceiptItemDto(2, 36m, 1.15m) });
+        var purchase = await svc.Upload(fileMock.Object, "Purchase", null, 65.40m, null, null, null, null,
+            new[] { new PurchaseItemDto(1, 24m, 1.00m), new PurchaseItemDto(2, 36m, 1.15m) });
 
-        Assert.NotNull(receipt);
+        Assert.NotNull(purchase);
         Assert.Equal(26, (await db.Products.FindAsync(1L))!.QuantityInStock);
         Assert.Equal(40, (await db.Products.FindAsync(2L))!.QuantityInStock);
         Assert.Equal(2, await db.ReceiptItems.CountAsync());
@@ -414,9 +414,9 @@ public class ReceiptServiceTests
     }
 
     [Fact]
-    public async Task Update_and_delete_receipt_maintain_linked_purchase_movement_without_reversal()
+    public async Task Update_and_delete_purchase_maintain_linked_movement_without_reversal()
     {
-        using var db = CreateDbContext("receipt_edit_test");
+        using var db = CreateDbContext("purchase_edit_test");
         db.Products.Add(new Product { Id = 1, Name = "M&M", QuantityInStock = 0 });
         AddTransitionBaseline(db, 1, 0);
         await db.SaveChangesAsync();
@@ -425,7 +425,7 @@ public class ReceiptServiceTests
         Directory.CreateDirectory(temp);
         envMock.Setup(e => e.WebRootPath).Returns(temp);
         envMock.Setup(e => e.ContentRootPath).Returns(temp);
-        IReceiptService svc = new ReceiptService(db, envMock.Object);
+        IPurchaseService svc = new PurchaseService(db, envMock.Object);
 
         var content = new MemoryStream(new byte[] { 1 });
         var fileMock = new Mock<IFormFile>();
@@ -436,14 +436,14 @@ public class ReceiptServiceTests
         fileMock.Setup(f => f.CopyToAsync(It.IsAny<Stream>(), default))
             .Returns((Stream s, System.Threading.CancellationToken ct) => content.CopyToAsync(s, ct));
 
-        var receipt = await svc.Upload(fileMock.Object, "Purchase", null, 10m, null, null, null, null,
-            new[] { new ReceiptItemDto(1, 10m, 1m) });
-        Assert.NotNull(receipt);
+        var purchase = await svc.Upload(fileMock.Object, "Purchase", null, 10m, null, null, null, null,
+            new[] { new PurchaseItemDto(1, 10m, 1m) });
+        Assert.NotNull(purchase);
         Assert.Equal(10, (await db.Products.FindAsync(1L))!.QuantityInStock);
         var originalItemId = (await db.ReceiptItems.SingleAsync()).Id;
 
-        await svc.Update(receipt!.Id, "Purchase", null, 12m, null, null, null, null,
-            new[] { new ReceiptItemDto(1, 10m, 2m) });
+        await svc.Update(purchase!.Id, "Purchase", null, 12m, null, null, null, null,
+            new[] { new PurchaseItemDto(1, 10m, 2m) });
         Assert.Equal(10, (await db.Products.FindAsync(1L))!.QuantityInStock);
         Assert.Equal(2m, (await db.Products.FindAsync(1L))!.AverageUnitCost);
         var item = await db.ReceiptItems.SingleAsync();
@@ -452,7 +452,7 @@ public class ReceiptServiceTests
         Assert.Equal(item.Id, movement.ReceiptItemId);
         Assert.Equal(2m, movement.UnitCost);
 
-        Assert.True(await svc.Delete(receipt.Id));
+        Assert.True(await svc.Delete(purchase.Id));
         Assert.Equal(0, (await db.Products.FindAsync(1L))!.QuantityInStock);
         Assert.Empty(await db.StockAdjustments.ToListAsync());
     }
@@ -460,7 +460,7 @@ public class ReceiptServiceTests
     [Fact]
     public async Task Upload_uses_weighted_average_cost_and_records_cost_ledger()
     {
-        using var db = CreateDbContext("receipt_avco_test");
+        using var db = CreateDbContext("purchase_avco_test");
         db.Products.Add(new Product { Id = 1, Name = "M&M", QuantityInStock = 10, AverageUnitCost = 2.10m });
         AddTransitionBaseline(db, 1, 10, 10, 21m, 2.10m);
         await db.SaveChangesAsync();
@@ -469,7 +469,7 @@ public class ReceiptServiceTests
         Directory.CreateDirectory(temp);
         envMock.Setup(e => e.WebRootPath).Returns(temp);
         envMock.Setup(e => e.ContentRootPath).Returns(temp);
-        IReceiptService svc = new ReceiptService(db, envMock.Object);
+        IPurchaseService svc = new PurchaseService(db, envMock.Object);
 
         var content = new MemoryStream(new byte[] { 1 });
         var fileMock = new Mock<IFormFile>();
@@ -481,7 +481,7 @@ public class ReceiptServiceTests
             .Returns((Stream s, System.Threading.CancellationToken ct) => content.CopyToAsync(s, ct));
 
         await svc.Upload(fileMock.Object, "Purchase", null, null, null, null, null, null,
-            new[] { new ReceiptItemDto(1, 24m, 1.00m) });
+            new[] { new PurchaseItemDto(1, 24m, 1.00m) });
 
         var product = await db.Products.FindAsync(1L);
         Assert.Equal(34, product!.QuantityInStock);
@@ -510,7 +510,7 @@ public class ReceiptServiceTests
                 It.IsAny<System.Threading.CancellationToken>()))
             .ReturnsAsync((long productId, DateTime? _, bool dryRun, System.Threading.CancellationToken _) =>
                 new InventoryCostRebuildResult { ProductId = productId, DryRun = dryRun });
-        IReceiptService svc = new ReceiptService(db, envMock.Object, rebuild.Object);
+        IPurchaseService svc = new PurchaseService(db, envMock.Object, rebuild.Object);
         var content = new MemoryStream(new byte[] { 1 });
         var fileMock = new Mock<IFormFile>();
         fileMock.Setup(f => f.Length).Returns(1);
@@ -519,7 +519,7 @@ public class ReceiptServiceTests
         fileMock.Setup(f => f.CopyToAsync(It.IsAny<Stream>(), default))
             .Returns((Stream stream, System.Threading.CancellationToken ct) => content.CopyToAsync(stream, ct));
 
-        var receipt = await svc.Upload(
+        var purchase = await svc.Upload(
             fileMock.Object,
             "Purchase",
             null,
@@ -528,10 +528,10 @@ public class ReceiptServiceTests
             packageCost: 2m,
             purchaseDate: null,
             supplierId: null,
-            items: new[] { new ReceiptItemDto(1, 10m, 2m) });
+            items: new[] { new PurchaseItemDto(1, 10m, 2m) });
 
-        Assert.NotNull(receipt);
-        Assert.Null(receipt!.Notes);
+        Assert.NotNull(purchase);
+        Assert.Null(purchase!.Notes);
     }
 
     [Fact]
@@ -568,7 +568,7 @@ public class ReceiptServiceTests
         Directory.CreateDirectory(temp);
         envMock.Setup(e => e.WebRootPath).Returns(temp);
         envMock.Setup(e => e.ContentRootPath).Returns(temp);
-        IReceiptService svc = new ReceiptService(db, envMock.Object);
+        IPurchaseService svc = new PurchaseService(db, envMock.Object);
         var content = new MemoryStream(new byte[] { 1 });
         var fileMock = new Mock<IFormFile>();
         fileMock.Setup(f => f.Length).Returns(1);
@@ -578,7 +578,7 @@ public class ReceiptServiceTests
         fileMock.Setup(f => f.CopyToAsync(It.IsAny<Stream>(), default))
             .Returns((Stream s, System.Threading.CancellationToken ct) => content.CopyToAsync(s, ct));
 
-        var receipt = await svc.Upload(
+        var purchase = await svc.Upload(
             fileMock.Object,
             "Purchase",
             null,
@@ -587,9 +587,9 @@ public class ReceiptServiceTests
             null,
             cutoff.AddMinutes(30),
             null,
-            new[] { new ReceiptItemDto(1, 10m, 2m) });
+            new[] { new PurchaseItemDto(1, 10m, 2m) });
 
-        Assert.NotNull(receipt);
+        Assert.NotNull(purchase);
         var product = await db.Products.SingleAsync();
         Assert.Equal(29, product.QuantityInStock);
         Assert.Equal(40, product.CostingQuantity);
@@ -601,8 +601,8 @@ public class ReceiptServiceTests
     [Fact]
     public async Task Upload_preserves_user_notes_when_total_mismatches()
     {
-        // Regression test: Receipt.Notes should never be mutated by validation warning
-        using var db = CreateDbContext("receipt_notes_test");
+        // Regression test: Purchase.Notes should never be mutated by validation warning
+        using var db = CreateDbContext("purchase_notes_test");
         db.Products.Add(new Product { Id = 1, Name = "M&M", QuantityInStock = 0 });
         AddTransitionBaseline(db, 1, 0);
         await db.SaveChangesAsync();
@@ -612,7 +612,7 @@ public class ReceiptServiceTests
         Directory.CreateDirectory(temp);
         envMock.Setup(e => e.WebRootPath).Returns(temp);
         envMock.Setup(e => e.ContentRootPath).Returns(temp);
-        IReceiptService svc = new ReceiptService(db, envMock.Object);
+        IPurchaseService svc = new PurchaseService(db, envMock.Object);
 
         var content = new MemoryStream(new byte[] { 1 });
         var fileMock = new Mock<IFormFile>();
@@ -624,16 +624,16 @@ public class ReceiptServiceTests
             .Returns((Stream s, System.Threading.CancellationToken ct) => content.CopyToAsync(s, ct));
 
         const string userNotes = "Purchased during Costco promotion";
-        var receipt = await svc.Upload(fileMock.Object, "Purchase", userNotes, 
+        var purchase = await svc.Upload(fileMock.Object, "Purchase", userNotes,
             30m, // totalAmount - intentionally high (items=20, no delivery/package, so calculated=20)
             null, null, null, null,
-            new[] { new ReceiptItemDto(1, 20m, 1m) });
+            new[] { new PurchaseItemDto(1, 20m, 1m) });
 
-        Assert.NotNull(receipt);
+        Assert.NotNull(purchase);
         // Notes must not contain warning text
-        Assert.Equal(userNotes, receipt.Notes);
-        Assert.DoesNotContain("Warning", receipt.Notes ?? "");
-        Assert.DoesNotContain("calculated total", receipt.Notes ?? "");
+        Assert.Equal(userNotes, purchase.Notes);
+        Assert.DoesNotContain("Warning", purchase.Notes ?? "");
+        Assert.DoesNotContain("calculated total", purchase.Notes ?? "");
     }
 
     [Fact]
@@ -641,7 +641,7 @@ public class ReceiptServiceTests
     {
         // Items = 20, no delivery/package, but entered total = 30
         // Calculated total = 20, difference = 10 (exceeds 0.02 tolerance)
-        using var db = CreateDbContext("receipt_validation_mismatch_test");
+        using var db = CreateDbContext("purchase_validation_mismatch_test");
         db.Products.Add(new Product { Id = 1, Name = "M&M", QuantityInStock = 0 });
         AddTransitionBaseline(db, 1, 0);
         await db.SaveChangesAsync();
@@ -651,7 +651,7 @@ public class ReceiptServiceTests
         Directory.CreateDirectory(temp);
         envMock.Setup(e => e.WebRootPath).Returns(temp);
         envMock.Setup(e => e.ContentRootPath).Returns(temp);
-        IReceiptService svc = new ReceiptService(db, envMock.Object);
+        IPurchaseService svc = new PurchaseService(db, envMock.Object);
 
         var content = new MemoryStream(new byte[] { 1 });
         var fileMock = new Mock<IFormFile>();
@@ -662,12 +662,12 @@ public class ReceiptServiceTests
         fileMock.Setup(f => f.CopyToAsync(It.IsAny<Stream>(), default))
             .Returns((Stream s, System.Threading.CancellationToken ct) => content.CopyToAsync(s, ct));
 
-        var receipt = await svc.Upload(fileMock.Object, "Purchase", null, 
+        var purchase = await svc.Upload(fileMock.Object, "Purchase", null,
             30m, null, null, null, null,
-            new[] { new ReceiptItemDto(1, 20m, 1m) });
+            new[] { new PurchaseItemDto(1, 20m, 1m) });
 
-        Assert.NotNull(receipt);
-        var validation = svc.ComputeValidation(receipt);
+        Assert.NotNull(purchase);
+        var validation = svc.ComputeValidation(purchase);
         
         Assert.NotNull(validation);
         Assert.True(validation.HasTotalMismatch);
@@ -681,7 +681,7 @@ public class ReceiptServiceTests
     {
         // Items = 20, delivery = 5, package = 2, entered total = 27
         // Calculated total = 27, no mismatch
-        using var db = CreateDbContext("receipt_validation_match_test");
+        using var db = CreateDbContext("purchase_validation_match_test");
         db.Products.Add(new Product { Id = 1, Name = "M&M", QuantityInStock = 0 });
         AddTransitionBaseline(db, 1, 0);
         await db.SaveChangesAsync();
@@ -691,7 +691,7 @@ public class ReceiptServiceTests
         Directory.CreateDirectory(temp);
         envMock.Setup(e => e.WebRootPath).Returns(temp);
         envMock.Setup(e => e.ContentRootPath).Returns(temp);
-        IReceiptService svc = new ReceiptService(db, envMock.Object);
+        IPurchaseService svc = new PurchaseService(db, envMock.Object);
 
         var content = new MemoryStream(new byte[] { 1 });
         var fileMock = new Mock<IFormFile>();
@@ -702,12 +702,12 @@ public class ReceiptServiceTests
         fileMock.Setup(f => f.CopyToAsync(It.IsAny<Stream>(), default))
             .Returns((Stream s, System.Threading.CancellationToken ct) => content.CopyToAsync(s, ct));
 
-        var receipt = await svc.Upload(fileMock.Object, "Purchase", null, 
+        var purchase = await svc.Upload(fileMock.Object, "Purchase", null,
             27m, 5m, 2m, null, null,
-            new[] { new ReceiptItemDto(1, 20m, 1m) });
+            new[] { new PurchaseItemDto(1, 20m, 1m) });
 
-        Assert.NotNull(receipt);
-        var validation = svc.ComputeValidation(receipt);
+        Assert.NotNull(purchase);
+        var validation = svc.ComputeValidation(purchase);
         
         Assert.NotNull(validation);
         Assert.False(validation.HasTotalMismatch);
@@ -720,7 +720,7 @@ public class ReceiptServiceTests
     public async Task Update_preserves_user_notes_and_computes_validation()
     {
         // Ensure update also preserves notes and provides new validation
-        using var db = CreateDbContext("receipt_update_notes_test");
+        using var db = CreateDbContext("purchase_update_notes_test");
         db.Products.Add(new Product { Id = 1, Name = "M&M", QuantityInStock = 0 });
         AddTransitionBaseline(db, 1, 0);
         await db.SaveChangesAsync();
@@ -730,7 +730,7 @@ public class ReceiptServiceTests
         Directory.CreateDirectory(temp);
         envMock.Setup(e => e.WebRootPath).Returns(temp);
         envMock.Setup(e => e.ContentRootPath).Returns(temp);
-        IReceiptService svc = new ReceiptService(db, envMock.Object);
+        IPurchaseService svc = new PurchaseService(db, envMock.Object);
 
         var content = new MemoryStream(new byte[] { 1 });
         var fileMock = new Mock<IFormFile>();
@@ -742,14 +742,14 @@ public class ReceiptServiceTests
             .Returns((Stream s, System.Threading.CancellationToken ct) => content.CopyToAsync(s, ct));
 
         const string userNotes = "Supplier note: fragile items";
-        var receipt = await svc.Upload(fileMock.Object, "Purchase", userNotes, 
+        var purchase = await svc.Upload(fileMock.Object, "Purchase", userNotes,
             20m, null, null, null, null,
-            new[] { new ReceiptItemDto(1, 20m, 1m) });
-        Assert.NotNull(receipt);
+            new[] { new PurchaseItemDto(1, 20m, 1m) });
+        Assert.NotNull(purchase);
 
         // Update with mismatched total
-        var updated = await svc.Update(receipt.Id, null, userNotes, 25m, null, null, null, null,
-            new[] { new ReceiptItemDto(1, 20m, 1m) });
+        var updated = await svc.Update(purchase.Id, null, userNotes, 25m, null, null, null, null,
+            new[] { new PurchaseItemDto(1, 20m, 1m) });
 
         Assert.NotNull(updated);
         Assert.Equal(userNotes, updated.Notes);
@@ -776,13 +776,13 @@ public class ReceiptServiceTests
         // Empty items, delivery = 5, package = 2, entered total = 20
         // Calculated = 0 + 5 + 2 = 7
         // Difference = 13 (exceeds tolerance)
-        using var db = CreateDbContext("receipt_empty_items_mismatch_test");
+        using var db = CreateDbContext("purchase_empty_items_mismatch_test");
         var envMock = new Mock<IWebHostEnvironment>();
         var temp = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         Directory.CreateDirectory(temp);
         envMock.Setup(e => e.WebRootPath).Returns(temp);
         envMock.Setup(e => e.ContentRootPath).Returns(temp);
-        IReceiptService svc = new ReceiptService(db, envMock.Object);
+        IPurchaseService svc = new PurchaseService(db, envMock.Object);
 
         var content = new MemoryStream(new byte[] { 1 });
         var fileMock = new Mock<IFormFile>();
@@ -793,12 +793,12 @@ public class ReceiptServiceTests
         fileMock.Setup(f => f.CopyToAsync(It.IsAny<Stream>(), default))
             .Returns((Stream s, System.Threading.CancellationToken ct) => content.CopyToAsync(s, ct));
 
-        var receipt = await svc.Upload(fileMock.Object, "Delivery Only", null,
+        var purchase = await svc.Upload(fileMock.Object, "Delivery Only", null,
             20m, 5m, 2m, null, null,
-            Array.Empty<ReceiptItemDto>());
+            Array.Empty<PurchaseItemDto>());
 
-        Assert.NotNull(receipt);
-        var validation = svc.ComputeValidation(receipt);
+        Assert.NotNull(purchase);
+        var validation = svc.ComputeValidation(purchase);
         
         Assert.NotNull(validation);
         Assert.True(validation.HasTotalMismatch);
@@ -812,13 +812,13 @@ public class ReceiptServiceTests
     {
         // Empty items, no delivery/package, null total
         // Should not compute validation
-        using var db = CreateDbContext("receipt_empty_items_null_total_test");
+        using var db = CreateDbContext("purchase_empty_items_null_total_test");
         var envMock = new Mock<IWebHostEnvironment>();
         var temp = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         Directory.CreateDirectory(temp);
         envMock.Setup(e => e.WebRootPath).Returns(temp);
         envMock.Setup(e => e.ContentRootPath).Returns(temp);
-        IReceiptService svc = new ReceiptService(db, envMock.Object);
+        IPurchaseService svc = new PurchaseService(db, envMock.Object);
 
         var content = new MemoryStream(new byte[] { 1 });
         var fileMock = new Mock<IFormFile>();
@@ -829,12 +829,12 @@ public class ReceiptServiceTests
         fileMock.Setup(f => f.CopyToAsync(It.IsAny<Stream>(), default))
             .Returns((Stream s, System.Threading.CancellationToken ct) => content.CopyToAsync(s, ct));
 
-        var receipt = await svc.Upload(fileMock.Object, "No Total", null,
+        var purchase = await svc.Upload(fileMock.Object, "No Total", null,
             null, null, null, null, null,
-            Array.Empty<ReceiptItemDto>());
+            Array.Empty<PurchaseItemDto>());
 
-        Assert.NotNull(receipt);
-        var validation = svc.ComputeValidation(receipt);
+        Assert.NotNull(purchase);
+        var validation = svc.ComputeValidation(purchase);
         
         Assert.NotNull(validation);
         Assert.False(validation.HasTotalMismatch);

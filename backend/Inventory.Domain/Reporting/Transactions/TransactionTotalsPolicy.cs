@@ -50,32 +50,100 @@ public static class TransactionTotalsPolicy
 {
     public static TransactionTotalsResult Calculate(IReadOnlyList<TransactionTotalsRowInputs> rows)
     {
-        var completedRows = rows.Where(x => x.IsCompleted).ToList();
-        var costedRows = completedRows.Where(x => x.IsCosted).ToList();
-        var isCogsComplete = completedRows.All(x => x.IsCosted);
-        var partialCost = costedRows.Sum(x => x.CostOfGoods ?? 0m);
-        decimal? cost = isCogsComplete ? partialCost : null;
-        decimal? grossProfit = isCogsComplete ? completedRows.Sum(x => x.GrossProfit ?? 0m) : null;
-        var directComplete = isCogsComplete && completedRows.All(x => x.DirectProfit.HasValue);
-        decimal? directProfit = directComplete ? completedRows.Sum(x => x.DirectProfit!.Value) : null;
-        var completedSales = completedRows.Sum(x => x.Sale);
-        decimal? partialGross = costedRows.Count == 0 ? null : costedRows.Sum(x => x.GrossProfit!.Value);
-        var directRows = completedRows.Where(x => x.DirectProfit.HasValue).ToList();
-        decimal? partialDirect = directRows.Count == 0 ? null : directRows.Sum(x => x.DirectProfit!.Value);
+        var accumulator = new TransactionTotalsAccumulator();
+        foreach (var row in rows) accumulator.Add(row);
+        return accumulator.ToResult();
+    }
+}
+
+/// <summary>
+/// Incrementally accumulates the same totals as <see cref="TransactionTotalsPolicy.Calculate"/>, one
+/// row at a time, so a caller can fold a large or streamed row sequence into constant-size state
+/// instead of retaining the complete row list. <see cref="TransactionTotalsPolicy.Calculate"/>
+/// delegates to this accumulator so there is a single authoritative formula path; batch and
+/// incremental use always agree because they run the same code.
+/// </summary>
+public sealed class TransactionTotalsAccumulator
+{
+    private int _transactionCount;
+    private int _completedTransactionCount;
+    private decimal _sales;
+    private decimal _cardSales;
+    private decimal _cashSales;
+    private decimal _completedSales;
+    private int _costedCompletedTransactionCount;
+    private bool _allCompletedCosted = true;
+    private decimal _costOfGoods;
+    private decimal _costedGrossProfitSum;
+    private bool _allCompletedHaveDirectProfit = true;
+    private int _directProfitRowCount;
+    private decimal _directProfitSum;
+    private decimal _estimatedFeeExGst;
+    private decimal _estimatedFeeGst;
+    private decimal _estimatedFeeIncGst;
+    private decimal _completedCommissionAmount;
+
+    public void Add(TransactionTotalsRowInputs row)
+    {
+        _transactionCount++;
+        _sales += row.Sale;
+        if (row.PaymentType == TransactionPaymentType.Card) _cardSales += row.Sale;
+        else if (row.PaymentType == TransactionPaymentType.Cash) _cashSales += row.Sale;
+
+        if (row.FeeIsEstimated)
+        {
+            _estimatedFeeExGst += row.FeeExGst;
+            _estimatedFeeGst += row.FeeGst;
+            _estimatedFeeIncGst += row.FeeIncGst;
+        }
+
+        if (!row.IsCompleted) return;
+
+        _completedTransactionCount++;
+        _completedSales += row.Sale;
+        _completedCommissionAmount += row.CommissionAmount;
+
+        if (row.IsCosted)
+        {
+            _costedCompletedTransactionCount++;
+            _costOfGoods += row.CostOfGoods ?? 0m;
+            _costedGrossProfitSum += row.GrossProfit ?? 0m;
+        }
+        else
+        {
+            _allCompletedCosted = false;
+        }
+
+        if (row.DirectProfit.HasValue)
+        {
+            _directProfitRowCount++;
+            _directProfitSum += row.DirectProfit.Value;
+        }
+        else
+        {
+            _allCompletedHaveDirectProfit = false;
+        }
+    }
+
+    public TransactionTotalsResult ToResult()
+    {
+        var isCogsComplete = _allCompletedCosted;
+        decimal? cost = isCogsComplete ? _costOfGoods : null;
+        decimal? grossProfit = isCogsComplete ? _costedGrossProfitSum : null;
+        var directComplete = isCogsComplete && _allCompletedHaveDirectProfit;
+        decimal? directProfit = directComplete ? _directProfitSum : null;
+        decimal? partialGross = _costedCompletedTransactionCount == 0 ? null : _costedGrossProfitSum;
+        decimal? partialDirect = _directProfitRowCount == 0 ? null : _directProfitSum;
 
         return new TransactionTotalsResult(
-            rows.Count, completedRows.Count, rows.Sum(x => x.Sale),
-            rows.Where(x => x.PaymentType == TransactionPaymentType.Card).Sum(x => x.Sale),
-            rows.Where(x => x.PaymentType == TransactionPaymentType.Cash).Sum(x => x.Sale),
-            costedRows.Count, completedRows.Count - costedRows.Count, isCogsComplete,
-            cost, partialCost, grossProfit,
-            grossProfit.HasValue ? ReportingCalculations.PercentageOf(grossProfit.Value, completedSales) : null,
+            _transactionCount, _completedTransactionCount, _sales, _cardSales, _cashSales,
+            _costedCompletedTransactionCount, _completedTransactionCount - _costedCompletedTransactionCount, isCogsComplete,
+            cost, _costOfGoods, grossProfit,
+            grossProfit.HasValue ? ReportingCalculations.PercentageOf(grossProfit.Value, _completedSales) : null,
             directProfit,
-            directProfit.HasValue ? ReportingCalculations.PercentageOf(directProfit.Value, completedSales) : null,
+            directProfit.HasValue ? ReportingCalculations.PercentageOf(directProfit.Value, _completedSales) : null,
             partialGross, partialDirect,
-            rows.Where(x => x.FeeIsEstimated).Sum(x => x.FeeExGst),
-            rows.Where(x => x.FeeIsEstimated).Sum(x => x.FeeGst),
-            rows.Where(x => x.FeeIsEstimated).Sum(x => x.FeeIncGst),
-            completedRows.Sum(x => x.CommissionAmount));
+            _estimatedFeeExGst, _estimatedFeeGst, _estimatedFeeIncGst,
+            _completedCommissionAmount);
     }
 }

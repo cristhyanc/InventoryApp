@@ -1,11 +1,11 @@
 <div class="mb-6 flex flex-wrap items-center justify-between gap-4">
   <h1 class="text-2xl font-semibold text-slate-800">Purchases</h1>
   <div class="flex flex-wrap gap-2">
-    <a routerLink="/receipts/new" class="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">+ Add Purchase</a>
+    <a routerLink="/purchases/new" class="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">+ Add Purchase</a>
   </div>
 </div>
 
-@if (receipts.length === 0) {
+@if (purchases.length === 0) {
   <div class="rounded-xl bg-white p-6 text-sm text-slate-500 shadow-sm">No purchases recorded yet.</div>
 } @else {
   <div class="overflow-x-auto rounded-xl bg-white shadow-sm">
@@ -22,17 +22,17 @@
         </tr>
       </thead>
       <tbody class="divide-y divide-slate-200">
-        @for (r of receipts; track r.id) {
+        @for (r of purchases; track r.id) {
           <tr class="align-top">
             <td class="px-4 py-4">
               <div class="flex min-w-56 items-center gap-3">
-                <a [href]="fileUrl(r)" target="_blank" rel="noopener" class="shrink-0">
-                  @if (isImage(r)) {
-                    <img [src]="fileUrl(r)" [alt]="r.title" class="h-14 w-14 rounded-lg object-cover" />
+                <button type="button" class="shrink-0" (click)="openDocument(r)" [attr.aria-label]="'Open document for ' + r.title">
+                  @if (isImage(r) && thumbnailUrl(r)) {
+                    <img [src]="thumbnailUrl(r)" [alt]="r.title" class="h-14 w-14 rounded-lg object-cover" />
                   } @else {
                     <div class="flex h-14 w-14 items-center justify-center rounded-lg bg-slate-100 text-xl">📄</div>
                   }
-                </a>
+                </button>
                 <strong class="font-semibold text-slate-800">{{ r.title }}</strong>
               </div>
             </td>
@@ -93,7 +93,7 @@
             </tr>
           }
 
-          @if (editingReceiptId === r.id) {
+          @if (editingPurchaseId === r.id) {
             <tr>
               <td colspan="7" class="bg-slate-50 px-4 py-5">
                 <form class="space-y-3" (ngSubmit)="saveEdit(r)">

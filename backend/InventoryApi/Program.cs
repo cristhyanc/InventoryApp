@@ -14,8 +14,16 @@ using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using InventoryApi.Http;
 using InventoryApi.Integrations.Nayax;
+using InventoryApi.Swagger;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.Identity.Web;
 
 var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddMicrosoftIdentityWebApi(builder.Configuration.GetSection("AzureAd"));
+
+builder.Services.AddAuthorization();
 
 builder.Services.AddControllers();
 builder.Services.AddApplicationServices();
@@ -24,16 +32,7 @@ builder.Services.AddInfrastructureServices();
 // Controlled RFC 7807 responses for Nayax upstream failures.
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<NayaxUpstreamExceptionHandler>();
-builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen(c =>
-{
-    c.SwaggerDoc("v1", new Microsoft.OpenApi.Models.OpenApiInfo
-    {
-        Title = "Inventory API",
-        Version = "v1",
-        Description = "Manage inventory for snacks and drinks, including suppliers, categories, stock adjustments, and receipt uploads."
-    });
-});
+builder.Services.AddInventoryApiSwagger();
 
 builder.Services.AddDbContext<AppDbContext>(options =>
 {
@@ -66,7 +65,7 @@ builder.Services.AddScoped<InventoryApi.Services.Interfaces.IInventoryCostServic
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IInventoryCostRebuildService, InventoryApi.Services.InventoryCostRebuildService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IInventoryCostTransitionService, InventoryApi.Services.InventoryCostTransitionService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.ISaleCostingService, InventoryApi.Services.SaleCostingService>();
-builder.Services.AddScoped<InventoryApi.Services.Interfaces.IReceiptService, InventoryApi.Services.ReceiptService>();
+builder.Services.AddScoped<InventoryApi.Services.Interfaces.IPurchaseService, InventoryApi.Services.PurchaseService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.ISupplierOrderService, InventoryApi.Services.SupplierOrderService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IMachineService, InventoryApi.Services.MachineService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.ISiteService, InventoryApi.Services.SiteService>();
@@ -121,9 +120,17 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "Inventory API v1"));
 }
 
-app.UseStaticFiles(); // serves wwwroot/receipts if direct static access is desired
+// No static-file middleware: the API serves no public assets (the Angular application is a
+// separate Azure Static Web App), and static-file middleware does not run controller
+// authorization. Uploaded purchase and operating-expense documents are stored outside the
+// web root (see ProtectedFileStorage) and are only readable through the [Authorize]d
+// endpoints, so no business document has an anonymous URL.
 app.UseCors("AllowAngularDevClient");
+app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
 
 app.Run();
+
+// Exposed so InventoryApi.Tests can host the API with WebApplicationFactory<Program>.
+public partial class Program;

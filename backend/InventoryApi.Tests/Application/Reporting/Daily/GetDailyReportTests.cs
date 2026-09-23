@@ -29,6 +29,7 @@ public class GetDailyReportTests
         Assert.True(row.IsReconciled);
         Assert.Equal("Reconciled", row.ReconciliationStatus);
         Assert.Equal("Actual", row.NayaxFeeSource);
+        Assert.Equal(0.4m, row.NayaxFeesGst);
 
         Assert.Equal(100m, report.Totals!.GrossSales);
         Assert.Equal(80m, report.Totals.CardSales);
@@ -37,9 +38,52 @@ public class GetDailyReportTests
         Assert.Equal(60m, report.Totals.GrossProfit);
         Assert.Equal(4m, report.Totals.NayaxFeesExGst);
         Assert.Equal(4.4m, report.Totals.NayaxFeesIncludingGst);
+        Assert.Equal(0.4m, report.Totals.NayaxProcessingFees.TotalFeeGst);
         Assert.Equal(80m, report.Totals.ImportedReimbursement);
         Assert.Equal(78m, report.Totals.NetReimbursement);
         Assert.Equal(4, report.DataQuality.Notes!.Count);
+    }
+
+    [Theory]
+    [InlineData(4, 0.4, 4.4, 0, 0, 0, 0.4)]
+    [InlineData(0, 0, 0, 6, 0.6, 6.6, 0.6)]
+    [InlineData(4, 0.4, 4.4, 2, 0.2, 2.2, 0.6)]
+    [InlineData(0, 0, 0, 0, 0, 0, 0)]
+    [InlineData(3.33, 0.33, 3.66, 1.11, 0.11, 1.22, 0.44)]
+    public async Task Row_level_fee_gst_equals_the_authoritative_processing_fee_result(
+        decimal actualFeeExGst, decimal actualFeeGst, decimal actualFeeIncGst,
+        decimal estimatedFeeExGst, decimal estimatedFeeGst, decimal estimatedFeeIncGst,
+        decimal expectedFeeGst)
+    {
+        var processingFees = new NayaxProcessingFeeResult(
+            actualFeeExGst, actualFeeGst, actualFeeIncGst,
+            estimatedFeeExGst, estimatedFeeGst, estimatedFeeIncGst,
+            estimatedFeeGst == 0m ? 0 : 1, DateTime.UtcNow, null);
+        var facts = FakeDailyReportFactsProvider.SingleDay(processingFees: processingFees);
+        var useCase = new GetDailyReport(new FakeDailyReportFactsProvider(facts));
+
+        var report = await useCase.Handle(
+            new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)), CancellationToken.None);
+
+        var row = Assert.Single(report.Rows);
+        Assert.Equal(expectedFeeGst, row.NayaxFeesGst);
+        Assert.Equal(processingFees.TotalFeeGst, row.NayaxFeesGst);
+        Assert.Equal(processingFees.TotalFeeGst, report.Totals!.NayaxProcessingFees.TotalFeeGst);
+    }
+
+    [Fact]
+    public async Task Missing_rate_transactions_still_expose_the_authoritative_zero_fee_gst()
+    {
+        var processingFees = new NayaxProcessingFeeResult(0m, 0m, 0m, 0m, 0m, 0m, 0, null, null, MissingRateTransactionCount: 3);
+        var facts = FakeDailyReportFactsProvider.SingleDay(processingFees: processingFees);
+        var useCase = new GetDailyReport(new FakeDailyReportFactsProvider(facts));
+
+        var report = await useCase.Handle(
+            new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)), CancellationToken.None);
+
+        var row = Assert.Single(report.Rows);
+        Assert.Equal(0m, row.NayaxFeesGst);
+        Assert.Equal(0m, report.Totals!.NayaxProcessingFees.TotalFeeGst);
     }
 
     [Fact]
@@ -120,6 +164,74 @@ public class GetDailyReportTests
         AssertNoteContains(report, "1 cancelled or declined Nayax transaction(s) are excluded from completed sales.");
         AssertNoteContains(report, "1 Nayax transaction(s) have unrecognised status IDs.");
         AssertNoteContains(report, "1 Nayax transaction(s) have no status ID and are excluded from completed sales.");
+    }
+
+    [Fact]
+    public async Task Complete_day_reports_available_cost_and_gst_classification_and_no_status_or_product_claims()
+    {
+        var facts = FakeDailyReportFactsProvider.SingleDay();
+        var useCase = new GetDailyReport(new FakeDailyReportFactsProvider(facts));
+
+        var report = await useCase.Handle(
+            new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)), CancellationToken.None);
+
+        Assert.False(report.DataQuality.MissingStatus);
+        Assert.False(report.DataQuality.HistoricalCostUnavailable);
+        Assert.False(report.DataQuality.GstClassificationMissing);
+        Assert.True(report.DataQuality.CommissionNotPersisted);
+        Assert.False(report.DataQuality.ContainsUnmappedProducts);
+    }
+
+    [Fact]
+    public async Task Null_or_unknown_status_transactions_set_the_missing_status_flag()
+    {
+        var facts = FakeDailyReportFactsProvider.SingleDay(nullStatusTransactionCount: 1);
+        var useCase = new GetDailyReport(new FakeDailyReportFactsProvider(facts));
+
+        var report = await useCase.Handle(
+            new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)), CancellationToken.None);
+
+        Assert.True(report.DataQuality.MissingStatus);
+    }
+
+    [Fact]
+    public async Task Incomplete_cogs_sets_the_historical_cost_unavailable_flag()
+    {
+        var facts = FakeDailyReportFactsProvider.SingleDay(isCogsComplete: false, uncostedTransactionCount: 1, uncostedSalesAmount: 10m);
+        var useCase = new GetDailyReport(new FakeDailyReportFactsProvider(facts));
+
+        var report = await useCase.Handle(
+            new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)), CancellationToken.None);
+
+        Assert.True(report.DataQuality.HistoricalCostUnavailable);
+    }
+
+    [Fact]
+    public async Task Absent_imported_gst_classification_sets_the_gst_classification_missing_flag()
+    {
+        var facts = FakeDailyReportFactsProvider.SingleDay() with { ImportedContainsGstClassification = false };
+        var useCase = new GetDailyReport(new FakeDailyReportFactsProvider(facts));
+
+        var report = await useCase.Handle(
+            new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)), CancellationToken.None);
+
+        Assert.True(report.DataQuality.GstClassificationMissing);
+    }
+
+    [Fact]
+    public async Task Multiple_report_specific_notes_are_kept_as_separate_ordered_entries()
+    {
+        var facts = FakeDailyReportFactsProvider.SingleDay(
+            processingFees: new NayaxProcessingFeeResult(0m, 0m, 0m, 0m, 0m, 0m, 0, null, null, MissingRateTransactionCount: 3),
+            isCogsComplete: false, uncostedTransactionCount: 1, uncostedSalesAmount: 10m);
+        var useCase = new GetDailyReport(new FakeDailyReportFactsProvider(facts));
+
+        var report = await useCase.Handle(
+            new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)), CancellationToken.None);
+
+        Assert.Equal(6, report.DataQuality.Notes!.Count);
+        Assert.Equal("3 card transaction(s) have no effective Nayax processing fee rate; fee totals are provisional.", report.DataQuality.Notes[4]);
+        Assert.Equal("One or more completed sales have no persisted COGS; profit is incomplete.", report.DataQuality.Notes[5]);
     }
 
     [Fact]

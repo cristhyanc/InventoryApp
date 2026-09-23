@@ -64,8 +64,13 @@ public sealed class GetMachineProfitabilityReport
             qualityNotes.Add("Commission configuration is incomplete; profit is unavailable.");
         qualityNotes.AddRange(facts.CommissionWarnings);
 
-        var quality = ReportingQuality.Quality(false, false, false,
-            qualityNotes.Count == 0 ? null : string.Join(" ", qualityNotes));
+        var quality = ReportingQuality.Quality(
+            missingStatus: true,
+            historicalCostUnavailable: rows.Any(x => !x.IsCogsComplete),
+            gstClassificationMissing: true,
+            commissionNotPersisted: !facts.CommissionIsComplete,
+            containsUnmappedProducts: false,
+            notes: qualityNotes);
 
         return new MachineProfitabilityReportDto(range.From, range.ToDate, rows, quality);
     }

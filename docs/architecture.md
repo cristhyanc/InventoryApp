@@ -34,8 +34,8 @@ InventoryApp/
 │   │   ├── Services/
 │   │   ├── Program.cs
 │   │   └── InventoryApi.csproj
-│   ├── Inventory.Domain/            NayaxFeeSettings rule, reporting policies/calculations (Inventory.Domain.Reporting.<Feature>); other features not yet migrated
-│   ├── Inventory.Application/       NayaxFeeSettings use cases/ports, reporting use cases/contracts (Inventory.Application.Reporting.<Feature>); other features not yet migrated
+│   ├── Inventory.Domain/            NayaxFeeSettings rule, reporting policies/calculations (Inventory.Domain.Reporting.<Feature>), Purchases.PurchaseTotalValidationPolicy; other features not yet migrated
+│   ├── Inventory.Application/       NayaxFeeSettings use cases/ports, reporting use cases/contracts (Inventory.Application.Reporting.<Feature>), Purchases.ComputePurchaseTotalValidation; other features not yet migrated
 │   ├── Inventory.Infrastructure/    SystemClock adapter; other features not yet migrated
 │   └── InventoryApi.Tests/
 ├── frontend/inventory-app/
@@ -72,7 +72,7 @@ flowchart TD
 ## Current strengths
 
 - Most feature controllers already depend on service interfaces.
-- The backend has meaningful tests for products, stock, receipts, supplier orders, costing, imports, fees, commissions, machine profitability, reporting, and migrations.
+- The backend has meaningful tests for products, stock, purchases, supplier orders, costing, imports, fees, commissions, machine profitability, reporting, and migrations.
 - Nayax transaction status and payment-method classification are centralized.
 - Historical sale cost and its provenance are persisted.
 - Reconciliation and incomplete-data states are represented explicitly.
@@ -82,8 +82,8 @@ flowchart TD
 
 ## Current pressure points
 
-- HTTP, use cases, domain calculations, EF Core, Nayax, file storage, and export generation live in one project for every feature area still pending migration (receipts, machine services, inventory-cost transition, and the remaining direct-`AppDbContext` controllers/services). Reporting is no longer part of this pressure point: its use cases live in `Inventory.Application.Reporting.<Feature>` and its calculations in `Inventory.Domain.Reporting.<Feature>`; only its temporary EF/Nayax adapters, HTTP controller, and CSV/XLSX byte encoding remain in `InventoryApi`.
-- Receipt, machine, and inventory-cost-transition services combine orchestration and persistence and are large.
+- HTTP, use cases, domain calculations, EF Core, Nayax, file storage, and export generation live in one project for every feature area still pending migration (purchases, machine services, inventory-cost transition, and the remaining direct-`AppDbContext` controllers/services). Reporting is no longer part of this pressure point: its use cases live in `Inventory.Application.Reporting.<Feature>` and its calculations in `Inventory.Domain.Reporting.<Feature>`; only its temporary EF/Nayax adapters, HTTP controller, and CSV/XLSX byte encoding remain in `InventoryApi`. `Purchases.PurchaseTotalValidationPolicy`/`ComputePurchaseTotalValidation` are the first pieces of the purchase slice to move out (see the [Purchase rename plan](#purchase-rename-plan)); the purchase upload/update/delete orchestration itself is still in `InventoryApi`.
+- `PurchaseService`, the machine services, and the inventory-cost-transition services each combine orchestration and persistence, and are large.
 - Operating-expense and site-commission controllers directly access `AppDbContext`; operating expenses also manipulate files. Fee-setting no longer does (see the Nayax fee-settings slice above), except through its temporary API-owned persistence adapter.
 - `Product` contains persistence state, business calculations, and transient Nayax/UI fields.
 - Several tests use EF Core InMemory where SQLite behavior may be more representative.
@@ -148,7 +148,7 @@ Inventory.Application/
 └── Reporting/
 ```
 
-Examples include `CreateOperatingExpense`, `RecordCommissionPayment`, `ImportNayaxSales`, `GetBookkeepingReport`, and `RebuildHistoricalCosts`.
+Examples include `CreateOperatingExpense`, `RecordCommissionPayment`, `ImportNayaxSales`, `GetBookkeepingReport`, `RebuildHistoricalCosts`, and `ComputePurchaseTotalValidation`.
 
 Application code determines what must happen. It does not know the physical database, file path, HTTP endpoint, or spreadsheet library used to make it happen.
 
@@ -176,6 +176,15 @@ Contains:
 
 Controllers do not implement accounting, inventory, persistence, or filesystem rules.
 
+### Authentication and authorization
+
+Authentication/authorization is an `InventoryApi`/frontend boundary concern (issue #38). Identity-provider types stay confined to that boundary:
+
+- **Backend.** `Program.cs` registers `AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddMicrosoftIdentityWebApi(builder.Configuration.GetSection("AzureAd"))` and calls `UseAuthentication()` before `UseAuthorization()`. Every controller carries `[Authorize]` plus `[RequiredScope("access_as_user")]` (`Microsoft.Identity.Web.Resource`), so a request without a bearer token is rejected `401 Unauthorized` and a request whose token lacks the delegated `access_as_user` scope is rejected `403 Forbidden`, both by ASP.NET Core's authentication/authorization middleware before any controller action runs. The non-secret `AzureAd` configuration (`Instance`, `TenantId`, `ClientId`, `Scopes`) lives in `appsettings.json`; the `ClientId` is the API app registration's public application ID, used only to validate the token audience, never a client secret. `Microsoft.Identity.Web`/`Microsoft.AspNetCore.Authorization`/JWT types are used only in `InventoryApi` (`Program.cs` and controllers) and must never appear in `Inventory.Domain` or `Inventory.Application`; if a use case ever needs the caller's identity, define a narrow neutral Application port instead of exposing Microsoft identity-provider types across that boundary.
+- **Frontend.** The Angular SPA authenticates through MSAL (`@azure/msal-angular`, `@azure/msal-browser`). `frontend/inventory-app/src/app/auth-config.ts` defines the SPA/API Entra application IDs, the delegated `access_as_user` scope (`loginRequest`), and `buildProtectedResourceMap(apiBaseUrl)`, which keys MSAL's protected-resource map off `ConfigService.apiBaseUrl` rather than a hard-coded host. `app.config.ts` wires `MsalInterceptor` (attaches `Authorization: Bearer <token>` to matching requests), `MsalGuard` (redirect-based route protection), and `MSAL_INTERCEPTOR_CONFIG` (built from that dynamic map), so the bearer token is attached correctly whether `ConfigService.apiBaseUrl` resolves to the local dev proxy (`/api`) or the deployed Azure API's absolute URL — see [Runtime configuration and API contracts](#runtime-configuration-and-api-contracts). `app.routes.ts` applies `MsalGuard` to every application route except the public `/auth` callback route (`AuthCallbackComponent`), which must stay reachable without authentication so the Entra redirect can complete. `AppComponent` drives sign-in/sign-out (`MsalService.loginRedirect`/`logoutRedirect`) and reflects the active account in the header.
+- **Protected documents.** Static-file middleware does not run controller authorization, so an uploaded document under `wwwroot` would be downloadable by anyone who knew its generated file name no matter what `[Authorize]` says. `Program.cs` therefore registers no static-file middleware at all — the API serves no public assets, since the Angular application is a separate Azure Static Web App — and `ProtectedFileStorage` stores purchase documents and operating-expense supporting documents under `{ContentRoot}/protected-files/{category}/`, outside the web root. The only way to read one is `GET /api/receipts/{id}/file` or `GET /api/operating-expenses/{id}/attachment`. Documents uploaded before this rule still sit in `wwwroot/{category}` and stay readable and deletable through the same endpoints (`ProtectedFileStorage.ExistingPath` falls back to that location) but no longer have an anonymous URL. Because these endpoints require a bearer token, the frontend must fetch them through `HttpClient` (`PurchaseService.getFile`, `OperatingExpenseService.getAttachment`, both `responseType: 'blob'`) and render them from an object URL; an `<a href>`/`<img src>` pointing straight at the endpoint is a plain browser request that carries no token and gets `401`.
+- **Multi-tenant scope.** Authentication accepts users from multiple Microsoft Entra tenants (`TenantId: "common"`), but this does not provide multi-tenant *data* isolation. Database-level tenant partitioning/scoping is a separate, unimplemented concern.
+
 ### API documentation policy
 
 `Swashbuckle.AspNetCore` (`AddSwaggerGen`/`UseSwagger`/`UseSwaggerUI` in `Program.cs`) is intentionally retained to give local developers an interactive view of the API surface. It is registered only behind `app.Environment.IsDevelopment()`, so it never runs, and never exposes `/swagger`, outside the Development environment; its `SwaggerDoc` metadata carries only a title, version, and description, with no authentication scheme or configuration values. `dotnet-tools.json` keeps the matching `swashbuckle.aspnetcore.cli` local tool so a developer can export `swagger.json` manually with `dotnet swagger tofile` if needed.
@@ -199,12 +208,13 @@ The frontend is an application boundary in its own right. It owns navigation, in
 | Area | Current responsibility |
 | --- | --- |
 | `app.component.*` | Application shell, primary navigation, report menu, router outlet, and toast host |
-| `app.routes.ts` | Product, stock, supplier, machine, site, receipt, report, expense, and administration routes |
+| `app.routes.ts` | Product, stock, supplier, machine, site, purchase, report, expense, and administration routes |
 | `components/` | Routed feature pages plus a small set of shared components |
 | `services/` | Typed HTTP calls, runtime configuration, toast state, and feature-specific client behavior |
-| `models/models.ts` | Shared inventory, purchasing, site, machine, and receipt contracts |
+| `models/models.ts` | Shared inventory, purchase, site, and machine contracts |
 | Report base/classes | Common report filters, loading/error state, financial-year presets, and export behavior |
-| `assets/config.json` | Deploy-time API base URL loaded before the application starts |
+| `assets/config.json`, `api-base-url.ts` | Deployed API base URL and the local-vs-deployed resolution rule applied before the application starts |
+| `auth-config.ts`, `auth/auth-callback.component.ts` | MSAL configuration, delegated `access_as_user` scope, protected-resource map, and the public Entra redirect callback route |
 
 The application currently uses component-local state and RxJS-backed singleton services. That is appropriate for its present size. Do not introduce a global state library merely to reorganize files. Add one only when there is demonstrated cross-feature state, cache invalidation, or event-coordination complexity that local state and focused services cannot handle clearly.
 
@@ -237,7 +247,7 @@ src/app/
 │   │   ├── data-access/
 │   │   └── models/
 │   ├── stock/
-│   ├── receipts/
+│   ├── purchases/
 │   ├── machines/
 │   ├── sites/
 │   ├── expenses/
@@ -266,11 +276,13 @@ Use these ownership rules:
 
 Routes are currently declared centrally and import every routed component eagerly. Preserve route URLs, but convert top-level features to `loadComponent` or feature route files as those areas are migrated. This keeps initial bundles smaller and creates an enforceable feature boundary without introducing NgModules.
 
-The static host must rewrite unknown application paths to `index.html`; otherwise refreshing a deep link such as `/reports/bookkeeping` will bypass Angular and return a host-level 404. API paths must remain excluded from that fallback where the hosting topology requires it.
+The static host must rewrite unknown application paths to `index.html`; otherwise refreshing a deep link such as `/reports/bookkeeping` or the Entra redirect landing on `/auth` will bypass Angular and return a host-level 404. `frontend/inventory-app/src/staticwebapp.config.json` (copied to the deployed output root by the `assets` build option) declares that Azure Static Web Apps `navigationFallback`, rewriting unmatched paths to `/index.html` while excluding `/assets/*` and static file extensions.
 
 ### Runtime configuration and API contracts
 
-`ConfigService` loads `/assets/config.json` through an application initializer before feature services issue requests and falls back to `/api` if that load fails. `proxy.conf.json` forwards `/api` to `http://localhost:5000/` for local development; a deployed static config can provide the hosted API base URL. Do not hard-code API hosts in components or feature services.
+`ConfigService` resolves the API base URL through an application initializer, before feature services issue requests, and is the single source of truth for it. On `localhost`/`127.0.0.1` it resolves to `/api`, which `proxy.conf.json` forwards to `http://localhost:5000/`; on any other origin it uses `apiBaseUrl` from `/assets/config.json`, falling back to `/api` if that load fails or yields nothing usable (`api-base-url.ts` holds that framework-free resolution rule). No one therefore edits the tracked `assets/config.json` to move between local development and deployment. Do not hard-code API hosts in components or feature services.
+
+`ConfigService` fetches `/assets/config.json` with a dedicated `HttpClient` built on the raw `HttpBackend`, bypassing the interceptor chain. This is an ordering requirement, not a preference: `MSAL_INTERCEPTOR_CONFIG` is built from `ConfigService.apiBaseUrl` when `MsalInterceptor` is first constructed, which an intercepted configuration request would trigger before the initializer had finished, permanently freezing the protected-resource map on the fallback value. MSAL's protected-resource map is built from that same resolved value (`auth-config.ts`'s `buildProtectedResourceMap`) rather than a fixed host, so the bearer token attaches correctly in both local and deployed environments.
 
 Backend contract changes are full-stack changes. When an endpoint changes:
 
@@ -370,10 +382,74 @@ Timezone migration is not part of an incidental feature. Changes require explici
 
 ### Product purchase and restock
 
-1. A receipt and receipt items record the source purchase.
-2. Receipt-linked restock movements add physical and costing inventory at purchase cost.
+1. A purchase and its purchase items record the source purchase.
+2. Purchase-linked restock movements add physical and costing inventory at purchase cost.
 3. Delivery/package amounts remain identifiable for whole-business reporting.
 4. Supplier-order allocations are reconciled without fabricating purchase quantities.
+
+#### Purchase rename plan
+
+The canonical internal business term is now **Purchase**/**PurchaseItem**, not Receipt/ReceiptItem
+(issue #60). The rename touched entity/service/component/DTO naming and the corresponding source file
+names only; purchase accounting/inventory behaviour, the database schema, and the API/route contract
+are unchanged (verified with `dotnet ef migrations has-pending-model-changes`, which reports no
+pending changes).
+
+The source files were renamed with `git mv` alongside their identifiers, so file names and type names
+now agree:
+
+| Renamed from | Renamed to |
+| --- | --- |
+| `backend/InventoryApi/Models/Receipt.cs` | `backend/InventoryApi/Models/Purchase.cs` |
+| `backend/InventoryApi/Models/ReceiptItem.cs` | `backend/InventoryApi/Models/PurchaseItem.cs` |
+| `backend/InventoryApi/Services/Interfaces/IReceiptService.cs` | `backend/InventoryApi/Services/Interfaces/IPurchaseService.cs` |
+| `backend/InventoryApi/Services/ReceiptService.cs` | `backend/InventoryApi/Services/PurchaseService.cs` |
+| `backend/InventoryApi/Controllers/ReceiptsController.cs` | `backend/InventoryApi/Controllers/PurchasesController.cs` |
+| `backend/InventoryApi.Tests/Services/ReceiptServiceTests.cs` | `backend/InventoryApi.Tests/Services/PurchaseServiceTests.cs` |
+| `frontend/.../services/receipt.service.ts` | `frontend/.../services/purchase.service.ts` |
+| `frontend/.../components/receipts/` | `frontend/.../components/purchases/` |
+| `frontend/.../components/purchases/receipt-list.component.{ts,html}` | `.../purchase-list.component.{ts,html}` |
+| `frontend/.../components/purchases/receipt-upload.component.{ts,html}` | `.../purchase-upload.component.{ts,html}` |
+
+The `receipts` upload folder name, the database tables and migration history, and the
+`/api/receipts` route are *not* file renames and deliberately keep their names; see the compatibility
+table below. (That upload folder has since moved out of `wwwroot` to
+`{ContentRoot}/protected-files/receipts` for the authorization boundary described in
+[Authentication and authorization](#authentication-and-authorization); only its location changed, not
+its name.)
+
+##### OpenAPI compatibility
+
+Swashbuckle derives schema ids from CLR type names and operation tags from controller names, so the
+rename would otherwise have republished the document's `Receipt`, `ReceiptItem`, `ReceiptResponseDto`
+and `ReceiptValidationDto` schemas and its `Receipts` tag under new `Purchase*` names — a breaking
+change for generated clients even though the routes and JSON keys are identical.
+`InventoryApi.Swagger.LegacyOpenApiCompatibility` is the compatibility boundary that prevents this: it
+maps the renamed CLR types back to their published schema ids and pins `PurchasesController`'s
+operations to the legacy `Receipts` tag, deferring to Swashbuckle's defaults for everything else. It
+is registered through `SwaggerServiceCollectionExtensions.AddInventoryApiSwagger`, the single
+registration shared by `Program.cs` and the contract tests, and is covered by
+`InventoryApi.Tests.Swagger.LegacyOpenApiContractTests` (schema ids, tag, and the schemas the purchase
+operations reference) and `InventoryApi.Tests.Controllers.PurchasesControllerRouteTests` (the effective
+`api/receipts` base route and its GET/POST/PUT/DELETE/file endpoints, read from the MVC API explorer).
+
+| Layer | Renamed to Purchase language | Left as a legacy/compatibility surface | Why |
+| --- | --- | --- | --- |
+| `Inventory.Domain` | `Purchases.PurchaseTotalValidationPolicy` (new) | — | New pure calculation; the one authoritative total-mismatch formula. |
+| `Inventory.Application` | `Purchases.ComputePurchaseTotalValidation` (new) | — | Thin use case wrapping the Domain policy; `InventoryApi.Services.PurchaseService` calls it instead of duplicating the formula. |
+| `InventoryApi.Models` | CLR types and files `Purchase.cs`, `PurchaseItem.cs` | DbSet properties `Receipts`/`ReceiptItems`, table names `Receipts`/`ReceiptItems` (now mapped explicitly with `ToTable`), `PurchaseItem.ReceiptId` column/property, `StockAdjustment.ReceiptItemId`/`ReceiptItem`, `SupplierOrderReceiptAllocation` (type and its `ReceiptItemId`/`ReceiptItem` members) | Schema/migration history must not change; `ReceiptId` and the `StockAdjustment`/`SupplierOrderReceiptAllocation` members are part of the JSON contract or are out of this issue's scope (supplier-order/stock-ledger naming belongs to the full slice above). |
+| `InventoryApi.Services` | `PurchaseService : IPurchaseService` (files `PurchaseService.cs`/`IPurchaseService.cs`) | Physical upload folder keeps the name `receipts` (`ProtectedFileStorage.PurchaseDocumentsCategory`), now under `{ContentRoot}/protected-files/` rather than `wwwroot/` | Already-uploaded purchase document scans must stay reachable by their stored file name; `ProtectedFileStorage.ExistingPath` still falls back to the old `wwwroot/receipts` location. |
+| `InventoryApi.Controllers` | `PurchasesController` (file `PurchasesController.cs`), explicit `[Route("api/receipts")]` | Route `api/receipts`, and the `Receipts` OpenAPI tag via `LegacyOpenApiCompatibility` | Preserves the existing, bookmarked API route (acceptance criterion). |
+| `InventoryApi.DTOs` | `PurchaseItemDto`, `PurchaseCreateMetaDto`, `PurchaseValidationDto`, `PurchaseResponseDto` | `PurchaseResponseDto`'s `Receipt`/`Validation` property names (JSON keys `receipt`/`validation`), and the published OpenAPI schema ids `Receipt`/`ReceiptItem`/`ReceiptItemDto`/`ReceiptCreateMetaDto`/`ReceiptValidationDto`/`ReceiptResponseDto` | JSON property names and schema ids are part of the public API contract; only the CLR type names changed. |
+| Frontend `models.ts`/`purchase.service.ts` | `Purchase`, `PurchaseItem`, `PurchaseValidation`, `PurchaseResponse`, `PurchaseService`, `PurchaseUploadPayload`/`PurchaseItemPayload`/`PurchaseUpdatePayload` (files `purchase.service.ts`, `components/purchases/purchase-{list,upload}.component.{ts,html}`) | JSON-bound fields `receipt`/`receiptId` | Matches the backend JSON contract above. |
+| Frontend routing | Primary route `/purchases` (and `/purchases/new`) | `/receipts` and `/receipts/new` redirect to the new paths | Keeps existing bookmarks/links working while the URL bar now matches the "Purchases" nav label. |
+| Supporting documents | Not renamed: `Purchase.FileName`/`StoredFileName`/`ContentType`/`FileSizeBytes`, the "Receipt or invoice" upload copy, `OperatingExpense` receipt-attachment naming | — | A purchase's attached scan/photo, and an operating expense's attachment, are supporting *documents*, a distinct concept from the Purchase business record (acceptance criterion). |
+
+Out of scope for this rename (per issue #60): changing purchase accounting/inventory behaviour, the
+purchase GST/BAS model, and any destructive migration/table rename. The compatibility surfaces listed
+above are deliberate and stay as they are; renaming any of them would be a schema or public-contract
+change needing its own issue, ideally combined with the rest of the Purchasing and costing slice
+(item 6 above).
 
 ### Machine refill
 
@@ -427,7 +503,13 @@ Backend and frontend tracks can progress independently when their contracts do n
    - Preserve supplier-order projection and low-stock semantics.
 
 6. **Purchasing and costing slice**
-   - Migrate receipts, supplier orders, stock ledger, AVCO, rebuilding, and sale costing as one coherent area.
+   - Migrate purchases, supplier orders, stock ledger, AVCO, rebuilding, and sale costing as one coherent area.
+   - **Receipt-to-Purchase internal rename done** (issue #60), ahead of the full slice migration above. See
+     [Purchase rename plan](#purchase-rename-plan) for the entity/service/component/DTO and source-file
+     renames, the OpenAPI compatibility boundary, and the compatibility surfaces intentionally left on
+     their legacy names. The rest of this slice — moving the purchase upload/update/delete orchestration
+     itself, and the supplier-order/stock-ledger/AVCO code it touches, into
+     `Inventory.Application`/`Inventory.Infrastructure` — remains future work.
 
 7. **Reporting slices**
    - Split bookkeeping, daily, reconciliation, machine/product profitability, GST, dashboard, and transactions into separate query handlers.
@@ -441,6 +523,7 @@ Backend and frontend tracks can progress independently when their contracts do n
    - **Dashboard slice done** (issue #90). `GetDashboardReport` (`Inventory.Application.Reporting.Dashboard`) is the one authoritative implementation for `GET api/reports/dashboard` and its CSV/XLSX export. It depends on the already-migrated bookkeeping and product profitability use cases through the Application-owned `IGetBookkeepingReport`/`IGetProductProfitabilityReport` interfaces (implemented by `GetBookkeepingReport`/`GetProductProfitabilityReport`) and reuses their sales, profit, fee, commission, operating-expense, and unmapped-product figures rather than re-deriving them; only the dashboard-specific reimbursement reconciliation is computed independently. `DashboardReimbursementPolicy` (`Inventory.Domain.Reporting.Dashboard`) derives the expected-versus-actual Nayax reimbursement difference and its "Pending"/"Reconciled"/"Needs Review" status from card sales, fees, and the imported net settlement; it reuses the shared `Inventory.Domain.Reporting.ReconciliationStatusPolicy` tolerance check the daily/reconciliation slices also call, but keeps its own three-state status vocabulary locally because it has no separate "Warning" state. `IDashboardReportFactsProvider` is its narrow port for the summary facts unique to the dashboard (completed-sale transaction/machine/product counts, the imported reimbursement facts, and commission completeness/warnings for its own data-quality notes), and `EfDashboardReportFactsProvider` is its temporary API-owned EF adapter, reusing `EfReportingSharedQueries`' completed-sale query, imported-summary query, and site-commission resolution rather than duplicating them a further time. `ReportsController` calls `GetDashboardReport` directly for that endpoint; at that point in the migration, the legacy `ReportingService.GetDashboardAsync` delegated to the same use case, and the `INayaxProcessingFeeService`/`ISiteCommissionService` dependencies it only needed for that orchestration were removed from `ReportingService`, so CSV/XLSX export stayed on one authoritative implementation, until issue #92 removed `ReportingService` entirely (see below).
    - **Transaction sales slice done** (issue #91), the last individual report family. `GetTransactionSalesReport` (`Inventory.Application.Reporting.Transactions`) is the one authoritative implementation for `GET api/reports/transactions` and its CSV/XLSX export, including the unpaginated export case. `Inventory.Domain.Reporting.Transactions.TransactionRowPolicy` derives each transaction's estimated Nayax fee (effective-dated rate lookup, unavailable when none covers the sale date) and site commission (effective-dated agreement lookup, unavailable when none covers the sale, overlapping when more than one does) and its resulting gross/direct profit, reusing the shared `ReportingCalculations`; `TransactionTotalsPolicy` aggregates those per-row results into the report totals. These per-transaction rules are deliberately separate from (not merged into) the aggregate bookkeeping/machine-profitability commission-completeness rules, since row-level and period-level coverage semantics differ. `Inventory.Application.Reporting.Transactions.GetTransactionSalesReport` resolves the requested date range/machine scope, retrieves facts through the narrow `ITransactionSalesReportFactsProvider` port, matches each raw Nayax product identifier/name to the catalogue through the shared `Inventory.Domain.Reporting.ProductMatching.ProductMatcher` (the same algorithm the product profitability slice uses), invokes the Domain row/totals policies, then applies status/payment/COGS/search filtering, user-selected sorting, pagination, page-size clamping (50/100/250, default 50), and filter-option construction as Application/presentation concerns. `EfTransactionSalesReportFactsProvider` is its temporary API-owned EF adapter; because transactions needs every status (not only completed sales, unlike every other migrated report), it does not reuse `EfReportingSharedQueries`' completed-sale query, and its site-name resolution from the live Nayax machine directory has no equivalent adapter to share it with. `ReportsController` calls `GetTransactionSalesReport` directly for that endpoint. This was the last individual report family in the sequence from issue #43.
    - **Shared-query audit and legacy service removal done** (issue #92), the final item in the sequence. The audit re-examined every `Ef<Feature>ReportFactsProvider` adapter for equivalent EF query helpers that earlier slices had not yet consolidated and found none: `EfReportingSharedQueries` already covers every completed-sale query, cost projection, imported-summary query, and site-commission resolution shared across bookkeeping/daily/reconciliation/machine-profitability/GST/dashboard, and the two helpers that looked similar but are not — `EfBookkeepingReportFactsProvider`'s business-wide receipt/operating-expense totals versus machine profitability's per-machine operating-expense breakdown, and `EfTransactionSalesReportFactsProvider`'s all-status query versus the shared completed-sale query — were deliberately kept separate and documented in place rather than forced into one shape. `Inventory.Application.Reporting.Export.GetReportExportRows` replaced the legacy `ReportingService`'s `ExportCsvAsync`/`ExportXlsxAsync` row-building: it calls the same eight migrated use cases directly and returns already-formatted rows (a `ReportExportTable`), never a re-derived value. `InventoryApi.Adapters.Export.ReportExportFileWriter` is the outer InventoryApi adapter that encodes those rows as CSV or XLSX bytes (ClosedXML stays out of `Inventory.Application`, per the architecture rule). `ReportsController`'s single `{report}/export` action now calls `GetReportExportRows` and `ReportExportFileWriter` instead of `IReportingService`. `InventoryApi.Services.ReportingService`/`Services.Interfaces.IReportingService` are gone: their dependency-injection registration (`Program.cs`), every production and test caller (the controller and every test), and both source files (`InventoryApi/Services/ReportingService.cs`, `InventoryApi/Services/Interfaces/IReportingService.cs`) were removed. An architecture test (`ProjectDependencyDirectionTests.No_other_source_file_references_the_removed_legacy_reporting_service`) proves no source file still references them.
+   - **Transaction report streaming and bounded page buffering done** (issue #115). `EfTransactionSalesReportFactsProvider.GetFactsAsync` no longer completes its date/machine-filtered EF query with `ToListAsync` into a full transaction list before returning; `TransactionSalesReportFacts.Transactions` is now an `IAsyncEnumerable<TransactionSalesReportFactsRow>`, and the adapter streams rows one at a time from the EF query (`IQueryable.AsAsyncEnumerable()`) with cancellation propagated through the stream. `GetTransactionSalesReport.Handle` enumerates that stream exactly once: it product-matches and runs `TransactionRowPolicy` per raw row as it arrives, folds matching rows into `Inventory.Domain.Reporting.Transactions.TransactionTotalsAccumulator` instead of building an intermediate `TransactionTotalsRowInputs` list (`TransactionTotalsPolicy.Calculate` now delegates to the same accumulator, so batch and incremental accumulation share one formula path), and accumulates distinct site/product filter-option state in dictionaries rather than retaining every row. Totals, quality facts, and filter options still cover the complete date/machine scope exactly as before — this is a one-pass, full-scope streaming design, not page-size-bounded database work or SQL pagination/filter pushdown (both stay out of scope). For a paginated request (`paginate: true`), only the best `page * pageSize` sorted filtered-row candidates needed to answer that page are retained, using the new `Inventory.Application.Reporting.Shared.BoundedTopSelector<T>` fed a comparer equivalent to the existing `SortRows` ordering; for `paginate: false` (CSV/XLSX export), the complete filtered result set is still collected and sorted as before, since export intentionally returns everything.
 
 8. **Remove legacy structure**
    - Done for reporting (issue #92): `InventoryApi.Services.ReportingService`, `InventoryApi.Services.Interfaces.IReportingService`, their dependency-injection registration, and every production and test caller were removed, and both source files were deleted. Reporting exports now run through `Inventory.Application.Reporting.Export.GetReportExportRows` for row building and `InventoryApi.Adapters.Export.ReportExportFileWriter` for CSV/XLSX byte encoding.
@@ -471,7 +554,7 @@ Backend and frontend tracks can progress independently when their contracts do n
    - Keep orchestration in the routed page and make child components input/output driven.
 
 6. **Critical workflow coverage**
-   - Add browser-level smoke tests for product maintenance, receipt/restock, machine refill, import, and a representative financial report.
+   - Add browser-level smoke tests for product maintenance, purchase/restock, machine refill, import, and a representative financial report.
    - Run frontend tests and the production build in pull-request validation before changing the deployment gate.
 
 ## Testing architecture
@@ -485,6 +568,8 @@ Use three complementary levels:
 3. **API/adapter tests** for HTTP contracts, Nayax mapping, file storage, imports, and report exports.
 
 EF Core InMemory tests remain useful for fast service checks but must not be the only evidence for relational behavior.
+
+Most controller tests instantiate the controller directly and never exercise ASP.NET Core's middleware pipeline. Proving the `[Authorize]`/`[RequiredScope]` HTTP boundary (issue #38) instead requires a real pipeline: `AuthenticationBoundaryTests` (`backend/InventoryApi.Tests/Controllers/`) hosts the app with `WebApplicationFactory<Program>`, swapping `AppDbContext` for a shared open in-memory SQLite connection so `Program.cs`'s startup `Database.Migrate()` succeeds, then asserts that an unauthenticated request to a representative protected endpoint — including the receipt and operating-expense document endpoints — returns `401`, and that a file placed in the web root has no anonymous static URL. `Program.cs` exposes a trailing `public partial class Program;` solely so `WebApplicationFactory<Program>` can reference it from the test assembly.
 
 Financial regression tests should cover at least:
 

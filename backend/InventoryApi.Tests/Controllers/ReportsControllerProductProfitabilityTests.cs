@@ -54,5 +54,7 @@ public class ReportsControllerProductProfitabilityTests
         Assert.Equal("Soda", row.ProductName);
         Assert.Equal(60m, row.Sales);
         Assert.Equal(40m, row.GrossProfit);
+        Assert.False(report.DataQuality.HistoricalCostUnavailable);
+        Assert.False(report.DataQuality.ContainsUnmappedProducts);
     }
 }

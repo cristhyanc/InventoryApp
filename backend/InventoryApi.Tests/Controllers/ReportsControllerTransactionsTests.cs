@@ -30,7 +30,7 @@ public class ReportsControllerTransactionsTests
     public async Task Transactions_action_routes_through_the_application_use_case()
     {
         var row = FakeTransactionSalesReportFactsProvider.CompletedCardRow(transactionId: 7, sale: 42m);
-        var facts = new TransactionSalesReportFacts([row], [], [], [], SiteMappingUnavailable: false);
+        var facts = FakeTransactionSalesReportFactsProvider.Facts([row]);
         var getTransactionSalesReport = new GetTransactionSalesReport(new FakeTransactionSalesReportFactsProvider(facts));
         var bookkeepingUseCase = new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(FakeBookkeepingReportFactsProvider.Complete()));
         var dailyUseCase = new GetDailyReport(new FakeDailyReportFactsProvider(FakeDailyReportFactsProvider.SingleDay()));

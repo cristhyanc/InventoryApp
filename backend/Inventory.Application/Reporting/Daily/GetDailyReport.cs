@@ -61,8 +61,13 @@ public sealed class GetDailyReport
             qualityNotes.Add("One or more completed sales have no persisted COGS; profit is incomplete.");
         AddStatusQualityNotes(qualityNotes, totalsFacts);
 
-        var quality = ReportingQuality.Quality(facts.ImportedContainsRows, facts.ImportedContainsGstClassification, false,
-            qualityNotes.Count == 0 ? null : string.Join(" ", qualityNotes));
+        var quality = ReportingQuality.Quality(
+            missingStatus: totalsFacts.NullStatusTransactionCount > 0 || totalsFacts.UnknownStatusTransactionCount > 0,
+            historicalCostUnavailable: !totalsFacts.IsCogsComplete,
+            gstClassificationMissing: !facts.ImportedContainsGstClassification,
+            commissionNotPersisted: true,
+            containsUnmappedProducts: false,
+            notes: qualityNotes);
 
         return new DailyReportDto(range.From, range.ToDate, rows, quality, totals);
     }
@@ -90,7 +95,7 @@ public sealed class GetDailyReport
             day.GrossSales, day.CardSales, day.CashSales, result.AverageSale,
             day.UncostedTransactionCount == 0, day.UncostedTransactionCount, day.UncostedSalesAmount,
             result.GrossMarginPercent, day.ProcessingFees.TotalFeeExGst, day.ProcessingFees.TotalFeeIncGst,
-            day.ImportedReimbursement, day.NetReimbursement, result.IsReconciled, result.ReconciliationStatus,
+            day.ProcessingFees.TotalFeeGst, day.ImportedReimbursement, day.NetReimbursement, result.IsReconciled, result.ReconciliationStatus,
             day.CompletedTransactionCount, day.PendingTransactionCount, day.DeclinedOrCancelledTransactionCount,
             day.RefundedTransactionCount, day.UnknownStatusTransactionCount, feeSource)
         {

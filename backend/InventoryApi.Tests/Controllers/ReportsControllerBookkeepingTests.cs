@@ -51,5 +51,8 @@ public class ReportsControllerBookkeepingTests
 
         Assert.Equal(250m, report.Sales);
         Assert.Equal(90m, report.CostOfGoods);
+        Assert.False(report.DataQuality.HistoricalCostUnavailable);
+        Assert.False(report.DataQuality.GstClassificationMissing);
+        Assert.False(report.DataQuality.CommissionNotPersisted);
     }
 }

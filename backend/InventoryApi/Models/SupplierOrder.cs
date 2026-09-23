@@ -55,7 +55,7 @@ public class SupplierOrderReceiptAllocation
     public virtual SupplierOrderLine SupplierOrderLine { get; set; } = null!;
     public int ReceiptItemId { get; set; }
     [JsonIgnore]
-    public virtual ReceiptItem ReceiptItem { get; set; } = null!;
+    public virtual PurchaseItem ReceiptItem { get; set; } = null!;
     public decimal QuantityApplied { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }

@@ -6,7 +6,7 @@
       <a routerLink="/products" routerLinkActive="text-blue-600" class="transition hover:text-blue-600">Products</a>
       <a routerLink="/categories" routerLinkActive="text-blue-600" class="transition hover:text-blue-600">Categories</a>
       <a routerLink="/suppliers" routerLinkActive="text-blue-600" class="transition hover:text-blue-600">Suppliers</a>
-      <a routerLink="/receipts" routerLinkActive="text-blue-600" class="transition hover:text-blue-600">Purchases</a>
+      <a routerLink="/purchases" routerLinkActive="text-blue-600" class="transition hover:text-blue-600">Purchases</a>
       <a routerLink="/admin" routerLinkActive="text-blue-600" class="transition hover:text-blue-600">Admin</a>
       <a routerLink="/expenses" routerLinkActive="text-blue-600" class="transition hover:text-blue-600">Expenses</a>
       <span class="text-slate-400">|</span>
@@ -26,6 +26,13 @@
           <a (click)="closeReportsMenu($event)" routerLink="/reports/site-commissions" routerLinkActive="bg-blue-50 text-blue-600" class="rounded px-3 py-2 transition hover:bg-slate-50 hover:text-blue-600">Site Commissions</a>
         </div>
       </details>
+      <span class="text-slate-400">|</span>
+      @if (isLoggedIn) {
+        <span class="text-slate-500">{{ userName }}</span>
+        <button type="button" (click)="logout()" class="rounded-md border border-slate-300 px-3 py-2 text-sm transition hover:bg-slate-50">Sign out</button>
+      } @else {
+        <button type="button" (click)="login()" class="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700">Sign in</button>
+      }
     </nav>
   </div>
 </header>

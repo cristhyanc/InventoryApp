@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Inventory.Application.Reporting.Transactions;
@@ -26,12 +28,27 @@ public sealed class FakeTransactionSalesReportFactsProvider : ITransactionSalesR
         return Task.FromResult(_facts);
     }
 
-    public static TransactionSalesReportFacts Empty() => new(
-        Transactions: [],
-        ProductCatalogue: [],
-        FeeRates: [],
-        CommissionAgreements: [],
-        SiteMappingUnavailable: false);
+    /// <summary>Builds a fact bundle from an in-memory row sequence, as an asynchronous stream.</summary>
+    public static TransactionSalesReportFacts Facts(
+        IReadOnlyList<TransactionSalesReportFactsRow> rows,
+        IReadOnlyList<TransactionSalesCatalogueEntry> productCatalogue = null,
+        IReadOnlyList<EffectiveFeeRate> feeRates = null,
+        IReadOnlyList<EffectiveCommissionAgreement> commissionAgreements = null,
+        bool siteMappingUnavailable = false) => new(
+        Stream(rows), productCatalogue ?? [], feeRates ?? [], commissionAgreements ?? [], siteMappingUnavailable);
+
+    public static async IAsyncEnumerable<TransactionSalesReportFactsRow> Stream(
+        IEnumerable<TransactionSalesReportFactsRow> rows, [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        foreach (var row in rows)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await Task.Yield();
+            yield return row;
+        }
+    }
+
+    public static TransactionSalesReportFacts Empty() => Facts([]);
 
     public static TransactionSalesReportFactsRow CompletedCardRow(
         long transactionId = 1,
