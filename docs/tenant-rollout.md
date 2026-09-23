@@ -147,8 +147,8 @@ optional.
 `--apply` and `--dry-run` are mutually exclusive; passing both, or any other flag, is refused
 rather than resolved by precedence.
 
-Do **not** deploy the API expecting it to migrate. Until this step completes, a deployed API in a
-non-Development environment will refuse to start and log which migrations are pending.
+Do not deploy the API expecting it to migrate. In Production, until this step completes,
+the API will refuse to start and log which migrations are pending.
 
 **3. Dry run the bootstrap.**
 
