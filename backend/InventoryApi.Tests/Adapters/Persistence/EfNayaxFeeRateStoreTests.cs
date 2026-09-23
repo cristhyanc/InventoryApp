@@ -13,7 +13,7 @@ public class EfNayaxFeeRateStoreTests
         var connection = new SqliteConnection("Data Source=:memory:");
         await connection.OpenAsync();
         var options = new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options;
-        await using var setup = new AppDbContext(options);
+        await using var setup = TestAppDbContext.Unrestricted(options);
         await setup.Database.EnsureCreatedAsync();
         return (connection, options);
     }
@@ -24,7 +24,7 @@ public class EfNayaxFeeRateStoreTests
         var (connection, options) = await CreateSqliteAsync();
         await using (connection)
         {
-            await using var db = new AppDbContext(options);
+            await using var db = TestAppDbContext.Unrestricted(options);
             var store = new EfNayaxFeeRateStore(db);
 
             var createdAt = new DateTime(2026, 3, 1, 4, 5, 6, DateTimeKind.Utc);
@@ -34,7 +34,7 @@ public class EfNayaxFeeRateStoreTests
             Assert.Equal(createdAt, record.CreatedAt);
             Assert.Equal(0.19m, record.FeeExGst);
 
-            await using var verify = new AppDbContext(options);
+            await using var verify = TestAppDbContext.Unrestricted(options);
             var persisted = Assert.Single(await verify.NayaxProcessingFeeRates.ToListAsync());
             Assert.Equal(record.Id, persisted.Id);
             Assert.Equal(new DateTime(2026, 3, 1), persisted.EffectiveFrom);
@@ -48,7 +48,7 @@ public class EfNayaxFeeRateStoreTests
         var (connection, options) = await CreateSqliteAsync();
         await using (connection)
         {
-            await using var db = new AppDbContext(options);
+            await using var db = TestAppDbContext.Unrestricted(options);
             var store = new EfNayaxFeeRateStore(db);
             await store.AddAsync(new DateTime(2026, 3, 1), 0.19m, DateTime.UtcNow, CancellationToken.None);
 
@@ -64,7 +64,7 @@ public class EfNayaxFeeRateStoreTests
         var (connection, options) = await CreateSqliteAsync();
         await using (connection)
         {
-            await using var db = new AppDbContext(options);
+            await using var db = TestAppDbContext.Unrestricted(options);
             var store = new EfNayaxFeeRateStore(db);
             var originalCreatedAt = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
             var created = await store.AddAsync(new DateTime(2026, 3, 1), 0.17m, originalCreatedAt, CancellationToken.None);
@@ -76,7 +76,7 @@ public class EfNayaxFeeRateStoreTests
             Assert.Equal(originalCreatedAt, updated.CreatedAt);
             Assert.Equal(0.25m, updated.FeeExGst);
 
-            await using var verify = new AppDbContext(options);
+            await using var verify = TestAppDbContext.Unrestricted(options);
             Assert.Single(await verify.NayaxProcessingFeeRates.ToListAsync());
         }
     }
@@ -87,7 +87,7 @@ public class EfNayaxFeeRateStoreTests
         var (connection, options) = await CreateSqliteAsync();
         await using (connection)
         {
-            await using var db = new AppDbContext(options);
+            await using var db = TestAppDbContext.Unrestricted(options);
             var store = new EfNayaxFeeRateStore(db);
             await store.AddAsync(new DateTime(2026, 1, 1), 0.10m, DateTime.UtcNow, CancellationToken.None);
             await store.AddAsync(new DateTime(2026, 3, 1), 0.20m, DateTime.UtcNow, CancellationToken.None);

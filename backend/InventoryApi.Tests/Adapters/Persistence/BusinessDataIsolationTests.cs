@@ -30,7 +30,7 @@ public class BusinessDataIsolationTests : IDisposable
         _connection.Open();
         _options = new DbContextOptionsBuilder<AppDbContext>().UseSqlite(_connection).Options;
 
-        using var setup = new AppDbContext(_options);
+        using var setup = TestAppDbContext.Unrestricted(_options);
         setup.Database.EnsureCreated();
         setup.Businesses.AddRange(
             new Business { Id = BusinessA, Name = "Vending A", CreatedAtUtc = DateTime.UtcNow },
@@ -45,10 +45,10 @@ public class BusinessDataIsolationTests : IDisposable
     }
 
     /// <summary>A context acting as the given business, exactly as a scoped request would.</summary>
-    private AppDbContext AsBusiness(int businessId) => new(_options, TestBusinessScope.For(businessId));
+    private AppDbContext AsBusiness(int businessId) => TestAppDbContext.For(_options, businessId);
 
     /// <summary>A context for a caller with no resolvable business membership.</summary>
-    private AppDbContext AsDeniedCaller() => new(_options, TestBusinessScope.Denied());
+    private AppDbContext AsDeniedCaller() => TestAppDbContext.Denied(_options);
 
     /// <summary>
     /// Seeds one business's records without going through the scoped path, so a test can set up
@@ -56,7 +56,7 @@ public class BusinessDataIsolationTests : IDisposable
     /// </summary>
     private void SeedFor(int businessId, Action<AppDbContext, int> seed)
     {
-        using var db = new AppDbContext(_options);
+        using var db = TestAppDbContext.Unrestricted(_options);
         seed(db, businessId);
         db.SaveChanges();
     }
@@ -148,7 +148,7 @@ public class BusinessDataIsolationTests : IDisposable
         SeedFor(BusinessB, (db, business) => db.Products.Add(NewProduct(business, "B Product")));
 
         long bProductId;
-        using (var seeded = new AppDbContext(_options))
+        using (var seeded = TestAppDbContext.Unrestricted(_options))
         {
             bProductId = seeded.Products.Single().Id;
         }
@@ -212,7 +212,7 @@ public class BusinessDataIsolationTests : IDisposable
             await a.SaveChangesAsync();
         }
 
-        await using var verify = new AppDbContext(_options);
+        await using var verify = TestAppDbContext.Unrestricted(_options);
         Assert.Equal(BusinessA, verify.Products.Single().BusinessId);
     }
 
@@ -239,7 +239,7 @@ public class BusinessDataIsolationTests : IDisposable
         SeedFor(BusinessB, (db, business) => db.Products.Add(NewProduct(business, "B Product")));
 
         long bProductId;
-        await using (var seeded = new AppDbContext(_options))
+        await using (var seeded = TestAppDbContext.Unrestricted(_options))
         {
             bProductId = seeded.Products.Single().Id;
         }
@@ -251,7 +251,7 @@ public class BusinessDataIsolationTests : IDisposable
 
         await Assert.ThrowsAsync<CrossBusinessAccessException>(() => a.SaveChangesAsync());
 
-        await using var verify = new AppDbContext(_options);
+        await using var verify = TestAppDbContext.Unrestricted(_options);
         Assert.Equal("B Product", verify.Products.Single().Name);
     }
 
@@ -261,7 +261,7 @@ public class BusinessDataIsolationTests : IDisposable
         SeedFor(BusinessB, (db, business) => db.Products.Add(NewProduct(business, "B Product")));
 
         long bProductId;
-        await using (var seeded = new AppDbContext(_options))
+        await using (var seeded = TestAppDbContext.Unrestricted(_options))
         {
             bProductId = seeded.Products.Single().Id;
         }
@@ -271,7 +271,7 @@ public class BusinessDataIsolationTests : IDisposable
 
         await Assert.ThrowsAsync<CrossBusinessAccessException>(() => a.SaveChangesAsync());
 
-        await using var verify = new AppDbContext(_options);
+        await using var verify = TestAppDbContext.Unrestricted(_options);
         Assert.Single(verify.Products.ToList());
     }
 
@@ -315,7 +315,7 @@ public class BusinessDataIsolationTests : IDisposable
         SeedFor(BusinessB, (db, business) => db.Suppliers.Add(NewSupplier(business, "B Supplier")));
 
         int bSupplierId;
-        await using (var seeded = new AppDbContext(_options))
+        await using (var seeded = TestAppDbContext.Unrestricted(_options))
         {
             bSupplierId = seeded.Suppliers.Single().Id;
         }
@@ -333,7 +333,7 @@ public class BusinessDataIsolationTests : IDisposable
         SeedFor(BusinessB, (db, business) => db.Categories.Add(new Category { BusinessId = business, Name = "B Category" }));
 
         long bCategoryId;
-        await using (var seeded = new AppDbContext(_options))
+        await using (var seeded = TestAppDbContext.Unrestricted(_options))
         {
             bCategoryId = seeded.Categories.Single().Id;
         }
@@ -350,7 +350,7 @@ public class BusinessDataIsolationTests : IDisposable
         SeedFor(BusinessB, (db, business) => db.Products.Add(NewProduct(business, "B Product")));
 
         long bProductId;
-        await using (var seeded = new AppDbContext(_options))
+        await using (var seeded = TestAppDbContext.Unrestricted(_options))
         {
             bProductId = seeded.Products.Single().Id;
         }
@@ -369,7 +369,7 @@ public class BusinessDataIsolationTests : IDisposable
         SeedFor(BusinessB, (db, business) => db.Suppliers.Add(NewSupplier(business, "B Supplier")));
 
         int bSupplierId;
-        await using (var seeded = new AppDbContext(_options))
+        await using (var seeded = TestAppDbContext.Unrestricted(_options))
         {
             bSupplierId = seeded.Suppliers.Single().Id;
         }
@@ -386,7 +386,7 @@ public class BusinessDataIsolationTests : IDisposable
         SeedFor(BusinessB, (db, business) => db.Suppliers.Add(NewSupplier(business, "B Supplier")));
 
         int bSupplierId;
-        await using (var seeded = new AppDbContext(_options))
+        await using (var seeded = TestAppDbContext.Unrestricted(_options))
         {
             bSupplierId = seeded.Suppliers.Single().Id;
         }
@@ -403,7 +403,7 @@ public class BusinessDataIsolationTests : IDisposable
         SeedFor(BusinessB, (db, business) => db.Products.Add(NewProduct(business, "B Product")));
 
         long bProductId;
-        await using (var seeded = new AppDbContext(_options))
+        await using (var seeded = TestAppDbContext.Unrestricted(_options))
         {
             bProductId = seeded.Products.Single().Id;
         }
@@ -425,7 +425,7 @@ public class BusinessDataIsolationTests : IDisposable
         SeedFor(BusinessB, (db, business) => db.Suppliers.Add(NewSupplier(business, "B Supplier")));
 
         int bSupplierId;
-        await using (var seeded = new AppDbContext(_options))
+        await using (var seeded = TestAppDbContext.Unrestricted(_options))
         {
             bSupplierId = seeded.Suppliers.Single().Id;
         }
@@ -480,7 +480,7 @@ public class BusinessDataIsolationTests : IDisposable
             await a.SaveChangesAsync();
         }
 
-        await using var verify = new AppDbContext(_options);
+        await using var verify = TestAppDbContext.Unrestricted(_options);
         Assert.Equal(BusinessA, verify.Receipts.Single().BusinessId);
         Assert.Equal(BusinessA, verify.ReceiptItems.Single().BusinessId);
         Assert.Equal(BusinessA, verify.Products.Single().BusinessId);

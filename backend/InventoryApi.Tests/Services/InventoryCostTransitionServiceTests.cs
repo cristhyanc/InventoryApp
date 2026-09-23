@@ -309,19 +309,24 @@ public class InventoryCostTransitionServiceTests
 
         await new MachineService(db, nayax.Object).GetAll();
 
+        // Looked up by the Nayax transaction id, not by the local primary key: TransactionID is
+        // a remote identifier and is no longer this table's key (see NayaxSales.Id).
         Assert.Equal(
             NayaxTransactionStatusIds.Completed,
-            (await db.NayaxSales.FindAsync(40L))!.TransactionStatusId);
+            (await SaleAsync(db, 40L)).TransactionStatusId);
         Assert.Equal(
             NayaxTransactionStatusIds.CancelledOrDeclined31,
-            (await db.NayaxSales.FindAsync(41L))!.TransactionStatusId);
+            (await SaleAsync(db, 41L)).TransactionStatusId);
         Assert.Equal(
             NayaxTransactionStatusIds.CancelledOrDeclined250,
-            (await db.NayaxSales.FindAsync(42L))!.TransactionStatusId);
+            (await SaleAsync(db, 42L)).TransactionStatusId);
     }
 
+    private static async Task<NayaxSales> SaleAsync(AppDbContext db, long transactionId) =>
+        await db.NayaxSales.SingleAsync(sale => sale.TransactionID == transactionId);
+
     private static AppDbContext CreateDb() =>
-        new(new DbContextOptionsBuilder<AppDbContext>()
+        TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options);
 

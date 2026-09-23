@@ -24,7 +24,7 @@ public class EfBusinessMembershipStoreTests
         var connection = new SqliteConnection("Data Source=:memory:");
         await connection.OpenAsync();
         var options = new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options;
-        await using var setup = new AppDbContext(options);
+        await using var setup = TestAppDbContext.Unrestricted(options);
         await setup.Database.EnsureCreatedAsync();
         return (connection, options);
     }
@@ -67,7 +67,7 @@ public class EfBusinessMembershipStoreTests
         var (connection, options) = await CreateSqliteAsync();
         await using (connection)
         {
-            await using var db = new AppDbContext(options);
+            await using var db = TestAppDbContext.Unrestricted(options);
             var business = await AddBusinessAsync(db, "Vending Co");
             await AddMembershipAsync(db, business.Id);
 
@@ -87,7 +87,7 @@ public class EfBusinessMembershipStoreTests
         var (connection, options) = await CreateSqliteAsync();
         await using (connection)
         {
-            await using var db = new AppDbContext(options);
+            await using var db = TestAppDbContext.Unrestricted(options);
             var business = await AddBusinessAsync(db, "Vending Co");
             await AddMembershipAsync(db, business.Id);
 
@@ -112,7 +112,7 @@ public class EfBusinessMembershipStoreTests
         var (connection, options) = await CreateSqliteAsync();
         await using (connection)
         {
-            await using var db = new AppDbContext(options);
+            await using var db = TestAppDbContext.Unrestricted(options);
 
             var first = await AddBusinessAsync(db, "Vending Co");
             var second = await AddBusinessAsync(db, "Vending Co");
@@ -132,7 +132,7 @@ public class EfBusinessMembershipStoreTests
         var (connection, options) = await CreateSqliteAsync();
         await using (connection)
         {
-            await using var db = new AppDbContext(options);
+            await using var db = TestAppDbContext.Unrestricted(options);
             var business = await AddBusinessAsync(db, "Vending Co");
             await AddMembershipAsync(db, business.Id);
 
@@ -155,7 +155,7 @@ public class EfBusinessMembershipStoreTests
         var (connection, options) = await CreateSqliteAsync();
         await using (connection)
         {
-            await using var db = new AppDbContext(options);
+            await using var db = TestAppDbContext.Unrestricted(options);
             var business = await AddBusinessAsync(db, "Vending Co");
             await AddMembershipAsync(db, business.Id, tid: Tid.ToLowerInvariant(), oid: Oid.ToLowerInvariant());
 
@@ -176,7 +176,7 @@ public class EfBusinessMembershipStoreTests
         var (connection, options) = await CreateSqliteAsync();
         await using (connection)
         {
-            await using var db = new AppDbContext(options);
+            await using var db = TestAppDbContext.Unrestricted(options);
             var first = await AddBusinessAsync(db, "Vending Co");
             var second = await AddBusinessAsync(db, "Other Vending Co");
             await AddMembershipAsync(db, first.Id);
@@ -198,7 +198,7 @@ public class EfBusinessMembershipStoreTests
         var (connection, options) = await CreateSqliteAsync();
         await using (connection)
         {
-            await using var db = new AppDbContext(options);
+            await using var db = TestAppDbContext.Unrestricted(options);
             var business = await AddBusinessAsync(db, "Vending Co");
             await AddMembershipAsync(db, business.Id, isActive: false);
 
@@ -218,7 +218,7 @@ public class EfBusinessMembershipStoreTests
         var (connection, options) = await CreateSqliteAsync();
         await using (connection)
         {
-            await using var db = new AppDbContext(options);
+            await using var db = TestAppDbContext.Unrestricted(options);
             var business = await AddBusinessAsync(db, "Closed Vending Co", isActive: false);
             await AddMembershipAsync(db, business.Id);
 
@@ -245,7 +245,7 @@ public class EfBusinessMembershipStoreTests
         var (connection, options) = await CreateSqliteAsync();
         await using (connection)
         {
-            await using var db = new AppDbContext(options);
+            await using var db = TestAppDbContext.Unrestricted(options);
             var business = await AddBusinessAsync(db, "Vending Co");
             await AddMembershipAsync(db, business.Id);
 
@@ -268,7 +268,7 @@ public class EfBusinessMembershipStoreTests
         var (connection, options) = await CreateSqliteAsync();
         await using (connection)
         {
-            await using var db = new AppDbContext(options);
+            await using var db = TestAppDbContext.Unrestricted(options);
             var business = await AddBusinessAsync(db, "Vending Co");
             await AddMembershipAsync(db, business.Id);
 

@@ -10,12 +10,16 @@ public class AppDbContext : DbContext
     private readonly IBusinessScope _businessScope;
 
     /// <summary>
-    /// The legacy direct-construction path. It applies no tenant scoping - see
-    /// <see cref="BusinessScopeState.Unscoped"/> - and exists for the code and tests written
-    /// before tenant ownership. The composition root always uses the injected overload.
+    /// Constructs a context with no business resolved, which is the fail-closed state: every
+    /// tenant-owned read returns nothing and every tenant-owned write is refused.
+    ///
+    /// Unrestricted, all-business access is never the default. Code that genuinely needs it -
+    /// controlled setup, migrations, cross-business maintenance - must say so by passing
+    /// <see cref="UnscopedBusinessScope.Instance"/> to the other constructor, so every such
+    /// place is greppable and reviewable rather than implied by which overload was convenient.
     /// </summary>
     public AppDbContext(DbContextOptions<AppDbContext> options)
-        : this(options, UnscopedBusinessScope.Instance)
+        : this(options, new BusinessScope())
     {
     }
 
@@ -109,8 +113,11 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<InventoryCostTransitionBaseline>()
             .Property(x => x.InventoryValue)
             .HasColumnType("decimal(18,6)");
+        // One baseline per product, scoped by business. A product cannot span businesses, so
+        // this is exactly as strong as the previous product-only constraint - but it states the
+        // tenant rule explicitly and lets the index lead with the column every query filters on.
         modelBuilder.Entity<InventoryCostTransitionBaseline>()
-            .HasIndex(x => x.ProductId)
+            .HasIndex(x => new { x.BusinessId, x.ProductId })
             .IsUnique();
         modelBuilder.Entity<InventoryCostTransitionBaseline>()
             .HasOne(x => x.Product)
@@ -143,8 +150,20 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<NayaxSales>()
             .ToTable("NayaxSales");
 
+        // The key is ours; TransactionID is Nayax's. See NayaxSales.Id for why they are not
+        // the same thing once more than one operator account can exist.
         modelBuilder.Entity<NayaxSales>()
-            .HasKey(s => s.TransactionID);
+            .HasKey(s => s.Id);
+
+        modelBuilder.Entity<NayaxSales>()
+            .Property(s => s.Id)
+            .ValueGeneratedOnAdd();
+
+        // A Nayax transaction appears at most once per business. Scoping the constraint by
+        // business is what lets two operator accounts legitimately report the same remote id.
+        modelBuilder.Entity<NayaxSales>()
+            .HasIndex(s => new { s.BusinessId, s.TransactionID })
+            .IsUnique();
 
         modelBuilder.Entity<NayaxSales>()
             .Property(s => s.SettlementValue)
@@ -244,7 +263,10 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<SupplierOrderLine>().HasIndex(line => new { line.ProductId, line.SupplierOrderId });
         modelBuilder.Entity<SupplierOrderReceiptAllocation>().HasIndex(allocation => allocation.ReceiptItemId);
         modelBuilder.Entity<SupplierOrderReceiptAllocation>().HasIndex(allocation => allocation.SupplierOrderLineId);
-        modelBuilder.Entity<ImportedFile>().HasIndex(f => f.FileHash).IsUnique();
+        // Import de-duplication is per business: two businesses may legitimately import the
+        // same file, and one must not be told its own import is a duplicate because another
+        // business imported the same bytes first.
+        modelBuilder.Entity<ImportedFile>().HasIndex(f => new { f.BusinessId, f.FileHash }).IsUnique();
         modelBuilder.Entity<ImportedReimbursement>()
             .HasOne(r => r.ImportedFile)
             .WithMany(f => f.Reimbursements)
@@ -296,9 +318,12 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<OperatingExpense>().HasIndex(e => e.SupplierId);
         modelBuilder.Entity<OperatingExpense>().HasIndex(e => e.MachineId);
         modelBuilder.Entity<NayaxProcessingFeeRate>().Property(r => r.FeeExGst).HasColumnType("decimal(18,4)");
-        modelBuilder.Entity<NayaxProcessingFeeRate>().HasIndex(r => r.EffectiveFrom).IsUnique();
+        // Each business configures its own effective-dated fee rates.
+        modelBuilder.Entity<NayaxProcessingFeeRate>().HasIndex(r => new { r.BusinessId, r.EffectiveFrom }).IsUnique();
         modelBuilder.Entity<SiteCommissionAgreement>().Property(x => x.CommissionRate).HasColumnType("decimal(18,4)");
-        modelBuilder.Entity<SiteCommissionAgreement>().HasIndex(x => new { x.SiteId, x.EffectiveFrom }).IsUnique();
+        // SiteId is a remote Nayax identifier, so the agreement key must be scoped by business
+        // as well: the same site id from two operator accounts is two different sites.
+        modelBuilder.Entity<SiteCommissionAgreement>().HasIndex(x => new { x.BusinessId, x.SiteId, x.EffectiveFrom }).IsUnique();
         modelBuilder.Entity<CommissionPayment>().Property(x => x.Amount).HasColumnType("decimal(18,2)");
         modelBuilder.Entity<CommissionPayment>().HasIndex(x => new { x.SiteId, x.PeriodStart, x.PeriodEnd });
 

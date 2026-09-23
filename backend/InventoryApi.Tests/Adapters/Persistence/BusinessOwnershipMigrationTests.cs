@@ -23,6 +23,7 @@ public class BusinessOwnershipMigrationTests
     private const string PreviousMigration = "20260915064737_AddProductRestockTo";
     private const string TenancyTablesMigration = "20260923110030_AddBusinessOwnershipModel";
     private const string OwnershipColumnMigration = "20260923111712_AddBusinessOwnershipToTenantOwnedEntities";
+    private const string ScopedUniquenessMigration = "20260923114130_ScopeUniqueConstraintsByBusiness";
 
     private static async Task MigrateToAsync(AppDbContext db, string targetMigration) =>
         await db.GetService<IMigrator>().MigrateAsync(targetMigration);
@@ -80,7 +81,7 @@ public class BusinessOwnershipMigrationTests
         await connection.OpenAsync();
         var options = new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options;
 
-        await using (var before = new AppDbContext(options))
+        await using (var before = TestAppDbContext.Unrestricted(options))
         {
             await MigrateToAsync(before, PreviousMigration);
 
@@ -92,7 +93,7 @@ public class BusinessOwnershipMigrationTests
             await SeedLegacyBusinessDataAsync(connection);
         }
 
-        await using (var checkpointOne = new AppDbContext(options))
+        await using (var checkpointOne = TestAppDbContext.Unrestricted(options))
         {
             await MigrateToAsync(checkpointOne, TenancyTablesMigration);
 
@@ -106,7 +107,7 @@ public class BusinessOwnershipMigrationTests
             Assert.DoesNotContain("BusinessId", await ColumnNamesAsync(connection, "Products"));
         }
 
-        await using (var checkpointTwo = new AppDbContext(options))
+        await using (var checkpointTwo = TestAppDbContext.Unrestricted(options))
         {
             await MigrateToAsync(checkpointTwo, OwnershipColumnMigration);
 
@@ -152,20 +153,64 @@ public class BusinessOwnershipMigrationTests
         await connection.OpenAsync();
         var options = new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options;
 
-        await using (var migrated = new AppDbContext(options))
+        await using (var migrated = TestAppDbContext.Unrestricted(options))
         {
             await MigrateToAsync(migrated, PreviousMigration);
             await SeedLegacyBusinessDataAsync(connection);
-            await MigrateToAsync(migrated, OwnershipColumnMigration);
+            await MigrateToAsync(migrated, ScopedUniquenessMigration);
 
             migrated.Businesses.Add(new Business { Name = "Vending Co", CreatedAtUtc = DateTime.UtcNow });
             await migrated.SaveChangesAsync();
         }
 
-        await using var scoped = new AppDbContext(options, TestBusinessScope.For(1));
+        await using var scoped = TestAppDbContext.For(options, 1);
 
         Assert.Empty(await scoped.Products.ToListAsync());
         Assert.Empty(await scoped.Categories.ToListAsync());
         Assert.Empty(await scoped.Suppliers.ToListAsync());
+    }
+
+    /// <summary>
+    /// The uniqueness-scoping migration rebuilds NayaxSales to give it a local primary key, so
+    /// this checks the rebuild the way it will actually be met in production: with rows already
+    /// in the table. Sales are financial records - losing one, or collapsing two into a single
+    /// key, would be a silent data loss that no later backfill could reconstruct.
+    /// </summary>
+    [Fact]
+    public async Task Rekeying_NayaxSales_preserves_every_existing_sale_and_gives_each_a_distinct_key()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        var options = new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options;
+
+        await using (var before = TestAppDbContext.Unrestricted(options))
+        {
+            await MigrateToAsync(before, OwnershipColumnMigration);
+
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                INSERT INTO NayaxSales (TransactionID, MachineID, SettlementValue, MachineAuthorizationTime,
+                                        CostingStatus, CostSource, BusinessId)
+                    VALUES (1001, 11, 3.50, '2026-07-01 10:00:00', 0, 0, 0),
+                           (1002, 11, 4.25, '2026-07-01 11:00:00', 0, 0, 0),
+                           (1003, 22, 5.00, '2026-07-02 09:00:00', 0, 0, 0);
+                """;
+            await command.ExecuteNonQueryAsync();
+        }
+
+        await using (var after = TestAppDbContext.Unrestricted(options))
+        {
+            await MigrateToAsync(after, ScopedUniquenessMigration);
+
+            var sales = await after.NayaxSales.AsNoTracking().OrderBy(s => s.TransactionID).ToListAsync();
+
+            Assert.Equal(3, sales.Count);
+            Assert.Equal(new long[] { 1001, 1002, 1003 }, sales.Select(s => s.TransactionID));
+            Assert.Equal(new decimal[] { 3.50m, 4.25m, 5.00m }, sales.Select(s => s.SettlementValue));
+
+            // Every row came out with its own local key rather than colliding on a default.
+            Assert.Equal(3, sales.Select(s => s.Id).Distinct().Count());
+            Assert.DoesNotContain(0L, sales.Select(s => s.Id));
+        }
     }
 }

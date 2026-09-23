@@ -11,13 +11,19 @@ using Xunit;
 namespace InventoryApi.Tests.Controllers;
 
 /// <summary>
-/// Pins down the composition root's half of tenant scoping (issue #64).
+/// Pins down the composition root's half of tenant scoping, and the invariant underneath it
+/// (issue #64):
 ///
-/// <c>AppDbContext</c> keeps a parameterless-scope constructor for the pre-tenant code and tests
-/// that build it directly, and that overload applies no filtering at all. That is safe only for
-/// as long as the real application never uses it, so this test asserts the running application
-/// resolves a request-backed scope instead. Without it, a dependency-injection mistake would
-/// silently unscope production while every other test still passed.
+/// <list type="bullet">
+///   <item>an ordinary context is denied or scoped;</item>
+///   <item>unrestricted, all-business access happens only when a caller explicitly asks for
+///   <see cref="UnscopedBusinessScope.Instance"/>.</item>
+/// </list>
+///
+/// Both halves matter. The default has to fail closed so that forgetting to think about tenancy
+/// cannot produce an unfiltered context, and the application has to resolve a request-backed
+/// scope so a dependency-injection mistake cannot silently unscope production while every other
+/// test still passes.
 /// </summary>
 public sealed class BusinessScopeCompositionTests : IClassFixture<BusinessScopeCompositionTests.ApiFactory>
 {
@@ -68,6 +74,39 @@ public sealed class BusinessScopeCompositionTests : IClassFixture<BusinessScopeC
         var readable = scope.ServiceProvider.GetRequiredService<IBusinessScope>();
 
         Assert.Same(writable, readable);
+    }
+
+    /// <summary>
+    /// The security invariant at the constructor itself: building a context without saying
+    /// anything about tenancy must fail closed, not open. This is the regression guard for the
+    /// earlier design, where the plain constructor meant "see everything".
+    /// </summary>
+    [Fact]
+    public void A_context_built_without_a_scope_is_denied_rather_than_unrestricted()
+    {
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseSqlite("Data Source=:memory:")
+            .Options;
+
+        using var db = new AppDbContext(options);
+
+        Assert.True(db.TenantFilteringEnabled);
+        Assert.Null(db.CurrentBusinessId);
+    }
+
+    /// <summary>
+    /// The deliberate opt-out still works, and is the only way to get all-business access.
+    /// </summary>
+    [Fact]
+    public void Unrestricted_access_requires_explicitly_passing_the_unscoped_scope()
+    {
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseSqlite("Data Source=:memory:")
+            .Options;
+
+        using var unrestricted = new AppDbContext(options, UnscopedBusinessScope.Instance);
+
+        Assert.False(unrestricted.TenantFilteringEnabled);
     }
 
     /// <summary>

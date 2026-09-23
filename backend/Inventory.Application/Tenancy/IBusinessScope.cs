@@ -32,10 +32,14 @@ public enum BusinessScopeState
     Resolved = 1,
 
     /// <summary>
-    /// Tenant scoping is deliberately not applied. This is the legacy path for code and tests
-    /// that construct an <c>AppDbContext</c> directly, before tenant ownership reaches every
-    /// caller. The composition root never produces it - see the DI test that pins that down -
-    /// so no authenticated request can ever run unscoped.
+    /// Tenant scoping is deliberately not applied: this scope sees and may write every
+    /// business's data.
+    ///
+    /// It is never a default and never arrives by omission - a caller has to pass
+    /// <see cref="UnscopedBusinessScope.Instance"/> explicitly to get it. It exists for
+    /// controlled setup, migration and cross-business maintenance code. The composition root
+    /// never produces it (see the DI test that pins that down), so no authenticated request can
+    /// run unscoped.
     /// </summary>
     Unscoped = 2,
 }

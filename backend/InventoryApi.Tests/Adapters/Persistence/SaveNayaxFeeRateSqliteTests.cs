@@ -22,7 +22,7 @@ public class SaveNayaxFeeRateSqliteTests
         await using (connection)
         {
             var options = new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options;
-            await using (var setup = new AppDbContext(options))
+            await using (var setup = TestAppDbContext.Unrestricted(options))
                 await setup.Database.EnsureCreatedAsync();
 
             var originalCreatedAt = new DateTime(2026, 5, 1, 12, 0, 0, DateTimeKind.Utc);
@@ -30,14 +30,14 @@ public class SaveNayaxFeeRateSqliteTests
 
             // Each save uses its own DbContext, the way two HTTP requests would.
             SaveNayaxFeeRateResult first;
-            await using (var db = new AppDbContext(options))
+            await using (var db = TestAppDbContext.Unrestricted(options))
                 first = await new SaveNayaxFeeRate(new EfNayaxFeeRateStore(db), clock)
                     .Handle(0.17m, new DateTime(2026, 3, 1, 9, 30, 0), CancellationToken.None);
 
             clock.UtcNow = new DateTime(2026, 6, 2, 8, 15, 0, DateTimeKind.Utc);
 
             SaveNayaxFeeRateResult second;
-            await using (var db = new AppDbContext(options))
+            await using (var db = TestAppDbContext.Unrestricted(options))
                 second = await new SaveNayaxFeeRate(new EfNayaxFeeRateStore(db), clock)
                     .Handle(0.21m, new DateTime(2026, 3, 1, 18, 45, 0), CancellationToken.None);
 
@@ -46,7 +46,7 @@ public class SaveNayaxFeeRateSqliteTests
             Assert.NotNull(first.Record);
             Assert.NotNull(second.Record);
 
-            await using var verify = new AppDbContext(options);
+            await using var verify = TestAppDbContext.Unrestricted(options);
             var row = Assert.Single(await verify.NayaxProcessingFeeRates.ToListAsync());
             Assert.Equal(new DateTime(2026, 3, 1), row.EffectiveFrom);
             Assert.Equal(row.EffectiveFrom.Date, row.EffectiveFrom);

@@ -179,7 +179,7 @@ public sealed class OperatingExpensesControllerTests : IDisposable
         Path.Combine(_contentRoot, "protected-files", "expenses", storedFileName);
 
     private AppDbContext CreateDbContext() =>
-        new(new DbContextOptionsBuilder<AppDbContext>()
+        TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options);
 

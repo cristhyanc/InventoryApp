@@ -36,7 +36,7 @@ public class NayaxTransactionStatusTests
     {
         var options = new DbContextOptionsBuilder<AppDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
-        using var db = new AppDbContext(options);
+        using var db = TestAppDbContext.Unrestricted(options);
         var service = new ImportService(
             db,
             Mock.Of<IWebHostEnvironment>(),
@@ -57,7 +57,7 @@ public class NayaxTransactionStatusTests
     {
         var options = new DbContextOptionsBuilder<AppDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
-        using var db = new AppDbContext(options);
+        using var db = TestAppDbContext.Unrestricted(options);
         db.Products.Add(new Product { Id = 10, Name = "Snack", QuantityInStock = 10, CostingQuantity = 10, InventoryValue = 21m, AverageUnitCost = 2.10m });
         db.StockAdjustments.Add(new StockAdjustment
         {
@@ -94,7 +94,7 @@ public class NayaxTransactionStatusTests
     {
         var options = new DbContextOptionsBuilder<AppDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
-        using var db = new AppDbContext(options);
+        using var db = TestAppDbContext.Unrestricted(options);
         db.Products.Add(new Product { Id = 10, Name = "Snack", AverageUnitCost = 2m });
         db.NayaxSales.Add(new NayaxSales
         {
@@ -117,7 +117,7 @@ public class NayaxTransactionStatusTests
     {
         var options = new DbContextOptionsBuilder<AppDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
-        using var db = new AppDbContext(options);
+        using var db = TestAppDbContext.Unrestricted(options);
         db.Products.Add(new Product { Id = 10, Name = "Snack", QuantityInStock = 10, CostingQuantity = 10, InventoryValue = 21m, AverageUnitCost = 2.10m });
         db.StockAdjustments.Add(new StockAdjustment
         {

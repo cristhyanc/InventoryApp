@@ -16,7 +16,7 @@ public class StockServiceTests
         var options = new DbContextOptionsBuilder<AppDbContext>()
             .UseInMemoryDatabase(dbName)
             .Options;
-        return new AppDbContext(options);
+        return TestAppDbContext.Unrestricted(options);
     }
 
     [Fact]
@@ -110,7 +110,7 @@ public class StockServiceTests
         await using var connection = new SqliteConnection("Data Source=:memory:");
         await connection.OpenAsync();
         var options = new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options;
-        await using (var setup = new AppDbContext(options))
+        await using (var setup = TestAppDbContext.Unrestricted(options))
         {
             await setup.Database.EnsureCreatedAsync();
             setup.Products.Add(new Product { Id = 1, Name = "p", QuantityInStock = 2, CostingQuantity = 2, InventoryValue = 6m, AverageUnitCost = 3m });
@@ -118,14 +118,14 @@ public class StockServiceTests
             await setup.SaveChangesAsync();
         }
 
-        await using (var db = new AppDbContext(options))
+        await using (var db = TestAppDbContext.Unrestricted(options))
         {
             var exception = await Assert.ThrowsAsync<ArgumentException>(() => new StockService(db).Adjust(
                 1, new StockAdjustmentDto(3, StockAdjustmentReason.Correction, null, null, null)));
             Assert.Equal("Correction quantity must remove stock.", exception.Message);
         }
 
-        await using var verification = new AppDbContext(options);
+        await using var verification = TestAppDbContext.Unrestricted(options);
         Assert.Single(await verification.StockAdjustments.ToListAsync());
         Assert.Equal(2, (await verification.Products.SingleAsync()).QuantityInStock);
     }

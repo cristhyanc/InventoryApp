@@ -114,7 +114,7 @@ public class MachineProfitabilityTests
     }
 
     private static AppDbContext Db() =>
-        new(new DbContextOptionsBuilder<AppDbContext>()
+        TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options);
 

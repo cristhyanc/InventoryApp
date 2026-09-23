@@ -40,7 +40,7 @@ public class BusinessOwnershipCoverageTests
     {
         using var connection = new SqliteConnection("Data Source=:memory:");
         var options = new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options;
-        using var context = new AppDbContext(options);
+        using var context = TestAppDbContext.Unrestricted(options);
         return context.Model;
     }
 
@@ -100,6 +100,66 @@ public class BusinessOwnershipCoverageTests
         Assert.True(
             unindexed.Length == 0,
             $"Business-owned entities without an index on BusinessId: {string.Join(", ", unindexed)}.");
+    }
+
+    /// <summary>
+    /// Every uniqueness rule on tenant-owned data must be scoped by business.
+    ///
+    /// A globally unique index in a shared database is a cross-tenant defect even though it leaks
+    /// nothing: whichever business writes a value first silently denies it to every other one.
+    /// Keys are covered too - a primary key that is a remote identifier, as NayaxSales'
+    /// TransactionID once was, has exactly the same problem.
+    /// </summary>
+    [Fact]
+    public void Every_unique_constraint_on_business_owned_data_includes_the_business()
+    {
+        var owned = BuildModel()
+            .GetEntityTypes()
+            .Where(entityType => typeof(IBusinessOwned).IsAssignableFrom(entityType.ClrType))
+            .ToArray();
+
+        var globallyUnique = owned
+            .SelectMany(entityType => entityType
+                .GetIndexes()
+                .Where(index => index.IsUnique)
+                .Where(index => index.Properties.All(p => p.Name != nameof(IBusinessOwned.BusinessId)))
+                .Select(index =>
+                    $"{entityType.ClrType.Name}({string.Join(", ", index.Properties.Select(p => p.Name))})"))
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.True(
+            globallyUnique.Length == 0,
+            "These unique indexes on business-owned entities are global rather than per-business, "
+                + "so one business can deny another a legitimate row: "
+                + $"{string.Join(", ", globallyUnique)}. Add BusinessId as the leading column.");
+    }
+
+    /// <summary>
+    /// The local primary key must be the application's own, never a remote identifier whose
+    /// uniqueness only holds inside the external account that issued it.
+    /// </summary>
+    [Fact]
+    public void No_business_owned_entity_is_keyed_by_a_remote_identifier()
+    {
+        // Remote identifiers reaching the model today. A key built on one of these would be
+        // unique only within a single Nayax operator account.
+        string[] remoteIdentifierProperties = ["TransactionID", "MachineID", "MachineId", "SiteId", "NayaxProductId"];
+
+        var offenders = BuildModel()
+            .GetEntityTypes()
+            .Where(entityType => typeof(IBusinessOwned).IsAssignableFrom(entityType.ClrType))
+            .Select(entityType => new { entityType.ClrType.Name, Key = entityType.FindPrimaryKey() })
+            .Where(x => x.Key is not null
+                && x.Key.Properties.Any(p => remoteIdentifierProperties.Contains(p.Name, StringComparer.Ordinal)))
+            .Select(x => $"{x.Name}({string.Join(", ", x.Key!.Properties.Select(p => p.Name))})")
+            .ToArray();
+
+        Assert.True(
+            offenders.Length == 0,
+            "These entities are keyed by a remote identifier, which is not guaranteed unique "
+                + $"across operator accounts: {string.Join(", ", offenders)}. Give the entity its "
+                + "own key and make the remote identifier unique per business instead.");
     }
 
     /// <summary>

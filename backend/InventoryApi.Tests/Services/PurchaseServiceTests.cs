@@ -18,7 +18,7 @@ public class PurchaseServiceTests
         var options = new DbContextOptionsBuilder<AppDbContext>()
             .UseInMemoryDatabase(dbName)
             .Options;
-        return new AppDbContext(options);
+        return TestAppDbContext.Unrestricted(options);
     }
 
     [Fact]
