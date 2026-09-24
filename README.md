@@ -81,7 +81,45 @@ dotnet run --project backend/InventoryApi/InventoryApi.csproj
 
 The development API listens at <http://localhost:5000>. Swagger UI is available at <http://localhost:5000/swagger> while the API is running in the Development environment.
 
-EF Core migrations are applied at startup. The default SQLite database is `inventory.db`, resolved from the API process's working directory; local database files must not be committed.
+EF Core migrations are applied automatically at startup in **Development** and **Testing**, where the database is disposable. The default SQLite database is `inventory.db`, resolved from the API process's working directory; local database files must not be committed. Schema migrations never assign tenant ownership or perform the business backfill, so starting the API never triggers one. Some schema migrations do rebuild tables and copy persisted rows, which is one reason production migration is human-controlled.
+
+**Production never migrates automatically, whatever the configuration says**, and refuses to start while any migration is pending — the tenancy migrations must be applied under human control (issue #64). Any other non-Production environment behaves the same way unless `Database:AllowAutomaticMigrationUnsafeOutsideDevelopment` is set to `true`, which is intended only for a disposable database such as an ephemeral integration-test or staging one; it has no effect in Production. Apply migrations explicitly — from a source tree with the SDK:
+
+```bash
+dotnet run --project backend/InventoryApi -- migrate-database --dry-run
+dotnet run --project backend/InventoryApi -- migrate-database --apply
+```
+
+or, from the deployed application (`dotnet publish` output, which has no SDK or sources, so `dotnet run --project` is unavailable):
+
+```bash
+dotnet InventoryApi.dll migrate-database --dry-run
+dotnet InventoryApi.dll migrate-database --apply
+```
+
+#### Business/tenant bootstrap
+
+Business data is owned by a `Business` record. Applying the schema creates no application `Business` — but it does not follow that there are no tenant-owned rows: seeded or pre-existing legacy rows carry `BusinessId = 0`, which matches no business, so they are invisible to every caller until the ownership bootstrap assigns them. Either way a signed-in caller sees an empty dataset until the bootstrap runs. This is the intended fail-closed state — the data is unowned, not lost — and the API logs an error at startup while it persists.
+
+The mapping from Microsoft Entra identities to that business is human-supplied and is never committed. `appsettings.json` ships the `BusinessBootstrap` section empty; supply real values through user secrets locally:
+
+```bash
+cd backend/InventoryApi
+dotnet user-secrets set "BusinessBootstrap:BusinessName" "<business name>"
+dotnet user-secrets set "BusinessBootstrap:Members:0:DirectoryTenantId" "<your Entra tid claim>"
+dotnet user-secrets set "BusinessBootstrap:Members:0:ObjectId" "<your Entra oid claim>"
+```
+
+Then assign ownership. The dry run measures and rolls back; `--apply` must be typed explicitly:
+
+```bash
+dotnet run --project backend/InventoryApi -- bootstrap-business --dry-run
+dotnet run --project backend/InventoryApi -- bootstrap-business --apply
+```
+
+On a deployed application use `dotnet InventoryApi.dll bootstrap-business --dry-run` / `--apply` instead.
+
+The command is restart-safe and idempotent: it only ever touches rows that are still unassigned. See [docs/tenant-rollout.md](docs/tenant-rollout.md) for the reviewed production sequence.
 
 ### 2. How the frontend finds the API
 
@@ -122,7 +160,9 @@ Protected business documents (purchase documents and operating-expense supportin
 
 Azure Static Web Apps direct navigation (including the `/auth` redirect landing) is handled by `frontend/inventory-app/src/staticwebapp.config.json`, which rewrites unmatched paths to `/index.html` so the Angular router — not a platform 404 — handles them.
 
-**Multi-tenant data partitioning is out of scope.** Accepting sign-ins from multiple Microsoft Entra tenants (`TenantId: "common"`) authenticates a user; it does not isolate one tenant's business data from another's. Database-level tenant scoping is a separate, unimplemented concern.
+**Authentication identifies a person; business ownership decides what they may see.** Accepting sign-ins from multiple Microsoft Entra tenants (`TenantId: "common"`) only authenticates a user. Data isolation is a separate boundary, established by issue #64: the validated `(tid, oid)` claim pair is mapped to an application-owned **Business** through explicit `BusinessMembership` rows, and every tenant-owned read and write is scoped to that business centrally in `AppDbContext`. A signed-in account with no usable membership receives `403` and no business data — it fails closed rather than falling back to "see everything". The business ID is never accepted from route, query, form, or JSON input.
+
+The first rollout serves **one** business. Adding a second live business is deliberately not enabled: the Nayax integration still uses a single operator/token configuration, so remote identifiers and imports are not yet partitioned per business. See [docs/tenant-rollout.md](docs/tenant-rollout.md) for the bootstrap procedure and [docs/architecture.md](docs/architecture.md#tenant-ownership-issue-64) for the design.
 
 ## Configuration and secrets
 

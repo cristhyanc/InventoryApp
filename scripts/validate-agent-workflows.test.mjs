@@ -28,6 +28,8 @@ import {
   simulateValidationRun,
   validatePath,
   verifyDocumentationImpactGate,
+  verifyArchitecturePass,
+  verifyTrackedFileDeletionPermissions,
   verifyValidationModeIsolation,
 } from './validate-agent-workflows.mjs';
 
@@ -460,5 +462,42 @@ describe('documentation-impact gate: review and repair workflows', () => {
       { [repairPath]: replaceOnce(repairWorkflow, '"Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh pr comment *)', '"Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh pr comment *),Bash(gh pr edit *)') },
       /allowed tools: contains forbidden text: gh pr edit/,
     );
+  });
+});
+
+describe('architecture pass contract', () => {
+  it('accepts the coder to architect to exact-head-validation ordering', () => {
+    assert.doesNotThrow(() => verifyArchitecturePass(implementWorkflow));
+  });
+
+  it('rejects an architect stage that can be skipped while dispatching validation', () => {
+    const unsafe = replaceOnce(implementWorkflow, '[ "$ARCHITECT_OUTCOME" = "success" ] &&', '[ "$ARCHITECT_OUTCOME" != "failure" ] &&');
+    assert.throws(() => runContractChecks({ read: readWithOverrides({ [implementPath]: unsafe }) }), /agent-implement.yml outcome/);
+  });
+
+  it('rejects an architect allowed to edit the PR description', () => {
+    const unsafe = replaceOnce(implementWorkflow, 'Bash(gh pr comment *)', 'Bash(gh pr comment *),Bash(gh pr edit *)');
+    assert.throws(() => runContractChecks({ read: readWithOverrides({ [implementPath]: unsafe }) }), /agent-implement.yml architect allowed tools/);
+  });
+});
+
+
+
+describe('scoped tracked-file deletion permissions', () => {
+  const scoped = 'Bash(git rm -- backend/*),Bash(git rm -- frontend/*),Bash(git rm -- docs/*),Bash(git rm -- scripts/*)';
+  it('allows tracked files in project directories only with the option terminator', () => {
+    assert.doesNotThrow(() => verifyTrackedFileDeletionPermissions(scoped, 'fixture'));
+  });
+  it('rejects broad, recursive, force and workflow deletion permissions', () => {
+    for (const extra of ['Bash(git rm *)', 'Bash(git rm -- *)', 'Bash(git rm -r *)', 'Bash(git rm -f *)', 'Bash(git rm -- .github/*)']) {
+      assert.throws(() => verifyTrackedFileDeletionPermissions(scoped + ',' + extra, 'fixture'), /forbidden text/);
+    }
+  });
+  it('requires the permission in implementation, architecture and repair', () => {
+    assert.doesNotThrow(() => runContractChecks());
+    for (const [path, workflow] of [[implementPath, implementWorkflow], [repairPath, repairWorkflow]]) {
+      const altered = replaceOnce(workflow, scoped, '');
+      assert.throws(() => runContractChecks({ read: readWithOverrides({ [path]: altered }) }), /missing required text: Bash\(git rm -- backend\/\*\)/);
+    }
   });
 });

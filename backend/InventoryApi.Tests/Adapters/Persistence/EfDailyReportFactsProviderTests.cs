@@ -18,7 +18,7 @@ public class EfDailyReportFactsProviderTests
     {
         var connection = new SqliteConnection("Data Source=:memory:");
         await connection.OpenAsync();
-        await using var setup = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        await using var setup = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
         await setup.Database.EnsureCreatedAsync();
         return connection;
     }
@@ -27,7 +27,7 @@ public class EfDailyReportFactsProviderTests
     public async Task Groups_sales_into_one_row_per_calendar_day_ordered_ascending()
     {
         await using var connection = await CreateSqliteAsync();
-        await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
         db.NayaxSales.AddRange(
             new NayaxSales { TransactionID = 1, MachineID = 10, SettlementValue = 10m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 2), TransactionStatusId = NayaxTransactionStatusIds.Completed },
             new NayaxSales { TransactionID = 2, MachineID = 10, SettlementValue = 5m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed },
@@ -48,7 +48,7 @@ public class EfDailyReportFactsProviderTests
     public async Task Splits_card_and_cash_sales_per_day_and_reports_cogs_completeness()
     {
         await using var connection = await CreateSqliteAsync();
-        await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
         db.NayaxSales.AddRange(
             new NayaxSales { TransactionID = 1, MachineID = 10, SettlementValue = 10m, PaymentMethod = "Credit Card", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed, CostOfGoodsSold = 4m },
             new NayaxSales { TransactionID = 2, MachineID = 10, SettlementValue = 5m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed, CostOfGoodsSold = null });
@@ -73,7 +73,7 @@ public class EfDailyReportFactsProviderTests
     public async Task Date_range_is_inclusive_of_both_boundary_days_and_excludes_the_day_after()
     {
         await using var connection = await CreateSqliteAsync();
-        await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
         db.NayaxSales.AddRange(
             new NayaxSales { TransactionID = 1, MachineID = 10, SettlementValue = 1m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 7, 31, 23, 59, 0), TransactionStatusId = NayaxTransactionStatusIds.Completed },
             new NayaxSales { TransactionID = 2, MachineID = 10, SettlementValue = 2m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1, 0, 0, 0), TransactionStatusId = NayaxTransactionStatusIds.Completed },
@@ -92,7 +92,7 @@ public class EfDailyReportFactsProviderTests
     public async Task Machine_filter_scopes_sales_to_the_selected_machine_only()
     {
         await using var connection = await CreateSqliteAsync();
-        await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
         db.NayaxSales.AddRange(
             new NayaxSales { TransactionID = 1, MachineID = 10, SettlementValue = 10m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed },
             new NayaxSales { TransactionID = 2, MachineID = 20, SettlementValue = 30m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed });
@@ -109,7 +109,7 @@ public class EfDailyReportFactsProviderTests
     public async Task Non_completed_sales_are_excluded_from_gross_sales_but_counted_by_status()
     {
         await using var connection = await CreateSqliteAsync();
-        await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
         db.NayaxSales.AddRange(
             new NayaxSales { TransactionID = 1, MachineID = 10, SettlementValue = 12m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed },
             new NayaxSales { TransactionID = 2, MachineID = 10, SettlementValue = 5m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.PendingSettlementNotFinal },
@@ -136,7 +136,7 @@ public class EfDailyReportFactsProviderTests
     public async Task Single_day_reimbursement_is_matched_to_its_calendar_day_and_reconciles_within_tolerance()
     {
         await using var connection = await CreateSqliteAsync();
-        await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
         db.NayaxSales.Add(new NayaxSales
         {
             TransactionID = 1,
@@ -170,7 +170,7 @@ public class EfDailyReportFactsProviderTests
     public async Task Multi_day_reimbursement_is_marked_period_only_and_not_allocated_to_a_single_day()
     {
         await using var connection = await CreateSqliteAsync();
-        await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
         db.NayaxSales.Add(new NayaxSales
         {
             TransactionID = 1,
@@ -204,7 +204,7 @@ public class EfDailyReportFactsProviderTests
     public async Task No_sales_in_range_returns_no_days_and_incomplete_cogs_flag_stays_true()
     {
         await using var connection = await CreateSqliteAsync();
-        await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
         var provider = new EfDailyReportFactsProvider(db, new NayaxProcessingFeeService(db));
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), null, CancellationToken.None);

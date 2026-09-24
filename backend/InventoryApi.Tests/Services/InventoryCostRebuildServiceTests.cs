@@ -203,7 +203,7 @@ public class InventoryCostRebuildServiceTests
     }
 
     private static AppDbContext CreateDb() =>
-        new(new DbContextOptionsBuilder<AppDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+        TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
 
     private static StockAdjustment Movement(long productId, int quantity, decimal? unitCost, StockAdjustmentReason reason, DateTime effectiveAt) =>
         new()

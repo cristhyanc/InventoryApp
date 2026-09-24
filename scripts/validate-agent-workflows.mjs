@@ -629,6 +629,8 @@ export function verifyDocumentationImpactGate(read = readRepositoryFile) {
     forbidText(implementAllowedTools, forbidden, `${implementPath} allowed tools`);
   }
 
+  verifyTrackedFileDeletionPermissions(implementAllowedTools, `${implementPath} implementation allowed tools`);
+
   // Validation workflow: the body is obtained in the trusted context job for both events,
   // handed over base64-encoded, decoded into a temporary file, and validated before the
   // repository validation, by a job that still holds no GitHub token.
@@ -679,6 +681,7 @@ export function verifyDocumentationImpactGate(read = readRepositoryFile) {
   }
   const repairAllowedTools = extractAllowedTools(repairJob, 'agent-repair.yml allowed tools');
   forbidText(repairAllowedTools, 'gh pr edit', 'agent-repair.yml allowed tools');
+  verifyTrackedFileDeletionPermissions(repairAllowedTools, 'agent-repair.yml allowed tools');
   const repairDisallowedTools = section(repairJob, '            --disallowedTools', '\n      - name: Record outcome', 'agent-repair.yml disallowed tools');
   requireText(repairDisallowedTools, 'Bash(gh pr edit *)', 'agent-repair.yml disallowed tools');
 }
@@ -688,10 +691,45 @@ export const VALIDATION_CONCURRENCY_GROUP =
 export const STATUS_CONTEXT_EXPRESSION =
   "STATUS_CONTEXT: ${{ github.event_name == 'workflow_dispatch' && 'agent-validation' || 'merge-validation' }}";
 
-/**
- * Runs every agent workflow contract check. `read` resolves a repository-relative path to
- * its text, so tests can substitute a modified workflow without touching the repository.
- */
+/** A tracked-file deletion must stay in project directories and use -- before paths. */
+export function verifyTrackedFileDeletionPermissions(allowed, source) {
+  for (const directory of ['backend', 'frontend', 'docs', 'scripts']) {
+    requireText(allowed, `Bash(git rm -- ${directory}/*)`, source);
+  }
+  for (const forbidden of ['Bash(git rm *)', 'Bash(git rm -- *)', 'Bash(git rm -r *)', 'Bash(git rm -f *)', 'Bash(git rm -- .github/*)']) {
+    forbidText(allowed, forbidden, source);
+  }
+}
+
+/** Verifies the architect handoff and final-head guard in the implementation workflow. */
+export function verifyArchitecturePass(workflow) {
+  const job = section(workflow, '  implement:\n', '  dispatch-validation:\n', 'agent-implement.yml implementation job');
+  requireOrder(job, '      - name: Run Claude Code implementation agent', '      - name: Verify the architecture pass target', 'agent-implement.yml architecture order');
+  requireOrder(job, '      - name: Verify the architecture pass target', '      - name: Run Claude Code architecture agent', 'agent-implement.yml architecture order');
+  requireOrder(job, '      - name: Run Claude Code architecture agent', '      - name: Record outcome on the issue', 'agent-implement.yml architecture order');
+
+  const target = section(job, '      - name: Verify the architecture pass target\n', '      - name: Run Claude Code architecture agent\n', 'agent-implement.yml architecture target');
+  for (const required of ["if: steps.claude.outcome == 'success'", 'if length == 1 then .[0] else {} end', 'gh api', '.head.repo.full_name == $repo', '.user.login == "github-actions[bot]"', 'git rev-parse HEAD', 'gh pr list', 'echo "pr_number=$pr_number"']) {
+    requireText(target, required, 'agent-implement.yml architecture target');
+  }
+
+  const architect = section(job, '      - name: Run Claude Code architecture agent\n', '      - name: Record outcome on the issue\n', 'agent-implement.yml architect');
+  for (const required of ["id: architect", "if: steps.architecture_target.outcome == 'success'", 'Read the issue', 'Preserve all observable behavior', 'bash scripts/validate.sh', 'gh pr comment', 'Bash(git push origin agent/issue-']) {
+    requireText(architect, required, 'agent-implement.yml architect');
+  }
+  const allowed = section(architect, '          claude_args: |\n', '            --disallowedTools', 'agent-implement.yml architect allowed tools');
+  verifyTrackedFileDeletionPermissions(allowed, 'agent-implement.yml architect allowed tools');
+  for (const forbidden of ['gh pr edit', 'gh pr create', 'gh issue edit', 'gh workflow', 'gh api']) {
+    forbidText(allowed, forbidden, 'agent-implement.yml architect allowed tools');
+  }
+
+  const outcome = section(job, '      - name: Record outcome on the issue\n', null, 'agent-implement.yml outcome');
+  for (const required of ['ARCHITECT_OUTCOME', 'TARGET_OUTCOME', '[ "$ARCHITECT_OUTCOME" = "success" ]', 'git branch --show-current', 'git rev-parse HEAD', 'git status --porcelain']) {
+    requireText(outcome, required, 'agent-implement.yml outcome');
+  }
+}
+
+/** Runs every agent workflow contract check with an overridable repository reader. */
 export function runContractChecks({ read = readRepositoryFile } = {}) {
   const validate = read(validatePath);
   for (const required of [
@@ -831,6 +869,8 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
   for (const forbidden of ['gh pr merge', 'gh pr review * --approve', 'gh pr review * --request-changes']) {
     forbidText(reviewAllowedTools, forbidden, 'agent-review.yml allowed tools');
   }
+
+  verifyArchitecturePass(read(implementPath));
 
   // Defence in depth: no agent workflow may resolve a pull request author through the
   // GraphQL actor login anywhere, including in a guard added after this contract was written.

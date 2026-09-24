@@ -4,6 +4,7 @@ import { Observable } from 'rxjs';
 import { Machine } from '../../models/models';
 import { MachineService } from '../../services/machine.service';
 import { ReportingFilter, ReportingService } from '../../services/reporting.service';
+import { money, moneyOrUnavailable, percentOrUnavailable } from './report-formatting';
 
 @Directive()
 export abstract class ReportPageBase<T> implements OnInit {
@@ -73,11 +74,15 @@ export abstract class ReportPageBase<T> implements OnInit {
   }
 
   money(value: number | null | undefined): string {
-    return new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD' }).format(value ?? 0);
+    return money(value);
   }
 
   moneyOrUnavailable(value: number | null | undefined): string {
-    return value == null ? 'Profit unavailable' : this.money(value);
+    return moneyOrUnavailable(value);
+  }
+
+  percentOrUnavailable(value: number | null | undefined, suffix = ''): string {
+    return percentOrUnavailable(value, suffix);
   }
 
   quality(): string[] {

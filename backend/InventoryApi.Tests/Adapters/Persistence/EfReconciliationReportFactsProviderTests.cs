@@ -19,7 +19,7 @@ public class EfReconciliationReportFactsProviderTests
     {
         var connection = new SqliteConnection("Data Source=:memory:");
         await connection.OpenAsync();
-        await using var setup = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        await using var setup = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
         await setup.Database.EnsureCreatedAsync();
         return connection;
     }
@@ -28,7 +28,7 @@ public class EfReconciliationReportFactsProviderTests
     public async Task No_reimbursements_returns_a_single_fallback_period_covering_the_requested_range()
     {
         await using var connection = await CreateSqliteAsync();
-        await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
         db.NayaxSales.Add(new NayaxSales
         {
             TransactionID = 1,
@@ -55,7 +55,7 @@ public class EfReconciliationReportFactsProviderTests
     public async Task Reimbursement_period_fully_within_the_requested_range_is_matched()
     {
         await using var connection = await CreateSqliteAsync();
-        await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
         db.NayaxSales.Add(new NayaxSales
         {
             TransactionID = 1,
@@ -89,7 +89,7 @@ public class EfReconciliationReportFactsProviderTests
     public async Task Reimbursement_period_outside_the_requested_range_is_not_matched_and_falls_back()
     {
         await using var connection = await CreateSqliteAsync();
-        await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
         db.NayaxSales.Add(new NayaxSales
         {
             TransactionID = 2,
@@ -121,7 +121,7 @@ public class EfReconciliationReportFactsProviderTests
     public async Task Machine_filter_matches_the_reimbursement_device_for_the_selected_machine_only()
     {
         await using var connection = await CreateSqliteAsync();
-        await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
         db.NayaxSales.AddRange(
             new NayaxSales
             {
@@ -168,7 +168,7 @@ public class EfReconciliationReportFactsProviderTests
     public async Task Fee_rows_split_into_processing_and_other_fees_with_gst_and_payment_rows_give_the_card_gross()
     {
         await using var connection = await CreateSqliteAsync();
-        await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
         db.NayaxSales.AddRange(
             new NayaxSales
             {
@@ -224,7 +224,7 @@ public class EfReconciliationReportFactsProviderTests
     public async Task Non_completed_sales_are_excluded_from_gross_but_counted_by_status_for_quality_notes()
     {
         await using var connection = await CreateSqliteAsync();
-        await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
         db.NayaxSales.AddRange(
             new NayaxSales { TransactionID = 1, MachineID = 10, SettlementValue = 12m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed },
             new NayaxSales { TransactionID = 2, MachineID = 10, SettlementValue = 5m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.PendingSettlementNotFinal },

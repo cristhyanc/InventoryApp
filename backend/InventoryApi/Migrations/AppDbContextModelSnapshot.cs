@@ -21,10 +21,112 @@ namespace InventoryApi.Migrations
                 .HasAnnotation("Proxies:CheckEquality", false)
                 .HasAnnotation("Proxies:LazyLoading", true);
 
+            modelBuilder.Entity("InventoryApi.Models.Business", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("Businesses");
+                });
+
+            modelBuilder.Entity("InventoryApi.Models.BusinessBackfillAudit", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("RecordedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("RowsAssigned")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<Guid>("RunId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TableName")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("TotalRowsAfter")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("TotalRowsBefore")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("UnassignedRowsAfter")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("UnassignedRowsBefore")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("RunId");
+
+                    b.ToTable("BusinessBackfillAudits");
+                });
+
+            modelBuilder.Entity("InventoryApi.Models.BusinessMembership", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("DirectoryTenantId")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .UseCollation("NOCASE");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ObjectId")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .UseCollation("NOCASE");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex("DirectoryTenantId", "ObjectId");
+
+                    b.HasIndex("DirectoryTenantId", "ObjectId", "BusinessId")
+                        .IsUnique();
+
+                    b.ToTable("BusinessMemberships");
+                });
+
             modelBuilder.Entity("InventoryApi.Models.Category", b =>
                 {
                     b.Property<long>("Id")
                         .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("Description")
@@ -35,6 +137,8 @@ namespace InventoryApi.Migrations
                         .HasColumnType("TEXT");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("BusinessId");
 
                     b.HasIndex("Name");
 
@@ -49,6 +153,9 @@ namespace InventoryApi.Migrations
 
                     b.Property<decimal>("Amount")
                         .HasColumnType("decimal(18,2)");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("TEXT");
@@ -73,6 +180,8 @@ namespace InventoryApi.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("BusinessId");
+
                     b.HasIndex("SiteId", "PeriodStart", "PeriodEnd");
 
                     b.ToTable("CommissionPayments");
@@ -82,6 +191,9 @@ namespace InventoryApi.Migrations
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("EntityId")
@@ -113,6 +225,8 @@ namespace InventoryApi.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("BusinessId");
+
                     b.HasIndex("ImportedReimbursementId");
 
                     b.ToTable("ImportedDevicePayments");
@@ -126,6 +240,9 @@ namespace InventoryApi.Migrations
 
                     b.Property<decimal?>("AverageFeeAmount")
                         .HasColumnType("decimal(18,4)");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
 
                     b.Property<string>("FeeTypeDescription")
                         .HasColumnType("TEXT");
@@ -159,6 +276,8 @@ namespace InventoryApi.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("BusinessId");
+
                     b.HasIndex("ImportedReimbursementId");
 
                     b.ToTable("ImportedFees");
@@ -168,6 +287,9 @@ namespace InventoryApi.Migrations
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("FileHash")
@@ -183,7 +305,9 @@ namespace InventoryApi.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("FileHash")
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex("BusinessId", "FileHash")
                         .IsUnique();
 
                     b.ToTable("ImportedFiles");
@@ -197,6 +321,9 @@ namespace InventoryApi.Migrations
 
                     b.Property<string>("BillingProvider")
                         .HasColumnType("TEXT");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
 
                     b.Property<int>("ImportedReimbursementId")
                         .HasColumnType("INTEGER");
@@ -227,6 +354,8 @@ namespace InventoryApi.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("BusinessId");
+
                     b.HasIndex("ImportedReimbursementId");
 
                     b.ToTable("ImportedPaymentMethods");
@@ -239,6 +368,9 @@ namespace InventoryApi.Migrations
                         .HasColumnType("INTEGER");
 
                     b.Property<int?>("ActiveDevices")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("CompanyName")
@@ -300,6 +432,8 @@ namespace InventoryApi.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("BusinessId");
+
                     b.HasIndex("ImportedFileId");
 
                     b.ToTable("ImportedReimbursements");
@@ -313,6 +447,9 @@ namespace InventoryApi.Migrations
 
                     b.Property<string>("ActorCode")
                         .HasColumnType("TEXT");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
 
                     b.Property<string>("EntityId")
                         .HasColumnType("TEXT");
@@ -370,6 +507,8 @@ namespace InventoryApi.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("BusinessId");
+
                     b.HasIndex("ImportedReimbursementId");
 
                     b.ToTable("ImportedReimbursementDevices");
@@ -383,6 +522,9 @@ namespace InventoryApi.Migrations
 
                     b.Property<decimal>("AverageUnitCost")
                         .HasColumnType("decimal(18,6)");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
 
                     b.Property<int>("CostSource")
                         .HasColumnType("INTEGER");
@@ -420,7 +562,11 @@ namespace InventoryApi.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("ProductId")
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex("ProductId");
+
+                    b.HasIndex("BusinessId", "ProductId")
                         .IsUnique();
 
                     b.ToTable("InventoryCostTransitionBaselines");
@@ -430,6 +576,9 @@ namespace InventoryApi.Migrations
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
                         .HasColumnType("INTEGER");
 
                     b.Property<int>("InventoryCostTransitionBaselineId")
@@ -450,6 +599,8 @@ namespace InventoryApi.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("BusinessId");
+
                     b.HasIndex("InventoryCostTransitionBaselineId");
 
                     b.ToTable("InventoryCostTransitionMachineStocks");
@@ -463,6 +614,9 @@ namespace InventoryApi.Migrations
 
                     b.Property<DateTime?>("AppliedAt")
                         .HasColumnType("TEXT");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("TEXT");
@@ -479,6 +633,8 @@ namespace InventoryApi.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("BusinessId");
+
                     b.ToTable("InventoryCostTransitionPreviewDrafts");
                 });
 
@@ -486,6 +642,9 @@ namespace InventoryApi.Migrations
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
                         .HasColumnType("INTEGER");
 
                     b.Property<DateTime>("CreatedAt")
@@ -499,7 +658,9 @@ namespace InventoryApi.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("EffectiveFrom")
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex("BusinessId", "EffectiveFrom")
                         .IsUnique();
 
                     b.ToTable("NayaxProcessingFeeRates");
@@ -507,8 +668,11 @@ namespace InventoryApi.Migrations
 
             modelBuilder.Entity("InventoryApi.Models.NayaxSales", b =>
                 {
-                    b.Property<long>("TransactionID")
+                    b.Property<long>("Id")
                         .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
                         .HasColumnType("INTEGER");
 
                     b.Property<decimal?>("CostOfGoodsSold")
@@ -544,13 +708,21 @@ namespace InventoryApi.Migrations
                     b.Property<decimal>("SettlementValue")
                         .HasColumnType("decimal(18,2)");
 
+                    b.Property<long>("TransactionID")
+                        .HasColumnType("INTEGER");
+
                     b.Property<int?>("TransactionStatusId")
                         .HasColumnType("INTEGER");
 
                     b.Property<decimal?>("UnitCostAtSale")
                         .HasColumnType("decimal(18,6)");
 
-                    b.HasKey("TransactionID");
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex("BusinessId", "TransactionID")
+                        .IsUnique();
 
                     b.ToTable("NayaxSales", (string)null);
                 });
@@ -575,6 +747,9 @@ namespace InventoryApi.Migrations
 
                     b.Property<string>("AttachmentStoredFileName")
                         .HasColumnType("TEXT");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
 
                     b.Property<int>("Category")
                         .HasColumnType("INTEGER");
@@ -618,6 +793,8 @@ namespace InventoryApi.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("BusinessId");
+
                     b.HasIndex("Category");
 
                     b.HasIndex("ExpenseDate");
@@ -637,6 +814,9 @@ namespace InventoryApi.Migrations
 
                     b.Property<decimal>("AverageUnitCost")
                         .HasColumnType("decimal(18,6)");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
 
                     b.Property<long?>("CategoryId")
                         .HasColumnType("INTEGER");
@@ -686,6 +866,8 @@ namespace InventoryApi.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("BusinessId");
+
                     b.HasIndex("CategoryId");
 
                     b.HasIndex("Sku");
@@ -695,10 +877,13 @@ namespace InventoryApi.Migrations
                     b.ToTable("Products");
                 });
 
-            modelBuilder.Entity("InventoryApi.Models.Receipt", b =>
+            modelBuilder.Entity("InventoryApi.Models.Purchase", b =>
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("ContentType")
@@ -743,15 +928,20 @@ namespace InventoryApi.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("BusinessId");
+
                     b.HasIndex("SupplierId");
 
-                    b.ToTable("Receipts");
+                    b.ToTable("Receipts", (string)null);
                 });
 
-            modelBuilder.Entity("InventoryApi.Models.ReceiptItem", b =>
+            modelBuilder.Entity("InventoryApi.Models.PurchaseItem", b =>
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
                         .HasColumnType("INTEGER");
 
                     b.Property<long>("ProductId")
@@ -768,11 +958,13 @@ namespace InventoryApi.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("BusinessId");
+
                     b.HasIndex("ProductId");
 
                     b.HasIndex("ReceiptId");
 
-                    b.ToTable("ReceiptItems");
+                    b.ToTable("ReceiptItems", (string)null);
                 });
 
             modelBuilder.Entity("InventoryApi.Models.SiteCommissionAgreement", b =>
@@ -782,6 +974,9 @@ namespace InventoryApi.Migrations
                         .HasColumnType("INTEGER");
 
                     b.Property<int>("Basis")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
                         .HasColumnType("INTEGER");
 
                     b.Property<decimal>("CommissionRate")
@@ -810,7 +1005,9 @@ namespace InventoryApi.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("SiteId", "EffectiveFrom")
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex("BusinessId", "SiteId", "EffectiveFrom")
                         .IsUnique();
 
                     b.ToTable("SiteCommissionAgreements");
@@ -824,6 +1021,9 @@ namespace InventoryApi.Migrations
 
                     b.Property<decimal?>("AverageUnitCostAfter")
                         .HasColumnType("decimal(18,6)");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
 
                     b.Property<int?>("CostingQuantityAfter")
                         .HasColumnType("INTEGER");
@@ -869,6 +1069,8 @@ namespace InventoryApi.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("BusinessId");
+
                     b.HasIndex("ProductId");
 
                     b.HasIndex("ReceiptItemId");
@@ -885,6 +1087,9 @@ namespace InventoryApi.Migrations
                     b.Property<string>("Address")
                         .HasColumnType("TEXT");
 
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("ContactName")
                         .HasColumnType("TEXT");
 
@@ -900,6 +1105,8 @@ namespace InventoryApi.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("BusinessId");
+
                     b.HasIndex("Name");
 
                     b.ToTable("Suppliers");
@@ -909,6 +1116,9 @@ namespace InventoryApi.Migrations
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
                         .HasColumnType("INTEGER");
 
                     b.Property<DateTime>("CreatedAt")
@@ -937,6 +1147,8 @@ namespace InventoryApi.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("BusinessId");
+
                     b.HasIndex("SupplierId", "Status", "OrderDate");
 
                     b.ToTable("SupplierOrders");
@@ -946,6 +1158,9 @@ namespace InventoryApi.Migrations
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("Notes")
@@ -968,6 +1183,8 @@ namespace InventoryApi.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("BusinessId");
+
                     b.HasIndex("SupplierOrderId");
 
                     b.HasIndex("ProductId", "SupplierOrderId");
@@ -979,6 +1196,9 @@ namespace InventoryApi.Migrations
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
                         .HasColumnType("INTEGER");
 
                     b.Property<DateTime>("CreatedAt")
@@ -995,11 +1215,24 @@ namespace InventoryApi.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("BusinessId");
+
                     b.HasIndex("ReceiptItemId");
 
                     b.HasIndex("SupplierOrderLineId");
 
                     b.ToTable("SupplierOrderReceiptAllocations");
+                });
+
+            modelBuilder.Entity("InventoryApi.Models.BusinessMembership", b =>
+                {
+                    b.HasOne("InventoryApi.Models.Business", "Business")
+                        .WithMany("Memberships")
+                        .HasForeignKey("BusinessId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Business");
                 });
 
             modelBuilder.Entity("InventoryApi.Models.ImportedDevicePayment", b =>
@@ -1106,7 +1339,7 @@ namespace InventoryApi.Migrations
                     b.Navigation("Supplier");
                 });
 
-            modelBuilder.Entity("InventoryApi.Models.Receipt", b =>
+            modelBuilder.Entity("InventoryApi.Models.Purchase", b =>
                 {
                     b.HasOne("InventoryApi.Models.Supplier", "Supplier")
                         .WithMany()
@@ -1116,7 +1349,7 @@ namespace InventoryApi.Migrations
                     b.Navigation("Supplier");
                 });
 
-            modelBuilder.Entity("InventoryApi.Models.ReceiptItem", b =>
+            modelBuilder.Entity("InventoryApi.Models.PurchaseItem", b =>
                 {
                     b.HasOne("InventoryApi.Models.Product", "Product")
                         .WithMany()
@@ -1124,7 +1357,7 @@ namespace InventoryApi.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
-                    b.HasOne("InventoryApi.Models.Receipt", "Receipt")
+                    b.HasOne("InventoryApi.Models.Purchase", "Purchase")
                         .WithMany("Items")
                         .HasForeignKey("ReceiptId")
                         .OnDelete(DeleteBehavior.Cascade)
@@ -1132,7 +1365,7 @@ namespace InventoryApi.Migrations
 
                     b.Navigation("Product");
 
-                    b.Navigation("Receipt");
+                    b.Navigation("Purchase");
                 });
 
             modelBuilder.Entity("InventoryApi.Models.StockAdjustment", b =>
@@ -1143,7 +1376,7 @@ namespace InventoryApi.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.HasOne("InventoryApi.Models.ReceiptItem", "ReceiptItem")
+                    b.HasOne("InventoryApi.Models.PurchaseItem", "ReceiptItem")
                         .WithMany()
                         .HasForeignKey("ReceiptItemId")
                         .OnDelete(DeleteBehavior.SetNull);
@@ -1184,7 +1417,7 @@ namespace InventoryApi.Migrations
 
             modelBuilder.Entity("InventoryApi.Models.SupplierOrderReceiptAllocation", b =>
                 {
-                    b.HasOne("InventoryApi.Models.ReceiptItem", "ReceiptItem")
+                    b.HasOne("InventoryApi.Models.PurchaseItem", "ReceiptItem")
                         .WithMany("SupplierOrderAllocations")
                         .HasForeignKey("ReceiptItemId")
                         .OnDelete(DeleteBehavior.Cascade)
@@ -1199,6 +1432,11 @@ namespace InventoryApi.Migrations
                     b.Navigation("ReceiptItem");
 
                     b.Navigation("SupplierOrderLine");
+                });
+
+            modelBuilder.Entity("InventoryApi.Models.Business", b =>
+                {
+                    b.Navigation("Memberships");
                 });
 
             modelBuilder.Entity("InventoryApi.Models.Category", b =>
@@ -1232,12 +1470,12 @@ namespace InventoryApi.Migrations
                     b.Navigation("StockAdjustments");
                 });
 
-            modelBuilder.Entity("InventoryApi.Models.Receipt", b =>
+            modelBuilder.Entity("InventoryApi.Models.Purchase", b =>
                 {
                     b.Navigation("Items");
                 });
 
-            modelBuilder.Entity("InventoryApi.Models.ReceiptItem", b =>
+            modelBuilder.Entity("InventoryApi.Models.PurchaseItem", b =>
                 {
                     b.Navigation("SupplierOrderAllocations");
                 });

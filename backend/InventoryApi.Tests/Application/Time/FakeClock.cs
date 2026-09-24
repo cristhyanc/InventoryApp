@@ -1,6 +1,6 @@
-using Inventory.Application.NayaxFeeSettings;
+using Inventory.Application.Time;
 
-namespace InventoryApi.Tests.Application.NayaxFeeSettings;
+namespace InventoryApi.Tests.Application.Time;
 
 public sealed class FakeClock : IClock
 {

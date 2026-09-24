@@ -17,7 +17,7 @@ public class EfGstReportFactsProviderTests
     {
         var connection = new SqliteConnection("Data Source=:memory:");
         await connection.OpenAsync();
-        await using var setup = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        await using var setup = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
         await setup.Database.EnsureCreatedAsync();
         return connection;
     }
@@ -26,7 +26,7 @@ public class EfGstReportFactsProviderTests
     public async Task No_imported_reimbursements_in_range_reports_no_rows_and_no_gst_classification()
     {
         await using var connection = await CreateSqliteAsync();
-        await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
         var provider = new EfGstReportFactsProvider(db);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31), null, CancellationToken.None);
@@ -39,7 +39,7 @@ public class EfGstReportFactsProviderTests
     public async Task Imported_reimbursement_with_a_vat_classified_fee_reports_rows_and_gst_classification()
     {
         await using var connection = await CreateSqliteAsync();
-        await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
         var file = new ImportedFile { FileName = "aug.xml", FileHash = "aug", ImportedAt = DateTime.UtcNow };
         file.Reimbursements.Add(new ImportedReimbursement
         {
@@ -62,7 +62,7 @@ public class EfGstReportFactsProviderTests
     public async Task Imported_reimbursement_without_a_vat_percentage_reports_rows_but_no_gst_classification()
     {
         await using var connection = await CreateSqliteAsync();
-        await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
         var file = new ImportedFile { FileName = "aug.xml", FileHash = "aug", ImportedAt = DateTime.UtcNow };
         file.Reimbursements.Add(new ImportedReimbursement
         {
@@ -85,7 +85,7 @@ public class EfGstReportFactsProviderTests
     public async Task A_reimbursement_period_outside_the_requested_range_is_not_counted()
     {
         await using var connection = await CreateSqliteAsync();
-        await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
         var file = new ImportedFile { FileName = "jul.xml", FileHash = "jul", ImportedAt = DateTime.UtcNow };
         file.Reimbursements.Add(new ImportedReimbursement
         {

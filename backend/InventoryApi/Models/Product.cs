@@ -1,9 +1,18 @@
 using System.ComponentModel.DataAnnotations.Schema;
 
+using System.Text.Json.Serialization;
+
 namespace InventoryApi.Models;
 
-public class Product
+public class Product : IBusinessOwned
 {
+    /// <summary>
+    /// The owning business (issue #64). Stamped from the caller's resolved business on insert
+    /// and immutable afterwards; never read from API input, and never serialised out.
+    /// </summary>
+    [JsonIgnore]
+    public int BusinessId { get; set; }
+
     public Product Clone() => (Product)MemberwiseClone();
 
     public long Id { get; set; }

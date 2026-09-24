@@ -45,7 +45,7 @@ Read the nearest relevant production code and tests before changing behavior. Fo
 2. Restate the issue's acceptance criteria, its explicit exclusions, and its documentation impact decision, and identify affected domain rules.
 3. Inspect existing implementations and tests before proposing a design.
 4. Make the smallest coherent change. Do not mix unrelated cleanup with feature work.
-5. Add or update tests for the behavior and meaningful edge cases.
+5. For new or changed behavior with a clear expected result, write a focused failing test first, run it to confirm the intended failure, implement the smallest change that passes, then refactor with tests green. Prioritize authorization and tenant isolation, financial and inventory rules, imports, regressions, and API contracts. Add meaningful edge cases. For exploratory UI work, configuration, migrations, or changes where a useful test cannot be written first, explain why in the PR and add relevant verification before completion. Avoid tests that merely mirror implementation details.
 5a. Follow the issue's documentation impact decision. When it says documentation changes are required, update every listed documentation file and section in the same change. When it says none are required but the change nevertheless makes documentation inaccurate, update that documentation anyway and state the discrepancy in the pull request. Never leave documentation that the change contradicts.
 6. Run the complete repository validation from the repository root:
 
@@ -55,7 +55,8 @@ Read the nearest relevant production code and tests before changing behavior. Fo
 
 7. Review the final diff for secrets, accidental schema changes, generated files, and unrelated edits.
 8. Open a pull request targeting `develop`, using the repository pull request template, with the reason for the change, tests run, financial/data risks, migration impact, any known limitations, and an accurate `## Documentation impact` section (see [Documentation impact gate](#documentation-impact-gate)).
-9. After opening the pull request, update only the feature branch, and only for at most two permitted repair attempts in response to CI or review failures. Stop and return control to a human when validation and review succeed, after two failed repair attempts, or when requirements are ambiguous or conflicting. Agents never merge or deploy; a human reviews and merges the pull request.
+8a. The implementation workflow runs a separate architecture agent invocation on the same feature branch after the initial PR and before exact-SHA validation. It may make focused, behavior-preserving structural edits within the approved issue, run full validation, commit, and push the branch. It may report an architectural concern without editing. It must not broaden scope, change data or API behavior, create another PR, edit the PR description, or change workflows, migrations, secrets, or deployment. If its edit would make the PR description or documentation-impact declaration inaccurate, it reports the finding for human review without making that edit. Its failure blocks validation dispatch. Independent review and human merge remain separate.
+9. After the architecture pass, update only the feature branch, and only for at most two permitted repair attempts in response to CI or review failures. Stop and return control to a human when validation and review succeed, after two failed repair attempts, or when requirements are ambiguous or conflicting. Agents never merge or deploy; a human reviews and merges the pull request.
 
 If complete validation cannot run, state exactly which command failed or was unavailable. Never claim a test or build passed unless it ran successfully.
 
@@ -75,7 +76,7 @@ These rules govern any current or future automated agent that implements a GitHu
 - When requirements are materially ambiguous, conflict with each other, or conflict with this file, `docs/architecture.md`, or existing tests, stop and request a human decision. State exactly which decision is needed.
 - Do not expand scope, broaden acceptance criteria, or reinterpret exclusions. Propose follow-up work in the pull request instead.
 - After a pull request fails validation or review, an agent may make at most two automated repair attempts. After that, or as soon as a repair would require weakening a test or changing an established rule, the task is blocked and returns to a human.
-- After opening the pull request, the agent may update its feature branch for at most two permitted repair attempts in response to CI or review failures. It stops and returns control to a human when validation and review succeed, after two failed repair attempts, or when requirements are ambiguous or conflicting. It never merges a feature or release pull request, never pushes to `develop` or `main`, never deploys, and never runs production migrations or modifies production data. An agent prepares a release pull request only on a separate, explicit human request, and only a human approves and merges it.
+- After the initial architecture pass, the implementation agent may update its feature branch for at most two permitted repair attempts in response to CI or review failures. It stops and returns control to a human when validation and review succeed, after two failed repair attempts, or when requirements are ambiguous or conflicting. It never merges a feature or release pull request, never pushes to `develop` or `main`, never deploys, and never runs production migrations or modifies production data. An agent prepares a release pull request only on a separate, explicit human request, and only a human approves and merges it.
 - High-risk categories require explicit human scrutiny of both the issue and the pull request: financial or profit calculations, inventory quantity or historical costing, database schema or migrations, backfills or destructive data operations, authentication or authorization, secrets or environment configuration, GitHub Actions/Azure/deployment changes, any Nayax or other external-integration change (whether it reads, writes, imports, synchronises, maps errors, changes authentication, or handles remote payloads), imports or reconciliation, public API contract changes, file upload or filesystem security, and any production-impacting operation.
 - Every automated change must be traceable through its issue, branch, commits, pull request, validation result, review result, and human merge decision.
 - Every agent task issue must carry a documentation impact decision and details, and every pull request must carry a `## Documentation impact` declaration. Automation only checks that these declarations exist and are meaningful; the reviewer decides whether they are truthful. See [Documentation impact gate](#documentation-impact-gate).
@@ -139,7 +140,7 @@ The current backend is one project with a service layer. Its target is an increm
 
 ## Database and migrations
 
-- EF Core migrations are the schema source of truth. Application startup currently calls `Database.Migrate()`.
+- EF Core migrations are the schema source of truth. Startup does not apply them as a matter of course: `DatabaseSchemaStartup` decides per environment. **Production never migrates automatically, regardless of configuration**, and fails closed — it logs a critical error naming the pending migrations and refuses to start rather than serve requests against a schema its code does not match. Development and `Testing` migrate automatically, where the database is disposable. Any other non-Production environment migrates automatically only when `Database:AllowAutomaticMigrationUnsafeOutsideDevelopment` is `true`; that override is checked after Production has already been ruled out, so it cannot reach production data. Production schema changes are applied by a human through the explicit `migrate-database` command (dry run first). Never reintroduce an unconditional `Database.Migrate()` at startup, and never make the override reachable from Production — some tenancy migrations rebuild tables and copy persisted rows, so applying them must never be a deployment side effect.
 - Never replace migrations with `EnsureCreated()`.
 - Never delete or rewrite an applied migration merely to simplify a change.
 - Do not edit an existing migration unless the issue explicitly concerns an unapplied migration and a human confirms it is safe.
@@ -148,6 +149,20 @@ The current backend is one project with a service layer. Its target is an increm
 - Prefer relational SQLite tests for behavior that depends on constraints, transactions, SQL translation, ordering, or migrations. EF Core InMemory tests do not prove relational behavior.
 - Do not run destructive production data operations, mass backfills, or irreversible corrections automatically at startup.
 - A backfill/rebuild must be explicit, idempotent or safely restartable, observable, and covered by regression tests.
+
+## Tenant ownership and data isolation
+
+Business data is owned by an application-owned `Business` (issue #64). These are repository-wide invariants, not feature-local choices. `docs/architecture.md` § Tenant ownership describes the design; `docs/tenant-rollout.md` describes the rollout.
+
+- **Ownership is central, never ad hoc.** Tenant-owned reads are scoped by the global query filters in `AppDbContext`, and every write goes through `BusinessOwnershipEnforcer` on `SaveChanges`. Do not add per-controller or per-service `Where(x => x.BusinessId == ...)` clauses: they are redundant, and they make the real boundary look optional. Fix the central mechanism instead.
+- **A new persisted entity is tenant-owned by default.** Implement `IBusinessOwned` and it is filtered, indexed, and stamped automatically. An entity that genuinely is not owned must be added to `DeliberatelyGlobalEntities` in `BusinessOwnershipCoverageTests` with the structural reason. That test fails if a new table arrives with no owner.
+- **Never accept a business or tenant ID from client input.** It is resolved from the authenticated actor's membership and stamped by the enforcer. No route, query, form, JSON, or header value may choose an owner, and no DTO carries one.
+- **Fail closed.** An unresolved business reads nothing and writes nothing. Never treat "no current business" as "no filter"; that turns a resolution bug into a cross-business data leak.
+- **Unrestricted access is an explicit opt-in.** Only the human-invoked `migrate-database` and `bootstrap-business` commands may pass `UnscopedBusinessScope.Instance`. No request path, controller, or service may run unrestricted. `IgnoreQueryFilters`, raw SQL, and direct `AppDbContext` construction in a request path are boundary violations.
+- **Ownership is immutable and relationships stay inside one business.** A record cannot be moved between businesses, and a foreign key between tenant-owned entities may not cross one.
+- **Uniqueness is per business.** Constraints over externally supplied values — Nayax transaction IDs, import file hashes, site agreements, fee effective dates — are scoped by business, because two businesses may legitimately hold the same external value.
+- **Claims parsing stays at the API boundary.** Domain and Application must not reference ASP.NET claims or principals; use the Application current-business abstraction.
+- **Isolation changes need two-business tests.** Any change to ownership, filtering, or enforcement requires relational tests with two synthetic businesses proving reads, writes, ID lookups, relationships, reports, imports, and document access cannot cross.
 
 ## Core bookkeeping and reporting invariants
 
@@ -278,7 +293,7 @@ Do not weaken or delete a failing test merely to obtain a green build. If an est
 A change is complete only when:
 
 - Acceptance criteria are met without unrelated behavior changes.
-- Relevant tests cover success, important edge cases, and regression risk.
+- Relevant tests cover success, important edge cases, and regression risk; for test-first changes the PR states which test initially failed and why.
 - Complete validation succeeds, or the exact environmental blocker is documented.
 - Schema/API/configuration changes are documented and backward compatibility is considered.
 - The documentation impact decision has been honoured: documentation the issue required is updated, any documentation the change would otherwise contradict is updated, and the pull request's `## Documentation impact` declaration is accurate and passes `scripts/validate-documentation-impact.mjs`.

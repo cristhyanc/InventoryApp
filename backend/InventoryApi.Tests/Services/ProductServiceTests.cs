@@ -17,7 +17,7 @@ public class ProductServiceTests
         var options = new DbContextOptionsBuilder<AppDbContext>()
             .UseInMemoryDatabase(dbName)
             .Options;
-        return new AppDbContext(options);
+        return TestAppDbContext.Unrestricted(options);
     }
 
     [Fact]
@@ -57,7 +57,7 @@ public class ProductServiceTests
 
         try
         {
-            await using (var db = new AppDbContext(options))
+            await using (var db = TestAppDbContext.Unrestricted(options))
             {
                 await db.Database.MigrateAsync("20260913011850_AddSupplierOrderReceiptAllocations");
                 await db.Database.ExecuteSqlRawAsync("""

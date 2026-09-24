@@ -172,7 +172,7 @@ jobs:
             - Requirements: every acceptance criterion met; nothing outside the criteria or inside the exclusions was changed; no scope creep, no unrelated cleanup.
             - Correctness and safety against AGENTS.md invariants (financial, inventory/costing, reconciliation, GST, commissions, migrations, Nayax, files/security, frontend rules). Cite the invariant you are applying.
             - Architecture against docs/architecture.md and the AGENTS.md architecture rules.
-            - Tests: the tests AGENTS.md requires for this change type exist, are meaningful, and no failing test was weakened, skipped, or deleted.
+            - Tests: the tests AGENTS.md requires for this change type exist, are meaningful, and no failing test was weakened, skipped, or deleted. Check the PR's test-first evidence (test name, intended initial failure and final pass), or its specific reason for not using test-first. A final diff alone cannot prove the sequence; do not claim independent proof of a red phase from it. Treat missing behavioral coverage or an unsupported high-risk isolation claim as a blocker, not a missing commit sequence by itself.
             - Validation evidence: the PR states real commands and results consistent with CI. Flag any unsupported "passed" claim.
             - Secrets, local databases, generated output, accidental migrations, unrelated files, and public API contract changes.
             - Risk classification per docs/automation.md; for high-risk areas confirm the PR cites the invariants it touches.

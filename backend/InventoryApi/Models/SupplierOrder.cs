@@ -11,8 +11,15 @@ public enum SupplierOrderStatus
     Cancelled
 }
 
-public class SupplierOrder
+public class SupplierOrder : IBusinessOwned
 {
+    /// <summary>
+    /// The owning business (issue #64). Stamped from the caller's resolved business on insert
+    /// and immutable afterwards; never read from API input, and never serialised out.
+    /// </summary>
+    [JsonIgnore]
+    public int BusinessId { get; set; }
+
     public int Id { get; set; }
     public int? SupplierId { get; set; }
     public virtual Supplier? Supplier { get; set; }
@@ -26,8 +33,15 @@ public class SupplierOrder
     public virtual ICollection<SupplierOrderLine> Lines { get; set; } = new List<SupplierOrderLine>();
 }
 
-public class SupplierOrderLine
+public class SupplierOrderLine : IBusinessOwned
 {
+    /// <summary>
+    /// The owning business (issue #64). Stamped from the caller's resolved business on insert
+    /// and immutable afterwards; never read from API input, and never serialised out.
+    /// </summary>
+    [JsonIgnore]
+    public int BusinessId { get; set; }
+
     public int Id { get; set; }
     public int SupplierOrderId { get; set; }
     [JsonIgnore]
@@ -47,8 +61,15 @@ public class SupplierOrderLine
         : Math.Max(0m, QuantityOrdered - QuantityReceived);
 }
 
-public class SupplierOrderReceiptAllocation
+public class SupplierOrderReceiptAllocation : IBusinessOwned
 {
+    /// <summary>
+    /// The owning business (issue #64). Stamped from the caller's resolved business on insert
+    /// and immutable afterwards; never read from API input, and never serialised out.
+    /// </summary>
+    [JsonIgnore]
+    public int BusinessId { get; set; }
+
     public int Id { get; set; }
     public int SupplierOrderLineId { get; set; }
     [JsonIgnore]
