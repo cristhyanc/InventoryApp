@@ -25,6 +25,16 @@ namespace InventoryApi.Bootstrap;
 ///   bytes is skipped, so an interrupted run is finished simply by running it again.</item>
 /// </list>
 ///
+/// A failure reaching the destination - container missing, authorization refused, account
+/// disabled, service unavailable - aborts the whole run rather than becoming one document's
+/// <see cref="DocumentMigrationStatus.Failed"/>. Those failures are about the destination, not
+/// about the document being copied, and reporting them per item would print the most misleading
+/// summary this command could produce: "32 migrated, 3 failed", when nothing could have worked
+/// and the three are merely where it stopped. Recovery is to fix the destination and run again,
+/// which is safe precisely because of the rerun property above. What a document's
+/// <see cref="DocumentMigrationStatus.Failed"/> does mean is narrower and always about that one
+/// document: its copy could not be read back, or did not match its source.
+///
 /// It takes an unrestricted <see cref="AppDbContext"/> because it must see every business's
 /// records at once, and a <see cref="IDocumentMigrationDestination"/> rather than
 /// <see cref="IDocumentStorage"/> because that port is scoped to the current request's business
@@ -202,6 +212,8 @@ public static class DocumentMigrator
                     "The stored document disappeared between being hashed and being copied.");
             }
 
+            // Deliberately not wrapped: an upload failure is a destination failure and ends the
+            // run. See the note on this class about why it is not this document's Failed.
             uploaded = await destination.UploadIfAbsentAsync(
                 businessId, reference.Category, reference.StoredFileName, content.Content, cancellationToken);
         }

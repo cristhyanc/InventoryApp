@@ -141,10 +141,12 @@ instead. Exactly one of the two flags must be given.
 The dry run writes nothing and reports what an apply would do. An apply copies each document to
 `tenants/{businessId}/purchases|expenses/{storedFileName}`, where the business is read from the
 record that owns the document, and verifies the copy by size and SHA-256 before counting it as
-migrated. Reruns are safe: a document already present with the same bytes is skipped, and a
-destination holding different bytes is reported as a collision and never overwritten. Source
-documents are never deleted — retiring them is a later, separate decision. The command exits
-non-zero if any document is missing, collided, unowned or failed.
+migrated. Reruns are safe and source documents are never deleted.
+
+**Do not run this against production from this description.**
+[docs/document-storage-rollout.md](docs/document-storage-rollout.md) is the canonical procedure:
+prerequisites, how to read the report, what must be reviewed before an apply, how to verify, and
+why the runtime provider is switched only afterwards.
 
 ### 2. How the frontend finds the API
 

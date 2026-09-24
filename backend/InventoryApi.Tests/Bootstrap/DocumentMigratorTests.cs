@@ -549,6 +549,140 @@ public sealed class DocumentMigratorTests : IDisposable
         await Assert.ThrowsAsync<RequestFailedException>(() => RunAsync(apply: true));
     }
 
+    /// <summary>
+    /// A failed upload aborts the whole run rather than becoming that document's
+    /// <see cref="DocumentMigrationStatus.Failed"/>.
+    ///
+    /// This is a deliberate contract, not an omission. The failures an upload can raise -
+    /// container missing, authorization refused, account disabled, service unavailable - are
+    /// almost never about the one document being copied; they are about the destination. Turning
+    /// them into a per-document result would produce the most misleading report this command
+    /// could print: "32 migrated, 3 failed", when in truth nothing could have worked and the
+    /// three are simply where it stopped. Classifying them per item would also mean a second
+    /// error-code taxonomy, which is exactly the mistake checkpoint 2 was fixed for.
+    ///
+    /// Recovery is the same in every case: fix the destination and run the command again. That
+    /// is safe because the migration is idempotent - documents already copied come back as
+    /// <see cref="DocumentMigrationStatus.AlreadyPresent"/> - and because a failed run has
+    /// changed nothing on the source side, which the assertions below pin down.
+    /// </summary>
+    [Theory]
+    [InlineData(404, "ContainerNotFound")]
+    [InlineData(403, "AuthorizationPermissionMismatch")]
+    [InlineData(403, "AccountIsDisabled")]
+    [InlineData(503, "ServerBusy")]
+    public async Task A_failed_upload_aborts_the_run_and_leaves_the_source_untouched(
+        int status, string errorCode)
+    {
+        var storedFileName = ProtectedDocument("receipt.jpg", "purchase bytes");
+        var purchase = SeedPurchase(BusinessA, storedFileName);
+        var path = ProtectedPath("receipts", storedFileName);
+        var sourceBefore = await File.ReadAllBytesAsync(path);
+        _container.FailCreatesWith = new RequestFailedException(status, "upload failed", errorCode, null);
+
+        var failure = await Assert.ThrowsAsync<RequestFailedException>(() => RunAsync(apply: true));
+
+        Assert.Equal(errorCode, failure.ErrorCode);
+
+        // Nothing was written at the destination, and nothing was taken away from the source.
+        Assert.Empty(_container.BlobNames);
+        Assert.Equal(0, _container.DeleteAttempts);
+        Assert.True(File.Exists(path), "the source document must survive a failed upload.");
+        Assert.Equal(sourceBefore, await File.ReadAllBytesAsync(path));
+        await AssertRecordUnchangedAsync(purchase, storedFileName);
+    }
+
+    /// <summary>
+    /// After an aborted run, running the command again finishes the job: this is what makes the
+    /// fatal-abort contract above a workable one rather than a dead end.
+    /// </summary>
+    [Fact]
+    public async Task A_run_that_aborted_on_upload_completes_when_it_is_run_again()
+    {
+        SeedPurchase(BusinessA, ProtectedDocument("receipt.jpg", "purchase bytes"));
+        _container.FailCreatesWith = new RequestFailedException(503, "busy", "ServerBusy", null);
+        await Assert.ThrowsAsync<RequestFailedException>(() => RunAsync(apply: true));
+
+        _container.FailCreatesWith = null;
+        var report = await RunAsync(apply: true);
+
+        Assert.Equal(1, report.Migrated);
+        Assert.Equal(0, report.ExitCode);
+    }
+
+    #endregion
+
+    #region Verification
+
+    /// <summary>
+    /// The case the read-back verification exists for: the destination accepts the write and
+    /// then holds something else. Nothing before the verification would notice - the upload
+    /// reported success - so without reading the bytes back the migration would report a
+    /// document as safely copied when it is not.
+    ///
+    /// The same-length case is the one that matters most: only the hash separates those two
+    /// documents, so a size check alone would pass.
+    /// </summary>
+    [Theory]
+    [InlineData("PURCHASE BYTES")]
+    [InlineData("short")]
+    public async Task A_copy_that_reads_back_differently_is_reported_as_failed_and_not_migrated(
+        string storedInstead)
+    {
+        var storedFileName = ProtectedDocument("receipt.jpg", "purchase bytes");
+        var purchase = SeedPurchase(BusinessA, storedFileName);
+        var path = ProtectedPath("receipts", storedFileName);
+        var sourceBefore = await File.ReadAllBytesAsync(path);
+        _container.CorruptCreatedContentWith = _ => Encoding.UTF8.GetBytes(storedInstead);
+
+        var report = await RunAsync(apply: true);
+
+        Assert.Equal(1, report.Failed);
+        Assert.Equal(0, report.Migrated);
+        Assert.Equal(1, report.ExitCode);
+
+        var item = Assert.Single(report.Items);
+        Assert.Equal(DocumentMigrationStatus.Failed, item.Status);
+        Assert.Equal(purchase.Id, item.RecordId);
+        Assert.Contains("does not match its source", item.Reason, StringComparison.Ordinal);
+
+        // The source is the only remaining copy of those bytes, so it must be exactly as it was.
+        Assert.True(File.Exists(path), "the source document must survive a failed verification.");
+        Assert.Equal(sourceBefore, await File.ReadAllBytesAsync(path));
+        await AssertRecordUnchangedAsync(purchase, storedFileName);
+
+        // The mismatching destination is left alone too: this command does not delete anything,
+        // and what is sitting there is for a human to identify.
+        Assert.Equal(0, _container.DeleteAttempts);
+        Assert.Equal(
+            storedInstead,
+            Encoding.UTF8.GetString(_container[$"tenants/{BusinessA}/purchases/{storedFileName}"]));
+    }
+
+    /// <summary>
+    /// A failed verification must not be quietly resolved by a later run either. The second run
+    /// sees a destination that differs from its source, which is a collision - still not
+    /// overwritten, still needing a human.
+    /// </summary>
+    [Fact]
+    public async Task Re_running_after_a_failed_verification_reports_a_collision_rather_than_overwriting()
+    {
+        var storedFileName = ProtectedDocument("receipt.jpg", "purchase bytes");
+        SeedPurchase(BusinessA, storedFileName);
+        _container.CorruptCreatedContentWith = _ => Encoding.UTF8.GetBytes("PURCHASE BYTES");
+        Assert.Equal(1, (await RunAsync(apply: true)).Failed);
+
+        _container.CorruptCreatedContentWith = null;
+        var report = await RunAsync(apply: true);
+
+        Assert.Equal(1, report.Collision);
+        Assert.Equal(0, report.Migrated);
+        Assert.Equal(1, report.ExitCode);
+        Assert.Equal(
+            "PURCHASE BYTES",
+            Encoding.UTF8.GetString(_container[$"tenants/{BusinessA}/purchases/{storedFileName}"]));
+    }
+
     #endregion
 
     #region Helpers
@@ -569,6 +703,20 @@ public sealed class DocumentMigratorTests : IDisposable
     }
 
     private static string Sha256(byte[] content) => Convert.ToHexString(SHA256.HashData(content));
+
+    /// <summary>
+    /// The migration reads the database and never writes to it, so a failure must leave the
+    /// record naming exactly the document it named before.
+    /// </summary>
+    private async Task AssertRecordUnchangedAsync(Purchase purchase, string storedFileName)
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+        var persisted = await db.Receipts.AsNoTracking().SingleAsync(x => x.Id == purchase.Id);
+
+        Assert.Equal(storedFileName, persisted.StoredFileName);
+        Assert.Equal("receipt.jpg", persisted.FileName);
+        Assert.Equal(purchase.BusinessId, persisted.BusinessId);
+    }
 
     private string ProtectedPath(string folderName, string storedFileName) =>
         Path.Combine(_contentRoot, "protected-files", folderName, storedFileName);

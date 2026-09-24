@@ -26,6 +26,13 @@ internal sealed class InMemoryDocumentBlobContainer : IDocumentBlobContainer
     /// <summary>Thrown by every create, for a storage failure part way through a migration.</summary>
     public Exception? FailCreatesWith { get; set; }
 
+    /// <summary>
+    /// Rewrites what a create actually stores, for the case a migration has to survive: the
+    /// write is accepted and the bytes that come back afterwards are not the ones sent. Only a
+    /// read-back comparison can catch that, which is why the migration does one.
+    /// </summary>
+    public Func<byte[], byte[]>? CorruptCreatedContentWith { get; set; }
+
     public IReadOnlyCollection<string> BlobNames => _blobs.Keys;
 
     public byte[] this[string blobName] => _blobs[blobName];
@@ -43,7 +50,8 @@ internal sealed class InMemoryDocumentBlobContainer : IDocumentBlobContainer
 
         using var buffer = new MemoryStream();
         await content.CopyToAsync(buffer, cancellationToken);
-        _blobs[blobName] = buffer.ToArray();
+        var written = buffer.ToArray();
+        _blobs[blobName] = CorruptCreatedContentWith is null ? written : CorruptCreatedContentWith(written);
         return true;
     }
 

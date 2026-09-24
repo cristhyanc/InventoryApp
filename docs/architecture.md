@@ -288,10 +288,20 @@ success. It exits `0` when nothing is unresolved (a dry run's pending work is no
 `1` when any document is missing, collided, unowned or failed, so an apply can be gated on a
 clean dry run.
 
+A failure reaching the destination — container missing, authorization refused, account disabled,
+service unavailable — aborts the whole run rather than becoming a few documents' `Failed`. Those
+failures are about the destination rather than the document being copied, and reporting them per
+item would print the most misleading summary the command could produce. Recovery is to fix the
+destination and run again, which is safe because the migration is idempotent. A document's
+`Failed` therefore always means something narrower and specific to it: its copy could not be read
+back, or did not match its source.
+
 It never deletes or modifies a source document, and never writes to the database: the stored file
 name is the link between record and document, and moving bytes is not a reason to change it.
 Retiring the filesystem copies and the legacy fallback is a separate human decision, after a
-verified migration.
+verified migration. [docs/document-storage-rollout.md](document-storage-rollout.md) is the
+operational runbook for the whole rollout — prerequisites, the dry-run review gate, verification,
+the separate runtime switch, and the rollback.
 
 **Configuration and provider selection.** `Program.cs` binds the non-secret `DocumentStorage`
 section and passes it, with the host's content and web roots, to
