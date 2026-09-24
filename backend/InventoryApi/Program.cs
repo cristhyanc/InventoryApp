@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Inventory.Application;
+using Inventory.Application.CatalogReconciliation;
 using Inventory.Application.NayaxFeeSettings;
 using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Reporting.Dashboard;
@@ -134,6 +135,11 @@ builder.Services.AddScoped<IDashboardReportFactsProvider, EfDashboardReportFacts
 
 // Temporary API-owned adapter for the transaction sales report facts port; see EfTransactionSalesReportFactsProvider.
 builder.Services.AddScoped<ITransactionSalesReportFactsProvider, EfTransactionSalesReportFactsProvider>();
+
+// Temporary API-owned adapters for the Nayax catalog reconciliation ports (issue #55); see
+// EfLocalCatalogSnapshotProvider and NayaxCatalogSnapshotProvider.
+builder.Services.AddScoped<ILocalCatalogSnapshotProvider, EfLocalCatalogSnapshotProvider>();
+builder.Services.AddScoped<INayaxCatalogSnapshotProvider, InventoryApi.Adapters.Nayax.NayaxCatalogSnapshotProvider>();
 
 var app = builder.Build();
 

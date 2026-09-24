@@ -507,6 +507,56 @@ change needing its own issue, ideally combined with the rest of the Purchasing a
 4. Mark reconciled only within the `$0.01` tolerance.
 5. Surface pending, unmatched, partial, unknown, or unsupported data.
 
+### Nayax catalog source-state reconciliation
+
+Local catalog data and live Nayax data can drift: a product or machine can be renamed, remapped, or
+stop being returned by Nayax entirely. `GET api/data-quality/nayax-catalog-reconciliation` (issue
+#55) compares the two and reports a source state per identity for human review; it never deletes or
+changes a local record on the basis of what Nayax currently returns.
+
+`Inventory.Domain.CatalogReconciliation.SourceReconciliationState` defines five states, resolved
+deterministically by `CatalogReconciliationPolicy` in priority order so at most one state applies to
+an identity:
+
+1. **ConflictingIdentity** - the identity is genuinely ambiguous, either because Nayax returns more
+   than one entry for the identifier in one snapshot, or because local history records more than one
+   name for it at its most recent observation, so no single current local name can be determined.
+2. **MissingRemotely** - a local record exists but Nayax no longer returns the identifier. This is a
+   data-quality signal, not deletion: the local product/machine history is untouched.
+3. **Added** - Nayax returns the identifier but there is no local record of it yet.
+4. **MappingChanged** - both sides have the identifier but disagree on their *current* name (a rename
+   or remap), after stripping a parenthetical Nayax price/code suffix the same way
+   `ProductMatcher.NormalizeName` already does for sale-to-product matching, so formatting-only
+   differences are not reported as changes.
+5. **Present** - local and remote agree on identity and current name.
+
+Only the latest reliable local name takes part in the comparison. Earlier names are carried
+separately as `HistoricalLocalNames` on every reported row (most recently used first) and appended to
+the row's note as context; they never decide a state on their own. A completed historical rename is
+therefore ordinary history: once the latest local name agrees with Nayax again the identity is
+`Present`, and a later disagreement still surfaces as `MappingChanged` instead of being masked by a
+permanent conflict.
+
+Products are compared directly (`Product.Id` is the persisted Nayax product identifier; see
+`ImportService.ImportProductsAsync`, which already never removes a local product Nayax stops
+returning). Machines have no persisted entity at all - `MachineService` builds machines as a live
+Nayax view - so a machine's local history is derived from its recorded `NayaxSales` rows: the
+`MachineName` on the most recent `MachineAuthorizationTime` is the latest reliable local name, any
+other distinct `MachineName` for the same `MachineID` becomes a historical name, and the current name
+counts as ambiguous - the only local `ConflictingIdentity` evidence - only when that most recent
+authorization time itself carries more than one distinct `MachineName`.
+
+This is a vertical slice on the current dependency skeleton: `SourceReconciliationState`,
+`CatalogReconciliationPolicy`, and the plain `RemoteCatalogEntry`/`LocalCatalogEntry` value types are
+deterministic `Inventory.Domain` rules with no Nayax or EF Core dependency.
+`Inventory.Application.CatalogReconciliation.GetNayaxCatalogReconciliation` is the use case, reading
+through the narrow `INayaxCatalogSnapshotProvider`/`ILocalCatalogSnapshotProvider` ports.
+`InventoryApi.Adapters.Nayax.NayaxCatalogSnapshotProvider` (backed by `INayaxLynxClient`) and
+`InventoryApi.Adapters.Persistence.EfLocalCatalogSnapshotProvider` (backed by `AppDbContext`) are
+temporary API-owned adapters, following the same pattern as `EfNayaxFeeRateStore`, because
+`INayaxLynxClient` and `AppDbContext` still live in `InventoryApi`. `DataQualityController` only binds
+the request and returns the use case's `CatalogReconciliationReportDto`.
+
 ## Incremental migration plan
 
 Each step is a separate, passing pull request. Existing endpoints stay operational throughout.
