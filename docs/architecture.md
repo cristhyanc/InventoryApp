@@ -13,7 +13,7 @@ This document describes the repository at the `main` baseline inspected on 17 Se
 | Backend | ASP.NET Core Web API on .NET 10 |
 | Persistence | EF Core 10, SQLite, code-first migrations |
 | External integration | Nayax Lynx HTTP API and imported reimbursement/workbook data |
-| Documents | Protected purchase and operating-expense files under the content root's `protected-files/`, outside the web root, with metadata in SQLite. Static-file middleware is disabled, so they have no anonymous URL; documents predating protected storage remain readable from `wwwroot/{category}` only as a fallback |
+| Documents | Purchase and operating-expense files behind `IDocumentStorage`, with metadata in SQLite. `DocumentStorage:Provider` selects the implementation: `FileSystem` (the default) keeps them under the content root's `protected-files/`, outside the web root, with a legacy `wwwroot/{category}` read fallback; `AzureBlob` keeps them in a private Azure container under `tenants/{businessId}/...`, authenticated with a managed identity. Static-file middleware is disabled and no SAS or public URL is ever generated, so no document has an anonymous URL |
 | Frontend | Angular 19 standalone components, TypeScript, RxJS, Tailwind-based styling |
 | Backend tests | xUnit, Moq, EF Core InMemory and SQLite |
 | Hosting | Azure App Service API and Azure Static Web Apps frontend |
@@ -36,7 +36,7 @@ InventoryApp/
 │   │   └── InventoryApi.csproj
 │   ├── Inventory.Domain/            NayaxFeeSettings rule, reporting policies/calculations (Inventory.Domain.Reporting.<Feature>), Purchases.PurchaseTotalValidationPolicy; other features not yet migrated
 │   ├── Inventory.Application/       NayaxFeeSettings use cases/ports, reporting use cases/contracts (Inventory.Application.Reporting.<Feature>), Purchases.ComputePurchaseTotalValidation, Documents.IDocumentStorage, shared Inventory.Application.Time.IClock/IBusinessCalendar; other features not yet migrated
-│   ├── Inventory.Infrastructure/    SystemClock/SydneyBusinessCalendar adapters (Inventory.Infrastructure.Time), FileSystemDocumentStorage (Inventory.Infrastructure.Documents); other features not yet migrated
+│   ├── Inventory.Infrastructure/    SystemClock/SydneyBusinessCalendar adapters (Inventory.Infrastructure.Time), FileSystemDocumentStorage and AzureBlobDocumentStorage (Inventory.Infrastructure.Documents); other features not yet migrated
 │   └── InventoryApi.Tests/
 ├── frontend/inventory-app/
 │   ├── src/app/
@@ -157,7 +157,7 @@ Contains adapters and technical implementation:
 
 - `AppDbContext`, entity configurations, migrations, and repositories/read stores.
 - Nayax Lynx HTTP client and imported-file parsers.
-- Document storage for purchase documents and operating-expense attachments (`Inventory.Infrastructure.Documents.FileSystemDocumentStorage`, behind the Application's `Documents.IDocumentStorage` port; see [Document storage](#document-storage)).
+- Document storage for purchase documents and operating-expense attachments (`Inventory.Infrastructure.Documents.FileSystemDocumentStorage` and `AzureBlobDocumentStorage`, behind the Application's `Documents.IDocumentStorage` port; see [Document storage](#document-storage)).
 - CSV/XLSX report exporters.
 - Clock/timezone adapter (`Inventory.Infrastructure.Clock.SystemClock`, `Inventory.Infrastructure.Time.SydneyBusinessCalendar`; see [Time](#time)).
 
@@ -226,13 +226,58 @@ reaches the port, by loading the parent record through the tenant-filtered `AppD
 work to replace a document, which is what keeps cleanup-on-failure ordering visible at the call
 site rather than hidden in storage.
 
-`Inventory.Infrastructure.Documents.FileSystemDocumentStorage` is the only implementation. It
-writes new documents to `{ContentRoot}/protected-files/{category}/`, reads them back from there
-or, failing that, from the legacy `{WebRoot}/{category}/` location, and refuses to overwrite an
-existing document or to leave a partially written one behind. `Program.cs` is the only place that
-knows the host's content and web roots: it passes them to `AddFileSystemDocumentStorage` as
-`FileSystemDocumentStorageOptions`. Category folders keep their legacy names (`receipts`,
+`Inventory.Infrastructure.Documents.FileSystemDocumentStorage` writes new documents to
+`{ContentRoot}/protected-files/{category}/`, reads them back from there or, failing that, from
+the legacy `{WebRoot}/{category}/` location, and refuses to overwrite an existing document or to
+leave a partially written one behind. Category folders keep their legacy names (`receipts`,
 `expenses`) because persisted metadata refers to documents by stored file name alone.
+
+`Inventory.Infrastructure.Documents.AzureBlobDocumentStorage` (issue #39, checkpoint 2) is the
+second implementation. It keys every document by the business that owns it:
+
+```text
+tenants/{businessId}/purchases/{storedFileName}
+tenants/{businessId}/expenses/{storedFileName}
+```
+
+The `businessId` is read from `IBusinessScope` — the trusted per-request scope issue #64
+publishes from the authenticated actor's membership — and never from a route, query, form,
+header, JSON body or file name; `IDocumentStorage` deliberately has no parameter that could
+carry one. A denied scope and the deliberate `Unscoped` opt-out both refuse: a document belongs
+to exactly one business, so there is no prefix that could stand in for "all of them", and
+cross-business maintenance work needs its own explicit path rather than a mode of the request
+path. `BlobDocumentPath` reduces an untrusted stored name to its last path segment before it can
+reach the service, because the Blob service canonicalises nothing and a `..` in a name would
+otherwise be a real blob under a different prefix. Uploads use `overwrite: false`, so the
+service itself refuses to replace an existing document; a blob is readable only once its upload
+is committed, so a failed upload leaves nothing behind and the adapter deliberately does not
+delete on failure. The container is private and no SAS or public URL is generated.
+
+The SDK sits behind a small seam, `IDocumentBlobContainer`, implemented by `AzureBlobContainer`.
+That is what lets the adapter's rules — tenant-scoped names, no overwrite, missing blob means
+`null` — be tested without Azure credentials or a network.
+
+**Configuration and provider selection.** `Program.cs` binds the non-secret `DocumentStorage`
+section and passes it, with the host's content and web roots, to
+`AddDocumentStorage`:
+
+```text
+DocumentStorage__Provider=AzureBlob
+DocumentStorage__BlobServiceUri=https://<storage-account>.blob.core.windows.net
+DocumentStorage__ContainerName=business-documents        # business-documents-dev for development
+```
+
+An absent provider means `FileSystem`, which is what every environment ran before the setting
+existed. An unrecognised provider, or an `AzureBlob` provider with a missing, non-absolute or
+plaintext endpoint, a missing container, or an endpoint carrying a query string or credentials
+(what a SAS token or an embedded key looks like), throws while the container is being built.
+There is deliberately no fallback from `AzureBlob` to the filesystem: an application that could
+not reach its configured storage would otherwise look healthy while writing business documents
+to a local disk nobody backs up. Authentication is `DefaultAzureCredential` throughout — the App
+Service's system-assigned managed identity in Azure, the developer's own Azure sign-in locally —
+so no account key, SAS token, client secret or storage connection string is ever configured.
+`FileSystemDocumentStorage` stays registered as a concrete type under either provider, because
+switching the provider does not move the documents already on disk.
 
 ### API documentation policy
 
@@ -607,7 +652,9 @@ Backend and frontend tracks can progress independently when their contracts do n
    - Extract use cases and persistence.
    - **`IDocumentStorage` done** (issue #39, checkpoint 1): the storage port and its filesystem
      adapter are in place for both purchase documents and operating-expense attachments; see
-     [Document storage](#document-storage). The operating-expense use cases and persistence
+     [Document storage](#document-storage). Checkpoint 2 added the tenant-scoped Azure Blob
+     adapter behind the same port and the `DocumentStorage:Provider` selection; migrating the
+     documents already on disk is still to come. The operating-expense use cases and persistence
      themselves remain in `OperatingExpensesController`/`AppDbContext`.
    - Preserve atomic replacement/cleanup and upload validation behavior.
 

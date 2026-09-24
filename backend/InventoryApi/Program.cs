@@ -53,15 +53,24 @@ builder.Services.AddApplicationServices();
 builder.Services.AddInfrastructureServices();
 
 // Uploaded business documents (issue #39). The composition root is the only place that knows
-// the host's content and web roots: the Application layer sees the IDocumentStorage port, and
-// the Infrastructure adapter sees plain paths, so neither depends on IWebHostEnvironment. New
-// documents are written under {ContentRoot}/protected-files, and documents uploaded before
-// protected storage existed stay readable from the web root through the adapter's fallback.
-builder.Services.AddFileSystemDocumentStorage(new FileSystemDocumentStorageOptions
-{
-    ContentRootPath = builder.Environment.ContentRootPath,
-    WebRootPath = builder.Environment.WebRootPath,
-});
+// the host's content and web roots and reads configuration: the Application layer sees the
+// IDocumentStorage port and the Infrastructure adapters see plain paths and settings, so
+// neither depends on IWebHostEnvironment or IConfiguration.
+//
+// DocumentStorage:Provider selects the implementation - FileSystem (the default, and what every
+// environment ran before this setting existed) or AzureBlob, which keys documents by the trusted
+// current business. An invalid or incomplete AzureBlob configuration fails startup here rather
+// than falling back to the local disk. The filesystem implementation stays registered as a
+// concrete type under either provider, because documents already written to disk must remain
+// readable.
+builder.Services.AddDocumentStorage(
+    builder.Configuration.GetSection(DocumentStorageOptions.SectionName).Get<DocumentStorageOptions>()
+        ?? new DocumentStorageOptions(),
+    new FileSystemDocumentStorageOptions
+    {
+        ContentRootPath = builder.Environment.ContentRootPath,
+        WebRootPath = builder.Environment.WebRootPath,
+    });
 
 // Controlled RFC 7807 responses for Nayax upstream failures.
 builder.Services.AddProblemDetails();
