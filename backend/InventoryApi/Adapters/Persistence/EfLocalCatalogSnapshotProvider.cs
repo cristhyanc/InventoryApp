@@ -14,9 +14,12 @@ namespace InventoryApi.Adapters.Persistence;
 /// Products are persisted directly, keyed by the Nayax product identifier (see
 /// <c>ImportService.ImportProductsAsync</c>). Machines have no persisted entity at all - the current
 /// remote-only machine view (<c>MachineService</c>) is not local history - so a machine's local
-/// history is derived from the <c>NayaxSales</c> rows recorded against it: the most recent
-/// <c>MachineName</c> is its current local name, and any other distinct name recorded for the same
-/// <c>MachineID</c> is reported as a prior name so the reconciliation policy can flag the conflict.
+/// history is derived from the <c>NayaxSales</c> rows recorded against it: the <c>MachineName</c> on
+/// its most recent sale is the latest reliable local name, and any other distinct name recorded for
+/// the same <c>MachineID</c> is reported as a historical name for context. A rename is therefore
+/// ordinary history, not a conflict. The current name is only ambiguous when the most recent
+/// authorization time itself carries more than one distinct <c>MachineName</c>; that is the single
+/// local signal the reconciliation policy treats as a conflicting identity.
 /// </summary>
 public sealed class EfLocalCatalogSnapshotProvider : ILocalCatalogSnapshotProvider
 {
@@ -45,16 +48,22 @@ public sealed class EfLocalCatalogSnapshotProvider : ILocalCatalogSnapshotProvid
             .GroupBy(row => row.MachineID)
             .Select(group =>
             {
-                var latestName = group
+                var latestTime = group.Max(row => row.MachineAuthorizationTime);
+                var namesAtLatestTime = group
+                    .Where(row => row.MachineAuthorizationTime == latestTime)
+                    .Select(row => row.MachineName!)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(name => name, StringComparer.Ordinal)
+                    .ToList();
+                var currentName = namesAtLatestTime[0];
+                var historicalNames = group
                     .OrderByDescending(row => row.MachineAuthorizationTime)
+                    .ThenBy(row => row.MachineName, StringComparer.Ordinal)
                     .Select(row => row.MachineName!)
-                    .First();
-                var priorNames = group
-                    .Select(row => row.MachineName!)
-                    .Where(name => !string.Equals(name, latestName, StringComparison.OrdinalIgnoreCase))
+                    .Where(name => !string.Equals(name, currentName, StringComparison.OrdinalIgnoreCase))
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToList();
-                return new LocalCatalogEntry(group.Key, latestName, priorNames);
+                return new LocalCatalogEntry(group.Key, currentName, historicalNames, namesAtLatestTime.Count > 1);
             })
             .ToList();
     }

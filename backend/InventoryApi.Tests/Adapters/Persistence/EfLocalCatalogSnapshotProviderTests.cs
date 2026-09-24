@@ -40,7 +40,7 @@ public class EfLocalCatalogSnapshotProviderTests
     }
 
     [Fact]
-    public async Task GetMachinesAsync_uses_the_most_recent_sale_name_as_the_current_local_name()
+    public async Task GetMachinesAsync_uses_the_most_recent_sale_name_as_the_latest_reliable_local_name()
     {
         await using var connection = await CreateSqliteAsync();
         await using var db = TestAppDbContext.For(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options, businessId: 1);
@@ -54,11 +54,52 @@ public class EfLocalCatalogSnapshotProviderTests
         var machine = Assert.Single(machines);
         Assert.Equal(10, machine.ExternalId);
         Assert.Equal("New Site Name", machine.Name);
-        Assert.Equal(["Old Site Name"], machine.PriorNames);
+        Assert.Equal(["Old Site Name"], machine.HistoricalNames);
+        Assert.False(machine.CurrentNameIsAmbiguous);
+    }
+
+    /// <summary>
+    /// Regression for the repair of PR #139: the current local name is only ambiguous when the most
+    /// recent authorization time itself carries more than one distinct name. A rename recorded at an
+    /// earlier time resolves cleanly (covered above) and must not set the flag.
+    /// </summary>
+    [Fact]
+    public async Task GetMachinesAsync_marks_the_current_name_ambiguous_when_the_latest_sale_time_carries_two_names()
+    {
+        await using var connection = await CreateSqliteAsync();
+        await using var db = TestAppDbContext.For(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options, businessId: 1);
+        var sameInstant = new DateTime(2026, 2, 1);
+        db.NayaxSales.Add(new NayaxSales { TransactionID = 1, MachineID = 10, MachineName = "Machine At Depot", SettlementValue = 2m, MachineAuthorizationTime = sameInstant });
+        db.NayaxSales.Add(new NayaxSales { TransactionID = 2, MachineID = 10, MachineName = "Machine At Site", SettlementValue = 2m, MachineAuthorizationTime = sameInstant });
+        await db.SaveChangesAsync();
+        var provider = new EfLocalCatalogSnapshotProvider(db);
+
+        var machine = Assert.Single(await provider.GetMachinesAsync(CancellationToken.None));
+
+        Assert.True(machine.CurrentNameIsAmbiguous);
+        Assert.Equal("Machine At Depot", machine.Name);
+        Assert.Equal(["Machine At Site"], machine.HistoricalNames);
     }
 
     [Fact]
-    public async Task GetMachinesAsync_reports_no_prior_names_when_every_sale_agrees_on_the_machine_name()
+    public async Task GetMachinesAsync_treats_a_case_only_difference_as_the_same_machine_name()
+    {
+        await using var connection = await CreateSqliteAsync();
+        await using var db = TestAppDbContext.For(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options, businessId: 1);
+        db.NayaxSales.Add(new NayaxSales { TransactionID = 1, MachineID = 10, MachineName = "machine a", SettlementValue = 2m, MachineAuthorizationTime = new DateTime(2026, 1, 1) });
+        db.NayaxSales.Add(new NayaxSales { TransactionID = 2, MachineID = 10, MachineName = "Machine A", SettlementValue = 2m, MachineAuthorizationTime = new DateTime(2026, 2, 1) });
+        await db.SaveChangesAsync();
+        var provider = new EfLocalCatalogSnapshotProvider(db);
+
+        var machine = Assert.Single(await provider.GetMachinesAsync(CancellationToken.None));
+
+        Assert.Equal("Machine A", machine.Name);
+        Assert.Empty(machine.HistoricalNames);
+        Assert.False(machine.CurrentNameIsAmbiguous);
+    }
+
+    [Fact]
+    public async Task GetMachinesAsync_reports_no_historical_names_when_every_sale_agrees_on_the_machine_name()
     {
         await using var connection = await CreateSqliteAsync();
         await using var db = TestAppDbContext.For(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options, businessId: 1);
@@ -70,7 +111,8 @@ public class EfLocalCatalogSnapshotProviderTests
         var machines = await provider.GetMachinesAsync(CancellationToken.None);
 
         var machine = Assert.Single(machines);
-        Assert.Empty(machine.PriorNames);
+        Assert.Empty(machine.HistoricalNames);
+        Assert.False(machine.CurrentNameIsAmbiguous);
     }
 
     [Fact]

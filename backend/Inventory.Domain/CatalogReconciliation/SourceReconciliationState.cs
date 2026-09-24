@@ -17,9 +17,16 @@ public enum SourceReconciliationState
     /// <summary>A local record exists but Nayax no longer returns this identity.</summary>
     MissingRemotely,
 
-    /// <summary>Local and remote agree on identity but disagree on name (a rename or remap).</summary>
+    /// <summary>
+    /// Local and remote agree on identity but disagree on their current name (a rename or remap).
+    /// Only the latest reliable local name is compared; earlier local names are context.
+    /// </summary>
     MappingChanged,
 
-    /// <summary>The same identity resolves to more than one name, remotely or in local history.</summary>
+    /// <summary>
+    /// The identity is genuinely ambiguous: Nayax returns more than one entry for the identifier in
+    /// one snapshot, or local history records more than one name for it at its most recent
+    /// observation. A completed historical rename is not a conflict.
+    /// </summary>
     ConflictingIdentity
 }

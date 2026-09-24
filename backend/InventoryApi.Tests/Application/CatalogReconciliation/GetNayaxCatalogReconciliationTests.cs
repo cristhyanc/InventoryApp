@@ -35,6 +35,33 @@ public class GetNayaxCatalogReconciliationTests
         Assert.Equal(0, result.MachineIssueCount);
     }
 
+    /// <summary>
+    /// Regression for the repair of PR #139: a machine renamed in local history whose latest name now
+    /// agrees with Nayax is not an issue in the report, and its earlier name reaches the API as
+    /// context rather than as a conflict.
+    /// </summary>
+    [Fact]
+    public async Task Handle_reports_a_renamed_machine_that_now_matches_Nayax_as_Present_with_its_earlier_name_as_context()
+    {
+        var remote = new FakeNayaxCatalogSnapshotProvider
+        {
+            Machines = [new RemoteCatalogEntry(100, "Machine A At Depot")]
+        };
+        var local = new FakeLocalCatalogSnapshotProvider
+        {
+            Machines = [new LocalCatalogEntry(100, "Machine A At Depot", HistoricalNames: ["Machine A"])]
+        };
+        var handler = new GetNayaxCatalogReconciliation(remote, local);
+
+        var result = await handler.Handle(CancellationToken.None);
+
+        var machine = Assert.Single(result.Machines);
+        Assert.Equal("Present", machine.State);
+        Assert.Equal("Machine A At Depot", machine.LocalName);
+        Assert.Equal(["Machine A"], machine.HistoricalLocalNames);
+        Assert.Equal(0, result.MachineIssueCount);
+    }
+
     [Fact]
     public async Task Handle_returns_empty_reports_when_neither_side_has_any_identity()
     {

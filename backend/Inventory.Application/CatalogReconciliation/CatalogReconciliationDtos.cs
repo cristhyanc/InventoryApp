@@ -5,12 +5,17 @@ namespace Inventory.Application.CatalogReconciliation;
 /// <c>Inventory.Domain.CatalogReconciliation.SourceReconciliationState</c> name
 /// (<c>"Present"</c>, <c>"Added"</c>, <c>"MissingRemotely"</c>, <c>"MappingChanged"</c>, or
 /// <c>"ConflictingIdentity"</c>).
+///
+/// <see cref="LocalName"/> is the latest reliable local name - the one compared against Nayax.
+/// <see cref="HistoricalLocalNames"/> reports any earlier local names as context, most recently used
+/// first; it is empty for an identity that was never renamed and never changes the state by itself.
 /// </summary>
 public sealed record CatalogReconciliationEntryDto(
     long ExternalId,
     string State,
     string? LocalName,
     string? RemoteName,
+    IReadOnlyList<string> HistoricalLocalNames,
     string? Note);
 
 /// <summary>

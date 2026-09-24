@@ -515,25 +515,33 @@ changes a local record on the basis of what Nayax currently returns.
 deterministically by `CatalogReconciliationPolicy` in priority order so at most one state applies to
 an identity:
 
-1. **ConflictingIdentity** - the same identifier resolves to more than one name, either because Nayax
-   itself returns duplicate entries for it in one snapshot, or because local history recorded more
-   than one distinct name for it (for example a machine whose `NayaxSales.MachineName` disagrees
-   across sales rows).
+1. **ConflictingIdentity** - the identity is genuinely ambiguous, either because Nayax returns more
+   than one entry for the identifier in one snapshot, or because local history records more than one
+   name for it at its most recent observation, so no single current local name can be determined.
 2. **MissingRemotely** - a local record exists but Nayax no longer returns the identifier. This is a
    data-quality signal, not deletion: the local product/machine history is untouched.
 3. **Added** - Nayax returns the identifier but there is no local record of it yet.
-4. **MappingChanged** - both sides have the identifier but disagree on name (a rename or remap), after
-   stripping a parenthetical Nayax price/code suffix the same way `ProductMatcher.NormalizeName`
-   already does for sale-to-product matching, so formatting-only differences are not reported as
-   changes.
-5. **Present** - local and remote agree on identity and name.
+4. **MappingChanged** - both sides have the identifier but disagree on their *current* name (a rename
+   or remap), after stripping a parenthetical Nayax price/code suffix the same way
+   `ProductMatcher.NormalizeName` already does for sale-to-product matching, so formatting-only
+   differences are not reported as changes.
+5. **Present** - local and remote agree on identity and current name.
+
+Only the latest reliable local name takes part in the comparison. Earlier names are carried
+separately as `HistoricalLocalNames` on every reported row (most recently used first) and appended to
+the row's note as context; they never decide a state on their own. A completed historical rename is
+therefore ordinary history: once the latest local name agrees with Nayax again the identity is
+`Present`, and a later disagreement still surfaces as `MappingChanged` instead of being masked by a
+permanent conflict.
 
 Products are compared directly (`Product.Id` is the persisted Nayax product identifier; see
 `ImportService.ImportProductsAsync`, which already never removes a local product Nayax stops
 returning). Machines have no persisted entity at all - `MachineService` builds machines as a live
-Nayax view - so a machine's local history is derived from its recorded `NayaxSales` rows: the most
-recent `MachineName` is treated as the current local name, and any other distinct name recorded for
-the same `MachineID` becomes a `ConflictingIdentity` note.
+Nayax view - so a machine's local history is derived from its recorded `NayaxSales` rows: the
+`MachineName` on the most recent `MachineAuthorizationTime` is the latest reliable local name, any
+other distinct `MachineName` for the same `MachineID` becomes a historical name, and the current name
+counts as ambiguous - the only local `ConflictingIdentity` evidence - only when that most recent
+authorization time itself carries more than one distinct `MachineName`.
 
 This is a vertical slice on the current dependency skeleton: `SourceReconciliationState`,
 `CatalogReconciliationPolicy`, and the plain `RemoteCatalogEntry`/`LocalCatalogEntry` value types are

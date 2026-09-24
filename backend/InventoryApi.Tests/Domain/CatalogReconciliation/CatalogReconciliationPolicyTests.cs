@@ -87,6 +87,78 @@ public class CatalogReconciliationPolicyTests
         Assert.Contains("New Name", result.Note);
     }
 
+    /// <summary>
+    /// Regression for the repair of PR #139: a machine renamed at some point in its local sales
+    /// history is not a conflicting identity. Only the latest local name is compared, so once it
+    /// agrees with Nayax the identity is simply Present, and the earlier name survives as context.
+    /// </summary>
+    [Fact]
+    public void An_old_local_name_followed_by_a_latest_name_that_matches_Nayax_is_Present_not_ConflictingIdentity()
+    {
+        var local = new[] { new LocalCatalogEntry(9, "Machine 9 (renamed)", HistoricalNames: ["Machine 9"]) };
+        var remote = new[] { new RemoteCatalogEntry(9, "Machine 9 (renamed)") };
+
+        var result = Assert.Single(CatalogReconciliationPolicy.Reconcile(local, remote));
+
+        Assert.Equal(SourceReconciliationState.Present, result.State);
+        Assert.Equal("Machine 9 (renamed)", result.LocalName);
+        Assert.Equal(["Machine 9"], result.HistoricalLocalNames);
+        Assert.Contains("Machine 9", result.Note);
+    }
+
+    /// <summary>
+    /// Regression for the repair of PR #139: local history no longer masks a real mapping change.
+    /// The latest local name disagrees with Nayax, so the row must be MappingChanged even though the
+    /// identity also has an earlier name on record.
+    /// </summary>
+    [Fact]
+    public void A_latest_local_name_that_differs_from_Nayax_is_MappingChanged_even_with_earlier_local_names()
+    {
+        var local = new[] { new LocalCatalogEntry(9, "Machine 9 (renamed)", HistoricalNames: ["Machine 9"]) };
+        var remote = new[] { new RemoteCatalogEntry(9, "Machine 9 At Depot") };
+
+        var result = Assert.Single(CatalogReconciliationPolicy.Reconcile(local, remote));
+
+        Assert.Equal(SourceReconciliationState.MappingChanged, result.State);
+        Assert.Equal("Machine 9 (renamed)", result.LocalName);
+        Assert.Equal("Machine 9 At Depot", result.RemoteName);
+        Assert.Equal(["Machine 9"], result.HistoricalLocalNames);
+    }
+
+    /// <summary>
+    /// Regression for the repair of PR #139: local history that cannot resolve one current name -
+    /// two different names recorded at the same most recent observation - remains a genuine
+    /// conflicting identity, and takes priority over the name comparison.
+    /// </summary>
+    [Fact]
+    public void Local_history_with_an_ambiguous_current_name_is_ConflictingIdentity()
+    {
+        var local = new[] { new LocalCatalogEntry(9, "Machine 9 At Depot", HistoricalNames: ["Machine 9 At Site"], CurrentNameIsAmbiguous: true) };
+        var remote = new[] { new RemoteCatalogEntry(9, "Machine 9 At Depot") };
+
+        var result = Assert.Single(CatalogReconciliationPolicy.Reconcile(local, remote));
+
+        Assert.Equal(SourceReconciliationState.ConflictingIdentity, result.State);
+        Assert.Contains("cannot be determined", result.Note);
+    }
+
+    [Fact]
+    public void Earlier_local_names_are_reported_as_context_on_a_MissingRemotely_row()
+    {
+        var local = new[] { new LocalCatalogEntry(9, "Machine 9 (renamed)", HistoricalNames: ["Machine 9"]) };
+
+        var result = Assert.Single(CatalogReconciliationPolicy.Reconcile(local, Array.Empty<RemoteCatalogEntry>()));
+
+        Assert.Equal(SourceReconciliationState.MissingRemotely, result.State);
+        Assert.Equal(["Machine 9"], result.HistoricalLocalNames);
+        Assert.Contains("no longer returns it", result.Note);
+        Assert.Contains("previously recorded", result.Note);
+    }
+
+    /// <summary>
+    /// Regression for the repair of PR #139: a duplicate/conflicting remote identity is still the
+    /// upstream conflict it always was, and still takes priority over every local comparison.
+    /// </summary>
     [Fact]
     public void Nayax_returning_two_entries_for_the_same_identifier_is_ConflictingIdentity()
     {
@@ -101,30 +173,7 @@ public class CatalogReconciliationPolicyTests
 
         Assert.Equal(SourceReconciliationState.ConflictingIdentity, result.State);
         Assert.Contains("2 entries", result.Note);
-    }
-
-    [Fact]
-    public void Local_history_recording_more_than_one_name_for_an_identifier_is_ConflictingIdentity()
-    {
-        var local = new[] { new LocalCatalogEntry(9, "Machine 9 (renamed)", PriorNames: ["Machine 9"]) };
-        var remote = new[] { new RemoteCatalogEntry(9, "Machine 9 (renamed)") };
-
-        var result = Assert.Single(CatalogReconciliationPolicy.Reconcile(local, remote));
-
-        Assert.Equal(SourceReconciliationState.ConflictingIdentity, result.State);
-        Assert.Contains("Machine 9 (renamed)", result.Note);
-        Assert.Contains("Machine 9", result.Note);
-    }
-
-    [Fact]
-    public void Local_prior_names_that_are_only_case_variants_of_the_current_name_are_not_a_conflict()
-    {
-        var local = new[] { new LocalCatalogEntry(9, "Machine 9", PriorNames: ["machine 9", "MACHINE 9"]) };
-        var remote = new[] { new RemoteCatalogEntry(9, "Machine 9") };
-
-        var result = Assert.Single(CatalogReconciliationPolicy.Reconcile(local, remote));
-
-        Assert.Equal(SourceReconciliationState.Present, result.State);
+        Assert.Contains("Machine 9 Duplicate", result.Note);
     }
 
     [Fact]

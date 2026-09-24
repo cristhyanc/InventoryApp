@@ -36,6 +36,12 @@ public sealed class GetNayaxCatalogReconciliation
 
     private static IReadOnlyList<CatalogReconciliationEntryDto> ToDtos(IReadOnlyList<ReconciliationEntry> entries) =>
         entries
-            .Select(entry => new CatalogReconciliationEntryDto(entry.ExternalId, entry.State.ToString(), entry.LocalName, entry.RemoteName, entry.Note))
+            .Select(entry => new CatalogReconciliationEntryDto(
+                entry.ExternalId,
+                entry.State.ToString(),
+                entry.LocalName,
+                entry.RemoteName,
+                entry.HistoricalLocalNames,
+                entry.Note))
             .ToList();
 }
