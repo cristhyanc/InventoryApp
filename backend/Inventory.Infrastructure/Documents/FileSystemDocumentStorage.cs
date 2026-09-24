@@ -100,8 +100,11 @@ public sealed class FileSystemDocumentStorage : IDocumentStorage
         var path = ExistingPath(category, storedFileName);
         if (path is null) return Task.FromResult<DocumentContent?>(null);
 
+        // Read the write time of the file actually selected - protected copy or legacy fallback -
+        // so the download keeps the Last-Modified value the physical file result used to supply.
+        var lastModified = new DateTimeOffset(File.GetLastWriteTimeUtc(path), TimeSpan.Zero);
         var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 4096, useAsync: true);
-        return Task.FromResult<DocumentContent?>(new DocumentContent(stream, stream.Length));
+        return Task.FromResult<DocumentContent?>(new DocumentContent(stream, stream.Length, lastModified));
     }
 
     /// <inheritdoc />

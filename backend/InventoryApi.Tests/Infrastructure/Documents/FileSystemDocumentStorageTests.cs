@@ -135,6 +135,66 @@ public sealed class FileSystemDocumentStorageTests : IDisposable
         Assert.True(File.Exists(Path.Combine(_contentRoot, "protected-files", "expenses", storedFileName)));
     }
 
+    #region Last-modified metadata
+
+    /// <summary>
+    /// Serving a document straight from disk used to supply the file's write time as the
+    /// response's <c>Last-Modified</c>. Reading through the port has to expose the same instant,
+    /// otherwise moving the read behind the abstraction silently drops a caching header.
+    /// </summary>
+    [Fact]
+    public async Task A_protected_document_reports_the_write_time_of_the_protected_file()
+    {
+        var storedFileName = $"{Guid.NewGuid()}.pdf";
+        await _storage.SaveAsync(DocumentCategory.PurchaseDocument, storedFileName, Content("saved"));
+        var path = Path.Combine(_contentRoot, "protected-files", "receipts", storedFileName);
+        var written = new DateTime(2026, 4, 5, 6, 7, 8, DateTimeKind.Utc);
+        File.SetLastWriteTimeUtc(path, written);
+
+        await using var document = await _storage.OpenReadAsync(DocumentCategory.PurchaseDocument, storedFileName);
+
+        Assert.Equal(new DateTimeOffset(written, TimeSpan.Zero), document!.LastModified);
+    }
+
+    /// <summary>
+    /// A legacy document must report its own write time, not the protected folder's: these files
+    /// were uploaded years apart from anything in protected storage.
+    /// </summary>
+    [Fact]
+    public async Task A_legacy_document_reports_the_write_time_of_the_legacy_file()
+    {
+        var storedFileName = await WriteLegacyDocumentAsync("expenses", "legacy");
+        var written = new DateTime(2023, 11, 2, 3, 4, 5, DateTimeKind.Utc);
+        File.SetLastWriteTimeUtc(Path.Combine(_webRoot, "expenses", storedFileName), written);
+
+        await using var document = await _storage.OpenReadAsync(DocumentCategory.ExpenseAttachment, storedFileName);
+
+        Assert.Equal(new DateTimeOffset(written, TimeSpan.Zero), document!.LastModified);
+    }
+
+    /// <summary>
+    /// The reported instant follows whichever file was actually selected, so a document present
+    /// in both locations reports the protected copy's write time, matching the bytes served.
+    /// </summary>
+    [Fact]
+    public async Task The_reported_write_time_follows_the_file_that_was_selected()
+    {
+        var storedFileName = await WriteLegacyDocumentAsync("receipts", "legacy");
+        var legacyWritten = new DateTime(2022, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        File.SetLastWriteTimeUtc(Path.Combine(_webRoot, "receipts", storedFileName), legacyWritten);
+        await _storage.SaveAsync(DocumentCategory.PurchaseDocument, storedFileName, Content("protected"));
+        var protectedWritten = new DateTime(2026, 9, 9, 9, 9, 9, DateTimeKind.Utc);
+        File.SetLastWriteTimeUtc(
+            Path.Combine(_contentRoot, "protected-files", "receipts", storedFileName), protectedWritten);
+
+        await using var document = await _storage.OpenReadAsync(DocumentCategory.PurchaseDocument, storedFileName);
+
+        Assert.Equal(new DateTimeOffset(protectedWritten, TimeSpan.Zero), document!.LastModified);
+        Assert.Equal("protected", await ReadAllAsync(document));
+    }
+
+    #endregion
+
     #region Missing documents
 
     [Fact]

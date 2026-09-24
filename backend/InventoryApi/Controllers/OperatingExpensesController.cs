@@ -171,8 +171,15 @@ public sealed class OperatingExpensesController : ControllerBase
             AttachmentCategory, expense.AttachmentStoredFileName, cancellationToken);
         if (document is null) return NotFound();
 
-        // FileStreamResult disposes the stream once the response has been written.
-        return File(document.Content, expense.AttachmentContentType ?? "application/octet-stream", expense.AttachmentFileName);
+        // FileStreamResult disposes the stream once the response has been written. The storage's
+        // last-modified instant is carried through so the response keeps the Last-Modified header
+        // it had when the attachment was served straight from disk.
+        var result = File(
+            document.Content,
+            expense.AttachmentContentType ?? "application/octet-stream",
+            expense.AttachmentFileName);
+        result.LastModified = document.LastModified;
+        return result;
     }
 
     [HttpDelete("{id:int}")]

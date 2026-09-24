@@ -8,12 +8,13 @@ namespace Inventory.Application.Documents;
 public sealed class DocumentContent : IAsyncDisposable, IDisposable
 {
     /// <summary>Creates a readable document over <paramref name="content"/>.</summary>
-    public DocumentContent(Stream content, long byteLength)
+    public DocumentContent(Stream content, long byteLength, DateTimeOffset? lastModified = null)
     {
         ArgumentNullException.ThrowIfNull(content);
 
         Content = content;
         ByteLength = byteLength;
+        LastModified = lastModified;
     }
 
     /// <summary>The document bytes, positioned at the start.</summary>
@@ -21,6 +22,15 @@ public sealed class DocumentContent : IAsyncDisposable, IDisposable
 
     /// <summary>Length of the stored document in bytes.</summary>
     public long ByteLength { get; }
+
+    /// <summary>
+    /// When the stored document was last written, as the storage itself reports it, or
+    /// <c>null</c> when the storage cannot say. It is a plain instant rather than anything
+    /// storage-specific - a filesystem write time, a blob's last-modified - so the API boundary
+    /// can turn it into a <c>Last-Modified</c> response header without knowing which storage
+    /// produced it.
+    /// </summary>
+    public DateTimeOffset? LastModified { get; }
 
     /// <inheritdoc />
     public void Dispose() => Content.Dispose();
