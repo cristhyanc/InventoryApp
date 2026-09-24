@@ -629,6 +629,8 @@ export function verifyDocumentationImpactGate(read = readRepositoryFile) {
     forbidText(implementAllowedTools, forbidden, `${implementPath} allowed tools`);
   }
 
+  verifyTrackedFileDeletionPermissions(implementAllowedTools, `${implementPath} implementation allowed tools`);
+
   // Validation workflow: the body is obtained in the trusted context job for both events,
   // handed over base64-encoded, decoded into a temporary file, and validated before the
   // repository validation, by a job that still holds no GitHub token.
@@ -679,6 +681,7 @@ export function verifyDocumentationImpactGate(read = readRepositoryFile) {
   }
   const repairAllowedTools = extractAllowedTools(repairJob, 'agent-repair.yml allowed tools');
   forbidText(repairAllowedTools, 'gh pr edit', 'agent-repair.yml allowed tools');
+  verifyTrackedFileDeletionPermissions(repairAllowedTools, 'agent-repair.yml allowed tools');
   const repairDisallowedTools = section(repairJob, '            --disallowedTools', '\n      - name: Record outcome', 'agent-repair.yml disallowed tools');
   requireText(repairDisallowedTools, 'Bash(gh pr edit *)', 'agent-repair.yml disallowed tools');
 }
@@ -687,6 +690,16 @@ export const VALIDATION_CONCURRENCY_GROUP =
   'group: validation-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || inputs.pr_number || github.ref }}';
 export const STATUS_CONTEXT_EXPRESSION =
   "STATUS_CONTEXT: ${{ github.event_name == 'workflow_dispatch' && 'agent-validation' || 'merge-validation' }}";
+
+/** A tracked-file deletion must stay in project directories and use -- before paths. */
+export function verifyTrackedFileDeletionPermissions(allowed, source) {
+  for (const directory of ['backend', 'frontend', 'docs', 'scripts']) {
+    requireText(allowed, `Bash(git rm -- ${directory}/*)`, source);
+  }
+  for (const forbidden of ['Bash(git rm *)', 'Bash(git rm -- *)', 'Bash(git rm -r *)', 'Bash(git rm -f *)', 'Bash(git rm -- .github/*)']) {
+    forbidText(allowed, forbidden, source);
+  }
+}
 
 /** Verifies the architect handoff and final-head guard in the implementation workflow. */
 export function verifyArchitecturePass(workflow) {
@@ -705,6 +718,7 @@ export function verifyArchitecturePass(workflow) {
     requireText(architect, required, 'agent-implement.yml architect');
   }
   const allowed = section(architect, '          claude_args: |\n', '            --disallowedTools', 'agent-implement.yml architect allowed tools');
+  verifyTrackedFileDeletionPermissions(allowed, 'agent-implement.yml architect allowed tools');
   for (const forbidden of ['gh pr edit', 'gh pr create', 'gh issue edit', 'gh workflow', 'gh api']) {
     forbidText(allowed, forbidden, 'agent-implement.yml architect allowed tools');
   }

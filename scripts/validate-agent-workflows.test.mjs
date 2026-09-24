@@ -29,6 +29,7 @@ import {
   validatePath,
   verifyDocumentationImpactGate,
   verifyArchitecturePass,
+  verifyTrackedFileDeletionPermissions,
   verifyValidationModeIsolation,
 } from './validate-agent-workflows.mjs';
 
@@ -480,3 +481,23 @@ describe('architecture pass contract', () => {
   });
 });
 
+
+
+describe('scoped tracked-file deletion permissions', () => {
+  const scoped = 'Bash(git rm -- backend/*),Bash(git rm -- frontend/*),Bash(git rm -- docs/*),Bash(git rm -- scripts/*)';
+  it('allows tracked files in project directories only with the option terminator', () => {
+    assert.doesNotThrow(() => verifyTrackedFileDeletionPermissions(scoped, 'fixture'));
+  });
+  it('rejects broad, recursive, force and workflow deletion permissions', () => {
+    for (const extra of ['Bash(git rm *)', 'Bash(git rm -- *)', 'Bash(git rm -r *)', 'Bash(git rm -f *)', 'Bash(git rm -- .github/*)']) {
+      assert.throws(() => verifyTrackedFileDeletionPermissions(scoped + ',' + extra, 'fixture'), /forbidden text/);
+    }
+  });
+  it('requires the permission in implementation, architecture and repair', () => {
+    assert.doesNotThrow(() => runContractChecks());
+    for (const [path, workflow] of [[implementPath, implementWorkflow], [repairPath, repairWorkflow]]) {
+      const altered = replaceOnce(workflow, scoped, '');
+      assert.throws(() => runContractChecks({ read: readWithOverrides({ [path]: altered }) }), /missing required text: Bash\(git rm -- backend\/\*\)/);
+    }
+  });
+});

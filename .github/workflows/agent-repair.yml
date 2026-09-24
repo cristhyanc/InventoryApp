@@ -133,6 +133,7 @@ jobs:
             --allowedTools "Edit,MultiEdit,Write,mcp__github_ci__get_ci_status,mcp__github_ci__get_workflow_run_details,mcp__github_ci__download_job_log"
             "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh pr comment *),Bash(gh issue view *),Bash(gh run view *),Bash(gh run list *)"
             "Bash(git status *),Bash(git diff *),Bash(git log *),Bash(git show *),Bash(git branch --show-current),Bash(git rev-parse *)"
+            "Bash(git rm -- backend/*),Bash(git rm -- frontend/*),Bash(git rm -- docs/*),Bash(git rm -- scripts/*)"
             "Bash(git add *),Bash(git commit *),Bash(git push origin ${{ steps.pr.outputs.head_ref }} *)"
             "Bash(bash scripts/validate.sh),Bash(dotnet *),Bash(npm --prefix frontend/inventory-app *)"
             --disallowedTools "WebFetch,WebSearch"
