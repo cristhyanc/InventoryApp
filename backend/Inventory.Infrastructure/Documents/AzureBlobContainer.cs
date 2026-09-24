@@ -85,13 +85,19 @@ public sealed class AzureBlobContainer : IDocumentBlobContainer
 
         try
         {
-            return await _container.GetBlobClient(blobName).DeleteIfExistsAsync(
-                cancellationToken: cancellationToken);
+            // Delete, not DeleteIfExists: Azure.Storage.Blobs 12.29.2 implements the latter by
+            // catching BlobNotFound *and* ContainerNotFound and returning false for either, so a
+            // container that does not exist would be reported here as an ordinary "there was
+            // nothing to delete". Every delete against a misconfigured or undeployed container
+            // would then look like a success. Deleting outright and translating the one code we
+            // mean keeps that distinction, and costs no extra request - an existence check first
+            // would add a round trip and a check-then-delete race.
+            await _container.GetBlobClient(blobName).DeleteAsync(cancellationToken: cancellationToken);
+            return true;
         }
         catch (RequestFailedException failure) when (Is(failure, BlobErrorCode.BlobNotFound))
         {
-            // DeleteIfExists already answers false for a blob that is not there; this covers the
-            // same condition arriving as an exception. Nothing else is turned into "there was
+            // This blob, specifically, was not there. Nothing else is turned into "there was
             // nothing to delete", because a delete that quietly did nothing is indistinguishable
             // from one that worked.
             return false;

@@ -84,6 +84,52 @@ public sealed class AzureBlobContainerErrorTranslationTests
 
     #region DeleteAsync
 
+    /// <summary>
+    /// The wrapper deletes with <c>BlobClient.DeleteAsync</c> and decides the outcome itself.
+    /// <c>DeleteIfExistsAsync</c> cannot be used here: Azure.Storage.Blobs 12.29.2 implements it
+    /// by catching <see cref="BlobErrorCode.BlobNotFound"/> <em>and</em>
+    /// <see cref="BlobErrorCode.ContainerNotFound"/> and returning false for either, so a missing
+    /// container never reaches a caller's catch block. Every delete against a misconfigured or
+    /// undeployed container would then be reported as an ordinary "there was nothing to delete",
+    /// which is exactly the confusion these tests exist to prevent - and which a mocked
+    /// <c>DeleteIfExistsAsync</c> would hide, because a mock throws where the real SDK has
+    /// already swallowed.
+    /// </summary>
+    [Fact]
+    public async Task Delete_does_not_go_through_the_SDKs_delete_if_exists_helper()
+    {
+        var blob = new Mock<BlobClient>(MockBehavior.Strict);
+        blob.Setup(x => x.DeleteAsync(
+                It.IsAny<DeleteSnapshotsOption>(),
+                It.IsAny<BlobRequestConditions>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Mock.Of<Response>());
+
+        // A strict mock fails the call outright if the wrapper reaches for any other member,
+        // DeleteIfExistsAsync included.
+        Assert.True(await ContainerOver(blob).DeleteAsync(BlobName, CancellationToken.None));
+
+        blob.Verify(
+            x => x.DeleteIfExistsAsync(
+                It.IsAny<DeleteSnapshotsOption>(),
+                It.IsAny<BlobRequestConditions>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task A_successful_delete_reports_that_a_blob_was_removed()
+    {
+        var blob = new Mock<BlobClient>();
+        blob.Setup(x => x.DeleteAsync(
+                It.IsAny<DeleteSnapshotsOption>(),
+                It.IsAny<BlobRequestConditions>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Mock.Of<Response>());
+
+        Assert.True(await ContainerOver(blob).DeleteAsync(BlobName, CancellationToken.None));
+    }
+
     [Fact]
     public async Task Deleting_a_blob_that_does_not_exist_reports_that_there_was_nothing_to_delete()
     {
@@ -110,29 +156,41 @@ public sealed class AzureBlobContainerErrorTranslationTests
         Assert.Equal(BlobErrorCode.ContainerNotFound.ToString(), failure.ErrorCode);
     }
 
-    [Fact]
-    public async Task A_delete_refused_by_a_lease_propagates()
+    [Theory]
+    [InlineData((int)HttpStatusCode.PreconditionFailed, "LeaseIdMissing")]
+    [InlineData((int)HttpStatusCode.Conflict, "LeaseIdMismatchWithBlobOperation")]
+    [InlineData((int)HttpStatusCode.PreconditionFailed, "ConditionNotMet")]
+    public async Task A_delete_refused_by_a_lease_or_precondition_propagates(int status, string errorCode)
     {
-        var container = ContainerWhoseDeleteThrows(
-            Failure(HttpStatusCode.PreconditionFailed, BlobErrorCode.LeaseIdMissing));
+        var container = ContainerWhoseDeleteThrows(new RequestFailedException(status, "failed", errorCode, null));
 
         var failure = await Assert.ThrowsAsync<RequestFailedException>(() =>
             container.DeleteAsync(BlobName, CancellationToken.None));
 
-        Assert.Equal(BlobErrorCode.LeaseIdMissing.ToString(), failure.ErrorCode);
+        Assert.Equal(errorCode, failure.ErrorCode);
+    }
+
+    [Theory]
+    [InlineData((int)HttpStatusCode.Forbidden, "AuthorizationPermissionMismatch")]
+    [InlineData((int)HttpStatusCode.NotFound, "AccountIsDisabled")]
+    [InlineData((int)HttpStatusCode.ServiceUnavailable, "ServerBusy")]
+    public async Task A_delete_refused_by_authorization_or_the_account_propagates(int status, string errorCode)
+    {
+        var container = ContainerWhoseDeleteThrows(new RequestFailedException(status, "failed", errorCode, null));
+
+        var failure = await Assert.ThrowsAsync<RequestFailedException>(() =>
+            container.DeleteAsync(BlobName, CancellationToken.None));
+
+        Assert.Equal(errorCode, failure.ErrorCode);
     }
 
     [Fact]
-    public async Task A_successful_delete_reports_that_a_blob_was_removed()
+    public async Task A_delete_failure_without_an_error_code_propagates()
     {
-        var blob = new Mock<BlobClient>();
-        blob.Setup(x => x.DeleteIfExistsAsync(
-                It.IsAny<DeleteSnapshotsOption>(),
-                It.IsAny<BlobRequestConditions>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Response.FromValue(true, Mock.Of<Response>()));
+        var container = ContainerWhoseDeleteThrows(new RequestFailedException(404, "failed"));
 
-        Assert.True(await ContainerOver(blob).DeleteAsync(BlobName, CancellationToken.None));
+        await Assert.ThrowsAsync<RequestFailedException>(() =>
+            container.DeleteAsync(BlobName, CancellationToken.None));
     }
 
     #endregion
@@ -232,7 +290,7 @@ public sealed class AzureBlobContainerErrorTranslationTests
     private static AzureBlobContainer ContainerWhoseDeleteThrows(Exception failure)
     {
         var blob = new Mock<BlobClient>();
-        blob.Setup(x => x.DeleteIfExistsAsync(
+        blob.Setup(x => x.DeleteAsync(
                 It.IsAny<DeleteSnapshotsOption>(),
                 It.IsAny<BlobRequestConditions>(),
                 It.IsAny<CancellationToken>()))
