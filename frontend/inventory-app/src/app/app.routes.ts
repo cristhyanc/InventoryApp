@@ -1,33 +1,25 @@
 import { Routes } from '@angular/router';
 import { MsalGuard } from '@azure/msal-angular';
 import { AuthCallbackComponent } from './auth/auth-callback.component';
-import { DashboardComponent } from './components/dashboard/dashboard.component';
-import { ProductFormComponent } from './components/products/product-form.component';
-import { CategoryListComponent } from './components/categories/category-list.component';
-import { SupplierListComponent } from './components/suppliers/supplier-list.component';
-import { StockHistoryComponent } from './components/stock/stock-history.component';
-import { PurchaseListComponent } from './components/purchases/purchase-list.component';
-import { PurchaseUploadComponent } from './components/purchases/purchase-upload.component';
-import { MachineDetailComponent } from './components/machines/machine-detail.component';
-import { SiteProductsComponent } from './components/sites/site-products.component';
-import { DashboardReportComponent } from './components/reports/dashboard-report.component';
-import { BookkeepingReportComponent } from './components/reports/bookkeeping-report.component';
-import { DailyReportComponent } from './components/reports/daily-report.component';
-import { ReconciliationReportComponent } from './components/reports/reconciliation-report.component';
-import { MachineReportComponent } from './components/reports/machine-report.component';
-import { ProductReportComponent } from './components/reports/product-report.component';
-import { GstReportComponent } from './components/reports/gst-report.component';
-import { AdminComponent } from './components/admin/admin.component';
-import { OperatingExpenseComponent } from './components/expenses/operating-expense.component';
-import { SiteCommissionsReportComponent } from './components/reports/site-commissions-report.component';
-import { TransactionSalesReportComponent } from './components/reports/transaction-sales-report.component';
 
 export const routes: Routes = [
   // Public: the Entra redirect callback must be reachable without authentication.
   { path: 'auth', component: AuthCallbackComponent },
-  { path: '', component: DashboardComponent, canActivate: [MsalGuard] },
-  { path: 'products/:id/edit', component: ProductFormComponent, canActivate: [MsalGuard] },
-  { path: 'products/:id/stock', component: StockHistoryComponent, canActivate: [MsalGuard] },
+  {
+    path: '',
+    canActivate: [MsalGuard],
+    loadComponent: () => import('./components/dashboard/dashboard.component').then((m) => m.DashboardComponent)
+  },
+  {
+    path: 'products/:id/edit',
+    canActivate: [MsalGuard],
+    loadComponent: () => import('./components/products/product-form.component').then((m) => m.ProductFormComponent)
+  },
+  {
+    path: 'products/:id/stock',
+    canActivate: [MsalGuard],
+    loadComponent: () => import('./components/stock/stock-history.component').then((m) => m.StockHistoryComponent)
+  },
   {
     path: 'products',
     canActivate: [MsalGuard],
@@ -48,22 +40,93 @@ export const routes: Routes = [
       }
     ]
   },
-  { path: 'categories', component: CategoryListComponent, canActivate: [MsalGuard] },
-  { path: 'suppliers', component: SupplierListComponent, canActivate: [MsalGuard] },
-  { path: 'machines/:id', component: MachineDetailComponent, canActivate: [MsalGuard] },
-  { path: 'sites/:id/products', component: SiteProductsComponent, canActivate: [MsalGuard] },
-  { path: 'purchases', component: PurchaseListComponent, canActivate: [MsalGuard] },
-  { path: 'purchases/new', component: PurchaseUploadComponent, canActivate: [MsalGuard] },
-  { path: 'reports', component: DashboardReportComponent, canActivate: [MsalGuard] },
-  { path: 'reports/bookkeeping', component: BookkeepingReportComponent, canActivate: [MsalGuard] },
-  { path: 'reports/daily', component: DailyReportComponent, canActivate: [MsalGuard] },
-  { path: 'reports/transactions', component: TransactionSalesReportComponent, canActivate: [MsalGuard] },
-  { path: 'reports/reconciliation', component: ReconciliationReportComponent, canActivate: [MsalGuard] },
-  { path: 'reports/machines', component: MachineReportComponent, canActivate: [MsalGuard] },
-  { path: 'reports/products', component: ProductReportComponent, canActivate: [MsalGuard] },
-  { path: 'reports/gst', component: GstReportComponent, canActivate: [MsalGuard] },
-  { path: 'reports/site-commissions', component: SiteCommissionsReportComponent, canActivate: [MsalGuard] },
-  { path: 'admin', component: AdminComponent, canActivate: [MsalGuard] },
-  { path: 'expenses', component: OperatingExpenseComponent, canActivate: [MsalGuard] },
+  {
+    path: 'categories',
+    canActivate: [MsalGuard],
+    loadComponent: () => import('./components/categories/category-list.component').then((m) => m.CategoryListComponent)
+  },
+  {
+    path: 'suppliers',
+    canActivate: [MsalGuard],
+    loadComponent: () => import('./components/suppliers/supplier-list.component').then((m) => m.SupplierListComponent)
+  },
+  {
+    path: 'machines/:id',
+    canActivate: [MsalGuard],
+    loadComponent: () => import('./components/machines/machine-detail.component').then((m) => m.MachineDetailComponent)
+  },
+  {
+    path: 'sites/:id/products',
+    canActivate: [MsalGuard],
+    loadComponent: () => import('./components/sites/site-products.component').then((m) => m.SiteProductsComponent)
+  },
+  {
+    path: 'purchases',
+    canActivate: [MsalGuard],
+    loadComponent: () => import('./components/purchases/purchase-list.component').then((m) => m.PurchaseListComponent)
+  },
+  {
+    path: 'purchases/new',
+    canActivate: [MsalGuard],
+    loadComponent: () => import('./components/purchases/purchase-upload.component').then((m) => m.PurchaseUploadComponent)
+  },
+  {
+    path: 'reports',
+    canActivate: [MsalGuard],
+    loadComponent: () => import('./components/reports/dashboard-report.component').then((m) => m.DashboardReportComponent)
+  },
+  {
+    path: 'reports/bookkeeping',
+    canActivate: [MsalGuard],
+    loadComponent: () => import('./components/reports/bookkeeping-report.component').then((m) => m.BookkeepingReportComponent)
+  },
+  {
+    path: 'reports/daily',
+    canActivate: [MsalGuard],
+    loadComponent: () => import('./components/reports/daily-report.component').then((m) => m.DailyReportComponent)
+  },
+  {
+    path: 'reports/transactions',
+    canActivate: [MsalGuard],
+    loadComponent: () =>
+      import('./components/reports/transaction-sales-report.component').then((m) => m.TransactionSalesReportComponent)
+  },
+  {
+    path: 'reports/reconciliation',
+    canActivate: [MsalGuard],
+    loadComponent: () =>
+      import('./components/reports/reconciliation-report.component').then((m) => m.ReconciliationReportComponent)
+  },
+  {
+    path: 'reports/machines',
+    canActivate: [MsalGuard],
+    loadComponent: () => import('./components/reports/machine-report.component').then((m) => m.MachineReportComponent)
+  },
+  {
+    path: 'reports/products',
+    canActivate: [MsalGuard],
+    loadComponent: () => import('./components/reports/product-report.component').then((m) => m.ProductReportComponent)
+  },
+  {
+    path: 'reports/gst',
+    canActivate: [MsalGuard],
+    loadComponent: () => import('./components/reports/gst-report.component').then((m) => m.GstReportComponent)
+  },
+  {
+    path: 'reports/site-commissions',
+    canActivate: [MsalGuard],
+    loadComponent: () =>
+      import('./components/reports/site-commissions-report.component').then((m) => m.SiteCommissionsReportComponent)
+  },
+  {
+    path: 'admin',
+    canActivate: [MsalGuard],
+    loadComponent: () => import('./components/admin/admin.component').then((m) => m.AdminComponent)
+  },
+  {
+    path: 'expenses',
+    canActivate: [MsalGuard],
+    loadComponent: () => import('./components/expenses/operating-expense.component').then((m) => m.OperatingExpenseComponent)
+  },
   { path: '**', redirectTo: '' }
 ];
