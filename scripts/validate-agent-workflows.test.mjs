@@ -28,6 +28,7 @@ import {
   simulateValidationRun,
   validatePath,
   verifyDocumentationImpactGate,
+  verifyArchitecturePass,
   verifyValidationModeIsolation,
 } from './validate-agent-workflows.mjs';
 
@@ -462,3 +463,20 @@ describe('documentation-impact gate: review and repair workflows', () => {
     );
   });
 });
+
+describe('architecture pass contract', () => {
+  it('accepts the coder to architect to exact-head-validation ordering', () => {
+    assert.doesNotThrow(() => verifyArchitecturePass(implementWorkflow));
+  });
+
+  it('rejects an architect stage that can be skipped while dispatching validation', () => {
+    const unsafe = replaceOnce(implementWorkflow, '[ "$ARCHITECT_OUTCOME" = "success" ] &&', '[ "$ARCHITECT_OUTCOME" != "failure" ] &&');
+    assert.throws(() => runContractChecks({ read: readWithOverrides({ [implementPath]: unsafe }) }), /agent-implement.yml outcome/);
+  });
+
+  it('rejects an architect allowed to edit the PR description', () => {
+    const unsafe = replaceOnce(implementWorkflow, 'Bash(gh pr comment *)', 'Bash(gh pr comment *),Bash(gh pr edit *)');
+    assert.throws(() => runContractChecks({ read: readWithOverrides({ [implementPath]: unsafe }) }), /agent-implement.yml architect allowed tools/);
+  });
+});
+
