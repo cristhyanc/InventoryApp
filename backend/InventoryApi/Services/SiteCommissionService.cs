@@ -1,3 +1,4 @@
+using Inventory.Application.Time;
 using InventoryApi.Data;
 using InventoryApi.DTOs;
 using InventoryApi.Integrations.Nayax;
@@ -12,11 +13,13 @@ public sealed class SiteCommissionService : ISiteCommissionService
     private const decimal Tolerance = 0.01m;
     private readonly AppDbContext _db;
     private readonly INayaxLynxClient _nayax;
+    private readonly IBusinessCalendar _businessCalendar;
 
-    public SiteCommissionService(AppDbContext db, INayaxLynxClient nayax)
+    public SiteCommissionService(AppDbContext db, INayaxLynxClient nayax, IBusinessCalendar businessCalendar)
     {
         _db = db;
         _nayax = nayax;
+        _businessCalendar = businessCalendar;
     }
 
     public async Task<SiteCommissionReportDto> GetReportAsync(DateTime from, DateTime to, long? siteId, CancellationToken cancellationToken = default)
@@ -109,7 +112,7 @@ public sealed class SiteCommissionService : ISiteCommissionService
                 .ToList();
             DateTime? dueDate = current?.PaymentDueDaysAfterPeriodEnd is int days ? to.AddDays(days) : null;
             var status = due == 0m ? "—" : paid >= due - Tolerance ? "Paid" : paid > Tolerance ? "Partially Paid" :
-                dueDate.HasValue && DateTime.Today > dueDate ? "Overdue" : "Due";
+                dueDate.HasValue && _businessCalendar.Today > dueDate ? "Overdue" : "Due";
             rows.Add(new(site.Key, SiteNameResolver.FromMachines(site, site.Key),
                 from, to, current?.Frequency ?? CommissionFrequency.None, current?.Basis ?? CommissionBasis.GrossSales, gross, card, cash, eligible,
                 current?.CommissionRate ?? 0m, due, paid, outstanding, dueDate, status, machineRows, productRows, paidRows,
