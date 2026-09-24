@@ -60,6 +60,68 @@ public static class DatabaseMigrationArguments
 }
 
 /// <summary>
+/// What <see cref="DatabaseMigrator.RunAsync"/> found and did, independent of how it is printed.
+/// Separated from <see cref="DatabaseMigrationCommand"/> so the detection/apply behaviour is
+/// verifiable against a real relational database without going through process argument parsing
+/// or building a <c>WebApplicationBuilder</c>.
+/// </summary>
+/// <param name="AppliedBefore">Migrations already applied before this run.</param>
+/// <param name="PendingBefore">Migrations pending before this run.</param>
+/// <param name="Applied">True only when this run actually called <c>Migrate</c>.</param>
+/// <param name="PendingAfter">
+/// Migrations still pending after this run. Equal to <paramref name="PendingBefore"/> when
+/// nothing was applied (dry run, or already up to date).
+/// </param>
+/// <param name="Readiness">
+/// Tenant ownership readiness, computed only after a successful apply - checking it beforehand
+/// or on a dry run would not reflect the schema the readiness check itself depends on.
+/// </param>
+public sealed record DatabaseMigrationOutcome(
+    IReadOnlyList<string> AppliedBefore,
+    IReadOnlyList<string> PendingBefore,
+    bool Applied,
+    IReadOnlyList<string> PendingAfter,
+    TenantOwnershipReadinessState? Readiness)
+{
+    public bool WasUpToDate => PendingBefore.Count == 0;
+
+    public bool FullyApplied => PendingAfter.Count == 0;
+}
+
+/// <summary>
+/// The detection/apply behaviour behind the <c>migrate-database</c> command, against an already
+/// constructed <see cref="AppDbContext"/> so tests can drive it directly with a relational SQLite
+/// database instead of a process argument list.
+/// </summary>
+public static class DatabaseMigrator
+{
+    public static async Task<DatabaseMigrationOutcome> RunAsync(
+        AppDbContext db,
+        bool apply,
+        CancellationToken cancellationToken)
+    {
+        var appliedBefore = (await db.Database.GetAppliedMigrationsAsync(cancellationToken)).ToList();
+        var pendingBefore = (await db.Database.GetPendingMigrationsAsync(cancellationToken)).ToList();
+
+        if (pendingBefore.Count == 0 || !apply)
+        {
+            return new DatabaseMigrationOutcome(appliedBefore, pendingBefore, Applied: false, pendingBefore, Readiness: null);
+        }
+
+        await db.Database.MigrateAsync(cancellationToken);
+        var pendingAfter = (await db.Database.GetPendingMigrationsAsync(cancellationToken)).ToList();
+
+        // Schema is only half the rollout; readiness reflects what state the data is actually in,
+        // so an operator does not read "applied" as "finished" and leave callers looking at an
+        // empty dataset. Only computed after a real apply - it depends on the schema being
+        // current, and a dry run or an already-up-to-date database has nothing new to report.
+        var readiness = TenantOwnershipReadiness.Inspect(db);
+
+        return new DatabaseMigrationOutcome(appliedBefore, pendingBefore, Applied: true, pendingAfter, readiness);
+    }
+}
+
+/// <summary>
 /// Applies schema migrations as a deliberate, human-invoked step (issue #64).
 ///
 /// This is the supported way to change a production schema now that startup refuses to. It ships
@@ -118,31 +180,30 @@ public static class DatabaseMigrationCommand
         // explicitly rather than inheriting it.
         await using var db = new AppDbContext(dbOptions, UnscopedBusinessScope.Instance);
 
-        var applied = (await db.Database.GetAppliedMigrationsAsync(cancellationToken)).ToList();
-        var pending = (await db.Database.GetPendingMigrationsAsync(cancellationToken)).ToList();
+        var outcome = await DatabaseMigrator.RunAsync(db, apply, cancellationToken);
 
         Console.WriteLine();
         Console.WriteLine($"Database migration - {(apply ? "APPLY" : "DRY RUN (nothing will be applied)")}");
         Console.WriteLine(new string('-', 78));
-        Console.WriteLine($"Applied migrations : {applied.Count}");
-        Console.WriteLine($"Pending migrations : {pending.Count}");
+        Console.WriteLine($"Applied migrations : {outcome.AppliedBefore.Count}");
+        Console.WriteLine($"Pending migrations : {outcome.PendingBefore.Count}");
         Console.WriteLine();
 
-        if (pending.Count == 0)
+        if (outcome.WasUpToDate)
         {
             Console.WriteLine("The schema is already up to date. Nothing to do.");
             Console.WriteLine();
             return 0;
         }
 
-        foreach (var migration in pending)
+        foreach (var migration in outcome.PendingBefore)
         {
             Console.WriteLine($"  pending  {migration}");
         }
 
         Console.WriteLine();
 
-        if (!apply)
+        if (!outcome.Applied)
         {
             Console.WriteLine(
                 "Dry run: nothing was applied. Take a verified backup, then re-run with "
@@ -152,19 +213,14 @@ public static class DatabaseMigrationCommand
         }
 
         Console.WriteLine("Applying...");
-        await db.Database.MigrateAsync(cancellationToken);
-
-        var remaining = (await db.Database.GetPendingMigrationsAsync(cancellationToken)).ToList();
 
         Console.WriteLine();
         Console.WriteLine(
-            remaining.Count == 0
+            outcome.FullyApplied
                 ? "Schema applied. No migrations remain pending."
-                : $"WARNING: {remaining.Count} migration(s) still pending after apply.");
+                : $"WARNING: {outcome.PendingAfter.Count} migration(s) still pending after apply.");
 
-        // Schema is only half the rollout; say plainly what state the data is in, so an operator
-        // does not read "applied" as "finished" and leave callers looking at an empty dataset.
-        var readiness = TenantOwnershipReadiness.Inspect(db);
+        var readiness = outcome.Readiness!.Value;
         Console.WriteLine();
         Console.WriteLine(
             readiness.IsReady
@@ -176,6 +232,6 @@ public static class DatabaseMigrationCommand
                     + $"{BusinessBootstrapArguments.DryRunFlag}` next. See docs/tenant-rollout.md.");
         Console.WriteLine();
 
-        return remaining.Count == 0 ? 0 : 1;
+        return outcome.FullyApplied ? 0 : 1;
     }
 }

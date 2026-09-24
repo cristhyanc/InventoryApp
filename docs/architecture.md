@@ -647,6 +647,8 @@ Current production delivery is triggered from `main`:
 
 Consequently, automated engineering agents stop at a pull request. Merge and production deployment remain human-controlled. The branch flow, agent authority model, task states, and risk classification for automated changes are defined in [docs/automation.md](automation.md).
 
+Deploying the API is not a way to change its database schema (issue #54). `InventoryApi/Bootstrap/DatabaseSchemaStartup.EnsureSchema` runs at startup and decides per environment: Development and `Testing` apply pending migrations automatically, because their database is disposable; every other environment, including Production, applies nothing and throws `PendingMigrationsException` if any migration is pending, naming the pending migrations and the command to apply them rather than serving requests against a schema its code does not match. A `Database:AllowAutomaticMigrationUnsafeOutsideDevelopment` configuration override exists for a disposable non-Development database (an ephemeral integration or staging environment) but is checked only after Production has already been ruled out by environment name, so it can never reach production data. Applying a pending schema change is instead the separate, human-invoked `migrate-database` command (`InventoryApi/Bootstrap/DatabaseMigrationCommand`), run with `--dry-run` to inspect and `--apply` to migrate, after a verified backup. Recovery from a bad apply is restoring that backup; the command does not roll a migration back. See `docs/tenant-rollout.md` for the worked example and `AGENTS.md` § Database and migrations for the invariant.
+
 ## Architectural decision rules
 
 Use this order when considering new structure:

@@ -86,6 +86,8 @@ A merge of a pull request into `main` is a push to `main` and triggers two deplo
 - `.github/workflows/vm-manager.yml`: the `build` job restores, builds, tests, publishes the API, and uploads the package; the `deploy` job then logs in to Azure and deploys the package to the Azure Web App `vm-manager`. The `deploy` job runs against the GitHub environment `VmInventoryApi_Env`. Whether that environment requires a reviewer is a repository setting, not a repository file, and is not verified by this document.
 - `.github/workflows/azure-static-web-apps-red-island-0c128c000.yml` ("Azure Static Web Apps CI/CD"): triggers only on `push` to `main`, builds `frontend/inventory-app`, and deploys `dist/inventory-app/browser` to Azure Static Web Apps. The workflow also contains a `close_pull_request_job`, but because the workflow has no `pull_request` trigger that job never runs.
 
+Deploying the API does not change its database schema (issue #54). `DatabaseSchemaStartup` only migrates automatically in Development and `Testing`; everywhere else, including Production, it applies nothing and fails closed with a `PendingMigrationsException` naming the pending migrations if the deployed code expects a schema the database does not have. A human applies a pending schema change separately, before or after the deploy, with the explicit `migrate-database` command shipped inside the published application (`dotnet InventoryApi.dll migrate-database --dry-run`, then `--apply`, after taking a verified backup — see `docs/tenant-rollout.md`). Recovery from a failed or unwanted apply is a database restore from that backup, not a further automated migration: `migrate-database` never rolls back a migration, and re-running `--apply` only applies what is still pending.
+
 ### Implementation workflow
 
 `.github/workflows/agent-implement.yml` ("Agent implementation"):
@@ -227,7 +229,7 @@ The authority matrix below applies to every phase. The implementation agent is C
 | Prepare or update a `develop` → `main` release PR | Yes | Only when a human explicitly and separately requests it | **No** | No | No |
 | Approve or merge a release PR | Yes | **No** | **No** | No | No |
 | Deploy an environment | Yes, indirectly, by merging a release PR to `main` | **No** | **No** | No | Yes, on `push` to `main` |
-| Run production migrations | Yes (application startup on deploy) | **No** | **No** | No | Indirectly, on deploy |
+| Run production migrations | Yes, via the human-invoked `migrate-database --apply` command; never automatic | **No** | **No** | No | No — deploying does not migrate the schema (see [Push or merge to `main`](#push-or-merge-to-main)) |
 | Modify production data | Yes | **No** | **No** | No | No |
 | Access production secrets | Only through approved secure platform administration when required | **No** | **No** | No | Consume configured secrets without displaying or returning them |
 | Expose production secrets | **No** | **No** | **No** | **No** | **No** |
@@ -409,7 +411,7 @@ A change whose chain is broken (for example a PR without an issue, or a validati
 - Normal feature and fix pull requests target `develop`.
 - `develop` is the integration branch. A push to `develop` runs backend build and tests (`vm-manager.yml` build job) but does not deploy.
 - Production releases use a **separate** pull request from `develop` to `main`.
-- A merge or push to `main` deploys the API and the frontend to Azure through the existing workflows, and the API applies EF Core migrations at startup.
+- A merge or push to `main` deploys the API and the frontend to Azure through the existing workflows. It does not apply EF Core migrations: outside Development and `Testing`, API startup applies no schema change and fails closed if one is pending (see [Push or merge to `main`](#push-or-merge-to-main)).
 - An agent may prepare or update a `develop` to `main` release pull request only when a human explicitly requests it. Permission to implement a feature never grants permission to create a release pull request. Agents never merge or deploy: a human reviews and merges the release pull request, and the existing workflow performs the deployment.
 - Production deployments and production migrations require human control. There is no automated path from an issue to production.
 
