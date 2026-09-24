@@ -131,12 +131,17 @@ with `DefaultAzureCredential` — no account key, SAS token or connection string
 run against the filesystem default:
 
 ```bash
-dotnet run --project backend/InventoryApi -- migrate-documents --dry-run
-dotnet run --project backend/InventoryApi -- migrate-documents --apply
+DocumentStorage__Provider=AzureBlob dotnet run --project backend/InventoryApi -- migrate-documents --dry-run
+DocumentStorage__Provider=AzureBlob dotnet run --project backend/InventoryApi -- migrate-documents --apply
 ```
 
 On a deployed application use `dotnet InventoryApi.dll migrate-documents --dry-run` / `--apply`
 instead. Exactly one of the two flags must be given.
+
+The provider is supplied as a process-local override, not by changing the deployed application's
+own setting: the running API reads the same `DocumentStorage:Provider`, so switching it
+persistently would move live document reads to the container before anything had been copied or
+verified.
 
 The dry run writes nothing and reports what an apply would do. An apply copies each document to
 `tenants/{businessId}/purchases|expenses/{storedFileName}`, where the business is read from the

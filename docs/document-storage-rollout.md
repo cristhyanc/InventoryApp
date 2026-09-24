@@ -45,15 +45,87 @@ throughout.
 
 ## 2. Required configuration
 
-Three non-secret settings, supplied as App Service application settings in Azure or as
+Three non-secret settings, read from App Service application settings in Azure or from
 environment variables. They are not committed: `appsettings.json` ships
 `DocumentStorage:Provider=FileSystem`, which is what the application has always used.
 
 ```text
-DocumentStorage__Provider=AzureBlob
+DocumentStorage__Provider=FileSystem | AzureBlob
 DocumentStorage__BlobServiceUri=https://<storage-account>.blob.core.windows.net
 DocumentStorage__ContainerName=business-documents          # business-documents-dev for development
 ```
+
+### The running API and the migration read the same settings
+
+This is the part of the rollout that is easiest to get wrong, so it is stated plainly:
+
+- The **running API** uses `DocumentStorage__Provider` to decide where it serves documents from.
+- The **migration command** requires `DocumentStorage__Provider=AzureBlob`, and refuses to run
+  against the filesystem default — without that check it would "migrate" every document from the
+  filesystem back to the filesystem and report complete success.
+
+They are the same setting name, so setting the persistent App Service value to `AzureBlob` in
+order to run the migration would **switch the live application at the same time**, before a single
+document had been copied or verified. Every read would go to an empty container and every
+existing document would 404.
+
+So the two must be separated. During the whole of this rollout:
+
+| Where | `DocumentStorage__Provider` |
+|---|---|
+| **Persistent App Service application settings** (the running API) | `FileSystem` — unchanged until [§ 13](#13-do-not-switch-the-runtime-provider-yet) |
+| **The `migrate-documents` process only** | `AzureBlob`, supplied as a process-local override for that one command |
+
+`DocumentStorage__BlobServiceUri` and `DocumentStorage__ContainerName` are safe to add to the
+persistent App Service settings ahead of time, and doing so is recommended: they are non-secret,
+the running API ignores them entirely while its provider is `FileSystem`, and having them already
+in place means the migration process only has to override the one setting that matters.
+
+> **Do not use the persistent Provider setting as the migration's temporary switch.** Changing an
+> App Service application setting restarts the application. A "set it to AzureBlob, run the
+> migration, set it back" sequence therefore means two live restarts with the API serving from an
+> unverified — and initially empty — container in between. The override below never touches the
+> App Service configuration and never restarts anything.
+
+### Supplying the override to the migration process
+
+The override lives in the environment of the single command invocation. Nothing in the
+application needs to change to support this: .NET configuration reads `DocumentStorage__Provider`
+from the process environment, which takes precedence over `appsettings.json`.
+
+Bash (App Service SSH, a container shell, or a Linux host):
+
+```bash
+DocumentStorage__Provider=AzureBlob dotnet InventoryApi.dll migrate-documents --dry-run
+```
+
+The assignment is a prefix on that one command, so it applies only to the migration process and
+leaves the shell's own environment untouched.
+
+PowerShell, which has no inline per-command assignment — scope it and put it back:
+
+```powershell
+$env:DocumentStorage__Provider = "AzureBlob"
+try { dotnet InventoryApi.dll migrate-documents --dry-run } finally { Remove-Item Env:\DocumentStorage__Provider }
+```
+
+If `BlobServiceUri` and `ContainerName` are not already in the environment the process inherits,
+supply them the same way:
+
+```bash
+DocumentStorage__Provider=AzureBlob \
+DocumentStorage__BlobServiceUri=https://<storage-account>.blob.core.windows.net \
+DocumentStorage__ContainerName=business-documents \
+dotnet InventoryApi.dll migrate-documents --dry-run
+```
+
+From a source tree the same prefix applies, before `dotnet run`.
+
+**The invariant for the whole of sections 4 to 12:** the running API sees `FileSystem`, the
+migration process sees `AzureBlob`, and the persistent setting is changed to `AzureBlob` only
+after the migration has been applied and verified ([§ 13](#13-do-not-switch-the-runtime-provider-yet)).
+
+### How the configuration fails
 
 The configuration is validated when the process starts, and the failures are deliberate:
 
@@ -65,9 +137,8 @@ The configuration is validated when the process starts, and the failures are del
   its configured storage fails to start rather than quietly writing business documents to a local
   disk nobody is watching.
 
-**The migration command requires `DocumentStorage__Provider=AzureBlob`** and refuses to run
-against the filesystem default. Without that check it would "migrate" every document from the
-filesystem back to the filesystem and report complete success.
+If the migration is invoked without the override, it refuses immediately and writes nothing,
+naming the setting to fix.
 
 ---
 
@@ -120,16 +191,18 @@ reads each record, locates its document, computes a SHA-256, looks at the destin
 reports. Run it with the Azure settings in place **and the runtime still serving documents from
 the filesystem** (see [§ 13](#13-do-not-switch-the-runtime-provider-yet)).
 
-From the deployed application (`dotnet publish` output, which has no SDK or sources):
+From the deployed application (`dotnet publish` output, which has no SDK or sources), with the
+provider override applied to this process only — the running API stays on `FileSystem`
+([§ 2](#2-required-configuration)):
 
 ```bash
-dotnet InventoryApi.dll migrate-documents --dry-run
+DocumentStorage__Provider=AzureBlob dotnet InventoryApi.dll migrate-documents --dry-run
 ```
 
 From a source tree:
 
 ```bash
-dotnet run --project backend/InventoryApi -- migrate-documents --dry-run
+DocumentStorage__Provider=AzureBlob dotnet run --project backend/InventoryApi -- migrate-documents --dry-run
 ```
 
 Exactly one of `--dry-run` or `--apply` must be given. A bare `migrate-documents` is refused
@@ -188,8 +261,11 @@ still be there afterwards.
 
 ## 7. Production apply
 
+Again with the override on this process only; the persistent App Service `Provider` is still
+`FileSystem` and the API is still serving documents from the filesystem.
+
 ```bash
-dotnet InventoryApi.dll migrate-documents --apply
+DocumentStorage__Provider=AzureBlob dotnet InventoryApi.dll migrate-documents --apply
 ```
 
 For each document: the source is read and fingerprinted, the destination is written only if its
@@ -207,7 +283,7 @@ The apply is safe to interrupt. If it stops part way, run it again.
 Run the same command again. This is the verification step, not an optional extra:
 
 ```bash
-dotnet InventoryApi.dll migrate-documents --apply
+DocumentStorage__Provider=AzureBlob dotnet InventoryApi.dll migrate-documents --apply
 ```
 
 Expected on a completed migration:
@@ -253,8 +329,27 @@ Check that:
 - every blob is under `tenants/{businessId}/purchases/` or `tenants/{businessId}/expenses/`;
 - the business ids present are the real ones from the `Businesses` table, and no document sits
   under a business that should not own it;
-- the count matches `Migrated` + `AlreadyPresent` from the report, less any duplicate references;
+- the blob count matches **`Migrated` + `AlreadyPresent`** from the report;
 - no container-level or account-level public access has appeared.
+
+Nothing is subtracted for duplicate references. Every candidate record has exactly one status, so
+a record reported as `DuplicateReference` was never counted in `Migrated` or `AlreadyPresent` in
+the first place — subtracting it again would under-count the blobs that are really there. What
+`DuplicateReference` means is that the destination it names is already accounted for by another
+record, so it adds no blob of its own:
+
+```text
+Candidates          : 2
+Migrated            : 1
+AlreadyPresent      : 0
+DuplicateReferences : 1
+
+Physical destination blobs represented: 1
+```
+
+`MissingSource`, `Collision`, `InvalidBusiness` and `Failed` likewise contribute no blob that this
+migration wrote — though a `Collision` does mean a blob is sitting at that key, put there by
+something other than this run, which is exactly why it has to be investigated rather than counted.
 
 ---
 
@@ -291,13 +386,24 @@ when this becomes safe.
 Copying the documents and serving them from Blob storage are two separate decisions, taken in
 that order, with verification in between.
 
-Set `DocumentStorage__Provider=AzureBlob` for the **running application** only after:
+Up to this point every `migrate-documents` invocation has carried its own process-local
+`DocumentStorage__Provider=AzureBlob`, and the **persistent App Service application setting has
+stayed `FileSystem`** ([§ 2](#2-required-configuration)). This is the step, and the only step,
+that changes that persistent setting.
+
+Change the App Service application setting `DocumentStorage__Provider` from `FileSystem` to
+`AzureBlob` only after:
 
 - [ ] the apply completed and the verification re-run reported `Migrated: 0`;
 - [ ] the blobs were inspected directly ([§ 9](#9-verify-the-blobs-directly));
 - [ ] `Collision`, `InvalidBusiness` and `Failed` are all zero;
 - [ ] any `MissingSource` is understood and accepted — those documents will 404 when read from
-      Blob storage, exactly as they already do from the filesystem.
+      Blob storage, exactly as they already do from the filesystem;
+- [ ] `BlobServiceUri` and `ContainerName` are already present in the App Service settings and
+      name the **production** container, not the development one.
+
+Changing the setting restarts the application, so treat it as a deployment: do it in a window
+where someone is watching, not alongside the migration itself.
 
 After the switch, smoke-test an authenticated upload, download and delete of both a purchase
 document and an operating-expense attachment, and confirm the download still carries its original
