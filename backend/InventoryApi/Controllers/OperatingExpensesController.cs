@@ -156,7 +156,6 @@ public sealed class OperatingExpensesController : ControllerBase
     }
 
     [HttpGet("{id:int}/attachment")]
-    [HttpGet("{id:int}/receipt")]
     public async Task<IActionResult> GetAttachment(int id, CancellationToken cancellationToken)
     {
         var expense = await _db.OperatingExpenses.AsNoTracking()
