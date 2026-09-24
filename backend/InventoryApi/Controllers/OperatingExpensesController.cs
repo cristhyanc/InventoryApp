@@ -1,7 +1,7 @@
+using Inventory.Application.Documents;
 using InventoryApi.Data;
 using InventoryApi.DTOs;
 using InventoryApi.Models;
-using InventoryApi.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -18,13 +18,14 @@ public sealed class OperatingExpensesController : ControllerBase
     private const decimal GstTolerance = 0.02m;
     private const long MaxAttachmentFileSizeBytes = 10 * 1024 * 1024;
     private static readonly string[] AllowedAttachmentExtensions = { ".jpg", ".jpeg", ".png", ".pdf", ".webp", ".heic" };
+    private const DocumentCategory AttachmentCategory = DocumentCategory.ExpenseAttachment;
     private readonly AppDbContext _db;
-    private readonly IWebHostEnvironment _environment;
+    private readonly IDocumentStorage _documents;
 
-    public OperatingExpensesController(AppDbContext db, IWebHostEnvironment environment)
+    public OperatingExpensesController(AppDbContext db, IDocumentStorage documents)
     {
         _db = db;
-        _environment = environment;
+        _documents = documents;
     }
 
     [HttpGet]
@@ -76,21 +77,21 @@ public sealed class OperatingExpensesController : ControllerBase
         if (validation is not null) return BadRequest(validation);
 
         var expense = FromDto(dto);
-        string? attachmentPath = null;
+        string? storedAttachmentName = null;
         try
         {
-            attachmentPath = await SaveAttachmentAsync(expense, attachment, cancellationToken);
+            storedAttachmentName = await SaveAttachmentAsync(expense, attachment, cancellationToken);
             _db.OperatingExpenses.Add(expense);
             await _db.SaveChangesAsync(cancellationToken);
         }
         catch (InvalidOperationException ex)
         {
-            DeleteFile(attachmentPath);
+            await DeleteAttachmentAsync(storedAttachmentName, cancellationToken);
             return BadRequest(ex.Message);
         }
         catch
         {
-            DeleteFile(attachmentPath);
+            await DeleteAttachmentAsync(storedAttachmentName, cancellationToken);
             throw;
         }
 
@@ -131,27 +132,31 @@ public sealed class OperatingExpensesController : ControllerBase
         var expense = await _db.OperatingExpenses.FindAsync(new object[] { id }, cancellationToken);
         if (expense is null) return NotFound();
 
-        var previousAttachmentPath = ExistingAttachmentPath(expense.AttachmentStoredFileName);
-        string? newAttachmentPath = null;
+        var previousStoredAttachmentName = expense.AttachmentStoredFileName;
+        string? newStoredAttachmentName = null;
         try
         {
             Apply(expense, dto);
-            newAttachmentPath = await SaveAttachmentAsync(expense, attachment, cancellationToken);
+            newStoredAttachmentName = await SaveAttachmentAsync(expense, attachment, cancellationToken);
             expense.UpdatedAt = DateTime.UtcNow;
             await _db.SaveChangesAsync(cancellationToken);
         }
         catch (InvalidOperationException ex)
         {
-            DeleteFile(newAttachmentPath);
+            await DeleteAttachmentAsync(newStoredAttachmentName, cancellationToken);
             return BadRequest(ex.Message);
         }
         catch
         {
-            DeleteFile(newAttachmentPath);
+            await DeleteAttachmentAsync(newStoredAttachmentName, cancellationToken);
             throw;
         }
 
-        if (newAttachmentPath is not null) DeleteFile(previousAttachmentPath);
+        // The replacement is only durable once the row naming it has been saved, so the previous
+        // document is removed last: a failure above leaves the expense pointing at a document
+        // that still exists.
+        if (newStoredAttachmentName is not null)
+            await DeleteAttachmentAsync(previousStoredAttachmentName, cancellationToken);
         return Ok(expense);
     }
 
@@ -162,9 +167,12 @@ public sealed class OperatingExpensesController : ControllerBase
             .SingleOrDefaultAsync(x => x.Id == id, cancellationToken);
         if (expense?.AttachmentStoredFileName is null) return NotFound();
 
-        var path = ExistingAttachmentPath(expense.AttachmentStoredFileName);
-        if (path is null) return NotFound();
-        return PhysicalFile(path, expense.AttachmentContentType ?? "application/octet-stream", expense.AttachmentFileName);
+        var document = await _documents.OpenReadAsync(
+            AttachmentCategory, expense.AttachmentStoredFileName, cancellationToken);
+        if (document is null) return NotFound();
+
+        // FileStreamResult disposes the stream once the response has been written.
+        return File(document.Content, expense.AttachmentContentType ?? "application/octet-stream", expense.AttachmentFileName);
     }
 
     [HttpDelete("{id:int}")]
@@ -174,7 +182,7 @@ public sealed class OperatingExpensesController : ControllerBase
         if (expense is null) return NotFound();
         _db.OperatingExpenses.Remove(expense);
         await _db.SaveChangesAsync(cancellationToken);
-        DeleteFile(ExistingAttachmentPath(expense.AttachmentStoredFileName));
+        await DeleteAttachmentAsync(expense.AttachmentStoredFileName, cancellationToken);
         return NoContent();
     }
 
@@ -221,32 +229,25 @@ public sealed class OperatingExpensesController : ControllerBase
             throw new InvalidOperationException("Supporting document must be an image or PDF.");
 
         var storedFileName = $"{Guid.NewGuid()}{extension}";
-        var path = AttachmentStoragePath(storedFileName);
-        try
+        await using (var source = attachment.OpenReadStream())
         {
-            await using var stream = new FileStream(path, FileMode.CreateNew);
-            await attachment.CopyToAsync(stream, cancellationToken);
-        }
-        catch
-        {
-            DeleteFile(path);
-            throw;
+            await _documents.SaveAsync(AttachmentCategory, storedFileName, source, cancellationToken);
         }
 
         expense.AttachmentFileName = Path.GetFileName(attachment.FileName);
         expense.AttachmentStoredFileName = storedFileName;
         expense.AttachmentContentType = AttachmentContentType(extension);
         expense.AttachmentFileSizeBytes = attachment.Length;
-        return path;
+        return storedFileName;
     }
 
-    // Supporting documents are stored outside the static web root and are only reachable
-    // through this [Authorize]d controller; see ProtectedFileStorage.
-    private string AttachmentStoragePath(string storedFileName) =>
-        ProtectedFileStorage.StoragePath(_environment, ProtectedFileStorage.ExpenseAttachmentsCategory, storedFileName);
-
-    private string? ExistingAttachmentPath(string? storedFileName) =>
-        ProtectedFileStorage.ExistingPath(_environment, ProtectedFileStorage.ExpenseAttachmentsCategory, storedFileName);
+    // Supporting documents go through the application document-storage port, so this controller
+    // holds no filesystem path. The tenant-owned expense row is always resolved first, and the
+    // stored name comes from that row rather than from the request.
+    private Task DeleteAttachmentAsync(string? storedFileName, CancellationToken cancellationToken) =>
+        storedFileName is null
+            ? Task.CompletedTask
+            : _documents.DeleteAsync(AttachmentCategory, storedFileName, cancellationToken);
 
     private static string AttachmentContentType(string extension) => extension switch
     {
@@ -257,9 +258,4 @@ public sealed class OperatingExpensesController : ControllerBase
         ".heic" => "image/heic",
         _ => "application/octet-stream"
     };
-
-    private static void DeleteFile(string? path)
-    {
-        if (path is not null && System.IO.File.Exists(path)) System.IO.File.Delete(path);
-    }
 }

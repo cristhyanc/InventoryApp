@@ -1,12 +1,11 @@
+using Inventory.Infrastructure.Documents;
 using InventoryApi.Controllers;
 using InventoryApi.Data;
 using InventoryApi.DTOs;
 using InventoryApi.Models;
 using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.FileProviders;
 using Xunit;
 
 namespace InventoryApi.Tests.Controllers;
@@ -54,9 +53,10 @@ public sealed class OperatingExpensesControllerTests : IDisposable
         Assert.True(File.Exists(AttachmentPath(expense.AttachmentStoredFileName!)));
 
         var document = await controller.GetAttachment(expense.Id, CancellationToken.None);
-        var file = Assert.IsType<PhysicalFileResult>(document);
+        var file = Assert.IsType<FileStreamResult>(document);
         Assert.Equal(contentType, file.ContentType);
         Assert.Equal(fileName, file.FileDownloadName);
+        Assert.Equal(new byte[] { 1, 2, 3 }, await ReadAllBytesAsync(file));
     }
 
     [Fact]
@@ -164,9 +164,10 @@ public sealed class OperatingExpensesControllerTests : IDisposable
 
         var document = await controller.GetAttachment(expenseId, CancellationToken.None);
 
-        var file = Assert.IsType<PhysicalFileResult>(document);
+        var file = Assert.IsType<FileStreamResult>(document);
         Assert.Equal("application/pdf", file.ContentType);
         Assert.Equal("legacy.pdf", file.FileDownloadName);
+        Assert.Equal(new byte[] { 1, 2, 3 }, await ReadAllBytesAsync(file));
     }
 
     public void Dispose()
@@ -184,7 +185,11 @@ public sealed class OperatingExpensesControllerTests : IDisposable
             .Options);
 
     private OperatingExpensesController CreateController(AppDbContext db) =>
-        new(db, new TestWebHostEnvironment(_contentRoot, _webRoot));
+        new(db, new FileSystemDocumentStorage(new FileSystemDocumentStorageOptions
+        {
+            ContentRootPath = _contentRoot,
+            WebRootPath = _webRoot,
+        }));
 
     private async Task<OperatingExpense> CreateExpenseWithAttachment(
         OperatingExpensesController controller, string fileName)
@@ -201,13 +206,11 @@ public sealed class OperatingExpensesControllerTests : IDisposable
     private static IFormFile CreateFile(string fileName) =>
         new FormFile(new MemoryStream(new byte[] { 1, 2, 3 }), 0, 3, "attachment", fileName);
 
-    private sealed class TestWebHostEnvironment(string contentRoot, string webRoot) : IWebHostEnvironment
+    private static async Task<byte[]> ReadAllBytesAsync(FileStreamResult result)
     {
-        public string ApplicationName { get; set; } = "InventoryApi.Tests";
-        public IFileProvider WebRootFileProvider { get; set; } = null!;
-        public string WebRootPath { get; set; } = webRoot;
-        public string EnvironmentName { get; set; } = "Test";
-        public string ContentRootPath { get; set; } = contentRoot;
-        public IFileProvider ContentRootFileProvider { get; set; } = null!;
+        await using var stream = result.FileStream;
+        using var buffer = new MemoryStream();
+        await stream.CopyToAsync(buffer);
+        return buffer.ToArray();
     }
 }

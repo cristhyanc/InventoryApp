@@ -12,6 +12,7 @@ using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Transactions;
 using Inventory.Application.Tenancy;
 using Inventory.Infrastructure;
+using Inventory.Infrastructure.Documents;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Bootstrap;
 using InventoryApi.Auth;
@@ -50,6 +51,17 @@ builder.Services.AddHttpContextAccessor();
 builder.Services.AddControllers();
 builder.Services.AddApplicationServices();
 builder.Services.AddInfrastructureServices();
+
+// Uploaded business documents (issue #39). The composition root is the only place that knows
+// the host's content and web roots: the Application layer sees the IDocumentStorage port, and
+// the Infrastructure adapter sees plain paths, so neither depends on IWebHostEnvironment. New
+// documents are written under {ContentRoot}/protected-files, and documents uploaded before
+// protected storage existed stay readable from the web root through the adapter's fallback.
+builder.Services.AddFileSystemDocumentStorage(new FileSystemDocumentStorageOptions
+{
+    ContentRootPath = builder.Environment.ContentRootPath,
+    WebRootPath = builder.Environment.WebRootPath,
+});
 
 // Controlled RFC 7807 responses for Nayax upstream failures.
 builder.Services.AddProblemDetails();
@@ -176,7 +188,7 @@ if (app.Environment.IsDevelopment())
 // No static-file middleware: the API serves no public assets (the Angular application is a
 // separate Azure Static Web App), and static-file middleware does not run controller
 // authorization. Uploaded purchase and operating-expense documents are stored outside the
-// web root (see ProtectedFileStorage) and are only readable through the [Authorize]d
+// web root (see FileSystemDocumentStorage) and are only readable through the [Authorize]d
 // endpoints, so no business document has an anonymous URL.
 app.UseCors("AllowAngularDevClient");
 app.UseAuthentication();

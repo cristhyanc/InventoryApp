@@ -1,13 +1,13 @@
+using Inventory.Application.Documents;
+using Inventory.Infrastructure.Documents;
 using InventoryApi.Controllers;
 using InventoryApi.Data;
 using InventoryApi.Models;
 using InventoryApi.Services;
-using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.FileProviders;
 using Moq;
 using Xunit;
 
@@ -73,7 +73,7 @@ public sealed class ProtectedDocumentTenantIsolationTests : IDisposable
         var (purchaseId, storedFileName) = await UploadPurchaseDocumentAsync(BusinessB);
 
         await using var db = TestAppDbContext.For(_options, BusinessB);
-        var (content, contentType, fileName) = await new PurchaseService(db, Environment()).GetFile(purchaseId);
+        var (content, contentType, fileName) = await new PurchaseService(db, Documents()).GetFile(purchaseId);
 
         Assert.Equal(new byte[] { 1, 2, 3 }, content);
         Assert.Equal("image/jpeg", contentType);
@@ -93,7 +93,7 @@ public sealed class ProtectedDocumentTenantIsolationTests : IDisposable
         var path = PurchaseDocumentPath(storedFileName);
 
         await using var db = TestAppDbContext.For(_options, BusinessA);
-        var (content, contentType, fileName) = await new PurchaseService(db, Environment()).GetFile(purchaseId);
+        var (content, contentType, fileName) = await new PurchaseService(db, Documents()).GetFile(purchaseId);
 
         Assert.Null(content);
         Assert.Null(contentType);
@@ -113,7 +113,7 @@ public sealed class ProtectedDocumentTenantIsolationTests : IDisposable
 
         await using (var db = TestAppDbContext.For(_options, BusinessA))
         {
-            Assert.False(await new PurchaseService(db, Environment()).Delete(purchaseId));
+            Assert.False(await new PurchaseService(db, Documents()).Delete(purchaseId));
         }
 
         Assert.True(File.Exists(path), "business B's document must survive another business's delete.");
@@ -156,9 +156,13 @@ public sealed class ProtectedDocumentTenantIsolationTests : IDisposable
         await using var db = TestAppDbContext.For(_options, BusinessB);
         var result = await ExpensesController(db).GetAttachment(expenseId, CancellationToken.None);
 
-        var file = Assert.IsType<PhysicalFileResult>(result);
-        Assert.Equal(ExpenseAttachmentPath(storedFileName), file.FileName);
+        var file = Assert.IsType<FileStreamResult>(result);
         Assert.Equal("application/pdf", file.ContentType);
+        await using var served = file.FileStream;
+        using var buffer = new MemoryStream();
+        await served.CopyToAsync(buffer);
+        Assert.Equal(new byte[] { 4, 5, 6 }, buffer.ToArray());
+        Assert.True(File.Exists(ExpenseAttachmentPath(storedFileName)));
     }
 
     [Fact]
@@ -199,15 +203,25 @@ public sealed class ProtectedDocumentTenantIsolationTests : IDisposable
 
     #region Helpers
 
-    private TestWebHostEnvironment Environment() => new(_contentRoot, _webRoot);
+    private IDocumentStorage Documents() => new FileSystemDocumentStorage(new FileSystemDocumentStorageOptions
+    {
+        ContentRootPath = _contentRoot,
+        WebRootPath = _webRoot,
+    });
 
-    private OperatingExpensesController ExpensesController(AppDbContext db) => new(db, Environment());
+    private OperatingExpensesController ExpensesController(AppDbContext db) => new(db, Documents());
 
     private string PurchaseDocumentPath(string storedFileName) => Path.Combine(
-        _contentRoot, ProtectedFileStorage.RootFolderName, ProtectedFileStorage.PurchaseDocumentsCategory, storedFileName);
+        _contentRoot,
+        FileSystemDocumentStorage.ProtectedRootFolderName,
+        FileSystemDocumentStorage.PurchaseDocumentsFolderName,
+        storedFileName);
 
     private string ExpenseAttachmentPath(string storedFileName) => Path.Combine(
-        _contentRoot, ProtectedFileStorage.RootFolderName, ProtectedFileStorage.ExpenseAttachmentsCategory, storedFileName);
+        _contentRoot,
+        FileSystemDocumentStorage.ProtectedRootFolderName,
+        FileSystemDocumentStorage.ExpenseAttachmentsFolderName,
+        storedFileName);
 
     /// <summary>
     /// Uploads through the real scoped service, so the stored document is owned exactly the way a
@@ -216,7 +230,7 @@ public sealed class ProtectedDocumentTenantIsolationTests : IDisposable
     private async Task<(int PurchaseId, string StoredFileName)> UploadPurchaseDocumentAsync(int businessId)
     {
         await using var db = TestAppDbContext.For(_options, businessId);
-        var purchase = await new PurchaseService(db, Environment())
+        var purchase = await new PurchaseService(db, Documents())
             .Upload(CreateFile("receipt.jpg"), "Purchase", null, null, null, null, null, null);
 
         Assert.NotNull(purchase);
@@ -228,7 +242,9 @@ public sealed class ProtectedDocumentTenantIsolationTests : IDisposable
     {
         var storedFileName = $"{Guid.NewGuid()}.pdf";
         var folder = Path.Combine(
-            _contentRoot, ProtectedFileStorage.RootFolderName, ProtectedFileStorage.ExpenseAttachmentsCategory);
+            _contentRoot,
+            FileSystemDocumentStorage.ProtectedRootFolderName,
+            FileSystemDocumentStorage.ExpenseAttachmentsFolderName);
         Directory.CreateDirectory(folder);
         await File.WriteAllBytesAsync(Path.Combine(folder, storedFileName), new byte[] { 4, 5, 6 });
 
@@ -260,16 +276,6 @@ public sealed class ProtectedDocumentTenantIsolationTests : IDisposable
         file.Setup(x => x.CopyToAsync(It.IsAny<Stream>(), It.IsAny<CancellationToken>()))
             .Returns((Stream target, CancellationToken token) => content.CopyToAsync(target, token));
         return file.Object;
-    }
-
-    private sealed class TestWebHostEnvironment(string contentRoot, string webRoot) : IWebHostEnvironment
-    {
-        public string ApplicationName { get; set; } = "InventoryApi.Tests";
-        public IFileProvider WebRootFileProvider { get; set; } = null!;
-        public string WebRootPath { get; set; } = webRoot;
-        public string EnvironmentName { get; set; } = "Test";
-        public string ContentRootPath { get; set; } = contentRoot;
-        public IFileProvider ContentRootFileProvider { get; set; } = null!;
     }
 
     #endregion
