@@ -497,7 +497,7 @@ describe('scoped tracked-file deletion permissions', () => {
     assert.doesNotThrow(() => runContractChecks());
     for (const [path, workflow] of [[implementPath, implementWorkflow], [repairPath, repairWorkflow]]) {
       const altered = replaceOnce(workflow, scoped, '');
-      assert.throws(() => runContractChecks({ read: readWithOverrides({ [path]: altered }) }), /missing required text: Bash\\(git rm -- backend\\/\\*\\)/);
+      assert.throws(() => runContractChecks({ read: readWithOverrides({ [path]: altered }) }), /missing required text: Bash\(git rm -- backend\/\*\)/);
     }
   });
 });
