@@ -688,10 +688,7 @@ export const VALIDATION_CONCURRENCY_GROUP =
 export const STATUS_CONTEXT_EXPRESSION =
   "STATUS_CONTEXT: ${{ github.event_name == 'workflow_dispatch' && 'agent-validation' || 'merge-validation' }}";
 
-/**
- * Runs every agent workflow contract check. `read` resolves a repository-relative path to
- * its text, so tests can substitute a modified workflow without touching the repository.
- */
+/** Verifies the architect handoff and final-head guard in the implementation workflow. */
 export function verifyArchitecturePass(workflow) {
   const job = section(workflow, '  implement:\n', '  dispatch-validation:\n', 'agent-implement.yml implementation job');
   requireOrder(job, '      - name: Run Claude Code implementation agent', '      - name: Verify the architecture pass target', 'agent-implement.yml architecture order');
@@ -718,6 +715,7 @@ export function verifyArchitecturePass(workflow) {
   }
 }
 
+/** Runs every agent workflow contract check with an overridable repository reader. */
 export function runContractChecks({ read = readRepositoryFile } = {}) {
   const validate = read(validatePath);
   for (const required of [
