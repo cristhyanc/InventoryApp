@@ -45,7 +45,7 @@ Read the nearest relevant production code and tests before changing behavior. Fo
 2. Restate the issue's acceptance criteria, its explicit exclusions, and its documentation impact decision, and identify affected domain rules.
 3. Inspect existing implementations and tests before proposing a design.
 4. Make the smallest coherent change. Do not mix unrelated cleanup with feature work.
-5. Add or update tests for the behavior and meaningful edge cases.
+5. For new or changed behavior with a clear expected result, write a focused failing test first, run it to confirm the intended failure, implement the smallest change that passes, then refactor with tests green. Prioritize authorization and tenant isolation, financial and inventory rules, imports, regressions, and API contracts. Add meaningful edge cases. For exploratory UI work, configuration, migrations, or changes where a useful test cannot be written first, explain why in the PR and add relevant verification before completion. Avoid tests that merely mirror implementation details.
 5a. Follow the issue's documentation impact decision. When it says documentation changes are required, update every listed documentation file and section in the same change. When it says none are required but the change nevertheless makes documentation inaccurate, update that documentation anyway and state the discrepancy in the pull request. Never leave documentation that the change contradicts.
 6. Run the complete repository validation from the repository root:
 
@@ -292,7 +292,7 @@ Do not weaken or delete a failing test merely to obtain a green build. If an est
 A change is complete only when:
 
 - Acceptance criteria are met without unrelated behavior changes.
-- Relevant tests cover success, important edge cases, and regression risk.
+- Relevant tests cover success, important edge cases, and regression risk; for test-first changes the PR states which test initially failed and why.
 - Complete validation succeeds, or the exact environmental blocker is documented.
 - Schema/API/configuration changes are documented and backward compatibility is considered.
 - The documentation impact decision has been honoured: documentation the issue required is updated, any documentation the change would otherwise contradict is updated, and the pull request's `## Documentation impact` declaration is accurate and passes `scripts/validate-documentation-impact.mjs`.
