@@ -1,3 +1,4 @@
+using Inventory.Application.CatalogReconciliation;
 using Inventory.Application.NayaxFeeSettings;
 using Inventory.Application.Purchases;
 using Inventory.Application.Reporting.Bookkeeping;
@@ -23,6 +24,7 @@ public static class ApplicationServiceCollectionExtensions
 
         services.AddScoped<ListNayaxFeeRates>();
         services.AddScoped<SaveNayaxFeeRate>();
+        services.AddScoped<GetNayaxCatalogReconciliation>();
         services.AddScoped<ComputePurchaseTotalValidation>();
         services.AddScoped<GetBookkeepingReport>();
         services.AddScoped<IGetBookkeepingReport>(sp => sp.GetRequiredService<GetBookkeepingReport>());

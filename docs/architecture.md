@@ -504,6 +504,48 @@ change needing its own issue, ideally combined with the rest of the Purchasing a
 4. Mark reconciled only within the `$0.01` tolerance.
 5. Surface pending, unmatched, partial, unknown, or unsupported data.
 
+### Nayax catalog source-state reconciliation
+
+Local catalog data and live Nayax data can drift: a product or machine can be renamed, remapped, or
+stop being returned by Nayax entirely. `GET api/data-quality/nayax-catalog-reconciliation` (issue
+#55) compares the two and reports a source state per identity for human review; it never deletes or
+changes a local record on the basis of what Nayax currently returns.
+
+`Inventory.Domain.CatalogReconciliation.SourceReconciliationState` defines five states, resolved
+deterministically by `CatalogReconciliationPolicy` in priority order so at most one state applies to
+an identity:
+
+1. **ConflictingIdentity** - the same identifier resolves to more than one name, either because Nayax
+   itself returns duplicate entries for it in one snapshot, or because local history recorded more
+   than one distinct name for it (for example a machine whose `NayaxSales.MachineName` disagrees
+   across sales rows).
+2. **MissingRemotely** - a local record exists but Nayax no longer returns the identifier. This is a
+   data-quality signal, not deletion: the local product/machine history is untouched.
+3. **Added** - Nayax returns the identifier but there is no local record of it yet.
+4. **MappingChanged** - both sides have the identifier but disagree on name (a rename or remap), after
+   stripping a parenthetical Nayax price/code suffix the same way `ProductMatcher.NormalizeName`
+   already does for sale-to-product matching, so formatting-only differences are not reported as
+   changes.
+5. **Present** - local and remote agree on identity and name.
+
+Products are compared directly (`Product.Id` is the persisted Nayax product identifier; see
+`ImportService.ImportProductsAsync`, which already never removes a local product Nayax stops
+returning). Machines have no persisted entity at all - `MachineService` builds machines as a live
+Nayax view - so a machine's local history is derived from its recorded `NayaxSales` rows: the most
+recent `MachineName` is treated as the current local name, and any other distinct name recorded for
+the same `MachineID` becomes a `ConflictingIdentity` note.
+
+This is a vertical slice on the current dependency skeleton: `SourceReconciliationState`,
+`CatalogReconciliationPolicy`, and the plain `RemoteCatalogEntry`/`LocalCatalogEntry` value types are
+deterministic `Inventory.Domain` rules with no Nayax or EF Core dependency.
+`Inventory.Application.CatalogReconciliation.GetNayaxCatalogReconciliation` is the use case, reading
+through the narrow `INayaxCatalogSnapshotProvider`/`ILocalCatalogSnapshotProvider` ports.
+`InventoryApi.Adapters.Nayax.NayaxCatalogSnapshotProvider` (backed by `INayaxLynxClient`) and
+`InventoryApi.Adapters.Persistence.EfLocalCatalogSnapshotProvider` (backed by `AppDbContext`) are
+temporary API-owned adapters, following the same pattern as `EfNayaxFeeRateStore`, because
+`INayaxLynxClient` and `AppDbContext` still live in `InventoryApi`. `DataQualityController` only binds
+the request and returns the use case's `CatalogReconciliationReportDto`.
+
 ## Incremental migration plan
 
 Each step is a separate, passing pull request. Existing endpoints stay operational throughout.
