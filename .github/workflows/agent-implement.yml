@@ -73,7 +73,7 @@ jobs:
     needs: preflight
     if: needs.preflight.result == 'success' && github.event.label.name == 'agent-ready' && github.event.issue.pull_request == null
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
     permissions:
       contents: write
       pull-requests: write
@@ -134,12 +134,12 @@ jobs:
             1. Read the issue with `gh issue view ${{ github.event.issue.number }} --comments`. Restate its acceptance criteria, its explicit exclusions, and its Documentation impact decision and Documentation impact details. The criteria and exclusions are the complete extent of your authority. If the acceptance criteria are materially ambiguous, conflict with each other, with AGENTS.md, with docs/architecture.md, or with existing tests, or if the issue requires a change AGENTS.md reserves for humans, stop: post one comment on the issue with `gh issue comment` stating exactly which human decision is needed, do not create a branch, and finish.
             2. Create the feature branch from the checked-out develop: `git checkout -b agent/issue-${{ github.event.issue.number }}-<short-kebab-slug>`. Never commit to develop or main.
             3. Inspect the relevant production code and tests before designing the change. Make the smallest coherent change that satisfies the acceptance criteria. Do not do nearby cleanup or anything listed as out of scope.
-            4. Add or update tests as AGENTS.md requires for this change type.
+            4. Follow AGENTS.md's selective test-first workflow. For a clear behavioral requirement, add a focused failing test, run it and confirm the intended failure, implement the behavior, then refactor with tests green. Prioritize access boundaries, financial and inventory rules, imports, regressions and API contracts. For a change where a useful test cannot be written first, explain why in the PR and verify the result. Add meaningful edge cases; avoid tests that restate implementation details.
             4a. Follow the issue's Documentation impact decision exactly. If it is "Documentation changes required", update every documentation file and section listed in the Documentation impact details on your feature branch, in this same change, so the documentation is accurate for the merged result. If it is "No documentation changes required" but your change nevertheless makes documentation (AGENTS.md, docs/, README.md, templates) inaccurate, update that documentation too and state the discrepancy with the issue explicitly in the pull request body and in your issue comment. Never leave documentation that the change contradicts.
             5. Run the complete repository validation with exactly `bash scripts/validate.sh`. If it fails because of your change, fix the change and rerun it. Never weaken, skip, or delete a failing test to get a green result. If it fails for an environmental reason, record the exact failing command and output.
             6. Review your diff for secrets, local databases, generated output, accidental migrations, and unrelated edits.
             7. Commit with focused, descriptive messages and push with exactly `git push -u origin agent/issue-${{ github.event.issue.number }}-<short-kebab-slug>`. Do not force-push.
-            8. Open one pull request targeting develop with `gh pr create --base develop --head <branch> --title "..." --body-file <file>`. The body must follow .github/pull_request_template.md, include `Closes #${{ github.event.issue.number }}`, address each acceptance criterion, describe scope and exclusions, paste the actual validation commands and their real result, list tests added or changed, fill the impact table, and state known limitations and suggested follow-up work. Fill the "## Documentation impact" section accurately with exactly one `Decision:` line and one `Evidence:` line: `Decision: UPDATED` when this pull request changes documentation, with Evidence listing each documentation file and what changed in it; `Decision: NOT REQUIRED` only when no documentation changed, with Evidence explaining for this specific change why behaviour, contracts, architecture, configuration, automation, deployment, operations and user workflows are unaffected. "None", "N/A", "Not applicable", generic sentences and the template placeholders are rejected by CI. Before creating the pull request, check the body file with `node scripts/validate-documentation-impact.mjs --pr-body <file>` and fix it until it passes. Do not apply labels, do not request reviewers, do not merge.
+            8. Open one pull request targeting develop with `gh pr create --base develop --head <branch> --title "..." --body-file <file>`. The body must follow .github/pull_request_template.md, include `Closes #${{ github.event.issue.number }}`, address each acceptance criterion, describe scope and exclusions, paste the actual validation commands and their real result, list tests added or changed and the observed initial failing test (or explain why test-first was unsuitable), fill the impact table, and state known limitations and suggested follow-up work. Fill the "## Documentation impact" section accurately with exactly one `Decision:` line and one `Evidence:` line: `Decision: UPDATED` when this pull request changes documentation, with Evidence listing each documentation file and what changed in it; `Decision: NOT REQUIRED` only when no documentation changed, with Evidence explaining for this specific change why behaviour, contracts, architecture, configuration, automation, deployment, operations and user workflows are unaffected. "None", "N/A", "Not applicable", generic sentences and the template placeholders are rejected by CI. Before creating the pull request, check the body file with `node scripts/validate-documentation-impact.mjs --pr-body <file>` and fix it until it passes. Do not apply labels, do not request reviewers, do not merge.
             9. Post a short comment on the issue with `gh issue comment` linking the pull request and summarising the validation result.
 
             Hard limits: do not merge, approve, deploy, run migrations against any environment, modify labels, change workflows, secrets or repository settings, touch anything outside the acceptance criteria, or claim a command passed unless it ran and succeeded in this session.
@@ -155,11 +155,65 @@ jobs:
             "Bash(git push * --force *),Bash(git push * -f *),Bash(git push * --force-with-lease *),Bash(git push --force *),Bash(git push -f *)"
             "Bash(git reset --hard *),Bash(git rebase *),Bash(git checkout develop *),Bash(git checkout main *),Bash(git switch develop *),Bash(git switch main *)"
             "Bash(gh pr merge *),Bash(gh pr review *),Bash(gh pr edit *),Bash(gh issue edit *),Bash(gh api *),Bash(gh workflow *),Bash(gh run *),Bash(gh release *),Bash(gh secret *),Bash(gh variable *)"
+      - name: Verify the architecture pass target
+        id: architecture_target
+        if: steps.claude.outcome == 'success'
+        run: |
+          set -euo pipefail
+          branch="$(git branch --show-current)"
+          [[ "$branch" == agent/issue-"$ISSUE_NUMBER"-* ]] || { echo "::error::Unexpected feature branch: $branch"; exit 1; }
+          pr_json="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --base develop --head "$branch" \
+            --json number,headRefOid --jq 'if length == 1 then .[0] else {} end')"
+          pr_number="$(jq -r '.number // empty' <<<"$pr_json")"
+          head_sha="$(jq -r '.headRefOid // empty' <<<"$pr_json")"
+          [[ "$pr_number" =~ ^[1-9][0-9]*$ ]] || { echo "::error::No unique open PR for $branch"; exit 1; }
+          pr_meta="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr_number")"
+          jq -e --arg repo "$GITHUB_REPOSITORY" '.state == "open" and .draft == false and .base.ref == "develop" and .head.repo.full_name == $repo and .user.login == "github-actions[bot]"' <<<"$pr_meta" > /dev/null || { echo "::error::PR is not a same-repository agent PR"; exit 1; }
+          [ "$(git rev-parse HEAD)" = "$head_sha" ] || { echo "::error::Local HEAD does not match the open PR"; exit 1; }
+          echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
+
+      # A fresh Claude invocation reviews the coder's PR and may make narrowly scoped,
+      # behavior-preserving structural fixes on the same feature branch before validation.
+      - name: Run Claude Code architecture agent
+        id: architect
+        if: steps.architecture_target.outcome == 'success'
+        uses: anthropics/claude-code-action@cfc3eb22bfed5c26ef66e3223c982af27e4524de # v1.0.231
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          base_branch: develop
+          show_full_output: true
+          branch_prefix: agent/
+          prompt: |
+            You are a new, separate InventoryApp architecture agent invocation. The coder has opened pull request #${{ steps.architecture_target.outputs.pr_number }}. Work only on its existing agent/issue-${{ github.event.issue.number }}-* feature branch; do not create another branch or pull request.
+
+            Follow CLAUDE.md, AGENTS.md, docs/architecture.md and docs/automation.md. Read the issue's acceptance criteria and exclusions, the open PR and its full diff, and the existing tests before proposing edits. Verify the current branch is the PR's head branch and that its base is develop. If there is no single matching open PR, stop without editing.
+
+            Review only touched code and its directly affected boundaries: controllers versus use cases, domain rules versus adapters, dependency direction, framework or persistence leakage, duplicated calculations, information hiding, and testability. Make a small structural correction only when the current implementation violates an established rule or obscures the approved behavior. Preserve all observable behavior, API contracts, data semantics, and acceptance criteria. Do not perform broad Clean Architecture migrations, add frameworks, or touch unrelated files. A clean result with no edits is valid.
+
+            Before editing, check whether your proposed change would require a migration, change documented architecture or the PR's Documentation impact declaration, expand the approved scope, alter a test expectation, or require a human decision. If so, make no change; comment on the PR with the exact finding for human review. Do not edit the issue or PR body. Never weaken, skip, or delete tests. Do not change workflows, secrets, configuration, or deployment.
+
+            If you edit: run `bash scripts/validate.sh`; if validation fails, fix only your structural change and rerun it. Check the final diff against the issue and PR body, commit a focused architecture change, and push only the current agent/issue-${{ github.event.issue.number }}-* branch without force. Do not push when validation fails. Comment on the PR with the structural changes and exact validation result. If you make no edits, comment briefly that no in-scope architectural corrections were needed. Never claim a command passed unless it ran successfully.
+
+            Never merge, approve, deploy, edit labels, open another PR, change the PR description, or modify production data. Independent exact-SHA validation and review still follow this stage.
+          claude_args: |
+            --max-turns 100
+            --allowedTools "Read,Glob,Grep,Edit,MultiEdit,Write"
+            "Bash(gh issue view *),Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr list *),Bash(gh pr comment *)"
+            "Bash(git status *),Bash(git diff *),Bash(git log *),Bash(git show *),Bash(git branch --show-current),Bash(git rev-parse *)"
+            "Bash(git add *),Bash(git commit *),Bash(git push origin agent/issue-${{ github.event.issue.number }}-*)"
+            "Bash(bash scripts/validate.sh),Bash(dotnet *),Bash(npm --prefix frontend/inventory-app *)"
+            --disallowedTools "WebFetch,WebSearch"
+            "Bash(git push * --force *),Bash(git push * -f *),Bash(git push * --force-with-lease *),Bash(git reset --hard *),Bash(git rebase *)"
+            "Bash(git checkout *),Bash(git switch *),Bash(gh pr merge *),Bash(gh pr review *),Bash(gh pr edit *),Bash(gh pr create *),Bash(gh issue edit *),Bash(gh api *),Bash(gh workflow *),Bash(gh run *)"
+
       - name: Record outcome on the issue
         id: outcome
         if: always()
         env:
           CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
+          ARCHITECT_OUTCOME: ${{ steps.architect.outcome }}
+          TARGET_OUTCOME: ${{ steps.architecture_target.outcome }}
         run: |
           set -euo pipefail
           {
@@ -177,6 +231,11 @@ jobs:
           head_sha="$(jq -r '.headRefOid // empty' <<<"$pr_json")"
 
           if [ "$CLAUDE_OUTCOME" = "success" ] &&
+             [ "$TARGET_OUTCOME" = "success" ] &&
+             [ "$ARCHITECT_OUTCOME" = "success" ] &&
+             [ "$(git branch --show-current)" = "$(jq -r '.headRefName // empty' <<<"$pr_json")" ] &&
+             [ "$(git rev-parse HEAD)" = "$head_sha" ] &&
+             [ -z "$(git status --porcelain)" ] &&
              [ -n "$pr_url" ] &&
              [[ "$pr_number" =~ ^[1-9][0-9]*$ ]] &&
              [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]]; then
@@ -189,7 +248,7 @@ jobs:
             gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
               --remove-label agent-working --add-label agent-review
             gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "$(cat <<EOF
-          Implementation run finished and opened $pr_url at head $head_sha.
+          Implementation and architecture runs finished for $pr_url at head $head_sha.
 
           A separate follow-up job will apply the \`agent-review\` label and dispatch trusted validation for that exact SHA. Once the \`agent-validation\` status passes, the initial independent review starts automatically; no further action is needed to request it. Human approval and merge remain required.
 
@@ -203,7 +262,7 @@ jobs:
             gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
               --remove-label agent-working --add-label agent-blocked
             gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "$(cat <<EOF
-          Implementation run ended without a verified open pull request targeting develop from a \`$prefix*\` branch (agent step outcome: $CLAUDE_OUTCOME). The task is now \`agent-blocked\` and needs a human decision. Read the run log and any comment the agent left above, resolve the blocker, then remove \`agent-blocked\` and re-apply \`agent-ready\` to start again.
+          Implementation or architecture stage ended without a verified completed pull request targeting develop from a \`$prefix*\` branch (coder: $CLAUDE_OUTCOME; target check: $TARGET_OUTCOME; architect: $ARCHITECT_OUTCOME). The task is now \`agent-blocked\` and needs a human decision. Read the run log and any comment the agent left above, resolve the blocker, then remove \`agent-blocked\` and re-apply \`agent-ready\` to start again.
 
           Run: $RUN_URL
           EOF
