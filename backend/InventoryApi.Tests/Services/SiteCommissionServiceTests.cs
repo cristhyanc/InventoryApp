@@ -2,6 +2,7 @@ using InventoryApi.Data;
 using InventoryApi.Integrations.Nayax;
 using InventoryApi.Models;
 using InventoryApi.Services;
+using InventoryApi.Tests.Application.Time;
 using Microsoft.EntityFrameworkCore;
 using Moq;
 using Xunit;
@@ -109,15 +110,47 @@ public class SiteCommissionServiceTests
         Assert.True(row.HasConfigurationGap);
     }
 
+    [Fact]
+    public async Task Unpaid_commission_is_overdue_once_the_business_calendar_date_passes_the_due_date()
+    {
+        await using var db = CreateDb();
+        db.SiteCommissionAgreements.Add(Agreement(91, new DateTime(2025, 1, 1), null, .10m, paymentDueDaysAfterPeriodEnd: 0));
+        AddSale(db, 1, 10, new DateTime(2025, 7, 15));
+        await db.SaveChangesAsync();
+
+        var row = Assert.Single((await Service(db, new DateTime(2025, 7, 16), (10, 91)).GetReportAsync(
+            new DateTime(2025, 7, 15), new DateTime(2025, 7, 15), null)).Rows);
+
+        Assert.Equal(new DateTime(2025, 7, 15), row.DueDate);
+        Assert.Equal("Overdue", row.Status);
+    }
+
+    [Fact]
+    public async Task Unpaid_commission_is_not_overdue_on_the_business_calendar_due_date()
+    {
+        await using var db = CreateDb();
+        db.SiteCommissionAgreements.Add(Agreement(91, new DateTime(2025, 1, 1), null, .10m, paymentDueDaysAfterPeriodEnd: 0));
+        AddSale(db, 1, 10, new DateTime(2025, 7, 15));
+        await db.SaveChangesAsync();
+
+        var row = Assert.Single((await Service(db, new DateTime(2025, 7, 15), (10, 91)).GetReportAsync(
+            new DateTime(2025, 7, 15), new DateTime(2025, 7, 15), null)).Rows);
+
+        Assert.Equal("Due", row.Status);
+    }
+
     private static AppDbContext CreateDb() => TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>()
         .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
 
-    private static SiteCommissionService Service(AppDbContext db, params (long MachineId, long SiteId)[] machines)
+    private static SiteCommissionService Service(AppDbContext db, params (long MachineId, long SiteId)[] machines) =>
+        Service(db, DateTime.UtcNow, machines);
+
+    private static SiteCommissionService Service(AppDbContext db, DateTime businessToday, params (long MachineId, long SiteId)[] machines)
     {
         var nayax = new Mock<INayaxLynxClient>();
         nayax.Setup(x => x.GetMachinesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(
             machines.Select(x => new NayaxMachine { MachineID = x.MachineId, CustomerID = x.SiteId }).ToList());
-        return new SiteCommissionService(db, nayax.Object);
+        return new SiteCommissionService(db, nayax.Object, new FakeBusinessCalendar(businessToday));
     }
 
     private static void AddSale(AppDbContext db, long id, long machineId, DateTime date) => db.NayaxSales.Add(new NayaxSales
@@ -130,12 +163,13 @@ public class SiteCommissionServiceTests
         MachineAuthorizationTime = date
     });
 
-    private static SiteCommissionAgreement Agreement(long siteId, DateTime from, DateTime? to, decimal rate) => new()
+    private static SiteCommissionAgreement Agreement(long siteId, DateTime from, DateTime? to, decimal rate, int? paymentDueDaysAfterPeriodEnd = null) => new()
     {
         SiteId = siteId,
         EffectiveFrom = from,
         EffectiveTo = to,
         CommissionRate = rate,
-        Basis = CommissionBasis.GrossSales
+        Basis = CommissionBasis.GrossSales,
+        PaymentDueDaysAfterPeriodEnd = paymentDueDaysAfterPeriodEnd
     };
 }

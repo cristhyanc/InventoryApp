@@ -1,4 +1,4 @@
-using Inventory.Application.NayaxFeeSettings;
+using Inventory.Application.Time;
 
 namespace Inventory.Infrastructure.Clock;
 
