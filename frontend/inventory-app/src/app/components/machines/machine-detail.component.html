@@ -28,7 +28,7 @@
       </div>
       <div class="rounded-xl bg-slate-50 p-4">
         <div class="text-xs uppercase tracking-wide text-slate-500">Today Direct Profit</div>
-        <div class="mt-2 text-lg font-semibold text-blue-600">${{ machine?.todayDirectProfit?.toFixed(2) }}</div>
+        <div class="mt-2 text-lg font-semibold text-blue-600">{{ machine?.todayDirectProfit == null ? 'Profit unavailable' : ('$' + machine!.todayDirectProfit!.toFixed(2)) }}</div>
       </div>
       <div class="rounded-xl bg-slate-50 p-4">
         <div class="text-xs uppercase tracking-wide text-slate-500">Current Week Gross</div>
