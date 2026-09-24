@@ -123,6 +123,28 @@ public sealed class FileSystemDocumentStorage : IDocumentStorage
     }
 
     /// <summary>
+    /// Which location holds a stored document, or <c>null</c> when neither does.
+    ///
+    /// This is the one inspection the document migration needs and cannot get from
+    /// <see cref="IDocumentStorage"/>: how many documents are still only in the legacy web-root
+    /// location is what tells a human whether that fallback can eventually be retired. It
+    /// answers with a location, never a path - the migration has no business knowing where on
+    /// disk anything is, and a report must not print server paths.
+    /// </summary>
+    public DocumentSourceLocation? Locate(DocumentCategory category, string? storedFileName)
+    {
+        if (string.IsNullOrWhiteSpace(storedFileName)) return null;
+
+        var folderName = FolderNameFor(category);
+        var protectedPath = ConfineToFolder(
+            Path.Combine(_contentRootPath, ProtectedRootFolderName, folderName), storedFileName);
+        if (protectedPath is not null && File.Exists(protectedPath)) return DocumentSourceLocation.ProtectedStorage;
+
+        var legacyPath = ConfineToFolder(Path.Combine(_webRootPath, folderName), storedFileName);
+        return legacyPath is not null && File.Exists(legacyPath) ? DocumentSourceLocation.LegacyWebRoot : null;
+    }
+
+    /// <summary>
     /// The path of an existing document, or <c>null</c> when it is in neither the protected nor
     /// the legacy location. Protected storage wins, so a migrated document is read from its new
     /// home even while the legacy copy is still on disk awaiting deliberate removal.

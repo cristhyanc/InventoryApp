@@ -38,6 +38,15 @@ if (DatabaseMigrationCommand.Matches(args))
     return await DatabaseMigrationCommand.RunAsync(args, CancellationToken.None);
 }
 
+// Copying stored documents to Azure Blob storage is the third human-invoked command (issue #39,
+// checkpoint 3). It reads every business's records and writes to a storage account, so it is
+// never something the web host does on the way up: reaching this branch means the process was
+// started to migrate documents and will exit when it has.
+if (DocumentMigrationCommand.Matches(args))
+{
+    return await DocumentMigrationCommand.RunAsync(args, CancellationToken.None);
+}
+
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)

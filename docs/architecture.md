@@ -206,7 +206,7 @@ Authentication answers "who is this?". Tenant ownership answers "whose data is t
 
 **Protected documents.** A document's bytes live outside the database, so hiding the row is not enough. Retrieval always resolves the tenant-owned parent record first — `GET /api/purchases/{id}/file` and `GET /api/operating-expenses/{id}/attachment` both go through the filtered `DbSet` — and the stored file name is read from that record, never from the request. No endpoint accepts a file name or path as input, and `FileSystemDocumentStorage` reduces any stored name with `Path.GetFileName` and then proves the result is inside the category folder, so a crafted value cannot escape it. Knowing another business's purchase ID, attachment ID, stored file name, and on-disk path therefore yields nothing.
 
-**The unrestricted-context rule.** `new AppDbContext(options)` is fail-closed. Unrestricted, all-business access requires passing `UnscopedBusinessScope.Instance` explicitly, so every such place is greppable. Outside tests it exists only in the two human-invoked commands — `migrate-database` and `bootstrap-business`. No controller, service, or request path may run unrestricted; a composition-root test pins down that the DI container never produces an unscoped context.
+**The unrestricted-context rule.** `new AppDbContext(options)` is fail-closed. Unrestricted, all-business access requires passing `UnscopedBusinessScope.Instance` explicitly, so every such place is greppable. Outside tests it exists only in the three human-invoked commands — `migrate-database`, `bootstrap-business` and `migrate-documents`, the last of which reads every business's document metadata to migrate it (see [Document storage](#document-storage)). No controller, service, or request path may run unrestricted; a composition-root test pins down that the DI container never produces an unscoped context.
 
 **Schema and data are separate, human-controlled steps.** `DatabaseSchemaStartup` decides per environment: Production never migrates automatically regardless of configuration and fails closed when migrations are pending; Development and `Testing` migrate automatically; any other non-Production environment does so only under the `Database:AllowAutomaticMigrationUnsafeOutsideDevelopment` override, which is read only after Production has been ruled out. Migrations never assign ownership. The backfill is exclusively `bootstrap-business`: deterministic, idempotent (it touches only unassigned rows), restartable, transactional, dry-runnable, and verified by before/after counts and financial totals, with a `BusinessBackfillAudit` record of what it did. `TenantOwnershipReadiness` reports at startup whether ownership has actually been bootstrapped, so "all my data is gone" cannot be the first symptom of an unfinished rollout.
 
@@ -256,6 +256,42 @@ delete on failure. The container is private and no SAS or public URL is generate
 The SDK sits behind a small seam, `IDocumentBlobContainer`, implemented by `AzureBlobContainer`.
 That is what lets the adapter's rules — tenant-scoped names, no overwrite, missing blob means
 `null` — be tested without Azure credentials or a network.
+
+**Migrating documents to Blob storage.** `migrate-documents`
+(`InventoryApi/Bootstrap/DocumentMigrationCommand`) copies the documents already on disk into the
+Blob container, as a human-invoked command run with `--dry-run` to inspect and `--apply` to copy.
+Exactly one of the two must be given: unlike the other commands, a bare invocation is refused
+rather than treated as a dry run. The web host never performs it.
+
+Ownership comes from the database and nowhere else: each document's business is read from the
+persisted purchase or operating-expense record that owns it, never from a folder name, a file
+name, a blob name or the command line. A record whose `BusinessId` is unusable is reported and
+left alone rather than filed under a default. The command therefore reads through
+`UnscopedBusinessScope.Instance` — it must see every business at once — but it is emphatically
+not a request: it uses `IDocumentMigrationDestination`, a separate Infrastructure abstraction
+that takes an explicit `BusinessId`, rather than `IDocumentStorage`, which has no such parameter
+and whose Azure adapter correctly refuses to run unscoped. Keys are built with the same
+`BlobDocumentPath` the running application uses, so a migrated document lands where the API will
+later look for it.
+
+Sources are resolved exactly as a live download resolves them — protected storage first, then the
+legacy web root — by reusing `FileSystemDocumentStorage`. Each document is fingerprinted by
+streaming SHA-256 and size: an absent destination is written create-if-absent and then read back
+and verified before it counts as `Migrated`; a destination already holding the same bytes is
+`AlreadyPresent`, which is what makes a rerun safe; a destination holding *different* bytes is a
+`Collision`, never overwritten, renamed or deleted. Missing sources, unusable business ids and
+failed verifications are reported per document with the record type, id, business, stored name
+and reason — and nothing about the document's contents. The command requires
+`DocumentStorage:Provider=AzureBlob` and refuses to run against the filesystem default, which
+would otherwise copy every document from the filesystem back to the filesystem and report
+success. It exits `0` when nothing is unresolved (a dry run's pending work is not a problem) and
+`1` when any document is missing, collided, unowned or failed, so an apply can be gated on a
+clean dry run.
+
+It never deletes or modifies a source document, and never writes to the database: the stored file
+name is the link between record and document, and moving bytes is not a reason to change it.
+Retiring the filesystem copies and the legacy fallback is a separate human decision, after a
+verified migration.
 
 **Configuration and provider selection.** `Program.cs` binds the non-secret `DocumentStorage`
 section and passes it, with the host's content and web roots, to
