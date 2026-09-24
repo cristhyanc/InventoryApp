@@ -22,7 +22,7 @@ public class EfBookkeepingReportFactsProviderTests
         var connection = new SqliteConnection("Data Source=:memory:");
         await connection.OpenAsync();
         var options = new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options;
-        await using var setup = new AppDbContext(options);
+        await using var setup = TestAppDbContext.Unrestricted(options);
         await setup.Database.EnsureCreatedAsync();
         return (connection, options);
     }
@@ -39,7 +39,7 @@ public class EfBookkeepingReportFactsProviderTests
     public async Task Splits_card_and_cash_sales_and_reports_cogs_completeness()
     {
         await using var connection = (await CreateSqliteAsync()).Connection;
-        await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
         db.NayaxSales.AddRange(
             new NayaxSales
             {
@@ -83,7 +83,7 @@ public class EfBookkeepingReportFactsProviderTests
     public async Task Date_range_is_inclusive_of_both_boundary_days_and_excludes_the_day_after()
     {
         await using var connection = (await CreateSqliteAsync()).Connection;
-        await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
         db.NayaxSales.AddRange(
             new NayaxSales { TransactionID = 1, MachineID = 10, SettlementValue = 1m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 7, 31, 23, 59, 0), TransactionStatusId = NayaxTransactionStatusIds.Completed },
             new NayaxSales { TransactionID = 2, MachineID = 10, SettlementValue = 2m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1, 0, 0, 0), TransactionStatusId = NayaxTransactionStatusIds.Completed },
@@ -101,7 +101,7 @@ public class EfBookkeepingReportFactsProviderTests
     public async Task Machine_filter_scopes_sales_to_the_selected_machine_only()
     {
         await using var connection = (await CreateSqliteAsync()).Connection;
-        await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
         db.NayaxSales.AddRange(
             new NayaxSales { TransactionID = 1, MachineID = 10, SettlementValue = 10m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed },
             new NayaxSales { TransactionID = 2, MachineID = 20, SettlementValue = 30m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed });
@@ -117,7 +117,7 @@ public class EfBookkeepingReportFactsProviderTests
     public async Task Non_completed_sales_are_excluded_from_totals_and_cogs_completeness()
     {
         await using var connection = (await CreateSqliteAsync()).Connection;
-        await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
         db.NayaxSales.AddRange(
             new NayaxSales { TransactionID = 1, MachineID = 10, SettlementValue = 10m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed, CostOfGoodsSold = 4m },
             new NayaxSales { TransactionID = 2, MachineID = 10, SettlementValue = 99m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.PendingSettlementNotFinal, CostOfGoodsSold = null });
@@ -134,7 +134,7 @@ public class EfBookkeepingReportFactsProviderTests
     public async Task Receipt_delivery_and_package_costs_are_zero_when_no_receipts_are_in_range()
     {
         await using var connection = (await CreateSqliteAsync()).Connection;
-        await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
         var provider = new EfBookkeepingReportFactsProvider(db, new NayaxProcessingFeeService(db), EmptyCommissions());
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), null, CancellationToken.None);

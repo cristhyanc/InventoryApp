@@ -17,7 +17,7 @@ public class SiteServiceTests
         var options = new DbContextOptionsBuilder<AppDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options;
-        using var db = new AppDbContext(options);
+        using var db = TestAppDbContext.Unrestricted(options);
         db.Products.AddRange(
             new Product { Id = 1, Name = "Low", UnitPrice = 1m, LowStockThreshold = 0 },
             new Product { Id = 2, Name = "Empty", UnitPrice = 1m, LowStockThreshold = 0 });
@@ -62,7 +62,7 @@ public class SiteServiceTests
         var options = new DbContextOptionsBuilder<AppDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options;
-        using var db = new AppDbContext(options);
+        using var db = TestAppDbContext.Unrestricted(options);
         db.Products.Add(new Product { Id = 1, Name = "Product", AverageUnitCost = 2m });
         db.SiteCommissionAgreements.Add(new SiteCommissionAgreement
         {
@@ -108,7 +108,7 @@ public class SiteServiceTests
     public async Task Product_preview_handles_no_agreement_and_overlap_without_throwing(bool overlapping)
     {
         var options = new DbContextOptionsBuilder<AppDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
-        using var db = new AppDbContext(options);
+        using var db = TestAppDbContext.Unrestricted(options);
         db.Products.Add(new Product { Id = 1, Name = "Product", AverageUnitCost = 2m });
         db.NayaxProcessingFeeRates.Add(new NayaxProcessingFeeRate { EffectiveFrom = DateTime.Today.AddYears(-1), FeeExGst = .20m });
         if (overlapping)

@@ -33,7 +33,7 @@ public class EfTransactionSalesReportFactsProviderTests
         var connection = new SqliteConnection("Data Source=:memory:");
         await connection.OpenAsync();
         var options = new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options;
-        var db = new AppDbContext(options);
+        var db = TestAppDbContext.Unrestricted(options);
         await db.Database.EnsureCreatedAsync();
         return db;
     }

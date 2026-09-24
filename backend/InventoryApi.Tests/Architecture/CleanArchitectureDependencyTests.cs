@@ -137,6 +137,21 @@ public class CleanArchitectureDependencyTests
             ["Microsoft.EntityFrameworkCore", "System.Net.Http", "ClosedXML"]);
     }
 
+    /// <summary>
+    /// Identity-provider and claims types must stay at the InventoryApi boundary (issue #64).
+    /// <c>System.Security.Claims</c> needs its own rule: it lives in System.Runtime rather than
+    /// under a Microsoft.AspNetCore namespace, so the web/transport rules above would not catch a
+    /// <c>ClaimsPrincipal</c> leaking into a use case or a tenancy policy.
+    /// </summary>
+    [Fact]
+    public void Domain_and_Application_must_not_depend_on_claims_or_identity_provider_types()
+    {
+        string[] identityNamespaces = ["System.Security.Claims", "Microsoft.Identity"];
+
+        AssertNoDependency(DomainAssembly, "Inventory.Domain", identityNamespaces);
+        AssertNoDependency(ApplicationAssembly, "Inventory.Application", identityNamespaces);
+    }
+
     [Fact]
     public void Domain_and_Application_must_not_reference_controllers()
     {

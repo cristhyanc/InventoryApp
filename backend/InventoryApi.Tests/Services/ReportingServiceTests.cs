@@ -39,7 +39,7 @@ public class ReportingRegressionTests
         var options = new DbContextOptionsBuilder<AppDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options;
-        return new AppDbContext(options);
+        return TestAppDbContext.Unrestricted(options);
     }
 
     private static ReportingHarness Reporting(AppDbContext db, INayaxLynxClient? nayaxLynxClient = null,
@@ -383,7 +383,7 @@ public class ReportingRegressionTests
         var options = new DbContextOptionsBuilder<AppDbContext>()
             .UseSqlite(connection)
             .Options;
-        await using var db = new AppDbContext(options);
+        await using var db = TestAppDbContext.Unrestricted(options);
         await db.Database.EnsureCreatedAsync();
         db.NayaxSales.AddRange(
             new NayaxSales
@@ -1126,7 +1126,7 @@ public class ReportingRegressionTests
         var options = new DbContextOptionsBuilder<AppDbContext>()
             .UseSqlite(connection)
             .Options;
-        await using var db = new AppDbContext(options);
+        await using var db = TestAppDbContext.Unrestricted(options);
         await db.Database.EnsureCreatedAsync();
         db.Products.Add(new Product { Id = 1, Name = "Water", UnitPrice = 3m });
         db.NayaxSales.AddRange(

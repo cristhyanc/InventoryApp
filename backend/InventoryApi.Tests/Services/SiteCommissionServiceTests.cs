@@ -109,7 +109,7 @@ public class SiteCommissionServiceTests
         Assert.True(row.HasConfigurationGap);
     }
 
-    private static AppDbContext CreateDb() => new(new DbContextOptionsBuilder<AppDbContext>()
+    private static AppDbContext CreateDb() => TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>()
         .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
 
     private static SiteCommissionService Service(AppDbContext db, params (long MachineId, long SiteId)[] machines)

@@ -76,7 +76,7 @@ public sealed class PurchaseFileStorageTests : IDisposable
     }
 
     private static AppDbContext CreateDbContext() =>
-        new(new DbContextOptionsBuilder<AppDbContext>()
+        TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options);
 

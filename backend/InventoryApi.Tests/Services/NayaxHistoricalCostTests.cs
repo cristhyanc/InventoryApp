@@ -343,7 +343,7 @@ public class NayaxHistoricalCostTests
     }
 
     private static AppDbContext CreateDb() =>
-        new(new DbContextOptionsBuilder<AppDbContext>()
+        TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
 
     private static ImportService CreateImportService(AppDbContext db) =>

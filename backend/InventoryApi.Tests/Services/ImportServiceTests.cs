@@ -72,7 +72,7 @@ public class ImportServiceTests
     }
 
     private static AppDbContext CreateDbContext() =>
-        new(new DbContextOptionsBuilder<AppDbContext>()
+        TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
 
     private static ImportService CreateImportService(AppDbContext db, INayaxLynxClient? nayax = null)

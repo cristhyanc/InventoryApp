@@ -9,8 +9,11 @@ using Inventory.Application.Reporting.MachineProfitability;
 using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Transactions;
+using Inventory.Application.Tenancy;
 using Inventory.Infrastructure;
 using InventoryApi.Adapters.Persistence;
+using InventoryApi.Bootstrap;
+using InventoryApi.Auth;
 using InventoryApi.Data;
 using InventoryApi.Http;
 using InventoryApi.Integrations.Nayax;
@@ -18,12 +21,30 @@ using InventoryApi.Swagger;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Identity.Web;
 
+// The business bootstrap is a separate, human-invoked path (issue #64, checkpoint 3). It is
+// checked before the web host is built so that starting the API and backfilling ownership can
+// never be the same action: a deployment starts the API and does not reach this branch.
+if (BusinessBootstrapCommand.Matches(args))
+{
+    return await BusinessBootstrapCommand.RunAsync(args, CancellationToken.None);
+}
+
+// Applying schema migrations is likewise a human-invoked command, not something a deployment
+// performs. Normal startup below applies nothing outside Development.
+if (DatabaseMigrationCommand.Matches(args))
+{
+    return await DatabaseMigrationCommand.RunAsync(args, CancellationToken.None);
+}
+
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddMicrosoftIdentityWebApi(builder.Configuration.GetSection("AzureAd"));
 
 builder.Services.AddAuthorization();
+
+// Required by EntraActorIdentityAccessor, which reads the current request's ClaimsPrincipal.
+builder.Services.AddHttpContextAccessor();
 
 builder.Services.AddControllers();
 builder.Services.AddApplicationServices();
@@ -73,6 +94,20 @@ builder.Services.AddScoped<InventoryApi.Services.Interfaces.IImportService, Inve
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.INayaxProcessingFeeService, InventoryApi.Services.NayaxProcessingFeeService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.ISiteCommissionService, InventoryApi.Services.SiteCommissionService>();
 
+// Tenancy (issue #64). Claims parsing stays at this boundary: EntraActorIdentityAccessor is the
+// only implementation of the Application's actor port, and the current-business abstraction
+// itself (ICurrentBusinessProvider) is registered by AddApplicationServices().
+builder.Services.AddScoped<IAuthenticatedActorAccessor, EntraActorIdentityAccessor>();
+
+// The per-request current business, published by BusinessScopeMiddleware and read by
+// AppDbContext's query filters and SaveChanges enforcement. Registered as the concrete type as
+// well, because only the middleware may resolve it; everything else consumes the read-only port.
+builder.Services.AddScoped<BusinessScope>();
+builder.Services.AddScoped<IBusinessScope>(sp => sp.GetRequiredService<BusinessScope>());
+
+// Temporary API-owned adapter for the business membership port; see EfBusinessMembershipStore.
+builder.Services.AddScoped<IBusinessMembershipStore, EfBusinessMembershipStore>();
+
 // Temporary API-owned adapter for the Nayax fee-settings persistence port; see EfNayaxFeeRateStore.
 builder.Services.AddScoped<INayaxFeeRateStore, EfNayaxFeeRateStore>();
 
@@ -102,12 +137,24 @@ builder.Services.AddScoped<ITransactionSalesReportFactsProvider, EfTransactionSa
 
 var app = builder.Build();
 
-// Apply code-first schema + seed data on startup
+// Schema handling at startup (issue #64). Development applies migrations automatically; every
+// other environment applies nothing and fails closed if any are pending, because the tenancy
+// migrations - including the NayaxSales table rebuild - must be applied by a human under review.
+// See DatabaseSchemaStartup and docs/tenant-rollout.md.
+//
+// Schema migrations never assign tenant ownership or perform the business backfill - that is
+// exclusively the human-invoked `bootstrap-business` command. Some of them do rebuild tables and
+// copy persisted rows (the NayaxSales re-key), which is a further reason production migration is
+// human-controlled rather than a deployment side effect.
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    db.Database.Migrate();
+    var loggerFactory = app.Services.GetRequiredService<ILoggerFactory>();
+
+    DatabaseSchemaStartup.EnsureSchema(db, app.Environment, app.Configuration, loggerFactory);
     //DbInitializer.Seed(db);
+
+    TenantOwnershipReadiness.Report(db, loggerFactory);
 }
 
 // First in the pipeline so exceptions from controllers, services, and the Nayax
@@ -128,9 +175,16 @@ if (app.Environment.IsDevelopment())
 app.UseCors("AllowAngularDevClient");
 app.UseAuthentication();
 app.UseAuthorization();
+
+// After authentication, so the caller's claims exist, and before the endpoint, so an
+// authenticated caller with no business membership is refused before any action reads data.
+app.UseMiddleware<BusinessScopeMiddleware>();
+
 app.MapControllers();
 
 app.Run();
+
+return 0;
 
 // Exposed so InventoryApi.Tests can host the API with WebApplicationFactory<Program>.
 public partial class Program;

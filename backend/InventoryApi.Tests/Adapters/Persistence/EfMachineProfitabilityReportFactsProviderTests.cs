@@ -23,7 +23,7 @@ public class EfMachineProfitabilityReportFactsProviderTests
         var connection = new SqliteConnection("Data Source=:memory:");
         await connection.OpenAsync();
         var options = new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options;
-        await using var setup = new AppDbContext(options);
+        await using var setup = TestAppDbContext.Unrestricted(options);
         await setup.Database.EnsureCreatedAsync();
         return connection;
     }
@@ -40,7 +40,7 @@ public class EfMachineProfitabilityReportFactsProviderTests
     public async Task Splits_card_and_cash_sales_per_machine_and_reports_cogs_completeness()
     {
         await using var connection = await CreateSqliteAsync();
-        await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
         db.NayaxSales.AddRange(
             new NayaxSales { TransactionID = 1, MachineID = 10, MachineName = "Machine A", SettlementValue = 10m, PaymentMethod = "Credit Card", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed, CostOfGoodsSold = 4m },
             new NayaxSales { TransactionID = 2, MachineID = 10, MachineName = "Machine A", SettlementValue = 5m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed, CostOfGoodsSold = null },
@@ -67,7 +67,7 @@ public class EfMachineProfitabilityReportFactsProviderTests
     public async Task Machine_filter_scopes_facts_to_the_selected_machine_only()
     {
         await using var connection = await CreateSqliteAsync();
-        await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
         db.NayaxSales.AddRange(
             new NayaxSales { TransactionID = 1, MachineID = 10, SettlementValue = 10m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed },
             new NayaxSales { TransactionID = 2, MachineID = 11, SettlementValue = 20m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed });
@@ -85,7 +85,7 @@ public class EfMachineProfitabilityReportFactsProviderTests
     public async Task Operating_expenses_are_grouped_by_machine_and_unassigned_expenses_are_excluded()
     {
         await using var connection = await CreateSqliteAsync();
-        await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
         var date = new DateTime(2025, 8, 1);
         db.NayaxSales.Add(new NayaxSales { TransactionID = 1, MachineID = 10, SettlementValue = 10m, PaymentMethod = "Cash", MachineAuthorizationTime = date, TransactionStatusId = NayaxTransactionStatusIds.Completed, CostOfGoodsSold = 4m });
         db.OperatingExpenses.AddRange(
@@ -104,7 +104,7 @@ public class EfMachineProfitabilityReportFactsProviderTests
     public async Task Missing_fee_rate_transactions_are_aggregated_across_machines()
     {
         await using var connection = await CreateSqliteAsync();
-        await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
         var date = new DateTime(2025, 8, 1);
         db.NayaxSales.AddRange(
             new NayaxSales { TransactionID = 1, MachineID = 10, SettlementValue = 10m, PaymentMethod = "Credit Card", MachineAuthorizationTime = date, TransactionStatusId = NayaxTransactionStatusIds.Completed, CostOfGoodsSold = 4m },

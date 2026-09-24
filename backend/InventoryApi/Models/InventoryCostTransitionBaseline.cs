@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace InventoryApi.Models;
 
 public enum InventoryCostBaselineSource
@@ -6,8 +8,15 @@ public enum InventoryCostBaselineSource
     ManualEstimated = 2
 }
 
-public class InventoryCostTransitionBaseline
+public class InventoryCostTransitionBaseline : IBusinessOwned
 {
+    /// <summary>
+    /// The owning business (issue #64). Stamped from the caller's resolved business on insert
+    /// and immutable afterwards; never read from API input, and never serialised out.
+    /// </summary>
+    [JsonIgnore]
+    public int BusinessId { get; set; }
+
     public int Id { get; set; }
     public long ProductId { get; set; }
     public virtual Product? Product { get; set; }
@@ -26,8 +35,15 @@ public class InventoryCostTransitionBaseline
         new List<InventoryCostTransitionMachineStock>();
 }
 
-public class InventoryCostTransitionMachineStock
+public class InventoryCostTransitionMachineStock : IBusinessOwned
 {
+    /// <summary>
+    /// The owning business (issue #64). Stamped from the caller's resolved business on insert
+    /// and immutable afterwards; never read from API input, and never serialised out.
+    /// </summary>
+    [JsonIgnore]
+    public int BusinessId { get; set; }
+
     public int Id { get; set; }
     public int InventoryCostTransitionBaselineId { get; set; }
     public virtual InventoryCostTransitionBaseline? InventoryCostTransitionBaseline { get; set; }
@@ -37,8 +53,15 @@ public class InventoryCostTransitionMachineStock
     public string Source { get; set; } = "Nayax PAR - MissingStockByMDB";
 }
 
-public class InventoryCostTransitionPreviewDraft
+public class InventoryCostTransitionPreviewDraft : IBusinessOwned
 {
+    /// <summary>
+    /// The owning business (issue #64). Stamped from the caller's resolved business on insert
+    /// and immutable afterwards; never read from API input, and never serialised out.
+    /// </summary>
+    [JsonIgnore]
+    public int BusinessId { get; set; }
+
     public Guid Id { get; set; }
     public long ProductId { get; set; }
     public string SnapshotJson { get; set; } = string.Empty;

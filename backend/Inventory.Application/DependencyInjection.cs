@@ -9,6 +9,7 @@ using Inventory.Application.Reporting.MachineProfitability;
 using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Transactions;
+using Inventory.Application.Tenancy;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Inventory.Application;
@@ -17,6 +18,9 @@ public static class ApplicationServiceCollectionExtensions
 {
     public static IServiceCollection AddApplicationServices(this IServiceCollection services)
     {
+        // Current-business resolution is per request: it must never be cached across callers.
+        services.AddScoped<ICurrentBusinessProvider, CurrentBusinessProvider>();
+
         services.AddScoped<ListNayaxFeeRates>();
         services.AddScoped<SaveNayaxFeeRate>();
         services.AddScoped<ComputePurchaseTotalValidation>();
