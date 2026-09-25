@@ -175,6 +175,43 @@ Contains:
 
 Controllers do not implement accounting, inventory, persistence, or filesystem rules.
 
+#### Temporary API-owned exception and its enforcement (issue #145)
+
+`InventoryApi/Services` (import, costing, commissions, machine/site/product/purchase/stock
+orchestration) is use-case/domain logic that predates the `Inventory.Domain`/`Inventory.Application`
+split and has not migrated yet. `InventoryApi/Adapters/{Persistence,Export,Nayax}` hold the
+temporary, API-owned adapters (`EfNayaxFeeRateStore`, the `Ef<Feature>ReportFactsProvider` family,
+`ReportExportFileWriter`, `NayaxCatalogSnapshotProvider`, ...) that implement `Inventory.Application`
+ports until `AppDbContext` and its persistence models move into `Inventory.Infrastructure` - see the
+per-slice detail under [Backend migration track](#backend-migration-track). Both are deliberate,
+temporary exceptions to "controllers are thin and InventoryApi holds no use-case/domain logic", not
+places for new business logic to land. Removing them entirely is tracked by issues #153/#154, after
+the feature-by-feature migrations in #146-#151; this issue does not migrate any of them.
+
+What issue #145 adds is enforcement that the `InventoryApi/Services` side of the exception stops
+growing silently. `ProjectDependencyDirectionTests.Only_the_documented_legacy_services_remain_in_InventoryApi_Services`
+(`backend/InventoryApi.Tests/Architecture/`) freezes the exact, named set of git-tracked files this
+migration found already in that folder; the moment a file is added, removed, or renamed there, the
+test fails and names the mismatch. A new slice's use-case or domain logic must go into
+`Inventory.Application`/`Inventory.Domain` instead of extending the legacy folder; growing the
+exception is still possible, but only as a conscious, reviewed edit to both that allow-list and this
+paragraph, never as a silent side effect of an unrelated change. `InventoryApi/Adapters/*` is not
+frozen the same way: unlike `Services`, adding a new temporary EF/Nayax/export adapter there for a
+migrating slice (mirroring `EfNayaxFeeRateStore`) is the established, expected pattern for this
+migration track, not scope creep - it implements an `Inventory.Application`-owned port rather than
+containing use-case logic itself.
+
+`CleanArchitectureDependencyTests` (same directory) is the complementary, compiled-assembly side of
+the boundary: `Domain_must_not_depend_on_Application_Infrastructure_or_Api`,
+`Application_must_not_depend_on_Infrastructure_or_Api`, and `Infrastructure_must_not_depend_on_Api`
+cover the `InventoryApi` reference direction; `Infrastructure_must_not_depend_on_ASP_NET_HTTP_types`
+(added by issue #145) keeps the ASP.NET Core web-host surface (`HttpContext`, middleware, MVC types)
+out of `Inventory.Infrastructure` now that it is a real target for adapters, alongside the existing
+rules keeping ASP.NET Core, EF Core, `HttpClient`, and ClosedXML types out of `Inventory.Domain` and
+`Inventory.Application`. `Inventory.Infrastructure` may still depend on EF Core and outbound HTTP
+clients (`System.Net.Http`) - those are exactly what an adapter is for - it is only the ASP.NET Core
+web-request-pipeline surface that must stay confined to `InventoryApi`.
+
 ### Authentication and authorization
 
 Authentication/authorization is an `InventoryApi`/frontend boundary concern (issue #38). Identity-provider types stay confined to that boundary:
