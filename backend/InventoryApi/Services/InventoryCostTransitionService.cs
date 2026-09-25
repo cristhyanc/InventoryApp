@@ -1,7 +1,7 @@
 using Inventory.Application.Exceptions;
 using InventoryApi.Data;
 using InventoryApi.DTOs;
-using InventoryApi.Integrations.Nayax;
+using Inventory.Application.Nayax;
 using InventoryApi.Models;
 using InventoryApi.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;

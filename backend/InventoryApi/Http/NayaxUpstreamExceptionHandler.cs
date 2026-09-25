@@ -1,5 +1,5 @@
 using System.Diagnostics;
-using InventoryApi.Integrations.Nayax;
+using Inventory.Infrastructure.Nayax;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
 

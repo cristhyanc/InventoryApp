@@ -1,8 +1,8 @@
 using System.Runtime.CompilerServices;
+using Inventory.Application.Nayax;
 using Inventory.Application.Reporting.Transactions;
 using Inventory.Domain.Reporting.Transactions;
 using InventoryApi.Data;
-using InventoryApi.Integrations.Nayax;
 using InventoryApi.Models;
 using InventoryApi.Services;
 using Microsoft.EntityFrameworkCore;

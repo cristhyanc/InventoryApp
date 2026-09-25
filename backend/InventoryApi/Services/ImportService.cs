@@ -1,5 +1,5 @@
 using InventoryApi.Data;
-using InventoryApi.Integrations.Nayax;
+using Inventory.Application.Nayax;
 using InventoryApi.Services.Interfaces;
 
 namespace InventoryApi.Services;

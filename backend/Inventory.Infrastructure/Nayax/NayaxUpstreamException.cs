@@ -1,8 +1,11 @@
 using System.Net;
 
-namespace Inventory.Application.Nayax;
+namespace Inventory.Infrastructure.Nayax;
 
-// Raised when Nayax Lynx answers with a non-success HTTP status.
+// Raised when Nayax Lynx answers with a non-success HTTP status. Lives in Infrastructure, not
+// alongside the INayaxLynxClient port in Inventory.Application, because it carries HTTP-specific
+// diagnostics (HttpMethod, relative endpoint) that Application must not depend on - see
+// CleanArchitectureDependencyTests.Application_must_not_depend_on_EF_Core_or_HTTP_clients.
 // Carries only safe diagnostics: the operation, the HTTP method, the relative
 // endpoint this application built, and the upstream status code. It must never
 // carry the bearer token, an authorization header, or any part of the upstream

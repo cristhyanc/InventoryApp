@@ -15,7 +15,7 @@ backend/InventoryApi/                 ASP.NET Core .NET 10 API
   Controllers/                        HTTP boundary
   DTOs/                               Current API/report contracts
   Data/AppDbContext.cs                EF Core model and mappings
-  Integrations/Nayax/                 Nayax Lynx HTTP integration
+  Adapters/Nayax/                      Nayax catalog-reconciliation adapter (the Nayax Lynx client itself lives in backend/Inventory.Infrastructure/Nayax/)
   Migrations/                         SQLite schema history
   Models/                             Current entities and enums
   Services/                           Current application/domain logic

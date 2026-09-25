@@ -205,9 +205,11 @@ Common environment-variable names include:
 ```text
 ConnectionStrings__DefaultConnection
 NayaxLynx__BaseUrl
-Nayax__Token
 NayaxLynx__OperatorId
+NayaxLynx__AccessToken
 ```
+
+`NayaxLynx__BaseUrl` and `NayaxLynx__OperatorId` are non-secret and validated at startup — the API refuses to start with a missing or invalid value rather than failing on the first Nayax call. `NayaxLynx__AccessToken` is the Nayax Core bearer token, a secret: set it through user-secrets locally or Key Vault/App Service configuration in Azure, and it is never logged. The already deployed secret, `Nayax__Token`, keeps working as a fallback with no rollout required — `Inventory.Infrastructure.Nayax.NayaxLynxConfiguration.ResolveAccessToken` prefers `NayaxLynx__AccessToken` when both are set. New environments should set `NayaxLynx__AccessToken`; `Nayax__Token` is retained only for the deployment that predates this consolidation.
 
 Uploaded purchase and expense documents are stored outside the API web root, under the content root's `protected-files/` folder, with their metadata in SQLite; they are readable only through the authenticated API endpoints. Do not commit uploaded business documents, local databases, or credentials.
 
