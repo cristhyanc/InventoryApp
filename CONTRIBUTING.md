@@ -35,7 +35,7 @@ This repository runs privileged automation (an implementation agent, an independ
 - **A fork PR cannot deploy anything.** The Azure deployment workflows (`vm-manager.yml`, the Static Web Apps workflow) trigger only on a `push` to `main`, which requires an already-merged, maintainer-approved change; they never run against a pull request.
 - **No contributor-supplied code runs with write access to this repository or with deployment credentials before a maintainer has reviewed it.**
 
-See [docs/automation.md](docs/automation.md) for the complete authority model, and [docs/public-release-checklist.md](docs/public-release-checklist.md) for the public-repository threat review these guarantees are based on.
+See [docs/automation.md](docs/automation.md) for the complete authority model.
 
 ## Reporting bugs and requesting features
 
