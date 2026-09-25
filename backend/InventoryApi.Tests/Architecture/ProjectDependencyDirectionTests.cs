@@ -152,4 +152,81 @@ public class ProjectDependencyDirectionTests
             Assert.DoesNotContain("InventoryApi", ProjectReferencesOf(folder, file));
         }
     }
+
+    /// <summary>
+    /// Issue #145: <c>InventoryApi/Services</c> is use-case/domain business logic (import,
+    /// costing, commissions, machine/site/product/purchase/stock orchestration, ...) that predates
+    /// the <c>Inventory.Domain</c>/<c>Inventory.Application</c> split and has not migrated yet - the
+    /// temporary, explicitly documented exception described in docs/architecture.md § Backend
+    /// target. Migrating all of it is tracked feature-by-feature by issues #146-#151, with full
+    /// removal of this exception tracked by #153/#154; ripping it out here would be a much larger,
+    /// riskier change than "strengthen the architecture tests" and is explicitly out of scope for
+    /// this issue.
+    ///
+    /// What this issue does require is that the exception stop growing silently. This test freezes
+    /// the exact set of files this migration found already in that folder. A new slice's use-case
+    /// or domain logic must go into <c>Inventory.Application</c>/<c>Inventory.Domain</c> instead of
+    /// copying the legacy pattern; the moment any file is added to, removed from, or renamed in
+    /// <c>InventoryApi/Services</c>, this test fails and names the mismatch, forcing that change to
+    /// be a conscious update to both this allow-list and the docs/architecture.md exception it
+    /// documents, rather than a silent expansion of code Clean Architecture no longer allows to grow.
+    /// </summary>
+    [Fact]
+    public void Only_the_documented_legacy_services_remain_in_InventoryApi_Services()
+    {
+        string[] allowedRelativePaths =
+        [
+            "CategoryService.cs",
+            "EffectiveFinancialConfiguration.cs",
+            "ImportService.cs",
+            "ImportService.NayaxSales.cs",
+            "ImportService.Products.cs",
+            "ImportService.Xml.cs",
+            "InsufficientStockException.cs",
+            "Interfaces/ICategoryService.cs",
+            "Interfaces/IImportService.cs",
+            "Interfaces/IInventoryCostRebuildService.cs",
+            "Interfaces/IInventoryCostService.cs",
+            "Interfaces/IInventoryCostTransitionService.cs",
+            "Interfaces/IMachineService.cs",
+            "Interfaces/INayaxProcessingFeeService.cs",
+            "Interfaces/IProductService.cs",
+            "Interfaces/IPurchaseService.cs",
+            "Interfaces/ISaleCostingService.cs",
+            "Interfaces/ISiteCommissionService.cs",
+            "Interfaces/ISiteService.cs",
+            "Interfaces/IStockService.cs",
+            "Interfaces/ISupplierOrderService.cs",
+            "Interfaces/ISupplierService.cs",
+            "InventoryCostRebuildResult.cs",
+            "InventoryCostRebuildService.cs",
+            "InventoryCostService.cs",
+            "InventoryCostTransitionService.cs",
+            "MachineService.cs",
+            "NayaxProcessingFeeService.cs",
+            "NayaxProductMatcher.cs",
+            "NayaxSalesWorkbook.cs",
+            "NayaxTransactionStatusClassifier.cs",
+            "PaymentMethodClassifier.cs",
+            "ProductService.cs",
+            "PurchaseService.cs",
+            "SaleCostingService.cs",
+            "SiteCommissionCalculator.cs",
+            "SiteCommissionService.cs",
+            "SiteNameResolver.cs",
+            "SiteService.cs",
+            "StockService.cs",
+            "SupplierOrderService.cs",
+            "SupplierService.cs",
+        ];
+
+        var servicesRoot = Path.Combine(BackendRoot, "InventoryApi", "Services");
+
+        var actualRelativePaths = Directory.EnumerateFiles(servicesRoot, "*.cs", SearchOption.AllDirectories)
+            .Select(path => Path.GetRelativePath(servicesRoot, path).Replace(Path.DirectorySeparatorChar, '/'))
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(allowedRelativePaths.OrderBy(name => name, StringComparer.Ordinal), actualRelativePaths);
+    }
 }
