@@ -51,9 +51,13 @@ builder.Services.AddControllers();
 builder.Services.AddApplicationServices();
 builder.Services.AddInfrastructureServices();
 
-// Controlled RFC 7807 responses for Nayax upstream failures.
+// Controlled RFC 7807 responses. IExceptionHandlers run in registration order, so the Nayax
+// handler keeps first refusal on its own exception type, DomainExceptionHandler then claims the
+// migrated validation/conflict cases, and GlobalExceptionHandler is the catch-all last resort.
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<NayaxUpstreamExceptionHandler>();
+builder.Services.AddExceptionHandler<DomainExceptionHandler>();
+builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 builder.Services.AddInventoryApiSwagger();
 
 builder.Services.AddDbContext<AppDbContext>(options =>
