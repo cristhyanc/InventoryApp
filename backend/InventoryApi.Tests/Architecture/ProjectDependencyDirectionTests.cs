@@ -220,13 +220,45 @@ public class ProjectDependencyDirectionTests
             "SupplierService.cs",
         ];
 
-        var servicesRoot = Path.Combine(BackendRoot, "InventoryApi", "Services");
-
-        var actualRelativePaths = Directory.EnumerateFiles(servicesRoot, "*.cs", SearchOption.AllDirectories)
-            .Select(path => Path.GetRelativePath(servicesRoot, path).Replace(Path.DirectorySeparatorChar, '/'))
+        var actualRelativePaths = GitTrackedFiles(Path.Combine("InventoryApi", "Services"))
+            .Where(path => path.EndsWith(".cs", StringComparison.Ordinal))
             .OrderBy(name => name, StringComparer.Ordinal)
             .ToArray();
 
         Assert.Equal(allowedRelativePaths.OrderBy(name => name, StringComparer.Ordinal), actualRelativePaths);
+    }
+
+    /// <summary>
+    /// Lists the git-tracked files under <paramref name="repoRelativeDirectory"/> (relative to
+    /// <see cref="BackendRoot"/>'s parent, the repository root), rather than walking the raw
+    /// filesystem. This freeze exists to catch a reviewed, committed change - a local build
+    /// artifact, IDE scratch file, or OS metadata file left in the working tree must not trip it
+    /// (and must not silently satisfy it either).
+    /// </summary>
+    private static string[] GitTrackedFiles(string repoRelativeDirectory)
+    {
+        var startInfo = new System.Diagnostics.ProcessStartInfo("git", $"ls-files -- {repoRelativeDirectory}")
+        {
+            WorkingDirectory = BackendRoot,
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+        };
+
+        using var process = System.Diagnostics.Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Could not start 'git ls-files'.");
+
+        var output = process.StandardOutput.ReadToEnd();
+        process.WaitForExit();
+
+        if (process.ExitCode != 0)
+        {
+            throw new InvalidOperationException($"'git ls-files -- {repoRelativeDirectory}' exited with code {process.ExitCode}.");
+        }
+
+        return output
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.Trim().Replace('\\', '/'))
+            .Select(path => path[(repoRelativeDirectory.Replace('\\', '/').Length + 1)..])
+            .ToArray();
     }
 }
