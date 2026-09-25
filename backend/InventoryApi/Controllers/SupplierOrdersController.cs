@@ -30,9 +30,9 @@ public class SupplierOrdersController : ControllerBase
     [HttpPost]
     public async Task<ActionResult<SupplierOrder>> Create(SupplierOrderCreateDto dto)
     {
-        // Validation failures (InvalidOperationException) are mapped centrally by
-        // DomainExceptionHandler (see Http/DomainExceptionHandler.cs) into a 400 ProblemDetails
-        // with the same message this action used to return directly.
+        // The service's deliberate validation checks throw DomainValidationException, which
+        // DomainExceptionHandler (see Http/DomainExceptionHandler.cs) maps centrally to a 400
+        // ProblemDetails carrying the same message this action used to return directly.
         var order = await _service.Create(dto);
         return order is null ? BadRequest("Invalid supplier.") : CreatedAtAction(nameof(GetActive), new { id = order.Id }, order);
     }

@@ -10,7 +10,13 @@ namespace InventoryApi.Tests.Http;
 
 public class GlobalExceptionHandlerTests
 {
-    private const string SecretConnectionString = "Server=internal-db;User=sa;Password=Sup3rSecret!";
+    /// <summary>
+    /// A non-secret sentinel standing in for whatever sensitive text an internal exception message
+    /// might carry. It is deliberately not shaped like a credential or connection string - a
+    /// realistic-looking fake trips repository secret scanning without making the assertion any
+    /// stronger. All these tests need is a distinctive string that must never leave the server.
+    /// </summary>
+    private const string SensitiveDetail = "sensitive-detail-sentinel-must-not-be-published";
 
     [Fact]
     public async Task Unexpected_exception_becomes_a_generic_500_problem_json_response()
@@ -18,7 +24,7 @@ public class GlobalExceptionHandlerTests
         var (handler, context, body, logger) = CreateHandler();
 
         var handled = await handler.TryHandleAsync(
-            context, new InvalidOperationException($"Connection failed: {SecretConnectionString}"), CancellationToken.None);
+            context, new InvalidOperationException($"Connection failed: {SensitiveDetail}"), CancellationToken.None);
 
         Assert.True(handled);
         Assert.Equal(StatusCodes.Status500InternalServerError, context.Response.StatusCode);
@@ -34,9 +40,38 @@ public class GlobalExceptionHandlerTests
         Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("traceId").GetString()));
 
         // The public response must never carry the exception's message, type name, or a stack trace.
-        Assert.DoesNotContain(SecretConnectionString, payload, StringComparison.Ordinal);
+        Assert.DoesNotContain(SensitiveDetail, payload, StringComparison.Ordinal);
         Assert.DoesNotContain("InvalidOperationException", payload, StringComparison.Ordinal);
         Assert.DoesNotContain("Connection failed", payload, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(typeof(ArgumentException))]
+    [InlineData(typeof(InvalidOperationException))]
+    public async Task Arbitrary_framework_exceptions_become_a_logged_generic_500_without_their_message(Type exceptionType)
+    {
+        // DomainExceptionHandler deliberately leaves ArgumentException/InvalidOperationException
+        // unclaimed so an unrelated internal failure - a tenant-scope double resolve, a report
+        // export argument check - stays a loud, logged 500 instead of becoming a public 400 that
+        // echoes a developer-facing message.
+        var (handler, context, body, logger) = CreateHandler();
+        var exception = (Exception)Activator.CreateInstance(exceptionType, SensitiveDetail)!;
+
+        var handled = await handler.TryHandleAsync(context, exception, CancellationToken.None);
+
+        Assert.True(handled);
+        Assert.Equal(StatusCodes.Status500InternalServerError, context.Response.StatusCode);
+
+        var payload = ReadBody(body);
+        Assert.DoesNotContain(SensitiveDetail, payload, StringComparison.Ordinal);
+        Assert.DoesNotContain(exceptionType.Name, payload, StringComparison.Ordinal);
+        Assert.Equal(
+            "The request could not be completed. Contact support with the trace identifier if this persists.",
+            JsonDocument.Parse(payload).RootElement.GetProperty("detail").GetString());
+
+        var entry = Assert.Single(logger.Entries);
+        Assert.Equal(LogLevel.Error, entry.Level);
+        Assert.Same(exception, entry.Exception);
     }
 
     [Fact]
@@ -44,7 +79,7 @@ public class GlobalExceptionHandlerTests
     {
         var (handler, context, body, logger) = CreateHandler();
         context.TraceIdentifier = "trace-for-this-request";
-        var exception = new InvalidOperationException($"Connection failed: {SecretConnectionString}");
+        var exception = new InvalidOperationException($"Connection failed: {SensitiveDetail}");
 
         await handler.TryHandleAsync(context, exception, CancellationToken.None);
 

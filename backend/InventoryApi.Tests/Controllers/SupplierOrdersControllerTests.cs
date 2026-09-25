@@ -1,3 +1,4 @@
+using Inventory.Application.Exceptions;
 using InventoryApi.Controllers;
 using InventoryApi.DTOs;
 using InventoryApi.Models;
@@ -9,10 +10,11 @@ using Xunit;
 namespace InventoryApi.Tests.Controllers;
 
 /// <summary>
-/// SupplierOrdersController.Create no longer catches InvalidOperationException itself
-/// (issue #59): DomainExceptionHandler now maps it centrally to the same 400 ProblemDetails this
-/// action used to build directly. These tests prove the action lets the exception propagate
-/// uncaught, and that its unrelated not-found/bad-request behaviour is unchanged.
+/// SupplierOrdersController.Create no longer catches its service's validation failures
+/// (issue #59): the service now throws DomainValidationException, which DomainExceptionHandler
+/// maps centrally to the same 400 ProblemDetails this action used to build directly. These tests
+/// prove the action lets that exception propagate uncaught, and that its unrelated
+/// not-found/bad-request behaviour is unchanged.
 /// </summary>
 public class SupplierOrdersControllerTests
 {
@@ -20,14 +22,14 @@ public class SupplierOrdersControllerTests
         new(1, DateTime.UtcNow, null, null, null, [new SupplierOrderLineCreateDto(1, 5)]);
 
     [Fact]
-    public async Task Create_lets_invalid_operation_exception_propagate()
+    public async Task Create_lets_domain_validation_exception_propagate()
     {
         var service = new Mock<ISupplierOrderService>();
         service.Setup(x => x.Create(It.IsAny<SupplierOrderCreateDto>()))
-            .ThrowsAsync(new InvalidOperationException("Ordered quantity must be positive."));
+            .ThrowsAsync(new DomainValidationException("Ordered quantity must be positive."));
         var controller = new SupplierOrdersController(service.Object);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => controller.Create(CreateDto()));
+        await Assert.ThrowsAsync<DomainValidationException>(() => controller.Create(CreateDto()));
     }
 
     [Fact]

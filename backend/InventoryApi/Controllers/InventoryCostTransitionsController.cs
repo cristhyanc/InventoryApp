@@ -6,9 +6,11 @@ using Microsoft.Identity.Web.Resource;
 
 namespace InventoryApi.Controllers;
 
-// Validation failures (InvalidOperationException) are mapped centrally by DomainExceptionHandler
-// (see Http/DomainExceptionHandler.cs) into a 400 ProblemDetails with the same message these
-// actions used to return directly, so none of them need their own catch block any more.
+// The service's deliberate validation checks throw DomainValidationException, which
+// DomainExceptionHandler (see Http/DomainExceptionHandler.cs) maps centrally to a 400
+// ProblemDetails carrying the same message these actions used to return directly, so none of them
+// need their own catch block any more. An unexpected framework exception is deliberately not
+// mapped: it reaches GlobalExceptionHandler as a logged, generic 500.
 [ApiController]
 [Route("api/admin/inventory-cost-transition")]
 [Authorize]

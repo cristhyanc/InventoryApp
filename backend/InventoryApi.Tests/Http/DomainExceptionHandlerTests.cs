@@ -12,6 +12,13 @@ namespace InventoryApi.Tests.Http;
 
 public class DomainExceptionHandlerTests
 {
+    /// <summary>
+    /// A non-secret sentinel standing in for any internal, developer-facing exception text. It is
+    /// deliberately not a credential, connection string, or token: the assertions only need a
+    /// distinctive string that must never appear in a public response body.
+    /// </summary>
+    private const string InternalDetail = "internal-detail-must-not-be-published";
+
     [Fact]
     public async Task Domain_validation_exception_becomes_a_400_problem_json_response()
     {
@@ -62,19 +69,40 @@ public class DomainExceptionHandlerTests
 
     [Theory]
     [InlineData(typeof(ArgumentException))]
+    [InlineData(typeof(ArgumentNullException))]
+    [InlineData(typeof(ArgumentOutOfRangeException))]
     [InlineData(typeof(InvalidOperationException))]
-    public async Task Legacy_exception_types_keep_their_established_400_mapping(Type exceptionType)
+    public async Task Arbitrary_framework_exceptions_are_not_claimed_and_never_reach_the_caller(Type exceptionType)
     {
+        // These types are thrown all over the BCL, EF Core, and this application's own
+        // infrastructure (tenant scope resolution, costing data quality, report export). Their
+        // messages are written for a developer, not an API client, so this handler must never
+        // claim them: they belong to GlobalExceptionHandler's logged, generic 500.
         var (handler, context, body, logger) = CreateHandler();
-        var exception = (Exception)Activator.CreateInstance(exceptionType, "Existing validation message.")!;
+        var exception = (Exception)Activator.CreateInstance(exceptionType, InternalDetail)!;
 
         var handled = await handler.TryHandleAsync(context, exception, CancellationToken.None);
 
-        Assert.True(handled);
-        Assert.Equal(StatusCodes.Status400BadRequest, context.Response.StatusCode);
-        var root = ParseBody(body);
-        Assert.Equal("Existing validation message.", root.GetProperty("detail").GetString());
-        Assert.Equal("Existing validation message.", root.GetProperty("message").GetString());
+        Assert.False(handled);
+        Assert.NotEqual(StatusCodes.Status400BadRequest, context.Response.StatusCode);
+        var payload = ReadBody(body);
+        Assert.Empty(payload);
+        Assert.DoesNotContain(InternalDetail, payload, StringComparison.Ordinal);
+        Assert.Empty(logger.Entries);
+    }
+
+    [Fact]
+    public async Task A_subclass_of_a_framework_exception_is_not_claimed_either()
+    {
+        // The tenant-scope double-resolve guard (BusinessScope.Resolve) and any other internal
+        // invariant check must stay a loud 500, not become a silent 400 echoing its message.
+        var (handler, context, body, logger) = CreateHandler();
+
+        var handled = await handler.TryHandleAsync(
+            context, new ObjectDisposedException(InternalDetail), CancellationToken.None);
+
+        Assert.False(handled);
+        Assert.Empty(ReadBody(body));
         Assert.Empty(logger.Entries);
     }
 
@@ -96,13 +124,13 @@ public class DomainExceptionHandlerTests
     public async Task Inventory_cost_data_quality_exception_is_not_claimed_here()
     {
         // It derives from InvalidOperationException but signals a data-integrity problem found
-        // while rebuilding costing history, not a routine client validation failure. Today
-        // nothing catches it, so it already surfaces as an unexpected error; this handler must
-        // not silently reclassify it as a client-caused 400.
+        // while rebuilding costing history, not a routine client validation failure. Nothing
+        // catches it, so it surfaces as an unexpected error; this handler must not reclassify it
+        // as a client-caused 400.
         var (handler, context, body, logger) = CreateHandler();
 
         var handled = await handler.TryHandleAsync(
-            context, new InventoryCostDataQualityException("Ledger is inconsistent."), CancellationToken.None);
+            context, new InventoryCostDataQualityException(InternalDetail), CancellationToken.None);
 
         Assert.False(handled);
         Assert.NotEqual(StatusCodes.Status400BadRequest, context.Response.StatusCode);

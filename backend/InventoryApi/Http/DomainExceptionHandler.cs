@@ -8,22 +8,28 @@ namespace InventoryApi.Http;
 
 /// <summary>
 /// Maps domain/application validation and conflict failures to stable, safe ProblemDetails
-/// responses, so controllers no longer need their own repetitive try/catch. It recognizes the new
-/// typed exceptions (<see cref="DomainValidationException"/>, <see cref="DomainConflictException"/>)
-/// plus the pre-existing exception types the controllers already caught one by one
-/// (<see cref="InsufficientStockException"/>, <see cref="ArgumentException"/>,
-/// <see cref="InvalidOperationException"/>), so centralizing the mapping preserves the exact
-/// status code and message every caller already receives today.
+/// responses, so controllers no longer need their own repetitive try/catch.
 ///
-/// <see cref="InventoryCostDataQualityException"/> is deliberately excluded even though
-/// it derives from <see cref="InvalidOperationException"/>: it signals a data-integrity problem
-/// found while rebuilding costing history, not a routine request-validation failure, and today it
-/// is not caught anywhere, so it already surfaces as an unexpected error. This handler leaves that
-/// behavior unchanged rather than silently reclassifying it as a client validation error.
+/// It only claims exception types whose contract guarantees a caller-safe message:
+/// <see cref="DomainValidationException"/> and <see cref="DomainConflictException"/> (both
+/// documented as carrying a message written for the caller), and
+/// <see cref="InsufficientStockException"/>, whose message is a fixed sentence plus an available
+/// stock count the caller is already entitled to see.
 ///
-/// Every other exception, and every Nayax upstream failure (already claimed by
-/// <see cref="NayaxUpstreamExceptionHandler"/>, registered before this handler), returns
-/// <see langword="false"/> and falls through to the general exception handler.
+/// It deliberately does not claim framework-wide types such as
+/// <see cref="ArgumentException"/> or <see cref="InvalidOperationException"/>. Those are thrown
+/// all over the BCL, EF Core, and this application's own infrastructure (tenant scope resolution,
+/// costing data-quality checks, report export), and their messages are written for a developer,
+/// not for an API client. Claiming them here would turn unrelated internal failures into public
+/// 400 responses that echo an internal message and are never logged. Every one of them - like any
+/// other unrecognized exception - returns <see langword="false"/> and falls through to
+/// <see cref="GlobalExceptionHandler"/>, which logs it once at <see cref="LogLevel.Error"/> and
+/// answers with a generic 500 that carries no message. A deliberate validation check that should
+/// reach the caller must therefore throw <see cref="DomainValidationException"/> or
+/// <see cref="DomainConflictException"/> at the throw site.
+///
+/// Nayax upstream failures are already claimed by <see cref="NayaxUpstreamExceptionHandler"/>,
+/// which is registered before this handler.
 /// </summary>
 public sealed class DomainExceptionHandler : IExceptionHandler
 {
@@ -85,14 +91,14 @@ public sealed class DomainExceptionHandler : IExceptionHandler
         return true;
     }
 
+    // Only exception types whose own contract guarantees a caller-safe message may appear here.
+    // Never add a framework-wide base type such as ArgumentException or InvalidOperationException:
+    // that would publish internal messages from throw sites nobody reviewed.
     private static (int Status, string Title)? Classify(Exception exception) => exception switch
     {
-        InventoryCostDataQualityException => null,
         DomainValidationException => (StatusCodes.Status400BadRequest, ValidationTitle),
         DomainConflictException => (StatusCodes.Status409Conflict, ConflictTitle),
         InsufficientStockException => (StatusCodes.Status400BadRequest, ValidationTitle),
-        ArgumentException => (StatusCodes.Status400BadRequest, ValidationTitle),
-        InvalidOperationException => (StatusCodes.Status400BadRequest, ValidationTitle),
         _ => null,
     };
 }

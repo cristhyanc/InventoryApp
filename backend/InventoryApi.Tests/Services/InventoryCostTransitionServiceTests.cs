@@ -1,3 +1,4 @@
+using Inventory.Application.Exceptions;
 using InventoryApi.Data;
 using InventoryApi.Integrations.Nayax;
 using InventoryApi.Models;
@@ -40,6 +41,35 @@ public class InventoryCostTransitionServiceTests
             preview.MachineStocks,
             stock => Assert.Equal(6, stock.StockQuantity),
             stock => Assert.Equal(5, stock.StockQuantity));
+    }
+
+    // Issue #59: every deliberate check in this service is caller-facing validation, so it throws
+    // the narrowly typed DomainValidationException the central handler is allowed to publish as a
+    // 400. An ordinary InvalidOperationException would now become a generic logged 500 instead.
+    [Fact]
+    public async Task Preview_rejects_a_negative_opening_cost_with_a_domain_validation_exception()
+    {
+        await using var db = CreateDb();
+        var service = new InventoryCostTransitionService(
+            db, NayaxWithStock(10).Object, new InventoryCostRebuildService(db));
+
+        var exception = await Assert.ThrowsAsync<DomainValidationException>(() =>
+            service.PreviewAsync(new(10, -1m, InventoryCostBaselineSource.ManualAuthoritative)));
+
+        Assert.Equal("The opening average unit cost cannot be negative.", exception.Message);
+    }
+
+    [Fact]
+    public async Task Apply_without_confirmation_throws_a_domain_validation_exception()
+    {
+        await using var db = CreateDb();
+        var service = new InventoryCostTransitionService(
+            db, NayaxWithStock(10).Object, new InventoryCostRebuildService(db));
+
+        var exception = await Assert.ThrowsAsync<DomainValidationException>(() =>
+            service.ApplyAsync(new(Guid.NewGuid(), false)));
+
+        Assert.Equal("Explicit confirmation is required to save the transition baseline.", exception.Message);
     }
 
     [Fact]
