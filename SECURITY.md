@@ -29,6 +29,5 @@ InventoryApp does not publish versioned releases; `main` is the only deployed br
 
 ## Related documentation
 
-- [`docs/public-release-checklist.md`](docs/public-release-checklist.md) — the audit and human-controlled sequence for making this repository public, including credential rotation and branch protection.
 - [`docs/automation.md`](docs/automation.md) — the automated development lifecycle, authority model, and the safeguards that keep repository/deployment secrets out of automated agents' reach.
 - [`AGENTS.md`](AGENTS.md) — engineering invariants, including "Security and deployment safeguards".
