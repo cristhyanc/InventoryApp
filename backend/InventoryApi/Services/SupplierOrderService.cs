@@ -1,3 +1,4 @@
+using Inventory.Application.Exceptions;
 using InventoryApi.Data;
 using InventoryApi.DTOs;
 using InventoryApi.Models;
@@ -32,12 +33,12 @@ public class SupplierOrderService : ISupplierOrderService
     public async Task<SupplierOrder?> Create(SupplierOrderCreateDto dto)
     {
         if (dto.Lines.Count == 0 || dto.Lines.Any(line => line.QuantityOrdered <= 0 || line.QuantityOrdered != decimal.Truncate(line.QuantityOrdered)))
-            throw new InvalidOperationException("An order must include at least one positive whole-unit quantity.");
+            throw new DomainValidationException("An order must include at least one positive whole-unit quantity.");
         if (!await _db.Suppliers.AnyAsync(supplier => supplier.Id == dto.SupplierId)) return null;
 
         var productIds = dto.Lines.Select(line => line.ProductId).Distinct().ToList();
         if (productIds.Count != dto.Lines.Count || await _db.Products.CountAsync(product => productIds.Contains(product.Id)) != productIds.Count)
-            throw new InvalidOperationException("Each order line must reference a distinct existing product.");
+            throw new DomainValidationException("Each order line must reference a distinct existing product.");
 
         var now = DateTime.UtcNow;
         var order = new SupplierOrder

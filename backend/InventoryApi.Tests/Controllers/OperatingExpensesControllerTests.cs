@@ -1,12 +1,11 @@
+using Inventory.Infrastructure.Documents;
 using InventoryApi.Controllers;
 using InventoryApi.Data;
 using InventoryApi.DTOs;
 using InventoryApi.Models;
 using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.FileProviders;
 using Xunit;
 
 namespace InventoryApi.Tests.Controllers;
@@ -54,9 +53,10 @@ public sealed class OperatingExpensesControllerTests : IDisposable
         Assert.True(File.Exists(AttachmentPath(expense.AttachmentStoredFileName!)));
 
         var document = await controller.GetAttachment(expense.Id, CancellationToken.None);
-        var file = Assert.IsType<PhysicalFileResult>(document);
+        var file = Assert.IsType<FileStreamResult>(document);
         Assert.Equal(contentType, file.ContentType);
         Assert.Equal(fileName, file.FileDownloadName);
+        Assert.Equal(new byte[] { 1, 2, 3 }, await ReadAllBytesAsync(file));
     }
 
     [Fact]
@@ -164,9 +164,69 @@ public sealed class OperatingExpensesControllerTests : IDisposable
 
         var document = await controller.GetAttachment(expenseId, CancellationToken.None);
 
-        var file = Assert.IsType<PhysicalFileResult>(document);
+        var file = Assert.IsType<FileStreamResult>(document);
         Assert.Equal("application/pdf", file.ContentType);
         Assert.Equal("legacy.pdf", file.FileDownloadName);
+        Assert.Equal(new byte[] { 1, 2, 3 }, await ReadAllBytesAsync(file));
+    }
+
+    /// <summary>
+    /// The attachment used to be served straight from disk, which supplied the file's write time
+    /// as <c>Last-Modified</c>. Serving it through the storage port must keep that header, so
+    /// conditional requests from a browser still work.
+    /// </summary>
+    [Fact]
+    public async Task Attachment_download_carries_the_stored_documents_last_modified_time()
+    {
+        await using var db = CreateDbContext();
+        var controller = CreateController(db);
+        var created = await CreateExpenseWithAttachment(controller, "invoice.pdf");
+        var written = new DateTime(2026, 2, 3, 4, 5, 6, DateTimeKind.Utc);
+        File.SetLastWriteTimeUtc(AttachmentPath(created.AttachmentStoredFileName!), written);
+
+        var document = await controller.GetAttachment(created.Id, CancellationToken.None);
+
+        var file = Assert.IsType<FileStreamResult>(document);
+        await file.FileStream.DisposeAsync();
+        Assert.Equal(new DateTimeOffset(written, TimeSpan.Zero), file.LastModified);
+    }
+
+    /// <summary>
+    /// A legacy attachment reports its own write time, which is the whole point of preserving it:
+    /// these documents predate protected storage by a long way.
+    /// </summary>
+    [Fact]
+    public async Task Legacy_attachment_download_carries_the_legacy_files_last_modified_time()
+    {
+        await using var db = CreateDbContext();
+        var controller = CreateController(db);
+        var storedFileName = $"{Guid.NewGuid()}.pdf";
+        var legacyFolder = Directory.CreateDirectory(Path.Combine(_webRoot, "expenses"));
+        var legacyPath = Path.Combine(legacyFolder.FullName, storedFileName);
+        await File.WriteAllBytesAsync(legacyPath, new byte[] { 1, 2, 3 });
+        var written = new DateTime(2021, 7, 8, 9, 10, 11, DateTimeKind.Utc);
+        File.SetLastWriteTimeUtc(legacyPath, written);
+        db.OperatingExpenses.Add(new OperatingExpense
+        {
+            ExpenseDate = DateTime.UtcNow.Date,
+            Category = OperatingExpenseCategory.Insurance,
+            Description = "Legacy attachment",
+            AmountExGst = 10m,
+            GstAmount = 1m,
+            TotalAmount = 11m,
+            AttachmentFileName = "legacy.pdf",
+            AttachmentStoredFileName = storedFileName,
+            AttachmentContentType = "application/pdf",
+            AttachmentFileSizeBytes = 3
+        });
+        await db.SaveChangesAsync();
+        var expenseId = (await db.OperatingExpenses.AsNoTracking().SingleAsync()).Id;
+
+        var document = await controller.GetAttachment(expenseId, CancellationToken.None);
+
+        var file = Assert.IsType<FileStreamResult>(document);
+        await file.FileStream.DisposeAsync();
+        Assert.Equal(new DateTimeOffset(written, TimeSpan.Zero), file.LastModified);
     }
 
     public void Dispose()
@@ -184,7 +244,11 @@ public sealed class OperatingExpensesControllerTests : IDisposable
             .Options);
 
     private OperatingExpensesController CreateController(AppDbContext db) =>
-        new(db, new TestWebHostEnvironment(_contentRoot, _webRoot));
+        new(db, new FileSystemDocumentStorage(new FileSystemDocumentStorageOptions
+        {
+            ContentRootPath = _contentRoot,
+            WebRootPath = _webRoot,
+        }));
 
     private async Task<OperatingExpense> CreateExpenseWithAttachment(
         OperatingExpensesController controller, string fileName)
@@ -201,13 +265,11 @@ public sealed class OperatingExpensesControllerTests : IDisposable
     private static IFormFile CreateFile(string fileName) =>
         new FormFile(new MemoryStream(new byte[] { 1, 2, 3 }), 0, 3, "attachment", fileName);
 
-    private sealed class TestWebHostEnvironment(string contentRoot, string webRoot) : IWebHostEnvironment
+    private static async Task<byte[]> ReadAllBytesAsync(FileStreamResult result)
     {
-        public string ApplicationName { get; set; } = "InventoryApi.Tests";
-        public IFileProvider WebRootFileProvider { get; set; } = null!;
-        public string WebRootPath { get; set; } = webRoot;
-        public string EnvironmentName { get; set; } = "Test";
-        public string ContentRootPath { get; set; } = contentRoot;
-        public IFileProvider ContentRootFileProvider { get; set; } = null!;
+        await using var stream = result.FileStream;
+        using var buffer = new MemoryStream();
+        await stream.CopyToAsync(buffer);
+        return buffer.ToArray();
     }
 }

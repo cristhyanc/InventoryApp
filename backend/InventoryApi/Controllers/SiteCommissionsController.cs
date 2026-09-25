@@ -1,3 +1,4 @@
+using Inventory.Application.Exceptions;
 using InventoryApi.Data;
 using InventoryApi.DTOs;
 using InventoryApi.Models;
@@ -37,7 +38,9 @@ public sealed class SiteCommissionsController : ControllerBase
             return BadRequest("Commission agreement values are invalid.");
         var overlaps = await _db.SiteCommissionAgreements.AnyAsync(x => x.SiteId == dto.SiteId &&
             x.EffectiveFrom <= (dto.EffectiveTo ?? DateTime.MaxValue) && (x.EffectiveTo ?? DateTime.MaxValue) >= dto.EffectiveFrom, ct);
-        if (overlaps) return Conflict("The agreement overlaps an existing agreement for this site.");
+        // Mapped centrally by DomainExceptionHandler into the same 409 this action used to
+        // return directly (see Http/DomainExceptionHandler.cs).
+        if (overlaps) throw new DomainConflictException("The agreement overlaps an existing agreement for this site.");
         var agreement = new SiteCommissionAgreement
         {
             SiteId = dto.SiteId,

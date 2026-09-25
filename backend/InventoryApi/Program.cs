@@ -12,6 +12,7 @@ using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Transactions;
 using Inventory.Application.Tenancy;
 using Inventory.Infrastructure;
+using Inventory.Infrastructure.Documents;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Bootstrap;
 using InventoryApi.Auth;
@@ -37,6 +38,15 @@ if (DatabaseMigrationCommand.Matches(args))
     return await DatabaseMigrationCommand.RunAsync(args, CancellationToken.None);
 }
 
+// Copying stored documents to Azure Blob storage is the third human-invoked command (issue #39,
+// checkpoint 3). It reads every business's records and writes to a storage account, so it is
+// never something the web host does on the way up: reaching this branch means the process was
+// started to migrate documents and will exit when it has.
+if (DocumentMigrationCommand.Matches(args))
+{
+    return await DocumentMigrationCommand.RunAsync(args, CancellationToken.None);
+}
+
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
@@ -51,9 +61,31 @@ builder.Services.AddControllers();
 builder.Services.AddApplicationServices();
 builder.Services.AddInfrastructureServices();
 
+// Uploaded business documents (issue #39). The composition root is the only place that knows
+// the host's content and web roots and reads configuration: the Application layer sees the
+// IDocumentStorage port and the Infrastructure adapters see plain paths and settings, so
+// neither depends on IWebHostEnvironment or IConfiguration.
+//
+// DocumentStorage:Provider selects the implementation - FileSystem (the default, and what every
+// environment ran before this setting existed) or AzureBlob, which keys documents by the trusted
+// current business. An invalid or incomplete AzureBlob configuration fails startup here rather
+// than falling back to the local disk. The filesystem implementation stays registered as a
+// concrete type under either provider, because documents already written to disk must remain
+// readable.
+builder.Services.AddDocumentStorage(
+    builder.Configuration.GetSection(DocumentStorageOptions.SectionName).Get<DocumentStorageOptions>()
+        ?? new DocumentStorageOptions(),
+    new FileSystemDocumentStorageOptions
+    {
+        ContentRootPath = builder.Environment.ContentRootPath,
+        WebRootPath = builder.Environment.WebRootPath,
+    });
+
 // Controlled RFC 7807 responses for Nayax upstream failures.
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<NayaxUpstreamExceptionHandler>();
+builder.Services.AddExceptionHandler<DomainExceptionHandler>();
+builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 builder.Services.AddInventoryApiSwagger();
 
 builder.Services.AddDbContext<AppDbContext>(options =>
@@ -176,7 +208,7 @@ if (app.Environment.IsDevelopment())
 // No static-file middleware: the API serves no public assets (the Angular application is a
 // separate Azure Static Web App), and static-file middleware does not run controller
 // authorization. Uploaded purchase and operating-expense documents are stored outside the
-// web root (see ProtectedFileStorage) and are only readable through the [Authorize]d
+// web root (see FileSystemDocumentStorage) and are only readable through the [Authorize]d
 // endpoints, so no business document has an anonymous URL.
 app.UseCors("AllowAngularDevClient");
 app.UseAuthentication();

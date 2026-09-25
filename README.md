@@ -121,6 +121,38 @@ On a deployed application use `dotnet InventoryApi.dll bootstrap-business --dry-
 
 The command is restart-safe and idempotent: it only ever touches rows that are still unassigned. See [docs/tenant-rollout.md](docs/tenant-rollout.md) for the reviewed production sequence.
 
+#### Migrating documents to Azure Blob storage
+
+Uploaded purchase and operating-expense documents can be stored on the filesystem (the default)
+or in a private Azure Blob container, selected by `DocumentStorage:Provider`. Moving the
+documents already on disk into the container is a separate human-invoked command. It requires
+`DocumentStorage:Provider=AzureBlob` with `BlobServiceUri` and `ContainerName`, authenticates
+with `DefaultAzureCredential` — no account key, SAS token or connection string — and refuses to
+run against the filesystem default:
+
+```bash
+DocumentStorage__Provider=AzureBlob dotnet run --project backend/InventoryApi -- migrate-documents --dry-run
+DocumentStorage__Provider=AzureBlob dotnet run --project backend/InventoryApi -- migrate-documents --apply
+```
+
+On a deployed application use `dotnet InventoryApi.dll migrate-documents --dry-run` / `--apply`
+instead. Exactly one of the two flags must be given.
+
+The provider is supplied as a process-local override, not by changing the deployed application's
+own setting: the running API reads the same `DocumentStorage:Provider`, so switching it
+persistently would move live document reads to the container before anything had been copied or
+verified.
+
+The dry run writes nothing and reports what an apply would do. An apply copies each document to
+`tenants/{businessId}/purchases|expenses/{storedFileName}`, where the business is read from the
+record that owns the document, and verifies the copy by size and SHA-256 before counting it as
+migrated. Reruns are safe and source documents are never deleted.
+
+**Do not run this against production from this description.**
+[docs/document-storage-rollout.md](docs/document-storage-rollout.md) is the canonical procedure:
+prerequisites, how to read the report, what must be reviewed before an apply, how to verify, and
+why the runtime provider is switched only afterwards.
+
 ### 2. How the frontend finds the API
 
 Nothing to configure locally. `ConfigService` resolves the API base URL to `/api` whenever the application is served from `localhost` or `127.0.0.1`, and the development proxy forwards `/api` to <http://localhost:5000>. Any other origin is a deployed one and uses `apiBaseUrl` from `frontend/inventory-app/src/assets/config.json`, which holds the deployed Azure API URL. Do not edit that tracked file to switch between local development and deployment, and do not commit a personal endpoint.
@@ -240,6 +272,8 @@ The complete invariants and change rules are in [AGENTS.md](AGENTS.md).
 Changes are made on feature branches created from `develop` and validated through pull requests that target `develop`. Every pull request to `develop` or `main` runs the validation workflow. A push to `develop` builds and tests the backend without deploying. Production releases are separate pull requests from `develop` to `main`; a merge to `main` triggers the Azure API and frontend deployment workflows. After opening a pull request, an automated engineering agent may update only its feature branch, for at most two permitted repair attempts in response to CI or review failures, and then returns control to a human. It never merges or deploys. An agent may prepare a release pull request only when a human explicitly requests it; a human reviews and merges that pull request, and the existing workflow performs the deployment.
 
 Tasks intended for an implementation agent use the **Agent task** issue form, and every pull request uses the repository pull request template. The agent provider is Claude Code: applying `agent-ready` to a reviewed issue starts the implementation workflow, which opens a pull request, applies `agent-review` to it as a deterministic step, and dispatches validation; once validation succeeds, an independent, comment-only review with an explicit verdict starts automatically, and the repository owner may request at most two repairs by commenting `@claude repair` on that pull request. Human approval and branch protection remain the merge gate. The full lifecycle, authority model, task labels, risk classification, and retry policy are in [docs/automation.md](docs/automation.md).
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to propose a change, and [SECURITY.md](SECURITY.md) for how to report a vulnerability privately.
 
 ## License
 

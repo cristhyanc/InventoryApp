@@ -151,7 +151,11 @@ export class StockHistoryComponent implements OnInit {
         this.load();
       },
       error: (err) => {
-        this.error = err?.error ?? 'Failed to adjust stock.';
+        // The insufficient-stock/validation failures behind this action moved from a plain
+        // string body to a ProblemDetails object (issue #59); handle both shapes, matching the
+        // same fallback already used in machine-detail.component.ts.
+        const body = err?.error;
+        this.error = typeof body === 'string' ? body : (body?.message ?? body?.title ?? 'Failed to adjust stock.');
       }
     });
   }

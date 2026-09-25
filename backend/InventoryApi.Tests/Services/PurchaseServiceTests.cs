@@ -1,10 +1,11 @@
+using Inventory.Application.Documents;
+using Inventory.Infrastructure.Documents;
 using InventoryApi.Data;
 using InventoryApi.DTOs;
 using InventoryApi.Models;
 using InventoryApi.Services;
 using InventoryApi.Services.Interfaces;
 using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Hosting;
 using Microsoft.EntityFrameworkCore;
 using Moq;
 using Xunit;
@@ -282,14 +283,23 @@ public class PurchaseServiceTests
             db.Suppliers.Add(new Supplier { Id = supplierId, Name = $"Supplier {supplierId}" });
     }
 
-    private static IPurchaseService CreateService(AppDbContext db)
+    private static IPurchaseService CreateService(AppDbContext db) =>
+        new PurchaseService(db, TemporaryDocumentStorage());
+
+    /// <summary>
+    /// Document storage rooted in a fresh temporary folder. These tests are about purchase
+    /// bookkeeping rather than storage, so they only need somewhere real for the uploaded
+    /// document to go; FileSystemDocumentStorageTests covers the storage behaviour itself.
+    /// </summary>
+    private static IDocumentStorage TemporaryDocumentStorage()
     {
-        var environment = new Mock<IWebHostEnvironment>();
         var temp = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         Directory.CreateDirectory(temp);
-        environment.Setup(item => item.WebRootPath).Returns(temp);
-        environment.Setup(item => item.ContentRootPath).Returns(temp);
-        return new PurchaseService(db, environment.Object);
+        return new FileSystemDocumentStorage(new FileSystemDocumentStorageOptions
+        {
+            ContentRootPath = temp,
+            WebRootPath = temp,
+        });
     }
 
     private static async Task UploadPurchase(IPurchaseService service, int supplierId, long productId, decimal quantity, DateTime? purchaseDate = null)
@@ -309,6 +319,7 @@ public class PurchaseServiceTests
         file.Setup(item => item.Length).Returns(1);
         file.Setup(item => item.FileName).Returns("purchase.jpg");
         file.Setup(item => item.ContentType).Returns("image/jpeg");
+        file.Setup(item => item.OpenReadStream()).Returns(content);
         file.Setup(item => item.CopyToAsync(It.IsAny<Stream>(), default))
             .Returns((Stream stream, System.Threading.CancellationToken token) => content.CopyToAsync(stream, token));
         await service.Upload(file.Object, "Purchase", null, null, null, null, purchaseDate, supplierId,
@@ -319,13 +330,8 @@ public class PurchaseServiceTests
     public async Task Upload_Saves_Purchase()
     {
         using var db = CreateDbContext("purchase_test");
-        var envMock = new Mock<IWebHostEnvironment>();
-        var temp = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
-        Directory.CreateDirectory(temp);
-        envMock.Setup(e => e.WebRootPath).Returns(temp);
-        envMock.Setup(e => e.ContentRootPath).Returns(temp);
 
-        IPurchaseService svc = new PurchaseService(db, envMock.Object);
+        IPurchaseService svc = new PurchaseService(db, TemporaryDocumentStorage());
 
         var content = new MemoryStream(new byte[] { 1, 2, 3 });
         var fileMock = new Mock<IFormFile>();
@@ -345,13 +351,8 @@ public class PurchaseServiceTests
     public async Task Update_Changes_Purchase_MetaData()
     {
         using var db = CreateDbContext("purchase_update_test");
-        var envMock = new Mock<IWebHostEnvironment>();
-        var temp = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
-        Directory.CreateDirectory(temp);
-        envMock.Setup(e => e.WebRootPath).Returns(temp);
-        envMock.Setup(e => e.ContentRootPath).Returns(temp);
 
-        IPurchaseService svc = new PurchaseService(db, envMock.Object);
+        IPurchaseService svc = new PurchaseService(db, TemporaryDocumentStorage());
 
         var content = new MemoryStream(new byte[] { 1, 2, 3 });
         var fileMock = new Mock<IFormFile>();
@@ -382,12 +383,7 @@ public class PurchaseServiceTests
         AddTransitionBaseline(db, 1, 2);
         AddTransitionBaseline(db, 2, 4);
         await db.SaveChangesAsync();
-        var envMock = new Mock<IWebHostEnvironment>();
-        var temp = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
-        Directory.CreateDirectory(temp);
-        envMock.Setup(e => e.WebRootPath).Returns(temp);
-        envMock.Setup(e => e.ContentRootPath).Returns(temp);
-        IPurchaseService svc = new PurchaseService(db, envMock.Object);
+        IPurchaseService svc = new PurchaseService(db, TemporaryDocumentStorage());
 
         var content = new MemoryStream(new byte[] { 1 });
         var fileMock = new Mock<IFormFile>();
@@ -416,12 +412,7 @@ public class PurchaseServiceTests
         db.Products.Add(new Product { Id = 1, Name = "M&M", QuantityInStock = 0 });
         AddTransitionBaseline(db, 1, 0);
         await db.SaveChangesAsync();
-        var envMock = new Mock<IWebHostEnvironment>();
-        var temp = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
-        Directory.CreateDirectory(temp);
-        envMock.Setup(e => e.WebRootPath).Returns(temp);
-        envMock.Setup(e => e.ContentRootPath).Returns(temp);
-        IPurchaseService svc = new PurchaseService(db, envMock.Object);
+        IPurchaseService svc = new PurchaseService(db, TemporaryDocumentStorage());
 
         var content = new MemoryStream(new byte[] { 1 });
         var fileMock = new Mock<IFormFile>();
@@ -460,12 +451,7 @@ public class PurchaseServiceTests
         db.Products.Add(new Product { Id = 1, Name = "M&M", QuantityInStock = 10, AverageUnitCost = 2.10m });
         AddTransitionBaseline(db, 1, 10, 10, 21m, 2.10m);
         await db.SaveChangesAsync();
-        var envMock = new Mock<IWebHostEnvironment>();
-        var temp = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
-        Directory.CreateDirectory(temp);
-        envMock.Setup(e => e.WebRootPath).Returns(temp);
-        envMock.Setup(e => e.ContentRootPath).Returns(temp);
-        IPurchaseService svc = new PurchaseService(db, envMock.Object);
+        IPurchaseService svc = new PurchaseService(db, TemporaryDocumentStorage());
 
         var content = new MemoryStream(new byte[] { 1 });
         var fileMock = new Mock<IFormFile>();
@@ -493,11 +479,6 @@ public class PurchaseServiceTests
         using var db = CreateDbContext(Guid.NewGuid().ToString());
         db.Products.Add(new Product { Id = 1, Name = "M&M" });
         await db.SaveChangesAsync();
-        var envMock = new Mock<IWebHostEnvironment>();
-        var temp = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
-        Directory.CreateDirectory(temp);
-        envMock.Setup(e => e.WebRootPath).Returns(temp);
-        envMock.Setup(e => e.ContentRootPath).Returns(temp);
         var rebuild = new Mock<IInventoryCostRebuildService>();
         rebuild.Setup(x => x.RebuildAsync(
                 It.IsAny<long>(),
@@ -506,12 +487,13 @@ public class PurchaseServiceTests
                 It.IsAny<System.Threading.CancellationToken>()))
             .ReturnsAsync((long productId, DateTime? _, bool dryRun, System.Threading.CancellationToken _) =>
                 new InventoryCostRebuildResult { ProductId = productId, DryRun = dryRun });
-        IPurchaseService svc = new PurchaseService(db, envMock.Object, rebuild.Object);
+        IPurchaseService svc = new PurchaseService(db, TemporaryDocumentStorage(), rebuild.Object);
         var content = new MemoryStream(new byte[] { 1 });
         var fileMock = new Mock<IFormFile>();
         fileMock.Setup(f => f.Length).Returns(1);
         fileMock.Setup(f => f.FileName).Returns("t.jpg");
         fileMock.Setup(f => f.ContentType).Returns("image/jpeg");
+        fileMock.Setup(f => f.OpenReadStream()).Returns(content);
         fileMock.Setup(f => f.CopyToAsync(It.IsAny<Stream>(), default))
             .Returns((Stream stream, System.Threading.CancellationToken ct) => content.CopyToAsync(stream, ct));
 
@@ -559,12 +541,7 @@ public class PurchaseServiceTests
             DataQualityNote = "Legacy discrepancy retired at cutover."
         });
         await db.SaveChangesAsync();
-        var envMock = new Mock<IWebHostEnvironment>();
-        var temp = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
-        Directory.CreateDirectory(temp);
-        envMock.Setup(e => e.WebRootPath).Returns(temp);
-        envMock.Setup(e => e.ContentRootPath).Returns(temp);
-        IPurchaseService svc = new PurchaseService(db, envMock.Object);
+        IPurchaseService svc = new PurchaseService(db, TemporaryDocumentStorage());
         var content = new MemoryStream(new byte[] { 1 });
         var fileMock = new Mock<IFormFile>();
         fileMock.Setup(f => f.Length).Returns(1);
@@ -603,12 +580,7 @@ public class PurchaseServiceTests
         AddTransitionBaseline(db, 1, 0);
         await db.SaveChangesAsync();
 
-        var envMock = new Mock<IWebHostEnvironment>();
-        var temp = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
-        Directory.CreateDirectory(temp);
-        envMock.Setup(e => e.WebRootPath).Returns(temp);
-        envMock.Setup(e => e.ContentRootPath).Returns(temp);
-        IPurchaseService svc = new PurchaseService(db, envMock.Object);
+        IPurchaseService svc = new PurchaseService(db, TemporaryDocumentStorage());
 
         var content = new MemoryStream(new byte[] { 1 });
         var fileMock = new Mock<IFormFile>();
@@ -642,12 +614,7 @@ public class PurchaseServiceTests
         AddTransitionBaseline(db, 1, 0);
         await db.SaveChangesAsync();
 
-        var envMock = new Mock<IWebHostEnvironment>();
-        var temp = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
-        Directory.CreateDirectory(temp);
-        envMock.Setup(e => e.WebRootPath).Returns(temp);
-        envMock.Setup(e => e.ContentRootPath).Returns(temp);
-        IPurchaseService svc = new PurchaseService(db, envMock.Object);
+        IPurchaseService svc = new PurchaseService(db, TemporaryDocumentStorage());
 
         var content = new MemoryStream(new byte[] { 1 });
         var fileMock = new Mock<IFormFile>();
@@ -682,12 +649,7 @@ public class PurchaseServiceTests
         AddTransitionBaseline(db, 1, 0);
         await db.SaveChangesAsync();
 
-        var envMock = new Mock<IWebHostEnvironment>();
-        var temp = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
-        Directory.CreateDirectory(temp);
-        envMock.Setup(e => e.WebRootPath).Returns(temp);
-        envMock.Setup(e => e.ContentRootPath).Returns(temp);
-        IPurchaseService svc = new PurchaseService(db, envMock.Object);
+        IPurchaseService svc = new PurchaseService(db, TemporaryDocumentStorage());
 
         var content = new MemoryStream(new byte[] { 1 });
         var fileMock = new Mock<IFormFile>();
@@ -721,12 +683,7 @@ public class PurchaseServiceTests
         AddTransitionBaseline(db, 1, 0);
         await db.SaveChangesAsync();
 
-        var envMock = new Mock<IWebHostEnvironment>();
-        var temp = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
-        Directory.CreateDirectory(temp);
-        envMock.Setup(e => e.WebRootPath).Returns(temp);
-        envMock.Setup(e => e.ContentRootPath).Returns(temp);
-        IPurchaseService svc = new PurchaseService(db, envMock.Object);
+        IPurchaseService svc = new PurchaseService(db, TemporaryDocumentStorage());
 
         var content = new MemoryStream(new byte[] { 1 });
         var fileMock = new Mock<IFormFile>();
@@ -773,12 +730,7 @@ public class PurchaseServiceTests
         // Calculated = 0 + 5 + 2 = 7
         // Difference = 13 (exceeds tolerance)
         using var db = CreateDbContext("purchase_empty_items_mismatch_test");
-        var envMock = new Mock<IWebHostEnvironment>();
-        var temp = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
-        Directory.CreateDirectory(temp);
-        envMock.Setup(e => e.WebRootPath).Returns(temp);
-        envMock.Setup(e => e.ContentRootPath).Returns(temp);
-        IPurchaseService svc = new PurchaseService(db, envMock.Object);
+        IPurchaseService svc = new PurchaseService(db, TemporaryDocumentStorage());
 
         var content = new MemoryStream(new byte[] { 1 });
         var fileMock = new Mock<IFormFile>();
@@ -809,12 +761,7 @@ public class PurchaseServiceTests
         // Empty items, no delivery/package, null total
         // Should not compute validation
         using var db = CreateDbContext("purchase_empty_items_null_total_test");
-        var envMock = new Mock<IWebHostEnvironment>();
-        var temp = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
-        Directory.CreateDirectory(temp);
-        envMock.Setup(e => e.WebRootPath).Returns(temp);
-        envMock.Setup(e => e.ContentRootPath).Returns(temp);
-        IPurchaseService svc = new PurchaseService(db, envMock.Object);
+        IPurchaseService svc = new PurchaseService(db, TemporaryDocumentStorage());
 
         var content = new MemoryStream(new byte[] { 1 });
         var fileMock = new Mock<IFormFile>();

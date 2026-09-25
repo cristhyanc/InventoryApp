@@ -25,8 +25,31 @@ coverage/
 *.suo
 *.userosscache
 *.sln.docstates
+*.pubxml
 *.pubxml.user
 .vscode/*.local.json
+
+# Environment files and local secrets
+.env
+.env.*
+*.envrc
+appsettings.*.local.json
+secrets.json
+*.pfx
+*.p12
+*.pem
+*.key
+*.cer
+*.crt
+*.PublishSettings
+
+# Archives (never a legitimate source artifact in this repository)
+*.zip
+*.7z
+*.tar
+*.tar.gz
+*.tgz
+*.rar
 
 # Logs and temporary files
 *.log

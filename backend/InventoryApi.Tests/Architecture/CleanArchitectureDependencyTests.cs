@@ -152,6 +152,22 @@ public class CleanArchitectureDependencyTests
         AssertNoDependency(ApplicationAssembly, "Inventory.Application", identityNamespaces);
     }
 
+    /// <summary>
+    /// The Azure Blob SDK and its credential chain are an adapter detail (issue #39). A use case
+    /// that took a <c>BlobClient</c>, or a controller that reached for one, would make the
+    /// storage decision impossible to change and impossible to test without Azure - and would
+    /// put the tenant-prefix rule somewhere other than the one adapter that enforces it.
+    /// </summary>
+    [Fact]
+    public void Azure_storage_and_credential_types_stay_in_Infrastructure()
+    {
+        string[] azureNamespaces = ["Azure.Storage", "Azure.Identity"];
+
+        AssertNoDependency(DomainAssembly, "Inventory.Domain", azureNamespaces);
+        AssertNoDependency(ApplicationAssembly, "Inventory.Application", azureNamespaces);
+        AssertNoDependency(ApiAssembly, "InventoryApi", azureNamespaces);
+    }
+
     [Fact]
     public void Domain_and_Application_must_not_reference_controllers()
     {
