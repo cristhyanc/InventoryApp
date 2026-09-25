@@ -213,6 +213,55 @@ NayaxLynx__AccessToken
 
 Uploaded purchase and expense documents are stored outside the API web root, under the content root's `protected-files/` folder, with their metadata in SQLite; they are readable only through the authenticated API endpoints. Do not commit uploaded business documents, local databases, or credentials.
 
+## Database backup and restore
+
+The production database is a single SQLite file, opened through
+`ConnectionStrings:DefaultConnection` (default `Data Source=inventory.db`, a path relative to the
+API process's working directory). On Azure App Service the only durable, restart-surviving
+location is the `/home` mount; a normal deployment extracts the published app under
+`/home/site/wwwroot`, so the default relative path resolves there today, but that default is
+fragile — an App Service configured with `WEBSITE_RUN_FROM_PACKAGE=1` mounts `wwwroot`
+**read-only**, and placing the database inside the deployment target directory is an avoidable
+risk either way. See [docs/architecture.md § SQLite operating assumptions and scale
+strategy](docs/architecture.md#sqlite-operating-assumptions-and-scale-strategy-issue-53) for the
+full persistence assumptions, concurrency/locking limits, monitoring signals, and the measurable,
+evidence-based triggers for moving to a server database (Azure SQL or PostgreSQL) — none of which
+are met today.
+
+**Backup and restore** uses SQLite's Online Backup API (the same mechanism behind the `sqlite3`
+CLI's `.backup` command and `Microsoft.Data.Sqlite`'s `SqliteConnection.BackupDatabase`), which
+produces a consistent snapshot without requiring the API process to stop:
+
+```bash
+sqlite3 /home/data/inventory.db ".backup '/home/data/backups/inventory-<timestamp>.db'"
+sqlite3 /home/data/backups/inventory-<timestamp>.db "PRAGMA integrity_check;"
+```
+
+Store the verified backup somewhere other than the App Service's own `/home` mount. Restoring
+(`sqlite3 <backup> ".backup '/home/data/inventory.db'"`) overwrites live data and must be run
+deliberately, by a human, after stopping the API — never automatically. The full step-by-step
+procedure, including why a plain filesystem copy is unsafe on a live database, is in
+[docs/architecture.md](docs/architecture.md#sqlite-operating-assumptions-and-scale-strategy-issue-53).
+
+**Non-destructive local validation.**
+`backend/InventoryApi.Tests/Operations/SqliteBackupRestoreTests.cs` proves the backup mechanism
+itself works — it runs as part of the normal test suite and only ever touches throwaway SQLite
+files under the OS temp directory, never a developer's or production `inventory.db`:
+
+```bash
+dotnet test backend/InventoryApi/InventoryApi.slnx --filter FullyQualifiedName~SqliteBackupRestoreTests
+```
+
+To rehearse the `sqlite3` CLI sequence above before relying on it in production, run it against a
+disposable local copy, never the live file:
+
+```bash
+cp inventory.db /tmp/inventory-check.db
+sqlite3 /tmp/inventory-check.db ".backup '/tmp/inventory-check-backup.db'"
+sqlite3 /tmp/inventory-check-backup.db "PRAGMA integrity_check;"
+rm /tmp/inventory-check.db /tmp/inventory-check-backup.db
+```
+
 ## Validate a change
 
 Run the repository-level validation from the root:
@@ -239,8 +288,9 @@ powershell -ExecutionPolicy Bypass -File scripts/validate.ps1
 | 5 | Check vulnerable NuGet packages | `dotnet package list --vulnerable --include-transitive` | yes, when a vulnerable package is reported |
 | 6 | Install frontend dependencies | `npm ci` against the committed lock file | yes |
 | 7 | Lint frontend | `npm run lint` (`ng lint`, ESLint + angular-eslint over TypeScript and templates) | yes, on lint **errors** |
-| 8 | Build frontend | Angular production build | yes |
-| 9 | Audit frontend dependencies | `npm audit` | no, report only |
+| 8 | Test frontend | `npm run test` (Jest, via `jest-preset-angular`) | yes |
+| 9 | Build frontend | Angular production build | yes |
+| 10 | Audit frontend dependencies | `npm audit` | no, report only |
 
 ### Backend code quality
 
@@ -256,6 +306,7 @@ Quality settings are centralised so every backend project gets them:
 
 - `npm run lint` runs `ng lint`, configured through `frontend/inventory-app/eslint.config.js` (ESLint 9 flat config with `angular-eslint` and `typescript-eslint`).
 - Rules are chosen to catch defects rather than style: unused variables and imports, `==` vs `===`, unreachable and constant-condition code, Angular template errors, and Angular lifecycle/interface mistakes are **errors**. Accessibility findings, `trackBy`, `any` and stray `console.log` are **warnings** so they are visible without blocking a build.
+- `npm run test` runs the Jest suite (`jest-preset-angular`, configured through `frontend/inventory-app/jest.config.js`/`tsconfig.spec.json`/`setup-jest.ts`) once and exits; it is not a watch-mode command. `*.spec.ts` files sit next to the code they test.
 - `npm audit` is reported but not enforced. The outstanding high/critical advisories are all in the Angular 19 build toolchain (`@angular-devkit/build-angular` → `vite`, `webpack-dev-server`, `tar`, …) and every published fix requires a major Angular upgrade, which is a separate, deliberate piece of work. Review the printed report; do not run `npm audit fix --force`.
 
 ## Important domain rules

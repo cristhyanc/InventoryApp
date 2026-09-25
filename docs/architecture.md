@@ -19,6 +19,149 @@ This document describes the repository at the `main` baseline inspected on 17 Se
 | Hosting | Azure App Service API and Azure Static Web Apps frontend |
 | Automation | GitHub Actions |
 
+### SQLite operating assumptions and scale strategy (issue #53)
+
+The production database is the single SQLite file EF Core opens through
+`ConnectionStrings:DefaultConnection` (`backend/InventoryApi/appsettings.json`), which defaults to
+`Data Source=inventory.db` — a path relative to the API process's working directory
+(`backend/InventoryApi/Program.cs`). No committed `appsettings.Production.json` overrides that
+default; a different value can only come from an App Service application setting
+(`ConnectionStrings__DefaultConnection`), which is Azure configuration outside this repository and
+not verifiable from source.
+
+**Where the file lives and what persists.** Azure App Service keeps exactly one directory durable
+across process restarts and reboots, and shared across every instance if the plan ever scales to
+more than one: `/home` (Windows: `d:\home`), mounted from the platform's own storage rather than
+the ephemeral per-instance disk. A normal zip/package deployment through `azure/webapps-deploy@v2`
+(`.github/workflows/vm-manager.yml`) extracts the published output under `/home/site/wwwroot`, so
+the default relative `inventory.db` path resolves inside that persistent directory today, and the
+file survives ordinary app restarts.
+
+That default is fragile for two reasons this repository cannot verify from source, because they
+are Azure App Service configuration, not code:
+
+1. **Run-From-Package.** If the App Service is configured with `WEBSITE_RUN_FROM_PACKAGE=1` (a
+   common App Service deployment mode), `wwwroot` is mounted **read-only** from the deployed
+   package, and a relative `inventory.db` path would not be writable at all. Confirm this setting
+   for the live app before relying on the default relative path.
+2. **Deployment overwrite.** Even where `wwwroot` is writable, it is also the deployment target.
+   Placing the database file inside the same directory the deployment pipeline writes to is an
+   avoidable risk, independent of exactly how a given deployment happens to behave.
+
+**Operational recommendation** (an App Service configuration change, not a code change — this
+issue does not alter any production setting): point `ConnectionStrings__DefaultConnection` at an
+absolute path outside `wwwroot` but still under the persistent `/home` mount, for example
+`Data Source=/home/data/inventory.db`, and confirm `WEBSITE_RUN_FROM_PACKAGE` is unset or `0` for
+this app. A human operator must make and verify this against the live App Service; it is not
+something an automated agent may apply (`AGENTS.md` reserves Azure/App Service configuration
+changes for humans).
+
+**Concurrency and locking limits.** The API opens the database with `Microsoft.Data.Sqlite`'s
+default journal mode (rollback journal, not WAL — nothing in `Program.cs` configures
+`journal_mode`) and the driver's default busy timeout (`Default Timeout=30`, i.e. 30 seconds).
+SQLite allows unlimited concurrent readers but only one writer at a time; a second writer blocks
+for up to the busy timeout and then fails with `SQLITE_BUSY` rather than queuing indefinitely. In
+this single-process deployment that is a soft limit on request latency under write-heavy
+concurrent load (for example simultaneous imports and sale-costing writes), not a hard outage —
+but it does not extend to multiple concurrently writing processes: **the App Service plan for this
+app must stay pinned to a single instance (no scale-out) while SQLite remains the store.** SQLite's
+file locking is unreliable over the kind of shared, network-backed storage `/home` becomes once
+more than one instance mounts it, so running two instances against the same database file is not a
+supported configuration.
+
+**Monitoring signals that indicate SQLite pressure** — none of these are wired into automated
+alerting today (that is future work, not part of this change), but are the observable evidence
+worth watching for:
+
+- `SQLITE_BUSY`/timeout exceptions in the application log
+  (`Microsoft.Data.Sqlite.SqliteException` with `SqliteErrorCode == 5`), especially clustered
+  around import or reconciliation jobs.
+- API request latency growth specifically on write endpoints (imports, sale costing, purchases,
+  stock adjustments) that does not correlate with CPU/memory pressure — a symptom of writers
+  queued behind the single-writer lock rather than genuine compute cost.
+- Database file size approaching the App Service plan's storage quota, or backup/restore
+  durations (see below) growing enough to threaten the business's recovery-time expectations.
+- Any deliberate move to more than one App Service instance for this app, which SQLite's
+  single-writer, file-locking model does not support safely.
+
+**Measurable triggers to migrate to a server database (Azure SQL or PostgreSQL).** Any one of
+these is a concrete, evidence-based reason to plan the migration, not a speculative one:
+
+1. The App Service plan needs more than one concurrently running instance (for availability or
+   throughput) — SQLite cannot be safely shared across instances at all.
+2. Recurring `SQLITE_BUSY` write-timeout errors under normal (non-incident) load, observed rather
+   than anticipated.
+3. A verified backup/restore cycle (see below) exceeds the business's acceptable recovery time
+   because the file has grown large enough that a full-file backup and restore no longer fits the
+   maintenance window.
+4. A second live business is onboarded whose Nayax integration needs to run concurrently with the
+   first (see [Tenant ownership](#tenant-ownership-issue-64): the Nayax client is single-tenant
+   today) in a way that increases concurrent write load beyond what one SQLite writer sustains.
+
+None of these are currently met; the current single-business, single-instance deployment is within
+SQLite's supported envelope. This issue does not migrate the database (explicitly out of scope for
+issue #53); it defines what would justify doing so.
+
+**Where a server-database migration would live.** If one of the triggers above is met, the target
+is a Clean Architecture change, not a drop-in connection-string swap. `AppDbContext` is currently
+API-owned in `InventoryApi/Data` as a documented transitional state (see [Backend target: pragmatic
+Clean Architecture with vertical slices](#backend-target-pragmatic-clean-architecture-with-vertical-slices)
+below), not the intended permanent location. A provider migration belongs in
+`Inventory.Infrastructure` — landing there directly, or moving there together with `AppDbContext`
+if that relocation has not happened first — behind the same narrow persistence ports this document
+already describes for migrated features, so `Inventory.Domain` and `Inventory.Application` stay
+unaware of which relational engine is in use. Do not treat the current `InventoryApi`-owned
+location of `AppDbContext` as where a server-database provider belongs.
+
+**Backup and restore procedure.** SQLite's Online Backup API — the same engine feature the
+`sqlite3` CLI's `.backup` command and `Microsoft.Data.Sqlite`'s
+`SqliteConnection.BackupDatabase` both call — copies a consistent snapshot of the database to a
+new file without requiring the source connection, or the API process holding it, to stop.
+`backend/InventoryApi.Tests/Operations/SqliteBackupRestoreTests.cs` proves this mechanically: it
+backs up a live SQLite file while the source connection that created it stays open (mirroring a
+running API process) and confirms the resulting copy passes `PRAGMA integrity_check` and contains
+exactly the committed rows, then proves a second backup taken later, still without closing that
+connection, reflects the writes committed in between.
+
+The equivalent operator procedure, using the `sqlite3` CLI (the standard SQLite tool;
+<https://sqlite.org/cli.html>) against the App Service's persistent database path:
+
+1. **Prefer a quiet window, but do not rely on stopping the app.** The Online Backup API produces
+   a consistent snapshot even while writes continue; stopping the App Service first (or scaling to
+   zero) removes any residual risk but is not required for backup correctness. Do not run a plain
+   filesystem `cp` of the `.db` file while the app is running — unlike the backup API, a raw copy
+   can capture a database file mid-write and is not guaranteed consistent.
+2. **Take the backup:**
+
+   ```bash
+   sqlite3 /home/data/inventory.db ".backup '/home/data/backups/inventory-$(date +%Y%m%dT%H%M%S).db'"
+   ```
+
+3. **Verify the backup immediately**, before trusting it:
+
+   ```bash
+   sqlite3 /home/data/backups/inventory-<timestamp>.db "PRAGMA integrity_check;"
+   ```
+
+   A result other than a single `ok` row means the backup is not trustworthy; take it again.
+4. **Store the verified backup somewhere other than the App Service's own `/home` mount** (for
+   example downloaded to a workstation, or uploaded to separate storage) — a backup that lives only
+   next to the database it protects does not survive whatever destroys the database.
+5. **Restore** by stopping the API, replacing the live database file with the verified backup (or
+   pointing the connection string at the restored file), and starting the API again:
+
+   ```bash
+   sqlite3 /home/data/backups/inventory-<timestamp>.db ".backup '/home/data/inventory.db'"
+   ```
+
+   Restoring does overwrite live data and must only be run deliberately, by a human, after
+   confirming the target file is the one meant to be replaced — this is the one step in the
+   sequence that is not safe to automate or run against a live app.
+
+This procedure, and the non-destructive local check in the README, do not touch any production
+connection string, credential, or data; every example above uses a placeholder path that a human
+operator supplies for their own environment.
+
 ## Current repository structure
 
 ```text
@@ -90,7 +233,7 @@ flowchart TD
 - Frontend contracts are split between a broad `models.ts` file and service-local report interfaces. `reporting.service.ts` is already a large multi-report API client.
 - Some page components, especially administration and reporting pages, contain substantial orchestration and presentation logic.
 - Report state is locally managed, but date-range logic and financial formatting can accidentally erase `null`/unknown meaning if reused without care.
-- The frontend package has no automated test or lint command; its current validation gate is a production build.
+- Frontend component/router/browser-smoke test coverage (categories 3-5 in [Frontend tests](#frontend-tests) below) is still absent; only pure-function unit tests (category 1) exist so far.
 - Branch protection and required-check configuration live in GitHub repository settings and must be enabled separately from source-controlled workflows.
 
 These are reasons to improve boundaries, not reasons for a wholesale rewrite.
@@ -174,6 +317,43 @@ Contains:
 - HTTP error/result mapping.
 
 Controllers do not implement accounting, inventory, persistence, or filesystem rules.
+
+#### Temporary API-owned exception and its enforcement (issue #145)
+
+`InventoryApi/Services` (import, costing, commissions, machine/site/product/purchase/stock
+orchestration) is use-case/domain logic that predates the `Inventory.Domain`/`Inventory.Application`
+split and has not migrated yet. `InventoryApi/Adapters/{Persistence,Export,Nayax}` hold the
+temporary, API-owned adapters (`EfNayaxFeeRateStore`, the `Ef<Feature>ReportFactsProvider` family,
+`ReportExportFileWriter`, `NayaxCatalogSnapshotProvider`, ...) that implement `Inventory.Application`
+ports until `AppDbContext` and its persistence models move into `Inventory.Infrastructure` - see the
+per-slice detail under [Backend migration track](#backend-migration-track). Both are deliberate,
+temporary exceptions to "controllers are thin and InventoryApi holds no use-case/domain logic", not
+places for new business logic to land. Removing them entirely is tracked by issues #153/#154, after
+the feature-by-feature migrations in #146-#151; this issue does not migrate any of them.
+
+What issue #145 adds is enforcement that the `InventoryApi/Services` side of the exception stops
+growing silently. `ProjectDependencyDirectionTests.Only_the_documented_legacy_services_remain_in_InventoryApi_Services`
+(`backend/InventoryApi.Tests/Architecture/`) freezes the exact, named set of git-tracked files this
+migration found already in that folder; the moment a file is added, removed, or renamed there, the
+test fails and names the mismatch. A new slice's use-case or domain logic must go into
+`Inventory.Application`/`Inventory.Domain` instead of extending the legacy folder; growing the
+exception is still possible, but only as a conscious, reviewed edit to both that allow-list and this
+paragraph, never as a silent side effect of an unrelated change. `InventoryApi/Adapters/*` is not
+frozen the same way: unlike `Services`, adding a new temporary EF/Nayax/export adapter there for a
+migrating slice (mirroring `EfNayaxFeeRateStore`) is the established, expected pattern for this
+migration track, not scope creep - it implements an `Inventory.Application`-owned port rather than
+containing use-case logic itself.
+
+`CleanArchitectureDependencyTests` (same directory) is the complementary, compiled-assembly side of
+the boundary: `Domain_must_not_depend_on_Application_Infrastructure_or_Api`,
+`Application_must_not_depend_on_Infrastructure_or_Api`, and `Infrastructure_must_not_depend_on_Api`
+cover the `InventoryApi` reference direction; `Infrastructure_must_not_depend_on_ASP_NET_HTTP_types`
+(added by issue #145) keeps the ASP.NET Core web-host surface (`HttpContext`, middleware, MVC types)
+out of `Inventory.Infrastructure` now that it is a real target for adapters, alongside the existing
+rules keeping ASP.NET Core, EF Core, `HttpClient`, and ClosedXML types out of `Inventory.Domain` and
+`Inventory.Application`. `Inventory.Infrastructure` may still depend on EF Core and outbound HTTP
+clients (`System.Net.Http`) - those are exactly what an adapter is for - it is only the ASP.NET Core
+web-request-pipeline surface that must stay confined to `InventoryApi`.
 
 ### Authentication and authorization
 
@@ -760,7 +940,7 @@ Backend and frontend tracks can progress independently when their contracts do n
 ### Frontend migration track
 
 1. **Frontend safety baseline**
-   - Add a pinned unit-test runner and lint command in a focused pull request.
+   - **Done.** Lint (`ng lint`, issue #129) and a pinned unit/component test runner (Jest via `jest-preset-angular`, issue #45) are both wired into `npm run lint`/`npm run test` and the validation scripts.
    - Test runtime configuration and one representative feature client before moving files.
 
 2. **Feature boundaries**
@@ -814,9 +994,9 @@ Financial regression tests should cover at least:
 
 ### Frontend tests
 
-The current package has no automated test command, so the first frontend testing change must choose, configure, and pin the runner explicitly. The target test mix is:
+The package uses Jest (`jest-preset-angular`) as its pinned unit/component test runner, run with `npm run test` (`frontend/inventory-app/jest.config.js`, `tsconfig.spec.json`, `setup-jest.ts`). `jest-preset-angular@14.x` is the version pinned for the current Angular 19/TypeScript 5.6 dependency tree; it requires Jest `^29`, which is also what `@angular-devkit/build-angular`'s own optional peer dependency expects, so a newer `jest-preset-angular`/Jest major (built for Angular 20+/Jest 30) would reintroduce the peer conflict this pin avoids. The target test mix is:
 
-1. **Pure unit tests** for date presets, display-only transformations, validation, and nullable financial presentation.
+1. **Pure unit tests** for date presets, display-only transformations, validation, and nullable financial presentation. **Started**: `auth-config.spec.ts`, `report-formatting.spec.ts`, and `filter-request-trigger.spec.ts` cover the MSAL protected-resource/API-base-URL resolution, nullable money/percent formatting, and the search-debounce/immediate-trigger RxJS contract.
 2. **HTTP client tests** for endpoint, query-parameter, request-body, response, and error mapping behavior.
 3. **Component tests** for loading, empty, error, success, confirmation, and accessibility states.
 4. **Router tests** for route parameters, redirects, lazy features, and direct report navigation.
@@ -826,7 +1006,7 @@ Do not duplicate backend formula tests in Angular. Frontend assertions should pr
 
 ## Build and delivery
 
-The canonical local validation entry points are `scripts/validate.ps1` and `scripts/validate.sh`. They restore, build, and test the backend and run a clean install plus production build for the frontend. `.github/workflows/validate.yml` runs the Bash entry point for every pull request targeting `develop` or `main` without deploying. When frontend test and lint scripts are added, these validation entry points and pull-request CI must call them.
+The canonical local validation entry points are `scripts/validate.ps1` and `scripts/validate.sh`. They restore, build, and test the backend and run a clean install, lint, Jest unit/component tests, and a production build for the frontend. `.github/workflows/validate.yml` runs the Bash entry point for every pull request targeting `develop` or `main` without deploying.
 
 Frontend build flow is:
 

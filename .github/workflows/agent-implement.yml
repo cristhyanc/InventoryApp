@@ -232,12 +232,15 @@ jobs:
           pr_number="$(jq -r '.number // empty' <<<"$pr_json")"
           head_sha="$(jq -r '.headRefOid // empty' <<<"$pr_json")"
 
+          # Only tracked changes can alter the proposed PR commit. Agent scratch files are
+          # untracked and disappear with this runner; they must not block validation.
           if [ "$CLAUDE_OUTCOME" = "success" ] &&
              [ "$TARGET_OUTCOME" = "success" ] &&
              [ "$ARCHITECT_OUTCOME" = "success" ] &&
              [ "$(git branch --show-current)" = "$(jq -r '.headRefName // empty' <<<"$pr_json")" ] &&
              [ "$(git rev-parse HEAD)" = "$head_sha" ] &&
-             [ -z "$(git status --porcelain)" ] &&
+             git diff --quiet &&
+             git diff --cached --quiet &&
              [ -n "$pr_url" ] &&
              [[ "$pr_number" =~ ^[1-9][0-9]*$ ]] &&
              [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]]; then

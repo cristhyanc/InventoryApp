@@ -724,7 +724,7 @@ export function verifyArchitecturePass(workflow) {
   }
 
   const outcome = section(job, '      - name: Record outcome on the issue\n', null, 'agent-implement.yml outcome');
-  for (const required of ['ARCHITECT_OUTCOME', 'TARGET_OUTCOME', '[ "$ARCHITECT_OUTCOME" = "success" ]', 'git branch --show-current', 'git rev-parse HEAD', 'git status --porcelain']) {
+  for (const required of ['ARCHITECT_OUTCOME', 'TARGET_OUTCOME', '[ "$ARCHITECT_OUTCOME" = "success" ]', 'git branch --show-current', 'git rev-parse HEAD', 'git diff --quiet', 'git diff --cached --quiet']) {
     requireText(outcome, required, 'agent-implement.yml outcome');
   }
 }

@@ -109,6 +109,7 @@ Frontend:
 ```bash
 npm --prefix frontend/inventory-app ci
 npm --prefix frontend/inventory-app run lint
+npm --prefix frontend/inventory-app run test
 npm --prefix frontend/inventory-app run build
 npm --prefix frontend/inventory-app audit
 ```
@@ -118,7 +119,7 @@ Both validation scripts run exactly this pipeline; run the script rather than th
 - The backend builds with `TreatWarningsAsErrors`, .NET analyzers and `EnforceCodeStyleInBuild` (see `Directory.Build.props`). A new warning in application code fails the build. The only suppressed compiler diagnostic is `CS8981` on EF Core generated migrations, scoped in `.editorconfig` to `[**/Migrations/*.cs]`. Do not widen that scope and do not add a global `<NoWarn>`.
 - `dotnet format` excludes `backend/InventoryApi/Migrations` because an applied migration must not be rewritten.
 - Coverage is collected on every test run but has no minimum threshold yet. Coverage output is git-ignored; never commit it.
-- The frontend now has a configured `lint` script but still has no `test` script. Do not claim tests ran. `npm run lint` must report zero **errors**; warnings are visible but non-blocking.
+- The frontend has a configured `lint` script (`ng lint`) and a `test` script (`jest`, via `jest-preset-angular`). `npm run lint` must report zero **errors**; warnings are visible but non-blocking. `npm run test` runs the Jest suite once (no watch mode) and must exit zero.
 - `npm audit` is reported, not enforced: the outstanding high/critical advisories are in the Angular 19 build toolchain and clear only with a major Angular upgrade. Never run `npm audit fix --force`.
 - `dotnet package list --vulnerable` always exits 0, so the scripts parse its output. A vulnerable package fails validation; an unreachable nuget.org only warns.
 
