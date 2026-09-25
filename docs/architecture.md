@@ -13,7 +13,7 @@ This document describes the repository at the `main` baseline inspected on 17 Se
 | Backend | ASP.NET Core Web API on .NET 10 |
 | Persistence | EF Core 10, SQLite, code-first migrations |
 | External integration | Nayax Lynx HTTP API and imported reimbursement/workbook data |
-| Documents | Protected purchase and operating-expense files under the content root's `protected-files/`, outside the web root, with metadata in SQLite. Static-file middleware is disabled, so they have no anonymous URL; documents predating protected storage remain readable from `wwwroot/{category}` only as a fallback |
+| Documents | Purchase and operating-expense files behind `IDocumentStorage`, with metadata in SQLite. `DocumentStorage:Provider` selects the implementation: `FileSystem` (the default) keeps them under the content root's `protected-files/`, outside the web root, with a legacy `wwwroot/{category}` read fallback; `AzureBlob` keeps them in a private Azure container under `tenants/{businessId}/...`, authenticated with a managed identity. Static-file middleware is disabled and no SAS or public URL is ever generated, so no document has an anonymous URL |
 | Frontend | Angular 19 standalone components, TypeScript, RxJS, Tailwind-based styling |
 | Backend tests | xUnit, Moq, EF Core InMemory and SQLite |
 | Hosting | Azure App Service API and Azure Static Web Apps frontend |
@@ -35,8 +35,8 @@ InventoryApp/
 │   │   ├── Program.cs
 │   │   └── InventoryApi.csproj
 │   ├── Inventory.Domain/            NayaxFeeSettings rule, reporting policies/calculations (Inventory.Domain.Reporting.<Feature>), Purchases.PurchaseTotalValidationPolicy; other features not yet migrated
-│   ├── Inventory.Application/       NayaxFeeSettings use cases/ports, reporting use cases/contracts (Inventory.Application.Reporting.<Feature>), Purchases.ComputePurchaseTotalValidation, shared Inventory.Application.Time.IClock/IBusinessCalendar; other features not yet migrated
-│   ├── Inventory.Infrastructure/    SystemClock/SydneyBusinessCalendar adapters (Inventory.Infrastructure.Time); other features not yet migrated
+│   ├── Inventory.Application/       NayaxFeeSettings use cases/ports, reporting use cases/contracts (Inventory.Application.Reporting.<Feature>), Purchases.ComputePurchaseTotalValidation, Documents.IDocumentStorage, shared Inventory.Application.Time.IClock/IBusinessCalendar; other features not yet migrated
+│   ├── Inventory.Infrastructure/    SystemClock/SydneyBusinessCalendar adapters (Inventory.Infrastructure.Time), FileSystemDocumentStorage and AzureBlobDocumentStorage (Inventory.Infrastructure.Documents); other features not yet migrated
 │   └── InventoryApi.Tests/
 ├── frontend/inventory-app/
 │   ├── src/app/
@@ -157,7 +157,7 @@ Contains adapters and technical implementation:
 
 - `AppDbContext`, entity configurations, migrations, and repositories/read stores.
 - Nayax Lynx HTTP client and imported-file parsers.
-- Document storage for receipts and operating expenses.
+- Document storage for purchase documents and operating-expense attachments (`Inventory.Infrastructure.Documents.FileSystemDocumentStorage` and `AzureBlobDocumentStorage`, behind the Application's `Documents.IDocumentStorage` port; see [Document storage](#document-storage)).
 - CSV/XLSX report exporters.
 - Clock/timezone adapter (`Inventory.Infrastructure.Clock.SystemClock`, `Inventory.Infrastructure.Time.SydneyBusinessCalendar`; see [Time](#time)).
 
@@ -181,7 +181,7 @@ Authentication/authorization is an `InventoryApi`/frontend boundary concern (iss
 
 - **Backend.** `Program.cs` registers `AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddMicrosoftIdentityWebApi(builder.Configuration.GetSection("AzureAd"))` and calls `UseAuthentication()` before `UseAuthorization()`. Every controller carries `[Authorize]` plus `[RequiredScope("access_as_user")]` (`Microsoft.Identity.Web.Resource`), so a request without a bearer token is rejected `401 Unauthorized` and a request whose token lacks the delegated `access_as_user` scope is rejected `403 Forbidden`, both by ASP.NET Core's authentication/authorization middleware before any controller action runs. The non-secret `AzureAd` configuration (`Instance`, `TenantId`, `ClientId`, `Scopes`) lives in `appsettings.json`; the `ClientId` is the API app registration's public application ID, used only to validate the token audience, never a client secret. `Microsoft.Identity.Web`/`Microsoft.AspNetCore.Authorization`/JWT types are used only in `InventoryApi` (`Program.cs` and controllers) and must never appear in `Inventory.Domain` or `Inventory.Application`; if a use case ever needs the caller's identity, define a narrow neutral Application port instead of exposing Microsoft identity-provider types across that boundary.
 - **Frontend.** The Angular SPA authenticates through MSAL (`@azure/msal-angular`, `@azure/msal-browser`). `frontend/inventory-app/src/app/auth-config.ts` defines the SPA/API Entra application IDs, the delegated `access_as_user` scope (`loginRequest`), and `buildProtectedResourceMap(apiBaseUrl)`, which keys MSAL's protected-resource map off `ConfigService.apiBaseUrl` rather than a hard-coded host. `app.config.ts` wires `MsalInterceptor` (attaches `Authorization: Bearer <token>` to matching requests), `MsalGuard` (redirect-based route protection), and `MSAL_INTERCEPTOR_CONFIG` (built from that dynamic map), so the bearer token is attached correctly whether `ConfigService.apiBaseUrl` resolves to the local dev proxy (`/api`) or the deployed Azure API's absolute URL — see [Runtime configuration and API contracts](#runtime-configuration-and-api-contracts). `app.routes.ts` applies `MsalGuard` to every application route except the public `/auth` callback route (`AuthCallbackComponent`), which must stay reachable without authentication so the Entra redirect can complete. `AppComponent` drives sign-in/sign-out (`MsalService.loginRedirect`/`logoutRedirect`) and reflects the active account in the header.
-- **Protected documents.** Static-file middleware does not run controller authorization, so an uploaded document under `wwwroot` would be downloadable by anyone who knew its generated file name no matter what `[Authorize]` says. `Program.cs` therefore registers no static-file middleware at all — the API serves no public assets, since the Angular application is a separate Azure Static Web App — and `ProtectedFileStorage` stores purchase documents and operating-expense supporting documents under `{ContentRoot}/protected-files/{category}/`, outside the web root. The only way to read one is `GET /api/purchases/{id}/file` or `GET /api/operating-expenses/{id}/attachment` — the sole, canonical OperatingExpense attachment route; the legacy `GET /api/operating-expenses/{id}/receipt` alias was removed (issue #61) once verification confirmed no in-repository or external caller used it, with no deprecation period. Documents uploaded before this rule still sit in `wwwroot/{category}` and stay readable and deletable through the same endpoints (`ProtectedFileStorage.ExistingPath` falls back to that location) but no longer have an anonymous URL. Because these endpoints require a bearer token, the frontend must fetch them through `HttpClient` (`PurchaseService.getFile`, `OperatingExpenseService.getAttachment`, both `responseType: 'blob'`) and render them from an object URL; an `<a href>`/`<img src>` pointing straight at the endpoint is a plain browser request that carries no token and gets `401`.
+- **Protected documents.** Static-file middleware does not run controller authorization, so an uploaded document under `wwwroot` would be downloadable by anyone who knew its generated file name no matter what `[Authorize]` says. `Program.cs` therefore registers no static-file middleware at all — the API serves no public assets, since the Angular application is a separate Azure Static Web App — and `Inventory.Infrastructure.Documents.FileSystemDocumentStorage` stores purchase documents and operating-expense supporting documents under `{ContentRoot}/protected-files/{category}/`, outside the web root. The only way to read one is `GET /api/purchases/{id}/file` or `GET /api/operating-expenses/{id}/attachment` — the sole, canonical OperatingExpense attachment route; the legacy `GET /api/operating-expenses/{id}/receipt` alias was removed (issue #61) once verification confirmed no in-repository or external caller used it, with no deprecation period. Documents uploaded before this rule still sit in `wwwroot/{category}` and stay readable and deletable through the same endpoints (the adapter falls back to that location) but no longer have an anonymous URL. Because these endpoints require a bearer token, the frontend must fetch them through `HttpClient` (`PurchaseService.getFile`, `OperatingExpenseService.getAttachment`, both `responseType: 'blob'`) and render them from an object URL; an `<a href>`/`<img src>` pointing straight at the endpoint is a plain browser request that carries no token and gets `401`.
 - **Authentication is not ownership.** Accepting users from multiple Microsoft Entra tenants (`TenantId: "common"`) establishes *who* the caller is. *What they may see* is decided separately by business ownership, described below.
 
 ### Tenant ownership (issue #64)
@@ -204,13 +204,126 @@ Authentication answers "who is this?". Tenant ownership answers "whose data is t
 
 **Tenant-scoped uniqueness.** Constraints over externally supplied values are scoped by business, because two businesses may legitimately hold the same external value: Nayax transaction IDs, import file hashes, site commission agreements, fee effective dates, and costing baselines. `NayaxSales` consequently has its own local key with `TransactionID` unique *per business* — a remote identifier is an external identity, not a primary key. This also keeps import de-duplication correct: one business must never be told its own import is a duplicate because another imported the same bytes first, and a shared remote ID must never cause one business's import to update another's row.
 
-**Protected documents.** A document's bytes live outside the database, so hiding the row is not enough. Retrieval always resolves the tenant-owned parent record first — `GET /api/purchases/{id}/file` and `GET /api/operating-expenses/{id}/attachment` both go through the filtered `DbSet` — and the stored file name is read from that record, never from the request. No endpoint accepts a file name or path as input, and `ProtectedFileStorage` reduces any stored name with `Path.GetFileName` so a crafted value cannot escape its category folder. Knowing another business's purchase ID, attachment ID, stored file name, and on-disk path therefore yields nothing.
+**Protected documents.** A document's bytes live outside the database, so hiding the row is not enough. Retrieval always resolves the tenant-owned parent record first — `GET /api/purchases/{id}/file` and `GET /api/operating-expenses/{id}/attachment` both go through the filtered `DbSet` — and the stored file name is read from that record, never from the request. No endpoint accepts a file name or path as input, and `FileSystemDocumentStorage` reduces any stored name with `Path.GetFileName` and then proves the result is inside the category folder, so a crafted value cannot escape it. Knowing another business's purchase ID, attachment ID, stored file name, and on-disk path therefore yields nothing.
 
-**The unrestricted-context rule.** `new AppDbContext(options)` is fail-closed. Unrestricted, all-business access requires passing `UnscopedBusinessScope.Instance` explicitly, so every such place is greppable. Outside tests it exists only in the two human-invoked commands — `migrate-database` and `bootstrap-business`. No controller, service, or request path may run unrestricted; a composition-root test pins down that the DI container never produces an unscoped context.
+**The unrestricted-context rule.** `new AppDbContext(options)` is fail-closed. Unrestricted, all-business access requires passing `UnscopedBusinessScope.Instance` explicitly, so every such place is greppable. Outside tests it exists only in the three human-invoked commands — `migrate-database`, `bootstrap-business` and `migrate-documents`, the last of which reads every business's document metadata to migrate it (see [Document storage](#document-storage)). No controller, service, or request path may run unrestricted; a composition-root test pins down that the DI container never produces an unscoped context.
 
 **Schema and data are separate, human-controlled steps.** `DatabaseSchemaStartup` decides per environment: Production never migrates automatically regardless of configuration and fails closed when migrations are pending; Development and `Testing` migrate automatically; any other non-Production environment does so only under the `Database:AllowAutomaticMigrationUnsafeOutsideDevelopment` override, which is read only after Production has been ruled out. Migrations never assign ownership. The backfill is exclusively `bootstrap-business`: deterministic, idempotent (it touches only unassigned rows), restartable, transactional, dry-runnable, and verified by before/after counts and financial totals, with a `BusinessBackfillAudit` record of what it did. `TenantOwnershipReadiness` reports at startup whether ownership has actually been bootstrapped, so "all my data is gone" cannot be the first symptom of an unfinished rollout.
 
 **Known limits of this rollout.** One business is live. The Nayax client still uses a single operator/token configuration, so remote identifiers and imports are not partitioned per business; a second live business must wait until they are. The database foreign keys from `BusinessId` to `Businesses` are a deliberate, still-outstanding deferral — see `docs/tenant-rollout.md`. Issue #39 (document storage) consumes this ownership key and must not introduce blob storage before it.
+
+### Document storage
+
+Uploaded business documents reach storage through one Application port,
+`Inventory.Application.Documents.IDocumentStorage` (issue #39, checkpoint 1). It takes a
+`DocumentCategory` — `PurchaseDocument` or `ExpenseAttachment` — and the server-generated stored
+file name already held on the tenant-owned purchase or operating-expense record, and offers
+`SaveAsync`, `OpenReadAsync` and `DeleteAsync`. It exposes no filesystem path, no container or
+URL, no `IWebHostEnvironment`, and no business identifier: ownership is resolved before a call
+reaches the port, by loading the parent record through the tenant-filtered `AppDbContext`, so the
+#64 boundary is what decides whether a document may be touched at all. `PurchaseService` and
+`OperatingExpensesController` compose `SaveAsync` and `DeleteAsync` around their own database
+work to replace a document, which is what keeps cleanup-on-failure ordering visible at the call
+site rather than hidden in storage.
+
+`Inventory.Infrastructure.Documents.FileSystemDocumentStorage` writes new documents to
+`{ContentRoot}/protected-files/{category}/`, reads them back from there or, failing that, from
+the legacy `{WebRoot}/{category}/` location, and refuses to overwrite an existing document or to
+leave a partially written one behind. Category folders keep their legacy names (`receipts`,
+`expenses`) because persisted metadata refers to documents by stored file name alone.
+
+`Inventory.Infrastructure.Documents.AzureBlobDocumentStorage` (issue #39, checkpoint 2) is the
+second implementation. It keys every document by the business that owns it:
+
+```text
+tenants/{businessId}/purchases/{storedFileName}
+tenants/{businessId}/expenses/{storedFileName}
+```
+
+The `businessId` is read from `IBusinessScope` — the trusted per-request scope issue #64
+publishes from the authenticated actor's membership — and never from a route, query, form,
+header, JSON body or file name; `IDocumentStorage` deliberately has no parameter that could
+carry one. A denied scope and the deliberate `Unscoped` opt-out both refuse: a document belongs
+to exactly one business, so there is no prefix that could stand in for "all of them", and
+cross-business maintenance work needs its own explicit path rather than a mode of the request
+path. `BlobDocumentPath` reduces an untrusted stored name to its last path segment before it can
+reach the service, because the Blob service canonicalises nothing and a `..` in a name would
+otherwise be a real blob under a different prefix. Uploads use `overwrite: false`, so the
+service itself refuses to replace an existing document; a blob is readable only once its upload
+is committed, so a failed upload leaves nothing behind and the adapter deliberately does not
+delete on failure. The container is private and no SAS or public URL is generated.
+
+The SDK sits behind a small seam, `IDocumentBlobContainer`, implemented by `AzureBlobContainer`.
+That is what lets the adapter's rules — tenant-scoped names, no overwrite, missing blob means
+`null` — be tested without Azure credentials or a network.
+
+**Migrating documents to Blob storage.** `migrate-documents`
+(`InventoryApi/Bootstrap/DocumentMigrationCommand`) copies the documents already on disk into the
+Blob container, as a human-invoked command run with `--dry-run` to inspect and `--apply` to copy.
+Exactly one of the two must be given: unlike the other commands, a bare invocation is refused
+rather than treated as a dry run. The web host never performs it.
+
+Ownership comes from the database and nowhere else: each document's business is read from the
+persisted purchase or operating-expense record that owns it, never from a folder name, a file
+name, a blob name or the command line. A record whose `BusinessId` is unusable is reported and
+left alone rather than filed under a default. The command therefore reads through
+`UnscopedBusinessScope.Instance` — it must see every business at once — but it is emphatically
+not a request: it uses `IDocumentMigrationDestination`, a separate Infrastructure abstraction
+that takes an explicit `BusinessId`, rather than `IDocumentStorage`, which has no such parameter
+and whose Azure adapter correctly refuses to run unscoped. Keys are built with the same
+`BlobDocumentPath` the running application uses, so a migrated document lands where the API will
+later look for it.
+
+Sources are resolved exactly as a live download resolves them — protected storage first, then the
+legacy web root — by reusing `FileSystemDocumentStorage`. Each document is fingerprinted by
+streaming SHA-256 and size: an absent destination is written create-if-absent and then read back
+and verified before it counts as `Migrated`; a destination already holding the same bytes is
+`AlreadyPresent`, which is what makes a rerun safe; a destination holding *different* bytes is a
+`Collision`, never overwritten, renamed or deleted. Missing sources, unusable business ids and
+failed verifications are reported per document with the record type, id, business, stored name
+and reason — and nothing about the document's contents. The command requires
+`DocumentStorage:Provider=AzureBlob` and refuses to run against the filesystem default, which
+would otherwise copy every document from the filesystem back to the filesystem and report
+success. It exits `0` when nothing is unresolved (a dry run's pending work is not a problem) and
+`1` when any document is missing, collided, unowned or failed, so an apply can be gated on a
+clean dry run.
+
+A failure reaching the destination — container missing, authorization refused, account disabled,
+service unavailable — aborts the whole run rather than becoming a few documents' `Failed`. Those
+failures are about the destination rather than the document being copied, and reporting them per
+item would print the most misleading summary the command could produce. Recovery is to fix the
+destination and run again, which is safe because the migration is idempotent. A document's
+`Failed` therefore always means something narrower and specific to it: its copy could not be read
+back, or did not match its source.
+
+It never deletes or modifies a source document, and never writes to the database: the stored file
+name is the link between record and document, and moving bytes is not a reason to change it.
+Retiring the filesystem copies and the legacy fallback is a separate human decision, after a
+verified migration. [docs/document-storage-rollout.md](document-storage-rollout.md) is the
+operational runbook for the whole rollout — prerequisites, the dry-run review gate, verification,
+the separate runtime switch, and the rollback.
+
+**Configuration and provider selection.** `Program.cs` binds the non-secret `DocumentStorage`
+section and passes it, with the host's content and web roots, to
+`AddDocumentStorage`:
+
+```text
+DocumentStorage__Provider=AzureBlob
+DocumentStorage__BlobServiceUri=https://<storage-account>.blob.core.windows.net
+DocumentStorage__ContainerName=business-documents        # business-documents-dev for development
+```
+
+An absent provider means `FileSystem`, which is what every environment ran before the setting
+existed. An unrecognised provider, or an `AzureBlob` provider with a missing, non-absolute or
+plaintext endpoint, a missing container, or an endpoint carrying a query string or credentials
+(what a SAS token or an embedded key looks like), throws while the container is being built.
+There is deliberately no fallback from `AzureBlob` to the filesystem: an application that could
+not reach its configured storage would otherwise look healthy while writing business documents
+to a local disk nobody backs up. Authentication is `DefaultAzureCredential` throughout — the App
+Service's system-assigned managed identity in Azure, the developer's own Azure sign-in locally —
+so no account key, SAS token, client secret or storage connection string is ever configured.
+`FileSystemDocumentStorage` stays registered as a concrete type under either provider, because
+switching the provider does not move the documents already on disk.
 
 ### API documentation policy
 
@@ -487,7 +600,7 @@ MVC API explorer) cover this contract.
 | `Inventory.Domain` | `Purchases.PurchaseTotalValidationPolicy` | — | New pure calculation; the one authoritative total-mismatch formula. |
 | `Inventory.Application` | `Purchases.ComputePurchaseTotalValidation` | — | Thin use case wrapping the Domain policy; `InventoryApi.Services.PurchaseService` calls it instead of duplicating the formula. |
 | `InventoryApi.Models` | CLR types and files `Purchase.cs`, `PurchaseItem.cs` | DbSet properties `Receipts`/`ReceiptItems`, table names `Receipts`/`ReceiptItems` (mapped explicitly with `ToTable`), `PurchaseItem.ReceiptId` column/property, `StockAdjustment.ReceiptItemId`/`ReceiptItem`, `SupplierOrderReceiptAllocation` (type and its `ReceiptItemId`/`ReceiptItem` members) | Schema/migration history must not change; these are persistence compatibility, not client/API compatibility, and stay out of scope until the purchasing/costing slice moves this persistence into `Inventory.Infrastructure`. |
-| `InventoryApi.Services` | `PurchaseService : IPurchaseService` (files `PurchaseService.cs`/`IPurchaseService.cs`) | Physical upload folder keeps the name `receipts` (`ProtectedFileStorage.PurchaseDocumentsCategory`), now under `{ContentRoot}/protected-files/` rather than `wwwroot/` | Already-uploaded purchase document scans must stay reachable by their stored file name; `ProtectedFileStorage.ExistingPath` still falls back to the old `wwwroot/receipts` location. Renaming the on-disk category needs its own verified file-migration. |
+| `InventoryApi.Services` | `PurchaseService : IPurchaseService` (files `PurchaseService.cs`/`IPurchaseService.cs`) | Physical upload folder keeps the name `receipts` (`FileSystemDocumentStorage.PurchaseDocumentsFolderName`), now under `{ContentRoot}/protected-files/` rather than `wwwroot/` | Already-uploaded purchase document scans must stay reachable by their stored file name; the storage adapter still falls back to the old `wwwroot/receipts` location. Renaming the on-disk category needs its own verified file-migration. |
 | `InventoryApi.Controllers` | `PurchasesController` (file `PurchasesController.cs`), `[Route("api/purchases")]` | — | The route is now canonical; there is no supported external client left to preserve `api/receipts` for. |
 | `InventoryApi.DTOs` | `PurchaseItemDto`, `PurchaseCreateMetaDto`, `PurchaseValidationDto`, `PurchaseResponseDto` (JSON keys `purchase`/`validation`) | — | The `receipt`/`validation` wrapper existed only for old clients; `PurchaseResponseDto`'s property is now named `Purchase`. |
 | Frontend `models.ts`/`purchase.service.ts` | `Purchase`, `PurchaseItem`, `PurchaseValidation`, `PurchaseResponse` (`purchase` field), `PurchaseService` (canonical `/purchases` base URL), `PurchaseUploadPayload`/`PurchaseItemPayload`/`PurchaseUpdatePayload` | JSON-bound field `receiptId` on `PurchaseItem` | `receiptId` matches the backend `PurchaseItem.ReceiptId` persistence/JSON contract above, which is out of this issue's scope. |
@@ -600,7 +713,13 @@ Backend and frontend tracks can progress independently when their contracts do n
    - The EF adapter remains temporarily in `InventoryApi` until `AppDbContext` and its persistence models move into `Inventory.Infrastructure`.
 
 4. **Operating expenses slice**
-   - Extract use cases, persistence, and `IDocumentStorage`.
+   - Extract use cases and persistence.
+   - **`IDocumentStorage` done** (issue #39, checkpoint 1): the storage port and its filesystem
+     adapter are in place for both purchase documents and operating-expense attachments; see
+     [Document storage](#document-storage). Checkpoint 2 added the tenant-scoped Azure Blob
+     adapter behind the same port and the `DocumentStorage:Provider` selection; migrating the
+     documents already on disk is still to come. The operating-expense use cases and persistence
+     themselves remain in `OperatingExpensesController`/`AppDbContext`.
    - Preserve atomic replacement/cleanup and upload validation behavior.
 
 5. **Products and stock slice**

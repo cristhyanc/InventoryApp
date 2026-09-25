@@ -1,11 +1,10 @@
+using Inventory.Infrastructure.Documents;
 using InventoryApi.Data;
 using InventoryApi.Models;
 using InventoryApi.Services;
 using InventoryApi.Services.Interfaces;
-using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.FileProviders;
 using Moq;
 using Xunit;
 
@@ -81,7 +80,11 @@ public sealed class PurchaseFileStorageTests : IDisposable
             .Options);
 
     private IPurchaseService CreateService(AppDbContext db) =>
-        new PurchaseService(db, new TestWebHostEnvironment(_contentRoot, _webRoot));
+        new PurchaseService(db, new FileSystemDocumentStorage(new FileSystemDocumentStorageOptions
+        {
+            ContentRootPath = _contentRoot,
+            WebRootPath = _webRoot,
+        }));
 
     private static IFormFile CreateFile(string fileName)
     {
@@ -94,15 +97,5 @@ public sealed class PurchaseFileStorageTests : IDisposable
         file.Setup(x => x.CopyToAsync(It.IsAny<Stream>(), It.IsAny<CancellationToken>()))
             .Returns((Stream target, CancellationToken token) => content.CopyToAsync(target, token));
         return file.Object;
-    }
-
-    private sealed class TestWebHostEnvironment(string contentRoot, string webRoot) : IWebHostEnvironment
-    {
-        public string ApplicationName { get; set; } = "InventoryApi.Tests";
-        public IFileProvider WebRootFileProvider { get; set; } = null!;
-        public string WebRootPath { get; set; } = webRoot;
-        public string EnvironmentName { get; set; } = "Test";
-        public string ContentRootPath { get; set; } = contentRoot;
-        public IFileProvider ContentRootFileProvider { get; set; } = null!;
     }
 }
