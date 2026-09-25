@@ -11,8 +11,9 @@
       5. Check vulnerable NuGet packages
       6. Install frontend dependencies (npm ci)
       7. Angular ESLint                (npm run lint)
-      8. Angular production build      (npm run build)
-      9. npm audit report
+      8. Frontend unit/component tests (npm run test)
+      9. Angular production build      (npm run build)
+     10. npm audit report
 
     scripts/validate.sh performs the same checks on macOS, Linux, Git Bash and CI.
     Keep the two in step.
@@ -144,6 +145,10 @@ Invoke-ExternalCommand -Label 'Install frontend dependencies' -Command {
 
 Invoke-ExternalCommand -Label 'Lint frontend' -Command {
     & npm --prefix $FrontendDirectory run lint
+}
+
+Invoke-ExternalCommand -Label 'Test frontend' -Command {
+    & npm --prefix $FrontendDirectory run test
 }
 
 Invoke-ExternalCommand -Label 'Build frontend' -Command {

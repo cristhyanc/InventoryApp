@@ -233,7 +233,7 @@ flowchart TD
 - Frontend contracts are split between a broad `models.ts` file and service-local report interfaces. `reporting.service.ts` is already a large multi-report API client.
 - Some page components, especially administration and reporting pages, contain substantial orchestration and presentation logic.
 - Report state is locally managed, but date-range logic and financial formatting can accidentally erase `null`/unknown meaning if reused without care.
-- The frontend package has no automated test or lint command; its current validation gate is a production build.
+- Frontend component/router/browser-smoke test coverage (categories 3-5 in [Frontend tests](#frontend-tests) below) is still absent; only pure-function unit tests (category 1) exist so far.
 - Branch protection and required-check configuration live in GitHub repository settings and must be enabled separately from source-controlled workflows.
 
 These are reasons to improve boundaries, not reasons for a wholesale rewrite.
@@ -937,7 +937,7 @@ Backend and frontend tracks can progress independently when their contracts do n
 ### Frontend migration track
 
 1. **Frontend safety baseline**
-   - Add a pinned unit-test runner and lint command in a focused pull request.
+   - **Done.** Lint (`ng lint`, issue #129) and a pinned unit/component test runner (Jest via `jest-preset-angular`, issue #45) are both wired into `npm run lint`/`npm run test` and the validation scripts.
    - Test runtime configuration and one representative feature client before moving files.
 
 2. **Feature boundaries**
@@ -991,9 +991,9 @@ Financial regression tests should cover at least:
 
 ### Frontend tests
 
-The current package has no automated test command, so the first frontend testing change must choose, configure, and pin the runner explicitly. The target test mix is:
+The package uses Jest (`jest-preset-angular`) as its pinned unit/component test runner, run with `npm run test` (`frontend/inventory-app/jest.config.js`, `tsconfig.spec.json`, `setup-jest.ts`). `jest-preset-angular@14.x` is the version pinned for the current Angular 19/TypeScript 5.6 dependency tree; it requires Jest `^29`, which is also what `@angular-devkit/build-angular`'s own optional peer dependency expects, so a newer `jest-preset-angular`/Jest major (built for Angular 20+/Jest 30) would reintroduce the peer conflict this pin avoids. The target test mix is:
 
-1. **Pure unit tests** for date presets, display-only transformations, validation, and nullable financial presentation.
+1. **Pure unit tests** for date presets, display-only transformations, validation, and nullable financial presentation. **Started**: `auth-config.spec.ts`, `report-formatting.spec.ts`, and `filter-request-trigger.spec.ts` cover the MSAL protected-resource/API-base-URL resolution, nullable money/percent formatting, and the search-debounce/immediate-trigger RxJS contract.
 2. **HTTP client tests** for endpoint, query-parameter, request-body, response, and error mapping behavior.
 3. **Component tests** for loading, empty, error, success, confirmation, and accessibility states.
 4. **Router tests** for route parameters, redirects, lazy features, and direct report navigation.
@@ -1003,7 +1003,7 @@ Do not duplicate backend formula tests in Angular. Frontend assertions should pr
 
 ## Build and delivery
 
-The canonical local validation entry points are `scripts/validate.ps1` and `scripts/validate.sh`. They restore, build, and test the backend and run a clean install plus production build for the frontend. `.github/workflows/validate.yml` runs the Bash entry point for every pull request targeting `develop` or `main` without deploying. When frontend test and lint scripts are added, these validation entry points and pull-request CI must call them.
+The canonical local validation entry points are `scripts/validate.ps1` and `scripts/validate.sh`. They restore, build, and test the backend and run a clean install, lint, Jest unit/component tests, and a production build for the frontend. `.github/workflows/validate.yml` runs the Bash entry point for every pull request targeting `develop` or `main` without deploying.
 
 Frontend build flow is:
 
