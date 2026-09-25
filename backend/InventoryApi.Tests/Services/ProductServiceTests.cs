@@ -1,3 +1,4 @@
+using Inventory.Application.Exceptions;
 using InventoryApi.Data;
 using InventoryApi.DTOs;
 using InventoryApi.Integrations.Nayax;
@@ -250,7 +251,9 @@ public class ProductServiceTests
         await db.SaveChangesAsync();
 
         var service = new SupplierOrderService(db);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => service.Create(
+        // Issue #59: the rule and its message are unchanged; only the exception type moved to the
+        // narrowly typed DomainValidationException the central handler may publish as a 400.
+        await Assert.ThrowsAsync<DomainValidationException>(() => service.Create(
             new SupplierOrderCreateDto(1, DateTime.UtcNow, null, null, null,
                 new[] { new SupplierOrderLineCreateDto(1, 1.5m) })));
     }

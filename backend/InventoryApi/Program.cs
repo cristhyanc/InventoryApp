@@ -84,6 +84,8 @@ builder.Services.AddDocumentStorage(
 // Controlled RFC 7807 responses for Nayax upstream failures.
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<NayaxUpstreamExceptionHandler>();
+builder.Services.AddExceptionHandler<DomainExceptionHandler>();
+builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 builder.Services.AddInventoryApiSwagger();
 
 builder.Services.AddDbContext<AppDbContext>(options =>

@@ -1,3 +1,4 @@
+using Inventory.Application.Exceptions;
 using InventoryApi.Data;
 using InventoryApi.DTOs;
 using InventoryApi.Integrations.Nayax;
@@ -8,6 +9,13 @@ using System.Text.Json;
 
 namespace InventoryApi.Services;
 
+/// <summary>
+/// Every deliberate check below throws <see cref="DomainValidationException"/>, whose message is
+/// written for the caller: <c>DomainExceptionHandler</c> returns it verbatim as the 400
+/// ProblemDetails this service's controller used to build in its own catch block (issue #59).
+/// A failure that is not a reviewed, caller-safe validation message must keep throwing an ordinary
+/// framework exception so it reaches <c>GlobalExceptionHandler</c> as a logged, generic 500.
+/// </summary>
 public sealed class InventoryCostTransitionService : IInventoryCostTransitionService
 {
     private readonly AppDbContext _db;
@@ -29,11 +37,11 @@ public sealed class InventoryCostTransitionService : IInventoryCostTransitionSer
         CancellationToken cancellationToken = default)
     {
         if (request.AverageUnitCost < 0)
-            throw new InvalidOperationException("The opening average unit cost cannot be negative.");
+            throw new DomainValidationException("The opening average unit cost cannot be negative.");
         if (!Enum.IsDefined(request.CostSource))
-            throw new InvalidOperationException("Select whether the opening cost is authoritative or estimated.");
+            throw new DomainValidationException("Select whether the opening cost is authoritative or estimated.");
         if (await _db.InventoryCostTransitionBaselines.AnyAsync(x => x.ProductId == request.ProductId, cancellationToken))
-            throw new InvalidOperationException("This product already has an inventory-cost transition baseline.");
+            throw new DomainValidationException("This product already has an inventory-cost transition baseline.");
 
         var preview = await BuildPreviewAsync(request, cancellationToken);
         var draft = new InventoryCostTransitionPreviewDraft
@@ -55,7 +63,7 @@ public sealed class InventoryCostTransitionService : IInventoryCostTransitionSer
     {
         var product = await _db.Products.AsNoTracking()
             .SingleOrDefaultAsync(x => x.Id == request.ProductId, cancellationToken)
-            ?? throw new InvalidOperationException($"Product {request.ProductId} does not exist.");
+            ?? throw new DomainValidationException($"Product {request.ProductId} does not exist.");
         var machineStocksByProduct = await ReadMachineStocksAsync(new[] { product.Id }, cancellationToken);
         var cutoffAt = DateTime.UtcNow;
         var replayedPhysical = await _db.StockAdjustments.AsNoTracking()
@@ -76,14 +84,14 @@ public sealed class InventoryCostTransitionService : IInventoryCostTransitionSer
         CancellationToken cancellationToken = default)
     {
         if (!request.Confirmed)
-            throw new InvalidOperationException("Explicit confirmation is required to save the transition baseline.");
+            throw new DomainValidationException("Explicit confirmation is required to save the transition baseline.");
 
         await using var transaction = _db.Database.IsRelational()
             ? await _db.Database.BeginTransactionAsync(cancellationToken)
             : null;
         var draft = await _db.InventoryCostTransitionPreviewDrafts
             .SingleOrDefaultAsync(x => x.Id == request.PreviewId && x.ProductId > 0, cancellationToken)
-            ?? throw new InvalidOperationException("The transition preview does not exist. Run the preview again.");
+            ?? throw new DomainValidationException("The transition preview does not exist. Run the preview again.");
         ValidateDraft(draft);
         var expected = Deserialize<InventoryCostTransitionPreview>(draft.SnapshotJson);
         var current = await BuildPreviewAsync(
@@ -107,7 +115,7 @@ public sealed class InventoryCostTransitionService : IInventoryCostTransitionSer
         CancellationToken cancellationToken = default)
     {
         if (!Enum.IsDefined(request.CostSource))
-            throw new InvalidOperationException("Select whether the opening costs are authoritative or estimated.");
+            throw new DomainValidationException("Select whether the opening costs are authoritative or estimated.");
         var baselineProductIds = await _db.InventoryCostTransitionBaselines.AsNoTracking()
             .Select(x => x.ProductId)
             .ToListAsync(cancellationToken);
@@ -116,9 +124,9 @@ public sealed class InventoryCostTransitionService : IInventoryCostTransitionSer
             .OrderBy(x => x.Name)
             .ToListAsync(cancellationToken);
         if (products.Count == 0)
-            throw new InvalidOperationException("All products already have an inventory-cost transition baseline.");
+            throw new DomainValidationException("All products already have an inventory-cost transition baseline.");
         if (products.Any(x => x.AverageUnitCost < 0))
-            throw new InvalidOperationException("One or more products have a negative current average unit cost.");
+            throw new DomainValidationException("One or more products have a negative current average unit cost.");
 
         var preview = await BuildBatchPreviewAsync(products, request.CostSource, Guid.NewGuid(), cancellationToken);
         _db.InventoryCostTransitionPreviewDrafts.Add(new InventoryCostTransitionPreviewDraft
@@ -138,25 +146,25 @@ public sealed class InventoryCostTransitionService : IInventoryCostTransitionSer
         CancellationToken cancellationToken = default)
     {
         if (!request.Confirmed)
-            throw new InvalidOperationException("Explicit confirmation is required to save all transition baselines.");
+            throw new DomainValidationException("Explicit confirmation is required to save all transition baselines.");
 
         await using var transaction = _db.Database.IsRelational()
             ? await _db.Database.BeginTransactionAsync(cancellationToken)
             : null;
         var draft = await _db.InventoryCostTransitionPreviewDrafts
             .SingleOrDefaultAsync(x => x.Id == request.PreviewId && x.ProductId == 0, cancellationToken)
-            ?? throw new InvalidOperationException("The all-products transition preview does not exist. Run the preview again.");
+            ?? throw new DomainValidationException("The all-products transition preview does not exist. Run the preview again.");
         ValidateDraft(draft);
         var expected = Deserialize<InventoryCostTransitionBatchPreview>(draft.SnapshotJson);
         var productIds = expected.Products.Select(x => x.ProductId).ToList();
         if (await _db.InventoryCostTransitionBaselines.AnyAsync(x => productIds.Contains(x.ProductId), cancellationToken))
-            throw new InvalidOperationException("One or more products received a baseline after this preview. Run the preview again.");
+            throw new DomainValidationException("One or more products received a baseline after this preview. Run the preview again.");
         var products = await _db.Products.AsNoTracking()
             .Where(x => productIds.Contains(x.Id))
             .OrderBy(x => x.Name)
             .ToListAsync(cancellationToken);
         if (products.Count != productIds.Count)
-            throw new InvalidOperationException("One or more previewed products no longer exist.");
+            throw new DomainValidationException("One or more previewed products no longer exist.");
         var current = await BuildBatchPreviewAsync(products, expected.CostSource, Guid.NewGuid(), cancellationToken);
         ValidateBatchUnchanged(expected, current);
 
@@ -233,11 +241,11 @@ public sealed class InventoryCostTransitionService : IInventoryCostTransitionSer
                 foreach (var slot in snapshot.Slots.Where(x => x.NayaxProductID == productId))
                 {
                     if (!slot.PAR.HasValue || !slot.MissingStockByMDB.HasValue)
-                        throw new InvalidOperationException(
+                        throw new DomainValidationException(
                             $"Nayax stock is incomplete for product {productId} in machine {snapshot.Machine.MachineName ?? snapshot.Machine.MachineID.ToString()}: PAR and MissingStockByMDB are required.");
                     var slotQuantity = slot.PAR.Value - slot.MissingStockByMDB.Value;
                     if (slotQuantity < 0 || slotQuantity > slot.PAR.Value)
-                        throw new InvalidOperationException(
+                        throw new DomainValidationException(
                             $"Nayax stock is invalid for product {productId} in machine {snapshot.Machine.MachineName ?? snapshot.Machine.MachineID.ToString()}.");
                     quantity = checked(quantity + slotQuantity);
                 }
@@ -309,14 +317,14 @@ public sealed class InventoryCostTransitionService : IInventoryCostTransitionSer
     private static void ValidateDraft(InventoryCostTransitionPreviewDraft draft)
     {
         if (draft.AppliedAt.HasValue)
-            throw new InvalidOperationException("This transition preview has already been applied.");
+            throw new DomainValidationException("This transition preview has already been applied.");
         if (draft.ExpiresAt < DateTime.UtcNow)
-            throw new InvalidOperationException("The transition preview expired. Run the preview again.");
+            throw new DomainValidationException("The transition preview expired. Run the preview again.");
     }
 
     private static T Deserialize<T>(string json) =>
         JsonSerializer.Deserialize<T>(json)
-        ?? throw new InvalidOperationException("The transition preview could not be read.");
+        ?? throw new DomainValidationException("The transition preview could not be read.");
 
     private static void ValidateUnchanged(
         InventoryCostTransitionPreview expected,
@@ -333,12 +341,12 @@ public sealed class InventoryCostTransitionService : IInventoryCostTransitionSer
         if (expected.HomeStockQuantity != current.HomeStockQuantity ||
             expected.LegacyReplayedPhysicalQuantity != current.LegacyReplayedPhysicalQuantity ||
             !machineStocksMatch)
-            throw new InvalidOperationException(
+            throw new DomainValidationException(
                 "Inventory data changed after the preview. Run the preview again before confirming.");
         if (expected.MachineStockQuantity != expectedMachineQuantity ||
             expected.OpeningCostingQuantity != expected.HomeStockQuantity + expected.MachineStockQuantity ||
             expected.InventoryValue != expected.OpeningCostingQuantity * expected.AverageUnitCost)
-            throw new InvalidOperationException("The confirmed transition values do not match the preview calculation.");
+            throw new DomainValidationException("The confirmed transition values do not match the preview calculation.");
     }
 
     private static void ValidateBatchUnchanged(
@@ -346,14 +354,14 @@ public sealed class InventoryCostTransitionService : IInventoryCostTransitionSer
         InventoryCostTransitionBatchPreview current)
     {
         if (expected.Products.Count != current.Products.Count)
-            throw new InvalidOperationException("The eligible product list changed after the preview. Run it again.");
+            throw new DomainValidationException("The eligible product list changed after the preview. Run it again.");
         var currentByProduct = current.Products.ToDictionary(x => x.ProductId);
         foreach (var product in expected.Products)
         {
             if (!currentByProduct.TryGetValue(product.ProductId, out var currentProduct))
-                throw new InvalidOperationException("The eligible product list changed after the preview. Run it again.");
+                throw new DomainValidationException("The eligible product list changed after the preview. Run it again.");
             if (product.AverageUnitCost != currentProduct.AverageUnitCost)
-                throw new InvalidOperationException(
+                throw new DomainValidationException(
                     $"The average unit cost for {product.ProductName} changed after the preview. Run it again.");
             ValidateUnchanged(product, currentProduct);
         }

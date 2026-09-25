@@ -1,3 +1,4 @@
+using Inventory.Application.Exceptions;
 using InventoryApi.Data;
 using InventoryApi.DTOs;
 using InventoryApi.Models;
@@ -62,14 +63,14 @@ public class StockService : IStockService
         if (!productExists) return null;
 
         if (dto.Reason == StockAdjustmentReason.Correction && dto.QuantityChange >= 0)
-            throw new ArgumentException("Correction quantity must remove stock.");
+            throw new DomainValidationException("Correction quantity must remove stock.");
 
         if (dto.Reason == StockAdjustmentReason.Restock && dto.QuantityChange > 0)
         {
             if (!dto.UnitCost.HasValue)
-                throw new ArgumentException("Unit cost is required for a positive Restock adjustment.");
+                throw new DomainValidationException("Unit cost is required for a positive Restock adjustment.");
             if (dto.UnitCost.Value < 0)
-                throw new ArgumentException("Unit cost cannot be negative for a positive Restock adjustment.");
+                throw new DomainValidationException("Unit cost cannot be negative for a positive Restock adjustment.");
         }
 
         var adjustment = _costing.ApplyMovement(productId, dto.QuantityChange, dto.Reason, null,
