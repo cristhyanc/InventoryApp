@@ -1,9 +1,11 @@
 using Azure.Identity;
 using Azure.Storage.Blobs;
 using Inventory.Application.Documents;
+using Inventory.Application.Nayax;
 using Inventory.Application.Time;
 using Inventory.Infrastructure.Clock;
 using Inventory.Infrastructure.Documents;
+using Inventory.Infrastructure.Nayax;
 using Inventory.Infrastructure.Time;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -93,5 +95,27 @@ public static class InfrastructureServiceCollectionExtensions
         // Scoped, unlike the filesystem adapter: it reads the current request's business scope,
         // which is what decides the tenant prefix every blob name is built from.
         services.AddScoped<IDocumentStorage, AzureBlobDocumentStorage>();
+    }
+
+    /// <summary>
+    /// Validates <paramref name="options"/> (<see cref="NayaxLynxConfiguration.ValidateNonSecretFields"/>)
+    /// and registers the Nayax Lynx HTTP client behind <see cref="INayaxLynxClient"/> (issue #49).
+    /// <paramref name="options"/> should already have its <see cref="NayaxLynxOptions.AccessToken"/>
+    /// resolved (<see cref="NayaxLynxConfiguration.ResolveAccessToken"/>), since that is a secret
+    /// this method does not read configuration for. Validation happens here, eagerly, so a
+    /// missing base URL or operator ID fails registration at startup rather than the first Nayax
+    /// call.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">A required non-secret field is missing or invalid.</exception>
+    public static IServiceCollection AddNayaxLynxClient(this IServiceCollection services, NayaxLynxOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        NayaxLynxConfiguration.ValidateNonSecretFields(options);
+
+        services.AddSingleton(options);
+        services.AddHttpClient<INayaxLynxClient, NayaxLynxClient>();
+
+        return services;
     }
 }

@@ -1,5 +1,5 @@
 using InventoryApi.Adapters.Nayax;
-using InventoryApi.Integrations.Nayax;
+using Inventory.Application.Nayax;
 using Moq;
 using Xunit;
 

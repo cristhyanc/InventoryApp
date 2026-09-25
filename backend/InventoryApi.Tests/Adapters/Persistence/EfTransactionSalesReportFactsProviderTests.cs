@@ -2,7 +2,7 @@ using Inventory.Application.Reporting.Transactions;
 using Inventory.Domain.Reporting.Transactions;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
-using InventoryApi.Integrations.Nayax;
+using Inventory.Application.Nayax;
 using InventoryApi.Models;
 using InventoryApi.Services;
 using Microsoft.Data.Sqlite;

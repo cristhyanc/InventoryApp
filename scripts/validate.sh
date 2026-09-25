@@ -10,8 +10,9 @@
 #   5. Check vulnerable NuGet packages
 #   6. Install frontend dependencies (npm ci)
 #   7. Angular ESLint                (npm run lint)
-#   8. Angular production build      (npm run build)
-#   9. npm audit report
+#   8. Frontend unit/component tests (npm run test)
+#   9. Angular production build      (npm run build)
+#  10. npm audit report
 #
 # scripts/validate.ps1 performs the same checks on Windows PowerShell. Keep the two in step.
 
@@ -117,6 +118,9 @@ run_step "Install frontend dependencies" \
 
 run_step "Lint frontend" \
     npm --prefix "${frontend_dir}" run lint
+
+run_step "Test frontend" \
+    npm --prefix "${frontend_dir}" run test
 
 run_step "Build frontend" \
     npm --prefix "${frontend_dir}" run build
