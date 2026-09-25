@@ -126,6 +126,20 @@ public class CleanArchitectureDependencyTests
         AssertNoDependency(DomainAssembly, "Inventory.Domain", PersistenceAndIoNamespaces);
     }
 
+    /// <summary>
+    /// Issue #145: <c>Inventory.Infrastructure</c> is the adapter layer (EF Core, Nayax HTTP
+    /// client, file storage, exports), so unlike Domain/Application it legitimately needs
+    /// persistence and outbound-HTTP-client namespaces. What it must never gain is the ASP.NET
+    /// Core web-host surface (<c>HttpContext</c>, middleware, MVC types, ...) - that would mean an
+    /// adapter reaching back into the request pipeline instead of exposing a narrow port for
+    /// InventoryApi to call, and would make the adapter untestable without a running host.
+    /// </summary>
+    [Fact]
+    public void Infrastructure_must_not_depend_on_ASP_NET_HTTP_types()
+    {
+        AssertNoDependency(InfrastructureAssembly, "Inventory.Infrastructure", ["Microsoft.AspNetCore"]);
+    }
+
     [Fact]
     public void Application_must_not_depend_on_EF_Core_or_HTTP_clients()
     {
