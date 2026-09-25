@@ -1,3 +1,4 @@
+using Inventory.Application.Exceptions;
 using InventoryApi.Data;
 using InventoryApi.DTOs;
 using InventoryApi.Models;
@@ -28,7 +29,7 @@ public class StockServiceTests
         await db.SaveChangesAsync();
 
         IStockService svc = new StockService(db);
-        var exception = await Assert.ThrowsAsync<ArgumentException>(() =>
+        var exception = await Assert.ThrowsAsync<DomainValidationException>(() =>
             svc.Adjust(1, new StockAdjustmentDto(3, StockAdjustmentReason.Restock, "note", null, System.DateTime.UtcNow.AddDays(30))));
 
         Assert.Equal("Unit cost is required for a positive Restock adjustment.", exception.Message);
@@ -42,7 +43,7 @@ public class StockServiceTests
         db.Products.Add(new Product { Id = 1, Name = "p", QuantityInStock = 2 });
         await db.SaveChangesAsync();
 
-        var exception = await Assert.ThrowsAsync<ArgumentException>(() =>
+        var exception = await Assert.ThrowsAsync<DomainValidationException>(() =>
             new StockService(db).Adjust(1, new StockAdjustmentDto(3, StockAdjustmentReason.Restock, null, null, null, -1m)));
 
         Assert.Equal("Unit cost cannot be negative for a positive Restock adjustment.", exception.Message);
@@ -120,7 +121,7 @@ public class StockServiceTests
 
         await using (var db = TestAppDbContext.Unrestricted(options))
         {
-            var exception = await Assert.ThrowsAsync<ArgumentException>(() => new StockService(db).Adjust(
+            var exception = await Assert.ThrowsAsync<DomainValidationException>(() => new StockService(db).Adjust(
                 1, new StockAdjustmentDto(3, StockAdjustmentReason.Correction, null, null, null)));
             Assert.Equal("Correction quantity must remove stock.", exception.Message);
         }
@@ -185,7 +186,7 @@ public class StockServiceTests
         await db.SaveChangesAsync();
 
         IStockService svc = new StockService(db);
-        var exception = await Assert.ThrowsAsync<ArgumentException>(() =>
+        var exception = await Assert.ThrowsAsync<DomainValidationException>(() =>
             svc.Adjust(1, new StockAdjustmentDto(0, StockAdjustmentReason.Correction, "count correction", null, null)));
 
         Assert.Equal("Correction quantity must remove stock.", exception.Message);

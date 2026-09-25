@@ -300,7 +300,7 @@ export class AdminComponent {
       this.transitionBatchPreview = null;
       this.inventoryCostTransition.previewAll(this.transitionCostSource).subscribe({
         next: preview => { this.transitionBatchPreview = preview; this.loading = false; },
-        error: err => { this.loading = false; this.toast.error(err?.error ?? 'Unable to preview all transition baselines.'); }
+        error: err => { this.loading = false; this.toast.error(this.extractErrorMessage(err, 'Unable to preview all transition baselines.')); }
       });
       return;
     }
@@ -317,7 +317,7 @@ export class AdminComponent {
       this.transitionCostSource
     ).subscribe({
       next: preview => { this.transitionPreview = preview; this.loading = false; },
-      error: err => { this.loading = false; this.toast.error(err?.error ?? 'Unable to preview the transition baseline.'); }
+      error: err => { this.loading = false; this.toast.error(this.extractErrorMessage(err, 'Unable to preview the transition baseline.')); }
     });
   }
 
@@ -332,7 +332,7 @@ export class AdminComponent {
         this.toast.success('Inventory AVCO transition baseline saved.');
         this.productService.getAll().subscribe(products => this.products = products);
       },
-      error: err => { this.loading = false; this.toast.error(err?.error ?? 'Unable to save the transition baseline.'); }
+      error: err => { this.loading = false; this.toast.error(this.extractErrorMessage(err, 'Unable to save the transition baseline.')); }
     });
   }
 
@@ -347,7 +347,7 @@ export class AdminComponent {
         this.toast.success(`${result.productCount} inventory AVCO transition baselines saved.`);
         this.productService.getAll().subscribe(products => this.products = products);
       },
-      error: err => { this.loading = false; this.toast.error(err?.error ?? 'Unable to save all transition baselines.'); }
+      error: err => { this.loading = false; this.toast.error(this.extractErrorMessage(err, 'Unable to save all transition baselines.')); }
     });
   }
 
@@ -359,7 +359,7 @@ export class AdminComponent {
     this.loading = true;
     this.reportingService.saveSiteCommissionAgreement({ siteId: this.commissionSiteId, commissionRate: this.commissionRate / 100, effectiveFrom: this.commissionEffectiveFrom, frequency: this.commissionFrequency, basis: this.commissionBasis, paymentDueDaysAfterPeriodEnd: this.commissionDueDays }).subscribe({
       next: () => { this.loading = false; this.toast.success('Site commission agreement saved.'); this.loadCommissionAgreements(); },
-      error: err => { this.loading = false; this.toast.error(err?.error ?? 'Unable to save the commission agreement.'); }
+      error: err => { this.loading = false; this.toast.error(this.extractErrorMessage(err, 'Unable to save the commission agreement.')); }
     });
   }
 
@@ -379,6 +379,16 @@ export class AdminComponent {
   isFutureFeeRate(rate: NayaxProcessingFeeRate): boolean {
     return new Date(`${rate.effectiveFrom.slice(0, 10)}T00:00:00`).getTime() > new Date().setHours(0, 0, 0, 0);
   }
+  // Some of these actions moved from returning a plain string body to a ProblemDetails object
+  // (issue #59); older endpoints still return a plain string, so both shapes are handled here,
+  // matching the same fallback already used in machine-detail.component.ts.
+  private extractErrorMessage(err: unknown, fallback: string): string {
+    const body = (err as { error?: unknown } | undefined)?.error;
+    if (typeof body === 'string') return body;
+    const problem = body as { message?: string; title?: string } | undefined;
+    return problem?.message ?? problem?.title ?? fallback;
+  }
+
   private get currentFeeRate(): NayaxProcessingFeeRate | undefined {
     const today = new Date().setHours(23, 59, 59, 999);
     return this.feeRates.find(rate =>

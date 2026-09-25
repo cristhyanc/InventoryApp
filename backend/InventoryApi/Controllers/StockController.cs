@@ -33,19 +33,10 @@ public class StockController : ControllerBase
     [HttpPost]
     public async Task<ActionResult<StockAdjustment>> Adjust(long productId, StockAdjustmentDto dto)
     {
-        StockAdjustment? adjustment;
-        try
-        {
-            adjustment = await _service.Adjust(productId, dto);
-        }
-        catch (InventoryApi.Services.InsufficientStockException exception)
-        {
-            return BadRequest(exception.Message);
-        }
-        catch (ArgumentException exception)
-        {
-            return BadRequest(exception.Message);
-        }
+        // InsufficientStockException and DomainValidationException are mapped centrally by
+        // DomainExceptionHandler (see Http/DomainExceptionHandler.cs) into a 400 ProblemDetails
+        // with the same message this action used to return directly.
+        var adjustment = await _service.Adjust(productId, dto);
 
         if (adjustment is null) return BadRequest("Invalid product or resulting quantity");
         return Ok(adjustment);
