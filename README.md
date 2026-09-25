@@ -241,6 +241,8 @@ Changes are made on feature branches created from `develop` and validated throug
 
 Tasks intended for an implementation agent use the **Agent task** issue form, and every pull request uses the repository pull request template. The agent provider is Claude Code: applying `agent-ready` to a reviewed issue starts the implementation workflow, which opens a pull request, applies `agent-review` to it as a deterministic step, and dispatches validation; once validation succeeds, an independent, comment-only review with an explicit verdict starts automatically, and the repository owner may request at most two repairs by commenting `@claude repair` on that pull request. Human approval and branch protection remain the merge gate. The full lifecycle, authority model, task labels, risk classification, and retry policy are in [docs/automation.md](docs/automation.md).
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to propose a change, and [SECURITY.md](SECURITY.md) for how to report a vulnerability privately.
+
 ## License
 
 See [LICENSE](LICENSE).
