@@ -13,12 +13,12 @@ using Inventory.Application.Reporting.Transactions;
 using Inventory.Application.Tenancy;
 using Inventory.Infrastructure;
 using Inventory.Infrastructure.Documents;
+using Inventory.Infrastructure.Nayax;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Bootstrap;
 using InventoryApi.Auth;
 using InventoryApi.Data;
 using InventoryApi.Http;
-using InventoryApi.Integrations.Nayax;
 using InventoryApi.Swagger;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Identity.Web;
@@ -105,10 +105,19 @@ builder.Services.AddCors(options =>
     });
 });
 
-builder.Services.Configure<NayaxLynxOptions>(
-    builder.Configuration.GetSection(NayaxLynxOptions.SectionName));
-
-builder.Services.AddHttpClient<INayaxLynxClient, NayaxLynxClient>();
+// Nayax Lynx HTTP client configuration (issue #49): one typed, validated options contract
+// instead of the client separately reading IConfiguration for the token. AccessToken prefers the
+// consolidated NayaxLynx:AccessToken key and falls back to the legacy Nayax:Token key, so the
+// already deployed Key Vault/App Service secret (Nayax__Token) keeps working with no rollout.
+// An incomplete BaseUrl/OperatorId fails registration here, at startup, rather than the first
+// Nayax call. See Inventory.Infrastructure.Nayax.NayaxLynxConfiguration and
+// README.md § Configuration and secrets.
+var nayaxLynxOptions = builder.Configuration.GetSection(NayaxLynxOptions.SectionName).Get<NayaxLynxOptions>()
+    ?? new NayaxLynxOptions();
+nayaxLynxOptions.AccessToken = NayaxLynxConfiguration.ResolveAccessToken(
+    builder.Configuration["NayaxLynx:AccessToken"],
+    builder.Configuration["Nayax:Token"]);
+builder.Services.AddNayaxLynxClient(nayaxLynxOptions);
 
 // Business services
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IProductService, InventoryApi.Services.ProductService>();

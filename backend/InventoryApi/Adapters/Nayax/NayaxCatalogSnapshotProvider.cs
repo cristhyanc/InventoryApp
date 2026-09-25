@@ -1,14 +1,15 @@
 using Inventory.Application.CatalogReconciliation;
+using Inventory.Application.Nayax;
 using Inventory.Domain.CatalogReconciliation;
-using InventoryApi.Integrations.Nayax;
 
 namespace InventoryApi.Adapters.Nayax;
 
 /// <summary>
-/// Implementation of <see cref="INayaxCatalogSnapshotProvider"/> backed by the Nayax Lynx client.
-/// It lives in InventoryApi, not Inventory.Infrastructure, because <see cref="INayaxLynxClient"/>
-/// still lives in InventoryApi (see <c>EfNayaxFeeRateStore</c> for the equivalent temporary-adapter
-/// rationale on the persistence side).
+/// Implementation of <see cref="INayaxCatalogSnapshotProvider"/> backed by the Nayax Lynx client
+/// (<see cref="INayaxLynxClient"/>, an Application-owned port implemented by
+/// <c>Inventory.Infrastructure.Nayax.NayaxLynxClient</c> since issue #49). This adapter itself
+/// still lives in InventoryApi rather than Inventory.Infrastructure; relocating it is outside
+/// issue #49's scope.
 ///
 /// A missing product/machine name is reported as an empty string rather than null: the reconciliation
 /// policy always has a remote name to compare or display, and an empty name is itself useful

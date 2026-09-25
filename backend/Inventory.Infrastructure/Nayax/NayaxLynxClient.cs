@@ -1,19 +1,9 @@
-using Microsoft.Extensions.Options;
 using System.Net.Http.Headers;
+using System.Net.Http.Json;
+using Inventory.Application.Nayax;
+using Microsoft.Extensions.Logging;
 
-namespace InventoryApi.Integrations.Nayax;
-
-public interface INayaxLynxClient
-{
-    Task<List<NayaxDevice>> GetDevicesAsync(CancellationToken ct = default);
-    Task<List<NayaxMachine>> GetMachinesAsync(CancellationToken ct = default);
-    Task<List<NayaxMachineProduct>> GetMachineProductsAsync(long machineId, CancellationToken ct = default);
-    Task<List<NayaxMachineProduct>> CreateMachineProductsAsync(long machineId, List<NayaxMachineProduct> products, CancellationToken ct = default);
-    Task<List<NayaxProduct>> GetProductsAsync(CancellationToken ct = default);
-    Task<List<NayaxProductGroup>> GetProductGroupssAsync(CancellationToken ct = default);
-    Task<List<NayaxLastSalesReport>> GetMachineLastSalesAsync(long machineId, CancellationToken ct = default);
-    Task<NayaxMachine> GetMachineAsync(long machineId, CancellationToken ct = default);
-}
+namespace Inventory.Infrastructure.Nayax;
 
 // Thin wrapper around Nayax Lynx's REST API.
 // Docs: https://devzone.nayax.com/docs/manage-data-operations/lynx-api
@@ -23,20 +13,21 @@ public class NayaxLynxClient : INayaxLynxClient
     private readonly HttpClient _http;
     private readonly string operatorId;
     private readonly ILogger<NayaxLynxClient> _logger;
-    public NayaxLynxClient(HttpClient http, IOptions<NayaxLynxOptions> options, IConfiguration configuration, ILogger<NayaxLynxClient> logger)
+
+    public NayaxLynxClient(HttpClient http, NayaxLynxOptions options, ILogger<NayaxLynxClient> logger)
     {
+        ArgumentNullException.ThrowIfNull(options);
+
         _http = http;
         _logger = logger;
-        var opts = options.Value;
-        var _token = configuration["Nayax:Token"];
-        operatorId = opts.OperatorId;
-        _http.BaseAddress = new Uri(opts.BaseUrl.TrimEnd('/') + "/operational/v1/");
+        operatorId = options.OperatorId;
+        _http.BaseAddress = new Uri(options.BaseUrl.TrimEnd('/') + "/operational/v1/");
         _http.DefaultRequestHeaders.Accept.Clear();
         _http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-        if (!string.IsNullOrWhiteSpace(_token))
+        if (!string.IsNullOrWhiteSpace(options.AccessToken))
         {
             _http.DefaultRequestHeaders.Authorization =
-                new AuthenticationHeaderValue("Bearer", _token);
+                new AuthenticationHeaderValue("Bearer", options.AccessToken);
         }
     }
 

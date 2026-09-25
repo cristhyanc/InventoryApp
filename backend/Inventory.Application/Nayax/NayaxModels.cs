@@ -1,6 +1,6 @@
 using System.Text.Json.Serialization;
 
-namespace InventoryApi.Integrations.Nayax;
+namespace Inventory.Application.Nayax;
 
 public class NayaxDevice
 {

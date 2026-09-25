@@ -1,4 +1,4 @@
-using InventoryApi.Integrations.Nayax;
+using Inventory.Application.Nayax;
 
 namespace InventoryApi.Services;
 

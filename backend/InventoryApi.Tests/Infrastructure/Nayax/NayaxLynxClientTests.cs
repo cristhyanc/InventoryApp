@@ -1,13 +1,12 @@
 #nullable enable
 
 using System.Net;
-using InventoryApi.Integrations.Nayax;
-using Microsoft.Extensions.Configuration;
+using Inventory.Application.Nayax;
+using Inventory.Infrastructure.Nayax;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using Xunit;
 
-namespace InventoryApi.Tests.Integrations;
+namespace InventoryApi.Tests.Infrastructure.Nayax;
 
 public class NayaxLynxClientTests
 {
@@ -155,6 +154,19 @@ public class NayaxLynxClientTests
         Assert.Empty(logger.Messages);
     }
 
+    [Fact]
+    public async Task Missing_access_token_sends_no_authorization_header()
+    {
+        var handler = new StubHttpMessageHandler(HttpStatusCode.OK, "[]");
+        var http = new HttpClient(handler) { BaseAddress = new Uri("https://nayax.invalid") };
+        var options = new NayaxLynxOptions { BaseUrl = "https://nayax.invalid", OperatorId = "test-operator" };
+
+        var client = new NayaxLynxClient(http, options, new CapturingLogger<NayaxLynxClient>());
+        await client.GetMachinesAsync(CancellationToken.None);
+
+        Assert.Null(handler.LastRequest?.Headers.Authorization);
+    }
+
     private static (NayaxLynxClient Client, CapturingLogger<NayaxLynxClient> Logger) CreateClient(
         HttpStatusCode status, string body)
     {
@@ -162,24 +174,23 @@ public class NayaxLynxClientTests
         // A deliberately unroutable host: these tests must never reach a real Nayax endpoint.
         var http = new HttpClient(handler) { BaseAddress = new Uri("https://nayax.invalid") };
 
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?> { ["Nayax:Token"] = FakeToken })
-            .Build();
-
-        var options = Options.Create(new NayaxLynxOptions
+        var options = new NayaxLynxOptions
         {
             BaseUrl = "https://nayax.invalid",
             OperatorId = "test-operator",
-        });
+            AccessToken = FakeToken,
+        };
 
         var logger = new CapturingLogger<NayaxLynxClient>();
-        return (new NayaxLynxClient(http, options, configuration, logger), logger);
+        return (new NayaxLynxClient(http, options, logger), logger);
     }
 
     private sealed class StubHttpMessageHandler : HttpMessageHandler
     {
         private readonly HttpStatusCode _status;
         private readonly string _body;
+
+        public HttpRequestMessage? LastRequest { get; private set; }
 
         public StubHttpMessageHandler(HttpStatusCode status, string body)
         {
@@ -191,6 +202,7 @@ public class NayaxLynxClientTests
             HttpRequestMessage request, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            LastRequest = request;
             return Task.FromResult(new HttpResponseMessage(_status)
             {
                 Content = new StringContent(_body, System.Text.Encoding.UTF8, "application/json"),

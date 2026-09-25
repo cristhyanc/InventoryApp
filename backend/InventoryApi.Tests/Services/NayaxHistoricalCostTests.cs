@@ -11,7 +11,7 @@ using Inventory.Application.Reporting.Transactions;
 using InventoryApi.Adapters.Export;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
-using InventoryApi.Integrations.Nayax;
+using Inventory.Application.Nayax;
 using InventoryApi.Models;
 using InventoryApi.Services;
 using InventoryApi.Services.Interfaces;

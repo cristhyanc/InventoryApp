@@ -2,13 +2,13 @@ using System.Diagnostics;
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using Inventory.Infrastructure.Nayax;
 using InventoryApi.Http;
-using InventoryApi.Integrations.Nayax;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
-namespace InventoryApi.Tests.Integrations;
+namespace InventoryApi.Tests.Http;
 
 public class NayaxUpstreamExceptionHandlerTests
 {
