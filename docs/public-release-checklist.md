@@ -1,17 +1,16 @@
-# Public release checklist
+# Public repository exposure and remediation checklist
 
 ## Status: **BLOCKED**
 
-This repository is **not** ready to be made public yet. The audit below found a real Nayax API credential and real uploaded business documents reachable in Git history (not the current tracked tree). Making the repository public today would publish those. See [Blocking findings](#blocking-findings) and [Required human remediation before publication](#required-human-remediation-before-publication).
+This repository is **already public**. The audit found historical Nayax API credentials and 10 real uploaded business documents in commits reachable from `main` and `develop` (not in the current tracked tree). Treat these as exposed. This remains **BLOCKED** until the incident response below is completed and verified; merging this documentation change does not remediate the exposure.
 
-This document is prepared, human-facing guidance. It performs no action by itself: nothing in this repository changes visibility, rotates a credential, rewrites history, or configures a repository setting. A human executes every step below, in order, using the access this repository's automation deliberately does not have.
+This document records the exposure and remediation decision. It does not rotate credentials, rewrite history, change visibility, or configure repository settings. The repository owner must execute and verify those actions.
 
 ## How to use this document
 
-1. Read [Blocking findings](#blocking-findings) and resolve every item in [Required human remediation before publication](#required-human-remediation-before-publication).
-2. Only after those are resolved, work through [Sequence for changing visibility](#sequence-for-changing-visibility) in order.
-3. Re-run the audit commands in [Audit method and how to repeat it](#audit-method-and-how-to-repeat-it) after remediation, before flipping visibility, to confirm nothing new has landed on `develop` or `main` in the meantime.
-4. After publication, complete [Post-publication verification](#post-publication-verification).
+1. Treat the historical credential and business documents as exposed; start [Required incident response](#required-incident-response).
+2. Coordinate the history removal described below, including branches, tags, pull request refs, forks, clones, and cached copies where possible.
+3. Re-run [Audit method and how to repeat it](#audit-method-and-how-to-repeat-it) after remediation and complete [Public repository verification](#public-repository-verification).
 
 ## Blocking findings
 
@@ -19,23 +18,23 @@ Redacted: no secret value, credential, or business document content appears belo
 
 | # | Category | Location | Commit(s) | Confidence | Currently in tracked tree? | Required human action |
 | - | -------- | -------- | --------- | ---------- | --------------------------- | ---------------------- |
-| 1 | External API credential | `backend/InventoryApi/appsettings.json`, `NayaxLynx.AccessToken` | `12670d8` (initial commit), `1d50d70` (replaced with a second literal value); removed from the tracked file in `4642c88` when the token moved to Key Vault | **High** — a real-looking, non-placeholder bearer token value, not a sentinel string | No (moved to Key Vault in `4642c88`; current file has no `AccessToken` key) | **Rotate the Nayax Lynx credential** with Nayax regardless of whether either historical value is still active, before this repository becomes public. Treat both historical values as compromised the moment history becomes public, even though scrubbing history is out of scope for this task. |
-| 2 | Uploaded business documents (receipts/expense attachments) | `backend/InventoryApi/wwwroot/receipts/*.pdf`/`*.png`/`*.jpg`, `backend/InventoryApi/wwwroot/expenses/*.png` | 7 commits between the initial commit and a later cleanup (10 binary files total: 6 PDF, 3 PNG, 1 JPG); removed from the tracked tree when the application moved to `protected-files/` storage outside the web root | **High** — real uploaded receipt/expense attachments, not fixtures (filenames are GUIDs matching the application's upload-naming convention) | No (directory no longer exists in the tracked tree; storage moved to the git-ignored `protected-files/` path) | **Decide whether these are sensitive enough to require history scrubbing** (out of scope for this task — see [Explicitly out of scope](#explicitly-out-of-scope-for-this-audit)) or whether the business accepts them remaining in history. If in doubt, treat as sensitive: they are real financial source documents for the business this repository operates. |
+| 1 | External API credential | `backend/InventoryApi/appsettings.json`, `NayaxLynx.AccessToken` | `12670d8` (initial commit), `1d50d70` (replaced with a second literal value); removed from the tracked file in `4642c88` when the token moved to Key Vault | **High** — a real-looking, non-placeholder bearer token value, not a sentinel string | No (moved to Key Vault in `4642c88`; current file has no `AccessToken` key) | **Rotate the Nayax Lynx credential** with Nayax regardless of whether either historical value is still active, immediately. Treat both historical values as compromised; the repository is already public. |
+| 2 | Uploaded business documents (receipts/expense attachments) | `backend/InventoryApi/wwwroot/receipts/*.pdf`/`*.png`/`*.jpg`, `backend/InventoryApi/wwwroot/expenses/*.png` | 7 commits between the initial commit and a later cleanup (10 binary files total: 6 PDF, 3 PNG, 1 JPG); removed from the tracked tree when the application moved to `protected-files/` storage outside the web root | **High** — real uploaded receipt/expense attachments, not fixtures (filenames are GUIDs matching the application's upload-naming convention) | No (directory no longer exists in the tracked tree; storage moved to the git-ignored `protected-files/` path) | **Remove these documents from reachable repository history.** They are real financial source documents and the repository is already public. Handle any personal/customer/payment information in them through an appropriate private incident process; do not copy their contents into an issue or PR. |
 | 3 | Azure resource identifiers | `backend/InventoryApi/Properties/PublishProfiles/vm-manager - Zip Deploy.pubxml` (**currently tracked** — see [Repository-owned safeguards applied in this change](#repository-owned-safeguards-applied-in-this-change), removed by this change) and, in history only, `backend/InventoryApi/Properties/serviceDependencies.vm-manager.json.user` (deleted from the tree in an earlier cleanup) | Reachable across the file's full history up to the commit removed by this change | **Medium** — a real Azure subscription ID and resource group/App Service/API Management resource names, not a credential by themselves (they cannot authenticate anything alone) | Yes, until this change (removed below) | **Owner decision**, not a hard blocker: an Azure subscription ID is an identifier, not a secret, but the owner may prefer not to publish it. If it should not be public even in history, note it alongside item 2 for the history-scrub decision. No action is required beyond the removal already made by this change unless the owner also wants history scrubbed. |
 | 4 | Local developer path fragment | `backend/InventoryApi/InventoryApi.csproj.user` (history only; not in the current tracked tree) | One historical commit | **Low** | No | No action required. A local Windows file path containing a shortened form of the repository owner's name, consistent with the already-public GitHub username. Not a credential and not independently identifying beyond what the GitHub account already discloses. Recorded for completeness only. |
 
 No other secret-shaped values (private keys, connection strings with embedded passwords, cloud access-key patterns, JWT-shaped strings, additional API tokens) were found in the current tracked tree or in a full-history pickaxe/content search. See [Audit method and how to repeat it](#audit-method-and-how-to-repeat-it) for the exact commands and their [Completeness limitations](#completeness-limitations).
 
-## Required human remediation before publication
+## Required incident response
 
-These items must be completed by a human before repository visibility changes. No automated agent may perform them (see [AGENTS.md § Security and deployment safeguards](AGENTS.md#security-and-deployment-safeguards) and [docs/automation.md](docs/automation.md)).
+**Decision: remove the 10 uploaded receipt/expense files from reachable history and remove the two historical Nayax token literals as part of the same coordinated rewrite.** These are real business documents, and the repository is already public. A rewrite limits future access through this repository but cannot retract copies already downloaded or cached. The owner must coordinate the rewrite; this PR does not force-push or delete refs.
 
-1. **Rotate the Nayax Lynx `AccessToken`** (finding 1) with Nayax, and update the value in the deployed environment's Key Vault / configuration. Confirm the old value no longer authenticates before proceeding.
-2. **Decide on history scrubbing** for findings 1 and 2 (credential and uploaded documents). Two acceptable outcomes:
-   - **Scrub history** (`git filter-repo` or equivalent) before publication, coordinated with anyone who has a local clone (their clones must be re-cloned afterward), then re-verify with the commands in [Audit method](#audit-method-and-how-to-repeat-it). This repository's automation and this task are deliberately not authorized to do this.
-   - **Accept exposure of a rotated credential and old business documents in history**, documented as a conscious business decision, because the credential in finding 1 will already have been rotated and is worthless to an attacker, and the documents in finding 2 are judged acceptable to disclose (or the business decides otherwise and requires scrubbing).
-3. **Review the Nayax operator identifier** in `backend/InventoryApi/appsettings.json` (`NayaxLynx.OperatorId`) and decide whether it should remain in the tracked file once public. It is a business identifier (which operator account this deployment integrates with), not a credential — see [Identifier classification](#identifier-classification). If the owner prefers it private, move it to Key Vault/configuration the same way the `AccessToken` was moved in commit `4642c88`, as a separate, explicit follow-up change (out of scope for this task).
-4. **Confirm no other credential needs rotation** using the [Credential rotation matrix](#credential-rotation-matrix) below.
+1. **Immediately revoke and rotate both historical Nayax Lynx `AccessToken` values** with Nayax. Update the Key Vault/deployed configuration and verify old values no longer authenticate. Avoid posting the values in GitHub.
+2. **Privately assess the ten historical documents** for customer, supplier, personal, payment, or tax details. Record who may need notification and whether any additional account or payment action is needed. Do not attach files or paste contents into public GitHub discussions.
+3. **Coordinate history removal:** inventory all branches, tags, PR refs, forks and mirrors; pause merges and agents that create branches; create a secure backup; use `git filter-repo` or an equivalent to remove the historical upload paths and token-bearing versions of `appsettings.json` while preserving clean configuration; verify every rewritten branch and tag; then update remote refs under an agreed maintenance window. Restrict any backups. Ask GitHub Support about cached PR views and inaccessible refs after the rewrite. Owners of clones/forks must delete old refs and re-clone. Avoid overwriting collaborators' work. Revocation remains necessary regardless of rewrite success.
+4. **Run a full-history secret scan** and re-check reachable files and metadata, then verify the old documents and token-bearing commits are no longer accessible through the canonical repository. Record remaining forks, caches, and known copies; never claim full retraction.
+5. **Review the Nayax `OperatorId`** in `backend/InventoryApi/appsettings.json` and the historical Azure subscription identifier as operational identifiers. Decide separately whether to remove either; neither is an authentication credential by itself.
+6. **Confirm other credentials and settings** using the [Credential rotation matrix](#credential-rotation-matrix), [Branch and ruleset configuration](#branch-and-ruleset-configuration), and [Repository/organization Actions settings](#repositoryorganization-actions-settings).
 
 ## Identifier classification
 
@@ -44,20 +43,20 @@ These items must be completed by a human before repository visibility changes. N
 | `AzureAd.ClientId` (API app registration) | `backend/InventoryApi/appsettings.json` | **Public identifier** | An Entra application (client) ID is not a secret; it is presented to the browser/token endpoint by design and is meant to be public. No client secret is used (see `README.md` § Authentication configuration). |
 | SPA client ID, API scope URI | `frontend/inventory-app/src/app/auth-config.ts` | **Public identifier** | Same reasoning: MSAL public-client configuration is inherently client-visible. |
 | Deployed API base URL | `frontend/inventory-app/src/assets/config.json` | **Public URL** | Already reachable by anyone using the deployed frontend; publishing the repository adds no exposure. |
-| Nayax `OperatorId` | `backend/InventoryApi/appsettings.json` | **Business identifier, owner's call** | Identifies which Nayax operator account this deployment reads from. Cannot authenticate anything by itself, but reveals an operational detail about the business. See [Required human remediation](#required-human-remediation-before-publication) item 3. |
+| Nayax `OperatorId` | `backend/InventoryApi/appsettings.json` | **Business identifier, owner's call** | Identifies which Nayax operator account this deployment reads from. Cannot authenticate anything by itself, but reveals an operational detail about the business. See [Required incident response](#required-incident-response) item 5. |
 | Azure subscription ID / resource group / resource names | `Properties/PublishProfiles/*.pubxml` (removed by this change), `serviceDependencies*.json.user` (history only) | **Operational identifier, owner's call** | Cannot authenticate anything by itself (Azure RBAC/OIDC trust gates actual access), but the owner may prefer not to publish it. See finding 3. |
-| Nayax `AccessToken` | History only (`appsettings.json` at `12670d8`, `1d50d70`) | **Credential — must rotate** | A bearer token is a credential by definition; treat as compromised once history is public regardless of rotation timing. |
+| Nayax `AccessToken` | History only (`appsettings.json` at `12670d8`, `1d50d70`) | **Credential — must rotate** | A bearer token is a credential by definition; treat as compromised because history is public. |
 
 ## Credential rotation matrix
 
 | Credential | Used by | Rotation trigger | Rotation method | Owner |
 | ---------- | ------- | ----------------- | ---------------- | ----- |
-| Nayax Lynx `AccessToken` | Backend Nayax integration (`Integrations/Nayax/NayaxLynxClient.cs`) | **Required before publication** (finding 1) | Issue a new token through Nayax's operator portal/support; update the Key Vault secret / deployed configuration; verify with a non-destructive read call | Human (repository owner) |
+| Nayax Lynx `AccessToken` | Backend Nayax integration (`Integrations/Nayax/NayaxLynxClient.cs`) | **Required immediately: public history exposure** (finding 1) | Issue a new token through Nayax's operator portal/support; update the Key Vault secret / deployed configuration; verify with a non-destructive read call | Human (repository owner) |
 | `CLAUDE_CODE_OAUTH_TOKEN` | `agent-implement.yml`, `agent-review.yml`, `agent-repair.yml` | Routine hygiene, or if leaked | `claude setup-token` to regenerate; update the repository secret | Human |
 | Azure Static Web Apps deployment token (`AZURE_STATIC_WEB_APPS_API_TOKEN_RED_ISLAND_0C128C000`) | `azure-static-web-apps-*.yml` | Routine hygiene, or if leaked; consider replacing with OIDC federation if the Static Web Apps SKU supports it | Regenerate from the Azure Static Web App resource; update the repository secret | Human |
-| Azure OIDC federated credential (`VmInventoryApi_CLIENT_ID_4D7F`, `_TENANT_ID_4D7F`, `_SUBSCRIPTION_ID_4D7F`) | `vm-manager.yml` `deploy` job (`azure/login`) | If the federated credential's subject claim (repository/branch) ever needs to change, or on suspected compromise | Update or recreate the federated credential's subject binding in Entra ID app registration; these are repository **variables**, not secrets — no rotation needed merely for going public, but **verify the federated credential's subject is scoped to this exact repository and `main`/`develop` branches** so a fork cannot assume it (see [OIDC trust verification](#oidc-trust-verification)) | Human |
+| Azure OIDC federated credential (`VmInventoryApi_CLIENT_ID_4D7F`, `_TENANT_ID_4D7F`, `_SUBSCRIPTION_ID_4D7F`) | `vm-manager.yml` `deploy` job (`azure/login`) | If the federated credential's subject claim (repository/branch) ever needs to change, or on suspected compromise | Update or recreate the federated credential's subject binding in Entra ID app registration; these are repository **variables**, not secrets — no rotation needed solely because the repository is public, but **verify the federated credential's subject is scoped to this exact repository and `main`/`develop` branches** so a fork cannot assume it (see [OIDC trust verification](#oidc-trust-verification)) | Human |
 | Key Vault access (used to source the rotated Nayax token and any other deployed secret) | Deployed API runtime, not GitHub Actions | If deployment identity or vault access policy changes | Managed identity / access policy change in Azure, outside this repository | Human |
-| Entra client IDs (API and SPA app registrations) | `appsettings.json`, `auth-config.ts` | Not a credential; no rotation needed for publication (see [Identifier classification](#identifier-classification)) | — | — |
+| Entra client IDs (API and SPA app registrations) | `appsettings.json`, `auth-config.ts` | Not a credential; no rotation needed solely because the repository is public (see [Identifier classification](#identifier-classification)) | — | — |
 
 No other credential was found in this repository's workflows or tracked configuration.
 
@@ -81,10 +80,10 @@ Reviewed: `agent-implement.yml`, `agent-review.yml`, `agent-repair.yml`, `valida
 - Deployment credentials (the Azure OIDC federated identity variables and the Static Web Apps API token) are consumed only inside these two workflows' `deploy`/`build_and_deploy_job` jobs, which run only on that `push` trigger. No agent workflow (`agent-implement.yml`, `agent-review.yml`, `agent-repair.yml`) requests or has access to them.
 - `vm-manager.yml`'s `deploy` job runs against the `VmInventoryApi_Env` GitHub environment; whether that environment has a required reviewer configured is a repository setting, not a workflow file — see [Environment protection](#environment-protection-not-yet-verifiable) below.
 
-### Findings that are not blockers but should be addressed at or shortly after publication
+### Findings that are not blockers but should be addressed in the public repository
 
 1. **Third-party actions in the deployment workflows are not pinned to a commit SHA.** `vm-manager.yml` and `azure-static-web-apps-red-island-0c128c000.yml` reference `actions/checkout@v4` (and `@v3` in the latter), `actions/setup-dotnet@v4`, `actions/upload-artifact@v4`, `actions/download-artifact@v4`, `azure/login@v2`, and `Azure/static-web-apps-deploy@v1` by mutable tag. The three `agent-*` workflows and `validate.yml` already pin every third-party action to a full commit SHA with the release tag in a comment (`docs/automation.md` § Credentials used by the agent workflows). The deployment workflows should adopt the same practice, because they run with `id-token: write` and real Azure deployment credentials — a compromised or retagged upstream action would have real production impact. **This is a workflow-file change and is deliberately left to a human-reviewed follow-up** (see [Explicitly out of scope](#explicitly-out-of-scope-for-this-audit)): `validate.yml`'s own dispatcher guards refuse automatic validation/review for any pull request touching `.github/workflows/**`, which is this repository's own signal that workflow-file edits need direct human review rather than the automated agent path.
-2. **`azure-static-web-apps-red-island-0c128c000.yml` declares no explicit `permissions:` block**, so its jobs run with whatever the repository/organization default `GITHUB_TOKEN` permissions are. Once the repository is public, confirm (or set) the organization/repository default workflow permissions to read-only (see [Repository/organization Actions settings](#repositoryorganization-actions-settings)), and consider adding an explicit least-privilege `permissions:` block to this workflow as a follow-up.
+2. **`azure-static-web-apps-red-island-0c128c000.yml` declares no explicit `permissions:` block**, so its jobs run with whatever the repository/organization default `GITHUB_TOKEN` permissions are. Confirm (or set) the organization/repository default workflow permissions to read-only (see [Repository/organization Actions settings](#repositoryorganization-actions-settings)), and consider adding an explicit least-privilege `permissions:` block to this workflow as a follow-up.
 3. **`close_pull_request_job` in the same workflow can never run** (it is conditioned on a `pull_request` event the workflow does not declare a trigger for), confirming `docs/automation.md`'s existing note. Not a security issue, but dead configuration worth removing in a future cleanup — out of scope here.
 
 None of the three items above are edited by this change; they are documented here for a human-reviewed follow-up because editing `.github/workflows/**` is outside what this audit task's automation is positioned to do safely (see next section).
@@ -93,23 +92,18 @@ None of the three items above are edited by this change; they are documented her
 
 Per the issue's own exclusions, this audit does not: change repository visibility or settings; enable rulesets, branch protection, environments, secrets, variables, collaborators, or Actions policy; rotate or reveal credentials; rewrite, squash, filter, force-push, or delete Git history or remote references; delete or edit historical issues/PRs/comments/releases/workflow logs/attachments; deploy or run production migrations; publish private business data as demonstration data; or make broad/unrelated changes. Everything in this checklist that falls into those categories is written as guidance for a human to execute, not as an action this change performs.
 
-## Sequence for changing visibility
+## Current public repository settings
 
-Follow in order. Each step assumes the previous ones are complete. This sequence does not begin until [Required human remediation before publication](#required-human-remediation-before-publication) is fully resolved.
+The repository is already public. Verify the following settings now, independently of the credential rotation and document remediation:
 
-1. **Rotate the Nayax credential** (finding 1) and confirm the old value no longer works.
-2. **Decide on history scrubbing** (item 2 of remediation) and execute it now if chosen — before visibility changes, while the repository is still private and no clone outside the owner's control exists.
-3. **Review open issues, pull requests, comments, and workflow run logs** for anything that should not become public (draft business discussion, screenshots with real data, attachments). This repository's automation never posts a secret to these surfaces by design (`AGENTS.md` § Security and deployment safeguards), but a human should still skim history before publication, since a public repository publishes its entire issue/PR/comment/attachment history, not just the default branch.
-4. **Configure branch protection and rulesets** for `develop` and `main` — see [Branch and ruleset configuration](#branch-and-ruleset-configuration). GitHub reports rulesets unavailable on some private-repo plans; this may only become configurable once the repository is public or the plan changes. If so, configure it **immediately** after changing visibility, before announcing the repository anywhere.
-5. **Configure fork-workflow approval and default token permissions** — see [Repository/organization Actions settings](#repositoryorganization-actions-settings).
-6. **Verify the Azure OIDC federated credential's trust conditions** — see [OIDC trust verification](#oidc-trust-verification).
-7. **Change repository visibility to public** in repository Settings → General → Danger Zone.
-8. **Immediately re-verify** branch protection, ruleset, and Actions settings took effect (some GitHub plans apply ruleset availability only after visibility changes, and settings can silently reset on a visibility change on some plans).
-9. Complete [Post-publication verification](#post-publication-verification).
+1. Review public issues, pull requests, comments, attachments, and workflow logs for further business data.
+2. Verify [Branch and ruleset configuration](#branch-and-ruleset-configuration) on `develop` and `main`.
+3. Verify [Repository/organization Actions settings](#repositoryorganization-actions-settings), [OIDC trust verification](#oidc-trust-verification), and [Environment protection](#environment-protection-not-yet-verifiable).
+4. Complete [Public repository verification](#public-repository-verification).
 
 ## Branch and ruleset configuration
 
-> Repository settings, not files. This section restates and slightly extends `docs/automation.md`'s [Recommended repository protection checklist](automation.md#recommended-repository-protection-checklist) for the public-repository moment specifically; that document remains authoritative.
+> Repository settings, not files. This section restates and slightly extends `docs/automation.md`'s [Recommended repository protection checklist](automation.md#recommended-repository-protection-checklist) for the public repository; that document remains authoritative.
 
 For both `develop` and `main`:
 
@@ -137,7 +131,7 @@ For both `develop` and `main`:
 
 ## OIDC trust verification
 
-`vm-manager.yml`'s `deploy` job authenticates to Azure with `azure/login@v2` using `id-token: write` and the federated-credential variables `VmInventoryApi_CLIENT_ID_4D7F`, `VmInventoryApi_TENANT_ID_4D7F`, `VmInventoryApi_SUBSCRIPTION_ID_4D7F`. Before or immediately after publication, a human should confirm in the Entra ID app registration's federated credential configuration that:
+`vm-manager.yml`'s `deploy` job authenticates to Azure with `azure/login@v2` using `id-token: write` and the federated-credential variables `VmInventoryApi_CLIENT_ID_4D7F`, `VmInventoryApi_TENANT_ID_4D7F`, `VmInventoryApi_SUBSCRIPTION_ID_4D7F`. Now, a human should confirm in the Entra ID app registration's federated credential configuration that:
 
 - The federated credential's **subject** is scoped to this exact repository (`repo:cristhyanc/InventoryApp:ref:refs/heads/main`, or the equivalent environment-scoped subject if `VmInventoryApi_Env` requires a specific subject pattern) — not a wildcard that any repository or branch could satisfy.
 - No federated credential subject matches a pattern a fork or arbitrary branch could produce (for example, a subject scoped to `pull_request` events, which this workflow does not use, but which is worth explicitly ruling out).
@@ -147,17 +141,15 @@ This verification cannot be performed from within this repository's files; it re
 
 ## Environment protection (not yet verifiable)
 
-`docs/automation.md` already notes that whether the `VmInventoryApi_Env` GitHub environment requires a reviewer is a repository setting this document does not verify. Before or at publication, confirm in Settings → Environments → `VmInventoryApi_Env` that a required reviewer (the repository owner) is configured, so a merge to `main` still pauses for explicit approval before the deploy job runs, independent of branch protection on `main` itself.
+`docs/automation.md` already notes that whether the `VmInventoryApi_Env` GitHub environment requires a reviewer is a repository setting this document does not verify. Now, confirm in Settings → Environments → `VmInventoryApi_Env` that a required reviewer (the repository owner) is configured, so a merge to `main` still pauses for explicit approval before the deploy job runs, independent of branch protection on `main` itself.
 
-## Post-publication verification
+## Public repository verification
 
-Immediately after changing visibility to public:
-
-1. Re-check every setting in [Branch and ruleset configuration](#branch-and-ruleset-configuration) and [Repository/organization Actions settings](#repositoryorganization-actions-settings) — some GitHub plans only expose rulesets once a repository is public, and settings have been observed to need re-confirmation after a visibility change on some plans.
-2. Open a throwaway test issue and confirm `agent-ready` still behaves as documented (do not merge anything from it) if you want to prove automation still works publicly — optional, and only do this if you are comfortable with a public test artifact.
-3. Confirm the deployed API and frontend are unaffected — visibility change does not redeploy anything, but confirm no configuration drifted.
-4. Watch the Actions tab for a period after publication for any unexpected workflow run (a sign that a fork-PR or public-issue trigger behaved differently than this review predicted).
-5. If history was scrubbed (remediation item 2), confirm every local clone (including the owner's own machines) was re-cloned from the rewritten history, and confirm no stale fork or mirror retains the old history.
+1. Confirm rotation and revocation of the historical Nayax credentials; verify old values are rejected without publishing them.
+2. After the coordinated rewrite, confirm the known upload paths and token-bearing revisions are unreachable from `main`, `develop`, all branches and tags, and check PR refs, forks and cached views separately.
+3. Re-run the history scan, then review public issues, PRs, comments, attachments, and workflow logs for additional sensitive material.
+4. Re-check branch rules, Actions settings, OIDC trust, environment approvals, and deployment health.
+5. Record remaining forks or copies and any private incident follow-up. Keep the incident open until these checks are complete.
 
 ## Audit method and how to repeat it
 
@@ -187,7 +179,7 @@ Content patterns searched across the current tracked tree: `-----BEGIN ... PRIVA
 
 - No dedicated secret scanner (`gitleaks`, `trufflehog`, `detect-secrets`, GitHub secret scanning) was run as part of this audit; this environment's tool access is a fixed allow-list of `git`/`gh`/build commands with no package manager or arbitrary shell access, so none could be installed. **A human should run a recognized scanner over full history** (for example `gitleaks detect --source . --log-opts="--all"`, or enable GitHub Advanced Security secret scanning with history scan once the repository is public, or before via a private security advisory workflow) before treating this checklist's findings as exhaustive.
 - The audit's content search was pattern-based and read specific known-risky file types/paths directly; it is narrower than a purpose-built scanner's entropy analysis and signature database, and could miss a secret that does not match any of the patterns above (for example, a credential embedded in an unusual format inside a binary file, which pattern search over text cannot see).
-- Issue/PR/comment/attachment content on GitHub itself (as opposed to Git history) was not exhaustively reviewed line by line; see [Sequence for changing visibility](#sequence-for-changing-visibility) step 3.
+- Issue/PR/comment/attachment content on GitHub itself (as opposed to Git history) was not exhaustively reviewed line by line; see [Current public repository settings](#current-public-repository-settings) step 1.
 
 ## Repository-owned safeguards applied in this change
 
