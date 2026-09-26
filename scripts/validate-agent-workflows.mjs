@@ -707,6 +707,13 @@ export function verifyArchitecturePass(workflow) {
   const implementationPrompt = extractPromptText(job, 'agent-implement.yml implementation prompt');
   requireText(
     implementationPrompt,
+    'Do not delegate, spawn, or use Claude sub-agents, and do not invoke the `Agent` tool.',
+    'agent-implement.yml implementation prompt',
+  );
+  const implementationAgent = section(job, '      - name: Run Claude Code implementation agent\n', '      - name: Verify the architecture pass target\n', 'agent-implement.yml implementation agent');
+  requireText(implementationAgent, '--disallowedTools "Agent,WebFetch,WebSearch"', 'agent-implement.yml implementation agent');
+  requireText(
+    implementationPrompt,
     'use the Write tool to create `.agent-run-status` containing exactly `blocked` on one line',
     'agent-implement.yml implementation prompt',
   );
@@ -720,6 +727,8 @@ export function verifyArchitecturePass(workflow) {
   }
 
   const architect = section(job, '      - name: Run Claude Code architecture agent\n', '      - name: Record outcome on the issue\n', 'agent-implement.yml architect');
+  requireText(architect, 'Do not delegate, spawn, or use Claude sub-agents, and do not invoke the `Agent` tool.', 'agent-implement.yml architect');
+  requireText(architect, '--disallowedTools "Agent,WebFetch,WebSearch"', 'agent-implement.yml architect');
   for (const required of ["id: architect", "if: steps.architecture_target.outputs.pr_ready == 'true'", 'Read the issue', 'Preserve all observable behavior', 'bash scripts/validate.sh', 'gh pr comment', 'Bash(git push origin agent/issue-']) {
     requireText(architect, required, 'agent-implement.yml architect');
   }
