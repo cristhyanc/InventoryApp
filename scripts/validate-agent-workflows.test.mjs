@@ -479,7 +479,7 @@ describe('architecture pass contract', () => {
       '[ "$(cat .agent-run-status)" = "blocked" ]',
       'echo "blocked=true"',
       'echo "pr_ready=true"',
-      'AGENT_BLOCKED',
+      'AGENT_BLOCKED: ${{ steps.architecture_target.outputs.blocked }}',
       '[ "$AGENT_BLOCKED" = "true" ]',
     ]) {
       const weakened = replaceOnce(implementWorkflow, required, '# removed');
