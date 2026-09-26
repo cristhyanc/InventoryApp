@@ -99,7 +99,9 @@ public static class InfrastructureServiceCollectionExtensions
 
     /// <summary>
     /// Validates <paramref name="options"/> (<see cref="NayaxLynxConfiguration.ValidateNonSecretFields"/>)
-    /// and registers the Nayax Lynx HTTP client behind <see cref="INayaxLynxClient"/> (issue #49).
+    /// and registers the Nayax Lynx HTTP client behind <see cref="INayaxLynxClient"/> (issue #49),
+    /// with bounded timeout/retry/circuit-breaker resilience (<see cref="NayaxResilienceHandler"/>,
+    /// issue #48) applied to every call it makes.
     /// <paramref name="options"/> should already have its <see cref="NayaxLynxOptions.AccessToken"/>
     /// resolved (<see cref="NayaxLynxConfiguration.ResolveAccessToken"/>), since that is a secret
     /// this method does not read configuration for. Validation happens here, eagerly, so a
@@ -114,7 +116,9 @@ public static class InfrastructureServiceCollectionExtensions
         NayaxLynxConfiguration.ValidateNonSecretFields(options);
 
         services.AddSingleton(options);
-        services.AddHttpClient<INayaxLynxClient, NayaxLynxClient>();
+        services.AddTransient<NayaxResilienceHandler>();
+        services.AddHttpClient<INayaxLynxClient, NayaxLynxClient>()
+            .AddHttpMessageHandler<NayaxResilienceHandler>();
 
         return services;
     }
