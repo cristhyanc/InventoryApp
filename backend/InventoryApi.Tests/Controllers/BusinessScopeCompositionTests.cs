@@ -142,7 +142,6 @@ public sealed class BusinessScopeCompositionTests : IClassFixture<BusinessScopeC
 
                 services.AddDbContext<AppDbContext>(options =>
                 {
-                    options.UseLazyLoadingProxies();
                     options.UseSqlite(_connection);
                 });
             });

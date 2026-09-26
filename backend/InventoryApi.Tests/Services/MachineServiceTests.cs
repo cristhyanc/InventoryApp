@@ -3,6 +3,7 @@ using Inventory.Application.Nayax;
 using InventoryApi.Models;
 using InventoryApi.Services;
 using InventoryApi.Services.Interfaces;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Moq;
 using Xunit;
@@ -17,6 +18,45 @@ public class MachineServiceTests
             .UseInMemoryDatabase(dbName)
             .Options;
         return TestAppDbContext.Unrestricted(options);
+    }
+
+    /// <summary>
+    /// Relational SQLite test: the supplier attached to a machine's product listing must come
+    /// from an explicit query rather than lazy loading (issue #52), so it is still populated when
+    /// read from a context separate from the one that seeded it - matching separate requests.
+    /// </summary>
+    [Fact]
+    public async Task GetMachineProducts_ReturnsSupplierWithoutLazyLoading()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        var options = new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options;
+        await using (var schema = TestAppDbContext.Unrestricted(options))
+            await schema.Database.EnsureCreatedAsync();
+
+        await using (var seed = TestAppDbContext.Unrestricted(options))
+        {
+            seed.Suppliers.Add(new Supplier { Id = 1, Name = "Acme" });
+            seed.Products.Add(new Product { Id = 200, Name = "px", UnitPrice = 2m, SupplierId = 1 });
+            await seed.SaveChangesAsync();
+        }
+
+        await using var db = TestAppDbContext.Unrestricted(options);
+        var nayaxMock = new Mock<INayaxLynxClient>();
+        nayaxMock.Setup(m => m.GetMachineAsync(1, default))
+            .ReturnsAsync(new NayaxMachine { MachineID = 1, MachineName = "M1" });
+        nayaxMock.Setup(m => m.GetMachineProductsAsync(1, default))
+            .ReturnsAsync(new List<NayaxMachineProduct>
+            {
+                new NayaxMachineProduct { NayaxProductID = 200, ProductName = "px", RetailPrice = 5m }
+            });
+
+        IMachineService svc = new MachineService(db, nayaxMock.Object);
+        var products = await svc.GetMachineProducts(1);
+
+        var product = Assert.Single(products);
+        Assert.NotNull(product.Supplier);
+        Assert.Equal("Acme", product.Supplier!.Name);
     }
 
     [Fact]
