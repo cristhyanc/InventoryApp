@@ -18,8 +18,9 @@
     <span class="mt-2 block text-sm text-slate-500">Units In Stock</span>
   </div>
   <div class="rounded-xl bg-white p-6 text-center shadow-sm">
-    <span class="text-3xl font-semibold text-blue-600">${{ inventoryValue.toFixed(2) }}</span>
-    <span class="mt-2 block text-sm text-slate-500">Inventory Value</span>
+    <span class="text-3xl font-semibold text-blue-600">{{ inventoryValueDisplay }}</span>
+    <span class="mt-2 block text-sm text-slate-500">Inventory Value (cost)</span>
+    <span class="mt-1 block text-xs text-slate-400">{{ inventoryValueHelpText }}</span>
   </div>
 </div>
 

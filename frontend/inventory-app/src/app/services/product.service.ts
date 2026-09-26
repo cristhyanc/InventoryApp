@@ -1,7 +1,7 @@
 import { Injectable } from '@angular/core';
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Observable } from 'rxjs';
-import { Product, ProductUpdateDto } from '../models/models';
+import { InventoryValuationSummary, Product, ProductUpdateDto } from '../models/models';
 import { ConfigService } from './config.service';
 
 export interface ProductFilters {
@@ -40,6 +40,10 @@ export class ProductService {
     if (filters.categoryId !== undefined) params = params.set('categoryId', filters.categoryId);
     if (filters.supplierId !== undefined) params = params.set('supplierId', filters.supplierId);
     return this.http.get<Product[]>(`${this.baseUrl}/alerts/low-stock`, { params });
+  }
+
+  getInventoryValuationSummary(): Observable<InventoryValuationSummary> {
+    return this.http.get<InventoryValuationSummary>(`${this.baseUrl}/inventory-value-summary`);
   }
 
   update(id: number, payload: ProductUpdateDto): Observable<void> {

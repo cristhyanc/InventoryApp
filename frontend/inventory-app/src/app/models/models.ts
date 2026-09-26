@@ -57,6 +57,18 @@ export interface Product {
   isReorderAlert: boolean;
 }
 
+/**
+ * The Dashboard "Inventory Value" tile's authoritative source: the business-owned perpetual
+ * inventory value (cost basis), never retail UnitPrice. `totalInventoryValue` is `null` whenever
+ * `isComplete` is `false` - a product with unknown cost must never be presented as a real `$0.00`.
+ */
+export interface InventoryValuationSummary {
+  totalInventoryValue: number | null;
+  isComplete: boolean;
+  productsWithUnknownCost: number;
+  totalProducts: number;
+}
+
 export interface Machine {
   machineID: number;
   machineName?: string | null;
