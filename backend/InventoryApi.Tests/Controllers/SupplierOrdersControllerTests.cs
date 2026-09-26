@@ -1,4 +1,4 @@
-using Inventory.Application.Exceptions;
+using Inventory.Domain.Exceptions;
 using InventoryApi.Controllers;
 using InventoryApi.DTOs;
 using InventoryApi.Models;

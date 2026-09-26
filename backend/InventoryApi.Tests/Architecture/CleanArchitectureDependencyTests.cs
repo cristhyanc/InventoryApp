@@ -209,6 +209,66 @@ public class CleanArchitectureDependencyTests
 
     #endregion
 
+    #region Exception ownership rules
+
+    /// <summary>
+    /// Issue #163: InventoryApi's job in the exception story is translation - an
+    /// <see cref="Microsoft.AspNetCore.Diagnostics.IExceptionHandler"/> that maps an already-thrown
+    /// exception to a <c>ProblemDetails</c> response - never definition. A business exception
+    /// belongs to whichever layer owns the failure it reports: <c>Inventory.Domain</c> for a domain
+    /// invariant, <c>Inventory.Application</c> for a use-case-specific failure that is not a domain
+    /// invariant, <c>Inventory.Infrastructure</c> for a provider-specific failure (EF Core, Azure
+    /// Blob, filesystem, HTTP, Nayax) translated at that layer's own boundary. See
+    /// docs/architecture.md § Domain and application error mapping for the ownership table.
+    ///
+    /// The types below predate that rule and are pinned here as a deliberate, reviewed exception
+    /// rather than removed by this change, exactly like
+    /// <see cref="ProjectDependencyDirectionTests.Only_the_documented_legacy_services_remain_in_InventoryApi_Services"/>
+    /// freezes the legacy services folder: <see cref="InventoryApi.Bootstrap.PendingMigrationsException"/>
+    /// and <see cref="InventoryApi.Data.CrossBusinessAccessException"/> are startup/persistence
+    /// guards intimately coupled to <c>AppDbContext</c>, which itself still lives in InventoryApi
+    /// (see docs/architecture.md's temporary API-owned exception); moving them means moving
+    /// AppDbContext first, which is out of this issue's scope. <c>InventoryCostDataQualityException</c>
+    /// (nested in <c>InventoryApi/Services/InventoryCostService.cs</c>) is an internal
+    /// data-integrity invariant with the same developer-facing-message shape as
+    /// <see cref="InvalidOperationException"/>, which it derives from, not a caller-safe business
+    /// exception the HTTP boundary maps by type.
+    ///
+    /// What this test enforces is that the set does not grow silently: a new exception type landing
+    /// in InventoryApi fails here and must be moved to the layer that owns it, or added to the
+    /// allow-list as a conscious, reviewed edit alongside this comment.
+    /// </summary>
+    [Fact]
+    public void No_new_business_exception_is_defined_in_InventoryApi()
+    {
+        string[] allowedLegacyExceptionTypeNames =
+        [
+            "InventoryApi.Bootstrap.PendingMigrationsException",
+            "InventoryApi.Data.CrossBusinessAccessException",
+            "InventoryApi.Services.InventoryCostDataQualityException",
+        ];
+
+        var offenders = ApiAssembly
+            .GetTypes()
+            .Where(type => typeof(Exception).IsAssignableFrom(type))
+            .Where(type => type.Namespace is null
+                || !type.Namespace.StartsWith(InstrumentationNamespacePrefix, StringComparison.Ordinal))
+            .Where(type => !allowedLegacyExceptionTypeNames.Contains(type.FullName))
+            .Select(type => type.FullName ?? type.Name)
+            .ToArray();
+
+        Assert.True(
+            offenders.Length == 0,
+            "InventoryApi must contain no business exception definitions; exception ownership "
+                + "belongs to Inventory.Domain, Inventory.Application, or Inventory.Infrastructure "
+                + "depending on which layer owns the failure (see docs/architecture.md). New "
+                + $"exception type(s) found: {string.Join(", ", offenders)}. Move the exception to "
+                + "the layer that owns it, or add it to the allow-list above as a conscious, "
+                + "reviewed edit if it is a deliberate exception.");
+    }
+
+    #endregion
+
     /// <summary>
     /// Coverlet weaves a per-assembly <c>Coverlet.Core.Instrumentation.Tracker.*</c> type into every
     /// instrumented assembly when the validation scripts run tests with coverage collection. That

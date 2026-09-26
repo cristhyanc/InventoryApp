@@ -1,6 +1,6 @@
 using System.Text;
 using System.Text.Json;
-using Inventory.Application.Exceptions;
+using Inventory.Domain.Exceptions;
 using InventoryApi.Http;
 using InventoryApi.Services;
 using Microsoft.AspNetCore.Http;
@@ -109,7 +109,7 @@ public class DomainExceptionHandlerTests
     [Fact]
     public async Task Insufficient_stock_exception_keeps_its_established_400_mapping()
     {
-        var (handler, context, body, _) = CreateHandler();
+        var (handler, context, body, logger) = CreateHandler();
 
         var handled = await handler.TryHandleAsync(
             context, new InsufficientStockException(2), CancellationToken.None);
@@ -118,6 +118,13 @@ public class DomainExceptionHandlerTests
         Assert.Equal(StatusCodes.Status400BadRequest, context.Response.StatusCode);
         var root = ParseBody(body);
         Assert.Equal("Not enough products in stock. Available stock: 2", root.GetProperty("detail").GetString());
+
+        // Issue #163: InsufficientStockException now derives from DomainConflictException (see
+        // Inventory.Domain.Exceptions.InsufficientStockException), but its established mapping -
+        // 400, not logged - predates that inheritance and must not change because of it. Without
+        // DomainExceptionHandler's explicit exclusion, this would incorrectly pick up
+        // DomainConflictException's "log a warning" behaviour.
+        Assert.Empty(logger.Entries);
     }
 
     [Fact]
