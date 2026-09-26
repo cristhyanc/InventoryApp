@@ -1,3 +1,4 @@
+using Inventory.Domain.Exceptions;
 using InventoryApi.Data;
 using InventoryApi.Models;
 using InventoryApi.Services.Interfaces;

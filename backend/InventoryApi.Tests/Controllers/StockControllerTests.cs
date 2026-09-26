@@ -1,8 +1,7 @@
-using Inventory.Application.Exceptions;
+using Inventory.Domain.Exceptions;
 using InventoryApi.Controllers;
 using InventoryApi.DTOs;
 using InventoryApi.Models;
-using InventoryApi.Services;
 using InventoryApi.Services.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 using Moq;

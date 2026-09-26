@@ -182,7 +182,6 @@ public class ProjectDependencyDirectionTests
             "ImportService.NayaxSales.cs",
             "ImportService.Products.cs",
             "ImportService.Xml.cs",
-            "InsufficientStockException.cs",
             "Interfaces/ICategoryService.cs",
             "Interfaces/IImportService.cs",
             "Interfaces/IInventoryCostRebuildService.cs",
