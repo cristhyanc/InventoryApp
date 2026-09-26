@@ -470,6 +470,19 @@ describe('architecture pass contract', () => {
     assert.doesNotThrow(() => verifyArchitecturePass(implementWorkflow));
   });
 
+  it('keeps coder and architect work in their foreground invocations', () => {
+    const prompt = 'Do not delegate, spawn, or use Claude sub-agents, and do not invoke the \`Agent\` tool.';
+    for (const unsafe of [
+      removeAll(implementWorkflow, prompt),
+      removeAll(implementWorkflow, '--disallowedTools "Agent,WebFetch,WebSearch"'),
+    ]) {
+      assert.throws(
+        () => runContractChecks({ read: readWithOverrides({ [implementPath]: unsafe }) }),
+        /(implementation prompt|implementation agent|architect): missing required text/,
+      );
+    }
+  });
+
   it('requires an explicit pre-PR blocked marker and verified PR-ready output', () => {
     for (const required of [
       'use the Write tool to create `.agent-run-status` containing exactly `blocked` on one line',
