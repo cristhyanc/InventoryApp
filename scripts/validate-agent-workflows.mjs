@@ -501,6 +501,7 @@ export const IMPLEMENT_JOB_DOCUMENTATION_CONTRACT = Object.freeze({
   condition: "if: needs.preflight.result == 'success' && github.event.label.name == 'agent-ready' && github.event.issue.pull_request == null",
   prompt: [
     'Restate its acceptance criteria, its explicit exclusions, and its Documentation impact decision and Documentation impact details.',
+    'use the Write tool to create `.agent-run-status` containing exactly `blocked` on one line',
     "Follow the issue's Documentation impact decision exactly.",
     'If it is "Documentation changes required", update every documentation file and section listed in the Documentation impact details',
     'Never leave documentation that the change contradicts.',
@@ -709,12 +710,12 @@ export function verifyArchitecturePass(workflow) {
   requireOrder(job, '      - name: Run Claude Code architecture agent', '      - name: Record outcome on the issue', 'agent-implement.yml architecture order');
 
   const target = section(job, '      - name: Verify the architecture pass target\n', '      - name: Run Claude Code architecture agent\n', 'agent-implement.yml architecture target');
-  for (const required of ["if: steps.claude.outcome == 'success'", 'if length == 1 then .[0] else {} end', 'gh api', '.head.repo.full_name == $repo', '.user.login == "github-actions[bot]"', 'git rev-parse HEAD', 'gh pr list', 'echo "pr_number=$pr_number"']) {
+  for (const required of ["if: steps.claude.outcome == 'success'", 'echo "pr_ready=false"', 'echo "blocked=false"', '.agent-run-status', '[ "$(cat .agent-run-status)" = "blocked" ]', 'echo "blocked=true"', 'if length == 1 then .[0] else {} end', 'gh api', '.head.repo.full_name == $repo', '.user.login == "github-actions[bot]"', 'git rev-parse HEAD', 'gh pr list', 'echo "pr_number=$pr_number"', 'echo "pr_ready=true"']) {
     requireText(target, required, 'agent-implement.yml architecture target');
   }
 
   const architect = section(job, '      - name: Run Claude Code architecture agent\n', '      - name: Record outcome on the issue\n', 'agent-implement.yml architect');
-  for (const required of ["id: architect", "if: steps.architecture_target.outcome == 'success'", 'Read the issue', 'Preserve all observable behavior', 'bash scripts/validate.sh', 'gh pr comment', 'Bash(git push origin agent/issue-']) {
+  for (const required of ["id: architect", "if: steps.architecture_target.outputs.pr_ready == 'true'", 'Read the issue', 'Preserve all observable behavior', 'bash scripts/validate.sh', 'gh pr comment', 'Bash(git push origin agent/issue-']) {
     requireText(architect, required, 'agent-implement.yml architect');
   }
   const allowed = section(architect, '          claude_args: |\n', '            --disallowedTools', 'agent-implement.yml architect allowed tools');
@@ -724,7 +725,7 @@ export function verifyArchitecturePass(workflow) {
   }
 
   const outcome = section(job, '      - name: Record outcome on the issue\n', null, 'agent-implement.yml outcome');
-  for (const required of ['ARCHITECT_OUTCOME', 'TARGET_OUTCOME', '[ "$ARCHITECT_OUTCOME" = "success" ]', 'git branch --show-current', 'git rev-parse HEAD', 'git diff --quiet', 'git diff --cached --quiet']) {
+  for (const required of ['ARCHITECT_OUTCOME', 'TARGET_OUTCOME', 'AGENT_BLOCKED', '[ "$AGENT_BLOCKED" = "true" ]', 'expected blocked-task outcome, not an implementation workflow failure', '[ "$ARCHITECT_OUTCOME" = "success" ]', 'git branch --show-current', 'git rev-parse HEAD', 'git diff --quiet', 'git diff --cached --quiet']) {
     requireText(outcome, required, 'agent-implement.yml outcome');
   }
 }
