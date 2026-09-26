@@ -262,6 +262,31 @@ sqlite3 /tmp/inventory-check-backup.db "PRAGMA integrity_check;"
 rm /tmp/inventory-check.db /tmp/inventory-check-backup.db
 ```
 
+## Health checks
+
+The API exposes two unauthenticated ASP.NET Core health-check endpoints (issue #164) so Azure App
+Service and operators can tell an API process that is merely running apart from one that can
+actually serve Inventory App requests:
+
+- **`GET /health/live`** — liveness. Returns `200` whenever the process can answer HTTP requests.
+  It runs no dependency checks at all, so it stays healthy through a database, Nayax, Entra ID, or
+  Key Vault outage. Use it only to detect a hung or crashed process.
+- **`GET /health/ready`** — readiness. Returns `200` only when the API can serve normal requests;
+  today that means the database (`AppDbContext`) is reachable, via a health check that calls
+  `Database.CanConnectAsync()`. Returns `503` when the database is unreachable. It deliberately
+  excludes Nayax and Microsoft Entra ID — an outage in either external system must not make the
+  whole Inventory API report unhealthy. Add a dependency to readiness only when it represents
+  something that truly prevents the API from serving requests.
+
+Both endpoints allow anonymous access (`AllowAnonymous()` in `Program.cs`) and are unaffected by
+`BusinessScopeMiddleware`, which already leaves unauthenticated requests alone.
+
+**Azure App Service configuration.** Set the App Service **Health check** path (Portal: App
+Service → Monitoring → Health check; or the `healthCheckPath` site configuration property) to
+`/health/ready`, so App Service routes traffic only to instances that can reach the database and
+restarts instances that cannot. Do not point Health check at `/health/live` — that would keep an
+instance in rotation even while its database connection is down.
+
 ## Validate a change
 
 Run the repository-level validation from the root:

@@ -19,8 +19,10 @@ using InventoryApi.Bootstrap;
 using InventoryApi.Auth;
 using InventoryApi.Data;
 using InventoryApi.Http;
+using InventoryApi.Http.HealthChecks;
 using InventoryApi.Swagger;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Identity.Web;
 
 // The business bootstrap is a separate, human-invoked path (issue #64, checkpoint 3). It is
@@ -60,6 +62,14 @@ builder.Services.AddHttpContextAccessor();
 builder.Services.AddControllers();
 builder.Services.AddApplicationServices();
 builder.Services.AddInfrastructureServices();
+
+// Liveness/readiness health checks (issue #164). Liveness maps no checks at all - it only proves
+// the process can answer HTTP requests. Readiness runs only checks tagged "ready": today that is
+// database connectivity, the one dependency without which the API cannot serve normal requests.
+// Nayax and Entra ID are deliberately excluded from both - an outage in either external system
+// must not make the Inventory API report unhealthy.
+builder.Services.AddHealthChecks()
+    .AddCheck<AppDbContextHealthCheck>("database", tags: new[] { "ready" });
 
 // Uploaded business documents (issue #39). The composition root is the only place that knows
 // the host's content and web roots and reads configuration: the Application layer sees the
@@ -226,6 +236,22 @@ app.UseAuthorization();
 // After authentication, so the caller's claims exist, and before the endpoint, so an
 // authenticated caller with no business membership is refused before any action reads data.
 app.UseMiddleware<BusinessScopeMiddleware>();
+
+// Health checks (issue #164). Anonymous by design so Azure App Service and other operators can
+// probe them without a bearer token; BusinessScopeMiddleware leaves unauthenticated requests
+// alone, so these never trip the 403 "no business membership" path either. /health/live runs no
+// checks (Predicate returns false for every registration), so it reports the process is up
+// regardless of the database or any other dependency. /health/ready runs only checks tagged
+// "ready" and returns 503 when one of them is unhealthy - see AppDbContextHealthCheck.
+app.MapHealthChecks("/health/live", new HealthCheckOptions
+{
+    Predicate = _ => false,
+}).AllowAnonymous();
+
+app.MapHealthChecks("/health/ready", new HealthCheckOptions
+{
+    Predicate = check => check.Tags.Contains("ready"),
+}).AllowAnonymous();
 
 app.MapControllers();
 
