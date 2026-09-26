@@ -501,7 +501,6 @@ export const IMPLEMENT_JOB_DOCUMENTATION_CONTRACT = Object.freeze({
   condition: "if: needs.preflight.result == 'success' && github.event.label.name == 'agent-ready' && github.event.issue.pull_request == null",
   prompt: [
     'Restate its acceptance criteria, its explicit exclusions, and its Documentation impact decision and Documentation impact details.',
-    'use the Write tool to create `.agent-run-status` containing exactly `blocked` on one line',
     "Follow the issue's Documentation impact decision exactly.",
     'If it is "Documentation changes required", update every documentation file and section listed in the Documentation impact details',
     'Never leave documentation that the change contradicts.',
@@ -705,12 +704,18 @@ export function verifyTrackedFileDeletionPermissions(allowed, source) {
 /** Verifies the architect handoff and final-head guard in the implementation workflow. */
 export function verifyArchitecturePass(workflow) {
   const job = section(workflow, '  implement:\n', '  dispatch-validation:\n', 'agent-implement.yml implementation job');
+  const implementationPrompt = extractPromptText(job, 'agent-implement.yml implementation prompt');
+  requireText(
+    implementationPrompt,
+    'use the Write tool to create `.agent-run-status` containing exactly `blocked` on one line',
+    'agent-implement.yml implementation prompt',
+  );
   requireOrder(job, '      - name: Run Claude Code implementation agent', '      - name: Verify the architecture pass target', 'agent-implement.yml architecture order');
   requireOrder(job, '      - name: Verify the architecture pass target', '      - name: Run Claude Code architecture agent', 'agent-implement.yml architecture order');
   requireOrder(job, '      - name: Run Claude Code architecture agent', '      - name: Record outcome on the issue', 'agent-implement.yml architecture order');
 
   const target = section(job, '      - name: Verify the architecture pass target\n', '      - name: Run Claude Code architecture agent\n', 'agent-implement.yml architecture target');
-  for (const required of ["if: steps.claude.outcome == 'success'", 'echo "pr_ready=false"', 'echo "blocked=false"', '.agent-run-status', '[ "$(cat .agent-run-status)" = "blocked" ]', 'echo "blocked=true"', 'if length == 1 then .[0] else {} end', 'gh api', '.head.repo.full_name == $repo', '.user.login == "github-actions[bot]"', 'git rev-parse HEAD', 'gh pr list', 'echo "pr_number=$pr_number"', 'echo "pr_ready=true"']) {
+  for (const required of ["if: steps.claude.outcome == 'success'", 'echo "pr_ready=false"', 'echo "blocked=false"', '.agent-run-status', '[ -z "$(git ls-files -- .agent-run-status)" ]', '[ "$(cat .agent-run-status)" = "blocked" ]', 'echo "blocked=true"', 'if length == 1 then .[0] else {} end', 'gh api', '.head.repo.full_name == $repo', '.user.login == "github-actions[bot]"', 'git rev-parse HEAD', 'gh pr list', 'echo "pr_number=$pr_number"', 'echo "pr_ready=true"']) {
     requireText(target, required, 'agent-implement.yml architecture target');
   }
 
