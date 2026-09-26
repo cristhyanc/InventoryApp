@@ -115,6 +115,7 @@ public sealed class OperatingExpensesController : ControllerBase
         Apply(expense, dto);
         expense.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(cancellationToken);
+        await LoadSupplierAsync(expense, cancellationToken);
         return Ok(expense);
     }
 
@@ -157,8 +158,17 @@ public sealed class OperatingExpensesController : ControllerBase
         // that still exists.
         if (newStoredAttachmentName is not null)
             await DeleteAttachmentAsync(previousStoredAttachmentName, cancellationToken);
+        await LoadSupplierAsync(expense, cancellationToken);
         return Ok(expense);
     }
+
+    // Update fetches by FindAsync rather than an Include'd query, since it may go on to change
+    // SupplierId itself; the navigation is loaded once, against the final value, right before the
+    // response is serialised.
+    private Task LoadSupplierAsync(OperatingExpense expense, CancellationToken cancellationToken) =>
+        expense.SupplierId.HasValue
+            ? _db.Entry(expense).Reference(e => e.Supplier).LoadAsync(cancellationToken)
+            : Task.CompletedTask;
 
     [HttpGet("{id:int}/attachment")]
     public async Task<IActionResult> GetAttachment(int id, CancellationToken cancellationToken)

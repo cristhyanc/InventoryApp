@@ -6,6 +6,7 @@ using InventoryApi.Models;
 using InventoryApi.Services;
 using InventoryApi.Services.Interfaces;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Moq;
 using Xunit;
@@ -371,6 +372,55 @@ public class PurchaseServiceTests
         Assert.Equal(3m, updated.DeliveryCost);
         Assert.Equal(4m, updated.PackageCost);
         Assert.Equal(new DateTime(2024, 1, 1), updated.PurchaseDate);
+    }
+
+    /// <summary>
+    /// Relational SQLite test: an existing purchase item's product must come back from an explicit
+    /// query rather than lazy loading (issue #52). Seeding, uploading, and updating each use their
+    /// own <see cref="AppDbContext"/> instance - as separate requests would - so no in-memory
+    /// change-tracker fixup from a shared context can mask a missing Include.
+    /// </summary>
+    [Fact]
+    public async Task Update_ReturnsExistingItemsWithProductPopulated()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        var options = new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options;
+        await using (var schema = TestAppDbContext.Unrestricted(options))
+            await schema.Database.EnsureCreatedAsync();
+
+        int purchaseId;
+        await using (var seed = TestAppDbContext.Unrestricted(options))
+        {
+            seed.Products.Add(new Product { Id = 1, Name = "Coke", QuantityInStock = 2 });
+            await seed.SaveChangesAsync();
+        }
+        await using (var uploadDb = TestAppDbContext.Unrestricted(options))
+        {
+            IPurchaseService uploadSvc = new PurchaseService(uploadDb, TemporaryDocumentStorage());
+            var content = new MemoryStream(new byte[] { 1 });
+            var fileMock = new Mock<IFormFile>();
+            fileMock.Setup(f => f.Length).Returns(1);
+            fileMock.Setup(f => f.FileName).Returns("p.jpg");
+            fileMock.Setup(f => f.ContentType).Returns("image/jpeg");
+            fileMock.Setup(f => f.OpenReadStream()).Returns(content);
+            fileMock.Setup(f => f.CopyToAsync(It.IsAny<Stream>(), default))
+                .Returns((Stream s, System.Threading.CancellationToken ct) => content.CopyToAsync(s, ct));
+
+            var created = await uploadSvc.Upload(fileMock.Object, "Purchase", null, null, null, null, null, null,
+                new[] { new PurchaseItemDto(1, 2m, 5m) });
+            Assert.NotNull(created);
+            purchaseId = created!.Id;
+        }
+
+        await using var db = TestAppDbContext.Unrestricted(options);
+        var service = CreateService(db);
+
+        var updated = await service.Update(purchaseId, "Updated title", null, null, null, null, null, null);
+
+        var item = Assert.Single(updated!.Items);
+        Assert.NotNull(item.Product);
+        Assert.Equal("Coke", item.Product!.Name);
     }
 
     [Fact]

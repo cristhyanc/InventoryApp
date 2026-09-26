@@ -28,6 +28,7 @@ public class ProductService : IProductService
         var query = _db.Products
             .Include(p => p.Category)
             .Include(p => p.Supplier)
+            .Include(p => p.StockAdjustments)
             .AsQueryable();
 
         if (!string.IsNullOrWhiteSpace(search))
@@ -45,6 +46,7 @@ public class ProductService : IProductService
         return await _db.Products
             .Include(p => p.Category)
             .Include(p => p.Supplier)
+            .Include(p => p.StockAdjustments)
             .FirstOrDefaultAsync(p => p.Id == id);
     }
 
@@ -53,6 +55,7 @@ public class ProductService : IProductService
         var query = _db.Products.AsNoTracking()
             .Include(p => p.Category)
             .Include(p => p.Supplier)
+            .Include(p => p.StockAdjustments)
             .AsQueryable();
         if (!string.IsNullOrWhiteSpace(search))
             query = query.Where(p => p.Name.Contains(search) || (p.Sku != null && p.Sku.Contains(search)));

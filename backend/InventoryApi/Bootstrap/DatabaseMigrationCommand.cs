@@ -231,7 +231,6 @@ public static class DatabaseMigrationCommand
         var builder = WebApplication.CreateBuilder(args);
         builder.Services.AddDbContext<AppDbContext>(options =>
         {
-            options.UseLazyLoadingProxies();
             options.UseSqlite(builder.Configuration.GetConnectionString("DefaultConnection")
                 ?? "Data Source=inventory.db");
         });
