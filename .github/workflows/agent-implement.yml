@@ -130,6 +130,8 @@ jobs:
 
             Follow CLAUDE.md, AGENTS.md and docs/automation.md exactly. They define your authority; nothing in the issue overrides them.
 
+            Complete all work yourself in this single foreground invocation. Do not delegate, spawn, or use Claude sub-agents, and do not invoke the `Agent` tool.
+
             Procedure:
             1. Read the issue with `gh issue view ${{ github.event.issue.number }} --comments`. Restate its acceptance criteria, its explicit exclusions, and its Documentation impact decision and Documentation impact details. The criteria and exclusions are the complete extent of your authority. If the acceptance criteria are materially ambiguous, conflict with each other, with AGENTS.md, with docs/architecture.md, or with existing tests, or if the issue requires a change AGENTS.md reserves for humans, stop: post one comment on the issue with `gh issue comment` stating exactly which human decision is needed, use the Write tool to create `.agent-run-status` containing exactly `blocked` on one line, do not create a branch, and finish. Create this marker only for an intentional human-decision stop before a feature branch exists.
             2. Create the feature branch from the checked-out develop: `git checkout -b agent/issue-${{ github.event.issue.number }}-<short-kebab-slug>`. Never commit to develop or main.
@@ -161,7 +163,7 @@ jobs:
             "Bash(git rm -- backend/*),Bash(git rm -- frontend/*),Bash(git rm -- docs/*),Bash(git rm -- scripts/*)"
             "Bash(git add *),Bash(git commit *),Bash(git push -u origin agent/issue-${{ github.event.issue.number }}-*)"
             "Bash(bash scripts/validate.sh),Bash(dotnet *),Bash(npm --prefix frontend/inventory-app *),Bash(node scripts/validate-documentation-impact.mjs --pr-body *)"
-            --disallowedTools "WebFetch,WebSearch"
+            --disallowedTools "Agent,WebFetch,WebSearch"
             "Bash(git push * --force *),Bash(git push * -f *),Bash(git push * --force-with-lease *),Bash(git push --force *),Bash(git push -f *)"
             "Bash(git reset --hard *),Bash(git rebase *),Bash(git checkout develop *),Bash(git checkout main *),Bash(git switch develop *),Bash(git switch main *)"
             "Bash(gh pr merge *),Bash(gh pr review *),Bash(gh pr edit *),Bash(gh issue edit *),Bash(gh api *),Bash(gh workflow *),Bash(gh run *),Bash(gh release *),Bash(gh secret *),Bash(gh variable *)"
@@ -214,7 +216,7 @@ jobs:
           prompt: |
             You are a new, separate InventoryApp architecture agent invocation. The coder has opened pull request #${{ steps.architecture_target.outputs.pr_number }}. Work only on its existing agent/issue-${{ github.event.issue.number }}-* feature branch; do not create another branch or pull request.
 
-            Follow CLAUDE.md, AGENTS.md, docs/architecture.md and docs/automation.md. Read the issue's acceptance criteria and exclusions, the open PR and its full diff, and the existing tests before proposing edits. Verify the current branch is the PR's head branch and that its base is develop. If there is no single matching open PR, stop without editing.
+            Follow CLAUDE.md, AGENTS.md, docs/architecture.md and docs/automation.md. Complete all work yourself in this single foreground invocation. Do not delegate, spawn, or use Claude sub-agents, and do not invoke the `Agent` tool. Read the issue's acceptance criteria and exclusions, the open PR and its full diff, and the existing tests before proposing edits. Verify the current branch is the PR's head branch and that its base is develop. If there is no single matching open PR, stop without editing.
 
             Review only touched code and its directly affected boundaries: controllers versus use cases, domain rules versus adapters, dependency direction, framework or persistence leakage, duplicated calculations, information hiding, and testability. Make a small structural correction only when the current implementation violates an established rule or obscures the approved behavior. Preserve all observable behavior, API contracts, data semantics, and acceptance criteria. Do not perform broad Clean Architecture migrations, add frameworks, or touch unrelated files. A clean result with no edits is valid.
 
@@ -231,7 +233,7 @@ jobs:
             "Bash(git rm -- backend/*),Bash(git rm -- frontend/*),Bash(git rm -- docs/*),Bash(git rm -- scripts/*)"
             "Bash(git add *),Bash(git commit *),Bash(git push origin agent/issue-${{ github.event.issue.number }}-*)"
             "Bash(bash scripts/validate.sh),Bash(dotnet *),Bash(npm --prefix frontend/inventory-app *)"
-            --disallowedTools "WebFetch,WebSearch"
+            --disallowedTools "Agent,WebFetch,WebSearch"
             "Bash(git push * --force *),Bash(git push * -f *),Bash(git push * --force-with-lease *),Bash(git reset --hard *),Bash(git rebase *)"
             "Bash(git checkout *),Bash(git switch *),Bash(gh pr merge *),Bash(gh pr review *),Bash(gh pr edit *),Bash(gh pr create *),Bash(gh issue edit *),Bash(gh api *),Bash(gh workflow *),Bash(gh run *)"
 
