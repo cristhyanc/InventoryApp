@@ -37,6 +37,25 @@ public class ImportServiceTests
     }
 
     [Fact]
+    public async Task ImportProducts_sets_unit_price_from_retail_price_not_cost_price()
+    {
+        await using var db = CreateDbContext();
+        var nayax = new Mock<INayaxLynxClient>();
+        nayax.Setup(client => client.GetProductsAsync(It.IsAny<System.Threading.CancellationToken>()))
+            .ReturnsAsync(new List<NayaxProduct>
+            {
+                new() { NayaxProductId = 100, ProductName = "X", ProductCostPrice = 1.10m, RetailPrice = 3.50m }
+            });
+        nayax.Setup(client => client.GetProductGroupssAsync(It.IsAny<System.Threading.CancellationToken>()))
+            .ReturnsAsync(new List<NayaxProductGroup>());
+
+        await CreateImportService(db, nayax.Object).ImportProductsAsync();
+
+        var product = await db.Products.SingleAsync(p => p.Id == 100);
+        Assert.Equal(3.50m, product.UnitPrice);
+    }
+
+    [Fact]
     public async Task Sales_import_recosts_an_updated_transaction()
     {
         await using var db = CreateDbContext();
