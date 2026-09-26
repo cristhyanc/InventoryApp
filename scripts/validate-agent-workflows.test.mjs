@@ -475,6 +475,7 @@ describe('architecture pass contract', () => {
       'use the Write tool to create `.agent-run-status` containing exactly `blocked` on one line',
       'echo "pr_ready=false"',
       'echo "blocked=false"',
+      '[ -z "$(git ls-files -- .agent-run-status)" ]',
       '[ "$(cat .agent-run-status)" = "blocked" ]',
       'echo "blocked=true"',
       'echo "pr_ready=true"',
@@ -484,7 +485,7 @@ describe('architecture pass contract', () => {
       const weakened = replaceOnce(implementWorkflow, required, '# removed');
       assert.throws(
         () => runContractChecks({ read: readWithOverrides({ [implementPath]: weakened }) }),
-        /(implementation workflow|implementation prompt|architecture target|outcome): missing required text/,
+        /(implementation prompt|architecture target|outcome): missing required text/,
       );
     }
   });
