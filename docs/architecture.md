@@ -691,6 +691,16 @@ The sources must not overlap for the same day. Ex-GST, GST, and GST-inclusive am
 
 Site commissions use effective-dated agreements and one of three bases: gross sales, card sales, or sales excluding GST. Missing coverage and overlaps remain visible quality/configuration failures. The absence of any agreement for a site is a valid zero-commission state.
 
+### Product selling price
+
+`Product.UnitPrice` is the catalog default/list selling price, synced one-way from the Nayax product catalog's `RetailPrice` field by `ImportService.ImportProductsAsync` (issue #57). It is a display/default value, not a calculation input: no reporting, profit, or costing calculation in `Inventory.Application`/`Inventory.Domain` reads it. It is distinct from:
+
+- `Product.AverageUnitCost` and the AVCO/historical-cost ledger — purchase cost, not selling price;
+- `Product.MachinePrice` (`[NotMapped]`) — the machine-specific live price, sourced from the per-machine Nayax `RetailPrice` (`NayaxMachineProduct.RetailPrice`) in `MachineService`/`SiteService`;
+- the Nayax `ProductCostPrice` field on an imported sale (`NayaxSales.NayaxProductCostPrice`) — a genuine cost value used for historical COGS, never a selling price. `ImportService.ImportProductsAsync` previously set `UnitPrice` from this cost field by mistake; it now uses the catalog `RetailPrice` instead.
+
+The public property name `UnitPrice` is retained for API/contract compatibility. Only the Nayax catalog import may change its value; `ProductService.Update` and the product edit UI treat it as Nayax-managed and read-only. The dashboard's low-stock inventory-value figure currently multiplies `quantityInStock * unitPrice`, which is a selling-price valuation, not a cost valuation; issue #42 owns that correction and it must not be replicated elsewhere.
+
 ### Historical inventory cost
 
 Physical storage stock and costing inventory answer different questions:

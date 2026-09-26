@@ -45,7 +45,7 @@ public sealed partial class ImportService
 
             product.Name = item.ProductName!;
             product.Description = item.ProductDescription;
-            product.UnitPrice = item.ProductCostPrice ?? 0m;
+            product.UnitPrice = item.RetailPrice ?? 0m;
             product.CategoryId = item.ProductGroupId;
             product.UpdatedAt = DateTime.UtcNow;
         }
