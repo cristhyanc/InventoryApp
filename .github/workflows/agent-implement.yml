@@ -169,6 +169,7 @@ jobs:
           branch="$(git branch --show-current)"
           if [ "$branch" = "develop" ] &&
              [ -f .agent-run-status ] &&
+             [ -z "$(git ls-files -- .agent-run-status)" ] &&
              [ "$(cat .agent-run-status)" = "blocked" ]; then
             echo "blocked=true" >> "$GITHUB_OUTPUT"
             echo "Implementation agent intentionally stopped for a human decision; skipping PR/architecture target verification."
