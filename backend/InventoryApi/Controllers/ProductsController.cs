@@ -1,3 +1,4 @@
+using Inventory.Application.Reporting.Dashboard;
 using InventoryApi.DTOs;
 using InventoryApi.Models;
 using Microsoft.AspNetCore.Authorization;
@@ -13,10 +14,14 @@ namespace InventoryApi.Controllers;
 public class ProductsController : ControllerBase
 {
     private readonly InventoryApi.Services.Interfaces.IProductService _service;
+    private readonly GetInventoryValuationSummary _getInventoryValuationSummary;
 
-    public ProductsController(InventoryApi.Services.Interfaces.IProductService service)
+    public ProductsController(
+        InventoryApi.Services.Interfaces.IProductService service,
+        GetInventoryValuationSummary getInventoryValuationSummary)
     {
         _service = service;
+        _getInventoryValuationSummary = getInventoryValuationSummary;
     }
 
     [HttpGet]
@@ -36,6 +41,10 @@ public class ProductsController : ControllerBase
         var product = await _service.Get(id);
         return product is null ? NotFound() : Ok(product);
     }
+
+    [HttpGet("inventory-value-summary")]
+    public Task<InventoryValuationSummaryDto> InventoryValueSummary(CancellationToken ct) =>
+        _getInventoryValuationSummary.Handle(ct);
 
     [HttpGet("alerts/low-stock")]
     public async Task<ActionResult<IEnumerable<Product>>> LowStock(

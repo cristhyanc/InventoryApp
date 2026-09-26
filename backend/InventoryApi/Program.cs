@@ -184,6 +184,9 @@ builder.Services.AddScoped<IGstReportFactsProvider, EfGstReportFactsProvider>();
 // Temporary API-owned adapter for the dashboard report facts port; see EfDashboardReportFactsProvider.
 builder.Services.AddScoped<IDashboardReportFactsProvider, EfDashboardReportFactsProvider>();
 
+// Temporary API-owned adapter for the inventory valuation facts port; see EfInventoryValuationFactsProvider.
+builder.Services.AddScoped<IInventoryValuationFactsProvider, EfInventoryValuationFactsProvider>();
+
 // Temporary API-owned adapter for the transaction sales report facts port; see EfTransactionSalesReportFactsProvider.
 builder.Services.AddScoped<ITransactionSalesReportFactsProvider, EfTransactionSalesReportFactsProvider>();
 

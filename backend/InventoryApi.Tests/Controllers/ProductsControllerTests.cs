@@ -2,6 +2,8 @@ using InventoryApi.Controllers;
 using InventoryApi.Data;
 using InventoryApi.DTOs;
 using Inventory.Application.Nayax;
+using Inventory.Application.Reporting.Dashboard;
+using InventoryApi.Adapters.Persistence;
 using InventoryApi.Models;
 using InventoryApi.Services;
 using Microsoft.AspNetCore.Mvc;
@@ -24,7 +26,8 @@ public class ProductsControllerTests
     private static ProductsController CreateController(AppDbContext db)
     {
         var nayaxMock = new Mock<INayaxLynxClient>();
-        return new ProductsController(new ProductService(db, nayaxMock.Object));
+        var getInventoryValuationSummary = new GetInventoryValuationSummary(new EfInventoryValuationFactsProvider(db));
+        return new ProductsController(new ProductService(db, nayaxMock.Object), getInventoryValuationSummary);
     }
 
     private static ProductUpdateDto UpdateDto(int lowStockThreshold, int restockTo) =>
@@ -75,5 +78,37 @@ public class ProductsControllerTests
         var result = await CreateController(db).Update(999, UpdateDto(57, 40));
 
         Assert.IsType<NotFoundResult>(result);
+    }
+
+    [Fact]
+    public async Task InventoryValueSummary_ReturnsTheAuthoritativeTotal_WhenEveryProductHasKnownCost()
+    {
+        using var db = CreateDbContext();
+        db.Products.AddRange(
+            new Product { Id = 1, Name = "Coke", UnitPrice = 5m, InventoryValue = 40m },
+            new Product { Id = 2, Name = "Chips", UnitPrice = 3m, InventoryValue = 60m });
+        await db.SaveChangesAsync();
+
+        var result = await CreateController(db).InventoryValueSummary(CancellationToken.None);
+
+        Assert.Equal(100m, result.TotalInventoryValue);
+        Assert.True(result.IsComplete);
+        Assert.Equal(0, result.ProductsWithUnknownCost);
+    }
+
+    [Fact]
+    public async Task InventoryValueSummary_IsUnavailable_WhenAnyProductHasUnknownCost()
+    {
+        using var db = CreateDbContext();
+        db.Products.AddRange(
+            new Product { Id = 1, Name = "Coke", UnitPrice = 5m, InventoryValue = 40m },
+            new Product { Id = 2, Name = "Never rebuilt", UnitPrice = 3m, InventoryValue = null });
+        await db.SaveChangesAsync();
+
+        var result = await CreateController(db).InventoryValueSummary(CancellationToken.None);
+
+        Assert.Null(result.TotalInventoryValue);
+        Assert.False(result.IsComplete);
+        Assert.Equal(1, result.ProductsWithUnknownCost);
     }
 }
