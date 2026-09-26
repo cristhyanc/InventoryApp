@@ -178,7 +178,7 @@ InventoryApp/
 │   │   ├── Program.cs
 │   │   └── InventoryApi.csproj
 │   ├── Inventory.Domain/            NayaxFeeSettings rule, reporting policies/calculations (Inventory.Domain.Reporting.<Feature>), Purchases.PurchaseTotalValidationPolicy; other features not yet migrated
-│   ├── Inventory.Application/       NayaxFeeSettings use cases/ports, Nayax.INayaxLynxClient port/DTOs, reporting use cases/contracts (Inventory.Application.Reporting.<Feature>), Purchases.ComputePurchaseTotalValidation, Documents.IDocumentStorage, shared Inventory.Application.Time.IClock/IBusinessCalendar; other features not yet migrated
+│   ├── Inventory.Application/       NayaxFeeSettings use cases/ports, Categories/Suppliers use cases/ports, Nayax.INayaxLynxClient port/DTOs, reporting use cases/contracts (Inventory.Application.Reporting.<Feature>), Purchases.ComputePurchaseTotalValidation, Documents.IDocumentStorage, shared Inventory.Application.Time.IClock/IBusinessCalendar; other features not yet migrated
 │   ├── Inventory.Infrastructure/    Nayax.NayaxLynxClient/NayaxLynxOptions (Nayax Lynx HTTP client), SystemClock/SydneyBusinessCalendar adapters (Inventory.Infrastructure.Time), FileSystemDocumentStorage and AzureBlobDocumentStorage (Inventory.Infrastructure.Documents); other features not yet migrated
 │   └── InventoryApi.Tests/
 ├── frontend/inventory-app/
@@ -916,7 +916,28 @@ Backend and frontend tracks can progress independently when their contracts do n
    - Proved the persistence port (`INayaxFeeRateStore`), a temporary API-owned EF adapter (`InventoryApi.Adapters.Persistence.EfNayaxFeeRateStore`), result mapping, DI registration, and the unit/Application/SQLite/API test pattern this migration will reuse.
    - The EF adapter remains temporarily in `InventoryApi` until `AppDbContext` and its persistence models move into `Inventory.Infrastructure`.
 
-4. **Operating expenses slice**
+4. **Categories and suppliers slice** — done (issue #146), the first of the feature-by-feature
+   migrations tracked by issues #146-#151 (see the [Temporary API-owned
+   exception](#temporary-api-owned-exception-and-its-enforcement-issue-145) above). `CategoryService`/`ICategoryService`
+   and `SupplierService`/`ISupplierService` (`InventoryApi/Services`) had no deterministic business
+   rule to extract into `Inventory.Domain` — no required-field validation, no uniqueness
+   enforcement (`Category.Name`/`Supplier.Name` are indexed but not unique, and creating a
+   duplicate name is still allowed, exactly as before), no computed value - so unlike
+   `NayaxFeeRate`, this slice adds no `Inventory.Domain` code; its plain persisted records
+   (`Inventory.Application.Categories.CategoryRecord`, `Inventory.Application.Suppliers.SupplierRecord`)
+   live in Application, following the same precedent `NayaxFeeRateRecord` set. `ListCategories`/`GetCategory`
+   and `ListSuppliers`/`GetSupplier`/`CreateSupplier`/`UpdateSupplier`/`DeleteSupplier`
+   (`Inventory.Application.Categories`/`Inventory.Application.Suppliers`) are the use cases; `ICategoryStore`/`ISupplierStore`
+   are their narrow ports; `InventoryApi.Adapters.Persistence.EfCategoryStore`/`EfSupplierStore` are
+   their temporary API-owned EF adapters, following the same pattern as `EfNayaxFeeRateStore`.
+   `CategoriesController`/`SuppliersController` only bind HTTP input and map use-case results;
+   routes, request/response JSON shapes, status codes, and the (absent) uniqueness behavior are
+   unchanged. `InventoryApi.Services.CategoryService`/`ICategoryService` and
+   `InventoryApi.Services.SupplierService`/`ISupplierService` were removed once both controllers
+   migrated, and `ProjectDependencyDirectionTests.Only_the_documented_legacy_services_remain_in_InventoryApi_Services`'s
+   allow-list was updated to match.
+
+5. **Operating expenses slice**
    - Extract use cases and persistence.
    - **`IDocumentStorage` done** (issue #39, checkpoint 1): the storage port and its filesystem
      adapter are in place for both purchase documents and operating-expense attachments; see
@@ -926,11 +947,11 @@ Backend and frontend tracks can progress independently when their contracts do n
      themselves remain in `OperatingExpensesController`/`AppDbContext`.
    - Preserve atomic replacement/cleanup and upload validation behavior.
 
-5. **Products and stock slice**
+6. **Products and stock slice**
    - Move reorder and inventory-movement rules to Domain.
    - Preserve supplier-order projection and low-stock semantics.
 
-6. **Purchasing and costing slice**
+7. **Purchasing and costing slice**
    - Migrate purchases, supplier orders, stock ledger, AVCO, rebuilding, and sale costing as one coherent area.
    - **Receipt-to-Purchase internal rename done** (issue #60), ahead of the full slice migration above,
      **and its client/API compatibility shims removed** (issue #127). See
@@ -940,7 +961,7 @@ Backend and frontend tracks can progress independently when their contracts do n
      upload/update/delete orchestration itself, and the supplier-order/stock-ledger/AVCO code it
      touches, into `Inventory.Application`/`Inventory.Infrastructure` — remains future work.
 
-7. **Reporting slices**
+8. **Reporting slices**
    - Split bookkeeping, daily, reconciliation, machine/product profitability, GST, dashboard, and transactions into separate query handlers.
    - Split CSV/XLSX formatting from report calculation.
    - **Contract placement done.** Report request/result contracts moved from `InventoryApi/DTOs/ReportingDtos.cs` into `Inventory.Application.Reporting.<Feature>` namespaces (`Shared`, `Bookkeeping`, `Daily`, `Reconciliation`, `MachineProfitability`, `ProductProfitability`, `Gst`, `Dashboard`, `Transactions`), with no JSON/API contract change.
@@ -954,7 +975,7 @@ Backend and frontend tracks can progress independently when their contracts do n
    - **Shared-query audit and legacy service removal done** (issue #92), the final item in the sequence. The audit re-examined every `Ef<Feature>ReportFactsProvider` adapter for equivalent EF query helpers that earlier slices had not yet consolidated and found none: `EfReportingSharedQueries` already covers every completed-sale query, cost projection, imported-summary query, and site-commission resolution shared across bookkeeping/daily/reconciliation/machine-profitability/GST/dashboard, and the two helpers that looked similar but are not — `EfBookkeepingReportFactsProvider`'s business-wide receipt/operating-expense totals versus machine profitability's per-machine operating-expense breakdown, and `EfTransactionSalesReportFactsProvider`'s all-status query versus the shared completed-sale query — were deliberately kept separate and documented in place rather than forced into one shape. `Inventory.Application.Reporting.Export.GetReportExportRows` replaced the legacy `ReportingService`'s `ExportCsvAsync`/`ExportXlsxAsync` row-building: it calls the same eight migrated use cases directly and returns already-formatted rows (a `ReportExportTable`), never a re-derived value. `InventoryApi.Adapters.Export.ReportExportFileWriter` is the outer InventoryApi adapter that encodes those rows as CSV or XLSX bytes (ClosedXML stays out of `Inventory.Application`, per the architecture rule). `ReportsController`'s single `{report}/export` action now calls `GetReportExportRows` and `ReportExportFileWriter` instead of `IReportingService`. `InventoryApi.Services.ReportingService`/`Services.Interfaces.IReportingService` are gone: their dependency-injection registration (`Program.cs`), every production and test caller (the controller and every test), and both source files (`InventoryApi/Services/ReportingService.cs`, `InventoryApi/Services/Interfaces/IReportingService.cs`) were removed. An architecture test (`ProjectDependencyDirectionTests.No_other_source_file_references_the_removed_legacy_reporting_service`) proves no source file still references them.
    - **Transaction report streaming and bounded page buffering done** (issue #115). `EfTransactionSalesReportFactsProvider.GetFactsAsync` no longer completes its date/machine-filtered EF query with `ToListAsync` into a full transaction list before returning; `TransactionSalesReportFacts.Transactions` is now an `IAsyncEnumerable<TransactionSalesReportFactsRow>`, and the adapter streams rows one at a time from the EF query (`IQueryable.AsAsyncEnumerable()`) with cancellation propagated through the stream. `GetTransactionSalesReport.Handle` enumerates that stream exactly once: it product-matches and runs `TransactionRowPolicy` per raw row as it arrives, folds matching rows into `Inventory.Domain.Reporting.Transactions.TransactionTotalsAccumulator` instead of building an intermediate `TransactionTotalsRowInputs` list (`TransactionTotalsPolicy.Calculate` now delegates to the same accumulator, so batch and incremental accumulation share one formula path), and accumulates distinct site/product filter-option state in dictionaries rather than retaining every row. Totals, quality facts, and filter options still cover the complete date/machine scope exactly as before — this is a one-pass, full-scope streaming design, not page-size-bounded database work or SQL pagination/filter pushdown (both stay out of scope). For a paginated request (`paginate: true`), only the best `page * pageSize` sorted filtered-row candidates needed to answer that page are retained, using the new `Inventory.Application.Reporting.Shared.BoundedTopSelector<T>` fed a comparer equivalent to the existing `SortRows` ordering; for `paginate: false` (CSV/XLSX export), the complete filtered result set is still collected and sorted as before, since export intentionally returns everything.
 
-8. **Remove legacy structure**
+9. **Remove legacy structure**
    - Done for reporting (issue #92): `InventoryApi.Services.ReportingService`, `InventoryApi.Services.Interfaces.IReportingService`, their dependency-injection registration, and every production and test caller were removed, and both source files were deleted. Reporting exports now run through `Inventory.Application.Reporting.Export.GetReportExportRows` for row building and `InventoryApi.Adapters.Export.ReportExportFileWriter` for CSV/XLSX byte encoding.
    - Still pending for every other feature area (products, stock, purchasing/costing, and the remaining direct-access controllers/services); only after each is migrated and tests prove equivalent behavior does this step complete overall.
 
