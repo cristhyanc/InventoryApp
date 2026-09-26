@@ -1,6 +1,5 @@
 using System.Diagnostics;
-using Inventory.Application.Exceptions;
-using InventoryApi.Services;
+using Inventory.Domain.Exceptions;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
 
@@ -10,9 +9,10 @@ namespace InventoryApi.Http;
 /// Maps domain/application validation and conflict failures to stable, safe ProblemDetails
 /// responses, so controllers no longer need their own repetitive try/catch.
 ///
-/// It only claims exception types whose contract guarantees a caller-safe message:
+/// It only claims exception types whose contract guarantees a caller-safe message, all defined in
+/// the <c>Inventory.Domain.Exceptions</c> hierarchy that this handler translates to HTTP:
 /// <see cref="DomainValidationException"/> and <see cref="DomainConflictException"/> (both
-/// documented as carrying a message written for the caller), and
+/// documented as carrying a message written for the caller), and its subclass
 /// <see cref="InsufficientStockException"/>, whose message is a fixed sentence plus an available
 /// stock count the caller is already entitled to see.
 ///
@@ -61,7 +61,10 @@ public sealed class DomainExceptionHandler : IExceptionHandler
 
         // A conflict is worth an operator's attention (it may indicate a real race between two
         // callers), but it is still an expected outcome, not a server error - warning only.
-        if (exception is DomainConflictException)
+        // InsufficientStockException is excluded even though it now derives from
+        // DomainConflictException: its established mapping (400, not logged) predates that
+        // inheritance and must not change because of it.
+        if (exception is DomainConflictException && exception is not InsufficientStockException)
         {
             _logger.LogWarning(
                 "Domain conflict. TraceId={TraceId} Detail={DomainConflictDetail}",
@@ -94,11 +97,16 @@ public sealed class DomainExceptionHandler : IExceptionHandler
     // Only exception types whose own contract guarantees a caller-safe message may appear here.
     // Never add a framework-wide base type such as ArgumentException or InvalidOperationException:
     // that would publish internal messages from throw sites nobody reviewed.
+    //
+    // InsufficientStockException must stay listed ahead of DomainConflictException: it is now a
+    // subclass of DomainConflictException (see Inventory.Domain.Exceptions.InsufficientStockException),
+    // and a C# type-pattern switch matches arms in source order, so its own arm has to come first to
+    // keep its established 400 mapping instead of falling through to the base type's 409.
     private static (int Status, string Title)? Classify(Exception exception) => exception switch
     {
+        InsufficientStockException => (StatusCodes.Status400BadRequest, ValidationTitle),
         DomainValidationException => (StatusCodes.Status400BadRequest, ValidationTitle),
         DomainConflictException => (StatusCodes.Status409Conflict, ConflictTitle),
-        InsufficientStockException => (StatusCodes.Status400BadRequest, ValidationTitle),
         _ => null,
     };
 }

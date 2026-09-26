@@ -470,6 +470,38 @@ describe('architecture pass contract', () => {
     assert.doesNotThrow(() => verifyArchitecturePass(implementWorkflow));
   });
 
+  it('requires an explicit pre-PR blocked marker and verified PR-ready output', () => {
+    for (const required of [
+      'use the Write tool to create `.agent-run-status` containing exactly `blocked` on one line',
+      'echo "pr_ready=false"',
+      'echo "blocked=false"',
+      '[ -z "$(git ls-files -- .agent-run-status)" ]',
+      '[ "$(cat .agent-run-status)" = "blocked" ]',
+      'echo "blocked=true"',
+      'echo "pr_ready=true"',
+      'AGENT_BLOCKED: ${{ steps.architecture_target.outputs.blocked }}',
+      '[ "$AGENT_BLOCKED" = "true" ]',
+    ]) {
+      const weakened = replaceOnce(implementWorkflow, required, '# removed');
+      assert.throws(
+        () => runContractChecks({ read: readWithOverrides({ [implementPath]: weakened }) }),
+        /(implementation prompt|architecture target|outcome): missing required text/,
+      );
+    }
+  });
+
+  it('runs the architect only when the target step verified a PR is ready', () => {
+    const unsafe = replaceOnce(
+      implementWorkflow,
+      "if: steps.architecture_target.outputs.pr_ready == 'true'",
+      "if: steps.architecture_target.outcome == 'success'",
+    );
+    assert.throws(
+      () => runContractChecks({ read: readWithOverrides({ [implementPath]: unsafe }) }),
+      /agent-implement.yml architect: missing required text/,
+    );
+  });
+
   it('rejects an architect stage that can be skipped while dispatching validation', () => {
     const unsafe = replaceOnce(implementWorkflow, '[ "$ARCHITECT_OUTCOME" = "success" ] &&', '[ "$ARCHITECT_OUTCOME" != "failure" ] &&');
     assert.throws(() => runContractChecks({ read: readWithOverrides({ [implementPath]: unsafe }) }), /agent-implement.yml outcome/);

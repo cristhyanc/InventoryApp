@@ -1,4 +1,4 @@
-using Inventory.Application.Exceptions;
+using Inventory.Domain.Exceptions;
 using InventoryApi.Data;
 using InventoryApi.DTOs;
 using Inventory.Application.Nayax;
