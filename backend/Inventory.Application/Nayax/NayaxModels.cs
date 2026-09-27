@@ -117,6 +117,24 @@ public class NayaxLastSalesReport
     public DateTime MachineAuthorizationTime { get; set; }
 }
 
+/// <summary>
+/// One entry from the Nayax Lynx machine last-alerts endpoint (issue #183). Field names follow the
+/// same PascalCase-matches-JSON convention already used by <see cref="NayaxMachine"/>/
+/// <see cref="NayaxDevice"/>; this is a best-effort shape based on the documented endpoint and the
+/// observed Event 501 example, not a live-verified contract - see the "Known limitations" note in
+/// the issue #183 pull request. Only <see cref="EventData"/>'s content and <see cref="EventID"/>'s
+/// uniqueness are load-bearing for the parsing/idempotency this feature depends on.
+/// </summary>
+public class NayaxMachineAlert
+{
+    public long EventID { get; set; }
+    public long MachineID { get; set; }
+    public int EventCode { get; set; }
+    public string? EventName { get; set; }
+    public string? EventData { get; set; }
+    public DateTime EventTimestamp { get; set; }
+}
+
 public class NayaxProduct
 {
     [JsonPropertyName("NayaxProductID")]

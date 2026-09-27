@@ -167,6 +167,60 @@ public class NayaxLynxClientTests
         Assert.Null(handler.LastRequest?.Headers.Authorization);
     }
 
+    [Fact]
+    public async Task GetMachineLastAlerts_when_nayax_returns_403_throws_NayaxUpstreamException()
+    {
+        var (client, _) = CreateClient(HttpStatusCode.Forbidden, SensitiveUpstreamBody);
+
+        var ex = await Assert.ThrowsAsync<NayaxUpstreamException>(
+            () => client.GetMachineLastAlertsAsync(42, CancellationToken.None));
+
+        Assert.Equal(HttpStatusCode.Forbidden, ex.StatusCode);
+        Assert.Equal("GetMachineLastAlertsAsync", ex.Operation);
+        Assert.Equal("GET", ex.Method);
+        Assert.Equal("machines/42/lastAlerts", ex.Endpoint);
+    }
+
+    [Fact]
+    public async Task GetMachineLastAlerts_deserializes_stock_adjustment_alerts()
+    {
+        const string body = """
+            [
+              {
+                "EventID": 9001,
+                "MachineID": 42,
+                "EventCode": 501,
+                "EventName": "Stock Adjust for Machine",
+                "EventData": "Eunhye Chung 'Adjusted Stock, Product MDB: 13 | 25g Nobby's Beef Jerky Hot | 2",
+                "EventTimestamp": "2026-09-01T10:00:00Z"
+              }
+            ]
+            """;
+        var (client, logger) = CreateClient(HttpStatusCode.OK, body);
+
+        var alerts = await client.GetMachineLastAlertsAsync(42, CancellationToken.None);
+
+        var alert = Assert.Single(alerts);
+        Assert.Equal(9001, alert.EventID);
+        Assert.Equal(42, alert.MachineID);
+        Assert.Equal(501, alert.EventCode);
+        Assert.Contains("Product MDB: 13", alert.EventData);
+        Assert.Empty(logger.Messages);
+    }
+
+    [Fact]
+    public async Task GetMachineLastAlerts_caller_cancellation_stays_cancellation()
+    {
+        var (client, logger) = CreateClient(HttpStatusCode.InternalServerError, SensitiveUpstreamBody);
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => client.GetMachineLastAlertsAsync(42, cts.Token));
+
+        Assert.Empty(logger.Messages);
+    }
+
     private static (NayaxLynxClient Client, CapturingLogger<NayaxLynxClient> Logger) CreateClient(
         HttpStatusCode status, string body)
     {

@@ -87,6 +87,14 @@ public class NayaxLynxClient : INayaxLynxClient
         return await response.Content.ReadFromJsonAsync<List<NayaxLastSalesReport>>(cancellationToken: ct) ?? new();
     }
 
+    public async Task<List<NayaxMachineAlert>> GetMachineLastAlertsAsync(long machineId, CancellationToken ct = default)
+    {
+        var endpoint = $"machines/{machineId}/lastAlerts";
+        var response = await _http.GetAsync(endpoint, ct);
+        EnsureNayaxSuccess(response, nameof(GetMachineLastAlertsAsync), HttpMethod.Get, endpoint, ct);
+        return await response.Content.ReadFromJsonAsync<List<NayaxMachineAlert>>(cancellationToken: ct) ?? new();
+    }
+
     public async Task<List<NayaxMachineProduct>> CreateMachineProductsAsync(
         long machineId, List<NayaxMachineProduct> products, CancellationToken ct = default)
     {

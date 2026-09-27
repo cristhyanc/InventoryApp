@@ -1,0 +1,84 @@
+using InventoryApi.Data;
+using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
+using Xunit;
+
+namespace InventoryApi.Tests.Adapters.Persistence;
+
+/// <summary>
+/// Upgrade test for <c>AddNayaxMachineStockEvents</c> (issue #183): the migration must be purely
+/// additive - a new table plus a defaulted <c>StockAdjustments.Source</c> column - and must not
+/// touch, reinterpret, or lose any existing stock-adjustment history.
+/// </summary>
+public class AddNayaxMachineStockEventsMigrationTests
+{
+    private const string PreviousMigration = "20260923120151_AddBusinessBackfillAudit";
+    private const string TargetMigration = "20260927140121_AddNayaxMachineStockEvents";
+
+    private static async Task<List<string>> ColumnNamesAsync(SqliteConnection connection, string table)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT name FROM pragma_table_info('{table}');";
+        await using var reader = await command.ExecuteReaderAsync();
+        var values = new List<string>();
+        while (await reader.ReadAsync()) values.Add(reader.GetString(0));
+        return values;
+    }
+
+    private static async Task<List<string>> TableNamesAsync(SqliteConnection connection)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name;";
+        await using var reader = await command.ExecuteReaderAsync();
+        var values = new List<string>();
+        while (await reader.ReadAsync()) values.Add(reader.GetString(0));
+        return values;
+    }
+
+    [Fact]
+    public async Task Migration_is_additive_and_preserves_existing_stock_adjustment_history()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        var options = new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options;
+
+        await using (var before = TestAppDbContext.Unrestricted(options))
+        {
+            await before.GetService<IMigrator>().MigrateAsync(PreviousMigration);
+
+            Assert.DoesNotContain("Source", await ColumnNamesAsync(connection, "StockAdjustments"));
+            Assert.DoesNotContain("NayaxMachineStockEvents", await TableNamesAsync(connection));
+
+            await using var seed = connection.CreateCommand();
+            seed.CommandText = """
+                INSERT INTO Products (Name, Sku, UnitPrice, AverageUnitCost, QuantityInStock, LowStockThreshold,
+                                      RestockTo, IsActive, Unit, CreatedAt, UpdatedAt, BusinessId)
+                    VALUES ('Chips', 'CHIP-1', 3.50, 1.10, 12, 2, 20, 1, 'unit',
+                            '2026-01-01 00:00:00', '2026-01-01 00:00:00', 1);
+                INSERT INTO StockAdjustments (ProductId, QuantityChange, QuantityAfter, Reason, MachineId,
+                                              CreatedAt, EffectiveAt, BusinessId)
+                    VALUES (1, -3, 9, 5, 42, '2026-01-02 00:00:00', '2026-01-02 00:00:00', 1);
+                """;
+            await seed.ExecuteNonQueryAsync();
+        }
+
+        await using (var after = TestAppDbContext.Unrestricted(options))
+        {
+            await after.GetService<IMigrator>().MigrateAsync(TargetMigration);
+
+            Assert.Contains("Source", await ColumnNamesAsync(connection, "StockAdjustments"));
+            Assert.Contains("NayaxMachineStockEvents", await TableNamesAsync(connection));
+
+            var preserved = await after.StockAdjustments.SingleAsync();
+            Assert.Equal(-3, preserved.QuantityChange);
+            Assert.Equal(42, preserved.MachineId);
+            // Existing rows default to Manual (0): the migration never reinterprets prior history
+            // as Nayax-sourced.
+            Assert.Equal(Models.StockAdjustmentSource.Manual, preserved.Source);
+
+            Assert.Empty(await after.NayaxMachineStockEvents.ToListAsync());
+        }
+    }
+}

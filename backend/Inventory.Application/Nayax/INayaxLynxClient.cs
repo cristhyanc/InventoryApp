@@ -17,4 +17,11 @@ public interface INayaxLynxClient
     Task<List<NayaxProductGroup>> GetProductGroupssAsync(CancellationToken ct = default);
     Task<List<NayaxLastSalesReport>> GetMachineLastSalesAsync(long machineId, CancellationToken ct = default);
     Task<NayaxMachine> GetMachineAsync(long machineId, CancellationToken ct = default);
+
+    /// <summary>
+    /// The machine's last-reported alerts, including Event 501 ("Stock Adjust for Machine")
+    /// stock-adjustment alerts consumed by the Sync Restock workflow (issue #183).
+    /// Docs: https://devzone.nayax.com/reference/lynx/machines/get-machine-last-alerts
+    /// </summary>
+    Task<List<NayaxMachineAlert>> GetMachineLastAlertsAsync(long machineId, CancellationToken ct = default);
 }
