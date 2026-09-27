@@ -385,7 +385,7 @@ describe('documentation-impact gate: implementation workflow', () => {
 
   it('requires every documentation requirement in the implementation prompt and the validator in its allowed tools', () => {
     for (const required of IMPLEMENT_JOB_DOCUMENTATION_CONTRACT.prompt) {
-      assertGateRejects({ [implementPath]: removeAll(implementWorkflow, required) }, /(?:implementation prompt|implementation result): missing required text/);
+      assertGateRejects({ [implementPath]: removeAll(implementWorkflow, required) }, /(?:implement prompt|implementation prompt|implementation result): missing required text/);
     }
     assertGateRejects(
       { [implementPath]: replaceOnce(implementWorkflow, `,Bash(node ${DOCUMENTATION_IMPACT_VALIDATOR} --pr-body *)`, '') },
