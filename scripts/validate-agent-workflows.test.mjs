@@ -197,9 +197,13 @@ describe('validate.yml status-context contract', () => {
 });
 
 describe('agent-review.yml consumes only the exact-SHA status', () => {
-  it('requires a successful agent-validation status and never merge-validation', () => {
+  it('requires a successful agent-validation status and never uses merge-validation as review evidence', () => {
     assert.ok(reviewWorkflow.includes('select(.context == "agent-validation")'));
-    assert.ok(!reviewWorkflow.includes(MERGE_VALIDATION_STATUS));
+    const reviewContext = reviewWorkflow.slice(
+      reviewWorkflow.indexOf('  context:\n'),
+      reviewWorkflow.indexOf('  review:\n'),
+    );
+    assert.ok(!reviewContext.includes(MERGE_VALIDATION_STATUS));
   });
 
   it('rejects a review guard that would accept the merge-result status', () => {
@@ -381,7 +385,7 @@ describe('documentation-impact gate: implementation workflow', () => {
 
   it('requires every documentation requirement in the implementation prompt and the validator in its allowed tools', () => {
     for (const required of IMPLEMENT_JOB_DOCUMENTATION_CONTRACT.prompt) {
-      assertGateRejects({ [implementPath]: replaceOnce(implementWorkflow, required, 'weakened') }, /implement prompt: missing required text/);
+      assertGateRejects({ [implementPath]: removeAll(implementWorkflow, required) }, /implement prompt: missing required text/);
     }
     assertGateRejects(
       { [implementPath]: replaceOnce(implementWorkflow, `,Bash(node ${DOCUMENTATION_IMPACT_VALIDATOR} --pr-body *)`, '') },
@@ -474,7 +478,7 @@ describe('review dispatch contract', () => {
     const unsafe = replaceOnce(reviewWorkflow, 'types: [labeled]', 'types: [labeled, synchronize]');
     assert.throws(
       () => runContractChecks({ read: readWithOverrides({ [reviewPath]: unsafe }) }),
-      /agent-review.yml triggers: contains forbidden text: synchronize/,
+      /agent-review.yml triggers: (missing required text: types: \[labeled\]|contains forbidden text: synchronize)/,
     );
   });
 });
@@ -528,7 +532,7 @@ describe('architecture pass contract', () => {
       const weakened = replaceOnce(workflow, 'EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}', '# removed');
       assert.throws(
         () => runContractChecks({ read: readWithOverrides({ [path]: weakened }) }),
-        /(architecture target|validation dispatcher|dispatched context|review dispatcher): missing required text/,
+        /(implementation publish|architecture target|validation dispatcher|dispatched context|review dispatcher): missing required text/,
       );
     }
   });
@@ -558,10 +562,10 @@ describe('architecture pass contract', () => {
       'AGENT_BLOCKED: ${{ steps.implementation_result.outputs.blocked }}',
       '[ "$AGENT_BLOCKED" = "true" ]',
     ]) {
-      const weakened = replaceOnce(implementWorkflow, required, '# removed');
+      const weakened = removeAll(implementWorkflow, required);
       assert.throws(
         () => runContractChecks({ read: readWithOverrides({ [implementPath]: weakened }) }),
-        /(implementation prompt|implementation result|outcome): missing required text/,
+        /(implementation prompt|implementation result|implementation publish|outcome): missing required text/,
       );
     }
   });
