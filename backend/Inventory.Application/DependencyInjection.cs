@@ -1,4 +1,5 @@
 using Inventory.Application.CatalogReconciliation;
+using Inventory.Application.Categories;
 using Inventory.Application.NayaxFeeSettings;
 using Inventory.Application.Purchases;
 using Inventory.Application.Reporting.Bookkeeping;
@@ -10,6 +11,7 @@ using Inventory.Application.Reporting.MachineProfitability;
 using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Transactions;
+using Inventory.Application.Suppliers;
 using Inventory.Application.Tenancy;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -24,6 +26,13 @@ public static class ApplicationServiceCollectionExtensions
 
         services.AddScoped<ListNayaxFeeRates>();
         services.AddScoped<SaveNayaxFeeRate>();
+        services.AddScoped<ListCategories>();
+        services.AddScoped<GetCategory>();
+        services.AddScoped<ListSuppliers>();
+        services.AddScoped<GetSupplier>();
+        services.AddScoped<CreateSupplier>();
+        services.AddScoped<UpdateSupplier>();
+        services.AddScoped<DeleteSupplier>();
         services.AddScoped<GetNayaxCatalogReconciliation>();
         services.AddScoped<ComputePurchaseTotalValidation>();
         services.AddScoped<GetBookkeepingReport>();
