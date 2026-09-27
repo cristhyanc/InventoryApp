@@ -7,7 +7,7 @@ name: Agent implementation
 # - Works from the latest `develop`, on a feature branch named `agent/issue-<n>-*`.
 # - Runs the complete repository validation and opens a pull request targeting `develop`.
 # - Never merges, deploys, or pushes to `develop`/`main`. Branch protection must also enforce this.
-# - The GitHub token is the job-scoped GITHUB_TOKEN; the Anthropic credential is CLAUDE_CODE_OAUTH_TOKEN.
+# - Agent branch/PR mutations use a short-lived, repository-scoped GitHub App token; deterministic workflow bookkeeping and dispatch use GITHUB_TOKEN. The Anthropic credential is CLAUDE_CODE_OAUTH_TOKEN.
 #
 # Before implementation starts, a separate read-only preflight job checks out trusted `develop` and
 # validates the issue's documentation-impact declaration (scripts/validate-documentation-impact.mjs).
@@ -15,7 +15,8 @@ name: Agent implementation
 # is created, and no label changes. The check is deliberately not a step of the implementation job,
 # whose always-running outcome step would otherwise relabel the issue after a preflight failure.
 #
-# The pull request is opened with the workflow token. A separate least-privilege job verifies the
+# Claude prepares a local commit and PR metadata; a deterministic step mints a fresh repository-scoped
+# GitHub App token to push the branch and open the pull request. A separate least-privilege job verifies the
 # resulting PR, applies the `agent-review` label to it as a deterministic step (Claude itself is
 # never granted `gh pr edit`/`gh label`), and dispatches trusted validation from `main` for its
 # exact head SHA with dispatch_review=true, so the initial independent review starts automatically
@@ -75,7 +76,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     permissions:
-      contents: write
+      contents: read
       pull-requests: write
       issues: write
     outputs:
@@ -93,6 +94,7 @@ jobs:
         with:
           ref: develop
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up .NET
         uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
@@ -140,41 +142,42 @@ jobs:
             4a. Follow the issue's Documentation impact decision exactly. If it is "Documentation changes required", update every documentation file and section listed in the Documentation impact details on your feature branch, in this same change, so the documentation is accurate for the merged result. If it is "No documentation changes required" but your change nevertheless makes documentation (AGENTS.md, docs/, README.md, templates) inaccurate, update that documentation too and state the discrepancy with the issue explicitly in the pull request body and in your issue comment. Never leave documentation that the change contradicts.
             5. Run the complete repository validation once in the foreground with exactly `bash scripts/validate.sh`, wait for it to terminate, inspect its exit code and retain its actual output for the pull request. Never use `&`, `nohup`, `run_in_background`, redirected background execution, concurrent validation processes, or any mechanism that returns before validation completes. If validation fails because of your change, fix the change and rerun it synchronously. Never weaken, skip, or delete a failing test to get a green result. If it fails for an environmental reason, record the exact failing command and output. A started or still-running command is not validation evidence.
             6. Review your diff for secrets, local databases, generated output, accidental migrations, and unrelated edits.
-            7. Commit with focused, descriptive messages and push with exactly `git push -u origin agent/issue-${{ github.event.issue.number }}-<short-kebab-slug>`. Do not force-push.
-            8. Open one pull request targeting develop with `gh pr create --base develop --head <branch> --title "..." --body-file <file>`. The body must follow .github/pull_request_template.md, include `Closes #${{ github.event.issue.number }}`, address each acceptance criterion, describe scope and exclusions, paste the actual validation commands and their real result, list tests added or changed and the observed initial failing test (or explain why test-first was unsuitable), fill the impact table, and state known limitations and suggested follow-up work. Fill the "## Documentation impact" section accurately with exactly one `Decision:` line and one `Evidence:` line: `Decision: UPDATED` when this pull request changes documentation, with Evidence listing each documentation file and what changed in it; `Decision: NOT REQUIRED` only when no documentation changed, with Evidence explaining for this specific change why behaviour, contracts, architecture, configuration, automation, deployment, operations and user workflows are unaffected. "None", "N/A", "Not applicable", generic sentences and the template placeholders are rejected by CI. Before creating the pull request, check the body file with `node scripts/validate-documentation-impact.mjs --pr-body <file>` and fix it until it passes. Do not apply labels, do not request reviewers, do not merge.
-            9. Post a short comment on the issue with `gh issue comment` linking the pull request and summarising the validation result.
-            10. Before finishing, run `gh pr view --json number,url,state,baseRefName,headRefName,headRefOid` and verify that exactly one open pull request exists, targets `develop`, uses your current feature branch, and points to `git rev-parse HEAD`. Do not produce your final response while validation is running or before the commit, push, pull-request creation and this verification have all completed. If any postcondition is false, continue working or report the concrete blocker on the issue; never describe partial work as complete.
+            7. Commit the completed implementation locally with focused, descriptive messages. Do not push any branch and do not create or edit a pull request; the workflow performs those remote mutations after your invocation with a separate short-lived GitHub App token that is never exposed to you.
+            8. Prepare the pull request metadata as two untracked scratch files in the repository root: `.agent-pr-title` containing exactly the PR title, and `.agent-pr-body.md` containing the complete body. The body must follow .github/pull_request_template.md, include `Closes #${{ github.event.issue.number }}`, address each acceptance criterion, describe scope and exclusions, paste the actual validation commands and their real result, list tests added or changed and the observed initial failing test (or explain why test-first was unsuitable), fill the impact table, and state known limitations and suggested follow-up work. Fill the "## Documentation impact" section accurately with exactly one `Decision:` line and one `Evidence:` line: `Decision: UPDATED` when this pull request changes documentation, with Evidence listing each documentation file and what changed in it; `Decision: NOT REQUIRED` only when no documentation changed, with Evidence explaining for this specific change why behaviour, contracts, architecture, configuration, automation, deployment, operations and user workflows are unaffected. "None", "N/A", "Not applicable", generic sentences and the template placeholders are rejected by CI. Run `node scripts/validate-documentation-impact.mjs --pr-body .agent-pr-body.md` and fix it until it passes. Never add or commit either scratch file.
+            9. Before finishing, verify that validation has terminated successfully, the current branch matches `agent/issue-${{ github.event.issue.number }}-*`, the index and tracked working tree are clean, `git rev-parse HEAD` is your completed local commit, and both scratch files exist and are untracked. Do not push, create a PR, apply labels, request reviewers, merge, or describe partial work as complete.
 
             Completion is valid only when all of these postconditions are true:
             - `bash scripts/validate.sh` terminated in this session and its exit code and result are known;
             - the working tree and index contain no tracked changes;
             - the current branch matches `agent/issue-${{ github.event.issue.number }}-*`;
-            - the current HEAD was pushed to that same remote branch;
-            - exactly one open, non-draft pull request targets `develop` from that branch; and
-            - the pull request head SHA equals `git rev-parse HEAD`.
+            - the completed implementation is committed locally;
+            - `.agent-pr-title` and `.agent-pr-body.md` exist and are untracked; and
+            - `node scripts/validate-documentation-impact.mjs --pr-body .agent-pr-body.md` passed.
 
             Hard limits: do not merge, approve, deploy, run migrations against any environment, modify labels, change workflows, secrets or repository settings, touch anything outside the acceptance criteria, or claim a command passed unless it ran and succeeded in this session.
           claude_args: |
             --max-turns 250
             --allowedTools "Read,Glob,Grep,Edit,MultiEdit,Write"
-            "Bash(gh issue view *),Bash(gh issue comment *),Bash(gh pr create *),Bash(gh pr view *),Bash(gh pr list *)"
+            "Bash(gh issue view *),Bash(gh issue comment *),Bash(gh pr view *),Bash(gh pr list *)"
             "Bash(git status *),Bash(git diff *),Bash(git log *),Bash(git show *),Bash(git branch --show-current),Bash(git rev-parse *)"
             "Bash(git checkout -b agent/issue-${{ github.event.issue.number }}-*),Bash(git switch -c agent/issue-${{ github.event.issue.number }}-*)"
             "Bash(git rm -- backend/*),Bash(git rm -- frontend/*),Bash(git rm -- docs/*),Bash(git rm -- scripts/*)"
-            "Bash(git add *),Bash(git commit *),Bash(git push -u origin agent/issue-${{ github.event.issue.number }}-*)"
+            "Bash(git add *),Bash(git commit *)"
             "Bash(bash scripts/validate.sh),Bash(dotnet *),Bash(npm --prefix frontend/inventory-app *),Bash(node scripts/validate-documentation-impact.mjs --pr-body *)"
             --disallowedTools "Agent,WebFetch,WebSearch"
-            "Bash(git push * --force *),Bash(git push * -f *),Bash(git push * --force-with-lease *),Bash(git push --force *),Bash(git push -f *)"
+            "Bash(git push *),Bash(git push * --force *),Bash(git push * -f *),Bash(git push * --force-with-lease *),Bash(git push --force *),Bash(git push -f *)"
             "Bash(git reset --hard *),Bash(git rebase *),Bash(git checkout develop *),Bash(git checkout main *),Bash(git switch develop *),Bash(git switch main *)"
-            "Bash(gh pr merge *),Bash(gh pr review *),Bash(gh pr edit *),Bash(gh issue edit *),Bash(gh api *),Bash(gh workflow *),Bash(gh run *),Bash(gh release *),Bash(gh secret *),Bash(gh variable *)"
-      - name: Verify the architecture pass target
-        id: architecture_target
+            "Bash(gh pr create *),Bash(gh pr merge *),Bash(gh pr review *),Bash(gh pr edit *),Bash(gh issue edit *),Bash(gh api *),Bash(gh workflow *),Bash(gh run *),Bash(gh release *),Bash(gh secret *),Bash(gh variable *)"
+      - name: Verify implementation result
+        id: implementation_result
         if: steps.claude.outcome == 'success'
         run: |
           set -euo pipefail
           {
-            echo "pr_ready=false"
+            echo "ready=false"
             echo "blocked=false"
+            echo "branch="
+            echo "head_sha="
           } >> "$GITHUB_OUTPUT"
 
           branch="$(git branch --show-current)"
@@ -183,21 +186,110 @@ jobs:
              [ -z "$(git ls-files -- .agent-run-status)" ] &&
              [ "$(cat .agent-run-status)" = "blocked" ]; then
             echo "blocked=true" >> "$GITHUB_OUTPUT"
-            echo "Implementation agent intentionally stopped for a human decision; skipping PR/architecture target verification."
+            echo "Implementation agent intentionally stopped for a human decision."
             exit 0
           fi
 
           [[ "$branch" == agent/issue-"$ISSUE_NUMBER"-* ]] || { echo "::error::Unexpected feature branch: $branch"; exit 1; }
-          pr_json="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --base develop --head "$branch" \
-            --json number,headRefOid --jq 'if length == 1 then .[0] else {} end')"
-          pr_number="$(jq -r '.number // empty' <<<"$pr_json")"
-          head_sha="$(jq -r '.headRefOid // empty' <<<"$pr_json")"
-          [[ "$pr_number" =~ ^[1-9][0-9]*$ ]] || { echo "::error::No unique open PR for $branch"; exit 1; }
+          git diff --quiet || { echo "::error::Tracked working-tree changes remain after implementation"; exit 1; }
+          git diff --cached --quiet || { echo "::error::Staged changes remain after implementation"; exit 1; }
+          [ -f .agent-pr-title ] || { echo "::error::Missing .agent-pr-title"; exit 1; }
+          [ -f .agent-pr-body.md ] || { echo "::error::Missing .agent-pr-body.md"; exit 1; }
+          [ -z "$(git ls-files -- .agent-pr-title .agent-pr-body.md)" ] || { echo "::error::PR metadata scratch files must remain untracked"; exit 1; }
+
+          title="$(cat .agent-pr-title)"
+          [ -n "$title" ] || { echo "::error::PR title is empty"; exit 1; }
+          [[ "$title" != *$'\n'* ]] || { echo "::error::PR title must be a single line"; exit 1; }
+          [ "${#title}" -le 256 ] || { echo "::error::PR title is too long"; exit 1; }
+          node scripts/validate-documentation-impact.mjs --pr-body .agent-pr-body.md
+
+          head_sha="$(git rev-parse HEAD)"
+          [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Could not resolve implementation HEAD"; exit 1; }
+
+          {
+            echo "ready=true"
+            echo "branch=$branch"
+            echo "head_sha=$head_sha"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub App token for implementation publish
+        id: implementation_app_token
+        if: steps.implementation_result.outputs.ready == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.AGENT_AUTOMATION_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AGENT_AUTOMATION_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Push implementation and create pull request
+        id: publish_implementation
+        if: steps.implementation_result.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ steps.implementation_app_token.outputs.token }}
+          BRANCH: ${{ steps.implementation_result.outputs.branch }}
+          HEAD_SHA: ${{ steps.implementation_result.outputs.head_sha }}
+          EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          [ -n "$EXPECTED_AGENT_AUTHOR" ] || fail "AGENT_AUTOMATION_APP_BOT_LOGIN is not configured."
+          [ "$(git branch --show-current)" = "$BRANCH" ] || fail "Local branch changed before publish."
+          [ "$(git rev-parse HEAD)" = "$HEAD_SHA" ] || fail "Local HEAD changed before publish."
+
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$BRANCH"
+
+          title="$(cat .agent-pr-title)"
+          pr_url="$(gh pr create --repo "$GITHUB_REPOSITORY" --base develop --head "$BRANCH" --title "$title" --body-file .agent-pr-body.md)"
+          pr_number="$(gh pr view "$pr_url" --repo "$GITHUB_REPOSITORY" --json number --jq '.number')"
+          [[ "$pr_number" =~ ^[1-9][0-9]*$ ]] || fail "Could not determine created pull request number."
+
           pr_meta="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr_number")"
-          jq -e --arg repo "$GITHUB_REPOSITORY" '.state == "open" and .draft == false and .base.ref == "develop" and .head.repo.full_name == $repo and .user.login == "github-actions[bot]"' <<<"$pr_meta" > /dev/null || { echo "::error::PR is not a same-repository agent PR"; exit 1; }
-          [ "$(git rev-parse HEAD)" = "$head_sha" ] || { echo "::error::Local HEAD does not match the open PR"; exit 1; }
+          jq -e --arg repo "$GITHUB_REPOSITORY" --arg author "$EXPECTED_AGENT_AUTHOR" --arg branch "$BRANCH" --arg sha "$HEAD_SHA"             '.state == "open" and .draft == false and .base.ref == "develop" and .head.repo.full_name == $repo and .head.ref == $branch and .head.sha == $sha and .user.login == $author'             <<<"$pr_meta" >/dev/null || fail "Created pull request failed the agent PR identity/head checks."
+
           {
             echo "pr_number=$pr_number"
+            echo "pr_url=$pr_url"
+            echo "branch=$BRANCH"
+            echo "head_sha=$HEAD_SHA"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Comment with opened pull request
+        if: steps.publish_implementation.outcome == 'success'
+        env:
+          PR_URL: ${{ steps.publish_implementation.outputs.pr_url }}
+          HEAD_SHA: ${{ steps.publish_implementation.outputs.head_sha }}
+        run: |
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY"             --body "Implementation was validated and published as $PR_URL at head $HEAD_SHA. The independent architecture pass runs next. Run: $RUN_URL"
+
+      - name: Verify the architecture pass target
+        id: architecture_target
+        if: steps.publish_implementation.outcome == 'success'
+        env:
+          EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}
+        run: |
+          set -euo pipefail
+          branch="${{ steps.publish_implementation.outputs.branch }}"
+          expected_pr="${{ steps.publish_implementation.outputs.pr_number }}"
+          expected_sha="${{ steps.publish_implementation.outputs.head_sha }}"
+
+          [ "$(git branch --show-current)" = "$branch" ] || { echo "::error::Unexpected local branch before architecture pass"; exit 1; }
+          pr_json="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --base develop --head "$branch"             --json number,headRefOid --jq 'if length == 1 then .[0] else {} end')"
+          pr_number="$(jq -r '.number // empty' <<<"$pr_json")"
+          head_sha="$(jq -r '.headRefOid // empty' <<<"$pr_json")"
+          [ "$pr_number" = "$expected_pr" ] || { echo "::error::No unique expected open PR for $branch"; exit 1; }
+          [ "$head_sha" = "$expected_sha" ] || { echo "::error::Published PR head changed before architecture pass"; exit 1; }
+          [ -n "$EXPECTED_AGENT_AUTHOR" ] || { echo "::error::AGENT_AUTOMATION_APP_BOT_LOGIN is not configured"; exit 1; }
+
+          pr_meta="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr_number")"
+          jq -e --arg repo "$GITHUB_REPOSITORY" --arg author "$EXPECTED_AGENT_AUTHOR"             '.state == "open" and .draft == false and .base.ref == "develop" and .head.repo.full_name == $repo and .user.login == $author'             <<<"$pr_meta" >/dev/null || { echo "::error::PR is not a same-repository agent PR authored by $EXPECTED_AGENT_AUTHOR"; exit 1; }
+          [ "$(git rev-parse HEAD)" = "$head_sha" ] || { echo "::error::Local HEAD does not match the open PR"; exit 1; }
+
+          {
+            echo "pr_number=$pr_number"
+            echo "branch=$branch"
+            echo "head_sha=$head_sha"
             echo "pr_ready=true"
           } >> "$GITHUB_OUTPUT"
 
@@ -222,7 +314,7 @@ jobs:
 
             Before editing, check whether your proposed change would require a migration, change documented architecture or the PR's Documentation impact declaration, expand the approved scope, alter a test expectation, or require a human decision. If so, make no change; comment on the PR with the exact finding for human review. Do not edit the issue or PR body. Never weaken, skip, or delete tests. Do not change workflows, secrets, configuration, or deployment.
 
-            If you edit: run `bash scripts/validate.sh`; if validation fails, fix only your structural change and rerun it. Check the final diff against the issue and PR body, commit a focused architecture change, and push only the current agent/issue-${{ github.event.issue.number }}-* branch without force. Do not push when validation fails. Comment on the PR with the structural changes and exact validation result. If you make no edits, comment briefly that no in-scope architectural corrections were needed. Never claim a command passed unless it ran successfully.
+            If you edit: run `bash scripts/validate.sh`; if validation fails, fix only your structural change and rerun it. Check the final diff against the issue and PR body and commit a focused architecture change locally. Do not push; a deterministic workflow step will mint a fresh GitHub App token and push the verified local head after your invocation. Comment on the PR with the structural changes and exact validation result. If you make no edits, comment briefly that no in-scope architectural corrections were needed. Never claim a command passed unless it ran successfully.
 
             Never merge, approve, deploy, edit labels, open another PR, change the PR description, or modify production data. Independent exact-SHA validation and review still follow this stage.
           claude_args: |
@@ -231,11 +323,53 @@ jobs:
             "Bash(gh issue view *),Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr list *),Bash(gh pr comment *)"
             "Bash(git status *),Bash(git diff *),Bash(git log *),Bash(git show *),Bash(git branch --show-current),Bash(git rev-parse *)"
             "Bash(git rm -- backend/*),Bash(git rm -- frontend/*),Bash(git rm -- docs/*),Bash(git rm -- scripts/*)"
-            "Bash(git add *),Bash(git commit *),Bash(git push origin agent/issue-${{ github.event.issue.number }}-*)"
+            "Bash(git add *),Bash(git commit *)"
             "Bash(bash scripts/validate.sh),Bash(dotnet *),Bash(npm --prefix frontend/inventory-app *)"
             --disallowedTools "Agent,WebFetch,WebSearch"
-            "Bash(git push * --force *),Bash(git push * -f *),Bash(git push * --force-with-lease *),Bash(git reset --hard *),Bash(git rebase *)"
+            "Bash(git push *),Bash(git push * --force *),Bash(git push * -f *),Bash(git push * --force-with-lease *),Bash(git reset --hard *),Bash(git rebase *)"
             "Bash(git checkout *),Bash(git switch *),Bash(gh pr merge *),Bash(gh pr review *),Bash(gh pr edit *),Bash(gh pr create *),Bash(gh issue edit *),Bash(gh api *),Bash(gh workflow *),Bash(gh run *)"
+
+      - name: Verify architecture result
+        id: architecture_result
+        if: steps.architect.outcome == 'success'
+        env:
+          START_SHA: ${{ steps.architecture_target.outputs.head_sha }}
+          BRANCH: ${{ steps.architecture_target.outputs.branch }}
+        run: |
+          set -euo pipefail
+          [ "$(git branch --show-current)" = "$BRANCH" ] || { echo "::error::Architecture pass changed branch"; exit 1; }
+          git diff --quiet || { echo "::error::Tracked working-tree changes remain after architecture pass"; exit 1; }
+          git diff --cached --quiet || { echo "::error::Staged changes remain after architecture pass"; exit 1; }
+          head_sha="$(git rev-parse HEAD)"
+          [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Could not resolve architecture HEAD"; exit 1; }
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+          if [ "$head_sha" = "$START_SHA" ]; then
+            echo "push_required=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "push_required=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub App token for architecture publish
+        id: architecture_app_token
+        if: steps.architecture_result.outputs.push_required == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.AGENT_AUTOMATION_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AGENT_AUTOMATION_APP_PRIVATE_KEY }}
+          permission-contents: write
+
+      - name: Push architecture head
+        id: publish_architecture
+        if: steps.architecture_result.outputs.push_required == 'true'
+        env:
+          GH_TOKEN: ${{ steps.architecture_app_token.outputs.token }}
+          BRANCH: ${{ steps.architecture_target.outputs.branch }}
+          HEAD_SHA: ${{ steps.architecture_result.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          [ "$(git branch --show-current)" = "$BRANCH" ] || { echo "::error::Local branch changed before architecture publish"; exit 1; }
+          [ "$(git rev-parse HEAD)" = "$HEAD_SHA" ] || { echo "::error::Local HEAD changed before architecture publish"; exit 1; }
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$BRANCH"
 
       - name: Record outcome on the issue
         id: outcome
@@ -244,7 +378,8 @@ jobs:
           CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
           ARCHITECT_OUTCOME: ${{ steps.architect.outcome }}
           TARGET_OUTCOME: ${{ steps.architecture_target.outcome }}
-          AGENT_BLOCKED: ${{ steps.architecture_target.outputs.blocked }}
+          ARCHITECTURE_RESULT_OUTCOME: ${{ steps.architecture_result.outcome }}
+          AGENT_BLOCKED: ${{ steps.implementation_result.outputs.blocked }}
         run: |
           set -euo pipefail
           {
@@ -275,6 +410,7 @@ jobs:
           elif [ "$CLAUDE_OUTCOME" = "success" ] &&
              [ "$TARGET_OUTCOME" = "success" ] &&
              [ "$ARCHITECT_OUTCOME" = "success" ] &&
+             [ "$ARCHITECTURE_RESULT_OUTCOME" = "success" ] &&
              [ "$(git branch --show-current)" = "$(jq -r '.headRefName // empty' <<<"$pr_json")" ] &&
              [ "$(git rev-parse HEAD)" = "$head_sha" ] &&
              git diff --quiet &&
@@ -327,6 +463,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ needs.implement.outputs.pr_number }}
           HEAD_SHA: ${{ needs.implement.outputs.head_sha }}
+          EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}
         run: |
           set -euo pipefail
           fail() { echo "::error::$1"; exit 1; }
@@ -347,7 +484,8 @@ jobs:
           [ "$base_ref" = "develop" ] || fail "Automated validation is limited to pull requests targeting develop."
           [ "$head_repo" = "$GITHUB_REPOSITORY" ] || fail "Automated validation is limited to same-repository branches."
           [[ "$head_ref" == agent/issue-* ]] || fail "Automated validation requires an agent/issue-* head branch."
-          [ "$author" = "github-actions[bot]" ] || fail "Automated validation requires github-actions[bot] as the pull request author."
+          [ -n "$EXPECTED_AGENT_AUTHOR" ] || fail "AGENT_AUTOMATION_APP_BOT_LOGIN is not configured."
+          [ "$author" = "$EXPECTED_AGENT_AUTHOR" ] || fail "Automated validation requires $EXPECTED_AGENT_AUTHOR as the pull request author."
           [ "$current_sha" = "$HEAD_SHA" ] || fail "Refusing stale validation dispatch: pull request head is $current_sha, expected $HEAD_SHA."
 
           changed_files="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" --jq '.[].filename')"
