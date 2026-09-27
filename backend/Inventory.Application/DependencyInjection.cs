@@ -44,6 +44,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<IGetProductProfitabilityReport>(sp => sp.GetRequiredService<GetProductProfitabilityReport>());
         services.AddScoped<GetGstAccountingAid>();
         services.AddScoped<GetDashboardReport>();
+        services.AddScoped<GetInventoryValuationSummary>();
         services.AddScoped<GetTransactionSalesReport>();
         services.AddScoped<GetReportExportRows>();
 

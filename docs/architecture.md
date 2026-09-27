@@ -712,7 +712,7 @@ Site commissions use effective-dated agreements and one of three bases: gross sa
 - `Product.MachinePrice` (`[NotMapped]`) — the machine-specific live price, sourced from the per-machine Nayax `RetailPrice` (`NayaxMachineProduct.RetailPrice`) in `MachineService`/`SiteService`;
 - the Nayax `ProductCostPrice` field on an imported sale (`NayaxSales.NayaxProductCostPrice`) — a genuine cost value used for historical COGS, never a selling price. `ImportService.ImportProductsAsync` previously set `UnitPrice` from this cost field by mistake; it now uses the catalog `RetailPrice` instead.
 
-The public property name `UnitPrice` is retained for API/contract compatibility. Only the Nayax catalog import may change its value; `ProductService.Update` and the product edit UI treat it as Nayax-managed and read-only. The dashboard's low-stock inventory-value figure currently multiplies `quantityInStock * unitPrice`, which is a selling-price valuation, not a cost valuation; issue #42 owns that correction and it must not be replicated elsewhere.
+The public property name `UnitPrice` is retained for API/contract compatibility. Only the Nayax catalog import may change its value; `ProductService.Update` and the product edit UI treat it as Nayax-managed and read-only. It is never an inventory-valuation input: the home Dashboard's "Inventory Value" tile is a backend-authoritative cost valuation (see [Dashboard "Inventory Value" tile](#dashboard-inventory-value-tile-issue-42) below, issue #42), and a `quantityInStock * unitPrice` selling-price valuation must not be introduced anywhere.
 
 ### Historical inventory cost
 
@@ -731,6 +731,27 @@ Historical sale cost precedence is:
 3. uncosted/unknown.
 
 Current product cost and selling price are never substitutes for historical cost. Reports preserve partial COGS and quality counts and do not turn missing cost into zero.
+
+#### Dashboard "Inventory Value" tile (issue #42)
+
+The home Dashboard's "Inventory Value" tile (`DashboardComponent`, distinct from the reporting
+dashboard at `/reports/dashboard`, `GetDashboardReport`) represents the business-owned perpetual
+inventory value described above - the sum of every product's persisted `InventoryValue` (the AVCO
+valuation `InventoryCostRebuildService` maintains) - not `QuantityInStock * UnitPrice` retail value
+and not home/storage stock quantity on its own.
+
+The backend is authoritative: `Inventory.Domain.Reporting.Dashboard.InventoryValuationPolicy`
+aggregates the per-product values, `Inventory.Application.Reporting.Dashboard.GetInventoryValuationSummary`
+is the use case (retrieving them through the narrow `IInventoryValuationFactsProvider` port, whose
+temporary EF adapter is `InventoryApi.Adapters.Persistence.EfInventoryValuationFactsProvider`), and
+`ProductsController` exposes it as `GET /api/products/inventory-value-summary`. A product's
+`InventoryValue` is `null` only when it has never had a cost rebuild run for it - a genuinely
+unknown cost, not a zero one - so the policy makes the whole total unavailable
+(`InventoryValuationSummaryDto.IsComplete = false`, `TotalInventoryValue = null`) whenever any
+product's cost is unknown, rather than silently summing only the known ones. Angular
+(`DashboardComponent`) only displays the returned total and status - it performs no valuation
+calculation of its own - showing "Unavailable" plus how many of how many products are missing cost
+data instead of a real `$0.00` when costing is incomplete.
 
 ### Profit levels
 
