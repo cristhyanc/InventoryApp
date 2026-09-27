@@ -93,12 +93,31 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/inventory-app/package-lock.json
 
+      - name: Create repository-scoped agent GitHub App token
+        id: agent_app_token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.AGENT_AUTOMATION_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AGENT_AUTOMATION_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
+
+      - name: Refresh App-token git credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ steps.pr.outputs.head_ref }}
+          fetch-depth: 0
+          token: ${{ steps.agent_app_token.outputs.token }}
+
       - name: Run Claude Code repair agent
         id: claude
+        env:
+          GH_TOKEN: ${{ steps.agent_app_token.outputs.token }}
         uses: anthropics/claude-code-action@cfc3eb22bfed5c26ef66e3223c982af27e4524de # v1.0.231
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          github_token: ${{ steps.agent_app_token.outputs.token }}
           base_branch: develop
           additional_permissions: |
             actions: read
@@ -230,6 +249,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ needs.repair.outputs.pr_number }}
           HEAD_SHA: ${{ needs.repair.outputs.head_sha }}
+          EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}
         run: |
           set -euo pipefail
           fail() { echo "::error::$1"; exit 1; }
@@ -250,7 +270,8 @@ jobs:
           [ "$base_ref" = "develop" ] || fail "Automated validation is limited to pull requests targeting develop."
           [ "$head_repo" = "$GITHUB_REPOSITORY" ] || fail "Automated validation is limited to same-repository branches."
           [[ "$head_ref" == agent/issue-* ]] || fail "Automated validation requires an agent/issue-* head branch."
-          [ "$author" = "github-actions[bot]" ] || fail "Automated validation requires github-actions[bot] as the pull request author."
+          [ -n "$EXPECTED_AGENT_AUTHOR" ] || fail "AGENT_AUTOMATION_APP_BOT_LOGIN is not configured."
+          [ "$author" = "$EXPECTED_AGENT_AUTHOR" ] || fail "Automated validation requires $EXPECTED_AGENT_AUTHOR as the pull request author."
           [ "$current_sha" = "$HEAD_SHA" ] || fail "Refusing stale validation dispatch: pull request head is $current_sha, expected $HEAD_SHA."
           jq -e 'any(.labels[]?; .name == "agent-review")' <<<"$pr_json" >/dev/null \
             || fail "The agent-review label is required before repair follow-up validation."
