@@ -470,6 +470,38 @@ describe('architecture pass contract', () => {
     assert.doesNotThrow(() => verifyArchitecturePass(implementWorkflow));
   });
 
+  it('requires repository-scoped GitHub App tokens for implementation, architecture and repair mutations', () => {
+    for (const [path, workflow, required] of [
+      [implementPath, implementWorkflow, 'id: agent_app_token'],
+      [implementPath, implementWorkflow, 'id: architecture_app_token'],
+      [repairPath, repairWorkflow, 'id: agent_app_token'],
+      [implementPath, implementWorkflow, 'client-id: ${{ vars.AGENT_AUTOMATION_APP_CLIENT_ID }}'],
+      [implementPath, implementWorkflow, 'private-key: ${{ secrets.AGENT_AUTOMATION_APP_PRIVATE_KEY }}'],
+      [repairPath, repairWorkflow, 'github_token: ${{ steps.agent_app_token.outputs.token }}'],
+    ]) {
+      const weakened = replaceOnce(workflow, required, '# removed');
+      assert.throws(
+        () => runContractChecks({ read: readWithOverrides({ [path]: weakened }) }),
+        /(App token|implementation agent|repair agent|repair checkout): missing required text/,
+      );
+    }
+  });
+
+  it('requires guarded agent PRs to match the configured GitHub App bot login', () => {
+    for (const [path, workflow] of [
+      [implementPath, implementWorkflow],
+      [repairPath, repairWorkflow],
+      [validatePath, validateWorkflow],
+      [reviewPath, reviewWorkflow],
+    ]) {
+      const weakened = replaceOnce(workflow, 'EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}', '# removed');
+      assert.throws(
+        () => runContractChecks({ read: readWithOverrides({ [path]: weakened }) }),
+        /(architecture target|validation dispatcher|dispatched context|review dispatcher): missing required text/,
+      );
+    }
+  });
+
   it('keeps coder and architect work in their foreground invocations', () => {
     const prompt = 'Do not delegate, spawn, or use Claude sub-agents, and do not invoke the \`Agent\` tool.';
     for (const unsafe of [
