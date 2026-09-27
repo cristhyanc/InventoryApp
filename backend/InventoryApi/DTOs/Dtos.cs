@@ -47,7 +47,11 @@ public record RestockCostSuggestionDto(
 
 public record CategoryDto(string Name, string? Description);
 
+public record CategoryResponse(long Id, string Name, string? Description);
+
 public record SupplierDto(string Name, string? ContactName, string? Phone, string? Email, string? Address);
+
+public record SupplierResponse(int Id, string Name, string? ContactName, string? Phone, string? Email, string? Address);
 
 public record PurchaseItemDto(long ProductId, decimal Quantity, decimal UnitCost);
 public record PurchaseCreateMetaDto(string Title, string? Notes, decimal? TotalAmount, decimal? DeliveryCost, decimal? PackageCost, DateTime? PurchaseDate, int? SupplierId, IReadOnlyList<PurchaseItemDto>? Items = null);
