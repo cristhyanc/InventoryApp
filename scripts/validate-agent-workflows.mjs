@@ -371,7 +371,7 @@ function verifySafeDispatcher(text, source, pullRequestsPermission = 'read') {
     `pull-requests: ${pullRequestsPermission}`,
     '--ref main',
     'headRefOid',
-    'EXPECTED_AGENT_AUTHOR',
+    'EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}',
     'agent/issue-*',
     '.github/workflows/',
   ]) {
@@ -791,6 +791,8 @@ export function verifyArchitecturePass(workflow) {
   for (const required of [
     'id: implementation_result',
     '.agent-run-status',
+    '[ -z "$(git ls-files -- .agent-run-status)" ]',
+    '[ "$(cat .agent-run-status)" = "blocked" ]',
     'echo "blocked=true"',
     '.agent-pr-title',
     '.agent-pr-body.md',
@@ -1126,6 +1128,11 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
   }
 
   const reviewContext = section(review, '  context:\n', '  review:\n', reviewPath);
+  requireText(
+    reviewContext,
+    'EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}',
+    'agent-review.yml dispatched context',
+  );
   verifyAgentPrGuards(normalizeGuardVariables(reviewContext), 'agent-review.yml dispatched context', 'Refusing stale review');
   requireText(reviewContext, 'statuses: read', 'agent-review.yml dispatched context');
   requireText(reviewContext, 'any(.labels[]?; .name == "agent-review")', 'agent-review.yml dispatched context');
