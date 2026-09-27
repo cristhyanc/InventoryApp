@@ -216,7 +216,7 @@ public class PurchaseService : IPurchaseService
 
     public async Task<Purchase?> Update(int id, string? title, string? notes, decimal? totalAmount, decimal? deliveryCost, decimal? packageCost, DateTime? purchaseDate, int? supplierId, IReadOnlyList<PurchaseItemDto>? items = null)
     {
-        var purchase = await _db.Receipts.Include(r => r.Supplier).Include(r => r.Items)
+        var purchase = await _db.Receipts.Include(r => r.Supplier).Include(r => r.Items).ThenInclude(i => i.Product)
             .FirstOrDefaultAsync(r => r.Id == id);
         if (purchase is null) return null;
 

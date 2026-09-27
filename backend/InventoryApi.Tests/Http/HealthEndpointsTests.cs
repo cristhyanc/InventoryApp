@@ -60,7 +60,6 @@ public sealed class HealthEndpointsTests : IClassFixture<HealthEndpointsTests.Ap
 
                 services.AddDbContext<AppDbContext>(options =>
                 {
-                    options.UseLazyLoadingProxies();
                     options.UseSqlite(_connection);
                 });
             });
@@ -138,7 +137,6 @@ public sealed class HealthEndpointsDatabaseUnavailableTests : IClassFixture<Heal
 
                 services.AddDbContext<AppDbContext>(options =>
                 {
-                    options.UseLazyLoadingProxies();
                     options.UseSqlite(connectionString);
                 });
             });

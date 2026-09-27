@@ -229,6 +229,43 @@ public sealed class OperatingExpensesControllerTests : IDisposable
         Assert.Equal(new DateTimeOffset(written, TimeSpan.Zero), file.LastModified);
     }
 
+    /// <summary>
+    /// The supplier attached to an updated expense must come back from an explicit query rather
+    /// than lazy loading (issue #52). Seeding and updating each use their own
+    /// <see cref="AppDbContext"/> instance - as separate requests would - so no in-memory
+    /// change-tracker fixup from a shared context can mask a missing load.
+    /// </summary>
+    [Fact]
+    public async Task Update_ReturnsSupplierWithoutLazyLoading()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        int expenseId;
+        await using (var seed = CreateDbContext(dbName))
+        {
+            seed.Suppliers.Add(new Supplier { Id = 1, Name = "Acme" });
+            seed.OperatingExpenses.Add(new OperatingExpense
+            {
+                ExpenseDate = DateTime.UtcNow.Date,
+                Category = OperatingExpenseCategory.Insurance,
+                Description = "Monthly insurance",
+                AmountExGst = 10m,
+                GstAmount = 1m,
+                TotalAmount = 11m,
+            });
+            await seed.SaveChangesAsync();
+            expenseId = (await seed.OperatingExpenses.AsNoTracking().SingleAsync()).Id;
+        }
+
+        await using var db = CreateDbContext(dbName);
+        var controller = CreateController(db);
+
+        var result = await controller.Update(expenseId, CreateDto() with { SupplierId = 1 }, CancellationToken.None);
+
+        var updated = Assert.IsType<OperatingExpense>(Assert.IsType<OkObjectResult>(result.Result).Value);
+        Assert.NotNull(updated.Supplier);
+        Assert.Equal("Acme", updated.Supplier!.Name);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_contentRoot)) Directory.Delete(_contentRoot, recursive: true);
@@ -238,9 +275,11 @@ public sealed class OperatingExpensesControllerTests : IDisposable
     private string AttachmentPath(string storedFileName) =>
         Path.Combine(_contentRoot, "protected-files", "expenses", storedFileName);
 
-    private AppDbContext CreateDbContext() =>
+    private AppDbContext CreateDbContext() => CreateDbContext(Guid.NewGuid().ToString());
+
+    private static AppDbContext CreateDbContext(string dbName) =>
         TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>()
-            .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .UseInMemoryDatabase(dbName)
             .Options);
 
     private OperatingExpensesController CreateController(AppDbContext db) =>
