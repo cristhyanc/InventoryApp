@@ -3,8 +3,9 @@ name: Agent review
 # Independent review agent (Claude Code) for pull requests that carry `agent-review`.
 #
 # Authority and lifecycle: AGENTS.md ("Automated task contract") and docs/automation.md ("Review agent").
-# - A human applies `agent-review` to request the initial review. Later repair pushes may dispatch a
-#   fresh review automatically, but only after exact-SHA validation succeeds and the label is still present.
+# - The implementation dispatcher applies `agent-review`, then exact-SHA validation dispatches the
+#   initial review automatically. A human may remove/re-apply the label to request another review of
+#   an already validated head. Repair pushes are reviewed only through the post-validation dispatch.
 # - Dispatched runs execute this trusted workflow from `main`, then verify the open, non-draft, same-repository
 #   agent PR, its current head SHA, its successful `agent-validation` status, and the workflow-file exclusion.
 # - Every run is a fresh review of the pull request's current head SHA in a new job with its own context.
@@ -12,7 +13,7 @@ name: Agent review
 
 on:
   pull_request:
-    types: [labeled, synchronize, ready_for_review]
+    types: [labeled]
     branches:
       - develop
   workflow_dispatch:
@@ -116,6 +117,33 @@ jobs:
             [[ "$pr_number" =~ ^[1-9][0-9]*$ ]] || fail "The pull_request event did not contain a valid pull request number."
             [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || fail "The pull_request event did not contain a full head SHA."
             [ "$base_ref" = "develop" ] || fail "Review is limited to pull requests targeting develop."
+            [ -n "$EXPECTED_AGENT_AUTHOR" ] || fail "AGENT_AUTOMATION_APP_BOT_LOGIN is not configured."
+
+            pr_json="$(gh pr view "$pr_number" --repo "$GITHUB_REPOSITORY" \
+              --json state,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,labels)"
+            state="$(jq -r '.state' <<<"$pr_json")"
+            is_draft="$(jq -r '.isDraft' <<<"$pr_json")"
+            head_ref="$(jq -r '.headRefName' <<<"$pr_json")"
+            current_sha="$(jq -r '.headRefOid // empty' <<<"$pr_json")"
+            head_repo="$(jq -r '"\(.headRepositoryOwner.login)/\(.headRepository.name)"' <<<"$pr_json")"
+            author="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr_number" --jq '.user.login // empty')"
+
+            [ "$state" = "OPEN" ] || fail "Pull request #$pr_number is not open."
+            [ "$is_draft" = "false" ] || fail "Pull request #$pr_number is a draft."
+            [ "$head_repo" = "$GITHUB_REPOSITORY" ] || fail "Review is limited to same-repository branches."
+            [[ "$head_ref" == agent/issue-* ]] || fail "Review requires an agent/issue-* head branch."
+            [ "$author" = "$EXPECTED_AGENT_AUTHOR" ] || fail "Review requires $EXPECTED_AGENT_AUTHOR as the pull request author."
+            [ "$current_sha" = "$head_sha" ] || fail "Refusing stale review: pull request head is $current_sha, event SHA is $head_sha."
+
+            changed_files="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$pr_number/files?per_page=100" --jq '.[].filename')"
+            if grep -Eq '^\.github/workflows/' <<<"$changed_files"; then
+              fail "Pull requests that change .github/workflows/** require manual validation and review."
+            fi
+
+            validation_state="$(gh api "repos/$GITHUB_REPOSITORY/commits/$head_sha/status" \
+              --jq '[.statuses[] | select(.context == "agent-validation")][0].state // ""')"
+            [ "$validation_state" = "success" ] \
+              || fail "A manual agent-review request requires a successful latest agent-validation status on the exact head SHA."
           fi
 
           {
@@ -167,7 +195,7 @@ jobs:
             1. CLAUDE.md, AGENTS.md and docs/automation.md (the binding engineering, safety and authority rules); docs/architecture.md where the change touches structure, EF Core, reporting, Nayax, or the Angular layout.
             2. The pull request (`gh pr view ${{ needs.context.outputs.pr_number }} --comments`) and its full diff (`gh pr diff ${{ needs.context.outputs.pr_number }}` or `git diff origin/${{ needs.context.outputs.base_ref }}...HEAD`).
             3. The linked issue named in the PR body (`gh issue view <n> --comments`): its acceptance criteria and explicit exclusions define what the PR was allowed to do.
-            4. The validation evidence: the "Validation commands and actual results" section of the PR body and the actual CI state (`gh pr checks ${{ needs.context.outputs.pr_number }}`, and the github_ci tools or `gh run view` for logs). A claim without matching evidence is not proven. A successful `agent-validation` commit status linked to a dispatched validation run is valid exact-SHA evidence; an approval-required duplicate `pull_request` run for the same bot update is not a failure when that exact-SHA status succeeded.
+            4. The validation evidence: the "Validation commands and actual results" section of the PR body and the actual CI state (`gh pr checks ${{ needs.context.outputs.pr_number }}`, and the github_ci tools or `gh run view` for logs). A claim without matching evidence is not proven. A successful `agent-validation` commit status linked to a dispatched validation run is the authoritative exact-SHA evidence for the review. Normal `merge-validation` runs are independent branch-protection evidence and never substitute for `agent-validation`.
             5. The documentation-impact declarations. Compare three things: the issue's Documentation impact decision and details, the pull request's "## Documentation impact" declaration (Decision and Evidence), and the actual diff. CI only proves that a declaration exists; you decide whether it is truthful.
 
             Evaluate and report on each of:
