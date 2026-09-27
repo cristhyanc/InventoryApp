@@ -371,7 +371,7 @@ function verifySafeDispatcher(text, source, pullRequestsPermission = 'read') {
     `pull-requests: ${pullRequestsPermission}`,
     '--ref main',
     'headRefOid',
-    'EXPECTED_AGENT_AUTHOR',
+    'EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}',
     'agent/issue-*',
     '.github/workflows/',
   ]) {
