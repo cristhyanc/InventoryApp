@@ -262,6 +262,31 @@ sqlite3 /tmp/inventory-check-backup.db "PRAGMA integrity_check;"
 rm /tmp/inventory-check.db /tmp/inventory-check-backup.db
 ```
 
+## Health checks
+
+The API exposes two unauthenticated ASP.NET Core health-check endpoints (issue #164) so Azure App
+Service and operators can tell an API process that is merely running apart from one that can
+actually serve Inventory App requests:
+
+- **`GET /health/live`** — liveness. Returns `200` whenever the process can answer HTTP requests.
+  It runs no dependency checks at all, so it stays healthy through a database, Nayax, Entra ID, or
+  Key Vault outage. Use it only to detect a hung or crashed process.
+- **`GET /health/ready`** — readiness. Returns `200` only when the API can serve normal requests;
+  today that means the database (`AppDbContext`) is reachable, via a health check that calls
+  `Database.CanConnectAsync()`. Returns `503` when the database is unreachable. It deliberately
+  excludes Nayax and Microsoft Entra ID — an outage in either external system must not make the
+  whole Inventory API report unhealthy. Add a dependency to readiness only when it represents
+  something that truly prevents the API from serving requests.
+
+Both endpoints allow anonymous access (`AllowAnonymous()` in `Program.cs`) and are unaffected by
+`BusinessScopeMiddleware`, which already leaves unauthenticated requests alone.
+
+**Azure App Service configuration.** Set the App Service **Health check** path (Portal: App
+Service → Monitoring → Health check; or the `healthCheckPath` site configuration property) to
+`/health/ready`, so App Service routes traffic only to instances that can reach the database and
+restarts instances that cannot. Do not point Health check at `/health/live` — that would keep an
+instance in rotation even while its database connection is down.
+
 ## Validate a change
 
 Run the repository-level validation from the root:
@@ -325,6 +350,8 @@ The complete invariants and change rules are in [AGENTS.md](AGENTS.md).
 Changes are made on feature branches created from `develop` and validated through pull requests that target `develop`. Every pull request to `develop` or `main` runs the validation workflow. A push to `develop` builds and tests the backend without deploying. Production releases are separate pull requests from `develop` to `main`; a merge to `main` triggers the Azure API and frontend deployment workflows. After opening a pull request, an automated engineering agent may update only its feature branch, for at most two permitted repair attempts in response to CI or review failures, and then returns control to a human. It never merges or deploys. An agent may prepare a release pull request only when a human explicitly requests it; a human reviews and merges that pull request, and the existing workflow performs the deployment.
 
 Tasks intended for an implementation agent use the **Agent task** issue form, and every pull request uses the repository pull request template. The agent provider is Claude Code: applying `agent-ready` to a reviewed issue starts the implementation workflow, which opens a pull request, applies `agent-review` to it as a deterministic step, and dispatches validation; once validation succeeds, an independent, comment-only review with an explicit verdict starts automatically, and the repository owner may request at most two repairs by commenting `@claude repair` on that pull request. Human approval and branch protection remain the merge gate. The full lifecycle, authority model, task labels, risk classification, and retry policy are in [docs/automation.md](docs/automation.md).
+
+Agent branch/PR mutations use a dedicated GitHub App installation token rather than the repository `GITHUB_TOKEN`, so normal `pull_request` validation starts automatically for agent-created and agent-updated PRs instead of waiting for **Approve workflows to run**. Claude never receives the App credential: implementation, architecture and repair agents commit locally, then deterministic workflow steps mint a fresh short-lived token immediately before push/PR creation. One-time repository setup: install a dedicated GitHub App only on this repository with **Contents** and **Pull requests** set to read/write (Metadata read is implicit); set repository variables `AGENT_AUTOMATION_APP_CLIENT_ID` and `AGENT_AUTOMATION_APP_BOT_LOGIN`; store the App private key as repository secret `AGENT_AUTOMATION_APP_PRIVATE_KEY`. Do not grant the App Issues, Actions, Administration, Secrets, Deployments, Environments, or workflow-management permissions.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for how to propose a change, and [SECURITY.md](SECURITY.md) for how to report a vulnerability privately.
 

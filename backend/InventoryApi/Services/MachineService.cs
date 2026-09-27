@@ -45,7 +45,12 @@ public class MachineService : IMachineService
     {
         var machine = await _nayaxLynxClient.GetMachineAsync(id);
         var nayaxMachineProducts = await _nayaxLynxClient.GetMachineProductsAsync(id);
-        var productList = await _db.Products.Include(x => x.Category).AsNoTracking().ToListAsync();
+        var productList = await _db.Products
+            .Include(x => x.Category)
+            .Include(x => x.Supplier)
+            .Include(x => x.StockAdjustments)
+            .AsNoTracking()
+            .ToListAsync();
         var today = DateTime.Today;
         var agreements = machine?.CustomerID is long siteId
             ? await _db.SiteCommissionAgreements.AsNoTracking()

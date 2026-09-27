@@ -229,6 +229,7 @@ These rules come from the application's established bookkeeping design. Changing
 
 - `QuantityInStock` represents physical storage/home stock used for replenishment planning.
 - `CostingQuantity` and `InventoryValue` represent business-owned inventory for perpetual weighted-average costing; they are not synonyms for storage quantity.
+- `Product.UnitPrice` is the catalog default/list selling price, synced one-way from the Nayax product catalog's `RetailPrice` field by `ImportService.ImportProductsAsync`. It is a display/default value only: no calculation in `Inventory.Application`/`Inventory.Domain` reads it, and `ProductService.Update`/the product edit UI intentionally treat it as Nayax-managed and read-only. Never conflate it with `AverageUnitCost`/AVCO, historical sale cost, the Nayax `ProductCostPrice`/`NayaxProductCostPrice` cost field, or `Product.MachinePrice` (the machine-specific live price sourced from the per-machine Nayax `RetailPrice`).
 - A receipt-linked restock increases costing quantity/value at its purchase unit cost.
 - `MachineRefill` is an internal transfer from storage to a vending machine. It can reduce storage quantity, but must not reduce business costing quantity/value and must not create COGS.
 - A completed sale reduces costing inventory and records historical unit cost and COGS.

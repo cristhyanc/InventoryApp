@@ -4,7 +4,7 @@ import { RouterLink } from '@angular/router';
 import { ProductService } from '../../services/product.service';
 import { MachineService } from '../../services/machine.service';
 import { SiteService } from '../../services/site.service';
-import { Product, Machine, Site } from '../../models/models';
+import { InventoryValuationSummary, Product, Machine, Site } from '../../models/models';
 
 @Component({
   selector: 'app-dashboard',
@@ -20,6 +20,8 @@ export class DashboardComponent implements OnInit {
   isLoadingSites = false;
   isLoadingMachines = false;
   isLoadingLowStock = false;
+  inventoryValuation: InventoryValuationSummary | null = null;
+  isLoadingInventoryValuation = false;
 
   constructor(
     private productService: ProductService,
@@ -31,6 +33,22 @@ export class DashboardComponent implements OnInit {
     this.refreshProducts();
     this.refreshMachines();
     this.refreshSites();
+    this.refreshInventoryValuation();
+  }
+
+  refreshInventoryValuation(): void {
+    this.isLoadingInventoryValuation = true;
+    this.productService.getInventoryValuationSummary().subscribe({
+      next: (summary) => {
+        this.inventoryValuation = summary;
+      },
+      error: () => {
+        this.inventoryValuation = null;
+      },
+      complete: () => {
+        this.isLoadingInventoryValuation = false;
+      }
+    });
   }
 
   refreshSites(): void {
@@ -87,8 +105,22 @@ export class DashboardComponent implements OnInit {
     return this.products.reduce((sum, p) => sum + p.quantityInStock, 0);
   }
 
-  get inventoryValue(): number {
-    return this.products.reduce((sum, p) => sum + p.quantityInStock * p.unitPrice, 0);
+  /**
+   * The authoritative cost-basis inventory value from `GetInventoryValuationSummary`, never
+   * calculated from `Product.unitPrice`/`quantityInStock` on the frontend. `null`/incomplete
+   * costing is shown as unavailable, never as a real `$0.00`.
+   */
+  get inventoryValueDisplay(): string {
+    if (!this.inventoryValuation || !this.inventoryValuation.isComplete || this.inventoryValuation.totalInventoryValue == null) {
+      return 'Unavailable';
+    }
+    return `$${this.inventoryValuation.totalInventoryValue.toFixed(2)}`;
+  }
+
+  get inventoryValueHelpText(): string {
+    if (!this.inventoryValuation) return 'Business-owned inventory at cost';
+    if (this.inventoryValuation.isComplete) return 'Business-owned inventory at cost';
+    return `${this.inventoryValuation.productsWithUnknownCost} of ${this.inventoryValuation.totalProducts} products missing cost data`;
   }
 
   get totalTodaySales(): number {
