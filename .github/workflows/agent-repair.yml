@@ -36,7 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     permissions:
-      contents: write
+      contents: read
       pull-requests: write
       issues: write
       actions: read
@@ -80,6 +80,7 @@ jobs:
         with:
           ref: ${{ steps.pr.outputs.head_ref }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up .NET
         uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
@@ -93,31 +94,12 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/inventory-app/package-lock.json
 
-      - name: Create repository-scoped agent GitHub App token
-        id: agent_app_token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          client-id: ${{ vars.AGENT_AUTOMATION_APP_CLIENT_ID }}
-          private-key: ${{ secrets.AGENT_AUTOMATION_APP_PRIVATE_KEY }}
-          permission-contents: write
-          permission-issues: write
-          permission-pull-requests: write
-
-      - name: Refresh App-token git credentials
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          ref: ${{ steps.pr.outputs.head_ref }}
-          fetch-depth: 0
-          token: ${{ steps.agent_app_token.outputs.token }}
-
       - name: Run Claude Code repair agent
         id: claude
-        env:
-          GH_TOKEN: ${{ steps.agent_app_token.outputs.token }}
         uses: anthropics/claude-code-action@cfc3eb22bfed5c26ef66e3223c982af27e4524de # v1.0.231
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          github_token: ${{ steps.agent_app_token.outputs.token }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           base_branch: develop
           additional_permissions: |
             actions: read
@@ -141,8 +123,8 @@ jobs:
             3a. Keep documentation accurate: when the repair changes behaviour, contracts, architecture, configuration, automation, deployment, operations or user workflows, or when the review findings identify missing, inaccurate or incomplete documentation, update the affected documentation on the head branch in the same repair, consistent with the issue's Documentation impact decision. You cannot and must not edit the pull request description. If the pull request's "## Documentation impact" declaration (its `Decision:` or `Evidence:` line) is no longer accurate after your repair, state in your closing comment exactly what must be corrected, quoting the exact replacement text, so the human can edit the description; validation reruns when the description is edited.
             4. Run the complete repository validation with exactly `bash scripts/validate.sh`. Record the real result.
             5. Review the diff for secrets, local databases, generated output, accidental migrations, and unrelated edits.
-            6. Commit with a focused message and push with exactly `git push origin ${{ steps.pr.outputs.head_ref }}`. Never force-push, rebase, or rewrite history.
-            7. Post one comment with `gh pr comment` describing what was changed and why, which findings it addresses, the exact validation command and its actual result, and anything you could not resolve. Do not change labels, do not edit the PR description, do not merge.
+            6. Commit the repair locally with a focused message. Do not push, rebase, or rewrite history; a deterministic workflow step will mint a fresh GitHub App token and push the verified local head after your invocation.
+            7. Post one comment with `gh pr comment` describing what was changed and why, which findings it addresses, the exact validation command and its actual result, and anything you could not resolve. Do not claim the commit was pushed. Do not change labels, do not edit the PR description, do not merge.
 
             Hard limits: do not merge, approve, deploy, run migrations against any environment, modify labels, change workflows, secrets or repository settings, touch anything outside the acceptance criteria, or claim a command passed unless it ran and succeeded in this session.
           claude_args: |
@@ -153,18 +135,63 @@ jobs:
             "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh pr comment *),Bash(gh issue view *),Bash(gh run view *),Bash(gh run list *)"
             "Bash(git status *),Bash(git diff *),Bash(git log *),Bash(git show *),Bash(git branch --show-current),Bash(git rev-parse *)"
             "Bash(git rm -- backend/*),Bash(git rm -- frontend/*),Bash(git rm -- docs/*),Bash(git rm -- scripts/*)"
-            "Bash(git add *),Bash(git commit *),Bash(git push origin ${{ steps.pr.outputs.head_ref }} *)"
+            "Bash(git add *),Bash(git commit *)"
             "Bash(bash scripts/validate.sh),Bash(dotnet *),Bash(npm --prefix frontend/inventory-app *)"
             --disallowedTools "WebFetch,WebSearch"
-            "Bash(git push * --force *),Bash(git push * -f *),Bash(git push * --force-with-lease *),Bash(git push --force *),Bash(git push -f *)"
+            "Bash(git push *),Bash(git push * --force *),Bash(git push * -f *),Bash(git push * --force-with-lease *),Bash(git push --force *),Bash(git push -f *)"
             "Bash(git reset --hard *),Bash(git rebase *),Bash(git checkout *),Bash(git switch *),Bash(git merge *)"
             "Bash(gh pr merge *),Bash(gh pr review *),Bash(gh pr edit *),Bash(gh pr create *),Bash(gh issue edit *),Bash(gh issue comment *),Bash(gh api *),Bash(gh workflow *),Bash(gh run rerun *),Bash(gh run cancel *),Bash(gh release *),Bash(gh secret *),Bash(gh variable *),Bash(gh label *)"
+
+      - name: Verify repair result
+        id: repair_result
+        if: steps.claude.outcome == 'success'
+        env:
+          HEAD_REF: ${{ steps.pr.outputs.head_ref }}
+          START_SHA: ${{ steps.pr.outputs.start_sha }}
+        run: |
+          set -euo pipefail
+          [ "$(git branch --show-current)" = "$HEAD_REF" ] || { echo "::error::Repair agent changed branch"; exit 1; }
+          git diff --quiet || { echo "::error::Tracked working-tree changes remain after repair"; exit 1; }
+          git diff --cached --quiet || { echo "::error::Staged changes remain after repair"; exit 1; }
+
+          head_sha="$(git rev-parse HEAD)"
+          [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Could not resolve repair HEAD"; exit 1; }
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+          if [ "$head_sha" = "$START_SHA" ]; then
+            echo "push_required=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "push_required=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub App token for repair publish
+        id: repair_app_token
+        if: steps.repair_result.outputs.push_required == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.AGENT_AUTOMATION_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AGENT_AUTOMATION_APP_PRIVATE_KEY }}
+          permission-contents: write
+
+      - name: Push repaired head
+        id: publish_repair
+        if: steps.repair_result.outputs.push_required == 'true'
+        env:
+          GH_TOKEN: ${{ steps.repair_app_token.outputs.token }}
+          HEAD_REF: ${{ steps.pr.outputs.head_ref }}
+          HEAD_SHA: ${{ steps.repair_result.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          [ "$(git branch --show-current)" = "$HEAD_REF" ] || { echo "::error::Local branch changed before repair publish"; exit 1; }
+          [ "$(git rev-parse HEAD)" = "$HEAD_SHA" ] || { echo "::error::Local HEAD changed before repair publish"; exit 1; }
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$HEAD_REF"
 
       - name: Record outcome on the pull request
         id: outcome
         if: always()
         env:
           CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
+          REPAIR_RESULT_OUTCOME: ${{ steps.repair_result.outcome }}
+          EXPECTED_SHA: ${{ steps.repair_result.outputs.head_sha }}
           HEAD_REF: ${{ steps.pr.outputs.head_ref }}
           START_SHA: ${{ steps.pr.outputs.start_sha }}
         run: |
@@ -189,7 +216,13 @@ jobs:
             *)         status_line="The repair agent step did not finish successfully (outcome: ${CLAUDE_OUTCOME:-unknown})." ;;
           esac
 
-          if [ -n "$START_SHA" ] && [ -n "$end_sha" ] && [ "$START_SHA" != "$end_sha" ]; then
+          if [ "$CLAUDE_OUTCOME" = "success" ] &&
+             [ "$REPAIR_RESULT_OUTCOME" = "success" ] &&
+             [ -n "$START_SHA" ] &&
+             [ -n "$EXPECTED_SHA" ] &&
+             [ -n "$end_sha" ] &&
+             [ "$START_SHA" != "$end_sha" ] &&
+             [ "$end_sha" = "$EXPECTED_SHA" ]; then
             {
               echo "dispatch_validation=true"
               echo "head_sha=$end_sha"
@@ -210,7 +243,7 @@ jobs:
             body="$(cat <<EOF
           Repair run on branch $HEAD_REF finished. $status_line
 
-          No new commit was pushed by this repair run: the pull request head is still $end_sha. No exact-SHA validation or review was dispatched. Read the agent's comment above (if any) and the run log before deciding whether another repair attempt is warranted.
+          No verified new commit was published by this repair run: the pull request head is still $end_sha. No exact-SHA validation or review was dispatched. Read the agent's comment above (if any) and the run log before deciding whether another repair attempt is warranted.
 
           Repair attempts are limited to two per pull request and are counted by you; after the second failed attempt, label the issue agent-blocked and take over.
 
