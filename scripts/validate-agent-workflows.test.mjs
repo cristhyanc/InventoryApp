@@ -533,6 +533,7 @@ describe('architecture pass contract', () => {
       assert.throws(
         () => runContractChecks({ read: readWithOverrides({ [path]: weakened }) }),
         /(implementation publish|architecture target|validation dispatcher|dispatched context|review dispatcher): missing required text/,
+        path,
       );
     }
   });
