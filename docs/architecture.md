@@ -711,7 +711,7 @@ Site commissions use effective-dated agreements and one of three bases: gross sa
 - `Product.MachinePrice` (`[NotMapped]`) — the machine-specific live price, sourced from the per-machine Nayax `RetailPrice` (`NayaxMachineProduct.RetailPrice`) in `MachineService`/`SiteService`;
 - the Nayax `ProductCostPrice` field on an imported sale (`NayaxSales.NayaxProductCostPrice`) — a genuine cost value used for historical COGS, never a selling price. `ImportService.ImportProductsAsync` previously set `UnitPrice` from this cost field by mistake; it now uses the catalog `RetailPrice` instead.
 
-The public property name `UnitPrice` is retained for API/contract compatibility. Only the Nayax catalog import may change its value; `ProductService.Update` and the product edit UI treat it as Nayax-managed and read-only. The dashboard's low-stock inventory-value figure currently multiplies `quantityInStock * unitPrice`, which is a selling-price valuation, not a cost valuation; issue #42 owns that correction and it must not be replicated elsewhere.
+The public property name `UnitPrice` is retained for API/contract compatibility. Only the Nayax catalog import may change its value; `ProductService.Update` and the product edit UI treat it as Nayax-managed and read-only. It is never an inventory-valuation input: the home Dashboard's "Inventory Value" tile is a backend-authoritative cost valuation (see [Dashboard "Inventory Value" tile](#dashboard-inventory-value-tile-issue-42) below, issue #42), and a `quantityInStock * unitPrice` selling-price valuation must not be introduced anywhere.
 
 ### Historical inventory cost
 
