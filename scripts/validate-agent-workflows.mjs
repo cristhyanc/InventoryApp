@@ -1128,6 +1128,11 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
   }
 
   const reviewContext = section(review, '  context:\n', '  review:\n', reviewPath);
+  requireText(
+    reviewContext,
+    'EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}',
+    'agent-review.yml dispatched context',
+  );
   verifyAgentPrGuards(normalizeGuardVariables(reviewContext), 'agent-review.yml dispatched context', 'Refusing stale review');
   requireText(reviewContext, 'statuses: read', 'agent-review.yml dispatched context');
   requireText(reviewContext, 'any(.labels[]?; .name == "agent-review")', 'agent-review.yml dispatched context');
