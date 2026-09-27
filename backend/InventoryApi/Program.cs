@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Inventory.Application;
 using Inventory.Application.CatalogReconciliation;
 using Inventory.Application.Categories;
+using Inventory.Application.MachineStockSync;
 using Inventory.Application.NayaxFeeSettings;
 using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Reporting.Dashboard;
@@ -140,7 +141,6 @@ builder.Services.AddScoped<InventoryApi.Services.Interfaces.ISaleCostingService,
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IPurchaseService, InventoryApi.Services.PurchaseService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.ISupplierOrderService, InventoryApi.Services.SupplierOrderService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IMachineService, InventoryApi.Services.MachineService>();
-builder.Services.AddScoped<InventoryApi.Services.Interfaces.INayaxMachineStockSyncService, InventoryApi.Services.NayaxMachineStockSyncService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.ISiteService, InventoryApi.Services.SiteService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IImportService, InventoryApi.Services.ImportService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.INayaxProcessingFeeService, InventoryApi.Services.NayaxProcessingFeeService>();
@@ -198,6 +198,10 @@ builder.Services.AddScoped<ITransactionSalesReportFactsProvider, EfTransactionSa
 // EfLocalCatalogSnapshotProvider and NayaxCatalogSnapshotProvider.
 builder.Services.AddScoped<ILocalCatalogSnapshotProvider, EfLocalCatalogSnapshotProvider>();
 builder.Services.AddScoped<INayaxCatalogSnapshotProvider, InventoryApi.Adapters.Nayax.NayaxCatalogSnapshotProvider>();
+
+// Temporary API-owned adapter for the machine Sync Restock persistence port (issue #183); see
+// EfMachineStockEventStore.
+builder.Services.AddScoped<IMachineStockEventStore, EfMachineStockEventStore>();
 
 var app = builder.Build();
 

@@ -1,4 +1,4 @@
-using InventoryApi.DTOs;
+using Inventory.Application.MachineStockSync;
 using InventoryApi.Models;
 using InventoryApi.Services.Interfaces;
 using Microsoft.AspNetCore.Authorization;
@@ -14,12 +14,17 @@ namespace InventoryApi.Controllers;
 public class MachinesController : ControllerBase
 {
     private readonly IMachineService _service;
-    private readonly INayaxMachineStockSyncService _stockSyncService;
+    private readonly SyncMachineStockFromNayax _syncMachineStock;
+    private readonly ApplyMachineStockSync _applyMachineStockSync;
 
-    public MachinesController(IMachineService service, INayaxMachineStockSyncService stockSyncService)
+    public MachinesController(
+        IMachineService service,
+        SyncMachineStockFromNayax syncMachineStock,
+        ApplyMachineStockSync applyMachineStockSync)
     {
         _service = service;
-        _stockSyncService = stockSyncService;
+        _syncMachineStock = syncMachineStock;
+        _applyMachineStockSync = applyMachineStockSync;
     }
 
     [HttpGet("{id:long}")]
@@ -48,7 +53,7 @@ public class MachinesController : ControllerBase
     [HttpPost("{id:long}/sync-restock")]
     public async Task<ActionResult<NayaxMachineStockSyncPreviewDto>> SyncRestock(long id, CancellationToken ct)
     {
-        var preview = await _stockSyncService.SyncAsync(id, ct);
+        var preview = await _syncMachineStock.Handle(id, ct);
         return Ok(preview);
     }
 
@@ -58,7 +63,7 @@ public class MachinesController : ControllerBase
     public async Task<ActionResult<NayaxMachineStockApplyResponseDto>> ApplySyncRestock(
         long id, NayaxStockEventApplyRequestDto dto, CancellationToken ct)
     {
-        var result = await _stockSyncService.ApplyAsync(id, dto.EventIds, ct);
+        var result = await _applyMachineStockSync.Handle(id, dto.EventIds, ct);
         return Ok(result);
     }
 }

@@ -1,6 +1,6 @@
-using InventoryApi.Models;
+using Inventory.Domain.Nayax;
 
-namespace InventoryApi.DTOs;
+namespace Inventory.Application.MachineStockSync;
 
 /// <summary>One Nayax machine-stock event as shown in the Sync Restock reconciliation preview (issue #183).</summary>
 public record NayaxStockEventPreviewDto(

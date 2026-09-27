@@ -964,30 +964,36 @@ projection, and this feature does not change that meaning.
    processed timestamp and the resulting `StockAdjustment.Id`). `(BusinessId, NayaxEventId)` is
    unique, the same external-identity pattern as `NayaxSales.TransactionID` - so re-fetching the
    same alert can never create a second deduction.
-4. **Match Machine + MDB, validate by name.** `InventoryApi.Services.NayaxMachineStockSyncService`
-   resolves the parsed MDB to a `NayaxProductID` via the same live `INayaxLynxClient.GetMachineProductsAsync`
-   projection `MachineService.GetMachineProducts` already uses, looks up the local `Product` by that
-   id (`Product.Id` is the Nayax product identifier catalog-wide, as elsewhere in this document),
-   and then uses the alert's product name only as a tolerant validation check
-   (`NayaxProductMatcher.NormalizeName`, case-insensitive). An unknown MDB or a material name
-   mismatch is `NeedsReview` and never causes a movement. The same product may legitimately occupy
-   more than one MDB on one machine; each event stays individually auditable, and the preview
-   groups them by product to show the combined requested storage impact.
+4. **Match Machine + MDB, validate by name.** `Inventory.Application.MachineStockSync.SyncMachineStockFromNayax`
+   reads the machine's MDB positions from the same live `INayaxLynxClient.GetMachineProductsAsync`
+   projection `MachineService.GetMachineProducts` already uses, and the deterministic Domain rule
+   `Inventory.Domain.Nayax.NayaxMachineStockMatchPolicy` resolves the parsed MDB to its
+   `NayaxProductID` and then to the local product by that id (`Product.Id` is the Nayax product
+   identifier catalog-wide, as elsewhere in this document). The alert's product name is only a
+   tolerant validation check, normalised through the same authoritative
+   `Inventory.Domain.Reporting.ProductMatching.ProductMatcher.NormalizeName` used for
+   sale-to-product matching. An unknown MDB or a material name mismatch is `NeedsReview` and never
+   causes a movement. The same product may legitimately occupy more than one MDB on one machine;
+   each event stays individually auditable, and the preview groups them by product to show the
+   combined requested storage impact.
 5. **Preview before anything changes.** The machine-detail page's **Sync Restock** action calls
    `POST /api/machines/{id}/sync-restock`, which fetches, imports, and returns a reconciliation
    preview (`NayaxMachineStockSyncPreviewDto`) - it never changes storage inventory itself. Already-
    applied events are excluded from the preview list; an empty result carries a clear message
    rather than an empty table. For each pending event the preview shows the parsed quantity, the
    matched product's current storage quantity, whether it is a **positive refill** or a **negative
-   discrepancy**, and - for a positive refill that exceeds available storage - the unaccounted
-   difference. A positive event is also flagged **possible duplicate** when a manual
-   (`StockAdjustmentSource.Manual`) `MachineRefill` for the same machine/product/quantity was
-   recorded within a 24-hour window; this is a signal for human resolution, not an automatic
-   merge or block; the operator's explicit choice of which events to apply is what resolves it.
-6. **Apply only what is accepted.** `POST /api/machines/{id}/sync-restock/apply` applies exactly
-   the event ids the operator selects, one at a time, each in its own transaction. A validated
-   positive event is applied through the same `IInventoryCostService.ApplyMovement` movement logic
-   as every other stock adjustment, as a `StockAdjustmentReason.MachineRefill` with
+   discrepancy** (`NayaxMachineStockImpactPolicy`), and - for a positive refill that exceeds
+   available storage - the unaccounted difference. A positive event is also flagged **possible
+   duplicate** (`NayaxMachineStockDuplicatePolicy`) when a manual (`StockAdjustmentSource.Manual`)
+   `MachineRefill` for the same machine/product/quantity was recorded within a 24-hour window; this
+   is a signal for human resolution, not an automatic merge or block; the operator's explicit
+   choice of which events to apply is what resolves it.
+6. **Apply only what is accepted.** `POST /api/machines/{id}/sync-restock/apply` runs
+   `Inventory.Application.MachineStockSync.ApplyMachineStockSync` over exactly the event ids the
+   operator selects, one at a time, each in its own transaction. `NayaxMachineStockApplyPolicy` is
+   the deterministic Domain rule that decides each one. A validated positive event is applied
+   through the same `IInventoryCostService.ApplyMovement` movement logic as every other stock
+   adjustment, as a `StockAdjustmentReason.MachineRefill` with
    `StockAdjustmentSource.Nayax` - it reduces `QuantityInStock` but never touches costing
    quantity/value, the same invariant an internal transfer already preserves. If the requested
    quantity exceeds available storage, the event is left `Unprocessed` (not partially applied, and
@@ -1006,14 +1012,29 @@ projection, and this feature does not change that meaning.
    `StockAdjustmentReason.MachineRefill`.
 
 This is a vertical slice on the current dependency skeleton, following the same shape as [Nayax
-catalog source-state reconciliation](#nayax-catalog-source-state-reconciliation) above: the parser
-and event-code constant are deterministic `Inventory.Domain` rules with no Nayax or EF Core
-dependency; the Nayax port extension lives in `Inventory.Application.Nayax`/
-`Inventory.Infrastructure.Nayax`; and the orchestration (`NayaxMachineStockSyncService`,
-`MachinesController`) stays in the existing `InventoryApi` machine/stock service layer alongside
-`MachineService`/`StockService`, which this feature extends rather than migrates - a broader Clean
-Architecture migration of that layer is unrelated, larger, out-of-scope work tracked by the
-incremental migration plan below.
+catalog source-state reconciliation](#nayax-catalog-source-state-reconciliation) above. Nothing in
+this feature is added to the legacy `InventoryApi/Services` layer:
+
+- **Domain.** `NayaxStockAdjustmentEventParser`, the Event 501 code constant, and the
+  `NayaxMachineStockMatchPolicy`/`NayaxMachineStockImpactPolicy`/`NayaxMachineStockDuplicatePolicy`/
+  `NayaxMachineStockApplyPolicy` rules, plus the `NayaxStockEventMatchStatus`/
+  `NayaxStockEventProcessingStatus` states, are deterministic `Inventory.Domain.Nayax` types with no
+  Nayax, HTTP, or EF Core dependency.
+- **Application.** `Inventory.Application.MachineStockSync` owns the two use cases
+  (`SyncMachineStockFromNayax`, `ApplyMachineStockSync`), their request/response DTOs, and the
+  narrow `IMachineStockEventStore` persistence port. The Nayax read stays on the existing
+  `Inventory.Application.Nayax.INayaxLynxClient` port.
+- **Infrastructure/adapters.** `Inventory.Infrastructure.Nayax.NayaxLynxClient` remains the Nayax
+  HTTP adapter. `InventoryApi.Adapters.Persistence.EfMachineStockEventStore` implements the
+  persistence port over `AppDbContext`, owns the per-event transaction, and reuses
+  `IInventoryCostService`/`IInventoryCostRebuildService` so the refill inherits the established
+  movement and costing invariants instead of re-implementing them. Like `EfSupplierStore` and
+  `EfLocalCatalogSnapshotProvider`, it is a temporary API-owned adapter only because
+  `AppDbContext`, the persistence models, and the costing services still live in `InventoryApi`.
+- **API.** `MachinesController` binds the request, invokes the use case, and returns its result.
+
+Migrating the rest of `InventoryApi/Services` remains unrelated, larger, out-of-scope work tracked
+by the incremental migration plan below.
 
 Scheduling this sync automatically, writing to Nayax, auto-creating purchases/receipts to cover an
 insufficient-storage shortfall, and auto-deciding the accounting/tax treatment of a negative
