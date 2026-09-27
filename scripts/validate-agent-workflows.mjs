@@ -371,7 +371,7 @@ function verifySafeDispatcher(text, source, pullRequestsPermission = 'read') {
     `pull-requests: ${pullRequestsPermission}`,
     '--ref main',
     'headRefOid',
-    'github-actions[bot]',
+    'EXPECTED_AGENT_AUTHOR',
     'agent/issue-*',
     '.github/workflows/',
   ]) {
@@ -400,9 +400,9 @@ function normalizeGuardVariables(text) {
   return text.replaceAll('$head_sha', '$HEAD_SHA').replaceAll('$pr_number', '$PR_NUMBER');
 }
 
-// Only the REST pull request endpoint returns the canonical author login. `gh pr view
-// --json author` resolves the GraphQL actor, which reports `github-actions` without the
-// `[bot]` suffix, so every guarded section must read `.user.login` over REST instead.
+// Only the REST pull request endpoint returns the canonical author login reliably for bot
+// authors, so every guarded section reads `.user.login` over REST and compares it with the
+// dedicated agent GitHub App bot login configured in AGENT_AUTOMATION_APP_BOT_LOGIN.
 function verifyAgentPrGuards(text, source, staleMessage) {
   for (const required of [
     '--json state,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner',
@@ -413,7 +413,8 @@ function verifyAgentPrGuards(text, source, staleMessage) {
     '[[ "$head_ref" == agent/issue-* ]]',
     'author="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER"',
     "--jq '.user.login // empty'",
-    '[ "$author" = "github-actions[bot]" ]',
+    'AGENT_AUTOMATION_APP_BOT_LOGIN is not configured',
+    '[ "$author" = "$EXPECTED_AGENT_AUTHOR" ]',
     '[ "$current_sha" = "$HEAD_SHA" ]',
     staleMessage,
     "grep -Eq '^\\.github/workflows/'",
@@ -701,6 +702,26 @@ export function verifyTrackedFileDeletionPermissions(allowed, source) {
   }
 }
 
+export const AGENT_APP_TOKEN_ACTION =
+  'actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0';
+
+function verifyAgentAppTokenStep(text, source, stepId) {
+  for (const required of [
+    AGENT_APP_TOKEN_ACTION,
+    `id: ${stepId}`,
+    'client-id: ${{ vars.AGENT_AUTOMATION_APP_CLIENT_ID }}',
+    'private-key: ${{ secrets.AGENT_AUTOMATION_APP_PRIVATE_KEY }}',
+    'permission-contents: write',
+    'permission-issues: write',
+    'permission-pull-requests: write',
+  ]) {
+    requireText(text, required, source);
+  }
+  for (const forbidden of ['personal access token', 'PAT_TOKEN', 'GH_PAT']) {
+    forbidText(text, forbidden, source);
+  }
+}
+
 /** Verifies the architect handoff and final-head guard in the implementation workflow. */
 export function verifyArchitecturePass(workflow) {
   const job = section(workflow, '  implement:\n', '  dispatch-validation:\n', 'agent-implement.yml implementation job');
@@ -710,8 +731,12 @@ export function verifyArchitecturePass(workflow) {
     'Do not delegate, spawn, or use Claude sub-agents, and do not invoke the `Agent` tool.',
     'agent-implement.yml implementation prompt',
   );
+  verifyAgentAppTokenStep(job, 'agent-implement.yml implementation App token', 'agent_app_token');
+  verifyAgentAppTokenStep(job, 'agent-implement.yml architecture App token', 'architecture_app_token');
   const implementationAgent = section(job, '      - name: Run Claude Code implementation agent\n', '      - name: Verify the architecture pass target\n', 'agent-implement.yml implementation agent');
   requireText(implementationAgent, '--disallowedTools "Agent,WebFetch,WebSearch"', 'agent-implement.yml implementation agent');
+  requireText(implementationAgent, 'GH_TOKEN: ${{ steps.agent_app_token.outputs.token }}', 'agent-implement.yml implementation agent');
+  requireText(implementationAgent, 'github_token: ${{ steps.agent_app_token.outputs.token }}', 'agent-implement.yml implementation agent');
   requireText(
     implementationPrompt,
     'use the Write tool to create `.agent-run-status` containing exactly `blocked` on one line',
@@ -722,13 +747,15 @@ export function verifyArchitecturePass(workflow) {
   requireOrder(job, '      - name: Run Claude Code architecture agent', '      - name: Record outcome on the issue', 'agent-implement.yml architecture order');
 
   const target = section(job, '      - name: Verify the architecture pass target\n', '      - name: Run Claude Code architecture agent\n', 'agent-implement.yml architecture target');
-  for (const required of ["if: steps.claude.outcome == 'success'", 'echo "pr_ready=false"', 'echo "blocked=false"', '.agent-run-status', '[ -z "$(git ls-files -- .agent-run-status)" ]', '[ "$(cat .agent-run-status)" = "blocked" ]', 'echo "blocked=true"', 'if length == 1 then .[0] else {} end', 'gh api', '.head.repo.full_name == $repo', '.user.login == "github-actions[bot]"', 'git rev-parse HEAD', 'gh pr list', 'echo "pr_number=$pr_number"', 'echo "pr_ready=true"']) {
+  for (const required of ["if: steps.claude.outcome == 'success'", 'EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}', 'echo "pr_ready=false"', 'echo "blocked=false"', '.agent-run-status', '[ -z "$(git ls-files -- .agent-run-status)" ]', '[ "$(cat .agent-run-status)" = "blocked" ]', 'echo "blocked=true"', 'if length == 1 then .[0] else {} end', 'gh api', '.head.repo.full_name == $repo', '--arg author "$EXPECTED_AGENT_AUTHOR"', '.user.login == $author', 'git rev-parse HEAD', 'gh pr list', 'echo "pr_number=$pr_number"', 'echo "branch=$branch"', 'echo "pr_ready=true"']) {
     requireText(target, required, 'agent-implement.yml architecture target');
   }
 
   const architect = section(job, '      - name: Run Claude Code architecture agent\n', '      - name: Record outcome on the issue\n', 'agent-implement.yml architect');
   requireText(architect, 'Do not delegate, spawn, or use Claude sub-agents, and do not invoke the `Agent` tool.', 'agent-implement.yml architect');
   requireText(architect, '--disallowedTools "Agent,WebFetch,WebSearch"', 'agent-implement.yml architect');
+  requireText(architect, 'GH_TOKEN: ${{ steps.architecture_app_token.outputs.token }}', 'agent-implement.yml architect');
+  requireText(architect, 'github_token: ${{ steps.architecture_app_token.outputs.token }}', 'agent-implement.yml architect');
   for (const required of ["id: architect", "if: steps.architecture_target.outputs.pr_ready == 'true'", 'Read the issue', 'Preserve all observable behavior', 'bash scripts/validate.sh', 'gh pr comment', 'Bash(git push origin agent/issue-']) {
     requireText(architect, required, 'agent-implement.yml architect');
   }
@@ -829,6 +856,12 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
     const workflow = read(path);
     const producer = section(workflow, `  ${producerName}:\n`, '  dispatch-validation:\n', path);
     forbidText(producer, 'actions: write', `${path} ${producerName} job`);
+    if (producerName === 'repair') {
+      verifyAgentAppTokenStep(producer, `${path} repair App token`, 'agent_app_token');
+      requireText(producer, 'GH_TOKEN: ${{ steps.agent_app_token.outputs.token }}', `${path} repair agent`);
+      requireText(producer, 'github_token: ${{ steps.agent_app_token.outputs.token }}', `${path} repair agent`);
+      requireText(producer, 'token: ${{ steps.agent_app_token.outputs.token }}', `${path} repair checkout`);
+    }
 
     const dispatcher = section(workflow, '  dispatch-validation:\n', null, path);
     verifySafeDispatcher(dispatcher, `${path} validation dispatcher`, producerName === 'implement' ? 'write' : 'read');
