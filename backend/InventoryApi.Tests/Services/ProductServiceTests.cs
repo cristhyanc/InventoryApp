@@ -5,6 +5,7 @@ using Inventory.Application.Nayax;
 using InventoryApi.Models;
 using InventoryApi.Services;
 using InventoryApi.Services.Interfaces;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Moq;
 using Xunit;
@@ -19,6 +20,43 @@ public class ProductServiceTests
             .UseInMemoryDatabase(dbName)
             .Options;
         return TestAppDbContext.Unrestricted(options);
+    }
+
+    /// <summary>
+    /// Relational SQLite test: each product's stock-adjustment history must come back from an
+    /// explicit query rather than lazy loading (issue #52), so a caller reading a query-loaded
+    /// product's <c>StockAdjustments</c> after this context is disposed still sees it.
+    /// </summary>
+    [Fact]
+    public async Task GetAll_IncludesStockAdjustmentHistoryWithoutLazyLoading()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        var options = new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options;
+        await using (var schema = TestAppDbContext.Unrestricted(options))
+            await schema.Database.EnsureCreatedAsync();
+
+        await using (var seed = TestAppDbContext.Unrestricted(options))
+        {
+            seed.Products.Add(new Product { Id = 1, Name = "Coke", QuantityInStock = 5 });
+            await seed.SaveChangesAsync();
+            seed.StockAdjustments.Add(new StockAdjustment
+            {
+                ProductId = 1,
+                QuantityChange = 5,
+                QuantityAfter = 5,
+                Reason = StockAdjustmentReason.Restock,
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        await using var db = TestAppDbContext.Unrestricted(options);
+        var service = CreateService(db);
+
+        var products = await service.GetAll(null, null, null, null);
+
+        var product = Assert.Single(products);
+        Assert.Single(product.StockAdjustments);
     }
 
     [Fact]

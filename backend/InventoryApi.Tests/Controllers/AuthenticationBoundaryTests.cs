@@ -83,7 +83,6 @@ public sealed class AuthenticationBoundaryTests : IClassFixture<AuthenticationBo
 
                 services.AddDbContext<AppDbContext>(options =>
                 {
-                    options.UseLazyLoadingProxies();
                     options.UseSqlite(_connection);
                 });
             });
