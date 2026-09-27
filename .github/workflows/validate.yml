@@ -58,6 +58,7 @@ jobs:
         id: context
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}
           # Each validation mode owns its own commit-status context so the two modes never
           # overwrite each other. workflow_dispatch exact-SHA validation publishes the
           # authoritative agent-validation status that agent-review.yml requires;
@@ -99,7 +100,8 @@ jobs:
             [ "$base_ref" = "develop" ] || fail "Automated validation is limited to pull requests targeting develop."
             [ "$head_repo" = "$GITHUB_REPOSITORY" ] || fail "Automated validation is limited to same-repository branches."
             [[ "$head_ref" == agent/issue-* ]] || fail "Automated validation requires an agent/issue-* head branch."
-            [ "$author" = "github-actions[bot]" ] || fail "Automated validation requires github-actions[bot] as the pull request author."
+            [ -n "$EXPECTED_AGENT_AUTHOR" ] || fail "AGENT_AUTOMATION_APP_BOT_LOGIN is not configured."
+            [ "$author" = "$EXPECTED_AGENT_AUTHOR" ] || fail "Automated validation requires $EXPECTED_AGENT_AUTHOR as the pull request author."
             [ "$current_sha" = "$head_sha" ] || fail "Refusing stale validation: pull request head is $current_sha, requested SHA is $head_sha."
 
             changed_files="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$pr_number/files?per_page=100" --jq '.[].filename')"
@@ -262,6 +264,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ needs.context.outputs.pr_number }}
           HEAD_SHA: ${{ needs.context.outputs.head_sha }}
+          EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}
         run: |
           set -euo pipefail
           fail() { echo "::error::$1"; exit 1; }
@@ -282,7 +285,8 @@ jobs:
           [ "$base_ref" = "develop" ] || fail "Pull request #$PR_NUMBER no longer targets develop."
           [ "$head_repo" = "$GITHUB_REPOSITORY" ] || fail "Pull request #$PR_NUMBER no longer uses a same-repository branch."
           [[ "$head_ref" == agent/issue-* ]] || fail "Pull request #$PR_NUMBER no longer uses an agent/issue-* branch."
-          [ "$author" = "github-actions[bot]" ] || fail "Pull request #$PR_NUMBER is not authored by github-actions[bot]."
+          [ -n "$EXPECTED_AGENT_AUTHOR" ] || fail "AGENT_AUTOMATION_APP_BOT_LOGIN is not configured."
+          [ "$author" = "$EXPECTED_AGENT_AUTHOR" ] || fail "Pull request #$PR_NUMBER is not authored by $EXPECTED_AGENT_AUTHOR."
           [ "$current_sha" = "$HEAD_SHA" ] || fail "Refusing stale review dispatch: pull request head is $current_sha, validated SHA is $HEAD_SHA."
 
           changed_files="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" --jq '.[].filename')"

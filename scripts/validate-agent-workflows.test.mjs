@@ -197,9 +197,13 @@ describe('validate.yml status-context contract', () => {
 });
 
 describe('agent-review.yml consumes only the exact-SHA status', () => {
-  it('requires a successful agent-validation status and never merge-validation', () => {
+  it('requires a successful agent-validation status and never uses merge-validation as review evidence', () => {
     assert.ok(reviewWorkflow.includes('select(.context == "agent-validation")'));
-    assert.ok(!reviewWorkflow.includes(MERGE_VALIDATION_STATUS));
+    const reviewContext = reviewWorkflow.slice(
+      reviewWorkflow.indexOf('  context:\n'),
+      reviewWorkflow.indexOf('  review:\n'),
+    );
+    assert.ok(!reviewContext.includes(MERGE_VALIDATION_STATUS));
   });
 
   it('rejects a review guard that would accept the merge-result status', () => {
@@ -381,7 +385,7 @@ describe('documentation-impact gate: implementation workflow', () => {
 
   it('requires every documentation requirement in the implementation prompt and the validator in its allowed tools', () => {
     for (const required of IMPLEMENT_JOB_DOCUMENTATION_CONTRACT.prompt) {
-      assertGateRejects({ [implementPath]: replaceOnce(implementWorkflow, required, 'weakened') }, /implement prompt: missing required text/);
+      assertGateRejects({ [implementPath]: removeAll(implementWorkflow, required) }, /implement prompt: missing required text/);
     }
     assertGateRejects(
       { [implementPath]: replaceOnce(implementWorkflow, `,Bash(node ${DOCUMENTATION_IMPACT_VALIDATOR} --pr-body *)`, '') },
@@ -465,9 +469,72 @@ describe('documentation-impact gate: review and repair workflows', () => {
   });
 });
 
+describe('review dispatch contract', () => {
+  it('does not review App-authenticated synchronize pushes before exact-SHA validation', () => {
+    assert.ok(reviewWorkflow.includes('types: [labeled]'));
+    assert.ok(!reviewWorkflow.slice(reviewWorkflow.indexOf('on:\n'), reviewWorkflow.indexOf('permissions:\n')).includes('synchronize'));
+    assert.ok(reviewWorkflow.includes('A manual agent-review request requires a successful latest agent-validation status on the exact head SHA.'));
+
+    const unsafe = replaceOnce(reviewWorkflow, 'types: [labeled]', 'types: [labeled, synchronize]');
+    assert.throws(
+      () => runContractChecks({ read: readWithOverrides({ [reviewPath]: unsafe }) }),
+      /agent-review.yml triggers: (missing required text: types: \[labeled\]|contains forbidden text: synchronize)/,
+    );
+  });
+});
+
 describe('architecture pass contract', () => {
   it('accepts the coder to architect to exact-head-validation ordering', () => {
     assert.doesNotThrow(() => verifyArchitecturePass(implementWorkflow));
+  });
+
+  it('requires just-in-time repository-scoped GitHub App tokens for deterministic publishes', () => {
+    for (const [path, workflow, required] of [
+      [implementPath, implementWorkflow, 'id: implementation_app_token'],
+      [implementPath, implementWorkflow, 'id: architecture_app_token'],
+      [repairPath, repairWorkflow, 'id: repair_app_token'],
+      [implementPath, implementWorkflow, 'client-id: ${{ vars.AGENT_AUTOMATION_APP_CLIENT_ID }}'],
+      [implementPath, implementWorkflow, 'private-key: ${{ secrets.AGENT_AUTOMATION_APP_PRIVATE_KEY }}'],
+      [implementPath, implementWorkflow, 'GH_TOKEN: ${{ steps.implementation_app_token.outputs.token }}'],
+      [repairPath, repairWorkflow, 'GH_TOKEN: ${{ steps.repair_app_token.outputs.token }}'],
+    ]) {
+      const weakened = replaceOnce(workflow, required, '# removed');
+      assert.throws(
+        () => runContractChecks({ read: readWithOverrides({ [path]: weakened }) }),
+        /(App token|implementation publish|repair publish): missing required text/,
+      );
+    }
+  });
+
+  it('never exposes the GitHub App credential to Claude invocations', () => {
+    for (const [path, workflow, agentName] of [
+      [implementPath, implementWorkflow, 'implementation'],
+      [repairPath, repairWorkflow, 'repair'],
+    ]) {
+      const marker = agentName === 'implementation'
+        ? '      - name: Run Claude Code implementation agent\n'
+        : '      - name: Run Claude Code repair agent\n';
+      const injected = workflow.replace(marker, marker + '        env:\n          LEAKED_APP_KEY: ${{ secrets.AGENT_AUTOMATION_APP_PRIVATE_KEY }}\n');
+      assert.throws(
+        () => runContractChecks({ read: readWithOverrides({ [path]: injected }) }),
+        /(implementation agent|repair agent): contains forbidden text/,
+      );
+    }
+  });
+
+  it('requires guarded agent PRs to match the configured GitHub App bot login', () => {
+    for (const [path, workflow] of [
+      [implementPath, implementWorkflow],
+      [repairPath, repairWorkflow],
+      [validatePath, validateWorkflow],
+      [reviewPath, reviewWorkflow],
+    ]) {
+      const weakened = replaceOnce(workflow, 'EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}', '# removed');
+      assert.throws(
+        () => runContractChecks({ read: readWithOverrides({ [path]: weakened }) }),
+        /(implementation publish|architecture target|validation dispatcher|dispatched context|review dispatcher): missing required text/,
+      );
+    }
   });
 
   it('keeps coder and architect work in their foreground invocations', () => {
@@ -483,22 +550,22 @@ describe('architecture pass contract', () => {
     }
   });
 
-  it('requires an explicit pre-PR blocked marker and verified PR-ready output', () => {
+  it('requires an explicit pre-PR blocked marker and verified local implementation package', () => {
     for (const required of [
       'use the Write tool to create `.agent-run-status` containing exactly `blocked` on one line',
-      'echo "pr_ready=false"',
-      'echo "blocked=false"',
       '[ -z "$(git ls-files -- .agent-run-status)" ]',
       '[ "$(cat .agent-run-status)" = "blocked" ]',
       'echo "blocked=true"',
-      'echo "pr_ready=true"',
-      'AGENT_BLOCKED: ${{ steps.architecture_target.outputs.blocked }}',
+      '.agent-pr-title',
+      '.agent-pr-body.md',
+      'echo "ready=true"',
+      'AGENT_BLOCKED: ${{ steps.implementation_result.outputs.blocked }}',
       '[ "$AGENT_BLOCKED" = "true" ]',
     ]) {
-      const weakened = replaceOnce(implementWorkflow, required, '# removed');
+      const weakened = removeAll(implementWorkflow, required);
       assert.throws(
         () => runContractChecks({ read: readWithOverrides({ [implementPath]: weakened }) }),
-        /(implementation prompt|architecture target|outcome): missing required text/,
+        /(implementation prompt|implementation result|implementation publish|outcome): missing required text/,
       );
     }
   });
