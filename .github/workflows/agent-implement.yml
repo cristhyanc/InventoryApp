@@ -7,7 +7,7 @@ name: Agent implementation
 # - Works from the latest `develop`, on a feature branch named `agent/issue-<n>-*`.
 # - Runs the complete repository validation and opens a pull request targeting `develop`.
 # - Never merges, deploys, or pushes to `develop`/`main`. Branch protection must also enforce this.
-# - The GitHub token is the job-scoped GITHUB_TOKEN; the Anthropic credential is CLAUDE_CODE_OAUTH_TOKEN.
+# - Agent branch/PR mutations use a short-lived, repository-scoped GitHub App token; deterministic workflow bookkeeping and dispatch use GITHUB_TOKEN. The Anthropic credential is CLAUDE_CODE_OAUTH_TOKEN.
 #
 # Before implementation starts, a separate read-only preflight job checks out trusted `develop` and
 # validates the issue's documentation-impact declaration (scripts/validate-documentation-impact.mjs).
@@ -111,12 +111,31 @@ jobs:
           gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
             --remove-label agent-ready --add-label agent-working
 
+      - name: Create repository-scoped agent GitHub App token
+        id: agent_app_token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.AGENT_AUTOMATION_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AGENT_AUTOMATION_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
+
+      - name: Configure App-token git credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: develop
+          fetch-depth: 0
+          token: ${{ steps.agent_app_token.outputs.token }}
+
       - name: Run Claude Code implementation agent
         id: claude
+        env:
+          GH_TOKEN: ${{ steps.agent_app_token.outputs.token }}
         uses: anthropics/claude-code-action@cfc3eb22bfed5c26ef66e3223c982af27e4524de # v1.0.231
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          github_token: ${{ steps.agent_app_token.outputs.token }}
           base_branch: develop
           show_full_output: true
           branch_prefix: agent/
@@ -170,6 +189,8 @@ jobs:
       - name: Verify the architecture pass target
         id: architecture_target
         if: steps.claude.outcome == 'success'
+        env:
+          EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}
         run: |
           set -euo pipefail
           {
@@ -193,23 +214,46 @@ jobs:
           pr_number="$(jq -r '.number // empty' <<<"$pr_json")"
           head_sha="$(jq -r '.headRefOid // empty' <<<"$pr_json")"
           [[ "$pr_number" =~ ^[1-9][0-9]*$ ]] || { echo "::error::No unique open PR for $branch"; exit 1; }
+          [ -n "$EXPECTED_AGENT_AUTHOR" ] || { echo "::error::AGENT_AUTOMATION_APP_BOT_LOGIN is not configured"; exit 1; }
           pr_meta="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr_number")"
-          jq -e --arg repo "$GITHUB_REPOSITORY" '.state == "open" and .draft == false and .base.ref == "develop" and .head.repo.full_name == $repo and .user.login == "github-actions[bot]"' <<<"$pr_meta" > /dev/null || { echo "::error::PR is not a same-repository agent PR"; exit 1; }
+          jq -e --arg repo "$GITHUB_REPOSITORY" --arg author "$EXPECTED_AGENT_AUTHOR" '.state == "open" and .draft == false and .base.ref == "develop" and .head.repo.full_name == $repo and .user.login == $author' <<<"$pr_meta" > /dev/null || { echo "::error::PR is not a same-repository agent PR authored by $EXPECTED_AGENT_AUTHOR"; exit 1; }
           [ "$(git rev-parse HEAD)" = "$head_sha" ] || { echo "::error::Local HEAD does not match the open PR"; exit 1; }
           {
             echo "pr_number=$pr_number"
+            echo "branch=$branch"
             echo "pr_ready=true"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Create fresh GitHub App token for architecture
+        id: architecture_app_token
+        if: steps.architecture_target.outputs.pr_ready == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.AGENT_AUTOMATION_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AGENT_AUTOMATION_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
+
+      - name: Refresh App-token git credentials for architecture
+        if: steps.architecture_target.outputs.pr_ready == 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ steps.architecture_target.outputs.branch }}
+          fetch-depth: 0
+          token: ${{ steps.architecture_app_token.outputs.token }}
 
       # A fresh Claude invocation reviews the coder's PR and may make narrowly scoped,
       # behavior-preserving structural fixes on the same feature branch before validation.
       - name: Run Claude Code architecture agent
         id: architect
         if: steps.architecture_target.outputs.pr_ready == 'true'
+        env:
+          GH_TOKEN: ${{ steps.architecture_app_token.outputs.token }}
         uses: anthropics/claude-code-action@cfc3eb22bfed5c26ef66e3223c982af27e4524de # v1.0.231
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          github_token: ${{ steps.architecture_app_token.outputs.token }}
           base_branch: develop
           show_full_output: true
           branch_prefix: agent/
@@ -327,6 +371,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ needs.implement.outputs.pr_number }}
           HEAD_SHA: ${{ needs.implement.outputs.head_sha }}
+          EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}
         run: |
           set -euo pipefail
           fail() { echo "::error::$1"; exit 1; }
@@ -347,7 +392,8 @@ jobs:
           [ "$base_ref" = "develop" ] || fail "Automated validation is limited to pull requests targeting develop."
           [ "$head_repo" = "$GITHUB_REPOSITORY" ] || fail "Automated validation is limited to same-repository branches."
           [[ "$head_ref" == agent/issue-* ]] || fail "Automated validation requires an agent/issue-* head branch."
-          [ "$author" = "github-actions[bot]" ] || fail "Automated validation requires github-actions[bot] as the pull request author."
+          [ -n "$EXPECTED_AGENT_AUTHOR" ] || fail "AGENT_AUTOMATION_APP_BOT_LOGIN is not configured."
+          [ "$author" = "$EXPECTED_AGENT_AUTHOR" ] || fail "Automated validation requires $EXPECTED_AGENT_AUTHOR as the pull request author."
           [ "$current_sha" = "$HEAD_SHA" ] || fail "Refusing stale validation dispatch: pull request head is $current_sha, expected $HEAD_SHA."
 
           changed_files="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" --jq '.[].filename')"
