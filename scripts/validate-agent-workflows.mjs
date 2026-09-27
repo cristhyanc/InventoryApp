@@ -791,6 +791,8 @@ export function verifyArchitecturePass(workflow) {
   for (const required of [
     'id: implementation_result',
     '.agent-run-status',
+    '[ -z "$(git ls-files -- .agent-run-status)" ]',
+    '[ "$(cat .agent-run-status)" = "blocked" ]',
     'echo "blocked=true"',
     '.agent-pr-title',
     '.agent-pr-body.md',
