@@ -176,13 +176,11 @@ public class ProjectDependencyDirectionTests
     {
         string[] allowedRelativePaths =
         [
-            "CategoryService.cs",
             "EffectiveFinancialConfiguration.cs",
             "ImportService.cs",
             "ImportService.NayaxSales.cs",
             "ImportService.Products.cs",
             "ImportService.Xml.cs",
-            "Interfaces/ICategoryService.cs",
             "Interfaces/IImportService.cs",
             "Interfaces/IInventoryCostRebuildService.cs",
             "Interfaces/IInventoryCostService.cs",
@@ -196,7 +194,6 @@ public class ProjectDependencyDirectionTests
             "Interfaces/ISiteService.cs",
             "Interfaces/IStockService.cs",
             "Interfaces/ISupplierOrderService.cs",
-            "Interfaces/ISupplierService.cs",
             "InventoryCostRebuildResult.cs",
             "InventoryCostRebuildService.cs",
             "InventoryCostService.cs",
@@ -216,7 +213,6 @@ public class ProjectDependencyDirectionTests
             "SiteService.cs",
             "StockService.cs",
             "SupplierOrderService.cs",
-            "SupplierService.cs",
         ];
 
         var actualRelativePaths = GitTrackedFiles(Path.Combine("InventoryApi", "Services"))
