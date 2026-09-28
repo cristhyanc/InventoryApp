@@ -3,6 +3,7 @@ using InventoryApi.Data;
 using InventoryApi.DTOs;
 using Inventory.Application.Nayax;
 using Inventory.Application.Purchases;
+using Inventory.Application.Reorder;
 using Inventory.Application.Reporting.Dashboard;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Models;
@@ -27,9 +28,10 @@ public class ProductsControllerTests
     private static ProductsController CreateController(AppDbContext db)
     {
         var nayaxMock = new Mock<INayaxLynxClient>();
+        var calculateReorderNeeds = new CalculateReorderNeeds(nayaxMock.Object, new EfOutstandingSupplierOrderQuantityStore(db));
         var getInventoryValuationSummary = new GetInventoryValuationSummary(new EfInventoryValuationFactsProvider(db));
         var getProductPriceComparison = new GetProductPriceComparison(new EfProductPurchasePriceHistoryProvider(db));
-        return new ProductsController(new ProductService(db, nayaxMock.Object), getInventoryValuationSummary, getProductPriceComparison);
+        return new ProductsController(new ProductService(db, calculateReorderNeeds), getInventoryValuationSummary, getProductPriceComparison);
     }
 
     private static ProductUpdateDto UpdateDto(int lowStockThreshold, int restockTo) =>

@@ -1,6 +1,6 @@
 using InventoryApi.Data;
 using InventoryApi.DTOs;
-using Inventory.Application.Nayax;
+using Inventory.Application.Reorder;
 using InventoryApi.Models;
 using InventoryApi.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
@@ -10,20 +10,21 @@ namespace InventoryApi.Services;
 public class ProductService : IProductService
 {
     private readonly AppDbContext _db;
-    private readonly INayaxLynxClient _nayaxLynxClient;
+    private readonly CalculateReorderNeeds _calculateReorderNeeds;
     private readonly IInventoryCostRebuildService _rebuild;
 
     public ProductService(
         AppDbContext db,
-        INayaxLynxClient nayaxLynxClient,
+        CalculateReorderNeeds calculateReorderNeeds,
         IInventoryCostRebuildService? rebuild = null)
     {
         _db = db;
-        _nayaxLynxClient = nayaxLynxClient;
+        _calculateReorderNeeds = calculateReorderNeeds;
         _rebuild = rebuild ?? new InventoryCostRebuildService(db);
     }
 
-    public async Task<IEnumerable<Product>> GetAll(string? search, long? categoryId, int? supplierId, bool? lowStockOnly)
+    public async Task<IEnumerable<Product>> GetAll(
+        string? search, long? categoryId, int? supplierId, bool? lowStockOnly, CancellationToken cancellationToken = default)
     {
         var query = _db.Products
             .Include(p => p.Category)
@@ -37,8 +38,8 @@ public class ProductService : IProductService
         if (categoryId.HasValue) query = query.Where(p => p.CategoryId == categoryId);
         if (supplierId.HasValue) query = query.Where(p => p.SupplierId == supplierId);
 
-        if (lowStockOnly == true) return await LowStock(search, categoryId, supplierId);
-        return await query.OrderBy(p => p.Name).ToListAsync();
+        if (lowStockOnly == true) return await LowStock(search, categoryId, supplierId, cancellationToken);
+        return await query.OrderBy(p => p.Name).ToListAsync(cancellationToken);
     }
 
     public async Task<Product?> Get(long id)
@@ -50,7 +51,8 @@ public class ProductService : IProductService
             .FirstOrDefaultAsync(p => p.Id == id);
     }
 
-    public async Task<IEnumerable<Product>> LowStock(string? search = null, long? categoryId = null, int? supplierId = null)
+    public async Task<IEnumerable<Product>> LowStock(
+        string? search = null, long? categoryId = null, int? supplierId = null, CancellationToken cancellationToken = default)
     {
         var query = _db.Products.AsNoTracking()
             .Include(p => p.Category)
@@ -62,31 +64,16 @@ public class ProductService : IProductService
         if (categoryId.HasValue) query = query.Where(p => p.CategoryId == categoryId);
         if (supplierId.HasValue) query = query.Where(p => p.SupplierId == supplierId);
 
-        var products = await query.ToListAsync();
-        var productsById = products.ToDictionary(p => p.Id);
-        var nayaxMachines = await _nayaxLynxClient.GetMachinesAsync();
+        var products = await query.ToListAsync(cancellationToken);
 
-        foreach (var machine in nayaxMachines)
-        {
-            var nayaxMachineProducts = await _nayaxLynxClient.GetMachineProductsAsync(machine.MachineID);
-            foreach (var nayaxProduct in nayaxMachineProducts)
-            {
-                if (nayaxProduct.NayaxProductID is not long productId ||
-                    !productsById.TryGetValue(productId, out var product))
-                    continue;
-
-                product.MachineReplenishmentNeed += nayaxProduct.MissingStockByMDB ?? 0;
-            }
-        }
-
-        var outstandingByProduct = await _db.SupplierOrderLines
-            .Where(line => line.SupplierOrder.Status != SupplierOrderStatus.Cancelled &&
-                           line.SupplierOrder.Status != SupplierOrderStatus.Received)
-            .GroupBy(line => line.ProductId)
-            .Select(group => new { ProductId = group.Key, Quantity = group.Sum(line => line.QuantityOrdered - line.QuantityReceived) })
-            .ToDictionaryAsync(item => item.ProductId, item => item.Quantity);
+        var reorderNeeds = await _calculateReorderNeeds.Handle(cancellationToken);
         foreach (var product in products)
-            product.OnOrderQuantity = Math.Max(0m, outstandingByProduct.GetValueOrDefault(product.Id));
+        {
+            product.MachineReplenishmentNeed =
+                reorderNeeds.MachineReplenishmentNeedByProductId.GetValueOrDefault(product.Id);
+            product.OnOrderQuantity =
+                Math.Max(0m, reorderNeeds.OnOrderQuantityByProductId.GetValueOrDefault(product.Id));
+        }
 
         return products.Where(p => p.IsReorderAlert)
             .OrderByDescending(p => p.NeedToOrder)
