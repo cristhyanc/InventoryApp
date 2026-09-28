@@ -3,32 +3,26 @@
 Written for: the human operator performing the rollout, and the reviewer approving it.
 
 This is the procedure for bringing the business/tenant ownership boundary into a live
-environment. Every step is performed by a person. Nothing in this procedure is automated, and
-nothing in the application performs it on its own.
+environment. It predates issue #201, which restored automatic Production-startup migration once
+this rollout was complete (see [Automatic Production-startup migration](#automatic-production-startup-migration-issue-201)
+below) — every step below still applies to the bootstrap, which remains entirely human-performed;
+only the schema-migration step's "deploy and let startup apply it" alternative is new.
 
 ## What the application does and does not do by itself
 
 | Action | Who |
 | --- | --- |
-| Apply schema migrations | **Human**, via `migrate-database --apply` |
+| Apply schema migrations | **Application**, automatically at Production startup (issue #201) — or **Human**, via `migrate-database --apply`, for diagnostics or ahead of a deployment window |
 | Create the `Business` record | **Human**, via `bootstrap-business` |
 | Create `BusinessMembership` rows from the supplied Entra mapping | **Human**, via `bootstrap-business` |
 | Assign existing rows to that business | **Human**, via `bootstrap-business --apply` |
 | Back up the database | **Human** |
 | Deploy | **Human** |
 
-**Deploying the API does not apply the schema.** In Production, startup applies no migrations at
-all, whatever the configuration says: if any are pending it logs a critical error naming them and
-refuses to start. That is deliberate — the tenancy migrations are high risk (the uniqueness one
-rebuilds the whole `NayaxSales` table), and issue #64 requires them to be applied and verified
-under human control. An API serving requests against a schema its code does not match is the
-failure this prevents.
-
-Disposable databases keep the convenience. Development and `Testing` migrate automatically, and
-any other non-Production environment does so only when
-`Database:AllowAutomaticMigrationUnsafeOutsideDevelopment` is `true` — intended for an ephemeral
-integration-test or staging database. Production is decided before that setting is read, so no
-configuration value can make a Production deployment migrate itself.
+**For this rollout specifically, apply the schema by hand first (step 2 below) rather than relying
+on automatic startup migration.** The tenancy migrations are high risk — the uniqueness one
+rebuilds the whole `NayaxSales` table — and this procedure depends on reviewing exactly what step 2
+applied before running the bootstrap in step 3 onward. Take the verified backup either way.
 
 Schema migrations never assign tenant ownership or perform the business backfill. That exists
 exclusively in the `bootstrap-business` command, which the API never invokes — starting the web
@@ -36,8 +30,27 @@ host and running either command are mutually exclusive paths through `Program.cs
 
 Schema migrations are not, however, data-free. Several rebuild a table and copy every row into a
 new one; the `ScopeUniqueConstraintsByBusiness` migration does this to `NayaxSales` in order to
-re-key it. That is another reason production migration stays human-controlled, and why step 2
-below asks for a verified backup first.
+re-key it. That is why step 1 below asks for a verified backup before step 2 applies anything,
+whether applied by hand or by an automatic startup.
+
+## Automatic Production-startup migration (issue #201)
+
+Outside of this rollout procedure, normal Production startup applies pending migrations
+automatically rather than refusing to start — the same as Development and `Testing`. A migration
+failure still stops the application rather than letting it serve requests against a schema its
+code does not match, and the failure is logged with the environment and the pending migration
+names. See `DatabaseSchemaStartup` and its concurrency note for why no distributed lock is needed
+for the single-instance App Service deployment this application runs on (docs/architecture.md §
+SQLite operating assumptions).
+
+Disposable databases keep the same automatic behaviour they always had: Development and `Testing`
+migrate automatically, and any other non-Production environment (an ephemeral integration-test or
+Staging database, for example) does so only when
+`Database:AllowAutomaticMigrationUnsafeOutsideDevelopment` is `true`.
+
+The explicit `migrate-database --dry-run`/`--apply` command remains available and is still the
+right tool for diagnostics, for inspecting what a pending deployment will apply, or for applying a
+high-risk migration ahead of a deployment window under review — as this rollout's step 2 does.
 
 ## Running the commands
 
@@ -147,8 +160,11 @@ optional.
 `--apply` and `--dry-run` are mutually exclusive; passing both, or any other flag, is refused
 rather than resolved by precedence.
 
-Do not deploy the API expecting it to migrate. In Production, until this step completes,
-the API will refuse to start and log which migrations are pending.
+For this rollout, apply the schema by hand as described above rather than deploying and letting
+Production startup migrate automatically (issue #201): the point of this step is the deliberate
+review the migration list gets before it runs, and `--dry-run` is where that review happens. A
+deploy against a database that still has these migrations pending would now apply them
+automatically rather than refuse to start — do not rely on that as a substitute for step 2's review.
 
 **3. Dry run the bootstrap.**
 
@@ -205,10 +221,13 @@ rolls back automatically if any row count or financial total moved. Then check b
   assigned. Either reactivate a membership deliberately, or add an actor who should have access
   to `BusinessBootstrap:Members` and run again — the bootstrap will not reactivate a revoked
   approval on your behalf.
-- **The API refuses to start with "pending migration(s)".** Step 2 has not been completed against
-  that database. Run `migrate-database --dry-run`, review, then `--apply`. Production ignores the
-  `Database:AllowAutomaticMigrationUnsafeOutsideDevelopment` setting entirely - there is no
-  configuration that makes a Production deployment migrate itself.
+- **The API refuses to start with "pending migration(s)" against a non-Production database** (an
+  ephemeral integration-test or Staging environment, for example). Run `migrate-database
+  --dry-run`, review, then `--apply`, or set `Database:AllowAutomaticMigrationUnsafeOutsideDevelopment`
+  for that disposable environment. Production applies pending migrations automatically instead of
+  refusing (issue #201) — if Production starts with these tenancy migrations still pending, it
+  applies them itself rather than waiting for step 2's manual review, so keep to the sequence above
+  rather than relying on that as a substitute for reviewing what `--dry-run` reports.
 - **"the business ... is deactivated".** The business that would own the data is inactive, so its
   records would be unreachable whoever is a member. Reactivate it deliberately, then run again.
 - **Ownership was assigned to the wrong business.** Restore from the backup. Do not attempt to
