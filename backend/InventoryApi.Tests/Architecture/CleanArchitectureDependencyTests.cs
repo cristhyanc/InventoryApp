@@ -224,8 +224,10 @@ public class CleanArchitectureDependencyTests
     /// The types below predate that rule and are pinned here as a deliberate, reviewed exception
     /// rather than removed by this change, exactly like
     /// <see cref="ProjectDependencyDirectionTests.Only_the_documented_legacy_services_remain_in_InventoryApi_Services"/>
-    /// freezes the legacy services folder: <see cref="InventoryApi.Bootstrap.PendingMigrationsException"/>
-    /// and <see cref="InventoryApi.Data.CrossBusinessAccessException"/> are startup/persistence
+    /// freezes the legacy services folder: <see cref="InventoryApi.Bootstrap.PendingMigrationsException"/>,
+    /// <see cref="InventoryApi.Bootstrap.DatabaseMigrationFailedException"/> (added by issue #201,
+    /// alongside the pending-migrations one, for the same reason) and
+    /// <see cref="InventoryApi.Data.CrossBusinessAccessException"/> are startup/persistence
     /// guards intimately coupled to <c>AppDbContext</c>, which itself still lives in InventoryApi
     /// (see docs/architecture.md's temporary API-owned exception); moving them means moving
     /// AppDbContext first, which is out of this issue's scope. <c>InventoryCostDataQualityException</c>
@@ -244,6 +246,7 @@ public class CleanArchitectureDependencyTests
         string[] allowedLegacyExceptionTypeNames =
         [
             "InventoryApi.Bootstrap.PendingMigrationsException",
+            "InventoryApi.Bootstrap.DatabaseMigrationFailedException",
             "InventoryApi.Data.CrossBusinessAccessException",
             "InventoryApi.Services.InventoryCostDataQualityException",
         ];

@@ -4,6 +4,7 @@ using Inventory.Application.CatalogReconciliation;
 using Inventory.Application.Categories;
 using Inventory.Application.MachineStockSync;
 using Inventory.Application.NayaxFeeSettings;
+using Inventory.Application.Purchases;
 using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Reporting.Dashboard;
 using Inventory.Application.Reporting.Daily;
@@ -192,6 +193,9 @@ builder.Services.AddScoped<IDashboardReportFactsProvider, EfDashboardReportFacts
 // Temporary API-owned adapter for the inventory valuation facts port; see EfInventoryValuationFactsProvider.
 builder.Services.AddScoped<IInventoryValuationFactsProvider, EfInventoryValuationFactsProvider>();
 
+// Temporary API-owned adapter for the product purchase-price-history port; see EfProductPurchasePriceHistoryProvider.
+builder.Services.AddScoped<IProductPurchasePriceHistoryProvider, EfProductPurchasePriceHistoryProvider>();
+
 // Temporary API-owned adapter for the transaction sales report facts port; see EfTransactionSalesReportFactsProvider.
 builder.Services.AddScoped<ITransactionSalesReportFactsProvider, EfTransactionSalesReportFactsProvider>();
 
@@ -210,15 +214,16 @@ builder.Services.AddScoped<ILatestNayaxSalesStore, EfLatestNayaxSalesStore>();
 
 var app = builder.Build();
 
-// Schema handling at startup (issue #64). Development applies migrations automatically; every
-// other environment applies nothing and fails closed if any are pending, because the tenancy
-// migrations - including the NayaxSales table rebuild - must be applied by a human under review.
-// See DatabaseSchemaStartup and docs/tenant-rollout.md.
+// Schema handling at startup (issue #64, revised by issue #201). Development, Testing, and
+// Production apply pending migrations automatically; any other environment applies nothing and
+// fails closed unless explicitly opted in. A migration failure always stops startup rather than
+// serving requests against a schema its code does not match. See DatabaseSchemaStartup (including
+// its concurrency note) and docs/tenant-rollout.md.
 //
 // Schema migrations never assign tenant ownership or perform the business backfill - that is
 // exclusively the human-invoked `bootstrap-business` command. Some of them do rebuild tables and
-// copy persisted rows (the NayaxSales re-key), which is a further reason production migration is
-// human-controlled rather than a deployment side effect.
+// copy persisted rows (the NayaxSales re-key); the explicit `migrate-database` command remains
+// available to inspect or apply them by hand for diagnostics.
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();

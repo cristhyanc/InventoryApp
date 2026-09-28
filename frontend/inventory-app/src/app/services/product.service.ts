@@ -1,7 +1,7 @@
 import { Injectable } from '@angular/core';
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Observable } from 'rxjs';
-import { InventoryValuationSummary, Product, ProductUpdateDto } from '../models/models';
+import { InventoryValuationSummary, Product, ProductPriceComparison, ProductUpdateDto } from '../models/models';
 import { ConfigService } from './config.service';
 
 export interface ProductFilters {
@@ -44,6 +44,10 @@ export class ProductService {
 
   getInventoryValuationSummary(): Observable<InventoryValuationSummary> {
     return this.http.get<InventoryValuationSummary>(`${this.baseUrl}/inventory-value-summary`);
+  }
+
+  getPriceComparison(id: number): Observable<ProductPriceComparison> {
+    return this.http.get<ProductPriceComparison>(`${this.baseUrl}/${id}/price-history`);
   }
 
   update(id: number, payload: ProductUpdateDto): Observable<void> {

@@ -2,6 +2,7 @@ using InventoryApi.Controllers;
 using InventoryApi.Data;
 using InventoryApi.DTOs;
 using Inventory.Application.Nayax;
+using Inventory.Application.Purchases;
 using Inventory.Application.Reporting.Dashboard;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Models;
@@ -27,7 +28,8 @@ public class ProductsControllerTests
     {
         var nayaxMock = new Mock<INayaxLynxClient>();
         var getInventoryValuationSummary = new GetInventoryValuationSummary(new EfInventoryValuationFactsProvider(db));
-        return new ProductsController(new ProductService(db, nayaxMock.Object), getInventoryValuationSummary);
+        var getProductPriceComparison = new GetProductPriceComparison(new EfProductPurchasePriceHistoryProvider(db));
+        return new ProductsController(new ProductService(db, nayaxMock.Object), getInventoryValuationSummary, getProductPriceComparison);
     }
 
     private static ProductUpdateDto UpdateDto(int lowStockThreshold, int restockTo) =>
@@ -110,5 +112,40 @@ public class ProductsControllerTests
         Assert.Null(result.TotalInventoryValue);
         Assert.False(result.IsComplete);
         Assert.Equal(1, result.ProductsWithUnknownCost);
+    }
+
+    [Fact]
+    public async Task PriceHistory_NonExistentProduct_ReturnsNotFound()
+    {
+        using var db = CreateDbContext();
+
+        var result = await CreateController(db).PriceHistory(999, CancellationToken.None);
+
+        Assert.IsType<NotFoundResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task PriceHistory_ExistingProductWithHistory_ReturnsTheComparison()
+    {
+        using var db = CreateDbContext();
+        db.Products.Add(new Product { Id = 1, Name = "Coke" });
+        db.Suppliers.Add(new Supplier { Id = 1, Name = "Acme Supplies" });
+        db.Receipts.Add(new Purchase
+        {
+            Id = 10,
+            Title = "January order",
+            SupplierId = 1,
+            PurchaseDate = new DateTime(2026, 1, 5),
+            Items = { new PurchaseItem { Id = 1, ProductId = 1, UnitCost = 2.00m, Quantity = 10 } }
+        });
+        await db.SaveChangesAsync();
+
+        var result = await CreateController(db).PriceHistory(1, CancellationToken.None);
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var dto = Assert.IsType<ProductPriceComparisonDto>(ok.Value);
+        Assert.Equal(2.00m, dto.Lowest!.UnitCost);
+        Assert.Equal("Acme Supplies", dto.Lowest.SupplierName);
+        Assert.Single(dto.HistoryNewestFirst);
     }
 }
