@@ -14,9 +14,10 @@ import {
 function event(overrides: Partial<NayaxStockEventPreview>): NayaxStockEventPreview {
   return {
     id: 1,
-    nayaxEventId: 1001,
+    nayaxEventLogId: 1001,
     machineId: 7,
-    eventTimestamp: '2026-09-27T10:00:00Z',
+    eventDateTimeGmt: '2026-09-27T10:00:00Z',
+    eventDateTimeVmc: '2026-09-27T20:00:00',
     rawEventData: "Eunhye Chung 'Adjusted Stock, Product MDB: 13 | Beef Jerky | 2",
     parsedMdb: 13,
     parsedProductName: 'Beef Jerky',

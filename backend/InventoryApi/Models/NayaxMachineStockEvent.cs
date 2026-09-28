@@ -19,21 +19,33 @@ public class NayaxMachineStockEvent : IBusinessOwned
     public int BusinessId { get; set; }
 
     /// <summary>
-    /// The application's own primary key. <see cref="NayaxEventId"/> is Nayax's identifier and is
+    /// The application's own primary key. <see cref="NayaxEventLogId"/> is Nayax's identifier and is
     /// only unique within one business (see AppDbContext), matching the established
     /// <c>NayaxSales</c>/<c>TransactionID</c> pattern.
     /// </summary>
     public int Id { get; set; }
 
-    public long NayaxEventId { get; set; }
+    /// <summary>The alert's Nayax <c>EventLogID</c>: the upstream event identity and idempotency key.</summary>
+    public long NayaxEventLogId { get; set; }
     public long MachineId { get; set; }
     public int EventCode { get; set; }
-    public DateTime EventTimestamp { get; set; }
+
+    /// <summary>The alert's Nayax <c>EventDateTimeGMT</c>, stored as UTC: the canonical event instant.</summary>
+    public DateTime EventDateTimeGmt { get; set; }
+
+    /// <summary>
+    /// The alert's Nayax <c>EventDateTimeVMC</c> (the machine clock), preserved as source data.
+    /// Null only for rows imported before this column existed.
+    /// </summary>
+    public DateTime? EventDateTimeVmc { get; set; }
 
     /// <summary>The raw, unmodified EventData text as reported by Nayax.</summary>
     public string RawEventData { get; set; } = string.Empty;
 
-    /// <summary>Additional raw source metadata (for example the alert's EventName) kept for audit.</summary>
+    /// <summary>
+    /// The complete source alert, serialised as JSON with Nayax's documented Get Machine Last Alerts
+    /// field names (EventDescription, EventSourceName, EventGroupName, JSONData, ...), kept for audit.
+    /// </summary>
     public string? RawSourceMetadata { get; set; }
 
     public int? ParsedMdb { get; set; }

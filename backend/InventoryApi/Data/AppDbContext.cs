@@ -187,10 +187,10 @@ public class AppDbContext : DbContext
             .Property(s => s.NayaxProductCostPrice)
             .HasColumnType("decimal(18,6)");
 
-        // A Nayax machine-stock event appears at most once per business, the same idempotency
-        // pattern as NayaxSales/TransactionID above (issue #183).
+        // A Nayax machine-stock event (identified by its Nayax EventLogID) appears at most once per
+        // business, the same idempotency pattern as NayaxSales/TransactionID above (issue #183).
         modelBuilder.Entity<NayaxMachineStockEvent>()
-            .HasIndex(e => new { e.BusinessId, e.NayaxEventId })
+            .HasIndex(e => new { e.BusinessId, e.NayaxEventLogId })
             .IsUnique();
 
         modelBuilder.Entity<NayaxMachineStockEvent>()

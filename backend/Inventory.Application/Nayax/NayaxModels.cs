@@ -118,21 +118,82 @@ public class NayaxLastSalesReport
 }
 
 /// <summary>
-/// One entry from the Nayax Lynx machine last-alerts endpoint (issue #183). Field names follow the
-/// same PascalCase-matches-JSON convention already used by <see cref="NayaxMachine"/>/
-/// <see cref="NayaxDevice"/>; this is a best-effort shape based on the documented endpoint and the
-/// observed Event 501 example, not a live-verified contract - see the "Known limitations" note in
-/// the issue #183 pull request. Only <see cref="EventData"/>'s content and <see cref="EventID"/>'s
-/// uniqueness are load-bearing for the parsing/idempotency this feature depends on.
+/// One item of the Nayax Lynx <c>GET /v1/machines/{MachineID}/lastAlerts</c> response
+/// ("Get Machine Last Alerts", https://devzone.nayax.com/reference/lynx/machines/get-machine-last-alerts).
+/// Every documented response field is mapped with an explicit <see cref="JsonPropertyNameAttribute"/>
+/// so the C# names stay independent of Nayax's JSON naming; types and nullability follow the
+/// documented schema. <see cref="EventLogId"/> is the upstream event identity (issue #183
+/// idempotency key), <see cref="EventDateTimeGmt"/> is the canonical event instant, and
+/// <see cref="EventData"/> is the raw text the Event 501 parser reads and must stay unmodified.
 /// </summary>
 public class NayaxMachineAlert
 {
-    public long EventID { get; set; }
-    public long MachineID { get; set; }
+    [JsonPropertyName("MachineID")]
+    public long? MachineId { get; set; }
+
+    /// <summary>The event time as recorded by the machine (VMC) clock; source data only.</summary>
+    [JsonPropertyName("EventDateTimeVMC")]
+    public DateTime EventDateTimeVmc { get; set; }
+
+    [JsonPropertyName("TransactionID")]
+    public long? TransactionId { get; set; }
+
+    /// <summary>The unique identifier of the Nayax event log entry.</summary>
+    [JsonPropertyName("EventLogID")]
+    public long EventLogId { get; set; }
+
+    [JsonPropertyName("SiteID")]
+    public int SiteId { get; set; }
+
+    [JsonPropertyName("EntityTypeID")]
+    public int EntityTypeId { get; set; }
+
+    [JsonPropertyName("EntityTypeName")]
+    public string? EntityTypeName { get; set; }
+
+    [JsonPropertyName("DeviceID")]
+    public long? DeviceId { get; set; }
+
+    [JsonPropertyName("EntityActorID")]
+    public long? EntityActorId { get; set; }
+
+    /// <summary>The event time in GMT.</summary>
+    [JsonPropertyName("EventDateTimeGMT")]
+    public DateTime EventDateTimeGmt { get; set; }
+
+    [JsonPropertyName("EventCode")]
     public int EventCode { get; set; }
-    public string? EventName { get; set; }
+
+    [JsonPropertyName("EventSourceID")]
+    public int EventSourceId { get; set; }
+
+    [JsonPropertyName("EventSourceName")]
+    public string? EventSourceName { get; set; }
+
+    [JsonPropertyName("EventGroupId")]
+    public int? EventGroupId { get; set; }
+
+    [JsonPropertyName("EventGroupName")]
+    public string? EventGroupName { get; set; }
+
+    [JsonPropertyName("EventCategoryId")]
+    public int? EventCategoryId { get; set; }
+
+    [JsonPropertyName("EventCategoryName")]
+    public string? EventCategoryName { get; set; }
+
+    [JsonPropertyName("EventDescription")]
+    public string? EventDescription { get; set; }
+
+    /// <summary>Additional event data as a string; for Event 501 the stock-adjustment text.</summary>
+    [JsonPropertyName("EventData")]
     public string? EventData { get; set; }
-    public DateTime EventTimestamp { get; set; }
+
+    [JsonPropertyName("JSONData")]
+    public string? JsonData { get; set; }
+
+    [JsonPropertyName("EventUserID")]
+    public long? EventUserId { get; set; }
 }
 
 public class NayaxProduct

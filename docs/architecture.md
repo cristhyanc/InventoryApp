@@ -950,18 +950,30 @@ projection, and this feature does not change that meaning.
    implemented by `Inventory.Infrastructure.Nayax.NayaxLynxClient`) is a typed, cancellation-aware
    read of the machine's last-reported alerts, following the same controlled upstream-error
    handling (`NayaxUpstreamException`/`NayaxUpstreamExceptionHandler`) as every other Lynx call.
-   Only Event 501 rows are relevant to this feature.
+   Its item type, `NayaxMachineAlert`, maps every field of the documented
+   [Get Machine Last Alerts](https://devzone.nayax.com/reference/lynx/machines/get-machine-last-alerts)
+   response (`GET /v1/machines/{MachineID}/lastAlerts`) with explicit `JsonPropertyName` attributes
+   and the documented types/nullability. The fields this feature relies on are `EventLogID` (the
+   upstream event identity), `EventCode`, `EventDateTimeGMT` (the canonical event instant; a value
+   without an offset is treated as UTC), `EventDateTimeVMC` (the machine clock, kept as source data
+   only) and `EventData` (the raw text the parser reads, never modified). The descriptive fields
+   (`EventDescription`, `EventSourceName`, `EventGroupName`, `EventCategoryName`, ...) keep their
+   documented meanings and are not substituted for one another. Only Event 501 rows are relevant
+   to this feature.
 2. **Parse.** `Inventory.Domain.Nayax.NayaxStockAdjustmentEventParser` is a deterministic, EF/HTTP-
    free parser for the alert's `EventData` text. It anchors on the literal `Product MDB:` marker
    rather than the free-text employee/user-name prefix that precedes it, so it does not depend on
    that prefix's presence or format. The supported form is
    `Product MDB: <mdb> | <product name> | <signed quantity>`; anything else fails to parse.
 3. **Persist as an imported fact.** `InventoryApi.Models.NayaxMachineStockEvent` is a tenant-owned
-   entity (`AppDbContext.NayaxMachineStockEvents`) holding the upstream event id, machine, event
-   timestamp, event code, the raw `EventData` (and other raw source metadata) for audit, the parsed
-   MDB/product name/signed quantity, the matched local `ProductId` where available, a match status
-   (`Matched`/`NeedsReview` with a reason), and a processing status (`Unprocessed`/`Applied` with a
-   processed timestamp and the resulting `StockAdjustment.Id`). `(BusinessId, NayaxEventId)` is
+   entity (`AppDbContext.NayaxMachineStockEvents`) holding the upstream `EventLogID`
+   (`NayaxEventLogId`), machine, `EventDateTimeGMT` (`EventDateTimeGmt`, UTC),
+   `EventDateTimeVMC` (`EventDateTimeVmc`), event code, the raw `EventData` verbatim, and the
+   complete source alert serialised as JSON with Nayax's documented field names
+   (`RawSourceMetadata`) for audit, the parsed MDB/product name/signed quantity, the matched
+   local `ProductId` where available, a match status (`Matched`/`NeedsReview` with a reason), and
+   a processing status (`Unprocessed`/`Applied` with a processed timestamp and the resulting
+   `StockAdjustment.Id`). `(BusinessId, NayaxEventLogId)` is
    unique, the same external-identity pattern as `NayaxSales.TransactionID` - so re-fetching the
    same alert can never create a second deduction.
 4. **Match Machine + MDB, validate by name.** `Inventory.Application.MachineStockSync.SyncMachineStockFromNayax`

@@ -190,9 +190,13 @@ export enum NayaxStockEventProcessingStatus {
 
 export interface NayaxStockEventPreview {
   id: number;
-  nayaxEventId: number;
+  /** The Nayax EventLogID: the upstream identity of the alert. */
+  nayaxEventLogId: number;
   machineId: number;
-  eventTimestamp: string;
+  /** The Nayax EventDateTimeGMT: the canonical event instant. */
+  eventDateTimeGmt: string;
+  /** The Nayax EventDateTimeVMC (machine clock); null for events imported before it was kept. */
+  eventDateTimeVmc: string | null;
   rawEventData: string;
   parsedMdb: number | null;
   parsedProductName: string | null;

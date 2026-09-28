@@ -71,7 +71,7 @@ public sealed class ApplyMachineStockSync
                 var application = await _store.ApplyRefillAsync(
                     state.Id,
                     machineId,
-                    state.NayaxEventId,
+                    state.NayaxEventLogId,
                     state.MatchedProductId!.Value,
                     state.ParsedQuantity!.Value,
                     cancellationToken);

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Inventory.Application.MachineStockSync;
 using Inventory.Application.Nayax;
 using Inventory.Domain.Nayax;
@@ -67,14 +68,16 @@ public class MachineStockSyncTests
         return product;
     }
 
-    private static NayaxMachineAlert StockAlert(long eventId, string eventData, DateTime? timestamp = null) => new()
+    private static NayaxMachineAlert StockAlert(long eventLogId, string eventData, DateTime? eventDateTimeGmt = null) => new()
     {
-        EventID = eventId,
-        MachineID = MachineId,
+        EventLogId = eventLogId,
+        MachineId = MachineId,
         EventCode = NayaxMachineAlertEventCodes.StockAdjustForMachine,
-        EventName = "Stock Adjust for Machine",
+        EventDescription = "Stock Adjust for Machine",
         EventData = eventData,
-        EventTimestamp = timestamp ?? EventTime
+        EventDateTimeGmt = eventDateTimeGmt ?? EventTime,
+        // The machine clock in Sydney (AEST, UTC+10).
+        EventDateTimeVmc = DateTime.SpecifyKind((eventDateTimeGmt ?? EventTime).AddHours(10), DateTimeKind.Unspecified)
     };
 
     private static Mock<INayaxLynxClient> NayaxClientReturning(
@@ -263,6 +266,75 @@ public class MachineStockSyncTests
         Assert.Equal(18, (await db.Products.FindAsync(ProductId))!.QuantityInStock);
         Assert.Single(await db.StockAdjustments.Where(x => x.Reason == StockAdjustmentReason.MachineRefill).ToListAsync());
         Assert.Single(await db.NayaxMachineStockEvents.ToListAsync());
+    }
+
+    [Fact]
+    public async Task Idempotency_is_keyed_on_event_log_id_not_on_event_content()
+    {
+        using var db = CreateInMemoryDb(nameof(Idempotency_is_keyed_on_event_log_id_not_on_event_content));
+        SeedCostedProduct(db, ProductId, "25g Nobby's Beef Jerky Hot", 20);
+        await db.SaveChangesAsync();
+
+        // Two distinct Nayax event log entries with identical content are two real adjustments; the
+        // same EventLogID repeated within one response is one.
+        const string eventData = "Product MDB: 13 | 25g Nobby's Beef Jerky Hot | 2";
+        var nayax = NayaxClientReturning([
+            StockAlert(1001, eventData),
+            StockAlert(1002, eventData),
+            StockAlert(1002, eventData)
+        ]);
+        var (sync, _) = UseCases(db, nayax.Object);
+
+        var preview = await sync.Handle(MachineId, CancellationToken.None);
+
+        Assert.Equal(2, preview.NewEventCount);
+        Assert.Equal([1001L, 1002L], preview.Events.Select(e => e.NayaxEventLogId).Order());
+    }
+
+    [Fact]
+    public async Task Imported_event_persists_the_documented_nayax_identity_timestamps_and_source_alert()
+    {
+        using var db = CreateInMemoryDb(nameof(Imported_event_persists_the_documented_nayax_identity_timestamps_and_source_alert));
+        SeedCostedProduct(db, ProductId, "25g Nobby's Beef Jerky Hot", 20);
+        await db.SaveChangesAsync();
+
+        const string eventData = "Eunhye Chung 'Adjusted Stock, Product MDB: 13 | 25g Nobby's Beef Jerky Hot | 2";
+        var alert = StockAlert(
+            5550001, eventData, DateTime.SpecifyKind(new DateTime(2026, 9, 1, 10, 0, 0), DateTimeKind.Unspecified));
+        alert.EventSourceId = 3;
+        alert.EventSourceName = "Nayax Core";
+        alert.EventGroupId = 12;
+        alert.EventGroupName = "Inventory";
+        alert.EventCategoryId = 4;
+        alert.EventCategoryName = "Information";
+        alert.SiteId = 2;
+        alert.EntityTypeId = 1;
+        alert.EntityTypeName = "Machine";
+        var (sync, _) = UseCases(db, NayaxClientReturning([alert]).Object);
+
+        var preview = await sync.Handle(MachineId, CancellationToken.None);
+
+        var evt = Assert.Single(preview.Events);
+        Assert.Equal(5550001, evt.NayaxEventLogId);
+        // EventDateTimeGMT without an offset is GMT, never server-local time.
+        Assert.Equal(new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc), evt.EventDateTimeGmt);
+        Assert.Equal(DateTimeKind.Utc, evt.EventDateTimeGmt.Kind);
+        Assert.Equal(new DateTime(2026, 9, 1, 20, 0, 0), evt.EventDateTimeVmc);
+        Assert.Equal(eventData, evt.RawEventData);
+
+        var stored = await db.NayaxMachineStockEvents.SingleAsync();
+        Assert.Equal(5550001, stored.NayaxEventLogId);
+        Assert.Equal(eventData, stored.RawEventData);
+
+        using var source = JsonDocument.Parse(stored.RawSourceMetadata!);
+        Assert.Equal(5550001, source.RootElement.GetProperty("EventLogID").GetInt64());
+        Assert.Equal("Stock Adjust for Machine", source.RootElement.GetProperty("EventDescription").GetString());
+        Assert.Equal("Nayax Core", source.RootElement.GetProperty("EventSourceName").GetString());
+        Assert.Equal("Inventory", source.RootElement.GetProperty("EventGroupName").GetString());
+        Assert.Equal("Information", source.RootElement.GetProperty("EventCategoryName").GetString());
+        Assert.Equal(eventData, source.RootElement.GetProperty("EventData").GetString());
+        Assert.True(source.RootElement.TryGetProperty("EventDateTimeVMC", out _));
+        Assert.False(source.RootElement.TryGetProperty("EventName", out _));
     }
 
     [Fact]

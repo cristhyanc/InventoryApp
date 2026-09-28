@@ -4,13 +4,18 @@ namespace Inventory.Application.MachineStockSync;
 
 /// <summary>
 /// One Nayax alert to persist as an imported fact, already parsed and resolved by the use case.
-/// The raw EventData and source metadata are carried verbatim so the import stays auditable.
+/// <see cref="NayaxEventLogId"/> is the alert's documented <c>EventLogID</c>,
+/// <see cref="EventDateTimeGmt"/> its <c>EventDateTimeGMT</c> (UTC) and
+/// <see cref="EventDateTimeVmc"/> its machine-clock <c>EventDateTimeVMC</c>. The raw EventData is
+/// carried verbatim and <see cref="RawSourceMetadata"/> holds the complete source alert as JSON in
+/// Nayax's documented field names, so the import stays auditable.
 /// </summary>
 public sealed record MachineStockEventImport(
-    long NayaxEventId,
+    long NayaxEventLogId,
     long MachineId,
     int EventCode,
-    DateTime EventTimestamp,
+    DateTime EventDateTimeGmt,
+    DateTime EventDateTimeVmc,
     string RawEventData,
     string? RawSourceMetadata,
     int? ParsedMdb,
@@ -23,9 +28,10 @@ public sealed record MachineStockEventImport(
 /// <summary>An imported event that has not been applied yet, with its matched product's current storage.</summary>
 public sealed record PendingMachineStockEvent(
     int Id,
-    long NayaxEventId,
+    long NayaxEventLogId,
     long MachineId,
-    DateTime EventTimestamp,
+    DateTime EventDateTimeGmt,
+    DateTime? EventDateTimeVmc,
     string RawEventData,
     int? ParsedMdb,
     string? ParsedProductName,
@@ -40,7 +46,7 @@ public sealed record PendingMachineStockEvent(
 /// <summary>The stored state one apply attempt needs in order to decide what to do.</summary>
 public sealed record MachineStockEventState(
     int Id,
-    long NayaxEventId,
+    long NayaxEventLogId,
     NayaxStockEventMatchStatus MatchStatus,
     string? NeedsReviewReason,
     NayaxStockEventProcessingStatus ProcessingStatus,
@@ -61,8 +67,8 @@ public sealed record MachineRefillApplication(bool Succeeded, int? StockAdjustme
 /// </summary>
 public interface IMachineStockEventStore
 {
-    /// <summary>The Nayax event ids already imported for this machine; the basis of idempotency.</summary>
-    Task<IReadOnlyList<long>> GetImportedNayaxEventIdsAsync(long machineId, CancellationToken cancellationToken);
+    /// <summary>The Nayax <c>EventLogID</c>s already imported for this machine; the basis of idempotency.</summary>
+    Task<IReadOnlyList<long>> GetImportedNayaxEventLogIdsAsync(long machineId, CancellationToken cancellationToken);
 
     /// <summary>The local products for the given Nayax product identifiers, keyed by that identifier.</summary>
     Task<IReadOnlyDictionary<long, NayaxStockSyncProduct>> GetStorageProductsAsync(
@@ -90,7 +96,7 @@ public interface IMachineStockEventStore
     Task<MachineRefillApplication> ApplyRefillAsync(
         int eventId,
         long machineId,
-        long nayaxEventId,
+        long nayaxEventLogId,
         long productId,
         int quantity,
         CancellationToken cancellationToken);

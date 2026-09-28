@@ -182,27 +182,27 @@ public class BusinessScopedUniquenessTests : IDisposable
     /// NayaxSales/TransactionID pattern: unique per business, not globally.
     /// </summary>
     [Fact]
-    public void Two_businesses_can_import_a_machine_stock_event_with_the_same_nayax_event_id()
+    public void Two_businesses_can_import_a_machine_stock_event_with_the_same_nayax_event_log_id()
     {
-        const long SharedEventId = 13579;
+        const long SharedEventLogId = 13579;
 
         SaveAs(BusinessA, db => db.NayaxMachineStockEvents.Add(new NayaxMachineStockEvent
         {
-            NayaxEventId = SharedEventId,
+            NayaxEventLogId = SharedEventLogId,
             MachineId = 1,
             EventCode = 501,
             RawEventData = "Product MDB: 1 | A | 1",
         }));
         SaveAs(BusinessB, db => db.NayaxMachineStockEvents.Add(new NayaxMachineStockEvent
         {
-            NayaxEventId = SharedEventId,
+            NayaxEventLogId = SharedEventLogId,
             MachineId = 2,
             EventCode = 501,
             RawEventData = "Product MDB: 2 | B | 2",
         }));
 
         using var verify = TestAppDbContext.Unrestricted(_options);
-        var events = verify.NayaxMachineStockEvents.Where(e => e.NayaxEventId == SharedEventId).ToList();
+        var events = verify.NayaxMachineStockEvents.Where(e => e.NayaxEventLogId == SharedEventLogId).ToList();
 
         Assert.Equal(2, events.Count);
         Assert.Equal([BusinessA, BusinessB], events.Select(e => e.BusinessId).OrderBy(id => id));
@@ -217,7 +217,7 @@ public class BusinessScopedUniquenessTests : IDisposable
     {
         SaveAs(BusinessA, db => db.NayaxMachineStockEvents.Add(new NayaxMachineStockEvent
         {
-            NayaxEventId = 24680,
+            NayaxEventLogId = 24680,
             MachineId = 1,
             EventCode = 501,
             RawEventData = "Product MDB: 1 | A | 1",
@@ -226,7 +226,7 @@ public class BusinessScopedUniquenessTests : IDisposable
         Assert.Throws<DbUpdateException>(() =>
             SaveAs(BusinessA, db => db.NayaxMachineStockEvents.Add(new NayaxMachineStockEvent
             {
-                NayaxEventId = 24680,
+                NayaxEventLogId = 24680,
                 MachineId = 1,
                 EventCode = 501,
                 RawEventData = "Product MDB: 1 | A | 1",

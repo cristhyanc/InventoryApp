@@ -33,12 +33,12 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
         _rebuild = rebuild;
     }
 
-    public async Task<IReadOnlyList<long>> GetImportedNayaxEventIdsAsync(
+    public async Task<IReadOnlyList<long>> GetImportedNayaxEventLogIdsAsync(
         long machineId, CancellationToken cancellationToken) =>
         await _db.NayaxMachineStockEvents
             .AsNoTracking()
             .Where(e => e.MachineId == machineId)
-            .Select(e => e.NayaxEventId)
+            .Select(e => e.NayaxEventLogId)
             .ToListAsync(cancellationToken);
 
     public async Task<IReadOnlyDictionary<long, NayaxStockSyncProduct>> GetStorageProductsAsync(
@@ -62,16 +62,17 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
             return;
 
         // BusinessId is deliberately left unset: BusinessOwnershipEnforcer stamps the caller's
-        // resolved business on SaveChanges, and the (BusinessId, NayaxEventId) unique index is what
+        // resolved business on SaveChanges, and the (BusinessId, NayaxEventLogId) unique index is what
         // makes re-importing the same alert impossible.
         foreach (var imported in events)
         {
             _db.NayaxMachineStockEvents.Add(new NayaxMachineStockEvent
             {
-                NayaxEventId = imported.NayaxEventId,
+                NayaxEventLogId = imported.NayaxEventLogId,
                 MachineId = imported.MachineId,
                 EventCode = imported.EventCode,
-                EventTimestamp = imported.EventTimestamp,
+                EventDateTimeGmt = imported.EventDateTimeGmt,
+                EventDateTimeVmc = imported.EventDateTimeVmc,
                 RawEventData = imported.RawEventData,
                 RawSourceMetadata = imported.RawSourceMetadata,
                 ParsedMdb = imported.ParsedMdb,
@@ -92,13 +93,14 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
             .AsNoTracking()
             .Where(e => e.MachineId == machineId
                 && e.ProcessingStatus == NayaxStockEventProcessingStatus.Unprocessed)
-            .OrderBy(e => e.EventTimestamp)
+            .OrderBy(e => e.EventDateTimeGmt)
             .ThenBy(e => e.Id)
             .Select(e => new PendingMachineStockEvent(
                 e.Id,
-                e.NayaxEventId,
+                e.NayaxEventLogId,
                 e.MachineId,
-                e.EventTimestamp,
+                e.EventDateTimeGmt,
+                e.EventDateTimeVmc,
                 e.RawEventData,
                 e.ParsedMdb,
                 e.ParsedProductName,
@@ -134,7 +136,7 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
             .Where(e => e.Id == eventId && e.MachineId == machineId)
             .Select(e => new MachineStockEventState(
                 e.Id,
-                e.NayaxEventId,
+                e.NayaxEventLogId,
                 e.MatchStatus,
                 e.NeedsReviewReason,
                 e.ProcessingStatus,
@@ -158,7 +160,7 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
     public async Task<MachineRefillApplication> ApplyRefillAsync(
         int eventId,
         long machineId,
-        long nayaxEventId,
+        long nayaxEventLogId,
         long productId,
         int quantity,
         CancellationToken cancellationToken)
@@ -175,7 +177,7 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
         {
             var adjustment = _costing.ApplyMovement(
                 productId, -quantity, StockAdjustmentReason.MachineRefill, null,
-                $"Nayax Sync Restock (event {nayaxEventId})");
+                $"Nayax Sync Restock (EventLogID {nayaxEventLogId})");
             adjustment.MachineId = machineId;
             adjustment.Source = StockAdjustmentSource.Nayax;
 

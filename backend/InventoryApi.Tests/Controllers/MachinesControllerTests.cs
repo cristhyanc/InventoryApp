@@ -31,7 +31,7 @@ public class MachinesControllerTests
         nayax.Setup(x => x.GetMachineLastAlertsAsync(MachineId, It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
         var store = new Mock<IMachineStockEventStore>();
-        store.Setup(x => x.GetImportedNayaxEventIdsAsync(MachineId, It.IsAny<CancellationToken>()))
+        store.Setup(x => x.GetImportedNayaxEventLogIdsAsync(MachineId, It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
         store.Setup(x => x.GetUnprocessedEventsAsync(MachineId, It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);

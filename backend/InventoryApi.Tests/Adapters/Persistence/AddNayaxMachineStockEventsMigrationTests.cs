@@ -78,7 +78,11 @@ public class AddNayaxMachineStockEventsMigrationTests
             // as Nayax-sourced.
             Assert.Equal(Models.StockAdjustmentSource.Manual, preserved.Source);
 
-            Assert.Empty(await after.NayaxMachineStockEvents.ToListAsync());
+            // Counted with SQL rather than through the current EF model, whose columns were renamed
+            // by the later RenameNayaxMachineStockEventToEventLogContract migration.
+            await using var count = connection.CreateCommand();
+            count.CommandText = "SELECT COUNT(*) FROM NayaxMachineStockEvents;";
+            Assert.Equal(0L, (long)(await count.ExecuteScalarAsync())!);
         }
     }
 }

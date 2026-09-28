@@ -5,9 +5,10 @@ namespace Inventory.Application.MachineStockSync;
 /// <summary>One Nayax machine-stock event as shown in the Sync Restock reconciliation preview (issue #183).</summary>
 public record NayaxStockEventPreviewDto(
     int Id,
-    long NayaxEventId,
+    long NayaxEventLogId,
     long MachineId,
-    DateTime EventTimestamp,
+    DateTime EventDateTimeGmt,
+    DateTime? EventDateTimeVmc,
     string RawEventData,
     int? ParsedMdb,
     string? ParsedProductName,

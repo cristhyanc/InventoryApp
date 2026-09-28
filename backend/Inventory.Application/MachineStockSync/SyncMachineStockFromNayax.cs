@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Inventory.Application.Nayax;
 using Inventory.Domain.Nayax;
 
@@ -27,12 +28,12 @@ public sealed class SyncMachineStockFromNayax
         var alerts = await _nayax.GetMachineLastAlertsAsync(machineId, cancellationToken);
         var stockAlerts = alerts
             .Where(alert => alert.EventCode == NayaxMachineAlertEventCodes.StockAdjustForMachine)
-            .GroupBy(alert => alert.EventID)
+            .GroupBy(alert => alert.EventLogId)
             .Select(group => group.First())
             .ToList();
 
-        var alreadyImported = (await _store.GetImportedNayaxEventIdsAsync(machineId, cancellationToken)).ToHashSet();
-        var newAlerts = stockAlerts.Where(alert => !alreadyImported.Contains(alert.EventID)).ToList();
+        var alreadyImported = (await _store.GetImportedNayaxEventLogIdsAsync(machineId, cancellationToken)).ToHashSet();
+        var newAlerts = stockAlerts.Where(alert => !alreadyImported.Contains(alert.EventLogId)).ToList();
 
         if (newAlerts.Count > 0)
         {
@@ -79,18 +80,30 @@ public sealed class SyncMachineStockFromNayax
         int? parsedQuantity,
         NayaxStockEventResolution resolution) =>
         new(
-            alert.EventID,
+            alert.EventLogId,
             machineId,
             alert.EventCode,
-            alert.EventTimestamp,
+            AsUtc(alert.EventDateTimeGmt),
+            alert.EventDateTimeVmc,
             alert.EventData ?? string.Empty,
-            alert.EventName,
+            JsonSerializer.Serialize(alert),
             parsedMdb,
             parsedProductName,
             parsedQuantity,
             resolution.MatchedProductId,
             resolution.MatchStatus,
             resolution.NeedsReviewReason);
+
+    /// <summary>
+    /// EventDateTimeGMT is documented as GMT; a value that arrives without an offset is therefore
+    /// UTC, not server-local time.
+    /// </summary>
+    private static DateTime AsUtc(DateTime gmt) => gmt.Kind switch
+    {
+        DateTimeKind.Utc => gmt,
+        DateTimeKind.Local => gmt.ToUniversalTime(),
+        _ => DateTime.SpecifyKind(gmt, DateTimeKind.Utc)
+    };
 
     private async Task<NayaxMachineStockSyncPreviewDto> BuildPreviewAsync(
         long machineId, int newEventCount, CancellationToken cancellationToken)
@@ -132,14 +145,15 @@ public sealed class SyncMachineStockFromNayax
 
         var possibleDuplicate = impact.IsPositiveRefill
             ? NayaxMachineStockDuplicatePolicy.FindPossibleDuplicate(
-                pending.MatchedProductId!.Value, pending.ParsedQuantity!.Value, pending.EventTimestamp, manualRefills)
+                pending.MatchedProductId!.Value, pending.ParsedQuantity!.Value, pending.EventDateTimeGmt, manualRefills)
             : null;
 
         return new NayaxStockEventPreviewDto(
             pending.Id,
-            pending.NayaxEventId,
+            pending.NayaxEventLogId,
             pending.MachineId,
-            pending.EventTimestamp,
+            pending.EventDateTimeGmt,
+            pending.EventDateTimeVmc,
             pending.RawEventData,
             pending.ParsedMdb,
             pending.ParsedProductName,
