@@ -862,6 +862,44 @@ Time acquisition and timezone conversion are external boundaries, not pure calcu
 3. Delivery/package amounts remain identifiable for whole-business reporting.
 4. Supplier-order allocations are reconciled without fabricating purchase quantities.
 
+#### Reorder-alert machine-product fan-out (issue #47)
+
+`InventoryApi.Services.ProductService.LowStock` (`GET /api/products/alerts/low-stock`, and
+`GET /api/products?lowStockOnly=true`) previously called `INayaxLynxClient.GetMachineProductsAsync`
+once per machine in an unbounded sequential loop. That fan-out and its aggregation now live in
+`Inventory.Application.Reorder.CalculateReorderNeeds`, `ProductService.LowStock`'s only remaining
+production coupling to Nayax for this endpoint: it fetches the current machine fleet through
+`INayaxLynxClient.GetMachinesAsync`, then issues the per-machine `GetMachineProductsAsync` calls with
+bounded parallelism (`Parallel.ForEachAsync`, `MaxDegreeOfParallelism =
+CalculateReorderNeeds.MaxConcurrentMachineRequests`, currently 4 - a fixed engineering constant chosen
+for headroom against Nayax rate limits given the small current machine fleet, not environment
+configuration), summing `MissingStockByMDB` per product ID exactly as the sequential loop did.
+`Inventory.Application.Reorder.IOutstandingSupplierOrderQuantityStore` is the narrow port for the
+outstanding (not cancelled, not fully received) supplier-order quantity per product the use case also
+returns; `InventoryApi.Adapters.Persistence.EfOutstandingSupplierOrderQuantityStore` is its temporary
+API-owned EF adapter, for the same `AppDbContext` reason as the other `Ef*` adapters in this document.
+`ProductService.LowStock` applies both returned dictionaries onto its already-filtered `Product` list
+unchanged (`MachineReplenishmentNeed`, `OnOrderQuantity`, and the `NeedToOrder`/`IsReorderAlert`
+computed properties they feed are untouched), then keeps its own search/category/supplier filtering,
+reorder-alert filtering, and sort itself - this migration moves only the external-integration
+orchestration and the outstanding-order query out of the legacy service, not the reorder math itself.
+
+Bounded parallelism, not a cache/snapshot, was chosen deliberately: the current machine fleet is small,
+so the safety/consistency cost of a stale snapshot and the freshness/invalidation semantics it would
+need is not justified by the fan-out this issue measured (one sequential `GetMachineProductsAsync` call
+per machine). A future machine-fleet growth that makes bounded parallelism insufficient should revisit
+this decision explicitly rather than layering a cache on top of it silently.
+
+Cancellation and typed error handling are unchanged in kind, extended in scope:
+`CalculateReorderNeeds.Handle` accepts and propagates a `CancellationToken` through
+`GetMachinesAsync`, every bounded `GetMachineProductsAsync` call, and the outstanding-order query (the
+legacy sequential loop never accepted one, because neither `ProductService.LowStock` nor
+`ProductsController`'s two calling actions did before this issue). A failing per-machine call - a typed
+`Inventory.Infrastructure.Nayax.NayaxUpstreamException` (see [External integration
+errors](#external-integration-errors)) or a genuine cancellation - propagates out of `Handle` unchanged;
+`Parallel.ForEachAsync` never assembles a completed-looking aggregate once one machine's call has
+failed, so a caller never receives a partial reorder calculation presented as a complete one.
+
 #### Supplier product price history and comparison (issue #63)
 
 The Purchasing/Suppliers vertical slice derives a per-product supplier price comparison from actual,
@@ -1271,6 +1309,14 @@ Backend and frontend tracks can progress independently when their contracts do n
 6. **Products and stock slice**
    - Move reorder and inventory-movement rules to Domain.
    - Preserve supplier-order projection and low-stock semantics.
+   - **Reorder-alert machine-product fan-out done** (issue #47). The `ProductService.LowStock`
+     machine-product orchestration - fetching the machine fleet and aggregating each machine's
+     `GetMachineProductsAsync` result - moved into `Inventory.Application.Reorder.CalculateReorderNeeds`,
+     with the outstanding supplier-order-quantity query behind the narrow
+     `IOutstandingSupplierOrderQuantityStore` port. See [Reorder-alert machine-product
+     fan-out](#reorder-alert-machine-product-fan-out-issue-47). `ProductService.LowStock` itself, the
+     reorder formulas on `Product` (`MachineReplenishmentNeed`, `OnOrderQuantity`, `NeedToOrder`,
+     `IsReorderAlert`), and the rest of this slice's inventory-movement rules remain future work.
 
 7. **Purchasing and costing slice**
    - Migrate purchases, supplier orders, stock ledger, AVCO, rebuilding, and sale costing as one coherent area.

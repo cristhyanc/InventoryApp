@@ -1,7 +1,9 @@
 using Inventory.Domain.Exceptions;
+using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using InventoryApi.DTOs;
 using Inventory.Application.Nayax;
+using Inventory.Application.Reorder;
 using InventoryApi.Models;
 using InventoryApi.Services;
 using InventoryApi.Services.Interfaces;
@@ -63,8 +65,9 @@ public class ProductServiceTests
     public async Task Create_Update_Delete_Product_And_StockAdjustment_Created()
     {
         using var db = CreateDbContext("prod_test");
-        var nayaxMock = new Mock<INayaxLynxClient>();
-        IProductService svc = new ProductService(db, nayaxMock.Object);
+        var calculateReorderNeeds = new CalculateReorderNeeds(
+            new Mock<INayaxLynxClient>().Object, new EfOutstandingSupplierOrderQuantityStore(db));
+        IProductService svc = new ProductService(db, calculateReorderNeeds);
 
         var dto = new ProductCreateDto("p1", null, null, 10m, 5, 1, 10, "unit", null, null, true);
         var product = await svc.Create(new ProductCreateDto("p1", null, null, 10m, 5, 1, 10, "unit", null, null, true));
@@ -189,6 +192,42 @@ public class ProductServiceTests
         Assert.True(product.IsReorderAlert);
     }
 
+    /// <summary>
+    /// Issue #47: proves the wiring through the extracted <see cref="CalculateReorderNeeds"/> use case
+    /// still reproduces the exact aggregate <c>MachineReplenishmentNeed</c> the legacy sequential loop
+    /// produced - summed across multiple machines reporting the same product, and unaffected by a
+    /// machine-product entry with no matching local product.
+    /// </summary>
+    [Fact]
+    public async Task LowStock_AggregatesMachineReplenishmentNeed_AcrossMultipleMachinesAndIgnoresUnmappedMachineProducts()
+    {
+        using var db = CreateDbContext(Guid.NewGuid().ToString());
+        db.Products.AddRange(
+            new Product { Id = 1, Name = "Coke", QuantityInStock = 10, LowStockThreshold = 5, RestockTo = 20 },
+            new Product { Id = 2, Name = "Chips", QuantityInStock = 10, LowStockThreshold = 5, RestockTo = 20 });
+        await db.SaveChangesAsync();
+
+        var nayaxMock = new Mock<INayaxLynxClient>();
+        nayaxMock.Setup(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<NayaxMachine> { new() { MachineID = 1 }, new() { MachineID = 2 } });
+        nayaxMock.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<NayaxMachineProduct>
+            {
+                new() { NayaxProductID = 1, MissingStockByMDB = 3 },
+                new() { NayaxProductID = 999, MissingStockByMDB = 7 }, // no matching local product; must be ignored
+            });
+        nayaxMock.Setup(x => x.GetMachineProductsAsync(2, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<NayaxMachineProduct> { new() { NayaxProductID = 1, MissingStockByMDB = 4 } });
+        var calculateReorderNeeds = new CalculateReorderNeeds(nayaxMock.Object, new EfOutstandingSupplierOrderQuantityStore(db));
+        var service = new ProductService(db, calculateReorderNeeds);
+
+        var alerts = (await service.LowStock()).ToList();
+
+        var coke = Assert.Single(alerts);
+        Assert.Equal("Coke", coke.Name);
+        Assert.Equal(7, coke.MachineReplenishmentNeed);
+    }
+
     [Fact]
     public async Task Create_RejectsInvalidRestockSettings()
     {
@@ -301,7 +340,8 @@ public class ProductServiceTests
         var nayaxMock = new Mock<INayaxLynxClient>();
         nayaxMock.Setup(client => client.GetMachinesAsync(It.IsAny<System.Threading.CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachine>());
-        return new ProductService(db, nayaxMock.Object);
+        var calculateReorderNeeds = new CalculateReorderNeeds(nayaxMock.Object, new EfOutstandingSupplierOrderQuantityStore(db));
+        return new ProductService(db, calculateReorderNeeds);
     }
 
 }

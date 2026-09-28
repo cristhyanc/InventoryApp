@@ -5,6 +5,7 @@ using Inventory.Application.Categories;
 using Inventory.Application.MachineStockSync;
 using Inventory.Application.NayaxFeeSettings;
 using Inventory.Application.Purchases;
+using Inventory.Application.Reorder;
 using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Reporting.Dashboard;
 using Inventory.Application.Reporting.Daily;
@@ -207,6 +208,10 @@ builder.Services.AddScoped<INayaxCatalogSnapshotProvider, InventoryApi.Adapters.
 // Temporary API-owned adapter for the machine Sync Restock persistence port (issue #183); see
 // EfMachineStockEventStore.
 builder.Services.AddScoped<IMachineStockEventStore, EfMachineStockEventStore>();
+
+// Temporary API-owned adapter for the reorder outstanding-supplier-order-quantity port (issue #47);
+// see EfOutstandingSupplierOrderQuantityStore.
+builder.Services.AddScoped<IOutstandingSupplierOrderQuantityStore, EfOutstandingSupplierOrderQuantityStore>();
 
 // Temporary API-owned adapter for the coordinated latest-Nayax-sales persistence port (issue #187);
 // see EfLatestNayaxSalesStore.
