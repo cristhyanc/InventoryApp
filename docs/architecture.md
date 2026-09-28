@@ -222,13 +222,13 @@ flowchart TD
 - The frontend has a centralized runtime API configuration, typed services, reusable report-page behavior, and shared toast/confirmation UI.
 - Standalone Angular components keep feature code independent of NgModule structure.
 - Backend CI restores, builds, and tests before a `main` deployment.
-- `AppDbContext` no longer enables `UseLazyLoadingProxies()` (issue #52). Every navigation an endpoint serialises or a service reads after materialization is loaded explicitly with `Include`/`ThenInclude` (for example `ProductService`, `MachineService.GetMachineProducts`, and `PurchaseService.Update`) or, where the caller may still change the owning foreign key afterwards, with a single explicit `Entry(...).Reference(...).LoadAsync()` once the final value is known (`OperatingExpensesController.Update`/`UpdateWithAttachment`). What a request loads from the database is visible in its query, not implied by which properties a response happens to touch.
+- `AppDbContext` no longer enables `UseLazyLoadingProxies()` (issue #52). Every navigation an endpoint serialises or a service reads after materialization is loaded explicitly with `Include`/`ThenInclude` (for example `ProductService`, `MachineService.GetMachineProducts`, and `PurchaseService.Update`) or, where the caller may still change the owning foreign key afterwards, with a single explicit `Entry(...).Reference(...).LoadAsync()` once the final value is known (`EfOperatingExpenseStore.UpdateAsync`, formerly `OperatingExpensesController.Update`/`UpdateWithAttachment` before the operating-expenses slice moved persistence into that adapter). What a request loads from the database is visible in its query, not implied by which properties a response happens to touch.
 
 ## Current pressure points
 
 - HTTP, use cases, domain calculations, EF Core, Nayax, file storage, and export generation live in one project for every feature area still pending migration (purchases, machine services, inventory-cost transition, and the remaining direct-`AppDbContext` controllers/services). Reporting is no longer part of this pressure point: its use cases live in `Inventory.Application.Reporting.<Feature>` and its calculations in `Inventory.Domain.Reporting.<Feature>`; only its temporary EF/Nayax adapters, HTTP controller, and CSV/XLSX byte encoding remain in `InventoryApi`. `Purchases.PurchaseTotalValidationPolicy`/`ComputePurchaseTotalValidation` are the first pieces of the purchase slice to move out (see the [Purchase rename plan](#purchase-rename-plan)); the purchase upload/update/delete orchestration itself is still in `InventoryApi`.
 - `PurchaseService`, the machine services, and the inventory-cost-transition services each combine orchestration and persistence, and are large.
-- Operating-expense and site-commission controllers directly access `AppDbContext`; operating expenses also manipulate files. Fee-setting no longer does (see the Nayax fee-settings slice above), except through its temporary API-owned persistence adapter.
+- The site-commission controller still directly accesses `AppDbContext`. Fee-setting, categories/suppliers, and operating expenses no longer do (see the Nayax fee-settings slice above and the Operating expenses slice below), except through each slice's temporary API-owned persistence adapter.
 - `Product` contains persistence state, business calculations, and transient Nayax/UI fields.
 - Several tests use EF Core InMemory where SQLite behavior may be more representative.
 - Frontend contracts are split between a broad `models.ts` file and service-local report interfaces. `reporting.service.ts` is already a large multi-report API client.
@@ -402,10 +402,10 @@ file name already held on the tenant-owned purchase or operating-expense record,
 `SaveAsync`, `OpenReadAsync` and `DeleteAsync`. It exposes no filesystem path, no container or
 URL, no `IWebHostEnvironment`, and no business identifier: ownership is resolved before a call
 reaches the port, by loading the parent record through the tenant-filtered `AppDbContext`, so the
-#64 boundary is what decides whether a document may be touched at all. `PurchaseService` and
-`OperatingExpensesController` compose `SaveAsync` and `DeleteAsync` around their own database
-work to replace a document, which is what keeps cleanup-on-failure ordering visible at the call
-site rather than hidden in storage.
+#64 boundary is what decides whether a document may be touched at all. `PurchaseService` and, since the operating-expenses slice (issue #50),
+`Inventory.Application.Expenses.CreateOperatingExpense`/`UpdateOperatingExpense`/`DeleteOperatingExpense`
+compose `SaveAsync` and `DeleteAsync` around their own database work to replace a document, which
+is what keeps cleanup-on-failure ordering visible at the call site rather than hidden in storage.
 
 `Inventory.Infrastructure.Documents.FileSystemDocumentStorage` writes new documents to
 `{ContentRoot}/protected-files/{category}/`, reads them back from there or, failing that, from
@@ -559,7 +559,7 @@ The consequence for a throw site is explicit: **a check whose message is meant f
 
 Not-found handling is unchanged by this work: controllers continue to return `NotFound()` directly for a missing resource, and this issue introduces no typed not-found exception.
 
-Migrating a controller to the centralized mapping never changes its status code or message; the only observable difference is that the response body for a migrated action becomes a `ProblemDetails` object (`application/problem+json`) instead of a bare JSON string, which is why the `message` extension above exists. `StockController.Adjust`, `InventoryCostTransitionsController` (all four actions), and `SupplierOrdersController.Create` were migrated this way, and the deliberate validation throws in `StockService.Adjust`, `InventoryCostTransitionService`, and `SupplierOrderService.Create` were converted from `ArgumentException`/`InvalidOperationException` to `DomainValidationException` so those actions keep the exact `400` and message they returned before. `SiteCommissionsController.SaveAgreement`'s overlapping-agreement check moved from returning `Conflict(...)` directly to throwing `DomainConflictException`, still producing `409` with the same message. `ProductsController.Update`, `PurchasesController`, `ImportsController.ImportNayaxSales`, and `OperatingExpensesController` still catch their own exceptions and were intentionally left for a later, separate change; `OperatingExpensesController` additionally deletes an uploaded file from its catch block, so migrating it also needs a way to run that cleanup from outside the controller.
+Migrating a controller to the centralized mapping never changes its status code or message; the only observable difference is that the response body for a migrated action becomes a `ProblemDetails` object (`application/problem+json`) instead of a bare JSON string, which is why the `message` extension above exists. `StockController.Adjust`, `InventoryCostTransitionsController` (all four actions), and `SupplierOrdersController.Create` were migrated this way, and the deliberate validation throws in `StockService.Adjust`, `InventoryCostTransitionService`, and `SupplierOrderService.Create` were converted from `ArgumentException`/`InvalidOperationException` to `DomainValidationException` so those actions keep the exact `400` and message they returned before. `SiteCommissionsController.SaveAgreement`'s overlapping-agreement check moved from returning `Conflict(...)` directly to throwing `DomainConflictException`, still producing `409` with the same message. `ProductsController.Update`, `PurchasesController`, and `ImportsController.ImportNayaxSales` still catch their own exceptions and were intentionally left for a later, separate change. `OperatingExpensesController` no longer catches anything itself: the operating-expenses slice (issue #50) moved its attachment save/cleanup-on-failure try/catch into `Inventory.Application.Expenses.CreateOperatingExpense`/`UpdateOperatingExpense` as a side effect of the Clean Architecture migration, which is exactly the "way to run that cleanup from outside the controller" this paragraph used to call out as still missing; its validation failures are returned as explicit result values rather than thrown, so the controller still needs no exception mapping to keep its `400 Bad Request` behavior.
 
 ## Frontend architecture
 
@@ -1296,15 +1296,45 @@ Backend and frontend tracks can progress independently when their contracts do n
    migrated, and `ProjectDependencyDirectionTests.Only_the_documented_legacy_services_remain_in_InventoryApi_Services`'s
    allow-list was updated to match.
 
-5. **Operating expenses slice**
-   - Extract use cases and persistence.
+5. **Operating expenses slice** — done (issue #50), following the same pattern as the Nayax
+   fee-settings and categories/suppliers slices above.
    - **`IDocumentStorage` done** (issue #39, checkpoint 1): the storage port and its filesystem
      adapter are in place for both purchase documents and operating-expense attachments; see
      [Document storage](#document-storage). Checkpoint 2 added the tenant-scoped Azure Blob
      adapter behind the same port and the `DocumentStorage:Provider` selection; migrating the
-     documents already on disk is still to come. The operating-expense use cases and persistence
-     themselves remain in `OperatingExpensesController`/`AppDbContext`.
-   - Preserve atomic replacement/cleanup and upload validation behavior.
+     documents already on disk is still to come. `OperatingExpensesController` already used this
+     port before this slice, and keeps doing so unchanged - this slice did not introduce a second
+     storage boundary.
+   - `Inventory.Domain.Expenses.OperatingExpenseDetails` validates an expense's descriptive/financial
+     fields (required description, non-negative amounts, service-period ordering) and
+     `Inventory.Domain.Expenses.ExpenseAttachmentPolicy` validates a candidate attachment's size and
+     extension and resolves its content type - the two deterministic rules the controller used to
+     enforce inline. `Inventory.Domain.Expenses.ExpenseCategory` mirrors
+     `InventoryApi.Models.OperatingExpenseCategory` member-for-member so Domain never references the
+     InventoryApi enum; the two convert by a plain cast at the controller boundary.
+   - `Inventory.Application.Expenses` holds the `ListOperatingExpenses`/`GetOperatingExpense`/
+     `GetOperatingExpenseAttachment`/`CreateOperatingExpense`/`UpdateOperatingExpense`/
+     `DeleteOperatingExpense` use cases, their request/result contracts
+     (`OperatingExpenseFields`/`OperatingExpenseFilter`/`OperatingExpenseRecord`/
+     `OperatingExpenseListItem`/`OperatingExpenseAttachmentMetadata`/`ExpenseAttachmentInput`/
+     `OperatingExpenseAttachmentResult`), and the `IOperatingExpenseStore` port. `CreateOperatingExpense`/
+     `UpdateOperatingExpense` validate first, then save a new attachment through the existing
+     `Inventory.Application.Documents.IDocumentStorage` port before persisting, and delete it again if
+     persistence then fails - the same validate-before-write, delete-on-failure order the retired
+     controller used - so atomicity and cleanup behavior are unchanged. `UpdateOperatingExpense` deletes
+     the previous attachment only after the replacement is durably persisted, for the same reason.
+   - Because `AppDbContext` and its EF entities still live in `InventoryApi`, `IOperatingExpenseStore`
+     is implemented by `InventoryApi.Adapters.Persistence.EfOperatingExpenseStore` - a deliberately
+     temporary API-owned adapter, registered directly in `Program.cs` rather than through
+     `AddInfrastructureServices()`, following the same precedent as `EfNayaxFeeRateStore`/
+     `EfCategoryStore`/`EfSupplierStore`. It must move into `Inventory.Infrastructure` once `AppDbContext`
+     and the shared persistence models relocate there. Its `UpdateAsync` reloads the `Supplier`
+     navigation explicitly, against the final `SupplierId`, once the update is saved (issue #52).
+   - `OperatingExpensesController` only binds HTTP/form/file input, invokes the use cases, and maps
+     results/status codes; `InventoryApi.DTOs.OperatingExpenseResponse` replaced the EF entity it used
+     to serialize directly for the single-record endpoints, with the same keys, order, and nested
+     supplier shape (`OperatingExpenseReportRowDto` already existed for the list endpoint and is
+     unchanged). Routes, multipart field names, status codes, and GST amount semantics are unchanged.
 
 6. **Products and stock slice**
    - Move reorder and inventory-movement rules to Domain.

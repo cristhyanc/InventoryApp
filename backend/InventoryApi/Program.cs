@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Inventory.Application;
 using Inventory.Application.CatalogReconciliation;
 using Inventory.Application.Categories;
+using Inventory.Application.Expenses;
 using Inventory.Application.MachineStockSync;
 using Inventory.Application.NayaxFeeSettings;
 using Inventory.Application.Purchases;
@@ -169,6 +170,9 @@ builder.Services.AddScoped<INayaxFeeRateStore, EfNayaxFeeRateStore>();
 // Temporary API-owned adapters for the categories/suppliers persistence ports; see EfCategoryStore/EfSupplierStore.
 builder.Services.AddScoped<ICategoryStore, EfCategoryStore>();
 builder.Services.AddScoped<ISupplierStore, EfSupplierStore>();
+
+// Temporary API-owned adapter for the operating-expenses persistence port; see EfOperatingExpenseStore.
+builder.Services.AddScoped<IOperatingExpenseStore, EfOperatingExpenseStore>();
 
 // Temporary API-owned adapter for the bookkeeping report facts port; see EfBookkeepingReportFactsProvider.
 builder.Services.AddScoped<IBookkeepingReportFactsProvider, EfBookkeepingReportFactsProvider>();

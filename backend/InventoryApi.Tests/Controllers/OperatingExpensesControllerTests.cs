@@ -1,4 +1,6 @@
+using Inventory.Application.Expenses;
 using Inventory.Infrastructure.Documents;
+using InventoryApi.Adapters.Persistence;
 using InventoryApi.Controllers;
 using InventoryApi.Data;
 using InventoryApi.DTOs;
@@ -27,9 +29,8 @@ public sealed class OperatingExpensesControllerTests : IDisposable
         var result = await controller.Create(CreateDto(), CancellationToken.None);
 
         var created = Assert.IsType<CreatedAtActionResult>(result.Result);
-        var expense = Assert.IsType<OperatingExpense>(created.Value);
+        var expense = Assert.IsType<OperatingExpenseResponse>(created.Value);
         Assert.Null(expense.AttachmentFileName);
-        Assert.Null(expense.AttachmentStoredFileName);
         Assert.Null(expense.AttachmentContentType);
         Assert.Null(expense.AttachmentFileSizeBytes);
     }
@@ -46,11 +47,12 @@ public sealed class OperatingExpensesControllerTests : IDisposable
             CreateDto(), CreateFile(fileName), CancellationToken.None);
 
         var created = Assert.IsType<CreatedAtActionResult>(result.Result);
-        var expense = Assert.IsType<OperatingExpense>(created.Value);
+        var expense = Assert.IsType<OperatingExpenseResponse>(created.Value);
         Assert.Equal(fileName, expense.AttachmentFileName);
         Assert.Equal(contentType, expense.AttachmentContentType);
         Assert.Equal(3, expense.AttachmentFileSizeBytes);
-        Assert.True(File.Exists(AttachmentPath(expense.AttachmentStoredFileName!)));
+        var storedFileName = (await db.OperatingExpenses.AsNoTracking().SingleAsync()).AttachmentStoredFileName!;
+        Assert.True(File.Exists(AttachmentPath(storedFileName)));
 
         var document = await controller.GetAttachment(expense.Id, CancellationToken.None);
         var file = Assert.IsType<FileStreamResult>(document);
@@ -79,13 +81,14 @@ public sealed class OperatingExpensesControllerTests : IDisposable
         await using var db = CreateDbContext();
         var controller = CreateController(db);
         var created = await CreateExpenseWithAttachment(controller, "old.pdf");
-        var oldPath = AttachmentPath(created.AttachmentStoredFileName!);
+        var oldStoredFileName = (await db.OperatingExpenses.AsNoTracking().SingleAsync()).AttachmentStoredFileName!;
+        var oldPath = AttachmentPath(oldStoredFileName);
 
         var result = await controller.UpdateWithAttachment(
             created.Id, CreateDto(description: "Updated"), CreateFile("new.png"), CancellationToken.None);
 
         Assert.IsType<OkObjectResult>(result.Result);
-        var updated = await db.OperatingExpenses.SingleAsync();
+        var updated = await db.OperatingExpenses.AsNoTracking().SingleAsync();
         Assert.Equal("new.png", updated.AttachmentFileName);
         Assert.False(File.Exists(oldPath));
         Assert.True(File.Exists(AttachmentPath(updated.AttachmentStoredFileName!)));
@@ -97,7 +100,8 @@ public sealed class OperatingExpensesControllerTests : IDisposable
         await using var db = CreateDbContext();
         var controller = CreateController(db);
         var created = await CreateExpenseWithAttachment(controller, "old.pdf");
-        var oldPath = AttachmentPath(created.AttachmentStoredFileName!);
+        var oldStoredFileName = (await db.OperatingExpenses.AsNoTracking().SingleAsync()).AttachmentStoredFileName!;
+        var oldPath = AttachmentPath(oldStoredFileName);
 
         var result = await controller.UpdateWithAttachment(
             created.Id, CreateDto(description: "Updated"), CreateFile("new.exe"), CancellationToken.None);
@@ -114,7 +118,8 @@ public sealed class OperatingExpensesControllerTests : IDisposable
         await using var db = CreateDbContext();
         var controller = CreateController(db);
         var created = await CreateExpenseWithAttachment(controller, "invoice.pdf");
-        var path = AttachmentPath(created.AttachmentStoredFileName!);
+        var storedFileName = (await db.OperatingExpenses.AsNoTracking().SingleAsync()).AttachmentStoredFileName!;
+        var path = AttachmentPath(storedFileName);
 
         var result = await controller.Delete(created.Id, CancellationToken.None);
 
@@ -131,10 +136,11 @@ public sealed class OperatingExpensesControllerTests : IDisposable
 
         var created = await CreateExpenseWithAttachment(controller, "invoice.pdf");
 
-        var storedFileName = created.AttachmentStoredFileName!;
+        var storedFileName = (await db.OperatingExpenses.AsNoTracking().SingleAsync()).AttachmentStoredFileName!;
         Assert.True(File.Exists(AttachmentPath(storedFileName)));
         Assert.False(File.Exists(Path.Combine(_webRoot, "expenses", storedFileName)));
         Assert.False(Directory.Exists(Path.Combine(_webRoot, "expenses")));
+        Assert.NotEqual(0, created.Id);
     }
 
     [Fact]
@@ -181,8 +187,9 @@ public sealed class OperatingExpensesControllerTests : IDisposable
         await using var db = CreateDbContext();
         var controller = CreateController(db);
         var created = await CreateExpenseWithAttachment(controller, "invoice.pdf");
+        var storedFileName = (await db.OperatingExpenses.AsNoTracking().SingleAsync()).AttachmentStoredFileName!;
         var written = new DateTime(2026, 2, 3, 4, 5, 6, DateTimeKind.Utc);
-        File.SetLastWriteTimeUtc(AttachmentPath(created.AttachmentStoredFileName!), written);
+        File.SetLastWriteTimeUtc(AttachmentPath(storedFileName), written);
 
         var document = await controller.GetAttachment(created.Id, CancellationToken.None);
 
@@ -261,7 +268,7 @@ public sealed class OperatingExpensesControllerTests : IDisposable
 
         var result = await controller.Update(expenseId, CreateDto() with { SupplierId = 1 }, CancellationToken.None);
 
-        var updated = Assert.IsType<OperatingExpense>(Assert.IsType<OkObjectResult>(result.Result).Value);
+        var updated = Assert.IsType<OperatingExpenseResponse>(Assert.IsType<OkObjectResult>(result.Result).Value);
         Assert.NotNull(updated.Supplier);
         Assert.Equal("Acme", updated.Supplier!.Name);
     }
@@ -282,20 +289,30 @@ public sealed class OperatingExpensesControllerTests : IDisposable
             .UseInMemoryDatabase(dbName)
             .Options);
 
-    private OperatingExpensesController CreateController(AppDbContext db) =>
-        new(db, new FileSystemDocumentStorage(new FileSystemDocumentStorageOptions
+    private OperatingExpensesController CreateController(AppDbContext db)
+    {
+        var store = new EfOperatingExpenseStore(db);
+        var documents = new FileSystemDocumentStorage(new FileSystemDocumentStorageOptions
         {
             ContentRootPath = _contentRoot,
             WebRootPath = _webRoot,
-        }));
+        });
+        return new OperatingExpensesController(
+            new ListOperatingExpenses(store),
+            new GetOperatingExpense(store),
+            new GetOperatingExpenseAttachment(store, documents),
+            new CreateOperatingExpense(store, documents),
+            new UpdateOperatingExpense(store, documents),
+            new DeleteOperatingExpense(store, documents));
+    }
 
-    private async Task<OperatingExpense> CreateExpenseWithAttachment(
+    private async Task<OperatingExpenseResponse> CreateExpenseWithAttachment(
         OperatingExpensesController controller, string fileName)
     {
         var result = await controller.CreateWithAttachment(
             CreateDto(), CreateFile(fileName), CancellationToken.None);
         var created = Assert.IsType<CreatedAtActionResult>(result.Result);
-        return Assert.IsType<OperatingExpense>(created.Value);
+        return Assert.IsType<OperatingExpenseResponse>(created.Value);
     }
 
     private static OperatingExpenseDto CreateDto(string description = "Monthly insurance") =>
