@@ -12,6 +12,7 @@ using Inventory.Application.Reporting.MachineProfitability;
 using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Transactions;
+using Inventory.Application.SalesSync;
 using Inventory.Application.Suppliers;
 using Inventory.Application.Tenancy;
 using Inventory.Infrastructure;
@@ -202,6 +203,10 @@ builder.Services.AddScoped<INayaxCatalogSnapshotProvider, InventoryApi.Adapters.
 // Temporary API-owned adapter for the machine Sync Restock persistence port (issue #183); see
 // EfMachineStockEventStore.
 builder.Services.AddScoped<IMachineStockEventStore, EfMachineStockEventStore>();
+
+// Temporary API-owned adapter for the coordinated latest-Nayax-sales persistence port (issue #187);
+// see EfLatestNayaxSalesStore.
+builder.Services.AddScoped<ILatestNayaxSalesStore, EfLatestNayaxSalesStore>();
 
 var app = builder.Build();
 

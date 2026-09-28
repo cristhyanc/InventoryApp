@@ -8,6 +8,12 @@
   <a routerLink="/admin" class="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">Open Admin</a>
 </div>
 
+@if (isSalesSyncFailed) {
+  <div class="mb-6 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+    Latest Nayax sales could not be synchronized. Sites and Machines below show the last successfully synchronized figures, which may be stale.
+  </div>
+}
+
 <div class="mb-6 grid gap-4 md:grid-cols-3">
   <div class="rounded-xl bg-white p-6 text-center shadow-sm">
     <span class="text-3xl font-semibold text-blue-600">{{ totalProducts }}</span>

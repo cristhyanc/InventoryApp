@@ -799,6 +799,40 @@ product's cost is unknown, rather than silently summing only the known ones. Ang
 calculation of its own - showing "Unavailable" plus how many of how many products are missing cost
 data instead of a real `$0.00` when costing is incomplete.
 
+#### Home dashboard coordinated Sites/Machines sales sync (issue #187)
+
+The home Dashboard's Sites and Machines sections both display sales figures derived from
+persisted `NayaxSales` rows, so they must read the same freshness boundary. Latest-Nayax-sales
+synchronization is an explicit, shared operation, not a side effect of loading either section, and it
+follows the Clean Architecture direction rather than growing the legacy `InventoryApi/Services`
+folder: `Inventory.Application.SalesSync.SyncLatestNayaxSales` is the use case that owns it. It
+discovers the machines and reads their last sales through the existing `INayaxLynxClient` port (so no
+Nayax HTTP detail reaches the use case), reads every machine's sales before anything is persisted so
+one coordinated refresh is stored in a single save, and then asks its narrow Application-owned
+`ILatestNayaxSalesStore` port to persist the batch and - only when a completed sale actually affected
+a product - to rebuild that product's inventory costs.
+`InventoryApi.Adapters.Persistence.EfLatestNayaxSalesStore` is that port's temporary API-owned EF
+adapter (same reason as every other `InventoryApi/Adapters/Persistence` adapter: `AppDbContext`, the
+`NayaxSales` model, and the costing services still live in `InventoryApi`). It holds the unchanged
+import rules extracted from the former `MachineService.SaveMachinesLastSalesAsync` - transaction dedup
+by `TransactionID`, Nayax product matching, the settlement-value completed/cancelled default,
+`ISaleCostingService` costing, and the `IInventoryCostRebuildService` rebuild for products whose
+transition-baseline cutoff a newly imported completed sale follows - and enriches an already stored
+transaction only where its product match or status is still missing, so an imported status or cost is
+never overwritten. `NayaxSalesSyncController` is a thin adapter that invokes the use case and maps it
+to `POST /api/nayax-sales-sync` (204); a Nayax upstream failure still surfaces as the centralized
+`502` from `NayaxUpstreamExceptionHandler`. `MachineService.GetAll()` no longer imports latest sales
+itself; its only responsibility is calculating machine sales/profit from whatever `NayaxSales` rows
+are already persisted, exactly as `SiteService.GetAll()` already did.
+
+`DashboardComponent.refreshSalesDashboard()` (Angular) calls
+`NayaxSalesSyncService.syncLatest()` once and, only after it resolves, loads `MachineService.getAll()`
+and `SiteService.getAll()` - so Sites and Machines always calculate from the same synchronized
+`NayaxSales` snapshot instead of racing each other. If the synchronization call fails, the
+component still loads Sites and Machines from whatever `NayaxSales` data is already persisted
+(never fabricating zero sales) and sets `isSalesSyncFailed`, which the template surfaces as a
+banner so the UI never silently presents both sections as freshly synchronized.
+
 ### Profit levels
 
 - Gross profit requires complete COGS and equals sales minus COGS.
