@@ -221,6 +221,7 @@ jobs:
           private-key: ${{ secrets.AGENT_AUTOMATION_APP_PRIVATE_KEY }}
           permission-contents: write
           permission-pull-requests: write
+          permission-workflows: write
 
       - name: Push implementation and create pull request
         id: publish_implementation
