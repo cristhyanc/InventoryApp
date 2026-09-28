@@ -1,4 +1,6 @@
+using Inventory.Application.SalesSync;
 using Inventory.Domain.Exceptions;
+using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using Inventory.Application.Nayax;
 using InventoryApi.Models;
@@ -245,14 +247,9 @@ public class InventoryCostTransitionServiceTests
             {
                 new() { NayaxProductID = 10, ProductName = "Snack", PAR = 5, MissingStockByMDB = 1 }
             });
-        var rebuild = new InventoryCostRebuildService(db);
-        var service = new NayaxLatestSalesSyncService(
-            db,
-            nayax.Object,
-            new SaleCostingService(db, rebuild),
-            rebuild);
+        var syncLatestSales = LatestSalesSync(db, nayax.Object);
 
-        await service.SyncLatestSalesAsync();
+        await syncLatestSales.Handle();
 
         var product = await db.Products.SingleAsync();
         var sale = await db.NayaxSales.SingleAsync();
@@ -334,7 +331,7 @@ public class InventoryCostTransitionServiceTests
                 new() { TransactionID = 41, MachineID = 1, MachineAuthorizationTime = DateTime.UtcNow, SettlementValue = 1 },
                 new() { TransactionID = 42, MachineID = 1, MachineAuthorizationTime = DateTime.UtcNow }
             });
-        await new NayaxLatestSalesSyncService(db, nayax.Object).SyncLatestSalesAsync();
+        await LatestSalesSync(db, nayax.Object).Handle();
 
         // Looked up by the Nayax transaction id, not by the local primary key: TransactionID is
         // a remote identifier and is no longer this table's key (see NayaxSales.Id).
@@ -347,6 +344,19 @@ public class InventoryCostTransitionServiceTests
         Assert.Equal(
             NayaxTransactionStatusIds.CancelledOrDeclined250,
             (await SaleAsync(db, 42L)).TransactionStatusId);
+    }
+
+    /// <summary>
+    /// The latest-sales synchronization use case (issue #187) over the real
+    /// <see cref="EfLatestNayaxSalesStore"/> adapter, so the live-sale costing and ledger behaviour
+    /// asserted here is exercised through the same path production uses. Costing and the store share
+    /// one rebuild instance, exactly as the DI-composed graph does.
+    /// </summary>
+    private static SyncLatestNayaxSales LatestSalesSync(AppDbContext db, INayaxLynxClient nayax)
+    {
+        var rebuild = new InventoryCostRebuildService(db);
+        return new SyncLatestNayaxSales(
+            nayax, new EfLatestNayaxSalesStore(db, new SaleCostingService(db, rebuild), rebuild));
     }
 
     private static async Task<NayaxSales> SaleAsync(AppDbContext db, long transactionId) =>

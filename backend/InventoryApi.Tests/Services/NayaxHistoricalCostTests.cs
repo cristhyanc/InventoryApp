@@ -8,6 +8,7 @@ using Inventory.Application.Reporting.MachineProfitability;
 using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Transactions;
+using Inventory.Application.SalesSync;
 using InventoryApi.Adapters.Export;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
@@ -329,9 +330,9 @@ public class NayaxHistoricalCostTests
                     MachineAuthorizationTime = new DateTime(2026, 9, 2, 14, 30, 0)
                 }
             });
-        var service = new NayaxLatestSalesSyncService(db, nayax.Object);
+        var syncLatestSales = LatestSalesSync(db, nayax.Object);
 
-        await service.SyncLatestSalesAsync();
+        await syncLatestSales.Handle();
 
         nayax.Verify(x => x.GetMachineLastSalesAsync(1, It.IsAny<CancellationToken>()), Times.AtLeastOnce);
         var sale = await db.NayaxSales.SingleAsync();
@@ -340,6 +341,18 @@ public class NayaxHistoricalCostTests
         Assert.Equal(1.20m, sale.NayaxProductCostPrice);
         Assert.Equal(1.15m, sale.CostOfGoodsSold);
         Assert.Equal(SaleCostSource.InventoryLedger, sale.CostSource);
+    }
+
+    /// <summary>
+    /// The latest-sales synchronization use case (issue #187) over the real
+    /// <see cref="EfLatestNayaxSalesStore"/> adapter, so the historical-cost behaviour asserted here
+    /// is exercised through the same dedup/costing path production uses.
+    /// </summary>
+    private static SyncLatestNayaxSales LatestSalesSync(AppDbContext db, INayaxLynxClient nayax)
+    {
+        var rebuild = new InventoryCostRebuildService(db);
+        return new SyncLatestNayaxSales(
+            nayax, new EfLatestNayaxSalesStore(db, new SaleCostingService(db, rebuild), rebuild));
     }
 
     private static AppDbContext CreateDb() =>

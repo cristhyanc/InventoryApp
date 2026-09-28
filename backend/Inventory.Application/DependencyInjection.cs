@@ -12,6 +12,7 @@ using Inventory.Application.Reporting.MachineProfitability;
 using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Transactions;
+using Inventory.Application.SalesSync;
 using Inventory.Application.Suppliers;
 using Inventory.Application.Tenancy;
 using Microsoft.Extensions.DependencyInjection;
@@ -38,6 +39,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<SyncMachineStockFromNayax>();
         services.AddScoped<ApplyMachineStockSync>();
         services.AddScoped<ResolveMachineStockDuplicate>();
+        services.AddScoped<SyncLatestNayaxSales>();
         services.AddScoped<ComputePurchaseTotalValidation>();
         services.AddScoped<GetBookkeepingReport>();
         services.AddScoped<IGetBookkeepingReport>(sp => sp.GetRequiredService<GetBookkeepingReport>());

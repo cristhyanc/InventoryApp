@@ -92,7 +92,7 @@ public class MachineServiceTests
 
     /// <summary>
     /// Issue #187: latest-sales synchronization is an explicit, shared operation
-    /// (<see cref="NayaxLatestSalesSyncService"/>), no longer a hidden side effect of
+    /// (<c>Inventory.Application.SalesSync.SyncLatestNayaxSales</c>), no longer a hidden side effect of
     /// <see cref="MachineService.GetAll"/>. Machines must calculate from whatever <c>NayaxSales</c>
     /// rows are already persisted, never trigger a fresh Nayax import themselves.
     /// </summary>
