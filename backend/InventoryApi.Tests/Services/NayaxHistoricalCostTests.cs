@@ -294,7 +294,7 @@ public class NayaxHistoricalCostTests
     }
 
     [Fact]
-    public async Task Machine_lookup_refreshes_sales_without_erasing_imported_costs()
+    public async Task Latest_sales_sync_refreshes_sales_without_erasing_imported_costs()
     {
         await using var db = CreateDb();
         db.NayaxSales.Add(new NayaxSales
@@ -329,9 +329,9 @@ public class NayaxHistoricalCostTests
                     MachineAuthorizationTime = new DateTime(2026, 9, 2, 14, 30, 0)
                 }
             });
-        var service = new MachineService(db, nayax.Object);
+        var service = new NayaxLatestSalesSyncService(db, nayax.Object);
 
-        await service.GetAll();
+        await service.SyncLatestSalesAsync();
 
         nayax.Verify(x => x.GetMachineLastSalesAsync(1, It.IsAny<CancellationToken>()), Times.AtLeastOnce);
         var sale = await db.NayaxSales.SingleAsync();

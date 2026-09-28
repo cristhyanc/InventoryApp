@@ -246,13 +246,13 @@ public class InventoryCostTransitionServiceTests
                 new() { NayaxProductID = 10, ProductName = "Snack", PAR = 5, MissingStockByMDB = 1 }
             });
         var rebuild = new InventoryCostRebuildService(db);
-        var service = new MachineService(
+        var service = new NayaxLatestSalesSyncService(
             db,
             nayax.Object,
             new SaleCostingService(db, rebuild),
-            inventoryCostRebuild: rebuild);
+            rebuild);
 
-        await service.GetAll();
+        await service.SyncLatestSalesAsync();
 
         var product = await db.Products.SingleAsync();
         var sale = await db.NayaxSales.SingleAsync();
@@ -334,10 +334,7 @@ public class InventoryCostTransitionServiceTests
                 new() { TransactionID = 41, MachineID = 1, MachineAuthorizationTime = DateTime.UtcNow, SettlementValue = 1 },
                 new() { TransactionID = 42, MachineID = 1, MachineAuthorizationTime = DateTime.UtcNow }
             });
-        nayax.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new List<NayaxMachineProduct>());
-
-        await new MachineService(db, nayax.Object).GetAll();
+        await new NayaxLatestSalesSyncService(db, nayax.Object).SyncLatestSalesAsync();
 
         // Looked up by the Nayax transaction id, not by the local primary key: TransactionID is
         // a remote identifier and is no longer this table's key (see NayaxSales.Id).

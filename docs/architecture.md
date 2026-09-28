@@ -799,6 +799,30 @@ product's cost is unknown, rather than silently summing only the known ones. Ang
 calculation of its own - showing "Unavailable" plus how many of how many products are missing cost
 data instead of a real `$0.00` when costing is incomplete.
 
+#### Home dashboard coordinated Sites/Machines sales sync (issue #187)
+
+The home Dashboard's Sites and Machines sections both display sales figures derived from
+persisted `NayaxSales` rows, so they must read the same freshness boundary. Latest-Nayax-sales
+synchronization is an explicit, shared operation, not a side effect of loading either section:
+`InventoryApi.Services.NayaxLatestSalesSyncService`
+(`Services.Interfaces.INayaxLatestSalesSyncService.SyncLatestSalesAsync`) is the one authoritative
+implementation of the latest-sales import - transaction dedup by `TransactionID`, Nayax product
+matching, `ISaleCostingService` costing, completed/cancelled classification, and
+`IInventoryCostRebuildService` inventory-cost rebuild for products whose baseline cutoff a newly
+imported sale precedes - extracted from the former `MachineService.SaveMachinesLastSalesAsync`.
+`NayaxSalesSyncController` exposes it as `POST /api/nayax-sales-sync`. `MachineService.GetAll()`
+no longer imports latest sales itself; its only responsibility is calculating machine sales/profit
+from whatever `NayaxSales` rows are already persisted, exactly as `SiteService.GetAll()` already
+did.
+
+`DashboardComponent.refreshSalesDashboard()` (Angular) calls
+`NayaxSalesSyncService.syncLatest()` once and, only after it resolves, loads `MachineService.getAll()`
+and `SiteService.getAll()` - so Sites and Machines always calculate from the same synchronized
+`NayaxSales` snapshot instead of racing each other. If the synchronization call fails, the
+component still loads Sites and Machines from whatever `NayaxSales` data is already persisted
+(never fabricating zero sales) and sets `isSalesSyncFailed`, which the template surfaces as a
+banner so the UI never silently presents both sections as freshly synchronized.
+
 ### Profit levels
 
 - Gross profit requires complete COGS and equals sales minus COGS.
