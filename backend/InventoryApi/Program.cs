@@ -4,6 +4,7 @@ using Inventory.Application.CatalogReconciliation;
 using Inventory.Application.Categories;
 using Inventory.Application.MachineStockSync;
 using Inventory.Application.NayaxFeeSettings;
+using Inventory.Application.Purchases;
 using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Reporting.Dashboard;
 using Inventory.Application.Reporting.Daily;
@@ -191,6 +192,9 @@ builder.Services.AddScoped<IDashboardReportFactsProvider, EfDashboardReportFacts
 
 // Temporary API-owned adapter for the inventory valuation facts port; see EfInventoryValuationFactsProvider.
 builder.Services.AddScoped<IInventoryValuationFactsProvider, EfInventoryValuationFactsProvider>();
+
+// Temporary API-owned adapter for the product purchase-price-history port; see EfProductPurchasePriceHistoryProvider.
+builder.Services.AddScoped<IProductPurchasePriceHistoryProvider, EfProductPurchasePriceHistoryProvider>();
 
 // Temporary API-owned adapter for the transaction sales report facts port; see EfTransactionSalesReportFactsProvider.
 builder.Services.AddScoped<ITransactionSalesReportFactsProvider, EfTransactionSalesReportFactsProvider>();

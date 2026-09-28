@@ -1,3 +1,4 @@
+using Inventory.Application.Purchases;
 using Inventory.Application.Reporting.Dashboard;
 using InventoryApi.DTOs;
 using InventoryApi.Models;
@@ -15,13 +16,16 @@ public class ProductsController : ControllerBase
 {
     private readonly InventoryApi.Services.Interfaces.IProductService _service;
     private readonly GetInventoryValuationSummary _getInventoryValuationSummary;
+    private readonly GetProductPriceComparison _getProductPriceComparison;
 
     public ProductsController(
         InventoryApi.Services.Interfaces.IProductService service,
-        GetInventoryValuationSummary getInventoryValuationSummary)
+        GetInventoryValuationSummary getInventoryValuationSummary,
+        GetProductPriceComparison getProductPriceComparison)
     {
         _service = service;
         _getInventoryValuationSummary = getInventoryValuationSummary;
+        _getProductPriceComparison = getProductPriceComparison;
     }
 
     [HttpGet]
@@ -45,6 +49,18 @@ public class ProductsController : ControllerBase
     [HttpGet("inventory-value-summary")]
     public Task<InventoryValuationSummaryDto> InventoryValueSummary(CancellationToken ct) =>
         _getInventoryValuationSummary.Handle(ct);
+
+    [HttpGet("{id:long}/price-history")]
+    public async Task<ActionResult<ProductPriceComparisonDto>> PriceHistory(long id, CancellationToken ct)
+    {
+        var product = await _service.Get(id);
+        if (product is null)
+        {
+            return NotFound();
+        }
+
+        return Ok(await _getProductPriceComparison.Handle(id, ct));
+    }
 
     [HttpGet("alerts/low-stock")]
     public async Task<ActionResult<IEnumerable<Product>>> LowStock(

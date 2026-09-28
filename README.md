@@ -4,7 +4,7 @@ InventoryApp is a full-stack operations and bookkeeping system for a vending-mac
 
 ## Capabilities
 
-- Product, category, supplier, and low-stock management.
+- Product, category, supplier, and low-stock management, including a per-product supplier price history/comparison (lowest vs. latest actual purchase cost, by supplier and date).
 - Purchases, their supporting documents, supplier orders, and stock movements.
 - Sites, vending machines, product assignments, and machine refills.
 - Nayax product and transaction imports with explicit payment/status handling.

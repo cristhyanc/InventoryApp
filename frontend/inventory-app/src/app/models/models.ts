@@ -69,6 +69,37 @@ export interface InventoryValuationSummary {
   totalProducts: number;
 }
 
+/**
+ * One recorded actual Purchase-item cost for a product. `supplierName` is `null` exactly when the
+ * source Purchase has no supplier recorded and must be presented explicitly (e.g. "None"), never
+ * omitted from the history.
+ */
+export interface ProductPriceHistoryEntry {
+  purchaseItemId: number;
+  purchaseId: number;
+  purchaseTitle: string;
+  purchaseDate: string;
+  supplierId: number | null;
+  supplierName: string | null;
+  unitCost: number;
+}
+
+/**
+ * The supplier-product price comparison for one product: its lowest and most recent recorded
+ * actual Purchase unit cost, and every recorded entry newest-first for the drill-down view.
+ * `lowest`/`latest` are `null` only when the product has no Purchase history at all.
+ * `percentageDifference` is `null` whenever `percentageIsMeaningful` is `false` (a zero lowest cost
+ * makes the percentage undefined, not zero or infinite).
+ */
+export interface ProductPriceComparison {
+  lowest: ProductPriceHistoryEntry | null;
+  latest: ProductPriceHistoryEntry | null;
+  absoluteDifference: number | null;
+  percentageDifference: number | null;
+  percentageIsMeaningful: boolean;
+  historyNewestFirst: ProductPriceHistoryEntry[];
+}
+
 export interface Machine {
   machineID: number;
   machineName?: string | null;
