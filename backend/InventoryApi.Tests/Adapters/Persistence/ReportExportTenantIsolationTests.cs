@@ -126,7 +126,8 @@ public sealed class ReportExportTenantIsolationTests : IDisposable
                 Application.Reporting.MachineProfitability.FakeMachineProfitabilityReportFactsProvider.Empty()));
         var productProfitability = new GetProductProfitabilityReport(
             new Application.Reporting.ProductProfitability.FakeProductProfitabilityReportFactsProvider(
-                Application.Reporting.ProductProfitability.FakeProductProfitabilityReportFactsProvider.Empty()));
+                Application.Reporting.ProductProfitability.FakeProductProfitabilityReportFactsProvider.Empty()),
+            Application.Reporting.ProductProfitability.FakeProductPurchaseCostFactsProvider.Empty());
         var gst = new Inventory.Application.Reporting.Gst.GetGstAccountingAid(
             bookkeeping,
             new Application.Reporting.Gst.FakeGstReportFactsProvider(

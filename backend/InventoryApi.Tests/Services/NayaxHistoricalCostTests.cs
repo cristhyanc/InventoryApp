@@ -272,7 +272,8 @@ public class NayaxHistoricalCostTests
         var getDailyReport = new GetDailyReport(new EfDailyReportFactsProvider(db, nayaxFees));
         var getReconciliationReport = new GetReconciliationReport(new EfReconciliationReportFactsProvider(db));
         var getMachineProfitabilityReport = new GetMachineProfitabilityReport(new EfMachineProfitabilityReportFactsProvider(db, nayaxFees, siteCommissions));
-        var getProductProfitabilityReport = new GetProductProfitabilityReport(new EfProductProfitabilityReportFactsProvider(db));
+        var getProductProfitabilityReport = new GetProductProfitabilityReport(
+            new EfProductProfitabilityReportFactsProvider(db), new EfProductPurchaseCostFactsProvider(db));
         var getGstAccountingAid = new GetGstAccountingAid(getBookkeepingReport, new EfGstReportFactsProvider(db));
         var getDashboardReport = new GetDashboardReport(getBookkeepingReport, getProductProfitabilityReport,
             new EfDashboardReportFactsProvider(db, siteCommissions));
