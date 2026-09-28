@@ -21,8 +21,17 @@ namespace InventoryApi.Tests.Application.MachineStockSync;
 /// import Nayax Event 501 stock-adjustment alerts, resolve them to a local product via Machine +
 /// MDB, preview the storage impact, and apply only explicitly accepted events through the existing
 /// inventory/costing movement logic. The use cases are exercised over the real
-/// <see cref="EfMachineStockEventStore"/> adapter, so persistence, transactions, and the costing
-/// invariants are covered end to end rather than only against a stub.
+/// <see cref="EfMachineStockEventStore"/> adapter rather than a stub, so the costing invariants are
+/// covered end to end.
+///
+/// The provider differs deliberately by what a test proves. Application/domain behaviour - parsing,
+/// matching, the apply/duplicate rulings, preview shape - uses the EF Core InMemory provider via
+/// <see cref="CreateInMemoryDb"/>. Behaviour that depends on a real transaction, on constraints, or
+/// on what is actually committed uses relational SQLite via <see cref="CreateSqliteDbAsync"/>,
+/// because InMemory is not relational: <see cref="EfMachineStockEventStore.ApplyRefillAsync"/> only
+/// opens a database transaction when <c>Database.IsRelational()</c>, so an InMemory test cannot
+/// prove that a movement and its event state commit or roll back together. See the "Transactional
+/// safety" and "Relational duplicate resolution" regions.
 /// </summary>
 public class MachineStockSyncTests
 {
@@ -32,6 +41,22 @@ public class MachineStockSyncTests
 
     private static AppDbContext CreateInMemoryDb(string dbName) =>
         TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseInMemoryDatabase(dbName).Options);
+
+    /// <summary>
+    /// Opens <paramref name="connection"/>, creates the schema on it, and returns options for a
+    /// relational SQLite database. The caller keeps the connection alive for the whole test, because
+    /// a <c>:memory:</c> database exists only as long as its connection does. Returning options
+    /// rather than a context lets a test read back what was committed through a fresh context, which
+    /// is the only way to tell a real commit from tracked in-memory state.
+    /// </summary>
+    private static async Task<DbContextOptions<AppDbContext>> CreateSqliteDbAsync(SqliteConnection connection)
+    {
+        await connection.OpenAsync();
+        var options = new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options;
+        await using var schema = TestAppDbContext.Unrestricted(options);
+        await schema.Database.EnsureCreatedAsync();
+        return options;
+    }
 
     private static (SyncMachineStockFromNayax Sync, ApplyMachineStockSync Apply) UseCases(
         AppDbContext db,
@@ -43,8 +68,10 @@ public class MachineStockSyncTests
         return (new SyncMachineStockFromNayax(nayax, store), new ApplyMachineStockSync(store));
     }
 
-    private static ResolveMachineStockDuplicate ResolveUseCase(AppDbContext db) =>
-        new(new EfMachineStockEventStore(db, new InventoryCostService(db), new InventoryCostRebuildService(db)));
+    private static ResolveMachineStockDuplicate ResolveUseCase(
+        AppDbContext db, IInventoryCostRebuildService? rebuild = null) =>
+        new(new EfMachineStockEventStore(
+            db, new InventoryCostService(db), rebuild ?? new InventoryCostRebuildService(db)));
 
     private static Product SeedCostedProduct(
         AppDbContext db, long id, string name, int quantityInStock, decimal unitCost = 1m)
@@ -652,7 +679,7 @@ public class MachineStockSyncTests
 
     #endregion
 
-    #region Explicit duplicate resolution (issue #196)
+    #region Explicit duplicate resolution: application behaviour, EF InMemory (issue #196)
 
     /// <summary>
     /// Seeds a product already refilled manually, then previews a matching Nayax event so it is
@@ -663,7 +690,8 @@ public class MachineStockSyncTests
         ApplyMachineStockSync Apply,
         ResolveMachineStockDuplicate Resolve,
         int EventId,
-        int ManualStockAdjustmentId)> SeedDuplicateScenarioAsync(AppDbContext db)
+        int ManualStockAdjustmentId)> SeedDuplicateScenarioAsync(
+        AppDbContext db, IInventoryCostRebuildService? rebuild = null)
     {
         SeedCostedProduct(db, ProductId, "Coke 375mL", 20, unitCost: 1m);
         await db.SaveChangesAsync();
@@ -679,8 +707,8 @@ public class MachineStockSyncTests
         var nayax = NayaxClientReturning([
             StockAlert(1, "Product MDB: 7 | Coke 375mL | 4")
         ], [new() { NayaxProductID = ProductId, MDBCode = 7, ProductName = "Coke 375mL" }]);
-        var (sync, apply) = UseCases(db, nayax.Object);
-        var resolve = ResolveUseCase(db);
+        var (sync, apply) = UseCases(db, nayax.Object, rebuild);
+        var resolve = ResolveUseCase(db, rebuild);
 
         var preview = await sync.Handle(MachineId, CancellationToken.None);
         var evt = Assert.Single(preview.Events);
@@ -810,6 +838,157 @@ public class MachineStockSyncTests
 
         Assert.Equal(NayaxStockEventApplyOutcome.NotApplicable, result.Outcome);
         Assert.Equal(20, (await db.Products.FindAsync(ProductId))!.QuantityInStock);
+    }
+
+    #endregion
+
+    #region Explicit duplicate resolution: relational SQLite (issue #196)
+
+    // "Apply as separate restock" is the one duplicate resolution that writes: it creates an
+    // inventory movement and the event's resolution state in the same transactional operation. The
+    // region above proves the decision logic; these three prove the parts only a relational database
+    // can prove - that the movement and the resolution state commit together, that a repeat against
+    // committed state cannot deduct again, and that a failure leaves nothing partially committed.
+
+    [Fact]
+    public async Task Apply_as_separate_restock_over_sqlite_commits_the_movement_and_its_resolution_state_together()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await CreateSqliteDbAsync(connection);
+
+        int eventId;
+        int manualAdjustmentId;
+        int? returnedAdjustmentId;
+        await using (var db = TestAppDbContext.Unrestricted(options))
+        {
+            var (_, apply, resolve, seededEventId, seededManualId) = await SeedDuplicateScenarioAsync(db);
+            eventId = seededEventId;
+            manualAdjustmentId = seededManualId;
+
+            // The ordinary apply path still refuses it; only the explicit resolution may override.
+            var ordinary = await apply.Handle(MachineId, [eventId], CancellationToken.None);
+            Assert.Equal(NayaxStockEventApplyOutcome.DuplicateRequiresResolution, ordinary.Results[0].Outcome);
+
+            var result = await resolve.Handle(
+                MachineId, eventId, NayaxDuplicateResolutionChoice.ApplyAsSeparateRestock, CancellationToken.None);
+
+            Assert.Equal(NayaxStockEventApplyOutcome.Applied, result.Outcome);
+            returnedAdjustmentId = result.StockAdjustmentId;
+            Assert.NotNull(returnedAdjustmentId);
+        }
+
+        // A fresh context reads only what the transaction actually committed.
+        await using var verify = TestAppDbContext.Unrestricted(options);
+
+        var nayaxMovement = Assert.Single(
+            await verify.StockAdjustments.Where(x => x.Source == StockAdjustmentSource.Nayax).ToListAsync());
+        Assert.Equal(StockAdjustmentReason.MachineRefill, nayaxMovement.Reason);
+        Assert.Equal(-4, nayaxMovement.QuantityChange);
+        Assert.Equal(MachineId, nayaxMovement.MachineId);
+        Assert.Equal(returnedAdjustmentId, nayaxMovement.Id);
+
+        // Storage: 20 seeded, 4 taken by the manual refill, 4 by this Nayax event - deducted once.
+        var product = await verify.Products.FindAsync(ProductId);
+        Assert.Equal(12, product!.QuantityInStock);
+
+        // MachineRefill is an internal transfer: no COGS, and costing quantity/value are untouched
+        // by either refill, at the product and in the committed ledger row itself.
+        Assert.Equal(20, product.CostingQuantity);
+        Assert.Equal(20m, product.InventoryValue);
+        Assert.Equal(1m, product.AverageUnitCost);
+        Assert.Equal(20, nayaxMovement.CostingQuantityAfter);
+        Assert.Equal(20m, nayaxMovement.InventoryValueAfter);
+        Assert.Empty(await verify.NayaxSales.Where(s => s.CostOfGoodsSold != null).ToListAsync());
+
+        var stored = await verify.NayaxMachineStockEvents.SingleAsync(e => e.Id == eventId);
+        Assert.Equal(NayaxStockEventProcessingStatus.Applied, stored.ProcessingStatus);
+        Assert.Equal(nayaxMovement.Id, stored.StockAdjustmentId);
+        Assert.Equal(NayaxDuplicateResolution.AppliedAsSeparateRestock, stored.DuplicateResolution);
+        Assert.NotNull(stored.DuplicateResolvedAt);
+        Assert.Equal(manualAdjustmentId, stored.MatchedManualStockAdjustmentId);
+    }
+
+    [Fact]
+    public async Task Repeating_apply_as_separate_restock_over_sqlite_never_deducts_or_records_twice()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await CreateSqliteDbAsync(connection);
+
+        int eventId;
+        int? firstAdjustmentId;
+        DateTime? firstResolvedAt;
+        await using (var db = TestAppDbContext.Unrestricted(options))
+        {
+            var (_, _, resolve, seededEventId, _) = await SeedDuplicateScenarioAsync(db);
+            eventId = seededEventId;
+
+            var first = await resolve.Handle(
+                MachineId, eventId, NayaxDuplicateResolutionChoice.ApplyAsSeparateRestock, CancellationToken.None);
+            Assert.Equal(NayaxStockEventApplyOutcome.Applied, first.Outcome);
+            firstAdjustmentId = first.StockAdjustmentId;
+        }
+
+        await using (var read = TestAppDbContext.Unrestricted(options))
+            firstResolvedAt = (await read.NayaxMachineStockEvents.SingleAsync(e => e.Id == eventId)).DuplicateResolvedAt;
+
+        // A second request, with its own context and store, sees only the committed state - so this
+        // is persisted idempotency rather than a change tracker still holding the first result.
+        await using (var db = TestAppDbContext.Unrestricted(options))
+        {
+            var second = await ResolveUseCase(db).Handle(
+                MachineId, eventId, NayaxDuplicateResolutionChoice.ApplyAsSeparateRestock, CancellationToken.None);
+
+            Assert.Equal(NayaxStockEventApplyOutcome.Applied, second.Outcome);
+            Assert.Equal(firstAdjustmentId, second.StockAdjustmentId);
+        }
+
+        await using var verify = TestAppDbContext.Unrestricted(options);
+        Assert.Single(await verify.StockAdjustments.Where(x => x.Source == StockAdjustmentSource.Nayax).ToListAsync());
+        Assert.Equal(12, (await verify.Products.FindAsync(ProductId))!.QuantityInStock);
+
+        var stored = await verify.NayaxMachineStockEvents.SingleAsync(e => e.Id == eventId);
+        Assert.Equal(NayaxDuplicateResolution.AppliedAsSeparateRestock, stored.DuplicateResolution);
+        Assert.Equal(firstResolvedAt, stored.DuplicateResolvedAt);
+        Assert.Equal(firstAdjustmentId, stored.StockAdjustmentId);
+    }
+
+    [Fact]
+    public async Task A_failure_while_applying_as_separate_restock_rolls_back_the_movement_and_the_resolution_together()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await CreateSqliteDbAsync(connection);
+
+        var failingRebuild = new Mock<IInventoryCostRebuildService>();
+        failingRebuild
+            .Setup(x => x.RebuildAsync(ProductId, null, false, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("simulated rebuild failure"));
+
+        int eventId;
+        await using (var db = TestAppDbContext.Unrestricted(options))
+        {
+            var (_, _, resolve, seededEventId, _) = await SeedDuplicateScenarioAsync(db, failingRebuild.Object);
+            eventId = seededEventId;
+
+            var result = await resolve.Handle(
+                MachineId, eventId, NayaxDuplicateResolutionChoice.ApplyAsSeparateRestock, CancellationToken.None);
+
+            Assert.Equal(NayaxStockEventApplyOutcome.Error, result.Outcome);
+            Assert.Null(result.StockAdjustmentId);
+        }
+
+        await using var verify = TestAppDbContext.Unrestricted(options);
+
+        // Nothing partially committed: no Nayax movement, storage still only reduced by the manual
+        // refill, and the event still unresolved so the operator can retry the same decision.
+        Assert.Empty(await verify.StockAdjustments.Where(x => x.Source == StockAdjustmentSource.Nayax).ToListAsync());
+        Assert.Equal(16, (await verify.Products.FindAsync(ProductId))!.QuantityInStock);
+
+        var stored = await verify.NayaxMachineStockEvents.SingleAsync(e => e.Id == eventId);
+        Assert.Equal(NayaxStockEventProcessingStatus.Unprocessed, stored.ProcessingStatus);
+        Assert.Null(stored.StockAdjustmentId);
+        Assert.Equal(NayaxDuplicateResolution.None, stored.DuplicateResolution);
+        Assert.Null(stored.DuplicateResolvedAt);
+        Assert.Null(stored.MatchedManualStockAdjustmentId);
     }
 
     #endregion
