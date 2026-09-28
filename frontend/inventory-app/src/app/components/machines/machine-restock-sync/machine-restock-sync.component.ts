@@ -153,6 +153,11 @@ export class MachineRestockSyncComponent {
   resolvingEventId$ = new BehaviorSubject<number | null>(null);
   selectedEventIds = new Set<number>();
 
+  /** The Sync Restock From date filter (issue #206), as a `yyyy-MM-dd` local-date input value. */
+  fromDate$ = new BehaviorSubject<string>(this.defaultFromDate());
+  /** Show reconciled (issue #206): off by default, so reconciled-manually events stay hidden. */
+  showReconciled$ = new BehaviorSubject<boolean>(false);
+
   readonly MatchStatus = NayaxStockEventMatchStatus;
   readonly DuplicateResolution = NayaxDuplicateResolution;
   readonly DuplicateResolutionChoice = NayaxDuplicateResolutionChoice;
@@ -170,10 +175,17 @@ export class MachineRestockSyncComponent {
     private toastService: ToastService
   ) {}
 
+  /**
+   * Whether this event is directly safe/applicable through the normal Apply path (issue #183),
+   * including through the "Select all applicable" bulk control (issue #206). A reconciled or an
+   * unresolved possible duplicate is never ready to apply - the former is already settled with no
+   * movement, the latter must go through explicit resolution first.
+   */
   isReadyToApply(event: NayaxStockEventPreview): boolean {
     return event.matchStatus === NayaxStockEventMatchStatus.Matched &&
       (event.parsedQuantity ?? 0) > 0 &&
       !event.isInsufficientStock &&
+      event.duplicateResolution === NayaxDuplicateResolution.None &&
       !this.isUnresolvedDuplicate(event);
   }
 
@@ -192,6 +204,24 @@ export class MachineRestockSyncComponent {
     } else {
       this.selectedEventIds.delete(eventId);
     }
+  }
+
+  /** Whether every currently visible/applicable event is selected, for the "Select all applicable" control. */
+  isAllApplicableSelected(preview: NayaxMachineStockSyncPreview): boolean {
+    const eligibleIds = preview.events.filter((e) => this.isReadyToApply(e)).map((e) => e.id);
+    return eligibleIds.length > 0 && eligibleIds.every((id) => this.selectedEventIds.has(id));
+  }
+
+  /**
+   * "Select all applicable" (issue #206): selects exactly the currently visible events that are
+   * directly safe/applicable through the normal Apply path - never an already-applied, reconciled,
+   * Needs Review, or unresolved-duplicate event. Clearing it clears the bulk selection without
+   * changing any event's persisted state.
+   */
+  toggleSelectAllApplicable(preview: NayaxMachineStockSyncPreview, checked: boolean): void {
+    this.selectedEventIds = checked
+      ? new Set(preview.events.filter((e) => this.isReadyToApply(e)).map((e) => e.id))
+      : new Set();
   }
 
   @HostListener('document:keydown.escape')
@@ -216,17 +246,49 @@ export class MachineRestockSyncComponent {
     this.syncTrigger?.nativeElement.focus();
   }
 
-  /** Opens the reconciliation dialog (if it is not already open) and fetches a fresh preview into it. */
+  /**
+   * Opens the reconciliation dialog (if it is not already open), resets the From date/Show
+   * reconciled filters to their opening defaults (issue #206), and fetches a fresh preview.
+   */
   syncRestock(): void {
+    if (!this.machineId) {
+      return;
+    }
+
+    this.fromDate$.next(this.defaultFromDate());
+    this.showReconciled$.next(false);
+    this.modalOpen$.next(true);
+    this.refreshPreview();
+  }
+
+  /** The From date filter changed (issue #206): fetches a preview bounded by the new date. */
+  onFromDateChange(value: string): void {
+    this.fromDate$.next(value);
+    this.refreshPreview();
+  }
+
+  /** Show reconciled changed (issue #206): never rewrites any event, only what the preview returns. */
+  onShowReconciledChange(checked: boolean): void {
+    this.showReconciled$.next(checked);
+    this.refreshPreview();
+  }
+
+  /**
+   * Fetches the preview for the current From date/Show reconciled filters. Reused by the initial
+   * open, a filter change, and the post-apply/post-resolve refresh, so every one of them is
+   * bounded/filtered consistently and the selection is reconciled with whatever comes back -
+   * never leaving a hidden or now-ineligible event selected (issue #206).
+   */
+  private refreshPreview(): void {
     const machineId = this.machineId;
     if (!machineId) {
       return;
     }
 
-    this.modalOpen$.next(true);
     this.syncError$.next(null);
     this.syncing$.next(true);
-    this.machineService.syncRestock(machineId).subscribe({
+    const fromDateIso = this.toUtcInstant(this.fromDate$.value);
+    this.machineService.syncRestock(machineId, fromDateIso, this.showReconciled$.value).subscribe({
       next: (preview) => {
         this.syncing$.next(false);
         this.syncPreview$.next(preview);
@@ -245,6 +307,31 @@ export class MachineRestockSyncComponent {
         this.toastService.error('Failed to sync Nayax stock-adjustment alerts.');
       }
     });
+  }
+
+  /** Seven calendar days before the operator's current local date (issue #206), as `yyyy-MM-dd`. */
+  private defaultFromDate(): string {
+    const date = new Date();
+    date.setDate(date.getDate() - 7);
+    return this.toDateInputValue(date);
+  }
+
+  private toDateInputValue(date: Date): string {
+    const pad = (value: number) => value.toString().padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  }
+
+  /**
+   * The operator's chosen local calendar date as the UTC instant of its local midnight, so the
+   * backend compares it against the canonical (UTC) EventDateTimeGMT without a second, separate
+   * event-date interpretation.
+   */
+  private toUtcInstant(dateInputValue: string): string | null {
+    if (!dateInputValue) {
+      return null;
+    }
+    const [year, month, day] = dateInputValue.split('-').map(Number);
+    return new Date(year, month - 1, day).toISOString();
   }
 
   applySelectedEvents(): void {
@@ -267,7 +354,7 @@ export class MachineRestockSyncComponent {
           this.toastService.warning(`${failedCount} event(s) could not be applied and remain for review.`);
         }
         this.selectedEventIds.clear();
-        this.syncRestock();
+        this.refreshPreview();
         if (appliedCount > 0) {
           this.restockApplied.emit();
         }
@@ -306,7 +393,7 @@ export class MachineRestockSyncComponent {
         } else {
           this.toastService.warning(result.message);
         }
-        this.syncRestock();
+        this.refreshPreview();
         if (applied) {
           this.restockApplied.emit();
         }

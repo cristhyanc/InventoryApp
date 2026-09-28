@@ -52,11 +52,15 @@ public class MachinesController : ControllerBase
     }
 
     // Fetches new Nayax stock-adjustment alerts and returns a reconciliation preview; it never
-    // changes storage inventory itself (issue #183).
+    // changes storage inventory itself (issue #183). fromDate/includeReconciled (issue #206) are
+    // presentation/workflow filters over the same imported facts: fromDate bounds the canonical
+    // EventDateTimeGMT, includeReconciled shows or hides events already reconciled as "already
+    // recorded manually". Omitting either preserves the original unfiltered behaviour.
     [HttpPost("{id:long}/sync-restock")]
-    public async Task<ActionResult<NayaxMachineStockSyncPreviewDto>> SyncRestock(long id, CancellationToken ct)
+    public async Task<ActionResult<NayaxMachineStockSyncPreviewDto>> SyncRestock(
+        long id, CancellationToken ct, [FromQuery] DateTime? fromDate = null, [FromQuery] bool includeReconciled = false)
     {
-        var preview = await _syncMachineStock.Handle(id, ct);
+        var preview = await _syncMachineStock.Handle(id, ct, fromDate, includeReconciled);
         return Ok(preview);
     }
 

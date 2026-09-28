@@ -23,7 +23,18 @@ public sealed class SyncMachineStockFromNayax
         _store = store;
     }
 
-    public async Task<NayaxMachineStockSyncPreviewDto> Handle(long machineId, CancellationToken cancellationToken)
+    /// <summary>
+    /// Imports new alerts and previews the machine's Sync Restock working list (issue #206).
+    /// <paramref name="fromDateGmt"/>, when given, is a lower bound on the canonical
+    /// <c>EventDateTimeGMT</c>; <c>null</c> shows the complete unprocessed history. <paramref
+    /// name="includeReconciled"/> shows or hides events already reconciled as "already recorded
+    /// manually"; the default hides them. Neither parameter changes what was imported or persisted.
+    /// </summary>
+    public async Task<NayaxMachineStockSyncPreviewDto> Handle(
+        long machineId,
+        CancellationToken cancellationToken,
+        DateTime? fromDateGmt = null,
+        bool includeReconciled = false)
     {
         var alerts = await _nayax.GetMachineLastAlertsAsync(machineId, cancellationToken);
         var stockAlerts = alerts
@@ -53,7 +64,7 @@ public sealed class SyncMachineStockFromNayax
                 cancellationToken);
         }
 
-        return await BuildPreviewAsync(machineId, newAlerts.Count, cancellationToken);
+        return await BuildPreviewAsync(machineId, newAlerts.Count, fromDateGmt, includeReconciled, cancellationToken);
     }
 
     private static MachineStockEventImport ToImport(
@@ -106,9 +117,14 @@ public sealed class SyncMachineStockFromNayax
     };
 
     private async Task<NayaxMachineStockSyncPreviewDto> BuildPreviewAsync(
-        long machineId, int newEventCount, CancellationToken cancellationToken)
+        long machineId,
+        int newEventCount,
+        DateTime? fromDateGmt,
+        bool includeReconciled,
+        CancellationToken cancellationToken)
     {
-        var pendingEvents = await _store.GetUnprocessedEventsAsync(machineId, cancellationToken);
+        var page = await _store.GetUnprocessedEventsAsync(machineId, cancellationToken, fromDateGmt, includeReconciled);
+        var pendingEvents = page.Events;
         var manualRefills = await _store.GetManualMachineRefillsAsync(machineId, cancellationToken);
 
         var events = pendingEvents.Select(pending => ToPreviewDto(pending, manualRefills)).ToList();
@@ -135,6 +151,7 @@ public sealed class SyncMachineStockFromNayax
             newEventCount,
             events,
             productImpacts,
+            page.HiddenReconciledCount,
             events.Count == 0 ? "No new Nayax stock-adjustment alerts to review." : null);
     }
 

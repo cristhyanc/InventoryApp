@@ -274,6 +274,8 @@ export interface NayaxMachineStockSyncPreview {
   newEventCount: number;
   events: NayaxStockEventPreview[];
   productImpacts: NayaxProductImpactPreview[];
+  /** Reconciled-manually events in the current From date window hidden because Show reconciled is off. */
+  hiddenReconciledCount: number;
   message: string | null;
 }
 
