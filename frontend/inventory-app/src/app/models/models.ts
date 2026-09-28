@@ -188,6 +188,22 @@ export enum NayaxStockEventProcessingStatus {
   Applied = 1
 }
 
+/**
+ * An operator's explicit resolution of a Nayax event flagged as a possible duplicate of a manual
+ * refill (issue #196), distinct from {@link NayaxStockEventProcessingStatus}.
+ */
+export enum NayaxDuplicateResolution {
+  None = 0,
+  ReconciledManually = 1,
+  AppliedAsSeparateRestock = 2
+}
+
+/** The two explicit resolutions an operator may choose for a flagged possible duplicate (issue #196). */
+export enum NayaxDuplicateResolutionChoice {
+  AlreadyRecordedManually = 0,
+  ApplyAsSeparateRestock = 1
+}
+
 export interface NayaxStockEventPreview {
   id: number;
   /** The Nayax EventLogID: the upstream identity of the alert. */
@@ -212,6 +228,7 @@ export interface NayaxStockEventPreview {
   isDiscrepancy: boolean;
   isPossibleDuplicate: boolean;
   possibleDuplicateNotes: string | null;
+  duplicateResolution: NayaxDuplicateResolution;
 }
 
 export interface NayaxProductImpactPreview {
@@ -234,7 +251,11 @@ export enum NayaxStockEventApplyOutcome {
   InsufficientStock = 1,
   NotMatched = 2,
   NotApplicable = 3,
-  Error = 4
+  Error = 4,
+  /** Reconciled as already recorded manually (issue #196): no movement was applied. */
+  Reconciled = 5,
+  /** Flagged as a possible duplicate and not yet explicitly resolved; the ordinary Apply action refused it. */
+  DuplicateRequiresResolution = 6
 }
 
 export interface NayaxStockEventApplyResult {

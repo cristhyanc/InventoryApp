@@ -4,9 +4,12 @@ import { MachineRestockSyncComponent } from './machine-restock-sync.component';
 import { MachineService } from '../../../services/machine.service';
 import { ToastService } from '../../../services/toast.service';
 import {
+  NayaxDuplicateResolution,
+  NayaxDuplicateResolutionChoice,
   NayaxMachineStockApplyResponse,
   NayaxMachineStockSyncPreview,
   NayaxStockEventApplyOutcome,
+  NayaxStockEventApplyResult,
   NayaxStockEventMatchStatus,
   NayaxStockEventPreview,
   NayaxStockEventProcessingStatus
@@ -34,6 +37,7 @@ function event(overrides: Partial<NayaxStockEventPreview>): NayaxStockEventPrevi
     isDiscrepancy: false,
     isPossibleDuplicate: false,
     possibleDuplicateNotes: null,
+    duplicateResolution: NayaxDuplicateResolution.None,
     ...overrides
   };
 }
@@ -52,20 +56,23 @@ interface Harness {
   component: MachineRestockSyncComponent;
   syncRestock: jest.Mock;
   applySyncRestock: jest.Mock;
+  resolveSyncRestockDuplicate: jest.Mock;
   toast: { success: jest.Mock; error: jest.Mock; warning: jest.Mock };
   applied: number;
 }
 
 function createHarness(
   syncRestock: jest.Mock = jest.fn(() => of(preview([]))),
-  applySyncRestock: jest.Mock = jest.fn(() => of({ results: [] } as NayaxMachineStockApplyResponse))
+  applySyncRestock: jest.Mock = jest.fn(() => of({ results: [] } as NayaxMachineStockApplyResponse)),
+  resolveSyncRestockDuplicate: jest.Mock = jest.fn(() =>
+    of({ eventId: 1, outcome: NayaxStockEventApplyOutcome.Reconciled, message: 'Reconciled', stockAdjustmentId: null } as NayaxStockEventApplyResult))
 ): Harness {
-  const machineService = { syncRestock, applySyncRestock } as unknown as MachineService;
+  const machineService = { syncRestock, applySyncRestock, resolveSyncRestockDuplicate } as unknown as MachineService;
   const toast = { success: jest.fn(), error: jest.fn(), warning: jest.fn() };
   const component = new MachineRestockSyncComponent(machineService, toast as unknown as ToastService);
   component.machineId = 7;
 
-  const harness: Harness = { component, syncRestock, applySyncRestock, toast, applied: 0 };
+  const harness: Harness = { component, syncRestock, applySyncRestock, resolveSyncRestockDuplicate, toast, applied: 0 };
   component.restockApplied.subscribe(() => harness.applied++);
   return harness;
 }
@@ -96,6 +103,78 @@ describe('MachineRestockSyncComponent eligibility', () => {
   it('never offers an unparsed event for apply', () => {
     const { component } = createHarness();
     expect(component.isReadyToApply(event({ parsedQuantity: null }))).toBe(false);
+  });
+
+  it('never offers an unresolved possible duplicate for apply', () => {
+    const { component } = createHarness();
+    const duplicate = event({ isPossibleDuplicate: true, duplicateResolution: NayaxDuplicateResolution.None });
+    expect(component.isReadyToApply(duplicate)).toBe(false);
+    expect(component.isUnresolvedDuplicate(duplicate)).toBe(true);
+  });
+
+  it('offers a duplicate resolved as a separate restock for apply once matched again', () => {
+    const { component } = createHarness();
+    const resolved = event({ isPossibleDuplicate: true, duplicateResolution: NayaxDuplicateResolution.AppliedAsSeparateRestock });
+    expect(component.isUnresolvedDuplicate(resolved)).toBe(false);
+    expect(component.isReadyToApply(resolved)).toBe(true);
+  });
+});
+
+describe('MachineRestockSyncComponent resolveDuplicate', () => {
+  it('does nothing without a machine id', () => {
+    const { component, resolveSyncRestockDuplicate } = createHarness();
+    component.machineId = null;
+
+    component.resolveDuplicate(event({ id: 3 }), NayaxDuplicateResolutionChoice.AlreadyRecordedManually);
+
+    expect(resolveSyncRestockDuplicate).not.toHaveBeenCalled();
+  });
+
+  it('reconciles as already recorded manually and re-syncs the preview', () => {
+    const syncRestock = jest.fn(() => of(preview([])));
+    const resolveSyncRestockDuplicate = jest.fn(() =>
+      of({ eventId: 3, outcome: NayaxStockEventApplyOutcome.Reconciled, message: 'Reconciled', stockAdjustmentId: null } as NayaxStockEventApplyResult));
+    const { component, toast } = createHarness(syncRestock, jest.fn(), resolveSyncRestockDuplicate);
+
+    component.resolveDuplicate(event({ id: 3 }), NayaxDuplicateResolutionChoice.AlreadyRecordedManually);
+
+    expect(resolveSyncRestockDuplicate).toHaveBeenCalledWith(7, 3, NayaxDuplicateResolutionChoice.AlreadyRecordedManually);
+    expect(toast.success).toHaveBeenCalledWith('Reconciled as already recorded manually; no Nayax movement was applied.');
+    expect(syncRestock).toHaveBeenCalledTimes(1);
+    expect(component.resolvingEventId$.value).toBeNull();
+  });
+
+  it('applies as a separate restock and tells the page to refresh products', () => {
+    const resolveSyncRestockDuplicate = jest.fn(() =>
+      of({ eventId: 3, outcome: NayaxStockEventApplyOutcome.Applied, message: 'Applied', stockAdjustmentId: 55 } as NayaxStockEventApplyResult));
+    const harness = createHarness(jest.fn(() => of(preview([]))), jest.fn(), resolveSyncRestockDuplicate);
+
+    harness.component.resolveDuplicate(event({ id: 3 }), NayaxDuplicateResolutionChoice.ApplyAsSeparateRestock);
+
+    expect(resolveSyncRestockDuplicate).toHaveBeenCalledWith(7, 3, NayaxDuplicateResolutionChoice.ApplyAsSeparateRestock);
+    expect(harness.toast.success).toHaveBeenCalledWith('Applied as a separate restock.');
+    expect(harness.applied).toBe(1);
+  });
+
+  it('reports a refused resolution as a warning rather than a success', () => {
+    const resolveSyncRestockDuplicate = jest.fn(() =>
+      of({ eventId: 3, outcome: NayaxStockEventApplyOutcome.NotApplicable, message: 'Not a duplicate.', stockAdjustmentId: null } as NayaxStockEventApplyResult));
+    const harness = createHarness(jest.fn(() => of(preview([]))), jest.fn(), resolveSyncRestockDuplicate);
+
+    harness.component.resolveDuplicate(event({ id: 3 }), NayaxDuplicateResolutionChoice.AlreadyRecordedManually);
+
+    expect(harness.toast.warning).toHaveBeenCalledWith('Not a duplicate.');
+    expect(harness.applied).toBe(0);
+  });
+
+  it('reports an upstream failure and keeps the event actionable', () => {
+    const resolveSyncRestockDuplicate = jest.fn(() => throwError(() => new Error('network error')));
+    const harness = createHarness(jest.fn(() => of(preview([]))), jest.fn(), resolveSyncRestockDuplicate);
+
+    harness.component.resolveDuplicate(event({ id: 3 }), NayaxDuplicateResolutionChoice.AlreadyRecordedManually);
+
+    expect(harness.component.resolvingEventId$.value).toBeNull();
+    expect(harness.toast.error).toHaveBeenCalledWith('Failed to resolve the possible duplicate.');
   });
 });
 
@@ -270,13 +349,15 @@ describe('MachineRestockSyncComponent dialog', () => {
 
   async function render(
     syncRestock: jest.Mock = jest.fn(() => of(preview([]))),
-    applySyncRestock: jest.Mock = jest.fn(() => of({ results: [] } as NayaxMachineStockApplyResponse))
+    applySyncRestock: jest.Mock = jest.fn(() => of({ results: [] } as NayaxMachineStockApplyResponse)),
+    resolveSyncRestockDuplicate: jest.Mock = jest.fn(() =>
+      of({ eventId: 1, outcome: NayaxStockEventApplyOutcome.Reconciled, message: 'Reconciled', stockAdjustmentId: null } as NayaxStockEventApplyResult))
   ) {
     const toast = { success: jest.fn(), error: jest.fn(), warning: jest.fn() };
     await TestBed.configureTestingModule({
       imports: [MachineRestockSyncComponent],
       providers: [
-        { provide: MachineService, useValue: { syncRestock, applySyncRestock } },
+        { provide: MachineService, useValue: { syncRestock, applySyncRestock, resolveSyncRestockDuplicate } },
         { provide: ToastService, useValue: toast }
       ]
     }).compileComponents();
@@ -288,22 +369,58 @@ describe('MachineRestockSyncComponent dialog', () => {
     fixture.detectChanges();
 
     const host = fixture.nativeElement as HTMLElement;
+
+    // `dialog`/`button` answer "is it there?" and may legitimately return nothing; the `require*`
+    // helpers are for the cases that need the element itself. They throw a message naming what was
+    // expected (and, for a button, what was actually rendered) so a missing element fails the test
+    // where it is missing, instead of a non-null assertion turning it into a TypeError one line later.
     const dialog = () => host.querySelector<HTMLElement>('[role="dialog"]');
     const button = (label: string) =>
       Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find((b) => b.textContent?.trim().startsWith(label));
-    const click = (element: HTMLElement | null | undefined) => {
-      element!.click();
+    const requireElement = <T extends HTMLElement = HTMLElement>(selector: string): T => {
+      const element = host.querySelector<T>(selector);
+      if (element === null) {
+        throw new Error(`Expected the rendered component to contain an element matching "${selector}", but it did not.`);
+      }
+      return element;
+    };
+    const requireDialog = (): HTMLElement => requireElement('[role="dialog"]');
+    const requireButton = (label: string): HTMLButtonElement => {
+      const found = button(label);
+      if (found === undefined) {
+        const rendered = Array.from(host.querySelectorAll('button')).map((b) => `"${b.textContent?.trim()}"`).join(', ');
+        throw new Error(`Expected a button labelled "${label}", but the rendered buttons were: ${rendered || '(none)'}.`);
+      }
+      return found;
+    };
+    const requireAttribute = (element: HTMLElement, name: string): string => {
+      const value = element.getAttribute(name);
+      if (value === null) {
+        throw new Error(`Expected <${element.tagName.toLowerCase()}> to carry a "${name}" attribute, but it did not.`);
+      }
+      return value;
+    };
+    const textOf = (element: HTMLElement): string => {
+      const text = element.textContent;
+      if (text === null) {
+        throw new Error(`Expected <${element.tagName.toLowerCase()}> to have text content, but it had none.`);
+      }
+      return text;
+    };
+    const click = (element: HTMLElement) => {
+      element.click();
       fixture.detectChanges();
     };
     const pressEscape = () => {
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
       fixture.detectChanges();
     };
-    const openDialog = () => click(button('Sync Restock'));
+    const openDialog = () => click(requireButton('Sync Restock'));
 
     return {
-      fixture, host, toast, syncRestock, applySyncRestock,
-      dialog, button, click, pressEscape, openDialog,
+      fixture, host, toast, syncRestock, applySyncRestock, resolveSyncRestockDuplicate,
+      dialog, button, requireElement, requireDialog, requireButton, requireAttribute, textOf,
+      click, pressEscape, openDialog,
       applied: () => appliedCount
     };
   }
@@ -320,16 +437,15 @@ describe('MachineRestockSyncComponent dialog', () => {
   });
 
   it('clicking Sync Restock fetches the preview and opens an accessible dialog', async () => {
-    const { dialog, openDialog, syncRestock } = await render();
+    const { requireDialog, requireAttribute, openDialog, syncRestock } = await render();
 
     openDialog();
 
     expect(syncRestock).toHaveBeenCalledWith(7);
-    const panel = dialog();
-    expect(panel).not.toBeNull();
-    expect(panel!.getAttribute('aria-modal')).toBe('true');
-    const titleId = panel!.getAttribute('aria-labelledby')!;
-    expect(panel!.querySelector(`#${titleId}`)?.textContent?.trim()).toBe('Sync Restock');
+    const panel = requireDialog();
+    expect(panel.getAttribute('aria-modal')).toBe('true');
+    const titleId = requireAttribute(panel, 'aria-labelledby');
+    expect(panel.querySelector(`#${titleId}`)?.textContent?.trim()).toBe('Sync Restock');
     expect(document.activeElement).toBe(panel);
   });
 
@@ -349,15 +465,14 @@ describe('MachineRestockSyncComponent dialog', () => {
       ...preview([ready, short, duplicate, needsReview]),
       productImpacts: [{ productId: 55, productName: 'Beef Jerky', availableStorageQuantity: 10, pendingRefillQuantity: 2 }]
     };
-    const { host, dialog, openDialog } = await render(jest.fn(() => of(withImpacts)));
+    const { requireElement, requireDialog, textOf, openDialog } = await render(jest.fn(() => of(withImpacts)));
 
     openDialog();
 
-    const table = host.querySelector('table');
-    expect(table).not.toBeNull();
-    expect(dialog()!.contains(table)).toBe(true);
-    expect(table!.querySelectorAll('tbody tr').length).toBe(4);
-    const text = dialog()!.textContent!;
+    const table = requireElement<HTMLTableElement>('table');
+    expect(requireDialog().contains(table)).toBe(true);
+    expect(table.querySelectorAll('tbody tr').length).toBe(4);
+    const text = textOf(requireDialog());
     expect(text).toContain('Pending refill: 2 · Available in storage: 10');
     expect(text).toContain('Insufficient storage: needs 5, has 4 (short 1)');
     expect(text).toContain('Possible duplicate');
@@ -366,22 +481,22 @@ describe('MachineRestockSyncComponent dialog', () => {
   });
 
   it('closes with the Close button, clears the preview, and returns focus to Sync Restock', async () => {
-    const { host, dialog, button, click, openDialog, fixture } = await render(jest.fn(() => of(preview([event({})]))));
+    const { host, dialog, requireButton, click, openDialog, fixture } = await render(jest.fn(() => of(preview([event({})]))));
     openDialog();
 
-    click(button('Close'));
+    click(requireButton('Close'));
 
     expect(dialog()).toBeNull();
     expect(host.querySelector('table')).toBeNull();
     expect(fixture.componentInstance.syncPreview$.value).toBeNull();
-    expect(document.activeElement).toBe(button('Sync Restock'));
+    expect(document.activeElement).toBe(requireButton('Sync Restock'));
   });
 
   it('closes with the header close control, Escape, and a backdrop click, but not a click inside the dialog', async () => {
-    const { host, dialog, click, pressEscape, openDialog } = await render();
+    const { dialog, requireDialog, requireElement, click, pressEscape, openDialog } = await render();
 
     openDialog();
-    click(host.querySelector<HTMLButtonElement>('[aria-label="Close Sync Restock"]'));
+    click(requireElement<HTMLButtonElement>('[aria-label="Close Sync Restock"]'));
     expect(dialog()).toBeNull();
 
     openDialog();
@@ -389,22 +504,22 @@ describe('MachineRestockSyncComponent dialog', () => {
     expect(dialog()).toBeNull();
 
     openDialog();
-    click(dialog());
+    click(requireDialog());
     expect(dialog()).not.toBeNull();
-    click(host.querySelector<HTMLElement>('.sync-modal-backdrop'));
+    click(requireElement('.sync-modal-backdrop'));
     expect(dialog()).toBeNull();
   });
 
   it('cannot be closed while an apply is in flight', async () => {
     const pendingApply = new Subject<NayaxMachineStockApplyResponse>();
-    const { dialog, button, click, pressEscape, openDialog } = await render(
+    const { dialog, requireButton, click, pressEscape, openDialog } = await render(
       jest.fn(() => of(preview([event({ id: 1 })]))),
       jest.fn(() => pendingApply)
     );
     openDialog();
-    click(button('Apply selected'));
+    click(requireButton('Apply selected'));
 
-    expect(button('Close')!.disabled).toBe(true);
+    expect(requireButton('Close').disabled).toBe(true);
     pressEscape();
     expect(dialog()).not.toBeNull();
   });
@@ -412,32 +527,32 @@ describe('MachineRestockSyncComponent dialog', () => {
   it('lets the operator change the selection with the checkboxes', async () => {
     const ready = event({ id: 1 });
     const needsReview = event({ id: 2, matchStatus: NayaxStockEventMatchStatus.NeedsReview, needsReviewReason: 'Unknown MDB' });
-    const { host, button, click, openDialog, fixture } = await render(jest.fn(() => of(preview([ready, needsReview]))));
+    const { host, requireButton, click, openDialog, fixture } = await render(jest.fn(() => of(preview([ready, needsReview]))));
     openDialog();
 
     const [readyBox, reviewBox] = Array.from(host.querySelectorAll<HTMLInputElement>('tbody input[type="checkbox"]'));
     expect(readyBox.checked).toBe(true);
     expect(reviewBox.disabled).toBe(true);
-    expect(button('Apply selected')!.textContent).toContain('(1)');
+    expect(requireButton('Apply selected').textContent).toContain('(1)');
 
     click(readyBox);
 
     expect(fixture.componentInstance.isEventSelected(1)).toBe(false);
-    expect(button('Apply selected')!.textContent).toContain('(0)');
-    expect(button('Apply selected')!.disabled).toBe(true);
+    expect(requireButton('Apply selected').textContent).toContain('(0)');
+    expect(requireButton('Apply selected').disabled).toBe(true);
   });
 
   it('applies the selected events, emits restockApplied, and keeps the dialog open without the applied event', async () => {
     const syncRestock = jest.fn()
       .mockReturnValueOnce(of(preview([event({ id: 1 })])))
       .mockReturnValueOnce(of(preview([], 'No new Nayax stock-adjustment alerts to review.')));
-    const { host, dialog, button, click, openDialog, toast, applySyncRestock, applied } = await render(
+    const { host, dialog, button, requireButton, click, openDialog, toast, applySyncRestock, applied } = await render(
       syncRestock,
       jest.fn(() => of(appliedResponse(1)))
     );
     openDialog();
 
-    click(button('Apply selected'));
+    click(requireButton('Apply selected'));
 
     expect(applySyncRestock).toHaveBeenCalledWith(7, [1]);
     expect(applied()).toBe(1);
@@ -451,42 +566,91 @@ describe('MachineRestockSyncComponent dialog', () => {
   });
 
   it('shows a sync failure inside the dialog', async () => {
-    const { dialog, openDialog, toast } = await render(jest.fn(() => throwError(() => new Error('upstream unavailable'))));
+    const { requireDialog, openDialog, toast } = await render(jest.fn(() => throwError(() => new Error('upstream unavailable'))));
 
     openDialog();
 
-    expect(dialog()!.querySelector('[role="alert"]')?.textContent).toContain('Failed to sync Nayax stock-adjustment alerts.');
+    expect(requireDialog().querySelector('[role="alert"]')?.textContent).toContain('Failed to sync Nayax stock-adjustment alerts.');
     expect(toast.error).toHaveBeenCalledWith('Failed to sync Nayax stock-adjustment alerts.');
   });
 
   it('shows an apply failure inside the dialog and keeps the events actionable', async () => {
-    const { host, dialog, button, click, openDialog, applied } = await render(
+    const { host, requireDialog, requireButton, click, openDialog, applied } = await render(
       jest.fn(() => of(preview([event({ id: 1 })]))),
       jest.fn(() => throwError(() => new Error('network error')))
     );
     openDialog();
 
-    click(button('Apply selected'));
+    click(requireButton('Apply selected'));
 
-    expect(dialog()!.querySelector('[role="alert"]')?.textContent)
+    expect(requireDialog().querySelector('[role="alert"]')?.textContent)
       .toContain('Failed to apply the selected Nayax stock-adjustment events.');
     expect(applied()).toBe(0);
     expect(host.querySelectorAll('tbody tr').length).toBe(1);
-    expect(button('Apply selected')!.disabled).toBe(false);
+    expect(requireButton('Apply selected').disabled).toBe(false);
   });
 
   it('shows the empty state inside the dialog with no apply action', async () => {
-    const { host, dialog, button, openDialog } = await render(
+    const { host, requireElement, requireDialog, button, openDialog } = await render(
       jest.fn(() => of(preview([], 'No new Nayax stock-adjustment alerts to review.')))
     );
 
     openDialog();
 
-    const empty = host.querySelector('[data-testid="sync-restock-empty"]');
-    expect(dialog()!.contains(empty)).toBe(true);
-    expect(empty!.textContent).toContain('No new Nayax stock-adjustment alerts to review.');
+    const empty = requireElement('[data-testid="sync-restock-empty"]');
+    expect(requireDialog().contains(empty)).toBe(true);
+    expect(empty.textContent).toContain('No new Nayax stock-adjustment alerts to review.');
     expect(host.querySelector('table')).toBeNull();
     expect(button('Apply selected')).toBeUndefined();
     expect(button('Close')).toBeTruthy();
+  });
+
+  it('never presents an unresolved possible duplicate as an ordinary selectable Apply item', async () => {
+    const duplicate = event({ id: 5, isPossibleDuplicate: true, possibleDuplicateNotes: 'Manual refill' });
+    const { host, requireElement, openDialog } = await render(jest.fn(() => of(preview([duplicate]))));
+
+    openDialog();
+
+    const checkbox = requireElement<HTMLInputElement>('tbody input[type="checkbox"]');
+    expect(checkbox.disabled).toBe(true);
+    expect(host.querySelector('[data-testid="possible-duplicate-badge"]')).not.toBeNull();
+  });
+
+  it('resolves a possible duplicate as already recorded manually and refreshes the preview', async () => {
+    const duplicate = event({ id: 5, isPossibleDuplicate: true, possibleDuplicateNotes: 'Manual refill' });
+    const syncRestock = jest.fn()
+      .mockReturnValueOnce(of(preview([duplicate])))
+      .mockReturnValueOnce(of(preview([], 'No new Nayax stock-adjustment alerts to review.')));
+    const resolveSyncRestockDuplicate = jest.fn(() =>
+      of({ eventId: 5, outcome: NayaxStockEventApplyOutcome.Reconciled, message: 'Reconciled', stockAdjustmentId: null } as NayaxStockEventApplyResult));
+    const { host, toast, openDialog, requireButton, click, applied } = await render(
+      syncRestock, jest.fn(), resolveSyncRestockDuplicate
+    );
+    openDialog();
+
+    click(requireButton('Already recorded manually'));
+
+    expect(resolveSyncRestockDuplicate).toHaveBeenCalledWith(7, 5, NayaxDuplicateResolutionChoice.AlreadyRecordedManually);
+    expect(toast.success).toHaveBeenCalledWith('Reconciled as already recorded manually; no Nayax movement was applied.');
+    expect(syncRestock).toHaveBeenCalledTimes(2);
+    expect(applied()).toBe(0);
+    expect(host.querySelector('[data-testid="sync-restock-empty"]')).not.toBeNull();
+  });
+
+  it('applies a possible duplicate as a separate restock and emits restockApplied', async () => {
+    const duplicate = event({ id: 5, isPossibleDuplicate: true, possibleDuplicateNotes: 'Manual refill' });
+    const syncRestock = jest.fn()
+      .mockReturnValueOnce(of(preview([duplicate])))
+      .mockReturnValueOnce(of(preview([], 'No new Nayax stock-adjustment alerts to review.')));
+    const resolveSyncRestockDuplicate = jest.fn(() =>
+      of({ eventId: 5, outcome: NayaxStockEventApplyOutcome.Applied, message: 'Applied', stockAdjustmentId: 90 } as NayaxStockEventApplyResult));
+    const { toast, openDialog, requireButton, click, applied } = await render(syncRestock, jest.fn(), resolveSyncRestockDuplicate);
+    openDialog();
+
+    click(requireButton('Apply as separate restock'));
+
+    expect(resolveSyncRestockDuplicate).toHaveBeenCalledWith(7, 5, NayaxDuplicateResolutionChoice.ApplyAsSeparateRestock);
+    expect(toast.success).toHaveBeenCalledWith('Applied as a separate restock.');
+    expect(applied()).toBe(1);
   });
 });

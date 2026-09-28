@@ -241,4 +241,47 @@ public class NayaxMachineStockSyncPoliciesTests
     }
 
     #endregion
+
+    #region Duplicate resolution gate (issue #196)
+
+    [Fact]
+    public void A_flagged_possible_duplicate_is_never_applied_through_the_ordinary_path_until_resolved()
+    {
+        var ruling = NayaxMachineStockApplyPolicy.Decide(
+            NayaxStockEventProcessingStatus.Unprocessed, NayaxStockEventMatchStatus.Matched, null, 200, 8, 20,
+            isPossibleDuplicate: true, duplicateResolution: NayaxDuplicateResolution.None);
+
+        Assert.Equal(NayaxStockEventApplyDecision.DuplicateRequiresResolution, ruling.Decision);
+    }
+
+    [Fact]
+    public void An_event_reconciled_as_recorded_manually_is_never_applied_again()
+    {
+        var ruling = NayaxMachineStockApplyPolicy.Decide(
+            NayaxStockEventProcessingStatus.Unprocessed, NayaxStockEventMatchStatus.Matched, null, 200, 8, 20,
+            isPossibleDuplicate: true, duplicateResolution: NayaxDuplicateResolution.ReconciledManually);
+
+        Assert.Equal(NayaxStockEventApplyDecision.ReconciledDuplicate, ruling.Decision);
+    }
+
+    [Fact]
+    public void A_duplicate_explicitly_resolved_as_a_separate_restock_applies_normally()
+    {
+        var ruling = NayaxMachineStockApplyPolicy.Decide(
+            NayaxStockEventProcessingStatus.Unprocessed, NayaxStockEventMatchStatus.Matched, null, 200, 8, 20,
+            isPossibleDuplicate: true, duplicateResolution: NayaxDuplicateResolution.AppliedAsSeparateRestock);
+
+        Assert.Equal(NayaxStockEventApplyDecision.Apply, ruling.Decision);
+    }
+
+    [Fact]
+    public void A_non_duplicate_event_is_unaffected_by_the_duplicate_gate()
+    {
+        var ruling = NayaxMachineStockApplyPolicy.Decide(
+            NayaxStockEventProcessingStatus.Unprocessed, NayaxStockEventMatchStatus.Matched, null, 200, 8, 20);
+
+        Assert.Equal(NayaxStockEventApplyDecision.Apply, ruling.Decision);
+    }
+
+    #endregion
 }

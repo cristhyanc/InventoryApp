@@ -3,8 +3,10 @@ import { Injectable } from '@angular/core';
 import { Observable } from 'rxjs';
 import {
   Machine,
+  NayaxDuplicateResolutionChoice,
   NayaxMachineStockApplyResponse,
   NayaxMachineStockSyncPreview,
+  NayaxStockEventApplyResult,
   Product
 } from '../models/models';
 import { ConfigService } from './config.service';
@@ -37,5 +39,16 @@ export class MachineService {
 
   applySyncRestock(id: number, eventIds: number[]): Observable<NayaxMachineStockApplyResponse> {
     return this.http.post<NayaxMachineStockApplyResponse>(`${this.baseUrl}/${id}/sync-restock/apply`, { eventIds });
+  }
+
+  resolveSyncRestockDuplicate(
+    id: number,
+    eventId: number,
+    resolution: NayaxDuplicateResolutionChoice
+  ): Observable<NayaxStockEventApplyResult> {
+    return this.http.post<NayaxStockEventApplyResult>(
+      `${this.baseUrl}/${id}/sync-restock/resolve-duplicate`,
+      { eventId, resolution }
+    );
   }
 }

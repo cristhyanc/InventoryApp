@@ -1046,9 +1046,42 @@ projection, and this feature does not change that meaning.
    available storage - the unaccounted difference. A positive event is also flagged **possible
    duplicate** (`NayaxMachineStockDuplicatePolicy`) when a manual (`StockAdjustmentSource.Manual`)
    `MachineRefill` for the same machine/product/quantity was recorded within a 24-hour window; this
-   is a signal for human resolution, not an automatic merge or block; the operator's explicit
-   choice of which events to apply is what resolves it.
-6. **Apply only what is accepted.** `POST /api/machines/{id}/sync-restock/apply` runs
+   is a signal for human resolution, not an automatic merge or block - the ordinary Apply action
+   refuses it until the operator explicitly resolves it (issue #196, next step).
+6. **A flagged possible duplicate requires explicit resolution before it can move storage
+   (issue #196).** `NayaxStockEventPreviewDto.DuplicateResolution` (`Inventory.Domain.Nayax.
+   NayaxDuplicateResolution`: `None`/`ReconciledManually`/`AppliedAsSeparateRestock`) is the
+   persisted, auditable outcome of that choice, distinct from `ProcessingStatus` (which only
+   tracks whether a storage movement was created). While unresolved, the dialog shows the event
+   visually distinct (its possible-duplicate badge and comparison context, including the matching
+   manual refill) with two explicit actions instead of an ordinary selectable checkbox - the
+   checkbox stays disabled and the event is never presented as an ordinary Apply item until it is
+   resolved:
+   - **Already recorded manually** calls `POST /api/machines/{id}/sync-restock/resolve-duplicate`
+     with `AlreadyRecordedManually`. `Inventory.Application.MachineStockSync.
+     ResolveMachineStockDuplicate` reconciles the event (`DuplicateResolution =
+     ReconciledManually`, `DuplicateResolvedAt` stamped, `MatchedManualStockAdjustmentId` set to
+     the matching manual `StockAdjustment.Id`) without ever creating a `MachineRefill`/
+     `StockAdjustment`, changing `QuantityInStock`, or touching costing. The event stays
+     `Unprocessed` (no movement occurred) but is excluded from the preview's product-impact
+     totals, since it will never draw down storage.
+   - **Apply as separate restock** calls the same endpoint with `ApplyAsSeparateRestock`, an
+     explicit override confirming the two events are different physical restocks. It applies the
+     event through the same `IInventoryCostService.ApplyMovement`/`MachineRefill` path as an
+     ordinary apply (reducing storage exactly once) and additionally stamps
+     `DuplicateResolution = AppliedAsSeparateRestock` and `MatchedManualStockAdjustmentId` in the
+     same transaction, so the override itself remains auditable alongside the movement it created.
+
+   The safety rule is enforced in `Inventory.Domain.Nayax.NayaxMachineStockApplyPolicy.Decide`,
+   not only by the disabled checkbox: an unresolved flagged duplicate now decides
+   `DuplicateRequiresResolution` and a reconciled one decides `ReconciledDuplicate`, so a direct
+   `POST /api/machines/{id}/sync-restock/apply` call gets the same protection as the UI. Both
+   resolution actions are idempotent - repeating either request re-reads the already-settled state
+   and returns the same outcome without creating another movement or changing storage again. The
+   original imported Nayax event row is never deleted or rewritten by either resolution; only the
+   duplicate-resolution columns and, for an override, the ordinary `Applied` columns are added to
+   it.
+7. **Apply only what is accepted.** `POST /api/machines/{id}/sync-restock/apply` runs
    `Inventory.Application.MachineStockSync.ApplyMachineStockSync` over exactly the event ids the
    operator selects, one at a time, each in its own transaction. `NayaxMachineStockApplyPolicy` is
    the deterministic Domain rule that decides each one. A validated positive event is applied
@@ -1064,7 +1097,7 @@ projection, and this feature does not change that meaning.
    quality failure) rolls back that event's own transaction only, so it is never left marked
    processed without its inventory movement, and it does not stop the other selected events in the
    batch from applying.
-7. **Manual restocking is the preserved fallback.** The existing per-product Restock action on the
+8. **Manual restocking is the preserved fallback.** The existing per-product Restock action on the
    machine-detail page (`MachineDetailComponent.restockProduct`) is unchanged and remains available
    for a Nayax outage or a machine/MDB Sync Restock cannot yet resolve. `StockAdjustment.Source`
    (`Manual` by default, `Nayax` only when set by the sync-apply path) is what keeps a manual and a
@@ -1078,11 +1111,14 @@ this feature is added to the legacy `InventoryApi/Services` layer:
 - **Domain.** `NayaxStockAdjustmentEventParser`, the Event 501 code constant, and the
   `NayaxMachineStockMatchPolicy`/`NayaxMachineStockImpactPolicy`/`NayaxMachineStockDuplicatePolicy`/
   `NayaxMachineStockApplyPolicy` rules, plus the `NayaxStockEventMatchStatus`/
-  `NayaxStockEventProcessingStatus` states, are deterministic `Inventory.Domain.Nayax` types with no
-  Nayax, HTTP, or EF Core dependency.
-- **Application.** `Inventory.Application.MachineStockSync` owns the two use cases
-  (`SyncMachineStockFromNayax`, `ApplyMachineStockSync`), their request/response DTOs, and the
-  narrow `IMachineStockEventStore` persistence port. The Nayax read stays on the existing
+  `NayaxStockEventProcessingStatus`/`NayaxDuplicateResolution`/`NayaxDuplicateResolutionChoice`
+  states, are deterministic `Inventory.Domain.Nayax` types with no Nayax, HTTP, or EF Core
+  dependency.
+- **Application.** `Inventory.Application.MachineStockSync` owns the three use cases
+  (`SyncMachineStockFromNayax`, `ApplyMachineStockSync`, `ResolveMachineStockDuplicate` -
+  issue #196), their request/response DTOs, and the narrow `IMachineStockEventStore` persistence
+  port (extended with `ReconcileAsManualDuplicateAsync` and an `ApplyRefillAsync` that also
+  persists the duplicate-resolution columns). The Nayax read stays on the existing
   `Inventory.Application.Nayax.INayaxLynxClient` port.
 - **Infrastructure/adapters.** `Inventory.Infrastructure.Nayax.NayaxLynxClient` remains the Nayax
   HTTP adapter. `InventoryApi.Adapters.Persistence.EfMachineStockEventStore` implements the
@@ -1091,12 +1127,15 @@ this feature is added to the legacy `InventoryApi/Services` layer:
   movement and costing invariants instead of re-implementing them. Like `EfSupplierStore` and
   `EfLocalCatalogSnapshotProvider`, it is a temporary API-owned adapter only because
   `AppDbContext`, the persistence models, and the costing services still live in `InventoryApi`.
-- **API.** `MachinesController` binds the request, invokes the use case, and returns its result.
+- **API.** `MachinesController` binds the request, invokes the use case, and returns its result;
+  `POST /api/machines/{id}/sync-restock/resolve-duplicate` (issue #196) is the third, equally thin
+  binding for `ResolveMachineStockDuplicate`.
 - **Frontend.** The Sync Restock workflow is its own standalone component,
   `components/machines/machine-restock-sync/MachineRestockSyncComponent`, following the [large page
   decomposition](#frontend-migration-track) step: it owns the reconciliation dialog's open state,
-  the preview state, the syncing/applying state, the selected event ids, the apply-eligibility
-  check, both API calls and its own notifications. The dialog follows the existing
+  the preview state, the syncing/applying/resolving state, the selected event ids, the
+  apply-eligibility check (which now also excludes an unresolved possible duplicate), the three API
+  calls, and its own notifications. The dialog follows the existing
   `ConfirmationDialogComponent` pattern (an `*ngIf` backdrop with `role="dialog"`/`aria-modal`,
   closed by its Close controls, Escape, or an outside click, but not while an apply is in flight);
   its body scrolls so a long event list never pushes the Close/Apply actions off screen. After an

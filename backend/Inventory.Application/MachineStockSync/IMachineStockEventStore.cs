@@ -41,18 +41,21 @@ public sealed record PendingMachineStockEvent(
     int? MatchedProductQuantityInStock,
     NayaxStockEventMatchStatus MatchStatus,
     string? NeedsReviewReason,
-    NayaxStockEventProcessingStatus ProcessingStatus);
+    NayaxStockEventProcessingStatus ProcessingStatus,
+    NayaxDuplicateResolution DuplicateResolution);
 
 /// <summary>The stored state one apply attempt needs in order to decide what to do.</summary>
 public sealed record MachineStockEventState(
     int Id,
     long NayaxEventLogId,
+    DateTime EventDateTimeGmt,
     NayaxStockEventMatchStatus MatchStatus,
     string? NeedsReviewReason,
     NayaxStockEventProcessingStatus ProcessingStatus,
     long? MatchedProductId,
     int? ParsedQuantity,
-    int? StockAdjustmentId);
+    int? StockAdjustmentId,
+    NayaxDuplicateResolution DuplicateResolution);
 
 /// <summary>
 /// The outcome of the store's single-event refill application. A failed application has recorded
@@ -91,7 +94,12 @@ public interface IMachineStockEventStore
     /// Records the refill movement and the event's processed state together, in one transaction, so
     /// an event can never be left marked processed without its inventory movement. The refill is a
     /// machine transfer out of storage: it reduces storage quantity and must not change costing
-    /// quantity/value or create COGS.
+    /// quantity/value or create COGS. <paramref name="duplicateResolution"/> is
+    /// <see cref="NayaxDuplicateResolution.None"/> for an ordinary (non-duplicate) apply, or
+    /// <see cref="NayaxDuplicateResolution.AppliedAsSeparateRestock"/> when the operator explicitly
+    /// overrode a possible-duplicate warning (issue #196); in that case
+    /// <paramref name="matchedManualStockAdjustmentId"/> is the manual refill the override was
+    /// resolved against, persisted alongside the movement for auditability.
     /// </summary>
     Task<MachineRefillApplication> ApplyRefillAsync(
         int eventId,
@@ -99,5 +107,17 @@ public interface IMachineStockEventStore
         long nayaxEventLogId,
         long productId,
         int quantity,
+        NayaxDuplicateResolution duplicateResolution,
+        int? matchedManualStockAdjustmentId,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Resolves a flagged possible duplicate as "already recorded manually" (issue #196): marks it
+    /// reconciled against <paramref name="matchedManualStockAdjustmentId"/> without creating a
+    /// Nayax-sourced movement or changing storage. Idempotent: resolving an event already reconciled
+    /// this way changes nothing. Returns <c>false</c> only when the event does not exist for this
+    /// machine.
+    /// </summary>
+    Task<bool> ReconcileAsManualDuplicateAsync(
+        int eventId, long machineId, int matchedManualStockAdjustmentId, CancellationToken cancellationToken);
 }

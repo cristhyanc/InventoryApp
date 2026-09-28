@@ -37,6 +37,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<GetNayaxCatalogReconciliation>();
         services.AddScoped<SyncMachineStockFromNayax>();
         services.AddScoped<ApplyMachineStockSync>();
+        services.AddScoped<ResolveMachineStockDuplicate>();
         services.AddScoped<ComputePurchaseTotalValidation>();
         services.AddScoped<GetBookkeepingReport>();
         services.AddScoped<IGetBookkeepingReport>(sp => sp.GetRequiredService<GetBookkeepingReport>());

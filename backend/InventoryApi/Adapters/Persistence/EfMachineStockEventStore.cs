@@ -110,7 +110,8 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
                 e.MatchedProduct != null ? (int?)e.MatchedProduct.QuantityInStock : null,
                 e.MatchStatus,
                 e.NeedsReviewReason,
-                e.ProcessingStatus))
+                e.ProcessingStatus,
+                e.DuplicateResolution))
             .ToListAsync(cancellationToken);
 
     public async Task<IReadOnlyList<ManualRefillEvidence>> GetManualMachineRefillsAsync(
@@ -121,11 +122,11 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
             .Where(sa => sa.MachineId == machineId
                 && sa.Reason == StockAdjustmentReason.MachineRefill
                 && sa.Source == StockAdjustmentSource.Manual)
-            .Select(sa => new { sa.ProductId, sa.QuantityChange, sa.EffectiveAt })
+            .Select(sa => new { sa.Id, sa.ProductId, sa.QuantityChange, sa.EffectiveAt })
             .ToListAsync(cancellationToken);
 
         return refills
-            .Select(sa => new ManualRefillEvidence(sa.ProductId, sa.QuantityChange, sa.EffectiveAt))
+            .Select(sa => new ManualRefillEvidence(sa.ProductId, sa.QuantityChange, sa.EffectiveAt, sa.Id))
             .ToList();
     }
 
@@ -137,12 +138,14 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
             .Select(e => new MachineStockEventState(
                 e.Id,
                 e.NayaxEventLogId,
+                e.EventDateTimeGmt,
                 e.MatchStatus,
                 e.NeedsReviewReason,
                 e.ProcessingStatus,
                 e.MatchedProductId,
                 e.ParsedQuantity,
-                e.StockAdjustmentId))
+                e.StockAdjustmentId,
+                e.DuplicateResolution))
             .FirstOrDefaultAsync(cancellationToken);
 
     public async Task<NayaxStockSyncProduct?> FindStorageProductAsync(
@@ -163,6 +166,8 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
         long nayaxEventLogId,
         long productId,
         int quantity,
+        NayaxDuplicateResolution duplicateResolution,
+        int? matchedManualStockAdjustmentId,
         CancellationToken cancellationToken)
     {
         var entity = await _db.NayaxMachineStockEvents
@@ -187,6 +192,13 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
             entity.ProcessedAt = DateTime.UtcNow;
             entity.StockAdjustmentId = adjustment.Id;
 
+            if (duplicateResolution != NayaxDuplicateResolution.None)
+            {
+                entity.DuplicateResolution = duplicateResolution;
+                entity.DuplicateResolvedAt = DateTime.UtcNow;
+                entity.MatchedManualStockAdjustmentId = matchedManualStockAdjustmentId;
+            }
+
             await _rebuild.RebuildAsync(productId, cancellationToken: cancellationToken);
             await _db.SaveChangesAsync(cancellationToken);
 
@@ -202,5 +214,21 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
             _db.ChangeTracker.Clear();
             return new MachineRefillApplication(false, null);
         }
+    }
+
+    public async Task<bool> ReconcileAsManualDuplicateAsync(
+        int eventId, long machineId, int matchedManualStockAdjustmentId, CancellationToken cancellationToken)
+    {
+        var entity = await _db.NayaxMachineStockEvents
+            .FirstOrDefaultAsync(e => e.Id == eventId && e.MachineId == machineId, cancellationToken);
+        if (entity is null)
+            return false;
+
+        entity.DuplicateResolution = NayaxDuplicateResolution.ReconciledManually;
+        entity.DuplicateResolvedAt = DateTime.UtcNow;
+        entity.MatchedManualStockAdjustmentId = matchedManualStockAdjustmentId;
+
+        await _db.SaveChangesAsync(cancellationToken);
+        return true;
     }
 }
