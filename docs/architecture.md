@@ -976,7 +976,8 @@ projection, and this feature does not change that meaning.
    causes a movement. The same product may legitimately occupy more than one MDB on one machine;
    each event stays individually auditable, and the preview groups them by product to show the
    combined requested storage impact.
-5. **Preview before anything changes.** The machine-detail page's **Sync Restock** action calls
+5. **Preview before anything changes.** The machine-detail page's **Sync Restock** panel
+   (`MachineRestockSyncComponent`) calls
    `POST /api/machines/{id}/sync-restock`, which fetches, imports, and returns a reconciliation
    preview (`NayaxMachineStockSyncPreviewDto`) - it never changes storage inventory itself. Already-
    applied events are excluded from the preview list; an empty result carries a clear message
@@ -1032,6 +1033,16 @@ this feature is added to the legacy `InventoryApi/Services` layer:
   `EfLocalCatalogSnapshotProvider`, it is a temporary API-owned adapter only because
   `AppDbContext`, the persistence models, and the costing services still live in `InventoryApi`.
 - **API.** `MachinesController` binds the request, invokes the use case, and returns its result.
+- **Frontend.** The Sync Restock workflow is its own standalone component,
+  `components/machines/machine-restock-sync/MachineRestockSyncComponent`, following the [large page
+  decomposition](#frontend-migration-track) step: it owns the preview state, the syncing/applying
+  state, the selected event ids, the apply-eligibility check, both API calls and its own
+  notifications. `MachineDetailComponent` composes it as
+  `<app-machine-restock-sync [machineId]="machine?.machineID" (restockApplied)="refreshProducts()">`
+  and stays responsible only for the machine-details page, reloading its product table when the
+  panel reports that at least one event was actually applied. The child's `isReadyToApply` only
+  decides which checkboxes an operator may tick; the backend apply use case remains the sole
+  authority over whether an event moves storage inventory.
 
 Migrating the rest of `InventoryApi/Services` remains unrelated, larger, out-of-scope work tracked
 by the incremental migration plan below.
