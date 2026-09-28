@@ -6,11 +6,12 @@ import { ProductService } from '../../services/product.service';
 import { CategoryService } from '../../services/category.service';
 import { SupplierService } from '../../services/supplier.service';
 import { Category, Supplier } from '../../models/models';
+import { ProductPriceHistoryComponent } from './product-price-history/product-price-history.component';
 
 @Component({
   selector: 'app-product-form',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterLink],
+  imports: [CommonModule, FormsModule, RouterLink, ProductPriceHistoryComponent],
   templateUrl: './product-form.component.html'
 })
 export class ProductFormComponent implements OnInit {

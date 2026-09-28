@@ -862,6 +862,33 @@ Time acquisition and timezone conversion are external boundaries, not pure calcu
 3. Delivery/package amounts remain identifiable for whole-business reporting.
 4. Supplier-order allocations are reconciled without fabricating purchase quantities.
 
+#### Supplier product price history and comparison (issue #63)
+
+The Purchasing/Suppliers vertical slice derives a per-product supplier price comparison from actual,
+immutable `PurchaseItem.UnitCost` history joined to its owning Purchase's date, title/reference, and
+supplier, rather than adding a separate quoted/current-price table: `Product`'s existing primary
+`SupplierId` is a default for ordering, not the source of this comparison, and every supplier a
+product was ever actually bought from remains visible. `Inventory.Domain.Purchases.SupplierPriceComparisonPolicy`
+is the one authoritative calculation: it selects the lowest and most recent recorded unit cost with
+deterministic tie-breaks (lowest-cost ties break to the earliest occurrence; latest-date ties break to
+the higher purchase item id), computes the absolute/percentage difference between them - leaving the
+percentage unset rather than dividing by a zero lowest cost - and returns every recorded entry
+newest-first without discarding a tied record. `Inventory.Application.Purchases.GetProductPriceComparison`
+is the use case; `Inventory.Application.Purchases.IProductPurchasePriceHistoryProvider` is the narrow
+port a product's actual Purchase-item history is read through, implemented by the temporary API-owned
+`InventoryApi.Adapters.Persistence.EfProductPurchasePriceHistoryProvider` (see [Temporary API-owned
+exception and its enforcement](#temporary-api-owned-exception-and-its-enforcement-issue-145)) until
+`AppDbContext` moves into `Inventory.Infrastructure`. `ProductsController`'s
+`GET /api/products/{id}/price-history` and the Angular `app-product-price-history` feature component
+(composed into the product-edit page's at-a-glance summary and "View price history" drill-down, per
+[Page composition boundary](#page-composition-boundary-issue-191)) only fetch and present this result.
+
+This comparison is historical/quoted guidance, never a substitute for AVCO, `Product.UnitPrice`, or a
+live supplier quote: it never feeds inventory costing, and a supplier-order creation flow that shows it
+for reference must not let it silently overwrite an entered order price/cost. A Purchase with no
+supplier recorded stays visible in the comparison and history with an explicit null/"None" source
+rather than being omitted.
+
 #### Purchase rename plan
 
 The canonical internal business term is **Purchase**/**PurchaseItem**, not Receipt/ReceiptItem
