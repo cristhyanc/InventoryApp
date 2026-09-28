@@ -36,6 +36,11 @@
       </div>
     </div>
 
+    <app-machine-restock-sync
+      [machineId]="machine?.machineID"
+      (restockApplied)="refreshProducts()">
+    </app-machine-restock-sync>
+
     <div class="mt-8 rounded-xl bg-white p-6 shadow-sm">
       <div class="mb-4 flex items-center justify-between gap-4">
         <h2 class="text-lg font-semibold text-slate-800">Products for this machine</h2>

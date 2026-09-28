@@ -1,3 +1,4 @@
+using Inventory.Application.MachineStockSync;
 using InventoryApi.Models;
 using InventoryApi.Services.Interfaces;
 using Microsoft.AspNetCore.Authorization;
@@ -13,10 +14,17 @@ namespace InventoryApi.Controllers;
 public class MachinesController : ControllerBase
 {
     private readonly IMachineService _service;
+    private readonly SyncMachineStockFromNayax _syncMachineStock;
+    private readonly ApplyMachineStockSync _applyMachineStockSync;
 
-    public MachinesController(IMachineService service)
+    public MachinesController(
+        IMachineService service,
+        SyncMachineStockFromNayax syncMachineStock,
+        ApplyMachineStockSync applyMachineStockSync)
     {
         _service = service;
+        _syncMachineStock = syncMachineStock;
+        _applyMachineStockSync = applyMachineStockSync;
     }
 
     [HttpGet("{id:long}")]
@@ -40,4 +48,22 @@ public class MachinesController : ControllerBase
         return Ok(products);
     }
 
+    // Fetches new Nayax stock-adjustment alerts and returns a reconciliation preview; it never
+    // changes storage inventory itself (issue #183).
+    [HttpPost("{id:long}/sync-restock")]
+    public async Task<ActionResult<NayaxMachineStockSyncPreviewDto>> SyncRestock(long id, CancellationToken ct)
+    {
+        var preview = await _syncMachineStock.Handle(id, ct);
+        return Ok(preview);
+    }
+
+    // Applies only the explicitly accepted events from the preview. Unresolved/needs-review/
+    // insufficient-stock events are left untouched even when included in the request.
+    [HttpPost("{id:long}/sync-restock/apply")]
+    public async Task<ActionResult<NayaxMachineStockApplyResponseDto>> ApplySyncRestock(
+        long id, NayaxStockEventApplyRequestDto dto, CancellationToken ct)
+    {
+        var result = await _applyMachineStockSync.Handle(id, dto.EventIds, ct);
+        return Ok(result);
+    }
 }

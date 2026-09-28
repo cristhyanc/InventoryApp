@@ -155,6 +155,11 @@ export interface SupplierOrderCreateDto {
   lines: Array<{ productId: number; quantityOrdered: number; unitPrice?: number | null; notes?: string | null }>;
 }
 
+export enum StockAdjustmentSource {
+  Manual = 0,
+  Nayax = 1
+}
+
 export interface StockAdjustment {
   id: number;
   productId: number;
@@ -166,10 +171,81 @@ export interface StockAdjustment {
   unitCost?: number | null;
   totalCost?: number | null;
   reason: StockAdjustmentReason;
+  source: StockAdjustmentSource;
   machineId?: number | null;
   notes?: string | null;
   eatBefore?: string | null;
   createdAt: string;
+}
+
+export enum NayaxStockEventMatchStatus {
+  Matched = 0,
+  NeedsReview = 1
+}
+
+export enum NayaxStockEventProcessingStatus {
+  Unprocessed = 0,
+  Applied = 1
+}
+
+export interface NayaxStockEventPreview {
+  id: number;
+  /** The Nayax EventLogID: the upstream identity of the alert. */
+  nayaxEventLogId: number;
+  machineId: number;
+  /** The Nayax EventDateTimeGMT: the canonical event instant. */
+  eventDateTimeGmt: string;
+  /** The Nayax EventDateTimeVMC (machine clock); null for events imported before it was kept. */
+  eventDateTimeVmc: string | null;
+  rawEventData: string;
+  parsedMdb: number | null;
+  parsedProductName: string | null;
+  parsedQuantity: number | null;
+  matchedProductId: number | null;
+  matchedProductName: string | null;
+  matchStatus: NayaxStockEventMatchStatus;
+  needsReviewReason: string | null;
+  processingStatus: NayaxStockEventProcessingStatus;
+  availableStorageQuantity: number | null;
+  isInsufficientStock: boolean;
+  unaccountedDifference: number | null;
+  isDiscrepancy: boolean;
+  isPossibleDuplicate: boolean;
+  possibleDuplicateNotes: string | null;
+}
+
+export interface NayaxProductImpactPreview {
+  productId: number;
+  productName: string;
+  availableStorageQuantity: number;
+  pendingRefillQuantity: number;
+}
+
+export interface NayaxMachineStockSyncPreview {
+  machineId: number;
+  newEventCount: number;
+  events: NayaxStockEventPreview[];
+  productImpacts: NayaxProductImpactPreview[];
+  message: string | null;
+}
+
+export enum NayaxStockEventApplyOutcome {
+  Applied = 0,
+  InsufficientStock = 1,
+  NotMatched = 2,
+  NotApplicable = 3,
+  Error = 4
+}
+
+export interface NayaxStockEventApplyResult {
+  eventId: number;
+  outcome: NayaxStockEventApplyOutcome;
+  message: string;
+  stockAdjustmentId: number | null;
+}
+
+export interface NayaxMachineStockApplyResponse {
+  results: NayaxStockEventApplyResult[];
 }
 
 export interface StockAdjustmentDto {

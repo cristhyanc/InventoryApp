@@ -64,6 +64,7 @@ public class AppDbContext : DbContext
     public DbSet<StockAdjustment> StockAdjustments => Set<StockAdjustment>();
     public DbSet<Purchase> Receipts => Set<Purchase>();
     public DbSet<NayaxSales> NayaxSales => Set<NayaxSales>();
+    public DbSet<NayaxMachineStockEvent> NayaxMachineStockEvents => Set<NayaxMachineStockEvent>();
     public DbSet<ImportedFile> ImportedFiles => Set<ImportedFile>();
     public DbSet<ImportedReimbursement> ImportedReimbursements => Set<ImportedReimbursement>();
     public DbSet<ImportedReimbursementDevice> ImportedReimbursementDevices => Set<ImportedReimbursementDevice>();
@@ -185,6 +186,21 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<NayaxSales>()
             .Property(s => s.NayaxProductCostPrice)
             .HasColumnType("decimal(18,6)");
+
+        // A Nayax machine-stock event (identified by its Nayax EventLogID) appears at most once per
+        // business, the same idempotency pattern as NayaxSales/TransactionID above (issue #183).
+        modelBuilder.Entity<NayaxMachineStockEvent>()
+            .HasIndex(e => new { e.BusinessId, e.NayaxEventLogId })
+            .IsUnique();
+
+        modelBuilder.Entity<NayaxMachineStockEvent>()
+            .HasIndex(e => new { e.BusinessId, e.MachineId, e.ProcessingStatus });
+
+        modelBuilder.Entity<NayaxMachineStockEvent>()
+            .HasOne(e => e.MatchedProduct)
+            .WithMany()
+            .HasForeignKey(e => e.MatchedProductId)
+            .OnDelete(DeleteBehavior.SetNull);
 
         modelBuilder.Entity<Product>()
             .HasOne(p => p.Category)

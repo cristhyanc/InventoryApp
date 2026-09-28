@@ -3,6 +3,7 @@ using System;
 using InventoryApi.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace InventoryApi.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260927140121_AddNayaxMachineStockEvents")]
+    partial class AddNayaxMachineStockEvents
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.0");
@@ -649,10 +652,7 @@ namespace InventoryApi.Migrations
                     b.Property<int>("EventCode")
                         .HasColumnType("INTEGER");
 
-                    b.Property<DateTime>("EventDateTimeGmt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTime?>("EventDateTimeVmc")
+                    b.Property<DateTime>("EventTimestamp")
                         .HasColumnType("TEXT");
 
                     b.Property<long>("MachineId")
@@ -664,7 +664,7 @@ namespace InventoryApi.Migrations
                     b.Property<long?>("MatchedProductId")
                         .HasColumnType("INTEGER");
 
-                    b.Property<long>("NayaxEventLogId")
+                    b.Property<long>("NayaxEventId")
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("NeedsReviewReason")
@@ -701,7 +701,7 @@ namespace InventoryApi.Migrations
 
                     b.HasIndex("MatchedProductId");
 
-                    b.HasIndex("BusinessId", "NayaxEventLogId")
+                    b.HasIndex("BusinessId", "NayaxEventId")
                         .IsUnique();
 
                     b.HasIndex("BusinessId", "MachineId", "ProcessingStatus");

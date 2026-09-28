@@ -177,9 +177,61 @@ public class BusinessScopedUniquenessTests : IDisposable
         Assert.Equal(BusinessA, visible.BusinessId);
     }
 
+    /// <summary>
+    /// A Nayax machine-stock event's external identity (issue #183) follows the same
+    /// NayaxSales/TransactionID pattern: unique per business, not globally.
+    /// </summary>
+    [Fact]
+    public void Two_businesses_can_import_a_machine_stock_event_with_the_same_nayax_event_log_id()
+    {
+        const long SharedEventLogId = 13579;
+
+        SaveAs(BusinessA, db => db.NayaxMachineStockEvents.Add(new NayaxMachineStockEvent
+        {
+            NayaxEventLogId = SharedEventLogId,
+            MachineId = 1,
+            EventCode = 501,
+            RawEventData = "Product MDB: 1 | A | 1",
+        }));
+        SaveAs(BusinessB, db => db.NayaxMachineStockEvents.Add(new NayaxMachineStockEvent
+        {
+            NayaxEventLogId = SharedEventLogId,
+            MachineId = 2,
+            EventCode = 501,
+            RawEventData = "Product MDB: 2 | B | 2",
+        }));
+
+        using var verify = TestAppDbContext.Unrestricted(_options);
+        var events = verify.NayaxMachineStockEvents.Where(e => e.NayaxEventLogId == SharedEventLogId).ToList();
+
+        Assert.Equal(2, events.Count);
+        Assert.Equal([BusinessA, BusinessB], events.Select(e => e.BusinessId).OrderBy(id => id));
+    }
+
     #endregion
 
     #region A duplicate inside one business is still refused
+
+    [Fact]
+    public void One_business_still_cannot_import_the_same_nayax_machine_stock_event_twice()
+    {
+        SaveAs(BusinessA, db => db.NayaxMachineStockEvents.Add(new NayaxMachineStockEvent
+        {
+            NayaxEventLogId = 24680,
+            MachineId = 1,
+            EventCode = 501,
+            RawEventData = "Product MDB: 1 | A | 1",
+        }));
+
+        Assert.Throws<DbUpdateException>(() =>
+            SaveAs(BusinessA, db => db.NayaxMachineStockEvents.Add(new NayaxMachineStockEvent
+            {
+                NayaxEventLogId = 24680,
+                MachineId = 1,
+                EventCode = 501,
+                RawEventData = "Product MDB: 1 | A | 1",
+            })));
+    }
 
     [Fact]
     public void One_business_still_cannot_import_the_same_file_hash_twice()

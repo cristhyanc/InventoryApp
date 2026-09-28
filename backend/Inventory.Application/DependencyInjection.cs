@@ -1,5 +1,6 @@
 using Inventory.Application.CatalogReconciliation;
 using Inventory.Application.Categories;
+using Inventory.Application.MachineStockSync;
 using Inventory.Application.NayaxFeeSettings;
 using Inventory.Application.Purchases;
 using Inventory.Application.Reporting.Bookkeeping;
@@ -34,6 +35,8 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<UpdateSupplier>();
         services.AddScoped<DeleteSupplier>();
         services.AddScoped<GetNayaxCatalogReconciliation>();
+        services.AddScoped<SyncMachineStockFromNayax>();
+        services.AddScoped<ApplyMachineStockSync>();
         services.AddScoped<ComputePurchaseTotalValidation>();
         services.AddScoped<GetBookkeepingReport>();
         services.AddScoped<IGetBookkeepingReport>(sp => sp.GetRequiredService<GetBookkeepingReport>());

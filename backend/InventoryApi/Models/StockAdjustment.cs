@@ -12,6 +12,17 @@ public enum StockAdjustmentReason
     MachineRefill = 5
 }
 
+/// <summary>
+/// Distinguishes an operator-entered movement from one imported and applied from a Nayax
+/// machine-stock event (issue #183), so manual and Nayax-sourced refills remain distinguishable in
+/// the audit trail even though both use <see cref="StockAdjustmentReason.MachineRefill"/>.
+/// </summary>
+public enum StockAdjustmentSource
+{
+    Manual = 0,
+    Nayax = 1
+}
+
 public class StockAdjustment : IBusinessOwned
 {
     /// <summary>
@@ -40,6 +51,7 @@ public class StockAdjustment : IBusinessOwned
     public decimal? InventoryValueAfter { get; set; }
 
     public StockAdjustmentReason Reason { get; set; } = StockAdjustmentReason.MachineRefill;
+    public StockAdjustmentSource Source { get; set; } = StockAdjustmentSource.Manual;
     public long? MachineId { get; set; }
     public string? Notes { get; set; }
 

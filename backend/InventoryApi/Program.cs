@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Inventory.Application;
 using Inventory.Application.CatalogReconciliation;
 using Inventory.Application.Categories;
+using Inventory.Application.MachineStockSync;
 using Inventory.Application.NayaxFeeSettings;
 using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Reporting.Dashboard;
@@ -197,6 +198,10 @@ builder.Services.AddScoped<ITransactionSalesReportFactsProvider, EfTransactionSa
 // EfLocalCatalogSnapshotProvider and NayaxCatalogSnapshotProvider.
 builder.Services.AddScoped<ILocalCatalogSnapshotProvider, EfLocalCatalogSnapshotProvider>();
 builder.Services.AddScoped<INayaxCatalogSnapshotProvider, InventoryApi.Adapters.Nayax.NayaxCatalogSnapshotProvider>();
+
+// Temporary API-owned adapter for the machine Sync Restock persistence port (issue #183); see
+// EfMachineStockEventStore.
+builder.Services.AddScoped<IMachineStockEventStore, EfMachineStockEventStore>();
 
 var app = builder.Build();
 
