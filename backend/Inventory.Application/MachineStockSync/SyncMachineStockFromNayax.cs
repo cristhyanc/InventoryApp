@@ -117,7 +117,8 @@ public sealed class SyncMachineStockFromNayax
             .Where(pending => pending.MatchStatus == NayaxStockEventMatchStatus.Matched
                 && pending.ParsedQuantity is > 0
                 && pending.MatchedProductId is not null
-                && pending.MatchedProductQuantityInStock is not null)
+                && pending.MatchedProductQuantityInStock is not null
+                && pending.DuplicateResolution != NayaxDuplicateResolution.ReconciledManually)
             .GroupBy(pending => (Id: pending.MatchedProductId!.Value,
                 Name: pending.MatchedProductName ?? string.Empty,
                 Available: pending.MatchedProductQuantityInStock!.Value))
@@ -170,6 +171,7 @@ public sealed class SyncMachineStockFromNayax
             possibleDuplicate is not null,
             possibleDuplicate is not null
                 ? $"A manual machine refill of the same quantity was recorded for this product/machine at {possibleDuplicate.Value.EffectiveAt:O}."
-                : null);
+                : null,
+            pending.DuplicateResolution);
     }
 }

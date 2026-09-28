@@ -23,7 +23,8 @@ public record NayaxStockEventPreviewDto(
     int? UnaccountedDifference,
     bool IsDiscrepancy,
     bool IsPossibleDuplicate,
-    string? PossibleDuplicateNotes
+    string? PossibleDuplicateNotes,
+    NayaxDuplicateResolution DuplicateResolution
 );
 
 /// <summary>
@@ -53,7 +54,16 @@ public enum NayaxStockEventApplyOutcome
     InsufficientStock,
     NotMatched,
     NotApplicable,
-    Error
+    Error,
+
+    /// <summary>Reconciled as already recorded manually (issue #196): no movement was applied.</summary>
+    Reconciled,
+
+    /// <summary>
+    /// Flagged as a possible duplicate of a manual refill and not yet explicitly resolved
+    /// (issue #196); the ordinary Apply action refused it.
+    /// </summary>
+    DuplicateRequiresResolution
 }
 
 public record NayaxStockEventApplyResultDto(
@@ -64,3 +74,10 @@ public record NayaxStockEventApplyResultDto(
 );
 
 public record NayaxMachineStockApplyResponseDto(IReadOnlyList<NayaxStockEventApplyResultDto> Results);
+
+/// <summary>
+/// An operator's explicit resolution of one Nayax event flagged as a possible duplicate of a manual
+/// refill (issue #196): <c>AlreadyRecordedManually</c> reconciles it without any movement,
+/// <c>ApplyAsSeparateRestock</c> explicitly overrides the warning and applies it once.
+/// </summary>
+public record NayaxResolveDuplicateRequestDto(int EventId, NayaxDuplicateResolutionChoice Resolution);

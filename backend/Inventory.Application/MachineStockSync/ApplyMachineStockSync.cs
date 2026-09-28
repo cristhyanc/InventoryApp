@@ -21,18 +21,22 @@ public sealed class ApplyMachineStockSync
     public async Task<NayaxMachineStockApplyResponseDto> Handle(
         long machineId, IReadOnlyList<int> eventIds, CancellationToken cancellationToken)
     {
+        var manualRefills = await _store.GetManualMachineRefillsAsync(machineId, cancellationToken);
         var results = new List<NayaxStockEventApplyResultDto>();
 
         foreach (var eventId in eventIds.Distinct())
         {
-            results.Add(await ApplyOneAsync(machineId, eventId, cancellationToken));
+            results.Add(await ApplyOneAsync(machineId, eventId, manualRefills, cancellationToken));
         }
 
         return new NayaxMachineStockApplyResponseDto(results);
     }
 
     private async Task<NayaxStockEventApplyResultDto> ApplyOneAsync(
-        long machineId, int eventId, CancellationToken cancellationToken)
+        long machineId,
+        int eventId,
+        IReadOnlyList<ManualRefillEvidence> manualRefills,
+        CancellationToken cancellationToken)
     {
         var state = await _store.FindEventAsync(machineId, eventId, cancellationToken);
         if (state is null)
@@ -42,18 +46,32 @@ public sealed class ApplyMachineStockSync
             ? await _store.FindStorageProductAsync(productId, cancellationToken)
             : null;
 
+        var isPossibleDuplicate = state.MatchStatus == NayaxStockEventMatchStatus.Matched
+            && state.MatchedProductId is long matchedProductId
+            && state.ParsedQuantity is > 0
+            && NayaxMachineStockDuplicatePolicy.FindPossibleDuplicate(
+                matchedProductId, state.ParsedQuantity.Value, state.EventDateTimeGmt, manualRefills) is not null;
+
         var ruling = NayaxMachineStockApplyPolicy.Decide(
             state.ProcessingStatus,
             state.MatchStatus,
             state.NeedsReviewReason,
             state.MatchedProductId,
             state.ParsedQuantity,
-            product?.QuantityInStock);
+            product?.QuantityInStock,
+            isPossibleDuplicate,
+            state.DuplicateResolution);
 
         switch (ruling.Decision)
         {
             case NayaxStockEventApplyDecision.AlreadyApplied:
                 return new(eventId, NayaxStockEventApplyOutcome.Applied, ruling.Message, state.StockAdjustmentId);
+
+            case NayaxStockEventApplyDecision.ReconciledDuplicate:
+                return new(eventId, NayaxStockEventApplyOutcome.Reconciled, ruling.Message, null);
+
+            case NayaxStockEventApplyDecision.DuplicateRequiresResolution:
+                return new(eventId, NayaxStockEventApplyOutcome.DuplicateRequiresResolution, ruling.Message, null);
 
             case NayaxStockEventApplyDecision.NeedsReview:
                 return new(eventId, NayaxStockEventApplyOutcome.NotMatched, ruling.Message, null);
@@ -74,6 +92,8 @@ public sealed class ApplyMachineStockSync
                     state.NayaxEventLogId,
                     state.MatchedProductId!.Value,
                     state.ParsedQuantity!.Value,
+                    NayaxDuplicateResolution.None,
+                    null,
                     cancellationToken);
 
                 return application.Succeeded

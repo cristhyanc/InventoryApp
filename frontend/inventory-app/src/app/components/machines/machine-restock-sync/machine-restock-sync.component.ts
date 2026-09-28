@@ -4,6 +4,8 @@ import { BehaviorSubject } from 'rxjs';
 import { MachineService } from '../../../services/machine.service';
 import { ToastService } from '../../../services/toast.service';
 import {
+  NayaxDuplicateResolution,
+  NayaxDuplicateResolutionChoice,
   NayaxMachineStockSyncPreview,
   NayaxStockEventApplyOutcome,
   NayaxStockEventMatchStatus,
@@ -148,9 +150,12 @@ export class MachineRestockSyncComponent {
   applying$ = new BehaviorSubject(false);
   syncError$ = new BehaviorSubject<string | null>(null);
   applyError$ = new BehaviorSubject<string | null>(null);
+  resolvingEventId$ = new BehaviorSubject<number | null>(null);
   selectedEventIds = new Set<number>();
 
   readonly MatchStatus = NayaxStockEventMatchStatus;
+  readonly DuplicateResolution = NayaxDuplicateResolution;
+  readonly DuplicateResolutionChoice = NayaxDuplicateResolutionChoice;
 
   @ViewChild('syncTrigger') private syncTrigger?: ElementRef<HTMLButtonElement>;
 
@@ -168,7 +173,13 @@ export class MachineRestockSyncComponent {
   isReadyToApply(event: NayaxStockEventPreview): boolean {
     return event.matchStatus === NayaxStockEventMatchStatus.Matched &&
       (event.parsedQuantity ?? 0) > 0 &&
-      !event.isInsufficientStock;
+      !event.isInsufficientStock &&
+      !this.isUnresolvedDuplicate(event);
+  }
+
+  /** A flagged possible duplicate the operator has not yet explicitly resolved. */
+  isUnresolvedDuplicate(event: NayaxStockEventPreview): boolean {
+    return event.isPossibleDuplicate && event.duplicateResolution === NayaxDuplicateResolution.None;
   }
 
   isEventSelected(eventId: number): boolean {
@@ -200,6 +211,7 @@ export class MachineRestockSyncComponent {
     this.syncPreview$.next(null);
     this.syncError$.next(null);
     this.applyError$.next(null);
+    this.resolvingEventId$.next(null);
     this.selectedEventIds.clear();
     this.syncTrigger?.nativeElement.focus();
   }
@@ -264,6 +276,45 @@ export class MachineRestockSyncComponent {
         this.applying$.next(false);
         this.applyError$.next('Failed to apply the selected Nayax stock-adjustment events.');
         this.toastService.error('Failed to apply the selected Nayax stock-adjustment events.');
+      }
+    });
+  }
+
+  /**
+   * The operator's explicit resolution for one event flagged as a possible duplicate (issue #196):
+   * "already recorded manually" reconciles it without any movement, "apply as separate restock" is
+   * an explicit, auditable override that applies it once. Either way the dialog re-syncs so the
+   * preview and machine inventory stay consistent.
+   */
+  resolveDuplicate(event: NayaxStockEventPreview, resolution: NayaxDuplicateResolutionChoice): void {
+    const machineId = this.machineId;
+    if (!machineId) {
+      return;
+    }
+
+    this.applyError$.next(null);
+    this.resolvingEventId$.next(event.id);
+    this.machineService.resolveSyncRestockDuplicate(machineId, event.id, resolution).subscribe({
+      next: (result) => {
+        this.resolvingEventId$.next(null);
+        this.selectedEventIds.delete(event.id);
+        const applied = result.outcome === NayaxStockEventApplyOutcome.Applied;
+        if (result.outcome === NayaxStockEventApplyOutcome.Reconciled) {
+          this.toastService.success('Reconciled as already recorded manually; no Nayax movement was applied.');
+        } else if (applied) {
+          this.toastService.success('Applied as a separate restock.');
+        } else {
+          this.toastService.warning(result.message);
+        }
+        this.syncRestock();
+        if (applied) {
+          this.restockApplied.emit();
+        }
+      },
+      error: () => {
+        this.resolvingEventId$.next(null);
+        this.applyError$.next('Failed to resolve the possible duplicate.');
+        this.toastService.error('Failed to resolve the possible duplicate.');
       }
     });
   }

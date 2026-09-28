@@ -12,9 +12,12 @@ public readonly record struct NayaxStockSyncProduct(long Id, string Name, int Qu
 /// <summary>
 /// A previously recorded manual machine refill, used only as duplicate-detection evidence.
 /// <see cref="QuantityChange"/> is the movement's own signed change to storage, so a manual refill
-/// of four units is <c>-4</c>.
+/// of four units is <c>-4</c>. <see cref="StockAdjustmentId"/> is the evidence's own persistence
+/// identity, kept so an explicit duplicate resolution can record exactly which manual movement it
+/// was resolved against (issue #196).
 /// </summary>
-public readonly record struct ManualRefillEvidence(long ProductId, int QuantityChange, DateTime EffectiveAt);
+public readonly record struct ManualRefillEvidence(
+    long ProductId, int QuantityChange, DateTime EffectiveAt, int StockAdjustmentId = 0);
 
 /// <summary>How one imported alert resolved against the machine's MDB map and the local catalogue.</summary>
 public readonly record struct NayaxStockEventResolution(
@@ -162,7 +165,53 @@ public enum NayaxStockEventApplyDecision
     InsufficientStorage,
 
     /// <summary>The matched product no longer exists locally.</summary>
-    MatchedProductMissing
+    MatchedProductMissing,
+
+    /// <summary>
+    /// Flagged as a possible duplicate of a manual refill and not yet explicitly resolved
+    /// (issue #196); the ordinary Apply action must refuse it until the operator chooses
+    /// <see cref="NayaxDuplicateResolution.ReconciledManually"/> or
+    /// <see cref="NayaxDuplicateResolution.AppliedAsSeparateRestock"/>.
+    /// </summary>
+    DuplicateRequiresResolution,
+
+    /// <summary>
+    /// Already resolved as "already recorded manually" (issue #196): re-applying, or re-resolving,
+    /// must never create a movement or change storage.
+    /// </summary>
+    ReconciledDuplicate
+}
+
+/// <summary>
+/// Whether, and how, an operator has explicitly resolved a Nayax event flagged as a possible
+/// duplicate of a manual refill (issue #196). This is the persisted, auditable outcome of that
+/// choice - distinct from <see cref="NayaxStockEventProcessingStatus"/>, which only tracks whether a
+/// storage movement was created.
+/// </summary>
+public enum NayaxDuplicateResolution
+{
+    /// <summary>Not yet resolved.</summary>
+    None = 0,
+
+    /// <summary>
+    /// The operator confirmed this Nayax event records the same physical restock as an existing
+    /// manual refill. No second movement is ever created for it.
+    /// </summary>
+    ReconciledManually = 1,
+
+    /// <summary>
+    /// The operator explicitly overrode the possible-duplicate warning, confirming this Nayax event
+    /// is a separate, additional physical restock. It is applied exactly once through the ordinary
+    /// MachineRefill inventory/costing path.
+    /// </summary>
+    AppliedAsSeparateRestock = 2
+}
+
+/// <summary>The two explicit resolutions an operator may choose for a flagged possible duplicate (issue #196).</summary>
+public enum NayaxDuplicateResolutionChoice
+{
+    AlreadyRecordedManually,
+    ApplyAsSeparateRestock
 }
 
 /// <summary>A decision plus the explanation shown to the operator.</summary>
@@ -181,10 +230,27 @@ public static class NayaxMachineStockApplyPolicy
         string? needsReviewReason,
         long? matchedProductId,
         int? parsedQuantity,
-        int? availableStorageQuantity)
+        int? availableStorageQuantity,
+        bool isPossibleDuplicate = false,
+        NayaxDuplicateResolution duplicateResolution = NayaxDuplicateResolution.None)
     {
         if (processingStatus == NayaxStockEventProcessingStatus.Applied)
             return new(NayaxStockEventApplyDecision.AlreadyApplied, "Already applied.");
+
+        if (duplicateResolution == NayaxDuplicateResolution.ReconciledManually)
+        {
+            return new(
+                NayaxStockEventApplyDecision.ReconciledDuplicate,
+                "Already reconciled as recorded manually; no Nayax movement was applied.");
+        }
+
+        if (isPossibleDuplicate && duplicateResolution == NayaxDuplicateResolution.None)
+        {
+            return new(
+                NayaxStockEventApplyDecision.DuplicateRequiresResolution,
+                "Flagged as a possible duplicate of a manual refill. Choose 'Already recorded "
+                    + "manually' or 'Apply as separate restock' before applying.");
+        }
 
         if (matchStatus != NayaxStockEventMatchStatus.Matched || matchedProductId is null || parsedQuantity is null)
         {

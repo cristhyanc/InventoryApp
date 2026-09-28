@@ -60,11 +60,21 @@ public class RenameNayaxMachineStockEventToEventLogContractMigrationTests
             Assert.DoesNotContain("NayaxEventId", columns);
             Assert.DoesNotContain("EventTimestamp", columns);
 
-            var preserved = await after.NayaxMachineStockEvents.SingleAsync();
-            Assert.Equal(9001, preserved.NayaxEventLogId);
-            Assert.Equal(new DateTime(2026, 9, 1, 10, 0, 0), preserved.EventDateTimeGmt);
-            Assert.Null(preserved.EventDateTimeVmc);
-            Assert.Equal("Product MDB: 13 | Chips | 2", preserved.RawEventData);
+            // Read with raw SQL rather than through the current EF model, whose columns were
+            // extended by the later AddNayaxMachineStockEventDuplicateResolution migration.
+            await using var select = connection.CreateCommand();
+            select.CommandText = """
+                SELECT NayaxEventLogId, EventDateTimeGmt, EventDateTimeVmc, RawEventData
+                    FROM NayaxMachineStockEvents;
+                """;
+            await using var reader = await select.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal(9001L, reader.GetInt64(0));
+            Assert.Equal(new DateTime(2026, 9, 1, 10, 0, 0), DateTime.Parse(reader.GetString(1)));
+            Assert.True(reader.IsDBNull(2));
+            Assert.Equal("Product MDB: 13 | Chips | 2", reader.GetString(3));
+            Assert.False(await reader.ReadAsync());
+            await reader.DisposeAsync();
 
             // The same EventLogID in the same business is still rejected by the renamed index.
             await using var duplicate = connection.CreateCommand();

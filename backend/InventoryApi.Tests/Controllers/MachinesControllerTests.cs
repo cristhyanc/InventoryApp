@@ -22,7 +22,8 @@ public class MachinesControllerTests
         new(
             Mock.Of<IMachineService>(),
             new SyncMachineStockFromNayax(nayax ?? Mock.Of<INayaxLynxClient>(), store),
-            new ApplyMachineStockSync(store));
+            new ApplyMachineStockSync(store),
+            new ResolveMachineStockDuplicate(store));
 
     [Fact]
     public async Task SyncRestock_returns_the_use_case_preview()
@@ -52,11 +53,14 @@ public class MachinesControllerTests
         var store = new Mock<IMachineStockEventStore>();
         store.Setup(x => x.FindEventAsync(MachineId, 7, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new MachineStockEventState(
-                7, 5001, NayaxStockEventMatchStatus.Matched, null,
-                NayaxStockEventProcessingStatus.Unprocessed, 200, 2, null));
+                7, 5001, DateTime.UtcNow, NayaxStockEventMatchStatus.Matched, null,
+                NayaxStockEventProcessingStatus.Unprocessed, 200, 2, null, NayaxDuplicateResolution.None));
         store.Setup(x => x.FindStorageProductAsync(200, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new NayaxStockSyncProduct(200, "Coke 375mL", 10));
-        store.Setup(x => x.ApplyRefillAsync(7, MachineId, 5001, 200, 2, It.IsAny<CancellationToken>()))
+        store.Setup(x => x.GetManualMachineRefillsAsync(MachineId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        store.Setup(x => x.ApplyRefillAsync(
+                7, MachineId, 5001, 200, 2, NayaxDuplicateResolution.None, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new MachineRefillApplication(true, 99));
 
         var result = await Controller(store.Object)

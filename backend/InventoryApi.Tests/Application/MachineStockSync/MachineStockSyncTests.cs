@@ -43,6 +43,9 @@ public class MachineStockSyncTests
         return (new SyncMachineStockFromNayax(nayax, store), new ApplyMachineStockSync(store));
     }
 
+    private static ResolveMachineStockDuplicate ResolveUseCase(AppDbContext db) =>
+        new(new EfMachineStockEventStore(db, new InventoryCostService(db), new InventoryCostRebuildService(db)));
+
     private static Product SeedCostedProduct(
         AppDbContext db, long id, string name, int quantityInStock, decimal unitCost = 1m)
     {
@@ -645,6 +648,168 @@ public class MachineStockSyncTests
 
         var evt = Assert.Single(preview.Events);
         Assert.False(evt.IsPossibleDuplicate);
+    }
+
+    #endregion
+
+    #region Explicit duplicate resolution (issue #196)
+
+    /// <summary>
+    /// Seeds a product already refilled manually, then previews a matching Nayax event so it is
+    /// flagged a possible duplicate, and returns everything a resolution test needs.
+    /// </summary>
+    private static async Task<(
+        SyncMachineStockFromNayax Sync,
+        ApplyMachineStockSync Apply,
+        ResolveMachineStockDuplicate Resolve,
+        int EventId,
+        int ManualStockAdjustmentId)> SeedDuplicateScenarioAsync(AppDbContext db)
+    {
+        SeedCostedProduct(db, ProductId, "Coke 375mL", 20, unitCost: 1m);
+        await db.SaveChangesAsync();
+
+        IStockService stockService = new StockService(db);
+        await stockService.Adjust(
+            ProductId,
+            new StockAdjustmentDto(-4, StockAdjustmentReason.MachineRefill, "operator restocked before Nayax reported it", MachineId, null));
+        var manualMovement = await db.StockAdjustments.SingleAsync(x => x.Reason == StockAdjustmentReason.MachineRefill);
+        manualMovement.EffectiveAt = EventTime.AddHours(-1);
+        await db.SaveChangesAsync();
+
+        var nayax = NayaxClientReturning([
+            StockAlert(1, "Product MDB: 7 | Coke 375mL | 4")
+        ], [new() { NayaxProductID = ProductId, MDBCode = 7, ProductName = "Coke 375mL" }]);
+        var (sync, apply) = UseCases(db, nayax.Object);
+        var resolve = ResolveUseCase(db);
+
+        var preview = await sync.Handle(MachineId, CancellationToken.None);
+        var evt = Assert.Single(preview.Events);
+        Assert.True(evt.IsPossibleDuplicate);
+
+        return (sync, apply, resolve, evt.Id, manualMovement.Id);
+    }
+
+    [Fact]
+    public async Task Ordinary_apply_refuses_a_flagged_possible_duplicate()
+    {
+        using var db = CreateInMemoryDb(nameof(Ordinary_apply_refuses_a_flagged_possible_duplicate));
+        var (_, apply, _, eventId, _) = await SeedDuplicateScenarioAsync(db);
+
+        var result = await apply.Handle(MachineId, [eventId], CancellationToken.None);
+
+        Assert.Equal(NayaxStockEventApplyOutcome.DuplicateRequiresResolution, result.Results[0].Outcome);
+        Assert.Equal(16, (await db.Products.FindAsync(ProductId))!.QuantityInStock);
+        Assert.Empty(await db.StockAdjustments.Where(x => x.Source == StockAdjustmentSource.Nayax).ToListAsync());
+    }
+
+    [Fact]
+    public async Task Already_recorded_manually_reconciles_without_changing_storage_or_creating_a_second_adjustment()
+    {
+        using var db = CreateInMemoryDb(nameof(Already_recorded_manually_reconciles_without_changing_storage_or_creating_a_second_adjustment));
+        var (_, _, resolve, eventId, manualAdjustmentId) = await SeedDuplicateScenarioAsync(db);
+
+        var result = await resolve.Handle(
+            MachineId, eventId, NayaxDuplicateResolutionChoice.AlreadyRecordedManually, CancellationToken.None);
+
+        Assert.Equal(NayaxStockEventApplyOutcome.Reconciled, result.Outcome);
+        Assert.Null(result.StockAdjustmentId);
+        Assert.Equal(16, (await db.Products.FindAsync(ProductId))!.QuantityInStock);
+        Assert.Single(await db.StockAdjustments.Where(x => x.Reason == StockAdjustmentReason.MachineRefill).ToListAsync());
+
+        var stored = await db.NayaxMachineStockEvents.SingleAsync(e => e.Id == eventId);
+        Assert.Equal(NayaxStockEventProcessingStatus.Unprocessed, stored.ProcessingStatus);
+        Assert.Equal(NayaxDuplicateResolution.ReconciledManually, stored.DuplicateResolution);
+        Assert.Equal(manualAdjustmentId, stored.MatchedManualStockAdjustmentId);
+        Assert.NotNull(stored.DuplicateResolvedAt);
+    }
+
+    [Fact]
+    public async Task Repeating_already_recorded_manually_is_idempotent()
+    {
+        using var db = CreateInMemoryDb(nameof(Repeating_already_recorded_manually_is_idempotent));
+        var (_, _, resolve, eventId, _) = await SeedDuplicateScenarioAsync(db);
+
+        var first = await resolve.Handle(
+            MachineId, eventId, NayaxDuplicateResolutionChoice.AlreadyRecordedManually, CancellationToken.None);
+        var second = await resolve.Handle(
+            MachineId, eventId, NayaxDuplicateResolutionChoice.AlreadyRecordedManually, CancellationToken.None);
+
+        Assert.Equal(NayaxStockEventApplyOutcome.Reconciled, first.Outcome);
+        Assert.Equal(NayaxStockEventApplyOutcome.Reconciled, second.Outcome);
+        Assert.Equal(16, (await db.Products.FindAsync(ProductId))!.QuantityInStock);
+        Assert.Single(await db.StockAdjustments.Where(x => x.Reason == StockAdjustmentReason.MachineRefill).ToListAsync());
+    }
+
+    [Fact]
+    public async Task Apply_as_separate_restock_requires_the_explicit_choice_and_deducts_storage_exactly_once()
+    {
+        using var db = CreateInMemoryDb(nameof(Apply_as_separate_restock_requires_the_explicit_choice_and_deducts_storage_exactly_once));
+        var (_, apply, resolve, eventId, manualAdjustmentId) = await SeedDuplicateScenarioAsync(db);
+
+        // The ordinary apply path still refuses it; only the explicit resolution may override it.
+        var ordinary = await apply.Handle(MachineId, [eventId], CancellationToken.None);
+        Assert.Equal(NayaxStockEventApplyOutcome.DuplicateRequiresResolution, ordinary.Results[0].Outcome);
+
+        var result = await resolve.Handle(
+            MachineId, eventId, NayaxDuplicateResolutionChoice.ApplyAsSeparateRestock, CancellationToken.None);
+
+        Assert.Equal(NayaxStockEventApplyOutcome.Applied, result.Outcome);
+        Assert.NotNull(result.StockAdjustmentId);
+        Assert.Equal(12, (await db.Products.FindAsync(ProductId))!.QuantityInStock);
+
+        var nayaxMovements = await db.StockAdjustments
+            .Where(x => x.Reason == StockAdjustmentReason.MachineRefill && x.Source == StockAdjustmentSource.Nayax)
+            .ToListAsync();
+        Assert.Single(nayaxMovements);
+        Assert.Equal(-4, nayaxMovements[0].QuantityChange);
+
+        var stored = await db.NayaxMachineStockEvents.SingleAsync(e => e.Id == eventId);
+        Assert.Equal(NayaxStockEventProcessingStatus.Applied, stored.ProcessingStatus);
+        Assert.Equal(NayaxDuplicateResolution.AppliedAsSeparateRestock, stored.DuplicateResolution);
+        Assert.Equal(manualAdjustmentId, stored.MatchedManualStockAdjustmentId);
+        Assert.NotNull(stored.DuplicateResolvedAt);
+    }
+
+    [Fact]
+    public async Task Repeating_apply_as_separate_restock_never_deducts_twice()
+    {
+        using var db = CreateInMemoryDb(nameof(Repeating_apply_as_separate_restock_never_deducts_twice));
+        var (_, _, resolve, eventId, _) = await SeedDuplicateScenarioAsync(db);
+
+        var first = await resolve.Handle(
+            MachineId, eventId, NayaxDuplicateResolutionChoice.ApplyAsSeparateRestock, CancellationToken.None);
+        var second = await resolve.Handle(
+            MachineId, eventId, NayaxDuplicateResolutionChoice.ApplyAsSeparateRestock, CancellationToken.None);
+
+        Assert.Equal(NayaxStockEventApplyOutcome.Applied, first.Outcome);
+        Assert.Equal(NayaxStockEventApplyOutcome.Applied, second.Outcome);
+        Assert.Equal(first.StockAdjustmentId, second.StockAdjustmentId);
+        Assert.Equal(12, (await db.Products.FindAsync(ProductId))!.QuantityInStock);
+        Assert.Single(await db.StockAdjustments.Where(x => x.Source == StockAdjustmentSource.Nayax).ToListAsync());
+    }
+
+    [Fact]
+    public async Task An_event_that_is_not_a_flagged_duplicate_cannot_be_resolved()
+    {
+        using var db = CreateInMemoryDb(nameof(An_event_that_is_not_a_flagged_duplicate_cannot_be_resolved));
+        SeedCostedProduct(db, ProductId, "25g Nobby's Beef Jerky Hot", 20);
+        await db.SaveChangesAsync();
+
+        var nayax = NayaxClientReturning([
+            StockAlert(1, "Product MDB: 13 | 25g Nobby's Beef Jerky Hot | 2")
+        ]);
+        var (sync, _) = UseCases(db, nayax.Object);
+        var resolve = ResolveUseCase(db);
+
+        var preview = await sync.Handle(MachineId, CancellationToken.None);
+        var eventId = preview.Events[0].Id;
+        Assert.False(preview.Events[0].IsPossibleDuplicate);
+
+        var result = await resolve.Handle(
+            MachineId, eventId, NayaxDuplicateResolutionChoice.AlreadyRecordedManually, CancellationToken.None);
+
+        Assert.Equal(NayaxStockEventApplyOutcome.NotApplicable, result.Outcome);
+        Assert.Equal(20, (await db.Products.FindAsync(ProductId))!.QuantityInStock);
     }
 
     #endregion

@@ -67,5 +67,23 @@ public class NayaxMachineStockEvent : IBusinessOwned
     /// <summary>The movement this event's application created, once <see cref="ProcessingStatus"/> is Applied.</summary>
     public int? StockAdjustmentId { get; set; }
 
+    /// <summary>
+    /// The operator's explicit resolution of a flagged possible duplicate (issue #196), distinct
+    /// from <see cref="ProcessingStatus"/>: <c>ReconciledManually</c> never creates a movement,
+    /// while <c>AppliedAsSeparateRestock</c> is an explicit, auditable override that does.
+    /// </summary>
+    public NayaxDuplicateResolution DuplicateResolution { get; set; } = NayaxDuplicateResolution.None;
+
+    /// <summary>When the operator made that explicit choice; null while unresolved.</summary>
+    public DateTime? DuplicateResolvedAt { get; set; }
+
+    /// <summary>
+    /// The manual <see cref="StockAdjustment"/> this event was resolved against, for either
+    /// resolution, kept for auditability (issue #196).
+    /// </summary>
+    public int? MatchedManualStockAdjustmentId { get; set; }
+    [JsonIgnore]
+    public virtual StockAdjustment? MatchedManualStockAdjustment { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }

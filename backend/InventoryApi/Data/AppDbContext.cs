@@ -202,6 +202,14 @@ public class AppDbContext : DbContext
             .HasForeignKey(e => e.MatchedProductId)
             .OnDelete(DeleteBehavior.SetNull);
 
+        // The manual refill a duplicate resolution was decided against (issue #196); kept for
+        // auditability only, never a driver of any calculation, so it may be orphaned by SetNull.
+        modelBuilder.Entity<NayaxMachineStockEvent>()
+            .HasOne(e => e.MatchedManualStockAdjustment)
+            .WithMany()
+            .HasForeignKey(e => e.MatchedManualStockAdjustmentId)
+            .OnDelete(DeleteBehavior.SetNull);
+
         modelBuilder.Entity<Product>()
             .HasOne(p => p.Category)
             .WithMany(c => c.Products)
