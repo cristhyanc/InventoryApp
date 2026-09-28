@@ -634,6 +634,52 @@ Use these ownership rules:
 - **Core services** are limited to application-wide infrastructure such as configuration and HTTP concerns. `core` is not a home for miscellaneous business logic.
 - **The backend** remains authoritative for stock transitions, historical COGS, fees, commissions, reconciliation, and report calculations.
 
+### Page composition boundary (issue #191)
+
+Page and detail components (the components routed directly in `app.routes.ts`, whether via the
+eager `component:` property or `loadComponent`) are primarily composition/orchestration
+boundaries: they read route/query parameters, hold the page's own loading/error/selection state,
+call feature data-access services for the page's own data, and lay out child components. They are
+not the place for every new workflow to accumulate.
+
+When a new piece of UI is a **distinct workflow** with its own substantial UI, plus its own
+state, actions, and loading/error lifecycle (for example, a dialog with its own open/close state
+that previews data, lets the operator make selections, and calls an API to apply them), implement
+it as a dedicated feature component rather than adding it directly to the page component. This is
+a responsibility/architecture rule, not a line-count limit: a page that is long because it lays
+out many small, focused pieces of composition is fine; a page that owns a second workflow's
+dialog state, API calls, and notifications alongside its own is the pattern to avoid, however
+short that added code looks in a diff.
+
+The preferred parent/child interaction is `@Input`/`@Output`, not a shared service or two-way
+binding built for this purpose:
+
+- **Inputs** pass the required context the child needs (for example, `[machineId]`).
+- **Outputs** notify the parent only of a meaningful change that requires it to refresh or
+  coordinate (for example, `(restockApplied)`); the child does not reach back into the parent's
+  state or services to do this itself.
+
+The Sync Restock workflow on `MachineDetailComponent` is the worked example this rule
+generalizes; see [Nayax machine-stock event import and Sync Restock reconciliation (issue
+#183)](#nayax-machine-stock-event-import-and-sync-restock-reconciliation-issue-183), "Frontend",
+for the full description of `MachineRestockSyncComponent` and how `MachineDetailComponent`
+composes it.
+
+**Automated guard.** `frontend/inventory-app/src/app/architecture/page-composition.guard.ts`
+(tested by the co-located `page-composition.guard.spec.ts`) enforces the one part of this rule a
+static check can catch narrowly and deterministically without a line-count proxy: it reads every
+component that `app.routes.ts` routes to directly, resolves that component's own template (inline
+or via `templateUrl`), and fails if that template itself authors `role="dialog"` markup. A page that
+composes a dialog workflow through a child component's selector (as `MachineDetailComponent` does
+for `<app-machine-restock-sync>`) never trips it, because the dialog markup then lives in the
+child's own template, not the page's; a page that grows its own inline dialog back in — the exact
+shape of the regression this issue was opened to prevent — fails immediately. This guard
+deliberately does not attempt to detect every way a page could accumulate a second workflow's
+state and actions (no static check on this codebase's current tooling can do that narrowly and
+without false positives); the broader responsibility rule above stays a documentation/review
+concern, per the known-constraints guidance that a brittle heuristic is worse than an honestly
+partial enforceable rule.
+
 ### Routing and loading
 
 Routes are declared centrally in `app.routes.ts`. Every top-level route loads its component with `loadComponent` (issue #65), except the public `/auth` Entra redirect callback, which stays eagerly imported because it is the landing route for an in-progress authentication redirect, not a migrated feature area. This keeps initial bundles smaller and creates an enforceable feature boundary without introducing NgModules. Preserve route URLs, guards, and parameters when adding or changing a route.
