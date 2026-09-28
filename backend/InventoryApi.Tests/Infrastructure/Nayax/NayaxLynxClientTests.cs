@@ -167,6 +167,138 @@ public class NayaxLynxClientTests
         Assert.Null(handler.LastRequest?.Headers.Authorization);
     }
 
+    [Fact]
+    public async Task GetMachineLastAlerts_when_nayax_returns_403_throws_NayaxUpstreamException()
+    {
+        var (client, _) = CreateClient(HttpStatusCode.Forbidden, SensitiveUpstreamBody);
+
+        var ex = await Assert.ThrowsAsync<NayaxUpstreamException>(
+            () => client.GetMachineLastAlertsAsync(42, CancellationToken.None));
+
+        Assert.Equal(HttpStatusCode.Forbidden, ex.StatusCode);
+        Assert.Equal("GetMachineLastAlertsAsync", ex.Operation);
+        Assert.Equal("GET", ex.Method);
+        Assert.Equal("machines/42/lastAlerts", ex.Endpoint);
+    }
+
+    /// <summary>
+    /// Proves the documented Get Machine Last Alerts response contract
+    /// (https://devzone.nayax.com/reference/lynx/machines/get-machine-last-alerts) maps field by
+    /// field, including the documented nullable fields arriving as null.
+    /// </summary>
+    [Fact]
+    public async Task GetMachineLastAlerts_deserializes_the_documented_response_contract()
+    {
+        const string eventData = "Eunhye Chung 'Adjusted Stock, Product MDB: 13 | 25g Nobby's Beef Jerky Hot | 2";
+        const string body = """
+            [
+              {
+                "MachineID": 42,
+                "EventDateTimeVMC": "2026-09-01T20:00:00.123",
+                "TransactionID": null,
+                "EventLogID": 8812345678,
+                "SiteID": 2,
+                "EntityTypeID": 1,
+                "EntityTypeName": "Machine",
+                "DeviceID": 7700123,
+                "EntityActorID": 1234567,
+                "EventDateTimeGMT": "2026-09-01T10:00:00.123Z",
+                "EventCode": 501,
+                "EventSourceID": 3,
+                "EventSourceName": "Nayax Core",
+                "EventGroupId": 12,
+                "EventGroupName": "Inventory",
+                "EventCategoryId": 4,
+                "EventCategoryName": "Information",
+                "EventDescription": "Stock Adjust for Machine",
+                "EventData": "Eunhye Chung 'Adjusted Stock, Product MDB: 13 | 25g Nobby's Beef Jerky Hot | 2",
+                "JSONData": null,
+                "EventUserID": 998877
+              },
+              {
+                "MachineID": null,
+                "EventDateTimeVMC": "2026-09-01T21:00:00",
+                "TransactionID": 2108816976,
+                "EventLogID": 8812345679,
+                "SiteID": 2,
+                "EntityTypeID": 1,
+                "EntityTypeName": null,
+                "DeviceID": null,
+                "EntityActorID": null,
+                "EventDateTimeGMT": "2026-09-01T11:00:00Z",
+                "EventCode": 100,
+                "EventSourceID": 1,
+                "EventSourceName": null,
+                "EventGroupId": null,
+                "EventGroupName": null,
+                "EventCategoryId": null,
+                "EventCategoryName": null,
+                "EventDescription": null,
+                "EventData": null,
+                "JSONData": "{\"a\":1}",
+                "EventUserID": null
+              }
+            ]
+            """;
+        var (client, logger) = CreateClient(HttpStatusCode.OK, body);
+
+        var alerts = await client.GetMachineLastAlertsAsync(42, CancellationToken.None);
+
+        Assert.Equal(2, alerts.Count);
+        var alert = alerts[0];
+        Assert.Equal(42, alert.MachineId);
+        Assert.Equal(new DateTime(2026, 9, 1, 20, 0, 0, 123), alert.EventDateTimeVmc);
+        Assert.Null(alert.TransactionId);
+        Assert.Equal(8812345678, alert.EventLogId);
+        Assert.Equal(2, alert.SiteId);
+        Assert.Equal(1, alert.EntityTypeId);
+        Assert.Equal("Machine", alert.EntityTypeName);
+        Assert.Equal(7700123, alert.DeviceId);
+        Assert.Equal(1234567, alert.EntityActorId);
+        Assert.Equal(new DateTime(2026, 9, 1, 10, 0, 0, 123, DateTimeKind.Utc), alert.EventDateTimeGmt);
+        Assert.Equal(DateTimeKind.Utc, alert.EventDateTimeGmt.Kind);
+        Assert.Equal(501, alert.EventCode);
+        Assert.Equal(3, alert.EventSourceId);
+        Assert.Equal("Nayax Core", alert.EventSourceName);
+        Assert.Equal(12, alert.EventGroupId);
+        Assert.Equal("Inventory", alert.EventGroupName);
+        Assert.Equal(4, alert.EventCategoryId);
+        Assert.Equal("Information", alert.EventCategoryName);
+        Assert.Equal("Stock Adjust for Machine", alert.EventDescription);
+        // EventData is the raw text the Event 501 parser reads; it must arrive byte-for-byte.
+        Assert.Equal(eventData, alert.EventData);
+        Assert.Null(alert.JsonData);
+        Assert.Equal(998877, alert.EventUserId);
+
+        var sparse = alerts[1];
+        Assert.Null(sparse.MachineId);
+        Assert.Equal(2108816976, sparse.TransactionId);
+        Assert.Equal(8812345679, sparse.EventLogId);
+        Assert.Null(sparse.DeviceId);
+        Assert.Null(sparse.EntityActorId);
+        Assert.Null(sparse.EventGroupId);
+        Assert.Null(sparse.EventCategoryId);
+        Assert.Null(sparse.EventDescription);
+        Assert.Null(sparse.EventData);
+        Assert.Equal("{\"a\":1}", sparse.JsonData);
+        Assert.Null(sparse.EventUserId);
+
+        Assert.Empty(logger.Messages);
+    }
+
+    [Fact]
+    public async Task GetMachineLastAlerts_caller_cancellation_stays_cancellation()
+    {
+        var (client, logger) = CreateClient(HttpStatusCode.InternalServerError, SensitiveUpstreamBody);
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => client.GetMachineLastAlertsAsync(42, cts.Token));
+
+        Assert.Empty(logger.Messages);
+    }
+
     private static (NayaxLynxClient Client, CapturingLogger<NayaxLynxClient> Logger) CreateClient(
         HttpStatusCode status, string body)
     {

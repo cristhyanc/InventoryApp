@@ -5,12 +5,18 @@ import { BehaviorSubject, catchError, map, Observable, of, switchMap, tap } from
 import { MachineService } from '../../services/machine.service';
 import { StockService } from '../../services/stock.service';
 import { ToastService } from '../../services/toast.service';
-import { Machine, Product, StockAdjustmentReason, StockAdjustmentDto } from '../../models/models';
+import { MachineRestockSyncComponent } from './machine-restock-sync/machine-restock-sync.component';
+import {
+  Machine,
+  Product,
+  StockAdjustmentReason,
+  StockAdjustmentDto
+} from '../../models/models';
 
 @Component({
   selector: 'app-machine-detail',
   standalone: true,
-  imports: [CommonModule, RouterLink],
+  imports: [CommonModule, RouterLink, MachineRestockSyncComponent],
   templateUrl: './machine-detail.component.html'
 })
 export class MachineDetailComponent implements OnInit {
@@ -18,6 +24,8 @@ export class MachineDetailComponent implements OnInit {
   products$!: Observable<Product[]>;
   loading$ = new BehaviorSubject(true);
   error$ = new BehaviorSubject('');
+
+  private machineId: number | null = null;
 
   constructor(
     private route: ActivatedRoute,
@@ -27,7 +35,12 @@ export class MachineDetailComponent implements OnInit {
   ) {}
 
   ngOnInit(): void {
-    const machineId$ = this.route.paramMap.pipe(map((params) => Number(params.get('id'))));
+    const machineId$ = this.route.paramMap.pipe(
+      map((params) => Number(params.get('id'))),
+      tap((machineId) => {
+        this.machineId = !machineId || isNaN(machineId) ? null : machineId;
+      })
+    );
 
     this.machine$ = machineId$.pipe(
       tap(() => {
@@ -58,14 +71,21 @@ export class MachineDetailComponent implements OnInit {
           return of([] as Product[]);
         }
 
-        return this.machineService.getProducts(machineId).pipe(
-          catchError(() => {
-            this.error$.next('Failed to load products for this machine.');
-            return of([] as Product[]);
-          })
-        );
+        return this.loadProducts(machineId);
       })
     );
+  }
+
+  /**
+   * Reloads the machine's products. Called when the Sync Restock panel reports that it applied a
+   * Nayax stock-adjustment event, because that changes storage quantities shown in this table.
+   */
+  refreshProducts(): void {
+    if (!this.machineId) {
+      return;
+    }
+
+    this.products$ = this.loadProducts(this.machineId);
   }
 
   stockClass(product: Product): string {
@@ -108,5 +128,14 @@ export class MachineDetailComponent implements OnInit {
         this.toastService.error(message ?? 'Failed to restock product');
       }
     });
+  }
+
+  private loadProducts(machineId: number): Observable<Product[]> {
+    return this.machineService.getProducts(machineId).pipe(
+      catchError(() => {
+        this.error$.next('Failed to load products for this machine.');
+        return of([] as Product[]);
+      })
+    );
   }
 }

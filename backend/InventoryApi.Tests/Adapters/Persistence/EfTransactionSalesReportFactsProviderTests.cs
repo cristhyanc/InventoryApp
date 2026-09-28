@@ -53,6 +53,7 @@ public class EfTransactionSalesReportFactsProviderTests
         public Task<List<NayaxProductGroup>> GetProductGroupssAsync(CancellationToken ct = default) => throw new NotImplementedException();
         public Task<List<NayaxLastSalesReport>> GetMachineLastSalesAsync(long machineId, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<NayaxMachine> GetMachineAsync(long machineId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<List<NayaxMachineAlert>> GetMachineLastAlertsAsync(long machineId, CancellationToken ct = default) => throw new NotImplementedException();
     }
 
     [Fact]

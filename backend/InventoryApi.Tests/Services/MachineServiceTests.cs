@@ -90,6 +90,38 @@ public class MachineServiceTests
         Assert.True(machine.TodayGrossRevenue >= 0);
     }
 
+    /// <summary>
+    /// Issue #187: latest-sales synchronization is an explicit, shared operation
+    /// (<c>Inventory.Application.SalesSync.SyncLatestNayaxSales</c>), no longer a hidden side effect of
+    /// <see cref="MachineService.GetAll"/>. Machines must calculate from whatever <c>NayaxSales</c>
+    /// rows are already persisted, never trigger a fresh Nayax import themselves.
+    /// </summary>
+    [Fact]
+    public async Task GetAll_DoesNotImportLatestSalesAsASideEffect()
+    {
+        using var db = CreateDbContext("mach_test_no_side_effect");
+        db.NayaxSales.Add(new NayaxSales
+        {
+            TransactionID = 1,
+            TransactionStatusId = NayaxTransactionStatusIds.Completed,
+            MachineID = 1,
+            SettlementValue = 4m,
+            MachineAuthorizationTime = DateTime.Now
+        });
+        await db.SaveChangesAsync();
+
+        var nayaxMock = new Mock<INayaxLynxClient>();
+        nayaxMock.Setup(m => m.GetMachinesAsync(default))
+            .ReturnsAsync(new List<NayaxMachine> { new NayaxMachine { MachineID = 1, MachineName = "M1" } });
+
+        IMachineService svc = new MachineService(db, nayaxMock.Object);
+        var machines = await svc.GetAll();
+
+        nayaxMock.Verify(m => m.GetMachineLastSalesAsync(It.IsAny<long>(), It.IsAny<CancellationToken>()), Times.Never);
+        var machine = Assert.Single(machines);
+        Assert.Equal(4m, machine.TodayGrossRevenue);
+    }
+
     [Fact]
     public void Week_to_date_comparison_uses_same_elapsed_period()
     {

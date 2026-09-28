@@ -4,6 +4,7 @@ import { RouterLink } from '@angular/router';
 import { ProductService } from '../../services/product.service';
 import { MachineService } from '../../services/machine.service';
 import { SiteService } from '../../services/site.service';
+import { NayaxSalesSyncService } from '../../services/nayax-sales-sync.service';
 import { InventoryValuationSummary, Product, Machine, Site } from '../../models/models';
 
 @Component({
@@ -20,20 +21,45 @@ export class DashboardComponent implements OnInit {
   isLoadingSites = false;
   isLoadingMachines = false;
   isLoadingLowStock = false;
+  isSalesSyncFailed = false;
   inventoryValuation: InventoryValuationSummary | null = null;
   isLoadingInventoryValuation = false;
 
   constructor(
     private productService: ProductService,
     private machineService: MachineService,
-    private siteService: SiteService
+    private siteService: SiteService,
+    private nayaxSalesSyncService: NayaxSalesSyncService
   ) {}
 
   ngOnInit(): void {
     this.refreshProducts();
-    this.refreshMachines();
-    this.refreshSites();
+    this.refreshSalesDashboard();
     this.refreshInventoryValuation();
+  }
+
+  /**
+   * Coordinates the home dashboard's Sites and Machines figures so both read the same freshness
+   * boundary (issue #187): the latest Nayax sales are synchronized once, then Sites and Machines
+   * are loaded from the resulting persisted `NayaxSales` data. If synchronization fails, existing
+   * persisted data is still loaded rather than fabricated as zero, but `isSalesSyncFailed` flags
+   * that the figures may be stale so the UI never presents them as freshly synchronized.
+   */
+  refreshSalesDashboard(): void {
+    this.isSalesSyncFailed = false;
+    this.isLoadingSites = true;
+    this.isLoadingMachines = true;
+    this.nayaxSalesSyncService.syncLatest().subscribe({
+      next: () => {
+        this.refreshMachines();
+        this.refreshSites();
+      },
+      error: () => {
+        this.isSalesSyncFailed = true;
+        this.refreshMachines();
+        this.refreshSites();
+      }
+    });
   }
 
   refreshInventoryValuation(): void {

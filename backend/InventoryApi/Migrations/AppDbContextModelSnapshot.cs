@@ -15,11 +15,7 @@ namespace InventoryApi.Migrations
         protected override void BuildModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
-            modelBuilder
-                .HasAnnotation("ProductVersion", "10.0.0")
-                .HasAnnotation("Proxies:ChangeTracking", false)
-                .HasAnnotation("Proxies:CheckEquality", false)
-                .HasAnnotation("Proxies:LazyLoading", true);
+            modelBuilder.HasAnnotation("ProductVersion", "10.0.0");
 
             modelBuilder.Entity("InventoryApi.Models.Business", b =>
                 {
@@ -638,6 +634,92 @@ namespace InventoryApi.Migrations
                     b.ToTable("InventoryCostTransitionPreviewDrafts");
                 });
 
+            modelBuilder.Entity("InventoryApi.Models.NayaxMachineStockEvent", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("DuplicateResolution")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime?>("DuplicateResolvedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("EventCode")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("EventDateTimeGmt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("EventDateTimeVmc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("MachineId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("MatchStatus")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("MatchedManualStockAdjustmentId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long?>("MatchedProductId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("NayaxEventLogId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("NeedsReviewReason")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("ParsedMdb")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ParsedProductName")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("ParsedQuantity")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime?>("ProcessedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("ProcessingStatus")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("RawEventData")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RawSourceMetadata")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("StockAdjustmentId")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex("MatchedManualStockAdjustmentId");
+
+                    b.HasIndex("MatchedProductId");
+
+                    b.HasIndex("BusinessId", "NayaxEventLogId")
+                        .IsUnique();
+
+                    b.HasIndex("BusinessId", "MachineId", "ProcessingStatus");
+
+                    b.ToTable("NayaxMachineStockEvents");
+                });
+
             modelBuilder.Entity("InventoryApi.Models.NayaxProcessingFeeRate", b =>
                 {
                     b.Property<int>("Id")
@@ -1061,6 +1143,9 @@ namespace InventoryApi.Migrations
                     b.Property<int?>("ReceiptItemId")
                         .HasColumnType("INTEGER");
 
+                    b.Property<int>("Source")
+                        .HasColumnType("INTEGER");
+
                     b.Property<decimal?>("TotalCost")
                         .HasColumnType("decimal(18,6)");
 
@@ -1310,6 +1395,23 @@ namespace InventoryApi.Migrations
                         .IsRequired();
 
                     b.Navigation("InventoryCostTransitionBaseline");
+                });
+
+            modelBuilder.Entity("InventoryApi.Models.NayaxMachineStockEvent", b =>
+                {
+                    b.HasOne("InventoryApi.Models.StockAdjustment", "MatchedManualStockAdjustment")
+                        .WithMany()
+                        .HasForeignKey("MatchedManualStockAdjustmentId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("InventoryApi.Models.Product", "MatchedProduct")
+                        .WithMany()
+                        .HasForeignKey("MatchedProductId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("MatchedManualStockAdjustment");
+
+                    b.Navigation("MatchedProduct");
                 });
 
             modelBuilder.Entity("InventoryApi.Models.OperatingExpense", b =>

@@ -5,7 +5,7 @@ import { ActivatedRoute, RouterLink } from '@angular/router';
 import { StockService } from '../../services/stock.service';
 import { ProductService } from '../../services/product.service';
 import { MachineService } from '../../services/machine.service';
-import { Product, StockAdjustment, StockAdjustmentReason, Machine, RestockCostSuggestion } from '../../models/models';
+import { Product, StockAdjustment, StockAdjustmentReason, StockAdjustmentSource, Machine, RestockCostSuggestion } from '../../models/models';
 
 @Component({
   selector: 'app-stock-history',
@@ -62,6 +62,10 @@ export class StockHistoryComponent implements OnInit {
 
   reasonLabel(reason: StockAdjustmentReason): string {
     return this.reasonOptions.find((r) => r.value === reason)?.label ?? 'Machine refill';
+  }
+
+  sourceLabel(source: StockAdjustmentSource): string {
+    return source === StockAdjustmentSource.Nayax ? 'Nayax Sync Restock' : 'Manual';
   }
 
   getMachineLabel(machineId?: number | null): string {

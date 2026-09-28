@@ -47,7 +47,7 @@ See [docs/architecture.md](docs/architecture.md) for the current system, target 
 ## Repository map
 
 ```text
-InventoryApp/
+Inventory App/
 ├── backend/InventoryApi/          ASP.NET Core API, EF migrations, and solution
 ├── backend/InventoryApi.Tests/    Backend test suite
 ├── frontend/inventory-app/        Angular application
