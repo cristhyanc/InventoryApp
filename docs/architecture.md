@@ -988,10 +988,11 @@ projection, and this feature does not change that meaning.
    causes a movement. The same product may legitimately occupy more than one MDB on one machine;
    each event stays individually auditable, and the preview groups them by product to show the
    combined requested storage impact.
-5. **Preview before anything changes.** The machine-detail page's **Sync Restock** panel
-   (`MachineRestockSyncComponent`) calls
+5. **Preview before anything changes.** The machine-detail page's **Sync Restock** action
+   (`MachineRestockSyncComponent`) opens a reconciliation dialog and calls
    `POST /api/machines/{id}/sync-restock`, which fetches, imports, and returns a reconciliation
-   preview (`NayaxMachineStockSyncPreviewDto`) - it never changes storage inventory itself. Already-
+   preview (`NayaxMachineStockSyncPreviewDto`) - it never changes storage inventory itself. The
+   preview is shown only inside that dialog, never inline on the page. Already-
    applied events are excluded from the preview list; an empty result carries a clear message
    rather than an empty table. For each pending event the preview shows the parsed quantity, the
    matched product's current storage quantity, whether it is a **positive refill** or a **negative
@@ -1047,12 +1048,17 @@ this feature is added to the legacy `InventoryApi/Services` layer:
 - **API.** `MachinesController` binds the request, invokes the use case, and returns its result.
 - **Frontend.** The Sync Restock workflow is its own standalone component,
   `components/machines/machine-restock-sync/MachineRestockSyncComponent`, following the [large page
-  decomposition](#frontend-migration-track) step: it owns the preview state, the syncing/applying
-  state, the selected event ids, the apply-eligibility check, both API calls and its own
-  notifications. `MachineDetailComponent` composes it as
+  decomposition](#frontend-migration-track) step: it owns the reconciliation dialog's open state,
+  the preview state, the syncing/applying state, the selected event ids, the apply-eligibility
+  check, both API calls and its own notifications. The dialog follows the existing
+  `ConfirmationDialogComponent` pattern (an `*ngIf` backdrop with `role="dialog"`/`aria-modal`,
+  closed by its Close controls, Escape, or an outside click, but not while an apply is in flight);
+  its body scrolls so a long event list never pushes the Close/Apply actions off screen. After an
+  apply it stays open and re-syncs, so applied events drop out of the list. `MachineDetailComponent`
+  composes it as
   `<app-machine-restock-sync [machineId]="machine?.machineID" (restockApplied)="refreshProducts()">`
   and stays responsible only for the machine-details page, reloading its product table when the
-  panel reports that at least one event was actually applied. The child's `isReadyToApply` only
+  component reports that at least one event was actually applied. The child's `isReadyToApply` only
   decides which checkboxes an operator may tick; the backend apply use case remains the sole
   authority over whether an event moves storage inventory.
 

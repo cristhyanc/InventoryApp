@@ -1,4 +1,5 @@
-import { of, throwError } from 'rxjs';
+import { TestBed } from '@angular/core/testing';
+import { Subject, of, throwError } from 'rxjs';
 import { MachineRestockSyncComponent } from './machine-restock-sync.component';
 import { MachineService } from '../../../services/machine.service';
 import { ToastService } from '../../../services/toast.service';
@@ -130,12 +131,22 @@ describe('MachineRestockSyncComponent sync', () => {
     expect(component.selectedEventIds.size).toBe(0);
   });
 
-  it('reports an upstream failure and clears the syncing state', () => {
+  it('opens the reconciliation dialog when a sync starts', () => {
+    const { component } = createHarness();
+
+    component.syncRestock();
+
+    expect(component.modalOpen$.value).toBe(true);
+  });
+
+  it('reports an upstream failure in the dialog and clears the syncing state', () => {
     const { component, toast } = createHarness(jest.fn(() => throwError(() => new Error('upstream unavailable'))));
 
     component.syncRestock();
 
     expect(component.syncing$.value).toBe(false);
+    expect(component.modalOpen$.value).toBe(true);
+    expect(component.syncError$.value).toBe('Failed to sync Nayax stock-adjustment alerts.');
     expect(toast.error).toHaveBeenCalledWith('Failed to sync Nayax stock-adjustment alerts.');
   });
 });
@@ -249,5 +260,233 @@ describe('MachineRestockSyncComponent apply', () => {
     expect(harness.component.selectedEventIds.size).toBe(1);
     expect(harness.applied).toBe(0);
     expect(harness.toast.error).toHaveBeenCalledWith('Failed to apply the selected Nayax stock-adjustment events.');
+  });
+});
+
+describe('MachineRestockSyncComponent dialog', () => {
+  const appliedResponse = (eventId: number): NayaxMachineStockApplyResponse => ({
+    results: [{ eventId, outcome: NayaxStockEventApplyOutcome.Applied, message: 'Applied', stockAdjustmentId: 90 }]
+  });
+
+  async function render(
+    syncRestock: jest.Mock = jest.fn(() => of(preview([]))),
+    applySyncRestock: jest.Mock = jest.fn(() => of({ results: [] } as NayaxMachineStockApplyResponse))
+  ) {
+    const toast = { success: jest.fn(), error: jest.fn(), warning: jest.fn() };
+    await TestBed.configureTestingModule({
+      imports: [MachineRestockSyncComponent],
+      providers: [
+        { provide: MachineService, useValue: { syncRestock, applySyncRestock } },
+        { provide: ToastService, useValue: toast }
+      ]
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(MachineRestockSyncComponent);
+    fixture.componentRef.setInput('machineId', 7);
+    let appliedCount = 0;
+    fixture.componentInstance.restockApplied.subscribe(() => appliedCount++);
+    fixture.detectChanges();
+
+    const host = fixture.nativeElement as HTMLElement;
+    const dialog = () => host.querySelector<HTMLElement>('[role="dialog"]');
+    const button = (label: string) =>
+      Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find((b) => b.textContent?.trim().startsWith(label));
+    const click = (element: HTMLElement | null | undefined) => {
+      element!.click();
+      fixture.detectChanges();
+    };
+    const pressEscape = () => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      fixture.detectChanges();
+    };
+    const openDialog = () => click(button('Sync Restock'));
+
+    return {
+      fixture, host, toast, syncRestock, applySyncRestock,
+      dialog, button, click, pressEscape, openDialog,
+      applied: () => appliedCount
+    };
+  }
+
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('shows only the Sync Restock action on the page, with no inline preview', async () => {
+    const { host, dialog, button, syncRestock } = await render();
+
+    expect(button('Sync Restock')).toBeTruthy();
+    expect(dialog()).toBeNull();
+    expect(host.querySelector('table')).toBeNull();
+    expect(syncRestock).not.toHaveBeenCalled();
+  });
+
+  it('clicking Sync Restock fetches the preview and opens an accessible dialog', async () => {
+    const { dialog, openDialog, syncRestock } = await render();
+
+    openDialog();
+
+    expect(syncRestock).toHaveBeenCalledWith(7);
+    const panel = dialog();
+    expect(panel).not.toBeNull();
+    expect(panel!.getAttribute('aria-modal')).toBe('true');
+    const titleId = panel!.getAttribute('aria-labelledby')!;
+    expect(panel!.querySelector(`#${titleId}`)?.textContent?.trim()).toBe('Sync Restock');
+    expect(document.activeElement).toBe(panel);
+  });
+
+  it('renders the reconciliation preview inside the dialog', async () => {
+    const ready = event({ id: 1 });
+    const short = event({
+      id: 2, parsedMdb: 14, matchedProductName: 'Cola', parsedQuantity: 5,
+      availableStorageQuantity: 4, isInsufficientStock: true, unaccountedDifference: 1
+    });
+    const duplicate = event({
+      id: 3, parsedMdb: 15, matchedProductName: 'Chips', isPossibleDuplicate: true, possibleDuplicateNotes: 'Manual refill'
+    });
+    const needsReview = event({
+      id: 4, parsedMdb: 99, matchStatus: NayaxStockEventMatchStatus.NeedsReview, needsReviewReason: 'Unknown MDB'
+    });
+    const withImpacts: NayaxMachineStockSyncPreview = {
+      ...preview([ready, short, duplicate, needsReview]),
+      productImpacts: [{ productId: 55, productName: 'Beef Jerky', availableStorageQuantity: 10, pendingRefillQuantity: 2 }]
+    };
+    const { host, dialog, openDialog } = await render(jest.fn(() => of(withImpacts)));
+
+    openDialog();
+
+    const table = host.querySelector('table');
+    expect(table).not.toBeNull();
+    expect(dialog()!.contains(table)).toBe(true);
+    expect(table!.querySelectorAll('tbody tr').length).toBe(4);
+    const text = dialog()!.textContent!;
+    expect(text).toContain('Pending refill: 2 · Available in storage: 10');
+    expect(text).toContain('Insufficient storage: needs 5, has 4 (short 1)');
+    expect(text).toContain('Possible duplicate');
+    expect(text).toContain('Needs review: Unknown MDB');
+    expect(text).toContain('Ready to apply');
+  });
+
+  it('closes with the Close button, clears the preview, and returns focus to Sync Restock', async () => {
+    const { host, dialog, button, click, openDialog, fixture } = await render(jest.fn(() => of(preview([event({})]))));
+    openDialog();
+
+    click(button('Close'));
+
+    expect(dialog()).toBeNull();
+    expect(host.querySelector('table')).toBeNull();
+    expect(fixture.componentInstance.syncPreview$.value).toBeNull();
+    expect(document.activeElement).toBe(button('Sync Restock'));
+  });
+
+  it('closes with the header close control, Escape, and a backdrop click, but not a click inside the dialog', async () => {
+    const { host, dialog, click, pressEscape, openDialog } = await render();
+
+    openDialog();
+    click(host.querySelector<HTMLButtonElement>('[aria-label="Close Sync Restock"]'));
+    expect(dialog()).toBeNull();
+
+    openDialog();
+    pressEscape();
+    expect(dialog()).toBeNull();
+
+    openDialog();
+    click(dialog());
+    expect(dialog()).not.toBeNull();
+    click(host.querySelector<HTMLElement>('.sync-modal-backdrop'));
+    expect(dialog()).toBeNull();
+  });
+
+  it('cannot be closed while an apply is in flight', async () => {
+    const pendingApply = new Subject<NayaxMachineStockApplyResponse>();
+    const { dialog, button, click, pressEscape, openDialog } = await render(
+      jest.fn(() => of(preview([event({ id: 1 })]))),
+      jest.fn(() => pendingApply)
+    );
+    openDialog();
+    click(button('Apply selected'));
+
+    expect(button('Close')!.disabled).toBe(true);
+    pressEscape();
+    expect(dialog()).not.toBeNull();
+  });
+
+  it('lets the operator change the selection with the checkboxes', async () => {
+    const ready = event({ id: 1 });
+    const needsReview = event({ id: 2, matchStatus: NayaxStockEventMatchStatus.NeedsReview, needsReviewReason: 'Unknown MDB' });
+    const { host, button, click, openDialog, fixture } = await render(jest.fn(() => of(preview([ready, needsReview]))));
+    openDialog();
+
+    const [readyBox, reviewBox] = Array.from(host.querySelectorAll<HTMLInputElement>('tbody input[type="checkbox"]'));
+    expect(readyBox.checked).toBe(true);
+    expect(reviewBox.disabled).toBe(true);
+    expect(button('Apply selected')!.textContent).toContain('(1)');
+
+    click(readyBox);
+
+    expect(fixture.componentInstance.isEventSelected(1)).toBe(false);
+    expect(button('Apply selected')!.textContent).toContain('(0)');
+    expect(button('Apply selected')!.disabled).toBe(true);
+  });
+
+  it('applies the selected events, emits restockApplied, and keeps the dialog open without the applied event', async () => {
+    const syncRestock = jest.fn()
+      .mockReturnValueOnce(of(preview([event({ id: 1 })])))
+      .mockReturnValueOnce(of(preview([], 'No new Nayax stock-adjustment alerts to review.')));
+    const { host, dialog, button, click, openDialog, toast, applySyncRestock, applied } = await render(
+      syncRestock,
+      jest.fn(() => of(appliedResponse(1)))
+    );
+    openDialog();
+
+    click(button('Apply selected'));
+
+    expect(applySyncRestock).toHaveBeenCalledWith(7, [1]);
+    expect(applied()).toBe(1);
+    expect(toast.success).toHaveBeenCalledWith('Applied 1 Nayax stock-adjustment event(s).');
+    expect(syncRestock).toHaveBeenCalledTimes(2);
+    expect(dialog()).not.toBeNull();
+    expect(host.querySelector('tbody tr')).toBeNull();
+    expect(button('Apply selected')).toBeUndefined();
+    expect(host.querySelector('[data-testid="sync-restock-empty"]')?.textContent)
+      .toContain('No new Nayax stock-adjustment alerts to review.');
+  });
+
+  it('shows a sync failure inside the dialog', async () => {
+    const { dialog, openDialog, toast } = await render(jest.fn(() => throwError(() => new Error('upstream unavailable'))));
+
+    openDialog();
+
+    expect(dialog()!.querySelector('[role="alert"]')?.textContent).toContain('Failed to sync Nayax stock-adjustment alerts.');
+    expect(toast.error).toHaveBeenCalledWith('Failed to sync Nayax stock-adjustment alerts.');
+  });
+
+  it('shows an apply failure inside the dialog and keeps the events actionable', async () => {
+    const { host, dialog, button, click, openDialog, applied } = await render(
+      jest.fn(() => of(preview([event({ id: 1 })]))),
+      jest.fn(() => throwError(() => new Error('network error')))
+    );
+    openDialog();
+
+    click(button('Apply selected'));
+
+    expect(dialog()!.querySelector('[role="alert"]')?.textContent)
+      .toContain('Failed to apply the selected Nayax stock-adjustment events.');
+    expect(applied()).toBe(0);
+    expect(host.querySelectorAll('tbody tr').length).toBe(1);
+    expect(button('Apply selected')!.disabled).toBe(false);
+  });
+
+  it('shows the empty state inside the dialog with no apply action', async () => {
+    const { host, dialog, button, openDialog } = await render(
+      jest.fn(() => of(preview([], 'No new Nayax stock-adjustment alerts to review.')))
+    );
+
+    openDialog();
+
+    const empty = host.querySelector('[data-testid="sync-restock-empty"]');
+    expect(dialog()!.contains(empty)).toBe(true);
+    expect(empty!.textContent).toContain('No new Nayax stock-adjustment alerts to review.');
+    expect(host.querySelector('table')).toBeNull();
+    expect(button('Apply selected')).toBeUndefined();
+    expect(button('Close')).toBeTruthy();
   });
 });

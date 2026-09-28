@@ -1,4 +1,4 @@
-import { Component, EventEmitter, Input, Output } from '@angular/core';
+import { Component, ElementRef, EventEmitter, HostListener, Input, Output, ViewChild } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { BehaviorSubject } from 'rxjs';
 import { MachineService } from '../../../services/machine.service';
@@ -11,10 +11,15 @@ import {
 } from '../../../models/models';
 
 /**
- * Machine-level Sync Restock panel (issue #183). It owns the whole Nayax stock-adjustment
- * reconciliation workflow - preview state, syncing/applying state, event selection, eligibility,
- * the two API calls and its own notifications - so the machine-detail page only has to supply the
- * machine identity and react to a successful apply.
+ * Machine-level Sync Restock action (issue #183). It owns the whole Nayax stock-adjustment
+ * reconciliation workflow - the reconciliation dialog's open state, preview state, syncing/applying
+ * state, event selection, eligibility, the two API calls and its own notifications - so the
+ * machine-detail page only has to supply the machine identity and react to a successful apply.
+ *
+ * The preview is shown in a dialog rather than inline, following the application's existing
+ * `ConfirmationDialogComponent` pattern (an `*ngIf` backdrop that closes on an outside click).
+ * After an apply the dialog stays open and re-syncs, so applied events drop out of the list and
+ * only still-actionable events remain.
  *
  * It never decides what is applied: `isReadyToApply` only pre-selects and enables the checkboxes
  * an operator can accept. The backend apply use case remains the sole authority over whether an
@@ -24,7 +29,112 @@ import {
   selector: 'app-machine-restock-sync',
   standalone: true,
   imports: [CommonModule],
-  templateUrl: './machine-restock-sync.component.html'
+  templateUrl: './machine-restock-sync.component.html',
+  styles: [
+    `
+      .sync-modal-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(15, 23, 42, 0.5);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 50;
+        padding: 1rem;
+      }
+
+      .sync-modal {
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+        max-width: 64rem;
+        max-height: calc(100vh - 2rem);
+        max-height: calc(100dvh - 2rem);
+        background: #fff;
+        border-radius: 12px;
+        box-shadow: 0 18px 60px rgba(15, 23, 42, 0.18);
+        outline: none;
+      }
+
+      .sync-modal-header,
+      .sync-modal-footer {
+        flex-shrink: 0;
+        display: flex;
+        gap: 0.75rem;
+        padding: 1rem 1.5rem;
+      }
+
+      .sync-modal-header {
+        align-items: flex-start;
+        justify-content: space-between;
+        border-bottom: 1px solid #e2e8f0;
+      }
+
+      .sync-modal-footer {
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        border-top: 1px solid #e2e8f0;
+      }
+
+      .sync-modal-body {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-y: auto;
+        padding: 1rem 1.5rem;
+      }
+
+      .sync-modal-close {
+        flex-shrink: 0;
+        border: none;
+        background: transparent;
+        color: #64748b;
+        font-size: 1.5rem;
+        line-height: 1;
+        padding: 0.25rem 0.5rem;
+        border-radius: 6px;
+        cursor: pointer;
+      }
+
+      .sync-modal-close:hover:not(:disabled) {
+        background: #f1f5f9;
+      }
+
+      .sync-modal-close:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      .sync-sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
+
+      @media (max-width: 640px) {
+        .sync-modal-backdrop {
+          padding: 0.5rem;
+        }
+
+        .sync-modal {
+          max-height: calc(100vh - 1rem);
+          max-height: calc(100dvh - 1rem);
+        }
+
+        .sync-modal-header,
+        .sync-modal-footer,
+        .sync-modal-body {
+          padding-left: 1rem;
+          padding-right: 1rem;
+        }
+      }
+    `
+  ]
 })
 export class MachineRestockSyncComponent {
   @Input() machineId: number | null | undefined = null;
@@ -32,12 +142,23 @@ export class MachineRestockSyncComponent {
   /** Emitted only after at least one event was actually applied, so the page can reload products. */
   @Output() readonly restockApplied = new EventEmitter<void>();
 
+  modalOpen$ = new BehaviorSubject(false);
   syncPreview$ = new BehaviorSubject<NayaxMachineStockSyncPreview | null>(null);
   syncing$ = new BehaviorSubject(false);
   applying$ = new BehaviorSubject(false);
+  syncError$ = new BehaviorSubject<string | null>(null);
+  applyError$ = new BehaviorSubject<string | null>(null);
   selectedEventIds = new Set<number>();
 
   readonly MatchStatus = NayaxStockEventMatchStatus;
+
+  @ViewChild('syncTrigger') private syncTrigger?: ElementRef<HTMLButtonElement>;
+
+  /** Moves keyboard focus into the dialog as soon as it is rendered. */
+  @ViewChild('dialogPanel')
+  private set dialogPanel(panel: ElementRef<HTMLElement> | undefined) {
+    panel?.nativeElement.focus();
+  }
 
   constructor(
     private machineService: MachineService,
@@ -62,12 +183,36 @@ export class MachineRestockSyncComponent {
     }
   }
 
+  @HostListener('document:keydown.escape')
+  onEscape(): void {
+    if (this.modalOpen$.value) {
+      this.closeModal();
+    }
+  }
+
+  /** Closes the dialog unless an apply is in flight, and returns focus to the Sync Restock button. */
+  closeModal(): void {
+    if (!this.modalOpen$.value || this.applying$.value) {
+      return;
+    }
+
+    this.modalOpen$.next(false);
+    this.syncPreview$.next(null);
+    this.syncError$.next(null);
+    this.applyError$.next(null);
+    this.selectedEventIds.clear();
+    this.syncTrigger?.nativeElement.focus();
+  }
+
+  /** Opens the reconciliation dialog (if it is not already open) and fetches a fresh preview into it. */
   syncRestock(): void {
     const machineId = this.machineId;
     if (!machineId) {
       return;
     }
 
+    this.modalOpen$.next(true);
+    this.syncError$.next(null);
     this.syncing$.next(true);
     this.machineService.syncRestock(machineId).subscribe({
       next: (preview) => {
@@ -84,6 +229,7 @@ export class MachineRestockSyncComponent {
       },
       error: () => {
         this.syncing$.next(false);
+        this.syncError$.next('Failed to sync Nayax stock-adjustment alerts.');
         this.toastService.error('Failed to sync Nayax stock-adjustment alerts.');
       }
     });
@@ -95,6 +241,7 @@ export class MachineRestockSyncComponent {
       return;
     }
 
+    this.applyError$.next(null);
     this.applying$.next(true);
     this.machineService.applySyncRestock(machineId, [...this.selectedEventIds]).subscribe({
       next: (response) => {
@@ -115,6 +262,7 @@ export class MachineRestockSyncComponent {
       },
       error: () => {
         this.applying$.next(false);
+        this.applyError$.next('Failed to apply the selected Nayax stock-adjustment events.');
         this.toastService.error('Failed to apply the selected Nayax stock-adjustment events.');
       }
     });
