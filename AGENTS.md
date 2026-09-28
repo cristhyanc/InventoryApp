@@ -268,6 +268,7 @@ These rules come from the application's established bookkeeping design. Changing
 - Display provisional, incomplete, pending, unknown, and reconciliation-warning states instead of hiding them.
 - Keep calculations on the backend unless a UI-only display calculation is explicitly safe and tested.
 - Maintain accessible labels, keyboard behavior, loading states, empty states, and actionable error messages.
+- Page/detail components (the ones routed directly in `app.routes.ts`) are primarily composition/orchestration boundaries: route/query parameters, the page's own loading/error/selection state, and laying out child components. When a change adds a distinct workflow with its own substantial UI plus its own state/actions/loading or error lifecycle, implement it as a dedicated feature component composed back in through `@Input`/`@Output`, not grown directly inside the page component. See `docs/architecture.md` § [Page composition boundary](docs/architecture.md#page-composition-boundary-issue-191) before adding new page-level UI, and its automated `frontend/inventory-app/src/app/architecture/page-composition.guard.ts` check, which fails if a routed page's own template authors dialog markup (`role="dialog"`) directly instead of delegating to a child component.
 
 ## Tests required by change type
 
