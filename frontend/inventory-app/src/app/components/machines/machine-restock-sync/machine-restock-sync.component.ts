@@ -9,6 +9,7 @@ import {
   shiftCalendarDate,
   startOfDayUtc
 } from '../../../formatting/business-time-zone';
+import { BusinessDateTimePipe } from '../../../formatting/business-date-time.pipe';
 import {
   NayaxDuplicateResolution,
   NayaxDuplicateResolutionChoice,
@@ -36,7 +37,7 @@ import {
 @Component({
   selector: 'app-machine-restock-sync',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, BusinessDateTimePipe],
   templateUrl: './machine-restock-sync.component.html',
   styles: [
     `

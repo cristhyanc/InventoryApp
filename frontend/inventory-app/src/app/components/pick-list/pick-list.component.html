@@ -8,7 +8,7 @@
     <div>
       <span class="block text-xs font-semibold uppercase text-slate-500">Snapshot</span>
       <span data-testid="pick-list-snapshot" class="text-sm text-slate-700">
-        {{ lastRefreshedAt ? ('As of ' + (lastRefreshedAt | date:'short')) : 'Not loaded yet' }}
+        {{ lastRefreshedAt ? ('As of ' + (lastRefreshedAt | businessDateTime)) : 'Not loaded yet' }}
       </span>
     </div>
 

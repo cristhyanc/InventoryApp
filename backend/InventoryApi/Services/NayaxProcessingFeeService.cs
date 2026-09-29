@@ -76,7 +76,13 @@ public sealed class NayaxProcessingFeeService : INayaxProcessingFeeService
         DateTime? estimatedFrom = null;
         foreach (var sale in eligibleSales)
         {
-            var day = sale.MachineAuthorizationTime.Date;
+            // The sale's authorization time materialises as a UTC instant (see the NayaxSales
+            // mapping in AppDbContext), but the fee coverage day it resolves to is a date-only
+            // business-calendar value that also leaves the API as EstimatedFeeFromDate. Dropping
+            // the Kind keeps it date-only so it is never serialised as a UTC instant a browser
+            // west of UTC would render as the previous day (issue #232); the day itself is
+            // unchanged, and the fee rate resolved for it is therefore unchanged too.
+            var day = DateTime.SpecifyKind(sale.MachineAuthorizationTime.Date, DateTimeKind.Unspecified);
             if (actualByDay.ContainsKey(day) || PaymentMethodClassifier.Classify(sale.PaymentMethod) != NayaxPaymentType.Card)
                 continue;
 
