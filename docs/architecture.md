@@ -864,8 +864,10 @@ local time zone). Instead it is rendered through the standalone `BusinessDateTim
 (`frontend/inventory-app/src/app/formatting/business-date-time.pipe.ts`), which formats the instant in
 `Australia/Canberra` - the same `BUSINESS_TIME_ZONE` IANA identifier `startOfDayUtc` uses for the
 reverse conversion - through `Intl.DateTimeFormat`, so AEST/AEDT is resolved from the platform
-timezone database rather than a fixed `+10`/`+11` offset and the displayed clock value is correct
-regardless of the operator's own browser timezone. A true date-only business-calendar value - a
+timezone database rather than a fixed `+10`/`+11` offset. The displayed clock value is then correct
+regardless of the operator's own browser timezone, but only because the JSON the pipe receives
+carries UTC identity: that half of the contract is the backend's, described immediately below. A true
+date-only business-calendar value - a
 purchase/expected date, an expense date, a report period boundary, a commission effective/payment
 date, a payout date modelled as a date, or a supplier price-history purchase date - carries no time
 component that could be shifted and is rendered with the ordinary `date` pipe (e.g. `'dd/MM/yyyy'`/
@@ -874,6 +876,28 @@ component that could be shifted and is rendered with the ordinary `date` pipe (e
 timestamps (`AdminComponent`), and the Pick List snapshot (`PickListComponent`) use
 `BusinessDateTimePipe` for this reason; `MachineRestockSyncComponent`'s reconciliation table (issue
 #231) and `StockHistoryComponent`'s manual-restock timestamp (issue #230) already did.
+
+**Serialised instant identity at the persistence boundary (issues #230, #232).** A frontend
+formatter can only be correct if the instant it is given is unambiguous, so the API must never
+serialise a true instant without a `Z`/offset. Microsoft's SQLite provider - the only provider this
+API runs against, see `Program.cs` - does not round-trip `DateTimeKind`: a `DateTime` read back from
+the database always materialises as `DateTimeKind.Unspecified`, and `System.Text.Json` then writes it
+with no timezone designator, which `BusinessDateTimePipe`'s `new Date(value)` parses as
+**browser-local** time instead of UTC. A persisted-UTC instant column that reaches the API as an
+instant therefore carries a narrow EF Core value conversion in `AppDbContext` that re-specifies
+`DateTimeKind.Utc` on read: `StockAdjustment.CreatedAt` (issue #230, Stock History) and
+`NayaxSales.MachineAuthorizationTime` (issue #232, the Transaction Sales `transactionDate`). The
+conversion writes the value through unchanged, so no stored byte, comparison, ordering, SQL
+translation, cost/COGS derivation or historical timestamp is affected - only in-memory `Kind`
+metadata - and no migration or backfill is involved. Conversely, a value *derived* from such an
+instant as a business-calendar **date** is reduced back to a `Kind`-free date at the point of
+derivation, so restoring instant identity never turns a date-only API field into a UTC instant a
+browser west of UTC would render as the previous day: see `EfDailyReportFactsProvider`'s per-day
+grouping (the daily report row `date`) and `NayaxProcessingFeeService`'s fee coverage day
+(`estimatedFeeFromDate`). Backend regression tests for both halves run against a real SQLite
+connection, because EF Core's InMemory provider keeps the original CLR object and does not reproduce
+the `Kind` loss at all: `StockHistoryTimestampContractTests` and
+`TransactionSalesTimestampContractTests`.
 
 ## Data flow
 

@@ -40,18 +40,18 @@ public sealed class EfDailyReportFactsProvider : IDailyReportFactsProvider
         var importedPeriod = await EfReportingSharedQueries.ImportedSummaryAsync(_db, from, endExclusive, machineId, cancellationToken);
 
         var feeByDate = new Dictionary<DateTime, NayaxProcessingFeeResult>();
-        foreach (var date in sales.Select(x => x.MachineAuthorizationTime.Date).Distinct())
+        foreach (var date in sales.Select(x => BusinessCalendarDate(x.MachineAuthorizationTime)).Distinct())
             feeByDate[date] = await _nayaxProcessingFees.GetProcessingFeesAsync(date, date, machineId, cancellationToken);
 
         var days = sales
-            .GroupBy(x => x.MachineAuthorizationTime.Date)
+            .GroupBy(x => BusinessCalendarDate(x.MachineAuthorizationTime))
             .OrderBy(g => g.Key)
             .Select(g =>
             {
                 var uncosted = g.Where(x => !x.HasCost).ToList();
                 var unknownTransactions = g.Count(x => PaymentMethodClassifier.Classify(x.PaymentMethod) == NayaxPaymentType.Unknown);
                 var imported = importedByDate.TryGetValue(g.Key, out var importedValue) ? importedValue : (DailyImportedSummary?)null;
-                var statusRows = statusSales.Where(x => x.MachineAuthorizationTime.Date == g.Key).ToList();
+                var statusRows = statusSales.Where(x => BusinessCalendarDate(x.MachineAuthorizationTime) == g.Key).ToList();
 
                 return new DailyReportDayFacts(
                     Date: g.Key,
@@ -102,6 +102,19 @@ public sealed class EfDailyReportFactsProvider : IDailyReportFactsProvider
             ImportedFeesMachineFilterLimited: importedPeriod.FeesMachineFilterLimited,
             HasAnyPeriodOnlyImportedData: importedByDate.Values.Any(x => x.HasPeriodOnlyData));
     }
+
+    /// <summary>
+    /// The business-calendar day a sale belongs to, as a true date-only value.
+    ///
+    /// MachineAuthorizationTime materialises as a UTC instant (see the NayaxSales mapping in
+    /// AppDbContext), and a daily row's Date is a date-only business-calendar value the frontend
+    /// renders with the ordinary <c>date</c> pipe. Dropping the Kind here is what keeps it one:
+    /// carrying DateTimeKind.Utc through would serialise the day as "...T00:00:00Z", which a
+    /// browser west of UTC parses as the previous day (issue #232 explicitly requires date-only
+    /// fields to stay date-only). Only the Kind is dropped - the calendar day itself is unchanged.
+    /// </summary>
+    private static DateTime BusinessCalendarDate(DateTime instant) =>
+        DateTime.SpecifyKind(instant.Date, DateTimeKind.Unspecified);
 
     private async Task<Dictionary<DateTime, DailyImportedSummary>> DailyImportedSummaryAsync(
         DateTime from, DateTime to, DateTime endExclusive, long? machineId, CancellationToken cancellationToken)

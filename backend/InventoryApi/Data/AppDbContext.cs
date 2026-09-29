@@ -173,6 +173,26 @@ public class AppDbContext : DbContext
             .HasIndex(s => new { s.BusinessId, s.TransactionID })
             .IsUnique();
 
+        // MachineAuthorizationTime is a persisted true UTC instant (see docs/architecture.md
+        // § Timezone and business calendar), and the Transaction Sales report exposes it to the
+        // frontend as the transaction's instant. Microsoft's SQLite provider does not round-trip
+        // DateTimeKind - see the StockAdjustment.CreatedAt comment below for the complete
+        // explanation - so without this the report's transactionDate serialises with no "Z"/offset
+        // and the Angular BusinessDateTimePipe parses it as browser-local time (issue #232, the
+        // same defect class issue #230 fixed for Stock History). Marking the value as UTC on every
+        // read restores the unambiguous instant the API boundary must expose without changing the
+        // stored bytes or any comparison semantics (DateTime comparisons and SQL translation only
+        // ever look at ticks, never Kind), so sale costing, COGS, fee/commission resolution,
+        // reconciliation, and every date-range filter are unaffected. Values derived from this
+        // instant as a business-calendar *date* are reduced back to a Kind-free date at the point
+        // of derivation, so a date-only field is never serialised as a UTC instant: see
+        // EfDailyReportFactsProvider and NayaxProcessingFeeService.
+        modelBuilder.Entity<NayaxSales>()
+            .Property(s => s.MachineAuthorizationTime)
+            .HasConversion(
+                toProvider => toProvider,
+                fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+
         modelBuilder.Entity<NayaxSales>()
             .Property(s => s.SettlementValue)
             .HasColumnType("decimal(18,2)");
