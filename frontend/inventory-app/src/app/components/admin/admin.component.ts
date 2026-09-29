@@ -15,11 +15,12 @@ import {
   InventoryCostTransitionPreview,
   InventoryCostTransitionService
 } from '../../services/inventory-cost-transition.service';
+import { BusinessDateTimePipe } from '../../formatting/business-date-time.pipe';
 
 @Component({
   selector: 'app-admin',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, BusinessDateTimePipe],
   template: `
     <div class="mb-6">
       <h1 class="text-2xl font-semibold text-slate-800">Admin</h1>
@@ -174,7 +175,7 @@ import {
               <div>Total machine stock: <strong>{{ transitionBatchPreview.machineStockQuantity }}</strong></div>
               <div>Total CostingQuantity: <strong>{{ transitionBatchPreview.openingCostingQuantity }}</strong></div>
               <div>Total InventoryValue: <strong>{{ transitionBatchPreview.inventoryValue | currency:'AUD' }}</strong></div>
-              <div>Cutoff timestamp: <strong>{{ transitionBatchPreview.cutoffAt | date:'medium' }}</strong></div>
+              <div>Cutoff timestamp: <strong>{{ transitionBatchPreview.cutoffAt | businessDateTime }}</strong></div>
               <div>Cost source: <strong>{{ transitionSourceLabel(transitionBatchPreview.costSource) }}</strong></div>
             </div>
             <div class="mt-4 max-h-96 overflow-auto">
@@ -215,7 +216,7 @@ import {
               <div>Total proposed CostingQuantity: <strong>{{ transitionPreview.openingCostingQuantity }}</strong></div>
               <div>Proposed AverageUnitCost: <strong>{{ transitionPreview.averageUnitCost | currency:'AUD':'symbol':'1.2-6' }}</strong></div>
               <div>Proposed InventoryValue: <strong>{{ transitionPreview.inventoryValue | currency:'AUD' }}</strong></div>
-              <div>Cutoff timestamp: <strong>{{ transitionPreview.cutoffAt | date:'medium' }}</strong></div>
+              <div>Cutoff timestamp: <strong>{{ transitionPreview.cutoffAt | businessDateTime }}</strong></div>
               <div>Cost source: <strong>{{ transitionSourceLabel(transitionPreview.costSource) }}</strong></div>
               <div>Legacy replayed physical quantity: <strong>{{ transitionPreview.legacyReplayedPhysicalQuantity }}</strong></div>
               <div>Legacy discrepancy retired: <strong>{{ transitionPreview.legacyPhysicalDiscrepancy }}</strong></div>

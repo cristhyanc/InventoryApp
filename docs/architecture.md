@@ -853,6 +853,28 @@ Timezone migration is not part of an incidental feature. Changes require explici
 
 Time acquisition and timezone conversion are external boundaries, not pure calculations, so their port lives in `Inventory.Application` and their implementation lives in `Inventory.Infrastructure` (issue #44): `Inventory.Application.Time.IClock` (promoted from the NayaxFeeSettings-scoped port the first Clean Architecture slice introduced) is the narrow port for the current UTC instant, implemented by `Inventory.Infrastructure.Clock.SystemClock`. `Inventory.Application.Time.IBusinessCalendar` converts a UTC instant to its `Australia/Sydney` business calendar date (`ToBusinessDate`) and resolves the UTC instant of the start of a Sydney business day (`StartOfBusinessDayUtc`), so a caller can derive inclusive-date-range UTC boundaries without ever touching `TimeZoneInfo` itself; `Inventory.Infrastructure.Time.SydneyBusinessCalendar` implements it using `TimeZoneInfo.FindSystemTimeZoneById("Australia/Sydney")`, which resolves the platform's IANA timezone database and therefore already accounts for daylight-saving transitions. `Inventory.Domain` still owns only the deterministic, timezone-free date-range/financial-year rules (`AustralianFinancialYear`, `ReportingRangeResolver`) and must not reference `TimeZoneInfo`, server-local time, or an infrastructure clock implementation. `SiteCommissionService`'s commission-due "Overdue" determination is the first use of `IBusinessCalendar` outside the clock's original NayaxFeeSettings feature, replacing a server-local `DateTime.Today` comparison with the injected Sydney business date. Storage keeps true UTC instants (`MachineAuthorizationTime`, `CreatedAt`/`UpdatedAt`, and similar timestamp columns); `IBusinessCalendar` is what turns a stored instant into the Sydney calendar date a report or a due-date comparison actually means, and no historical timestamp is reinterpreted or rewritten by this abstraction. Several other server-local `DateTime.Today`/`DateTime.Now` reads remain outside this slice's bounded scope — for example the machine/site dashboard week-to-date and month-to-date aggregates in `InventoryApi.Services.MachineService`/`SiteService` — and are a known follow-up rather than part of this change.
 
+**Frontend operator-facing instant rendering contract (issues #216-#218, #230-#232).** Every value the
+Angular frontend displays is one of two kinds, and the two are never rendered the same way. A true
+instant - a moment in time that is meaningful independent of any calendar, such as a server-supplied,
+UTC-persisted/transmitted `StockAdjustment.createdAt`/`effectiveAt`, a Nayax stock-sync event's
+`eventDateTimeGmt`, a transaction's `transactionDate`, an inventory-cost transition's `cutoffAt`, or
+the Pick List's own client-captured "As of" snapshot instant (never sent to or from the server) - is
+never rendered with Angular's built-in `date` pipe (which formats in the browser's own, accidental,
+local time zone). Instead it is rendered through the standalone `BusinessDateTimePipe`
+(`frontend/inventory-app/src/app/formatting/business-date-time.pipe.ts`), which formats the instant in
+`Australia/Canberra` - the same `BUSINESS_TIME_ZONE` IANA identifier `startOfDayUtc` uses for the
+reverse conversion - through `Intl.DateTimeFormat`, so AEST/AEDT is resolved from the platform
+timezone database rather than a fixed `+10`/`+11` offset and the displayed clock value is correct
+regardless of the operator's own browser timezone. A true date-only business-calendar value - a
+purchase/expected date, an expense date, a report period boundary, a commission effective/payment
+date, a payout date modelled as a date, or a supplier price-history purchase date - carries no time
+component that could be shifted and is rendered with the ordinary `date` pipe (e.g. `'dd/MM/yyyy'`/
+`'mediumDate'`) exactly as before; `BusinessDateTimePipe` is never applied to these. Transaction Sales
+(`TransactionSalesReportComponent`), the Admin inventory-cost transition preview/batch-preview cutoff
+timestamps (`AdminComponent`), and the Pick List snapshot (`PickListComponent`) use
+`BusinessDateTimePipe` for this reason; `MachineRestockSyncComponent`'s reconciliation table (issue
+#231) and `StockHistoryComponent`'s manual-restock timestamp (issue #230) already did.
+
 ## Data flow
 
 ### Product purchase and restock

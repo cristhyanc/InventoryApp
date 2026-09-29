@@ -5,11 +5,12 @@ import { Machine } from '../../models/models';
 import { MachineService } from '../../services/machine.service';
 import { ReportingService, TransactionSalesFilter, TransactionSalesReport, TransactionSalesRow } from '../../services/reporting.service';
 import { ReportFiltersComponent } from './report-filters.component';
+import { BusinessDateTimePipe } from '../../formatting/business-date-time.pipe';
 
 @Component({
   selector: 'app-transaction-sales-report',
   standalone: true,
-  imports: [CommonModule, FormsModule, ReportFiltersComponent],
+  imports: [CommonModule, FormsModule, ReportFiltersComponent, BusinessDateTimePipe],
   template: `
 <div class="mb-5 flex flex-wrap items-center justify-between gap-3">
   <h1 class="text-2xl font-semibold text-slate-800">Transaction Sales</h1>
@@ -40,7 +41,7 @@ import { ReportFiltersComponent } from './report-filters.component';
   <div class="overflow-x-auto rounded-xl bg-white shadow-sm"><table class="min-w-full text-sm">
     <thead><tr class="bg-slate-50 text-left">@for (column of columns; track column.key) {<th class="whitespace-nowrap px-3 py-3">@if (column.sortable) {<button class="font-semibold" (click)="sort(column.key)">{{ column.label }} @if (filter.sortBy === column.key) {<span>{{ filter.sortDescending ? '↓' : '↑' }}</span>}</button>} @else {<span class="font-semibold">{{ column.label }}</span>}</th>}<th class="px-3 py-3">Fees / commission</th></tr></thead>
     <tbody>@for (row of report.rows; track row.transactionId) {<tr class="border-t align-top">
-      <td class="whitespace-nowrap px-3 py-3">{{ row.transactionDate | date:'dd/MM/yyyy HH:mm' }}<div class="text-xs text-slate-500">#{{ row.transactionId }}</div></td>
+      <td class="whitespace-nowrap px-3 py-3">{{ row.transactionDate | businessDateTime }}<div class="text-xs text-slate-500">#{{ row.transactionId }}</div></td>
       <td class="px-3 py-3">{{ row.machineName }}<div class="text-xs text-slate-500">{{ row.siteName || 'Site unavailable' }}</div></td>
       <td class="px-3 py-3">{{ row.productName }}</td>
       <td class="px-3 py-3">{{ row.paymentType }}<div class="text-xs text-slate-500">{{ row.rawPaymentMethod || '—' }}</div></td>
