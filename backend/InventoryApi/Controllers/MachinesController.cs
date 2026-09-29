@@ -55,12 +55,17 @@ public class MachinesController : ControllerBase
     // changes storage inventory itself (issue #183). fromDate/includeReconciled (issue #206) are
     // presentation/workflow filters over the same imported facts: fromDate bounds the canonical
     // EventDateTimeGMT, includeReconciled shows or hides events already reconciled as "already
-    // recorded manually". Omitting either preserves the original unfiltered behaviour.
+    // recorded manually". Omitting either preserves the original unfiltered behaviour. fromDate is
+    // bound as DateTimeOffset, not DateTime (issue #218): the frontend always sends the operator's
+    // Australia/Canberra calendar boundary already converted to a UTC instant, and ASP.NET Core's
+    // default DateTime query binding reinterprets a UTC instant against the server process's local
+    // time zone - DateTimeOffset carries its own offset, so UtcDateTime is the exact instant chosen
+    // regardless of the server's local time zone.
     [HttpPost("{id:long}/sync-restock")]
     public async Task<ActionResult<NayaxMachineStockSyncPreviewDto>> SyncRestock(
-        long id, CancellationToken ct, [FromQuery] DateTime? fromDate = null, [FromQuery] bool includeReconciled = false)
+        long id, CancellationToken ct, [FromQuery] DateTimeOffset? fromDate = null, [FromQuery] bool includeReconciled = false)
     {
-        var preview = await _syncMachineStock.Handle(id, ct, fromDate, includeReconciled);
+        var preview = await _syncMachineStock.Handle(id, ct, fromDate?.UtcDateTime, includeReconciled);
         return Ok(preview);
     }
 
