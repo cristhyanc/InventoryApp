@@ -38,11 +38,17 @@ public record NayaxProductImpactPreviewDto(
     int PendingRefillQuantity
 );
 
+/// <summary>
+/// The Sync Restock working list for one machine. <see cref="HiddenReconciledCount"/> is how many
+/// reconciled-manually events within the current From date window are not in <see cref="Events"/>
+/// because Show reconciled is off (issue #206); it is zero when Show reconciled is on.
+/// </summary>
 public record NayaxMachineStockSyncPreviewDto(
     long MachineId,
     int NewEventCount,
     IReadOnlyList<NayaxStockEventPreviewDto> Events,
     IReadOnlyList<NayaxProductImpactPreviewDto> ProductImpacts,
+    int HiddenReconciledCount,
     string? Message
 );
 

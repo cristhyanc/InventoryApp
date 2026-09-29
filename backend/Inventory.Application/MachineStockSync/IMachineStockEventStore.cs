@@ -44,6 +44,14 @@ public sealed record PendingMachineStockEvent(
     NayaxStockEventProcessingStatus ProcessingStatus,
     NayaxDuplicateResolution DuplicateResolution);
 
+/// <summary>
+/// One page of the Sync Restock working list (issue #206): the currently-unprocessed events that
+/// satisfy the operator's From date / Show reconciled filters, plus how many reconciled-manually
+/// events in that same date window are hidden because Show reconciled is off.
+/// </summary>
+public sealed record MachineStockEventsPage(
+    IReadOnlyList<PendingMachineStockEvent> Events, int HiddenReconciledCount);
+
 /// <summary>The stored state one apply attempt needs in order to decide what to do.</summary>
 public sealed record MachineStockEventState(
     int Id,
@@ -79,8 +87,22 @@ public interface IMachineStockEventStore
 
     Task ImportAsync(IReadOnlyList<MachineStockEventImport> events, CancellationToken cancellationToken);
 
-    Task<IReadOnlyList<PendingMachineStockEvent>> GetUnprocessedEventsAsync(
-        long machineId, CancellationToken cancellationToken);
+    /// <summary>
+    /// The machine's currently-unprocessed events, oldest first (issue #206). <paramref
+    /// name="fromDateGmt"/>, when given, is a lower bound on the canonical
+    /// <see cref="PendingMachineStockEvent.EventDateTimeGmt"/> - the same event timestamp the
+    /// stock-sync contract already defines, never a second interpretation. <paramref
+    /// name="includeReconciled"/> controls whether events already resolved as "reconciled: already
+    /// recorded manually" are included; when it is <c>false</c> they are excluded from the returned
+    /// events but still counted in <see cref="MachineStockEventsPage.HiddenReconciledCount"/>.
+    /// Neither parameter changes any persisted event: both are presentation/workflow filters over
+    /// the same imported audit facts.
+    /// </summary>
+    Task<MachineStockEventsPage> GetUnprocessedEventsAsync(
+        long machineId,
+        CancellationToken cancellationToken,
+        DateTime? fromDateGmt = null,
+        bool includeReconciled = false);
 
     /// <summary>Manual (operator-entered) machine refills for this machine, as duplicate evidence.</summary>
     Task<IReadOnlyList<ManualRefillEvidence>> GetManualMachineRefillsAsync(

@@ -1222,6 +1222,34 @@ projection, and this feature does not change that meaning.
    (`Manual` by default, `Nayax` only when set by the sync-apply path) is what keeps a manual and a
    Nayax-sourced refill distinguishable in the stock history/audit trail, even though both share
    `StockAdjustmentReason.MachineRefill`.
+9. **Filter and bulk-select the working list as history grows (issue #206).** As imported Event 501
+   history accumulates, `MachineRestockSyncComponent` sends a **From date** and a **Show
+   reconciled** filter with every `POST /api/machines/{id}/sync-restock` call
+   (`fromDate`/`includeReconciled` query parameters), so the operator normally works a bounded
+   recent window instead of the whole history. `MachinesController` passes them straight through to
+   `SyncMachineStockFromNayax.Handle`, which passes them straight through to
+   `IMachineStockEventStore.GetUnprocessedEventsAsync` - the single query-boundary `WHERE` clause
+   that bounds `EventDateTimeGMT` (the same canonical event timestamp used everywhere else in this
+   feature, never a second interpretation) and excludes events already resolved
+   `ReconciledManually` unless Show reconciled is on. The store returns a `MachineStockEventsPage`
+   pairing the filtered events with `HiddenReconciledCount` - reconciled events in the date window
+   Show reconciled is currently hiding - which the preview exposes as
+   `NayaxMachineStockSyncPreviewDto.HiddenReconciledCount` for the dialog's compact visible/hidden
+   status line. From date defaults, in the browser only, to seven calendar days before the
+   operator's local date; a caller that omits it (a direct API call, or every test in
+   `MachineStockSyncTests` written before this issue) gets the original unfiltered behaviour, since
+   `null` means "no lower bound" rather than any server-side default. Neither filter deletes,
+   rewrites, or reclassifies any imported event or touches the Apply/duplicate-resolution safety
+   policies - they only change what one preview response returns, and turning Show reconciled back
+   off does not undo a reconciliation. **Select all applicable** selects exactly the checkbox-
+   eligible ids `isReadyToApply` already computes (Matched, a positive quantity, sufficient storage,
+   and `DuplicateResolution.None` with no unresolved possible duplicate) among the events the
+   current filters return; unchecking it clears the bulk selection locally without changing any
+   event. Because every preview fetch - the initial open, a filter change, and the post-apply/post-
+   resolve refresh - recomputes the selection from the events actually returned, a hidden or
+   now-ineligible event can never stay selected across a filter change. Pagination was considered
+   and deliberately not added: filtering the query boundary this way is the requested first step,
+   and nothing so far shows it is insufficient.
 
 This is a vertical slice on the current dependency skeleton, following the same shape as [Nayax
 catalog source-state reconciliation](#nayax-catalog-source-state-reconciliation) above. Nothing in
@@ -1237,8 +1265,9 @@ this feature is added to the legacy `InventoryApi/Services` layer:
   (`SyncMachineStockFromNayax`, `ApplyMachineStockSync`, `ResolveMachineStockDuplicate` -
   issue #196), their request/response DTOs, and the narrow `IMachineStockEventStore` persistence
   port (extended with `ReconcileAsManualDuplicateAsync` and an `ApplyRefillAsync` that also
-  persists the duplicate-resolution columns). The Nayax read stays on the existing
-  `Inventory.Application.Nayax.INayaxLynxClient` port.
+  persists the duplicate-resolution columns, and with `GetUnprocessedEventsAsync`'s
+  `fromDateGmt`/`includeReconciled` filters and `MachineStockEventsPage` result - issue #206). The
+  Nayax read stays on the existing `Inventory.Application.Nayax.INayaxLynxClient` port.
 - **Infrastructure/adapters.** `Inventory.Infrastructure.Nayax.NayaxLynxClient` remains the Nayax
   HTTP adapter. `InventoryApi.Adapters.Persistence.EfMachineStockEventStore` implements the
   persistence port over `AppDbContext`, owns the per-event transaction, and reuses
@@ -1248,23 +1277,28 @@ this feature is added to the legacy `InventoryApi/Services` layer:
   `AppDbContext`, the persistence models, and the costing services still live in `InventoryApi`.
 - **API.** `MachinesController` binds the request, invokes the use case, and returns its result;
   `POST /api/machines/{id}/sync-restock/resolve-duplicate` (issue #196) is the third, equally thin
-  binding for `ResolveMachineStockDuplicate`.
+  binding for `ResolveMachineStockDuplicate`. `POST /api/machines/{id}/sync-restock` additionally
+  binds the optional `fromDate`/`includeReconciled` query parameters (issue #206) straight through
+  to the use case; the controller does no filtering itself.
 - **Frontend.** The Sync Restock workflow is its own standalone component,
   `components/machines/machine-restock-sync/MachineRestockSyncComponent`, following the [large page
   decomposition](#frontend-migration-track) step: it owns the reconciliation dialog's open state,
-  the preview state, the syncing/applying/resolving state, the selected event ids, the
-  apply-eligibility check (which now also excludes an unresolved possible duplicate), the three API
-  calls, and its own notifications. The dialog follows the existing
-  `ConfirmationDialogComponent` pattern (an `*ngIf` backdrop with `role="dialog"`/`aria-modal`,
-  closed by its Close controls, Escape, or an outside click, but not while an apply is in flight);
-  its body scrolls so a long event list never pushes the Close/Apply actions off screen. After an
-  apply it stays open and re-syncs, so applied events drop out of the list. `MachineDetailComponent`
-  composes it as
+  the preview state, the syncing/applying/resolving state, the selected event ids, the From
+  date/Show reconciled filter state (issue #206), the apply-eligibility check (which now also
+  excludes an unresolved *or already-reconciled* duplicate), the three API calls, and its own
+  notifications. The dialog follows the existing `ConfirmationDialogComponent` pattern (an `*ngIf`
+  backdrop with `role="dialog"`/`aria-modal`, closed by its Close controls, Escape, or an outside
+  click, but not while an apply is in flight); its body scrolls so a long event list never pushes
+  the Close/Apply actions off screen. Opening the dialog resets From date to seven calendar days
+  before the browser's local date and Show reconciled to off; changing either filter, and the
+  post-apply/post-resolve refresh, all fetch through the same `refreshPreview`, so the selection is
+  always recomputed from the events the current filters actually return.
+  `MachineDetailComponent` composes it as
   `<app-machine-restock-sync [machineId]="machine?.machineID" (restockApplied)="refreshProducts()">`
   and stays responsible only for the machine-details page, reloading its product table when the
   component reports that at least one event was actually applied. The child's `isReadyToApply` only
-  decides which checkboxes an operator may tick; the backend apply use case remains the sole
-  authority over whether an event moves storage inventory.
+  decides which checkboxes an operator may tick, including through **Select all applicable**; the
+  backend apply use case remains the sole authority over whether an event moves storage inventory.
 
 Migrating the rest of `InventoryApi/Services` remains unrelated, larger, out-of-scope work tracked
 by the incremental migration plan below.
