@@ -357,4 +357,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for how to propose a change, and [SECURIT
 
 ## License
 
-See [LICENSE](LICENSE).
+InventoryApp is **source-available and proprietary, not open source**. This public repository permits viewing and evaluating the source code, but it does not grant permission to copy, modify, redistribute, sublicense, sell, host, deploy, or use InventoryApp (or a substantial portion of it) for commercial or production purposes. Any use beyond viewing and evaluation requires prior written permission from the copyright holder. See [LICENSE](LICENSE) for the controlling terms.
