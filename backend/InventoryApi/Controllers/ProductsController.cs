@@ -33,9 +33,10 @@ public class ProductsController : ControllerBase
         [FromQuery] string? search,
         [FromQuery] long? categoryId,
         [FromQuery] int? supplierId,
-        [FromQuery] bool? lowStockOnly)
+        [FromQuery] bool? lowStockOnly,
+        CancellationToken ct)
     {
-        var result = await _service.GetAll(search, categoryId, supplierId, lowStockOnly);
+        var result = await _service.GetAll(search, categoryId, supplierId, lowStockOnly, ct);
         return Ok(result);
     }
 
@@ -66,9 +67,10 @@ public class ProductsController : ControllerBase
     public async Task<ActionResult<IEnumerable<Product>>> LowStock(
         [FromQuery] string? search,
         [FromQuery] long? categoryId,
-        [FromQuery] int? supplierId)
+        [FromQuery] int? supplierId,
+        CancellationToken ct)
     {
-        var items = await _service.LowStock(search, categoryId, supplierId);
+        var items = await _service.LowStock(search, categoryId, supplierId, ct);
         return Ok(items);
     }
 

@@ -31,7 +31,8 @@ public class GetReportExportRowsTests
                 InventoryApi.Tests.Application.Reporting.MachineProfitability.FakeMachineProfitabilityReportFactsProvider.Empty()));
         var productProfitability = new Inventory.Application.Reporting.ProductProfitability.GetProductProfitabilityReport(
             new InventoryApi.Tests.Application.Reporting.ProductProfitability.FakeProductProfitabilityReportFactsProvider(
-                InventoryApi.Tests.Application.Reporting.ProductProfitability.FakeProductProfitabilityReportFactsProvider.Empty()));
+                InventoryApi.Tests.Application.Reporting.ProductProfitability.FakeProductProfitabilityReportFactsProvider.Empty()),
+            InventoryApi.Tests.Application.Reporting.ProductProfitability.FakeProductPurchaseCostFactsProvider.Empty());
         var gst = new Inventory.Application.Reporting.Gst.GetGstAccountingAid(bookkeeping,
             new InventoryApi.Tests.Application.Reporting.Gst.FakeGstReportFactsProvider(
                 InventoryApi.Tests.Application.Reporting.Gst.FakeGstReportFactsProvider.Complete()));
@@ -111,6 +112,22 @@ public class GetReportExportRowsTests
         Assert.Equal("0.5", detailRow[feeGstIndex]);
         Assert.Equal("0.5", totalsRow[feeGstIndex]);
         Assert.NotEqual((4.4m - 4m).ToString(System.Globalization.CultureInfo.InvariantCulture), detailRow[feeGstIndex]);
+    }
+
+    /// <summary>
+    /// Issue #207's Last Cost/Lowest Cost/Saving-per-unit purchasing insights are a deliberately
+    /// UI-only presentation (paired currency + supplier text in one report cell, per the issue's
+    /// frontend presentation section) and are not added to the CSV/XLSX export contract.
+    /// </summary>
+    [Fact]
+    public async Task Product_profitability_export_does_not_include_the_last_lowest_cost_or_saving_columns()
+    {
+        var table = await Sut().Handle("product-profitability", new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)), CancellationToken.None);
+
+        var header = table.Rows[0];
+        Assert.DoesNotContain("LastCost", header);
+        Assert.DoesNotContain("LowestCost", header);
+        Assert.DoesNotContain("SavingPerUnit", header);
     }
 
     [Fact]

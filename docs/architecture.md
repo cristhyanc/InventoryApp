@@ -222,13 +222,13 @@ flowchart TD
 - The frontend has a centralized runtime API configuration, typed services, reusable report-page behavior, and shared toast/confirmation UI.
 - Standalone Angular components keep feature code independent of NgModule structure.
 - Backend CI restores, builds, and tests before a `main` deployment.
-- `AppDbContext` no longer enables `UseLazyLoadingProxies()` (issue #52). Every navigation an endpoint serialises or a service reads after materialization is loaded explicitly with `Include`/`ThenInclude` (for example `ProductService`, `MachineService.GetMachineProducts`, and `PurchaseService.Update`) or, where the caller may still change the owning foreign key afterwards, with a single explicit `Entry(...).Reference(...).LoadAsync()` once the final value is known (`OperatingExpensesController.Update`/`UpdateWithAttachment`). What a request loads from the database is visible in its query, not implied by which properties a response happens to touch.
+- `AppDbContext` no longer enables `UseLazyLoadingProxies()` (issue #52). Every navigation an endpoint serialises or a service reads after materialization is loaded explicitly with `Include`/`ThenInclude` (for example `ProductService`, `MachineService.GetMachineProducts`, and `PurchaseService.Update`) or, where the caller may still change the owning foreign key afterwards, with a single explicit `Entry(...).Reference(...).LoadAsync()` once the final value is known (`EfOperatingExpenseStore.UpdateAsync`, formerly `OperatingExpensesController.Update`/`UpdateWithAttachment` before the operating-expenses slice moved persistence into that adapter). What a request loads from the database is visible in its query, not implied by which properties a response happens to touch.
 
 ## Current pressure points
 
 - HTTP, use cases, domain calculations, EF Core, Nayax, file storage, and export generation live in one project for every feature area still pending migration (purchases, machine services, inventory-cost transition, and the remaining direct-`AppDbContext` controllers/services). Reporting is no longer part of this pressure point: its use cases live in `Inventory.Application.Reporting.<Feature>` and its calculations in `Inventory.Domain.Reporting.<Feature>`; only its temporary EF/Nayax adapters, HTTP controller, and CSV/XLSX byte encoding remain in `InventoryApi`. `Purchases.PurchaseTotalValidationPolicy`/`ComputePurchaseTotalValidation` are the first pieces of the purchase slice to move out (see the [Purchase rename plan](#purchase-rename-plan)); the purchase upload/update/delete orchestration itself is still in `InventoryApi`.
 - `PurchaseService`, the machine services, and the inventory-cost-transition services each combine orchestration and persistence, and are large.
-- Operating-expense and site-commission controllers directly access `AppDbContext`; operating expenses also manipulate files. Fee-setting no longer does (see the Nayax fee-settings slice above), except through its temporary API-owned persistence adapter.
+- The site-commission controller still directly accesses `AppDbContext`. Fee-setting, categories/suppliers, and operating expenses no longer do (see the Nayax fee-settings slice above and the Operating expenses slice below), except through each slice's temporary API-owned persistence adapter.
 - `Product` contains persistence state, business calculations, and transient Nayax/UI fields.
 - Several tests use EF Core InMemory where SQLite behavior may be more representative.
 - Frontend contracts are split between a broad `models.ts` file and service-local report interfaces. `reporting.service.ts` is already a large multi-report API client.
@@ -402,10 +402,10 @@ file name already held on the tenant-owned purchase or operating-expense record,
 `SaveAsync`, `OpenReadAsync` and `DeleteAsync`. It exposes no filesystem path, no container or
 URL, no `IWebHostEnvironment`, and no business identifier: ownership is resolved before a call
 reaches the port, by loading the parent record through the tenant-filtered `AppDbContext`, so the
-#64 boundary is what decides whether a document may be touched at all. `PurchaseService` and
-`OperatingExpensesController` compose `SaveAsync` and `DeleteAsync` around their own database
-work to replace a document, which is what keeps cleanup-on-failure ordering visible at the call
-site rather than hidden in storage.
+#64 boundary is what decides whether a document may be touched at all. `PurchaseService` and, since the operating-expenses slice (issue #50),
+`Inventory.Application.Expenses.CreateOperatingExpense`/`UpdateOperatingExpense`/`DeleteOperatingExpense`
+compose `SaveAsync` and `DeleteAsync` around their own database work to replace a document, which
+is what keeps cleanup-on-failure ordering visible at the call site rather than hidden in storage.
 
 `Inventory.Infrastructure.Documents.FileSystemDocumentStorage` writes new documents to
 `{ContentRoot}/protected-files/{category}/`, reads them back from there or, failing that, from
@@ -559,7 +559,7 @@ The consequence for a throw site is explicit: **a check whose message is meant f
 
 Not-found handling is unchanged by this work: controllers continue to return `NotFound()` directly for a missing resource, and this issue introduces no typed not-found exception.
 
-Migrating a controller to the centralized mapping never changes its status code or message; the only observable difference is that the response body for a migrated action becomes a `ProblemDetails` object (`application/problem+json`) instead of a bare JSON string, which is why the `message` extension above exists. `StockController.Adjust`, `InventoryCostTransitionsController` (all four actions), and `SupplierOrdersController.Create` were migrated this way, and the deliberate validation throws in `StockService.Adjust`, `InventoryCostTransitionService`, and `SupplierOrderService.Create` were converted from `ArgumentException`/`InvalidOperationException` to `DomainValidationException` so those actions keep the exact `400` and message they returned before. `SiteCommissionsController.SaveAgreement`'s overlapping-agreement check moved from returning `Conflict(...)` directly to throwing `DomainConflictException`, still producing `409` with the same message. `ProductsController.Update`, `PurchasesController`, `ImportsController.ImportNayaxSales`, and `OperatingExpensesController` still catch their own exceptions and were intentionally left for a later, separate change; `OperatingExpensesController` additionally deletes an uploaded file from its catch block, so migrating it also needs a way to run that cleanup from outside the controller.
+Migrating a controller to the centralized mapping never changes its status code or message; the only observable difference is that the response body for a migrated action becomes a `ProblemDetails` object (`application/problem+json`) instead of a bare JSON string, which is why the `message` extension above exists. `StockController.Adjust`, `InventoryCostTransitionsController` (all four actions), and `SupplierOrdersController.Create` were migrated this way, and the deliberate validation throws in `StockService.Adjust`, `InventoryCostTransitionService`, and `SupplierOrderService.Create` were converted from `ArgumentException`/`InvalidOperationException` to `DomainValidationException` so those actions keep the exact `400` and message they returned before. `SiteCommissionsController.SaveAgreement`'s overlapping-agreement check moved from returning `Conflict(...)` directly to throwing `DomainConflictException`, still producing `409` with the same message. `ProductsController.Update`, `PurchasesController`, and `ImportsController.ImportNayaxSales` still catch their own exceptions and were intentionally left for a later, separate change. `OperatingExpensesController` no longer catches anything itself: the operating-expenses slice (issue #50) moved its attachment save/cleanup-on-failure try/catch into `Inventory.Application.Expenses.CreateOperatingExpense`/`UpdateOperatingExpense` as a side effect of the Clean Architecture migration, which is exactly the "way to run that cleanup from outside the controller" this paragraph used to call out as still missing; its validation failures are returned as explicit result values rather than thrown, so the controller still needs no exception mapping to keep its `400 Bad Request` behavior.
 
 ## Frontend architecture
 
@@ -862,6 +862,44 @@ Time acquisition and timezone conversion are external boundaries, not pure calcu
 3. Delivery/package amounts remain identifiable for whole-business reporting.
 4. Supplier-order allocations are reconciled without fabricating purchase quantities.
 
+#### Reorder-alert machine-product fan-out (issue #47)
+
+`InventoryApi.Services.ProductService.LowStock` (`GET /api/products/alerts/low-stock`, and
+`GET /api/products?lowStockOnly=true`) previously called `INayaxLynxClient.GetMachineProductsAsync`
+once per machine in an unbounded sequential loop. That fan-out and its aggregation now live in
+`Inventory.Application.Reorder.CalculateReorderNeeds`, `ProductService.LowStock`'s only remaining
+production coupling to Nayax for this endpoint: it fetches the current machine fleet through
+`INayaxLynxClient.GetMachinesAsync`, then issues the per-machine `GetMachineProductsAsync` calls with
+bounded parallelism (`Parallel.ForEachAsync`, `MaxDegreeOfParallelism =
+CalculateReorderNeeds.MaxConcurrentMachineRequests`, currently 4 - a fixed engineering constant chosen
+for headroom against Nayax rate limits given the small current machine fleet, not environment
+configuration), summing `MissingStockByMDB` per product ID exactly as the sequential loop did.
+`Inventory.Application.Reorder.IOutstandingSupplierOrderQuantityStore` is the narrow port for the
+outstanding (not cancelled, not fully received) supplier-order quantity per product the use case also
+returns; `InventoryApi.Adapters.Persistence.EfOutstandingSupplierOrderQuantityStore` is its temporary
+API-owned EF adapter, for the same `AppDbContext` reason as the other `Ef*` adapters in this document.
+`ProductService.LowStock` applies both returned dictionaries onto its already-filtered `Product` list
+unchanged (`MachineReplenishmentNeed`, `OnOrderQuantity`, and the `NeedToOrder`/`IsReorderAlert`
+computed properties they feed are untouched), then keeps its own search/category/supplier filtering,
+reorder-alert filtering, and sort itself - this migration moves only the external-integration
+orchestration and the outstanding-order query out of the legacy service, not the reorder math itself.
+
+Bounded parallelism, not a cache/snapshot, was chosen deliberately: the current machine fleet is small,
+so the safety/consistency cost of a stale snapshot and the freshness/invalidation semantics it would
+need is not justified by the fan-out this issue measured (one sequential `GetMachineProductsAsync` call
+per machine). A future machine-fleet growth that makes bounded parallelism insufficient should revisit
+this decision explicitly rather than layering a cache on top of it silently.
+
+Cancellation and typed error handling are unchanged in kind, extended in scope:
+`CalculateReorderNeeds.Handle` accepts and propagates a `CancellationToken` through
+`GetMachinesAsync`, every bounded `GetMachineProductsAsync` call, and the outstanding-order query (the
+legacy sequential loop never accepted one, because neither `ProductService.LowStock` nor
+`ProductsController`'s two calling actions did before this issue). A failing per-machine call - a typed
+`Inventory.Infrastructure.Nayax.NayaxUpstreamException` (see [External integration
+errors](#external-integration-errors)) or a genuine cancellation - propagates out of `Handle` unchanged;
+`Parallel.ForEachAsync` never assembles a completed-looking aggregate once one machine's call has
+failed, so a caller never receives a partial reorder calculation presented as a complete one.
+
 #### Supplier product price history and comparison (issue #63)
 
 The Purchasing/Suppliers vertical slice derives a per-product supplier price comparison from actual,
@@ -888,6 +926,26 @@ live supplier quote: it never feeds inventory costing, and a supplier-order crea
 for reference must not let it silently overwrite an entered order price/cost. A Purchase with no
 supplier recorded stays visible in the comparison and history with an explicit null/"None" source
 rather than being omitted.
+
+Product Profitability's **Last Cost**/**Lowest Cost**/**Saving per unit** columns (issue #207) are the
+same purchasing insight surfaced on the report used to compare sales performance against purchasing
+opportunity, not a second lowest/latest-cost algorithm. `Inventory.Application.Reporting.ProductProfitability.GetProductProfitabilityReport`
+fetches every matched row's actual Purchase history in one bulk call through the narrow
+`IProductPurchaseCostFactsProvider` port (implemented by the temporary API-owned
+`InventoryApi.Adapters.Persistence.EfProductPurchaseCostFactsProvider`, avoiding a per-product query),
+then applies the same authoritative `SupplierPriceComparisonPolicy.Evaluate` this section describes to
+each product's entries, so the report and the product's own price-history view always agree on latest
+cost, lowest cost, supplier, and tie-break behaviour. The result populates
+`ProductProfitabilityRowDto.LastCost`/`LastCostSupplierName`/`LowestCost`/`LowestCostSupplierName`/`SavingPerUnit`,
+which stay purchasing intelligence only: they never feed `CostOfGoods`, `GrossProfit`, `MarginPercent`,
+or any other historical costing/valuation figure the report already computes from completed-sale
+costing data, and an unmapped sale group's raw Nayax product identifier is never used to look up
+Purchase history. A product with no recorded Purchase history reports these fields as null, which
+`ProductReportComponent` (`frontend/inventory-app/src/app/components/reports/product-report.component.ts`)
+renders as `—` rather than a fabricated zero; the Last/Lowest Cost cells show the supplier underneath
+the cost, and the export (`GetReportExportRows`) deliberately does not add these fields to the CSV/XLSX
+column contract - they stay a UI-only presentation, matching the issue's frontend presentation intent
+of pairing currency and supplier text in one report cell.
 
 #### Purchase rename plan
 
@@ -1164,6 +1222,34 @@ projection, and this feature does not change that meaning.
    (`Manual` by default, `Nayax` only when set by the sync-apply path) is what keeps a manual and a
    Nayax-sourced refill distinguishable in the stock history/audit trail, even though both share
    `StockAdjustmentReason.MachineRefill`.
+9. **Filter and bulk-select the working list as history grows (issue #206).** As imported Event 501
+   history accumulates, `MachineRestockSyncComponent` sends a **From date** and a **Show
+   reconciled** filter with every `POST /api/machines/{id}/sync-restock` call
+   (`fromDate`/`includeReconciled` query parameters), so the operator normally works a bounded
+   recent window instead of the whole history. `MachinesController` passes them straight through to
+   `SyncMachineStockFromNayax.Handle`, which passes them straight through to
+   `IMachineStockEventStore.GetUnprocessedEventsAsync` - the single query-boundary `WHERE` clause
+   that bounds `EventDateTimeGMT` (the same canonical event timestamp used everywhere else in this
+   feature, never a second interpretation) and excludes events already resolved
+   `ReconciledManually` unless Show reconciled is on. The store returns a `MachineStockEventsPage`
+   pairing the filtered events with `HiddenReconciledCount` - reconciled events in the date window
+   Show reconciled is currently hiding - which the preview exposes as
+   `NayaxMachineStockSyncPreviewDto.HiddenReconciledCount` for the dialog's compact visible/hidden
+   status line. From date defaults, in the browser only, to seven calendar days before the
+   operator's local date; a caller that omits it (a direct API call, or every test in
+   `MachineStockSyncTests` written before this issue) gets the original unfiltered behaviour, since
+   `null` means "no lower bound" rather than any server-side default. Neither filter deletes,
+   rewrites, or reclassifies any imported event or touches the Apply/duplicate-resolution safety
+   policies - they only change what one preview response returns, and turning Show reconciled back
+   off does not undo a reconciliation. **Select all applicable** selects exactly the checkbox-
+   eligible ids `isReadyToApply` already computes (Matched, a positive quantity, sufficient storage,
+   and `DuplicateResolution.None` with no unresolved possible duplicate) among the events the
+   current filters return; unchecking it clears the bulk selection locally without changing any
+   event. Because every preview fetch - the initial open, a filter change, and the post-apply/post-
+   resolve refresh - recomputes the selection from the events actually returned, a hidden or
+   now-ineligible event can never stay selected across a filter change. Pagination was considered
+   and deliberately not added: filtering the query boundary this way is the requested first step,
+   and nothing so far shows it is insufficient.
 
 This is a vertical slice on the current dependency skeleton, following the same shape as [Nayax
 catalog source-state reconciliation](#nayax-catalog-source-state-reconciliation) above. Nothing in
@@ -1179,8 +1265,9 @@ this feature is added to the legacy `InventoryApi/Services` layer:
   (`SyncMachineStockFromNayax`, `ApplyMachineStockSync`, `ResolveMachineStockDuplicate` -
   issue #196), their request/response DTOs, and the narrow `IMachineStockEventStore` persistence
   port (extended with `ReconcileAsManualDuplicateAsync` and an `ApplyRefillAsync` that also
-  persists the duplicate-resolution columns). The Nayax read stays on the existing
-  `Inventory.Application.Nayax.INayaxLynxClient` port.
+  persists the duplicate-resolution columns, and with `GetUnprocessedEventsAsync`'s
+  `fromDateGmt`/`includeReconciled` filters and `MachineStockEventsPage` result - issue #206). The
+  Nayax read stays on the existing `Inventory.Application.Nayax.INayaxLynxClient` port.
 - **Infrastructure/adapters.** `Inventory.Infrastructure.Nayax.NayaxLynxClient` remains the Nayax
   HTTP adapter. `InventoryApi.Adapters.Persistence.EfMachineStockEventStore` implements the
   persistence port over `AppDbContext`, owns the per-event transaction, and reuses
@@ -1190,23 +1277,28 @@ this feature is added to the legacy `InventoryApi/Services` layer:
   `AppDbContext`, the persistence models, and the costing services still live in `InventoryApi`.
 - **API.** `MachinesController` binds the request, invokes the use case, and returns its result;
   `POST /api/machines/{id}/sync-restock/resolve-duplicate` (issue #196) is the third, equally thin
-  binding for `ResolveMachineStockDuplicate`.
+  binding for `ResolveMachineStockDuplicate`. `POST /api/machines/{id}/sync-restock` additionally
+  binds the optional `fromDate`/`includeReconciled` query parameters (issue #206) straight through
+  to the use case; the controller does no filtering itself.
 - **Frontend.** The Sync Restock workflow is its own standalone component,
   `components/machines/machine-restock-sync/MachineRestockSyncComponent`, following the [large page
   decomposition](#frontend-migration-track) step: it owns the reconciliation dialog's open state,
-  the preview state, the syncing/applying/resolving state, the selected event ids, the
-  apply-eligibility check (which now also excludes an unresolved possible duplicate), the three API
-  calls, and its own notifications. The dialog follows the existing
-  `ConfirmationDialogComponent` pattern (an `*ngIf` backdrop with `role="dialog"`/`aria-modal`,
-  closed by its Close controls, Escape, or an outside click, but not while an apply is in flight);
-  its body scrolls so a long event list never pushes the Close/Apply actions off screen. After an
-  apply it stays open and re-syncs, so applied events drop out of the list. `MachineDetailComponent`
-  composes it as
+  the preview state, the syncing/applying/resolving state, the selected event ids, the From
+  date/Show reconciled filter state (issue #206), the apply-eligibility check (which now also
+  excludes an unresolved *or already-reconciled* duplicate), the three API calls, and its own
+  notifications. The dialog follows the existing `ConfirmationDialogComponent` pattern (an `*ngIf`
+  backdrop with `role="dialog"`/`aria-modal`, closed by its Close controls, Escape, or an outside
+  click, but not while an apply is in flight); its body scrolls so a long event list never pushes
+  the Close/Apply actions off screen. Opening the dialog resets From date to seven calendar days
+  before the browser's local date and Show reconciled to off; changing either filter, and the
+  post-apply/post-resolve refresh, all fetch through the same `refreshPreview`, so the selection is
+  always recomputed from the events the current filters actually return.
+  `MachineDetailComponent` composes it as
   `<app-machine-restock-sync [machineId]="machine?.machineID" (restockApplied)="refreshProducts()">`
   and stays responsible only for the machine-details page, reloading its product table when the
   component reports that at least one event was actually applied. The child's `isReadyToApply` only
-  decides which checkboxes an operator may tick; the backend apply use case remains the sole
-  authority over whether an event moves storage inventory.
+  decides which checkboxes an operator may tick, including through **Select all applicable**; the
+  backend apply use case remains the sole authority over whether an event moves storage inventory.
 
 Migrating the rest of `InventoryApi/Services` remains unrelated, larger, out-of-scope work tracked
 by the incremental migration plan below.
@@ -1258,19 +1350,57 @@ Backend and frontend tracks can progress independently when their contracts do n
    migrated, and `ProjectDependencyDirectionTests.Only_the_documented_legacy_services_remain_in_InventoryApi_Services`'s
    allow-list was updated to match.
 
-5. **Operating expenses slice**
-   - Extract use cases and persistence.
+5. **Operating expenses slice** — done (issue #50), following the same pattern as the Nayax
+   fee-settings and categories/suppliers slices above.
    - **`IDocumentStorage` done** (issue #39, checkpoint 1): the storage port and its filesystem
      adapter are in place for both purchase documents and operating-expense attachments; see
      [Document storage](#document-storage). Checkpoint 2 added the tenant-scoped Azure Blob
      adapter behind the same port and the `DocumentStorage:Provider` selection; migrating the
-     documents already on disk is still to come. The operating-expense use cases and persistence
-     themselves remain in `OperatingExpensesController`/`AppDbContext`.
-   - Preserve atomic replacement/cleanup and upload validation behavior.
+     documents already on disk is still to come. `OperatingExpensesController` already used this
+     port before this slice, and keeps doing so unchanged - this slice did not introduce a second
+     storage boundary.
+   - `Inventory.Domain.Expenses.OperatingExpenseDetails` validates an expense's descriptive/financial
+     fields (required description, non-negative amounts, service-period ordering) and
+     `Inventory.Domain.Expenses.ExpenseAttachmentPolicy` validates a candidate attachment's size and
+     extension and resolves its content type - the two deterministic rules the controller used to
+     enforce inline. `Inventory.Domain.Expenses.ExpenseCategory` mirrors
+     `InventoryApi.Models.OperatingExpenseCategory` member-for-member so Domain never references the
+     InventoryApi enum; the two convert by a plain cast at the controller boundary.
+   - `Inventory.Application.Expenses` holds the `ListOperatingExpenses`/`GetOperatingExpense`/
+     `GetOperatingExpenseAttachment`/`CreateOperatingExpense`/`UpdateOperatingExpense`/
+     `DeleteOperatingExpense` use cases, their request/result contracts
+     (`OperatingExpenseFields`/`OperatingExpenseFilter`/`OperatingExpenseRecord`/
+     `OperatingExpenseListItem`/`OperatingExpenseAttachmentMetadata`/`ExpenseAttachmentInput`/
+     `OperatingExpenseAttachmentResult`), and the `IOperatingExpenseStore` port. `CreateOperatingExpense`/
+     `UpdateOperatingExpense` validate first, then save a new attachment through the existing
+     `Inventory.Application.Documents.IDocumentStorage` port before persisting, and delete it again if
+     persistence then fails - the same validate-before-write, delete-on-failure order the retired
+     controller used - so atomicity and cleanup behavior are unchanged. `UpdateOperatingExpense` deletes
+     the previous attachment only after the replacement is durably persisted, for the same reason.
+   - Because `AppDbContext` and its EF entities still live in `InventoryApi`, `IOperatingExpenseStore`
+     is implemented by `InventoryApi.Adapters.Persistence.EfOperatingExpenseStore` - a deliberately
+     temporary API-owned adapter, registered directly in `Program.cs` rather than through
+     `AddInfrastructureServices()`, following the same precedent as `EfNayaxFeeRateStore`/
+     `EfCategoryStore`/`EfSupplierStore`. It must move into `Inventory.Infrastructure` once `AppDbContext`
+     and the shared persistence models relocate there. Its `UpdateAsync` reloads the `Supplier`
+     navigation explicitly, against the final `SupplierId`, once the update is saved (issue #52).
+   - `OperatingExpensesController` only binds HTTP/form/file input, invokes the use cases, and maps
+     results/status codes; `InventoryApi.DTOs.OperatingExpenseResponse` replaced the EF entity it used
+     to serialize directly for the single-record endpoints, with the same keys, order, and nested
+     supplier shape (`OperatingExpenseReportRowDto` already existed for the list endpoint and is
+     unchanged). Routes, multipart field names, status codes, and GST amount semantics are unchanged.
 
 6. **Products and stock slice**
    - Move reorder and inventory-movement rules to Domain.
    - Preserve supplier-order projection and low-stock semantics.
+   - **Reorder-alert machine-product fan-out done** (issue #47). The `ProductService.LowStock`
+     machine-product orchestration - fetching the machine fleet and aggregating each machine's
+     `GetMachineProductsAsync` result - moved into `Inventory.Application.Reorder.CalculateReorderNeeds`,
+     with the outstanding supplier-order-quantity query behind the narrow
+     `IOutstandingSupplierOrderQuantityStore` port. See [Reorder-alert machine-product
+     fan-out](#reorder-alert-machine-product-fan-out-issue-47). `ProductService.LowStock` itself, the
+     reorder formulas on `Product` (`MachineReplenishmentNeed`, `OnOrderQuantity`, `NeedToOrder`,
+     `IsReorderAlert`), and the rest of this slice's inventory-movement rules remain future work.
 
 7. **Purchasing and costing slice**
    - Migrate purchases, supplier orders, stock ledger, AVCO, rebuilding, and sale costing as one coherent area.

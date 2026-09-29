@@ -1,5 +1,7 @@
 using Inventory.Application.Documents;
+using Inventory.Application.Expenses;
 using Inventory.Infrastructure.Documents;
+using InventoryApi.Adapters.Persistence;
 using InventoryApi.Controllers;
 using InventoryApi.Data;
 using InventoryApi.Models;
@@ -209,7 +211,18 @@ public sealed class ProtectedDocumentTenantIsolationTests : IDisposable
         WebRootPath = _webRoot,
     });
 
-    private OperatingExpensesController ExpensesController(AppDbContext db) => new(db, Documents());
+    private OperatingExpensesController ExpensesController(AppDbContext db)
+    {
+        var store = new EfOperatingExpenseStore(db);
+        var documents = Documents();
+        return new OperatingExpensesController(
+            new ListOperatingExpenses(store),
+            new GetOperatingExpense(store),
+            new GetOperatingExpenseAttachment(store, documents),
+            new CreateOperatingExpense(store, documents),
+            new UpdateOperatingExpense(store, documents),
+            new DeleteOperatingExpense(store, documents));
+    }
 
     private string PurchaseDocumentPath(string storedFileName) => Path.Combine(
         _contentRoot,

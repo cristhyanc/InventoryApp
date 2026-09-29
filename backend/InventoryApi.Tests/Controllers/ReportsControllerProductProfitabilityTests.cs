@@ -27,7 +27,9 @@ public class ReportsControllerProductProfitabilityTests
     public async Task Product_profitability_action_routes_through_the_application_use_case()
     {
         var facts = FakeProductProfitabilityReportFactsProvider.SingleMappedProduct(productId: 7, productName: "Soda", sales: 60m, cost: 20m);
-        var useCase = new GetProductProfitabilityReport(new FakeProductProfitabilityReportFactsProvider(facts));
+        var useCase = new GetProductProfitabilityReport(
+            new FakeProductProfitabilityReportFactsProvider(facts),
+            FakeProductPurchaseCostFactsProvider.Empty());
         var bookkeepingUseCase = new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(FakeBookkeepingReportFactsProvider.Complete()));
         var dailyUseCase = new GetDailyReport(new FakeDailyReportFactsProvider(FakeDailyReportFactsProvider.SingleDay()));
         var reconciliationUseCase = new GetReconciliationReport(new FakeReconciliationReportFactsProvider(FakeReconciliationReportFactsProvider.SinglePeriod()));

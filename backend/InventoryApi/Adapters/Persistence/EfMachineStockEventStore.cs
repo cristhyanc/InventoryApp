@@ -87,12 +87,28 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
         await _db.SaveChangesAsync(cancellationToken);
     }
 
-    public async Task<IReadOnlyList<PendingMachineStockEvent>> GetUnprocessedEventsAsync(
-        long machineId, CancellationToken cancellationToken) =>
-        await _db.NayaxMachineStockEvents
+    public async Task<MachineStockEventsPage> GetUnprocessedEventsAsync(
+        long machineId,
+        CancellationToken cancellationToken,
+        DateTime? fromDateGmt = null,
+        bool includeReconciled = false)
+    {
+        var query = _db.NayaxMachineStockEvents
             .AsNoTracking()
             .Where(e => e.MachineId == machineId
-                && e.ProcessingStatus == NayaxStockEventProcessingStatus.Unprocessed)
+                && e.ProcessingStatus == NayaxStockEventProcessingStatus.Unprocessed);
+
+        if (fromDateGmt is DateTime from)
+            query = query.Where(e => e.EventDateTimeGmt >= from);
+
+        var hiddenReconciledCount = includeReconciled
+            ? 0
+            : await query.CountAsync(e => e.DuplicateResolution == NayaxDuplicateResolution.ReconciledManually, cancellationToken);
+
+        if (!includeReconciled)
+            query = query.Where(e => e.DuplicateResolution != NayaxDuplicateResolution.ReconciledManually);
+
+        var events = await query
             .OrderBy(e => e.EventDateTimeGmt)
             .ThenBy(e => e.Id)
             .Select(e => new PendingMachineStockEvent(
@@ -113,6 +129,9 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
                 e.ProcessingStatus,
                 e.DuplicateResolution))
             .ToListAsync(cancellationToken);
+
+        return new MachineStockEventsPage(events, hiddenReconciledCount);
+    }
 
     public async Task<IReadOnlyList<ManualRefillEvidence>> GetManualMachineRefillsAsync(
         long machineId, CancellationToken cancellationToken)

@@ -58,7 +58,8 @@ public class ReportingRegressionTests
         var getDailyReport = new GetDailyReport(new EfDailyReportFactsProvider(db, nayaxFees));
         var getReconciliationReport = new GetReconciliationReport(new EfReconciliationReportFactsProvider(db));
         var getMachineProfitabilityReport = new GetMachineProfitabilityReport(new EfMachineProfitabilityReportFactsProvider(db, nayaxFees, siteCommissions));
-        var getProductProfitabilityReport = new GetProductProfitabilityReport(new EfProductProfitabilityReportFactsProvider(db));
+        var getProductProfitabilityReport = new GetProductProfitabilityReport(
+            new EfProductProfitabilityReportFactsProvider(db), new EfProductPurchaseCostFactsProvider(db));
         var getGstAccountingAid = new GetGstAccountingAid(getBookkeepingReport, new EfGstReportFactsProvider(db));
         var getDashboardReport = new GetDashboardReport(getBookkeepingReport, getProductProfitabilityReport,
             new EfDashboardReportFactsProvider(db, siteCommissions));
@@ -354,6 +355,7 @@ public class ReportingRegressionTests
         services.AddScoped<IReconciliationReportFactsProvider, EfReconciliationReportFactsProvider>();
         services.AddScoped<IMachineProfitabilityReportFactsProvider, EfMachineProfitabilityReportFactsProvider>();
         services.AddScoped<IProductProfitabilityReportFactsProvider, EfProductProfitabilityReportFactsProvider>();
+        services.AddScoped<IProductPurchaseCostFactsProvider, EfProductPurchaseCostFactsProvider>();
         services.AddScoped<IGstReportFactsProvider, EfGstReportFactsProvider>();
         services.AddScoped<IDashboardReportFactsProvider, EfDashboardReportFactsProvider>();
         services.AddScoped<ITransactionSalesReportFactsProvider, EfTransactionSalesReportFactsProvider>();

@@ -34,8 +34,9 @@ public class MachinesControllerTests
         var store = new Mock<IMachineStockEventStore>();
         store.Setup(x => x.GetImportedNayaxEventLogIdsAsync(MachineId, It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
-        store.Setup(x => x.GetUnprocessedEventsAsync(MachineId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync([]);
+        store.Setup(x => x.GetUnprocessedEventsAsync(
+                MachineId, It.IsAny<CancellationToken>(), It.IsAny<DateTime?>(), It.IsAny<bool>()))
+            .ReturnsAsync(new MachineStockEventsPage([], 0));
         store.Setup(x => x.GetManualMachineRefillsAsync(MachineId, It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
 
@@ -45,6 +46,31 @@ public class MachinesControllerTests
         var preview = Assert.IsType<NayaxMachineStockSyncPreviewDto>(ok.Value);
         Assert.Equal(MachineId, preview.MachineId);
         Assert.Equal("No new Nayax stock-adjustment alerts to review.", preview.Message);
+    }
+
+    [Fact]
+    public async Task SyncRestock_passes_the_from_date_and_show_reconciled_query_parameters_through()
+    {
+        var fromDate = new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc);
+        var nayax = new Mock<INayaxLynxClient>();
+        nayax.Setup(x => x.GetMachineLastAlertsAsync(MachineId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        var store = new Mock<IMachineStockEventStore>();
+        store.Setup(x => x.GetImportedNayaxEventLogIdsAsync(MachineId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        store.Setup(x => x.GetUnprocessedEventsAsync(MachineId, It.IsAny<CancellationToken>(), fromDate, true))
+            .ReturnsAsync(new MachineStockEventsPage([], 3));
+        store.Setup(x => x.GetManualMachineRefillsAsync(MachineId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+
+        var result = await Controller(store.Object, nayax.Object)
+            .SyncRestock(MachineId, CancellationToken.None, fromDate, includeReconciled: true);
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var preview = Assert.IsType<NayaxMachineStockSyncPreviewDto>(ok.Value);
+        Assert.Equal(3, preview.HiddenReconciledCount);
+        store.Verify(
+            x => x.GetUnprocessedEventsAsync(MachineId, It.IsAny<CancellationToken>(), fromDate, true), Times.Once);
     }
 
     [Fact]

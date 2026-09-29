@@ -42,12 +42,17 @@ function event(overrides: Partial<NayaxStockEventPreview>): NayaxStockEventPrevi
   };
 }
 
-function preview(events: NayaxStockEventPreview[], message: string | null = null): NayaxMachineStockSyncPreview {
+function preview(
+  events: NayaxStockEventPreview[],
+  message: string | null = null,
+  hiddenReconciledCount = 0
+): NayaxMachineStockSyncPreview {
   return {
     machineId: 7,
     newEventCount: events.length,
     events,
     productImpacts: [],
+    hiddenReconciledCount,
     message
   };
 }
@@ -112,11 +117,18 @@ describe('MachineRestockSyncComponent eligibility', () => {
     expect(component.isUnresolvedDuplicate(duplicate)).toBe(true);
   });
 
-  it('offers a duplicate resolved as a separate restock for apply once matched again', () => {
+  it('never re-offers a duplicate already resolved as a separate restock for apply again', () => {
     const { component } = createHarness();
     const resolved = event({ isPossibleDuplicate: true, duplicateResolution: NayaxDuplicateResolution.AppliedAsSeparateRestock });
     expect(component.isUnresolvedDuplicate(resolved)).toBe(false);
-    expect(component.isReadyToApply(resolved)).toBe(true);
+    expect(component.isReadyToApply(resolved)).toBe(false);
+  });
+
+  it('never offers an event already reconciled as recorded manually for apply again', () => {
+    const { component } = createHarness();
+    const reconciled = event({ isPossibleDuplicate: true, duplicateResolution: NayaxDuplicateResolution.ReconciledManually });
+    expect(component.isUnresolvedDuplicate(reconciled)).toBe(false);
+    expect(component.isReadyToApply(reconciled)).toBe(false);
   });
 });
 
@@ -227,6 +239,105 @@ describe('MachineRestockSyncComponent sync', () => {
     expect(component.modalOpen$.value).toBe(true);
     expect(component.syncError$.value).toBe('Failed to sync Nayax stock-adjustment alerts.');
     expect(toast.error).toHaveBeenCalledWith('Failed to sync Nayax stock-adjustment alerts.');
+  });
+
+  it('defaults the From date to seven calendar days before today and shows reconciled off', () => {
+    const syncRestock: jest.Mock = jest.fn(() => of(preview([])));
+    const { component } = createHarness(syncRestock);
+    const expected = new Date();
+    expected.setDate(expected.getDate() - 7);
+    const pad = (n: number) => n.toString().padStart(2, '0');
+    const expectedValue = `${expected.getFullYear()}-${pad(expected.getMonth() + 1)}-${pad(expected.getDate())}`;
+
+    component.syncRestock();
+
+    expect(component.fromDate$.value).toBe(expectedValue);
+    expect(component.showReconciled$.value).toBe(false);
+    const [, fromDateIso, includeReconciled] = syncRestock.mock.calls[0];
+    expect(fromDateIso).toBe(new Date(expected.getFullYear(), expected.getMonth(), expected.getDate()).toISOString());
+    expect(includeReconciled).toBe(false);
+  });
+});
+
+describe('MachineRestockSyncComponent filters', () => {
+  it('Select all applicable selects exactly the currently visible/applicable events', () => {
+    const ready1 = event({ id: 1 });
+    const ready2 = event({ id: 2, matchedProductName: 'Chips' });
+    const needsReview = event({ id: 3, matchStatus: NayaxStockEventMatchStatus.NeedsReview });
+    const reconciled = event({ id: 4, isPossibleDuplicate: true, duplicateResolution: NayaxDuplicateResolution.ReconciledManually });
+    const duplicate = event({ id: 5, isPossibleDuplicate: true, duplicateResolution: NayaxDuplicateResolution.None });
+    const { component } = createHarness();
+    const p = preview([ready1, ready2, needsReview, reconciled, duplicate]);
+
+    component.toggleSelectAllApplicable(p, true);
+
+    expect([...component.selectedEventIds].sort()).toEqual([1, 2]);
+    expect(component.isAllApplicableSelected(p)).toBe(true);
+  });
+
+  it('clears the bulk selection without changing event state when Select all applicable is unchecked', () => {
+    const ready = event({ id: 1 });
+    const { component } = createHarness();
+    const p = preview([ready]);
+    component.toggleEventSelection(1, true);
+
+    component.toggleSelectAllApplicable(p, false);
+
+    expect(component.selectedEventIds.size).toBe(0);
+  });
+
+  it('reports Select all applicable as unchecked once there is nothing eligible to select', () => {
+    const needsReview = event({ id: 1, matchStatus: NayaxStockEventMatchStatus.NeedsReview });
+    const { component } = createHarness();
+
+    expect(component.isAllApplicableSelected(preview([needsReview]))).toBe(false);
+  });
+
+  it('changing the From date fetches a new preview bounded by the new date as a UTC instant', () => {
+    const syncRestock: jest.Mock = jest.fn(() => of(preview([])));
+    const { component } = createHarness(syncRestock);
+    component.syncRestock();
+    syncRestock.mockClear();
+
+    component.onFromDateChange('2026-09-01');
+
+    expect(component.fromDate$.value).toBe('2026-09-01');
+    const [machineId, fromDateIso, includeReconciled] = syncRestock.mock.calls[0];
+    expect(machineId).toBe(7);
+    expect(fromDateIso).toBe(new Date(2026, 8, 1).toISOString());
+    expect(includeReconciled).toBe(false);
+  });
+
+  it('toggling Show reconciled fetches reconciled events without implying any state change', () => {
+    const reconciled = event({ id: 9, isPossibleDuplicate: true, duplicateResolution: NayaxDuplicateResolution.ReconciledManually });
+    const syncRestock = jest.fn()
+      .mockReturnValueOnce(of(preview([], null, 1)))
+      .mockReturnValueOnce(of(preview([reconciled], null, 0)));
+    const { component } = createHarness(syncRestock);
+    component.syncRestock();
+
+    component.onShowReconciledChange(true);
+
+    expect(syncRestock).toHaveBeenLastCalledWith(7, expect.any(String), true);
+    expect(component.syncPreview$.value?.events).toEqual([reconciled]);
+    expect(component.syncPreview$.value?.hiddenReconciledCount).toBe(0);
+  });
+
+  it('reconciles the selection with the newly visible/applicable set after a filter change', () => {
+    const ready = event({ id: 1 });
+    const short = event({ id: 2, parsedQuantity: 5, availableStorageQuantity: 4, isInsufficientStock: true });
+    const syncRestock = jest.fn()
+      .mockReturnValueOnce(of(preview([ready, short])))
+      .mockReturnValueOnce(of(preview([short])));
+    const { component } = createHarness(syncRestock);
+    component.syncRestock();
+    expect([...component.selectedEventIds]).toEqual([1]);
+
+    component.onFromDateChange('2026-09-15');
+
+    // Event 1 is no longer part of the visible/applicable set after the filter change, so it
+    // cannot be left selected for Apply.
+    expect([...component.selectedEventIds]).toEqual([]);
   });
 });
 
@@ -441,7 +552,7 @@ describe('MachineRestockSyncComponent dialog', () => {
 
     openDialog();
 
-    expect(syncRestock).toHaveBeenCalledWith(7);
+    expect(syncRestock).toHaveBeenCalledWith(7, expect.any(String), false);
     const panel = requireDialog();
     expect(panel.getAttribute('aria-modal')).toBe('true');
     const titleId = requireAttribute(panel, 'aria-labelledby');
@@ -652,5 +763,90 @@ describe('MachineRestockSyncComponent dialog', () => {
     expect(resolveSyncRestockDuplicate).toHaveBeenCalledWith(7, 5, NayaxDuplicateResolutionChoice.ApplyAsSeparateRestock);
     expect(toast.success).toHaveBeenCalledWith('Applied as a separate restock.');
     expect(applied()).toBe(1);
+  });
+
+  it('shows the From date/Show reconciled/Select all applicable controls and a compact status summary', async () => {
+    const { host, openDialog } = await render(jest.fn(() => of(preview([event({ id: 1 })], null, 2))));
+
+    openDialog();
+
+    const fromDateInput = host.querySelector<HTMLInputElement>('#sync-restock-from-date');
+    if (fromDateInput === null) {
+      throw new Error('Expected a From date input.');
+    }
+    expect(fromDateInput.value).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+
+    const labels = Array.from(host.querySelectorAll('label')).map((label) => label.textContent?.trim());
+    expect(labels.some((text) => text?.includes('Show reconciled'))).toBe(true);
+    expect(labels.some((text) => text?.includes('Select all applicable'))).toBe(true);
+
+    const status = host.querySelector('[data-testid="sync-restock-status"]');
+    expect(status?.textContent).toContain('1 shown');
+    expect(status?.textContent).toContain('2 reconciled record(s) hidden');
+  });
+
+  it('changing the From date input requests a preview bounded by the new date', async () => {
+    const syncRestock = jest.fn()
+      .mockReturnValueOnce(of(preview([event({ id: 1 })])))
+      .mockReturnValueOnce(of(preview([])));
+    const { host, fixture, openDialog } = await render(syncRestock);
+    openDialog();
+
+    const fromDateInput = host.querySelector<HTMLInputElement>('#sync-restock-from-date');
+    if (fromDateInput === null) {
+      throw new Error('Expected a From date input.');
+    }
+    fromDateInput.value = '2026-09-01';
+    fromDateInput.dispatchEvent(new Event('change'));
+    fixture.detectChanges();
+
+    expect(syncRestock).toHaveBeenCalledTimes(2);
+    expect(syncRestock.mock.calls[1]).toEqual([7, new Date(2026, 8, 1).toISOString(), false]);
+  });
+
+  it('Select all applicable toggles the bulk selection between every applicable event and none', async () => {
+    const ready = event({ id: 1 });
+    const needsReview = event({ id: 2, matchStatus: NayaxStockEventMatchStatus.NeedsReview });
+    const { host, requireButton, click, openDialog } = await render(jest.fn(() => of(preview([ready, needsReview]))));
+    openDialog();
+
+    const selectAll = Array.from(host.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'))
+      .find((el) => el.closest('label')?.textContent?.includes('Select all applicable'));
+    if (selectAll === undefined) {
+      throw new Error('Expected a "Select all applicable" checkbox.');
+    }
+    expect(selectAll.checked).toBe(true);
+    expect(requireButton('Apply selected').textContent).toContain('(1)');
+
+    click(selectAll);
+    expect(requireButton('Apply selected').textContent).toContain('(0)');
+
+    click(selectAll);
+    expect(requireButton('Apply selected').textContent).toContain('(1)');
+  });
+
+  it('toggling Show reconciled displays a reconciled event for audit without an ordinary selectable checkbox', async () => {
+    const reconciled = event({
+      id: 3, isPossibleDuplicate: true, duplicateResolution: NayaxDuplicateResolution.ReconciledManually
+    });
+    const syncRestock = jest.fn()
+      .mockReturnValueOnce(of(preview([], null, 1)))
+      .mockReturnValueOnce(of(preview([reconciled], null, 0)));
+    const { host, fixture, openDialog } = await render(syncRestock);
+    openDialog();
+
+    const showReconciled = Array.from(host.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'))
+      .find((el) => el.closest('label')?.textContent?.includes('Show reconciled'));
+    if (showReconciled === undefined) {
+      throw new Error('Expected a "Show reconciled" checkbox.');
+    }
+    showReconciled.checked = true;
+    showReconciled.dispatchEvent(new Event('change'));
+    fixture.detectChanges();
+
+    expect(syncRestock.mock.calls[1]).toEqual([7, expect.any(String), true]);
+    const row = host.querySelector<HTMLInputElement>('tbody input[type="checkbox"]');
+    expect(row?.disabled).toBe(true);
+    expect(host.querySelector('tbody')?.textContent).toContain('Reconciled: already recorded manually');
   });
 });

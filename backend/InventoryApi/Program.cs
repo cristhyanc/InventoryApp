@@ -2,9 +2,11 @@ using Microsoft.EntityFrameworkCore;
 using Inventory.Application;
 using Inventory.Application.CatalogReconciliation;
 using Inventory.Application.Categories;
+using Inventory.Application.Expenses;
 using Inventory.Application.MachineStockSync;
 using Inventory.Application.NayaxFeeSettings;
 using Inventory.Application.Purchases;
+using Inventory.Application.Reorder;
 using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Reporting.Dashboard;
 using Inventory.Application.Reporting.Daily;
@@ -169,6 +171,9 @@ builder.Services.AddScoped<INayaxFeeRateStore, EfNayaxFeeRateStore>();
 builder.Services.AddScoped<ICategoryStore, EfCategoryStore>();
 builder.Services.AddScoped<ISupplierStore, EfSupplierStore>();
 
+// Temporary API-owned adapter for the operating-expenses persistence port; see EfOperatingExpenseStore.
+builder.Services.AddScoped<IOperatingExpenseStore, EfOperatingExpenseStore>();
+
 // Temporary API-owned adapter for the bookkeeping report facts port; see EfBookkeepingReportFactsProvider.
 builder.Services.AddScoped<IBookkeepingReportFactsProvider, EfBookkeepingReportFactsProvider>();
 
@@ -196,6 +201,9 @@ builder.Services.AddScoped<IInventoryValuationFactsProvider, EfInventoryValuatio
 // Temporary API-owned adapter for the product purchase-price-history port; see EfProductPurchasePriceHistoryProvider.
 builder.Services.AddScoped<IProductPurchasePriceHistoryProvider, EfProductPurchasePriceHistoryProvider>();
 
+// Temporary API-owned adapter for the product profitability report's bulk purchase-cost facts port; see EfProductPurchaseCostFactsProvider.
+builder.Services.AddScoped<IProductPurchaseCostFactsProvider, EfProductPurchaseCostFactsProvider>();
+
 // Temporary API-owned adapter for the transaction sales report facts port; see EfTransactionSalesReportFactsProvider.
 builder.Services.AddScoped<ITransactionSalesReportFactsProvider, EfTransactionSalesReportFactsProvider>();
 
@@ -207,6 +215,10 @@ builder.Services.AddScoped<INayaxCatalogSnapshotProvider, InventoryApi.Adapters.
 // Temporary API-owned adapter for the machine Sync Restock persistence port (issue #183); see
 // EfMachineStockEventStore.
 builder.Services.AddScoped<IMachineStockEventStore, EfMachineStockEventStore>();
+
+// Temporary API-owned adapter for the reorder outstanding-supplier-order-quantity port (issue #47);
+// see EfOutstandingSupplierOrderQuantityStore.
+builder.Services.AddScoped<IOutstandingSupplierOrderQuantityStore, EfOutstandingSupplierOrderQuantityStore>();
 
 // Temporary API-owned adapter for the coordinated latest-Nayax-sales persistence port (issue #187);
 // see EfLatestNayaxSalesStore.
