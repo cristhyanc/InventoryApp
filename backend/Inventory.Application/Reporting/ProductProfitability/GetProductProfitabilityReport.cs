@@ -1,4 +1,5 @@
 using Inventory.Application.Reporting.Shared;
+using Inventory.Domain.Purchases;
 using Inventory.Domain.Reporting;
 using Inventory.Domain.Reporting.ProductMatching;
 using Inventory.Domain.Reporting.Profitability;
@@ -14,14 +15,24 @@ namespace Inventory.Application.Reporting.ProductProfitability;
 /// profit/margin/completeness policy, and builds the authoritative
 /// <see cref="ProductProfitabilityReportDto"/> consumed by both the API response and the
 /// CSV/XLSX export.
+///
+/// Each mapped product's Last/Lowest purchase-cost purchasing insight (issue #207) is derived by
+/// fetching every matched product's actual Purchase history in one bulk call through
+/// <see cref="IProductPurchaseCostFactsProvider"/> and applying the same authoritative #63
+/// <see cref="SupplierPriceComparisonPolicy"/> the product's own price-history view uses - never a
+/// second lowest/latest-cost algorithm, and never a per-product query.
 /// </summary>
 public sealed class GetProductProfitabilityReport : IGetProductProfitabilityReport
 {
     private readonly IProductProfitabilityReportFactsProvider _facts;
+    private readonly IProductPurchaseCostFactsProvider _purchaseCostFacts;
 
-    public GetProductProfitabilityReport(IProductProfitabilityReportFactsProvider facts)
+    public GetProductProfitabilityReport(
+        IProductProfitabilityReportFactsProvider facts,
+        IProductPurchaseCostFactsProvider purchaseCostFacts)
     {
         _facts = facts;
+        _purchaseCostFacts = purchaseCostFacts;
     }
 
     public async Task<ProductProfitabilityReportDto> Handle(ReportingFilterDto filter, CancellationToken cancellationToken)
@@ -42,6 +53,13 @@ public sealed class GetProductProfitabilityReport : IGetProductProfitabilityRepo
             return (Group: group, MatchedProductId: matchedProductId, UnmappedName: unmappedName);
         }).ToList();
 
+        var matchedProductIds = matched
+            .Where(x => x.MatchedProductId.HasValue)
+            .Select(x => x.MatchedProductId!.Value)
+            .Distinct()
+            .ToArray();
+        var purchaseCostFactsByProduct = await _purchaseCostFacts.GetForProductsAsync(matchedProductIds, cancellationToken);
+
         var rows = matched
             .GroupBy(x => x.MatchedProductId.HasValue ? $"product:{x.MatchedProductId}" : $"unmapped:{x.Group.NayaxProductId}:{x.UnmappedName}")
             .Select(g =>
@@ -54,6 +72,11 @@ public sealed class GetProductProfitabilityReport : IGetProductProfitabilityRepo
                 var product = first.MatchedProductId.HasValue ? catalogueById.GetValueOrDefault(first.MatchedProductId.Value) : null;
 
                 var row = ProfitabilityRowPolicy.Calculate(new ProfitabilityRowInputs(sales, partialCost, isCogsComplete));
+
+                var purchaseCostComparison = first.MatchedProductId.HasValue
+                    && purchaseCostFactsByProduct.TryGetValue(first.MatchedProductId.Value, out var purchaseHistory)
+                        ? SupplierPriceComparisonPolicy.Evaluate(purchaseHistory)
+                        : (SupplierPriceComparison?)null;
 
                 return new ProductProfitabilityRowDto(
                     first.MatchedProductId ?? first.Group.NayaxProductId,
@@ -73,7 +96,12 @@ public sealed class GetProductProfitabilityReport : IGetProductProfitabilityRepo
                     PartialCostOfGoods = partialCost,
                     IsCogsComplete = isCogsComplete,
                     UncostedTransactionCount = g.Sum(x => x.Group.UncostedTransactionCount),
-                    UncostedSalesAmount = g.Sum(x => x.Group.UncostedSalesAmount)
+                    UncostedSalesAmount = g.Sum(x => x.Group.UncostedSalesAmount),
+                    LastCost = purchaseCostComparison?.Latest?.UnitCost,
+                    LastCostSupplierName = purchaseCostComparison?.Latest?.SupplierName,
+                    LowestCost = purchaseCostComparison?.Lowest?.UnitCost,
+                    LowestCostSupplierName = purchaseCostComparison?.Lowest?.SupplierName,
+                    SavingPerUnit = purchaseCostComparison?.AbsoluteDifference
                 };
             })
             .OrderByDescending(x => x.Sales)

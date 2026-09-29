@@ -197,6 +197,9 @@ builder.Services.AddScoped<IInventoryValuationFactsProvider, EfInventoryValuatio
 // Temporary API-owned adapter for the product purchase-price-history port; see EfProductPurchasePriceHistoryProvider.
 builder.Services.AddScoped<IProductPurchasePriceHistoryProvider, EfProductPurchasePriceHistoryProvider>();
 
+// Temporary API-owned adapter for the product profitability report's bulk purchase-cost facts port; see EfProductPurchaseCostFactsProvider.
+builder.Services.AddScoped<IProductPurchaseCostFactsProvider, EfProductPurchaseCostFactsProvider>();
+
 // Temporary API-owned adapter for the transaction sales report facts port; see EfTransactionSalesReportFactsProvider.
 builder.Services.AddScoped<ITransactionSalesReportFactsProvider, EfTransactionSalesReportFactsProvider>();
 
