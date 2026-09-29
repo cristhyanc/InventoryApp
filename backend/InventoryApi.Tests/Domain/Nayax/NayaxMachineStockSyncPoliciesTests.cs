@@ -165,6 +165,43 @@ public class NayaxMachineStockSyncPoliciesTests
     }
 
     [Fact]
+    public void A_manual_refill_exactly_at_the_24_hour_boundary_is_still_a_possible_duplicate()
+    {
+        // The established rule is inclusive of the boundary itself; this locks that in.
+        var duplicate = NayaxMachineStockDuplicatePolicy.FindPossibleDuplicate(
+            200, 4, EventTime,
+            [new ManualRefillEvidence(200, -4, EventTime - NayaxMachineStockDuplicatePolicy.DetectionWindow)]);
+
+        Assert.NotNull(duplicate);
+    }
+
+    [Fact]
+    public void A_manual_refill_genuinely_more_than_24_hours_away_is_not_a_duplicate()
+    {
+        var duplicate = NayaxMachineStockDuplicatePolicy.FindPossibleDuplicate(
+            200, 4, EventTime,
+            [new ManualRefillEvidence(200, -4, EventTime - NayaxMachineStockDuplicatePolicy.DetectionWindow - TimeSpan.FromMinutes(1))]);
+
+        Assert.Null(duplicate);
+    }
+
+    [Fact]
+    public void Equivalent_utc_and_unspecified_kind_representations_of_the_same_instant_are_a_duplicate()
+    {
+        // Nayax's EventDateTimeGMT is normalized to UTC exactly once at the Application boundary
+        // (SyncMachineStockFromNayax.AsUtc); by the time a timestamp reaches this policy both sides
+        // are already unambiguous UTC instants, so a manual refill and a Nayax event recording the
+        // same physical instant compare with zero elapsed difference regardless of DateTimeKind.
+        var sameInstantUnspecifiedKind = DateTime.SpecifyKind(EventTime, DateTimeKind.Unspecified);
+
+        var duplicate = NayaxMachineStockDuplicatePolicy.FindPossibleDuplicate(
+            200, 4, EventTime,
+            [new ManualRefillEvidence(200, -4, sameInstantUnspecifiedKind)]);
+
+        Assert.NotNull(duplicate);
+    }
+
+    [Fact]
     public void A_nearby_manual_movement_of_another_product_or_quantity_is_not_a_duplicate()
     {
         var duplicate = NayaxMachineStockDuplicatePolicy.FindPossibleDuplicate(

@@ -654,6 +654,35 @@ public class MachineStockSyncTests
     }
 
     [Fact]
+    public async Task A_nayax_event_with_gmt_recorded_without_an_offset_matching_the_same_instant_as_a_manual_refill_is_a_possible_duplicate()
+    {
+        // Nayax's EventDateTimeGMT arrives without an offset (DateTimeKind.Unspecified) and is
+        // normalized to UTC once, at import (SyncMachineStockFromNayax.AsUtc). This proves that
+        // normalization end to end: the manual refill's UTC instant and the Nayax event's
+        // no-offset GMT instant are the same physical moment and must compare with zero elapsed
+        // difference, not an hours-off mismatch from an unnormalized comparison.
+        using var db = CreateInMemoryDb(nameof(A_nayax_event_with_gmt_recorded_without_an_offset_matching_the_same_instant_as_a_manual_refill_is_a_possible_duplicate));
+        SeedCostedProduct(db, ProductId, "Coke 375mL", 20, unitCost: 1m);
+        await db.SaveChangesAsync();
+
+        IStockService stockService = new StockService(db);
+        await stockService.Adjust(ProductId, new StockAdjustmentDto(-4, StockAdjustmentReason.MachineRefill, "operator restocked before Nayax reported it", MachineId, null));
+        var manualMovement = await db.StockAdjustments.SingleAsync(x => x.Reason == StockAdjustmentReason.MachineRefill);
+        manualMovement.EffectiveAt = EventTime;
+        await db.SaveChangesAsync();
+
+        var nayax = NayaxClientReturning([
+            StockAlert(1, "Product MDB: 7 | Coke 375mL | 4", DateTime.SpecifyKind(EventTime, DateTimeKind.Unspecified))
+        ], [new() { NayaxProductID = ProductId, MDBCode = 7, ProductName = "Coke 375mL" }]);
+        var (sync, _) = UseCases(db, nayax.Object);
+
+        var preview = await sync.Handle(MachineId, CancellationToken.None);
+
+        var evt = Assert.Single(preview.Events);
+        Assert.True(evt.IsPossibleDuplicate);
+    }
+
+    [Fact]
     public async Task A_manual_refill_far_outside_the_window_is_not_flagged_as_a_possible_duplicate()
     {
         using var db = CreateInMemoryDb(nameof(A_manual_refill_far_outside_the_window_is_not_flagged_as_a_possible_duplicate));
