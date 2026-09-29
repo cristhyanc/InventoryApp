@@ -4,6 +4,12 @@ import { BehaviorSubject } from 'rxjs';
 import { MachineService } from '../../../services/machine.service';
 import { ToastService } from '../../../services/toast.service';
 import {
+  BUSINESS_TIME_ZONE,
+  currentDateInTimeZone,
+  shiftCalendarDate,
+  startOfDayUtc
+} from '../../../formatting/business-time-zone';
+import {
   NayaxDuplicateResolution,
   NayaxDuplicateResolutionChoice,
   NayaxMachineStockSyncPreview,
@@ -309,29 +315,30 @@ export class MachineRestockSyncComponent {
     });
   }
 
-  /** Seven calendar days before the operator's current local date (issue #206), as `yyyy-MM-dd`. */
+  /**
+   * Seven calendar days before the operator's current Australia/Canberra business date (issue
+   * #206; timezone corrected by issue #218), as `yyyy-MM-dd`.
+   */
   private defaultFromDate(): string {
-    const date = new Date();
-    date.setDate(date.getDate() - 7);
-    return this.toDateInputValue(date);
-  }
-
-  private toDateInputValue(date: Date): string {
+    const today = currentDateInTimeZone(new Date(), BUSINESS_TIME_ZONE);
+    const { year, month, day } = shiftCalendarDate(today, -7);
     const pad = (value: number) => value.toString().padStart(2, '0');
-    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+    return `${year}-${pad(month)}-${pad(day)}`;
   }
 
   /**
-   * The operator's chosen local calendar date as the UTC instant of its local midnight, so the
+   * The operator's chosen calendar date as the UTC instant of its Australia/Canberra midnight
+   * (issue #218) - the InventoryApp business timezone, not the browser's local timezone - so the
    * backend compares it against the canonical (UTC) EventDateTimeGMT without a second, separate
-   * event-date interpretation.
+   * event-date interpretation. Resolved from the IANA timezone database, so AEST/AEDT
+   * daylight-saving transitions are applied automatically rather than a fixed UTC offset.
    */
   private toUtcInstant(dateInputValue: string): string | null {
     if (!dateInputValue) {
       return null;
     }
     const [year, month, day] = dateInputValue.split('-').map(Number);
-    return new Date(year, month - 1, day).toISOString();
+    return startOfDayUtc(year, month, day, BUSINESS_TIME_ZONE).toISOString();
   }
 
   applySelectedEvents(): void {

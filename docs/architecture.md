@@ -1268,20 +1268,50 @@ projection, and this feature does not change that meaning.
    Show reconciled is currently hiding - which the preview exposes as
    `NayaxMachineStockSyncPreviewDto.HiddenReconciledCount` for the dialog's compact visible/hidden
    status line. From date defaults, in the browser only, to seven calendar days before the
-   operator's local date; a caller that omits it (a direct API call, or every test in
-   `MachineStockSyncTests` written before this issue) gets the original unfiltered behaviour, since
-   `null` means "no lower bound" rather than any server-side default. Neither filter deletes,
-   rewrites, or reclassifies any imported event or touches the Apply/duplicate-resolution safety
-   policies - they only change what one preview response returns, and turning Show reconciled back
-   off does not undo a reconciliation. **Select all applicable** selects exactly the checkbox-
-   eligible ids `isReadyToApply` already computes (Matched, a positive quantity, sufficient storage,
-   and `DuplicateResolution.None` with no unresolved possible duplicate) among the events the
-   current filters return; unchecking it clears the bulk selection locally without changing any
-   event. Because every preview fetch - the initial open, a filter change, and the post-apply/post-
-   resolve refresh - recomputes the selection from the events actually returned, a hidden or
-   now-ineligible event can never stay selected across a filter change. Pagination was considered
-   and deliberately not added: filtering the query boundary this way is the requested first step,
-   and nothing so far shows it is insufficient.
+   operator's current Australia/Canberra business date (issue #218; before that fix it used the
+   browser's own local date, which is not necessarily the same calendar day); a caller that omits
+   it (a direct API call, or every test in `MachineStockSyncTests` written before this issue) gets
+   the original unfiltered behaviour, since `null` means "no lower bound" rather than any
+   server-side default. Neither filter deletes, rewrites, or reclassifies any imported event or
+   touches the Apply/duplicate-resolution safety policies - they only change what one preview
+   response returns, and turning Show reconciled back off does not undo a reconciliation. **Select
+   all applicable** selects exactly the checkbox-eligible ids `isReadyToApply` already computes
+   (Matched, a positive quantity, sufficient storage, and `DuplicateResolution.None` with no
+   unresolved possible duplicate) among the events the current filters return; unchecking it clears
+   the bulk selection locally without changing any event. Because every preview fetch - the initial
+   open, a filter change, and the post-apply/post-resolve refresh - recomputes the selection from
+   the events actually returned, a hidden or now-ineligible event can never stay selected across a
+   filter change. Pagination was considered and deliberately not added: filtering the query
+   boundary this way is the requested first step, and nothing so far shows it is insufficient.
+10. **Timestamp contract: UTC storage, Australia/Canberra operator boundary (issues #216, #217,
+    #218).** Every persisted/compared instant in this feature -
+    `NayaxMachineStockEvent.EventDateTimeGMT`, `StockAdjustment.EffectiveAt`, `ProcessedAt`/
+    `DuplicateResolvedAt` - is a true UTC instant: `SyncMachineStockFromNayax.AsUtc` normalizes
+    Nayax's own `EventDateTimeGMT` (documented as already GMT) exactly once at import, and every
+    server-set timestamp is `DateTime.UtcNow`. `NayaxMachineStockDuplicatePolicy`'s 24-hour
+    possible-duplicate window, and every other elapsed-time comparison in this feature, operate on
+    these normalized instants: `DateTime` subtraction and the comparison operators are
+    `DateTimeKind`-agnostic, so as long as both sides are already the same physical UTC instant the
+    comparison is correct regardless of `DateTimeKind` labelling - audited and locked in by
+    regression tests in `MachineStockSyncTests`/`NayaxMachineStockSyncPoliciesTests` (issue #217)
+    with no production defect found or code changed. The operator-facing boundary is
+    `Australia/Canberra` - the same IANA identifier `BusinessDateTimePipe` uses to display
+    `StockAdjustment.createdAt` (issue #216) - in both directions: display formats a stored UTC
+    instant into Canberra wall-clock time through `Intl.DateTimeFormat`, and the Sync Restock
+    **From date** input interprets the operator's chosen calendar date as Canberra midnight and
+    converts it to the equivalent UTC instant (`startOfDayUtc` in
+    `frontend/inventory-app/src/app/formatting/business-time-zone.ts`) before it is ever compared to
+    `EventDateTimeGMT` (issue #218). Both directions resolve AEST/AEDT from the platform's IANA
+    timezone database rather than a fixed UTC offset, so a daylight-saving transition shifts the
+    computed instant by exactly the hour the transition itself changes, never a hard-coded `+10`/
+    `+11`. `MachinesController.SyncRestock` binds `fromDate` as `DateTimeOffset`, not a plain
+    `DateTime` (issue #218): ASP.NET Core's default `DateTime` query-string conversion reinterprets
+    a `Z`-suffixed UTC instant against the server process's own local time zone
+    (`TimeZoneInfo.Local`), silently shifting the compared value whenever that process is not itself
+    running in UTC, exactly the server-local date shift this application's timestamp rules prohibit;
+    `DateTimeOffset` carries its own offset, so its `UtcDateTime` is the operator's exact chosen
+    instant regardless of the server's local time zone (`SyncRestockFromDateQueryBindingTests`,
+    `MachinesControllerTests`).
 
 This is a vertical slice on the current dependency skeleton, following the same shape as [Nayax
 catalog source-state reconciliation](#nayax-catalog-source-state-reconciliation) above. Nothing in
@@ -1310,8 +1340,11 @@ this feature is added to the legacy `InventoryApi/Services` layer:
 - **API.** `MachinesController` binds the request, invokes the use case, and returns its result;
   `POST /api/machines/{id}/sync-restock/resolve-duplicate` (issue #196) is the third, equally thin
   binding for `ResolveMachineStockDuplicate`. `POST /api/machines/{id}/sync-restock` additionally
-  binds the optional `fromDate`/`includeReconciled` query parameters (issue #206) straight through
-  to the use case; the controller does no filtering itself.
+  binds the optional `fromDate`/`includeReconciled` query parameters (issue #206) and passes
+  `fromDate?.UtcDateTime` straight through to the use case; the controller does no filtering itself.
+  `fromDate` is declared `DateTimeOffset?`, not `DateTime?` (issue #218), so the UTC instant the
+  frontend already computed cannot be reinterpreted against the server process's own local time
+  zone.
 - **Frontend.** The Sync Restock workflow is its own standalone component,
   `components/machines/machine-restock-sync/MachineRestockSyncComponent`, following the [large page
   decomposition](#frontend-migration-track) step: it owns the reconciliation dialog's open state,
@@ -1322,7 +1355,8 @@ this feature is added to the legacy `InventoryApi/Services` layer:
   backdrop with `role="dialog"`/`aria-modal`, closed by its Close controls, Escape, or an outside
   click, but not while an apply is in flight); its body scrolls so a long event list never pushes
   the Close/Apply actions off screen. Opening the dialog resets From date to seven calendar days
-  before the browser's local date and Show reconciled to off; changing either filter, and the
+  before the operator's current Australia/Canberra business date (issue #218) and Show reconciled to
+  off; changing either filter, and the
   post-apply/post-resolve refresh, all fetch through the same `refreshPreview`, so the selection is
   always recomputed from the events the current filters actually return.
   `MachineDetailComponent` composes it as

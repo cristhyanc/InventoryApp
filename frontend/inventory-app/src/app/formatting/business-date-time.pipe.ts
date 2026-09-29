@@ -1,11 +1,7 @@
 import { Pipe, PipeTransform } from '@angular/core';
+import { BUSINESS_TIME_ZONE } from './business-time-zone';
 
-/**
- * The InventoryApp business timezone used for operator-facing date/time display.
- * `Australia/Canberra` is an IANA identifier, so `Intl.DateTimeFormat` resolves AEST/AEDT
- * from the platform timezone database instead of a fixed UTC offset.
- */
-export const BUSINESS_TIME_ZONE = 'Australia/Canberra';
+export { BUSINESS_TIME_ZONE };
 
 const businessDateTimeFormatter = new Intl.DateTimeFormat('en-AU', {
   timeZone: BUSINESS_TIME_ZONE,
