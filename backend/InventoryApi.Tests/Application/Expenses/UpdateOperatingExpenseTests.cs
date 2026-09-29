@@ -38,6 +38,22 @@ public class UpdateOperatingExpenseTests
     }
 
     [Fact]
+    public async Task Missing_expense_returns_not_found_even_when_the_attachment_is_invalid()
+    {
+        var store = new FakeOperatingExpenseStore();
+        var documents = new FakeDocumentStorage();
+        var useCase = new UpdateOperatingExpense(store, documents);
+
+        var result = await useCase.Handle(999, Fields(), AttachmentInput("new.exe"), CancellationToken.None);
+
+        // The retired controller resolved the row before validating the attachment, so an unknown
+        // id must keep answering not-found rather than the attachment validation error.
+        Assert.True(result.IsNotFound);
+        Assert.Null(result.ValidationError);
+        Assert.Empty(documents.SavedFileNames);
+    }
+
+    [Fact]
     public async Task Invalid_fields_return_validation_error_before_any_lookup()
     {
         var store = new FakeOperatingExpenseStore();

@@ -112,6 +112,24 @@ public sealed class OperatingExpensesControllerTests : IDisposable
         Assert.Equal("old.pdf", persisted.AttachmentFileName);
     }
 
+    /// <summary>
+    /// A request naming an unknown expense answers 404, even when it also carries an attachment
+    /// that would fail validation: the expense is resolved before the attachment is inspected, as
+    /// the pre-migration controller did (issue #50 preserves existing status codes).
+    /// </summary>
+    [Fact]
+    public async Task Update_with_an_invalid_attachment_on_an_unknown_expense_returns_not_found()
+    {
+        await using var db = CreateDbContext();
+        var controller = CreateController(db);
+
+        var result = await controller.UpdateWithAttachment(
+            999, CreateDto(description: "Updated"), CreateFile("new.exe"), CancellationToken.None);
+
+        Assert.IsType<NotFoundResult>(result.Result);
+        Assert.Empty(db.OperatingExpenses);
+    }
+
     [Fact]
     public async Task Delete_removes_the_attachment_file()
     {

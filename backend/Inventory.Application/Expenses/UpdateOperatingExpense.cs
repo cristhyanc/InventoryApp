@@ -30,14 +30,17 @@ public sealed class UpdateOperatingExpense
             return updated is null ? UpdateOperatingExpenseResult.NotFound() : UpdateOperatingExpenseResult.Success(updated);
         }
 
+        // Existence is resolved before the attachment is validated, exactly as the retired
+        // controller did: an unknown id answers not-found even when the request also carries an
+        // oversized or disallowed attachment.
+        var existing = await _store.FindByIdAsync(id, cancellationToken);
+        if (existing is null) return UpdateOperatingExpenseResult.NotFound();
+
         var extension = Path.GetExtension(attachment.FileName).ToLowerInvariant();
         if (!ExpenseAttachmentPolicy.IsSizeValid(attachment.Length))
             return UpdateOperatingExpenseResult.Invalid(ExpenseAttachmentPolicy.SizeErrorMessage);
         if (!ExpenseAttachmentPolicy.IsExtensionAllowed(extension))
             return UpdateOperatingExpenseResult.Invalid(ExpenseAttachmentPolicy.ExtensionErrorMessage);
-
-        var existing = await _store.FindByIdAsync(id, cancellationToken);
-        if (existing is null) return UpdateOperatingExpenseResult.NotFound();
 
         var storedFileName = $"{Guid.NewGuid()}{extension}";
         try
