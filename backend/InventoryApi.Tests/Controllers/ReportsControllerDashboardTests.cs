@@ -29,7 +29,9 @@ public class ReportsControllerDashboardTests
         var bookkeepingFacts = FakeBookkeepingReportFactsProvider.Complete(sales: 300m, cost: 100m);
         var bookkeepingUseCase = new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(bookkeepingFacts));
         var productFacts = FakeProductProfitabilityReportFactsProvider.SingleMappedProduct(productId: 7, productName: "Soda", sales: 60m, cost: 20m);
-        var productProfitabilityUseCase = new GetProductProfitabilityReport(new FakeProductProfitabilityReportFactsProvider(productFacts));
+        var productProfitabilityUseCase = new GetProductProfitabilityReport(
+            new FakeProductProfitabilityReportFactsProvider(productFacts),
+            FakeProductPurchaseCostFactsProvider.Empty());
         var dailyUseCase = new GetDailyReport(new FakeDailyReportFactsProvider(FakeDailyReportFactsProvider.SingleDay()));
         var reconciliationUseCase = new GetReconciliationReport(new FakeReconciliationReportFactsProvider(FakeReconciliationReportFactsProvider.SinglePeriod()));
         var machineProfitabilityUseCase = new GetMachineProfitabilityReport(new FakeMachineProfitabilityReportFactsProvider(FakeMachineProfitabilityReportFactsProvider.Empty()));

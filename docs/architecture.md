@@ -927,6 +927,26 @@ for reference must not let it silently overwrite an entered order price/cost. A 
 supplier recorded stays visible in the comparison and history with an explicit null/"None" source
 rather than being omitted.
 
+Product Profitability's **Last Cost**/**Lowest Cost**/**Saving per unit** columns (issue #207) are the
+same purchasing insight surfaced on the report used to compare sales performance against purchasing
+opportunity, not a second lowest/latest-cost algorithm. `Inventory.Application.Reporting.ProductProfitability.GetProductProfitabilityReport`
+fetches every matched row's actual Purchase history in one bulk call through the narrow
+`IProductPurchaseCostFactsProvider` port (implemented by the temporary API-owned
+`InventoryApi.Adapters.Persistence.EfProductPurchaseCostFactsProvider`, avoiding a per-product query),
+then applies the same authoritative `SupplierPriceComparisonPolicy.Evaluate` this section describes to
+each product's entries, so the report and the product's own price-history view always agree on latest
+cost, lowest cost, supplier, and tie-break behaviour. The result populates
+`ProductProfitabilityRowDto.LastCost`/`LastCostSupplierName`/`LowestCost`/`LowestCostSupplierName`/`SavingPerUnit`,
+which stay purchasing intelligence only: they never feed `CostOfGoods`, `GrossProfit`, `MarginPercent`,
+or any other historical costing/valuation figure the report already computes from completed-sale
+costing data, and an unmapped sale group's raw Nayax product identifier is never used to look up
+Purchase history. A product with no recorded Purchase history reports these fields as null, which
+`ProductReportComponent` (`frontend/inventory-app/src/app/components/reports/product-report.component.ts`)
+renders as `—` rather than a fabricated zero; the Last/Lowest Cost cells show the supplier underneath
+the cost, and the export (`GetReportExportRows`) deliberately does not add these fields to the CSV/XLSX
+column contract - they stay a UI-only presentation, matching the issue's frontend presentation intent
+of pairing currency and supplier text in one report cell.
+
 #### Purchase rename plan
 
 The canonical internal business term is **Purchase**/**PurchaseItem**, not Receipt/ReceiptItem
