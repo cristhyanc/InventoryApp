@@ -1,5 +1,6 @@
 using Inventory.Application.CatalogReconciliation;
 using Inventory.Application.Categories;
+using Inventory.Application.Expenses;
 using Inventory.Application.MachineStockSync;
 using Inventory.Application.NayaxFeeSettings;
 using Inventory.Application.Purchases;
@@ -36,6 +37,12 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<CreateSupplier>();
         services.AddScoped<UpdateSupplier>();
         services.AddScoped<DeleteSupplier>();
+        services.AddScoped<ListOperatingExpenses>();
+        services.AddScoped<GetOperatingExpense>();
+        services.AddScoped<GetOperatingExpenseAttachment>();
+        services.AddScoped<CreateOperatingExpense>();
+        services.AddScoped<UpdateOperatingExpense>();
+        services.AddScoped<DeleteOperatingExpense>();
         services.AddScoped<GetNayaxCatalogReconciliation>();
         services.AddScoped<SyncMachineStockFromNayax>();
         services.AddScoped<ApplyMachineStockSync>();
