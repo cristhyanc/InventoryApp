@@ -79,7 +79,7 @@
           <tbody class="divide-y divide-slate-100 bg-white">
             @for (h of history; track h.id) {
               <tr>
-                <td class="px-4 py-3 text-slate-600">{{ h.createdAt | date:'short' }}</td>
+                <td class="px-4 py-3 text-slate-600">{{ h.createdAt | businessDateTime }}</td>
                 <td class="px-4 py-3" [style.color]="h.quantityChange < 0 ? '#b91c1c' : '#15803d'">
                   {{ h.quantityChange > 0 ? '+' : '' }}{{ h.quantityChange }}
                 </td>

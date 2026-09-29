@@ -6,11 +6,12 @@ import { StockService } from '../../services/stock.service';
 import { ProductService } from '../../services/product.service';
 import { MachineService } from '../../services/machine.service';
 import { Product, StockAdjustment, StockAdjustmentReason, StockAdjustmentSource, Machine, RestockCostSuggestion } from '../../models/models';
+import { BusinessDateTimePipe } from '../../formatting/business-date-time.pipe';
 
 @Component({
   selector: 'app-stock-history',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterLink],
+  imports: [CommonModule, FormsModule, RouterLink, BusinessDateTimePipe],
   templateUrl: './stock-history.component.html'
 })
 export class StockHistoryComponent implements OnInit {
