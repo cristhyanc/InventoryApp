@@ -937,19 +937,48 @@ picked/unpicked completion state are out of scope for this projection and remain
 `PickListComponent` (`frontend/inventory-app/src/app/components/pick-list`, routed at `/pick-list`)
 is a thin, entirely client-side consumer of the read-only `GET /api/pick-list` projection above: it
 restates none of its arithmetic. Every piece of state the page adds on top of that projection -
-which machines are selected as matrix columns (`selectedMachineIds`), the optional product-row
-filter (`selectedProductIds`), and which positive-pick cells the operator has marked picked
-(`pickedCells`) - lives only in the component instance. None of it is written to `localStorage`,
-a query parameter, or any backend store, so it is lost on every page refresh or navigation away, by
-design: the page is a planning aid, not a record of what was actually picked. Adding or removing a
-machine, or clicking "Apply" (a manual re-fetch, since the underlying Nayax figures are live and the
-projection has no polling), always re-requests `GET /api/pick-list` and then reconciles
-`pickedCells` against the new response, dropping any picked mark whose product/machine cell no
-longer exists or no longer has a positive quantity to pick; a product-row filter change never drops
-picked marks, since the underlying cells are still valid and only hidden from view. The page calls
-no endpoint besides this projection and the existing read-only machine/product list endpoints: no
-selection, filter, or pick/unpick interaction ever calls a mutation endpoint, so the page can never
-create a `MachineRefill`, a stock adjustment, or any other inventory movement.
+the applied machine/product filter selections, the matrix data for the applied machines, and which
+positive-pick cells the operator has marked picked (`pickedCells`) - lives only in the component
+instance. None of it is written to `localStorage`, a query parameter, or any backend store, so it is
+lost on every page refresh or navigation away, by design: the page is a planning aid, not a record
+of what was actually picked. The page calls no endpoint besides this projection and the existing
+read-only machine/product list endpoints: no selection, filter, or pick/unpick interaction ever
+calls a mutation endpoint, so the page can never create a `MachineRefill`, a stock adjustment, or any
+other inventory movement.
+
+**Staged filter model (issue #226).** Products and Machines are both compact checkbox-style
+multi-select dropdown filters (`MultiSelectDropdownComponent`,
+`frontend/inventory-app/src/app/components/shared/multi-select-dropdown.component.ts`), sharing one
+reusable trigger/panel/Select-all implementation rather than duplicating it per filter - a
+`role="group"` panel of native checkboxes plus a tri-state "Select all" checkbox (checked/indeterminate/
+unchecked reflecting all/some/none of the current options selected), closing on Escape or an outside
+click, and a trigger label that summarizes the selection ("All products", "4 products selected", ...).
+It is a presentation-only component: it never owns filtering/fetch semantics, only reports the
+`selectedIds` the operator has checked through a `selectedIdsChange` output, per the [page composition
+boundary](#page-composition-boundary-issue-191) rule of composing a distinct piece of UI as a child
+rather than growing it inline in the page template.
+
+`PickListComponent` keeps two selections per filter: `stagedProductIds`/`stagedMachineIds` (what the
+dropdowns currently show checked) and `appliedProductIds`/`appliedMachineIds` (what the matrix, chips,
+totals and progress are actually computed from). Every dropdown checkbox change updates only the
+staged arrays; nothing about the displayed matrix or picked/unpicked state changes until the operator
+clicks **Apply**. Apply copies both staged selections into the applied selections together and
+compares the new and previous applied machine ids: only a changed machine selection re-requests
+`GET /api/pick-list` (for the newly applied machine ids) and then reconciles `pickedCells` against the
+response, dropping any picked mark whose product/machine cell no longer exists or no longer has a
+positive quantity to pick. An unchanged machine selection with only a product-filter change never
+re-requests the projection - `visibleProducts()` simply filters the already-fetched
+`pickListProducts` by `appliedProductIds` - so product filtering stays client-side and picked marks
+for filtered-out rows are preserved, not dropped, since the underlying cells are still valid and only
+hidden from view. Applying an empty staged machine selection clears the matrix locally without calling
+the backend, the same as it did before this issue. Products defaults to every product id staged and
+applied (so the initial trigger reads "All products" and the matrix starts unfiltered); Machines
+defaults to no ids staged or applied, so the page still requires an explicit Apply before it fetches
+anything. The Selected Machines chips remain as a read-only summary of `appliedMachineIds`; removing a
+chip updates both the applied and staged machine selections (so the dropdown reflects the removal too)
+and re-fetches or clears the matrix exactly as an Apply with a changed machine selection would. Reset
+clears both the staged and applied Products/Machines selections back to those same defaults, along
+with the matrix data, `pickedCells`, and the snapshot timestamp.
 
 #### Supplier product price history and comparison (issue #63)
 
