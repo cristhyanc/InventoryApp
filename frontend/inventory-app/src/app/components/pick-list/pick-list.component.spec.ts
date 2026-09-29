@@ -516,6 +516,34 @@ describe('PickListComponent rendered structure', () => {
     expect(host.querySelector('table')).toBeNull();
   });
 
+  it('renders the snapshot "As of" time as Australia/Canberra local time during AEST (UTC+10), not raw UTC (issue #232)', async () => {
+    jest.useFakeTimers({ now: new Date('2026-06-15T00:00:00Z') });
+    try {
+      const { host, openDropdown, checkOption, applyFilters } = await render();
+      openDropdown('Machines');
+      checkOption('Machine A');
+      applyFilters();
+
+      expect(host.querySelector('[data-testid="pick-list-snapshot"]')?.textContent).toContain('As of 15/06/2026, 10:00 am');
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('renders the snapshot "As of" time as Australia/Canberra local time during AEDT (UTC+11), not raw UTC (issue #232)', async () => {
+    jest.useFakeTimers({ now: new Date('2026-01-15T00:00:00Z') });
+    try {
+      const { host, openDropdown, checkOption, applyFilters } = await render();
+      openDropdown('Machines');
+      checkOption('Machine A');
+      applyFilters();
+
+      expect(host.querySelector('[data-testid="pick-list-snapshot"]')?.textContent).toContain('As of 15/01/2026, 11:00 am');
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('stages a multi-machine selection from the Machines dropdown without changing the matrix until Apply', async () => {
     const { host, openDropdown, checkOption, dropdownTrigger } = await render();
 

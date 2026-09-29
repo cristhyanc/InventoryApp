@@ -8,6 +8,7 @@ import { ToastService } from '../../services/toast.service';
 import { Machine, PickListMachineQuantity, PickListProduct, Product } from '../../models/models';
 import { ListLoadState } from '../shared/list-load-state';
 import { MultiSelectDropdownComponent, MultiSelectOption } from '../shared/multi-select-dropdown.component';
+import { BusinessDateTimePipe } from '../../formatting/business-date-time.pipe';
 
 /**
  * Pick List (Restock Planning) page (issues #222, #226): a read-only matrix built on the #221
@@ -19,7 +20,7 @@ import { MultiSelectDropdownComponent, MultiSelectOption } from '../shared/multi
 @Component({
   selector: 'app-pick-list',
   standalone: true,
-  imports: [CommonModule, MultiSelectDropdownComponent],
+  imports: [CommonModule, MultiSelectDropdownComponent, BusinessDateTimePipe],
   templateUrl: './pick-list.component.html'
 })
 export class PickListComponent implements OnInit {
