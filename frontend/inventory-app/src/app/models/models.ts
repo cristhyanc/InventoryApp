@@ -358,3 +358,29 @@ export interface PurchaseItem {
   unitCost: number;
   lineTotal?: number;
 }
+
+/**
+ * One machine's current/target/pick figures for a product in the Pick List matrix (issue #221/#222),
+ * from the read-only `GET /api/pick-list` projection.
+ */
+export interface PickListMachineQuantity {
+  machineId: number;
+  currentQuantity: number;
+  targetQuantity: number;
+  quantityToPick: number;
+}
+
+/** One product row of the Pick List matrix. */
+export interface PickListProduct {
+  productId: number;
+  productName: string;
+  storageQuantityInStock: number;
+  totalQuantityToPick: number;
+  storageShortageQuantity: number;
+  machineQuantities: PickListMachineQuantity[];
+}
+
+/** The complete read-only Pick List projection for the requested machines. */
+export interface PickListResult {
+  products: PickListProduct[];
+}

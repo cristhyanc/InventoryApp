@@ -932,6 +932,25 @@ workflows, and Nayax remains the read-only source for the machine-stock facts th
 The Pick List Angular page, its machine chips/filter controls, and any persisted
 picked/unpicked completion state are out of scope for this projection and remain frontend-phase work.
 
+#### Pick List frontend page (issue #222)
+
+`PickListComponent` (`frontend/inventory-app/src/app/components/pick-list`, routed at `/pick-list`)
+is a thin, entirely client-side consumer of the read-only `GET /api/pick-list` projection above: it
+restates none of its arithmetic. Every piece of state the page adds on top of that projection -
+which machines are selected as matrix columns (`selectedMachineIds`), the optional product-row
+filter (`selectedProductIds`), and which positive-pick cells the operator has marked picked
+(`pickedCells`) - lives only in the component instance. None of it is written to `localStorage`,
+a query parameter, or any backend store, so it is lost on every page refresh or navigation away, by
+design: the page is a planning aid, not a record of what was actually picked. Adding or removing a
+machine, or clicking "Apply" (a manual re-fetch, since the underlying Nayax figures are live and the
+projection has no polling), always re-requests `GET /api/pick-list` and then reconciles
+`pickedCells` against the new response, dropping any picked mark whose product/machine cell no
+longer exists or no longer has a positive quantity to pick; a product-row filter change never drops
+picked marks, since the underlying cells are still valid and only hidden from view. The page calls
+no endpoint besides this projection and the existing read-only machine/product list endpoints: no
+selection, filter, or pick/unpick interaction ever calls a mutation endpoint, so the page can never
+create a `MachineRefill`, a stock adjustment, or any other inventory movement.
+
 #### Supplier product price history and comparison (issue #63)
 
 The Purchasing/Suppliers vertical slice derives a per-product supplier price comparison from actual,
