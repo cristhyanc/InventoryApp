@@ -31,7 +31,9 @@ public class ReportsControllerBookkeepingTests
         var dailyUseCase = new GetDailyReport(new FakeDailyReportFactsProvider(FakeDailyReportFactsProvider.SingleDay()));
         var reconciliationUseCase = new GetReconciliationReport(new FakeReconciliationReportFactsProvider(FakeReconciliationReportFactsProvider.SinglePeriod()));
         var machineProfitabilityUseCase = new GetMachineProfitabilityReport(new FakeMachineProfitabilityReportFactsProvider(FakeMachineProfitabilityReportFactsProvider.Empty()));
-        var productProfitabilityUseCase = new GetProductProfitabilityReport(new FakeProductProfitabilityReportFactsProvider(FakeProductProfitabilityReportFactsProvider.Empty()));
+        var productProfitabilityUseCase = new GetProductProfitabilityReport(
+            new FakeProductProfitabilityReportFactsProvider(FakeProductProfitabilityReportFactsProvider.Empty()),
+            FakeProductPurchaseCostFactsProvider.Empty());
         var gstUseCase = new GetGstAccountingAid(useCase, new FakeGstReportFactsProvider(FakeGstReportFactsProvider.Complete()));
         var dashboardUseCase = new GetDashboardReport(useCase,
             new FakeGetProductProfitabilityReport(new ProductProfitabilityReportDto(default, default, [], new ReportingDataQualityDto())),

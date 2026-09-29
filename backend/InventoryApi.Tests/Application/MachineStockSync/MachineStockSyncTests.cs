@@ -993,6 +993,132 @@ public class MachineStockSyncTests
 
     #endregion
 
+    #region Sync Restock filtering (issue #206)
+
+    // From date and Show reconciled are query-boundary filters implemented in
+    // EfMachineStockEventStore.GetUnprocessedEventsAsync, so these use relational SQLite rather
+    // than the EF Core InMemory provider used above, following the same split as "Transactional
+    // safety".
+
+    [Fact]
+    public async Task Omitting_from_date_returns_the_complete_unprocessed_history()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await CreateSqliteDbAsync(connection);
+        await using var db = TestAppDbContext.Unrestricted(options);
+        SeedCostedProduct(db, ProductId, "Coke 375mL", 20);
+        await db.SaveChangesAsync();
+
+        var nayax = NayaxClientReturning([
+            StockAlert(1, "Product MDB: 7 | Coke 375mL | 2", EventTime.AddDays(-30)),
+            StockAlert(2, "Product MDB: 7 | Coke 375mL | 3", EventTime)
+        ], [new() { NayaxProductID = ProductId, MDBCode = 7, ProductName = "Coke 375mL" }]);
+        var (sync, _) = UseCases(db, nayax.Object);
+
+        var preview = await sync.Handle(MachineId, CancellationToken.None);
+
+        Assert.Equal(2, preview.Events.Count);
+        Assert.Equal(0, preview.HiddenReconciledCount);
+    }
+
+    [Fact]
+    public async Task From_date_bounds_the_preview_by_the_canonical_event_timestamp_without_dropping_older_imports()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await CreateSqliteDbAsync(connection);
+        await using var db = TestAppDbContext.Unrestricted(options);
+        SeedCostedProduct(db, ProductId, "Coke 375mL", 20);
+        await db.SaveChangesAsync();
+
+        var nayax = NayaxClientReturning([
+            StockAlert(1, "Product MDB: 7 | Coke 375mL | 2", EventTime.AddDays(-10)),
+            StockAlert(2, "Product MDB: 7 | Coke 375mL | 3", EventTime)
+        ], [new() { NayaxProductID = ProductId, MDBCode = 7, ProductName = "Coke 375mL" }]);
+        var (sync, _) = UseCases(db, nayax.Object);
+
+        // The unfiltered call imports both alerts as facts; only the previewed list is bounded by date.
+        await sync.Handle(MachineId, CancellationToken.None);
+
+        var filtered = await sync.Handle(MachineId, CancellationToken.None, EventTime.AddDays(-1));
+
+        var evt = Assert.Single(filtered.Events);
+        Assert.Equal(2, evt.NayaxEventLogId);
+        Assert.Equal(2, await db.NayaxMachineStockEvents.CountAsync());
+    }
+
+    [Fact]
+    public async Task Reconciled_manually_events_are_hidden_by_default_and_shown_and_counted_when_requested()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await CreateSqliteDbAsync(connection);
+        await using var db = TestAppDbContext.Unrestricted(options);
+        var (sync, _, resolve, eventId, _) = await SeedDuplicateScenarioAsync(db);
+
+        var resolved = await resolve.Handle(
+            MachineId, eventId, NayaxDuplicateResolutionChoice.AlreadyRecordedManually, CancellationToken.None);
+        Assert.Equal(NayaxStockEventApplyOutcome.Reconciled, resolved.Outcome);
+
+        var hidden = await sync.Handle(MachineId, CancellationToken.None);
+        Assert.Empty(hidden.Events);
+        Assert.Equal(1, hidden.HiddenReconciledCount);
+        Assert.Equal("No new Nayax stock-adjustment alerts to review.", hidden.Message);
+
+        var shown = await sync.Handle(MachineId, CancellationToken.None, includeReconciled: true);
+        var evt = Assert.Single(shown.Events);
+        Assert.Equal(NayaxDuplicateResolution.ReconciledManually, evt.DuplicateResolution);
+        Assert.Equal(0, shown.HiddenReconciledCount);
+    }
+
+    [Fact]
+    public async Task Unprocessed_events_stay_scoped_to_the_calling_business_under_the_new_filters()
+    {
+        const int BusinessA = 501;
+        const int BusinessB = 502;
+        const long ProductIdA = 300;
+        const long ProductIdB = 301;
+
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await CreateSqliteDbAsync(connection);
+
+        await using (var setup = TestAppDbContext.Unrestricted(options))
+        {
+            setup.Businesses.AddRange(
+                new Business { Id = BusinessA, Name = "Vending A", CreatedAtUtc = DateTime.UtcNow },
+                new Business { Id = BusinessB, Name = "Vending B", CreatedAtUtc = DateTime.UtcNow });
+            await setup.SaveChangesAsync();
+        }
+
+        await using var dbA = TestAppDbContext.For(options, BusinessA);
+        SeedCostedProduct(dbA, ProductIdA, "Coke 375mL", 20);
+        await dbA.SaveChangesAsync();
+        var storeA = new EfMachineStockEventStore(dbA, new InventoryCostService(dbA), new InventoryCostRebuildService(dbA));
+        await storeA.ImportAsync(
+            [new MachineStockEventImport(
+                1, MachineId, NayaxMachineAlertEventCodes.StockAdjustForMachine, EventTime, EventTime,
+                "Product MDB: 7 | Coke 375mL | 2", null, 7, "Coke 375mL", 2,
+                ProductIdA, NayaxStockEventMatchStatus.Matched, null)],
+            CancellationToken.None);
+
+        await using var dbB = TestAppDbContext.For(options, BusinessB);
+        SeedCostedProduct(dbB, ProductIdB, "Coke 375mL", 20);
+        await dbB.SaveChangesAsync();
+        var storeB = new EfMachineStockEventStore(dbB, new InventoryCostService(dbB), new InventoryCostRebuildService(dbB));
+        await storeB.ImportAsync(
+            [new MachineStockEventImport(
+                2, MachineId, NayaxMachineAlertEventCodes.StockAdjustForMachine, EventTime, EventTime,
+                "Product MDB: 7 | Coke 375mL | 3", null, 7, "Coke 375mL", 3,
+                ProductIdB, NayaxStockEventMatchStatus.Matched, null)],
+            CancellationToken.None);
+
+        var pageA = await storeA.GetUnprocessedEventsAsync(MachineId, CancellationToken.None, EventTime.AddDays(-1), includeReconciled: true);
+        var pageB = await storeB.GetUnprocessedEventsAsync(MachineId, CancellationToken.None, EventTime.AddDays(-1), includeReconciled: true);
+
+        Assert.Equal(1L, Assert.Single(pageA.Events).NayaxEventLogId);
+        Assert.Equal(2L, Assert.Single(pageB.Events).NayaxEventLogId);
+    }
+
+    #endregion
+
     #region Nayax upstream failure
 
     [Fact]
