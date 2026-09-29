@@ -752,6 +752,10 @@ video {
   max-height: 24rem;
 }
 
+.max-h-\[70vh\] {
+  max-height: 70vh;
+}
+
 .max-h-\[calc\(100vh-2rem\)\] {
   max-height: calc(100vh - 2rem);
 }
@@ -1577,6 +1581,12 @@ video {
 
 .underline {
   text-decoration-line: underline;
+}
+
+.shadow-\[inset_0_-1px_0_0_\#e2e8f0\] {
+  --tw-shadow: inset 0 -1px 0 0 #e2e8f0;
+  --tw-shadow-colored: inset 0 -1px 0 0 var(--tw-shadow-color);
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
 }
 
 .shadow-lg {

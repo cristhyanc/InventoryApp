@@ -986,6 +986,16 @@ and re-fetches or clears the matrix exactly as an Apply with a changed machine s
 clears both the staged and applied Products/Machines selections back to those same defaults, along
 with the matrix data, `pickedCells`, and the snapshot timestamp.
 
+**Matrix table layout.** The matrix lives in one bounded scroll area (`max-h-[70vh] overflow-auto`),
+so a long product list scrolls vertically inside the card while many machine columns still scroll
+horizontally in the same area. Every header cell - Product, Total to Pick and each applied machine
+column - is individually `sticky top-0` with an opaque background and a z-index above the body cells,
+so the whole header row stays visible while rows scroll under it without showing through. The
+`<thead>` element itself, the filter panel and the Selected Machines card are deliberately not
+sticky. Sticky positioning does not participate in table column sizing, so header and body keep
+identical column widths; the header's bottom rule is an inset box shadow on each header cell, because
+the collapsed `divide-y` border between `<thead>` and `<tbody>` scrolls away with the body.
+
 #### Supplier product price history and comparison (issue #63)
 
 The Purchasing/Suppliers vertical slice derives a per-product supplier price comparison from actual,

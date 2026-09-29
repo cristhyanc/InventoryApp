@@ -550,6 +550,27 @@ describe('PickListComponent rendered structure', () => {
     expect(rows[0].textContent).toContain('Current: 6 of 10');
   });
 
+  it('keeps the whole matrix header row sticky inside a scrollable table area', async () => {
+    const { host, requireElement, openDropdown, checkOption, applyFilters } = await render();
+    openDropdown('Machines');
+    checkOption('Machine A');
+    checkOption('Machine B');
+    applyFilters();
+
+    // A bounded height with overflow on both axes: rows scroll vertically under the pinned header,
+    // and many machine columns still scroll horizontally in the same scroll area.
+    const scrollArea = requireElement('[data-testid="pick-list-table-scroll"]');
+    expect(scrollArea.contains(requireElement('table'))).toBe(true);
+    expect(Array.from(scrollArea.classList)).toEqual(expect.arrayContaining(['max-h-[70vh]', 'overflow-auto']));
+
+    const headers = Array.from(host.querySelectorAll<HTMLTableCellElement>('thead th'));
+    expect(headers.map((th) => th.textContent?.trim())).toEqual(['Product', 'Total to Pick', 'Machine A', 'Machine B']);
+    for (const th of headers) {
+      // Every header cell, not just the first two, is pinned and opaque so rows cannot show through.
+      expect(Array.from(th.classList)).toEqual(expect.arrayContaining(['sticky', 'top-0', 'z-10', 'bg-slate-50']));
+    }
+  });
+
   it('a product-only Apply filters the visible rows without an extra Pick List request', async () => {
     const pickList = jest.fn(() => of(pickListResult()));
     const { openDropdown, checkOption, applyFilters, host } = await render(undefined, undefined, pickList);
