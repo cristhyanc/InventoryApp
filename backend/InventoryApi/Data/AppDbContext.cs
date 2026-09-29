@@ -216,6 +216,23 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<NayaxMachineStockEvent>()
             .HasIndex(e => new { e.BusinessId, e.MachineId, e.ProcessingStatus });
 
+        // EventDateTimeGmt is normalised to a UTC instant at import (SyncMachineStockFromNayax.AsUtc,
+        // issue #217) and the Sync Restock preview exposes it to the frontend as the event's instant.
+        // Microsoft's SQLite provider does not round-trip DateTimeKind - see the StockAdjustment
+        // .CreatedAt comment below for the complete explanation - so without this the preview's
+        // eventDateTimeGmt serialises with no "Z"/offset and the Angular BusinessDateTimePipe parses
+        // it as browser-local time (issue #237, the same defect class issue #230/#232 fixed for Stock
+        // History/Transaction Sales). Marking the value as UTC on every read restores the unambiguous
+        // instant the API boundary must expose without changing the stored bytes or any comparison
+        // semantics (DateTime comparisons and SQL translation only ever look at ticks, never Kind),
+        // so the 24-hour duplicate heuristic, From-date filtering, reconciliation, idempotency,
+        // inventory and costing are unaffected.
+        modelBuilder.Entity<NayaxMachineStockEvent>()
+            .Property(e => e.EventDateTimeGmt)
+            .HasConversion(
+                toProvider => toProvider,
+                fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+
         modelBuilder.Entity<NayaxMachineStockEvent>()
             .HasOne(e => e.MatchedProduct)
             .WithMany()
