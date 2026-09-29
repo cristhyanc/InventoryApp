@@ -16,16 +16,16 @@
 
   @if (isOpen) {
     <div [attr.id]="panelId" role="group" [attr.aria-label]="label + ' options'" class="absolute z-20 mt-1 w-64 rounded-md border border-slate-200 bg-white p-2 shadow-lg">
-      <label class="flex items-center gap-2 rounded px-2 py-1 text-sm font-medium text-slate-700 hover:bg-slate-50">
-        <input type="checkbox" [checked]="allSelected" [indeterminate]="someSelected" [disabled]="options.length === 0" (change)="toggleSelectAll()" />
-        Select all
+      <label class="msd-row rounded px-2 py-1 text-sm font-medium text-slate-700 hover:bg-slate-50">
+        <input type="checkbox" class="msd-checkbox" [checked]="allSelected" [indeterminate]="someSelected" [disabled]="options.length === 0" (change)="toggleSelectAll()" />
+        <span class="msd-label">Select all</span>
       </label>
       <div class="my-1 border-t border-slate-100"></div>
       <div class="max-h-56 overflow-y-auto">
         @for (option of options; track option.id) {
-          <label class="flex items-center gap-2 rounded px-2 py-1 text-sm text-slate-700 hover:bg-slate-50">
-            <input type="checkbox" [checked]="isSelected(option.id)" (change)="toggleOption(option.id)" />
-            <span class="truncate">{{ option.label }}</span>
+          <label class="msd-row rounded px-2 py-1 text-sm text-slate-700 hover:bg-slate-50">
+            <input type="checkbox" class="msd-checkbox" [checked]="isSelected(option.id)" (change)="toggleOption(option.id)" />
+            <span class="msd-label">{{ option.label }}</span>
           </label>
         }
         @if (options.length === 0) {

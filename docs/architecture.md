@@ -956,7 +956,13 @@ click, and a trigger label that summarizes the selection ("All products", "4 pro
 It is a presentation-only component: it never owns filtering/fetch semantics, only reports the
 `selectedIds` the operator has checked through a `selectedIdsChange` output, per the [page composition
 boundary](#page-composition-boundary-issue-191) rule of composing a distinct piece of UI as a child
-rather than growing it inline in the page template.
+rather than growing it inline in the page template. The panel's row layout also belongs to the shared
+component, not to the Products/Machines call sites: "Select all" and every option render the same
+`.msd-row`/`.msd-checkbox`/`.msd-label` structure, so their checkboxes share one fixed-width column
+and all label text starts at the same x-position, with long labels truncating inside the scrollable
+option list. Those three rules are component-scoped styles rather than utility classes because the
+global `input, select, textarea` rule in `src/styles.scss` gives every input full width and
+form-field padding, which would otherwise size each checkbox differently per row.
 
 `PickListComponent` keeps two selections per filter: `stagedProductIds`/`stagedMachineIds` (what the
 dropdowns currently show checked) and `appliedProductIds`/`appliedMachineIds` (what the matrix, chips,

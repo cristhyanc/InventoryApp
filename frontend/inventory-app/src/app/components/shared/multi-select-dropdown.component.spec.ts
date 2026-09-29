@@ -106,6 +106,36 @@ describe('MultiSelectDropdownComponent panel', () => {
   });
 });
 
+describe('MultiSelectDropdownComponent panel row structure', () => {
+  it('gives Select all and every option the same row, checkbox column and label structure', async () => {
+    const { host, openPanel } = await render([1]);
+    openPanel();
+
+    const rows = Array.from(host.querySelectorAll<HTMLLabelElement>('[role="group"] label'));
+    expect(rows.length).toBe(4);
+
+    for (const row of rows) {
+      expect(Array.from(row.classList)).toContain('msd-row');
+      const children = Array.from(row.children);
+      expect(children.map((child) => child.tagName)).toEqual(['INPUT', 'SPAN']);
+      expect((children[0] as HTMLInputElement).type).toBe('checkbox');
+      expect(Array.from(children[0].classList)).toContain('msd-checkbox');
+      expect(Array.from(children[1].classList)).toContain('msd-label');
+    }
+
+    expect(rows.map((row) => row.querySelector('.msd-label')!.textContent!.trim())).toEqual(['Select all', 'Coke', 'Chips', 'Water']);
+  });
+
+  it('keeps the option list in a bounded scroll area', async () => {
+    const { host, openPanel } = await render([]);
+    openPanel();
+
+    const optionList = host.querySelector<HTMLElement>('[role="group"] .max-h-56')!;
+    expect(Array.from(optionList.classList)).toContain('overflow-y-auto');
+    expect(optionList.querySelectorAll('label.msd-row').length).toBe(3);
+  });
+});
+
 describe('MultiSelectDropdownComponent selection', () => {
   it('emits the option added to the selection when an unchecked option is clicked', async () => {
     const { openPanel, optionCheckbox, emitted } = await render([1]);

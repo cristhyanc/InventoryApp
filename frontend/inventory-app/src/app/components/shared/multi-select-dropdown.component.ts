@@ -16,7 +16,39 @@ export interface MultiSelectOption {
   selector: 'app-multi-select-dropdown',
   standalone: true,
   imports: [CommonModule],
-  templateUrl: './multi-select-dropdown.component.html'
+  templateUrl: './multi-select-dropdown.component.html',
+  styles: [
+    `
+      /*
+       * One row structure for "Select all" and every option, so their checkboxes share a
+       * fixed-width column and all label text starts at the same x-position. These rules are
+       * component-scoped on purpose: the global "input, select, textarea" rule in styles.scss
+       * gives every input full width and form-field padding, which otherwise stretched each
+       * checkbox differently depending on how long its label was.
+       */
+      .msd-row {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+      }
+
+      .msd-checkbox {
+        flex: 0 0 auto;
+        width: 1rem;
+        height: 1rem;
+        margin: 0;
+        padding: 0;
+      }
+
+      .msd-label {
+        flex: 1 1 auto;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+    `
+  ]
 })
 export class MultiSelectDropdownComponent {
   private static nextInstanceId = 0;
