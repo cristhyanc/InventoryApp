@@ -119,6 +119,11 @@ export const routes: Routes = [
       import('./components/reports/site-commissions-report.component').then((m) => m.SiteCommissionsReportComponent)
   },
   {
+    path: 'pick-list',
+    canActivate: [MsalGuard],
+    loadComponent: () => import('./components/pick-list/pick-list.component').then((m) => m.PickListComponent)
+  },
+  {
     path: 'admin',
     canActivate: [MsalGuard],
     loadComponent: () => import('./components/admin/admin.component').then((m) => m.AdminComponent)

@@ -4,6 +4,12 @@ import { MachineRestockSyncComponent } from './machine-restock-sync.component';
 import { MachineService } from '../../../services/machine.service';
 import { ToastService } from '../../../services/toast.service';
 import {
+  BUSINESS_TIME_ZONE,
+  currentDateInTimeZone,
+  shiftCalendarDate,
+  startOfDayUtc
+} from '../../../formatting/business-time-zone';
+import {
   NayaxDuplicateResolution,
   NayaxDuplicateResolutionChoice,
   NayaxMachineStockApplyResponse,
@@ -241,20 +247,20 @@ describe('MachineRestockSyncComponent sync', () => {
     expect(toast.error).toHaveBeenCalledWith('Failed to sync Nayax stock-adjustment alerts.');
   });
 
-  it('defaults the From date to seven calendar days before today and shows reconciled off', () => {
+  it('defaults the From date to seven Australia/Canberra calendar days before today and shows reconciled off', () => {
     const syncRestock: jest.Mock = jest.fn(() => of(preview([])));
     const { component } = createHarness(syncRestock);
-    const expected = new Date();
-    expected.setDate(expected.getDate() - 7);
+    const today = currentDateInTimeZone(new Date(), BUSINESS_TIME_ZONE);
+    const expected = shiftCalendarDate(today, -7);
     const pad = (n: number) => n.toString().padStart(2, '0');
-    const expectedValue = `${expected.getFullYear()}-${pad(expected.getMonth() + 1)}-${pad(expected.getDate())}`;
+    const expectedValue = `${expected.year}-${pad(expected.month)}-${pad(expected.day)}`;
 
     component.syncRestock();
 
     expect(component.fromDate$.value).toBe(expectedValue);
     expect(component.showReconciled$.value).toBe(false);
     const [, fromDateIso, includeReconciled] = syncRestock.mock.calls[0];
-    expect(fromDateIso).toBe(new Date(expected.getFullYear(), expected.getMonth(), expected.getDate()).toISOString());
+    expect(fromDateIso).toBe(startOfDayUtc(expected.year, expected.month, expected.day, BUSINESS_TIME_ZONE).toISOString());
     expect(includeReconciled).toBe(false);
   });
 });
@@ -293,7 +299,7 @@ describe('MachineRestockSyncComponent filters', () => {
     expect(component.isAllApplicableSelected(preview([needsReview]))).toBe(false);
   });
 
-  it('changing the From date fetches a new preview bounded by the new date as a UTC instant', () => {
+  it('changing the From date fetches a new preview bounded by the Australia/Canberra midnight of the new date, as a UTC instant', () => {
     const syncRestock: jest.Mock = jest.fn(() => of(preview([])));
     const { component } = createHarness(syncRestock);
     component.syncRestock();
@@ -304,8 +310,22 @@ describe('MachineRestockSyncComponent filters', () => {
     expect(component.fromDate$.value).toBe('2026-09-01');
     const [machineId, fromDateIso, includeReconciled] = syncRestock.mock.calls[0];
     expect(machineId).toBe(7);
-    expect(fromDateIso).toBe(new Date(2026, 8, 1).toISOString());
+    // 2026-09-01 is in the Australian winter (AEST, UTC+10), so Canberra midnight is the previous UTC calendar day.
+    expect(fromDateIso).toBe(startOfDayUtc(2026, 9, 1, BUSINESS_TIME_ZONE).toISOString());
+    expect(fromDateIso).toBe('2026-08-31T14:00:00.000Z');
     expect(includeReconciled).toBe(false);
+  });
+
+  it('interprets a From date at an AEDT (UTC+11) boundary as Canberra midnight, not a fixed UTC+10 offset', () => {
+    const syncRestock: jest.Mock = jest.fn(() => of(preview([])));
+    const { component } = createHarness(syncRestock);
+    component.syncRestock();
+    syncRestock.mockClear();
+
+    component.onFromDateChange('2026-01-15');
+
+    const [, fromDateIso] = syncRestock.mock.calls[0];
+    expect(fromDateIso).toBe('2026-01-14T13:00:00.000Z');
   });
 
   it('toggling Show reconciled fetches reconciled events without implying any state change', () => {
@@ -801,7 +821,7 @@ describe('MachineRestockSyncComponent dialog', () => {
     fixture.detectChanges();
 
     expect(syncRestock).toHaveBeenCalledTimes(2);
-    expect(syncRestock.mock.calls[1]).toEqual([7, new Date(2026, 8, 1).toISOString(), false]);
+    expect(syncRestock.mock.calls[1]).toEqual([7, startOfDayUtc(2026, 9, 1, BUSINESS_TIME_ZONE).toISOString(), false]);
   });
 
   it('Select all applicable toggles the bulk selection between every applicable event and none', async () => {

@@ -1,0 +1,141 @@
+<div class="mb-6">
+  <h1 class="text-2xl font-semibold text-slate-800">Pick List (Restock Planning)</h1>
+  <p class="text-sm text-slate-500">Planning only. This is a read-only view: it never changes requested quantities or inventory, and nothing selected or picked here is saved.</p>
+</div>
+
+<div class="mb-6 rounded-xl bg-white p-6 shadow-sm">
+  <div class="flex flex-wrap items-end gap-4">
+    <div>
+      <span class="block text-xs font-semibold uppercase text-slate-500">Snapshot</span>
+      <span data-testid="pick-list-snapshot" class="text-sm text-slate-700">
+        {{ lastRefreshedAt ? ('As of ' + (lastRefreshedAt | date:'short')) : 'Not loaded yet' }}
+      </span>
+    </div>
+
+    <app-multi-select-dropdown
+      label="Products"
+      itemLabelSingular="product"
+      itemLabelPlural="products"
+      [options]="productOptions()"
+      [selectedIds]="stagedProductIds"
+      (selectedIdsChange)="onStagedProductIdsChange($event)"
+    ></app-multi-select-dropdown>
+
+    <app-multi-select-dropdown
+      label="Machines"
+      itemLabelSingular="machine"
+      itemLabelPlural="machines"
+      [options]="machineOptions()"
+      [selectedIds]="stagedMachineIds"
+      (selectedIdsChange)="onStagedMachineIdsChange($event)"
+    ></app-multi-select-dropdown>
+
+    <button type="button" class="rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white" (click)="applyFilters()">Apply</button>
+    <button type="button" class="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50" (click)="resetAll()">Reset</button>
+  </div>
+</div>
+
+<div class="mb-6 rounded-xl bg-white p-6 shadow-sm">
+  <div class="mb-3 flex items-center justify-between">
+    <h2 class="text-sm font-semibold text-slate-700">Selected Machines ({{ appliedMachineIds.length }})</h2>
+  </div>
+  <div class="flex flex-wrap gap-2">
+    @for (machineId of appliedMachineIds; track machineId) {
+      <span class="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-sm text-slate-700">
+        {{ machineLabel(machineId) }}
+        <button type="button" class="text-slate-500 hover:text-red-600" [attr.aria-label]="'Remove ' + machineLabel(machineId)" (click)="removeMachine(machineId)">&times;</button>
+      </span>
+    }
+    @if (appliedMachineIds.length === 0) {
+      <span class="text-sm text-slate-500">No machines selected yet.</span>
+    }
+  </div>
+</div>
+
+<div class="rounded-xl bg-white p-6 shadow-sm">
+  @if (appliedMachineIds.length === 0) {
+    <p class="text-sm text-slate-500">Select at least one machine to build a pick list.</p>
+  } @else if (loadState.loadFailed) {
+    <p class="text-sm text-red-600">Failed to load the pick list. Change your selection or click Apply to try again.</p>
+  } @else if (!loadState.loaded) {
+    <p class="text-sm text-slate-500">Loading pick list&hellip;</p>
+  } @else if (visibleProducts().length === 0) {
+    <p class="text-sm text-slate-500">No products to pick for the selected machines and filters.</p>
+  } @else {
+    <!--
+      One bounded scroll area for both axes: long product lists scroll vertically under the sticky
+      header row, and many machine columns still scroll horizontally. The header cells are sticky
+      individually (rather than the <thead>) with an opaque background, a z-index above the body
+      cells, and an inset bottom line replacing the border the body would otherwise scroll away.
+    -->
+    <div data-testid="pick-list-table-scroll" class="max-h-[70vh] overflow-auto">
+      <table class="min-w-full divide-y divide-slate-200 text-sm">
+        <thead class="bg-slate-50">
+          <tr>
+            <th class="sticky top-0 z-10 bg-slate-50 px-4 py-3 text-left font-semibold text-slate-700 shadow-[inset_0_-1px_0_0_#e2e8f0]">Product</th>
+            <th class="sticky top-0 z-10 bg-slate-50 px-4 py-3 text-left font-semibold text-slate-700 shadow-[inset_0_-1px_0_0_#e2e8f0]">Total to Pick</th>
+            @for (machineId of appliedMachineIds; track machineId) {
+              <th class="sticky top-0 z-10 bg-slate-50 px-4 py-3 text-left font-semibold text-slate-700 shadow-[inset_0_-1px_0_0_#e2e8f0]">{{ machineLabel(machineId) }}</th>
+            }
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100 bg-white">
+          @for (product of visibleProducts(); track product.productId) {
+            <tr>
+              <td class="px-4 py-3 text-slate-700">
+                {{ product.productName }}
+                @if (product.storageShortageQuantity > 0) {
+                  <span data-testid="storage-shortage-badge" class="ml-2 inline-flex rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700">
+                    Storage short {{ product.storageShortageQuantity }}
+                  </span>
+                }
+              </td>
+              <td class="px-4 py-3 font-semibold text-slate-700">{{ product.totalQuantityToPick }}</td>
+              @for (machineId of appliedMachineIds; track machineId) {
+                @if (cellFor(product, machineId); as cell) {
+                  <td class="px-4 py-3">
+                    @if (cell.quantityToPick > 0) {
+                      <button
+                        type="button"
+                        class="w-full rounded-md border px-2 py-1 text-left"
+                        [ngClass]="isPicked(product.productId, machineId) ? 'border-green-300 bg-green-100 text-green-800' : 'border-slate-200 bg-white text-slate-700'"
+                        (click)="togglePicked(product, machineId)">
+                        <span class="block font-medium">
+                          @if (isPicked(product.productId, machineId)) { &#10003; }
+                          Pick: {{ cell.quantityToPick }}
+                        </span>
+                        <span class="block text-xs text-slate-500">Current: {{ cell.currentQuantity }} of {{ cell.targetQuantity }}</span>
+                      </button>
+                    } @else {
+                      <div class="px-2 py-1 text-slate-500">
+                        <span class="block font-medium">Pick: 0</span>
+                        <span class="block text-xs text-slate-400">Current: {{ cell.currentQuantity }} of {{ cell.targetQuantity }}</span>
+                      </div>
+                    }
+                  </td>
+                } @else {
+                  <td class="px-4 py-3 text-slate-300">&mdash;</td>
+                }
+              }
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+
+    <div class="mt-6 flex flex-wrap items-center gap-6 border-t border-slate-200 pt-4 text-sm text-slate-600">
+      <div class="flex items-center gap-2">
+        <span class="inline-block h-4 w-4 rounded border border-green-300 bg-green-100"></span> Picked
+        <span class="inline-block h-4 w-4 rounded border border-slate-200 bg-white"></span> Not picked
+      </div>
+      <div data-testid="pick-list-total-units">Total to Pick: <span class="font-semibold text-slate-800">{{ totalToPickUnits() }}</span> units</div>
+      <div data-testid="pick-list-progress-count">Picked <span class="font-semibold text-slate-800">{{ pickedActionableCellCount() }}/{{ actionableCellCount() }}</span> actionable cells</div>
+      <div class="flex min-w-[140px] items-center gap-2">
+        <div class="h-2 flex-1 overflow-hidden rounded-full bg-slate-200">
+          <div class="h-2 rounded-full bg-green-500" [style.width.%]="progressPercent()"></div>
+        </div>
+        <span data-testid="pick-list-progress-percent" class="text-xs text-slate-500">{{ progressPercent() }}%</span>
+      </div>
+    </div>
+  }
+</div>

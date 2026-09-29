@@ -51,14 +51,15 @@ public class MachinesControllerTests
     [Fact]
     public async Task SyncRestock_passes_the_from_date_and_show_reconciled_query_parameters_through()
     {
-        var fromDate = new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc);
+        var expectedUtc = new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc);
+        var fromDate = new DateTimeOffset(expectedUtc);
         var nayax = new Mock<INayaxLynxClient>();
         nayax.Setup(x => x.GetMachineLastAlertsAsync(MachineId, It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
         var store = new Mock<IMachineStockEventStore>();
         store.Setup(x => x.GetImportedNayaxEventLogIdsAsync(MachineId, It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
-        store.Setup(x => x.GetUnprocessedEventsAsync(MachineId, It.IsAny<CancellationToken>(), fromDate, true))
+        store.Setup(x => x.GetUnprocessedEventsAsync(MachineId, It.IsAny<CancellationToken>(), expectedUtc, true))
             .ReturnsAsync(new MachineStockEventsPage([], 3));
         store.Setup(x => x.GetManualMachineRefillsAsync(MachineId, It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
@@ -70,7 +71,36 @@ public class MachinesControllerTests
         var preview = Assert.IsType<NayaxMachineStockSyncPreviewDto>(ok.Value);
         Assert.Equal(3, preview.HiddenReconciledCount);
         store.Verify(
-            x => x.GetUnprocessedEventsAsync(MachineId, It.IsAny<CancellationToken>(), fromDate, true), Times.Once);
+            x => x.GetUnprocessedEventsAsync(MachineId, It.IsAny<CancellationToken>(), expectedUtc, true), Times.Once);
+    }
+
+    /// <summary>
+    /// Issue #218: <c>fromDate</c> is bound as <see cref="DateTimeOffset"/> precisely so its
+    /// instant is unambiguous regardless of the server process's local time zone. This proves the
+    /// controller converts a non-zero-offset value (as a client in any time zone could send) to the
+    /// exact same UTC instant, rather than the server-local-time-zone-dependent shift a plain
+    /// <c>DateTime</c> query parameter would apply.
+    /// </summary>
+    [Fact]
+    public async Task SyncRestock_converts_a_non_utc_offset_from_date_to_its_exact_utc_instant()
+    {
+        var expectedUtc = new DateTime(2026, 8, 31, 14, 0, 0, DateTimeKind.Utc);
+        var fromDate = new DateTimeOffset(2026, 9, 1, 0, 0, 0, TimeSpan.FromHours(10));
+        var nayax = new Mock<INayaxLynxClient>();
+        nayax.Setup(x => x.GetMachineLastAlertsAsync(MachineId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        var store = new Mock<IMachineStockEventStore>();
+        store.Setup(x => x.GetImportedNayaxEventLogIdsAsync(MachineId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        store.Setup(x => x.GetUnprocessedEventsAsync(MachineId, It.IsAny<CancellationToken>(), expectedUtc, false))
+            .ReturnsAsync(new MachineStockEventsPage([], 0));
+        store.Setup(x => x.GetManualMachineRefillsAsync(MachineId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+
+        await Controller(store.Object, nayax.Object).SyncRestock(MachineId, CancellationToken.None, fromDate);
+
+        store.Verify(
+            x => x.GetUnprocessedEventsAsync(MachineId, It.IsAny<CancellationToken>(), expectedUtc, false), Times.Once);
     }
 
     [Fact]

@@ -3,6 +3,7 @@ using Inventory.Application.Categories;
 using Inventory.Application.Expenses;
 using Inventory.Application.MachineStockSync;
 using Inventory.Application.NayaxFeeSettings;
+using Inventory.Application.PickList;
 using Inventory.Application.Purchases;
 using Inventory.Application.Reorder;
 using Inventory.Application.Reporting.Bookkeeping;
@@ -50,6 +51,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<SyncLatestNayaxSales>();
         services.AddScoped<ComputePurchaseTotalValidation>();
         services.AddScoped<CalculateReorderNeeds>();
+        services.AddScoped<GetPickList>();
         services.AddScoped<GetProductPriceComparison>();
         services.AddScoped<GetBookkeepingReport>();
         services.AddScoped<IGetBookkeepingReport>(sp => sp.GetRequiredService<GetBookkeepingReport>());

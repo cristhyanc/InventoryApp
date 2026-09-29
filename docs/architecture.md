@@ -900,6 +900,102 @@ errors](#external-integration-errors)) or a genuine cancellation - propagates ou
 `Parallel.ForEachAsync` never assembles a completed-looking aggregate once one machine's call has
 failed, so a caller never receives a partial reorder calculation presented as a complete one.
 
+#### Pick List backend projection (issue #221)
+
+`GET /api/pick-list?machineIds=...` (`InventoryApi.Controllers.PickListController`, thin: it only
+binds/validates the query string and maps the result) is a **read-only restock-planning projection**
+for the Pick List UI's future frontend phase (parent issue #212). It is `Inventory.Application.PickList.GetPickList`,
+a second, independent consumer of the same `INayaxLynxClient.GetMachineProductsAsync` source and
+PAR/`MissingStockByMDB` arithmetic `InventoryApi.Services.MachineService.GetMachineProducts` already
+uses to show one machine's current stock and restock target - it does not introduce a competing
+restock formula. For the caller's selected machines (never the whole fleet), it fans the per-machine
+`GetMachineProductsAsync` calls out with the same bounded parallelism
+`Inventory.Application.Reorder.CalculateReorderNeeds.MaxConcurrentMachineRequests` already established
+for the reorder-alert fan-out above, aggregates each product's current/target/pick-quantity per
+machine (summing duplicate MDB-slot mappings within a machine exactly as `CalculateReorderNeeds`
+already does for `MissingStockByMDB`), and looks up each product's physical storage quantity through
+the narrow `IPickListStorageStockStore` port (`InventoryApi.Adapters.Persistence.EfPickListStorageStockStore`,
+a temporary API-owned `AppDbContext` adapter following the same pattern as
+`EfOutstandingSupplierOrderQuantityStore`, scoped by the same central tenant query filter as every
+other `_db.Products` read - it adds no per-call business filter of its own). A product with no
+matching row in that tenant-scoped lookup is excluded from the result rather than assigned a
+fabricated zero storage quantity, so the tenant boundary can never be papered over as a data gap.
+
+The projection returns, per product: its physical `QuantityInStock` (untouched), the total quantity
+to pick across the selected machines, and a storage-shortage quantity (`max(0, total to pick -
+QuantityInStock)`) projected when the combined pick quantity would exceed what is physically on the
+shelf; and per selected machine: current quantity, target/capacity, and quantity to pick (the same
+clamped-to-zero `MissingStockByMDB` value, so a machine already at or above its target always
+contributes zero). Executing the query performs no EF/database mutation and creates no
+`MachineRefill`, costing, or inventory movement; actual restocking remains the existing refill/restock
+workflows, and Nayax remains the read-only source for the machine-stock facts this projection reuses.
+The Pick List Angular page, its machine chips/filter controls, and any persisted
+picked/unpicked completion state are out of scope for this projection and remain frontend-phase work.
+
+#### Pick List frontend page (issue #222)
+
+`PickListComponent` (`frontend/inventory-app/src/app/components/pick-list`, routed at `/pick-list`)
+is a thin, entirely client-side consumer of the read-only `GET /api/pick-list` projection above: it
+restates none of its arithmetic. Every piece of state the page adds on top of that projection -
+the applied machine/product filter selections, the matrix data for the applied machines, and which
+positive-pick cells the operator has marked picked (`pickedCells`) - lives only in the component
+instance. None of it is written to `localStorage`, a query parameter, or any backend store, so it is
+lost on every page refresh or navigation away, by design: the page is a planning aid, not a record
+of what was actually picked. The page calls no endpoint besides this projection and the existing
+read-only machine/product list endpoints: no selection, filter, or pick/unpick interaction ever
+calls a mutation endpoint, so the page can never create a `MachineRefill`, a stock adjustment, or any
+other inventory movement.
+
+**Staged filter model (issue #226).** Products and Machines are both compact checkbox-style
+multi-select dropdown filters (`MultiSelectDropdownComponent`,
+`frontend/inventory-app/src/app/components/shared/multi-select-dropdown.component.ts`), sharing one
+reusable trigger/panel/Select-all implementation rather than duplicating it per filter - a
+`role="group"` panel of native checkboxes plus a tri-state "Select all" checkbox (checked/indeterminate/
+unchecked reflecting all/some/none of the current options selected), closing on Escape or an outside
+click, and a trigger label that summarizes the selection ("All products", "4 products selected", ...).
+It is a presentation-only component: it never owns filtering/fetch semantics, only reports the
+`selectedIds` the operator has checked through a `selectedIdsChange` output, per the [page composition
+boundary](#page-composition-boundary-issue-191) rule of composing a distinct piece of UI as a child
+rather than growing it inline in the page template. The panel's row layout also belongs to the shared
+component, not to the Products/Machines call sites: "Select all" and every option render the same
+`.msd-row`/`.msd-checkbox`/`.msd-label` structure, so their checkboxes share one fixed-width column
+and all label text starts at the same x-position, with long labels truncating inside the scrollable
+option list. Those three rules are component-scoped styles rather than utility classes because the
+global `input, select, textarea` rule in `src/styles.scss` gives every input full width and
+form-field padding, which would otherwise size each checkbox differently per row.
+
+`PickListComponent` keeps two selections per filter: `stagedProductIds`/`stagedMachineIds` (what the
+dropdowns currently show checked) and `appliedProductIds`/`appliedMachineIds` (what the matrix, chips,
+totals and progress are actually computed from). Every dropdown checkbox change updates only the
+staged arrays; nothing about the displayed matrix or picked/unpicked state changes until the operator
+clicks **Apply**. Apply copies both staged selections into the applied selections together and
+compares the new and previous applied machine ids: only a changed machine selection re-requests
+`GET /api/pick-list` (for the newly applied machine ids) and then reconciles `pickedCells` against the
+response, dropping any picked mark whose product/machine cell no longer exists or no longer has a
+positive quantity to pick. An unchanged machine selection with only a product-filter change never
+re-requests the projection - `visibleProducts()` simply filters the already-fetched
+`pickListProducts` by `appliedProductIds` - so product filtering stays client-side and picked marks
+for filtered-out rows are preserved, not dropped, since the underlying cells are still valid and only
+hidden from view. Applying an empty staged machine selection clears the matrix locally without calling
+the backend, the same as it did before this issue. Products defaults to every product id staged and
+applied (so the initial trigger reads "All products" and the matrix starts unfiltered); Machines
+defaults to no ids staged or applied, so the page still requires an explicit Apply before it fetches
+anything. The Selected Machines chips remain as a read-only summary of `appliedMachineIds`; removing a
+chip updates both the applied and staged machine selections (so the dropdown reflects the removal too)
+and re-fetches or clears the matrix exactly as an Apply with a changed machine selection would. Reset
+clears both the staged and applied Products/Machines selections back to those same defaults, along
+with the matrix data, `pickedCells`, and the snapshot timestamp.
+
+**Matrix table layout.** The matrix lives in one bounded scroll area (`max-h-[70vh] overflow-auto`),
+so a long product list scrolls vertically inside the card while many machine columns still scroll
+horizontally in the same area. Every header cell - Product, Total to Pick and each applied machine
+column - is individually `sticky top-0` with an opaque background and a z-index above the body cells,
+so the whole header row stays visible while rows scroll under it without showing through. The
+`<thead>` element itself, the filter panel and the Selected Machines card are deliberately not
+sticky. Sticky positioning does not participate in table column sizing, so header and body keep
+identical column widths; the header's bottom rule is an inset box shadow on each header cell, because
+the collapsed `divide-y` border between `<thead>` and `<tbody>` scrolls away with the body.
+
 #### Supplier product price history and comparison (issue #63)
 
 The Purchasing/Suppliers vertical slice derives a per-product supplier price comparison from actual,
@@ -1236,20 +1332,50 @@ projection, and this feature does not change that meaning.
    Show reconciled is currently hiding - which the preview exposes as
    `NayaxMachineStockSyncPreviewDto.HiddenReconciledCount` for the dialog's compact visible/hidden
    status line. From date defaults, in the browser only, to seven calendar days before the
-   operator's local date; a caller that omits it (a direct API call, or every test in
-   `MachineStockSyncTests` written before this issue) gets the original unfiltered behaviour, since
-   `null` means "no lower bound" rather than any server-side default. Neither filter deletes,
-   rewrites, or reclassifies any imported event or touches the Apply/duplicate-resolution safety
-   policies - they only change what one preview response returns, and turning Show reconciled back
-   off does not undo a reconciliation. **Select all applicable** selects exactly the checkbox-
-   eligible ids `isReadyToApply` already computes (Matched, a positive quantity, sufficient storage,
-   and `DuplicateResolution.None` with no unresolved possible duplicate) among the events the
-   current filters return; unchecking it clears the bulk selection locally without changing any
-   event. Because every preview fetch - the initial open, a filter change, and the post-apply/post-
-   resolve refresh - recomputes the selection from the events actually returned, a hidden or
-   now-ineligible event can never stay selected across a filter change. Pagination was considered
-   and deliberately not added: filtering the query boundary this way is the requested first step,
-   and nothing so far shows it is insufficient.
+   operator's current Australia/Canberra business date (issue #218; before that fix it used the
+   browser's own local date, which is not necessarily the same calendar day); a caller that omits
+   it (a direct API call, or every test in `MachineStockSyncTests` written before this issue) gets
+   the original unfiltered behaviour, since `null` means "no lower bound" rather than any
+   server-side default. Neither filter deletes, rewrites, or reclassifies any imported event or
+   touches the Apply/duplicate-resolution safety policies - they only change what one preview
+   response returns, and turning Show reconciled back off does not undo a reconciliation. **Select
+   all applicable** selects exactly the checkbox-eligible ids `isReadyToApply` already computes
+   (Matched, a positive quantity, sufficient storage, and `DuplicateResolution.None` with no
+   unresolved possible duplicate) among the events the current filters return; unchecking it clears
+   the bulk selection locally without changing any event. Because every preview fetch - the initial
+   open, a filter change, and the post-apply/post-resolve refresh - recomputes the selection from
+   the events actually returned, a hidden or now-ineligible event can never stay selected across a
+   filter change. Pagination was considered and deliberately not added: filtering the query
+   boundary this way is the requested first step, and nothing so far shows it is insufficient.
+10. **Timestamp contract: UTC storage, Australia/Canberra operator boundary (issues #216, #217,
+    #218).** Every persisted/compared instant in this feature -
+    `NayaxMachineStockEvent.EventDateTimeGMT`, `StockAdjustment.EffectiveAt`, `ProcessedAt`/
+    `DuplicateResolvedAt` - is a true UTC instant: `SyncMachineStockFromNayax.AsUtc` normalizes
+    Nayax's own `EventDateTimeGMT` (documented as already GMT) exactly once at import, and every
+    server-set timestamp is `DateTime.UtcNow`. `NayaxMachineStockDuplicatePolicy`'s 24-hour
+    possible-duplicate window, and every other elapsed-time comparison in this feature, operate on
+    these normalized instants: `DateTime` subtraction and the comparison operators are
+    `DateTimeKind`-agnostic, so as long as both sides are already the same physical UTC instant the
+    comparison is correct regardless of `DateTimeKind` labelling - audited and locked in by
+    regression tests in `MachineStockSyncTests`/`NayaxMachineStockSyncPoliciesTests` (issue #217)
+    with no production defect found or code changed. The operator-facing boundary is
+    `Australia/Canberra` - the same IANA identifier `BusinessDateTimePipe` uses to display
+    `StockAdjustment.createdAt` (issue #216) - in both directions: display formats a stored UTC
+    instant into Canberra wall-clock time through `Intl.DateTimeFormat`, and the Sync Restock
+    **From date** input interprets the operator's chosen calendar date as Canberra midnight and
+    converts it to the equivalent UTC instant (`startOfDayUtc` in
+    `frontend/inventory-app/src/app/formatting/business-time-zone.ts`) before it is ever compared to
+    `EventDateTimeGMT` (issue #218). Both directions resolve AEST/AEDT from the platform's IANA
+    timezone database rather than a fixed UTC offset, so a daylight-saving transition shifts the
+    computed instant by exactly the hour the transition itself changes, never a hard-coded `+10`/
+    `+11`. `MachinesController.SyncRestock` binds `fromDate` as `DateTimeOffset`, not a plain
+    `DateTime` (issue #218): ASP.NET Core's default `DateTime` query-string conversion reinterprets
+    a `Z`-suffixed UTC instant against the server process's own local time zone
+    (`TimeZoneInfo.Local`), silently shifting the compared value whenever that process is not itself
+    running in UTC, exactly the server-local date shift this application's timestamp rules prohibit;
+    `DateTimeOffset` carries its own offset, so its `UtcDateTime` is the operator's exact chosen
+    instant regardless of the server's local time zone (`SyncRestockFromDateQueryBindingTests`,
+    `MachinesControllerTests`).
 
 This is a vertical slice on the current dependency skeleton, following the same shape as [Nayax
 catalog source-state reconciliation](#nayax-catalog-source-state-reconciliation) above. Nothing in
@@ -1278,8 +1404,11 @@ this feature is added to the legacy `InventoryApi/Services` layer:
 - **API.** `MachinesController` binds the request, invokes the use case, and returns its result;
   `POST /api/machines/{id}/sync-restock/resolve-duplicate` (issue #196) is the third, equally thin
   binding for `ResolveMachineStockDuplicate`. `POST /api/machines/{id}/sync-restock` additionally
-  binds the optional `fromDate`/`includeReconciled` query parameters (issue #206) straight through
-  to the use case; the controller does no filtering itself.
+  binds the optional `fromDate`/`includeReconciled` query parameters (issue #206) and passes
+  `fromDate?.UtcDateTime` straight through to the use case; the controller does no filtering itself.
+  `fromDate` is declared `DateTimeOffset?`, not `DateTime?` (issue #218), so the UTC instant the
+  frontend already computed cannot be reinterpreted against the server process's own local time
+  zone.
 - **Frontend.** The Sync Restock workflow is its own standalone component,
   `components/machines/machine-restock-sync/MachineRestockSyncComponent`, following the [large page
   decomposition](#frontend-migration-track) step: it owns the reconciliation dialog's open state,
@@ -1290,7 +1419,8 @@ this feature is added to the legacy `InventoryApi/Services` layer:
   backdrop with `role="dialog"`/`aria-modal`, closed by its Close controls, Escape, or an outside
   click, but not while an apply is in flight); its body scrolls so a long event list never pushes
   the Close/Apply actions off screen. Opening the dialog resets From date to seven calendar days
-  before the browser's local date and Show reconciled to off; changing either filter, and the
+  before the operator's current Australia/Canberra business date (issue #218) and Show reconciled to
+  off; changing either filter, and the
   post-apply/post-resolve refresh, all fetch through the same `refreshPreview`, so the selection is
   always recomputed from the events the current filters actually return.
   `MachineDetailComponent` composes it as
