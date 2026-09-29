@@ -594,6 +594,10 @@ video {
   z-index: 10;
 }
 
+.z-20 {
+  z-index: 20;
+}
+
 .z-50 {
   z-index: 50;
 }
@@ -605,6 +609,11 @@ video {
 .mx-auto {
   margin-left: auto;
   margin-right: auto;
+}
+
+.my-1 {
+  margin-top: 0.25rem;
+  margin-bottom: 0.25rem;
 }
 
 .mb-1 {
@@ -731,12 +740,20 @@ video {
   height: 1rem;
 }
 
+.max-h-56 {
+  max-height: 14rem;
+}
+
 .max-h-72 {
   max-height: 18rem;
 }
 
 .max-h-96 {
   max-height: 24rem;
+}
+
+.max-h-\[70vh\] {
+  max-height: 70vh;
 }
 
 .max-h-\[calc\(100vh-2rem\)\] {
@@ -775,6 +792,14 @@ video {
   width: 10rem;
 }
 
+.w-56 {
+  width: 14rem;
+}
+
+.w-64 {
+  width: 16rem;
+}
+
 .w-full {
   width: 100%;
 }
@@ -793,14 +818,6 @@ video {
 
 .min-w-\[140px\] {
   min-width: 140px;
-}
-
-.min-w-\[200px\] {
-  min-width: 200px;
-}
-
-.min-w-\[220px\] {
-  min-width: 220px;
 }
 
 .min-w-\[900px\] {
@@ -997,6 +1014,12 @@ video {
 
 .overflow-y-auto {
   overflow-y: auto;
+}
+
+.truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .whitespace-nowrap {
@@ -1558,6 +1581,12 @@ video {
 
 .underline {
   text-decoration-line: underline;
+}
+
+.shadow-\[inset_0_-1px_0_0_\#e2e8f0\] {
+  --tw-shadow: inset 0 -1px 0 0 #e2e8f0;
+  --tw-shadow-colored: inset 0 -1px 0 0 var(--tw-shadow-color);
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
 }
 
 .shadow-lg {

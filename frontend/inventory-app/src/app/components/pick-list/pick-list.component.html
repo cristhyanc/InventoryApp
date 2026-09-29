@@ -12,48 +12,48 @@
       </span>
     </div>
 
-    <label class="flex flex-col text-sm text-slate-600">
-      Products
-      <select multiple class="min-w-[200px]" [size]="4" (change)="onProductFilterChange($event)">
-        @for (product of allProducts; track product.id) {
-          <option [value]="product.id" [selected]="selectedProductIds.includes(product.id)">{{ product.name }}</option>
-        }
-      </select>
-    </label>
+    <app-multi-select-dropdown
+      label="Products"
+      itemLabelSingular="product"
+      itemLabelPlural="products"
+      [options]="productOptions()"
+      [selectedIds]="stagedProductIds"
+      (selectedIdsChange)="onStagedProductIdsChange($event)"
+    ></app-multi-select-dropdown>
 
-    <button type="button" class="rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white" (click)="refresh()" [disabled]="selectedMachineIds.length === 0">Apply</button>
+    <app-multi-select-dropdown
+      label="Machines"
+      itemLabelSingular="machine"
+      itemLabelPlural="machines"
+      [options]="machineOptions()"
+      [selectedIds]="stagedMachineIds"
+      (selectedIdsChange)="onStagedMachineIdsChange($event)"
+    ></app-multi-select-dropdown>
+
+    <button type="button" class="rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white" (click)="applyFilters()">Apply</button>
     <button type="button" class="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50" (click)="resetAll()">Reset</button>
   </div>
 </div>
 
 <div class="mb-6 rounded-xl bg-white p-6 shadow-sm">
   <div class="mb-3 flex items-center justify-between">
-    <h2 class="text-sm font-semibold text-slate-700">Selected Machines ({{ selectedMachineIds.length }})</h2>
+    <h2 class="text-sm font-semibold text-slate-700">Selected Machines ({{ appliedMachineIds.length }})</h2>
   </div>
-  <div class="mb-4 flex flex-wrap gap-2">
-    @for (machineId of selectedMachineIds; track machineId) {
+  <div class="flex flex-wrap gap-2">
+    @for (machineId of appliedMachineIds; track machineId) {
       <span class="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-sm text-slate-700">
         {{ machineLabel(machineId) }}
         <button type="button" class="text-slate-500 hover:text-red-600" [attr.aria-label]="'Remove ' + machineLabel(machineId)" (click)="removeMachine(machineId)">&times;</button>
       </span>
     }
-    @if (selectedMachineIds.length === 0) {
+    @if (appliedMachineIds.length === 0) {
       <span class="text-sm text-slate-500">No machines selected yet.</span>
     }
-  </div>
-  <div class="flex items-center gap-2">
-    <select class="min-w-[220px]" [(ngModel)]="machineToAdd">
-      <option [ngValue]="''">Select a machine&hellip;</option>
-      @for (machine of availableMachinesToAdd(); track machine.machineID) {
-        <option [ngValue]="machine.machineID">{{ machine.machineName || machine.machineNumber || ('Machine #' + machine.machineID) }}</option>
-      }
-    </select>
-    <button type="button" class="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50" [disabled]="machineToAdd === ''" (click)="addMachine()">+ Add Machines</button>
   </div>
 </div>
 
 <div class="rounded-xl bg-white p-6 shadow-sm">
-  @if (selectedMachineIds.length === 0) {
+  @if (appliedMachineIds.length === 0) {
     <p class="text-sm text-slate-500">Select at least one machine to build a pick list.</p>
   } @else if (loadState.loadFailed) {
     <p class="text-sm text-red-600">Failed to load the pick list. Change your selection or click Apply to try again.</p>
@@ -62,14 +62,20 @@
   } @else if (visibleProducts().length === 0) {
     <p class="text-sm text-slate-500">No products to pick for the selected machines and filters.</p>
   } @else {
-    <div class="overflow-x-auto">
+    <!--
+      One bounded scroll area for both axes: long product lists scroll vertically under the sticky
+      header row, and many machine columns still scroll horizontally. The header cells are sticky
+      individually (rather than the <thead>) with an opaque background, a z-index above the body
+      cells, and an inset bottom line replacing the border the body would otherwise scroll away.
+    -->
+    <div data-testid="pick-list-table-scroll" class="max-h-[70vh] overflow-auto">
       <table class="min-w-full divide-y divide-slate-200 text-sm">
         <thead class="bg-slate-50">
           <tr>
-            <th class="px-4 py-3 text-left font-semibold text-slate-700">Product</th>
-            <th class="px-4 py-3 text-left font-semibold text-slate-700">Total to Pick</th>
-            @for (machineId of selectedMachineIds; track machineId) {
-              <th class="px-4 py-3 text-left font-semibold text-slate-700">{{ machineLabel(machineId) }}</th>
+            <th class="sticky top-0 z-10 bg-slate-50 px-4 py-3 text-left font-semibold text-slate-700 shadow-[inset_0_-1px_0_0_#e2e8f0]">Product</th>
+            <th class="sticky top-0 z-10 bg-slate-50 px-4 py-3 text-left font-semibold text-slate-700 shadow-[inset_0_-1px_0_0_#e2e8f0]">Total to Pick</th>
+            @for (machineId of appliedMachineIds; track machineId) {
+              <th class="sticky top-0 z-10 bg-slate-50 px-4 py-3 text-left font-semibold text-slate-700 shadow-[inset_0_-1px_0_0_#e2e8f0]">{{ machineLabel(machineId) }}</th>
             }
           </tr>
         </thead>
@@ -85,7 +91,7 @@
                 }
               </td>
               <td class="px-4 py-3 font-semibold text-slate-700">{{ product.totalQuantityToPick }}</td>
-              @for (machineId of selectedMachineIds; track machineId) {
+              @for (machineId of appliedMachineIds; track machineId) {
                 @if (cellFor(product, machineId); as cell) {
                   <td class="px-4 py-3">
                     @if (cell.quantityToPick > 0) {
