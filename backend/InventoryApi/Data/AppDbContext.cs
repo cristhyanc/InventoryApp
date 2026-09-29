@@ -282,6 +282,20 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<OperatingExpense>().Property(e => e.AmountExGst).HasColumnType("decimal(18,2)");
         modelBuilder.Entity<OperatingExpense>().Property(e => e.GstAmount).HasColumnType("decimal(18,2)");
         modelBuilder.Entity<OperatingExpense>().Property(e => e.TotalAmount).HasColumnType("decimal(18,2)");
+        // StockAdjustment.CreatedAt is always DateTime.UtcNow (see StockAdjustment.cs), but
+        // Microsoft's SQLite provider - the only provider this API runs against, see Program.cs -
+        // does not round-trip DateTimeKind: a value freshly queried back from the database always
+        // materialises as DateTimeKind.Unspecified. System.Text.Json then serialises it without a
+        // "Z"/offset, so Stock History's JSON instant is ambiguous and the frontend's
+        // BusinessDateTimePipe parses it as browser-local time instead of UTC (issue #230). Marking
+        // the value as UTC on every read restores the unambiguous instant the API boundary must
+        // expose, without changing the stored bytes or comparison semantics (DateTime comparisons and
+        // SQL translation only ever look at ticks, never Kind).
+        modelBuilder.Entity<StockAdjustment>()
+            .Property(a => a.CreatedAt)
+            .HasConversion(
+                toProvider => toProvider,
+                fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
         modelBuilder.Entity<StockAdjustment>().Property(a => a.UnitCost).HasColumnType("decimal(18,6)");
         modelBuilder.Entity<StockAdjustment>().Property(a => a.TotalCost).HasColumnType("decimal(18,6)");
         modelBuilder.Entity<StockAdjustment>().Property(a => a.AverageUnitCostAfter).HasColumnType("decimal(18,6)");
