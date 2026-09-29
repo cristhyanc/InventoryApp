@@ -900,6 +900,38 @@ errors](#external-integration-errors)) or a genuine cancellation - propagates ou
 `Parallel.ForEachAsync` never assembles a completed-looking aggregate once one machine's call has
 failed, so a caller never receives a partial reorder calculation presented as a complete one.
 
+#### Pick List backend projection (issue #221)
+
+`GET /api/pick-list?machineIds=...` (`InventoryApi.Controllers.PickListController`, thin: it only
+binds/validates the query string and maps the result) is a **read-only restock-planning projection**
+for the Pick List UI's future frontend phase (parent issue #212). It is `Inventory.Application.PickList.GetPickList`,
+a second, independent consumer of the same `INayaxLynxClient.GetMachineProductsAsync` source and
+PAR/`MissingStockByMDB` arithmetic `InventoryApi.Services.MachineService.GetMachineProducts` already
+uses to show one machine's current stock and restock target - it does not introduce a competing
+restock formula. For the caller's selected machines (never the whole fleet), it fans the per-machine
+`GetMachineProductsAsync` calls out with the same bounded parallelism
+`Inventory.Application.Reorder.CalculateReorderNeeds.MaxConcurrentMachineRequests` already established
+for the reorder-alert fan-out above, aggregates each product's current/target/pick-quantity per
+machine (summing duplicate MDB-slot mappings within a machine exactly as `CalculateReorderNeeds`
+already does for `MissingStockByMDB`), and looks up each product's physical storage quantity through
+the narrow `IPickListStorageStockStore` port (`InventoryApi.Adapters.Persistence.EfPickListStorageStockStore`,
+a temporary API-owned `AppDbContext` adapter following the same pattern as
+`EfOutstandingSupplierOrderQuantityStore`, scoped by the same central tenant query filter as every
+other `_db.Products` read - it adds no per-call business filter of its own). A product with no
+matching row in that tenant-scoped lookup is excluded from the result rather than assigned a
+fabricated zero storage quantity, so the tenant boundary can never be papered over as a data gap.
+
+The projection returns, per product: its physical `QuantityInStock` (untouched), the total quantity
+to pick across the selected machines, and a storage-shortage quantity (`max(0, total to pick -
+QuantityInStock)`) projected when the combined pick quantity would exceed what is physically on the
+shelf; and per selected machine: current quantity, target/capacity, and quantity to pick (the same
+clamped-to-zero `MissingStockByMDB` value, so a machine already at or above its target always
+contributes zero). Executing the query performs no EF/database mutation and creates no
+`MachineRefill`, costing, or inventory movement; actual restocking remains the existing refill/restock
+workflows, and Nayax remains the read-only source for the machine-stock facts this projection reuses.
+The Pick List Angular page, its machine chips/filter controls, and any persisted
+picked/unpicked completion state are out of scope for this projection and remain frontend-phase work.
+
 #### Supplier product price history and comparison (issue #63)
 
 The Purchasing/Suppliers vertical slice derives a per-product supplier price comparison from actual,
