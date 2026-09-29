@@ -611,6 +611,28 @@ describe('MachineRestockSyncComponent dialog', () => {
     expect(text).toContain('Ready to apply');
   });
 
+  it('renders the canonical GMT event time as Australia/Canberra local time during AEST (UTC+10), not raw UTC', async () => {
+    // 2026-06-15T00:00:00Z falls in the Australian winter, outside daylight saving (AEST, UTC+10).
+    const aest = event({ id: 1, eventDateTimeGmt: '2026-06-15T00:00:00Z' });
+    const { requireElement, openDialog } = await render(jest.fn(() => of(preview([aest]))));
+
+    openDialog();
+
+    const timeCell = requireElement<HTMLTableElement>('table').querySelector('tbody tr td:nth-child(2)');
+    expect(timeCell?.textContent?.trim()).toBe('15/06/2026, 10:00 am');
+  });
+
+  it('renders the canonical GMT event time as Australia/Canberra local time during AEDT (UTC+11), not raw UTC', async () => {
+    // 2026-01-15T00:00:00Z falls in the Australian summer, inside daylight saving (AEDT, UTC+11).
+    const aedt = event({ id: 1, eventDateTimeGmt: '2026-01-15T00:00:00Z' });
+    const { requireElement, openDialog } = await render(jest.fn(() => of(preview([aedt]))));
+
+    openDialog();
+
+    const timeCell = requireElement<HTMLTableElement>('table').querySelector('tbody tr td:nth-child(2)');
+    expect(timeCell?.textContent?.trim()).toBe('15/01/2026, 11:00 am');
+  });
+
   it('closes with the Close button, clears the preview, and returns focus to Sync Restock', async () => {
     const { host, dialog, requireButton, click, openDialog, fixture } = await render(jest.fn(() => of(preview([event({})]))));
     openDialog();
