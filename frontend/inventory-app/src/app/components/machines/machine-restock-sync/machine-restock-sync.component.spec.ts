@@ -633,6 +633,17 @@ describe('MachineRestockSyncComponent dialog', () => {
     expect(timeCell?.textContent?.trim()).toBe('15/01/2026, 11:00 am');
   });
 
+  it('rolls the displayed calendar date forward across the UTC/Canberra day boundary rather than showing the UTC date', async () => {
+    // 2026-06-14T14:30:00Z is still 14 June in UTC, but AEST (UTC+10) has already crossed into 15 June.
+    const boundary = event({ id: 1, eventDateTimeGmt: '2026-06-14T14:30:00Z' });
+    const { requireElement, openDialog } = await render(jest.fn(() => of(preview([boundary]))));
+
+    openDialog();
+
+    const timeCell = requireElement<HTMLTableElement>('table').querySelector('tbody tr td:nth-child(2)');
+    expect(timeCell?.textContent?.trim()).toBe('15/06/2026, 12:30 am');
+  });
+
   it('closes with the Close button, clears the preview, and returns focus to Sync Restock', async () => {
     const { host, dialog, requireButton, click, openDialog, fixture } = await render(jest.fn(() => of(preview([event({})]))));
     openDialog();
