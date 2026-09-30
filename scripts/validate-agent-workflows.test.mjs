@@ -515,6 +515,7 @@ describe('architecture pass contract', () => {
       'delays=(0 2 5 10)',
       'sleep "$delay"',
       "grep -Eqi '403|Permission to .* denied'",
+      'core.hooksPath=/dev/null',
       'push "$remote" "$refspec"',
     ]) {
       const weakened = replaceOnce(appPushRetryScript, required, '# removed retry contract');
