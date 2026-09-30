@@ -436,6 +436,7 @@ export const implementPath = '.github/workflows/agent-implement.yml';
 export const repairPath = '.github/workflows/agent-repair.yml';
 export const issueTemplatePath = '.github/ISSUE_TEMPLATE/agent-task.yml';
 export const pullRequestTemplatePath = '.github/pull_request_template.md';
+export const appPushRetryPath = 'scripts/git-push-with-app-retry.sh';
 
 // ---------------------------------------------------------------------------------------
 // Documentation-impact gate. The templates collect the decision, the preflight and validation
@@ -792,6 +793,7 @@ export function verifyArchitecturePass(workflow) {
     'Existing persistence branch differs; refusing overwrite',
     'Remote persistence verification failed', 'agent/recovery-',
     'core.hooksPath=/dev/null', 'credential.helper=',
+    `bash ${appPushRetryPath} "$publish_remote" "$EXPECTED_HEAD:refs/heads/$saved_branch"`,
   ]) requireText(persistence, required, 'trusted persistence');
   for (const forbidden of ['gh pr create', 'ready=true', '--force']) forbidText(persistence, forbidden, 'storage is not approval');
   requireText(job, "if: success() && steps.claude.outcome == 'success'", 'failed agent must not advance');
@@ -869,7 +871,7 @@ export function verifyArchitecturePass(workflow) {
   for (const required of [
     'GH_TOKEN: ${{ steps.implementation_app_token.outputs.token }}',
     'EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}',
-    'git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"',
+    `bash ${appPushRetryPath} "https://github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$BRANCH"`,
     'gh pr create',
     '--body-file .agent-pr-body.md',
     '.user.login == $author',
@@ -972,7 +974,7 @@ export function verifyArchitecturePass(workflow) {
   );
   for (const required of [
     'GH_TOKEN: ${{ steps.architecture_app_token.outputs.token }}',
-    'git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"',
+    `bash ${appPushRetryPath} "https://github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$BRANCH"`,
     'HEAD_SHA: ${{ steps.architecture_result.outputs.head_sha }}',
   ]) {
     requireText(architecturePublish, required, 'agent-implement.yml architecture publish');
@@ -999,6 +1001,24 @@ export function verifyArchitecturePass(workflow) {
 
 /** Runs every agent workflow contract check with an overridable repository reader. */
 export function runContractChecks({ read = readRepositoryFile } = {}) {
+  const appPushRetry = read(appPushRetryPath);
+  for (const required of [
+    'set -euo pipefail',
+    '[ -n "${GH_TOKEN:-}" ]',
+    'delays=(0 2 5 10)',
+    'sleep "$delay"',
+    "grep -Eqi '403|Permission to .* denied'",
+    'credential.helper=',
+    'core.hooksPath=/dev/null',
+    'http.extraheader="AUTHORIZATION: basic $auth"',
+    'push "$remote" "$refspec"',
+  ]) {
+    requireText(appPushRetry, required, appPushRetryPath);
+  }
+  for (const forbidden of ['--force', 'git config --global', 'x-access-token:${GH_TOKEN}@']) {
+    forbidText(appPushRetry, forbidden, appPushRetryPath);
+  }
+
   const validate = read(validatePath);
   for (const required of [
     'workflow_dispatch:',
