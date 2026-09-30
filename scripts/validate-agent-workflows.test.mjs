@@ -508,6 +508,21 @@ describe('architecture pass contract', () => {
     }
   });
 
+  it('requires bounded retry for transient GitHub App Git authorization denials', () => {
+    for (const required of [
+      'local delays=(0 2 5 10)',
+      'sleep "$delay"',
+      "grep -Eqi '403|Permission to .* denied'",
+      'push_with_app_retry "$publish_remote"',
+    ]) {
+      const weakened = replaceOnce(implementWorkflow, required, '# removed retry contract');
+      assert.throws(
+        () => runContractChecks({ read: readWithOverrides({ [implementPath]: weakened }) }),
+        /push retry: missing required text/,
+      );
+    }
+  });
+
   it('never exposes the GitHub App credential to Claude invocations', () => {
     for (const [path, workflow, agentName] of [
       [implementPath, implementWorkflow, 'implementation'],
