@@ -417,6 +417,7 @@ jobs:
           BRANCH: ${{ steps.implementation_result.outputs.branch }}
           HEAD_SHA: ${{ steps.implementation_result.outputs.head_sha }}
           EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
           fail() { echo "::error::$1"; exit 1; }
@@ -525,6 +526,7 @@ jobs:
     permissions:
       actions: write
       pull-requests: read
+      issues: write
 
     steps:
       - name: Verify pull request and dispatch trusted architecture workflow
@@ -565,9 +567,15 @@ jobs:
             fail "Pull requests that change .github/workflows/** require manual validation and review."
           fi
 
-          gh workflow run agent-architecture.yml \
+          if ! gh workflow run agent-architecture.yml \
             --repo "$GITHUB_REPOSITORY" \
             --ref main \
             -f issue_number="$ISSUE_NUMBER" \
             -f pr_number="$PR_NUMBER" \
-            -f head_sha="$HEAD_SHA"
+            -f head_sha="$HEAD_SHA"; then
+            gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
+              --remove-label agent-working --add-label agent-blocked || true
+            gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
+              --body "Implementation PR #$PR_NUMBER was created at $HEAD_SHA, but the trusted architecture workflow could not be dispatched. The task is now agent-blocked. Run: $RUN_URL" || true
+            fail "Architecture workflow dispatch failed."
+          fi
