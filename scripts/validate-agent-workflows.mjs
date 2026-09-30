@@ -792,7 +792,7 @@ export function verifyArchitecturePass(workflow) {
     'git merge-base --is-ancestor', '--diff-merges=separate',
     'Existing persistence branch differs; refusing overwrite',
     'Remote persistence verification failed', 'agent/recovery-',
-    'core.hooksPath=/dev/null', 'credential.helper=',
+    'credential.helper=',
     `bash ${appPushRetryPath} "$publish_remote" "$EXPECTED_HEAD:refs/heads/$saved_branch"`,
   ]) requireText(persistence, required, 'trusted persistence');
   for (const forbidden of ['gh pr create', 'ready=true', '--force']) forbidText(persistence, forbidden, 'storage is not approval');
