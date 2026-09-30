@@ -1,14 +1,21 @@
+using Inventory.Application.Sites;
+using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using Inventory.Application.Nayax;
 using InventoryApi.Models;
 using InventoryApi.Services;
-using InventoryApi.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
 using Moq;
 using Xunit;
 
 namespace InventoryApi.Tests.Services;
 
+/// <summary>
+/// Regression tests for the migrated site dashboard slice (issue #241):
+/// <see cref="GetSiteSummaries"/>/<see cref="GetSiteProducts"/> over the real
+/// <see cref="EfSiteFactsStore"/>, matching the former <c>InventoryApi.Services.SiteService</c> tests
+/// this replaces exactly.
+/// </summary>
 public class SiteServiceTests
 {
     [Fact]
@@ -46,8 +53,8 @@ public class SiteServiceTests
                 new() { MachineID = 11, NayaxProductID = 2, PAR = 5, MissingStockByMDB = 5, VendOutAlertThreshold = 1 }
             });
 
-        ISiteService service = new SiteService(db, nayax.Object, Mock.Of<IMachineService>());
-        var summary = Assert.Single(await service.GetAll());
+        var service = new GetSiteSummaries(nayax.Object, new EfSiteFactsStore(db), new SiteNameResolverAdapter());
+        var summary = Assert.Single(await service.Handle(CancellationToken.None));
 
         Assert.Equal(12m, summary.TodayRevenue);
         Assert.Equal(12m, summary.CurrentWeekRevenue);
@@ -90,12 +97,12 @@ public class SiteServiceTests
             {
                 new() { MachineID = 10, NayaxProductID = 1, RetailPrice = 5m }
             });
-        var service = new SiteService(db, nayax.Object, Mock.Of<IMachineService>());
+        var service = new GetSiteProducts(nayax.Object, new EfSiteFactsStore(db));
 
-        var first = Assert.Single(await service.GetProducts(42));
+        var first = Assert.Single(await service.Handle(42, CancellationToken.None));
         rate.FeeExGst = .25m;
         await db.SaveChangesAsync();
-        var second = Assert.Single(await service.GetProducts(42));
+        var second = Assert.Single(await service.Handle(42, CancellationToken.None));
 
         Assert.Equal(2.78m, first.EstimatedCardProfit!.Value);
         Assert.Equal(2.725m, second.EstimatedCardProfit!.Value);
@@ -121,7 +128,8 @@ public class SiteServiceTests
         nayax.Setup(x => x.GetMachinesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([new NayaxMachine { MachineID = 10, CustomerID = 42 }]);
         nayax.Setup(x => x.GetMachineProductsAsync(10, It.IsAny<CancellationToken>())).ReturnsAsync([new NayaxMachineProduct { MachineID = 10, NayaxProductID = 1, RetailPrice = 5m }]);
 
-        var product = Assert.Single(await new SiteService(db, nayax.Object, Mock.Of<IMachineService>()).GetProducts(42));
+        var service = new GetSiteProducts(nayax.Object, new EfSiteFactsStore(db));
+        var product = Assert.Single(await service.Handle(42, CancellationToken.None));
 
         Assert.Equal(overlapping ? null : 2.78m, product.EstimatedCardProfit);
     }
