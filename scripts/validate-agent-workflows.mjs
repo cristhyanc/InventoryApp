@@ -987,6 +987,8 @@ export function verifyArchitecturePass(implementationWorkflow, architectureWorkf
 
   const implementationToken = section(job, '      - name: Create GitHub App token for implementation publish\n', '      - name: Push implementation and create pull request\n', 'agent-implement.yml implementation App token');
   verifyAgentAppTokenStep(implementationToken, 'agent-implement.yml implementation App token', 'implementation_app_token', { pullRequests: true });
+  const implementationDiagnostic = section(job, '      - name: Diagnose GitHub App publish permissions\n', '      - name: Push implementation and create pull request\n', 'agent-implement.yml implementation publish diagnostic');
+  requireText(implementationDiagnostic, 'GH_TOKEN: ${{ steps.implementation_app_token.outputs.token }}', 'agent-implement.yml implementation publish diagnostic');
   const implementationPublish = section(job, '      - name: Push implementation and create pull request\n', '      - name: Record implementation outcome\n', 'agent-implement.yml implementation publish');
   for (const required of [
     'GH_TOKEN: ${{ steps.implementation_app_token.outputs.token }}',
@@ -1036,6 +1038,7 @@ export function verifyArchitecturePass(implementationWorkflow, architectureWorkf
   const context = section(architectureWorkflow, '  context:\n', '  architecture:\n', 'agent-architecture.yml context');
   requireText(context, 'pull-requests: read', 'agent-architecture.yml context');
   requireText(context, 'issues: read', 'agent-architecture.yml context');
+  requireText(context, 'EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}', 'agent-architecture.yml context');
   forbidText(context, 'actions/checkout', 'agent-architecture.yml context');
   forbidText(context, 'CLAUDE_CODE_OAUTH_TOKEN', 'agent-architecture.yml context');
   verifyAgentPrGuards(context, 'agent-architecture.yml context', 'Refusing stale architecture run');
@@ -1078,6 +1081,7 @@ export function verifyArchitecturePass(implementationWorkflow, architectureWorkf
   const finalize = section(architectureWorkflow, '  finalize:\n', null, 'agent-architecture.yml finalize');
   for (const required of [
     "if: always() && needs.context.result == 'success'", 'actions: write', 'pull-requests: write', 'issues: write',
+    'EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}',
     'ARCHITECTURE_JOB_RESULT: ${{ needs.architecture.result }}', '[ "$ARCHITECTURE_JOB_RESULT" != "success" ]',
     'FINAL_SHA: ${{ needs.architecture.outputs.head_sha }}', '[ "$current_sha" = "$FINAL_SHA" ]',
     '[[ "$head_ref" == agent/issue-"$ISSUE_NUMBER"-* ]]', '.user.login // empty',
