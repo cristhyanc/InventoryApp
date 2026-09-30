@@ -17,12 +17,15 @@ function fixture(fn) {
   const git = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
   try {
     git('init', '-b', 'develop'); git('config', 'user.name', 'Fixture'); git('config', 'user.email', 'fixture@example.invalid');
+    // The persist step calls the push helper by relative path, so the fixture repo needs its own copy.
+    mkdirSync(join(repo, 'scripts'));
+    writeFileSync(join(repo, 'scripts', 'git-push-with-app-retry.sh'), readFileSync(new URL('./git-push-with-app-retry.sh', import.meta.url)));
     writeFileSync(join(repo, 'file'), 'base'); git('add', '.'); git('commit', '-m', 'base');
     const base = git('rev-parse', 'HEAD'); git('init', '--bare', remote); git('remote', 'add', 'origin', remote);
     git('checkout', '-b', 'agent/issue-250-fixture');
     const commit = (path = 'file') => { mkdirSync(join(repo, path, '..'), { recursive: true }); writeFileSync(join(repo, path), Math.random().toString()); git('add', '.'); git('commit', '-m', 'implementation'); return git('rev-parse', 'HEAD'); };
     const output = join(root, 'output'), summary = join(root, 'summary');
-    const run = (name, extra = {}) => spawnSync('bash', ['-c', shell(name)], { cwd: repo, encoding: 'utf8', env: { ...process.env, ISSUE_NUMBER: '250', RUN_ID: '123', RUN_ATTEMPT: '1', BASE_SHA: base, EXPECTED_HEAD: git('rev-parse', 'HEAD'), CLAUDE_OUTCOME: 'success', PUBLISH_REMOTE: remote, GITHUB_OUTPUT: output, GITHUB_STEP_SUMMARY: summary, ...extra } });
+    const run = (name, extra = {}) => spawnSync('bash', ['-c', shell(name)], { cwd: repo, encoding: 'utf8', env: { ...process.env, ISSUE_NUMBER: '250', RUN_ID: '123', RUN_ATTEMPT: '1', BASE_SHA: base, EXPECTED_HEAD: git('rev-parse', 'HEAD'), GH_TOKEN: 'fixture-token', CLAUDE_OUTCOME: 'success', PUBLISH_REMOTE: remote, GITHUB_OUTPUT: output, GITHUB_STEP_SUMMARY: summary, ...extra } });
     fn({ git, base, commit, run, output, summary, repo, remote });
   } finally { rmSync(root, { recursive: true, force: true }); }
 }
