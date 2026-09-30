@@ -1,0 +1,371 @@
+// Behavioural tests for guarded review publication (agent-review.yml publish job) and updated-head
+// scheduling (agent-head-update.yml, agent-repair.yml dispatcher), issue #268.
+//
+// Each test extracts the exact shell of a trusted workflow step and runs it with bash against a
+// fake `gh` that serves a fixture of the live pull request state and records every call. These are
+// deterministic contract tests of the trusted workflow code; they do not exercise GitHub itself and
+// say nothing about how the review model judges a pull request (see evals/agent/ for that).
+import assert from 'node:assert/strict';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { describe, it } from 'node:test';
+
+const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8').replaceAll('\r\n', '\n');
+
+function stepShell(workflow, name) {
+  const step = workflow.split(`      - name: ${name}\n`)[1]?.split('\n      - name: ')[0];
+  assert.ok(step, `missing trusted step: ${name}`);
+  const run = step.split('        run: |\n')[1];
+  assert.ok(run, `step has no run block: ${name}`);
+  return run.split('\n').map((line) => line.slice(10)).join('\n');
+}
+
+const publishShell = stepShell(read('.github/workflows/agent-review.yml'), 'Guard and publish review');
+const headUpdateShell = stepShell(read('.github/workflows/agent-head-update.yml'), 'Reverify current head and dispatch validation');
+const repairDispatchShell = stepShell(read('.github/workflows/agent-repair.yml'), 'Verify repaired head and dispatch trusted validation');
+
+const REPO = 'owner/InventoryApp';
+const BOT = 'inventoryapp-agent-automation[bot]';
+const PR = '267';
+const SHA = '6b5ade799d290fb2c4e59710cbf047c43a305df0';
+const NEWER_SHA = 'f49fcc313ab6295c29d9d426445e1dbbd54fd997';
+
+// A fake gh CLI: serves the fixture in $FAKE_GH_STATE and appends every call to $FAKE_GH_LOG.
+const FAKE_GH = `#!/usr/bin/env node
+const fs = require('node:fs');
+const { spawnSync } = require('node:child_process');
+const args = process.argv.slice(2);
+const state = JSON.parse(fs.readFileSync(process.env.FAKE_GH_STATE, 'utf8'));
+const log = (entry) => fs.appendFileSync(process.env.FAKE_GH_LOG, JSON.stringify(entry) + '\\n');
+const opt = (name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
+const out = (value) => {
+  const expr = opt('--jq');
+  if (expr === undefined) { process.stdout.write(JSON.stringify(value)); return; }
+  const r = spawnSync('jq', ['-r', expr], { input: JSON.stringify(value), encoding: 'utf8' });
+  if (r.status !== 0) { process.stderr.write(r.stderr); process.exit(1); }
+  process.stdout.write(r.stdout);
+};
+const fail = (why) => { process.stderr.write(why + '\\n'); process.exit(1); };
+if ((state.unavailable ?? []).some((prefix) => args.join(' ').includes(prefix))) fail('HTTP 502: fixture outage');
+if (args[0] === 'pr' && args[1] === 'view') {
+  const fields = opt('--json').split(',');
+  out(Object.fromEntries(fields.map((f) => [f, state.pr[f]])));
+} else if (args[0] === 'workflow' && args[1] === 'run') {
+  log({ kind: 'dispatch', args });
+} else if (args[0] === 'api') {
+  const method = opt('--method') ?? 'GET';
+  const path = args.find((a, i) => i > 0 && !a.startsWith('-') && !['--method', '--jq', '--input', '-f'].includes(args[i - 1]));
+  if (method === 'POST' && path.endsWith('/reviews')) {
+    const payload = JSON.parse(fs.readFileSync(opt('--input'), 'utf8'));
+    if (state.rejectInlineComments && payload.comments.length > 0) { log({ kind: 'review-rejected', payload }); fail('HTTP 422: line could not be resolved'); }
+    log({ kind: 'review', payload });
+  } else if (method === 'POST' && path.includes('/statuses/')) {
+    const fields = {};
+    args.forEach((a, i) => { if (args[i - 1] === '-f') { const k = a.split('=')[0]; fields[k] = a.slice(k.length + 1); } });
+    log({ kind: 'status', sha: path.split('/statuses/')[1], ...fields });
+  } else if (/\\/commits\\/[0-9a-f]{40}\\/status$/.test(path)) {
+    out({ statuses: state.statuses[path.split('/commits/')[1].split('/')[0]] ?? [] });
+  } else if (path.includes('/files')) {
+    out(state.files.map((filename) => ({ filename })));
+  } else if (/\\/pulls\\/\\d+$/.test(path)) {
+    out({ user: { login: state.author } });
+  } else fail('unexpected api call: ' + args.join(' '));
+} else fail('unexpected gh call: ' + args.join(' '));
+`;
+
+function eligibleState(overrides = {}) {
+  return {
+    pr: {
+      state: 'OPEN',
+      isDraft: false,
+      baseRefName: 'develop',
+      headRefName: 'agent/issue-245-take-inventory-page',
+      headRefOid: SHA,
+      headRepository: { name: 'InventoryApp' },
+      headRepositoryOwner: { login: 'owner' },
+      labels: [{ name: 'agent-review' }],
+      ...(overrides.pr ?? {}),
+    },
+    author: overrides.author ?? BOT,
+    files: overrides.files ?? ['backend/InventoryApi/Services/InventoryCountService.cs', 'docs/architecture.md'],
+    statuses: overrides.statuses ?? { [SHA]: [{ context: 'agent-validation', state: 'success' }, { context: 'merge-validation', state: 'success' }] },
+    rejectInlineComments: overrides.rejectInlineComments ?? false,
+    unavailable: overrides.unavailable ?? [],
+  };
+}
+
+function readyOutput(overrides = {}) {
+  return {
+    reviewed_head_sha: SHA,
+    verdict: 'READY FOR HUMAN REVIEW',
+    blockers: [],
+    criteria: [{ criterion: 'Concurrent changes never produce incorrect stock adjustments', status: 'met', evidence: 'Conditional update in one statement; regression test InventoryCount_ChangedBetweenReadAndApply_Conflicts.' }],
+    suggestions: [],
+    validation_evidence: 'agent-validation success on the exact SHA.',
+    inline_comments: [],
+    ...overrides,
+  };
+}
+
+function changesOutput(overrides = {}) {
+  return readyOutput({
+    verdict: 'CHANGES REQUESTED',
+    blockers: ['InventoryCountAdjustmentStore.ApplyAsync re-reads stock outside the staleness check: issue #245 criterion on concurrent changes is not met.'],
+    criteria: [{ criterion: 'Concurrent changes never produce incorrect stock adjustments', status: 'not met', evidence: 'Read, comparison and mutation are separate operations.' }],
+    inline_comments: [{ path: 'backend/InventoryApi/Services/InventoryCountService.cs', line: 42, body: 'Staleness check and write are not atomic.' }],
+    ...overrides,
+  });
+}
+
+function run(shell, { state, env = {} }) {
+  const root = mkdtempSync(join(tmpdir(), 'agent-review-publication-'));
+  try {
+    const bin = join(root, 'bin');
+    spawnSync('mkdir', [bin]);
+    writeFileSync(join(bin, 'gh'), FAKE_GH);
+    chmodSync(join(bin, 'gh'), 0o755);
+    const statePath = join(root, 'state.json');
+    const logPath = join(root, 'calls.jsonl');
+    writeFileSync(statePath, JSON.stringify(state));
+    const result = spawnSync('bash', ['-c', shell], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${bin}:${process.env.PATH}`,
+        FAKE_GH_STATE: statePath,
+        FAKE_GH_LOG: logPath,
+        GITHUB_REPOSITORY: REPO,
+        GH_TOKEN: 'fixture-token',
+        EXPECTED_AGENT_AUTHOR: BOT,
+        PR_NUMBER: PR,
+        HEAD_SHA: SHA,
+        ...env,
+      },
+    });
+    const calls = existsSync(logPath)
+      ? readFileSync(logPath, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line))
+      : [];
+    return { status: result.status, stdout: result.stdout, stderr: result.stderr, calls };
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+function publish({ state = eligibleState(), output = readyOutput(), result = 'success' } = {}) {
+  return run(publishShell, {
+    state,
+    env: {
+      REVIEW_RESULT: result,
+      REVIEW_OUTPUT: output === null ? '' : JSON.stringify(output),
+      VERDICT_CONTEXT: 'agent-review-verdict',
+      RUN_URL: 'https://github.com/owner/InventoryApp/actions/runs/1',
+    },
+  });
+}
+
+const reviews = (calls) => calls.filter((c) => c.kind === 'review');
+const statuses = (calls) => calls.filter((c) => c.kind === 'status');
+const dispatches = (calls) => calls.filter((c) => c.kind === 'dispatch');
+
+function assertSuppressed(outcome, reason) {
+  assert.equal(outcome.status, 0, outcome.stderr);
+  assert.equal(reviews(outcome.calls).length, 0, 'no review may be published');
+  const [status] = statuses(outcome.calls);
+  assert.ok(status, 'a suppressed result must still be recorded');
+  assert.equal(status.sha, SHA, 'the outcome is recorded only on the reviewed SHA');
+  assert.equal(status.context, 'agent-review-verdict');
+  assert.equal(status.state, 'error');
+  assert.match(outcome.stdout + outcome.stderr, reason);
+}
+
+describe('guarded review publication', () => {
+  it('publishes a ready review bound to the exact reviewed commit on an unchanged eligible head', () => {
+    const outcome = publish();
+    assert.equal(outcome.status, 0, outcome.stderr);
+    const [review] = reviews(outcome.calls);
+    assert.equal(review.payload.commit_id, SHA);
+    assert.equal(review.payload.event, 'COMMENT');
+    assert.match(review.payload.body, new RegExp(`^Head SHA reviewed: ${SHA}\\n\\nVERDICT: READY FOR HUMAN REVIEW\\n`));
+    assert.equal(review.payload.body.match(/^VERDICT:/gm).length, 1);
+    assert.match(review.payload.body, /This is an advisory review\. Human approval and branch protection remain the merge gate\.\n?$/);
+    assert.deepEqual(statuses(outcome.calls).map(({ sha, state, context }) => ({ sha, state, context })), [{ sha: SHA, state: 'success', context: 'agent-review-verdict' }]);
+  });
+
+  it('publishes a changes-requested review with its inline comments on the reviewed commit', () => {
+    const outcome = publish({ output: changesOutput() });
+    assert.equal(outcome.status, 0, outcome.stderr);
+    const [review] = reviews(outcome.calls);
+    assert.match(review.payload.body, /VERDICT: CHANGES REQUESTED\n\nBlockers:\n1\. InventoryCountAdjustmentStore/);
+    assert.deepEqual(review.payload.comments, [{ path: 'backend/InventoryApi/Services/InventoryCountService.cs', line: 42, side: 'RIGHT', body: 'Staleness check and write are not atomic.' }]);
+    assert.equal(statuses(outcome.calls)[0].state, 'failure');
+  });
+
+  it('falls back to one body-only review when GitHub rejects an inline position', () => {
+    const outcome = publish({ output: changesOutput(), state: eligibleState({ rejectInlineComments: true }) });
+    assert.equal(outcome.status, 0, outcome.stderr);
+    const [review] = reviews(outcome.calls);
+    assert.deepEqual(review.payload.comments, []);
+    assert.match(review.payload.body, /Inline comments \(could not be anchored\):\n- backend\/InventoryApi\/Services\/InventoryCountService\.cs:42:/);
+    assert.equal(review.payload.commit_id, SHA);
+  });
+
+  it('suppresses the verdict when the head changed during review (the #267 stale-head case)', () => {
+    const state = eligibleState({ pr: { headRefOid: NEWER_SHA } });
+    assertSuppressed(publish({ state }), /Refusing stale review publication: head moved to f49fcc3/);
+    assert.ok(!statuses(publish({ state }).calls).some((s) => s.sha === NEWER_SHA), 'nothing may be written for the new head');
+  });
+
+  for (const [name, pr, reason] of [
+    ['closed', { state: 'CLOSED' }, /no longer open/],
+    ['merged', { state: 'MERGED' }, /no longer open/],
+    ['draft', { isDraft: true }, /now a draft/],
+    ['retargeted', { baseRefName: 'main' }, /no longer targets develop/],
+    ['unlabelled', { labels: [] }, /agent-review label was removed/],
+    ['non-agent branch', { headRefName: 'feature/manual' }, /agent\/issue-\*/],
+  ]) {
+    it(`suppresses the verdict for a ${name} pull request`, () => {
+      assertSuppressed(publish({ state: eligibleState({ pr }) }), reason);
+    });
+  }
+
+  it('suppresses the verdict for a pull request not authored by the agent App', () => {
+    assertSuppressed(publish({ state: eligibleState({ author: 'someone-else' }) }), /not authored by/);
+  });
+
+  it('suppresses the verdict for a workflow-changing pull request', () => {
+    assertSuppressed(publish({ state: eligibleState({ files: ['.github/workflows/agent-review.yml'] }) }), /\.github\/workflows/);
+  });
+
+  for (const [name, list] of [
+    ['missing', [{ context: 'merge-validation', state: 'success' }]],
+    ['failed', [{ context: 'agent-validation', state: 'failure' }]],
+    ['pending', [{ context: 'agent-validation', state: 'pending' }]],
+  ]) {
+    it(`suppresses the verdict when agent-validation is ${name}, even with merge-validation green`, () => {
+      assertSuppressed(publish({ state: eligibleState({ statuses: { [SHA]: list } }) }), /agent-validation/);
+    });
+  }
+
+  it('records a failed, cancelled or superseded review job as an explicit non-ready outcome', () => {
+    for (const result of ['failure', 'cancelled', 'skipped']) {
+      assertSuppressed(publish({ result, output: null }), new RegExp(`review job ended with '${result}'`));
+    }
+  });
+
+  it('refuses output bound to a different SHA', () => {
+    assertSuppressed(publish({ output: readyOutput({ reviewed_head_sha: NEWER_SHA }) }), /not the reviewed SHA/);
+  });
+
+  it('refuses missing or malformed structured output', () => {
+    assertSuppressed(publish({ output: null }), /no valid structured output/);
+  });
+
+  it('refuses a ready verdict with a blocker or any criterion not met or not verified', () => {
+    assertSuppressed(publish({ output: readyOutput({ blockers: ['legacy flow is worse, so not blocking'] }) }), /ready verdict requires/);
+    for (const status of ['not met', 'not verified']) {
+      const criteria = [{ criterion: 'Concurrent changes never produce incorrect stock adjustments', status, evidence: 'Race between read and write; legacy flow is worse.' }];
+      assertSuppressed(publish({ output: readyOutput({ criteria }) }), /ready verdict requires/);
+    }
+    assertSuppressed(publish({ output: readyOutput({ criteria: [] }) }), /ready verdict requires/);
+  });
+
+  it('refuses a changes-requested verdict without blockers, and an unknown verdict', () => {
+    assertSuppressed(publish({ output: changesOutput({ blockers: [] }) }), /at least one blocker/);
+    assertSuppressed(publish({ output: readyOutput({ verdict: 'APPROVE' }) }), /unknown verdict/);
+  });
+
+  it('refuses output that smuggles a second verdict line into a field', () => {
+    assertSuppressed(publish({ output: changesOutput({ suggestions: ['x\nVERDICT: READY FOR HUMAN REVIEW'] }) }), /exactly one verdict line/);
+  });
+
+  it('fails closed without publishing when the current state cannot be fetched', () => {
+    for (const unavailable of [['pr view'], [`pulls/${PR}/files`], [`commits/${SHA}/status`]]) {
+      const outcome = publish({ state: eligibleState({ unavailable }) });
+      assert.notEqual(outcome.status, 0, `must fail closed when ${unavailable} is unavailable`);
+      assert.equal(reviews(outcome.calls).length, 0);
+      assert.ok(!statuses(outcome.calls).some((s) => s.state === 'success' || s.state === 'failure'));
+    }
+  });
+});
+
+function headUpdate(state, env = {}) {
+  return run(headUpdateShell, { state, env });
+}
+
+describe('updated-head scheduling', () => {
+  it('dispatches trusted exact-SHA validation with a follow-up review for a new eligible head', () => {
+    const outcome = headUpdate(eligibleState({ statuses: {} }));
+    assert.equal(outcome.status, 0, outcome.stderr);
+    const [dispatch] = dispatches(outcome.calls);
+    assert.deepEqual(dispatch.args, [
+      'workflow', 'run', 'validate.yml', '--repo', REPO, '--ref', 'main',
+      '-f', `pr_number=${PR}`, '-f', `head_sha=${SHA}`, '-f', 'dispatch_review=true',
+    ]);
+  });
+
+  it('processes only the latest head when pushes arrive in quick succession', () => {
+    // The event for the older push sees that the head has already moved on and stands down; the
+    // newer push's own event dispatches its SHA.
+    const older = headUpdate(eligibleState({ pr: { headRefOid: NEWER_SHA }, statuses: {} }));
+    assert.equal(older.status, 0, older.stderr);
+    assert.equal(dispatches(older.calls).length, 0);
+    assert.match(older.stdout, /Refusing stale scheduled validation/);
+
+    const newer = headUpdate(eligibleState({ pr: { headRefOid: NEWER_SHA }, statuses: {} }), { HEAD_SHA: NEWER_SHA });
+    assert.equal(dispatches(newer.calls).length, 1);
+    assert.ok(dispatches(newer.calls)[0].args.includes(`head_sha=${NEWER_SHA}`));
+  });
+
+  for (const existing of ['pending', 'success', 'failure']) {
+    it(`does not duplicate a validation that another path already owns (${existing})`, () => {
+      const outcome = headUpdate(eligibleState({ statuses: { [SHA]: [{ context: 'agent-validation', state: existing }] } }));
+      assert.equal(outcome.status, 0, outcome.stderr);
+      assert.equal(dispatches(outcome.calls).length, 0);
+      assert.match(outcome.stdout, /another path owns it/);
+    });
+  }
+
+  it('does not treat merge-validation as an existing exact-SHA validation', () => {
+    const outcome = headUpdate(eligibleState({ statuses: { [SHA]: [{ context: 'merge-validation', state: 'success' }] } }));
+    assert.equal(dispatches(outcome.calls).length, 1);
+  });
+
+  for (const [name, overrides] of [
+    ['closed', { pr: { state: 'CLOSED' } }],
+    ['draft', { pr: { isDraft: true } }],
+    ['unlabelled', { pr: { labels: [] } }],
+    ['human-authored', { author: 'cristhyanc' }],
+    ['fork', { pr: { headRepositoryOwner: { login: 'someone' } } }],
+    ['workflow-changing', { files: ['.github/workflows/validate.yml'] }],
+  ]) {
+    it(`skips a ${name} pull request without failing or dispatching`, () => {
+      const outcome = headUpdate(eligibleState({ ...overrides, statuses: {} }));
+      assert.equal(outcome.status, 0, outcome.stderr);
+      assert.equal(dispatches(outcome.calls).length, 0);
+    });
+  }
+
+  it('fails closed without dispatching when the live state cannot be read', () => {
+    for (const unavailable of [['pr view'], [`pulls/${PR}/files`], [`commits/${SHA}/status`]]) {
+      const outcome = headUpdate(eligibleState({ statuses: {}, unavailable }));
+      assert.notEqual(outcome.status, 0);
+      assert.equal(dispatches(outcome.calls).length, 0);
+    }
+  });
+});
+
+describe('repair dispatch deduplication', () => {
+  it('dispatches when no path has scheduled the repaired SHA yet', () => {
+    const outcome = run(repairDispatchShell, { state: eligibleState({ statuses: {} }) });
+    assert.equal(outcome.status, 0, outcome.stderr);
+    assert.equal(dispatches(outcome.calls).length, 1);
+  });
+
+  it('stands down when the head-update scheduler already scheduled the repaired SHA', () => {
+    const outcome = run(repairDispatchShell, { state: eligibleState({ statuses: { [SHA]: [{ context: 'agent-validation', state: 'pending' }] } }) });
+    assert.equal(outcome.status, 0, outcome.stderr);
+    assert.equal(dispatches(outcome.calls).length, 0);
+  });
+});
