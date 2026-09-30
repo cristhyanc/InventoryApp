@@ -149,6 +149,11 @@ jobs:
       - name: Run Claude Code implementation agent
         id: claude
         uses: anthropics/claude-code-action@cfc3eb22bfed5c26ef66e3223c982af27e4524de # v1.0.231
+        env:
+          # validate.sh takes several minutes; Claude Code's 2-minute default Bash timeout
+          # would push the agent toward backgrounding or redirecting it, which the allowlist refuses.
+          BASH_DEFAULT_TIMEOUT_MS: "1800000"
+          BASH_MAX_TIMEOUT_MS: "1800000"
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -173,7 +178,7 @@ jobs:
             3. Inspect the relevant production code and tests before designing the change. Make the smallest coherent change that satisfies the acceptance criteria. Do not do nearby cleanup or anything listed as out of scope.
             4. Follow AGENTS.md's selective test-first workflow. For a clear behavioral requirement, add a focused failing test, run it and confirm the intended failure, implement the behavior, then refactor with tests green. Prioritize access boundaries, financial and inventory rules, imports, regressions and API contracts. For a change where a useful test cannot be written first, explain why in the PR and verify the result. Add meaningful edge cases; avoid tests that restate implementation details.
             4a. Follow the issue's Documentation impact decision exactly. If it is "Documentation changes required", update every documentation file and section listed in the Documentation impact details on your feature branch, in this same change, so the documentation is accurate for the merged result. If it is "No documentation changes required" but your change nevertheless makes documentation (AGENTS.md, docs/, README.md, templates) inaccurate, update that documentation too and state the discrepancy with the issue explicitly in the pull request body and in your issue comment. Never leave documentation that the change contradicts.
-            5. Run the complete repository validation once in the foreground with exactly `bash scripts/validate.sh`, wait for it to terminate, inspect its exit code and retain its actual output for the pull request. Never use `&`, `nohup`, `run_in_background`, redirected background execution, concurrent validation processes, or any mechanism that returns before validation completes. If validation fails because of your change, fix the change and rerun it synchronously. Never weaken, skip, or delete a failing test to get a green result. If it fails for an environmental reason, record the exact failing command and output. A started or still-running command is not validation evidence.
+            5. Run the complete repository validation once in the foreground with exactly `bash scripts/validate.sh`, wait for it to terminate, inspect its exit code and retain its actual output for the pull request. Never use `&`, `nohup`, `run_in_background`, redirected background execution, concurrent validation processes, or any mechanism that returns before validation completes. If validation fails because of your change, fix the change and rerun it synchronously. Never weaken, skip, or delete a failing test to get a green result. If it fails for an environmental reason, record the exact failing command and output. A started or still-running command is not validation evidence. Invoke it as that exact command with no redirection, pipe, prefix or suffix: the permission allowlist matches the literal command and refuses any variant, and the shell timeout (30 minutes) already covers a full run. Create any new directory with `mkdir -p` and a repository-relative path under `backend/`, `frontend/`, `docs/` or `scripts/`, one directory per command, or simply write the file, since the Write tool creates missing parent directories.
             6. Review your diff for secrets, local databases, generated output, accidental migrations, and unrelated edits. Do not create tracked diagnostic/scratch files. If a temporary file was accidentally staged under `backend/`, `frontend/`, `docs/`, or `scripts/`, unstage it with the permitted scoped `git restore --staged -- <project-path>` command before completion. When deleting obsolete tracked project files, use the permitted `git rm -- <project-path>` form without extra flags.
             7. Commit the completed implementation locally with focused, descriptive messages. Do not push any branch and do not create or edit a pull request; the workflow performs those remote mutations after your invocation with a separate short-lived GitHub App token that is never exposed to you.
             8. Prepare the pull request metadata as two untracked scratch files in the repository root: `.agent-pr-title` containing exactly the PR title, and `.agent-pr-body.md` containing the complete body. The body must follow .github/pull_request_template.md, include `Closes #${{ github.event.issue.number }}`, address each acceptance criterion, describe scope and exclusions, paste the actual validation commands and their real result, list tests added or changed and the observed initial failing test (or explain why test-first was unsuitable), fill the impact table, and state known limitations and suggested follow-up work. Fill the "## Documentation impact" section accurately with exactly one `Decision:` line and one `Evidence:` line: `Decision: UPDATED` when this pull request changes documentation, with Evidence listing each documentation file and what changed in it; `Decision: NOT REQUIRED` only when no documentation changed, with Evidence explaining for this specific change why behaviour, contracts, architecture, configuration, automation, deployment, operations and user workflows are unaffected. "None", "N/A", "Not applicable", generic sentences and the template placeholders are rejected by CI. Run `node scripts/validate-documentation-impact.mjs --pr-body .agent-pr-body.md` and fix it until it passes. Never add or commit either scratch file.
@@ -196,6 +201,7 @@ jobs:
             "Bash(git checkout -b agent/issue-${{ github.event.issue.number }}-*),Bash(git switch -c agent/issue-${{ github.event.issue.number }}-*)"
             "Bash(git rm -- backend/*),Bash(git rm -- frontend/*),Bash(git rm -- docs/*),Bash(git rm -- scripts/*)"
             "Bash(git restore --staged -- backend/*),Bash(git restore --staged -- frontend/*),Bash(git restore --staged -- docs/*),Bash(git restore --staged -- scripts/*)"
+            "Bash(mkdir -p backend/*),Bash(mkdir -p frontend/*),Bash(mkdir -p docs/*),Bash(mkdir -p scripts/*)"
             "Bash(git add *),Bash(git commit *)"
             "Bash(bash scripts/validate.sh),Bash(dotnet *),Bash(npm --prefix frontend/inventory-app *),Bash(node scripts/validate-documentation-impact.mjs --pr-body *)"
             --disallowedTools "Agent,WebFetch,WebSearch"
@@ -482,6 +488,11 @@ jobs:
         id: architect
         if: steps.architecture_target.outputs.pr_ready == 'true'
         uses: anthropics/claude-code-action@cfc3eb22bfed5c26ef66e3223c982af27e4524de # v1.0.231
+        env:
+          # validate.sh takes several minutes; Claude Code's 2-minute default Bash timeout
+          # would push the agent toward backgrounding or redirecting it, which the allowlist refuses.
+          BASH_DEFAULT_TIMEOUT_MS: "1800000"
+          BASH_MAX_TIMEOUT_MS: "1800000"
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -497,7 +508,7 @@ jobs:
 
             Before editing, check whether your proposed change would require a migration, change documented architecture or the PR's Documentation impact declaration, expand the approved scope, alter a test expectation, or require a human decision. If so, make no change; comment on the PR with the exact finding for human review. Do not edit the issue or PR body. Never weaken, skip, or delete tests. Do not change workflows, secrets, configuration, or deployment.
 
-            If you edit: run `bash scripts/validate.sh`; if validation fails, fix only your structural change and rerun it. Check the final diff against the issue and PR body and commit a focused architecture change locally. Do not push; a deterministic workflow step will mint a fresh GitHub App token and push the verified local head after your invocation. Comment on the PR with the structural changes and exact validation result. If you make no edits, comment briefly that no in-scope architectural corrections were needed. Never claim a command passed unless it ran successfully.
+            If you edit: run exactly `bash scripts/validate.sh` in the foreground, with no redirection, pipe or background execution (the allowlist refuses any variant, and the 30-minute shell timeout covers a full run); if validation fails, fix only your structural change and rerun it. Check the final diff against the issue and PR body and commit a focused architecture change locally. Do not push; a deterministic workflow step will mint a fresh GitHub App token and push the verified local head after your invocation. Comment on the PR with the structural changes and exact validation result. If you make no edits, comment briefly that no in-scope architectural corrections were needed. Never claim a command passed unless it ran successfully.
 
             Never merge, approve, deploy, edit labels, open another PR, change the PR description, or modify production data. Independent exact-SHA validation and review still follow this stage.
           claude_args: |
@@ -507,6 +518,7 @@ jobs:
             "Bash(git status *),Bash(git diff *),Bash(git log *),Bash(git show *),Bash(git branch --show-current),Bash(git rev-parse *)"
             "Bash(git rm -- backend/*),Bash(git rm -- frontend/*),Bash(git rm -- docs/*),Bash(git rm -- scripts/*)"
             "Bash(git restore --staged -- backend/*),Bash(git restore --staged -- frontend/*),Bash(git restore --staged -- docs/*),Bash(git restore --staged -- scripts/*)"
+            "Bash(mkdir -p backend/*),Bash(mkdir -p frontend/*),Bash(mkdir -p docs/*),Bash(mkdir -p scripts/*)"
             "Bash(git add *),Bash(git commit *)"
             "Bash(bash scripts/validate.sh),Bash(dotnet *),Bash(npm --prefix frontend/inventory-app *)"
             --disallowedTools "Agent,WebFetch,WebSearch"

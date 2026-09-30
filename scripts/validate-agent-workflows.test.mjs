@@ -22,6 +22,7 @@ import {
   evaluateExpression,
   headUpdatePath,
   verifyReviewPublicationAndScheduling,
+  verifyScopedDirectoryCreationPermissions,
   appPushRetryPath,
   implementPath,
   issueTemplatePath,
@@ -666,6 +667,54 @@ describe('scoped tracked-file deletion permissions', () => {
       const altered = replaceOnce(workflow, scoped, '');
       assert.throws(() => runContractChecks({ read: readWithOverrides({ [path]: altered }) }), /missing required text: Bash\(git rm -- backend\/\*\)/);
     }
+  });
+});
+
+describe('scoped directory creation permissions', () => {
+  const scoped = 'Bash(mkdir -p backend/*),Bash(mkdir -p frontend/*),Bash(mkdir -p docs/*),Bash(mkdir -p scripts/*)';
+  it('allows mkdir -p only inside normal project directories', () => {
+    assert.doesNotThrow(() => verifyScopedDirectoryCreationPermissions(scoped, 'fixture'));
+  });
+  it('rejects broad and workflow-directory creation permissions', () => {
+    for (const extra of ['Bash(mkdir *)', 'Bash(mkdir -p *)', 'Bash(mkdir -p .github/*)']) {
+      assert.throws(() => verifyScopedDirectoryCreationPermissions(scoped + ',' + extra, 'fixture'), /forbidden text/);
+    }
+  });
+  it('requires the permission in the implementation and architecture agents', () => {
+    assert.doesNotThrow(() => runContractChecks());
+    const withoutFirst = replaceOnce(implementWorkflow, scoped, '');
+    assert.throws(
+      () => runContractChecks({ read: readWithOverrides({ [implementPath]: withoutFirst }) }),
+      /implementation allowed tools: missing required text: Bash\(mkdir -p backend\/\*\)/,
+    );
+    const last = implementWorkflow.lastIndexOf(scoped);
+    const architectOnly = implementWorkflow.slice(0, last) + implementWorkflow.slice(last + scoped.length);
+    assert.throws(
+      () => runContractChecks({ read: readWithOverrides({ [implementPath]: architectOnly }) }),
+      /architect allowed tools: missing required text: Bash\(mkdir -p backend\/\*\)/,
+    );
+  });
+});
+
+
+describe('agent shell timeout covers full validation', () => {
+  it('requires a 30-minute default and maximum Bash timeout for both Claude steps', () => {
+    assert.doesNotThrow(() => runContractChecks());
+    for (const [from, to, pattern] of [
+      ['BASH_DEFAULT_TIMEOUT_MS: "1800000"', 'BASH_DEFAULT_TIMEOUT_MS: "120000"', /implementation agent: missing required text: BASH_DEFAULT_TIMEOUT_MS/],
+      ['BASH_MAX_TIMEOUT_MS: "1800000"', 'BASH_MAX_TIMEOUT_MS: "600000"', /implementation agent: missing required text: BASH_MAX_TIMEOUT_MS/],
+    ]) {
+      const altered = replaceOnce(implementWorkflow, from, to);
+      assert.throws(() => runContractChecks({ read: readWithOverrides({ [implementPath]: altered }) }), pattern);
+    }
+    const lastDefault = implementWorkflow.lastIndexOf('BASH_DEFAULT_TIMEOUT_MS: "1800000"');
+    const architectShort = implementWorkflow.slice(0, lastDefault)
+      + 'BASH_DEFAULT_TIMEOUT_MS: "120000"'
+      + implementWorkflow.slice(lastDefault + 'BASH_DEFAULT_TIMEOUT_MS: "1800000"'.length);
+    assert.throws(
+      () => runContractChecks({ read: readWithOverrides({ [implementPath]: architectShort }) }),
+      /architect: missing required text: BASH_DEFAULT_TIMEOUT_MS/,
+    );
   });
 });
 
