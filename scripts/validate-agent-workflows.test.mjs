@@ -1,3 +1,4 @@
+import './agent-persistence.test.mjs';
 // Deterministic contract tests for the validation workflow's concurrency and status model.
 // Run with: node --test scripts/validate-agent-workflows.test.mjs
 import assert from 'node:assert/strict';
@@ -645,3 +646,4 @@ describe('scoped tracked-file deletion permissions', () => {
     }
   });
 });
+
