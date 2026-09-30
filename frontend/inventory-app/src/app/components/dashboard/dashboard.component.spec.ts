@@ -1,6 +1,8 @@
+import { TestBed } from '@angular/core/testing';
+import { provideRouter } from '@angular/router';
 import { Observable, of, throwError } from 'rxjs';
 import { DashboardComponent } from './dashboard.component';
-import { InventoryValuationSummary, Machine, Site } from '../../models/models';
+import { InventoryValuationSummary, Machine, Product, Site } from '../../models/models';
 import { ProductService } from '../../services/product.service';
 import { MachineService } from '../../services/machine.service';
 import { SiteService } from '../../services/site.service';
@@ -115,6 +117,117 @@ const SITE: Site = {
   currentWeekRevenue: 34,
   previousComparableWeekRevenue: 90
 };
+
+function product(overrides: Partial<Product> = {}): Product {
+  return {
+    id: 1,
+    name: 'Cola 375mL',
+    sku: 'COLA-375',
+    description: null,
+    unitPrice: 3,
+    averageUnitCost: 1.2,
+    costingQuantity: 10,
+    inventoryValue: 12,
+    machinePrice: 3.5,
+    commissionValue: 0,
+    suggestedNetValue: null,
+    suggestedPriceValue: null,
+    quantityInStock: 10,
+    maxStockInMachine: 20,
+    machineReplenishmentNeed: 4,
+    onOrderQuantity: 0,
+    lowStockThreshold: 5,
+    restockTo: 30,
+    needToOrder: 0,
+    mdbCode: null,
+    unit: 'unit',
+    lastEatBefore1: null,
+    lastEatBefore2: null,
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    categoryId: null,
+    category: null,
+    supplierId: null,
+    supplier: { id: 1, name: 'Acme Supplies' },
+    isActive: true,
+    isLowStock: true,
+    isReorderAlert: true,
+    ...overrides
+  };
+}
+
+describe('DashboardComponent reorder alerts - stock after machine need', () => {
+  it('is positive when stock exceeds machine need', () => {
+    const component = createComponent(of(SUMMARY));
+    const p = product({ quantityInStock: 46, machineReplenishmentNeed: 16 });
+
+    expect(component.stockAfterMachineNeed(p)).toBe(30);
+    expect(component.stockAfterMachineNeedClass(p)).not.toContain('text-red');
+  });
+
+  it('is zero when stock exactly covers machine need', () => {
+    const component = createComponent(of(SUMMARY));
+    const p = product({ quantityInStock: 16, machineReplenishmentNeed: 16 });
+
+    expect(component.stockAfterMachineNeed(p)).toBe(0);
+    expect(component.stockAfterMachineNeedClass(p)).not.toContain('text-red');
+  });
+
+  it('keeps the signed negative value and flags it red when machine need exceeds stock', () => {
+    const component = createComponent(of(SUMMARY));
+    const p = product({ quantityInStock: 10, machineReplenishmentNeed: 16 });
+
+    expect(component.stockAfterMachineNeed(p)).toBe(-6);
+    expect(component.stockAfterMachineNeedClass(p)).toContain('text-red');
+  });
+});
+
+describe('DashboardComponent reorder alerts table rendering', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  async function renderTable(products: Product[]) {
+    await TestBed.configureTestingModule({
+      imports: [DashboardComponent],
+      providers: [
+        provideRouter([]),
+        { provide: ProductService, useValue: { getAll: () => of([]), getLowStock: () => of(products), getInventoryValuationSummary: () => of(SUMMARY) } },
+        { provide: MachineService, useValue: { getAll: () => of([]) } },
+        { provide: SiteService, useValue: { getAll: () => of([]) } },
+        { provide: NayaxSalesSyncService, useValue: { syncLatest: () => of(undefined) } }
+      ]
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(DashboardComponent);
+    fixture.detectChanges();
+    return fixture.nativeElement as HTMLElement;
+  }
+
+  it('no longer shows the Adjust Stock action', async () => {
+    const host = await renderTable([product()]);
+
+    expect(host.textContent).not.toContain('Adjust Stock');
+  });
+
+  it('shows the Stock after machine need column between On order and Need to Order', async () => {
+    const host = await renderTable([product()]);
+
+    const headers = Array.from(host.querySelectorAll('th')).map((th) => th.textContent?.trim());
+    const onOrderIndex = headers.indexOf('On order');
+    const needToOrderIndex = headers.indexOf('Need to Order');
+    const stockAfterIndex = headers.indexOf('Stock after machine need');
+
+    expect(stockAfterIndex).toBeGreaterThan(onOrderIndex);
+    expect(stockAfterIndex).toBeLessThan(needToOrderIndex);
+  });
+
+  it('renders a negative Stock after machine need in red', async () => {
+    const host = await renderTable([product({ quantityInStock: 10, machineReplenishmentNeed: 16 })]);
+
+    const cell = Array.from(host.querySelectorAll('td')).find((td) => td.textContent?.trim() === '-6');
+    expect(cell).toBeDefined();
+    expect(cell?.className).toContain('text-red');
+  });
+});
 
 describe('DashboardComponent coordinated sales refresh', () => {
   it('synchronizes latest sales before loading Sites and Machines', () => {
