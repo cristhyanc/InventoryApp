@@ -770,6 +770,24 @@ export function verifyArchitecturePass(workflow) {
   }
 
   requireOrder(job, '      - name: Run Claude Code implementation agent', '      - name: Verify implementation result', 'agent-implement.yml publish order');
+  requireOrder(job, '      - name: Capture trusted base and resume checkpoint', '      - name: Run Claude Code implementation agent', 'trusted base capture');
+  requireOrder(job, '      - name: Run Claude Code implementation agent', '      - name: Persist committed implementation', 'durability boundary');
+  requireOrder(job, '      - name: Persist committed implementation', '      - name: Verify implementation result', 'durability before postconditions');
+  verifyAgentAppTokenStep(section(job, '      - name: Create GitHub App token for persistence\n', '      - name: Persist committed implementation\n', 'persistence App token'), 'persistence App token', 'persistence_app_token');
+  const persistence = section(job, '      - name: Persist committed implementation\n', '      - name: Verify implementation result\n', 'trusted persistence');
+  for (const required of [
+    'if: always()', 'BASE_SHA: ${{ steps.starting_point.outputs.base_sha }}',
+    'EXPECTED_HEAD: ${{ steps.persistence_candidate.outputs.head_sha }}',
+    'GH_TOKEN: ${{ steps.persistence_app_token.outputs.token }}',
+    'git merge-base --is-ancestor', '--diff-merges=separate',
+    'Existing persistence branch differs; refusing overwrite',
+    'Remote persistence verification failed', 'agent/recovery-',
+    'core.hooksPath=/dev/null', 'credential.helper=',
+  ]) requireText(persistence, required, 'trusted persistence');
+  for (const forbidden of ['gh pr create', 'ready=true', '--force']) forbidText(persistence, forbidden, 'storage is not approval');
+  requireText(job, "if: success() && steps.claude.outcome == 'success'", 'failed agent must not advance');
+  requireText(workflow, 'cancel-in-progress: false', 'do not cancel work before persistence');
+
   requireOrder(job, '      - name: Verify implementation result', '      - name: Create GitHub App token for implementation publish', 'agent-implement.yml publish order');
   requireOrder(job, '      - name: Create GitHub App token for implementation publish', '      - name: Push implementation and create pull request', 'agent-implement.yml publish order');
   requireOrder(job, '      - name: Push implementation and create pull request', '      - name: Verify the architecture pass target', 'agent-implement.yml publish order');
@@ -782,7 +800,7 @@ export function verifyArchitecturePass(workflow) {
   const implementationAgent = section(
     job,
     '      - name: Run Claude Code implementation agent\n',
-    '      - name: Verify implementation result\n',
+    '      # Storage only:',
     'agent-implement.yml implementation agent',
   );
   requireText(implementationAgent, 'github_token: ${{ secrets.GITHUB_TOKEN }}', 'agent-implement.yml implementation agent');
@@ -830,6 +848,8 @@ export function verifyArchitecturePass(workflow) {
     'agent-implement.yml implementation App token',
   );
   verifyAgentAppTokenStep(implementationToken, 'agent-implement.yml implementation App token', 'implementation_app_token', { pullRequests: true });
+
+  requireText(section(job, '      - name: Diagnose GitHub App publish permissions\n', '      - name: Push implementation and create pull request\n', 'implementation publish'), 'GH_TOKEN: ${{ steps.implementation_app_token.outputs.token }}', 'implementation publish');
 
   const implementationPublish = section(
     job,
@@ -1201,3 +1221,4 @@ if (invokedDirectly) {
   runContractChecks();
   console.log('Agent workflow contract validation passed.');
 }
+
