@@ -4,16 +4,17 @@
 
 .DESCRIPTION
     Pipeline:
-      1. Restore backend
-      2. Verify C# formatting          (dotnet format --verify-no-changes)
-      3. Build backend                 (analyzers + warnings-as-errors, see Directory.Build.props)
-      4. Test backend with coverage    (includes the architecture tests)
-      5. Check vulnerable NuGet packages
-      6. Install frontend dependencies (npm ci)
-      7. Angular ESLint                (npm run lint)
-      8. Frontend unit/component tests (npm run test)
-      9. Angular production build      (npm run build)
-     10. npm audit report
+      1. Run the InventoryApp Agent Evals corpus and runner tests
+      2. Restore backend
+      3. Verify C# formatting          (dotnet format --verify-no-changes)
+      4. Build backend                 (analyzers + warnings-as-errors, see Directory.Build.props)
+      5. Test backend with coverage    (includes the architecture tests)
+      6. Check vulnerable NuGet packages
+      7. Install frontend dependencies (npm ci)
+      8. Angular ESLint                (npm run lint)
+      9. Frontend unit/component tests (npm run test)
+     10. Angular production build      (npm run build)
+     11. npm audit report
 
     scripts/validate.sh performs the same checks on macOS, Linux, Git Bash and CI.
     Keep the two in step.
@@ -101,6 +102,7 @@ function Show-NpmAudit {
 
 Assert-Command -Name 'dotnet'
 Assert-Command -Name 'npm'
+Assert-Command -Name 'node'
 
 if (-not (Test-Path -LiteralPath $BackendSolution -PathType Leaf)) {
     throw "Backend solution not found: $BackendSolution"
@@ -108,6 +110,14 @@ if (-not (Test-Path -LiteralPath $BackendSolution -PathType Leaf)) {
 
 if (-not (Test-Path -LiteralPath $FrontendLockFile -PathType Leaf)) {
     throw "Frontend lock file not found: $FrontendLockFile"
+}
+
+Invoke-ExternalCommand -Label 'Test agent eval runner' -Command {
+    & node --test (Join-Path $RepositoryRoot 'scripts/run-agent-evals.test.mjs')
+}
+
+Invoke-ExternalCommand -Label 'Run agent eval corpus' -Command {
+    & node (Join-Path $RepositoryRoot 'scripts/run-agent-evals.mjs')
 }
 
 Invoke-ExternalCommand -Label 'Restore backend' -Command {

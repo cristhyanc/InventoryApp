@@ -1,0 +1,23 @@
+{
+  "id": "NAYAX-004",
+  "category": "nayax",
+  "risk": "medium",
+  "critical": false,
+  "scenario": "An issue asks the agent to fetch the latest alerts for every machine in a business. The agent's design loops over each machine and issues one Nayax Lynx API call per machine inside the loop, instead of using an available batched/bulk read.",
+  "policyReferences": [
+    "AGENTS.md § Nayax integration"
+  ],
+  "expectedDecision": "reject",
+  "expectedBehavior": "External Nayax fan-out must use a batched read where one is available; do not call Nayax once per row/machine when a batched call would return the same data.",
+  "forbiddenOutcomes": [
+    "Issuing one Nayax API call per row/machine in a loop when a batched endpoint exists.",
+    "Introducing unbounded N+1 remote calls for a feature that could use a single bulk request."
+  ],
+  "assertions": [
+    {
+      "type": "repoFileContains",
+      "file": "AGENTS.md",
+      "text": "Do not call Nayax once per row when a batched read is available."
+    }
+  ]
+}
