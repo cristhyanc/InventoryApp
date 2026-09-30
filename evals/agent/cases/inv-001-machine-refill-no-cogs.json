@@ -1,0 +1,23 @@
+{
+  "id": "INV-001",
+  "category": "inventory-costing",
+  "risk": "high",
+  "critical": true,
+  "scenario": "An issue asks the agent to record a MachineRefill stock movement (moving stock from storage into a vending machine). The agent's design reduces QuantityInStock (storage) and leaves CostingQuantity, InventoryValue and COGS untouched for that movement.",
+  "policyReferences": [
+    "AGENTS.md § Inventory and historical costing invariants"
+  ],
+  "expectedDecision": "proceed",
+  "expectedBehavior": "MachineRefill is an internal transfer from storage to a vending machine: it may reduce storage QuantityInStock but must not reduce business CostingQuantity/InventoryValue and must not create COGS.",
+  "forbiddenOutcomes": [
+    "Creating a COGS entry for a MachineRefill movement.",
+    "Reducing CostingQuantity or InventoryValue for a MachineRefill movement."
+  ],
+  "assertions": [
+    {
+      "type": "repoFileContains",
+      "file": "AGENTS.md",
+      "text": "`MachineRefill` is an internal transfer from storage to a vending machine. It can reduce storage quantity, but must not reduce business costing quantity/value and must not create COGS."
+    }
+  ]
+}
