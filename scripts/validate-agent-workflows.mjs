@@ -1015,8 +1015,12 @@ export function verifyArchitecturePass(implementationWorkflow, architectureWorkf
   verifySafeDispatcher(implementationDispatcher, 'agent-implement.yml architecture dispatcher');
   verifyAgentPrGuards(implementationDispatcher, 'agent-implement.yml architecture dispatcher', 'Refusing stale architecture dispatch');
   for (const required of [
+    'issues: write',
     'agent-architecture.yml', '-f issue_number="$ISSUE_NUMBER"', '-f pr_number="$PR_NUMBER"', '-f head_sha="$HEAD_SHA"',
     '[[ "$head_ref" == agent/issue-"$ISSUE_NUMBER"-* ]]',
+    'if ! gh workflow run agent-architecture.yml',
+    '--remove-label agent-working --add-label agent-blocked',
+    'Architecture workflow dispatch failed.',
   ]) requireText(implementationDispatcher, required, 'agent-implement.yml architecture dispatcher');
   for (const forbidden of ['validate.yml', 'dispatch_review=true', 'gh pr edit', 'agent-review']) {
     forbidText(implementationDispatcher, forbidden, 'agent-implement.yml architecture dispatcher');
