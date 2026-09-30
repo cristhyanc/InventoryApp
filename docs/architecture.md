@@ -1200,6 +1200,49 @@ change needing its own issue, ideally combined with the rest of the Purchasing a
    fallback for when Nayax is unavailable or a machine/MDB is not yet mapped; Sync Restock is the
    preferred path when a Nayax stock-adjustment alert already reports the physical event.
 
+### Take Inventory (issue #245)
+
+Take Inventory (`/take-inventory`, `TakeInventoryComponent`) is a compact per-product table for
+counting physical storage stock (`QuantityInStock`) across the whole catalogue, distinct from a
+machine refill: a refill is an internal transfer *out of* storage to a vending machine, while a
+count difference here is a correction *to* storage itself, so it must never use
+`StockAdjustmentReason.MachineRefill`. `Adjustment = CountedStock - CurrentStock`, resolved by the
+deterministic `Inventory.Domain.InventoryCounting.InventoryCountAdjustmentPolicy`:
+
+1. **Counted = Current.** No stock movement. This is the same outcome whether the operator clicks
+   the clickable Current Stock value to confirm an unchanged count (a pure frontend/session
+   interaction - it never calls the backend) or types the same value into Counted Stock and clicks
+   Apply (which does call the backend and returns a `Confirmed` outcome with no persisted
+   `StockAdjustment`). Either way the green/confirmed row state is frontend/session state only: it
+   is not written to any backend session/history model, and this repository deliberately has none
+   for inventory counting - a durable count-session record would be its own schema change and issue.
+2. **Counted > Current.** The positive difference reuses the existing positive physical-stock
+   Restock movement (`StockAdjustmentReason.Restock`, the same operation `StockController`'s manual
+   Restock action already applies), at the same restock-cost suggestion that action already offers
+   (last purchase cost, else average unit cost). When neither is available, Apply is refused with a
+   validation error rather than assuming a zero or fabricated cost.
+3. **Counted < Current.** The negative difference reuses the existing Correction movement
+   (`StockAdjustmentReason.Correction`).
+
+Both non-zero cases persist an ordinary `StockAdjustment` through the same
+`IInventoryCostService.ApplyMovement`/`IInventoryCostRebuildService.RebuildAsync` transaction every
+other stock movement in this document uses, so a successful count difference is auditable in the
+existing Stock History view exactly like a manual Restock or Correction - there is no separate
+audit trail for Take Inventory.
+
+`InventoryCountController`'s `POST /api/products/{id}/inventory-count/apply` is thin;
+`Inventory.Application.InventoryCounting.ApplyInventoryCount` is the use case, reading and applying
+through the narrow `IInventoryCountAdjustmentStore` port (implemented by the temporary API-owned
+`InventoryApi.Adapters.Persistence.EfInventoryCountAdjustmentStore`, the same pattern as
+`EfMachineStockEventStore`). The request carries both the counted quantity and the current quantity
+the operator counted against (`ExpectedCurrentStock`); the use case re-reads the authoritative
+current quantity at the mutation boundary and throws `DomainConflictException` (409) when it no
+longer matches, instead of silently applying a delta against a quantity that has since changed
+underneath a stale UI row. An invalid count or a missing restock-cost suggestion throws
+`DomainValidationException` (400). Both map to a `ProblemDetails` response through the existing
+central `DomainExceptionHandler`, described under [Domain and application error
+mapping](#domain-and-application-error-mapping).
+
 ### Sale import and costing
 
 1. Imported transaction facts are persisted using the Nayax transaction identity.

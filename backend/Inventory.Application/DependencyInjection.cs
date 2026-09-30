@@ -1,6 +1,7 @@
 using Inventory.Application.CatalogReconciliation;
 using Inventory.Application.Categories;
 using Inventory.Application.Expenses;
+using Inventory.Application.InventoryCounting;
 using Inventory.Application.MachineStockSync;
 using Inventory.Application.Machines;
 using Inventory.Application.NayaxFeeSettings;
@@ -59,6 +60,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<ComputePurchaseTotalValidation>();
         services.AddScoped<CalculateReorderNeeds>();
         services.AddScoped<GetPickList>();
+        services.AddScoped<ApplyInventoryCount>();
         services.AddScoped<GetProductPriceComparison>();
         services.AddScoped<GetBookkeepingReport>();
         services.AddScoped<IGetBookkeepingReport>(sp => sp.GetRequiredService<GetBookkeepingReport>());

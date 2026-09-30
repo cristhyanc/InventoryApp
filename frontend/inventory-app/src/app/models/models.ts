@@ -384,3 +384,24 @@ export interface PickListProduct {
 export interface PickListResult {
   products: PickListProduct[];
 }
+
+/** Whether a Take Inventory Apply request created a stock movement (issue #245). */
+export enum InventoryCountApplyOutcome {
+  /** Counted matched the authoritative current quantity: no stock movement was created. */
+  Confirmed = 0,
+  /** A non-zero difference was applied through the existing Restock/Correction movement. */
+  Applied = 1
+}
+
+/** One product's Take Inventory Apply request. `expectedCurrentStock` is the quantity the operator counted against, so the backend can refuse a stale count instead of silently overwriting a concurrent change. */
+export interface InventoryCountApplyRequest {
+  countedStock: number;
+  expectedCurrentStock: number;
+}
+
+export interface InventoryCountApplyResult {
+  outcome: InventoryCountApplyOutcome;
+  quantityChange: number;
+  currentStock: number;
+  stockAdjustmentId: number | null;
+}
