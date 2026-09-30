@@ -433,6 +433,7 @@ function verifyAgentPrGuards(text, source, staleMessage) {
 export const validatePath = '.github/workflows/validate.yml';
 export const reviewPath = '.github/workflows/agent-review.yml';
 export const implementPath = '.github/workflows/agent-implement.yml';
+export const architecturePath = '.github/workflows/agent-architecture.yml';
 export const repairPath = '.github/workflows/agent-repair.yml';
 export const headUpdatePath = '.github/workflows/agent-head-update.yml';
 export const issueTemplatePath = '.github/ISSUE_TEMPLATE/agent-task.yml';
@@ -618,7 +619,7 @@ export function verifyDocumentationImpactGate(read = readRepositoryFile) {
   for (const forbidden of PREFLIGHT_JOB_CONTRACT.forbidden) {
     forbidText(preflight, forbidden, `${implementPath} preflight job`);
   }
-  const implementJob = section(implement, '  implement:\n', '  dispatch-validation:\n', `${implementPath} implement job`);
+  const implementJob = section(implement, '  implement:\n', '  dispatch-architecture:\n', `${implementPath} implement job`);
   requireText(implementJob, IMPLEMENT_JOB_DOCUMENTATION_CONTRACT.needs, `${implementPath} implement job`);
   requireText(implementJob, IMPLEMENT_JOB_DOCUMENTATION_CONTRACT.condition, `${implementPath} implement job`);
   requireOrder(implementJob, IMPLEMENT_JOB_DOCUMENTATION_CONTRACT.needs, '    steps:\n', `${implementPath} implement job`, 'needs: preflight must be declared on the job.');
@@ -926,9 +927,9 @@ function verifyAgentAppTokenStep(text, source, stepId, { pullRequests = false } 
   }
 }
 
-/** Verifies deterministic App-token publishing, architect handoff and final-head guard. */
-export function verifyArchitecturePass(workflow) {
-  const job = section(workflow, '  implement:\n', '  dispatch-validation:\n', 'agent-implement.yml implementation job');
+/** Verifies implementation publication, trusted architecture handoff and final-head validation dispatch. */
+export function verifyArchitecturePass(implementationWorkflow, architectureWorkflow) {
+  const job = section(implementationWorkflow, '  implement:\n', '  dispatch-architecture:\n', 'agent-implement.yml implementation job');
 
   requireText(job, '      contents: read', 'agent-implement.yml implementation permissions');
   requireText(job, 'persist-credentials: false', 'agent-implement.yml implementation checkout');
@@ -941,246 +942,149 @@ export function verifyArchitecturePass(workflow) {
     '`.agent-pr-title`',
     '`.agent-pr-body.md`',
     'short-lived GitHub App token that is never exposed to you',
-  ]) {
-    requireText(implementationPrompt, required, 'agent-implement.yml implementation prompt');
-  }
+  ]) requireText(implementationPrompt, required, 'agent-implement.yml implementation prompt');
 
-  requireOrder(job, '      - name: Run Claude Code implementation agent', '      - name: Verify implementation result', 'agent-implement.yml publish order');
   requireOrder(job, '      - name: Capture trusted base and resume checkpoint', '      - name: Run Claude Code implementation agent', 'trusted base capture');
   requireOrder(job, '      - name: Run Claude Code implementation agent', '      - name: Persist committed implementation', 'durability boundary');
   requireOrder(job, '      - name: Persist committed implementation', '      - name: Verify implementation result', 'durability before postconditions');
+  requireOrder(job, '      - name: Verify implementation result', '      - name: Create GitHub App token for implementation publish', 'agent-implement.yml publish order');
+  requireOrder(job, '      - name: Create GitHub App token for implementation publish', '      - name: Push implementation and create pull request', 'agent-implement.yml publish order');
+  requireOrder(job, '      - name: Push implementation and create pull request', '      - name: Record implementation outcome', 'agent-implement.yml handoff order');
+
+  const implementationAgent = section(job, '      - name: Run Claude Code implementation agent\n', '      # Storage only:', 'agent-implement.yml implementation agent');
+  requireText(implementationAgent, 'github_token: ${{ secrets.GITHUB_TOKEN }}', 'agent-implement.yml implementation agent');
+  requireText(implementationAgent, '--disallowedTools "Agent,WebFetch,WebSearch"', 'agent-implement.yml implementation agent');
+  requireText(implementationAgent, 'Bash(git push *)', 'agent-implement.yml implementation agent');
+  requireText(implementationAgent, 'Bash(gh pr create *)', 'agent-implement.yml implementation agent');
+  verifyAgentShellTimeout(implementationAgent, 'agent-implement.yml implementation agent');
+  const implementationAllowed = extractAllowedTools(implementationAgent, 'agent-implement.yml implementation allowed tools');
+  verifyTrackedFileDeletionPermissions(implementationAllowed, 'agent-implement.yml implementation allowed tools');
+  verifyScopedStagingCleanupPermissions(implementationAllowed, 'agent-implement.yml implementation allowed tools');
+  verifyScopedDirectoryCreationPermissions(implementationAllowed, 'agent-implement.yml implementation allowed tools');
+  for (const forbidden of ['AGENT_AUTOMATION_APP_PRIVATE_KEY', 'create-github-app-token', 'steps.implementation_app_token.outputs.token', 'git push -u origin']) {
+    forbidText(implementationAgent, forbidden, 'agent-implement.yml implementation agent');
+  }
+
   verifyAgentAppTokenStep(section(job, '      - name: Create GitHub App token for persistence\n', '      - name: Persist committed implementation\n', 'persistence App token'), 'persistence App token', 'persistence_app_token');
-  const persistenceDiagnostic = section(job, '      - name: Diagnose persistence GitHub App token\n', '      - name: Persist committed implementation\n', 'persistence App token diagnostic');
-  for (const required of [
-    'gh api installation/repositories',
-    '.repositories[] | select(.full_name == $repo)',
-    '.permissions.push // false',
-    'Effective repository permissions for installation token:',
-    'push --dry-run',
-  ]) requireText(persistenceDiagnostic, required, 'persistence App token diagnostic');
-  forbidText(persistenceDiagnostic, '--jq --arg', 'persistence App token diagnostic');
   const persistence = section(job, '      - name: Persist committed implementation\n', '      - name: Verify implementation result\n', 'trusted persistence');
   for (const required of [
     'if: always()', 'BASE_SHA: ${{ steps.starting_point.outputs.base_sha }}',
     'EXPECTED_HEAD: ${{ steps.persistence_candidate.outputs.head_sha }}',
     'GH_TOKEN: ${{ steps.persistence_app_token.outputs.token }}',
     'git merge-base --is-ancestor', '--diff-merges=separate',
-    'Existing persistence branch differs; refusing overwrite',
-    'Remote persistence verification failed', 'agent/recovery-',
-    'credential.helper=',
-    `bash ${appPushRetryPath} "$publish_remote" "$EXPECTED_HEAD:refs/heads/$saved_branch"`,
+    'Existing persistence branch differs; refusing overwrite', 'Remote persistence verification failed',
+    'agent/recovery-', `bash ${appPushRetryPath} "$publish_remote" "$EXPECTED_HEAD:refs/heads/$saved_branch"`,
   ]) requireText(persistence, required, 'trusted persistence');
-  for (const forbidden of ['gh pr create', 'ready=true', '--force']) forbidText(persistence, forbidden, 'storage is not approval');
-  requireText(job, "if: success() && steps.claude.outcome == 'success'", 'failed agent must not advance');
-  requireText(workflow, 'cancel-in-progress: false', 'do not cancel work before persistence');
+  requireText(implementationWorkflow, 'cancel-in-progress: false', 'do not cancel work before persistence');
 
-  requireOrder(job, '      - name: Verify implementation result', '      - name: Create GitHub App token for implementation publish', 'agent-implement.yml publish order');
-  requireOrder(job, '      - name: Create GitHub App token for implementation publish', '      - name: Push implementation and create pull request', 'agent-implement.yml publish order');
-  requireOrder(job, '      - name: Push implementation and create pull request', '      - name: Verify the architecture pass target', 'agent-implement.yml publish order');
-  requireOrder(job, '      - name: Verify the architecture pass target', '      - name: Run Claude Code architecture agent', 'agent-implement.yml architecture order');
-  requireOrder(job, '      - name: Run Claude Code architecture agent', '      - name: Verify architecture result', 'agent-implement.yml architecture publish order');
-  requireOrder(job, '      - name: Verify architecture result', '      - name: Create GitHub App token for architecture publish', 'agent-implement.yml architecture publish order');
-  requireOrder(job, '      - name: Create GitHub App token for architecture publish', '      - name: Push architecture head', 'agent-implement.yml architecture publish order');
-  requireOrder(job, '      - name: Push architecture head', '      - name: Record outcome on the issue', 'agent-implement.yml architecture publish order');
-
-  const implementationAgent = section(
-    job,
-    '      - name: Run Claude Code implementation agent\n',
-    '      # Storage only:',
-    'agent-implement.yml implementation agent',
-  );
-  requireText(implementationAgent, 'github_token: ${{ secrets.GITHUB_TOKEN }}', 'agent-implement.yml implementation agent');
-  requireText(implementationAgent, '--disallowedTools "Agent,WebFetch,WebSearch"', 'agent-implement.yml implementation agent');
-  requireText(implementationAgent, 'Bash(git push *)', 'agent-implement.yml implementation agent');
-  requireText(implementationAgent, 'Bash(gh pr create *)', 'agent-implement.yml implementation agent');
-  verifyAgentShellTimeout(implementationAgent, 'agent-implement.yml implementation agent');
-  verifyScopedDirectoryCreationPermissions(
-    extractAllowedTools(implementationAgent, 'agent-implement.yml implementation allowed tools'),
-    'agent-implement.yml implementation allowed tools',
-  );
-  for (const forbidden of [
-    'AGENT_AUTOMATION_APP_PRIVATE_KEY',
-    'create-github-app-token',
-    'steps.implementation_app_token.outputs.token',
-    'git push -u origin',
-  ]) {
-    forbidText(implementationAgent, forbidden, 'agent-implement.yml implementation agent');
-  }
-
-  const implementationResult = section(
-    job,
-    '      - name: Verify implementation result\n',
-    '      - name: Create GitHub App token for implementation publish\n',
-    'agent-implement.yml implementation result',
-  );
+  const implementationResult = section(job, '      - name: Verify implementation result\n', '      - name: Create GitHub App token for implementation publish\n', 'agent-implement.yml implementation result');
   for (const required of [
-    'id: implementation_result',
-    '.agent-run-status',
-    '[ -z "$(git ls-files -- .agent-run-status)" ]',
-    '[ "$(cat .agent-run-status)" = "blocked" ]',
-    'echo "blocked=true"',
-    '.agent-pr-title',
-    '.agent-pr-body.md',
-    'PR metadata scratch files must remain untracked',
-    `node ${DOCUMENTATION_IMPACT_VALIDATOR} --pr-body .agent-pr-body.md`,
-    'git diff --quiet',
-    'git diff --cached --quiet',
-    'echo "ready=true"',
-    'echo "branch=$branch"',
-    'echo "head_sha=$head_sha"',
-  ]) {
-    requireText(implementationResult, required, 'agent-implement.yml implementation result');
-  }
+    'id: implementation_result', '.agent-run-status', '[ -z "$(git ls-files -- .agent-run-status)" ]',
+    '[ "$(cat .agent-run-status)" = "blocked" ]', 'echo "blocked=true"', '.agent-pr-title', '.agent-pr-body.md',
+    'PR metadata scratch files must remain untracked', `node ${DOCUMENTATION_IMPACT_VALIDATOR} --pr-body .agent-pr-body.md`,
+    'git diff --quiet', 'git diff --cached --quiet', 'echo "ready=true"', 'echo "branch=$branch"', 'echo "head_sha=$head_sha"',
+  ]) requireText(implementationResult, required, 'agent-implement.yml implementation result');
 
-  const implementationToken = section(
-    job,
-    '      - name: Create GitHub App token for implementation publish\n',
-    '      - name: Push implementation and create pull request\n',
-    'agent-implement.yml implementation App token',
-  );
+  const implementationToken = section(job, '      - name: Create GitHub App token for implementation publish\n', '      - name: Push implementation and create pull request\n', 'agent-implement.yml implementation App token');
   verifyAgentAppTokenStep(implementationToken, 'agent-implement.yml implementation App token', 'implementation_app_token', { pullRequests: true });
-
-  requireText(section(job, '      - name: Diagnose GitHub App publish permissions\n', '      - name: Push implementation and create pull request\n', 'implementation publish'), 'GH_TOKEN: ${{ steps.implementation_app_token.outputs.token }}', 'implementation publish');
-
-  const implementationPublish = section(
-    job,
-    '      - name: Push implementation and create pull request\n',
-    '      - name: Comment with opened pull request\n',
-    'agent-implement.yml implementation publish',
-  );
+  const implementationPublish = section(job, '      - name: Push implementation and create pull request\n', '      - name: Record implementation outcome\n', 'agent-implement.yml implementation publish');
   for (const required of [
     'GH_TOKEN: ${{ steps.implementation_app_token.outputs.token }}',
     'EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}',
     `bash ${appPushRetryPath} "https://github.com/\${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$BRANCH"`,
-    'gh pr create',
-    '--body-file .agent-pr-body.md',
-    '.user.login == $author',
-    '.head.sha == $sha',
-    'echo "pr_number=$pr_number"',
-    'echo "head_sha=$HEAD_SHA"',
-  ]) {
-    requireText(implementationPublish, required, 'agent-implement.yml implementation publish');
+    'gh pr create', '--body-file .agent-pr-body.md', '.user.login == $author', '.head.sha == $sha',
+    'echo "pr_number=$pr_number"', 'echo "head_sha=$HEAD_SHA"',
+  ]) requireText(implementationPublish, required, 'agent-implement.yml implementation publish');
+
+  for (const forbidden of ['Run Claude Code architecture agent', 'architecture_app_token', 'Push architecture head']) {
+    forbidText(job, forbidden, 'agent-implement.yml must not contain architecture execution');
   }
 
-  const target = section(
-    job,
-    '      - name: Verify the architecture pass target\n',
-    '      - name: Run Claude Code architecture agent\n',
-    'agent-implement.yml architecture target',
-  );
+  const outcome = section(job, '      - name: Record implementation outcome\n', null, 'agent-implement.yml outcome');
   for (const required of [
-    "if: steps.publish_implementation.outcome == 'success'",
-    'EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}',
-    'steps.publish_implementation.outputs.pr_number',
-    'steps.publish_implementation.outputs.head_sha',
-    'gh pr list',
-    'gh api',
-    '--arg author "$EXPECTED_AGENT_AUTHOR"',
-    '.user.login == $author',
-    'git rev-parse HEAD',
-    'echo "pr_number=$pr_number"',
-    'echo "branch=$branch"',
-    'echo "head_sha=$head_sha"',
-    'echo "pr_ready=true"',
-  ]) {
-    requireText(target, required, 'agent-implement.yml architecture target');
-  }
-
-  const architect = section(
-    job,
-    '      - name: Run Claude Code architecture agent\n',
-    '      - name: Verify architecture result\n',
-    'agent-implement.yml architect',
-  );
-  for (const required of [
-    'id: architect',
-    "if: steps.architecture_target.outputs.pr_ready == 'true'",
-    'github_token: ${{ secrets.GITHUB_TOKEN }}',
-    'Do not delegate, spawn, or use Claude sub-agents, and do not invoke the `Agent` tool.',
-    'Preserve all observable behavior',
-    'bash scripts/validate.sh',
-    'gh pr comment',
-    'Do not push; a deterministic workflow step will mint a fresh GitHub App token',
-    '--disallowedTools "Agent,WebFetch,WebSearch"',
-    'Bash(git push *)',
-  ]) {
-    requireText(architect, required, 'agent-implement.yml architect');
-  }
-  for (const forbidden of [
-    'AGENT_AUTOMATION_APP_PRIVATE_KEY',
-    'steps.architecture_app_token.outputs.token',
-    'Bash(git push origin agent/issue-',
-  ]) {
-    forbidText(architect, forbidden, 'agent-implement.yml architect');
-  }
-  const allowed = section(architect, '          claude_args: |\n', '            --disallowedTools', 'agent-implement.yml architect allowed tools');
-  verifyTrackedFileDeletionPermissions(allowed, 'agent-implement.yml architect allowed tools');
-  verifyScopedStagingCleanupPermissions(allowed, 'agent-implement.yml architect allowed tools');
-  verifyScopedDirectoryCreationPermissions(allowed, 'agent-implement.yml architect allowed tools');
-  verifyAgentShellTimeout(architect, 'agent-implement.yml architect');
-  for (const forbidden of ['gh pr edit', 'gh pr create', 'gh issue edit', 'gh workflow', 'gh api']) {
-    forbidText(allowed, forbidden, 'agent-implement.yml architect allowed tools');
-  }
-
-  const architectureResult = section(
-    job,
-    '      - name: Verify architecture result\n',
-    '      - name: Create GitHub App token for architecture publish\n',
-    'agent-implement.yml architecture result',
-  );
-  for (const required of [
-    'id: architecture_result',
-    'START_SHA: ${{ steps.architecture_target.outputs.head_sha }}',
-    'git diff --quiet',
-    'git diff --cached --quiet',
-    'echo "head_sha=$head_sha"',
-    'echo "push_required=false"',
-    'echo "push_required=true"',
-  ]) {
-    requireText(architectureResult, required, 'agent-implement.yml architecture result');
-  }
-
-  const architectureToken = section(
-    job,
-    '      - name: Create GitHub App token for architecture publish\n',
-    '      - name: Push architecture head\n',
-    'agent-implement.yml architecture App token',
-  );
-  verifyAgentAppTokenStep(architectureToken, 'agent-implement.yml architecture App token', 'architecture_app_token');
-
-  const architecturePublish = section(
-    job,
-    '      - name: Push architecture head\n',
-    '      - name: Record outcome on the issue\n',
-    'agent-implement.yml architecture publish',
-  );
-  for (const required of [
-    'GH_TOKEN: ${{ steps.architecture_app_token.outputs.token }}',
-    `bash ${appPushRetryPath} "https://github.com/\${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$BRANCH"`,
-    'HEAD_SHA: ${{ steps.architecture_result.outputs.head_sha }}',
-  ]) {
-    requireText(architecturePublish, required, 'agent-implement.yml architecture publish');
-  }
-
-  const outcome = section(job, '      - name: Record outcome on the issue\n', null, 'agent-implement.yml outcome');
-  for (const required of [
-    'ARCHITECT_OUTCOME',
-    'TARGET_OUTCOME',
-    'ARCHITECTURE_RESULT_OUTCOME',
+    'PERSIST_OUTCOME: ${{ steps.persist_implementation.outcome }}',
+    'PUBLISH_OUTCOME: ${{ steps.publish_implementation.outcome }}',
+    'IMPLEMENTATION_READY: ${{ steps.implementation_result.outputs.ready }}',
     'AGENT_BLOCKED: ${{ steps.implementation_result.outputs.blocked }}',
-    '[ "$AGENT_BLOCKED" = "true" ]',
-    'expected blocked-task outcome, not an implementation workflow failure',
-    '[ "$ARCHITECT_OUTCOME" = "success" ]',
-    '[ "$ARCHITECTURE_RESULT_OUTCOME" = "success" ]',
-    'git branch --show-current',
-    'git rev-parse HEAD',
-    'git diff --quiet',
-    'git diff --cached --quiet',
-  ]) {
-    requireText(outcome, required, 'agent-implement.yml outcome');
-  }
-}
+    '[ "$AGENT_BLOCKED" = "true" ]', '[ "$PUBLISH_OUTCOME" = "success" ]',
+    'echo "dispatch_architecture=true"', 'git branch --show-current', 'git rev-parse HEAD',
+    'git diff --quiet', 'git diff --cached --quiet',
+  ]) requireText(outcome, required, 'agent-implement.yml outcome');
 
+  const implementationDispatcher = section(implementationWorkflow, '  dispatch-architecture:\n', null, 'agent-implement.yml architecture dispatcher');
+  verifySafeDispatcher(implementationDispatcher, 'agent-implement.yml architecture dispatcher');
+  verifyAgentPrGuards(implementationDispatcher, 'agent-implement.yml architecture dispatcher', 'Refusing stale architecture dispatch');
+  for (const required of [
+    'agent-architecture.yml', '-f issue_number="$ISSUE_NUMBER"', '-f pr_number="$PR_NUMBER"', '-f head_sha="$HEAD_SHA"',
+    '[[ "$head_ref" == agent/issue-"$ISSUE_NUMBER"-* ]]',
+  ]) requireText(implementationDispatcher, required, 'agent-implement.yml architecture dispatcher');
+  for (const forbidden of ['validate.yml', 'dispatch_review=true', 'gh pr edit', 'agent-review']) {
+    forbidText(implementationDispatcher, forbidden, 'agent-implement.yml architecture dispatcher');
+  }
+
+  const triggers = section(architectureWorkflow, 'on:\n', 'permissions:\n', 'agent-architecture.yml triggers');
+  for (const required of ['workflow_dispatch:', 'issue_number:', 'pr_number:', 'head_sha:']) requireText(triggers, required, 'agent-architecture.yml triggers');
+  for (const forbidden of ['pull_request:', 'issues:', 'issue_comment:']) forbidText(triggers, forbidden, 'agent-architecture.yml triggers');
+  requireText(architectureWorkflow, 'permissions: {}', 'agent-architecture.yml top-level permissions');
+  requireText(architectureWorkflow, 'group: agent-architecture-pr-${{ inputs.pr_number }}', 'agent-architecture.yml concurrency');
+  requireText(architectureWorkflow, 'cancel-in-progress: false', 'agent-architecture.yml concurrency');
+
+  const context = section(architectureWorkflow, '  context:\n', '  architecture:\n', 'agent-architecture.yml context');
+  requireText(context, 'pull-requests: read', 'agent-architecture.yml context');
+  requireText(context, 'issues: read', 'agent-architecture.yml context');
+  forbidText(context, 'actions/checkout', 'agent-architecture.yml context');
+  forbidText(context, 'CLAUDE_CODE_OAUTH_TOKEN', 'agent-architecture.yml context');
+  verifyAgentPrGuards(context, 'agent-architecture.yml context', 'Refusing stale architecture run');
+  requireText(context, '[[ "$head_ref" == agent/issue-"$ISSUE_NUMBER"-* ]]', 'agent-architecture.yml context');
+  requireText(context, 'any(.labels[]?; .name == "agent-working")', 'agent-architecture.yml context');
+
+  const architectureJob = section(architectureWorkflow, '  architecture:\n', '  finalize:\n', 'agent-architecture.yml architecture job');
+  requireText(architectureJob, '    needs: context', 'agent-architecture.yml architecture job');
+  requireText(architectureJob, '      contents: read', 'agent-architecture.yml architecture permissions');
+  requireText(architectureJob, '      pull-requests: write', 'agent-architecture.yml architecture permissions');
+  requireText(architectureJob, '      issues: read', 'agent-architecture.yml architecture permissions');
+  forbidText(architectureJob, 'actions: write', 'agent-architecture.yml architecture permissions');
+  requireText(architectureJob, 'ref: ${{ needs.context.outputs.head_sha }}', 'agent-architecture.yml exact checkout');
+  requireText(architectureJob, 'persist-credentials: false', 'agent-architecture.yml exact checkout');
+  requireText(architectureJob, 'git checkout -b "$BRANCH" "$HEAD_SHA"', 'agent-architecture.yml local feature branch');
+
+  const architect = section(architectureJob, '      - name: Run Claude Code architecture agent\n', '      - name: Verify architecture result\n', 'agent-architecture.yml architect');
+  for (const required of [
+    'id: architect', 'github_token: ${{ secrets.GITHUB_TOKEN }}',
+    'Do not delegate, spawn, or use Claude sub-agents, and do not invoke the `Agent` tool.',
+    'Preserve all observable behavior', 'bash scripts/validate.sh', 'gh pr comment',
+    'Do not push; a deterministic workflow step will mint a fresh GitHub App token',
+    '--disallowedTools "Agent,WebFetch,WebSearch"', 'Bash(git push *)',
+  ]) requireText(architect, required, 'agent-architecture.yml architect');
+  for (const forbidden of ['AGENT_AUTOMATION_APP_PRIVATE_KEY', 'steps.architecture_app_token.outputs.token']) forbidText(architect, forbidden, 'agent-architecture.yml architect');
+  const architectureAllowed = extractAllowedTools(architect, 'agent-architecture.yml architect allowed tools');
+  verifyTrackedFileDeletionPermissions(architectureAllowed, 'agent-architecture.yml architect allowed tools');
+  verifyScopedStagingCleanupPermissions(architectureAllowed, 'agent-architecture.yml architect allowed tools');
+  verifyScopedDirectoryCreationPermissions(architectureAllowed, 'agent-architecture.yml architect allowed tools');
+  verifyAgentShellTimeout(architect, 'agent-architecture.yml architect');
+  for (const forbidden of ['gh pr edit', 'gh pr create', 'gh issue edit', 'gh workflow', 'gh api']) forbidText(architectureAllowed, forbidden, 'agent-architecture.yml architect allowed tools');
+
+  const architectureResult = section(architectureJob, '      - name: Verify architecture result\n', '      - name: Create GitHub App token for architecture publish\n', 'agent-architecture.yml architecture result');
+  for (const required of ['id: architecture_result', 'START_SHA: ${{ needs.context.outputs.head_sha }}', 'git diff --quiet', 'git diff --cached --quiet', 'echo "head_sha=$head_sha"', 'echo "push_required=false"', 'echo "push_required=true"']) requireText(architectureResult, required, 'agent-architecture.yml architecture result');
+  const architectureToken = section(architectureJob, '      - name: Create GitHub App token for architecture publish\n', '      - name: Push architecture head\n', 'agent-architecture.yml architecture App token');
+  verifyAgentAppTokenStep(architectureToken, 'agent-architecture.yml architecture App token', 'architecture_app_token');
+  const architecturePublish = section(architectureJob, '      - name: Push architecture head\n', null, 'agent-architecture.yml architecture publish');
+  for (const required of ['GH_TOKEN: ${{ steps.architecture_app_token.outputs.token }}', `bash ${appPushRetryPath} "https://github.com/\${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$BRANCH"`, 'HEAD_SHA: ${{ steps.architecture_result.outputs.head_sha }}']) requireText(architecturePublish, required, 'agent-architecture.yml architecture publish');
+
+  const finalize = section(architectureWorkflow, '  finalize:\n', null, 'agent-architecture.yml finalize');
+  for (const required of [
+    "if: always() && needs.context.result == 'success'", 'actions: write', 'pull-requests: write', 'issues: write',
+    'ARCHITECTURE_JOB_RESULT: ${{ needs.architecture.result }}', '[ "$ARCHITECTURE_JOB_RESULT" != "success" ]',
+    'FINAL_SHA: ${{ needs.architecture.outputs.head_sha }}', '[ "$current_sha" = "$FINAL_SHA" ]',
+    '[[ "$head_ref" == agent/issue-"$ISSUE_NUMBER"-* ]]', '.user.login // empty',
+    'any(.labels[]?; .name == "agent-working")', "grep -Eq '^\\.github/workflows/'",
+    'gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label agent-review',
+    'gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --remove-label agent-working --add-label agent-review',
+    'gh workflow run validate.yml', '--ref main', '-f head_sha="$FINAL_SHA"', '-f dispatch_review=true',
+    '--remove-label agent-review --add-label agent-blocked',
+  ]) requireText(finalize, required, 'agent-architecture.yml finalize');
+  for (const forbidden of ['actions/checkout', 'CLAUDE_CODE_OAUTH_TOKEN', 'AGENT_AUTOMATION_APP_PRIVATE_KEY', 'contents: write', 'claude-code-action']) forbidText(finalize, forbidden, 'agent-architecture.yml finalize');
+}
 /** Runs every agent workflow contract check with an overridable repository reader. */
 export function runContractChecks({ read = readRepositoryFile } = {}) {
   const appPushRetry = read(appPushRetryPath);
@@ -1277,84 +1181,39 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
 
   verifyValidationModeIsolation(validate, validatePath);
 
-  for (const [path, producerName] of [
-    ['.github/workflows/agent-implement.yml', 'implement'],
-    ['.github/workflows/agent-repair.yml', 'repair'],
-  ]) {
+  {
+    const path = repairPath;
     const workflow = read(path);
-    const producer = section(workflow, `  ${producerName}:\n`, '  dispatch-validation:\n', path);
-    forbidText(producer, 'actions: write', `${path} ${producerName} job`);
-    if (producerName === 'repair') {
-      requireText(producer, '      contents: read', `${path} repair permissions`);
-      requireText(producer, 'persist-credentials: false', `${path} repair checkout`);
+    const producer = section(workflow, '  repair:\n', '  dispatch-validation:\n', path);
+    forbidText(producer, 'actions: write', `${path} repair job`);
+    requireText(producer, '      contents: read', `${path} repair permissions`);
+    requireText(producer, 'persist-credentials: false', `${path} repair checkout`);
 
-      const repairAgent = section(
-        producer,
-        '      - name: Run Claude Code repair agent\n',
-        '      - name: Verify repair result\n',
-        `${path} repair agent`,
-      );
-      requireText(repairAgent, 'github_token: ${{ secrets.GITHUB_TOKEN }}', `${path} repair agent`);
-      requireText(repairAgent, 'Do not push, rebase, or rewrite history', `${path} repair agent`);
-      requireText(repairAgent, 'Bash(git push *)', `${path} repair agent`);
-      for (const forbidden of ['AGENT_AUTOMATION_APP_PRIVATE_KEY', 'steps.repair_app_token.outputs.token']) {
-        forbidText(repairAgent, forbidden, `${path} repair agent`);
-      }
+    const repairAgent = section(producer, '      - name: Run Claude Code repair agent\n', '      - name: Verify repair result\n', `${path} repair agent`);
+    requireText(repairAgent, 'github_token: ${{ secrets.GITHUB_TOKEN }}', `${path} repair agent`);
+    requireText(repairAgent, 'Do not push, rebase, or rewrite history', `${path} repair agent`);
+    requireText(repairAgent, 'Bash(git push *)', `${path} repair agent`);
+    for (const forbidden of ['AGENT_AUTOMATION_APP_PRIVATE_KEY', 'steps.repair_app_token.outputs.token']) forbidText(repairAgent, forbidden, `${path} repair agent`);
 
-      const repairResult = section(
-        producer,
-        '      - name: Verify repair result\n',
-        '      - name: Create GitHub App token for repair publish\n',
-        `${path} repair result`,
-      );
-      for (const required of ['id: repair_result', 'git diff --quiet', 'git diff --cached --quiet', 'echo "head_sha=$head_sha"', 'echo "push_required=true"']) {
-        requireText(repairResult, required, `${path} repair result`);
-      }
+    const repairResult = section(producer, '      - name: Verify repair result\n', '      - name: Create GitHub App token for repair publish\n', `${path} repair result`);
+    for (const required of ['id: repair_result', 'git diff --quiet', 'git diff --cached --quiet', 'echo "head_sha=$head_sha"', 'echo "push_required=true"']) requireText(repairResult, required, `${path} repair result`);
 
-      const repairToken = section(
-        producer,
-        '      - name: Create GitHub App token for repair publish\n',
-        '      - name: Push repaired head\n',
-        `${path} repair App token`,
-      );
-      verifyAgentAppTokenStep(repairToken, `${path} repair App token`, 'repair_app_token');
+    const repairToken = section(producer, '      - name: Create GitHub App token for repair publish\n', '      - name: Push repaired head\n', `${path} repair App token`);
+    verifyAgentAppTokenStep(repairToken, `${path} repair App token`, 'repair_app_token');
+    const repairPublish = section(producer, '      - name: Push repaired head\n', '      - name: Record outcome on the pull request\n', `${path} repair publish`);
+    requireText(repairPublish, 'GH_TOKEN: ${{ steps.repair_app_token.outputs.token }}', `${path} repair publish`);
+    requireText(repairPublish, 'git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"', `${path} repair publish`);
 
-      const repairPublish = section(
-        producer,
-        '      - name: Push repaired head\n',
-        '      - name: Record outcome on the pull request\n',
-        `${path} repair publish`,
-      );
-      requireText(repairPublish, 'GH_TOKEN: ${{ steps.repair_app_token.outputs.token }}', `${path} repair publish`);
-      requireText(repairPublish, 'git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"', `${path} repair publish`);
-
-      const repairOutcome = section(producer, '      - name: Record outcome on the pull request\n', null, `${path} repair outcome`);
-      for (const required of [
-        'REPAIR_RESULT_OUTCOME: ${{ steps.repair_result.outcome }}',
-        'EXPECTED_SHA: ${{ steps.repair_result.outputs.head_sha }}',
-        '[ "$REPAIR_RESULT_OUTCOME" = "success" ]',
-        '[ "$end_sha" = "$EXPECTED_SHA" ]',
-      ]) {
-        requireText(repairOutcome, required, `${path} repair outcome`);
-      }
-    }
+    const repairOutcome = section(producer, '      - name: Record outcome on the pull request\n', null, `${path} repair outcome`);
+    for (const required of ['REPAIR_RESULT_OUTCOME: ${{ steps.repair_result.outcome }}', 'EXPECTED_SHA: ${{ steps.repair_result.outputs.head_sha }}', '[ "$REPAIR_RESULT_OUTCOME" = "success" ]', '[ "$end_sha" = "$EXPECTED_SHA" ]']) requireText(repairOutcome, required, `${path} repair outcome`);
 
     const dispatcher = section(workflow, '  dispatch-validation:\n', null, path);
-    verifySafeDispatcher(dispatcher, `${path} validation dispatcher`, producerName === 'implement' ? 'write' : 'read');
+    verifySafeDispatcher(dispatcher, `${path} validation dispatcher`);
     verifyAgentPrGuards(dispatcher, `${path} validation dispatcher`, 'Refusing stale validation dispatch');
     requireText(dispatcher, 'validate.yml', `${path} validation dispatcher`);
-    if (producerName === 'implement') {
-      // The implementation dispatcher is the one place allowed to label the pull request
-      // itself: it applies agent-review as a deterministic step (Claude is never granted
-      // gh pr edit/gh label) before requesting review automatically via dispatch_review=true.
-      requireText(dispatcher, 'gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label agent-review', `${path} validation dispatcher`);
-      requireText(dispatcher, '-f dispatch_review=true', `${path} validation dispatcher`);
-    } else {
-      requireText(dispatcher, '-f dispatch_review=true', `${path} validation dispatcher`);
-      requireText(dispatcher, 'any(.labels[]?; .name == "agent-review")', `${path} validation dispatcher`);
-    }
+    requireText(dispatcher, '-f dispatch_review=true', `${path} validation dispatcher`);
+    requireText(dispatcher, 'any(.labels[]?; .name == "agent-review")', `${path} validation dispatcher`);
   }
-
   const review = read(reviewPath);
   const reviewTriggers = section(review, 'on:\n', 'permissions:\n', 'agent-review.yml triggers');
   requireText(reviewTriggers, 'types: [labeled]', 'agent-review.yml triggers');
@@ -1409,12 +1268,13 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
     forbidText(reviewAllowedTools, forbidden, 'agent-review.yml allowed tools');
   }
 
-  verifyArchitecturePass(read(implementPath));
+  verifyArchitecturePass(read(implementPath), read(architecturePath));
 
   // Defence in depth: no agent workflow may resolve a pull request author through the
   // GraphQL actor login anywhere, including in a guard added after this contract was written.
   for (const path of [
     '.github/workflows/agent-implement.yml',
+    architecturePath,
     '.github/workflows/agent-repair.yml',
     reviewPath,
     validatePath,
