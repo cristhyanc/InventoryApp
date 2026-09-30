@@ -87,3 +87,11 @@ public record NayaxMachineStockApplyResponseDto(IReadOnlyList<NayaxStockEventApp
 /// <c>ApplyAsSeparateRestock</c> explicitly overrides the warning and applies it once.
 /// </summary>
 public record NayaxResolveDuplicateRequestDto(int EventId, NayaxDuplicateResolutionChoice Resolution);
+
+/// <summary>
+/// An operator's explicit bulk request to resolve every listed Sync Restock event as "already
+/// recorded manually" in one action (issue #242). Unlike <see cref="NayaxResolveDuplicateRequestDto"/>,
+/// this is never limited to events the app flagged as a possible duplicate - that flag is only a
+/// suggestion for human resolution, not a precondition.
+/// </summary>
+public record NayaxResolveManyAsAlreadyRecordedRequestDto(IReadOnlyList<int> EventIds);

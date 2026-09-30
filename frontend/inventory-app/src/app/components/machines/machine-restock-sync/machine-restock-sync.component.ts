@@ -21,9 +21,11 @@ import {
 
 /**
  * Machine-level Sync Restock action (issue #183). It owns the whole Nayax stock-adjustment
- * reconciliation workflow - the reconciliation dialog's open state, preview state, syncing/applying
- * state, event selection, eligibility, the two API calls and its own notifications - so the
- * machine-detail page only has to supply the machine identity and react to a successful apply.
+ * reconciliation workflow - the reconciliation dialog's open state, preview state, syncing/applying/
+ * bulk-resolving state, event selection, eligibility, its API calls and its own notifications - so
+ * the machine-detail page only has to supply the machine identity and react to a successful apply.
+ * The bulk "Already recorded manually" action (issue #242) reconciles every explicitly selected
+ * event in one call, whether or not the app flagged it as a possible duplicate.
  *
  * The preview is shown in a dialog rather than inline, following the application's existing
  * `ConfirmationDialogComponent` pattern (an `*ngIf` backdrop that closes on an outside click).
@@ -158,6 +160,8 @@ export class MachineRestockSyncComponent {
   syncError$ = new BehaviorSubject<string | null>(null);
   applyError$ = new BehaviorSubject<string | null>(null);
   resolvingEventId$ = new BehaviorSubject<number | null>(null);
+  /** The bulk "Already recorded manually" action is in flight (issue #242). */
+  resolvingManyEvents$ = new BehaviorSubject(false);
   selectedEventIds = new Set<number>();
 
   /** The Sync Restock From date filter (issue #206), as a `yyyy-MM-dd` local-date input value. */
@@ -201,6 +205,17 @@ export class MachineRestockSyncComponent {
     return event.isPossibleDuplicate && event.duplicateResolution === NayaxDuplicateResolution.None;
   }
 
+  /**
+   * Whether this event may be explicitly selected and marked **Already recorded manually** through
+   * the bulk action (issue #242). The app's possible-duplicate detection is only a suggestion for
+   * human resolution, not a precondition: any unresolved event is eligible, whether or not it is
+   * ready to apply or flagged as a possible duplicate. An already-reconciled event stays ineligible
+   * so it is never re-selected for the same resolution.
+   */
+  isEligibleForManualResolution(event: NayaxStockEventPreview): boolean {
+    return event.duplicateResolution === NayaxDuplicateResolution.None;
+  }
+
   isEventSelected(eventId: number): boolean {
     return this.selectedEventIds.has(eventId);
   }
@@ -238,9 +253,12 @@ export class MachineRestockSyncComponent {
     }
   }
 
-  /** Closes the dialog unless an apply is in flight, and returns focus to the Sync Restock button. */
+  /**
+   * Closes the dialog unless an apply or a bulk resolve is in flight, and returns focus to the Sync
+   * Restock button.
+   */
   closeModal(): void {
-    if (!this.modalOpen$.value || this.applying$.value) {
+    if (!this.modalOpen$.value || this.applying$.value || this.resolvingManyEvents$.value) {
       return;
     }
 
@@ -317,12 +335,13 @@ export class MachineRestockSyncComponent {
   }
 
   /**
-   * Seven calendar days before the operator's current Australia/Canberra business date (issue
-   * #206; timezone corrected by issue #218), as `yyyy-MM-dd`.
+   * Three calendar days before the operator's current Australia/Canberra business date (issue
+   * #206; timezone corrected by issue #218; shortened from seven days by issue #242), as
+   * `yyyy-MM-dd`.
    */
   private defaultFromDate(): string {
     const today = currentDateInTimeZone(new Date(), BUSINESS_TIME_ZONE);
-    const { year, month, day } = shiftCalendarDate(today, -7);
+    const { year, month, day } = shiftCalendarDate(today, -3);
     const pad = (value: number) => value.toString().padStart(2, '0');
     return `${year}-${pad(month)}-${pad(day)}`;
   }
@@ -410,6 +429,42 @@ export class MachineRestockSyncComponent {
         this.resolvingEventId$.next(null);
         this.applyError$.next('Failed to resolve the possible duplicate.');
         this.toastService.error('Failed to resolve the possible duplicate.');
+      }
+    });
+  }
+
+  /**
+   * The bulk "Already recorded manually" action (issue #242): resolves every explicitly selected
+   * event as already represented by an existing manual restock in one action, whether or not the
+   * app flagged it as a possible duplicate. Each event keeps its own outcome; the dialog re-syncs
+   * afterwards so the preview and selection stay consistent with what was actually resolved.
+   */
+  resolveSelectedAsAlreadyRecorded(): void {
+    const machineId = this.machineId;
+    if (!machineId || this.selectedEventIds.size === 0) {
+      return;
+    }
+
+    this.applyError$.next(null);
+    this.resolvingManyEvents$.next(true);
+    this.machineService.resolveSyncRestockManually(machineId, [...this.selectedEventIds]).subscribe({
+      next: (response) => {
+        this.resolvingManyEvents$.next(false);
+        const reconciledCount = response.results.filter((r) => r.outcome === NayaxStockEventApplyOutcome.Reconciled).length;
+        const failedCount = response.results.length - reconciledCount;
+        if (reconciledCount > 0) {
+          this.toastService.success(`Reconciled ${reconciledCount} event(s) as already recorded manually.`);
+        }
+        if (failedCount > 0) {
+          this.toastService.warning(`${failedCount} event(s) could not be resolved and remain for review.`);
+        }
+        this.selectedEventIds.clear();
+        this.refreshPreview();
+      },
+      error: () => {
+        this.resolvingManyEvents$.next(false);
+        this.applyError$.next('Failed to resolve the selected events as already recorded manually.');
+        this.toastService.error('Failed to resolve the selected events as already recorded manually.');
       }
     });
   }

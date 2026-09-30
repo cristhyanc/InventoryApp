@@ -1320,9 +1320,10 @@ projection, and this feature does not change that meaning.
    persisted, auditable outcome of that choice, distinct from `ProcessingStatus` (which only
    tracks whether a storage movement was created). While unresolved, the dialog shows the event
    visually distinct (its possible-duplicate badge and comparison context, including the matching
-   manual refill) with two explicit actions instead of an ordinary selectable checkbox - the
-   checkbox stays disabled and the event is never presented as an ordinary Apply item until it is
-   resolved:
+   manual refill) with two explicit per-row actions, alongside the ordinary selectable checkbox -
+   the possible-duplicate flag is a suggestion for human resolution, not a precondition (issue
+   #242, next step), so the checkbox stays enabled even while unresolved, but the event is never
+   pre-selected or presented as an ordinary Apply item until it is resolved:
    - **Already recorded manually** calls `POST /api/machines/{id}/sync-restock/resolve-duplicate`
      with `AlreadyRecordedManually`. `Inventory.Application.MachineStockSync.
      ResolveMachineStockDuplicate` reconciles the event (`DuplicateResolution =
@@ -1339,7 +1340,7 @@ projection, and this feature does not change that meaning.
      same transaction, so the override itself remains auditable alongside the movement it created.
 
    The safety rule is enforced in `Inventory.Domain.Nayax.NayaxMachineStockApplyPolicy.Decide`,
-   not only by the disabled checkbox: an unresolved flagged duplicate now decides
+   not only by the checkbox eligibility: an unresolved flagged duplicate now decides
    `DuplicateRequiresResolution` and a reconciled one decides `ReconciledDuplicate`, so a direct
    `POST /api/machines/{id}/sync-restock/apply` call gets the same protection as the UI. Both
    resolution actions are idempotent - repeating either request re-reads the already-settled state
@@ -1347,6 +1348,28 @@ projection, and this feature does not change that meaning.
    original imported Nayax event row is never deleted or rewritten by either resolution; only the
    duplicate-resolution columns and, for an override, the ordinary `Applied` columns are added to
    it.
+6a. **Bulk "Already recorded manually" for any eligible unresolved event, suggested or not (issue
+    #242).** The possible-duplicate flag above is only a suggestion for human resolution; it is
+    never a precondition for this resolution. The operator may explicitly check any unresolved,
+    not-yet-reconciled event's checkbox - ready to apply, Needs Review, a negative discrepancy, an
+    insufficient-storage event, or a flagged-but-unresolved possible duplicate - and resolve every
+    selected one in a single **Already recorded manually (N)** action distinct from **Apply
+    selected**; an already-reconciled event (shown only when Show reconciled is on) stays
+    checkbox-ineligible. The dialog calls `POST /api/machines/{id}/sync-restock/resolve-manual`
+    with the selected event ids; `Inventory.Application.MachineStockSync.
+    ResolveMachineStockEventsAsAlreadyRecorded` resolves each id independently through the same
+    idempotent `IMachineStockEventStore.ReconcileAsManualDuplicateAsync` primitive
+    `ResolveMachineStockDuplicate` uses for one flagged duplicate - linking the matching manual
+    `StockAdjustment.Id` when `NayaxMachineStockDuplicatePolicy.FindPossibleDuplicate` finds one,
+    or leaving it `null` when the operator is resolving an event the app never flagged - and
+    returns every id's own outcome in a `NayaxMachineStockApplyResponseDto`, the same batch
+    response shape `ApplyMachineStockSync` already returns. An event that already has an applied
+    Nayax movement is reported `NotApplicable`, never silently reconciled or skipped; one invalid
+    or already-settled id in the same request never blocks or changes the outcome of the others,
+    following the same per-event batch shape `ApplyMachineStockSync` established (step 7, below).
+    Checking a box never itself reconciles anything - only this explicit action does - and
+    **Select all applicable** is unrelated: it still selects only the checkbox-eligible ids
+    `isReadyToApply` computes, for **Apply selected**.
 7. **Apply only what is accepted.** `POST /api/machines/{id}/sync-restock/apply` runs
    `Inventory.Application.MachineStockSync.ApplyMachineStockSync` over exactly the event ids the
    operator selects, one at a time, each in its own transaction. `NayaxMachineStockApplyPolicy` is
@@ -1382,9 +1405,10 @@ projection, and this feature does not change that meaning.
    pairing the filtered events with `HiddenReconciledCount` - reconciled events in the date window
    Show reconciled is currently hiding - which the preview exposes as
    `NayaxMachineStockSyncPreviewDto.HiddenReconciledCount` for the dialog's compact visible/hidden
-   status line. From date defaults, in the browser only, to seven calendar days before the
+   status line. From date defaults, in the browser only, to three calendar days before the
    operator's current Australia/Canberra business date (issue #218; before that fix it used the
-   browser's own local date, which is not necessarily the same calendar day); a caller that omits
+   browser's own local date, which is not necessarily the same calendar day; shortened from seven
+   days to three by issue #242); a caller that omits
    it (a direct API call, or every test in `MachineStockSyncTests` written before this issue) gets
    the original unfiltered behaviour, since `null` means "no lower bound" rather than any
    server-side default. Neither filter deletes, rewrites, or reclassifies any imported event or
@@ -1438,13 +1462,16 @@ this feature is added to the legacy `InventoryApi/Services` layer:
   `NayaxStockEventProcessingStatus`/`NayaxDuplicateResolution`/`NayaxDuplicateResolutionChoice`
   states, are deterministic `Inventory.Domain.Nayax` types with no Nayax, HTTP, or EF Core
   dependency.
-- **Application.** `Inventory.Application.MachineStockSync` owns the three use cases
+- **Application.** `Inventory.Application.MachineStockSync` owns the use cases
   (`SyncMachineStockFromNayax`, `ApplyMachineStockSync`, `ResolveMachineStockDuplicate` -
-  issue #196), their request/response DTOs, and the narrow `IMachineStockEventStore` persistence
-  port (extended with `ReconcileAsManualDuplicateAsync` and an `ApplyRefillAsync` that also
-  persists the duplicate-resolution columns, and with `GetUnprocessedEventsAsync`'s
-  `fromDateGmt`/`includeReconciled` filters and `MachineStockEventsPage` result - issue #206). The
-  Nayax read stays on the existing `Inventory.Application.Nayax.INayaxLynxClient` port.
+  issue #196 - and `ResolveMachineStockEventsAsAlreadyRecorded` - the bulk equivalent, issue
+  #242), their request/response DTOs, and the narrow `IMachineStockEventStore` persistence
+  port (extended with `ReconcileAsManualDuplicateAsync` - whose matched-manual-adjustment
+  parameter became nullable under issue #242, for a bulk-resolved event the app never flagged -
+  and an `ApplyRefillAsync` that also persists the duplicate-resolution columns, and with
+  `GetUnprocessedEventsAsync`'s `fromDateGmt`/`includeReconciled` filters and
+  `MachineStockEventsPage` result - issue #206). The Nayax read stays on the existing
+  `Inventory.Application.Nayax.INayaxLynxClient` port.
 - **Infrastructure/adapters.** `Inventory.Infrastructure.Nayax.NayaxLynxClient` remains the Nayax
   HTTP adapter. `InventoryApi.Adapters.Persistence.EfMachineStockEventStore` implements the
   persistence port over `AppDbContext`, owns the per-event transaction, and reuses
@@ -1454,7 +1481,9 @@ this feature is added to the legacy `InventoryApi/Services` layer:
   `AppDbContext`, the persistence models, and the costing services still live in `InventoryApi`.
 - **API.** `MachinesController` binds the request, invokes the use case, and returns its result;
   `POST /api/machines/{id}/sync-restock/resolve-duplicate` (issue #196) is the third, equally thin
-  binding for `ResolveMachineStockDuplicate`. `POST /api/machines/{id}/sync-restock` additionally
+  binding for `ResolveMachineStockDuplicate`, and `POST /api/machines/{id}/sync-restock/resolve-manual`
+  (issue #242) is the fourth, for the bulk `ResolveMachineStockEventsAsAlreadyRecorded`.
+  `POST /api/machines/{id}/sync-restock` additionally
   binds the optional `fromDate`/`includeReconciled` query parameters (issue #206) and passes
   `fromDate?.UtcDateTime` straight through to the use case; the controller does no filtering itself.
   `fromDate` is declared `DateTimeOffset?`, not `DateTime?` (issue #218), so the UTC instant the
@@ -1463,23 +1492,30 @@ this feature is added to the legacy `InventoryApi/Services` layer:
 - **Frontend.** The Sync Restock workflow is its own standalone component,
   `components/machines/machine-restock-sync/MachineRestockSyncComponent`, following the [large page
   decomposition](#frontend-migration-track) step: it owns the reconciliation dialog's open state,
-  the preview state, the syncing/applying/resolving state, the selected event ids, the From
-  date/Show reconciled filter state (issue #206), the apply-eligibility check (which now also
-  excludes an unresolved *or already-reconciled* duplicate), the three API calls, and its own
-  notifications. The dialog follows the existing `ConfirmationDialogComponent` pattern (an `*ngIf`
-  backdrop with `role="dialog"`/`aria-modal`, closed by its Close controls, Escape, or an outside
-  click, but not while an apply is in flight); its body scrolls so a long event list never pushes
-  the Close/Apply actions off screen. Opening the dialog resets From date to seven calendar days
-  before the operator's current Australia/Canberra business date (issue #218) and Show reconciled to
+  the preview state, the syncing/applying/resolving/bulk-resolving state, the selected event ids,
+  the From date/Show reconciled filter state (issue #206), the apply-eligibility check (which now
+  also excludes an unresolved *or already-reconciled* duplicate), the separate bulk
+  manual-resolution eligibility check `isEligibleForManualResolution` (issue #242 - any event with
+  `DuplicateResolution.None`, a materially wider set than `isReadyToApply`), its API calls, and its
+  own notifications. The dialog follows the existing `ConfirmationDialogComponent` pattern (an
+  `*ngIf` backdrop with `role="dialog"`/`aria-modal`, closed by its Close controls, Escape, or an
+  outside click, but not while an apply or a bulk resolve is in flight); its body scrolls so a long
+  event list never pushes the Close/Apply/Already-recorded-manually actions off screen. Opening the
+  dialog resets From date to three calendar days before the operator's current Australia/Canberra
+  business date (issue #218; shortened from seven days by issue #242) and Show reconciled to
   off; changing either filter, and the
   post-apply/post-resolve refresh, all fetch through the same `refreshPreview`, so the selection is
-  always recomputed from the events the current filters actually return.
+  always recomputed from the events the current filters actually return - `isReadyToApply` alone,
+  never the wider bulk-resolution eligibility, so a Needs Review or flagged-duplicate event is
+  never left silently pre-selected for either action.
   `MachineDetailComponent` composes it as
   `<app-machine-restock-sync [machineId]="machine?.machineID" (restockApplied)="refreshProducts()">`
   and stays responsible only for the machine-details page, reloading its product table when the
   component reports that at least one event was actually applied. The child's `isReadyToApply` only
-  decides which checkboxes an operator may tick, including through **Select all applicable**; the
-  backend apply use case remains the sole authority over whether an event moves storage inventory.
+  decides which checkboxes are pre-selected and count towards **Select all applicable**/**Apply
+  selected**; `isEligibleForManualResolution` alone decides which checkboxes an operator may tick
+  for **Already recorded manually**. Either way, the backend use case remains the sole authority
+  over whether an event moves storage inventory or is reconciled.
 
 Migrating the rest of `InventoryApi/Services` remains unrelated, larger, out-of-scope work tracked
 by the incremental migration plan below.

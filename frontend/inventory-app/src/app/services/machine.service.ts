@@ -61,4 +61,15 @@ export class MachineService {
       { eventId, resolution }
     );
   }
+
+  /**
+   * Resolves every listed Sync Restock event as "already recorded manually" in one explicit bulk
+   * action (issue #242), whether or not the app flagged it as a possible duplicate.
+   */
+  resolveSyncRestockManually(id: number, eventIds: number[]): Observable<NayaxMachineStockApplyResponse> {
+    return this.http.post<NayaxMachineStockApplyResponse>(
+      `${this.baseUrl}/${id}/sync-restock/resolve-manual`,
+      { eventIds }
+    );
+  }
 }

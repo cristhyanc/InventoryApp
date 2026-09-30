@@ -17,17 +17,20 @@ public class MachinesController : ControllerBase
     private readonly SyncMachineStockFromNayax _syncMachineStock;
     private readonly ApplyMachineStockSync _applyMachineStockSync;
     private readonly ResolveMachineStockDuplicate _resolveMachineStockDuplicate;
+    private readonly ResolveMachineStockEventsAsAlreadyRecorded _resolveMachineStockEventsAsAlreadyRecorded;
 
     public MachinesController(
         IMachineService service,
         SyncMachineStockFromNayax syncMachineStock,
         ApplyMachineStockSync applyMachineStockSync,
-        ResolveMachineStockDuplicate resolveMachineStockDuplicate)
+        ResolveMachineStockDuplicate resolveMachineStockDuplicate,
+        ResolveMachineStockEventsAsAlreadyRecorded resolveMachineStockEventsAsAlreadyRecorded)
     {
         _service = service;
         _syncMachineStock = syncMachineStock;
         _applyMachineStockSync = applyMachineStockSync;
         _resolveMachineStockDuplicate = resolveMachineStockDuplicate;
+        _resolveMachineStockEventsAsAlreadyRecorded = resolveMachineStockEventsAsAlreadyRecorded;
     }
 
     [HttpGet("{id:long}")]
@@ -89,6 +92,18 @@ public class MachinesController : ControllerBase
         long id, NayaxResolveDuplicateRequestDto dto, CancellationToken ct)
     {
         var result = await _resolveMachineStockDuplicate.Handle(id, dto.EventId, dto.Resolution, ct);
+        return Ok(result);
+    }
+
+    // The bulk "already recorded manually" action (issue #242): reconciles every selected event in
+    // one explicit operator action, whether or not the app flagged it as a possible duplicate - that
+    // flag is a suggestion, not a precondition. Each event keeps its own idempotent, individually
+    // reported outcome, following the same per-event batch shape as ApplySyncRestock.
+    [HttpPost("{id:long}/sync-restock/resolve-manual")]
+    public async Task<ActionResult<NayaxMachineStockApplyResponseDto>> ResolveSyncRestockManually(
+        long id, NayaxResolveManyAsAlreadyRecordedRequestDto dto, CancellationToken ct)
+    {
+        var result = await _resolveMachineStockEventsAsAlreadyRecorded.Handle(id, dto.EventIds, ct);
         return Ok(result);
     }
 }

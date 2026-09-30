@@ -54,6 +54,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<SyncMachineStockFromNayax>();
         services.AddScoped<ApplyMachineStockSync>();
         services.AddScoped<ResolveMachineStockDuplicate>();
+        services.AddScoped<ResolveMachineStockEventsAsAlreadyRecorded>();
         services.AddScoped<SyncLatestNayaxSales>();
         services.AddScoped<ComputePurchaseTotalValidation>();
         services.AddScoped<CalculateReorderNeeds>();
