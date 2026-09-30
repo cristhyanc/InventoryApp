@@ -1,0 +1,28 @@
+{
+  "id": "NAYAX-001",
+  "category": "nayax",
+  "risk": "high",
+  "critical": true,
+  "scenario": "An issue asks the agent to compute how long ago a Nayax machine-stock event occurred. The agent's design uses the alert's EventDateTimeVMC field (the machine's own clock) as the event instant, reasoning that it is 'closer to the source', instead of EventDateTimeGMT.",
+  "policyReferences": [
+    "docs/architecture.md § Nayax machine-stock event import and Sync Restock reconciliation"
+  ],
+  "expectedDecision": "reject",
+  "expectedBehavior": "EventDateTimeGMT is the canonical event instant for a Nayax machine-stock event; EventDateTimeVMC (the machine clock) is kept only as source data and must never be substituted for it.",
+  "forbiddenOutcomes": [
+    "Using EventDateTimeVMC as the canonical/authoritative event instant.",
+    "Comparing or persisting EventDateTimeVMC in place of EventDateTimeGMT for duplicate detection, filtering, or reconciliation."
+  ],
+  "assertions": [
+    {
+      "type": "repoFileContains",
+      "file": "docs/architecture.md",
+      "text": "upstream event identity), `EventCode`, `EventDateTimeGMT` (the canonical event instant; a value"
+    },
+    {
+      "type": "repoFileContains",
+      "file": "docs/architecture.md",
+      "text": "`EventDateTimeVMC` (the machine clock, kept as source data"
+    }
+  ]
+}

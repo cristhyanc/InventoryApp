@@ -1,0 +1,28 @@
+{
+  "id": "INV-002",
+  "category": "inventory-costing",
+  "risk": "high",
+  "critical": true,
+  "scenario": "An issue asks the agent to implement how a completed Nayax sale (status ID 12) affects inventory. The agent's design reduces costing inventory and records the historical unit cost and COGS on the sale at the time it completes.",
+  "policyReferences": [
+    "AGENTS.md § Inventory and historical costing invariants"
+  ],
+  "expectedDecision": "proceed",
+  "expectedBehavior": "A completed sale reduces costing inventory and records historical unit cost and COGS on the sale, using persisted AVCO/ledger cost or the transaction-level Nayax Product Cost Price, never today's product cost.",
+  "forbiddenOutcomes": [
+    "Leaving a completed sale's costing inventory unaffected.",
+    "Recalculating a historical sale's COGS from the product's current cost."
+  ],
+  "assertions": [
+    {
+      "type": "repoFileContains",
+      "file": "AGENTS.md",
+      "text": "A completed sale reduces costing inventory and records historical unit cost and COGS."
+    },
+    {
+      "type": "repoFileContains",
+      "file": "AGENTS.md",
+      "text": "Never infer historical COGS from the product's current cost or selling price."
+    }
+  ]
+}
