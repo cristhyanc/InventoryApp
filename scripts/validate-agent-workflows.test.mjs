@@ -525,7 +525,7 @@ describe('architecture pass contract', () => {
       [repairPath, repairWorkflow, 'GH_TOKEN: ${{ steps.repair_app_token.outputs.token }}'],
     ]) {
       const weakened = replaceOnce(workflow, required, '# removed');
-      assert.throws(() => runContractChecks({ read: readWithOverrides({ [path]: weakened }) }), /(App token|implementation publish|architecture publish|repair publish): missing required text/);
+      assert.throws(() => runContractChecks({ read: readWithOverrides({ [path]: weakened }) }), /(App token|implementation publish(?: diagnostic)?|architecture publish|repair publish): missing required text/);
     }
   });
 
