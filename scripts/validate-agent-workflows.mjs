@@ -877,6 +877,23 @@ export function verifyScopedStagingCleanupPermissions(allowed, source) {
   }
 }
 
+export function verifyScopedDirectoryCreationPermissions(allowed, source) {
+  for (const directory of ['backend', 'frontend', 'docs', 'scripts']) {
+    requireText(allowed, `Bash(mkdir -p ${directory}/*)`, source);
+  }
+  for (const forbidden of ['Bash(mkdir *)', 'Bash(mkdir -p *)', 'Bash(mkdir -p .github/*)']) {
+    forbidText(allowed, forbidden, source);
+  }
+}
+
+// validate.sh runs for several minutes. With Claude Code's short default Bash timeout the agent
+// backgrounds or redirects it, the literal-command allowlist refuses that, and the run ends with
+// uncommitted work. The default must cover a full run because the agent invokes the bare command.
+export function verifyAgentShellTimeout(stepText, source) {
+  requireText(stepText, 'BASH_DEFAULT_TIMEOUT_MS: "1800000"', source);
+  requireText(stepText, 'BASH_MAX_TIMEOUT_MS: "1800000"', source);
+}
+
 export const AGENT_APP_TOKEN_ACTION =
   'actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0';
 
@@ -976,6 +993,11 @@ export function verifyArchitecturePass(workflow) {
   requireText(implementationAgent, '--disallowedTools "Agent,WebFetch,WebSearch"', 'agent-implement.yml implementation agent');
   requireText(implementationAgent, 'Bash(git push *)', 'agent-implement.yml implementation agent');
   requireText(implementationAgent, 'Bash(gh pr create *)', 'agent-implement.yml implementation agent');
+  verifyAgentShellTimeout(implementationAgent, 'agent-implement.yml implementation agent');
+  verifyScopedDirectoryCreationPermissions(
+    extractAllowedTools(implementationAgent, 'agent-implement.yml implementation allowed tools'),
+    'agent-implement.yml implementation allowed tools',
+  );
   for (const forbidden of [
     'AGENT_AUTOMATION_APP_PRIVATE_KEY',
     'create-github-app-token',
@@ -1094,6 +1116,8 @@ export function verifyArchitecturePass(workflow) {
   const allowed = section(architect, '          claude_args: |\n', '            --disallowedTools', 'agent-implement.yml architect allowed tools');
   verifyTrackedFileDeletionPermissions(allowed, 'agent-implement.yml architect allowed tools');
   verifyScopedStagingCleanupPermissions(allowed, 'agent-implement.yml architect allowed tools');
+  verifyScopedDirectoryCreationPermissions(allowed, 'agent-implement.yml architect allowed tools');
+  verifyAgentShellTimeout(architect, 'agent-implement.yml architect');
   for (const forbidden of ['gh pr edit', 'gh pr create', 'gh issue edit', 'gh workflow', 'gh api']) {
     forbidText(allowed, forbidden, 'agent-implement.yml architect allowed tools');
   }
