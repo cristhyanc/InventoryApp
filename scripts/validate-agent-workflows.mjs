@@ -871,7 +871,7 @@ export function verifyArchitecturePass(workflow) {
   for (const required of [
     'GH_TOKEN: ${{ steps.implementation_app_token.outputs.token }}',
     'EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}',
-    `bash ${appPushRetryPath} "https://github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$BRANCH"`,
+    `bash ${appPushRetryPath} "https://github.com/\${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$BRANCH"`,
     'gh pr create',
     '--body-file .agent-pr-body.md',
     '.user.login == $author',
@@ -974,7 +974,7 @@ export function verifyArchitecturePass(workflow) {
   );
   for (const required of [
     'GH_TOKEN: ${{ steps.architecture_app_token.outputs.token }}',
-    `bash ${appPushRetryPath} "https://github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$BRANCH"`,
+    `bash ${appPushRetryPath} "https://github.com/\${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$BRANCH"`,
     'HEAD_SHA: ${{ steps.architecture_result.outputs.head_sha }}',
   ]) {
     requireText(architecturePublish, required, 'agent-implement.yml architecture publish');
