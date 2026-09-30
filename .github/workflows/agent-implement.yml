@@ -224,6 +224,26 @@ jobs:
           permission-pull-requests: write
           permission-workflows: write
 
+      - name: Diagnose GitHub App publish permissions
+        if: steps.implementation_result.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ steps.implementation_app_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          permissions="$(gh api "repos/$GITHUB_REPOSITORY" --include 2>&1 >/dev/null \
+            | tr -d '\r' \
+            | grep -i '^x-accepted-github-permissions:' \
+            | sed 's/^[^:]*:[[:space:]]*//' || true)"
+          if [ -n "$permissions" ]; then
+            echo "GitHub App token accepted repository permissions: $permissions"
+          else
+            echo "::warning::GitHub did not return an X-Accepted-GitHub-Permissions header for the repository metadata request."
+          fi
+
+          can_write="$(gh api "repos/$GITHUB_REPOSITORY/installation" --silent >/dev/null 2>&1 && echo yes || echo no)"
+          echo "GitHub App installation endpoint accessible: $can_write"
+          echo "Publish requires effective contents=write; pull_requests=write; workflows=write."
+
       - name: Push implementation and create pull request
         id: publish_implementation
         if: steps.implementation_result.outputs.ready == 'true'
