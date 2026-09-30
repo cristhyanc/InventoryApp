@@ -18,6 +18,7 @@ import {
   VALIDATE_WORKFLOW_DOCUMENTATION_CONTRACT,
   VALIDATION_CONCURRENCY_GROUP,
   evaluateExpression,
+  appPushRetryPath,
   implementPath,
   issueTemplatePath,
   pullRequestTemplatePath,
@@ -38,6 +39,7 @@ import {
 const validateWorkflow = readRepositoryFile(validatePath);
 const reviewWorkflow = readRepositoryFile(reviewPath);
 const implementWorkflow = readRepositoryFile(implementPath);
+const appPushRetryScript = readRepositoryFile(appPushRetryPath);
 const repairWorkflow = readRepositoryFile(repairPath);
 const issueTemplate = readRepositoryFile(issueTemplatePath);
 const pullRequestTemplate = readRepositoryFile(pullRequestTemplatePath);
@@ -510,15 +512,15 @@ describe('architecture pass contract', () => {
 
   it('requires bounded retry for transient GitHub App Git authorization denials', () => {
     for (const required of [
-      'local delays=(0 2 5 10)',
+      'delays=(0 2 5 10)',
       'sleep "$delay"',
       "grep -Eqi '403|Permission to .* denied'",
-      'push_with_app_retry "$publish_remote"',
+      'push "$remote" "$refspec"',
     ]) {
-      const weakened = replaceOnce(implementWorkflow, required, '# removed retry contract');
+      const weakened = replaceOnce(appPushRetryScript, required, '# removed retry contract');
       assert.throws(
-        () => runContractChecks({ read: readWithOverrides({ [implementPath]: weakened }) }),
-        /push retry: missing required text/,
+        () => runContractChecks({ read: readWithOverrides({ [appPushRetryPath]: weakened }) }),
+        /git-push-with-app-retry\.sh: missing required text/,
       );
     }
   });
