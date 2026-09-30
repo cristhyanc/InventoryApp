@@ -321,7 +321,7 @@ jobs:
             [ "${remote_head%%$'\t'*}" = "$EXPECTED_HEAD" ] || fail "Existing persistence branch differs; refusing overwrite"
           else
             # Unique run/attempt namespace; ordinary push cannot replace unrelated history.
-            git -c credential.helper= -c core.hooksPath=/dev/null -c http.extraheader="AUTHORIZATION: basic $auth" push "$publish_remote" "$EXPECTED_HEAD:refs/heads/$saved_branch"
+            bash scripts/git-push-with-app-retry.sh "$publish_remote" "$EXPECTED_HEAD:refs/heads/$saved_branch"
           fi
           remote_head="$(git -c credential.helper= -c http.extraheader="AUTHORIZATION: basic $auth" ls-remote "$publish_remote" "refs/heads/$saved_branch")"
           [ "${remote_head%%$'\t'*}" = "$EXPECTED_HEAD" ] || fail "Remote persistence verification failed"
@@ -421,7 +421,7 @@ jobs:
           [ "$(git branch --show-current)" = "$BRANCH" ] || fail "Local branch changed before publish."
           [ "$(git rev-parse HEAD)" = "$HEAD_SHA" ] || fail "Local HEAD changed before publish."
 
-          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$BRANCH"
+          bash scripts/git-push-with-app-retry.sh "https://github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$BRANCH"
 
           title="$(cat .agent-pr-title)"
           pr_url="$(gh pr create --repo "$GITHUB_REPOSITORY" --base develop --head "$BRANCH" --title "$title" --body-file .agent-pr-body.md)"
@@ -553,7 +553,7 @@ jobs:
           set -euo pipefail
           [ "$(git branch --show-current)" = "$BRANCH" ] || { echo "::error::Local branch changed before architecture publish"; exit 1; }
           [ "$(git rev-parse HEAD)" = "$HEAD_SHA" ] || { echo "::error::Local HEAD changed before architecture publish"; exit 1; }
-          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$BRANCH"
+          bash scripts/git-push-with-app-retry.sh "https://github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$BRANCH"
 
       - name: Record outcome on the issue
         id: outcome
