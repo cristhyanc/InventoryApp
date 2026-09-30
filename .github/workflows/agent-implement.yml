@@ -224,6 +224,51 @@ jobs:
           private-key: ${{ secrets.AGENT_AUTOMATION_APP_PRIVATE_KEY }}
           permission-contents: write
 
+      - name: Diagnose persistence GitHub App token
+        if: always() && steps.persistence_app_token.outcome == 'success' && steps.persistence_candidate.outputs.has_commit == 'true'
+        env:
+          GH_TOKEN: ${{ steps.persistence_app_token.outputs.token }}
+          EXPECTED_HEAD: ${{ steps.persistence_candidate.outputs.head_sha }}
+          CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -u
+          echo "Testing the exact short-lived GitHub App installation token before persistence."
+
+          if gh api "repos/$GITHUB_REPOSITORY" --silent >/dev/null 2>&1; then
+            echo "Repository API access with the installation token: OK"
+          else
+            echo "::error::Repository API access with the installation token failed."
+          fi
+
+          if gh api installation/repositories --jq --arg repo "$GITHUB_REPOSITORY" \
+            '[.repositories[].full_name] | index($repo) != null' 2>/dev/null | grep -qx true; then
+            echo "Installation token repository access includes $GITHUB_REPOSITORY: YES"
+          else
+            echo "::error::Installation token could not confirm repository access to $GITHUB_REPOSITORY."
+          fi
+
+          if [ "$CLAUDE_OUTCOME" = "success" ]; then
+            probe_branch="agent/issue-$ISSUE_NUMBER-checkpoint-$RUN_ID-$RUN_ATTEMPT"
+          else
+            probe_branch="agent/recovery-$ISSUE_NUMBER-$RUN_ID-$RUN_ATTEMPT"
+          fi
+
+          publish_remote="https://github.com/${GITHUB_REPOSITORY}.git"
+          auth="$(printf 'x-access-token:%s' "${GH_TOKEN:-}" | base64 -w0)"
+          echo "::add-mask::$auth"
+
+          echo "Testing Git write authorization with a non-mutating push --dry-run to $probe_branch."
+          if probe_output="$(git -c credential.helper= -c http.extraheader="AUTHORIZATION: basic $auth" \
+            push --dry-run "$publish_remote" "$EXPECTED_HEAD:refs/heads/$probe_branch" 2>&1)"; then
+            echo "Git dry-run push authorization: OK"
+          else
+            echo "Git dry-run push authorization: DENIED"
+            printf '%s\n' "$probe_output"
+            echo "::error::The GitHub App installation token cannot push the agent persistence branch. Check the installation's effective Contents permission or repository-level authorization for the app actor."
+          fi
+
       - name: Persist committed implementation
         id: persist_implementation
         if: always() && steps.persistence_candidate.outcome == 'success' && (steps.persistence_app_token.outcome == 'success' || steps.persistence_candidate.outputs.has_commit != 'true')
