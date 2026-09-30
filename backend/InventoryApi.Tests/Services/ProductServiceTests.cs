@@ -3,6 +3,7 @@ using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using InventoryApi.DTOs;
 using Inventory.Application.Nayax;
+using Inventory.Application.Products;
 using Inventory.Application.Reorder;
 using InventoryApi.Models;
 using InventoryApi.Services;
@@ -67,7 +68,7 @@ public class ProductServiceTests
         using var db = CreateDbContext("prod_test");
         var calculateReorderNeeds = new CalculateReorderNeeds(
             new Mock<INayaxLynxClient>().Object, new EfOutstandingSupplierOrderQuantityStore(db));
-        IProductService svc = new ProductService(db, calculateReorderNeeds);
+        IProductService svc = CreateService(db, calculateReorderNeeds);
 
         var dto = new ProductCreateDto("p1", null, null, 10m, 5, 1, 10, "unit", null, null, true);
         var product = await svc.Create(new ProductCreateDto("p1", null, null, 10m, 5, 1, 10, "unit", null, null, true));
@@ -219,7 +220,7 @@ public class ProductServiceTests
         nayaxMock.Setup(x => x.GetMachineProductsAsync(2, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct> { new() { NayaxProductID = 1, MissingStockByMDB = 4 } });
         var calculateReorderNeeds = new CalculateReorderNeeds(nayaxMock.Object, new EfOutstandingSupplierOrderQuantityStore(db));
-        var service = new ProductService(db, calculateReorderNeeds);
+        var service = CreateService(db, calculateReorderNeeds);
 
         var alerts = (await service.LowStock()).ToList();
 
@@ -341,7 +342,13 @@ public class ProductServiceTests
         nayaxMock.Setup(client => client.GetMachinesAsync(It.IsAny<System.Threading.CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachine>());
         var calculateReorderNeeds = new CalculateReorderNeeds(nayaxMock.Object, new EfOutstandingSupplierOrderQuantityStore(db));
-        return new ProductService(db, calculateReorderNeeds);
+        return CreateService(db, calculateReorderNeeds);
     }
 
+    private static ProductService CreateService(AppDbContext db, CalculateReorderNeeds calculateReorderNeeds)
+    {
+        var store = new EfProductStore(db, new InventoryCostRebuildService(db));
+        return new ProductService(
+            db, calculateReorderNeeds, new CreateProduct(store), new UpdateProduct(store), new DeleteProduct(store));
+    }
 }

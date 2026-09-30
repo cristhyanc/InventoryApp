@@ -1,5 +1,5 @@
 using Inventory.Application.Machines;
-using Inventory.Domain.Reporting;
+using Inventory.Application.Products;
 using InventoryApi.Data;
 using Inventory.Application.Nayax;
 using InventoryApi.Models;
@@ -12,8 +12,11 @@ namespace InventoryApi.Services;
 /// <see cref="GetById"/>/<see cref="GetAll"/> delegate to the migrated
 /// <see cref="Inventory.Application.Machines.GetMachineDashboard"/>/<see cref="Inventory.Application.Machines.ListMachineDashboard"/>
 /// use cases (issue #241), mapping their result to the <see cref="Machine"/> API contract unchanged.
-/// <see cref="GetMachineProducts"/> stays here: it returns the EF <see cref="Product"/> entity
-/// directly, which belongs to the sibling Products migration (issue #240), not this slice.
+/// <see cref="GetMachineProducts"/> still clones and returns the EF <see cref="Product"/> entity
+/// directly (its full field set has no Application-owned equivalent - see <c>docs/architecture.md</c>
+/// backend migration track item 6), but its suggested net/price commission-and-fee calculation now
+/// delegates to <see cref="ResolveMachineProductPricing"/> (issue #240), reusing the site dashboard's
+/// commission/fee resolution port instead of a third copy of that lookup.
 /// </summary>
 public class MachineService : IMachineService
 {
@@ -21,17 +24,20 @@ public class MachineService : IMachineService
     private readonly INayaxLynxClient _nayaxLynxClient;
     private readonly GetMachineDashboard _getMachineDashboard;
     private readonly ListMachineDashboard _listMachineDashboard;
+    private readonly ResolveMachineProductPricing _resolveMachineProductPricing;
 
     public MachineService(
         AppDbContext db,
         INayaxLynxClient nayaxLynxClient,
         GetMachineDashboard getMachineDashboard,
-        ListMachineDashboard listMachineDashboard)
+        ListMachineDashboard listMachineDashboard,
+        ResolveMachineProductPricing resolveMachineProductPricing)
     {
         _db = db;
         _nayaxLynxClient = nayaxLynxClient;
         _getMachineDashboard = getMachineDashboard;
         _listMachineDashboard = listMachineDashboard;
+        _resolveMachineProductPricing = resolveMachineProductPricing;
     }
 
     public async Task<Machine?> GetById(long id)
@@ -77,32 +83,6 @@ public class MachineService : IMachineService
             .Include(x => x.StockAdjustments)
             .AsNoTracking()
             .ToListAsync();
-        var today = DateTime.Today;
-        var agreements = machine?.CustomerID is long siteId
-            ? await _db.SiteCommissionAgreements.AsNoTracking()
-                .Where(x => x.SiteId == siteId)
-                .ToListAsync()
-            : [];
-        var rates = await _db.NayaxProcessingFeeRates.AsNoTracking()
-            .Where(x => x.EffectiveFrom <= today)
-            .OrderBy(x => x.EffectiveFrom)
-            .ToListAsync();
-        SiteCommissionAgreement? agreement = null;
-        var commissionConfigurationUnavailable = false;
-        if (machine?.CustomerID is long currentSiteId)
-        {
-            try
-            {
-                agreement = EffectiveFinancialConfiguration.ResolveAgreement(agreements, currentSiteId, today);
-                commissionConfigurationUnavailable = agreement is null && agreements.Count > 0;
-            }
-            catch (InvalidOperationException)
-            {
-                commissionConfigurationUnavailable = true;
-            }
-        }
-        var feeRate = EffectiveFinancialConfiguration.ResolveNayaxFeeRate(rates, today);
-        var feeIncGst = feeRate is null ? 0m : feeRate.FeeExGst + ReportingCalculations.GstFromExcluding(feeRate.FeeExGst);
 
         var products = nayaxMachineProducts.Select(mp =>
         {
@@ -111,31 +91,24 @@ public class MachineService : IMachineService
             var result = source.Clone();
             result.MachinePrice = mp.RetailPrice ?? 0;
             result.CommissionValue = mp.CommissionValue ?? 0;
-            var hasCostBasis = result.AverageUnitCost > 0m;
-            if (machine?.CustomerID.HasValue == true && !commissionConfigurationUnavailable && feeRate is not null && hasCostBasis)
-            {
-                var commission = agreement is null
-                    ? 0m
-                    : SiteCommissionCalculator.CommissionAmount(
-                        agreement, result.MachinePrice, NayaxPaymentType.Card);
-                result.SuggestedNetValue =
-                    result.MachinePrice - result.AverageUnitCost - commission - feeIncGst;
-
-                var commissionPerDollar = agreement is null
-                    ? 0m
-                    : SiteCommissionCalculator.CommissionAmount(
-                        agreement, 1m, NayaxPaymentType.Card);
-                var denominator = 0.5m - commissionPerDollar;
-                result.SuggestedPriceValue = denominator > 0m
-                    ? (result.AverageUnitCost + feeIncGst) / denominator
-                    : null;
-            }
             result.MdbCode = mp.MDBCode;
             result.QuantityInStock = (mp.PAR - mp.MissingStockByMDB) ?? 0;
             result.MaxStockInMachine = mp.PAR;
             return result;
-        }).Where(x => x is not null).Cast<Product>().OrderBy(x => x.MdbCode).ToList();
+        }).Where(x => x is not null).Cast<Product>().ToList();
 
-        return products;
+        // Positional, not keyed by product id: more than one machine slot can list the same
+        // product with a different machine price, so a dictionary keyed by id would collide.
+        var pricingFacts = products
+            .Select(product => new MachineProductPricingFact(product.Id, product.MachinePrice, product.AverageUnitCost))
+            .ToList();
+        var pricingResults = await _resolveMachineProductPricing.Handle(machine?.CustomerID, pricingFacts, CancellationToken.None);
+        for (var index = 0; index < products.Count; index++)
+        {
+            products[index].SuggestedNetValue = pricingResults[index].SuggestedNetValue;
+            products[index].SuggestedPriceValue = pricingResults[index].SuggestedPriceValue;
+        }
+
+        return products.OrderBy(x => x.MdbCode).ToList();
     }
 }

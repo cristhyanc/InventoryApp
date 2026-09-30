@@ -2,6 +2,7 @@ using InventoryApi.Controllers;
 using InventoryApi.Data;
 using InventoryApi.DTOs;
 using Inventory.Application.Nayax;
+using Inventory.Application.Products;
 using Inventory.Application.Purchases;
 using Inventory.Application.Reorder;
 using Inventory.Application.Reporting.Dashboard;
@@ -31,7 +32,10 @@ public class ProductsControllerTests
         var calculateReorderNeeds = new CalculateReorderNeeds(nayaxMock.Object, new EfOutstandingSupplierOrderQuantityStore(db));
         var getInventoryValuationSummary = new GetInventoryValuationSummary(new EfInventoryValuationFactsProvider(db));
         var getProductPriceComparison = new GetProductPriceComparison(new EfProductPurchasePriceHistoryProvider(db));
-        return new ProductsController(new ProductService(db, calculateReorderNeeds), getInventoryValuationSummary, getProductPriceComparison);
+        var store = new EfProductStore(db, new InventoryCostRebuildService(db));
+        var productService = new ProductService(
+            db, calculateReorderNeeds, new CreateProduct(store), new UpdateProduct(store), new DeleteProduct(store));
+        return new ProductsController(productService, getInventoryValuationSummary, getProductPriceComparison);
     }
 
     private static ProductUpdateDto UpdateDto(int lowStockThreshold, int restockTo) =>

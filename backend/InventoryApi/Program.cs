@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Inventory.Application;
 using Inventory.Application.CatalogReconciliation;
 using Inventory.Application.Categories;
+using Inventory.Application.Products;
 using Inventory.Application.Expenses;
 using Inventory.Application.InventoryCounting;
 using Inventory.Application.MachineStockSync;
@@ -177,6 +178,9 @@ builder.Services.AddScoped<ISupplierStore, EfSupplierStore>();
 
 // Temporary API-owned adapter for the operating-expenses persistence port; see EfOperatingExpenseStore.
 builder.Services.AddScoped<IOperatingExpenseStore, EfOperatingExpenseStore>();
+
+// Temporary API-owned adapter for the product create/update/delete persistence port; see EfProductStore.
+builder.Services.AddScoped<IProductStore, EfProductStore>();
 
 // Temporary API-owned adapters for the site dashboard ports; see EfSiteFactsStore/SiteNameResolverAdapter.
 builder.Services.AddScoped<ISiteFactsStore, EfSiteFactsStore>();

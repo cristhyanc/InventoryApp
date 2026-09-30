@@ -1,5 +1,6 @@
 using InventoryApi.Data;
 using InventoryApi.DTOs;
+using Inventory.Application.Products;
 using Inventory.Application.Reorder;
 using InventoryApi.Models;
 using InventoryApi.Services.Interfaces;
@@ -7,20 +8,35 @@ using Microsoft.EntityFrameworkCore;
 
 namespace InventoryApi.Services;
 
+/// <summary>
+/// <see cref="Create"/>/<see cref="Update"/>/<see cref="Delete"/> delegate to the migrated
+/// <see cref="CreateProduct"/>/<see cref="UpdateProduct"/>/<see cref="DeleteProduct"/> use cases
+/// (issue #240), preserving this service's existing <see cref="IProductService"/> contract and
+/// exception/return shapes exactly. <see cref="GetAll"/>/<see cref="Get"/>/<see cref="LowStock"/>
+/// stay here: they return the EF <see cref="Product"/> entity directly (the API's existing response
+/// shape) and its reorder formulas (<see cref="Product.NeedToOrder"/>/<see cref="Product.IsReorderAlert"/>)
+/// remain future work (see <c>docs/architecture.md</c> backend migration track item 6).
+/// </summary>
 public class ProductService : IProductService
 {
     private readonly AppDbContext _db;
     private readonly CalculateReorderNeeds _calculateReorderNeeds;
-    private readonly IInventoryCostRebuildService _rebuild;
+    private readonly CreateProduct _createProduct;
+    private readonly UpdateProduct _updateProduct;
+    private readonly DeleteProduct _deleteProduct;
 
     public ProductService(
         AppDbContext db,
         CalculateReorderNeeds calculateReorderNeeds,
-        IInventoryCostRebuildService? rebuild = null)
+        CreateProduct createProduct,
+        UpdateProduct updateProduct,
+        DeleteProduct deleteProduct)
     {
         _db = db;
         _calculateReorderNeeds = calculateReorderNeeds;
-        _rebuild = rebuild ?? new InventoryCostRebuildService(db);
+        _createProduct = createProduct;
+        _updateProduct = updateProduct;
+        _deleteProduct = deleteProduct;
     }
 
     public async Task<IEnumerable<Product>> GetAll(
@@ -83,90 +99,30 @@ public class ProductService : IProductService
 
     public async Task<Product> Create(ProductCreateDto dto)
     {
-        if (dto.InitialUnitCost is < 0)
-            throw new InvalidOperationException("Initial unit cost cannot be negative.");
-        ValidateRestockSettings(dto.LowStockThreshold, dto.RestockTo);
+        var fields = new ProductCreateFields(
+            dto.Name, dto.Sku, dto.Description, dto.UnitPrice, dto.QuantityInStock,
+            dto.LowStockThreshold, dto.RestockTo, dto.Unit, dto.CategoryId, dto.SupplierId,
+            dto.IsActive, dto.InitialUnitCost);
 
-        var product = new Product
-        {
-            Name = dto.Name,
-            Sku = dto.Sku,
-            Description = dto.Description,
-            UnitPrice = dto.UnitPrice,
-            AverageUnitCost = dto.InitialUnitCost ?? 0m,
-            IsActive = dto.IsActive,
-            QuantityInStock = dto.QuantityInStock,
-            LowStockThreshold = dto.LowStockThreshold,
-            RestockTo = dto.RestockTo,
-            Unit = dto.Unit,
-            CategoryId = dto.CategoryId,
-            SupplierId = dto.SupplierId,
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow
-        };
-        _db.Products.Add(product);
-        await _db.SaveChangesAsync();
+        var result = await _createProduct.Handle(fields, CancellationToken.None);
+        if (!result.IsValid) throw new InvalidOperationException(result.ValidationError);
 
-        if (product.QuantityInStock > 0)
-        {
-            _db.StockAdjustments.Add(new StockAdjustment
-            {
-                ProductId = product.Id,
-                QuantityChange = product.QuantityInStock,
-                QuantityAfter = product.QuantityInStock,
-                Reason = StockAdjustmentReason.Restock,
-                UnitCost = dto.InitialUnitCost,
-                TotalCost = dto.InitialUnitCost * product.QuantityInStock,
-                Notes = "Initial stock on product creation",
-                EffectiveAt = product.CreatedAt
-            });
-            await _db.SaveChangesAsync();
-            if (dto.InitialUnitCost.HasValue)
-            {
-                await _rebuild.RebuildAsync(product.Id);
-                await _db.SaveChangesAsync();
-            }
-        }
-
-        return product;
+        return (await Get(result.ProductId!.Value))!;
     }
 
     public async Task<bool> Update(long id, ProductUpdateDto dto)
     {
-        var product = await _db.Products.FindAsync(id);
-        if (product is null) return false;
+        var fields = new ProductUpdateFields(
+            dto.Sku, dto.Description, dto.LowStockThreshold, dto.RestockTo, dto.Unit, dto.SupplierId, dto.IsActive);
 
-        ValidateRestockSettings(dto.LowStockThreshold, dto.RestockTo);
-
-        product.Sku = dto.Sku;
-        product.Description = dto.Description;
-        product.IsActive = dto.IsActive;
-        product.LowStockThreshold = dto.LowStockThreshold;
-        product.RestockTo = dto.RestockTo;
-        product.Unit = dto.Unit;
-        product.SupplierId = dto.SupplierId;
-        product.UpdatedAt = DateTime.UtcNow;
-
-        await _db.SaveChangesAsync();
-        return true;
+        var result = await _updateProduct.Handle(id, fields, CancellationToken.None);
+        return result.Outcome switch
+        {
+            UpdateProductOutcome.Success => true,
+            UpdateProductOutcome.NotFound => false,
+            _ => throw new InvalidOperationException(result.ValidationError),
+        };
     }
 
-    private static void ValidateRestockSettings(int lowStockThreshold, int restockTo)
-    {
-        if (lowStockThreshold < 0)
-            throw new InvalidOperationException("Low Stock Threshold cannot be negative.");
-        if (restockTo < 0)
-            throw new InvalidOperationException("Restock To cannot be negative.");
-        if (restockTo < lowStockThreshold)
-            throw new InvalidOperationException("Restock To must be greater than or equal to the Low Stock Threshold.");
-    }
-
-    public async Task<bool> Delete(long id)
-    {
-        var product = await _db.Products.FindAsync(id);
-        if (product is null) return false;
-        _db.Products.Remove(product);
-        await _db.SaveChangesAsync();
-        return true;
-    }
+    public Task<bool> Delete(long id) => _deleteProduct.Handle(id, CancellationToken.None);
 }

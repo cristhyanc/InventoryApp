@@ -1,4 +1,5 @@
 using Inventory.Application.Machines;
+using Inventory.Application.Products;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using Inventory.Application.Nayax;
@@ -25,7 +26,9 @@ public class MachineServiceTests
     private static MachineService Service(AppDbContext db, INayaxLynxClient nayax)
     {
         var facts = new EfMachineDashboardFactsStore(db, new NayaxProcessingFeeService(db));
-        return new MachineService(db, nayax, new GetMachineDashboard(nayax, facts), new ListMachineDashboard(nayax, facts));
+        var resolveMachineProductPricing = new ResolveMachineProductPricing(new EfSiteFactsStore(db));
+        return new MachineService(
+            db, nayax, new GetMachineDashboard(nayax, facts), new ListMachineDashboard(nayax, facts), resolveMachineProductPricing);
     }
 
     /// <summary>
