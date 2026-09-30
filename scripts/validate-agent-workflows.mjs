@@ -774,6 +774,15 @@ export function verifyArchitecturePass(workflow) {
   requireOrder(job, '      - name: Run Claude Code implementation agent', '      - name: Persist committed implementation', 'durability boundary');
   requireOrder(job, '      - name: Persist committed implementation', '      - name: Verify implementation result', 'durability before postconditions');
   verifyAgentAppTokenStep(section(job, '      - name: Create GitHub App token for persistence\n', '      - name: Persist committed implementation\n', 'persistence App token'), 'persistence App token', 'persistence_app_token');
+  const persistenceDiagnostic = section(job, '      - name: Diagnose persistence GitHub App token\n', '      - name: Persist committed implementation\n', 'persistence App token diagnostic');
+  for (const required of [
+    'gh api installation/repositories',
+    '.repositories[] | select(.full_name == $repo)',
+    '.permissions.push // false',
+    'Effective repository permissions for installation token:',
+    'push --dry-run',
+  ]) requireText(persistenceDiagnostic, required, 'persistence App token diagnostic');
+  forbidText(persistenceDiagnostic, '--jq --arg', 'persistence App token diagnostic');
   const persistence = section(job, '      - name: Persist committed implementation\n', '      - name: Verify implementation result\n', 'trusted persistence');
   for (const required of [
     'if: always()', 'BASE_SHA: ${{ steps.starting_point.outputs.base_sha }}',

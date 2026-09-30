@@ -236,18 +236,28 @@ jobs:
           set -u
           echo "Testing the exact short-lived GitHub App installation token before persistence."
 
-          if gh api "repos/$GITHUB_REPOSITORY" --silent >/dev/null 2>&1; then
-            echo "Repository API access with the installation token: OK"
+          installation_json=""
+          installation_error_file="$(mktemp)"
+          if installation_json="$(gh api installation/repositories 2>"$installation_error_file")"; then
+            repo_json="$(jq -c --arg repo "$GITHUB_REPOSITORY" '.repositories[] | select(.full_name == $repo)' <<<"$installation_json" | head -n1)"
+            if [ -n "$repo_json" ]; then
+              repo_push="$(jq -r '.permissions.push // false' <<<"$repo_json")"
+              repo_pull="$(jq -r '.permissions.pull // false' <<<"$repo_json")"
+              repo_admin="$(jq -r '.permissions.admin // false' <<<"$repo_json")"
+              echo "Installation token repository access includes $GITHUB_REPOSITORY: YES"
+              echo "Effective repository permissions for installation token: push=$repo_push pull=$repo_pull admin=$repo_admin"
+              if [ "$repo_push" != "true" ]; then
+                echo "::error::Installation token can access the repository but GitHub reports permissions.push=$repo_push."
+              fi
+            else
+              repo_count="$(jq -r '.total_count // (.repositories | length)' <<<"$installation_json")"
+              echo "::error::Installation token is valid but $GITHUB_REPOSITORY is not in its accessible repository set (count=$repo_count)."
+            fi
           else
-            echo "::error::Repository API access with the installation token failed."
+            echo "::error::The token could not call GET /installation/repositories, so its installation scope could not be verified."
+            sed 's/^/installation endpoint: /' "$installation_error_file"
           fi
-
-          if gh api installation/repositories --jq --arg repo "$GITHUB_REPOSITORY" \
-            '[.repositories[].full_name] | index($repo) != null' 2>/dev/null | grep -qx true; then
-            echo "Installation token repository access includes $GITHUB_REPOSITORY: YES"
-          else
-            echo "::error::Installation token could not confirm repository access to $GITHUB_REPOSITORY."
-          fi
+          rm -f "$installation_error_file"
 
           if [ "$CLAUDE_OUTCOME" = "success" ]; then
             probe_branch="agent/issue-$ISSUE_NUMBER-checkpoint-$RUN_ID-$RUN_ATTEMPT"
