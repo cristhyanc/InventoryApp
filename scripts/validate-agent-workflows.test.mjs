@@ -248,8 +248,11 @@ describe('preserved guards', () => {
     const dispatcher = implementWorkflow.slice(implementWorkflow.indexOf('  dispatch-architecture:\n'));
     assert.ok(dispatcher.includes('actions: write'));
     assert.ok(dispatcher.includes('pull-requests: read'));
+    assert.ok(dispatcher.includes('issues: write'));
     assert.ok(!dispatcher.includes('pull-requests: write'));
     assert.ok(dispatcher.includes('agent-architecture.yml'));
+    assert.ok(dispatcher.includes('if ! gh workflow run agent-architecture.yml'));
+    assert.ok(dispatcher.includes('--remove-label agent-working --add-label agent-blocked'));
     assert.ok(dispatcher.includes('--ref main'));
     assert.ok(dispatcher.includes('-f issue_number="$ISSUE_NUMBER"'));
     assert.ok(dispatcher.includes('-f pr_number="$PR_NUMBER"'));
@@ -358,7 +361,7 @@ describe('documentation-impact gate: implementation workflow', () => {
 
     const preflightStart = implementWorkflow.indexOf('  preflight:\n');
     const implementStart = implementWorkflow.indexOf('  implement:\n');
-    const dispatchStart = implementWorkflow.indexOf('  dispatch-validation:\n');
+    const dispatchStart = implementWorkflow.indexOf('  dispatch-architecture:\n');
     const preflightJob = implementWorkflow.slice(preflightStart, implementStart);
     const implementJob = implementWorkflow.slice(implementStart, dispatchStart);
     const reordered = implementWorkflow.slice(0, preflightStart) + implementJob + preflightJob + implementWorkflow.slice(dispatchStart);
