@@ -631,6 +631,7 @@ export function verifyDocumentationImpactGate(read = readRepositoryFile) {
   }
 
   verifyTrackedFileDeletionPermissions(implementAllowedTools, `${implementPath} implementation allowed tools`);
+  verifyScopedStagingCleanupPermissions(implementAllowedTools, `${implementPath} implementation allowed tools`);
 
   // Validation workflow: the body is obtained in the trusted context job for both events,
   // handed over base64-encoded, decoded into a temporary file, and validated before the
@@ -698,6 +699,21 @@ export function verifyTrackedFileDeletionPermissions(allowed, source) {
     requireText(allowed, `Bash(git rm -- ${directory}/*)`, source);
   }
   for (const forbidden of ['Bash(git rm *)', 'Bash(git rm -- *)', 'Bash(git rm -r *)', 'Bash(git rm -f *)', 'Bash(git rm -- .github/*)']) {
+    forbidText(allowed, forbidden, source);
+  }
+}
+
+/** Accidental staging cleanup must stay scoped to normal project directories. */
+export function verifyScopedStagingCleanupPermissions(allowed, source) {
+  for (const directory of ['backend', 'frontend', 'docs', 'scripts']) {
+    requireText(allowed, `Bash(git restore --staged -- ${directory}/*)`, source);
+  }
+  for (const forbidden of [
+    'Bash(git restore --staged *)',
+    'Bash(git restore --staged -- *)',
+    'Bash(git restore --staged -- .github/*)',
+    'Bash(git reset *)',
+  ]) {
     forbidText(allowed, forbidden, source);
   }
 }
@@ -888,6 +904,7 @@ export function verifyArchitecturePass(workflow) {
   }
   const allowed = section(architect, '          claude_args: |\n', '            --disallowedTools', 'agent-implement.yml architect allowed tools');
   verifyTrackedFileDeletionPermissions(allowed, 'agent-implement.yml architect allowed tools');
+  verifyScopedStagingCleanupPermissions(allowed, 'agent-implement.yml architect allowed tools');
   for (const forbidden of ['gh pr edit', 'gh pr create', 'gh issue edit', 'gh workflow', 'gh api']) {
     forbidText(allowed, forbidden, 'agent-implement.yml architect allowed tools');
   }
