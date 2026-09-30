@@ -234,4 +234,18 @@ export class DashboardComponent implements OnInit {
     if (site.totalStockPercentage < 80) return 'bg-yellow-100 text-yellow-700';
     return 'bg-green-100 text-green-700';
   }
+
+  /**
+   * "After I fill the machines to their current required level, how much storage stock will I
+   * have left?" (issue #243). A pure display derivation of the already-authoritative
+   * `quantityInStock`/`machineReplenishmentNeed` the Reorder Alerts row already carries; it never
+   * feeds back into `needToOrder` or any other reorder calculation.
+   */
+  stockAfterMachineNeed(product: Product): number {
+    return product.quantityInStock - product.machineReplenishmentNeed;
+  }
+
+  stockAfterMachineNeedClass(product: Product): string {
+    return this.stockAfterMachineNeed(product) < 0 ? 'text-red-600 font-semibold' : 'text-slate-600';
+  }
 }

@@ -200,9 +200,9 @@
             <th class="px-4 py-3 text-left font-semibold text-slate-700">Machine need</th>
             <th class="px-4 py-3 text-left font-semibold text-slate-700">Restock To</th>
             <th class="px-4 py-3 text-left font-semibold text-slate-700">On order</th>
+            <th class="px-4 py-3 text-left font-semibold text-slate-700">Stock after machine need</th>
             <th class="px-4 py-3 text-left font-semibold text-slate-700">Need to Order</th>
             <th class="px-4 py-3 text-left font-semibold text-slate-700">Unit Price</th>
-            <th class="px-4 py-3 text-left font-semibold text-slate-700"></th>
           </tr>
         </thead>
         <tbody class="divide-y divide-slate-100 bg-white">
@@ -215,9 +215,9 @@
               <td class="px-4 py-3 text-slate-600">{{ p.machineReplenishmentNeed }}</td>
               <td class="px-4 py-3 text-slate-600">{{ p.restockTo }}</td>
               <td class="px-4 py-3 text-slate-600">{{ p.onOrderQuantity }}</td>
+              <td class="px-4 py-3" [ngClass]="stockAfterMachineNeedClass(p)">{{ stockAfterMachineNeed(p) }}</td>
               <td class="px-4 py-3 font-semibold text-red-700">{{ p.needToOrder }}</td>
               <td class="px-4 py-3 text-slate-600">${{ p.unitPrice.toFixed(2) }}</td>
-              <td class="px-4 py-3"><a [routerLink]="['/products', p.id, 'stock']" class="inline-flex items-center rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700">Adjust Stock</a></td>
             </tr>
           }
         </tbody>
