@@ -236,7 +236,7 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
     }
 
     public async Task<bool> ReconcileAsManualDuplicateAsync(
-        int eventId, long machineId, int matchedManualStockAdjustmentId, CancellationToken cancellationToken)
+        int eventId, long machineId, int? matchedManualStockAdjustmentId, CancellationToken cancellationToken)
     {
         var entity = await _db.NayaxMachineStockEvents
             .FirstOrDefaultAsync(e => e.Id == eventId && e.MachineId == machineId, cancellationToken);
