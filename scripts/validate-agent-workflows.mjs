@@ -750,6 +750,22 @@ function verifyAgentAppTokenStep(text, source, stepId, { pullRequests = false } 
   }
 }
 
+function verifyTransientAppPushRetry(text, source) {
+  for (const required of [
+    'push_with_app_retry()',
+    'local delays=(0 2 5 10)',
+    'sleep "$delay"',
+    "grep -Eqi '403|Permission to .* denied'",
+    'credential.helper=',
+    'core.hooksPath=/dev/null',
+    'http.extraheader="AUTHORIZATION: basic $auth"',
+    'push_with_app_retry "$publish_remote"',
+  ]) {
+    requireText(text, required, source);
+  }
+  forbidText(text, '--force', source);
+}
+
 /** Verifies deterministic App-token publishing, architect handoff and final-head guard. */
 export function verifyArchitecturePass(workflow) {
   const job = section(workflow, '  implement:\n', '  dispatch-validation:\n', 'agent-implement.yml implementation job');
@@ -794,6 +810,7 @@ export function verifyArchitecturePass(workflow) {
     'core.hooksPath=/dev/null', 'credential.helper=',
   ]) requireText(persistence, required, 'trusted persistence');
   for (const forbidden of ['gh pr create', 'ready=true', '--force']) forbidText(persistence, forbidden, 'storage is not approval');
+  verifyTransientAppPushRetry(persistence, 'trusted persistence retry');
   requireText(job, "if: success() && steps.claude.outcome == 'success'", 'failed agent must not advance');
   requireText(workflow, 'cancel-in-progress: false', 'do not cancel work before persistence');
 
@@ -869,7 +886,7 @@ export function verifyArchitecturePass(workflow) {
   for (const required of [
     'GH_TOKEN: ${{ steps.implementation_app_token.outputs.token }}',
     'EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}',
-    'git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"',
+    'publish_remote="https://github.com/${GITHUB_REPOSITORY}.git"',
     'gh pr create',
     '--body-file .agent-pr-body.md',
     '.user.login == $author',
@@ -879,6 +896,7 @@ export function verifyArchitecturePass(workflow) {
   ]) {
     requireText(implementationPublish, required, 'agent-implement.yml implementation publish');
   }
+  verifyTransientAppPushRetry(implementationPublish, 'agent-implement.yml implementation publish retry');
 
   const target = section(
     job,
@@ -972,11 +990,12 @@ export function verifyArchitecturePass(workflow) {
   );
   for (const required of [
     'GH_TOKEN: ${{ steps.architecture_app_token.outputs.token }}',
-    'git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"',
+    'publish_remote="https://github.com/${GITHUB_REPOSITORY}.git"',
     'HEAD_SHA: ${{ steps.architecture_result.outputs.head_sha }}',
   ]) {
     requireText(architecturePublish, required, 'agent-implement.yml architecture publish');
   }
+  verifyTransientAppPushRetry(architecturePublish, 'agent-implement.yml architecture publish retry');
 
   const outcome = section(job, '      - name: Record outcome on the issue\n', null, 'agent-implement.yml outcome');
   for (const required of [
