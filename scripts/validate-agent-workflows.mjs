@@ -436,6 +436,7 @@ export const implementPath = '.github/workflows/agent-implement.yml';
 export const repairPath = '.github/workflows/agent-repair.yml';
 export const issueTemplatePath = '.github/ISSUE_TEMPLATE/agent-task.yml';
 export const pullRequestTemplatePath = '.github/pull_request_template.md';
+export const appPushRetryPath = 'scripts/git-push-with-app-retry.sh';
 
 // ---------------------------------------------------------------------------------------
 // Documentation-impact gate. The templates collect the decision, the preflight and validation
@@ -750,22 +751,6 @@ function verifyAgentAppTokenStep(text, source, stepId, { pullRequests = false } 
   }
 }
 
-function verifyTransientAppPushRetry(text, source) {
-  for (const required of [
-    'push_with_app_retry()',
-    'local delays=(0 2 5 10)',
-    'sleep "$delay"',
-    "grep -Eqi '403|Permission to .* denied'",
-    'credential.helper=',
-    'core.hooksPath=/dev/null',
-    'http.extraheader="AUTHORIZATION: basic $auth"',
-    'push_with_app_retry "$publish_remote"',
-  ]) {
-    requireText(text, required, source);
-  }
-  forbidText(text, '--force', source);
-}
-
 /** Verifies deterministic App-token publishing, architect handoff and final-head guard. */
 export function verifyArchitecturePass(workflow) {
   const job = section(workflow, '  implement:\n', '  dispatch-validation:\n', 'agent-implement.yml implementation job');
@@ -808,9 +793,9 @@ export function verifyArchitecturePass(workflow) {
     'Existing persistence branch differs; refusing overwrite',
     'Remote persistence verification failed', 'agent/recovery-',
     'core.hooksPath=/dev/null', 'credential.helper=',
+    `bash ${appPushRetryPath} "$publish_remote" "$EXPECTED_HEAD:refs/heads/$saved_branch"`,
   ]) requireText(persistence, required, 'trusted persistence');
   for (const forbidden of ['gh pr create', 'ready=true', '--force']) forbidText(persistence, forbidden, 'storage is not approval');
-  verifyTransientAppPushRetry(persistence, 'trusted persistence retry');
   requireText(job, "if: success() && steps.claude.outcome == 'success'", 'failed agent must not advance');
   requireText(workflow, 'cancel-in-progress: false', 'do not cancel work before persistence');
 
@@ -886,7 +871,7 @@ export function verifyArchitecturePass(workflow) {
   for (const required of [
     'GH_TOKEN: ${{ steps.implementation_app_token.outputs.token }}',
     'EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}',
-    'publish_remote="https://github.com/${GITHUB_REPOSITORY}.git"',
+    `bash ${appPushRetryPath} "https://github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$BRANCH"`,
     'gh pr create',
     '--body-file .agent-pr-body.md',
     '.user.login == $author',
@@ -896,7 +881,6 @@ export function verifyArchitecturePass(workflow) {
   ]) {
     requireText(implementationPublish, required, 'agent-implement.yml implementation publish');
   }
-  verifyTransientAppPushRetry(implementationPublish, 'agent-implement.yml implementation publish retry');
 
   const target = section(
     job,
@@ -990,12 +974,11 @@ export function verifyArchitecturePass(workflow) {
   );
   for (const required of [
     'GH_TOKEN: ${{ steps.architecture_app_token.outputs.token }}',
-    'publish_remote="https://github.com/${GITHUB_REPOSITORY}.git"',
+    `bash ${appPushRetryPath} "https://github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$BRANCH"`,
     'HEAD_SHA: ${{ steps.architecture_result.outputs.head_sha }}',
   ]) {
     requireText(architecturePublish, required, 'agent-implement.yml architecture publish');
   }
-  verifyTransientAppPushRetry(architecturePublish, 'agent-implement.yml architecture publish retry');
 
   const outcome = section(job, '      - name: Record outcome on the issue\n', null, 'agent-implement.yml outcome');
   for (const required of [
@@ -1018,6 +1001,24 @@ export function verifyArchitecturePass(workflow) {
 
 /** Runs every agent workflow contract check with an overridable repository reader. */
 export function runContractChecks({ read = readRepositoryFile } = {}) {
+  const appPushRetry = read(appPushRetryPath);
+  for (const required of [
+    'set -euo pipefail',
+    '[ -n "${GH_TOKEN:-}" ]',
+    'delays=(0 2 5 10)',
+    'sleep "$delay"',
+    "grep -Eqi '403|Permission to .* denied'",
+    'credential.helper=',
+    'core.hooksPath=/dev/null',
+    'http.extraheader="AUTHORIZATION: basic $auth"',
+    'push "$remote" "$refspec"',
+  ]) {
+    requireText(appPushRetry, required, appPushRetryPath);
+  }
+  for (const forbidden of ['--force', 'git config --global', 'x-access-token:${GH_TOKEN}@']) {
+    forbidText(appPushRetry, forbidden, appPushRetryPath);
+  }
+
   const validate = read(validatePath);
   for (const required of [
     'workflow_dispatch:',
