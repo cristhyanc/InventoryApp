@@ -1,0 +1,101 @@
+name: Agent head update
+
+# Schedules exact-SHA validation, and after it succeeds a fresh independent review, when a new commit
+# lands on an eligible agent pull request that already carries `agent-review`.
+#
+# Authority and lifecycle: AGENTS.md ("Automated task contract") and docs/automation.md
+# ("Updated-head scheduling").
+# - Trusted source: `pull_request_target` always runs this definition from the default branch (`main`),
+#   never from the pull request, and this workflow never checks out or executes pull request code. A
+#   pull request therefore cannot change what this job does with its `actions: write` permission.
+# - It only dispatches the existing trusted `validate.yml` from `main` with dispatch_review=true;
+#   validation dispatches the review only after the exact SHA passes. It never runs a review itself.
+# - Deduplication: a SHA that already has an `agent-validation` status (pending, success or failure)
+#   is owned by the path that created it (the implementation or repair dispatcher, or an earlier
+#   run of this workflow), so it is skipped. A concurrent duplicate dispatch for the same pull request
+#   is still collapsed by the per-PR `validate.yml` dispatch concurrency group.
+# - Ineligible pull requests (human, fork, draft, unlabelled, workflow-changing, or already moved on)
+#   are skipped without failing; failure to read the live state fails closed without dispatching.
+# - It does not approve, merge, label, push, review, or deploy.
+
+on:
+  pull_request_target:
+    types: [synchronize]
+    branches:
+      - develop
+
+permissions: {}
+
+concurrency:
+  group: agent-head-update-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  dispatch-validation:
+    name: Schedule exact-SHA validation for the new head
+    if: |
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.base.ref == 'develop' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      startsWith(github.event.pull_request.head.ref, 'agent/issue-') &&
+      contains(github.event.pull_request.labels.*.name, 'agent-review')
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      pull-requests: read
+      statuses: read
+
+    steps:
+      - name: Reverify current head and dispatch validation
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+          skip() { echo "::notice::No validation scheduled: $1"; exit 0; }
+
+          [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] || fail "The event did not contain a valid pull request number."
+          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "The event did not contain a full head SHA."
+
+          # Any failure to read the live state stops here (set -e) without dispatching: fail closed.
+          pr_json="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --json state,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,labels)"
+          state="$(jq -r '.state' <<<"$pr_json")"
+          is_draft="$(jq -r '.isDraft' <<<"$pr_json")"
+          base_ref="$(jq -r '.baseRefName' <<<"$pr_json")"
+          head_ref="$(jq -r '.headRefName' <<<"$pr_json")"
+          current_sha="$(jq -r '.headRefOid // empty' <<<"$pr_json")"
+          head_repo="$(jq -r '"\(.headRepositoryOwner.login)/\(.headRepository.name)"' <<<"$pr_json")"
+          author="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.user.login // empty')"
+
+          [ "$state" = "OPEN" ] || skip "pull request #$PR_NUMBER is not open."
+          [ "$is_draft" = "false" ] || skip "pull request #$PR_NUMBER is a draft."
+          [ "$base_ref" = "develop" ] || skip "pull request #$PR_NUMBER does not target develop."
+          [ "$head_repo" = "$GITHUB_REPOSITORY" ] || skip "pull request #$PR_NUMBER does not use a same-repository branch."
+          [[ "$head_ref" == agent/issue-* ]] || skip "pull request #$PR_NUMBER does not use an agent/issue-* branch."
+          [ -n "$EXPECTED_AGENT_AUTHOR" ] || fail "AGENT_AUTOMATION_APP_BOT_LOGIN is not configured."
+          [ "$author" = "$EXPECTED_AGENT_AUTHOR" ] || skip "pull request #$PR_NUMBER is not authored by $EXPECTED_AGENT_AUTHOR."
+          [ "$current_sha" = "$HEAD_SHA" ] || skip "Refusing stale scheduled validation: head is now $current_sha; the newer push schedules its own."
+          jq -e 'any(.labels[]?; .name == "agent-review")' <<<"$pr_json" >/dev/null \
+            || skip "the agent-review label is absent."
+
+          changed_files="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" --jq '.[].filename')"
+          if grep -Eq '^\.github/workflows/' <<<"$changed_files"; then
+            skip "pull requests that change .github/workflows/** require manual validation and review."
+          fi
+
+          existing_validation="$(gh api "repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA/status" \
+            --jq '[.statuses[] | select(.context == "agent-validation")][0].state // ""')"
+          [ -z "$existing_validation" ] \
+            || skip "$HEAD_SHA already has an agent-validation status ($existing_validation); another path owns it."
+
+          gh workflow run validate.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref main \
+            -f pr_number="$PR_NUMBER" \
+            -f head_sha="$HEAD_SHA" \
+            -f dispatch_review=true
+          echo "::notice::Dispatched exact-SHA validation for $HEAD_SHA; a fresh review follows only if it succeeds."

@@ -232,7 +232,7 @@ jobs:
             body="$(cat <<EOF
           Repair run on branch $HEAD_REF finished. $status_line
 
-          The pull request head changed from $START_SHA to $end_sha. A separate follow-up job will dispatch trusted validation for the new exact SHA. If validation passes and the human-applied \`agent-review\` label is still present, a fresh independent review will be dispatched automatically. Human approval and merge remain required.
+          The pull request head changed from $START_SHA to $end_sha. Trusted validation for the new exact SHA is dispatched once, by a separate follow-up job or by the head-update scheduler, whichever runs first. If validation passes and the human-applied \`agent-review\` label is still present, a fresh independent review will be dispatched automatically. Human approval and merge remain required.
 
           Repair attempts are limited to two per pull request and are counted by you; after the second failed attempt, label the issue agent-blocked and take over.
 
@@ -276,6 +276,7 @@ jobs:
     permissions:
       actions: write
       pull-requests: read
+      statuses: read
 
     steps:
       - name: Verify repaired head and dispatch trusted validation
@@ -313,6 +314,15 @@ jobs:
           changed_files="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" --jq '.[].filename')"
           if grep -Eq '^\.github/workflows/' <<<"$changed_files"; then
             fail "Pull requests that change .github/workflows/** require manual validation and review."
+          fi
+
+          # The repair push also triggers agent-head-update.yml for the same SHA. Whichever path
+          # dispatches first owns it; the other sees the agent-validation status and stands down.
+          existing_validation="$(gh api "repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA/status" \
+            --jq '[.statuses[] | select(.context == "agent-validation")][0].state // ""')"
+          if [ -n "$existing_validation" ]; then
+            echo "::notice::$HEAD_SHA already has an agent-validation status ($existing_validation); validation was already scheduled."
+            exit 0
           fi
 
           gh workflow run validate.yml \

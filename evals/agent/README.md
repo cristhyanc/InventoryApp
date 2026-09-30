@@ -108,8 +108,8 @@ The JSON report (`node scripts/run-agent-evals.mjs --json`) includes:
 Some scenarios genuinely require reasoning about a specific narrative (for example: is a
 newly discovered, unrequested fix "in scope" or must it become a follow-up?) rather than checking
 whether a policy sentence still exists. The corpus marks these with
-`"assertions": [{ "type": "requiresModelEvaluation" }]` (see `AUTH-006` for the one case that uses
-it today).
+`"assertions": [{ "type": "requiresModelEvaluation" }]` (`AUTH-006`, and the review-judgment pair
+`INV-005`/`INV-006` described below).
 
 This mode is optional and is **not** wired into `scripts/validate.sh` or any pull-request
 workflow, so it never consumes paid model tokens on a normal application PR, and it never runs
@@ -145,6 +145,29 @@ implement the corpus and deterministic runner, document the live-model interface
 human review before adding any new workflow or credential. When that follow-up is picked up, it
 must stay read-only by default, must not run on every normal application pull request, must pin
 the model/prompt version it uses, and must record that version alongside its results.
+
+## Review-judgment scenarios (issue #268)
+
+PR #267 received `VERDICT: READY FOR HUMAN REVIEW` even though its reviewer had found a read/write
+race against an explicit concurrency acceptance criterion, and called it non-blocking because the
+legacy flow was worse. Four cases cover that failure mode, and they deliberately separate what is
+proven deterministically from what only a model run can show:
+
+| Case | Layer | What it shows |
+| --- | --- | --- |
+| `AUTH-007` | Deterministic | The review prompt still forbids waiving an unmet criterion (legacy worse, unlikely, tests pass, green gate), and the trusted publisher still refuses a ready verdict that lists a blocker or any criterion `not met` or `not verified`. |
+| `AUTH-008` | Deterministic | The trusted publisher still re-checks the current head immediately before publishing and binds the review to the reviewed commit, so a verdict for an old head is suppressed rather than shown for a new one. |
+| `INV-005` | Model evaluation | The #267 scenario: a staleness check on one read, a mutation after a separate read, no regression test for a change in between. Expected `reject` (`VERDICT: CHANGES REQUESTED`). |
+| `INV-006` | Model evaluation | The safe control: one conditional update that compares and writes atomically, with a regression test. Expected `proceed` (`VERDICT: READY FOR HUMAN REVIEW`). |
+
+The review cases reuse the existing schema: `proceed` means the reviewer should return
+`VERDICT: READY FOR HUMAN REVIEW`, `reject` means `VERDICT: CHANGES REQUESTED`, and `stop` means a
+blocker starting "Human decision required:". The scenario text states that mapping, because the
+generic model-eval prompt frames the respondent as the implementation agent. `AUTH-007` and
+`AUTH-008` passing proves that the guardrail text and the deterministic publisher checks exist,
+not that the review model obeys them; the behavioural tests of the publisher itself live in
+`scripts/agent-review-publication.test.mjs`. `INV-005` and `INV-006` have not been run through a
+model; see `baseline.md`.
 
 ## Regression/baseline workflow
 
