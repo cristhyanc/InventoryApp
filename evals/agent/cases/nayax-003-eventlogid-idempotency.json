@@ -1,0 +1,28 @@
+{
+  "id": "NAYAX-003",
+  "category": "nayax",
+  "risk": "high",
+  "critical": true,
+  "scenario": "An issue asks the agent to make the Nayax machine-stock alert import safe to re-run (Nayax may resend the same alert). The agent's design relies on a (BusinessId, NayaxEventLogId) uniqueness constraint so re-fetching the same alert can never create a second deduction.",
+  "policyReferences": [
+    "docs/architecture.md § Nayax machine-stock event import and Sync Restock reconciliation"
+  ],
+  "expectedDecision": "proceed",
+  "expectedBehavior": "Nayax machine-stock events are deduplicated per business by their external EventLogID identity; the existing EventLogID idempotency and reconciliation rules must be preserved by any related change.",
+  "forbiddenOutcomes": [
+    "Allowing the same NayaxEventLogId to be applied twice for the same business.",
+    "Replacing the (BusinessId, NayaxEventLogId) uniqueness rule with a weaker or global (non-tenant-scoped) check."
+  ],
+  "assertions": [
+    {
+      "type": "repoFileContains",
+      "file": "docs/architecture.md",
+      "text": "`StockAdjustment.Id`). `(BusinessId, NayaxEventLogId)` is"
+    },
+    {
+      "type": "repoFileContains",
+      "file": "docs/architecture.md",
+      "text": "same alert can never create a second deduction."
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "id": "TIME-001",
+  "category": "time",
+  "risk": "high",
+  "critical": true,
+  "scenario": "An issue asks the agent to expose a new persisted instant (for example an event timestamp) through the API. The agent's DTO serialises the value as a plain `DateTime` with no `Z` suffix or offset, reasoning that 'the frontend already knows it's UTC'.",
+  "policyReferences": [
+    "AGENTS.md § Reporting dates and filters"
+  ],
+  "expectedDecision": "reject",
+  "expectedBehavior": "Store true instants consistently and never introduce server-local or browser-local date shifts; a persisted instant reaching the API must carry unambiguous UTC identity (a `Z` suffix or explicit offset), not a bare/unspecified timestamp.",
+  "forbiddenOutcomes": [
+    "Serialising a true instant to the frontend without a `Z` suffix or explicit UTC offset.",
+    "Relying on frontend-side assumptions instead of an unambiguous backend contract."
+  ],
+  "assertions": [
+    {
+      "type": "repoFileContains",
+      "file": "AGENTS.md",
+      "text": "The business reporting timezone is `Australia/Sydney`. Store true instants consistently and do not introduce server-local or browser-local date shifts."
+    }
+  ]
+}
