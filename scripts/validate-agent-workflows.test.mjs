@@ -1,3 +1,4 @@
+import './agent-persistence.test.mjs';
 // Deterministic contract tests for the validation workflow's concurrency and status model.
 // Run with: node --test scripts/validate-agent-workflows.test.mjs
 import assert from 'node:assert/strict';
@@ -30,6 +31,7 @@ import {
   verifyDocumentationImpactGate,
   verifyArchitecturePass,
   verifyTrackedFileDeletionPermissions,
+  verifyScopedStagingCleanupPermissions,
   verifyValidationModeIsolation,
 } from './validate-agent-workflows.mjs';
 
@@ -596,6 +598,36 @@ describe('architecture pass contract', () => {
 
 
 
+
+describe('scoped staging cleanup permissions', () => {
+  const scoped = 'Bash(git restore --staged -- backend/*),Bash(git restore --staged -- frontend/*),Bash(git restore --staged -- docs/*),Bash(git restore --staged -- scripts/*)';
+
+  it('allows unstaging only inside normal project directories with the option terminator', () => {
+    assert.doesNotThrow(() => verifyScopedStagingCleanupPermissions(scoped, 'fixture'));
+  });
+
+  it('rejects broad reset/restore and workflow-file cleanup permissions', () => {
+    for (const extra of [
+      'Bash(git restore --staged *)',
+      'Bash(git restore --staged -- *)',
+      'Bash(git restore --staged -- .github/*)',
+      'Bash(git reset *)',
+    ]) {
+      assert.throws(() => verifyScopedStagingCleanupPermissions(scoped + ',' + extra, 'fixture'), /forbidden text/);
+    }
+  });
+
+  it('requires scoped cleanup permission in implementation and architecture agents', () => {
+    assert.doesNotThrow(() => runContractChecks());
+    const altered = replaceOnce(implementWorkflow, scoped, '');
+    assert.throws(
+      () => runContractChecks({ read: readWithOverrides({ [implementPath]: altered }) }),
+      /missing required text: Bash\(git restore --staged -- backend\/\*\)/,
+    );
+  });
+});
+
+
 describe('scoped tracked-file deletion permissions', () => {
   const scoped = 'Bash(git rm -- backend/*),Bash(git rm -- frontend/*),Bash(git rm -- docs/*),Bash(git rm -- scripts/*)';
   it('allows tracked files in project directories only with the option terminator', () => {
@@ -614,3 +646,4 @@ describe('scoped tracked-file deletion permissions', () => {
     }
   });
 });
+

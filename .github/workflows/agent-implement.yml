@@ -31,7 +31,7 @@ permissions: {}
 
 concurrency:
   group: agent-implement-issue-${{ github.event.issue.number }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   preflight:
@@ -96,6 +96,39 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Capture trusted base and resume checkpoint
+        id: starting_point
+        env:
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          base_sha="$(git rev-parse HEAD)"
+          echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
+          echo "resumed=false" >> "$GITHUB_OUTPUT"
+          # Only an earlier attempt of this exact run is eligible for automatic resume.
+          refs="$(git ls-remote --heads origin "refs/heads/agent/issue-$ISSUE_NUMBER-checkpoint-$RUN_ID-*" "refs/heads/agent/recovery-$ISSUE_NUMBER-$RUN_ID-*")"
+          selected=""
+          selected_attempt=0
+          while read -r sha ref; do
+            [ -n "$ref" ] || continue
+            attempt="${ref##*-}"
+            [[ "$attempt" =~ ^[1-9][0-9]*$ ]] || exit 1
+            if (( attempt < RUN_ATTEMPT && attempt > selected_attempt )); then
+              selected="$ref"
+              selected_attempt="$attempt"
+              selected_sha="$sha"
+            fi
+          done <<< "$refs"
+          if [ -n "$selected" ]; then
+            git -c core.hooksPath=/dev/null fetch --no-tags origin "$selected"
+            [ "$(git rev-parse FETCH_HEAD)" = "$selected_sha" ] || { echo "::error::Checkpoint changed during resume"; exit 1; }
+            git merge-base --is-ancestor "$base_sha" "$selected_sha" || { echo "::error::Saved work is not based on current develop; human recovery required"; exit 1; }
+            git -c core.hooksPath=/dev/null checkout -b "agent/issue-$ISSUE_NUMBER-resume-$RUN_ID-$RUN_ATTEMPT" "$selected_sha"
+            echo "resumed=true" >> "$GITHUB_OUTPUT"
+            echo "Resuming saved commit $selected_sha from $selected" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Set up .NET
         uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
@@ -136,12 +169,12 @@ jobs:
 
             Procedure:
             1. Read the issue with `gh issue view ${{ github.event.issue.number }} --comments`. Restate its acceptance criteria, its explicit exclusions, and its Documentation impact decision and Documentation impact details. The criteria and exclusions are the complete extent of your authority. If the acceptance criteria are materially ambiguous, conflict with each other, with AGENTS.md, with docs/architecture.md, or with existing tests, or if the issue requires a change AGENTS.md reserves for humans, stop: post one comment on the issue with `gh issue comment` stating exactly which human decision is needed, use the Write tool to create `.agent-run-status` containing exactly `blocked` on one line, do not create a branch, and finish. Create this marker only for an intentional human-decision stop before a feature branch exists.
-            2. Create the feature branch from the checked-out develop: `git checkout -b agent/issue-${{ github.event.issue.number }}-<short-kebab-slug>`. Never commit to develop or main.
+            2. If this is a resumed attempt (${{ steps.starting_point.outputs.resumed }}), continue the existing checked-out feature branch and inspect its commits before editing; do not reimplement completed work or create another branch. Otherwise create the feature branch from the checked-out develop: `git checkout -b agent/issue-${{ github.event.issue.number }}-<short-kebab-slug>`. Never commit to develop or main.
             3. Inspect the relevant production code and tests before designing the change. Make the smallest coherent change that satisfies the acceptance criteria. Do not do nearby cleanup or anything listed as out of scope.
             4. Follow AGENTS.md's selective test-first workflow. For a clear behavioral requirement, add a focused failing test, run it and confirm the intended failure, implement the behavior, then refactor with tests green. Prioritize access boundaries, financial and inventory rules, imports, regressions and API contracts. For a change where a useful test cannot be written first, explain why in the PR and verify the result. Add meaningful edge cases; avoid tests that restate implementation details.
             4a. Follow the issue's Documentation impact decision exactly. If it is "Documentation changes required", update every documentation file and section listed in the Documentation impact details on your feature branch, in this same change, so the documentation is accurate for the merged result. If it is "No documentation changes required" but your change nevertheless makes documentation (AGENTS.md, docs/, README.md, templates) inaccurate, update that documentation too and state the discrepancy with the issue explicitly in the pull request body and in your issue comment. Never leave documentation that the change contradicts.
             5. Run the complete repository validation once in the foreground with exactly `bash scripts/validate.sh`, wait for it to terminate, inspect its exit code and retain its actual output for the pull request. Never use `&`, `nohup`, `run_in_background`, redirected background execution, concurrent validation processes, or any mechanism that returns before validation completes. If validation fails because of your change, fix the change and rerun it synchronously. Never weaken, skip, or delete a failing test to get a green result. If it fails for an environmental reason, record the exact failing command and output. A started or still-running command is not validation evidence.
-            6. Review your diff for secrets, local databases, generated output, accidental migrations, and unrelated edits.
+            6. Review your diff for secrets, local databases, generated output, accidental migrations, and unrelated edits. Do not create tracked diagnostic/scratch files. If a temporary file was accidentally staged under `backend/`, `frontend/`, `docs/`, or `scripts/`, unstage it with the permitted scoped `git restore --staged -- <project-path>` command before completion. When deleting obsolete tracked project files, use the permitted `git rm -- <project-path>` form without extra flags.
             7. Commit the completed implementation locally with focused, descriptive messages. Do not push any branch and do not create or edit a pull request; the workflow performs those remote mutations after your invocation with a separate short-lived GitHub App token that is never exposed to you.
             8. Prepare the pull request metadata as two untracked scratch files in the repository root: `.agent-pr-title` containing exactly the PR title, and `.agent-pr-body.md` containing the complete body. The body must follow .github/pull_request_template.md, include `Closes #${{ github.event.issue.number }}`, address each acceptance criterion, describe scope and exclusions, paste the actual validation commands and their real result, list tests added or changed and the observed initial failing test (or explain why test-first was unsuitable), fill the impact table, and state known limitations and suggested follow-up work. Fill the "## Documentation impact" section accurately with exactly one `Decision:` line and one `Evidence:` line: `Decision: UPDATED` when this pull request changes documentation, with Evidence listing each documentation file and what changed in it; `Decision: NOT REQUIRED` only when no documentation changed, with Evidence explaining for this specific change why behaviour, contracts, architecture, configuration, automation, deployment, operations and user workflows are unaffected. "None", "N/A", "Not applicable", generic sentences and the template placeholders are rejected by CI. Run `node scripts/validate-documentation-impact.mjs --pr-body .agent-pr-body.md` and fix it until it passes. Never add or commit either scratch file.
             9. Before finishing, verify that validation has terminated successfully, the current branch matches `agent/issue-${{ github.event.issue.number }}-*`, the index and tracked working tree are clean, `git rev-parse HEAD` is your completed local commit, and both scratch files exist and are untracked. Do not push, create a PR, apply labels, request reviewers, merge, or describe partial work as complete.
@@ -162,15 +195,88 @@ jobs:
             "Bash(git status *),Bash(git diff *),Bash(git log *),Bash(git show *),Bash(git branch --show-current),Bash(git rev-parse *)"
             "Bash(git checkout -b agent/issue-${{ github.event.issue.number }}-*),Bash(git switch -c agent/issue-${{ github.event.issue.number }}-*)"
             "Bash(git rm -- backend/*),Bash(git rm -- frontend/*),Bash(git rm -- docs/*),Bash(git rm -- scripts/*)"
+            "Bash(git restore --staged -- backend/*),Bash(git restore --staged -- frontend/*),Bash(git restore --staged -- docs/*),Bash(git restore --staged -- scripts/*)"
             "Bash(git add *),Bash(git commit *)"
             "Bash(bash scripts/validate.sh),Bash(dotnet *),Bash(npm --prefix frontend/inventory-app *),Bash(node scripts/validate-documentation-impact.mjs --pr-body *)"
             --disallowedTools "Agent,WebFetch,WebSearch"
             "Bash(git push *),Bash(git push * --force *),Bash(git push * -f *),Bash(git push * --force-with-lease *),Bash(git push --force *),Bash(git push -f *)"
             "Bash(git reset --hard *),Bash(git rebase *),Bash(git checkout develop *),Bash(git checkout main *),Bash(git switch develop *),Bash(git switch main *)"
             "Bash(gh pr create *),Bash(gh pr merge *),Bash(gh pr review *),Bash(gh pr edit *),Bash(gh issue edit *),Bash(gh api *),Bash(gh workflow *),Bash(gh run *),Bash(gh release *),Bash(gh secret *),Bash(gh variable *)"
+      # Storage only: independent of clean-tree, validation claims and PR metadata.
+      - name: Inspect persistence candidate
+        id: persistence_candidate
+        if: always() && steps.starting_point.outcome == 'success' && steps.claude.outcome != 'skipped'
+        env:
+          BASE_SHA: ${{ steps.starting_point.outputs.base_sha }}
+        run: |
+          set -euo pipefail
+          echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          if [ "$(git rev-parse HEAD)" != "$BASE_SHA" ]; then
+            echo "has_commit=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub App token for persistence
+        id: persistence_app_token
+        if: always() && steps.persistence_candidate.outputs.has_commit == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.AGENT_AUTOMATION_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AGENT_AUTOMATION_APP_PRIVATE_KEY }}
+          permission-contents: write
+
+      - name: Persist committed implementation
+        id: persist_implementation
+        if: always() && steps.persistence_candidate.outcome == 'success' && (steps.persistence_app_token.outcome == 'success' || steps.persistence_candidate.outputs.has_commit != 'true')
+        env:
+          BASE_SHA: ${{ steps.starting_point.outputs.base_sha }}
+          EXPECTED_HEAD: ${{ steps.persistence_candidate.outputs.head_sha }}
+          CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          GH_TOKEN: ${{ steps.persistence_app_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+          [[ "$ISSUE_NUMBER" =~ ^[1-9][0-9]*$ && "$RUN_ID" =~ ^[1-9][0-9]*$ && "$RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || fail "Invalid persistence identity"
+          [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ && "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]] || fail "Invalid expected SHA"
+          [ "$(git rev-parse HEAD)" = "$EXPECTED_HEAD" ] || fail "Unexpected HEAD before persistence"
+          git cat-file -e "$BASE_SHA^{commit}" || fail "Missing trusted base"
+          [ "$EXPECTED_HEAD" != "$BASE_SHA" ] || exit 0
+          branch="$(git branch --show-current)"
+          [[ "$branch" == agent/issue-"$ISSUE_NUMBER"-* ]] || fail "Unexpected implementation branch"
+          git merge-base --is-ancestor "$BASE_SHA" "$EXPECTED_HEAD" || fail "Implementation is not ahead of trusted base"
+          # Check every commit, including reverted files and merge parents, not only net diff.
+          changed="$(git -c core.quotepath=false log --format= --name-only --diff-merges=separate "$BASE_SHA..$EXPECTED_HEAD")"
+          [ -n "$changed" ] || fail "No meaningful committed file changes"
+          while read -r commit; do
+            protected_bytes="$(git diff-tree --root -r -m --no-commit-id --name-only -z "$commit" -- .github '.agent-*' inventory.db | wc -c)"
+            [ "$protected_bytes" -eq 0 ] || fail "Protected control-plane or scratch files in implementation history; human recovery required"
+          done < <(git rev-list "$BASE_SHA..$EXPECTED_HEAD")
+          if [ "$CLAUDE_OUTCOME" = "success" ]; then
+            saved_branch="agent/issue-$ISSUE_NUMBER-checkpoint-$RUN_ID-$RUN_ATTEMPT"
+          else
+            saved_branch="agent/recovery-$ISSUE_NUMBER-$RUN_ID-$RUN_ATTEMPT"
+          fi
+          # No stored credential or token-bearing remote/config is handed to a later agent.
+          publish_remote="${PUBLISH_REMOTE:-https://github.com/${GITHUB_REPOSITORY}.git}"
+          auth="$(printf 'x-access-token:%s' "${GH_TOKEN:-}" | base64 -w0)"
+          echo "::add-mask::$auth"
+          remote_head="$(git -c credential.helper= -c http.extraheader="AUTHORIZATION: basic $auth" ls-remote "$publish_remote" "refs/heads/$saved_branch")"
+          if [ -n "$remote_head" ]; then
+            [ "${remote_head%%$'\t'*}" = "$EXPECTED_HEAD" ] || fail "Existing persistence branch differs; refusing overwrite"
+          else
+            # Unique run/attempt namespace; ordinary push cannot replace unrelated history.
+            git -c credential.helper= -c core.hooksPath=/dev/null -c http.extraheader="AUTHORIZATION: basic $auth" push "$publish_remote" "$EXPECTED_HEAD:refs/heads/$saved_branch"
+          fi
+          remote_head="$(git -c credential.helper= -c http.extraheader="AUTHORIZATION: basic $auth" ls-remote "$publish_remote" "refs/heads/$saved_branch")"
+          [ "${remote_head%%$'\t'*}" = "$EXPECTED_HEAD" ] || fail "Remote persistence verification failed"
+          echo "saved_branch=$saved_branch" >> "$GITHUB_OUTPUT"
+          echo "saved_sha=$EXPECTED_HEAD" >> "$GITHUB_OUTPUT"
+          echo "Work preserved at $saved_branch ($EXPECTED_HEAD). Storage only; validation, architecture and human approval remain required." >> "$GITHUB_STEP_SUMMARY"
+
       - name: Verify implementation result
         id: implementation_result
-        if: steps.claude.outcome == 'success'
+        if: success() && steps.claude.outcome == 'success'
         run: |
           set -euo pipefail
           {
@@ -223,6 +329,26 @@ jobs:
           permission-pull-requests: write
           permission-workflows: write
 
+      - name: Diagnose GitHub App publish permissions
+        if: steps.implementation_result.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ steps.implementation_app_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          permissions="$(gh api "repos/$GITHUB_REPOSITORY" --include 2>&1 >/dev/null \
+            | tr -d '\r' \
+            | grep -i '^x-accepted-github-permissions:' \
+            | sed 's/^[^:]*:[[:space:]]*//' || true)"
+          if [ -n "$permissions" ]; then
+            echo "GitHub App token accepted repository permissions: $permissions"
+          else
+            echo "::warning::GitHub did not return an X-Accepted-GitHub-Permissions header for the repository metadata request."
+          fi
+
+          can_write="$(gh api "repos/$GITHUB_REPOSITORY/installation" --silent >/dev/null 2>&1 && echo yes || echo no)"
+          echo "GitHub App installation endpoint accessible: $can_write"
+          echo "Publish requires effective contents=write; pull_requests=write; workflows=write."
+
       - name: Push implementation and create pull request
         id: publish_implementation
         if: steps.implementation_result.outputs.ready == 'true'
@@ -235,6 +361,7 @@ jobs:
           set -euo pipefail
           fail() { echo "::error::$1"; exit 1; }
 
+          [ "$HEAD_SHA" = "${{ steps.persist_implementation.outputs.saved_sha }}" ] || fail "Implementation was not durably persisted."
           [ -n "$EXPECTED_AGENT_AUTHOR" ] || fail "AGENT_AUTOMATION_APP_BOT_LOGIN is not configured."
           [ "$(git branch --show-current)" = "$BRANCH" ] || fail "Local branch changed before publish."
           [ "$(git rev-parse HEAD)" = "$HEAD_SHA" ] || fail "Local HEAD changed before publish."
@@ -324,6 +451,7 @@ jobs:
             "Bash(gh issue view *),Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr list *),Bash(gh pr comment *)"
             "Bash(git status *),Bash(git diff *),Bash(git log *),Bash(git show *),Bash(git branch --show-current),Bash(git rev-parse *)"
             "Bash(git rm -- backend/*),Bash(git rm -- frontend/*),Bash(git rm -- docs/*),Bash(git rm -- scripts/*)"
+            "Bash(git restore --staged -- backend/*),Bash(git restore --staged -- frontend/*),Bash(git restore --staged -- docs/*),Bash(git restore --staged -- scripts/*)"
             "Bash(git add *),Bash(git commit *)"
             "Bash(bash scripts/validate.sh),Bash(dotnet *),Bash(npm --prefix frontend/inventory-app *)"
             --disallowedTools "Agent,WebFetch,WebSearch"
@@ -376,11 +504,14 @@ jobs:
         id: outcome
         if: always()
         env:
+          PERSIST_OUTCOME: ${{ steps.persist_implementation.outcome }}
           CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
           ARCHITECT_OUTCOME: ${{ steps.architect.outcome }}
           TARGET_OUTCOME: ${{ steps.architecture_target.outcome }}
           ARCHITECTURE_RESULT_OUTCOME: ${{ steps.architecture_result.outcome }}
           AGENT_BLOCKED: ${{ steps.implementation_result.outputs.blocked }}
+          SAVED_BRANCH: ${{ steps.persist_implementation.outputs.saved_branch }}
+          SAVED_SHA: ${{ steps.persist_implementation.outputs.saved_sha }}
         run: |
           set -euo pipefail
           {
@@ -389,6 +520,9 @@ jobs:
             echo "head_sha="
           } >> "$GITHUB_OUTPUT"
 
+          if [ -n "$SAVED_BRANCH" ]; then
+            gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Committed work preserved on $SAVED_BRANCH at $SAVED_SHA. This is storage only, not evidence of validation or approval. Run: $RUN_URL"
+          fi
           prefix="agent/issue-$ISSUE_NUMBER-"
           pr_json="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --base develop \
             --json number,url,headRefName,headRefOid \
@@ -408,7 +542,8 @@ jobs:
           Run: $RUN_URL
           EOF
           )"
-          elif [ "$CLAUDE_OUTCOME" = "success" ] &&
+          elif [ "$PERSIST_OUTCOME" = "success" ] &&
+             [ "$CLAUDE_OUTCOME" = "success" ] &&
              [ "$TARGET_OUTCOME" = "success" ] &&
              [ "$ARCHITECT_OUTCOME" = "success" ] &&
              [ "$ARCHITECTURE_RESULT_OUTCOME" = "success" ] &&
@@ -502,3 +637,4 @@ jobs:
             -f pr_number="$PR_NUMBER" \
             -f head_sha="$HEAD_SHA" \
             -f dispatch_review=true
+

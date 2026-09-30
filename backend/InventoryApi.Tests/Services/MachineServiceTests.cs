@@ -1,3 +1,5 @@
+using Inventory.Application.Machines;
+using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using Inventory.Application.Nayax;
 using InventoryApi.Models;
@@ -18,6 +20,12 @@ public class MachineServiceTests
             .UseInMemoryDatabase(dbName)
             .Options;
         return TestAppDbContext.Unrestricted(options);
+    }
+
+    private static MachineService Service(AppDbContext db, INayaxLynxClient nayax)
+    {
+        var facts = new EfMachineDashboardFactsStore(db, new NayaxProcessingFeeService(db));
+        return new MachineService(db, nayax, new GetMachineDashboard(nayax, facts), new ListMachineDashboard(nayax, facts));
     }
 
     /// <summary>
@@ -51,7 +59,7 @@ public class MachineServiceTests
                 new NayaxMachineProduct { NayaxProductID = 200, ProductName = "px", RetailPrice = 5m }
             });
 
-        IMachineService svc = new MachineService(db, nayaxMock.Object);
+        IMachineService svc = Service(db, nayaxMock.Object);
         var products = await svc.GetMachineProducts(1);
 
         var product = Assert.Single(products);
@@ -83,7 +91,7 @@ public class MachineServiceTests
                 new NayaxLastSalesReport { MachineID = 1, ProductName = "ProdX", SettlementValue = 5m, MachineAuthorizationTime = System.DateTime.UtcNow }
             });
 
-        IMachineService svc = new MachineService(db, nayaxMock.Object);
+        IMachineService svc = Service(db, nayaxMock.Object);
         var machine = await svc.GetById(1);
         Assert.NotNull(machine);
         Assert.Equal(1, machine.MachineID);
@@ -114,35 +122,11 @@ public class MachineServiceTests
         nayaxMock.Setup(m => m.GetMachinesAsync(default))
             .ReturnsAsync(new List<NayaxMachine> { new NayaxMachine { MachineID = 1, MachineName = "M1" } });
 
-        IMachineService svc = new MachineService(db, nayaxMock.Object);
+        IMachineService svc = Service(db, nayaxMock.Object);
         var machines = await svc.GetAll();
 
         nayaxMock.Verify(m => m.GetMachineLastSalesAsync(It.IsAny<long>(), It.IsAny<CancellationToken>()), Times.Never);
         var machine = Assert.Single(machines);
         Assert.Equal(4m, machine.TodayGrossRevenue);
     }
-
-    [Fact]
-    public void Week_to_date_comparison_uses_same_elapsed_period()
-    {
-        var reference = new System.DateTime(2026, 9, 4, 14, 30, 0);
-
-        var current = MachineService.GetWeekToDateRange(reference);
-        var previous = MachineService.GetPreviousComparableWeekRange(reference);
-
-        Assert.Equal(new System.DateTime(2026, 8, 31), current.Start);
-        Assert.Equal(reference, current.End);
-        Assert.Equal(new System.DateTime(2026, 8, 24), previous.Start);
-        Assert.Equal(new System.DateTime(2026, 8, 28, 14, 30, 0), previous.End);
-    }
-
-    [Fact]
-    public void Month_to_date_starts_at_the_first_local_day()
-    {
-        var range = MachineService.GetMonthToDateRange(new System.DateTime(2026, 9, 4, 14, 30, 0));
-
-        Assert.Equal(new System.DateTime(2026, 9, 1), range.Start);
-        Assert.Equal(new System.DateTime(2026, 9, 4, 14, 30, 0), range.End);
-    }
-
 }

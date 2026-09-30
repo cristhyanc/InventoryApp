@@ -3,16 +3,17 @@
 # Complete local validation for InventoryApp (macOS, Linux, Git Bash, CI).
 #
 # Pipeline:
-#   1. Restore backend
-#   2. Verify C# formatting          (dotnet format --verify-no-changes)
-#   3. Build backend                 (analyzers + warnings-as-errors, see Directory.Build.props)
-#   4. Test backend with coverage    (includes the architecture tests)
-#   5. Check vulnerable NuGet packages
-#   6. Install frontend dependencies (npm ci)
-#   7. Angular ESLint                (npm run lint)
-#   8. Frontend unit/component tests (npm run test)
-#   9. Angular production build      (npm run build)
-#  10. npm audit report
+#   1. Run the InventoryApp Agent Evals corpus and runner tests
+#   2. Restore backend
+#   3. Verify C# formatting          (dotnet format --verify-no-changes)
+#   4. Build backend                 (analyzers + warnings-as-errors, see Directory.Build.props)
+#   5. Test backend with coverage    (includes the architecture tests)
+#   6. Check vulnerable NuGet packages
+#   7. Install frontend dependencies (npm ci)
+#   8. Angular ESLint                (npm run lint)
+#   9. Frontend unit/component tests (npm run test)
+#  10. Angular production build      (npm run build)
+#  11. npm audit report
 #
 # scripts/validate.ps1 performs the same checks on Windows PowerShell. Keep the two in step.
 
@@ -44,6 +45,7 @@ run_step() {
 
 require_command dotnet
 require_command npm
+require_command node
 
 if [[ ! -f "${backend_solution}" ]]; then
     echo "Backend solution not found: ${backend_solution}" >&2
@@ -87,6 +89,12 @@ report_npm_audit() {
     echo
     echo 'NOTE: npm audit is informational and does not fail validation. See README.md (Validate a change).'
 }
+
+run_step "Test agent eval runner" \
+    node --test "${repo_root}/scripts/run-agent-evals.test.mjs"
+
+run_step "Run agent eval corpus" \
+    node "${repo_root}/scripts/run-agent-evals.mjs"
 
 run_step "Restore backend" \
     dotnet restore "${backend_solution}"

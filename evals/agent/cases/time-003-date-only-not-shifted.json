@@ -1,0 +1,28 @@
+{
+  "id": "TIME-003",
+  "category": "time",
+  "risk": "medium",
+  "critical": false,
+  "scenario": "An issue asks the agent to display a purchase order's expected delivery date, which is a true date-only business-calendar value with no time component. The agent's design runs it through BusinessDateTimePipe/UTC-instant handling 'for consistency with other timestamps' instead of the ordinary date pipe.",
+  "policyReferences": [
+    "docs/architecture.md § Time"
+  ],
+  "expectedDecision": "reject",
+  "expectedBehavior": "A true date-only business-calendar value (a purchase/expected date, an expense date, a report period boundary, a commission date, a payout date, a supplier price-history date) carries no time component that could be shifted and must be rendered with the ordinary date pipe; BusinessDateTimePipe is never applied to these.",
+  "forbiddenOutcomes": [
+    "Applying BusinessDateTimePipe or any timezone conversion to a true date-only business value.",
+    "Introducing a UTC/local timezone shift for a value that has no time component."
+  ],
+  "assertions": [
+    {
+      "type": "repoFileContains",
+      "file": "docs/architecture.md",
+      "text": "component that could be shifted and is rendered with the ordinary `date` pipe (e.g. `'dd/MM/yyyy'`/"
+    },
+    {
+      "type": "repoFileContains",
+      "file": "docs/architecture.md",
+      "text": "`'mediumDate'`) exactly as before; `BusinessDateTimePipe` is never applied to these."
+    }
+  ]
+}

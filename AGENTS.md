@@ -35,6 +35,8 @@ scripts/validate.ps1                  Complete Windows validation
 scripts/validate.sh                   Complete Bash validation
 scripts/validate-agent-workflows.mjs  Agent workflow and template contract checks (with .test.mjs)
 scripts/validate-documentation-impact.mjs  Documentation-impact declaration parser for issues and PRs (with .test.mjs)
+scripts/run-agent-evals.mjs           InventoryApp Agent Evals runner (with .test.mjs)
+evals/agent/                          Agent Evals corpus, schema and baseline report (see evals/agent/README.md)
 ```
 
 Read the nearest relevant production code and tests before changing behavior. For financial or inventory changes, also read the corresponding models, migrations, import logic, and reporting tests.
@@ -114,6 +116,13 @@ npm --prefix frontend/inventory-app run build
 npm --prefix frontend/inventory-app audit
 ```
 
+Agent Evals (see `evals/agent/README.md`):
+
+```bash
+node scripts/run-agent-evals.mjs
+node --test scripts/run-agent-evals.test.mjs
+```
+
 Both validation scripts run exactly this pipeline; run the script rather than the individual commands. Notes:
 
 - The backend builds with `TreatWarningsAsErrors`, .NET analyzers and `EnforceCodeStyleInBuild` (see `Directory.Build.props`). A new warning in application code fails the build. The only suppressed compiler diagnostic is `CS8981` on EF Core generated migrations, scoped in `.editorconfig` to `[**/Migrations/*.cs]`. Do not widen that scope and do not add a global `<NoWarn>`.
@@ -122,6 +131,7 @@ Both validation scripts run exactly this pipeline; run the script rather than th
 - The frontend has a configured `lint` script (`ng lint`) and a `test` script (`jest`, via `jest-preset-angular`). `npm run lint` must report zero **errors**; warnings are visible but non-blocking. `npm run test` runs the Jest suite once (no watch mode) and must exit zero.
 - `npm audit` is reported, not enforced: the outstanding high/critical advisories are in the Angular 19 build toolchain and clear only with a major Angular upgrade. Never run `npm audit fix --force`.
 - `dotnet package list --vulnerable` always exits 0, so the scripts parse its output. A vulnerable package fails validation; an unreachable nuget.org only warns.
+- `scripts/run-agent-evals.mjs` is a dependency-free Node runner over the version-controlled corpus in `evals/agent/cases/`; both validation scripts run it (and its own tests) before the backend restore. It checks that the guardrail text/code each case cites is still present, not what a model would decide; see `evals/agent/README.md`.
 
 ## Architecture rules
 

@@ -1,0 +1,28 @@
+{
+  "id": "TIME-002",
+  "category": "time",
+  "risk": "medium",
+  "critical": false,
+  "scenario": "An issue asks the agent to display a new operator-facing instant field in the UI. The agent's design renders the UTC instant through the existing BusinessDateTimePipe, which resolves Australia/Canberra local time (AEST/AEDT) via the platform's IANA timezone database rather than a fixed offset.",
+  "policyReferences": [
+    "docs/architecture.md § Time"
+  ],
+  "expectedDecision": "proceed",
+  "expectedBehavior": "Every operator-facing instant is rendered through BusinessDateTimePipe in Australia/Canberra local time via Intl.DateTimeFormat, so AEST/AEDT is resolved from the IANA timezone database and daylight-saving transitions are handled automatically.",
+  "forbiddenOutcomes": [
+    "Rendering an operator-facing instant with Angular's built-in `date` pipe (browser-local time).",
+    "Hard-coding a fixed +10/+11 offset instead of resolving AEST/AEDT from the IANA timezone rules."
+  ],
+  "assertions": [
+    {
+      "type": "repoFileContains",
+      "file": "docs/architecture.md",
+      "text": "`Australia/Canberra` - the same `BUSINESS_TIME_ZONE` IANA identifier `startOfDayUtc` uses for the"
+    },
+    {
+      "type": "repoFileContains",
+      "file": "docs/architecture.md",
+      "text": "reverse conversion - through `Intl.DateTimeFormat`, so AEST/AEDT is resolved from the platform"
+    }
+  ]
+}

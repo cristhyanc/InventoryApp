@@ -1,3 +1,5 @@
+using Inventory.Application.Machines;
+using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using Inventory.Application.Nayax;
 using InventoryApi.Models;
@@ -10,6 +12,12 @@ namespace InventoryApi.Tests.Services;
 
 public class MachineProfitabilityTests
 {
+    private static MachineService Service(AppDbContext db, INayaxLynxClient nayax)
+    {
+        var facts = new EfMachineDashboardFactsStore(db, new NayaxProcessingFeeService(db));
+        return new MachineService(db, nayax, new GetMachineDashboard(nayax, facts), new ListMachineDashboard(nayax, facts));
+    }
+
     [Fact]
     public async Task Product_pricing_uses_site_agreement_instead_of_nayax_commission()
     {
@@ -43,7 +51,7 @@ public class MachineProfitabilityTests
                 }
             });
 
-        var product = Assert.Single(await new MachineService(db, nayax.Object).GetMachineProducts(1));
+        var product = Assert.Single(await Service(db, nayax.Object).GetMachineProducts(1));
 
         Assert.Equal(6.78m, product.SuggestedNetValue!.Value);
         Assert.Equal(5.55m, product.SuggestedPriceValue!.Value);
@@ -58,7 +66,7 @@ public class MachineProfitabilityTests
         await db.SaveChangesAsync();
 
         var nayax = PreviewClient();
-        var product = Assert.Single(await new MachineService(db, nayax.Object).GetMachineProducts(1));
+        var product = Assert.Single(await Service(db, nayax.Object).GetMachineProducts(1));
 
         Assert.Equal(2.78m, product.SuggestedNetValue);
         Assert.Equal(4.44m, product.SuggestedPriceValue);
@@ -75,7 +83,7 @@ public class MachineProfitabilityTests
             new SiteCommissionAgreement { SiteId = 91, EffectiveFrom = DateTime.Today.AddMonths(-1), CommissionRate = .12m, Basis = CommissionBasis.GrossSales });
         await db.SaveChangesAsync();
 
-        var product = Assert.Single(await new MachineService(db, PreviewClient().Object).GetMachineProducts(1));
+        var product = Assert.Single(await Service(db, PreviewClient().Object).GetMachineProducts(1));
 
         Assert.Null(product.SuggestedNetValue);
         Assert.Null(product.SuggestedPriceValue);
@@ -106,7 +114,7 @@ public class MachineProfitabilityTests
         nayax.Setup(x => x.GetMachineAsync(1, default))
             .ReturnsAsync(new NayaxMachine { MachineID = 1, CustomerID = 91 });
 
-        var machine = await new MachineService(db, nayax.Object).GetById(1);
+        var machine = await Service(db, nayax.Object).GetById(1);
 
         Assert.NotNull(machine);
         Assert.Null(machine.TodayDirectProfit);

@@ -15,7 +15,7 @@ It deliberately separates three things:
 
 | Category | Meaning |
 | --- | --- |
-| **Exists now** | Behaviour implemented by files in this repository today: the validation and deployment workflows, the Claude Code implementation (including architecture pass), review, and repair workflows (`agent-implement.yml`, `agent-review.yml`, `agent-repair.yml`), the validation scripts, the workflow-contract and documentation-impact validators in `scripts/`, `AGENTS.md`, `CLAUDE.md`, the agent task issue form, the pull request template, and the [documentation impact gate](#documentation-impact-gate). |
+| **Exists now** | Behaviour implemented by files in this repository today: the validation and deployment workflows, the Claude Code implementation (including architecture pass), review, and repair workflows (`agent-implement.yml`, `agent-review.yml`, `agent-repair.yml`), the validation scripts, the workflow-contract and documentation-impact validators in `scripts/`, `AGENTS.md`, `CLAUDE.md`, the agent task issue form, the pull request template, the [documentation impact gate](#documentation-impact-gate), and the deterministic [Agent Evals](#guardrails-ci-validation-review-and-evals) corpus/runner in `evals/agent/`. |
 | **Proposed for future pull requests** | Automation that is designed here but **not implemented**: mechanical enforcement of the two-attempt repair limit, staging, release automation, monitoring, and any auto-merge. |
 | **Human-controlled** | Decisions that stay with a human regardless of how much automation is added: applying `agent-ready`, authorising and counting repair attempts (and the fresh review that follows one), approving, merging, releasing, deploying. The *initial* independent review is requested automatically once validation succeeds; it is no longer a separate human decision. |
 
@@ -24,6 +24,38 @@ Nothing in this document creates an automation capability by itself. Where a cap
 The agent provider is **Claude Code**, run through the `anthropics/claude-code-action` GitHub Action. `CLAUDE.md` at the repository root directs Claude to read and obey `AGENTS.md`, this document, `docs/architecture.md` where relevant, and the linked issue's acceptance criteria and exclusions.
 
 `AGENTS.md` is the authoritative engineering and safety policy, and `docs/architecture.md` is the authoritative architectural description. This document does not restate their financial, inventory, database, Nayax, or security invariants; it refers to them.
+
+## Guardrails, CI validation, review, and evals
+
+Four distinct mechanisms keep an automated change safe, and it matters which one caught a
+problem:
+
+| Mechanism | Question it answers | Where it lives |
+| --- | --- | --- |
+| **Guardrails** | What is an agent allowed to do at all? | `AGENTS.md`, `CLAUDE.md`, this document, the `.github/workflows/agent-*.yml` prompts and tool permissions, `scripts/validate-agent-workflows.mjs`. |
+| **CI validation** | Does this specific change build, test, and lint? | `scripts/validate.sh`/`scripts/validate.ps1`, `validate.yml`. |
+| **Independent review** | Did this specific pull request actually honour the guardrails? | `agent-review.yml`. |
+| **Evals** | Do representative scenarios still resolve the way the guardrails say they should, across changes to the guardrails themselves? | `evals/agent/` (corpus and deterministic runner in `scripts/run-agent-evals.mjs`; see `evals/agent/README.md`). |
+
+Evals are the odd one out: they do not validate a specific pull request's diff, and today's
+deterministic runner does not simulate an agent's decision on a scenario at all. It checks that
+the guardrail text/workflow permission/distinguishing code each eval case cites is still present,
+so a change to a prompt or a policy document that silently weakens an invariant is caught as a
+failing eval case even when no single application pull request happens to exercise it. An optional,
+not-yet-automated model-evaluation mode (`node scripts/run-agent-evals.mjs --mode model`) exists for
+the smaller set of scenarios that genuinely require reasoning about a specific narrative rather than
+checking that a sentence still exists; see `evals/agent/README.md` § AI/model evaluation mode for
+why grading is documented rather than automated today, and why that follow-up does not broaden
+secret access if it is picked up later.
+
+**When a pull request changes an agent policy or prompt file** — `AGENTS.md`, `CLAUDE.md`, this
+document, or a prompt/instruction block inside `agent-implement.yml`, `agent-review.yml`, or
+`agent-repair.yml` — re-run `node scripts/run-agent-evals.mjs` (already part of
+`scripts/validate.sh`/`scripts/validate.ps1`) and read its result deliberately rather than treating
+it as routine backend/frontend noise. A failing case means the change altered or removed something
+an eval case relies on: either update the affected case(s)/`policyReferences` in the same pull
+request because the guardrail is intentionally changing (and say so, per `AGENTS.md` § Tests
+required by change type), or treat the failure as a regression and fix the guardrail file instead.
 
 ## Desired lifecycle
 
@@ -295,7 +327,7 @@ Its result is advisory. A human still reviews and decides whether to merge.
 
 The implementation, architecture, and review invocations **may share the Anthropic billing credential** (`CLAUDE_CODE_OAUTH_TOKEN`). Independence is provided by separation of invocation, context, and authority, not by separate Anthropic accounts:
 
-- **Separate invocations:** implementation and review are different workflows with separate runs, working trees, prompts, and tokens. The architecture pass is a second invocation within the implementation job, deliberately sharing its feature checkout and job-scoped token so it can update that PR branch. All three editing invocations (implementation, architecture and repair) may remove tracked files in project directories with `git rm -- <path>` when in scope; they cannot remove `.github/` files through that permission. The agent workflow contract test rejects broader deletion patterns. A human starts implementation with `agent-ready`; the initial review is requested automatically, by `agent-implement.yml`'s dispatcher applying `agent-review` and successful validation dispatching the review. After a human starts a repair, successful exact-SHA validation may dispatch another independent review under that existing label.
+- **Separate invocations:** implementation and review are different workflows with separate runs, working trees, prompts, and tokens. The architecture pass is a second invocation within the implementation job, deliberately sharing its feature checkout and job-scoped token so it can update that PR branch. All three editing invocations (implementation, architecture and repair) may remove tracked files in project directories with `git rm -- <path>` when in scope; they cannot remove `.github/` files through that permission. The implementation and architecture agents may also recover from an accidentally staged project file with the narrowly scoped `git restore --staged -- <project-path>` permission; broad restore/reset and `.github/` cleanup remain forbidden. The agent workflow contract tests reject broader deletion and staging-cleanup patterns. A human starts implementation with `agent-ready`; the initial review is requested automatically, by `agent-implement.yml`'s dispatcher applying `agent-review` and successful validation dispatching the review. After a human starts a repair, successful exact-SHA validation may dispatch another independent review under that existing label.
 - **Separate contexts:** each run has its own checkout, prompt, conversation, and tool configuration. The reviewer receives the head SHA, the pull request, and the issue, not the implementation agent's transcript or reasoning.
 - **Separate, job-scoped GitHub permissions:** the implementation and repair jobs use repository-scoped GitHub App installation tokens only for branch/PR mutations and agent GitHub calls; deterministic bookkeeping/dispatch continues to use each job's `GITHUB_TOKEN`. The review job has read-only access to code and may only comment or review with its own `GITHUB_TOKEN`. The App private key is never exposed to the review or validation jobs.
 
@@ -452,3 +484,17 @@ Each phase is delivered as its own pull request and must be proven reliable befo
 | 7 | Possible low-risk auto-merge, only after the earlier phases have proven reliable and only for `risk:low` tasks, with a human able to disable it at any time. Any such merge would be performed by repository automation configured by a human, never by the implementation or review agent, and would require an explicit update to this document. | Proposed, not committed |
 
 Phases 4–7, and the mechanical repair-limit enforcement of phase 3, are not implemented by this repository at the time of writing. Any claim that one of them exists must be backed by a workflow or configuration file in this repository and a corresponding update to this document.
+
+
+
+## Implementation durability and recovery (issue #250)
+
+The trusted implementation workflow captures the starting `develop` SHA before Claude runs. Immediately after the implementation invocation, an `always()` persistence step uses a fresh, contents-only GitHub App token to preserve meaningful committed work **before** clean-tree, PR metadata, PR creation, architecture and review processing. Claude receives no publishing credential or push permission. The publisher checks the exact expected HEAD, the issue-specific feature branch and ancestry from the trusted base. It checks every intervening commit (including merge parents and reverted files) for `.github/**` and tracked agent scratch files; protected changes require human recovery and are never published through this path.
+
+Successful invocations are saved on `agent/issue-<issue>-checkpoint-<run>-<attempt>`; unsuccessful invocations are saved on `agent/recovery-<issue>-<run>-<attempt>`. These are storage references, not normal completed implementation PRs. Existing refs must point to the exact intended SHA or publication fails, and pushes never force or rewrite history. The branch and SHA are recorded in the run summary and issue. No new commit means no recovery branch. Uncommitted edits are not persisted.
+
+The persistence step does not establish that validation passed or acceptance criteria were met. A failed agent action stays failed and cannot advance to normal PR creation, architecture or validation dispatch. Later failures leave the checkpoint intact. Human approval, exact-SHA validation, architecture review, merge gates, deployment controls and `.github/**` protections remain required. The normal PR branch is still published only after implementation postconditions pass.
+
+Rerunning the same workflow run selects the most recent checkpoint from an earlier attempt and continues on a fresh issue-specific feature branch at its exact SHA. Claude inspects existing work and completes validation and metadata instead of reimplementing it. Resume is allowed only when current `develop` is an ancestor of the saved commit; a changed base requiring integration returns to a human. A new label-triggered run has a different run ID and does not automatically adopt old or ambiguous recovery work: a maintainer must select and reconcile that branch explicitly.
+
+Runs for one issue are queued rather than cancelled by a newer invocation, so a new label event cannot interrupt the persistence boundary. Runner termination, hard timeout, credential/API/network failure, and work never committed can still prevent remote persistence; this is not an absolute guarantee against infrastructure loss. Persistence errors remain visible as workflow failures. Deterministic tests use real temporary repositories and a bare remote to exercise downstream failures, failed-agent recovery, no-commit behavior, SHA/ancestry rejection, protected history, collision rejection and exact-SHA resume.

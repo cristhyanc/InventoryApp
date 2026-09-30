@@ -4,6 +4,7 @@ using Inventory.Application.CatalogReconciliation;
 using Inventory.Application.Categories;
 using Inventory.Application.Expenses;
 using Inventory.Application.MachineStockSync;
+using Inventory.Application.Machines;
 using Inventory.Application.NayaxFeeSettings;
 using Inventory.Application.PickList;
 using Inventory.Application.Purchases;
@@ -17,6 +18,7 @@ using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Transactions;
 using Inventory.Application.SalesSync;
+using Inventory.Application.Sites;
 using Inventory.Application.Suppliers;
 using Inventory.Application.Tenancy;
 using Inventory.Infrastructure;
@@ -174,6 +176,13 @@ builder.Services.AddScoped<ISupplierStore, EfSupplierStore>();
 
 // Temporary API-owned adapter for the operating-expenses persistence port; see EfOperatingExpenseStore.
 builder.Services.AddScoped<IOperatingExpenseStore, EfOperatingExpenseStore>();
+
+// Temporary API-owned adapters for the site dashboard ports; see EfSiteFactsStore/SiteNameResolverAdapter.
+builder.Services.AddScoped<ISiteFactsStore, EfSiteFactsStore>();
+builder.Services.AddScoped<ISiteNameResolver, SiteNameResolverAdapter>();
+
+// Temporary API-owned adapter for the machine dashboard facts port; see EfMachineDashboardFactsStore.
+builder.Services.AddScoped<IMachineDashboardFactsStore, EfMachineDashboardFactsStore>();
 
 // Temporary API-owned adapter for the bookkeeping report facts port; see EfBookkeepingReportFactsProvider.
 builder.Services.AddScoped<IBookkeepingReportFactsProvider, EfBookkeepingReportFactsProvider>();
