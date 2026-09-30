@@ -25,6 +25,7 @@ import {
   verifyScopedDirectoryCreationPermissions,
   appPushRetryPath,
   implementPath,
+  architecturePath,
   issueTemplatePath,
   pullRequestTemplatePath,
   readRepositoryFile,
@@ -44,6 +45,7 @@ import {
 const validateWorkflow = readRepositoryFile(validatePath);
 const reviewWorkflow = readRepositoryFile(reviewPath);
 const implementWorkflow = readRepositoryFile(implementPath);
+const architectureWorkflow = readRepositoryFile(architecturePath);
 const appPushRetryScript = readRepositoryFile(appPushRetryPath);
 const repairWorkflow = readRepositoryFile(repairPath);
 const issueTemplate = readRepositoryFile(issueTemplatePath);
@@ -242,28 +244,33 @@ describe('preserved guards', () => {
     assert.throws(() => runContractChecks({ read: readWithOverrides({ [validatePath]: workflowFilesAccepted }) }));
   });
 
-  it('has the implementation dispatcher label the pull request agent-review and request review automatically', () => {
-    const dispatcher = implementWorkflow.slice(implementWorkflow.indexOf('  dispatch-validation:\n'));
-    assert.ok(dispatcher.includes('pull-requests: write'));
-    assert.ok(dispatcher.includes('gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label agent-review'));
-    assert.ok(dispatcher.includes('-f dispatch_review=true'));
+  it('has the implementation dispatcher hand off only to the trusted architecture workflow', () => {
+    const dispatcher = implementWorkflow.slice(implementWorkflow.indexOf('  dispatch-architecture:\n'));
+    assert.ok(dispatcher.includes('actions: write'));
+    assert.ok(dispatcher.includes('pull-requests: read'));
+    assert.ok(!dispatcher.includes('pull-requests: write'));
+    assert.ok(dispatcher.includes('agent-architecture.yml'));
+    assert.ok(dispatcher.includes('--ref main'));
+    assert.ok(dispatcher.includes('-f issue_number="$ISSUE_NUMBER"'));
+    assert.ok(dispatcher.includes('-f pr_number="$PR_NUMBER"'));
+    assert.ok(dispatcher.includes('-f head_sha="$HEAD_SHA"'));
+    assert.ok(!dispatcher.includes('validate.yml'));
+    assert.ok(!dispatcher.includes('gh pr edit'));
 
-    const noAutoReview = replaceOnce(implementWorkflow, '-f dispatch_review=true', '-f dispatch_review=false');
-    assert.throws(() => runContractChecks({ read: readWithOverrides({ [implementPath]: noAutoReview }) }), /missing required text: -f dispatch_review=true/);
-
-    const noLabelStep = replaceOnce(implementWorkflow,
-      '          gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label agent-review\n\n', '');
-    assert.throws(() => runContractChecks({ read: readWithOverrides({ [implementPath]: noLabelStep }) }), /missing required text: gh pr edit/);
-
-    // gh pr edit --add-label needs pull-requests: write (it resolves to the GraphQL
-    // addLabelsToLabelable mutation, which checks the pull-requests permission even though
-    // the labelable is a pull request) -- issues: write is not sufficient and was the bug
-    // in the first version of this contract.
-    const readOnlyPullRequests = replaceOnce(implementWorkflow, '      actions: write\n      pull-requests: write\n',
-      '      actions: write\n      pull-requests: read\n');
-    assert.throws(() => runContractChecks({ read: readWithOverrides({ [implementPath]: readOnlyPullRequests }) }), /missing required text: pull-requests: write/);
+    const bypass = replaceOnce(implementWorkflow, 'agent-architecture.yml', 'validate.yml');
+    assert.throws(() => runContractChecks({ read: readWithOverrides({ [implementPath]: bypass }) }), /architecture dispatcher/);
   });
 
+  it('has architecture finalization label the PR and dispatch exact-SHA validation only after success', () => {
+    const finalize = architectureWorkflow.slice(architectureWorkflow.indexOf('  finalize:\n'));
+    assert.ok(finalize.includes('ARCHITECTURE_JOB_RESULT: ${{ needs.architecture.result }}'));
+    assert.ok(finalize.includes('gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label agent-review'));
+    assert.ok(finalize.includes('gh workflow run validate.yml'));
+    assert.ok(finalize.includes('-f dispatch_review=true'));
+
+    const noSuccessGate = replaceOnce(architectureWorkflow, '[ "$ARCHITECTURE_JOB_RESULT" != "success" ]', '[ "$ARCHITECTURE_JOB_RESULT" = "failure" ]');
+    assert.throws(() => runContractChecks({ read: readWithOverrides({ [architecturePath]: noSuccessGate }) }), /agent-architecture.yml finalize/);
+  });
   it('keeps the repair dispatcher read-only on pull requests, since it never labels one', () => {
     const dispatcher = repairWorkflow.slice(repairWorkflow.indexOf('  dispatch-validation:\n'));
     assert.ok(dispatcher.includes('pull-requests: read'));
@@ -493,86 +500,68 @@ describe('review dispatch contract', () => {
 });
 
 describe('architecture pass contract', () => {
-  it('accepts the coder to architect to exact-head-validation ordering', () => {
-    assert.doesNotThrow(() => verifyArchitecturePass(implementWorkflow));
+  it('accepts implementation publication -> trusted architecture -> exact-head validation ordering', () => {
+    assert.doesNotThrow(() => verifyArchitecturePass(implementWorkflow, architectureWorkflow));
+  });
+
+  it('keeps the architecture agent out of the implementation workflow', () => {
+    assert.ok(!implementWorkflow.includes('Run Claude Code architecture agent'));
+    const injected = implementWorkflow.replace('      - name: Record implementation outcome\n', '      - name: Run Claude Code architecture agent\n        run: echo unsafe\n\n      - name: Record implementation outcome\n');
+    assert.throws(() => runContractChecks({ read: readWithOverrides({ [implementPath]: injected }) }), /must not contain architecture execution/);
   });
 
   it('requires just-in-time repository-scoped GitHub App tokens for deterministic publishes', () => {
     for (const [path, workflow, required] of [
       [implementPath, implementWorkflow, 'id: implementation_app_token'],
-      [implementPath, implementWorkflow, 'id: architecture_app_token'],
+      [architecturePath, architectureWorkflow, 'id: architecture_app_token'],
       [repairPath, repairWorkflow, 'id: repair_app_token'],
       [implementPath, implementWorkflow, 'client-id: ${{ vars.AGENT_AUTOMATION_APP_CLIENT_ID }}'],
-      [implementPath, implementWorkflow, 'private-key: ${{ secrets.AGENT_AUTOMATION_APP_PRIVATE_KEY }}'],
+      [architecturePath, architectureWorkflow, 'private-key: ${{ secrets.AGENT_AUTOMATION_APP_PRIVATE_KEY }}'],
       [implementPath, implementWorkflow, 'GH_TOKEN: ${{ steps.implementation_app_token.outputs.token }}'],
+      [architecturePath, architectureWorkflow, 'GH_TOKEN: ${{ steps.architecture_app_token.outputs.token }}'],
       [repairPath, repairWorkflow, 'GH_TOKEN: ${{ steps.repair_app_token.outputs.token }}'],
     ]) {
       const weakened = replaceOnce(workflow, required, '# removed');
-      assert.throws(
-        () => runContractChecks({ read: readWithOverrides({ [path]: weakened }) }),
-        /(App token|implementation publish|repair publish): missing required text/,
-      );
+      assert.throws(() => runContractChecks({ read: readWithOverrides({ [path]: weakened }) }), /(App token|implementation publish|architecture publish|repair publish): missing required text/);
     }
   });
 
   it('requires bounded retry for transient GitHub App Git authorization denials', () => {
-    for (const required of [
-      'delays=(0 2 5 10)',
-      'sleep "$delay"',
-      "grep -Eqi '403|Permission to .* denied'",
-      'core.hooksPath=/dev/null',
-      'push "$remote" "$refspec"',
-    ]) {
+    for (const required of ['delays=(0 2 5 10)', 'sleep "$delay"', "grep -Eqi '403|Permission to .* denied'", 'core.hooksPath=/dev/null', 'push "$remote" "$refspec"']) {
       const weakened = replaceOnce(appPushRetryScript, required, '# removed retry contract');
-      assert.throws(
-        () => runContractChecks({ read: readWithOverrides({ [appPushRetryPath]: weakened }) }),
-        /git-push-with-app-retry\.sh: missing required text/,
-      );
+      assert.throws(() => runContractChecks({ read: readWithOverrides({ [appPushRetryPath]: weakened }) }), /git-push-with-app-retry\.sh: missing required text/);
     }
   });
 
   it('never exposes the GitHub App credential to Claude invocations', () => {
-    for (const [path, workflow, agentName] of [
-      [implementPath, implementWorkflow, 'implementation'],
-      [repairPath, repairWorkflow, 'repair'],
+    for (const [path, workflow, marker] of [
+      [implementPath, implementWorkflow, '      - name: Run Claude Code implementation agent\n'],
+      [architecturePath, architectureWorkflow, '      - name: Run Claude Code architecture agent\n'],
+      [repairPath, repairWorkflow, '      - name: Run Claude Code repair agent\n'],
     ]) {
-      const marker = agentName === 'implementation'
-        ? '      - name: Run Claude Code implementation agent\n'
-        : '      - name: Run Claude Code repair agent\n';
       const injected = workflow.replace(marker, marker + '        env:\n          LEAKED_APP_KEY: ${{ secrets.AGENT_AUTOMATION_APP_PRIVATE_KEY }}\n');
-      assert.throws(
-        () => runContractChecks({ read: readWithOverrides({ [path]: injected }) }),
-        /(implementation agent|repair agent): contains forbidden text/,
-      );
+      assert.throws(() => runContractChecks({ read: readWithOverrides({ [path]: injected }) }), /(implementation agent|architect|repair agent): contains forbidden text/);
     }
   });
 
   it('requires guarded agent PRs to match the configured GitHub App bot login', () => {
     for (const [path, workflow] of [
       [implementPath, implementWorkflow],
+      [architecturePath, architectureWorkflow],
       [repairPath, repairWorkflow],
       [validatePath, validateWorkflow],
       [reviewPath, reviewWorkflow],
     ]) {
       const weakened = removeAll(workflow, 'EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}');
-      assert.throws(
-        () => runContractChecks({ read: readWithOverrides({ [path]: weakened }) }),
-        /(implementation publish|architecture target|validation dispatcher|dispatched context|review dispatcher): missing required text/,
-        path,
-      );
+      assert.throws(() => runContractChecks({ read: readWithOverrides({ [path]: weakened }) }), /(implementation publish|architecture dispatcher|agent-architecture.yml context|validation dispatcher|dispatched context|review dispatcher|finalize): missing required text/, path);
     }
   });
 
   it('keeps coder and architect work in their foreground invocations', () => {
-    const prompt = 'Do not delegate, spawn, or use Claude sub-agents, and do not invoke the \`Agent\` tool.';
-    for (const unsafe of [
-      removeAll(implementWorkflow, prompt),
-      removeAll(implementWorkflow, '--disallowedTools "Agent,WebFetch,WebSearch"'),
-    ]) {
-      assert.throws(
-        () => runContractChecks({ read: readWithOverrides({ [implementPath]: unsafe }) }),
-        /(implementation prompt|implementation agent|architect): missing required text/,
-      );
+    const prompt = 'Do not delegate, spawn, or use Claude sub-agents, and do not invoke the `Agent` tool.';
+    for (const [path, workflow] of [[implementPath, implementWorkflow], [architecturePath, architectureWorkflow]]) {
+      const weakened = removeAll(workflow, prompt);
+      assert.throws(() => runContractChecks({ read: readWithOverrides({ [path]: weakened }) }), /(implementation prompt|architect): missing required text/);
     }
   });
 
@@ -581,46 +570,31 @@ describe('architecture pass contract', () => {
       'use the Write tool to create `.agent-run-status` containing exactly `blocked` on one line',
       '[ -z "$(git ls-files -- .agent-run-status)" ]',
       '[ "$(cat .agent-run-status)" = "blocked" ]',
-      'echo "blocked=true"',
-      '.agent-pr-title',
-      '.agent-pr-body.md',
-      'echo "ready=true"',
-      'AGENT_BLOCKED: ${{ steps.implementation_result.outputs.blocked }}',
-      '[ "$AGENT_BLOCKED" = "true" ]',
+      'echo "blocked=true"', '.agent-pr-title', '.agent-pr-body.md', 'echo "ready=true"',
+      'AGENT_BLOCKED: ${{ steps.implementation_result.outputs.blocked }}', '[ "$AGENT_BLOCKED" = "true" ]',
     ]) {
       const weakened = removeAll(implementWorkflow, required);
-      assert.throws(
-        () => runContractChecks({ read: readWithOverrides({ [implementPath]: weakened }) }),
-        /(implementation prompt|implementation result|implementation publish|outcome): missing required text/,
-      );
+      assert.throws(() => runContractChecks({ read: readWithOverrides({ [implementPath]: weakened }) }), /(implementation prompt|implementation result|implementation publish|outcome): missing required text/);
     }
   });
 
-  it('runs the architect only when the target step verified a PR is ready', () => {
-    const unsafe = replaceOnce(
-      implementWorkflow,
-      "if: steps.architecture_target.outputs.pr_ready == 'true'",
-      "if: steps.architecture_target.outcome == 'success'",
-    );
-    assert.throws(
-      () => runContractChecks({ read: readWithOverrides({ [implementPath]: unsafe }) }),
-      /agent-implement.yml architect: missing required text/,
-    );
-  });
-
-  it('rejects an architect stage that can be skipped while dispatching validation', () => {
-    const unsafe = replaceOnce(implementWorkflow, '[ "$ARCHITECT_OUTCOME" = "success" ] &&', '[ "$ARCHITECT_OUTCOME" != "failure" ] &&');
-    assert.throws(() => runContractChecks({ read: readWithOverrides({ [implementPath]: unsafe }) }), /agent-implement.yml outcome/);
+  it('requires the architecture workflow to start from the exact verified SHA and current agent-working issue', () => {
+    for (const required of [
+      'ref: ${{ needs.context.outputs.head_sha }}',
+      '[ "$current_sha" = "$HEAD_SHA" ] || fail "Refusing stale architecture run:',
+      'any(.labels[]?; .name == "agent-working")',
+      'git checkout -b "$BRANCH" "$HEAD_SHA"',
+    ]) {
+      const weakened = removeAll(architectureWorkflow, required);
+      assert.throws(() => runContractChecks({ read: readWithOverrides({ [architecturePath]: weakened }) }), /agent-architecture.yml/);
+    }
   });
 
   it('rejects an architect allowed to edit the PR description', () => {
-    const unsafe = replaceOnce(implementWorkflow, 'Bash(gh pr comment *)', 'Bash(gh pr comment *),Bash(gh pr edit *)');
-    assert.throws(() => runContractChecks({ read: readWithOverrides({ [implementPath]: unsafe }) }), /agent-implement.yml architect allowed tools/);
+    const unsafe = replaceOnce(architectureWorkflow, 'Bash(gh pr comment *)', 'Bash(gh pr comment *),Bash(gh pr edit *)');
+    assert.throws(() => runContractChecks({ read: readWithOverrides({ [architecturePath]: unsafe }) }), /agent-architecture.yml architect allowed tools/);
   });
 });
-
-
-
 
 describe('scoped staging cleanup permissions', () => {
   const scoped = 'Bash(git restore --staged -- backend/*),Bash(git restore --staged -- frontend/*),Bash(git restore --staged -- docs/*),Bash(git restore --staged -- scripts/*)';
@@ -642,11 +616,13 @@ describe('scoped staging cleanup permissions', () => {
 
   it('requires scoped cleanup permission in implementation and architecture agents', () => {
     assert.doesNotThrow(() => runContractChecks());
-    const altered = replaceOnce(implementWorkflow, scoped, '');
-    assert.throws(
-      () => runContractChecks({ read: readWithOverrides({ [implementPath]: altered }) }),
-      /missing required text: Bash\(git restore --staged -- backend\/\*\)/,
-    );
+    for (const [path, workflow] of [[implementPath, implementWorkflow], [architecturePath, architectureWorkflow]]) {
+      const altered = replaceOnce(workflow, scoped, '');
+      assert.throws(
+        () => runContractChecks({ read: readWithOverrides({ [path]: altered }) }),
+        /missing required text: Bash\(git restore --staged -- backend\/\*\)/,
+      );
+    }
   });
 });
 
@@ -663,7 +639,7 @@ describe('scoped tracked-file deletion permissions', () => {
   });
   it('requires the permission in implementation, architecture and repair', () => {
     assert.doesNotThrow(() => runContractChecks());
-    for (const [path, workflow] of [[implementPath, implementWorkflow], [repairPath, repairWorkflow]]) {
+    for (const [path, workflow] of [[implementPath, implementWorkflow], [architecturePath, architectureWorkflow], [repairPath, repairWorkflow]]) {
       const altered = replaceOnce(workflow, scoped, '');
       assert.throws(() => runContractChecks({ read: readWithOverrides({ [path]: altered }) }), /missing required text: Bash\(git rm -- backend\/\*\)/);
     }
@@ -682,15 +658,14 @@ describe('scoped directory creation permissions', () => {
   });
   it('requires the permission in the implementation and architecture agents', () => {
     assert.doesNotThrow(() => runContractChecks());
-    const withoutFirst = replaceOnce(implementWorkflow, scoped, '');
+    const implementationMissing = replaceOnce(implementWorkflow, scoped, '');
     assert.throws(
-      () => runContractChecks({ read: readWithOverrides({ [implementPath]: withoutFirst }) }),
+      () => runContractChecks({ read: readWithOverrides({ [implementPath]: implementationMissing }) }),
       /implementation allowed tools: missing required text: Bash\(mkdir -p backend\/\*\)/,
     );
-    const last = implementWorkflow.lastIndexOf(scoped);
-    const architectOnly = implementWorkflow.slice(0, last) + implementWorkflow.slice(last + scoped.length);
+    const architectureMissing = replaceOnce(architectureWorkflow, scoped, '');
     assert.throws(
-      () => runContractChecks({ read: readWithOverrides({ [implementPath]: architectOnly }) }),
+      () => runContractChecks({ read: readWithOverrides({ [architecturePath]: architectureMissing }) }),
       /architect allowed tools: missing required text: Bash\(mkdir -p backend\/\*\)/,
     );
   });
@@ -698,26 +673,22 @@ describe('scoped directory creation permissions', () => {
 
 
 describe('agent shell timeout covers full validation', () => {
-  it('requires a 30-minute default and maximum Bash timeout for both Claude steps', () => {
+  it('requires a 30-minute default and maximum Bash timeout for implementation and architecture Claude steps', () => {
     assert.doesNotThrow(() => runContractChecks());
-    for (const [from, to, pattern] of [
-      ['BASH_DEFAULT_TIMEOUT_MS: "1800000"', 'BASH_DEFAULT_TIMEOUT_MS: "120000"', /implementation agent: missing required text: BASH_DEFAULT_TIMEOUT_MS/],
-      ['BASH_MAX_TIMEOUT_MS: "1800000"', 'BASH_MAX_TIMEOUT_MS: "600000"', /implementation agent: missing required text: BASH_MAX_TIMEOUT_MS/],
+    for (const [path, workflow, source] of [
+      [implementPath, implementWorkflow, 'implementation agent'],
+      [architecturePath, architectureWorkflow, 'architect'],
     ]) {
-      const altered = replaceOnce(implementWorkflow, from, to);
-      assert.throws(() => runContractChecks({ read: readWithOverrides({ [implementPath]: altered }) }), pattern);
+      for (const [from, to] of [
+        ['BASH_DEFAULT_TIMEOUT_MS: "1800000"', 'BASH_DEFAULT_TIMEOUT_MS: "120000"'],
+        ['BASH_MAX_TIMEOUT_MS: "1800000"', 'BASH_MAX_TIMEOUT_MS: "600000"'],
+      ]) {
+        const altered = replaceOnce(workflow, from, to);
+        assert.throws(() => runContractChecks({ read: readWithOverrides({ [path]: altered }) }), new RegExp(`${source}: missing required text: BASH_`));
+      }
     }
-    const lastDefault = implementWorkflow.lastIndexOf('BASH_DEFAULT_TIMEOUT_MS: "1800000"');
-    const architectShort = implementWorkflow.slice(0, lastDefault)
-      + 'BASH_DEFAULT_TIMEOUT_MS: "120000"'
-      + implementWorkflow.slice(lastDefault + 'BASH_DEFAULT_TIMEOUT_MS: "1800000"'.length);
-    assert.throws(
-      () => runContractChecks({ read: readWithOverrides({ [implementPath]: architectShort }) }),
-      /architect: missing required text: BASH_DEFAULT_TIMEOUT_MS/,
-    );
   });
 });
-
 
 // ---------------------------------------------------------------------------------------
 // Review judgment, guarded publication and updated-head scheduling (issue #268). Each test
