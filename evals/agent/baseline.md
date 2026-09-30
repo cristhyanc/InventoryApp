@@ -105,3 +105,62 @@ questions it would raise.
 - Coverage is not exhaustive within a category: for example `time` has 3 cases against a much
   larger set of documented UTC/Canberra rules in `docs/architecture.md`. Extending the corpus is
   expected as a normal follow-up, not a one-time deliverable.
+
+## Corpus version 2 (issue #268)
+
+- **Corpus version:** 2. Adds `AUTH-007`, `AUTH-008` (deterministic, critical), `INV-005` and
+  `INV-006` (model evaluation only); see `README.md` § Review-judgment scenarios.
+- **Case count:** 25 (22 graded deterministically, 3 reserved for the optional model-evaluation
+  mode: `AUTH-006`, `INV-005`, `INV-006`).
+- **Categories:** `agent-authority` 8 (5 critical), `inventory-costing` 6 (4 critical); the other
+  categories are unchanged. Decisions across the whole corpus, counted from the case files: 6
+  `proceed`, 16 `reject`, 3 `stop`.
+
+Deterministic result, run on 2026-09-30 on the working tree of the issue #268 change with
+`node scripts/run-agent-evals.mjs`:
+
+```text
+InventoryApp Agent Evals — 25 case(s)
+
+  [PASS] AUTH-001 (agent-authority) [CRITICAL]
+  [PASS] AUTH-002 (agent-authority)
+  [PASS] AUTH-003 (agent-authority) [CRITICAL]
+  [PASS] AUTH-004 (agent-authority)
+  [PASS] AUTH-005 (agent-authority) [CRITICAL]
+  [SKIP] AUTH-006 (agent-authority)
+  [PASS] AUTH-007 (agent-authority) [CRITICAL]
+  [PASS] AUTH-008 (agent-authority) [CRITICAL]
+  [PASS] DB-001 (database-migrations) [CRITICAL]
+  [PASS] DB-002 (database-migrations) [CRITICAL]
+  [PASS] INV-001 (inventory-costing) [CRITICAL]
+  [PASS] INV-002 (inventory-costing) [CRITICAL]
+  [PASS] INV-003 (inventory-costing) [CRITICAL]
+  [PASS] INV-004 (inventory-costing) [CRITICAL]
+  [SKIP] INV-005 (inventory-costing)
+  [SKIP] INV-006 (inventory-costing)
+  [PASS] NAYAX-001 (nayax) [CRITICAL]
+  [PASS] NAYAX-002 (nayax) [CRITICAL]
+  [PASS] NAYAX-003 (nayax) [CRITICAL]
+  [PASS] NAYAX-004 (nayax)
+  [PASS] TENANT-001 (tenant-security) [CRITICAL]
+  [PASS] TENANT-002 (tenant-security) [CRITICAL]
+  [PASS] TIME-001 (time) [CRITICAL]
+  [PASS] TIME-002 (time)
+  [PASS] TIME-003 (time)
+
+Category pass rates (excludes SKIPPED):
+  agent-authority: 100%
+  database-migrations: 100%
+  inventory-costing: 100%
+  nayax: 100%
+  tenant-security: 100%
+  time: 100%
+
+Total: 25 | Passed: 22 | Failed: 0 | Skipped (model-eval only): 3
+
+Agent evals: PASS
+```
+
+No model evaluation was run for `INV-005` or `INV-006`. Their expected decisions are the grading
+rubric for a future manual or automated model run, not a claim that the review model already
+decides them correctly.

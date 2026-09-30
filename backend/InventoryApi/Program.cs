@@ -3,6 +3,7 @@ using Inventory.Application;
 using Inventory.Application.CatalogReconciliation;
 using Inventory.Application.Categories;
 using Inventory.Application.Expenses;
+using Inventory.Application.InventoryCounting;
 using Inventory.Application.MachineStockSync;
 using Inventory.Application.Machines;
 using Inventory.Application.NayaxFeeSettings;
@@ -237,6 +238,10 @@ builder.Services.AddScoped<IPickListStorageStockStore, EfPickListStorageStockSto
 // Temporary API-owned adapter for the coordinated latest-Nayax-sales persistence port (issue #187);
 // see EfLatestNayaxSalesStore.
 builder.Services.AddScoped<ILatestNayaxSalesStore, EfLatestNayaxSalesStore>();
+
+// Temporary API-owned adapter for the Take Inventory apply port (issue #245); see
+// EfInventoryCountAdjustmentStore.
+builder.Services.AddScoped<IInventoryCountAdjustmentStore, EfInventoryCountAdjustmentStore>();
 
 var app = builder.Build();
 

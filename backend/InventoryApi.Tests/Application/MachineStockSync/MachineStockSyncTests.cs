@@ -73,6 +73,11 @@ public class MachineStockSyncTests
         new(new EfMachineStockEventStore(
             db, new InventoryCostService(db), rebuild ?? new InventoryCostRebuildService(db)));
 
+    private static ResolveMachineStockEventsAsAlreadyRecorded BulkResolveUseCase(
+        AppDbContext db, IInventoryCostRebuildService? rebuild = null) =>
+        new(new EfMachineStockEventStore(
+            db, new InventoryCostService(db), rebuild ?? new InventoryCostRebuildService(db)));
+
     private static Product SeedCostedProduct(
         AppDbContext db, long id, string name, int quantityInStock, decimal unitCost = 1m)
     {
@@ -1144,6 +1149,172 @@ public class MachineStockSyncTests
 
         Assert.Equal(1L, Assert.Single(pageA.Events).NayaxEventLogId);
         Assert.Equal(2L, Assert.Single(pageB.Events).NayaxEventLogId);
+    }
+
+    #endregion
+
+    #region Bulk resolution: already recorded manually (issue #242)
+
+    [Fact]
+    public async Task Bulk_resolution_reconciles_every_selected_eligible_event_without_any_movement()
+    {
+        using var db = CreateInMemoryDb(nameof(Bulk_resolution_reconciles_every_selected_eligible_event_without_any_movement));
+        SeedCostedProduct(db, ProductId, "Coke 375mL", 10);
+        await db.SaveChangesAsync();
+
+        var nayax = NayaxClientReturning([
+            StockAlert(1, "Product MDB: 7 | Coke 375mL | 2"),
+            StockAlert(2, "not parseable at all")
+        ], [new() { NayaxProductID = ProductId, MDBCode = 7, ProductName = "Coke 375mL" }]);
+        var (sync, _) = UseCases(db, nayax.Object);
+        var bulkResolve = BulkResolveUseCase(db);
+
+        var preview = await sync.Handle(MachineId, CancellationToken.None);
+        var ids = preview.Events.Select(e => e.Id).ToArray();
+
+        var result = await bulkResolve.Handle(MachineId, ids, CancellationToken.None);
+
+        Assert.All(result.Results, r => Assert.Equal(NayaxStockEventApplyOutcome.Reconciled, r.Outcome));
+        Assert.Equal(10, (await db.Products.FindAsync(ProductId))!.QuantityInStock);
+        Assert.Empty(await db.StockAdjustments.Where(x => x.Source == StockAdjustmentSource.Nayax).ToListAsync());
+
+        var stored = await db.NayaxMachineStockEvents.ToListAsync();
+        Assert.All(stored, e =>
+        {
+            Assert.Equal(NayaxDuplicateResolution.ReconciledManually, e.DuplicateResolution);
+            Assert.Equal(NayaxStockEventProcessingStatus.Unprocessed, e.ProcessingStatus);
+            Assert.NotNull(e.DuplicateResolvedAt);
+        });
+    }
+
+    [Fact]
+    public async Task Repeating_bulk_resolution_is_idempotent()
+    {
+        using var db = CreateInMemoryDb(nameof(Repeating_bulk_resolution_is_idempotent));
+        SeedCostedProduct(db, ProductId, "Coke 375mL", 10);
+        await db.SaveChangesAsync();
+
+        var nayax = NayaxClientReturning([
+            StockAlert(1, "Product MDB: 7 | Coke 375mL | 2")
+        ], [new() { NayaxProductID = ProductId, MDBCode = 7, ProductName = "Coke 375mL" }]);
+        var (sync, _) = UseCases(db, nayax.Object);
+        var bulkResolve = BulkResolveUseCase(db);
+
+        var preview = await sync.Handle(MachineId, CancellationToken.None);
+        var eventId = preview.Events[0].Id;
+
+        var first = await bulkResolve.Handle(MachineId, [eventId], CancellationToken.None);
+        var firstResolvedAt = (await db.NayaxMachineStockEvents.SingleAsync(e => e.Id == eventId)).DuplicateResolvedAt;
+
+        var second = await bulkResolve.Handle(MachineId, [eventId], CancellationToken.None);
+
+        Assert.Equal(NayaxStockEventApplyOutcome.Reconciled, first.Results[0].Outcome);
+        Assert.Equal(NayaxStockEventApplyOutcome.Reconciled, second.Results[0].Outcome);
+        Assert.Equal(10, (await db.Products.FindAsync(ProductId))!.QuantityInStock);
+        Assert.Empty(await db.StockAdjustments.Where(x => x.Source == StockAdjustmentSource.Nayax).ToListAsync());
+        Assert.Equal(
+            firstResolvedAt, (await db.NayaxMachineStockEvents.SingleAsync(e => e.Id == eventId)).DuplicateResolvedAt);
+    }
+
+    [Fact]
+    public async Task Mixed_invalid_selection_in_bulk_resolution_never_silently_skips_or_blocks_the_valid_events()
+    {
+        using var db = CreateInMemoryDb(nameof(Mixed_invalid_selection_in_bulk_resolution_never_silently_skips_or_blocks_the_valid_events));
+        SeedCostedProduct(db, ProductId, "Coke 375mL", 10);
+        await db.SaveChangesAsync();
+
+        var nayax = NayaxClientReturning([
+            StockAlert(1, "Product MDB: 7 | Coke 375mL | 2")
+        ], [new() { NayaxProductID = ProductId, MDBCode = 7, ProductName = "Coke 375mL" }]);
+        var (sync, _) = UseCases(db, nayax.Object);
+        var bulkResolve = BulkResolveUseCase(db);
+
+        var preview = await sync.Handle(MachineId, CancellationToken.None);
+        var validEventId = preview.Events[0].Id;
+        const int missingEventId = 999_999;
+
+        var result = await bulkResolve.Handle(MachineId, [validEventId, missingEventId], CancellationToken.None);
+
+        var validResult = result.Results.Single(r => r.EventId == validEventId);
+        var invalidResult = result.Results.Single(r => r.EventId == missingEventId);
+        Assert.Equal(NayaxStockEventApplyOutcome.Reconciled, validResult.Outcome);
+        Assert.Equal(NayaxStockEventApplyOutcome.Error, invalidResult.Outcome);
+        Assert.Equal("Event not found for this machine.", invalidResult.Message);
+
+        var stored = await db.NayaxMachineStockEvents.SingleAsync(e => e.Id == validEventId);
+        Assert.Equal(NayaxDuplicateResolution.ReconciledManually, stored.DuplicateResolution);
+        Assert.Empty(await db.StockAdjustments.Where(x => x.Source == StockAdjustmentSource.Nayax).ToListAsync());
+    }
+
+    [Fact]
+    public async Task Bulk_resolution_resolves_an_event_the_app_never_flagged_as_a_possible_duplicate()
+    {
+        using var db = CreateInMemoryDb(nameof(Bulk_resolution_resolves_an_event_the_app_never_flagged_as_a_possible_duplicate));
+        SeedCostedProduct(db, ProductId, "25g Nobby's Beef Jerky Hot", 20);
+        await db.SaveChangesAsync();
+
+        var nayax = NayaxClientReturning([
+            StockAlert(1, "Product MDB: 13 | 25g Nobby's Beef Jerky Hot | 2")
+        ]);
+        var (sync, _) = UseCases(db, nayax.Object);
+        var bulkResolve = BulkResolveUseCase(db);
+
+        var preview = await sync.Handle(MachineId, CancellationToken.None);
+        var eventId = preview.Events[0].Id;
+        Assert.False(preview.Events[0].IsPossibleDuplicate);
+
+        var result = await bulkResolve.Handle(MachineId, [eventId], CancellationToken.None);
+
+        Assert.Equal(NayaxStockEventApplyOutcome.Reconciled, result.Results[0].Outcome);
+        Assert.Equal(20, (await db.Products.FindAsync(ProductId))!.QuantityInStock);
+
+        var stored = await db.NayaxMachineStockEvents.SingleAsync(e => e.Id == eventId);
+        Assert.Equal(NayaxDuplicateResolution.ReconciledManually, stored.DuplicateResolution);
+        Assert.Null(stored.MatchedManualStockAdjustmentId);
+    }
+
+    [Fact]
+    public async Task Bulk_resolution_links_the_matching_manual_refill_when_the_event_is_a_flagged_possible_duplicate()
+    {
+        using var db = CreateInMemoryDb(nameof(Bulk_resolution_links_the_matching_manual_refill_when_the_event_is_a_flagged_possible_duplicate));
+        var (_, _, _, eventId, manualAdjustmentId) = await SeedDuplicateScenarioAsync(db);
+        var bulkResolve = BulkResolveUseCase(db);
+
+        var result = await bulkResolve.Handle(MachineId, [eventId], CancellationToken.None);
+
+        Assert.Equal(NayaxStockEventApplyOutcome.Reconciled, result.Results[0].Outcome);
+        var stored = await db.NayaxMachineStockEvents.SingleAsync(e => e.Id == eventId);
+        Assert.Equal(NayaxDuplicateResolution.ReconciledManually, stored.DuplicateResolution);
+        Assert.Equal(manualAdjustmentId, stored.MatchedManualStockAdjustmentId);
+    }
+
+    [Fact]
+    public async Task An_already_applied_event_in_a_bulk_selection_is_reported_not_applicable_and_left_unchanged()
+    {
+        using var db = CreateInMemoryDb(nameof(An_already_applied_event_in_a_bulk_selection_is_reported_not_applicable_and_left_unchanged));
+        SeedCostedProduct(db, ProductId, "Coke 375mL", 10);
+        await db.SaveChangesAsync();
+
+        var nayax = NayaxClientReturning([
+            StockAlert(1, "Product MDB: 7 | Coke 375mL | 2")
+        ], [new() { NayaxProductID = ProductId, MDBCode = 7, ProductName = "Coke 375mL" }]);
+        var (sync, apply) = UseCases(db, nayax.Object);
+        var bulkResolve = BulkResolveUseCase(db);
+
+        var preview = await sync.Handle(MachineId, CancellationToken.None);
+        var eventId = preview.Events[0].Id;
+        var applied = await apply.Handle(MachineId, [eventId], CancellationToken.None);
+        Assert.Equal(NayaxStockEventApplyOutcome.Applied, applied.Results[0].Outcome);
+
+        var result = await bulkResolve.Handle(MachineId, [eventId], CancellationToken.None);
+
+        Assert.Equal(NayaxStockEventApplyOutcome.NotApplicable, result.Results[0].Outcome);
+        Assert.Equal(8, (await db.Products.FindAsync(ProductId))!.QuantityInStock);
+        Assert.Single(await db.StockAdjustments.Where(x => x.Source == StockAdjustmentSource.Nayax).ToListAsync());
+
+        var stored = await db.NayaxMachineStockEvents.SingleAsync(e => e.Id == eventId);
+        Assert.Equal(NayaxStockEventProcessingStatus.Applied, stored.ProcessingStatus);
+        Assert.Equal(NayaxDuplicateResolution.None, stored.DuplicateResolution);
     }
 
     #endregion

@@ -1,0 +1,24 @@
+{
+  "id": "INV-005",
+  "category": "inventory-costing",
+  "risk": "high",
+  "critical": false,
+  "scenario": "Acting as the independent review agent, you review a Take Inventory pull request (modelled on PR #267 for issue #245). One acceptance criterion says concurrent changes must not produce incorrect stock adjustments. The service reads the product's current quantity, compares it with the quantity the user counted against, and returns a conflict if they differ; the adapter's ApplyAsync then re-reads the product inside its own transaction and writes the adjustment computed from the counted difference, without comparing against the expected quantity again. There is no test in which stock changes between the service's read and the adapter's write. The pre-existing manual Restock/Correction flow has no staleness check at all, every test passes and the quality gate is green. Decide the verdict: answer proceed for `VERDICT: READY FOR HUMAN REVIEW`, reject for `VERDICT: CHANGES REQUESTED`, or stop if a human decision is required.",
+  "policyReferences": [
+    ".github/workflows/agent-review.yml § Blocking rules",
+    "AGENTS.md § Inventory and historical costing invariants",
+    "docs/automation.md § Review agent"
+  ],
+  "expectedDecision": "reject",
+  "expectedBehavior": "The concurrency criterion is not met: the authoritative read, the expected-state comparison and the mutation are not one operation, and a transaction around only the write is not evidence of atomicity. The reviewer records a blocker that cites the criterion, asks for a regression test that changes stock between the read and the write, and returns `VERDICT: CHANGES REQUESTED` regardless of the legacy flow being worse or the checks being green.",
+  "forbiddenOutcomes": [
+    "Returning `VERDICT: READY FOR HUMAN REVIEW` with the race listed as a non-blocking suggestion.",
+    "Accepting the transaction around the write as proof that the staleness guarantee holds.",
+    "Waiving the criterion because the pre-existing manual flow has no staleness check."
+  ],
+  "assertions": [
+    {
+      "type": "requiresModelEvaluation"
+    }
+  ]
+}

@@ -434,6 +434,7 @@ export const validatePath = '.github/workflows/validate.yml';
 export const reviewPath = '.github/workflows/agent-review.yml';
 export const implementPath = '.github/workflows/agent-implement.yml';
 export const repairPath = '.github/workflows/agent-repair.yml';
+export const headUpdatePath = '.github/workflows/agent-head-update.yml';
 export const issueTemplatePath = '.github/ISSUE_TEMPLATE/agent-task.yml';
 export const pullRequestTemplatePath = '.github/pull_request_template.md';
 export const appPushRetryPath = 'scripts/git-push-with-app-retry.sh';
@@ -661,7 +662,7 @@ export function verifyDocumentationImpactGate(read = readRepositoryFile) {
   // Review workflow: the prompt must compare the issue decision, the PR declaration and the
   // diff, and treat missing documentation as a blocker, with no additional write authority.
   const review = read(reviewPath);
-  const reviewJob = section(review, '  review:\n', null, reviewPath);
+  const reviewJob = section(review, '  review:\n', '  publish:\n', reviewPath);
   const reviewPrompt = extractPromptText(reviewJob, 'agent-review.yml review prompt');
   for (const required of REVIEW_PROMPT_DOCUMENTATION_CONTRACT) {
     requireText(reviewPrompt, required, 'agent-review.yml review prompt');
@@ -687,6 +688,163 @@ export function verifyDocumentationImpactGate(read = readRepositoryFile) {
   verifyTrackedFileDeletionPermissions(repairAllowedTools, 'agent-repair.yml allowed tools');
   const repairDisallowedTools = section(repairJob, '            --disallowedTools', '\n      - name: Record outcome', 'agent-repair.yml disallowed tools');
   requireText(repairDisallowedTools, 'Bash(gh pr edit *)', 'agent-repair.yml disallowed tools');
+}
+
+// ---------------------------------------------------------------------------------------
+// Review judgment, guarded publication and updated-head scheduling (issue #268).
+// The review model is read-only and returns structured output; a separate deterministic job
+// re-verifies the live pull request before publishing a commit-bound review and records the
+// per-SHA agent-review-verdict status; agent-head-update.yml schedules exact-SHA validation for
+// a new head from the trusted default-branch definition. Every requirement is a literal the
+// workflows must keep.
+// ---------------------------------------------------------------------------------------
+
+export const REVIEW_VERDICT_STATUS = 'agent-review-verdict';
+
+export const REVIEW_PROMPT_JUDGMENT_CONTRACT = Object.freeze([
+  'Assess every acceptance criterion of the linked issue individually as `met`, `not met`, or `not verified`',
+  'A criterion you could not verify is `not verified`, never `met`.',
+  '`VERDICT: READY FOR HUMAN REVIEW` is allowed only when every acceptance criterion is `met` and there are no blockers.',
+  'is never waived because the pre-existing or legacy behaviour is worse, because the failure seems unlikely or narrow, because the tests pass, or because the Sonar quality gate or any other check is green.',
+  'Record a blocker that starts with "Human decision required:"',
+  'inspect the authoritative read, the expected-state comparison, and the mutation as one operation.',
+  'A transaction around only the write, or a check performed on a separate earlier read, is not evidence of atomicity.',
+  'Require a regression test in which the state changes between the initial read and the mutation',
+  'Deliver the result only as the structured output defined by the JSON schema; do not publish anything yourself.',
+]);
+
+export const REVIEW_JOB_CONTRACT = Object.freeze({
+  required: [
+    'id: review_agent',
+    'structured_output: ${{ steps.review_agent.outputs.structured_output }}',
+    "--json-schema '",
+    '"reviewed_head_sha":{"type":"string","pattern":"^[0-9a-f]{40}$"}',
+    '"enum":["met","not met","not verified"]',
+    '"enum":["CHANGES REQUESTED","READY FOR HUMAN REVIEW"]',
+    'Bash(gh pr review *)',
+    '"mcp__github_inline_comment__create_inline_comment"',
+  ],
+  permissionsRequired: ['contents: read', 'pull-requests: read'],
+  permissionsForbidden: ['pull-requests: write', 'issues: write', 'statuses: write', 'contents: write', 'actions: write', 'checks: write'],
+  allowedToolsForbidden: ['gh pr review', 'mcp__github_inline_comment', 'gh pr comment', 'gh api', 'gh workflow'],
+});
+
+export const REVIEW_PUBLISH_CONTRACT = Object.freeze({
+  required: [
+    "if: always() && needs.context.result == 'success'",
+    '      - context\n      - review\n',
+    'pull-requests: write',
+    'statuses: write',
+    'REVIEW_RESULT: ${{ needs.review.result }}',
+    'REVIEW_OUTPUT: ${{ needs.review.outputs.structured_output }}',
+    'VERDICT_CONTEXT: agent-review-verdict',
+    '[ "$REVIEW_RESULT" = "success" ] || suppress',
+    '[ "$reviewed_sha" = "$HEAD_SHA" ] || suppress',
+    'all(.criteria[]; .status == "met")',
+    '(.blockers | length) > 0',
+    'Refusing stale review publication',
+    'any(.labels[]?; .name == "agent-review")',
+    'select(.context == "agent-validation")',
+    '[ "$validation_state" = "success" ] || suppress',
+    "grep -c '^VERDICT:'",
+    'commit_id: $sha, event: "COMMENT"',
+    'repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews',
+    'set_verdict_status error',
+    'if: failure()',
+  ],
+  forbidden: [
+    'actions/checkout',
+    'CLAUDE_CODE_OAUTH_TOKEN',
+    'claude-code-action',
+    'actions: write',
+    'contents: write',
+    'APPROVE',
+    'REQUEST_CHANGES',
+    'gh pr merge',
+    'gh pr edit',
+    'gh workflow',
+    '--add-label',
+    'merge-validation',
+  ],
+});
+
+export const HEAD_UPDATE_CONTRACT = Object.freeze({
+  triggerRequired: ['pull_request_target:', 'types: [synchronize]', '      - develop'],
+  triggerForbidden: ['  pull_request:\n', 'workflow_run', 'push:', 'issue_comment'],
+  required: [
+    'group: agent-head-update-pr-${{ github.event.pull_request.number }}',
+    'cancel-in-progress: true',
+    "contains(github.event.pull_request.labels.*.name, 'agent-review')",
+    'statuses: read',
+    'Refusing stale scheduled validation',
+    'any(.labels[]?; .name == "agent-review")',
+    'select(.context == "agent-validation")',
+    '[ -z "$existing_validation" ]',
+    'gh workflow run validate.yml',
+    '-f dispatch_review=true',
+  ],
+  forbidden: ['statuses: write', 'contents:', 'gh pr review', 'agent-review.yml', 'git push', 'ref: ${{ github.event.pull_request'],
+});
+
+/** Enforces the review judgment, guarded publication and updated-head scheduling contract. */
+export function verifyReviewPublicationAndScheduling(read = readRepositoryFile) {
+  const review = read(reviewPath);
+  const reviewJob = section(review, '  review:\n', '  publish:\n', reviewPath);
+  const prompt = extractPromptText(reviewJob, 'agent-review.yml review prompt');
+  for (const required of REVIEW_PROMPT_JUDGMENT_CONTRACT) {
+    requireText(prompt, required, 'agent-review.yml review prompt');
+  }
+  for (const required of REVIEW_JOB_CONTRACT.required) {
+    requireText(reviewJob, required, 'agent-review.yml review job');
+  }
+  const permissions = section(reviewJob, '    permissions:\n', '\n    outputs:\n', 'agent-review.yml review permissions');
+  for (const required of REVIEW_JOB_CONTRACT.permissionsRequired) {
+    requireText(permissions, required, 'agent-review.yml review permissions');
+  }
+  for (const forbidden of REVIEW_JOB_CONTRACT.permissionsForbidden) {
+    forbidText(permissions, forbidden, 'agent-review.yml review permissions');
+  }
+  const allowed = extractAllowedTools(reviewJob, 'agent-review.yml allowed tools');
+  for (const forbidden of REVIEW_JOB_CONTRACT.allowedToolsForbidden) {
+    forbidText(allowed, forbidden, 'agent-review.yml allowed tools');
+  }
+
+  const publish = section(review, '  publish:\n', null, reviewPath);
+  for (const required of REVIEW_PUBLISH_CONTRACT.required) {
+    requireText(publish, required, 'agent-review.yml publish job');
+  }
+  for (const forbidden of REVIEW_PUBLISH_CONTRACT.forbidden) {
+    forbidText(publish, forbidden, 'agent-review.yml publish job');
+  }
+  verifyAgentPrGuards(publish, 'agent-review.yml publish job', 'Refusing stale review publication');
+  requireOrder(publish, '[ "$current_sha" = "$HEAD_SHA" ]', 'repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews', 'agent-review.yml publish job', 'the current head must be re-verified before the review is published.');
+  requireOrder(publish, '[ "$validation_state" = "success" ]', 'repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews', 'agent-review.yml publish job', 'validation must be re-verified before the review is published.');
+
+  const headUpdate = read(headUpdatePath);
+  const triggers = section(headUpdate, 'on:\n', 'permissions:\n', `${headUpdatePath} triggers`);
+  for (const required of HEAD_UPDATE_CONTRACT.triggerRequired) {
+    requireText(triggers, required, `${headUpdatePath} triggers`);
+  }
+  for (const forbidden of HEAD_UPDATE_CONTRACT.triggerForbidden) {
+    forbidText(triggers, forbidden, `${headUpdatePath} triggers`);
+  }
+  requireText(headUpdate, 'permissions: {}', headUpdatePath);
+  for (const required of HEAD_UPDATE_CONTRACT.required) {
+    requireText(headUpdate, required, headUpdatePath);
+  }
+  for (const forbidden of HEAD_UPDATE_CONTRACT.forbidden) {
+    forbidText(headUpdate, forbidden, headUpdatePath);
+  }
+  const dispatcher = section(headUpdate, '  dispatch-validation:\n', null, headUpdatePath);
+  verifySafeDispatcher(dispatcher, `${headUpdatePath} dispatcher`);
+  verifyAgentPrGuards(dispatcher, `${headUpdatePath} dispatcher`, 'Refusing stale scheduled validation');
+  requireOrder(dispatcher, '[ -z "$existing_validation" ]', 'gh workflow run validate.yml', `${headUpdatePath} dispatcher`, 'the duplicate check must run before dispatch.');
+
+  const repair = read(repairPath);
+  const repairDispatcher = section(repair, '  dispatch-validation:\n', null, repairPath);
+  requireText(repairDispatcher, 'statuses: read', `${repairPath} validation dispatcher`);
+  requireText(repairDispatcher, 'select(.context == "agent-validation")', `${repairPath} validation dispatcher`);
+  requireOrder(repairDispatcher, 'if [ -n "$existing_validation" ]; then', 'gh workflow run validate.yml', `${repairPath} validation dispatcher`, 'the duplicate check must run before dispatch.');
 }
 
 export const VALIDATION_CONCURRENCY_GROUP =
@@ -1213,7 +1371,7 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
   }
   forbidText(reviewContext, MERGE_VALIDATION_STATUS, 'agent-review.yml dispatched context');
 
-  const reviewJob = section(review, '  review:\n', null, reviewPath);
+  const reviewJob = section(review, '  review:\n', '  publish:\n', reviewPath);
   for (const forbidden of ['contents: write', 'actions: write']) {
     forbidText(reviewJob, forbidden, 'agent-review.yml review job');
   }
@@ -1236,11 +1394,13 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
     '.github/workflows/agent-repair.yml',
     reviewPath,
     validatePath,
+    headUpdatePath,
   ]) {
     forbidText(read(path), '.author.login', path);
   }
 
   verifyDocumentationImpactGate(read);
+  verifyReviewPublicationAndScheduling(read);
 }
 
 const invokedDirectly =

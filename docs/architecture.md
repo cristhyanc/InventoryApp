@@ -332,6 +332,28 @@ temporary exceptions to "controllers are thin and InventoryApi holds no use-case
 places for new business logic to land. Removing them entirely is tracked by issues #153/#154, after
 the feature-by-feature migrations in #146-#151; this issue does not migrate any of them.
 
+**Financial and classification ownership (issues #150/#153/#154).**
+`EffectiveFinancialConfiguration`, `SiteCommissionCalculator`, `PaymentMethodClassifier`, and
+`NayaxTransactionStatusClassifier` are temporary `InventoryApi.Services` residents, not permanent
+exceptions to the target architecture. Issue #241 left them in place to keep the Sites/Machines
+slice bounded; issue #150 owns migrating their deterministic effective-date, commission,
+payment-method, and transaction-status rules into `Inventory.Domain`, using Domain-owned inputs
+and types rather than `InventoryApi.Models` entities. It also owns the remaining commission/fee
+orchestration in `Inventory.Application`, reusing the existing NayaxFeeSettings slice.
+
+Entity-specific queries such as `CompletedSalePredicate` over the persistence `NayaxSales` model
+belong in persistence adapters, not Domain. They may stay in documented temporary API-owned
+adapters until #153 moves persistence to `Inventory.Infrastructure`. Issue #150 must update all
+shared consumers (including reporting, Sites/Machines, import and costing) to use the same
+migrated rules, preserve their existing financial and classification semantics, and remove the
+obsolete helpers/services and their allow-list entries once their callers have migrated. It must
+not duplicate formulas or merge distinct row-level and aggregate-report coverage policies.
+
+Issue #154 runs after these migrations and #153, removes the temporary exceptions, and proves
+that no financial/classification business logic remains in the API. The API retains the HTTP
+boundary responsibilities listed above (including authentication, middleware, error mapping and
+startup/composition); these do not permit legacy business services to remain indefinitely.
+
 What issue #145 adds is enforcement that the `InventoryApi/Services` side of the exception stops
 growing silently. `ProjectDependencyDirectionTests.Only_the_documented_legacy_services_remain_in_InventoryApi_Services`
 (`backend/InventoryApi.Tests/Architecture/`) freezes the exact, named set of git-tracked files this
@@ -1178,6 +1200,49 @@ change needing its own issue, ideally combined with the rest of the Purchasing a
    fallback for when Nayax is unavailable or a machine/MDB is not yet mapped; Sync Restock is the
    preferred path when a Nayax stock-adjustment alert already reports the physical event.
 
+### Take Inventory (issue #245)
+
+Take Inventory (`/take-inventory`, `TakeInventoryComponent`) is a compact per-product table for
+counting physical storage stock (`QuantityInStock`) across the whole catalogue, distinct from a
+machine refill: a refill is an internal transfer *out of* storage to a vending machine, while a
+count difference here is a correction *to* storage itself, so it must never use
+`StockAdjustmentReason.MachineRefill`. `Adjustment = CountedStock - CurrentStock`, resolved by the
+deterministic `Inventory.Domain.InventoryCounting.InventoryCountAdjustmentPolicy`:
+
+1. **Counted = Current.** No stock movement. This is the same outcome whether the operator clicks
+   the clickable Current Stock value to confirm an unchanged count (a pure frontend/session
+   interaction - it never calls the backend) or types the same value into Counted Stock and clicks
+   Apply (which does call the backend and returns a `Confirmed` outcome with no persisted
+   `StockAdjustment`). Either way the green/confirmed row state is frontend/session state only: it
+   is not written to any backend session/history model, and this repository deliberately has none
+   for inventory counting - a durable count-session record would be its own schema change and issue.
+2. **Counted > Current.** The positive difference reuses the existing positive physical-stock
+   Restock movement (`StockAdjustmentReason.Restock`, the same operation `StockController`'s manual
+   Restock action already applies), at the same restock-cost suggestion that action already offers
+   (last purchase cost, else average unit cost). When neither is available, Apply is refused with a
+   validation error rather than assuming a zero or fabricated cost.
+3. **Counted < Current.** The negative difference reuses the existing Correction movement
+   (`StockAdjustmentReason.Correction`).
+
+Both non-zero cases persist an ordinary `StockAdjustment` through the same
+`IInventoryCostService.ApplyMovement`/`IInventoryCostRebuildService.RebuildAsync` transaction every
+other stock movement in this document uses, so a successful count difference is auditable in the
+existing Stock History view exactly like a manual Restock or Correction - there is no separate
+audit trail for Take Inventory.
+
+`InventoryCountController`'s `POST /api/products/{id}/inventory-count/apply` is thin;
+`Inventory.Application.InventoryCounting.ApplyInventoryCount` is the use case, reading and applying
+through the narrow `IInventoryCountAdjustmentStore` port (implemented by the temporary API-owned
+`InventoryApi.Adapters.Persistence.EfInventoryCountAdjustmentStore`, the same pattern as
+`EfMachineStockEventStore`). The request carries both the counted quantity and the current quantity
+the operator counted against (`ExpectedCurrentStock`); the use case re-reads the authoritative
+current quantity at the mutation boundary and throws `DomainConflictException` (409) when it no
+longer matches, instead of silently applying a delta against a quantity that has since changed
+underneath a stale UI row. An invalid count or a missing restock-cost suggestion throws
+`DomainValidationException` (400). Both map to a `ProblemDetails` response through the existing
+central `DomainExceptionHandler`, described under [Domain and application error
+mapping](#domain-and-application-error-mapping).
+
 ### Sale import and costing
 
 1. Imported transaction facts are persisted using the Nayax transaction identity.
@@ -1320,9 +1385,10 @@ projection, and this feature does not change that meaning.
    persisted, auditable outcome of that choice, distinct from `ProcessingStatus` (which only
    tracks whether a storage movement was created). While unresolved, the dialog shows the event
    visually distinct (its possible-duplicate badge and comparison context, including the matching
-   manual refill) with two explicit actions instead of an ordinary selectable checkbox - the
-   checkbox stays disabled and the event is never presented as an ordinary Apply item until it is
-   resolved:
+   manual refill) with two explicit per-row actions, alongside the ordinary selectable checkbox -
+   the possible-duplicate flag is a suggestion for human resolution, not a precondition (issue
+   #242, next step), so the checkbox stays enabled even while unresolved, but the event is never
+   pre-selected or presented as an ordinary Apply item until it is resolved:
    - **Already recorded manually** calls `POST /api/machines/{id}/sync-restock/resolve-duplicate`
      with `AlreadyRecordedManually`. `Inventory.Application.MachineStockSync.
      ResolveMachineStockDuplicate` reconciles the event (`DuplicateResolution =
@@ -1339,7 +1405,7 @@ projection, and this feature does not change that meaning.
      same transaction, so the override itself remains auditable alongside the movement it created.
 
    The safety rule is enforced in `Inventory.Domain.Nayax.NayaxMachineStockApplyPolicy.Decide`,
-   not only by the disabled checkbox: an unresolved flagged duplicate now decides
+   not only by the checkbox eligibility: an unresolved flagged duplicate now decides
    `DuplicateRequiresResolution` and a reconciled one decides `ReconciledDuplicate`, so a direct
    `POST /api/machines/{id}/sync-restock/apply` call gets the same protection as the UI. Both
    resolution actions are idempotent - repeating either request re-reads the already-settled state
@@ -1347,6 +1413,28 @@ projection, and this feature does not change that meaning.
    original imported Nayax event row is never deleted or rewritten by either resolution; only the
    duplicate-resolution columns and, for an override, the ordinary `Applied` columns are added to
    it.
+6a. **Bulk "Already recorded manually" for any eligible unresolved event, suggested or not (issue
+    #242).** The possible-duplicate flag above is only a suggestion for human resolution; it is
+    never a precondition for this resolution. The operator may explicitly check any unresolved,
+    not-yet-reconciled event's checkbox - ready to apply, Needs Review, a negative discrepancy, an
+    insufficient-storage event, or a flagged-but-unresolved possible duplicate - and resolve every
+    selected one in a single **Already recorded manually (N)** action distinct from **Apply
+    selected**; an already-reconciled event (shown only when Show reconciled is on) stays
+    checkbox-ineligible. The dialog calls `POST /api/machines/{id}/sync-restock/resolve-manual`
+    with the selected event ids; `Inventory.Application.MachineStockSync.
+    ResolveMachineStockEventsAsAlreadyRecorded` resolves each id independently through the same
+    idempotent `IMachineStockEventStore.ReconcileAsManualDuplicateAsync` primitive
+    `ResolveMachineStockDuplicate` uses for one flagged duplicate - linking the matching manual
+    `StockAdjustment.Id` when `NayaxMachineStockDuplicatePolicy.FindPossibleDuplicate` finds one,
+    or leaving it `null` when the operator is resolving an event the app never flagged - and
+    returns every id's own outcome in a `NayaxMachineStockApplyResponseDto`, the same batch
+    response shape `ApplyMachineStockSync` already returns. An event that already has an applied
+    Nayax movement is reported `NotApplicable`, never silently reconciled or skipped; one invalid
+    or already-settled id in the same request never blocks or changes the outcome of the others,
+    following the same per-event batch shape `ApplyMachineStockSync` established (step 7, below).
+    Checking a box never itself reconciles anything - only this explicit action does - and
+    **Select all applicable** is unrelated: it still selects only the checkbox-eligible ids
+    `isReadyToApply` computes, for **Apply selected**.
 7. **Apply only what is accepted.** `POST /api/machines/{id}/sync-restock/apply` runs
    `Inventory.Application.MachineStockSync.ApplyMachineStockSync` over exactly the event ids the
    operator selects, one at a time, each in its own transaction. `NayaxMachineStockApplyPolicy` is
@@ -1382,9 +1470,10 @@ projection, and this feature does not change that meaning.
    pairing the filtered events with `HiddenReconciledCount` - reconciled events in the date window
    Show reconciled is currently hiding - which the preview exposes as
    `NayaxMachineStockSyncPreviewDto.HiddenReconciledCount` for the dialog's compact visible/hidden
-   status line. From date defaults, in the browser only, to seven calendar days before the
+   status line. From date defaults, in the browser only, to three calendar days before the
    operator's current Australia/Canberra business date (issue #218; before that fix it used the
-   browser's own local date, which is not necessarily the same calendar day); a caller that omits
+   browser's own local date, which is not necessarily the same calendar day; shortened from seven
+   days to three by issue #242); a caller that omits
    it (a direct API call, or every test in `MachineStockSyncTests` written before this issue) gets
    the original unfiltered behaviour, since `null` means "no lower bound" rather than any
    server-side default. Neither filter deletes, rewrites, or reclassifies any imported event or
@@ -1438,13 +1527,16 @@ this feature is added to the legacy `InventoryApi/Services` layer:
   `NayaxStockEventProcessingStatus`/`NayaxDuplicateResolution`/`NayaxDuplicateResolutionChoice`
   states, are deterministic `Inventory.Domain.Nayax` types with no Nayax, HTTP, or EF Core
   dependency.
-- **Application.** `Inventory.Application.MachineStockSync` owns the three use cases
+- **Application.** `Inventory.Application.MachineStockSync` owns the use cases
   (`SyncMachineStockFromNayax`, `ApplyMachineStockSync`, `ResolveMachineStockDuplicate` -
-  issue #196), their request/response DTOs, and the narrow `IMachineStockEventStore` persistence
-  port (extended with `ReconcileAsManualDuplicateAsync` and an `ApplyRefillAsync` that also
-  persists the duplicate-resolution columns, and with `GetUnprocessedEventsAsync`'s
-  `fromDateGmt`/`includeReconciled` filters and `MachineStockEventsPage` result - issue #206). The
-  Nayax read stays on the existing `Inventory.Application.Nayax.INayaxLynxClient` port.
+  issue #196 - and `ResolveMachineStockEventsAsAlreadyRecorded` - the bulk equivalent, issue
+  #242), their request/response DTOs, and the narrow `IMachineStockEventStore` persistence
+  port (extended with `ReconcileAsManualDuplicateAsync` - whose matched-manual-adjustment
+  parameter became nullable under issue #242, for a bulk-resolved event the app never flagged -
+  and an `ApplyRefillAsync` that also persists the duplicate-resolution columns, and with
+  `GetUnprocessedEventsAsync`'s `fromDateGmt`/`includeReconciled` filters and
+  `MachineStockEventsPage` result - issue #206). The Nayax read stays on the existing
+  `Inventory.Application.Nayax.INayaxLynxClient` port.
 - **Infrastructure/adapters.** `Inventory.Infrastructure.Nayax.NayaxLynxClient` remains the Nayax
   HTTP adapter. `InventoryApi.Adapters.Persistence.EfMachineStockEventStore` implements the
   persistence port over `AppDbContext`, owns the per-event transaction, and reuses
@@ -1454,7 +1546,9 @@ this feature is added to the legacy `InventoryApi/Services` layer:
   `AppDbContext`, the persistence models, and the costing services still live in `InventoryApi`.
 - **API.** `MachinesController` binds the request, invokes the use case, and returns its result;
   `POST /api/machines/{id}/sync-restock/resolve-duplicate` (issue #196) is the third, equally thin
-  binding for `ResolveMachineStockDuplicate`. `POST /api/machines/{id}/sync-restock` additionally
+  binding for `ResolveMachineStockDuplicate`, and `POST /api/machines/{id}/sync-restock/resolve-manual`
+  (issue #242) is the fourth, for the bulk `ResolveMachineStockEventsAsAlreadyRecorded`.
+  `POST /api/machines/{id}/sync-restock` additionally
   binds the optional `fromDate`/`includeReconciled` query parameters (issue #206) and passes
   `fromDate?.UtcDateTime` straight through to the use case; the controller does no filtering itself.
   `fromDate` is declared `DateTimeOffset?`, not `DateTime?` (issue #218), so the UTC instant the
@@ -1463,23 +1557,30 @@ this feature is added to the legacy `InventoryApi/Services` layer:
 - **Frontend.** The Sync Restock workflow is its own standalone component,
   `components/machines/machine-restock-sync/MachineRestockSyncComponent`, following the [large page
   decomposition](#frontend-migration-track) step: it owns the reconciliation dialog's open state,
-  the preview state, the syncing/applying/resolving state, the selected event ids, the From
-  date/Show reconciled filter state (issue #206), the apply-eligibility check (which now also
-  excludes an unresolved *or already-reconciled* duplicate), the three API calls, and its own
-  notifications. The dialog follows the existing `ConfirmationDialogComponent` pattern (an `*ngIf`
-  backdrop with `role="dialog"`/`aria-modal`, closed by its Close controls, Escape, or an outside
-  click, but not while an apply is in flight); its body scrolls so a long event list never pushes
-  the Close/Apply actions off screen. Opening the dialog resets From date to seven calendar days
-  before the operator's current Australia/Canberra business date (issue #218) and Show reconciled to
+  the preview state, the syncing/applying/resolving/bulk-resolving state, the selected event ids,
+  the From date/Show reconciled filter state (issue #206), the apply-eligibility check (which now
+  also excludes an unresolved *or already-reconciled* duplicate), the separate bulk
+  manual-resolution eligibility check `isEligibleForManualResolution` (issue #242 - any event with
+  `DuplicateResolution.None`, a materially wider set than `isReadyToApply`), its API calls, and its
+  own notifications. The dialog follows the existing `ConfirmationDialogComponent` pattern (an
+  `*ngIf` backdrop with `role="dialog"`/`aria-modal`, closed by its Close controls, Escape, or an
+  outside click, but not while an apply or a bulk resolve is in flight); its body scrolls so a long
+  event list never pushes the Close/Apply/Already-recorded-manually actions off screen. Opening the
+  dialog resets From date to three calendar days before the operator's current Australia/Canberra
+  business date (issue #218; shortened from seven days by issue #242) and Show reconciled to
   off; changing either filter, and the
   post-apply/post-resolve refresh, all fetch through the same `refreshPreview`, so the selection is
-  always recomputed from the events the current filters actually return.
+  always recomputed from the events the current filters actually return - `isReadyToApply` alone,
+  never the wider bulk-resolution eligibility, so a Needs Review or flagged-duplicate event is
+  never left silently pre-selected for either action.
   `MachineDetailComponent` composes it as
   `<app-machine-restock-sync [machineId]="machine?.machineID" (restockApplied)="refreshProducts()">`
   and stays responsible only for the machine-details page, reloading its product table when the
   component reports that at least one event was actually applied. The child's `isReadyToApply` only
-  decides which checkboxes an operator may tick, including through **Select all applicable**; the
-  backend apply use case remains the sole authority over whether an event moves storage inventory.
+  decides which checkboxes are pre-selected and count towards **Select all applicable**/**Apply
+  selected**; `isEligibleForManualResolution` alone decides which checkboxes an operator may tick
+  for **Already recorded manually**. Either way, the backend use case remains the sole authority
+  over whether an event moves storage inventory or is reconciled.
 
 Migrating the rest of `InventoryApi/Services` remains unrelated, larger, out-of-scope work tracked
 by the incremental migration plan below.
@@ -1609,7 +1710,7 @@ Backend and frontend tracks can progress independently when their contracts do n
 
 9. **Sites and Machines dashboard slice done** (issue #241, a child of the #147 umbrella; #240 migrates Products separately). `SiteService.GetAll`/`GetProducts` and `MachineService.GetById`/`GetAll` are the migrated endpoints; `MachineService.GetMachineProducts` stays as-is because it clones and returns the EF `Product` entity directly, which belongs to the sibling Products migration (issue #240), not this slice.
    - `Inventory.Domain.Sites.SiteStockPolicy` computes a site's overall stock percentage and its low/empty product alert counts from already-fetched machine-product facts; `Inventory.Domain.Sites.SiteProductPricingPolicy` computes the site product preview's average retail price and estimated card-sale profit, given an already-resolved per-item commission amount and fee rate. `Inventory.Domain.Machines.MachineDashboardPeriods` is the pure today/week-to-date/previous-comparable-week/last-week/month-to-date/two-weeks-ago range arithmetic, moved out of the former `MachineService` statics unchanged; `Inventory.Domain.Machines.MachineDashboardDirectProfitPolicy` and `MachineProfitabilityStatusPolicy` are the machine dashboard's period direct-profit and status-message rules, given already-resolved facts. Both direct-profit policies are deliberately kept separate from `Inventory.Domain.Reporting.Profitability.MachineDirectProfitPolicy`, which answers the same question at report-row (aggregate period) granularity rather than the dashboard's fixed rolling periods, matching the precedent the reporting slice already documented for row-level versus aggregate rules.
-   - `Inventory.Application.Sites.GetSiteSummaries`/`GetSiteProducts` and `Inventory.Application.Machines.ListMachineDashboard`/`GetMachineDashboard` are the use cases, calling `INayaxLynxClient` with the same bounded per-site/per-machine fan-out (`Task.WhenAll` over each site's/machine's `GetMachineProductsAsync` calls) the former services used. `Inventory.Application.Sites.ISiteFactsStore`/`ISiteNameResolver` and `Inventory.Application.Machines.IMachineDashboardFactsStore` are their narrow ports. Commission/fee resolution and payment/status classification still depend on the still-legacy `EffectiveFinancialConfiguration`/`SiteCommissionCalculator`/`PaymentMethodClassifier`/`NayaxTransactionStatusClassifier` (documented as permanent `InventoryApi.Services` residents, shared by `SiteCommissionService` and the reporting adapters — see the [temporary API-owned exception](#temporary-api-owned-exception-and-its-enforcement-issue-145) above), so the ports return already-resolved decimal/boolean facts rather than raw agreements: `ISiteFactsStore.ResolveCardCommissionAsync` takes the distinct candidate retail prices appearing in a site's machine products and returns the commission amount already resolved for each (site commission is linear in price for a fixed payment type, but the exact per-price legacy call is still what computes each entry, not a re-derived multiplier, so no formula is duplicated), and `IMachineDashboardFactsStore.GetFactsAsync` returns each rolling period's already-resolved gross revenue and direct-profit inputs plus the profitability-status inputs, mirroring the former per-sale commission-resolution loop and its exact short-circuiting (an ambiguous or gap-covered agreement, or a missing site mapping with sales present, skips the Nayax fee lookup entirely, exactly as before) fact for fact.
+   - `Inventory.Application.Sites.GetSiteSummaries`/`GetSiteProducts` and `Inventory.Application.Machines.ListMachineDashboard`/`GetMachineDashboard` are the use cases, calling `INayaxLynxClient` with the same bounded per-site/per-machine fan-out (`Task.WhenAll` over each site's/machine's `GetMachineProductsAsync` calls) the former services used. `Inventory.Application.Sites.ISiteFactsStore`/`ISiteNameResolver` and `Inventory.Application.Machines.IMachineDashboardFactsStore` are their narrow ports. Commission/fee resolution and payment/status classification still depend on the still-legacy `EffectiveFinancialConfiguration`/`SiteCommissionCalculator`/`PaymentMethodClassifier`/`NayaxTransactionStatusClassifier` (temporary `InventoryApi.Services` residents shared by `SiteCommissionService` and the reporting adapters; their rule migration is owned by #150, persistence relocation by #153, and final enforcement by #154 — see the [temporary API-owned exception](#temporary-api-owned-exception-and-its-enforcement-issue-145) above), so the ports return already-resolved decimal/boolean facts rather than raw agreements: `ISiteFactsStore.ResolveCardCommissionAsync` takes the distinct candidate retail prices appearing in a site's machine products and returns the commission amount already resolved for each (site commission is linear in price for a fixed payment type, but the exact per-price legacy call is still what computes each entry, not a re-derived multiplier, so no formula is duplicated), and `IMachineDashboardFactsStore.GetFactsAsync` returns each rolling period's already-resolved gross revenue and direct-profit inputs plus the profitability-status inputs, mirroring the former per-sale commission-resolution loop and its exact short-circuiting (an ambiguous or gap-covered agreement, or a missing site mapping with sales present, skips the Nayax fee lookup entirely, exactly as before) fact for fact.
    - `InventoryApi.Adapters.Persistence.EfSiteFactsStore`/`SiteNameResolverAdapter`/`EfMachineDashboardFactsStore` are the temporary API-owned adapters, following the same precedent as `EfBookkeepingReportFactsProvider`/`EfMachineProfitabilityReportFactsProvider` composing still-legacy business services. They must move into `Inventory.Infrastructure` once `AppDbContext` and the shared persistence models relocate there.
    - `InventoryApi.Services.SiteService`/`MachineService` were not deleted: `SitesController`/`MachinesController`, `ISiteService`/`IMachineService`, and their DI registrations are unchanged, and the two classes now only map the migrated use cases' results to the unchanged `SiteSummaryDto`/`SiteProductDto`/`Machine` API contracts — the same transitional "legacy service delegates to the new use case" shape the reporting slices used before issue #92's final removal. Physically deleting these two now-thin delegator classes (and `MachineService`'s now-unused `GetMachineProducts`-only interface split) is left as explicit follow-up work, tracked the same way issue #92 was a separate, later step after every report family had migrated.
    - The server-local `DateTime.Now`/`DateTime.Today` acquisition itself is unchanged and still called from the Application use cases at the same points the former services called it (once per site in `GetSiteSummaries`, once per machine per `ListMachineDashboard`/`GetMachineDashboard` call) — only the range *arithmetic* moved to `MachineDashboardPeriods`. It remains the same known follow-up already documented in [Time](#time) above, not something this slice resolved.

@@ -23,7 +23,8 @@ public class MachinesControllerTests
             Mock.Of<IMachineService>(),
             new SyncMachineStockFromNayax(nayax ?? Mock.Of<INayaxLynxClient>(), store),
             new ApplyMachineStockSync(store),
-            new ResolveMachineStockDuplicate(store));
+            new ResolveMachineStockDuplicate(store),
+            new ResolveMachineStockEventsAsAlreadyRecorded(store));
 
     [Fact]
     public async Task SyncRestock_returns_the_use_case_preview()
@@ -128,6 +129,30 @@ public class MachinesControllerTests
         Assert.Equal(7, applied.EventId);
         Assert.Equal(NayaxStockEventApplyOutcome.Applied, applied.Outcome);
         Assert.Equal(99, applied.StockAdjustmentId);
+        store.VerifyAll();
+    }
+
+    [Fact]
+    public async Task ResolveSyncRestockManually_passes_the_requested_event_ids_through()
+    {
+        var store = new Mock<IMachineStockEventStore>();
+        store.Setup(x => x.GetManualMachineRefillsAsync(MachineId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        store.Setup(x => x.FindEventAsync(MachineId, 7, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MachineStockEventState(
+                7, 5001, DateTime.UtcNow, NayaxStockEventMatchStatus.NeedsReview, "Unknown MDB",
+                NayaxStockEventProcessingStatus.Unprocessed, null, null, null, NayaxDuplicateResolution.None));
+        store.Setup(x => x.ReconcileAsManualDuplicateAsync(7, MachineId, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        var result = await Controller(store.Object)
+            .ResolveSyncRestockManually(MachineId, new NayaxResolveManyAsAlreadyRecordedRequestDto([7]), CancellationToken.None);
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var response = Assert.IsType<NayaxMachineStockApplyResponseDto>(ok.Value);
+        var resolved = Assert.Single(response.Results);
+        Assert.Equal(7, resolved.EventId);
+        Assert.Equal(NayaxStockEventApplyOutcome.Reconciled, resolved.Outcome);
         store.VerifyAll();
     }
 }

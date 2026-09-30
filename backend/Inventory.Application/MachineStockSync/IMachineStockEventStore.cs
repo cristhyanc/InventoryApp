@@ -134,12 +134,14 @@ public interface IMachineStockEventStore
         CancellationToken cancellationToken);
 
     /// <summary>
-    /// Resolves a flagged possible duplicate as "already recorded manually" (issue #196): marks it
-    /// reconciled against <paramref name="matchedManualStockAdjustmentId"/> without creating a
-    /// Nayax-sourced movement or changing storage. Idempotent: resolving an event already reconciled
-    /// this way changes nothing. Returns <c>false</c> only when the event does not exist for this
-    /// machine.
+    /// Resolves an event as "already recorded manually" (issue #196; extended by issue #242 to any
+    /// otherwise-eligible unresolved event, not only one flagged as a possible duplicate): marks it
+    /// reconciled against <paramref name="matchedManualStockAdjustmentId"/> - the matching manual
+    /// refill's <c>StockAdjustment.Id</c> when the app found one, or <c>null</c> when the operator is
+    /// explicitly resolving an event the app did not flag - without creating a Nayax-sourced movement
+    /// or changing storage. Idempotent: resolving an event already reconciled this way changes
+    /// nothing. Returns <c>false</c> only when the event does not exist for this machine.
     /// </summary>
     Task<bool> ReconcileAsManualDuplicateAsync(
-        int eventId, long machineId, int matchedManualStockAdjustmentId, CancellationToken cancellationToken);
+        int eventId, long machineId, int? matchedManualStockAdjustmentId, CancellationToken cancellationToken);
 }

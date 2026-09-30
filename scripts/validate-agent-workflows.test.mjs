@@ -1,4 +1,5 @@
 import './agent-persistence.test.mjs';
+import './agent-review-publication.test.mjs';
 // Deterministic contract tests for the validation workflow's concurrency and status model.
 // Run with: node --test scripts/validate-agent-workflows.test.mjs
 import assert from 'node:assert/strict';
@@ -17,7 +18,10 @@ import {
   STATUS_CONTEXT_EXPRESSION,
   VALIDATE_WORKFLOW_DOCUMENTATION_CONTRACT,
   VALIDATION_CONCURRENCY_GROUP,
+  REVIEW_PROMPT_JUDGMENT_CONTRACT,
   evaluateExpression,
+  headUpdatePath,
+  verifyReviewPublicationAndScheduling,
   appPushRetryPath,
   implementPath,
   issueTemplatePath,
@@ -456,9 +460,9 @@ describe('documentation-impact gate: review and repair workflows', () => {
   });
 
   it('does not let the review job gain write authority alongside the gate', () => {
-    assertGateRejects({ [reviewPath]: replaceOnce(reviewWorkflow, '      contents: read\n      pull-requests: write\n      issues: read\n', '      contents: write\n      pull-requests: write\n      issues: read\n') }, /contains forbidden text: contents: write/);
-    assertGateRejects({ [reviewPath]: replaceOnce(reviewWorkflow, '      contents: read\n      pull-requests: write\n      issues: read\n', '      contents: read\n      pull-requests: write\n      issues: write\n') }, /review permissions: contains forbidden text: issues: write/);
-    assertGateRejects({ [reviewPath]: replaceOnce(reviewWorkflow, '"Bash(gh pr review * --comment *)"', '"Bash(gh pr review * --comment *),Bash(gh pr edit *)"') }, /allowed tools: contains forbidden text: gh pr edit/);
+    assertGateRejects({ [reviewPath]: replaceOnce(reviewWorkflow, '      contents: read\n      pull-requests: read\n      issues: read\n', '      contents: write\n      pull-requests: read\n      issues: read\n') }, /contains forbidden text: contents: write/);
+    assertGateRejects({ [reviewPath]: replaceOnce(reviewWorkflow, '      contents: read\n      pull-requests: read\n      issues: read\n', '      contents: read\n      pull-requests: read\n      issues: write\n') }, /review permissions: contains forbidden text: issues: write/);
+    assertGateRejects({ [reviewPath]: replaceOnce(reviewWorkflow, '"Bash(gh pr view *),Bash(gh pr diff *)', '"Bash(gh pr edit *),Bash(gh pr view *),Bash(gh pr diff *)') }, /allowed tools: contains forbidden text: gh pr edit/);
   });
 
   it('requires repairs to update documentation and forbids editing the pull request description', () => {
@@ -665,3 +669,95 @@ describe('scoped tracked-file deletion permissions', () => {
   });
 });
 
+
+// ---------------------------------------------------------------------------------------
+// Review judgment, guarded publication and updated-head scheduling (issue #268). Each test
+// weakens one requirement and proves the contract rejects it.
+// ---------------------------------------------------------------------------------------
+
+const headUpdateWorkflow = readRepositoryFile(headUpdatePath);
+
+function assertPublicationRejects(overrides, pattern) {
+  assert.throws(() => verifyReviewPublicationAndScheduling(readWithOverrides(overrides)), pattern);
+  assert.throws(() => runContractChecks({ read: readWithOverrides(overrides) }), pattern);
+}
+
+describe('review judgment contract', () => {
+  it('passes for the committed review prompt', () => {
+    assert.doesNotThrow(() => verifyReviewPublicationAndScheduling());
+  });
+
+  it('requires every blocking rule in the review prompt', () => {
+    for (const required of REVIEW_PROMPT_JUDGMENT_CONTRACT) {
+      assertPublicationRejects({ [reviewPath]: replaceOnce(reviewWorkflow, required, 'weakened') }, /review prompt: missing required text/);
+    }
+  });
+});
+
+describe('guarded publication contract', () => {
+  it('keeps the model job read-only so it cannot publish around the guard', () => {
+    assertPublicationRejects(
+      { [reviewPath]: replaceOnce(reviewWorkflow, '      contents: read\n      pull-requests: read\n      issues: read\n', '      contents: read\n      pull-requests: write\n      issues: read\n') },
+      /review permissions: (missing required text: pull-requests: read|contains forbidden text: pull-requests: write)/,
+    );
+    assertPublicationRejects(
+      { [reviewPath]: replaceOnce(reviewWorkflow, '"Bash(gh pr view *),Bash(gh pr diff *)', '"Bash(gh pr review * --comment *),Bash(gh pr view *),Bash(gh pr diff *)') },
+      /allowed tools: contains forbidden text: gh pr review/,
+    );
+    assertPublicationRejects(
+      { [reviewPath]: replaceOnce(reviewWorkflow, '--allowedTools "mcp__github_ci__get_ci_status', '--allowedTools "mcp__github_inline_comment__create_inline_comment,mcp__github_ci__get_ci_status') },
+      /allowed tools: contains forbidden text: mcp__github_inline_comment/,
+    );
+  });
+
+  it('requires schema-bound structured output from the model', () => {
+    assertPublicationRejects({ [reviewPath]: removeAll(reviewWorkflow, "--json-schema '") }, /review job: missing required text: --json-schema/);
+  });
+
+  it('requires the publisher to re-verify the head, eligibility and validation before publishing', () => {
+    for (const fragment of [
+      '[ "$current_sha" = "$HEAD_SHA" ] || suppress',
+      '[ "$validation_state" = "success" ] || suppress',
+      '[ "$reviewed_sha" = "$HEAD_SHA" ] || suppress',
+      'all(.criteria[]; .status == "met")',
+      '[ "$is_draft" = "false" ] || suppress',
+    ]) {
+      assertPublicationRejects({ [reviewPath]: replaceOnce(reviewWorkflow, fragment, '# removed') }, /publish job/);
+    }
+  });
+
+  it('requires the published review to be bound to the reviewed commit and to stay comment-only', () => {
+    assertPublicationRejects({ [reviewPath]: replaceOnce(reviewWorkflow, 'commit_id: $sha, event: "COMMENT"', 'event: "COMMENT"') }, /publish job: missing required text: commit_id/);
+    assertPublicationRejects({ [reviewPath]: replaceOnce(reviewWorkflow, 'commit_id: $sha, event: "COMMENT"', 'commit_id: $sha, event: "APPROVE"') }, /publish job/);
+  });
+
+  it('rejects a publisher that checks out code or holds the model credential', () => {
+    const withCheckout = replaceOnce(reviewWorkflow, '    steps:\n      - name: Guard and publish review\n', '    steps:\n      - uses: actions/checkout@v4\n      - name: Guard and publish review\n');
+    assertPublicationRejects({ [reviewPath]: withCheckout }, /publish job: contains forbidden text: actions\/checkout/);
+  });
+
+  it('records an outcome even when the review job fails or is cancelled', () => {
+    assertPublicationRejects({ [reviewPath]: replaceOnce(reviewWorkflow, "if: always() && needs.context.result == 'success'", "if: needs.review.result == 'success'") }, /publish job: missing required text: if: always\(\)/);
+  });
+});
+
+describe('updated-head scheduling contract', () => {
+  it('runs only from the trusted default-branch definition, never from a pull_request-triggered job', () => {
+    assertPublicationRejects({ [headUpdatePath]: replaceOnce(headUpdateWorkflow, '  pull_request_target:\n', '  pull_request:\n') }, /triggers: (missing required text: pull_request_target|contains forbidden text: {2}pull_request:)/);
+  });
+
+  it('never checks out or executes pull request code while holding dispatch authority', () => {
+    const withCheckout = replaceOnce(headUpdateWorkflow, '    steps:\n', '    steps:\n      - uses: actions/checkout@v4\n        with:\n          ref: ${{ github.event.pull_request.head.sha }}\n');
+    assertPublicationRejects({ [headUpdatePath]: withCheckout }, /agent-head-update.yml/);
+  });
+
+  it('requires the stale-head guard, the duplicate check and a review only after validation', () => {
+    assertPublicationRejects({ [headUpdatePath]: replaceOnce(headUpdateWorkflow, '[ -z "$existing_validation" ]', 'true') }, /missing required text: \[ -z "\$existing_validation" \]/);
+    assertPublicationRejects({ [headUpdatePath]: replaceOnce(headUpdateWorkflow, '[ "$current_sha" = "$HEAD_SHA" ]', 'true') }, /current_sha/);
+    assertPublicationRejects({ [headUpdatePath]: replaceOnce(headUpdateWorkflow, 'gh workflow run validate.yml', 'gh workflow run agent-review.yml') }, /agent-head-update.yml/);
+  });
+
+  it('requires the repair dispatcher to stand down for a SHA that is already scheduled', () => {
+    assertPublicationRejects({ [repairPath]: replaceOnce(repairWorkflow, 'if [ -n "$existing_validation" ]; then', 'if false; then') }, /agent-repair.yml validation dispatcher/);
+  });
+});

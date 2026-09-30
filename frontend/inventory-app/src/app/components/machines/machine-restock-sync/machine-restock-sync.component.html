@@ -57,7 +57,7 @@
               id="sync-restock-from-date"
               type="date"
               [value]="fromDate$ | async"
-              [disabled]="((syncing$ | async) ?? false) || ((applying$ | async) ?? false)"
+              [disabled]="((syncing$ | async) ?? false) || ((applying$ | async) ?? false) || ((resolvingManyEvents$ | async) ?? false)"
               (change)="onFromDateChange($any($event.target).value)"
               class="mt-1 rounded-md border border-slate-300 px-2 py-1 text-sm text-slate-700"
             />
@@ -66,7 +66,7 @@
             <input
               type="checkbox"
               [checked]="showReconciled$ | async"
-              [disabled]="((syncing$ | async) ?? false) || ((applying$ | async) ?? false)"
+              [disabled]="((syncing$ | async) ?? false) || ((applying$ | async) ?? false) || ((resolvingManyEvents$ | async) ?? false)"
               (change)="onShowReconciledChange($any($event.target).checked)"
             />
             Show reconciled
@@ -75,7 +75,7 @@
             <input
               type="checkbox"
               [checked]="isAllApplicableSelected(preview)"
-              [disabled]="((applying$ | async) ?? false) || preview.events.length === 0"
+              [disabled]="((applying$ | async) ?? false) || ((resolvingManyEvents$ | async) ?? false) || preview.events.length === 0"
               (change)="toggleSelectAllApplicable(preview, $any($event.target).checked)"
             />
             Select all applicable
@@ -120,7 +120,7 @@
                     type="checkbox"
                     [attr.aria-label]="'Select MDB ' + event.parsedMdb + ' ' + (event.matchedProductName || event.parsedProductName || 'event')"
                     [checked]="isEventSelected(event.id)"
-                    [disabled]="!isReadyToApply(event)"
+                    [disabled]="!isEligibleForManualResolution(event)"
                     (change)="toggleEventSelection(event.id, $any($event.target).checked)"
                   />
                 </td>
@@ -178,7 +178,7 @@
       <button
         type="button"
         (click)="closeModal()"
-        [disabled]="(applying$ | async) ?? false"
+        [disabled]="((applying$ | async) ?? false) || ((resolvingManyEvents$ | async) ?? false)"
         class="inline-flex items-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
       >
         Close
@@ -186,8 +186,17 @@
       <button
         *ngIf="((syncPreview$ | async)?.events?.length ?? 0) > 0"
         type="button"
+        (click)="resolveSelectedAsAlreadyRecorded()"
+        [disabled]="((applying$ | async) ?? false) || ((syncing$ | async) ?? false) || ((resolvingManyEvents$ | async) ?? false) || selectedEventIds.size === 0"
+        class="inline-flex items-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+      >
+        {{ (resolvingManyEvents$ | async) ? 'Resolving…' : 'Already recorded manually (' + selectedEventIds.size + ')' }}
+      </button>
+      <button
+        *ngIf="((syncPreview$ | async)?.events?.length ?? 0) > 0"
+        type="button"
         (click)="applySelectedEvents()"
-        [disabled]="((applying$ | async) ?? false) || ((syncing$ | async) ?? false) || selectedEventIds.size === 0"
+        [disabled]="((applying$ | async) ?? false) || ((syncing$ | async) ?? false) || ((resolvingManyEvents$ | async) ?? false) || selectedEventIds.size === 0"
         class="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
       >
         {{ (applying$ | async) ? 'Applying…' : 'Apply selected (' + selectedEventIds.size + ')' }}

@@ -124,6 +124,11 @@ export const routes: Routes = [
     loadComponent: () => import('./components/pick-list/pick-list.component').then((m) => m.PickListComponent)
   },
   {
+    path: 'take-inventory',
+    canActivate: [MsalGuard],
+    loadComponent: () => import('./components/take-inventory/take-inventory.component').then((m) => m.TakeInventoryComponent)
+  },
+  {
     path: 'admin',
     canActivate: [MsalGuard],
     loadComponent: () => import('./components/admin/admin.component').then((m) => m.AdminComponent)

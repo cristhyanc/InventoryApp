@@ -5,11 +5,16 @@ name: Agent review
 # Authority and lifecycle: AGENTS.md ("Automated task contract") and docs/automation.md ("Review agent").
 # - The implementation dispatcher applies `agent-review`, then exact-SHA validation dispatches the
 #   initial review automatically. A human may remove/re-apply the label to request another review of
-#   an already validated head. Repair pushes are reviewed only through the post-validation dispatch.
+#   an already validated head. Repair pushes and other new commits are reviewed only through the
+#   post-validation dispatch (agent-head-update.yml schedules exact-SHA validation for a new head).
 # - Dispatched runs execute this trusted workflow from `main`, then verify the open, non-draft, same-repository
 #   agent PR, its current head SHA, its successful `agent-validation` status, and the workflow-file exclusion.
 # - Every run is a fresh review of the pull request's current head SHA in a new job with its own context.
-# - The review may comment but cannot modify code, labels, branches, settings, merge, or deploy.
+# - The review job is read-only: Claude returns its verdict as structured output and publishes nothing.
+#   A separate deterministic publish job re-verifies the pull request immediately before publishing,
+#   binds the review to the exact reviewed SHA, suppresses stale or ineligible results, and records the
+#   outcome as the per-SHA `agent-review-verdict` commit status. Neither job can modify code, labels,
+#   branches, settings, merge, or deploy.
 
 on:
   pull_request:
@@ -157,13 +162,18 @@ jobs:
     needs: context
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # Read-only: this job runs Claude and holds no pull-request, issue, status or workflow write
+    # permission, so the model cannot publish, label, dispatch or push even if it tried. Its only
+    # output is the schema-validated structured_output consumed by the publish job below.
     permissions:
       contents: read
-      pull-requests: write
+      pull-requests: read
       issues: read
       actions: read
       checks: read
       statuses: read
+    outputs:
+      structured_output: ${{ steps.review_agent.outputs.structured_output }}
 
     steps:
       - name: Check out pull request head
@@ -174,6 +184,7 @@ jobs:
           persist-credentials: false
 
       - name: Run Claude Code review agent
+        id: review_agent
         uses: anthropics/claude-code-action@cfc3eb22bfed5c26ef66e3223c982af27e4524de # v1.0.231
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -208,27 +219,181 @@ jobs:
             - Risk classification per docs/automation.md; for high-risk areas confirm the PR cites the invariants it touches.
             - Documentation impact: the diff must match the declarations. With `Decision: UPDATED`, every documentation file named in the Evidence must actually change in the diff and describe the merged behaviour accurately, and every documentation change in the diff must be listed. With `Decision: NOT REQUIRED`, verify from the diff, not from filenames alone, that no documented behaviour, contract, architecture, configuration, automation, deployment, operation or user workflow changed; if the issue said "Documentation changes required", or the diff makes any documentation inaccurate, that decision is wrong. Missing, inaccurate or incomplete required documentation is a blocker. So is a declaration that contradicts the diff or an issue decision that the PR silently ignored.
 
-            Deliver the result on the pull request:
-            - Inline comments (mcp__github_inline_comment__create_inline_comment) for specific lines that need a change, each stating the problem, why it matters, and the rule or criterion it violates.
-            - Exactly one summary review, always submitted with `gh pr review ${{ needs.context.outputs.pr_number }} --comment --body "..."`. Never use --approve or --request-changes: this pull request is authored by the dedicated agent GitHub App bot and GitHub rejects approve/request-changes reviews from the same account; the verdict line below carries the outcome instead. Do not post any other top-level comment.
-            - The review body must have this structure, in this order:
-              1. `Head SHA reviewed: <sha>`
-              2. Exactly one verdict line, verbatim, on its own line: `VERDICT: CHANGES REQUESTED` when anything blocks the change, otherwise `VERDICT: READY FOR HUMAN REVIEW`.
-              3. `Blockers:` followed by a numbered list of every blocking finding (file, line where applicable, what is wrong, which rule or acceptance criterion it violates). Write `Blockers: none` when there are none.
-              4. The acceptance criteria checklist with met / not met per item.
-              5. Non-blocking suggestions.
-              6. The validation evidence you confirmed (checks, runs, commands and their real results).
-              7. The sentence: "This is an advisory review. Human approval and branch protection remain the merge gate."
+            Blocking rules (these decide the verdict; you may not relax them):
+            - Assess every acceptance criterion of the linked issue individually as `met`, `not met`, or `not verified`, each with concrete evidence (file and line, test name, CI run, or command output). A criterion you could not verify is `not verified`, never `met`.
+            - `VERDICT: READY FOR HUMAN REVIEW` is allowed only when every acceptance criterion is `met` and there are no blockers. Any `not met` or `not verified` criterion, and any violated financial, inventory/costing, tenant or security invariant, is a blocker and the verdict is `VERDICT: CHANGES REQUESTED`.
+            - A known unmet criterion or violated invariant is never waived because the pre-existing or legacy behaviour is worse, because the failure seems unlikely or narrow, because the tests pass, or because the Sonar quality gate or any other check is green. Do not downgrade it to a non-blocking suggestion.
+            - When a high-risk requirement is materially ambiguous, do not invent a policy to resolve it. Record a blocker that starts with "Human decision required:" and states exactly which decision is needed.
+            - For any stale-state, concurrency or "must not act on outdated data" guarantee, inspect the authoritative read, the expected-state comparison, and the mutation as one operation. A transaction around only the write, or a check performed on a separate earlier read, is not evidence of atomicity. Require a regression test in which the state changes between the initial read and the mutation; without it the criterion is `not verified`.
 
-            Hard limits: never approve, request changes, merge, edit files, commit, push, change labels, edit the PR or issue, trigger workflows, or run write operations of any kind. If a tool call is denied, do not look for another route; report what you could not verify instead.
+            Deliver the result only as the structured output defined by the JSON schema; do not publish anything yourself. You have no permission to post reviews or comments, and a separate trusted job publishes your result only if the pull request head is still exactly the SHA above and it is still eligible. Fill the fields as follows:
+            - `reviewed_head_sha`: exactly the HEAD SHA UNDER REVIEW above.
+            - `verdict`: `CHANGES REQUESTED` or `READY FOR HUMAN REVIEW`, following the blocking rules.
+            - `blockers`: every blocking finding (file, line where applicable, what is wrong, which rule or acceptance criterion it violates); an empty list only when there are none.
+            - `criteria`: one entry per acceptance criterion with `status` `met`, `not met` or `not verified` and its evidence.
+            - `suggestions`: non-blocking suggestions only.
+            - `validation_evidence`: the checks, runs, commands and real results you confirmed.
+            - `inline_comments`: specific lines in the diff that need a change (`path`, `line` in the new file version, `body` stating the problem, why it matters, and the rule or criterion it violates).
+            Do not write a `VERDICT:` line inside any field; the publisher writes the head SHA, the single verdict line and the advisory sentence itself.
+
+            Hard limits: never approve, request changes, comment, merge, edit files, commit, push, change labels, edit the PR or issue, trigger workflows, or run write operations of any kind. If a tool call is denied, do not look for another route; report what you could not verify instead.
           claude_args: |
             --model sonnet
             --effort high
             --max-turns 80
-            --allowedTools "mcp__github_inline_comment__create_inline_comment,mcp__github_ci__get_ci_status,mcp__github_ci__get_workflow_run_details,mcp__github_ci__download_job_log"
+            --json-schema '{"type":"object","additionalProperties":false,"required":["reviewed_head_sha","verdict","blockers","criteria","suggestions","validation_evidence","inline_comments"],"properties":{"reviewed_head_sha":{"type":"string","pattern":"^[0-9a-f]{40}$"},"verdict":{"type":"string","enum":["CHANGES REQUESTED","READY FOR HUMAN REVIEW"]},"blockers":{"type":"array","items":{"type":"string","minLength":1}},"criteria":{"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"required":["criterion","status","evidence"],"properties":{"criterion":{"type":"string","minLength":1},"status":{"type":"string","enum":["met","not met","not verified"]},"evidence":{"type":"string","minLength":1}}}},"suggestions":{"type":"array","items":{"type":"string"}},"validation_evidence":{"type":"string","minLength":1},"inline_comments":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["path","line","body"],"properties":{"path":{"type":"string","minLength":1},"line":{"type":"integer","minimum":1},"body":{"type":"string","minLength":1}}}}}}'
+            --allowedTools "mcp__github_ci__get_ci_status,mcp__github_ci__get_workflow_run_details,mcp__github_ci__download_job_log"
             "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh issue view *),Bash(gh run view *),Bash(gh run list *)"
-            "Bash(gh pr review * --comment *)"
             "Bash(git status *),Bash(git diff *),Bash(git log *),Bash(git show *),Bash(git rev-parse *),Bash(git branch *)"
             --disallowedTools "Edit,MultiEdit,Write,NotebookEdit,WebFetch,WebSearch"
-            "Bash(gh pr review * --approve *),Bash(gh pr review * --request-changes *),Bash(gh pr review --approve *),Bash(gh pr review --request-changes *),Bash(gh pr comment *),Bash(gh pr merge *),Bash(gh pr edit *),Bash(gh pr close *),Bash(gh pr reopen *),Bash(gh pr ready *),Bash(gh issue edit *),Bash(gh issue comment *),Bash(gh api *),Bash(gh workflow *),Bash(gh run rerun *),Bash(gh run cancel *),Bash(gh label *)"
+            "mcp__github_inline_comment__create_inline_comment"
+            "Bash(gh pr review *),Bash(gh pr comment *),Bash(gh pr merge *),Bash(gh pr edit *),Bash(gh pr close *),Bash(gh pr reopen *),Bash(gh pr ready *),Bash(gh issue edit *),Bash(gh issue comment *),Bash(gh api *),Bash(gh workflow *),Bash(gh run rerun *),Bash(gh run cancel *),Bash(gh label *)"
             "Bash(git push *),Bash(git commit *),Bash(git add *),Bash(git checkout *),Bash(git switch *),Bash(git reset *),Bash(git rebase *),Bash(git merge *),Bash(git stash *),Bash(git restore *),Bash(git clean *)"
+
+  publish:
+    name: Guarded review publication
+    # Runs even when the review job failed or was cancelled (for example superseded by a newer review
+    # of the same pull request), so every reviewed SHA ends with an explicit agent-review-verdict
+    # outcome. No checkout and no Anthropic credential: it only reads the structured review output
+    # and the live pull request state through the API.
+    if: always() && needs.context.result == 'success'
+    needs:
+      - context
+      - review
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      statuses: write
+
+    steps:
+      - name: Guard and publish review
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}
+          PR_NUMBER: ${{ needs.context.outputs.pr_number }}
+          HEAD_SHA: ${{ needs.context.outputs.head_sha }}
+          REVIEW_RESULT: ${{ needs.review.result }}
+          REVIEW_OUTPUT: ${{ needs.review.outputs.structured_output }}
+          VERDICT_CONTEXT: agent-review-verdict
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+
+          set_verdict_status() {
+            gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" \
+              -f state="$1" \
+              -f context="$VERDICT_CONTEXT" \
+              -f description="$2" \
+              -f target_url="$RUN_URL" >/dev/null
+          }
+          # A suppressed result is never published as a review. It is recorded as an error status on
+          # the reviewed SHA only, so it can never read as a ready result for this or any other head.
+          suppress() {
+            echo "::warning::Review not published: $1"
+            set_verdict_status error "Superseded or not published: ${1:0:100}"
+            exit 0
+          }
+
+          [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] || { echo "::error::Invalid pull request number."; exit 1; }
+          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Invalid reviewed head SHA."; exit 1; }
+
+          [ "$REVIEW_RESULT" = "success" ] || suppress "the review job ended with '$REVIEW_RESULT' (failed, cancelled or superseded)."
+
+          # 1. The structured output must be well formed, bound to the reviewed SHA, and internally
+          #    consistent with the blocking rules before anything else is considered.
+          printf '%s' "$REVIEW_OUTPUT" > "$work/review.json"
+          jq -e 'type == "object"' "$work/review.json" >/dev/null 2>&1 || suppress "the review produced no valid structured output."
+          reviewed_sha="$(jq -r '.reviewed_head_sha // ""' "$work/review.json")"
+          [ "$reviewed_sha" = "$HEAD_SHA" ] || suppress "the review output names SHA '$reviewed_sha', not the reviewed SHA $HEAD_SHA."
+          verdict="$(jq -r '.verdict // ""' "$work/review.json")"
+          case "$verdict" in
+            "READY FOR HUMAN REVIEW")
+              jq -e '(.blockers | length) == 0 and (.criteria | length) > 0 and all(.criteria[]; .status == "met")' "$work/review.json" >/dev/null \
+                || suppress "a ready verdict requires no blockers and every acceptance criterion met."
+              ;;
+            "CHANGES REQUESTED")
+              jq -e '(.blockers | length) > 0' "$work/review.json" >/dev/null \
+                || suppress "a changes-requested verdict must list at least one blocker."
+              ;;
+            *) suppress "unknown verdict '$verdict'." ;;
+          esac
+
+          # 2. Re-fetch eligibility and the current head immediately before publishing. Any failure
+          #    to read the live state stops the step (set -e) before a review is posted: fail closed.
+          pr_json="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --json state,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,labels)"
+          state="$(jq -r '.state' <<<"$pr_json")"
+          is_draft="$(jq -r '.isDraft' <<<"$pr_json")"
+          base_ref="$(jq -r '.baseRefName' <<<"$pr_json")"
+          head_ref="$(jq -r '.headRefName' <<<"$pr_json")"
+          current_sha="$(jq -r '.headRefOid // empty' <<<"$pr_json")"
+          head_repo="$(jq -r '"\(.headRepositoryOwner.login)/\(.headRepository.name)"' <<<"$pr_json")"
+          author="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.user.login // empty')"
+          changed_files="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" --jq '.[].filename')"
+          validation_state="$(gh api "repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA/status" \
+            --jq '[.statuses[] | select(.context == "agent-validation")][0].state // ""')"
+
+          [ "$state" = "OPEN" ] || suppress "pull request #$PR_NUMBER is no longer open."
+          [ "$is_draft" = "false" ] || suppress "pull request #$PR_NUMBER is now a draft."
+          [ "$base_ref" = "develop" ] || suppress "pull request #$PR_NUMBER no longer targets develop."
+          [ "$head_repo" = "$GITHUB_REPOSITORY" ] || suppress "pull request #$PR_NUMBER no longer uses a same-repository branch."
+          [[ "$head_ref" == agent/issue-* ]] || suppress "pull request #$PR_NUMBER no longer uses an agent/issue-* branch."
+          [ -n "$EXPECTED_AGENT_AUTHOR" ] || suppress "AGENT_AUTOMATION_APP_BOT_LOGIN is not configured."
+          [ "$author" = "$EXPECTED_AGENT_AUTHOR" ] || suppress "pull request #$PR_NUMBER is not authored by $EXPECTED_AGENT_AUTHOR."
+          [ "$current_sha" = "$HEAD_SHA" ] || suppress "Refusing stale review publication: head moved to $current_sha."
+          jq -e 'any(.labels[]?; .name == "agent-review")' <<<"$pr_json" >/dev/null \
+            || suppress "the agent-review label was removed."
+          if grep -Eq '^\.github/workflows/' <<<"$changed_files"; then
+            suppress "pull requests that change .github/workflows/** require manual validation and review."
+          fi
+          [ "$validation_state" = "success" ] || suppress "the reviewed SHA no longer has a successful latest agent-validation status."
+
+          # 3. Render the review deterministically. The publisher, not the model, writes the reviewed
+          #    SHA, the single verdict line and the advisory sentence.
+          jq -r --arg sha "$HEAD_SHA" --arg run "$RUN_URL" '
+            def numbered(xs): [xs | to_entries[] | "\(.key + 1). \(.value)"] | join("\n");
+            "Head SHA reviewed: \($sha)\n\nVERDICT: \(.verdict)\n\n"
+            + (if (.blockers | length) == 0 then "Blockers: none" else "Blockers:\n" + numbered(.blockers) end)
+            + "\n\nAcceptance criteria:\n" + ([.criteria[] | "- [\(.status)] \(.criterion): \(.evidence)"] | join("\n"))
+            + "\n\nNon-blocking suggestions:\n" + (if (.suggestions | length) == 0 then "none" else ([.suggestions[] | "- \(.)"] | join("\n")) end)
+            + "\n\nValidation evidence confirmed:\n" + .validation_evidence
+            + "\n\nThis verdict applies only to \($sha); any later commit needs its own validation and review. Published by the guarded publication job of \($run)."
+            + "\n\nThis is an advisory review. Human approval and branch protection remain the merge gate."
+          ' "$work/review.json" > "$work/body.md"
+          verdict_lines="$(grep -c '^VERDICT:' "$work/body.md" || true)"
+          [ "$verdict_lines" = "1" ] || suppress "the rendered review must contain exactly one verdict line, found $verdict_lines."
+
+          jq -n --arg sha "$HEAD_SHA" --rawfile body "$work/body.md" --slurpfile review "$work/review.json" '
+            { commit_id: $sha, event: "COMMENT", body: $body,
+              comments: [$review[0].inline_comments[] | { path, line, side: "RIGHT", body }] }
+          ' > "$work/payload.json"
+
+          # 4. Publish one comment-only review bound to the exact reviewed commit. If GitHub rejects an
+          #    inline position, publish once more with the inline comments folded into the body.
+          if ! gh api --method POST "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews" --input "$work/payload.json" >/dev/null; then
+            echo "::warning::Inline comments were rejected; publishing them in the review body instead."
+            jq '.body += "\n\nInline comments (could not be anchored):\n" + ([.comments[] | "- \(.path):\(.line): \(.body)"] | join("\n")) | .comments = []' \
+              "$work/payload.json" > "$work/payload-fallback.json"
+            gh api --method POST "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews" --input "$work/payload-fallback.json" >/dev/null
+          fi
+
+          if [ "$verdict" = "READY FOR HUMAN REVIEW" ]; then
+            set_verdict_status success "Ready for human review (advisory) for this SHA only"
+          else
+            set_verdict_status failure "Changes requested for this SHA"
+          fi
+
+      - name: Record fail-closed outcome
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ needs.context.outputs.head_sha }}
+          VERDICT_CONTEXT: agent-review-verdict
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" \
+            -f state=error \
+            -f context="$VERDICT_CONTEXT" \
+            -f description="Review publication failed closed; nothing was published" \
+            -f target_url="$RUN_URL" >/dev/null || echo "::warning::Could not record the fail-closed status."
