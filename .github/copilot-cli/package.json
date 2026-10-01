@@ -1,0 +1,8 @@
+{
+  "name": "inventoryapp-copilot-cli",
+  "private": true,
+  "description": "Pinned GitHub Copilot CLI for the read-only architecture check in agent-architecture.yml. Install with npm ci --ignore-scripts.",
+  "dependencies": {
+    "@github/copilot": "1.0.90"
+  }
+}
