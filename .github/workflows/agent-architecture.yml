@@ -126,10 +126,21 @@ jobs:
         with:
           node-version: 22
 
-      - name: Install Copilot CLI
+      # The Copilot CLI version is pinned by the lockfile in .github/copilot-cli on the trusted
+      # workflow commit (github.sha), never by the pull request head, and installed without
+      # lifecycle scripts.
+      - name: Install pinned Copilot CLI
         env:
-          COPILOT_CLI_VERSION: ${{ vars.COPILOT_CLI_VERSION || 'latest' }}
-        run: npm install -g "@github/copilot@${COPILOT_CLI_VERSION}"
+          TRUSTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          cli_dir="$RUNNER_TEMP/copilot-cli"
+          mkdir -p "$cli_dir"
+          for file in package.json package-lock.json; do
+            git show "$TRUSTED_SHA:.github/copilot-cli/$file" > "$cli_dir/$file"
+          done
+          npm ci --prefix "$cli_dir" --ignore-scripts --no-audit --no-fund
+          echo "$cli_dir/node_modules/.bin" >> "$GITHUB_PATH"
 
       - name: Run Copilot architecture check
         id: check

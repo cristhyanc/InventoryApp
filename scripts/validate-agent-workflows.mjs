@@ -962,6 +962,15 @@ function verifyAgentAppTokenStep(text, source, stepId, { pullRequests = false } 
 
 /** Verifies implementation publication, trusted architecture handoff and final-head validation dispatch. */
 export function verifyArchitecturePass(implementationWorkflow, architectureWorkflow) {
+  verifyImplementationJob(implementationWorkflow);
+  verifyArchitectureDispatcher(implementationWorkflow);
+  verifyArchitectureContext(architectureWorkflow);
+  verifyArchitectureCopilotCheck(architectureWorkflow);
+  verifyArchitectureFixJob(architectureWorkflow);
+  verifyArchitectureFinalizer(architectureWorkflow);
+}
+
+function verifyImplementationJob(implementationWorkflow) {
   const job = section(implementationWorkflow, '  implement:\n', '  dispatch-architecture:\n', 'agent-implement.yml implementation job');
 
   requireText(job, '      contents: read', 'agent-implement.yml implementation permissions');
@@ -1046,6 +1055,9 @@ export function verifyArchitecturePass(implementationWorkflow, architectureWorkf
     'git diff --quiet', 'git diff --cached --quiet',
   ]) requireText(outcome, required, 'agent-implement.yml outcome');
 
+}
+
+function verifyArchitectureDispatcher(implementationWorkflow) {
   const implementationDispatcher = section(implementationWorkflow, '  dispatch-architecture:\n', null, 'agent-implement.yml architecture dispatcher');
   verifySafeDispatcher(implementationDispatcher, 'agent-implement.yml architecture dispatcher');
   verifyAgentPrGuards(implementationDispatcher, 'agent-implement.yml architecture dispatcher', 'Refusing stale architecture dispatch');
@@ -1063,6 +1075,9 @@ export function verifyArchitecturePass(implementationWorkflow, architectureWorkf
     forbidText(implementationDispatcher, forbidden, 'agent-implement.yml architecture dispatcher');
   }
 
+}
+
+function verifyArchitectureContext(architectureWorkflow) {
   const triggers = section(architectureWorkflow, 'on:\n', 'permissions:\n', 'agent-architecture.yml triggers');
   for (const required of ['workflow_dispatch:', 'issue_number:', 'pr_number:', 'head_sha:']) requireText(triggers, required, 'agent-architecture.yml triggers');
   for (const forbidden of ['pull_request:', 'issues:', 'issue_comment:']) forbidText(triggers, forbidden, 'agent-architecture.yml triggers');
@@ -1080,6 +1095,9 @@ export function verifyArchitecturePass(implementationWorkflow, architectureWorkf
   requireText(context, '[[ "$head_ref" == agent/issue-"$ISSUE_NUMBER"-* ]]', 'agent-architecture.yml context');
   requireText(context, 'any(.labels[]?; .name == "agent-working")', 'agent-architecture.yml context');
 
+}
+
+function verifyArchitectureCopilotCheck(architectureWorkflow) {
   // Cross-check: Copilot reviews Claude's architecture read-only; it holds no write permission, no
   // persisted checkout credentials, no App or Anthropic credential, and may not change the tree.
   const copilotCheck = section(architectureWorkflow, '  copilot-check:\n', '  architecture:\n', 'agent-architecture.yml Copilot check');
@@ -1088,13 +1106,18 @@ export function verifyArchitecturePass(implementationWorkflow, architectureWorkf
     'COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_CLI_TOKEN }}', "--deny-tool='write'", '--no-ask-user',
     '[ -z "$(git status --porcelain)" ]', '[ "$(git rev-parse HEAD)" = "$HEAD_SHA" ]',
     'ARCHITECTURE: CLEAN', 'ARCHITECTURE: FINDINGS', 'echo "verdict=$verdict"',
+    // The CLI is pinned by the trusted workflow commit's lockfile and installed without lifecycle scripts.
+    'TRUSTED_SHA: ${{ github.sha }}', 'git show "$TRUSTED_SHA:.github/copilot-cli/$file"', '--ignore-scripts',
   ]) requireText(copilotCheck, required, 'agent-architecture.yml Copilot check');
   for (const forbidden of [
     'contents: write', 'pull-requests: write', 'issues: write', 'actions: write', 'copilot-requests: write',
     'CLAUDE_CODE_OAUTH_TOKEN', 'AGENT_AUTOMATION_APP_PRIVATE_KEY', 'create-github-app-token', 'COPILOT_AGENT_TOKEN',
-    'secrets.GITHUB_TOKEN', 'git push', 'gh pr', 'gh issue', '--allow-all', "--allow-tool='write'", "--allow-tool='shell'",
+    'secrets.GITHUB_TOKEN', 'git push', 'gh pr', 'gh issue', 'npm install', '@github/copilot@', '--allow-all', "--allow-tool='write'", "--allow-tool='shell'",
   ]) forbidText(copilotCheck, forbidden, 'agent-architecture.yml Copilot check');
 
+}
+
+function verifyArchitectureFixJob(architectureWorkflow) {
   const architectureJob = section(architectureWorkflow, '  architecture:\n', '  finalize:\n', 'agent-architecture.yml architecture job');
   requireText(architectureJob, '      - context\n      - copilot-check\n', 'agent-architecture.yml architecture job');
   requireText(architectureJob, "if: needs.copilot-check.outputs.verdict == 'findings'", 'agent-architecture.yml architecture job');
@@ -1137,6 +1160,9 @@ export function verifyArchitecturePass(implementationWorkflow, architectureWorkf
   const architecturePublish = section(architectureJob, '      - name: Push architecture head\n', null, 'agent-architecture.yml architecture publish');
   for (const required of ['GH_TOKEN: ${{ steps.architecture_app_token.outputs.token }}', `bash ${appPushRetryPath} "https://github.com/\${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$BRANCH"`, 'HEAD_SHA: ${{ steps.architecture_result.outputs.head_sha }}']) requireText(architecturePublish, required, 'agent-architecture.yml architecture publish');
 
+}
+
+function verifyArchitectureFinalizer(architectureWorkflow) {
   const finalize = section(architectureWorkflow, '  finalize:\n', null, 'agent-architecture.yml finalize');
   for (const required of [
     "    if: always()\n", '      - context\n      - copilot-check\n      - architecture\n', 'actions: write', 'pull-requests: write', 'issues: write', 'statuses: read',
@@ -1171,7 +1197,15 @@ export function verifyArchitecturePass(implementationWorkflow, architectureWorkf
 
 /** Enforces the Copilot implementation path (agent-copilot.yml, agent-copilot-architecture.yml). */
 export function verifyCopilotImplementationPath(read = readRepositoryFile) {
-  const workflow = read(copilotImplementPath);
+  verifyCopilotAssignWorkflow(read(copilotImplementPath));
+  verifyCopilotHandoffWorkflow(read(copilotHandoffPath));
+  const check = read(copilotArchitecturePath);
+  verifyCopilotArchitectureContext(check);
+  verifyCopilotArchitectureCheckJob(check);
+  verifyCopilotArchitectureFinalizer(check);
+}
+
+function verifyCopilotAssignWorkflow(workflow) {
   const triggers = section(workflow, 'on:\n', '\npermissions: {}\n', `${copilotImplementPath} triggers`);
   for (const required of ['issues:', 'types: [labeled]']) {
     requireText(triggers, required, `${copilotImplementPath} triggers`);
@@ -1207,7 +1241,9 @@ export function verifyCopilotImplementationPath(read = readRepositoryFile) {
   }
   requireOrder(assign, '--remove-label agent-ready-copilot --add-label agent-working', 'repos/$GITHUB_REPOSITORY/issues/$ISSUE_NUMBER/assignees', `${copilotImplementPath} assign`, 'the issue must be agent-working before Copilot starts.');
 
-  const handoffWorkflow = read(copilotHandoffPath);
+}
+
+function verifyCopilotHandoffWorkflow(handoffWorkflow) {
   const handoffTriggers = section(handoffWorkflow, 'on:\n', '\npermissions: {}\n', `${copilotHandoffPath} triggers`);
   for (const required of ['pull_request_target:', 'types: [ready_for_review]', '      - develop']) requireText(handoffTriggers, required, `${copilotHandoffPath} triggers`);
   for (const forbidden of ['  pull_request:\n', 'issues:', 'synchronize', 'issue_comment', 'workflow_run', 'push:']) forbidText(handoffTriggers, forbidden, `${copilotHandoffPath} triggers`);
@@ -1227,7 +1263,9 @@ export function verifyCopilotImplementationPath(read = readRepositoryFile) {
     forbidText(handoff, forbidden, `${copilotHandoffPath} handoff`);
   }
 
-  const check = read(copilotArchitecturePath);
+}
+
+function verifyCopilotArchitectureContext(check) {
   const checkTriggers = section(check, 'on:\n', '\npermissions: {}\n', `${copilotArchitecturePath} triggers`);
   for (const required of ['workflow_dispatch:', 'issue_number:', 'pr_number:', 'head_sha:']) requireText(checkTriggers, required, `${copilotArchitecturePath} triggers`);
   for (const forbidden of ['pull_request', 'issues:', 'issue_comment:']) forbidText(checkTriggers, forbidden, `${copilotArchitecturePath} triggers`);
@@ -1240,6 +1278,9 @@ export function verifyCopilotImplementationPath(read = readRepositoryFile) {
   }
   for (const forbidden of ['actions/checkout', 'CLAUDE_CODE_OAUTH_TOKEN', 'write']) forbidText(context, forbidden, `${copilotArchitecturePath} context`);
 
+}
+
+function verifyCopilotArchitectureCheckJob(check) {
   // Claude's architecture check of Copilot's work is read-only: no write permission, no editing or
   // publishing tools, and its result is schema-validated structured output.
   const claudeCheck = section(check, '  check:\n', '  finalize:\n', `${copilotArchitecturePath} check`);
@@ -1259,6 +1300,9 @@ export function verifyCopilotImplementationPath(read = readRepositoryFile) {
     forbidText(claudeCheck, forbidden, `${copilotArchitecturePath} check`);
   }
 
+}
+
+function verifyCopilotArchitectureFinalizer(check) {
   const finalize = section(check, '  finalize:\n', null, `${copilotArchitecturePath} finalize`);
   for (const required of [
     '    if: always()\n', '      - context\n      - check\n', 'actions: write', 'pull-requests: write', 'issues: write',

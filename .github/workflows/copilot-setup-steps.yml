@@ -3,7 +3,8 @@ name: Copilot setup steps
 # Prepares the Copilot coding agent's environment so it can run `bash scripts/validate.sh`
 # (agent-ready-copilot issues; see docs/automation.md § Cross-review: Claude and Copilot).
 # GitHub runs the `copilot-setup-steps` job before Copilot starts work; it must keep that exact name.
-# It holds read-only permissions and no secrets.
+# It holds read-only permissions and no secrets. Dependencies are installed without lifecycle
+# scripts; scripts/validate.sh performs its own install when Copilot runs it.
 
 on:
   workflow_dispatch:
@@ -39,4 +40,4 @@ jobs:
         run: |
           set -euo pipefail
           dotnet restore backend/InventoryApi/InventoryApi.slnx
-          npm --prefix frontend/inventory-app ci
+          npm --prefix frontend/inventory-app ci --ignore-scripts
