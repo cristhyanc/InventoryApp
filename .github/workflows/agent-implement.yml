@@ -536,11 +536,27 @@ jobs:
           PR_NUMBER: ${{ needs.implement.outputs.pr_number }}
           HEAD_SHA: ${{ needs.implement.outputs.head_sha }}
           EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
           fail() { echo "::error::$1"; exit 1; }
 
           [[ "$ISSUE_NUMBER" =~ ^[1-9][0-9]*$ ]] || fail "A valid issue number is required."
+
+          # Any failure before the architecture workflow is dispatched (a guard, a gh error or the
+          # dispatch itself) must not leave the issue in agent-working with nothing scheduled.
+          dispatched=false
+          block_undispatched() {
+            local status=$?
+            if [ "$status" -ne 0 ] && [ "$dispatched" != "true" ]; then
+              gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
+                --remove-label agent-working --add-label agent-blocked || true
+              gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
+                --body "Implementation PR #${PR_NUMBER:-?} was created at ${HEAD_SHA:-?}, but the trusted architecture workflow could not be dispatched. The task is now agent-blocked. Run: $RUN_URL" || true
+            fi
+          }
+          trap block_undispatched EXIT
+
           pr_json="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
             --json state,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner)"
           state="$(jq -r '.state' <<<"$pr_json")"
@@ -567,15 +583,10 @@ jobs:
             fail "Pull requests that change .github/workflows/** require manual validation and review."
           fi
 
-          if ! gh workflow run agent-architecture.yml \
+          gh workflow run agent-architecture.yml \
             --repo "$GITHUB_REPOSITORY" \
             --ref main \
             -f issue_number="$ISSUE_NUMBER" \
             -f pr_number="$PR_NUMBER" \
-            -f head_sha="$HEAD_SHA"; then
-            gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
-              --remove-label agent-working --add-label agent-blocked || true
-            gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
-              --body "Implementation PR #$PR_NUMBER was created at $HEAD_SHA, but the trusted architecture workflow could not be dispatched. The task is now agent-blocked. Run: $RUN_URL" || true
-            fail "Architecture workflow dispatch failed."
-          fi
+            -f head_sha="$HEAD_SHA"
+          dispatched=true

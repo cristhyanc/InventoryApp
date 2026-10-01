@@ -225,20 +225,24 @@ jobs:
     needs:
       - context
       - architecture
-    if: always() && needs.context.result == 'success'
+    # Runs even when the target check fails, so a rejected or broken handoff never leaves the
+    # issue in agent-working with nothing scheduled.
+    if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       actions: write
       pull-requests: write
       issues: write
+      statuses: read
 
     steps:
       - name: Record architecture outcome and dispatch exact-SHA validation
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ISSUE_NUMBER: ${{ needs.context.outputs.issue_number }}
-          PR_NUMBER: ${{ needs.context.outputs.pr_number }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+          CONTEXT_JOB_RESULT: ${{ needs.context.result }}
+          PR_NUMBER: ${{ inputs.pr_number }}
           EXPECTED_START_SHA: ${{ needs.context.outputs.head_sha }}
           FINAL_SHA: ${{ needs.architecture.outputs.head_sha }}
           ARCHITECTURE_JOB_RESULT: ${{ needs.architecture.result }}
@@ -248,11 +252,29 @@ jobs:
           set -euo pipefail
           fail() { echo "::error::$1"; exit 1; }
 
-          if [ "$ARCHITECTURE_JOB_RESULT" != "success" ]; then
-            gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --remove-label agent-working --add-label agent-blocked
-            gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Architecture workflow did not complete successfully ($ARCHITECTURE_JOB_RESULT). The task is now agent-blocked. Run: $RUN_URL"
-            exit 1
-          fi
+          [[ "$ISSUE_NUMBER" =~ ^[1-9][0-9]*$ ]] || fail "A valid issue number is required."
+
+          # Any failure before validation is dispatched blocks the task, but only while the issue
+          # is still agent-working, so a stale or mistaken manual dispatch cannot block other work.
+          dispatched=false
+          labelled_by_this_run=false
+          block_undispatched() {
+            local status=$?
+            if [ "$status" -ne 0 ] && [ "$dispatched" != "true" ]; then
+              if [ "$labelled_by_this_run" = "true" ] || gh issue view "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --json state,labels \
+                | jq -e '.state == "OPEN" and any(.labels[]?; .name == "agent-working")' >/dev/null; then
+                gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --remove-label agent-review || true
+                gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
+                  --remove-label agent-working --remove-label agent-review --add-label agent-blocked || true
+                gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
+                  --body "Architecture stage did not hand pull request #$PR_NUMBER to exact-SHA validation (target check: $CONTEXT_JOB_RESULT; architecture: $ARCHITECTURE_JOB_RESULT). The task is now agent-blocked. Run: $RUN_URL" || true
+              fi
+            fi
+          }
+          trap block_undispatched EXIT
+
+          [ "$CONTEXT_JOB_RESULT" = "success" ] || fail "Architecture target check did not succeed ($CONTEXT_JOB_RESULT)."
+          [ "$ARCHITECTURE_JOB_RESULT" = "success" ] || fail "Architecture workflow did not complete successfully ($ARCHITECTURE_JOB_RESULT)."
 
           [[ "$FINAL_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "Architecture workflow did not produce a valid final head SHA."
           pr_json="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
@@ -283,19 +305,24 @@ jobs:
           [ "$(jq -r '.state' <<<"$issue_json")" = "OPEN" ] || fail "Issue #$ISSUE_NUMBER is not open."
           jq -e 'any(.labels[]?; .name == "agent-working")' <<<"$issue_json" >/dev/null || fail "Issue #$ISSUE_NUMBER is not in agent-working state."
 
+          labelled_by_this_run=true
           gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label agent-review
           gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --remove-label agent-working --add-label agent-review
 
-          if ! gh workflow run validate.yml \
-            --repo "$GITHUB_REPOSITORY" \
-            --ref main \
-            -f pr_number="$PR_NUMBER" \
-            -f head_sha="$FINAL_SHA" \
-            -f dispatch_review=true; then
-            gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --remove-label agent-review || true
-            gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --remove-label agent-review --add-label agent-blocked || true
-            gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Architecture passed at $FINAL_SHA, but exact-SHA validation dispatch failed. The task is agent-blocked. Run: $RUN_URL" || true
-            fail "Exact-SHA validation dispatch failed after architecture."
+          # The architecture push can also reach agent-head-update.yml for the same SHA. Whichever
+          # path dispatches first owns it; the other sees the agent-validation status and stands down.
+          existing_validation="$(gh api "repos/$GITHUB_REPOSITORY/commits/$FINAL_SHA/status" \
+            --jq '[.statuses[] | select(.context == "agent-validation")][0].state // ""')"
+          if [ -n "$existing_validation" ]; then
+            echo "::notice::$FINAL_SHA already has an agent-validation status ($existing_validation); validation was already scheduled."
+          else
+            gh workflow run validate.yml \
+              --repo "$GITHUB_REPOSITORY" \
+              --ref main \
+              -f pr_number="$PR_NUMBER" \
+              -f head_sha="$FINAL_SHA" \
+              -f dispatch_review=true
           fi
+          dispatched=true
 
           gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Architecture pass finished for pull request #$PR_NUMBER at head $FINAL_SHA. Exact-SHA validation is now running; successful validation will dispatch the independent review automatically. Run: $RUN_URL"

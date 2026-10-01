@@ -1,5 +1,6 @@
 import './agent-persistence.test.mjs';
 import './agent-review-publication.test.mjs';
+import './agent-architecture-handoff.test.mjs';
 // Deterministic contract tests for the validation workflow's concurrency and status model.
 // Run with: node --test scripts/validate-agent-workflows.test.mjs
 import assert from 'node:assert/strict';
@@ -251,7 +252,8 @@ describe('preserved guards', () => {
     assert.ok(dispatcher.includes('issues: write'));
     assert.ok(!dispatcher.includes('pull-requests: write'));
     assert.ok(dispatcher.includes('agent-architecture.yml'));
-    assert.ok(dispatcher.includes('if ! gh workflow run agent-architecture.yml'));
+    assert.ok(dispatcher.includes('trap block_undispatched EXIT'));
+    assert.ok(dispatcher.includes('RUN_URL: ${{ github.server_url }}'));
     assert.ok(dispatcher.includes('--remove-label agent-working --add-label agent-blocked'));
     assert.ok(dispatcher.includes('--ref main'));
     assert.ok(dispatcher.includes('-f issue_number="$ISSUE_NUMBER"'));
@@ -271,8 +273,12 @@ describe('preserved guards', () => {
     assert.ok(finalize.includes('gh workflow run validate.yml'));
     assert.ok(finalize.includes('-f dispatch_review=true'));
 
-    const noSuccessGate = replaceOnce(architectureWorkflow, '[ "$ARCHITECTURE_JOB_RESULT" != "success" ]', '[ "$ARCHITECTURE_JOB_RESULT" = "failure" ]');
+    const noSuccessGate = replaceOnce(architectureWorkflow, '[ "$ARCHITECTURE_JOB_RESULT" = "success" ]', '[ "$ARCHITECTURE_JOB_RESULT" != "failure" ]');
     assert.throws(() => runContractChecks({ read: readWithOverrides({ [architecturePath]: noSuccessGate }) }), /agent-architecture.yml finalize/);
+    const skippedOnRejectedTarget = replaceOnce(architectureWorkflow, '    if: always()\n', "    if: always() && needs.context.result == 'success'\n");
+    assert.throws(() => runContractChecks({ read: readWithOverrides({ [architecturePath]: skippedOnRejectedTarget }) }), /agent-architecture.yml finalize/);
+    const noDuplicateCheck = replaceOnce(architectureWorkflow, 'select(.context == "agent-validation")', 'select(.context == "merge-validation")');
+    assert.throws(() => runContractChecks({ read: readWithOverrides({ [architecturePath]: noDuplicateCheck }) }), /agent-architecture.yml finalize/);
   });
   it('keeps the repair dispatcher read-only on pull requests, since it never labels one', () => {
     const dispatcher = repairWorkflow.slice(repairWorkflow.indexOf('  dispatch-validation:\n'));

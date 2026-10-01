@@ -1020,9 +1020,10 @@ export function verifyArchitecturePass(implementationWorkflow, architectureWorkf
     'issues: write',
     'agent-architecture.yml', '-f issue_number="$ISSUE_NUMBER"', '-f pr_number="$PR_NUMBER"', '-f head_sha="$HEAD_SHA"',
     '[[ "$head_ref" == agent/issue-"$ISSUE_NUMBER"-* ]]',
-    'if ! gh workflow run agent-architecture.yml',
+    'RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}',
+    'trap block_undispatched EXIT', 'dispatched=true',
     '--remove-label agent-working --add-label agent-blocked',
-    'Architecture workflow dispatch failed.',
+    'could not be dispatched. The task is now agent-blocked.',
   ]) requireText(implementationDispatcher, required, 'agent-implement.yml architecture dispatcher');
   for (const forbidden of ['validate.yml', 'dispatch_review=true', 'gh pr edit', 'agent-review']) {
     forbidText(implementationDispatcher, forbidden, 'agent-implement.yml architecture dispatcher');
@@ -1080,9 +1081,13 @@ export function verifyArchitecturePass(implementationWorkflow, architectureWorkf
 
   const finalize = section(architectureWorkflow, '  finalize:\n', null, 'agent-architecture.yml finalize');
   for (const required of [
-    "if: always() && needs.context.result == 'success'", 'actions: write', 'pull-requests: write', 'issues: write',
+    "    if: always()\n", 'actions: write', 'pull-requests: write', 'issues: write', 'statuses: read',
+    'ISSUE_NUMBER: ${{ inputs.issue_number }}', 'CONTEXT_JOB_RESULT: ${{ needs.context.result }}',
+    '[ "$CONTEXT_JOB_RESULT" = "success" ]', 'trap block_undispatched EXIT', 'dispatched=true',
+    '[ "$labelled_by_this_run" = "true" ]', 'labelled_by_this_run=true',
+    'select(.context == "agent-validation")',
     'EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}',
-    'ARCHITECTURE_JOB_RESULT: ${{ needs.architecture.result }}', '[ "$ARCHITECTURE_JOB_RESULT" != "success" ]',
+    'ARCHITECTURE_JOB_RESULT: ${{ needs.architecture.result }}', '[ "$ARCHITECTURE_JOB_RESULT" = "success" ]',
     'FINAL_SHA: ${{ needs.architecture.outputs.head_sha }}', '[ "$current_sha" = "$FINAL_SHA" ]',
     '[[ "$head_ref" == agent/issue-"$ISSUE_NUMBER"-* ]]', '.user.login // empty',
     'any(.labels[]?; .name == "agent-working")', "grep -Eq '^\\.github/workflows/'",
@@ -1091,6 +1096,10 @@ export function verifyArchitecturePass(implementationWorkflow, architectureWorkf
     'gh workflow run validate.yml', '--ref main', '-f head_sha="$FINAL_SHA"', '-f dispatch_review=true',
     '--remove-label agent-review --add-label agent-blocked',
   ]) requireText(finalize, required, 'agent-architecture.yml finalize');
+  // finalize must also run when the target check fails, or a rejected handoff strands the issue.
+  forbidText(finalize, "needs.context.result == 'success'", 'agent-architecture.yml finalize');
+  requireOrder(finalize, 'labelled_by_this_run=true', 'gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label agent-review', 'agent-architecture.yml finalize');
+  requireOrder(finalize, 'gh workflow run validate.yml', 'dispatched=true', 'agent-architecture.yml finalize');
   for (const forbidden of ['actions/checkout', 'CLAUDE_CODE_OAUTH_TOKEN', 'AGENT_AUTOMATION_APP_PRIVATE_KEY', 'contents: write', 'claude-code-action']) forbidText(finalize, forbidden, 'agent-architecture.yml finalize');
 }
 /** Runs every agent workflow contract check with an overridable repository reader. */
