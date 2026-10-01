@@ -131,6 +131,9 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           allowed_bots: "github-actions[bot]"
+          # Same as agent-architecture.yml: without the full transcript, refused tool calls and
+          # turn-limit failures cannot be diagnosed from the run log.
+          show_full_output: true
           prompt: |
             You are the read-only InventoryApp architecture checker. Pull request #${{ needs.context.outputs.pr_number }} (issue #${{ needs.context.outputs.issue_number }}) was implemented by GitHub Copilot, a different agent; do not rely on anything it claimed. The working tree is its head ${{ needs.context.outputs.head_sha }}; compare with `git diff origin/develop...HEAD`.
 
@@ -142,7 +145,7 @@ jobs:
           claude_args: |
             --model sonnet
             --effort high
-            --max-turns 60
+            --max-turns 100
             --json-schema '{"type":"object","additionalProperties":false,"required":["checked_head_sha","verdict","findings"],"properties":{"checked_head_sha":{"type":"string","pattern":"^[0-9a-f]{40}$"},"verdict":{"type":"string","enum":["CLEAN","FINDINGS"]},"findings":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["path","line","rule","problem","fix"],"properties":{"path":{"type":"string","minLength":1},"line":{"type":"integer","minimum":1},"rule":{"type":"string","minLength":1},"problem":{"type":"string","minLength":1},"fix":{"type":"string","minLength":1}}}}}}'
             --allowedTools "Read,Glob,Grep"
             "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh issue view *)"
