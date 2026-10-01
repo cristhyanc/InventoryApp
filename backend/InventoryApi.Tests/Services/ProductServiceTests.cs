@@ -3,6 +3,7 @@ using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using InventoryApi.DTOs;
 using Inventory.Application.Nayax;
+using Inventory.Application.Products;
 using Inventory.Application.Reorder;
 using InventoryApi.Models;
 using InventoryApi.Services;
@@ -61,13 +62,115 @@ public class ProductServiceTests
         Assert.Single(product.StockAdjustments);
     }
 
+    /// <summary>
+    /// Issue #240 moved the product reads behind Application use cases and a read port, with the API
+    /// mapping the result back to the unchanged <see cref="Product"/> response. This pins that the whole
+    /// response shape survives the round trip: the scalar catalogue/costing fields, the nested category
+    /// and supplier, the stock-adjustment history, and the derived reorder values.
+    /// </summary>
+    [Fact]
+    public async Task Get_ReturnsTheCompleteProductResponseShape_IncludingNestedDetailAndDerivedValues()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        var options = new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options;
+        await using (var schema = TestAppDbContext.Unrestricted(options))
+            await schema.Database.EnsureCreatedAsync();
+
+        await using (var seed = TestAppDbContext.Unrestricted(options))
+        {
+            seed.Categories.Add(new Category { Id = 3, Name = "Drinks", Description = "Cold" });
+            seed.Suppliers.Add(new Supplier
+            {
+                Id = 4,
+                Name = "Acme",
+                ContactName = "Pat",
+                Phone = "123",
+                Email = "a@b.c",
+                Address = "1 Road",
+            });
+            seed.Products.Add(new Product
+            {
+                Id = 1,
+                Name = "Coke",
+                Sku = "SKU-1",
+                Description = "A can",
+                UnitPrice = 3.50m,
+                AverageUnitCost = 1.25m,
+                CostingQuantity = 7,
+                InventoryValue = 8.75m,
+                QuantityInStock = 4,
+                LowStockThreshold = 10,
+                RestockTo = 20,
+                Unit = "can",
+                IsActive = true,
+                CategoryId = 3,
+                SupplierId = 4,
+            });
+            await seed.SaveChangesAsync();
+            seed.StockAdjustments.Add(new StockAdjustment
+            {
+                ProductId = 1,
+                QuantityChange = 4,
+                QuantityAfter = 4,
+                UnitCost = 1.25m,
+                TotalCost = 5m,
+                Reason = StockAdjustmentReason.Restock,
+                Source = StockAdjustmentSource.Nayax,
+                Notes = "Initial",
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        await using var db = TestAppDbContext.Unrestricted(options);
+
+        var product = await CreateService(db).Get(1);
+
+        Assert.NotNull(product);
+        Assert.Equal("Coke", product.Name);
+        Assert.Equal("SKU-1", product.Sku);
+        Assert.Equal("A can", product.Description);
+        Assert.Equal(3.50m, product.UnitPrice);
+        Assert.Equal(1.25m, product.AverageUnitCost);
+        Assert.Equal(7, product.CostingQuantity);
+        Assert.Equal(8.75m, product.InventoryValue);
+        Assert.Equal(4, product.QuantityInStock);
+        Assert.Equal(10, product.LowStockThreshold);
+        Assert.Equal(20, product.RestockTo);
+        Assert.Equal("can", product.Unit);
+        Assert.True(product.IsActive);
+        Assert.Equal(3, product.CategoryId);
+        Assert.Equal("Drinks", product.Category!.Name);
+        Assert.Equal("Cold", product.Category.Description);
+        Assert.Equal(4, product.SupplierId);
+        Assert.Equal("Acme", product.Supplier!.Name);
+        Assert.Equal("Pat", product.Supplier.ContactName);
+        Assert.Equal("1 Road", product.Supplier.Address);
+
+        var adjustment = Assert.Single(product.StockAdjustments);
+        Assert.Equal(4, adjustment.QuantityChange);
+        Assert.Equal(1.25m, adjustment.UnitCost);
+        Assert.Equal(StockAdjustmentReason.Restock, adjustment.Reason);
+        Assert.Equal(StockAdjustmentSource.Nayax, adjustment.Source);
+        Assert.Equal("Initial", adjustment.Notes);
+
+        // Derived reorder values: GetAll/Get resolve no live machine need or outstanding orders, so
+        // these follow from the persisted fields alone, exactly as before the migration.
+        Assert.Equal(0, product.MachineReplenishmentNeed);
+        Assert.Equal(0m, product.OnOrderQuantity);
+        Assert.Equal(4m, product.ProjectedStockForReorder);
+        Assert.Equal(16m, product.NeedToOrder);
+        Assert.True(product.IsLowStock);
+        Assert.True(product.IsReorderAlert);
+    }
+
     [Fact]
     public async Task Create_Update_Delete_Product_And_StockAdjustment_Created()
     {
         using var db = CreateDbContext("prod_test");
         var calculateReorderNeeds = new CalculateReorderNeeds(
             new Mock<INayaxLynxClient>().Object, new EfOutstandingSupplierOrderQuantityStore(db));
-        IProductService svc = new ProductService(db, calculateReorderNeeds);
+        IProductService svc = CreateService(db, calculateReorderNeeds);
 
         var dto = new ProductCreateDto("p1", null, null, 10m, 5, 1, 10, "unit", null, null, true);
         var product = await svc.Create(new ProductCreateDto("p1", null, null, 10m, 5, 1, 10, "unit", null, null, true));
@@ -219,7 +322,7 @@ public class ProductServiceTests
         nayaxMock.Setup(x => x.GetMachineProductsAsync(2, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct> { new() { NayaxProductID = 1, MissingStockByMDB = 4 } });
         var calculateReorderNeeds = new CalculateReorderNeeds(nayaxMock.Object, new EfOutstandingSupplierOrderQuantityStore(db));
-        var service = new ProductService(db, calculateReorderNeeds);
+        var service = CreateService(db, calculateReorderNeeds);
 
         var alerts = (await service.LowStock()).ToList();
 
@@ -341,7 +444,20 @@ public class ProductServiceTests
         nayaxMock.Setup(client => client.GetMachinesAsync(It.IsAny<System.Threading.CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachine>());
         var calculateReorderNeeds = new CalculateReorderNeeds(nayaxMock.Object, new EfOutstandingSupplierOrderQuantityStore(db));
-        return new ProductService(db, calculateReorderNeeds);
+        return CreateService(db, calculateReorderNeeds);
     }
 
+    private static ProductService CreateService(AppDbContext db, CalculateReorderNeeds calculateReorderNeeds)
+    {
+        var store = new EfProductStore(db, new InventoryCostRebuildService(db));
+        var catalog = new EfProductCatalogStore(db);
+        var listLowStockProducts = new ListLowStockProducts(catalog, calculateReorderNeeds);
+        return new ProductService(
+            new ListProducts(catalog, listLowStockProducts),
+            new GetProduct(catalog),
+            listLowStockProducts,
+            new CreateProduct(store),
+            new UpdateProduct(store),
+            new DeleteProduct(store));
+    }
 }
