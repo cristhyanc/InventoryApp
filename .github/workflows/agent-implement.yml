@@ -1,9 +1,9 @@
 name: Agent implementation
 
-# Implementation agent (Claude Code) for issues a human has marked `agent-ready`.
+# Implementation agent (Claude Code) for issues a human has marked `agent-ready-claude`.
 #
 # Authority and lifecycle: AGENTS.md ("Automated task contract") and docs/automation.md.
-# - Starts only when a human applies the `agent-ready` label to an issue.
+# - Starts only when a human applies the `agent-ready-claude` label to an issue.
 # - Works from the latest `develop`, on a feature branch named `agent/issue-<n>-*`.
 # - Runs the complete repository validation and opens a pull request targeting `develop`.
 # - Never merges, deploys, or pushes to `develop`/`main`. Branch protection must also enforce this.
@@ -35,7 +35,7 @@ concurrency:
 jobs:
   preflight:
     name: Validate issue documentation-impact declaration
-    if: github.event.label.name == 'agent-ready' && github.event.issue.pull_request == null
+    if: github.event.label.name == 'agent-ready-claude' && github.event.issue.pull_request == null
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -64,14 +64,14 @@ jobs:
           gh issue view "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --json body --jq '.body // ""' > "$body_file"
 
           if ! node scripts/validate-documentation-impact.mjs --issue-body "$body_file"; then
-            echo "::error title=Documentation impact preflight failed::Issue #$ISSUE_NUMBER does not carry a valid documentation-impact declaration, so implementation did not start: Claude was not run, no branch was created and no label was changed. Edit the issue so it has exactly one 'Documentation impact decision' section containing exactly 'Documentation changes required' or 'No documentation changes required', and exactly one 'Documentation impact details' section that lists the affected documentation files/sections or explains specifically why documentation is unaffected (bare 'None', 'N/A' or 'Not applicable' is rejected). Then remove and re-apply the agent-ready label."
+            echo "::error title=Documentation impact preflight failed::Issue #$ISSUE_NUMBER does not carry a valid documentation-impact declaration, so implementation did not start: Claude was not run, no branch was created and no label was changed. Edit the issue so it has exactly one 'Documentation impact decision' section containing exactly 'Documentation changes required' or 'No documentation changes required', and exactly one 'Documentation impact details' section that lists the affected documentation files/sections or explains specifically why documentation is unaffected (bare 'None', 'N/A' or 'Not applicable' is rejected). Then remove and re-apply the agent-ready-claude label."
             exit 1
           fi
 
   implement:
-    name: Implement agent-ready issue
+    name: Implement agent-ready-claude issue
     needs: preflight
-    if: needs.preflight.result == 'success' && github.event.label.name == 'agent-ready' && github.event.issue.pull_request == null
+    if: needs.preflight.result == 'success' && github.event.label.name == 'agent-ready-claude' && github.event.issue.pull_request == null
     runs-on: ubuntu-latest
     timeout-minutes: 180
     permissions:
@@ -143,7 +143,7 @@ jobs:
       - name: Mark issue as agent-working
         run: |
           gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
-            --remove-label agent-ready --add-label agent-working
+            --remove-label agent-ready-claude --add-label agent-working
 
       - name: Run Claude Code implementation agent
         id: claude
@@ -511,7 +511,7 @@ jobs:
             gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
               --remove-label agent-working --add-label agent-blocked
             gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "$(cat <<EOF
-          Implementation ended without a verified completed pull request targeting develop from an \`agent/issue-$ISSUE_NUMBER-*\` branch (coder: $CLAUDE_OUTCOME; publish: $PUBLISH_OUTCOME). The task is now \`agent-blocked\` and needs a human decision. Read the run log and any agent comment, resolve the blocker, then remove \`agent-blocked\` and re-apply \`agent-ready\` to start again.
+          Implementation ended without a verified completed pull request targeting develop from an \`agent/issue-$ISSUE_NUMBER-*\` branch (coder: $CLAUDE_OUTCOME; publish: $PUBLISH_OUTCOME). The task is now \`agent-blocked\` and needs a human decision. Read the run log and any agent comment, resolve the blocker, then remove \`agent-blocked\` and re-apply \`agent-ready-claude\` to start again.
 
           Run: $RUN_URL
           EOF

@@ -366,13 +366,18 @@ export function verifyValidationModeIsolation(workflowText, source) {
 // resolves to the GraphQL addLabelsToLabelable mutation, which checks the pull-requests
 // permission, not issues, regardless of the labelable being a pull request).
 function verifySafeDispatcher(text, source, pullRequestsPermission = 'read') {
+  verifySafeDispatcherBase(text, source, pullRequestsPermission);
+  for (const required of ['EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}', 'agent/issue-*']) {
+    requireText(text, required, source);
+  }
+}
+
+function verifySafeDispatcherBase(text, source, pullRequestsPermission = 'read') {
   for (const required of [
     'actions: write',
     `pull-requests: ${pullRequestsPermission}`,
     '--ref main',
     'headRefOid',
-    'EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}',
-    'agent/issue-*',
     '.github/workflows/',
   ]) {
     requireText(text, required, source);
@@ -400,26 +405,51 @@ function normalizeGuardVariables(text) {
   return text.replaceAll('$head_sha', '$HEAD_SHA').replaceAll('$pr_number', '$PR_NUMBER');
 }
 
+// Cross-review identities. A Claude implementation is an `agent/issue-*` branch authored by the
+// dedicated agent GitHub App bot (AGENT_AUTOMATION_APP_BOT_LOGIN); a Copilot implementation is a
+// `copilot/*` branch authored by the Copilot coding agent (COPILOT_AGENT_BOT_LOGIN, default Copilot).
+export const COPILOT_AUTHOR_ENV = "EXPECTED_COPILOT_AUTHOR: ${{ vars.COPILOT_AGENT_BOT_LOGIN || 'Copilot' }}";
+const CLAUDE_PR_GUARDS = Object.freeze([
+  '[[ "$head_ref" == agent/issue-* ]]',
+  'AGENT_AUTOMATION_APP_BOT_LOGIN is not configured',
+  '[ "$author" = "$EXPECTED_AGENT_AUTHOR" ]',
+]);
+const COPILOT_PR_GUARDS = Object.freeze([
+  COPILOT_AUTHOR_ENV,
+  '[[ "$head_ref" == copilot/* ]]',
+  '[ "$author" = "$EXPECTED_COPILOT_AUTHOR" ]',
+]);
+
 // Only the REST pull request endpoint returns the canonical author login reliably for bot
 // authors, so every guarded section reads `.user.login` over REST and compares it with the
-// dedicated agent GitHub App bot login configured in AGENT_AUTOMATION_APP_BOT_LOGIN.
-function verifyAgentPrGuards(text, source, staleMessage) {
+// expected implementer login. `implementers` names which implementations the section accepts:
+// 'claude' (the default), 'both' (validation and scheduling), or 'copilot' (Claude's review of
+// Copilot's work, which must never accept a Claude implementation).
+function verifyAgentPrGuards(text, source, staleMessage, implementers = 'claude') {
   for (const required of [
     '--json state,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner',
     '[ "$state" = "OPEN" ]',
     '[ "$is_draft" = "false" ]',
     '[ "$base_ref" = "develop" ]',
     '[ "$head_repo" = "$GITHUB_REPOSITORY" ]',
-    '[[ "$head_ref" == agent/issue-* ]]',
     'author="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER"',
     "--jq '.user.login // empty'",
-    'AGENT_AUTOMATION_APP_BOT_LOGIN is not configured',
-    '[ "$author" = "$EXPECTED_AGENT_AUTHOR" ]',
     '[ "$current_sha" = "$HEAD_SHA" ]',
     staleMessage,
     "grep -Eq '^\\.github/workflows/'",
   ]) {
     requireText(text, required, source);
+  }
+  if (implementers !== 'copilot') {
+    for (const required of CLAUDE_PR_GUARDS) requireText(text, required, source);
+  }
+  if (implementers !== 'claude') {
+    for (const required of COPILOT_PR_GUARDS) requireText(text, required, source);
+  } else {
+    forbidText(text, 'copilot/*', source);
+  }
+  if (implementers === 'copilot') {
+    for (const forbidden of ['agent/issue-*', 'EXPECTED_AGENT_AUTHOR']) forbidText(text, forbidden, source);
   }
 
   for (const forbidden of [
@@ -439,6 +469,8 @@ export const headUpdatePath = '.github/workflows/agent-head-update.yml';
 export const issueTemplatePath = '.github/ISSUE_TEMPLATE/agent-task.yml';
 export const pullRequestTemplatePath = '.github/pull_request_template.md';
 export const appPushRetryPath = 'scripts/git-push-with-app-retry.sh';
+export const copilotImplementPath = '.github/workflows/agent-copilot.yml';
+export const copilotArchitecturePath = '.github/workflows/agent-copilot-architecture.yml';
 
 // ---------------------------------------------------------------------------------------
 // Documentation-impact gate. The templates collect the decision, the preflight and validation
@@ -475,7 +507,7 @@ export const PULL_REQUEST_TEMPLATE_DOCUMENTATION_CONTRACT = Object.freeze({
 
 export const PREFLIGHT_JOB_CONTRACT = Object.freeze({
   required: [
-    "if: github.event.label.name == 'agent-ready' && github.event.issue.pull_request == null",
+    "if: github.event.label.name == 'agent-ready-claude' && github.event.issue.pull_request == null",
     'contents: read',
     'issues: read',
     'actions/checkout',
@@ -502,7 +534,7 @@ export const PREFLIGHT_JOB_CONTRACT = Object.freeze({
 
 export const IMPLEMENT_JOB_DOCUMENTATION_CONTRACT = Object.freeze({
   needs: '    needs: preflight\n',
-  condition: "if: needs.preflight.result == 'success' && github.event.label.name == 'agent-ready' && github.event.issue.pull_request == null",
+  condition: "if: needs.preflight.result == 'success' && github.event.label.name == 'agent-ready-claude' && github.event.issue.pull_request == null",
   prompt: [
     'Restate its acceptance criteria, its explicit exclusions, and its Documentation impact decision and Documentation impact details.',
     "Follow the issue's Documentation impact decision exactly.",
@@ -817,7 +849,7 @@ export function verifyReviewPublicationAndScheduling(read = readRepositoryFile) 
   for (const forbidden of REVIEW_PUBLISH_CONTRACT.forbidden) {
     forbidText(publish, forbidden, 'agent-review.yml publish job');
   }
-  verifyAgentPrGuards(publish, 'agent-review.yml publish job', 'Refusing stale review publication');
+  verifyAgentPrGuards(publish, 'agent-review.yml publish job', 'Refusing stale review publication', 'copilot');
   requireOrder(publish, '[ "$current_sha" = "$HEAD_SHA" ]', 'repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews', 'agent-review.yml publish job', 'the current head must be re-verified before the review is published.');
   requireOrder(publish, '[ "$validation_state" = "success" ]', 'repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews', 'agent-review.yml publish job', 'validation must be re-verified before the review is published.');
 
@@ -838,7 +870,7 @@ export function verifyReviewPublicationAndScheduling(read = readRepositoryFile) 
   }
   const dispatcher = section(headUpdate, '  dispatch-validation:\n', null, headUpdatePath);
   verifySafeDispatcher(dispatcher, `${headUpdatePath} dispatcher`);
-  verifyAgentPrGuards(dispatcher, `${headUpdatePath} dispatcher`, 'Refusing stale scheduled validation');
+  verifyAgentPrGuards(dispatcher, `${headUpdatePath} dispatcher`, 'Refusing stale scheduled validation', 'both');
   requireOrder(dispatcher, '[ -z "$existing_validation" ]', 'gh workflow run validate.yml', `${headUpdatePath} dispatcher`, 'the duplicate check must run before dispatch.');
 
   const repair = read(repairPath);
@@ -1037,7 +1069,7 @@ export function verifyArchitecturePass(implementationWorkflow, architectureWorkf
   requireText(architectureWorkflow, 'group: agent-architecture-pr-${{ inputs.pr_number }}', 'agent-architecture.yml concurrency');
   requireText(architectureWorkflow, 'cancel-in-progress: false', 'agent-architecture.yml concurrency');
 
-  const context = section(architectureWorkflow, '  context:\n', '  architecture:\n', 'agent-architecture.yml context');
+  const context = section(architectureWorkflow, '  context:\n', '  copilot-check:\n', 'agent-architecture.yml context');
   requireText(context, 'pull-requests: read', 'agent-architecture.yml context');
   requireText(context, 'issues: read', 'agent-architecture.yml context');
   requireText(context, 'EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}', 'agent-architecture.yml context');
@@ -1047,8 +1079,25 @@ export function verifyArchitecturePass(implementationWorkflow, architectureWorkf
   requireText(context, '[[ "$head_ref" == agent/issue-"$ISSUE_NUMBER"-* ]]', 'agent-architecture.yml context');
   requireText(context, 'any(.labels[]?; .name == "agent-working")', 'agent-architecture.yml context');
 
+  // Cross-check: Copilot reviews Claude's architecture read-only; it holds no write permission, no
+  // persisted checkout credentials, no App or Anthropic credential, and may not change the tree.
+  const copilotCheck = section(architectureWorkflow, '  copilot-check:\n', '  architecture:\n', 'agent-architecture.yml Copilot check');
+  for (const required of [
+    '    needs: context', '      contents: read', 'ref: ${{ needs.context.outputs.head_sha }}', 'persist-credentials: false',
+    'COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_CLI_TOKEN }}', "--deny-tool='write'", '--no-ask-user',
+    '[ -z "$(git status --porcelain)" ]', '[ "$(git rev-parse HEAD)" = "$HEAD_SHA" ]',
+    'ARCHITECTURE: CLEAN', 'ARCHITECTURE: FINDINGS', 'echo "verdict=$verdict"',
+  ]) requireText(copilotCheck, required, 'agent-architecture.yml Copilot check');
+  for (const forbidden of [
+    'contents: write', 'pull-requests: write', 'issues: write', 'actions: write', 'copilot-requests: write',
+    'CLAUDE_CODE_OAUTH_TOKEN', 'AGENT_AUTOMATION_APP_PRIVATE_KEY', 'create-github-app-token', 'COPILOT_AGENT_TOKEN',
+    'secrets.GITHUB_TOKEN', 'git push', 'gh pr', 'gh issue', '--allow-all', "--allow-tool='write'", "--allow-tool='shell'",
+  ]) forbidText(copilotCheck, forbidden, 'agent-architecture.yml Copilot check');
+
   const architectureJob = section(architectureWorkflow, '  architecture:\n', '  finalize:\n', 'agent-architecture.yml architecture job');
-  requireText(architectureJob, '    needs: context', 'agent-architecture.yml architecture job');
+  requireText(architectureJob, '      - context\n      - copilot-check\n', 'agent-architecture.yml architecture job');
+  requireText(architectureJob, "if: needs.copilot-check.outputs.verdict == 'findings'", 'agent-architecture.yml architecture job');
+  requireText(architectureJob, '${{ needs.copilot-check.outputs.findings }}', 'agent-architecture.yml architecture job');
   requireText(architectureJob, '      contents: read', 'agent-architecture.yml architecture permissions');
   requireText(architectureJob, '      pull-requests: write', 'agent-architecture.yml architecture permissions');
   requireText(architectureJob, '      issues: read', 'agent-architecture.yml architecture permissions');
@@ -1082,14 +1131,17 @@ export function verifyArchitecturePass(implementationWorkflow, architectureWorkf
 
   const finalize = section(architectureWorkflow, '  finalize:\n', null, 'agent-architecture.yml finalize');
   for (const required of [
-    "    if: always()\n", 'actions: write', 'pull-requests: write', 'issues: write', 'statuses: read',
+    "    if: always()\n", '      - context\n      - copilot-check\n      - architecture\n', 'actions: write', 'pull-requests: write', 'issues: write', 'statuses: read',
     'ISSUE_NUMBER: ${{ inputs.issue_number }}', 'CONTEXT_JOB_RESULT: ${{ needs.context.result }}',
     '[ "$CONTEXT_JOB_RESULT" = "success" ]', 'trap block_undispatched EXIT', 'dispatched=true',
     '[ "$labelled_by_this_run" = "true" ]', 'labelled_by_this_run=true',
     'select(.context == "agent-validation")',
     'EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}',
     'ARCHITECTURE_JOB_RESULT: ${{ needs.architecture.result }}', '[ "$ARCHITECTURE_JOB_RESULT" = "success" ]',
-    'FINAL_SHA: ${{ needs.architecture.outputs.head_sha }}', '[ "$current_sha" = "$FINAL_SHA" ]',
+    'COPILOT_CHECK_RESULT: ${{ needs.copilot-check.result }}', '[ "$COPILOT_CHECK_RESULT" = "success" ]',
+    'COPILOT_VERDICT: ${{ needs.copilot-check.outputs.verdict }}', '[ "$ARCHITECTURE_JOB_RESULT" = "skipped" ]',
+    'FINAL_SHA="$EXPECTED_START_SHA"', 'FIX_SHA: ${{ needs.architecture.outputs.head_sha }}', 'FINAL_SHA="$FIX_SHA"',
+    '[ "$current_sha" = "$FINAL_SHA" ]',
     '[[ "$head_ref" == agent/issue-"$ISSUE_NUMBER"-* ]]', '.user.login // empty',
     'any(.labels[]?; .name == "agent-working")', "grep -Eq '^\\.github/workflows/'",
     'gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label agent-review',
@@ -1103,6 +1155,110 @@ export function verifyArchitecturePass(implementationWorkflow, architectureWorkf
   requireOrder(finalize, 'gh workflow run validate.yml', 'dispatched=true', 'agent-architecture.yml finalize');
   for (const forbidden of ['actions/checkout', 'CLAUDE_CODE_OAUTH_TOKEN', 'AGENT_AUTOMATION_APP_PRIVATE_KEY', 'contents: write', 'claude-code-action']) forbidText(finalize, forbidden, 'agent-architecture.yml finalize');
 }
+// ---------------------------------------------------------------------------------------
+// agent-ready-copilot path: Copilot implements, Claude checks architecture read-only, Copilot fixes,
+// exact-SHA validation runs, Claude reviews. These checks keep each stage's authority where the
+// cross-review model puts it.
+// ---------------------------------------------------------------------------------------
+
+/** Enforces the Copilot implementation path (agent-copilot.yml, agent-copilot-architecture.yml). */
+export function verifyCopilotImplementationPath(read = readRepositoryFile) {
+  const workflow = read(copilotImplementPath);
+  const triggers = section(workflow, 'on:\n', 'permissions:\n', `${copilotImplementPath} triggers`);
+  for (const required of ['issues:', 'types: [labeled]', 'pull_request_target:', 'types: [ready_for_review]', '      - develop']) {
+    requireText(triggers, required, `${copilotImplementPath} triggers`);
+  }
+  for (const forbidden of ['  pull_request:\n', 'synchronize', 'issue_comment', 'workflow_run', 'push:']) {
+    forbidText(triggers, forbidden, `${copilotImplementPath} triggers`);
+  }
+  requireText(workflow, 'permissions: {}', copilotImplementPath);
+  for (const forbidden of ['CLAUDE_CODE_OAUTH_TOKEN', 'claude-code-action', 'AGENT_AUTOMATION_APP_PRIVATE_KEY', 'gh pr merge', 'git push', 'ref: ${{ github.event.pull_request']) {
+    forbidText(workflow, forbidden, copilotImplementPath);
+  }
+
+  const preflight = section(workflow, '  preflight:\n', '  assign:\n', `${copilotImplementPath} preflight`);
+  requireText(preflight, "if: github.event_name == 'issues' && github.event.label.name == 'agent-ready-copilot' && github.event.issue.pull_request == null", `${copilotImplementPath} preflight`);
+  for (const required of PREFLIGHT_JOB_CONTRACT.required.slice(1)) requireText(preflight, required, `${copilotImplementPath} preflight`);
+  for (const forbidden of [...PREFLIGHT_JOB_CONTRACT.forbidden, 'COPILOT_AGENT_TOKEN']) forbidText(preflight, forbidden, `${copilotImplementPath} preflight`);
+
+  const assign = section(workflow, '  assign:\n', '  handoff:\n', `${copilotImplementPath} assign`);
+  for (const required of [
+    '    needs: preflight\n',
+    "if: needs.preflight.result == 'success' && github.event_name == 'issues' && github.event.label.name == 'agent-ready-copilot'",
+    '      issues: write', 'COPILOT_AGENT_TOKEN: ${{ secrets.COPILOT_AGENT_TOKEN }}',
+    '--remove-label agent-ready-copilot --add-label agent-working',
+    'assignees: ["copilot-swe-agent[bot]"]', 'base_branch: "develop"', 'custom_instructions: $instructions',
+    'GH_TOKEN="$COPILOT_AGENT_TOKEN" gh api', 'repos/$GITHUB_REPOSITORY/issues/$ISSUE_NUMBER/assignees',
+    'trap block_unassigned EXIT', '--add-label agent-blocked', 'assigned=true',
+    'Base branch is develop.', 'bash scripts/validate.sh', '## Documentation impact', 'Do not change anything under .github/',
+  ]) requireText(assign, required, `${copilotImplementPath} assign`);
+  for (const forbidden of ['actions/checkout', 'actions: write', 'contents: write', 'pull-requests: write']) {
+    forbidText(assign, forbidden, `${copilotImplementPath} assign`);
+  }
+  requireOrder(assign, '--remove-label agent-ready-copilot --add-label agent-working', 'repos/$GITHUB_REPOSITORY/issues/$ISSUE_NUMBER/assignees', `${copilotImplementPath} assign`, 'the issue must be agent-working before Copilot starts.');
+
+  const handoff = section(workflow, '  handoff:\n', null, `${copilotImplementPath} handoff`);
+  verifySafeDispatcherBase(handoff, `${copilotImplementPath} handoff`);
+  verifyAgentPrGuards(handoff, `${copilotImplementPath} handoff`, 'Refusing stale handoff', 'copilot');
+  for (const required of [
+    "github.event_name == 'pull_request_target'", "startsWith(github.event.pull_request.head.ref, 'copilot/')",
+    'closingIssuesReferences', 'any(.labels[]?; .name == "agent-working")',
+    'gh workflow run agent-copilot-architecture.yml', '-f issue_number="$issue_number"', '-f pr_number="$PR_NUMBER"', '-f head_sha="$HEAD_SHA"',
+  ]) requireText(handoff, required, `${copilotImplementPath} handoff`);
+  for (const forbidden of ['validate.yml', 'agent-review.yml', 'COPILOT_AGENT_TOKEN', 'issues: write', 'gh pr edit', 'gh issue edit']) {
+    forbidText(handoff, forbidden, `${copilotImplementPath} handoff`);
+  }
+
+  const check = read(copilotArchitecturePath);
+  const checkTriggers = section(check, 'on:\n', 'permissions:\n', `${copilotArchitecturePath} triggers`);
+  for (const required of ['workflow_dispatch:', 'issue_number:', 'pr_number:', 'head_sha:']) requireText(checkTriggers, required, `${copilotArchitecturePath} triggers`);
+  for (const forbidden of ['pull_request', 'issues:', 'issue_comment:']) forbidText(checkTriggers, forbidden, `${copilotArchitecturePath} triggers`);
+  requireText(check, 'permissions: {}', copilotArchitecturePath);
+
+  const context = section(check, '  context:\n', '  check:\n', `${copilotArchitecturePath} context`);
+  verifyAgentPrGuards(context, `${copilotArchitecturePath} context`, 'Refusing stale architecture check', 'copilot');
+  for (const required of ['pull-requests: read', 'issues: read', '[.closingIssuesReferences[]?.number] == [$n]', 'any(.labels[]?; .name == "agent-working")']) {
+    requireText(context, required, `${copilotArchitecturePath} context`);
+  }
+  for (const forbidden of ['actions/checkout', 'CLAUDE_CODE_OAUTH_TOKEN', 'write']) forbidText(context, forbidden, `${copilotArchitecturePath} context`);
+
+  // Claude's architecture check of Copilot's work is read-only: no write permission, no editing or
+  // publishing tools, and its result is schema-validated structured output.
+  const claudeCheck = section(check, '  check:\n', '  finalize:\n', `${copilotArchitecturePath} check`);
+  const checkPermissions = section(claudeCheck, '    permissions:\n', '\n    outputs:\n', `${copilotArchitecturePath} check permissions`);
+  for (const forbidden of ['write']) forbidText(checkPermissions, forbidden, `${copilotArchitecturePath} check permissions`);
+  for (const required of [
+    'ref: ${{ needs.context.outputs.head_sha }}', 'persist-credentials: false', 'id: architecture_check',
+    'structured_output: ${{ steps.architecture_check.outputs.structured_output }}', "--json-schema '",
+    '"enum":["CLEAN","FINDINGS"]', '"checked_head_sha":{"type":"string","pattern":"^[0-9a-f]{40}$"}',
+    '--disallowedTools "Edit,MultiEdit,Write,NotebookEdit,Agent,WebFetch,WebSearch"', 'Bash(git push *)', 'Bash(gh pr comment *)',
+  ]) requireText(claudeCheck, required, `${copilotArchitecturePath} check`);
+  const checkAllowed = extractAllowedTools(claudeCheck, `${copilotArchitecturePath} check allowed tools`);
+  for (const forbidden of ['Edit', 'Write', 'git add', 'git commit', 'git push', 'gh pr comment', 'gh pr edit', 'gh pr review', 'gh issue edit', 'gh api', 'gh workflow', 'validate.sh']) {
+    forbidText(checkAllowed, forbidden, `${copilotArchitecturePath} check allowed tools`);
+  }
+  for (const forbidden of ['COPILOT_AGENT_TOKEN', 'AGENT_AUTOMATION_APP_PRIVATE_KEY', 'create-github-app-token']) {
+    forbidText(claudeCheck, forbidden, `${copilotArchitecturePath} check`);
+  }
+
+  const finalize = section(check, '  finalize:\n', null, `${copilotArchitecturePath} finalize`);
+  for (const required of [
+    '    if: always()\n', '      - context\n      - check\n', 'actions: write', 'pull-requests: write', 'issues: write',
+    'trap block_unhanded EXIT', 'handed_off=true', '--remove-label agent-working --remove-label agent-review --add-label agent-blocked',
+    '[ "$CONTEXT_JOB_RESULT" = "success" ]', '[ "$CHECK_JOB_RESULT" = "success" ]', '[ "$checked_sha" = "$HEAD_SHA" ]',
+    '[ "$current_sha" = "$HEAD_SHA" ]', '[[ "$(jq -r \'.headRefName\' <<<"$pr_json")" == copilot/* ]]', '[ "$author" = "$EXPECTED_COPILOT_AUTHOR" ]',
+    COPILOT_AUTHOR_ENV, 'GH_TOKEN="$COPILOT_AGENT_TOKEN" gh pr comment', '@copilot ',
+    'gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label agent-review',
+    'gh workflow run validate.yml', '--ref main', '-f head_sha="$HEAD_SHA"', '-f dispatch_review=true',
+    'select(.context == "agent-validation")',
+  ]) requireText(finalize, required, `${copilotArchitecturePath} finalize`);
+  for (const forbidden of ['actions/checkout', 'CLAUDE_CODE_OAUTH_TOKEN', 'claude-code-action', 'AGENT_AUTOMATION_APP_PRIVATE_KEY', 'contents: write', 'agent-review.yml', "needs.context.result == 'success'"]) {
+    forbidText(finalize, forbidden, `${copilotArchitecturePath} finalize`);
+  }
+  requireOrder(finalize, '[ "$current_sha" = "$HEAD_SHA" ]', 'GH_TOKEN="$COPILOT_AGENT_TOKEN" gh pr comment', `${copilotArchitecturePath} finalize`, 'the current head must be re-verified before Copilot is asked to fix it.');
+  requireOrder(finalize, '[ "$current_sha" = "$HEAD_SHA" ]', 'gh workflow run validate.yml', `${copilotArchitecturePath} finalize`, 'the current head must be re-verified before validation is dispatched.');
+}
+
 /** Runs every agent workflow contract check with an overridable repository reader. */
 export function runContractChecks({ read = readRepositoryFile } = {}) {
   const appPushRetry = read(appPushRetryPath);
@@ -1155,7 +1311,7 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
   requireText(validationContext, 'echo "status_context=$STATUS_CONTEXT"', 'validate.yml context job');
   forbidText(validationContext, 'actions/checkout', 'validate.yml context job');
   forbidText(validationContext, 'CLAUDE_CODE_OAUTH_TOKEN', 'validate.yml context job');
-  verifyAgentPrGuards(normalizeGuardVariables(validationContext), 'validate.yml dispatched context', 'Refusing stale validation');
+  verifyAgentPrGuards(normalizeGuardVariables(validationContext), 'validate.yml dispatched context', 'Refusing stale validation', 'both');
 
   // The branch anchors carry a leading newline so the inner, deeper-indented if/else/fi
   // inside the pull_request branch cannot be mistaken for the outer one.
@@ -1190,7 +1346,19 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
 
   const reviewDispatcher = section(validate, '  dispatch-review:\n', null, validatePath);
   verifySafeDispatcher(reviewDispatcher, 'validate.yml review dispatcher');
-  verifyAgentPrGuards(reviewDispatcher, 'validate.yml review dispatcher', 'Refusing stale review dispatch');
+  verifyAgentPrGuards(reviewDispatcher, 'validate.yml review dispatcher', 'Refusing stale review dispatch', 'both');
+  // Cross-review: a Claude implementation is reviewed by Copilot code review, requested with the
+  // owner's token; only a Copilot implementation reaches the Claude review workflow.
+  for (const required of [
+    'COPILOT_AGENT_TOKEN: ${{ secrets.COPILOT_AGENT_TOKEN }}',
+    'if [ "$implementer" = "claude" ]; then',
+    'GH_TOKEN="$COPILOT_AGENT_TOKEN" gh api',
+    'repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/requested_reviewers',
+    "-f 'reviewers[]=copilot-pull-request-reviewer[bot]'",
+    'gh workflow run agent-review.yml',
+  ]) requireText(reviewDispatcher, required, 'validate.yml review dispatcher');
+  requireOrder(reviewDispatcher, 'if [ "$implementer" = "claude" ]; then', 'gh workflow run agent-review.yml', 'validate.yml review dispatcher', 'a Claude implementation must be routed to Copilot before the Claude review dispatch.');
+  requireText(section(reviewDispatcher, 'if [ "$implementer" = "claude" ]; then', 'gh workflow run agent-review.yml', 'validate.yml Copilot review request'), 'exit 0', 'validate.yml Copilot review request');
   requireText(reviewDispatcher, "github.event_name == 'workflow_dispatch'", 'validate.yml review dispatcher');
   requireText(reviewDispatcher, 'inputs.dispatch_review == true', 'validate.yml review dispatcher');
   requireText(reviewDispatcher, 'needs.report-status.result', 'validate.yml review dispatcher');
@@ -1204,6 +1372,7 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
     const workflow = read(path);
     const producer = section(workflow, '  repair:\n', '  dispatch-validation:\n', path);
     forbidText(producer, 'actions: write', `${path} repair job`);
+    requireText(producer, 'case "$head_ref" in copilot/*) fail', `${path} repair job`);
     requireText(producer, '      contents: read', `${path} repair permissions`);
     requireText(producer, 'persist-credentials: false', `${path} repair checkout`);
 
@@ -1253,12 +1422,7 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
   }
 
   const reviewContext = section(review, '  context:\n', '  review:\n', reviewPath);
-  requireText(
-    reviewContext,
-    'EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}',
-    'agent-review.yml dispatched context',
-  );
-  verifyAgentPrGuards(normalizeGuardVariables(reviewContext), 'agent-review.yml dispatched context', 'Refusing stale review');
+  verifyAgentPrGuards(normalizeGuardVariables(reviewContext), 'agent-review.yml dispatched context', 'Refusing stale review', 'copilot');
   requireText(reviewContext, 'statuses: read', 'agent-review.yml dispatched context');
   requireText(reviewContext, 'any(.labels[]?; .name == "agent-review")', 'agent-review.yml dispatched context');
   requireText(reviewContext, 'validation_state', 'agent-review.yml dispatched context');
@@ -1266,9 +1430,9 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
   // merge-result status published by pull_request validation is never a substitute.
   requireText(reviewContext, 'select(.context == "agent-validation")', 'agent-review.yml dispatched context');
   requireText(reviewContext, 'A manual agent-review request requires a successful latest agent-validation status on the exact head SHA.', 'agent-review.yml manual labeled context');
-  const authorGuardCount = (reviewContext.match(/\[ "\$author" = "\$EXPECTED_AGENT_AUTHOR" \]/g) ?? []).length;
+  const authorGuardCount = (reviewContext.match(/\[ "\$author" = "\$EXPECTED_COPILOT_AUTHOR" \]/g) ?? []).length;
   if (authorGuardCount < 2) {
-    throw new Error('agent-review.yml context: both dispatched and manual labeled review paths must verify the configured App bot author.');
+    throw new Error('agent-review.yml context: both dispatched and manual labeled review paths must verify the Copilot author.');
   }
   forbidText(reviewContext, MERGE_VALIDATION_STATUS, 'agent-review.yml dispatched context');
 
@@ -1297,12 +1461,15 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
     reviewPath,
     validatePath,
     headUpdatePath,
+    copilotImplementPath,
+    copilotArchitecturePath,
   ]) {
     forbidText(read(path), '.author.login', path);
   }
 
   verifyDocumentationImpactGate(read);
   verifyReviewPublicationAndScheduling(read);
+  verifyCopilotImplementationPath(read);
 }
 
 const invokedDirectly =

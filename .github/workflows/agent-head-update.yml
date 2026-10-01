@@ -37,7 +37,7 @@ jobs:
       github.event.pull_request.draft == false &&
       github.event.pull_request.base.ref == 'develop' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
-      startsWith(github.event.pull_request.head.ref, 'agent/issue-') &&
+      (startsWith(github.event.pull_request.head.ref, 'agent/issue-') || startsWith(github.event.pull_request.head.ref, 'copilot/')) &&
       contains(github.event.pull_request.labels.*.name, 'agent-review')
     runs-on: ubuntu-latest
     permissions:
@@ -52,6 +52,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}
+          EXPECTED_COPILOT_AUTHOR: ${{ vars.COPILOT_AGENT_BOT_LOGIN || 'Copilot' }}
         run: |
           set -euo pipefail
           fail() { echo "::error::$1"; exit 1; }
@@ -75,9 +76,17 @@ jobs:
           [ "$is_draft" = "false" ] || skip "pull request #$PR_NUMBER is a draft."
           [ "$base_ref" = "develop" ] || skip "pull request #$PR_NUMBER does not target develop."
           [ "$head_repo" = "$GITHUB_REPOSITORY" ] || skip "pull request #$PR_NUMBER does not use a same-repository branch."
-          [[ "$head_ref" == agent/issue-* ]] || skip "pull request #$PR_NUMBER does not use an agent/issue-* branch."
-          [ -n "$EXPECTED_AGENT_AUTHOR" ] || fail "AGENT_AUTOMATION_APP_BOT_LOGIN is not configured."
-          [ "$author" = "$EXPECTED_AGENT_AUTHOR" ] || skip "pull request #$PR_NUMBER is not authored by $EXPECTED_AGENT_AUTHOR."
+          if [[ "$head_ref" == agent/issue-* ]]; then
+            [ -n "$EXPECTED_AGENT_AUTHOR" ] || fail "AGENT_AUTOMATION_APP_BOT_LOGIN is not configured."
+            [ "$author" = "$EXPECTED_AGENT_AUTHOR" ] || skip "pull request #$PR_NUMBER is not authored by $EXPECTED_AGENT_AUTHOR."
+            implementer="claude"
+          elif [[ "$head_ref" == copilot/* ]]; then
+            [ "$author" = "$EXPECTED_COPILOT_AUTHOR" ] || skip "pull request #$PR_NUMBER is not authored by $EXPECTED_COPILOT_AUTHOR."
+            implementer="copilot"
+          else
+            skip "pull request #$PR_NUMBER does not use an agent/issue-* or copilot/* branch."
+          fi
+          echo "::notice::Pull request #$PR_NUMBER was implemented by $implementer."
           [ "$current_sha" = "$HEAD_SHA" ] || skip "Refusing stale scheduled validation: head is now $current_sha; the newer push schedules its own."
           jq -e 'any(.labels[]?; .name == "agent-review")' <<<"$pr_json" >/dev/null \
             || skip "the agent-review label is absent."

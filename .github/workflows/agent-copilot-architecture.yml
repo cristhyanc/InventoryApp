@@ -1,0 +1,276 @@
+name: Agent Copilot architecture check
+
+# Claude's read-only architecture check of a Copilot-implemented pull request (`agent-ready-copilot`).
+# Invoked only through workflow_dispatch from trusted default-branch automation (agent-copilot.yml).
+#
+# Cross-check: Claude reads the touched code and returns findings as schema-validated structured
+# output; the check job has no write permission and Claude's tools are read-only, so it cannot edit,
+# commit, push, comment or label. A separate deterministic finalize job then:
+# - with findings: asks Copilot to fix them in an @copilot comment posted with the owner's token
+#   (Copilot only acts on mentions from people with write access), and labels the pull request
+#   `agent-review`, so Copilot's fix push is validated at its exact SHA by agent-head-update.yml and
+#   then reviewed by Claude;
+# - with a clean result: labels the pull request `agent-review` and dispatches exact-SHA validation
+#   with dispatch_review=true, which dispatches Claude's final review on success.
+# Any failure before that handoff moves the issue from agent-working to agent-blocked.
+# Nothing here approves, merges, releases, or deploys.
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Linked agent-ready-copilot issue number
+        required: true
+        type: string
+      pr_number:
+        description: Copilot pull request number
+        required: true
+        type: string
+      head_sha:
+        description: Exact Copilot implementation head SHA to check
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: agent-copilot-architecture-pr-${{ inputs.pr_number }}
+  cancel-in-progress: false
+
+jobs:
+  context:
+    name: Verify architecture target
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pull-requests: read
+      issues: read
+    outputs:
+      issue_number: ${{ steps.context.outputs.issue_number }}
+      pr_number: ${{ steps.context.outputs.pr_number }}
+      head_sha: ${{ steps.context.outputs.head_sha }}
+
+    steps:
+      - name: Verify exact Copilot pull request
+        id: context
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+          EXPECTED_COPILOT_AUTHOR: ${{ vars.COPILOT_AGENT_BOT_LOGIN || 'Copilot' }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          [[ "$ISSUE_NUMBER" =~ ^[1-9][0-9]*$ ]] || fail "A valid issue number is required."
+          [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] || fail "A valid pull request number is required."
+          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "A full 40-character lowercase head SHA is required."
+
+          pr_json="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --json state,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,closingIssuesReferences)"
+          state="$(jq -r '.state' <<<"$pr_json")"
+          is_draft="$(jq -r '.isDraft' <<<"$pr_json")"
+          base_ref="$(jq -r '.baseRefName' <<<"$pr_json")"
+          head_ref="$(jq -r '.headRefName' <<<"$pr_json")"
+          current_sha="$(jq -r '.headRefOid // empty' <<<"$pr_json")"
+          head_repo="$(jq -r '"\(.headRepositoryOwner.login)/\(.headRepository.name)"' <<<"$pr_json")"
+          author="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.user.login // empty')"
+
+          [ "$state" = "OPEN" ] || fail "Pull request #$PR_NUMBER is not open."
+          [ "$is_draft" = "false" ] || fail "Pull request #$PR_NUMBER is a draft."
+          [ "$base_ref" = "develop" ] || fail "Architecture check is limited to pull requests targeting develop."
+          [ "$head_repo" = "$GITHUB_REPOSITORY" ] || fail "Architecture check is limited to same-repository branches."
+          [[ "$head_ref" == copilot/* ]] || fail "Claude's architecture check is limited to Copilot-implemented copilot/* branches."
+          [ "$author" = "$EXPECTED_COPILOT_AUTHOR" ] || fail "Architecture check requires $EXPECTED_COPILOT_AUTHOR as the pull request author."
+          [ "$current_sha" = "$HEAD_SHA" ] || fail "Refusing stale architecture check: pull request head is $current_sha, expected $HEAD_SHA."
+          jq -e --argjson n "$ISSUE_NUMBER" '[.closingIssuesReferences[]?.number] == [$n]' <<<"$pr_json" >/dev/null \
+            || fail "Pull request #$PR_NUMBER does not close exactly issue #$ISSUE_NUMBER."
+
+          issue_json="$(gh issue view "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --json state,labels)"
+          [ "$(jq -r '.state' <<<"$issue_json")" = "OPEN" ] || fail "Issue #$ISSUE_NUMBER is not open."
+          jq -e 'any(.labels[]?; .name == "agent-working")' <<<"$issue_json" >/dev/null || fail "Issue #$ISSUE_NUMBER is not in agent-working state."
+
+          changed_files="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" --jq '.[].filename')"
+          if grep -Eq '^\.github/workflows/' <<<"$changed_files"; then
+            fail "Pull requests that change .github/workflows/** require manual validation and review."
+          fi
+
+          {
+            echo "issue_number=$ISSUE_NUMBER"
+            echo "pr_number=$PR_NUMBER"
+            echo "head_sha=$HEAD_SHA"
+          } >> "$GITHUB_OUTPUT"
+
+  check:
+    name: Claude architecture check (read-only)
+    needs: context
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Read-only: this job runs Claude and holds no pull-request, issue, status or workflow write
+    # permission. Its only output is the schema-validated structured_output used by finalize.
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    outputs:
+      structured_output: ${{ steps.architecture_check.outputs.structured_output }}
+
+    steps:
+      - name: Check out exact Copilot head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.context.outputs.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Run Claude Code architecture check
+        id: architecture_check
+        uses: anthropics/claude-code-action@cfc3eb22bfed5c26ef66e3223c982af27e4524de # v1.0.231
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          allowed_bots: "github-actions[bot]"
+          prompt: |
+            You are the read-only InventoryApp architecture checker. Pull request #${{ needs.context.outputs.pr_number }} (issue #${{ needs.context.outputs.issue_number }}) was implemented by GitHub Copilot, a different agent; do not rely on anything it claimed. The working tree is its head ${{ needs.context.outputs.head_sha }}; compare with `git diff origin/develop...HEAD`.
+
+            Read CLAUDE.md, AGENTS.md (Architecture rules), docs/architecture.md, the issue's acceptance criteria and exclusions (`gh issue view ${{ needs.context.outputs.issue_number }}`), and the pull request diff (`gh pr diff ${{ needs.context.outputs.pr_number }}`). Review only the touched code and its directly affected boundaries: controllers versus use cases, domain rules versus adapters, dependency direction, framework or persistence leakage, duplicated calculations, information hiding, and testability.
+
+            Report only violations of an established rule in those documents. For each finding give the file, the line in the new file version, the rule it breaks, and the smallest structural fix that preserves observable behaviour, API contracts, data semantics and acceptance criteria. Do not propose broad migrations, new frameworks, scope expansion or changes to unrelated files. If a fix would need a migration, a documented-architecture change or a human decision, say so in the finding instead of prescribing it. A clean result is valid.
+
+            Deliver the result only as the structured output defined by the JSON schema: `checked_head_sha` exactly ${{ needs.context.outputs.head_sha }}, `verdict` `CLEAN` (no findings) or `FINDINGS` (at least one), and `findings`. You have no permission to edit, comment, label or push, and must not try.
+          claude_args: |
+            --model sonnet
+            --effort high
+            --max-turns 60
+            --json-schema '{"type":"object","additionalProperties":false,"required":["checked_head_sha","verdict","findings"],"properties":{"checked_head_sha":{"type":"string","pattern":"^[0-9a-f]{40}$"},"verdict":{"type":"string","enum":["CLEAN","FINDINGS"]},"findings":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["path","line","rule","problem","fix"],"properties":{"path":{"type":"string","minLength":1},"line":{"type":"integer","minimum":1},"rule":{"type":"string","minLength":1},"problem":{"type":"string","minLength":1},"fix":{"type":"string","minLength":1}}}}}}'
+            --allowedTools "Read,Glob,Grep"
+            "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh issue view *)"
+            "Bash(git status *),Bash(git diff *),Bash(git log *),Bash(git show *),Bash(git rev-parse *)"
+            --disallowedTools "Edit,MultiEdit,Write,NotebookEdit,Agent,WebFetch,WebSearch"
+            "mcp__github_inline_comment__create_inline_comment"
+            "Bash(gh pr review *),Bash(gh pr comment *),Bash(gh pr merge *),Bash(gh pr edit *),Bash(gh issue edit *),Bash(gh issue comment *),Bash(gh api *),Bash(gh workflow *),Bash(gh label *)"
+            "Bash(git push *),Bash(git commit *),Bash(git add *),Bash(git checkout *),Bash(git switch *),Bash(git reset *),Bash(git rebase *),Bash(git merge *),Bash(git restore *),Bash(git clean *)"
+
+  finalize:
+    name: Hand findings to Copilot or start validation
+    needs:
+      - context
+      - check
+    # Runs even when the check fails, so a broken handoff never leaves the issue agent-working.
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      pull-requests: write
+      issues: write
+      statuses: read
+
+    steps:
+      - name: Record architecture outcome and hand off
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COPILOT_AGENT_TOKEN: ${{ secrets.COPILOT_AGENT_TOKEN }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+          CONTEXT_JOB_RESULT: ${{ needs.context.result }}
+          CHECK_JOB_RESULT: ${{ needs.check.result }}
+          CHECK_OUTPUT: ${{ needs.check.outputs.structured_output }}
+          EXPECTED_COPILOT_AUTHOR: ${{ vars.COPILOT_AGENT_BOT_LOGIN || 'Copilot' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+          work="$(mktemp -d)"
+
+          [[ "$ISSUE_NUMBER" =~ ^[1-9][0-9]*$ ]] || fail "A valid issue number is required."
+          [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] || fail "A valid pull request number is required."
+          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "A full head SHA is required."
+
+          handed_off=false
+          block_unhanded() {
+            local status=$?
+            if [ "$status" -ne 0 ] && [ "$handed_off" != "true" ]; then
+              if gh issue view "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --json state,labels \
+                | jq -e '.state == "OPEN" and any(.labels[]?; .name == "agent-working")' >/dev/null; then
+                gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --remove-label agent-review || true
+                gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
+                  --remove-label agent-working --remove-label agent-review --add-label agent-blocked || true
+                gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
+                  --body "Claude's architecture check did not hand Copilot pull request #$PR_NUMBER on (target check: $CONTEXT_JOB_RESULT; Claude check: $CHECK_JOB_RESULT). The task is now agent-blocked. Run: $RUN_URL" || true
+              fi
+            fi
+          }
+          trap block_unhanded EXIT
+
+          [ "$CONTEXT_JOB_RESULT" = "success" ] || fail "Architecture target check did not succeed ($CONTEXT_JOB_RESULT)."
+          [ "$CHECK_JOB_RESULT" = "success" ] || fail "Claude's architecture check did not complete successfully ($CHECK_JOB_RESULT)."
+
+          printf '%s' "$CHECK_OUTPUT" > "$work/check.json"
+          jq -e 'type == "object"' "$work/check.json" >/dev/null 2>&1 || fail "The architecture check produced no valid structured output."
+          checked_sha="$(jq -r '.checked_head_sha // ""' "$work/check.json")"
+          [ "$checked_sha" = "$HEAD_SHA" ] || fail "The architecture check names SHA '$checked_sha', not $HEAD_SHA."
+          verdict="$(jq -r '.verdict // ""' "$work/check.json")"
+          case "$verdict" in
+            CLEAN) jq -e '(.findings | length) == 0' "$work/check.json" >/dev/null || fail "A CLEAN verdict must not list findings." ;;
+            FINDINGS) jq -e '(.findings | length) > 0' "$work/check.json" >/dev/null || fail "A FINDINGS verdict must list at least one finding." ;;
+            *) fail "Unknown architecture verdict '$verdict'." ;;
+          esac
+
+          # Re-verify the live pull request immediately before handing off: fail closed.
+          pr_json="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --json state,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner)"
+          author="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.user.login // empty')"
+          [ "$(jq -r '.state' <<<"$pr_json")" = "OPEN" ] || fail "Pull request #$PR_NUMBER is not open."
+          [ "$(jq -r '.isDraft' <<<"$pr_json")" = "false" ] || fail "Pull request #$PR_NUMBER is a draft."
+          [ "$(jq -r '.baseRefName' <<<"$pr_json")" = "develop" ] || fail "Pull request #$PR_NUMBER no longer targets develop."
+          [ "$(jq -r '"\(.headRepositoryOwner.login)/\(.headRepository.name)"' <<<"$pr_json")" = "$GITHUB_REPOSITORY" ] || fail "Pull request #$PR_NUMBER no longer uses a same-repository branch."
+          [[ "$(jq -r '.headRefName' <<<"$pr_json")" == copilot/* ]] || fail "Pull request #$PR_NUMBER no longer uses a copilot/* branch."
+          [ "$author" = "$EXPECTED_COPILOT_AUTHOR" ] || fail "Pull request #$PR_NUMBER is not authored by $EXPECTED_COPILOT_AUTHOR."
+          current_sha="$(jq -r '.headRefOid // empty' <<<"$pr_json")"
+          [ "$current_sha" = "$HEAD_SHA" ] || fail "Refusing stale architecture handoff: pull request head is $current_sha, checked $HEAD_SHA."
+
+          jq -r --arg sha "$HEAD_SHA" '
+            "### Claude architecture check (read-only) at \($sha)\n\nVerdict: **\(.verdict)**\n" +
+            ( .findings | map("- `\(.path):\(.line)` (\(.rule)): \(.problem)\n  Fix: \(.fix)") | join("\n") )
+          ' "$work/check.json" > "$work/summary.md"
+
+          if [ "$verdict" = "FINDINGS" ]; then
+            [ -n "$COPILOT_AGENT_TOKEN" ] || fail "The COPILOT_AGENT_TOKEN secret is not configured, so Copilot cannot be asked to fix the findings."
+            gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label agent-review
+            gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --remove-label agent-working --add-label agent-review
+            {
+              echo "@copilot Claude's read-only architecture check found the problems below in this pull request. Verify each against docs/architecture.md and AGENTS.md, fix the ones that are correct with the smallest change that preserves behaviour and the issue's acceptance criteria, re-run bash scripts/validate.sh, and explain in a comment any finding you decline and why. Do not change anything outside the issue's scope."
+              echo
+              cat "$work/summary.md"
+            } > "$work/copilot-request.md"
+            # Posted with the owner's token: Copilot only acts on @copilot mentions from people with write access.
+            GH_TOKEN="$COPILOT_AGENT_TOKEN" gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$work/copilot-request.md"
+            handed_off=true
+            gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
+              --body "Claude's architecture check found problems in pull request #$PR_NUMBER and asked Copilot to fix them. Copilot's fix push is validated at its exact SHA and then reviewed by Claude. Run: $RUN_URL"
+            exit 0
+          fi
+
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$work/summary.md"
+          gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label agent-review
+          gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --remove-label agent-working --add-label agent-review
+
+          existing_validation="$(gh api "repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA/status" \
+            --jq '[.statuses[] | select(.context == "agent-validation")][0].state // ""')"
+          if [ -n "$existing_validation" ]; then
+            echo "::notice::$HEAD_SHA already has an agent-validation status ($existing_validation); validation was already scheduled."
+          else
+            gh workflow run validate.yml \
+              --repo "$GITHUB_REPOSITORY" \
+              --ref main \
+              -f pr_number="$PR_NUMBER" \
+              -f head_sha="$HEAD_SHA" \
+              -f dispatch_review=true
+          fi
+          handed_off=true
+
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --body "Claude's architecture check found no problems in pull request #$PR_NUMBER at $HEAD_SHA. Exact-SHA validation is running; on success Claude does the final review. Run: $RUN_URL"

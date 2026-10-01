@@ -1,10 +1,13 @@
 name: Agent review
 
-# Independent review agent (Claude Code) for pull requests that carry `agent-review`.
+# Independent review agent (Claude Code) for Copilot-implemented pull requests that carry `agent-review`.
 #
 # Authority and lifecycle: AGENTS.md ("Automated task contract") and docs/automation.md ("Review agent").
-# - The implementation dispatcher applies `agent-review`, then exact-SHA validation dispatches the
-#   initial review automatically. A human may remove/re-apply the label to request another review of
+# - Cross-review: Claude reviews only pull requests that GitHub Copilot implemented (`copilot/*` head
+#   branch, authored by the Copilot bot). Claude-implemented `agent/issue-*` pull requests are reviewed
+#   by Copilot code review instead (requested by validate.yml), so no agent reviews its own work.
+# - agent-copilot.yml applies `agent-review` when a Copilot pull request is marked ready for review,
+#   then exact-SHA validation dispatches the initial review automatically. A human may remove/re-apply the label to request another review of
 #   an already validated head. Repair pushes and other new commits are reviewed only through the
 #   post-validation dispatch (agent-head-update.yml schedules exact-SHA validation for a new head).
 # - Dispatched runs execute this trusted workflow from `main`, then verify the open, non-draft, same-repository
@@ -66,7 +69,7 @@ jobs:
         id: context
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}
+          EXPECTED_COPILOT_AUTHOR: ${{ vars.COPILOT_AGENT_BOT_LOGIN || 'Copilot' }}
           EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
           EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           EVENT_BASE_REF: ${{ github.event.pull_request.base.ref }}
@@ -98,9 +101,8 @@ jobs:
             [ "$is_draft" = "false" ] || fail "Pull request #$pr_number is a draft."
             [ "$base_ref" = "develop" ] || fail "Automated review is limited to pull requests targeting develop."
             [ "$head_repo" = "$GITHUB_REPOSITORY" ] || fail "Automated review is limited to same-repository branches."
-            [[ "$head_ref" == agent/issue-* ]] || fail "Automated review requires an agent/issue-* head branch."
-            [ -n "$EXPECTED_AGENT_AUTHOR" ] || fail "AGENT_AUTOMATION_APP_BOT_LOGIN is not configured."
-            [ "$author" = "$EXPECTED_AGENT_AUTHOR" ] || fail "Automated review requires $EXPECTED_AGENT_AUTHOR as the pull request author."
+            [[ "$head_ref" == copilot/* ]] || fail "Claude reviews only Copilot-implemented pull requests (copilot/* head branch); Claude-implemented pull requests are reviewed by Copilot."
+            [ "$author" = "$EXPECTED_COPILOT_AUTHOR" ] || fail "Automated review requires $EXPECTED_COPILOT_AUTHOR as the pull request author."
             [ "$current_sha" = "$head_sha" ] || fail "Refusing stale review: pull request head is $current_sha, requested SHA is $head_sha."
             jq -e 'any(.labels[]?; .name == "agent-review")' <<<"$pr_json" >/dev/null \
               || fail "The agent-review label is required before review."
@@ -122,7 +124,6 @@ jobs:
             [[ "$pr_number" =~ ^[1-9][0-9]*$ ]] || fail "The pull_request event did not contain a valid pull request number."
             [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || fail "The pull_request event did not contain a full head SHA."
             [ "$base_ref" = "develop" ] || fail "Review is limited to pull requests targeting develop."
-            [ -n "$EXPECTED_AGENT_AUTHOR" ] || fail "AGENT_AUTOMATION_APP_BOT_LOGIN is not configured."
 
             pr_json="$(gh pr view "$pr_number" --repo "$GITHUB_REPOSITORY" \
               --json state,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,labels)"
@@ -136,8 +137,8 @@ jobs:
             [ "$state" = "OPEN" ] || fail "Pull request #$pr_number is not open."
             [ "$is_draft" = "false" ] || fail "Pull request #$pr_number is a draft."
             [ "$head_repo" = "$GITHUB_REPOSITORY" ] || fail "Review is limited to same-repository branches."
-            [[ "$head_ref" == agent/issue-* ]] || fail "Review requires an agent/issue-* head branch."
-            [ "$author" = "$EXPECTED_AGENT_AUTHOR" ] || fail "Review requires $EXPECTED_AGENT_AUTHOR as the pull request author."
+            [[ "$head_ref" == copilot/* ]] || fail "Claude reviews only Copilot-implemented pull requests (copilot/* head branch); Claude-implemented pull requests are reviewed by Copilot."
+            [ "$author" = "$EXPECTED_COPILOT_AUTHOR" ] || fail "Review requires $EXPECTED_COPILOT_AUTHOR as the pull request author."
             [ "$current_sha" = "$head_sha" ] || fail "Refusing stale review: pull request head is $current_sha, event SHA is $head_sha."
 
             changed_files="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$pr_number/files?per_page=100" --jq '.[].filename')"
@@ -193,7 +194,7 @@ jobs:
           additional_permissions: |
             actions: read
           prompt: |
-            You are the InventoryApp independent review agent running in GitHub Actions. You are a separate invocation from the implementation agent: do not rely on anything it may have claimed; verify it.
+            You are the InventoryApp independent review agent running in GitHub Actions. This pull request was implemented by GitHub Copilot, a different agent: do not rely on anything it may have claimed; verify it. Copilot-implemented pull requests get no separate architecture pass, so your architecture review is the only one: treat a violation of docs/architecture.md or the AGENTS.md architecture rules (controller and use-case boundaries, domain versus adapters, dependency direction, duplicated logic, testability) as a blocker, not a suggestion.
 
             REPOSITORY: ${{ github.repository }}
             PULL REQUEST: #${{ needs.context.outputs.pr_number }}
@@ -269,7 +270,7 @@ jobs:
       - name: Guard and publish review
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}
+          EXPECTED_COPILOT_AUTHOR: ${{ vars.COPILOT_AGENT_BOT_LOGIN || 'Copilot' }}
           PR_NUMBER: ${{ needs.context.outputs.pr_number }}
           HEAD_SHA: ${{ needs.context.outputs.head_sha }}
           REVIEW_RESULT: ${{ needs.review.result }}
@@ -338,9 +339,8 @@ jobs:
           [ "$is_draft" = "false" ] || suppress "pull request #$PR_NUMBER is now a draft."
           [ "$base_ref" = "develop" ] || suppress "pull request #$PR_NUMBER no longer targets develop."
           [ "$head_repo" = "$GITHUB_REPOSITORY" ] || suppress "pull request #$PR_NUMBER no longer uses a same-repository branch."
-          [[ "$head_ref" == agent/issue-* ]] || suppress "pull request #$PR_NUMBER no longer uses an agent/issue-* branch."
-          [ -n "$EXPECTED_AGENT_AUTHOR" ] || suppress "AGENT_AUTOMATION_APP_BOT_LOGIN is not configured."
-          [ "$author" = "$EXPECTED_AGENT_AUTHOR" ] || suppress "pull request #$PR_NUMBER is not authored by $EXPECTED_AGENT_AUTHOR."
+          [[ "$head_ref" == copilot/* ]] || suppress "pull request #$PR_NUMBER no longer uses a copilot/* branch."
+          [ "$author" = "$EXPECTED_COPILOT_AUTHOR" ] || suppress "pull request #$PR_NUMBER is not authored by $EXPECTED_COPILOT_AUTHOR."
           [ "$current_sha" = "$HEAD_SHA" ] || suppress "Refusing stale review publication: head moved to $current_sha."
           jq -e 'any(.labels[]?; .name == "agent-review")' <<<"$pr_json" >/dev/null \
             || suppress "the agent-review label was removed."

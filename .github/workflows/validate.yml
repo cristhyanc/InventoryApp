@@ -19,7 +19,7 @@ on:
         required: true
         type: string
       dispatch_review:
-        description: Dispatch an independent review after validation succeeds
+        description: Request the cross review (Copilot for Claude PRs, Claude for Copilot PRs) after validation succeeds
         required: false
         default: false
         type: boolean
@@ -59,6 +59,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}
+          EXPECTED_COPILOT_AUTHOR: ${{ vars.COPILOT_AGENT_BOT_LOGIN || 'Copilot' }}
           # Each validation mode owns its own commit-status context so the two modes never
           # overwrite each other. workflow_dispatch exact-SHA validation publishes the
           # authoritative agent-validation status that agent-review.yml requires;
@@ -99,9 +100,17 @@ jobs:
             [ "$is_draft" = "false" ] || fail "Pull request #$pr_number is a draft."
             [ "$base_ref" = "develop" ] || fail "Automated validation is limited to pull requests targeting develop."
             [ "$head_repo" = "$GITHUB_REPOSITORY" ] || fail "Automated validation is limited to same-repository branches."
-            [[ "$head_ref" == agent/issue-* ]] || fail "Automated validation requires an agent/issue-* head branch."
-            [ -n "$EXPECTED_AGENT_AUTHOR" ] || fail "AGENT_AUTOMATION_APP_BOT_LOGIN is not configured."
-            [ "$author" = "$EXPECTED_AGENT_AUTHOR" ] || fail "Automated validation requires $EXPECTED_AGENT_AUTHOR as the pull request author."
+            if [[ "$head_ref" == agent/issue-* ]]; then
+              [ -n "$EXPECTED_AGENT_AUTHOR" ] || fail "AGENT_AUTOMATION_APP_BOT_LOGIN is not configured."
+              [ "$author" = "$EXPECTED_AGENT_AUTHOR" ] || fail "Automated validation of an agent/issue-* branch requires $EXPECTED_AGENT_AUTHOR as the pull request author."
+              implementer="claude"
+            elif [[ "$head_ref" == copilot/* ]]; then
+              [ "$author" = "$EXPECTED_COPILOT_AUTHOR" ] || fail "Automated validation of a copilot/* branch requires $EXPECTED_COPILOT_AUTHOR as the pull request author."
+              implementer="copilot"
+            else
+              fail "Automated validation requires an agent/issue-* (Claude) or copilot/* (Copilot) head branch."
+            fi
+            echo "::notice::Pull request #$pr_number was implemented by $implementer."
             [ "$current_sha" = "$head_sha" ] || fail "Refusing stale validation: pull request head is $current_sha, requested SHA is $head_sha."
 
             changed_files="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$pr_number/files?per_page=100" --jq '.[].filename')"
@@ -264,7 +273,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ needs.context.outputs.pr_number }}
           HEAD_SHA: ${{ needs.context.outputs.head_sha }}
+          COPILOT_AGENT_TOKEN: ${{ secrets.COPILOT_AGENT_TOKEN }}
           EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}
+          EXPECTED_COPILOT_AUTHOR: ${{ vars.COPILOT_AGENT_BOT_LOGIN || 'Copilot' }}
         run: |
           set -euo pipefail
           fail() { echo "::error::$1"; exit 1; }
@@ -284,9 +295,16 @@ jobs:
           [ "$is_draft" = "false" ] || fail "Pull request #$PR_NUMBER is now a draft."
           [ "$base_ref" = "develop" ] || fail "Pull request #$PR_NUMBER no longer targets develop."
           [ "$head_repo" = "$GITHUB_REPOSITORY" ] || fail "Pull request #$PR_NUMBER no longer uses a same-repository branch."
-          [[ "$head_ref" == agent/issue-* ]] || fail "Pull request #$PR_NUMBER no longer uses an agent/issue-* branch."
-          [ -n "$EXPECTED_AGENT_AUTHOR" ] || fail "AGENT_AUTOMATION_APP_BOT_LOGIN is not configured."
-          [ "$author" = "$EXPECTED_AGENT_AUTHOR" ] || fail "Pull request #$PR_NUMBER is not authored by $EXPECTED_AGENT_AUTHOR."
+          if [[ "$head_ref" == agent/issue-* ]]; then
+            [ -n "$EXPECTED_AGENT_AUTHOR" ] || fail "AGENT_AUTOMATION_APP_BOT_LOGIN is not configured."
+            [ "$author" = "$EXPECTED_AGENT_AUTHOR" ] || fail "Pull request #$PR_NUMBER is not authored by $EXPECTED_AGENT_AUTHOR."
+            implementer="claude"
+          elif [[ "$head_ref" == copilot/* ]]; then
+            [ "$author" = "$EXPECTED_COPILOT_AUTHOR" ] || fail "Pull request #$PR_NUMBER is not authored by $EXPECTED_COPILOT_AUTHOR."
+            implementer="copilot"
+          else
+            fail "Pull request #$PR_NUMBER no longer uses an agent/issue-* or copilot/* branch."
+          fi
           [ "$current_sha" = "$HEAD_SHA" ] || fail "Refusing stale review dispatch: pull request head is $current_sha, validated SHA is $HEAD_SHA."
 
           changed_files="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" --jq '.[].filename')"
@@ -296,6 +314,20 @@ jobs:
 
           if ! jq -e 'any(.labels[]?; .name == "agent-review")' <<<"$pr_json" >/dev/null; then
             echo "::notice::The agent-review label is absent; validation passed, but no review was dispatched."
+            exit 0
+          fi
+
+          # Cross-review: the reviewer is always the agent that did not implement the change.
+          # A Claude-implemented pull request is reviewed by Copilot code review, requested with the
+          # owner's Copilot-licensed token (Copilot reviews cannot be requested with GITHUB_TOKEN or
+          # an App installation token). A Copilot-implemented pull request is reviewed by Claude.
+          if [ "$implementer" = "claude" ]; then
+            [ -n "$COPILOT_AGENT_TOKEN" ] || fail "The COPILOT_AGENT_TOKEN secret is not configured, so the Copilot review could not be requested."
+            GH_TOKEN="$COPILOT_AGENT_TOKEN" gh api \
+              --method POST \
+              "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/requested_reviewers" \
+              -f 'reviewers[]=copilot-pull-request-reviewer[bot]' >/dev/null
+            echo "::notice::Requested a Copilot code review of $HEAD_SHA on Claude-implemented pull request #$PR_NUMBER."
             exit 0
           fi
 

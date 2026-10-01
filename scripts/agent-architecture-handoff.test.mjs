@@ -166,10 +166,30 @@ describe('stale implementation dispatcher', () => {
 });
 
 describe('architecture finalizer', () => {
-  const success = { CONTEXT_JOB_RESULT: 'success', ARCHITECTURE_JOB_RESULT: 'success', EXPECTED_START_SHA: SHA, FINAL_SHA: SHA };
+  // Copilot's read-only check reported findings and Claude's fix pass produced the final head.
+  const success = {
+    CONTEXT_JOB_RESULT: 'success',
+    COPILOT_CHECK_RESULT: 'success',
+    COPILOT_VERDICT: 'findings',
+    COPILOT_FINDINGS: 'backend/Api/ProductsController.cs:12 calls the repository directly.\nARCHITECTURE: FINDINGS',
+    ARCHITECTURE_JOB_RESULT: 'success',
+    EXPECTED_START_SHA: SHA,
+    FIX_SHA: SHA,
+  };
+  // Copilot reported a clean architecture, so Claude's fix pass was skipped.
+  const clean = { ...success, COPILOT_VERDICT: 'clean', COPILOT_FINDINGS: 'ARCHITECTURE: CLEAN', ARCHITECTURE_JOB_RESULT: 'skipped', FIX_SHA: '' };
 
-  it('labels for review and dispatches exact-SHA validation after a successful pass', () => {
+  it('labels for review and dispatches exact-SHA validation after Claude fixes Copilot findings', () => {
     const { status, calls } = run(finalizeShell, { state: fixture(), env: success });
+    assert.equal(status, 0);
+    assert.equal(dispatches(calls, 'validate.yml').length, 1);
+    assert.ok(dispatches(calls, 'validate.yml')[0].args.includes(`head_sha=${SHA}`));
+    assert.ok(calls.some((c) => c.kind === 'pr-comment'), 'Copilot findings must be recorded on the PR');
+    assert.ok(!blocked(calls));
+  });
+
+  it('dispatches validation of the unchanged head when Copilot reports a clean architecture', () => {
+    const { status, calls } = run(finalizeShell, { state: fixture(), env: clean });
     assert.equal(status, 0);
     assert.equal(dispatches(calls, 'validate.yml').length, 1);
     assert.ok(dispatches(calls, 'validate.yml')[0].args.includes(`head_sha=${SHA}`));
@@ -185,8 +205,11 @@ describe('architecture finalizer', () => {
   });
 
   for (const [name, env] of [
-    ['a rejected target check', { ...success, CONTEXT_JOB_RESULT: 'failure', ARCHITECTURE_JOB_RESULT: 'skipped', FINAL_SHA: '' }],
-    ['a failed architecture job', { ...success, ARCHITECTURE_JOB_RESULT: 'failure', FINAL_SHA: '' }],
+    ['a rejected target check', { ...success, CONTEXT_JOB_RESULT: 'failure', COPILOT_CHECK_RESULT: 'skipped', ARCHITECTURE_JOB_RESULT: 'skipped', FIX_SHA: '' }],
+    ['a failed Copilot check', { ...success, COPILOT_CHECK_RESULT: 'failure', COPILOT_VERDICT: '', ARCHITECTURE_JOB_RESULT: 'skipped', FIX_SHA: '' }],
+    ['an unknown Copilot verdict', { ...success, COPILOT_VERDICT: 'maybe' }],
+    ['a failed Claude fix pass', { ...success, ARCHITECTURE_JOB_RESULT: 'failure', FIX_SHA: '' }],
+    ['a clean verdict that still ran the fix pass', { ...clean, ARCHITECTURE_JOB_RESULT: 'success', FIX_SHA: NEWER_SHA }],
   ]) {
     it(`blocks an agent-working issue on ${name}`, () => {
       const { status, calls } = run(finalizeShell, { state: fixture(), env });
@@ -204,15 +227,17 @@ describe('architecture finalizer', () => {
     assert.ok(calls.some((c) => c.kind === 'pr-edit' && c.args.includes('--remove-label') && c.args.includes('agent-review')));
   });
 
-  it('blocks when the PR head moved during the architecture pass', () => {
-    const { status, calls } = run(finalizeShell, { state: fixture({ pr: { headRefOid: NEWER_SHA } }), env: success });
-    assert.notEqual(status, 0);
-    assert.ok(blocked(calls));
+  it('blocks when the PR head moved during the architecture stage', () => {
+    for (const env of [success, clean]) {
+      const { status, calls } = run(finalizeShell, { state: fixture({ pr: { headRefOid: NEWER_SHA } }), env });
+      assert.notEqual(status, 0);
+      assert.ok(blocked(calls));
+    }
   });
 
   it('never blocks an issue that is not agent-working, such as one already in review', () => {
     const state = fixture({ issue: { labels: [{ name: 'agent-review' }] } });
-    const { status, calls } = run(finalizeShell, { state, env: { ...success, CONTEXT_JOB_RESULT: 'failure', FINAL_SHA: '' } });
+    const { status, calls } = run(finalizeShell, { state, env: { ...success, CONTEXT_JOB_RESULT: 'failure', FIX_SHA: '' } });
     assert.notEqual(status, 0);
     assert.ok(!blocked(calls));
     assert.equal(calls.length, 0);
