@@ -1,4 +1,4 @@
-using InventoryApi.Models;
+using Inventory.Domain.FinancialConfiguration;
 
 namespace InventoryApi.DTOs;
 
@@ -10,7 +10,9 @@ public record SiteCommissionProductDto(string ProductName, int TotalVends, decim
 public record SiteCommissionRowDto(long SiteId, string SiteName, DateTime PeriodStart, DateTime PeriodEnd, CommissionFrequency Frequency,
     CommissionBasis Basis, decimal GrossSales, decimal CardSales, decimal CashSales, decimal EligibleSales, decimal CommissionRate,
     decimal CommissionDue, decimal Paid, decimal Outstanding, DateTime? DueDate, string Status, IReadOnlyList<SiteCommissionMachineDto> Machines,
-    IReadOnlyList<SiteCommissionProductDto> Products, IReadOnlyList<CommissionPayment> Payments, string? DataQuality = null)
+    IReadOnlyList<SiteCommissionProductDto> Products,
+    IReadOnlyList<Inventory.Domain.FinancialConfiguration.CommissionPayment> Payments,
+    string? DataQuality = null)
 {
     public bool HasConfigurationGap { get; init; }
     public bool HasOverlap { get; init; }

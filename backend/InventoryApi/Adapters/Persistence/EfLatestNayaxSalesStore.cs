@@ -1,5 +1,6 @@
 using Inventory.Application.Nayax;
 using Inventory.Application.SalesSync;
+using Inventory.Domain.FinancialConfiguration;
 using InventoryApi.Data;
 using InventoryApi.Models;
 using InventoryApi.Services;
@@ -74,7 +75,7 @@ public sealed class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
                 };
                 _db.NayaxSales.Add(added);
                 await _saleCosting.CostSaleAsync(added, cancellationToken: cancellationToken);
-                if (NayaxTransactionStatusClassifier.IsCompletedSale(added))
+                if (NayaxTransactionStatusClassifier.IsCompletedSale(added.TransactionStatusId))
                 {
                     if (matchedProduct is not null &&
                         (!affected.TryGetValue(matchedProduct.Id, out var existingAt) || added.MachineAuthorizationTime < existingAt))
@@ -108,7 +109,7 @@ public sealed class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
                 await _saleCosting.CostSaleAsync(
                     existing,
                     cancellationToken: cancellationToken);
-                if (NayaxTransactionStatusClassifier.IsCompletedSale(existing))
+                if (NayaxTransactionStatusClassifier.IsCompletedSale(existing.TransactionStatusId))
                 {
                     matchedProduct ??= NayaxProductMatcher.Match(
                         products, existing.NayaxProductId, existing.ProductName);

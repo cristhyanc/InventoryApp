@@ -10,7 +10,7 @@ public sealed record SiteCompletedSaleFact(long MachineId, decimal SettlementVal
 /// A site's resolved card-sale commission facts as of a date: whether the site's commission
 /// configuration is unavailable (an ambiguous/overlapping agreement), and, when it is not, the
 /// commission amount for each of the given candidate retail prices, resolved with the one
-/// authoritative <c>SiteCommissionCalculator</c> formula. The amounts are meaningless (and omitted)
+/// authoritative Domain <c>SiteCommissionCalculator</c> formula. The amounts are meaningless (and omitted)
 /// when <see cref="ConfigurationUnavailable"/> is true.
 /// </summary>
 public sealed record SiteCardCommissionResolution(
@@ -18,9 +18,9 @@ public sealed record SiteCardCommissionResolution(
     IReadOnlyDictionary<decimal, decimal> CommissionAmountByRetailPrice);
 
 /// <summary>
-/// Narrow persistence/business-service port for the site dashboard, owned by the Application layer.
-/// Its temporary EF Core implementation composes the still-legacy <c>SiteCommissionCalculator</c>/
-/// <c>EffectiveFinancialConfiguration</c> (see <c>docs/architecture.md</c>).
+/// Narrow facts port for the site dashboard, owned by the Application layer. Its temporary EF Core
+/// implementation applies the Domain-owned commission and effective-configuration rules
+/// (see <c>docs/architecture.md</c>).
 /// </summary>
 public interface ISiteFactsStore
 {

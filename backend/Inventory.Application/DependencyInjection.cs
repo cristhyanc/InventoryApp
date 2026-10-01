@@ -1,10 +1,12 @@
 using Inventory.Application.CatalogReconciliation;
 using Inventory.Application.Categories;
+using Inventory.Application.Commissions;
 using Inventory.Application.Expenses;
 using Inventory.Application.InventoryCounting;
 using Inventory.Application.MachineStockSync;
 using Inventory.Application.Machines;
 using Inventory.Application.NayaxFeeSettings;
+using Inventory.Application.NayaxProcessingFees;
 using Inventory.Application.PickList;
 using Inventory.Application.Products;
 using Inventory.Application.Purchases;
@@ -35,6 +37,13 @@ public static class ApplicationServiceCollectionExtensions
 
         services.AddScoped<ListNayaxFeeRates>();
         services.AddScoped<SaveNayaxFeeRate>();
+        services.AddScoped<GetNayaxProcessingFees>();
+        services.AddScoped<IGetNayaxProcessingFees>(sp => sp.GetRequiredService<GetNayaxProcessingFees>());
+        services.AddScoped<GetSiteCommissionReport>();
+        services.AddScoped<IGetSiteCommissionReport>(sp => sp.GetRequiredService<GetSiteCommissionReport>());
+        services.AddScoped<GetSiteCommissionAgreements>();
+        services.AddScoped<SaveSiteCommissionAgreement>();
+        services.AddScoped<RecordSiteCommissionPayment>();
         services.AddScoped<ListCategories>();
         services.AddScoped<GetCategory>();
         services.AddScoped<ListSuppliers>();

@@ -1,8 +1,8 @@
 using Inventory.Application.Reporting.Daily;
 using Inventory.Application.Reporting.Shared;
+using Inventory.Application.NayaxProcessingFees;
+using Inventory.Domain.FinancialConfiguration;
 using InventoryApi.Data;
-using InventoryApi.Services;
-using InventoryApi.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
 
 namespace InventoryApi.Adapters.Persistence;
@@ -11,7 +11,7 @@ namespace InventoryApi.Adapters.Persistence;
 /// Temporary EF Core implementation of <see cref="IDailyReportFactsProvider"/>. It lives in
 /// InventoryApi, not Inventory.Infrastructure, for the same reason as
 /// <see cref="EfBookkeepingReportFactsProvider"/>: it depends on <see cref="AppDbContext"/> and the
-/// still-InventoryApi-owned <see cref="INayaxProcessingFeeService"/>. Move it into
+/// Application-owned <see cref="IGetNayaxProcessingFees"/> use case. Move it into
 /// Inventory.Infrastructure once the shared AppDbContext and persistence models relocate there.
 ///
 /// Its completed-sale cost query and period-level imported-reimbursement summary are shared with
@@ -22,9 +22,9 @@ namespace InventoryApi.Adapters.Persistence;
 public sealed class EfDailyReportFactsProvider : IDailyReportFactsProvider
 {
     private readonly AppDbContext _db;
-    private readonly INayaxProcessingFeeService _nayaxProcessingFees;
+    private readonly IGetNayaxProcessingFees _nayaxProcessingFees;
 
-    public EfDailyReportFactsProvider(AppDbContext db, INayaxProcessingFeeService nayaxProcessingFees)
+    public EfDailyReportFactsProvider(AppDbContext db, IGetNayaxProcessingFees nayaxProcessingFees)
     {
         _db = db;
         _nayaxProcessingFees = nayaxProcessingFees;
@@ -41,7 +41,7 @@ public sealed class EfDailyReportFactsProvider : IDailyReportFactsProvider
 
         var feeByDate = new Dictionary<DateTime, NayaxProcessingFeeResult>();
         foreach (var date in sales.Select(x => BusinessCalendarDate(x.MachineAuthorizationTime)).Distinct())
-            feeByDate[date] = await _nayaxProcessingFees.GetProcessingFeesAsync(date, date, machineId, cancellationToken);
+            feeByDate[date] = await _nayaxProcessingFees.Handle(date, date, machineId, cancellationToken);
 
         var days = sales
             .GroupBy(x => BusinessCalendarDate(x.MachineAuthorizationTime))
@@ -71,7 +71,7 @@ public sealed class EfDailyReportFactsProvider : IDailyReportFactsProvider
                     HasDataQualityWarning: uncosted.Count != 0 || unknownTransactions != 0 ||
                         statusRows.Any(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) != NayaxTransactionStatus.Completed &&
                             x.TransactionStatusId is not null),
-                    CompletedTransactionCount: statusRows.Count(NayaxTransactionStatusClassifier.IsCompletedSale),
+                    CompletedTransactionCount: statusRows.Count(sale => NayaxTransactionStatusClassifier.IsCompletedSale(sale.TransactionStatusId)),
                     PendingTransactionCount: statusRows.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Pending),
                     DeclinedOrCancelledTransactionCount: statusRows.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.CancelledOrDeclined),
                     RefundedTransactionCount: statusRows.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Refunded),
@@ -79,7 +79,7 @@ public sealed class EfDailyReportFactsProvider : IDailyReportFactsProvider
             })
             .ToList();
 
-        var totalFees = await _nayaxProcessingFees.GetProcessingFeesAsync(from, to, machineId, cancellationToken);
+        var totalFees = await _nayaxProcessingFees.Handle(from, to, machineId, cancellationToken);
         var totals = new DailyReportTotalsFacts(
             PartialCostOfGoods: sales.Sum(x => x.CostOfGoodsSold ?? 0m),
             IsCogsComplete: sales.All(x => x.HasCost),
@@ -87,7 +87,7 @@ public sealed class EfDailyReportFactsProvider : IDailyReportFactsProvider
             ImportedContainsRows: importedPeriod.ContainsRows,
             ImportedReimbursement: importedPeriod.Settlement,
             ImportedNetReimbursement: importedPeriod.NetSettlement,
-            CompletedTransactionCount: statusSales.Count(NayaxTransactionStatusClassifier.IsCompletedSale),
+            CompletedTransactionCount: statusSales.Count(sale => NayaxTransactionStatusClassifier.IsCompletedSale(sale.TransactionStatusId)),
             PendingTransactionCount: statusSales.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Pending),
             DeclinedOrCancelledTransactionCount: statusSales.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.CancelledOrDeclined),
             RefundedTransactionCount: statusSales.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Refunded),

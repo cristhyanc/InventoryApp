@@ -1,4 +1,5 @@
 using ClosedXML.Excel;
+using Inventory.Domain.FinancialConfiguration;
 using InventoryApi.Models;
 using InventoryApi.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
@@ -97,7 +98,7 @@ public sealed partial class ImportService
         NayaxSales sale,
         IDictionary<long, DateTime> affected)
     {
-        if (!NayaxTransactionStatusClassifier.IsCompletedSale(sale))
+        if (!NayaxTransactionStatusClassifier.IsCompletedSale(sale.TransactionStatusId))
             return;
         var product = NayaxProductMatcher.Match(products, sale.NayaxProductId, sale.ProductName);
         if (product is not null &&

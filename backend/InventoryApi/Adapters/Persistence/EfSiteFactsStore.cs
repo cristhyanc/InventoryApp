@@ -1,7 +1,7 @@
 using Inventory.Application.Sites;
+using Inventory.Domain.FinancialConfiguration;
 using Inventory.Domain.Sites;
 using InventoryApi.Data;
-using InventoryApi.Services;
 using Microsoft.EntityFrameworkCore;
 
 namespace InventoryApi.Adapters.Persistence;
@@ -9,9 +9,8 @@ namespace InventoryApi.Adapters.Persistence;
 /// <summary>
 /// Temporary EF Core implementation of <see cref="ISiteFactsStore"/>. It lives in InventoryApi, not
 /// Inventory.Infrastructure, because it depends on <see cref="AppDbContext"/> and persistence models
-/// that still live in InventoryApi, and because it also composes the still-legacy
-/// <c>EffectiveFinancialConfiguration</c>/<c>SiteCommissionCalculator</c> business formulas, which are
-/// not part of this migration (see <c>docs/architecture.md</c>). Move it into Inventory.Infrastructure
+/// that still live in InventoryApi. It applies the Domain-owned financial rules through its
+/// Application port (see <c>docs/architecture.md</c>). Move it into Inventory.Infrastructure
 /// once the shared AppDbContext and persistence models relocate there.
 /// </summary>
 public sealed class EfSiteFactsStore : ISiteFactsStore
@@ -36,7 +35,7 @@ public sealed class EfSiteFactsStore : ISiteFactsStore
             .ToListAsync(cancellationToken);
 
         return sales
-            .Where(NayaxTransactionStatusClassifier.IsCompletedSale)
+            .Where(sale => NayaxTransactionStatusClassifier.IsCompletedSale(sale.TransactionStatusId))
             .Select(sale => new SiteCompletedSaleFact(sale.MachineID, sale.SettlementValue, sale.MachineAuthorizationTime))
             .ToList();
     }
@@ -51,11 +50,12 @@ public sealed class EfSiteFactsStore : ISiteFactsStore
     public async Task<SiteCardCommissionResolution> ResolveCardCommissionAsync(
         long siteId, DateTime asOfDate, IReadOnlyCollection<decimal> candidateRetailPrices, CancellationToken cancellationToken)
     {
-        var agreements = await _db.SiteCommissionAgreements.AsNoTracking()
+        var agreementEntities = await _db.SiteCommissionAgreements.AsNoTracking()
             .Where(agreement => agreement.SiteId == siteId)
             .ToListAsync(cancellationToken);
+        var agreements = agreementEntities.Select(ToDomain).ToList();
 
-        Models.SiteCommissionAgreement? agreement;
+        CommissionAgreement? agreement;
         bool configurationUnavailable;
         try
         {
@@ -84,8 +84,22 @@ public sealed class EfSiteFactsStore : ISiteFactsStore
         var rates = await _db.NayaxProcessingFeeRates.AsNoTracking()
             .Where(rate => rate.EffectiveFrom <= asOfDate)
             .OrderBy(rate => rate.EffectiveFrom)
+            .Select(rate => new EffectiveNayaxFeeRate(rate.EffectiveFrom, rate.FeeExGst))
             .ToListAsync(cancellationToken);
 
         return EffectiveFinancialConfiguration.ResolveNayaxFeeRate(rates, asOfDate)?.FeeExGst;
     }
+
+    private static CommissionAgreement ToDomain(InventoryApi.Models.SiteCommissionAgreement agreement) =>
+        new(
+            agreement.Id,
+            agreement.SiteId,
+            agreement.EffectiveFrom,
+            agreement.EffectiveTo,
+            agreement.CommissionRate,
+            agreement.Frequency,
+            agreement.Basis,
+            agreement.PaymentDueDaysAfterPeriodEnd,
+            agreement.CreatedAt,
+            agreement.UpdatedAt);
 }

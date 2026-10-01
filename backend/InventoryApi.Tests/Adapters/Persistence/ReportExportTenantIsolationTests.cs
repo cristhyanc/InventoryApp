@@ -7,10 +7,11 @@ using Inventory.Application.Reporting.Transactions;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using InventoryApi.Models;
-using InventoryApi.Services;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
+
+using Inventory.Domain.FinancialConfiguration;
 
 namespace InventoryApi.Tests.Adapters.Persistence;
 
@@ -110,7 +111,7 @@ public sealed class ReportExportTenantIsolationTests : IDisposable
     /// </summary>
     private static GetReportExportRows ExportRowsFor(AppDbContext db)
     {
-        var daily = new GetDailyReport(new EfDailyReportFactsProvider(db, new NayaxProcessingFeeService(db)));
+        var daily = new GetDailyReport(new EfDailyReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db)));
 
         var bookkeeping = new GetBookkeepingReport(
             new Application.Reporting.Bookkeeping.FakeBookkeepingReportFactsProvider(

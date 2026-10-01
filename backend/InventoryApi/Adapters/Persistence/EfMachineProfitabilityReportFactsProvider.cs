@@ -1,7 +1,8 @@
 using Inventory.Application.Reporting.MachineProfitability;
+using Inventory.Application.Commissions;
+using Inventory.Application.NayaxProcessingFees;
+using Inventory.Domain.FinancialConfiguration;
 using InventoryApi.Data;
-using InventoryApi.Services;
-using InventoryApi.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
 
 namespace InventoryApi.Adapters.Persistence;
@@ -10,8 +11,8 @@ namespace InventoryApi.Adapters.Persistence;
 /// Temporary EF Core implementation of <see cref="IMachineProfitabilityReportFactsProvider"/>. It
 /// lives in InventoryApi, not Inventory.Infrastructure, because it depends on
 /// <see cref="AppDbContext"/> and persistence models that still live in InventoryApi, and because
-/// it also composes the existing <see cref="INayaxProcessingFeeService"/> and
-/// <see cref="ISiteCommissionService"/> business services, which are not part of this migration.
+/// it also composes the Application-owned <see cref="IGetNayaxProcessingFees"/> and
+/// <see cref="IGetSiteCommissionReport"/> use cases.
 /// Move it into Inventory.Infrastructure once the shared AppDbContext and persistence models
 /// relocate there.
 ///
@@ -26,11 +27,11 @@ namespace InventoryApi.Adapters.Persistence;
 public sealed class EfMachineProfitabilityReportFactsProvider : IMachineProfitabilityReportFactsProvider
 {
     private readonly AppDbContext _db;
-    private readonly INayaxProcessingFeeService _nayaxProcessingFees;
-    private readonly ISiteCommissionService _siteCommissions;
+    private readonly IGetNayaxProcessingFees _nayaxProcessingFees;
+    private readonly IGetSiteCommissionReport _siteCommissions;
 
     public EfMachineProfitabilityReportFactsProvider(
-        AppDbContext db, INayaxProcessingFeeService nayaxProcessingFees, ISiteCommissionService siteCommissions)
+        AppDbContext db, IGetNayaxProcessingFees nayaxProcessingFees, IGetSiteCommissionReport siteCommissions)
     {
         _db = db;
         _nayaxProcessingFees = nayaxProcessingFees;
@@ -72,7 +73,7 @@ public sealed class EfMachineProfitabilityReportFactsProvider : IMachineProfitab
         var missingFeeRateTransactions = 0;
         foreach (var group in machineGroups)
         {
-            var fees = await _nayaxProcessingFees.GetProcessingFeesAsync(from, to, group.MachineID, cancellationToken);
+            var fees = await _nayaxProcessingFees.Handle(from, to, group.MachineID, cancellationToken);
             missingFeeRateTransactions += fees.MissingRateTransactionCount;
             var commission = commissions.Machines.GetValueOrDefault(group.MachineID);
             machines.Add(new MachineProfitabilityMachineFacts(

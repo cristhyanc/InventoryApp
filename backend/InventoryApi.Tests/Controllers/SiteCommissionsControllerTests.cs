@@ -1,9 +1,11 @@
+using Inventory.Application.Commissions;
+using Inventory.Domain.FinancialConfiguration;
 using Inventory.Domain.Exceptions;
+using InventoryApi.Adapters.Persistence;
 using InventoryApi.Controllers;
 using InventoryApi.Data;
 using InventoryApi.DTOs;
 using InventoryApi.Models;
-using InventoryApi.Services.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Moq;
@@ -27,8 +29,16 @@ public class SiteCommissionsControllerTests
         return TestAppDbContext.For(options, businessId);
     }
 
-    private static SiteCommissionsController CreateController(AppDbContext db) =>
-        new(db, new Mock<ISiteCommissionService>().Object);
+    private static SiteCommissionsController CreateController(AppDbContext db)
+    {
+        var store = new EfSiteCommissionStore(db);
+        var report = new Mock<IGetSiteCommissionReport>().Object;
+        return new(
+            report,
+            new GetSiteCommissionAgreements(store),
+            new SaveSiteCommissionAgreement(store),
+            new RecordSiteCommissionPayment(report, store));
+    }
 
     private static SiteCommissionAgreementDto Dto(long siteId, DateTime from, DateTime? to) =>
         new(siteId, from, to, 0.1m, CommissionFrequency.Monthly, CommissionBasis.GrossSales, 14);

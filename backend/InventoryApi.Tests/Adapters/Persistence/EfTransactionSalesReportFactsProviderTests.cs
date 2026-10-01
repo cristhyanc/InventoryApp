@@ -1,10 +1,11 @@
 using Inventory.Application.Reporting.Transactions;
-using Inventory.Domain.Reporting.Transactions;
+using Inventory.Domain.FinancialConfiguration;
+using TransactionCommissionBasis = Inventory.Domain.FinancialConfiguration.CommissionBasis;
+using TransactionSaleStatus = Inventory.Domain.FinancialConfiguration.NayaxTransactionStatus;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using Inventory.Application.Nayax;
 using InventoryApi.Models;
-using InventoryApi.Services;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Xunit;

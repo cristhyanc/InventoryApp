@@ -1,9 +1,9 @@
 using Inventory.Application.Machines;
+using Inventory.Application.NayaxProcessingFees;
+using Inventory.Domain.FinancialConfiguration;
 using Inventory.Domain.Machines;
 using InventoryApi.Data;
 using InventoryApi.Models;
-using InventoryApi.Services;
-using InventoryApi.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
 
 namespace InventoryApi.Adapters.Persistence;
@@ -11,18 +11,17 @@ namespace InventoryApi.Adapters.Persistence;
 /// <summary>
 /// Temporary EF Core implementation of <see cref="IMachineDashboardFactsStore"/>. It lives in
 /// InventoryApi, not Inventory.Infrastructure, because it depends on <see cref="AppDbContext"/> and
-/// persistence models that still live in InventoryApi, and because it also composes the still-legacy
-/// <c>EffectiveFinancialConfiguration</c>/<c>SiteCommissionCalculator</c>/<c>PaymentMethodClassifier</c>/
-/// <c>NayaxTransactionStatusClassifier</c>/<see cref="INayaxProcessingFeeService"/>, which are not part
-/// of this migration (see <c>docs/architecture.md</c>). Move it into Inventory.Infrastructure once the
+/// persistence models that still live in InventoryApi, and because it composes the Application-owned
+/// <see cref="IGetNayaxProcessingFees"/> use case. Its financial and classification rules are
+/// Domain-owned (see <c>docs/architecture.md</c>). Move it into Inventory.Infrastructure once the
 /// shared AppDbContext and persistence models relocate there.
 /// </summary>
 public sealed class EfMachineDashboardFactsStore : IMachineDashboardFactsStore
 {
     private readonly AppDbContext _db;
-    private readonly INayaxProcessingFeeService _nayaxProcessingFees;
+    private readonly IGetNayaxProcessingFees _nayaxProcessingFees;
 
-    public EfMachineDashboardFactsStore(AppDbContext db, INayaxProcessingFeeService nayaxProcessingFees)
+    public EfMachineDashboardFactsStore(AppDbContext db, IGetNayaxProcessingFees nayaxProcessingFees)
     {
         _db = db;
         _nayaxProcessingFees = nayaxProcessingFees;
@@ -43,7 +42,7 @@ public sealed class EfMachineDashboardFactsStore : IMachineDashboardFactsStore
             .ToListAsync(cancellationToken);
 
         var agreementFrom = lastSales.Count == 0 ? today : lastSales.Min(sale => sale.MachineAuthorizationTime.Date);
-        var agreements = siteId.HasValue
+        var agreementEntities = siteId.HasValue
             ? await _db.SiteCommissionAgreements.AsNoTracking()
                 .Where(agreement => agreement.SiteId == siteId.Value &&
                     agreement.EffectiveFrom <= now &&
@@ -51,6 +50,17 @@ public sealed class EfMachineDashboardFactsStore : IMachineDashboardFactsStore
                 .OrderBy(agreement => agreement.EffectiveFrom)
                 .ToListAsync(cancellationToken)
             : [];
+        var agreements = agreementEntities.Select(agreement => new CommissionAgreement(
+            agreement.Id,
+            agreement.SiteId,
+            agreement.EffectiveFrom,
+            agreement.EffectiveTo,
+            agreement.CommissionRate,
+            agreement.Frequency,
+            agreement.Basis,
+            agreement.PaymentDueDaysAfterPeriodEnd,
+            agreement.CreatedAt,
+            agreement.UpdatedAt)).ToList();
 
         var today0 = await BuildPeriodFactsAsync(CompletedSales(lastSales, today, now), agreements, siteId, today, now, machineId, cancellationToken);
         var currentWeekFacts = await BuildPeriodFactsAsync(CompletedSales(lastSales, currentWeek.Start, currentWeek.End), agreements, siteId, currentWeek.Start, currentWeek.End, machineId, cancellationToken);
@@ -59,7 +69,7 @@ public sealed class EfMachineDashboardFactsStore : IMachineDashboardFactsStore
         var monthToDateFacts = await BuildPeriodFactsAsync(CompletedSales(lastSales, monthToDate.Start, monthToDate.End), agreements, siteId, monthToDate.Start, monthToDate.End, machineId, cancellationToken);
         var twoWeeksAgoFacts = await BuildPeriodFactsAsync(CompletedSales(lastSales, twoWeeksAgo.Start, twoWeeksAgo.End), agreements, siteId, twoWeeksAgo.Start, twoWeeksAgo.End, machineId, cancellationToken);
 
-        var completedSales = lastSales.Where(NayaxTransactionStatusClassifier.IsCompletedSale).ToList();
+        var completedSales = lastSales.Where(sale => NayaxTransactionStatusClassifier.IsCompletedSale(sale.TransactionStatusId)).ToList();
         var statusInputs = new MachineProfitabilityStatusInputs(
             completedSales.Any(sale => !sale.CostOfGoodsSold.HasValue),
             completedSales.Count > 0,
@@ -75,12 +85,12 @@ public sealed class EfMachineDashboardFactsStore : IMachineDashboardFactsStore
 
     private static List<NayaxSales> CompletedSales(List<NayaxSales> sales, DateTime start, DateTime end) =>
         sales.Where(sale => sale.MachineAuthorizationTime >= start && sale.MachineAuthorizationTime <= end &&
-                             NayaxTransactionStatusClassifier.IsCompletedSale(sale))
+                             NayaxTransactionStatusClassifier.IsCompletedSale(sale.TransactionStatusId))
             .ToList();
 
     private async Task<MachineDashboardPeriodFacts> BuildPeriodFactsAsync(
         List<NayaxSales> sales,
-        IReadOnlyList<SiteCommissionAgreement> agreements,
+        IReadOnlyList<CommissionAgreement> agreements,
         long? siteId,
         DateTime from,
         DateTime to,
@@ -96,7 +106,7 @@ public sealed class EfMachineDashboardFactsStore : IMachineDashboardFactsStore
         var netSalesBeforeFees = 0m;
         foreach (var sale in sales)
         {
-            SiteCommissionAgreement? agreement;
+            CommissionAgreement? agreement;
             try
             {
                 agreement = EffectiveFinancialConfiguration.ResolveAgreement(agreements, resolvedSiteId, sale.MachineAuthorizationTime);
@@ -115,7 +125,7 @@ public sealed class EfMachineDashboardFactsStore : IMachineDashboardFactsStore
             netSalesBeforeFees += sale.SettlementValue - sale.CostOfGoodsSold!.Value - commission;
         }
 
-        var fees = await _nayaxProcessingFees.GetProcessingFeesAsync(from, to, machineId, cancellationToken);
+        var fees = await _nayaxProcessingFees.Handle(from, to, machineId, cancellationToken);
         return new MachineDashboardPeriodFacts(
             grossRevenue,
             new MachineDashboardDirectProfitInputs(false, netSalesBeforeFees, fees.HasMissingRates, fees.TotalFeeIncGst));

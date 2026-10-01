@@ -1,5 +1,4 @@
-using InventoryApi.Models;
-using InventoryApi.Services;
+using Inventory.Domain.FinancialConfiguration;
 using Xunit;
 
 namespace InventoryApi.Tests.Services;
@@ -64,17 +63,20 @@ public class SiteCommissionCalculatorTests
                 agreements, 1, new DateTime(2026, 7, 1)));
     }
 
-    private static SiteCommissionAgreement Agreement(
+    private static CommissionAgreement Agreement(
         CommissionBasis basis,
         decimal rate,
         DateTime? from = null,
         DateTime? to = null) =>
-        new()
-        {
-            SiteId = 1,
-            EffectiveFrom = from ?? new DateTime(2026, 1, 1),
-            EffectiveTo = to,
-            CommissionRate = rate,
-            Basis = basis
-        };
+        new(
+            0,
+            1,
+            from ?? new DateTime(2026, 1, 1),
+            to,
+            rate,
+            CommissionFrequency.None,
+            basis,
+            null,
+            default,
+            default);
 }

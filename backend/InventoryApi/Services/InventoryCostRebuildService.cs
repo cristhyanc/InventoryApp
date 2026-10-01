@@ -1,3 +1,4 @@
+using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using InventoryApi.Models;
 using InventoryApi.Services.Interfaces;
@@ -25,7 +26,7 @@ public sealed class InventoryCostRebuildService : IInventoryCostRebuildService
         var adjustments = await adjustmentQuery.Where(x => x.ProductId == productId).ToListAsync(cancellationToken);
         var products = await _db.Products.AsNoTracking().ToListAsync(cancellationToken);
         var sales = (await saleQuery
-                .Where(NayaxTransactionStatusClassifier.CompletedSalePredicate)
+                .Where(EfNayaxSalesQueries.CompletedSalePredicate)
                 .ToListAsync(cancellationToken))
             .Where(s => NayaxProductMatcher.Match(products, s.NayaxProductId, s.ProductName)?.Id == productId)
             .ToList();
@@ -65,7 +66,7 @@ public sealed class InventoryCostRebuildService : IInventoryCostRebuildService
             .ToListAsync(cancellationToken);
         var products = await _db.Products.AsNoTracking().ToListAsync(cancellationToken);
         var sales = (await _db.NayaxSales.AsNoTracking()
-                .Where(NayaxTransactionStatusClassifier.CompletedSalePredicate)
+                .Where(EfNayaxSalesQueries.CompletedSalePredicate)
                 .Where(s => s.MachineAuthorizationTime <= saleTime)
                 .ToListAsync(cancellationToken))
             .Where(s => NayaxProductMatcher.Match(products, s.NayaxProductId, s.ProductName)?.Id == productId)

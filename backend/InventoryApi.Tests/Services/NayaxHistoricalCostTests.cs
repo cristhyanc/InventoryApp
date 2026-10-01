@@ -9,6 +9,7 @@ using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Transactions;
 using Inventory.Application.SalesSync;
+using Inventory.Application.Commissions;
 using InventoryApi.Adapters.Export;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
@@ -22,6 +23,8 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Moq;
 using Xunit;
+
+using Inventory.Domain.FinancialConfiguration;
 
 namespace InventoryApi.Tests.Services;
 
@@ -266,8 +269,8 @@ public class NayaxHistoricalCostTests
         });
         await db.SaveChangesAsync();
 
-        var nayaxFees = new NayaxProcessingFeeService(db);
-        var siteCommissions = Mock.Of<ISiteCommissionService>();
+        var nayaxFees = TestFinancialUseCases.ProcessingFees(db);
+        var siteCommissions = Mock.Of<IGetSiteCommissionReport>();
         var getBookkeepingReport = new GetBookkeepingReport(new EfBookkeepingReportFactsProvider(db, nayaxFees, siteCommissions));
         var getDailyReport = new GetDailyReport(new EfDailyReportFactsProvider(db, nayaxFees));
         var getReconciliationReport = new GetReconciliationReport(new EfReconciliationReportFactsProvider(db));

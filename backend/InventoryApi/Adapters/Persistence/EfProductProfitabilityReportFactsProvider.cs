@@ -1,6 +1,6 @@
 using Inventory.Application.Reporting.ProductProfitability;
+using Inventory.Domain.FinancialConfiguration;
 using InventoryApi.Data;
-using InventoryApi.Services;
 using Microsoft.EntityFrameworkCore;
 
 namespace InventoryApi.Adapters.Persistence;

@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Inventory.Application;
 using Inventory.Application.CatalogReconciliation;
+using Inventory.Application.Commissions;
 using Inventory.Application.Categories;
 using Inventory.Application.Products;
 using Inventory.Application.Expenses;
@@ -8,6 +9,7 @@ using Inventory.Application.InventoryCounting;
 using Inventory.Application.MachineStockSync;
 using Inventory.Application.Machines;
 using Inventory.Application.NayaxFeeSettings;
+using Inventory.Application.NayaxProcessingFees;
 using Inventory.Application.PickList;
 using Inventory.Application.Purchases;
 using Inventory.Application.Reorder;
@@ -152,8 +154,6 @@ builder.Services.AddScoped<InventoryApi.Services.Interfaces.ISupplierOrderServic
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IMachineService, InventoryApi.Services.MachineService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.ISiteService, InventoryApi.Services.SiteService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IImportService, InventoryApi.Services.ImportService>();
-builder.Services.AddScoped<InventoryApi.Services.Interfaces.INayaxProcessingFeeService, InventoryApi.Services.NayaxProcessingFeeService>();
-builder.Services.AddScoped<InventoryApi.Services.Interfaces.ISiteCommissionService, InventoryApi.Services.SiteCommissionService>();
 
 // Tenancy (issue #64). Claims parsing stays at this boundary: EntraActorIdentityAccessor is the
 // only implementation of the Application's actor port, and the current-business abstraction
@@ -171,6 +171,11 @@ builder.Services.AddScoped<IBusinessMembershipStore, EfBusinessMembershipStore>(
 
 // Temporary API-owned adapter for the Nayax fee-settings persistence port; see EfNayaxFeeRateStore.
 builder.Services.AddScoped<INayaxFeeRateStore, EfNayaxFeeRateStore>();
+
+// Temporary API-owned adapters for commission and processing-fee facts, pending persistence
+// consolidation in issue #153.
+builder.Services.AddScoped<INayaxProcessingFeeFactsProvider, EfNayaxProcessingFeeFactsProvider>();
+builder.Services.AddScoped<ISiteCommissionStore, EfSiteCommissionStore>();
 
 // Temporary API-owned adapters for the categories/suppliers persistence ports; see EfCategoryStore/EfSupplierStore.
 builder.Services.AddScoped<ICategoryStore, EfCategoryStore>();

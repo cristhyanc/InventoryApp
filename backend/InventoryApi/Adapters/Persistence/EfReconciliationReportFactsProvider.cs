@@ -1,7 +1,7 @@
 using Inventory.Application.Reporting.Reconciliation;
+using Inventory.Domain.FinancialConfiguration;
 using InventoryApi.Data;
 using InventoryApi.Models;
-using InventoryApi.Services;
 using Microsoft.EntityFrameworkCore;
 
 namespace InventoryApi.Adapters.Persistence;

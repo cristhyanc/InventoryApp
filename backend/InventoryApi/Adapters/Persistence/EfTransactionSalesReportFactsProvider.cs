@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using Inventory.Application.Nayax;
 using Inventory.Application.Reporting.Transactions;
+using Inventory.Domain.FinancialConfiguration;
 using Inventory.Domain.Reporting.Transactions;
 using InventoryApi.Data;
 using InventoryApi.Models;
@@ -51,14 +52,12 @@ public sealed class EfTransactionSalesReportFactsProvider : ITransactionSalesRep
             .Where(x => x.EffectiveFrom <= to)
             .Select(x => new { x.EffectiveFrom, x.FeeExGst })
             .ToListAsync(cancellationToken);
-        var feeRates = feeRateRows.Select(x => new EffectiveFeeRate(x.EffectiveFrom, x.FeeExGst)).ToList();
+        var feeRates = feeRateRows.Select(x => new EffectiveNayaxFeeRate(x.EffectiveFrom, x.FeeExGst)).ToList();
 
         var agreementRows = await _db.SiteCommissionAgreements.AsNoTracking()
-            .Select(x => new { x.SiteId, x.EffectiveFrom, x.EffectiveTo, x.Basis, x.CommissionRate })
+            .Select(x => new EffectiveCommissionAgreement(
+                x.SiteId, x.EffectiveFrom, x.EffectiveTo, x.Basis, x.CommissionRate))
             .ToListAsync(cancellationToken);
-        var agreements = agreementRows
-            .Select(x => new EffectiveCommissionAgreement(x.SiteId, x.EffectiveFrom, x.EffectiveTo, ToDomain(x.Basis), x.CommissionRate))
-            .ToList();
 
         var siteMappingUnavailable = _nayaxLynxClient is null;
         var liveMachines = new List<NayaxMachine>();
@@ -85,7 +84,7 @@ public sealed class EfTransactionSalesReportFactsProvider : ITransactionSalesRep
 
         var rows = StreamRows(salesQuery, machineById, machinesBySite, cancellationToken);
 
-        return new TransactionSalesReportFacts(rows, catalogue, feeRates, agreements, siteMappingUnavailable);
+        return new TransactionSalesReportFacts(rows, catalogue, feeRates, agreementRows, siteMappingUnavailable);
     }
 
     // Consumes the date/machine-filtered EF query as an asynchronous stream instead of completing it
@@ -109,10 +108,10 @@ public sealed class EfTransactionSalesReportFactsProvider : ITransactionSalesRep
             yield return new TransactionSalesReportFactsRow(
                 sale.TransactionID, sale.MachineAuthorizationTime, sale.MachineID, sale.MachineName,
                 siteId, siteName, sale.NayaxProductId, sale.ProductName,
-                ToDomain(PaymentMethodClassifier.Classify(sale.PaymentMethod)), sale.PaymentMethod, sale.SettlementValue,
+                PaymentMethodClassifier.Classify(sale.PaymentMethod), sale.PaymentMethod, sale.SettlementValue,
                 sale.NayaxProductCostPrice, sale.UnitCostAtSale, sale.CostOfGoodsSold,
                 sale.CostingStatus.ToString(), CostSourceLabel(sale), hasPersistedCost,
-                ToDomain(NayaxTransactionStatusClassifier.Classify(sale.TransactionStatusId)),
+                NayaxTransactionStatusClassifier.Classify(sale.TransactionStatusId),
                 sale.TransactionStatusId, NayaxTransactionStatusClassifier.Describe(sale.TransactionStatusId));
         }
     }
@@ -133,26 +132,4 @@ public sealed class EfTransactionSalesReportFactsProvider : ITransactionSalesRep
         };
     }
 
-    private static TransactionPaymentType ToDomain(NayaxPaymentType type) => type switch
-    {
-        NayaxPaymentType.Card => TransactionPaymentType.Card,
-        NayaxPaymentType.Cash => TransactionPaymentType.Cash,
-        _ => TransactionPaymentType.Unknown
-    };
-
-    private static TransactionSaleStatus ToDomain(NayaxTransactionStatus status) => status switch
-    {
-        NayaxTransactionStatus.Completed => TransactionSaleStatus.Completed,
-        NayaxTransactionStatus.Pending => TransactionSaleStatus.Pending,
-        NayaxTransactionStatus.Refunded => TransactionSaleStatus.Refunded,
-        NayaxTransactionStatus.CancelledOrDeclined => TransactionSaleStatus.CancelledOrDeclined,
-        _ => TransactionSaleStatus.Unknown
-    };
-
-    private static TransactionCommissionBasis ToDomain(CommissionBasis basis) => basis switch
-    {
-        CommissionBasis.CardSales => TransactionCommissionBasis.CardSales,
-        CommissionBasis.SalesExGst => TransactionCommissionBasis.SalesExGst,
-        _ => TransactionCommissionBasis.GrossSales
-    };
 }

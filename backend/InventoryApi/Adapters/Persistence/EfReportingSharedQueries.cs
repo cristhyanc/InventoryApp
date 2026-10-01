@@ -1,8 +1,7 @@
 using InventoryApi.Data;
-using InventoryApi.DTOs;
+using Inventory.Application.Commissions;
+using Inventory.Domain.FinancialConfiguration;
 using InventoryApi.Models;
-using InventoryApi.Services;
-using InventoryApi.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
 
 namespace InventoryApi.Adapters.Persistence;
@@ -30,7 +29,7 @@ internal static class EfReportingSharedQueries
             (!machineId.HasValue || x.MachineID == machineId.Value));
 
     public static IQueryable<NayaxSales> SalesQuery(AppDbContext db, DateTime from, DateTime endExclusive, long? machineId) =>
-        AllSalesQuery(db, from, endExclusive, machineId).Where(NayaxTransactionStatusClassifier.CompletedSalePredicate);
+        AllSalesQuery(db, from, endExclusive, machineId).Where(EfNayaxSalesQueries.CompletedSalePredicate);
 
     // The completed-sale cost projection needs only the sale's own fields (no join against
     // Products), which is enough for both bookkeeping's totals and daily's per-day grouping.
@@ -48,10 +47,10 @@ internal static class EfReportingSharedQueries
     // resolve the same effective-dated site commission coverage/warnings for a date range and
     // optional machine filter, gated on which completed-sale machine IDs actually have a mapped site.
     public static async Task<CommissionResolutionResult> GetMachineCommissionsAsync(
-        AppDbContext db, ISiteCommissionService siteCommissions, DateTime from, DateTime to, DateTime endExclusive,
+        AppDbContext db, IGetSiteCommissionReport siteCommissions, DateTime from, DateTime to, DateTime endExclusive,
         long? machineId, CancellationToken cancellationToken)
     {
-        var report = await siteCommissions.GetReportAsync(from, to, null, cancellationToken);
+        var report = await siteCommissions.Handle(from, to, null, cancellationToken);
 
         var relevantRows = report.Rows.Where(site => !machineId.HasValue || site.Machines.Any(machine => machine.MachineId == machineId.Value)).ToList();
         var machines = relevantRows.SelectMany(site => site.Machines.Select(machine =>
@@ -82,7 +81,7 @@ internal static class EfReportingSharedQueries
             hasConfigurationGap, hasOverlap, hasMissingSiteMapping, usesMultipleRates, warnings.Distinct().ToList());
     }
 
-    private static List<string> SelectedMachineCommissionWarnings(SiteCommissionMachineDto? machine)
+    private static List<string> SelectedMachineCommissionWarnings(SiteCommissionMachineReportRow? machine)
     {
         var warnings = new List<string>();
         if (machine?.HasConfigurationGap == true)
