@@ -1,3 +1,4 @@
+import { TestBed } from '@angular/core/testing';
 import { of, throwError } from 'rxjs';
 import { TakeInventoryComponent } from './take-inventory.component';
 import { ProductService } from '../../services/product.service';
@@ -199,5 +200,65 @@ describe('TakeInventoryComponent apply failure/refresh', () => {
     expect(row.error).toContain('19');
     expect(getProduct).toHaveBeenCalledWith(1);
     expect(row.product.quantityInStock).toBe(19);
+  });
+});
+
+describe('TakeInventoryComponent current stock control sizing', () => {
+  async function render(products: Product[]) {
+    const apply = jest.fn();
+
+    await TestBed.configureTestingModule({
+      imports: [TakeInventoryComponent],
+      providers: [
+        {
+          provide: ProductService,
+          useValue: { getAll: jest.fn(() => of(products)), get: jest.fn((id: number) => of(products.find((p) => p.id === id)!)) }
+        },
+        { provide: InventoryCountService, useValue: { apply } },
+        { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() } }
+      ]
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(TakeInventoryComponent);
+    fixture.detectChanges();
+    const host = fixture.nativeElement as HTMLElement;
+    const buttons = () => Array.from(host.querySelectorAll<HTMLButtonElement>('[data-testid="confirm-current-stock"]'));
+
+    return { fixture, host, buttons, apply };
+  }
+
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('gives every current stock button a centred 44x44 CSS pixel minimum target, regardless of digit count', async () => {
+    const { buttons } = await render([
+      product({ id: 1, name: 'Coke', quantityInStock: 8 }),
+      product({ id: 2, name: 'Chips', quantityInStock: 12 }),
+      product({ id: 3, name: 'Water', quantityInStock: 1234 })
+    ]);
+
+    const rendered = buttons();
+    expect(rendered.length).toBe(3);
+
+    for (const button of rendered) {
+      const classes = Array.from(button.classList);
+      expect(classes).toEqual(expect.arrayContaining(['min-h-[44px]', 'min-w-[44px]', 'inline-flex', 'items-center', 'justify-center']));
+    }
+
+    const sizingClasses = rendered.map((b) => Array.from(b.classList).sort().join(' '));
+    expect(new Set(sizingClasses).size).toBe(1);
+    expect(rendered[2].textContent).toContain('1234');
+  });
+
+  it('keeps the confirm behaviour and completed appearance when the enlarged button is clicked', async () => {
+    const { fixture, buttons, apply } = await render([product({ id: 1, name: 'Coke', quantityInStock: 17 })]);
+
+    buttons()[0].click();
+    fixture.detectChanges();
+
+    const button = buttons()[0];
+    expect(apply).not.toHaveBeenCalled();
+    expect(fixture.componentInstance.rows[0].complete).toBe(true);
+    expect(button.textContent).toContain('\u2713');
+    expect(Array.from(button.classList)).toEqual(expect.arrayContaining(['bg-green-100', 'min-h-[44px]', 'min-w-[44px]']));
   });
 });

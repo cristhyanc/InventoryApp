@@ -33,7 +33,7 @@
                 <button
                   type="button"
                   data-testid="confirm-current-stock"
-                  class="rounded-md border px-2 py-1 font-medium"
+                  class="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md border px-3 py-2 font-medium"
                   [ngClass]="row.complete ? 'border-green-300 bg-green-100 text-green-800' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'"
                   [attr.aria-label]="'Confirm current stock of ' + row.product.quantityInStock + ' for ' + row.product.name"
                   (click)="confirmCurrentStock(row)">
