@@ -147,6 +147,24 @@ describe('implementation to architecture handoff', () => {
   }
 });
 
+describe('stale implementation dispatcher', () => {
+  it('never blocks an issue that has already moved on from agent-working', () => {
+    for (const labels of [[{ name: 'agent-review' }], [{ name: 'agent-blocked' }]]) {
+      const state = fixture({ pr: { headRefOid: NEWER_SHA }, issue: { labels } });
+      const { status, calls } = run(dispatchShell, { state, env: { HEAD_SHA: SHA } });
+      assert.notEqual(status, 0);
+      assert.equal(calls.length, 0, 'no label edit or comment on an issue that is not agent-working');
+    }
+  });
+
+  it('never blocks a closed issue', () => {
+    const state = fixture({ unavailable: ['workflow run'], issue: { state: 'CLOSED' } });
+    const { status, calls } = run(dispatchShell, { state, env: { HEAD_SHA: SHA } });
+    assert.notEqual(status, 0);
+    assert.ok(!blocked(calls));
+  });
+});
+
 describe('architecture finalizer', () => {
   const success = { CONTEXT_JOB_RESULT: 'success', ARCHITECTURE_JOB_RESULT: 'success', EXPECTED_START_SHA: SHA, FINAL_SHA: SHA };
 

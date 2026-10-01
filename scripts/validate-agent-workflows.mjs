@@ -1022,6 +1022,7 @@ export function verifyArchitecturePass(implementationWorkflow, architectureWorkf
     '[[ "$head_ref" == agent/issue-"$ISSUE_NUMBER"-* ]]',
     'RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}',
     'trap block_undispatched EXIT', 'dispatched=true',
+    '.state == "OPEN" and any(.labels[]?; .name == "agent-working")',
     '--remove-label agent-working --add-label agent-blocked',
     'could not be dispatched. The task is now agent-blocked.',
   ]) requireText(implementationDispatcher, required, 'agent-implement.yml architecture dispatcher');

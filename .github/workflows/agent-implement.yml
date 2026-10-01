@@ -544,15 +544,20 @@ jobs:
           [[ "$ISSUE_NUMBER" =~ ^[1-9][0-9]*$ ]] || fail "A valid issue number is required."
 
           # Any failure before the architecture workflow is dispatched (a guard, a gh error or the
-          # dispatch itself) must not leave the issue in agent-working with nothing scheduled.
+          # dispatch itself) must not leave the issue in agent-working with nothing scheduled. It
+          # blocks only an issue that is still agent-working, so a stale or manually re-run
+          # dispatcher cannot regress an issue that has already moved on to review.
           dispatched=false
           block_undispatched() {
             local status=$?
             if [ "$status" -ne 0 ] && [ "$dispatched" != "true" ]; then
-              gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
-                --remove-label agent-working --add-label agent-blocked || true
-              gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
-                --body "Implementation PR #${PR_NUMBER:-?} was created at ${HEAD_SHA:-?}, but the trusted architecture workflow could not be dispatched. The task is now agent-blocked. Run: $RUN_URL" || true
+              if gh issue view "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --json state,labels \
+                | jq -e '.state == "OPEN" and any(.labels[]?; .name == "agent-working")' >/dev/null; then
+                gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
+                  --remove-label agent-working --add-label agent-blocked || true
+                gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
+                  --body "Implementation PR #${PR_NUMBER:-?} was created at ${HEAD_SHA:-?}, but the trusted architecture workflow could not be dispatched. The task is now agent-blocked. Run: $RUN_URL" || true
+              fi
             fi
           }
           trap block_undispatched EXIT
