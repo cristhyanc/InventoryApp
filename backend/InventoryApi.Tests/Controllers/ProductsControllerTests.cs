@@ -33,8 +33,15 @@ public class ProductsControllerTests
         var getInventoryValuationSummary = new GetInventoryValuationSummary(new EfInventoryValuationFactsProvider(db));
         var getProductPriceComparison = new GetProductPriceComparison(new EfProductPurchasePriceHistoryProvider(db));
         var store = new EfProductStore(db, new InventoryCostRebuildService(db));
+        var catalog = new EfProductCatalogStore(db);
+        var listLowStockProducts = new ListLowStockProducts(catalog, calculateReorderNeeds);
         var productService = new ProductService(
-            db, calculateReorderNeeds, new CreateProduct(store), new UpdateProduct(store), new DeleteProduct(store));
+            new ListProducts(catalog, listLowStockProducts),
+            new GetProduct(catalog),
+            listLowStockProducts,
+            new CreateProduct(store),
+            new UpdateProduct(store),
+            new DeleteProduct(store));
         return new ProductsController(productService, getInventoryValuationSummary, getProductPriceComparison);
     }
 

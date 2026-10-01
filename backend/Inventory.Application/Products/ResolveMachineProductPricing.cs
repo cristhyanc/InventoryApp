@@ -30,11 +30,12 @@ public sealed class ResolveMachineProductPricing
         var today = DateTime.Today;
         var candidatePrices = facts.Select(fact => fact.MachinePrice).Append(1m).Distinct().ToList();
 
-        var commissionTask = _facts.ResolveCardCommissionAsync(siteId.Value, today, candidatePrices, cancellationToken);
-        var feeExGstTask = _facts.ResolveEffectiveFeeExGstAsync(today, cancellationToken);
-        await Task.WhenAll(commissionTask, feeExGstTask);
-        var commission = await commissionTask;
-        var feeExGst = await feeExGstTask;
+        // Awaited one at a time, deliberately not with Task.WhenAll: both calls land on the same
+        // scoped ISiteFactsStore, whose EF adapter shares one AppDbContext, and a DbContext supports
+        // only one operation at a time. SQLite's synchronous async implementation would usually hide
+        // the overlap locally while failing against a real asynchronous provider.
+        var commission = await _facts.ResolveCardCommissionAsync(siteId.Value, today, candidatePrices, cancellationToken);
+        var feeExGst = await _facts.ResolveEffectiveFeeExGstAsync(today, cancellationToken);
         var feeIncGst = feeExGst.HasValue
             ? feeExGst.Value + ReportingCalculations.GstFromExcluding(feeExGst.Value)
             : (decimal?)null;

@@ -1,4 +1,6 @@
 using Inventory.Application.Products;
+using Inventory.Application.Sites;
+using Inventory.Domain.Sites;
 using Xunit;
 
 namespace InventoryApi.Tests.Application.Products;
@@ -71,5 +73,80 @@ public class ResolveMachineProductPricingTests
 
         var result = Assert.Single(results);
         Assert.Equal(7.78m, result.SuggestedNetValue);
+    }
+
+    /// <summary>
+    /// Both reads go through one scoped <see cref="ISiteFactsStore"/>, whose EF adapter shares a single
+    /// <c>AppDbContext</c>, and a <c>DbContext</c> permits only one operation at a time. The commission
+    /// and fee calls must therefore be awaited one at a time: starting them together with
+    /// <c>Task.WhenAll</c> overlaps them, which SQLite's synchronous async implementation hides in
+    /// tests while a real asynchronous provider rejects it. The recorder yields inside each call, so an
+    /// overlapping implementation deterministically produces an interleaved trace and a concurrency
+    /// count above one.
+    /// </summary>
+    [Fact]
+    public async Task Handle_AwaitsTheCommissionAndFeeReadsOneAtATime()
+    {
+        var recorder = new CallSequenceRecordingSiteFactsStore(new Dictionary<decimal, decimal> { [10m] = 1m }, 0.2m);
+        var useCase = new ResolveMachineProductPricing(recorder);
+
+        await useCase.Handle(91, [new MachineProductPricingFact(200, 10m, 2m)], CancellationToken.None);
+
+        Assert.Equal(
+            new[] { "start:commission", "end:commission", "start:fee", "end:fee" },
+            recorder.Trace);
+        Assert.Equal(1, recorder.MaxConcurrentCalls);
+    }
+
+    /// <summary>
+    /// Records when each port call starts and finishes, and how many were ever in flight at once. Each
+    /// call yields before completing, so a caller that started both before awaiting either is visible
+    /// as an interleaved trace rather than as a passing test.
+    /// </summary>
+    private sealed class CallSequenceRecordingSiteFactsStore : ISiteFactsStore
+    {
+        private readonly IReadOnlyDictionary<decimal, decimal> _commissionByPrice;
+        private readonly decimal? _feeExGst;
+        private int _inFlight;
+
+        public CallSequenceRecordingSiteFactsStore(
+            IReadOnlyDictionary<decimal, decimal> commissionByPrice, decimal? feeExGst)
+        {
+            _commissionByPrice = commissionByPrice;
+            _feeExGst = feeExGst;
+        }
+
+        public List<string> Trace { get; } = [];
+
+        public int MaxConcurrentCalls { get; private set; }
+
+        public Task<IReadOnlyList<SiteProductActivityFact>> GetProductActivityAsync(CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<IReadOnlyList<SiteCompletedSaleFact>> GetRecentCompletedSalesAsync(
+            IReadOnlyCollection<long> machineIds, DateTime since, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<IReadOnlyDictionary<long, SiteProductCostBasis>> GetProductCostBasisAsync(CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<SiteCardCommissionResolution> ResolveCardCommissionAsync(
+            long siteId, DateTime asOfDate, IReadOnlyCollection<decimal> candidateRetailPrices, CancellationToken cancellationToken) =>
+            RecordAsync("commission", new SiteCardCommissionResolution(false, _commissionByPrice));
+
+        public Task<decimal?> ResolveEffectiveFeeExGstAsync(DateTime asOfDate, CancellationToken cancellationToken) =>
+            RecordAsync("fee", _feeExGst);
+
+        private async Task<T> RecordAsync<T>(string name, T result)
+        {
+            Trace.Add($"start:{name}");
+            MaxConcurrentCalls = Math.Max(MaxConcurrentCalls, ++_inFlight);
+
+            await Task.Yield();
+
+            _inFlight--;
+            Trace.Add($"end:{name}");
+            return result;
+        }
     }
 }

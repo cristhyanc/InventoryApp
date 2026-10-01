@@ -74,10 +74,10 @@ public sealed class EfProductStore : IProductStore
     public Task<bool> ExistsAsync(long id, CancellationToken cancellationToken) =>
         _db.Products.AnyAsync(product => product.Id == id, cancellationToken);
 
-    public async Task UpdateAsync(long id, ProductUpdateFields fields, CancellationToken cancellationToken)
+    public async Task<bool> UpdateAsync(long id, ProductUpdateFields fields, CancellationToken cancellationToken)
     {
         var product = await _db.Products.FindAsync([id], cancellationToken);
-        if (product is null) return;
+        if (product is null) return false;
 
         product.Sku = fields.Sku;
         product.Description = fields.Description;
@@ -89,6 +89,7 @@ public sealed class EfProductStore : IProductStore
         product.UpdatedAt = DateTime.UtcNow;
 
         await _db.SaveChangesAsync(cancellationToken);
+        return true;
     }
 
     public async Task<bool> DeleteAsync(long id, CancellationToken cancellationToken)

@@ -182,6 +182,9 @@ builder.Services.AddScoped<IOperatingExpenseStore, EfOperatingExpenseStore>();
 // Temporary API-owned adapter for the product create/update/delete persistence port; see EfProductStore.
 builder.Services.AddScoped<IProductStore, EfProductStore>();
 
+// Temporary API-owned adapter for the product catalogue read port; see EfProductCatalogStore.
+builder.Services.AddScoped<IProductCatalogStore, EfProductCatalogStore>();
+
 // Temporary API-owned adapters for the site dashboard ports; see EfSiteFactsStore/SiteNameResolverAdapter.
 builder.Services.AddScoped<ISiteFactsStore, EfSiteFactsStore>();
 builder.Services.AddScoped<ISiteNameResolver, SiteNameResolverAdapter>();

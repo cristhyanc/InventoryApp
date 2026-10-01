@@ -15,8 +15,13 @@ public interface IProductStore
 
     Task<bool> ExistsAsync(long id, CancellationToken cancellationToken);
 
-    /// <summary>Updates the product's editable fields. Assumes the product's existence was already confirmed.</summary>
-    Task UpdateAsync(long id, ProductUpdateFields fields, CancellationToken cancellationToken);
+    /// <summary>
+    /// Updates the product's editable fields. Returns <c>false</c> when no product with
+    /// <paramref name="id"/> was updated, which is the authoritative not-found answer: an earlier
+    /// <see cref="ExistsAsync"/> result is only a read, and the row can be deleted by another
+    /// request between that read and this write.
+    /// </summary>
+    Task<bool> UpdateAsync(long id, ProductUpdateFields fields, CancellationToken cancellationToken);
 
     /// <summary>Deletes the product. Returns <c>false</c> when no product with <paramref name="id"/> exists.</summary>
     Task<bool> DeleteAsync(long id, CancellationToken cancellationToken);

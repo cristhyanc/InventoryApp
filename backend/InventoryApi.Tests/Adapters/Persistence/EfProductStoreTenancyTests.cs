@@ -76,11 +76,16 @@ public class EfProductStoreTenancyTests : IDisposable
             otherBusinessProductId = product.Id;
         }
 
+        bool updated;
         using (var db = TestAppDbContext.For(_options, BusinessA))
         {
             var store = new EfProductStore(db, new InventoryCostRebuildService(db));
-            await store.UpdateAsync(otherBusinessProductId, UpdateFields(), CancellationToken.None);
+            updated = await store.UpdateAsync(otherBusinessProductId, UpdateFields(), CancellationToken.None);
         }
+
+        // A cross-tenant target is reported as not updated, so the caller answers not-found rather
+        // than a success that changed nothing.
+        Assert.False(updated);
 
         using var verify = TestAppDbContext.Unrestricted(_options);
         var untouched = await verify.Products.SingleAsync(product => product.Id == otherBusinessProductId);

@@ -6,6 +6,11 @@ namespace Inventory.Application.Products;
 /// The product update use case: an unknown id answers not-found even when the request also carries
 /// invalid restock settings, matching the former <c>InventoryApi.Services.ProductService.Update</c>
 /// exactly (issue #240).
+///
+/// The <see cref="IProductStore.ExistsAsync"/> read is only a fast pre-check that preserves that
+/// ordering; the authoritative not-found answer is <see cref="IProductStore.UpdateAsync"/>'s own
+/// outcome, so a product deleted by another request between the read and the write reports
+/// not-found rather than a success that changed nothing.
 /// </summary>
 public sealed class UpdateProduct
 {
@@ -24,7 +29,8 @@ public sealed class UpdateProduct
         var error = ProductRestockPolicy.Validate(fields.LowStockThreshold, fields.RestockTo);
         if (error is not null) return UpdateProductResult.Invalid(error);
 
-        await _store.UpdateAsync(id, fields, cancellationToken);
-        return UpdateProductResult.Success();
+        return await _store.UpdateAsync(id, fields, cancellationToken)
+            ? UpdateProductResult.Success()
+            : UpdateProductResult.NotFound();
     }
 }

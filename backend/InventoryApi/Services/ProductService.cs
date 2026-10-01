@@ -1,39 +1,39 @@
-using InventoryApi.Data;
+using InventoryApi.Adapters.Mapping;
 using InventoryApi.DTOs;
 using Inventory.Application.Products;
-using Inventory.Application.Reorder;
 using InventoryApi.Models;
 using InventoryApi.Services.Interfaces;
-using Microsoft.EntityFrameworkCore;
 
 namespace InventoryApi.Services;
 
 /// <summary>
-/// <see cref="Create"/>/<see cref="Update"/>/<see cref="Delete"/> delegate to the migrated
-/// <see cref="CreateProduct"/>/<see cref="UpdateProduct"/>/<see cref="DeleteProduct"/> use cases
-/// (issue #240), preserving this service's existing <see cref="IProductService"/> contract and
-/// exception/return shapes exactly. <see cref="GetAll"/>/<see cref="Get"/>/<see cref="LowStock"/>
-/// stay here: they return the EF <see cref="Product"/> entity directly (the API's existing response
-/// shape) and its reorder formulas (<see cref="Product.NeedToOrder"/>/<see cref="Product.IsReorderAlert"/>)
-/// remain future work (see <c>docs/architecture.md</c> backend migration track item 6).
+/// A transitional delegator only (issue #240, the same shape #241 left <see cref="SiteService"/>/
+/// <see cref="MachineService"/> in): every method maps the <see cref="IProductService"/> request onto
+/// the migrated <see cref="Inventory.Application.Products"/> use case that owns it, and maps the
+/// result back to the unchanged <see cref="Product"/> API response through
+/// <see cref="ProductResponseMapper"/>. It holds no <c>AppDbContext</c>, no query, and no rule of its
+/// own. Deleting it, and with it <see cref="IProductService"/>, is tracked by issue #153.
 /// </summary>
 public class ProductService : IProductService
 {
-    private readonly AppDbContext _db;
-    private readonly CalculateReorderNeeds _calculateReorderNeeds;
+    private readonly ListProducts _listProducts;
+    private readonly GetProduct _getProduct;
+    private readonly ListLowStockProducts _listLowStockProducts;
     private readonly CreateProduct _createProduct;
     private readonly UpdateProduct _updateProduct;
     private readonly DeleteProduct _deleteProduct;
 
     public ProductService(
-        AppDbContext db,
-        CalculateReorderNeeds calculateReorderNeeds,
+        ListProducts listProducts,
+        GetProduct getProduct,
+        ListLowStockProducts listLowStockProducts,
         CreateProduct createProduct,
         UpdateProduct updateProduct,
         DeleteProduct deleteProduct)
     {
-        _db = db;
-        _calculateReorderNeeds = calculateReorderNeeds;
+        _listProducts = listProducts;
+        _getProduct = getProduct;
+        _listLowStockProducts = listLowStockProducts;
         _createProduct = createProduct;
         _updateProduct = updateProduct;
         _deleteProduct = deleteProduct;
@@ -42,59 +42,23 @@ public class ProductService : IProductService
     public async Task<IEnumerable<Product>> GetAll(
         string? search, long? categoryId, int? supplierId, bool? lowStockOnly, CancellationToken cancellationToken = default)
     {
-        var query = _db.Products
-            .Include(p => p.Category)
-            .Include(p => p.Supplier)
-            .Include(p => p.StockAdjustments)
-            .AsQueryable();
-
-        if (!string.IsNullOrWhiteSpace(search))
-            query = query.Where(p => p.Name.Contains(search) || (p.Sku != null && p.Sku.Contains(search)));
-
-        if (categoryId.HasValue) query = query.Where(p => p.CategoryId == categoryId);
-        if (supplierId.HasValue) query = query.Where(p => p.SupplierId == supplierId);
-
-        if (lowStockOnly == true) return await LowStock(search, categoryId, supplierId, cancellationToken);
-        return await query.OrderBy(p => p.Name).ToListAsync(cancellationToken);
+        var records = await _listProducts.Handle(
+            new ProductCatalogFilter(search, categoryId, supplierId), lowStockOnly, cancellationToken);
+        return records.Select(ProductResponseMapper.ToProduct).ToList();
     }
 
     public async Task<Product?> Get(long id)
     {
-        return await _db.Products
-            .Include(p => p.Category)
-            .Include(p => p.Supplier)
-            .Include(p => p.StockAdjustments)
-            .FirstOrDefaultAsync(p => p.Id == id);
+        var record = await _getProduct.Handle(id, CancellationToken.None);
+        return record is null ? null : ProductResponseMapper.ToProduct(record);
     }
 
     public async Task<IEnumerable<Product>> LowStock(
         string? search = null, long? categoryId = null, int? supplierId = null, CancellationToken cancellationToken = default)
     {
-        var query = _db.Products.AsNoTracking()
-            .Include(p => p.Category)
-            .Include(p => p.Supplier)
-            .Include(p => p.StockAdjustments)
-            .AsQueryable();
-        if (!string.IsNullOrWhiteSpace(search))
-            query = query.Where(p => p.Name.Contains(search) || (p.Sku != null && p.Sku.Contains(search)));
-        if (categoryId.HasValue) query = query.Where(p => p.CategoryId == categoryId);
-        if (supplierId.HasValue) query = query.Where(p => p.SupplierId == supplierId);
-
-        var products = await query.ToListAsync(cancellationToken);
-
-        var reorderNeeds = await _calculateReorderNeeds.Handle(cancellationToken);
-        foreach (var product in products)
-        {
-            product.MachineReplenishmentNeed =
-                reorderNeeds.MachineReplenishmentNeedByProductId.GetValueOrDefault(product.Id);
-            product.OnOrderQuantity =
-                Math.Max(0m, reorderNeeds.OnOrderQuantityByProductId.GetValueOrDefault(product.Id));
-        }
-
-        return products.Where(p => p.IsReorderAlert)
-            .OrderByDescending(p => p.NeedToOrder)
-            .ThenBy(p => p.Name)
-            .ToList();
+        var records = await _listLowStockProducts.Handle(
+            new ProductCatalogFilter(search, categoryId, supplierId), cancellationToken);
+        return records.Select(ProductResponseMapper.ToProduct).ToList();
     }
 
     public async Task<Product> Create(ProductCreateDto dto)

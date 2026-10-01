@@ -53,6 +53,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<GetSiteProducts>();
         services.AddScoped<ListMachineDashboard>();
         services.AddScoped<GetMachineDashboard>();
+        services.AddScoped<ListMachineProducts>();
         services.AddScoped<SyncMachineStockFromNayax>();
         services.AddScoped<ApplyMachineStockSync>();
         services.AddScoped<ResolveMachineStockDuplicate>();
@@ -60,6 +61,9 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<SyncLatestNayaxSales>();
         services.AddScoped<ComputePurchaseTotalValidation>();
         services.AddScoped<CalculateReorderNeeds>();
+        services.AddScoped<ListProducts>();
+        services.AddScoped<GetProduct>();
+        services.AddScoped<ListLowStockProducts>();
         services.AddScoped<CreateProduct>();
         services.AddScoped<UpdateProduct>();
         services.AddScoped<DeleteProduct>();
