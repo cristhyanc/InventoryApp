@@ -1,0 +1,328 @@
+name: Agent architecture
+
+# Separate architecture pass for a verified agent implementation pull request.
+# Invoked only through workflow_dispatch from trusted default-branch automation.
+# Claude may make narrowly scoped structural edits on the existing feature branch;
+# a deterministic step publishes those edits with a short-lived GitHub App token.
+# Exact-SHA validation and independent review are dispatched only after this workflow succeeds.
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Linked agent task issue number
+        required: true
+        type: string
+      pr_number:
+        description: Agent pull request number
+        required: true
+        type: string
+      head_sha:
+        description: Exact implementation head SHA to review
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: agent-architecture-pr-${{ inputs.pr_number }}
+  cancel-in-progress: false
+
+jobs:
+  context:
+    name: Verify architecture target
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pull-requests: read
+      issues: read
+    outputs:
+      issue_number: ${{ steps.context.outputs.issue_number }}
+      pr_number: ${{ steps.context.outputs.pr_number }}
+      branch: ${{ steps.context.outputs.branch }}
+      head_sha: ${{ steps.context.outputs.head_sha }}
+
+    steps:
+      - name: Verify exact agent pull request
+        id: context
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+          EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          [[ "$ISSUE_NUMBER" =~ ^[1-9][0-9]*$ ]] || fail "A valid issue number is required."
+          [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] || fail "A valid pull request number is required."
+          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "A full 40-character lowercase head SHA is required."
+
+          pr_json="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --json state,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner)"
+          state="$(jq -r '.state' <<<"$pr_json")"
+          is_draft="$(jq -r '.isDraft' <<<"$pr_json")"
+          base_ref="$(jq -r '.baseRefName' <<<"$pr_json")"
+          head_ref="$(jq -r '.headRefName' <<<"$pr_json")"
+          current_sha="$(jq -r '.headRefOid // empty' <<<"$pr_json")"
+          head_repo="$(jq -r '"\(.headRepositoryOwner.login)/\(.headRepository.name)"' <<<"$pr_json")"
+          author="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" \
+            --jq '.user.login // empty')"
+
+          [ "$state" = "OPEN" ] || fail "Pull request #$PR_NUMBER is not open."
+          [ "$is_draft" = "false" ] || fail "Pull request #$PR_NUMBER is a draft."
+          [ "$base_ref" = "develop" ] || fail "Architecture is limited to pull requests targeting develop."
+          [ "$head_repo" = "$GITHUB_REPOSITORY" ] || fail "Architecture is limited to same-repository branches."
+          [[ "$head_ref" == agent/issue-* ]] || fail "Architecture requires an agent/issue-* head branch."
+          [[ "$head_ref" == agent/issue-"$ISSUE_NUMBER"-* ]] || fail "Pull request branch does not match issue #$ISSUE_NUMBER."
+          [ -n "$EXPECTED_AGENT_AUTHOR" ] || fail "AGENT_AUTOMATION_APP_BOT_LOGIN is not configured."
+          [ "$author" = "$EXPECTED_AGENT_AUTHOR" ] || fail "Architecture requires $EXPECTED_AGENT_AUTHOR as the pull request author."
+          [ "$current_sha" = "$HEAD_SHA" ] || fail "Refusing stale architecture run: pull request head is $current_sha, expected $HEAD_SHA."
+
+          issue_json="$(gh issue view "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --json state,labels)"
+          [ "$(jq -r '.state' <<<"$issue_json")" = "OPEN" ] || fail "Issue #$ISSUE_NUMBER is not open."
+          jq -e 'any(.labels[]?; .name == "agent-working")' <<<"$issue_json" >/dev/null || fail "Issue #$ISSUE_NUMBER is not in agent-working state."
+
+          changed_files="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" --jq '.[].filename')"
+          if grep -Eq '^\.github/workflows/' <<<"$changed_files"; then
+            fail "Pull requests that change .github/workflows/** require manual validation and review."
+          fi
+
+          {
+            echo "issue_number=$ISSUE_NUMBER"
+            echo "pr_number=$PR_NUMBER"
+            echo "branch=$head_ref"
+            echo "head_sha=$HEAD_SHA"
+          } >> "$GITHUB_OUTPUT"
+
+  architecture:
+    name: Review architecture
+    needs: context
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+    outputs:
+      head_sha: ${{ steps.architecture_result.outputs.head_sha }}
+
+    steps:
+      - name: Check out exact implementation head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.context.outputs.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Attach local feature branch
+        env:
+          BRANCH: ${{ needs.context.outputs.branch }}
+          HEAD_SHA: ${{ needs.context.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          [ "$(git rev-parse HEAD)" = "$HEAD_SHA" ] || { echo "::error::Checkout does not match architecture target"; exit 1; }
+          git checkout -b "$BRANCH" "$HEAD_SHA"
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/inventory-app/package-lock.json
+
+      - name: Run Claude Code architecture agent
+        id: architect
+        if: needs.context.result == 'success'
+        uses: anthropics/claude-code-action@cfc3eb22bfed5c26ef66e3223c982af27e4524de # v1.0.231
+        env:
+          # validate.sh takes several minutes; Claude Code's 2-minute default Bash timeout
+          # would push the agent toward backgrounding or redirecting it, which the allowlist refuses.
+          BASH_DEFAULT_TIMEOUT_MS: "1800000"
+          BASH_MAX_TIMEOUT_MS: "1800000"
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          base_branch: develop
+          show_full_output: true
+          branch_prefix: agent/
+          prompt: |
+            You are a new, separate InventoryApp architecture agent invocation. The coder has opened pull request #${{ needs.context.outputs.pr_number }}. Work only on its existing agent/issue-${{ needs.context.outputs.issue_number }}-* feature branch; do not create another branch or pull request.
+
+            Follow CLAUDE.md, AGENTS.md, docs/architecture.md and docs/automation.md. Complete all work yourself in this single foreground invocation. Do not delegate, spawn, or use Claude sub-agents, and do not invoke the `Agent` tool. Read the issue's acceptance criteria and exclusions, the open PR and its full diff, and the existing tests before proposing edits. Verify the current branch is the PR's head branch and that its base is develop. If there is no single matching open PR, stop without editing.
+
+            Review only touched code and its directly affected boundaries: controllers versus use cases, domain rules versus adapters, dependency direction, framework or persistence leakage, duplicated calculations, information hiding, and testability. Make a small structural correction only when the current implementation violates an established rule or obscures the approved behavior. Preserve all observable behavior, API contracts, data semantics, and acceptance criteria. Do not perform broad Clean Architecture migrations, add frameworks, or touch unrelated files. A clean result with no edits is valid.
+
+            Before editing, check whether your proposed change would require a migration, change documented architecture or the PR's Documentation impact declaration, expand the approved scope, alter a test expectation, or require a human decision. If so, make no change; comment on the PR with the exact finding for human review. Do not edit the issue or PR body. Never weaken, skip, or delete tests. Do not change workflows, secrets, configuration, or deployment.
+
+            If you edit: run exactly `bash scripts/validate.sh` in the foreground, with no redirection, pipe or background execution (the allowlist refuses any variant, and the 30-minute shell timeout covers a full run); if validation fails, fix only your structural change and rerun it. Check the final diff against the issue and PR body and commit a focused architecture change locally. Do not push; a deterministic workflow step will mint a fresh GitHub App token and push the verified local head after your invocation. Comment on the PR with the structural changes and exact validation result. If you make no edits, comment briefly that no in-scope architectural corrections were needed. Never claim a command passed unless it ran successfully.
+
+            Never merge, approve, deploy, edit labels, open another PR, change the PR description, or modify production data. Independent exact-SHA validation and review still follow this stage.
+          claude_args: |
+            --max-turns 100
+            --allowedTools "Read,Glob,Grep,Edit,MultiEdit,Write"
+            "Bash(gh issue view *),Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr list *),Bash(gh pr comment *)"
+            "Bash(git status *),Bash(git diff *),Bash(git log *),Bash(git show *),Bash(git branch --show-current),Bash(git rev-parse *)"
+            "Bash(git rm -- backend/*),Bash(git rm -- frontend/*),Bash(git rm -- docs/*),Bash(git rm -- scripts/*)"
+            "Bash(git restore --staged -- backend/*),Bash(git restore --staged -- frontend/*),Bash(git restore --staged -- docs/*),Bash(git restore --staged -- scripts/*)"
+            "Bash(mkdir -p backend/*),Bash(mkdir -p frontend/*),Bash(mkdir -p docs/*),Bash(mkdir -p scripts/*)"
+            "Bash(git add *),Bash(git commit *)"
+            "Bash(bash scripts/validate.sh),Bash(dotnet *),Bash(npm --prefix frontend/inventory-app *)"
+            --disallowedTools "Agent,WebFetch,WebSearch"
+            "Bash(git push *),Bash(git push * --force *),Bash(git push * -f *),Bash(git push * --force-with-lease *),Bash(git reset --hard *),Bash(git rebase *)"
+            "Bash(git checkout *),Bash(git switch *),Bash(gh pr merge *),Bash(gh pr review *),Bash(gh pr edit *),Bash(gh pr create *),Bash(gh issue edit *),Bash(gh api *),Bash(gh workflow *),Bash(gh run *)"
+
+      - name: Verify architecture result
+        id: architecture_result
+        if: steps.architect.outcome == 'success'
+        env:
+          START_SHA: ${{ needs.context.outputs.head_sha }}
+          BRANCH: ${{ needs.context.outputs.branch }}
+        run: |
+          set -euo pipefail
+          [ "$(git branch --show-current)" = "$BRANCH" ] || { echo "::error::Architecture pass changed branch"; exit 1; }
+          git diff --quiet || { echo "::error::Tracked working-tree changes remain after architecture pass"; exit 1; }
+          git diff --cached --quiet || { echo "::error::Staged changes remain after architecture pass"; exit 1; }
+          head_sha="$(git rev-parse HEAD)"
+          [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Could not resolve architecture HEAD"; exit 1; }
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+          if [ "$head_sha" = "$START_SHA" ]; then
+            echo "push_required=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "push_required=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub App token for architecture publish
+        id: architecture_app_token
+        if: steps.architecture_result.outputs.push_required == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.AGENT_AUTOMATION_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AGENT_AUTOMATION_APP_PRIVATE_KEY }}
+          permission-contents: write
+
+      - name: Push architecture head
+        id: publish_architecture
+        if: steps.architecture_result.outputs.push_required == 'true'
+        env:
+          GH_TOKEN: ${{ steps.architecture_app_token.outputs.token }}
+          BRANCH: ${{ needs.context.outputs.branch }}
+          HEAD_SHA: ${{ steps.architecture_result.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          [ "$(git branch --show-current)" = "$BRANCH" ] || { echo "::error::Local branch changed before architecture publish"; exit 1; }
+          [ "$(git rev-parse HEAD)" = "$HEAD_SHA" ] || { echo "::error::Local HEAD changed before architecture publish"; exit 1; }
+          bash scripts/git-push-with-app-retry.sh "https://github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$BRANCH"
+
+  finalize:
+    name: Finalize architecture handoff
+    needs:
+      - context
+      - architecture
+    # Runs even when the target check fails, so a rejected or broken handoff never leaves the
+    # issue in agent-working with nothing scheduled.
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      pull-requests: write
+      issues: write
+      statuses: read
+
+    steps:
+      - name: Record architecture outcome and dispatch exact-SHA validation
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+          CONTEXT_JOB_RESULT: ${{ needs.context.result }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          EXPECTED_START_SHA: ${{ needs.context.outputs.head_sha }}
+          FINAL_SHA: ${{ needs.architecture.outputs.head_sha }}
+          ARCHITECTURE_JOB_RESULT: ${{ needs.architecture.result }}
+          EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          [[ "$ISSUE_NUMBER" =~ ^[1-9][0-9]*$ ]] || fail "A valid issue number is required."
+
+          # Any failure before validation is dispatched blocks the task, but only while the issue
+          # is still agent-working, so a stale or mistaken manual dispatch cannot block other work.
+          dispatched=false
+          labelled_by_this_run=false
+          block_undispatched() {
+            local status=$?
+            if [ "$status" -ne 0 ] && [ "$dispatched" != "true" ]; then
+              if [ "$labelled_by_this_run" = "true" ] || gh issue view "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --json state,labels \
+                | jq -e '.state == "OPEN" and any(.labels[]?; .name == "agent-working")' >/dev/null; then
+                gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --remove-label agent-review || true
+                gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
+                  --remove-label agent-working --remove-label agent-review --add-label agent-blocked || true
+                gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
+                  --body "Architecture stage did not hand pull request #$PR_NUMBER to exact-SHA validation (target check: $CONTEXT_JOB_RESULT; architecture: $ARCHITECTURE_JOB_RESULT). The task is now agent-blocked. Run: $RUN_URL" || true
+              fi
+            fi
+          }
+          trap block_undispatched EXIT
+
+          [ "$CONTEXT_JOB_RESULT" = "success" ] || fail "Architecture target check did not succeed ($CONTEXT_JOB_RESULT)."
+          [ "$ARCHITECTURE_JOB_RESULT" = "success" ] || fail "Architecture workflow did not complete successfully ($ARCHITECTURE_JOB_RESULT)."
+
+          [[ "$FINAL_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "Architecture workflow did not produce a valid final head SHA."
+          pr_json="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --json state,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner)"
+          state="$(jq -r '.state' <<<"$pr_json")"
+          is_draft="$(jq -r '.isDraft' <<<"$pr_json")"
+          base_ref="$(jq -r '.baseRefName' <<<"$pr_json")"
+          head_ref="$(jq -r '.headRefName' <<<"$pr_json")"
+          current_sha="$(jq -r '.headRefOid // empty' <<<"$pr_json")"
+          head_repo="$(jq -r '"\(.headRepositoryOwner.login)/\(.headRepository.name)"' <<<"$pr_json")"
+          author="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.user.login // empty')"
+
+          [ "$state" = "OPEN" ] || fail "Pull request #$PR_NUMBER is not open."
+          [ "$is_draft" = "false" ] || fail "Pull request #$PR_NUMBER is a draft."
+          [ "$base_ref" = "develop" ] || fail "Architecture finalization is limited to develop pull requests."
+          [ "$head_repo" = "$GITHUB_REPOSITORY" ] || fail "Architecture finalization is limited to same-repository branches."
+          [[ "$head_ref" == agent/issue-"$ISSUE_NUMBER"-* ]] || fail "Pull request branch does not match issue #$ISSUE_NUMBER."
+          [ -n "$EXPECTED_AGENT_AUTHOR" ] || fail "AGENT_AUTOMATION_APP_BOT_LOGIN is not configured."
+          [ "$author" = "$EXPECTED_AGENT_AUTHOR" ] || fail "Architecture finalization requires $EXPECTED_AGENT_AUTHOR as the pull request author."
+          [ "$current_sha" = "$FINAL_SHA" ] || fail "Refusing stale architecture finalization: pull request head is $current_sha, expected $FINAL_SHA."
+
+          changed_files="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" --jq '.[].filename')"
+          if grep -Eq '^\.github/workflows/' <<<"$changed_files"; then
+            fail "Pull requests that change .github/workflows/** require manual validation and review."
+          fi
+
+          issue_json="$(gh issue view "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --json state,labels)"
+          [ "$(jq -r '.state' <<<"$issue_json")" = "OPEN" ] || fail "Issue #$ISSUE_NUMBER is not open."
+          jq -e 'any(.labels[]?; .name == "agent-working")' <<<"$issue_json" >/dev/null || fail "Issue #$ISSUE_NUMBER is not in agent-working state."
+
+          labelled_by_this_run=true
+          gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label agent-review
+          gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --remove-label agent-working --add-label agent-review
+
+          # The architecture push can also reach agent-head-update.yml for the same SHA. Whichever
+          # path dispatches first owns it; the other sees the agent-validation status and stands down.
+          existing_validation="$(gh api "repos/$GITHUB_REPOSITORY/commits/$FINAL_SHA/status" \
+            --jq '[.statuses[] | select(.context == "agent-validation")][0].state // ""')"
+          if [ -n "$existing_validation" ]; then
+            echo "::notice::$FINAL_SHA already has an agent-validation status ($existing_validation); validation was already scheduled."
+          else
+            gh workflow run validate.yml \
+              --repo "$GITHUB_REPOSITORY" \
+              --ref main \
+              -f pr_number="$PR_NUMBER" \
+              -f head_sha="$FINAL_SHA" \
+              -f dispatch_review=true
+          fi
+          dispatched=true
+
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Architecture pass finished for pull request #$PR_NUMBER at head $FINAL_SHA. Exact-SHA validation is now running; successful validation will dispatch the independent review automatically. Run: $RUN_URL"
