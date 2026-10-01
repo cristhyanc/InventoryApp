@@ -1,7 +1,7 @@
 name: Agent Copilot architecture check
 
 # Claude's read-only architecture check of a Copilot-implemented pull request (`agent-ready-copilot`).
-# Invoked only through workflow_dispatch from trusted default-branch automation (agent-copilot.yml).
+# Invoked only through workflow_dispatch from trusted default-branch automation (agent-copilot-handoff.yml).
 #
 # Cross-check: Claude reads the touched code and returns findings as schema-validated structured
 # output; the check job has no write permission and Claude's tools are read-only, so it cannot edit,

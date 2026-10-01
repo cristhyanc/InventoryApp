@@ -1,5 +1,5 @@
 // Behavioural tests for the agent-ready-copilot path: the Copilot pull request handoff
-// (agent-copilot.yml handoff job) and the finalizer of Claude's read-only architecture check
+// (agent-copilot-handoff.yml) and the finalizer of Claude's read-only architecture check
 // (agent-copilot-architecture.yml finalize job).
 //
 // Each test extracts the exact shell of the trusted step and runs it with bash against a fake `gh`
@@ -24,7 +24,7 @@ function stepShell(workflow, name) {
   return run.split('\n').map((line) => line.slice(10)).join('\n');
 }
 
-const handoffShell = stepShell(read('.github/workflows/agent-copilot.yml'), 'Verify Copilot pull request and dispatch architecture check');
+const handoffShell = stepShell(read('.github/workflows/agent-copilot-handoff.yml'), 'Verify Copilot pull request and dispatch architecture check');
 const finalizeShell = stepShell(read('.github/workflows/agent-copilot-architecture.yml'), 'Record architecture outcome and hand off');
 
 const REPO = 'owner/InventoryApp';

@@ -10,23 +10,19 @@ name: Agent Copilot implementation
 #   `agent-working` and assigned to the Copilot coding agent with base branch `develop`.
 #   Assigning Copilot needs a user-to-server token (COPILOT_AGENT_TOKEN, the owner's fine-grained
 #   token); GITHUB_TOKEN and App installation tokens cannot start Copilot.
-# - handoff: when Copilot's `copilot/*` pull request into `develop` is marked ready for review, this
-#   trusted `pull_request_target` job (definition from `main`, never checks out pull request code)
-#   verifies it and dispatches agent-copilot-architecture.yml from `main` for the exact head SHA.
+# - The handoff to Claude's read-only architecture check, when Copilot's pull request is marked ready
+#   for review, lives in agent-copilot-handoff.yml: a privileged `pull_request_target` workflow is kept
+#   separate from any workflow that checks out code.
 # - Nothing here approves, merges, releases, or deploys.
 
 on:
   issues:
     types: [labeled]
-  pull_request_target:
-    types: [ready_for_review]
-    branches:
-      - develop
 
 permissions: {}
 
 concurrency:
-  group: agent-copilot-${{ github.event.issue.number || github.event.pull_request.number }}
+  group: agent-copilot-issue-${{ github.event.issue.number }}
   cancel-in-progress: false
 
 jobs:
@@ -127,72 +123,3 @@ jobs:
 
           gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
             --body "Assigned to the Copilot coding agent with base branch develop. When Copilot's pull request is marked ready for review, Claude runs a read-only architecture check, Copilot fixes any findings, exact-SHA validation runs, and Claude does the final review. Run: $RUN_URL"
-
-  handoff:
-    name: Hand Copilot pull request to Claude architecture check
-    if: |
-      github.event_name == 'pull_request_target' &&
-      github.event.pull_request.draft == false &&
-      github.event.pull_request.base.ref == 'develop' &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      startsWith(github.event.pull_request.head.ref, 'copilot/')
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      actions: write
-      pull-requests: read
-      issues: read
-
-    steps:
-      - name: Verify Copilot pull request and dispatch architecture check
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          EXPECTED_COPILOT_AUTHOR: ${{ vars.COPILOT_AGENT_BOT_LOGIN || 'Copilot' }}
-        run: |
-          set -euo pipefail
-          fail() { echo "::error::$1"; exit 1; }
-          skip() { echo "::notice::No architecture check scheduled: $1"; exit 0; }
-
-          [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] || fail "The event did not contain a valid pull request number."
-          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "The event did not contain a full head SHA."
-
-          pr_json="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
-            --json state,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,closingIssuesReferences)"
-          state="$(jq -r '.state' <<<"$pr_json")"
-          is_draft="$(jq -r '.isDraft' <<<"$pr_json")"
-          base_ref="$(jq -r '.baseRefName' <<<"$pr_json")"
-          head_ref="$(jq -r '.headRefName' <<<"$pr_json")"
-          current_sha="$(jq -r '.headRefOid // empty' <<<"$pr_json")"
-          head_repo="$(jq -r '"\(.headRepositoryOwner.login)/\(.headRepository.name)"' <<<"$pr_json")"
-          author="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.user.login // empty')"
-
-          [ "$state" = "OPEN" ] || skip "pull request #$PR_NUMBER is not open."
-          [ "$is_draft" = "false" ] || skip "pull request #$PR_NUMBER is a draft."
-          [ "$base_ref" = "develop" ] || skip "pull request #$PR_NUMBER does not target develop."
-          [ "$head_repo" = "$GITHUB_REPOSITORY" ] || skip "pull request #$PR_NUMBER does not use a same-repository branch."
-          [[ "$head_ref" == copilot/* ]] || skip "pull request #$PR_NUMBER does not use a copilot/* branch."
-          [ "$author" = "$EXPECTED_COPILOT_AUTHOR" ] || skip "pull request #$PR_NUMBER is not authored by $EXPECTED_COPILOT_AUTHOR."
-          [ "$current_sha" = "$HEAD_SHA" ] || skip "Refusing stale handoff: head is now $current_sha."
-
-          changed_files="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" --jq '.[].filename')"
-          if grep -Eq '^\.github/workflows/' <<<"$changed_files"; then
-            fail "Pull requests that change .github/workflows/** require manual validation and review."
-          fi
-
-          issue_count="$(jq '[.closingIssuesReferences[]?] | length' <<<"$pr_json")"
-          [ "$issue_count" = "1" ] || fail "Copilot pull request #$PR_NUMBER must close exactly one agent-ready-copilot issue (found $issue_count)."
-          issue_number="$(jq -r '.closingIssuesReferences[0].number' <<<"$pr_json")"
-          issue_json="$(gh issue view "$issue_number" --repo "$GITHUB_REPOSITORY" --json state,labels)"
-          [ "$(jq -r '.state' <<<"$issue_json")" = "OPEN" ] || fail "Issue #$issue_number is not open."
-          jq -e 'any(.labels[]?; .name == "agent-working")' <<<"$issue_json" >/dev/null \
-            || skip "issue #$issue_number is not agent-working (the architecture check already ran or the task was not started with agent-ready-copilot)."
-
-          gh workflow run agent-copilot-architecture.yml \
-            --repo "$GITHUB_REPOSITORY" \
-            --ref main \
-            -f issue_number="$issue_number" \
-            -f pr_number="$PR_NUMBER" \
-            -f head_sha="$HEAD_SHA"
-          echo "::notice::Dispatched Claude's read-only architecture check for $HEAD_SHA."

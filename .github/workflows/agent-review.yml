@@ -6,8 +6,8 @@ name: Agent review
 # - Cross-review: Claude reviews only pull requests that GitHub Copilot implemented (`copilot/*` head
 #   branch, authored by the Copilot bot). Claude-implemented `agent/issue-*` pull requests are reviewed
 #   by Copilot code review instead (requested by validate.yml), so no agent reviews its own work.
-# - agent-copilot.yml applies `agent-review` when a Copilot pull request is marked ready for review,
-#   then exact-SHA validation dispatches the initial review automatically. A human may remove/re-apply the label to request another review of
+# - agent-copilot-architecture.yml applies `agent-review` after Claude's read-only architecture check of
+#   a Copilot pull request; exact-SHA validation then dispatches the initial review automatically. A human may remove/re-apply the label to request another review of
 #   an already validated head. Repair pushes and other new commits are reviewed only through the
 #   post-validation dispatch (agent-head-update.yml schedules exact-SHA validation for a new head).
 # - Dispatched runs execute this trusted workflow from `main`, then verify the open, non-draft, same-repository

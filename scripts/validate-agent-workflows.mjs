@@ -470,6 +470,7 @@ export const issueTemplatePath = '.github/ISSUE_TEMPLATE/agent-task.yml';
 export const pullRequestTemplatePath = '.github/pull_request_template.md';
 export const appPushRetryPath = 'scripts/git-push-with-app-retry.sh';
 export const copilotImplementPath = '.github/workflows/agent-copilot.yml';
+export const copilotHandoffPath = '.github/workflows/agent-copilot-handoff.yml';
 export const copilotArchitecturePath = '.github/workflows/agent-copilot-architecture.yml';
 
 // ---------------------------------------------------------------------------------------
@@ -1164,11 +1165,13 @@ export function verifyArchitecturePass(implementationWorkflow, architectureWorkf
 /** Enforces the Copilot implementation path (agent-copilot.yml, agent-copilot-architecture.yml). */
 export function verifyCopilotImplementationPath(read = readRepositoryFile) {
   const workflow = read(copilotImplementPath);
-  const triggers = section(workflow, 'on:\n', 'permissions:\n', `${copilotImplementPath} triggers`);
-  for (const required of ['issues:', 'types: [labeled]', 'pull_request_target:', 'types: [ready_for_review]', '      - develop']) {
+  const triggers = section(workflow, 'on:\n', '\npermissions: {}\n', `${copilotImplementPath} triggers`);
+  for (const required of ['issues:', 'types: [labeled]']) {
     requireText(triggers, required, `${copilotImplementPath} triggers`);
   }
-  for (const forbidden of ['  pull_request:\n', 'synchronize', 'issue_comment', 'workflow_run', 'push:']) {
+  // The privileged pull_request_target handoff lives in its own workflow so that no workflow
+  // triggered by a pull request event also contains a checkout step.
+  for (const forbidden of ['pull_request', 'synchronize', 'issue_comment', 'workflow_run', 'push:']) {
     forbidText(triggers, forbidden, `${copilotImplementPath} triggers`);
   }
   requireText(workflow, 'permissions: {}', copilotImplementPath);
@@ -1181,7 +1184,7 @@ export function verifyCopilotImplementationPath(read = readRepositoryFile) {
   for (const required of PREFLIGHT_JOB_CONTRACT.required.slice(1)) requireText(preflight, required, `${copilotImplementPath} preflight`);
   for (const forbidden of [...PREFLIGHT_JOB_CONTRACT.forbidden, 'COPILOT_AGENT_TOKEN']) forbidText(preflight, forbidden, `${copilotImplementPath} preflight`);
 
-  const assign = section(workflow, '  assign:\n', '  handoff:\n', `${copilotImplementPath} assign`);
+  const assign = section(workflow, '  assign:\n', null, `${copilotImplementPath} assign`);
   for (const required of [
     '    needs: preflight\n',
     "if: needs.preflight.result == 'success' && github.event_name == 'issues' && github.event.label.name == 'agent-ready-copilot'",
@@ -1197,20 +1200,28 @@ export function verifyCopilotImplementationPath(read = readRepositoryFile) {
   }
   requireOrder(assign, '--remove-label agent-ready-copilot --add-label agent-working', 'repos/$GITHUB_REPOSITORY/issues/$ISSUE_NUMBER/assignees', `${copilotImplementPath} assign`, 'the issue must be agent-working before Copilot starts.');
 
-  const handoff = section(workflow, '  handoff:\n', null, `${copilotImplementPath} handoff`);
-  verifySafeDispatcherBase(handoff, `${copilotImplementPath} handoff`);
-  verifyAgentPrGuards(handoff, `${copilotImplementPath} handoff`, 'Refusing stale handoff', 'copilot');
+  const handoffWorkflow = read(copilotHandoffPath);
+  const handoffTriggers = section(handoffWorkflow, 'on:\n', '\npermissions: {}\n', `${copilotHandoffPath} triggers`);
+  for (const required of ['pull_request_target:', 'types: [ready_for_review]', '      - develop']) requireText(handoffTriggers, required, `${copilotHandoffPath} triggers`);
+  for (const forbidden of ['  pull_request:\n', 'issues:', 'synchronize', 'issue_comment', 'workflow_run', 'push:']) forbidText(handoffTriggers, forbidden, `${copilotHandoffPath} triggers`);
+  requireText(handoffWorkflow, 'permissions: {}', copilotHandoffPath);
+  for (const forbidden of ['actions/checkout', 'secrets.COPILOT', 'CLAUDE_CODE_OAUTH_TOKEN', 'AGENT_AUTOMATION_APP_PRIVATE_KEY', 'ref: ${{ github.event.pull_request', 'git push']) {
+    forbidText(handoffWorkflow, forbidden, copilotHandoffPath);
+  }
+  const handoff = section(handoffWorkflow, '  handoff:\n', null, `${copilotHandoffPath} handoff`);
+  verifySafeDispatcherBase(handoff, `${copilotHandoffPath} handoff`);
+  verifyAgentPrGuards(handoff, `${copilotHandoffPath} handoff`, 'Refusing stale handoff', 'copilot');
   for (const required of [
-    "github.event_name == 'pull_request_target'", "startsWith(github.event.pull_request.head.ref, 'copilot/')",
+    "startsWith(github.event.pull_request.head.ref, 'copilot/')",
     'closingIssuesReferences', 'any(.labels[]?; .name == "agent-working")',
     'gh workflow run agent-copilot-architecture.yml', '-f issue_number="$issue_number"', '-f pr_number="$PR_NUMBER"', '-f head_sha="$HEAD_SHA"',
-  ]) requireText(handoff, required, `${copilotImplementPath} handoff`);
+  ]) requireText(handoff, required, `${copilotHandoffPath} handoff`);
   for (const forbidden of ['validate.yml', 'agent-review.yml', 'COPILOT_AGENT_TOKEN', 'issues: write', 'gh pr edit', 'gh issue edit']) {
-    forbidText(handoff, forbidden, `${copilotImplementPath} handoff`);
+    forbidText(handoff, forbidden, `${copilotHandoffPath} handoff`);
   }
 
   const check = read(copilotArchitecturePath);
-  const checkTriggers = section(check, 'on:\n', 'permissions:\n', `${copilotArchitecturePath} triggers`);
+  const checkTriggers = section(check, 'on:\n', '\npermissions: {}\n', `${copilotArchitecturePath} triggers`);
   for (const required of ['workflow_dispatch:', 'issue_number:', 'pr_number:', 'head_sha:']) requireText(checkTriggers, required, `${copilotArchitecturePath} triggers`);
   for (const forbidden of ['pull_request', 'issues:', 'issue_comment:']) forbidText(checkTriggers, forbidden, `${copilotArchitecturePath} triggers`);
   requireText(check, 'permissions: {}', copilotArchitecturePath);
@@ -1462,6 +1473,7 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
     validatePath,
     headUpdatePath,
     copilotImplementPath,
+    copilotHandoffPath,
     copilotArchitecturePath,
   ]) {
     forbidText(read(path), '.author.login', path);

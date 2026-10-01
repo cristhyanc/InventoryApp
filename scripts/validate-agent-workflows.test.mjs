@@ -43,6 +43,7 @@ import {
   verifyScopedStagingCleanupPermissions,
   verifyValidationModeIsolation,
   copilotImplementPath,
+  copilotHandoffPath,
   copilotArchitecturePath,
 } from './validate-agent-workflows.mjs';
 
@@ -795,6 +796,7 @@ describe('updated-head scheduling contract', () => {
 
 describe('cross-review contract (agent-ready-claude / agent-ready-copilot)', () => {
   const copilotWorkflow = readRepositoryFile(copilotImplementPath);
+  const copilotHandoffWorkflow = readRepositoryFile(copilotHandoffPath);
   const copilotArchitectureWorkflow = readRepositoryFile(copilotArchitecturePath);
   const headUpdateWorkflow = readRepositoryFile(headUpdatePath);
   const rejects = (overrides, pattern) => assert.throws(() => runContractChecks({ read: readWithOverrides(overrides) }), pattern);
@@ -845,8 +847,15 @@ describe('cross-review contract (agent-ready-claude / agent-ready-copilot)', () 
   });
 
   it('rejects a Copilot handoff that skips the architecture check or accepts non-Copilot work', () => {
-    rejects({ [copilotImplementPath]: replaceOnce(copilotWorkflow, 'gh workflow run agent-copilot-architecture.yml', 'gh workflow run validate.yml') }, /agent-copilot.yml handoff/);
-    rejects({ [copilotImplementPath]: replaceOnce(copilotWorkflow, '[ "$author" = "$EXPECTED_COPILOT_AUTHOR" ] || skip', 'true || skip') }, /agent-copilot.yml handoff/);
+    rejects({ [copilotHandoffPath]: replaceOnce(copilotHandoffWorkflow, 'gh workflow run agent-copilot-architecture.yml', 'gh workflow run validate.yml') }, /agent-copilot-handoff.yml handoff/);
+    rejects({ [copilotHandoffPath]: replaceOnce(copilotHandoffWorkflow, '[ "$author" = "$EXPECTED_COPILOT_AUTHOR" ] || skip', 'true || skip') }, /agent-copilot-handoff.yml handoff/);
+  });
+
+  it('keeps the privileged pull_request_target handoff free of any checkout', () => {
+    const withCheckout = replaceOnce(copilotHandoffWorkflow, '    steps:\n', '    steps:\n      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0\n');
+    rejects({ [copilotHandoffPath]: withCheckout }, /agent-copilot-handoff.yml/);
+    const prTrigger = replaceOnce(copilotWorkflow, '  issues:\n    types: [labeled]\n', '  issues:\n    types: [labeled]\n  pull_request_target:\n    types: [ready_for_review]\n');
+    rejects({ [copilotImplementPath]: prTrigger }, /agent-copilot.yml triggers/);
   });
 
   it('rejects a Copilot assignment that could target a branch other than develop', () => {
