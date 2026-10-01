@@ -101,7 +101,6 @@ Human merge                                Human merge
 ```
 
 | Stage | `agent-ready-claude` | `agent-ready-copilot` |
-| `agent-ready-copilot` | The same human confirmation, but it authorises the Copilot coding agent to implement the issue, with Claude as architecture checker and final reviewer. Applying it starts `agent-copilot.yml`, whose read-only preflight validates the documentation impact declaration before Copilot is assigned with base branch `develop`. | **Human only** |
 | --- | --- | --- |
 | Implementer, branch, PR author | Claude Code; `agent/issue-<n>-*`; the agent GitHub App bot (`AGENT_AUTOMATION_APP_BOT_LOGIN`) | Copilot coding agent; `copilot/*`; the Copilot bot (`COPILOT_AGENT_BOT_LOGIN`, default `Copilot`) |
 | Read-only architecture check | Copilot CLI in the `copilot-check` job of `agent-architecture.yml`: `contents: read` only, no persisted checkout credentials, `--deny-tool='write'` and only `git diff/log/show` shell tools; the job fails if the working tree or `HEAD` changed. It ends with `ARCHITECTURE: CLEAN` or `ARCHITECTURE: FINDINGS`. | Claude in the `check` job of `agent-copilot-architecture.yml`: read-only permissions and tools, schema-validated `CLEAN`/`FINDINGS` structured output bound to the checked SHA. |
@@ -385,7 +384,12 @@ For `agent-ready-claude`, `agent-implement.yml` verifies the PR and dispatches `
 
 For `agent-ready-copilot`, `agent-copilot-handoff.yml` dispatches `agent-copilot-architecture.yml` when Copilot's PR is marked ready for review. It is a `pull_request_target` workflow with no checkout and no secret beyond its own `GITHUB_TOKEN`, kept separate from `agent-copilot.yml` so that no workflow triggered by a pull request event contains a checkout. Claude checks the same concerns read-only and returns structured findings. The finalizer asks Copilot to fix them in an `@copilot` comment, or dispatches validation directly when there are none.
 
-Each finalizer re-verifies the current PR head, then labels the PR and issue `agent-review` and dispatches exact-SHA validation of the final head. If any stage fails, it labels the issue `agent-blocked` and does not dispatch validation. Neither architecture role can merge, deploy, alter workflow files, or approve a PR.
+Each finalizer first re-verifies the current PR head. What follows depends on the path and the result:
+
+- `agent-ready-claude`, and `agent-ready-copilot` with a clean Claude check: the finalizer labels the PR and issue `agent-review` and dispatches exact-SHA validation of the final head, which then dispatches the final review.
+- `agent-ready-copilot` with Claude findings: `agent-working` → `agent-architecture-fix` (PR and issue) → Copilot pushes a fix → `agent-head-update.yml` dispatches exact-SHA validation of the fix → on success `validate.yml` moves the PR and issue to `agent-review` and dispatches Claude's final review. No validation of the unfixed head and no review run in `agent-architecture-fix`.
+
+If any stage fails, the finalizer labels the issue `agent-blocked` and dispatches nothing. Neither architecture role can merge, deploy, alter workflow files, or approve a PR.
 
 ### Review agent
 
@@ -422,11 +426,12 @@ The deployment workflows run only on a push to `main`. They are not invoked by a
 
 ## Task states and labels
 
-The labels below exist in the repository's label settings, where a human created them. No file in this repository creates labels. Only the deterministic steps of `agent-implement.yml`, `agent-architecture.yml`, `agent-copilot.yml` and `agent-copilot-architecture.yml` apply or remove labels, and only on the issue they were started from and its pull request.
+A human creates the labels below in the repository's label settings; no file in this repository creates labels. `agent-ready-claude`, `agent-ready-copilot` and `agent-architecture-fix` are new with the cross-review workflows and must be created before those workflows are used (see [Cross-review: Claude and Copilot](#cross-review-claude-and-copilot)). Only the deterministic steps of `agent-implement.yml`, `agent-architecture.yml`, `agent-copilot.yml`, `agent-copilot-architecture.yml` and the review dispatcher in `validate.yml` apply or remove labels, and only on the issue they were started from and its pull request.
 
 | Label | Meaning | Applied by |
 | --- | --- | --- |
 | `agent-ready-claude` | A human has reviewed the issue, confirmed the acceptance criteria are complete and testable and the documentation impact decision is correct, and authorises Claude to implement it, with Copilot as architecture checker and final reviewer. Applying it starts `agent-implement.yml`, whose read-only preflight first validates the documentation impact declaration; if that fails, the label is left in place and nothing else runs until a human edits the issue and re-applies it. | **Human only** |
+| `agent-ready-copilot` | The same human confirmation, but it authorises the Copilot coding agent to implement the issue, with Claude as architecture checker and final reviewer. Applying it starts `agent-copilot.yml`, whose read-only preflight validates the documentation impact declaration before Copilot is assigned with base branch `develop`. | **Human only** |
 | `agent-working` | An implementation agent has started and owns a feature branch for this issue. | `agent-implement.yml` (replaces `agent-ready-claude`) or `agent-copilot.yml` (replaces `agent-ready-copilot`), at the start of the run |
 | `agent-architecture-fix` | A Copilot pull request (and its issue) whose read-only Claude architecture check found problems that Copilot has been asked to fix. Copilot's pushes are validated at their exact SHA, but no review runs in this state. | `agent-copilot-architecture.yml` finalizer (replaces `agent-working` on the issue); `validate.yml` replaces it with `agent-review` after a fix push passes exact-SHA validation |
 | `agent-review` | On an **issue**: a pull request is open and awaiting independent review. On a **pull request**: authorises the (now automatic) initial independent review and a fresh review after any later repair or other new commit. `agent-repair.yml` accepts the repository owner's `@claude repair` comments while the label remains present; a pushed repair, and any other new commit, is validated and reviewed again automatically. Removing the label stops further automatic reviews and makes the publish job suppress a review still in progress. | Issue and pull request: the `agent-architecture.yml` or `agent-copilot-architecture.yml` finalizer after a successful architecture stage and exact current-head recheck, or `validate.yml` when a Copilot architecture fix passes exact-SHA validation; a human may also apply it manually (for example to re-request review outside a repair) |
@@ -437,7 +442,7 @@ The labels below exist in the repository's label settings, where a human created
 
 Rules:
 
-- A human applies `agent-ready-claude` or `agent-ready-copilot`. Submitting the issue form does not apply either, and the form does not reference them.
+- A human applies `agent-ready-claude` or `agent-ready-copilot`. Submitting the issue form does not apply either label; the form only explains that a human must apply one after review.
 - An agent must not start from an issue that has not been reviewed and labelled `agent-ready-claude` or `agent-ready-copilot` by a human.
 - An agent must not apply an `agent-ready-*` label to any issue, including one it drafted. Claude itself is denied `gh issue edit`, `gh pr edit`, and `gh label` in every agent workflow, and Copilot's instructions forbid label changes; the only label transitions are the deterministic workflow steps listed above.
 - The state labels are mutually exclusive: an issue is in at most one of `agent-ready-claude`, `agent-ready-copilot`, `agent-working`, `agent-architecture-fix`, `agent-review`, or `agent-blocked`. `agent-architecture-fix` is used only on the Copilot path.
