@@ -6,7 +6,7 @@ name: Agent architecture
 # and returns findings; it cannot edit, commit or push, and the job fails if the tree changes.
 # Only when Copilot reports findings does Claude, the implementer, make narrowly scoped structural
 # fixes on the existing feature branch; a deterministic step publishes them with a short-lived
-# GitHub App token. Exact-SHA validation and the Copilot final review are dispatched only after
+# GitHub App token. Exact-SHA validation and the Copilot CLI final review (agent-review.yml) are dispatched only after
 # this workflow succeeds.
 
 on:
@@ -146,6 +146,7 @@ jobs:
         id: check
         env:
           COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_CLI_TOKEN }}
+          COPILOT_AUTO_UPDATE: "false"
           HEAD_SHA: ${{ needs.context.outputs.head_sha }}
           ISSUE_NUMBER: ${{ needs.context.outputs.issue_number }}
           PR_NUMBER: ${{ needs.context.outputs.pr_number }}
@@ -460,4 +461,4 @@ jobs:
           fi
           dispatched=true
 
-          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Architecture stage finished for pull request #$PR_NUMBER at head $FINAL_SHA (Copilot check: $COPILOT_VERDICT). Exact-SHA validation is now running; successful validation will request the Copilot final review automatically. Run: $RUN_URL"
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Architecture stage finished for pull request #$PR_NUMBER at head $FINAL_SHA (Copilot check: $COPILOT_VERDICT). Exact-SHA validation is now running; successful validation will start the Copilot final review automatically. Run: $RUN_URL"

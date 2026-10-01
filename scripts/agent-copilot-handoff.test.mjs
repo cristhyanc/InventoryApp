@@ -194,7 +194,8 @@ describe('Claude architecture check finalizer', () => {
     assert.match(request.body, /^@copilot /);
     assert.match(request.body, /backend\/Api\/ProductsController\.cs:12/);
     assert.equal(dispatches(calls, 'validate.yml').length, 0, 'validation follows Copilot\'s fix push via agent-head-update');
-    assert.ok(calls.some((c) => c.kind === 'pr-edit' && c.args.includes('agent-review')), 'the label lets the fix push be validated and reviewed');
+    assert.ok(calls.some((c) => c.kind === 'pr-edit' && c.args.includes('agent-architecture-fix')), 'the label lets the fix push be validated');
+    assert.ok(!calls.some((c) => c.args?.includes('agent-review')), 'no review may be requested before the fix push passes validation');
     assert.ok(!blocked(calls));
   });
 

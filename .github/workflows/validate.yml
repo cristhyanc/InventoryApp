@@ -265,7 +265,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       actions: write
-      pull-requests: read
+      pull-requests: write
+      issues: write
 
     steps:
       - name: Reverify current head and dispatch review
@@ -273,7 +274,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ needs.context.outputs.pr_number }}
           HEAD_SHA: ${{ needs.context.outputs.head_sha }}
-          COPILOT_AGENT_TOKEN: ${{ secrets.COPILOT_AGENT_TOKEN }}
           EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}
           EXPECTED_COPILOT_AUTHOR: ${{ vars.COPILOT_AGENT_BOT_LOGIN || 'Copilot' }}
         run: |
@@ -281,7 +281,7 @@ jobs:
           fail() { echo "::error::$1"; exit 1; }
 
           pr_json="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
-            --json state,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,labels)"
+            --json state,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,labels,closingIssuesReferences)"
           state="$(jq -r '.state' <<<"$pr_json")"
           is_draft="$(jq -r '.isDraft' <<<"$pr_json")"
           base_ref="$(jq -r '.baseRefName' <<<"$pr_json")"
@@ -312,25 +312,24 @@ jobs:
             fail "Pull requests that change .github/workflows/** require manual validation and review."
           fi
 
-          if ! jq -e 'any(.labels[]?; .name == "agent-review")' <<<"$pr_json" >/dev/null; then
+          # A Copilot pull request waiting on architecture fixes moves to agent-review only now, after
+          # Copilot's fix push has passed exact-SHA validation. GITHUB_TOKEN label events start no
+          # workflow, so the relabel itself never triggers a premature review.
+          if [ "$implementer" = "copilot" ] \
+            && ! jq -e 'any(.labels[]?; .name == "agent-review")' <<<"$pr_json" >/dev/null \
+            && jq -e 'any(.labels[]?; .name == "agent-architecture-fix")' <<<"$pr_json" >/dev/null; then
+            issue_number="$(jq -r 'if ([.closingIssuesReferences[]?] | length) == 1 then .closingIssuesReferences[0].number else "" end' <<<"$pr_json")"
+            [[ "$issue_number" =~ ^[1-9][0-9]*$ ]] || fail "Pull request #$PR_NUMBER must close exactly one issue to leave agent-architecture-fix."
+            gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --remove-label agent-architecture-fix --add-label agent-review
+            gh issue edit "$issue_number" --repo "$GITHUB_REPOSITORY" --remove-label agent-architecture-fix --add-label agent-review
+            echo "::notice::Copilot's architecture fix passed validation at $HEAD_SHA; pull request #$PR_NUMBER moved to agent-review."
+          elif ! jq -e 'any(.labels[]?; .name == "agent-review")' <<<"$pr_json" >/dev/null; then
             echo "::notice::The agent-review label is absent; validation passed, but no review was dispatched."
             exit 0
           fi
 
-          # Cross-review: the reviewer is always the agent that did not implement the change.
-          # A Claude-implemented pull request is reviewed by Copilot code review, requested with the
-          # owner's Copilot-licensed token (Copilot reviews cannot be requested with GITHUB_TOKEN or
-          # an App installation token). A Copilot-implemented pull request is reviewed by Claude.
-          if [ "$implementer" = "claude" ]; then
-            [ -n "$COPILOT_AGENT_TOKEN" ] || fail "The COPILOT_AGENT_TOKEN secret is not configured, so the Copilot review could not be requested."
-            GH_TOKEN="$COPILOT_AGENT_TOKEN" gh api \
-              --method POST \
-              "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/requested_reviewers" \
-              -f 'reviewers[]=copilot-pull-request-reviewer[bot]' >/dev/null
-            echo "::notice::Requested a Copilot code review of $HEAD_SHA on Claude-implemented pull request #$PR_NUMBER."
-            exit 0
-          fi
-
+          # Cross-review: agent-review.yml runs the reviewer that did not implement the change (the
+          # Copilot CLI for a Claude implementation, Claude for a Copilot implementation).
           gh workflow run agent-review.yml \
             --repo "$GITHUB_REPOSITORY" \
             --ref main \

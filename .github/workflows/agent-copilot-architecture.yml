@@ -195,9 +195,9 @@ jobs:
             if [ "$status" -ne 0 ] && [ "$handed_off" != "true" ]; then
               if gh issue view "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --json state,labels \
                 | jq -e '.state == "OPEN" and any(.labels[]?; .name == "agent-working")' >/dev/null; then
-                gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --remove-label agent-review || true
+                gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --remove-label agent-review --remove-label agent-architecture-fix || true
                 gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
-                  --remove-label agent-working --remove-label agent-review --add-label agent-blocked || true
+                  --remove-label agent-working --remove-label agent-review --remove-label agent-architecture-fix --add-label agent-blocked || true
                 gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
                   --body "Claude's architecture check did not hand Copilot pull request #$PR_NUMBER on (target check: $CONTEXT_JOB_RESULT; Claude check: $CHECK_JOB_RESULT). The task is now agent-blocked. Run: $RUN_URL" || true
               fi
@@ -239,8 +239,10 @@ jobs:
 
           if [ "$verdict" = "FINDINGS" ]; then
             [ -n "$COPILOT_AGENT_TOKEN" ] || fail "The COPILOT_AGENT_TOKEN secret is not configured, so Copilot cannot be asked to fix the findings."
-            gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label agent-review
-            gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --remove-label agent-working --add-label agent-review
+            # agent-architecture-fix, not agent-review: no review may run until Copilot's fix push has
+            # passed exact-SHA validation (agent-head-update.yml schedules it; validate.yml relabels).
+            gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label agent-architecture-fix
+            gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --remove-label agent-working --add-label agent-architecture-fix
             {
               echo "@copilot Claude's read-only architecture check found the problems below in this pull request. Verify each against docs/architecture.md and AGENTS.md, fix the ones that are correct with the smallest change that preserves behaviour and the issue's acceptance criteria, re-run bash scripts/validate.sh, and explain in a comment any finding you decline and why. Do not change anything outside the issue's scope."
               echo
@@ -250,7 +252,7 @@ jobs:
             GH_TOKEN="$COPILOT_AGENT_TOKEN" gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$work/copilot-request.md"
             handed_off=true
             gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
-              --body "Claude's architecture check found problems in pull request #$PR_NUMBER and asked Copilot to fix them. Copilot's fix push is validated at its exact SHA and then reviewed by Claude. Run: $RUN_URL"
+              --body "Claude's architecture check found problems in pull request #$PR_NUMBER and asked Copilot to fix them. The pull request is agent-architecture-fix until Copilot's fix push passes exact-SHA validation; it then moves to agent-review and Claude reviews it. Run: $RUN_URL"
             exit 0
           fi
 

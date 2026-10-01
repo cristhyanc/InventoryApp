@@ -57,13 +57,12 @@ if (args[0] === 'pr' && args[1] === 'view') {
   out(Object.fromEntries(fields.map((f) => [f, state.pr[f]])));
 } else if (args[0] === 'workflow' && args[1] === 'run') {
   log({ kind: 'dispatch', args });
+} else if ((args[0] === 'pr' || args[0] === 'issue') && args[1] === 'edit') {
+  log({ kind: 'label', target: args[0], number: args[2], args: args.slice(3) });
 } else if (args[0] === 'api') {
   const method = opt('--method') ?? 'GET';
   const path = args.find((a, i) => i > 0 && !a.startsWith('-') && !['--method', '--jq', '--input', '-f'].includes(args[i - 1]));
-  if (method === 'POST' && path.endsWith('/requested_reviewers')) {
-    const reviewers = args.filter((a, i) => args[i - 1] === '-f' && a.startsWith('reviewers[]=')).map((a) => a.split('=')[1]);
-    log({ kind: 'review-request', token: process.env.GH_TOKEN, reviewers });
-  } else if (method === 'POST' && path.endsWith('/reviews')) {
+  if (method === 'POST' && path.endsWith('/reviews')) {
     const payload = JSON.parse(fs.readFileSync(opt('--input'), 'utf8'));
     if (state.rejectInlineComments && payload.comments.length > 0) { log({ kind: 'review-rejected', payload }); fail('HTTP 422: line could not be resolved'); }
     log({ kind: 'review', payload });
@@ -92,6 +91,7 @@ function eligibleState(overrides = {}) {
       headRepository: { name: 'InventoryApp' },
       headRepositoryOwner: { login: 'owner' },
       labels: [{ name: 'agent-review' }],
+      closingIssuesReferences: [{ number: 245 }],
       ...(overrides.pr ?? {}),
     },
     author: overrides.author ?? BOT,
@@ -169,10 +169,11 @@ function run(shell, { state, env = {} }) {
   }
 }
 
-function publish({ state = copilotState(), output = readyOutput(), result = 'success' } = {}) {
+function publish({ state = copilotState(), output = readyOutput(), result = 'success', implementer = 'copilot' } = {}) {
   return run(publishShell, {
     state,
     env: {
+      IMPLEMENTER: implementer,
       REVIEW_RESULT: result,
       REVIEW_OUTPUT: output === null ? '' : JSON.stringify(output),
       VERDICT_CONTEXT: 'agent-review-verdict',
@@ -203,7 +204,7 @@ describe('guarded review publication', () => {
     const [review] = reviews(outcome.calls);
     assert.equal(review.payload.commit_id, SHA);
     assert.equal(review.payload.event, 'COMMENT');
-    assert.match(review.payload.body, new RegExp(`^Head SHA reviewed: ${SHA}\\n\\nVERDICT: READY FOR HUMAN REVIEW\\n`));
+    assert.match(review.payload.body, new RegExp(`^Reviewer: Claude\\nHead SHA reviewed: ${SHA}\\n\\nVERDICT: READY FOR HUMAN REVIEW\\n`));
     assert.equal(review.payload.body.match(/^VERDICT:/gm).length, 1);
     assert.match(review.payload.body, /This is an advisory review\. Human approval and branch protection remain the merge gate\.\n?$/);
     assert.deepEqual(statuses(outcome.calls).map(({ sha, state, context }) => ({ sha, state, context })), [{ sha: SHA, state: 'success', context: 'agent-review-verdict' }]);
@@ -246,8 +247,24 @@ describe('guarded review publication', () => {
     });
   }
 
-  it('suppresses the verdict for a Claude-implemented pull request, which Copilot reviews instead', () => {
-    assertSuppressed(publish({ state: eligibleState() }), /copilot\/\*/);
+  it('publishes the Copilot review of a Claude-implemented pull request through the same guarded path', () => {
+    const outcome = publish({ state: eligibleState(), implementer: 'claude', output: changesOutput() });
+    assert.equal(outcome.status, 0, outcome.stderr);
+    const [review] = reviews(outcome.calls);
+    assert.match(review.payload.body, new RegExp(`^Reviewer: GitHub Copilot \\(Copilot CLI\\)\\nHead SHA reviewed: ${SHA}\\n\\nVERDICT: CHANGES REQUESTED\\n`));
+    assert.equal(review.payload.commit_id, SHA);
+    assert.deepEqual(statuses(outcome.calls).map(({ sha, state, context }) => ({ sha, state, context })), [{ sha: SHA, state: 'failure', context: 'agent-review-verdict' }]);
+  });
+
+  it('never publishes a review by the implementer of the pull request', () => {
+    // Claude's review (implementer copilot) of a Claude pull request, and Copilot's review of a Copilot one.
+    assertSuppressed(publish({ state: eligibleState(), implementer: 'copilot' }), /now implemented by claude, not copilot/);
+    assertSuppressed(publish({ state: copilotState(), implementer: 'claude' }), /now implemented by copilot, not claude/);
+    assertSuppressed(publish({ implementer: '' }), /unknown implementer/);
+  });
+
+  it('suppresses the verdict for an agent/issue-* pull request not authored by the automation App', () => {
+    assertSuppressed(publish({ state: eligibleState({ author: 'someone-else' }), implementer: 'claude' }), /not authored by/);
   });
 
   it('suppresses the verdict for a copilot/* pull request not authored by Copilot', () => {
@@ -374,6 +391,20 @@ describe('updated-head scheduling', () => {
     assert.match(outcome.stdout, /implemented by copilot/);
   });
 
+  it('schedules validation for a Copilot architecture fix push while the pull request is agent-architecture-fix', () => {
+    const outcome = headUpdate(copilotState({ pr: { labels: [{ name: 'agent-architecture-fix' }] }, statuses: {} }));
+    assert.equal(outcome.status, 0, outcome.stderr);
+    const [dispatch] = dispatches(outcome.calls);
+    assert.ok(dispatch.args.includes('dispatch_review=true'));
+    assert.equal(outcome.calls.filter((c) => c.kind === 'label').length, 0, 'scheduling never relabels');
+  });
+
+  it('does not schedule a Claude pull request from agent-architecture-fix', () => {
+    const outcome = headUpdate(eligibleState({ pr: { labels: [{ name: 'agent-architecture-fix' }] }, statuses: {} }));
+    assert.equal(outcome.status, 0, outcome.stderr);
+    assert.equal(dispatches(outcome.calls).length, 0);
+  });
+
   it('skips a copilot/* branch that Copilot did not author, and an agent/issue-* branch Copilot authored', () => {
     for (const state of [copilotState({ author: 'cristhyanc', statuses: {} }), eligibleState({ author: COPILOT, statuses: {} })]) {
       const outcome = headUpdate(state);
@@ -406,40 +437,125 @@ describe('repair dispatch deduplication', () => {
 });
 
 describe('cross-review routing after exact-SHA validation', () => {
-  const routed = (state, env = {}) => run(reviewDispatchShell, { state, env: { COPILOT_AGENT_TOKEN: 'owner-copilot-token', ...env } });
-  const reviewRequests = (calls) => calls.filter((c) => c.kind === 'review-request');
+  const routed = (state, env = {}) => run(reviewDispatchShell, { state, env });
+  const labels = (calls) => calls.filter((c) => c.kind === 'label');
+  const reviewDispatch = ['workflow', 'run', 'agent-review.yml', '--repo', REPO, '--ref', 'main', '-f', `pr_number=${PR}`, '-f', `head_sha=${SHA}`];
 
-  it('requests a Copilot code review, with the owner token, for a Claude-implemented pull request', () => {
-    const outcome = routed(eligibleState());
+  it('dispatches agent-review.yml, which runs the other agent, for both implementers', () => {
+    for (const state of [eligibleState(), copilotState()]) {
+      const outcome = routed(state);
+      assert.equal(outcome.status, 0, outcome.stderr);
+      assert.deepEqual(dispatches(outcome.calls).map((d) => d.args), [reviewDispatch]);
+      assert.equal(labels(outcome.calls).length, 0);
+    }
+  });
+
+  it('moves a validated Copilot architecture fix from agent-architecture-fix to agent-review, then dispatches the review', () => {
+    const outcome = routed(copilotState({ pr: { labels: [{ name: 'agent-architecture-fix' }] } }));
     assert.equal(outcome.status, 0, outcome.stderr);
-    assert.deepEqual(reviewRequests(outcome.calls), [{ kind: 'review-request', token: 'owner-copilot-token', reviewers: ['copilot-pull-request-reviewer[bot]'] }]);
-    assert.equal(dispatches(outcome.calls).length, 0, 'Claude must not review its own implementation');
+    assert.deepEqual(labels(outcome.calls).map(({ target, number, args }) => ({ target, number, args })), [
+      { target: 'pr', number: PR, args: ['--repo', REPO, '--remove-label', 'agent-architecture-fix', '--add-label', 'agent-review'] },
+      { target: 'issue', number: '245', args: ['--repo', REPO, '--remove-label', 'agent-architecture-fix', '--add-label', 'agent-review'] },
+    ]);
+    assert.deepEqual(dispatches(outcome.calls).map((d) => d.args), [reviewDispatch]);
   });
 
-  it('dispatches the Claude review for a Copilot-implemented pull request and never asks Copilot to review itself', () => {
-    const outcome = routed(copilotState());
+  it('does not leave agent-architecture-fix unless the pull request closes exactly one issue', () => {
+    for (const closingIssuesReferences of [[], [{ number: 245 }, { number: 246 }]]) {
+      const outcome = routed(copilotState({ pr: { labels: [{ name: 'agent-architecture-fix' }], closingIssuesReferences } }));
+      assert.notEqual(outcome.status, 0);
+      assert.equal(labels(outcome.calls).length + dispatches(outcome.calls).length, 0);
+    }
+  });
+
+  it('never moves a Claude pull request out of agent-architecture-fix', () => {
+    const outcome = routed(eligibleState({ pr: { labels: [{ name: 'agent-architecture-fix' }] } }));
     assert.equal(outcome.status, 0, outcome.stderr);
-    assert.equal(reviewRequests(outcome.calls).length, 0);
-    const [dispatch] = dispatches(outcome.calls);
-    assert.deepEqual(dispatch.args, ['workflow', 'run', 'agent-review.yml', '--repo', REPO, '--ref', 'main', '-f', `pr_number=${PR}`, '-f', `head_sha=${SHA}`]);
+    assert.equal(labels(outcome.calls).length + dispatches(outcome.calls).length, 0);
   });
 
-  it('fails visibly instead of skipping the review when the Copilot token is missing', () => {
-    const outcome = routed(eligibleState(), { COPILOT_AGENT_TOKEN: '' });
-    assert.notEqual(outcome.status, 0);
-    assert.equal(reviewRequests(outcome.calls).length + dispatches(outcome.calls).length, 0);
-  });
-
-  it('requests no review for an unlabelled, stale, human or mismatched pull request', () => {
+  it('dispatches no review for an unlabelled, stale, human or mismatched pull request', () => {
     for (const state of [
       eligibleState({ pr: { labels: [] } }),
       copilotState({ pr: { labels: [] } }),
       eligibleState({ pr: { headRefOid: NEWER_SHA } }),
+      copilotState({ pr: { headRefOid: NEWER_SHA, labels: [{ name: 'agent-architecture-fix' }] } }),
       eligibleState({ pr: { headRefName: 'feature/manual' } }),
       copilotState({ author: BOT }),
     ]) {
       const outcome = routed(state);
-      assert.equal(reviewRequests(outcome.calls).length + dispatches(outcome.calls).length, 0);
+      assert.equal(labels(outcome.calls).length + dispatches(outcome.calls).length, 0);
+    }
+  });
+});
+
+// The Copilot CLI review step (agent-review.yml copilot-review job), run against a fake `copilot`
+// in a throwaway repository. It must turn only a well-formed, marked review JSON into output.
+const copilotReviewShell = stepShell(read('.github/workflows/agent-review.yml').split('\n  publish:\n')[0], 'Run Copilot review');
+
+function runCopilotReview(copilotOutput, { touchTree = false, token = 'cli-token' } = {}) {
+  const root = mkdtempSync(join(tmpdir(), 'agent-copilot-review-'));
+  try {
+    const repo = join(root, 'repo');
+    const bin = join(root, 'bin');
+    const git = (...args) => spawnSync('git', ['-C', repo, ...args], { encoding: 'utf8' });
+    spawnSync('mkdir', ['-p', repo, bin]);
+    git('init', '-q');
+    writeFileSync(join(repo, 'README.md'), 'fixture\n');
+    git('add', '.');
+    git('-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '-qm', 'fixture');
+    const head = git('rev-parse', 'HEAD').stdout.trim();
+    writeFileSync(join(root, 'copilot-output.md'), copilotOutput.replaceAll('@SHA@', head));
+    writeFileSync(join(bin, 'copilot'), `#!/usr/bin/env bash\n${touchTree ? 'echo changed > README.md\n' : ''}cat "${join(root, 'copilot-output.md')}"\n`);
+    chmodSync(join(bin, 'copilot'), 0o755);
+    const outputPath = join(root, 'github-output');
+    writeFileSync(outputPath, '');
+    const result = spawnSync('bash', ['-c', copilotReviewShell], {
+      cwd: repo,
+      encoding: 'utf8',
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, GITHUB_OUTPUT: outputPath, COPILOT_GITHUB_TOKEN: token, PR_NUMBER: PR, HEAD_SHA: head, BASE_REF: 'develop' },
+    });
+    return { status: result.status, stderr: result.stderr + result.stdout, output: readFileSync(outputPath, 'utf8'), head };
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+const marked = (review) => `Reviewed the diff.\n\nBEGIN_REVIEW_JSON\n\`\`\`json\n${JSON.stringify(review, null, 2)}\n\`\`\`\nEND_REVIEW_JSON\n`;
+
+describe('Copilot CLI final review output', () => {
+  it('emits the last marked review JSON as compact structured output', () => {
+    const stale = marked(readyOutput({ reviewed_head_sha: '@SHA@', validation_evidence: 'draft' }));
+    const outcome = runCopilotReview(stale + marked(changesOutput({ reviewed_head_sha: '@SHA@' })));
+    assert.equal(outcome.status, 0, outcome.stderr);
+    const json = outcome.output.split('\n')[1];
+    const parsed = JSON.parse(json);
+    assert.equal(parsed.reviewed_head_sha, outcome.head);
+    assert.equal(parsed.verdict, 'CHANGES REQUESTED');
+    assert.match(outcome.output, /^structured_output<<REVIEW_[0-9a-f]{32}\n/);
+  });
+
+  for (const [name, text] of [
+    ['no marked block', JSON.stringify(readyOutput())],
+    ['an unknown verdict', marked(readyOutput({ reviewed_head_sha: '@SHA@', verdict: 'APPROVE' }))],
+    ['an unknown criterion status', marked(readyOutput({ reviewed_head_sha: '@SHA@', criteria: [{ criterion: 'c', status: 'partly', evidence: 'e' }] }))],
+    ['a missing key', marked((({ suggestions, ...rest }) => rest)(readyOutput({ reviewed_head_sha: '@SHA@' })))],
+    ['an extra key', marked(readyOutput({ reviewed_head_sha: '@SHA@', approve: true }))],
+    ['a non-integer inline line', marked(changesOutput({ reviewed_head_sha: '@SHA@', inline_comments: [{ path: 'a.cs', line: 1.5, body: 'b' }] }))],
+    ['malformed JSON', 'BEGIN_REVIEW_JSON\n{"verdict": \nEND_REVIEW_JSON\n'],
+  ]) {
+    it(`fails without output on ${name}`, () => {
+      const outcome = runCopilotReview(text);
+      assert.notEqual(outcome.status, 0);
+      assert.equal(outcome.output, '');
+    });
+  }
+
+  it('fails when Copilot changes the working tree, and when the CLI token is missing', () => {
+    const good = marked(readyOutput({ reviewed_head_sha: '@SHA@' }));
+    for (const outcome of [runCopilotReview(good, { touchTree: true }), runCopilotReview(good, { token: '' })]) {
+      assert.notEqual(outcome.status, 0);
+      assert.equal(outcome.output, '');
     }
   });
 });

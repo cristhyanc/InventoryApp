@@ -811,14 +811,39 @@ describe('cross-review contract (agent-ready-claude / agent-ready-copilot)', () 
     rejects({ [copilotImplementPath]: copilotWorkflow.replaceAll("'agent-ready-copilot'", "'agent-ready-claude'") }, /agent-copilot.yml (preflight|assign)/);
   });
 
-  it('rejects a Claude review that would accept a Claude-implemented pull request', () => {
-    const selfReview = reviewWorkflow.replace('[[ "$head_ref" == copilot/* ]] || fail', '[[ "$head_ref" == agent/issue-* || "$head_ref" == copilot/* ]] || fail');
-    rejects({ [reviewPath]: selfReview }, /agent-review.yml dispatched context: contains forbidden text: agent\/issue-\*/);
+  it('rejects a review that could let an agent review its own implementation', () => {
+    for (const [unsafe, reason] of [
+      [replaceOnce(reviewWorkflow, "if: needs.context.outputs.implementer == 'copilot'", "if: needs.context.outputs.implementer != ''"), /agent-review.yml review job/],
+      [replaceOnce(reviewWorkflow, "    if: needs.context.outputs.implementer == 'claude'", "    if: always()"), /agent-review.yml Copilot review job/],
+      [replaceOnce(reviewWorkflow, '[ "$live_implementer" = "$IMPLEMENTER" ] || suppress', 'true || suppress'), /agent-review.yml publish job/],
+      [replaceOnce(reviewWorkflow, "needs.context.outputs.implementer == 'claude' && needs.copilot-review.result || needs.review.result", 'needs.review.result'), /agent-review.yml publish job/],
+    ]) {
+      rejects({ [reviewPath]: unsafe }, reason);
+    }
   });
 
-  it('rejects review routing that sends a Claude implementation to the Claude review', () => {
-    rejects({ [validatePath]: replaceOnce(validateWorkflow, 'if [ "$implementer" = "claude" ]; then', 'if [ "$implementer" = "nobody" ]; then') }, /validate.yml review dispatcher/);
-    rejects({ [validatePath]: replaceOnce(validateWorkflow, "-f 'reviewers[]=copilot-pull-request-reviewer[bot]'", "-f 'reviewers[]=cristhyanc'") }, /validate.yml review dispatcher/);
+  it('rejects a Copilot final review that could write, float its CLI version or skip the review contract', () => {
+    for (const unsafe of [
+      replaceOnce(reviewWorkflow, "            --deny-tool='write' \\\n            -p \"$prompt\" > \"$work/copilot-output.md\"", '            -p "$prompt" > "$work/copilot-output.md"'),
+      replaceOnce(reviewWorkflow, "    permissions:\n      contents: read\n      pull-requests: read\n      issues: read\n      actions: read\n      checks: read\n      statuses: read\n    outputs:\n      structured_output: ${{ steps.copilot_review", "    permissions:\n      contents: read\n      pull-requests: write\n      issues: read\n      actions: read\n      checks: read\n      statuses: read\n    outputs:\n      structured_output: ${{ steps.copilot_review"),
+      replaceOnce(reviewWorkflow, 'COPILOT_AUTO_UPDATE: "false"', 'COPILOT_AUTO_UPDATE: "true"'),
+      reviewWorkflow.replace('npm ci --prefix "$cli_dir" --ignore-scripts --no-audit --no-fund\n          echo "$cli_dir/node_modules/.bin" >> "$GITHUB_PATH"\n\n      - name: Run Copilot review', 'npm install -g @github/copilot@latest\n\n      - name: Run Copilot review'),
+      replaceOnce(reviewWorkflow, "--allow-tool='shell(gh run list:*)'", "--allow-tool='shell(gh run list:*)' --allow-tool='shell(gh pr comment:*)'"),
+      replaceOnce(reviewWorkflow, '.status == "met" or .status == "not met" or .status == "not verified"', 'true'),
+    ]) {
+      rejects({ [reviewPath]: unsafe }, /agent-review.yml Copilot review/);
+    }
+  });
+
+  it('rejects review routing that bypasses agent-review.yml or moves a pull request to review too early', () => {
+    rejects({ [validatePath]: replaceOnce(validateWorkflow, 'gh workflow run agent-review.yml', 'gh workflow run other-review.yml') }, /validate.yml review dispatcher/);
+    rejects({ [validatePath]: replaceOnce(validateWorkflow, '          EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}\n          EXPECTED_COPILOT_AUTHOR: ${{ vars.COPILOT_AGENT_BOT_LOGIN || \'Copilot\' }}\n        run: |\n          set -euo pipefail\n          fail() { echo "::error::$1"; exit 1; }\n\n          pr_json', '          COPILOT_AGENT_TOKEN: ${{ secrets.COPILOT_AGENT_TOKEN }}\n          EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}\n          EXPECTED_COPILOT_AUTHOR: ${{ vars.COPILOT_AGENT_BOT_LOGIN || \'Copilot\' }}\n        run: |\n          set -euo pipefail\n          fail() { echo "::error::$1"; exit 1; }\n\n          pr_json') }, /validate.yml review dispatcher/);
+    const early = replaceOnce(
+      copilotArchitectureWorkflow,
+      'gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label agent-architecture-fix',
+      'gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label agent-architecture-fix --add-label agent-review',
+    );
+    rejects({ [copilotArchitecturePath]: early }, /findings handoff/);
   });
 
   it('rejects a Copilot architecture check that could write, push or use another credential', () => {
