@@ -1,0 +1,105 @@
+name: Agent review request
+
+# Manual re-review: when a human applies `agent-review` to an eligible agent pull request whose exact
+# head already passed validation, dispatch agent-review.yml from `main` for that head.
+#
+# Authority and lifecycle: docs/automation.md ("Updated-head scheduling", "Review agent").
+# - agent-review.yml has no pull_request trigger: a pull_request run would use the pull request's
+#   merge commit as github.sha, so the review workflow and the pinned Copilot CLI it installs could
+#   come from the pull request. Every review is therefore a workflow_dispatch with --ref main, from
+#   validate.yml after successful exact-SHA validation or from this dispatcher.
+# - Trusted source: `pull_request_target` always runs this definition from the default branch, and
+#   this workflow never checks out or executes pull request code. Its only write permission is
+#   `actions: write`, used solely to dispatch agent-review.yml.
+# - Labels applied by automation with GITHUB_TOKEN start no workflow, so only a human's label event
+#   reaches this dispatcher.
+# - It does not approve, merge, label, push, review, or deploy.
+
+on:
+  pull_request_target:
+    types: [labeled]
+    branches:
+      - develop
+
+permissions: {}
+
+concurrency:
+  group: agent-review-request-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  dispatch-review:
+    name: Dispatch a fresh review of the validated head
+    if: |
+      github.event.label.name == 'agent-review' &&
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.base.ref == 'develop' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (startsWith(github.event.pull_request.head.ref, 'agent/issue-') || startsWith(github.event.pull_request.head.ref, 'copilot/'))
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      pull-requests: read
+      statuses: read
+
+    steps:
+      - name: Reverify current head and dispatch review
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}
+          EXPECTED_COPILOT_AUTHOR: ${{ vars.COPILOT_AGENT_BOT_LOGIN || 'Copilot' }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] || fail "The event did not contain a valid pull request number."
+          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "The event did not contain a full head SHA."
+
+          # Any failure to read the live state stops here (set -e) without dispatching: fail closed.
+          pr_json="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --json state,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,labels)"
+          state="$(jq -r '.state' <<<"$pr_json")"
+          is_draft="$(jq -r '.isDraft' <<<"$pr_json")"
+          base_ref="$(jq -r '.baseRefName' <<<"$pr_json")"
+          head_ref="$(jq -r '.headRefName' <<<"$pr_json")"
+          current_sha="$(jq -r '.headRefOid // empty' <<<"$pr_json")"
+          head_repo="$(jq -r '"\(.headRepositoryOwner.login)/\(.headRepository.name)"' <<<"$pr_json")"
+          author="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.user.login // empty')"
+
+          [ "$state" = "OPEN" ] || fail "Pull request #$PR_NUMBER is not open."
+          [ "$is_draft" = "false" ] || fail "Pull request #$PR_NUMBER is a draft."
+          [ "$base_ref" = "develop" ] || fail "Pull request #$PR_NUMBER does not target develop."
+          [ "$head_repo" = "$GITHUB_REPOSITORY" ] || fail "Pull request #$PR_NUMBER does not use a same-repository branch."
+          if [[ "$head_ref" == agent/issue-* ]]; then
+            [ -n "$EXPECTED_AGENT_AUTHOR" ] || fail "AGENT_AUTOMATION_APP_BOT_LOGIN is not configured."
+            [ "$author" = "$EXPECTED_AGENT_AUTHOR" ] || fail "Pull request #$PR_NUMBER is not authored by $EXPECTED_AGENT_AUTHOR."
+            implementer="claude"
+          elif [[ "$head_ref" == copilot/* ]]; then
+            [ "$author" = "$EXPECTED_COPILOT_AUTHOR" ] || fail "Pull request #$PR_NUMBER is not authored by $EXPECTED_COPILOT_AUTHOR."
+            implementer="copilot"
+          else
+            fail "Pull request #$PR_NUMBER does not use an agent/issue-* or copilot/* branch."
+          fi
+          echo "::notice::Pull request #$PR_NUMBER was implemented by $implementer; the other agent reviews it."
+          [ "$current_sha" = "$HEAD_SHA" ] || fail "Refusing stale review request: pull request head is $current_sha, labelled SHA is $HEAD_SHA."
+          jq -e 'any(.labels[]?; .name == "agent-review")' <<<"$pr_json" >/dev/null \
+            || fail "The agent-review label was removed before the review could be requested."
+
+          changed_files="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" --jq '.[].filename')"
+          if grep -Eq '^\.github/workflows/' <<<"$changed_files"; then
+            fail "Pull requests that change .github/workflows/** require manual validation and review."
+          fi
+
+          validation_state="$(gh api "repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA/status" \
+            --jq '[.statuses[] | select(.context == "agent-validation")][0].state // ""')"
+          [ "$validation_state" = "success" ] \
+            || fail "A manual agent-review request requires a successful latest agent-validation status on the exact head SHA."
+
+          gh workflow run agent-review.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref main \
+            -f pr_number="$PR_NUMBER" \
+            -f head_sha="$HEAD_SHA"
+          echo "::notice::Dispatched a fresh review of $HEAD_SHA from main."

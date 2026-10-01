@@ -45,6 +45,7 @@ import {
   copilotImplementPath,
   copilotHandoffPath,
   copilotArchitecturePath,
+  reviewRequestPath,
 } from './validate-agent-workflows.mjs';
 
 const validateWorkflow = readRepositoryFile(validatePath);
@@ -499,16 +500,30 @@ describe('documentation-impact gate: review and repair workflows', () => {
 });
 
 describe('review dispatch contract', () => {
-  it('does not review App-authenticated synchronize pushes before exact-SHA validation', () => {
-    assert.ok(reviewWorkflow.includes('types: [labeled]'));
-    assert.ok(!reviewWorkflow.slice(reviewWorkflow.indexOf('on:\n'), reviewWorkflow.indexOf('permissions:\n')).includes('synchronize'));
-    assert.ok(reviewWorkflow.includes('A manual agent-review request requires a successful latest agent-validation status on the exact head SHA.'));
+  it('starts reviews only by trusted dispatch from main, never from a pull_request event', () => {
+    const triggers = reviewWorkflow.slice(reviewWorkflow.indexOf('on:\n'), reviewWorkflow.indexOf('permissions:\n'));
+    assert.ok(!triggers.includes('pull_request'));
+    for (const [trigger, reason] of [
+      ['on:\n  pull_request:\n    types: [labeled]\n    branches:\n      - develop\n  workflow_dispatch:', /agent-review.yml triggers: contains forbidden text: pull_request/],
+      ['on:\n  pull_request_target:\n    types: [labeled]\n  workflow_dispatch:', /agent-review.yml triggers: contains forbidden text: pull_request/],
+    ]) {
+      const unsafe = replaceOnce(reviewWorkflow, 'on:\n  workflow_dispatch:', trigger);
+      assert.throws(() => runContractChecks({ read: readWithOverrides({ [reviewPath]: unsafe }) }), reason);
+    }
+    const anyRef = replaceOnce(reviewWorkflow, '[ "$GITHUB_REF" = "refs/heads/main" ] || fail', 'true || fail');
+    assert.throws(() => runContractChecks({ read: readWithOverrides({ [reviewPath]: anyRef }) }), /agent-review.yml context/);
+  });
 
-    const unsafe = replaceOnce(reviewWorkflow, 'types: [labeled]', 'types: [labeled, synchronize]');
-    assert.throws(
-      () => runContractChecks({ read: readWithOverrides({ [reviewPath]: unsafe }) }),
-      /agent-review.yml triggers: (missing required text: types: \[labeled\]|contains forbidden text: synchronize)/,
-    );
+  it('rejects a manual review dispatcher that skips validation, runs PR code or dispatches from the PR', () => {
+    const request = readRepositoryFile(reviewRequestPath);
+    for (const unsafe of [
+      replaceOnce(request, '            --ref main \\\n', ''),
+      replaceOnce(request, '          [ "$validation_state" = "success" ] \\\n            ||', '          true \\\n            ||'),
+      replaceOnce(request, '    steps:\n', '    steps:\n      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0\n'),
+      replaceOnce(request, '  pull_request_target:\n', '  pull_request:\n'),
+    ]) {
+      assert.throws(() => runContractChecks({ read: readWithOverrides({ [reviewRequestPath]: unsafe }) }), /agent-review-request.yml/);
+    }
   });
 });
 

@@ -472,6 +472,7 @@ export const appPushRetryPath = 'scripts/git-push-with-app-retry.sh';
 export const copilotImplementPath = '.github/workflows/agent-copilot.yml';
 export const copilotHandoffPath = '.github/workflows/agent-copilot-handoff.yml';
 export const copilotArchitecturePath = '.github/workflows/agent-copilot-architecture.yml';
+export const reviewRequestPath = '.github/workflows/agent-review-request.yml';
 
 // ---------------------------------------------------------------------------------------
 // Documentation-impact gate. The templates collect the decision, the preflight and validation
@@ -822,6 +823,27 @@ export const HEAD_UPDATE_CONTRACT = Object.freeze({
   forbidden: ['statuses: write', 'contents:', 'gh pr review', 'agent-review.yml', 'git push', 'ref: ${{ github.event.pull_request', 'pull-requests: write', 'issues: write', 'gh pr edit'],
 });
 
+/** Manual re-review: a human's agent-review label dispatches agent-review.yml from main, nothing else. */
+function verifyReviewRequestDispatcher(workflow) {
+  const triggers = section(workflow, 'on:\n', '\npermissions: {}\n', `${reviewRequestPath} triggers`);
+  for (const required of ['pull_request_target:', 'types: [labeled]', '      - develop']) requireText(triggers, required, `${reviewRequestPath} triggers`);
+  for (const forbidden of ['  pull_request:\n', 'synchronize', 'issue_comment', 'workflow_run', 'push:']) forbidText(triggers, forbidden, `${reviewRequestPath} triggers`);
+  requireText(workflow, 'permissions: {}', reviewRequestPath);
+  const job = section(workflow, '  dispatch-review:\n', null, `${reviewRequestPath} dispatcher`);
+  verifySafeDispatcher(job, `${reviewRequestPath} dispatcher`);
+  verifyAgentPrGuards(job, `${reviewRequestPath} dispatcher`, 'Refusing stale review request', 'both');
+  for (const required of [
+    "github.event.label.name == 'agent-review'", 'statuses: read',
+    'any(.labels[]?; .name == "agent-review")', 'select(.context == "agent-validation")', '[ "$validation_state" = "success" ]',
+    'A manual agent-review request requires a successful latest agent-validation status on the exact head SHA.',
+    'gh workflow run agent-review.yml', '-f pr_number="$PR_NUMBER"', '-f head_sha="$HEAD_SHA"',
+  ]) requireText(job, required, `${reviewRequestPath} dispatcher`);
+  for (const forbidden of ['secrets.COPILOT', 'CLAUDE_CODE_OAUTH_TOKEN', 'AGENT_AUTOMATION_APP_PRIVATE_KEY', 'issues: write', 'contents:', 'statuses: write', 'gh pr edit', 'gh issue edit', 'validate.yml', MERGE_VALIDATION_STATUS]) {
+    forbidText(job, forbidden, `${reviewRequestPath} dispatcher`);
+  }
+  requireOrder(job, '[ "$validation_state" = "success" ]', 'gh workflow run agent-review.yml', `${reviewRequestPath} dispatcher`, 'the exact head must have passed validation before a review is dispatched.');
+}
+
 /** Copilot's final review of Claude's work: read-only, pinned CLI, schema-checked output. */
 function verifyCopilotReviewJob(review) {
   const job = section(review, '  copilot-review:\n', '  publish:\n', 'agent-review.yml Copilot review job');
@@ -829,6 +851,7 @@ function verifyCopilotReviewJob(review) {
     "if: needs.context.outputs.implementer == 'claude'",
     'ref: ${{ needs.context.outputs.head_sha }}', 'persist-credentials: false',
     'TRUSTED_SHA: ${{ github.sha }}', 'git show "$TRUSTED_SHA:.github/copilot-cli/$file"', '--ignore-scripts',
+    '[ "$GITHUB_REF" = "refs/heads/main" ] ||',
     'COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_CLI_TOKEN }}', 'COPILOT_AUTO_UPDATE: "false"',
     "--deny-tool='write'", '--no-ask-user',
     '[ -z "$(git status --porcelain)" ]', '[ "$(git rev-parse HEAD)" = "$HEAD_SHA" ]',
@@ -1144,6 +1167,7 @@ function verifyArchitectureCopilotCheck(architectureWorkflow) {
     'ARCHITECTURE: CLEAN', 'ARCHITECTURE: FINDINGS', 'echo "verdict=$verdict"',
     // The CLI is pinned by the trusted workflow commit's lockfile and installed without lifecycle scripts.
     'TRUSTED_SHA: ${{ github.sha }}', 'git show "$TRUSTED_SHA:.github/copilot-cli/$file"', '--ignore-scripts',
+    '[ "$GITHUB_REF" = "refs/heads/main" ] ||', 'COPILOT_AUTO_UPDATE: "false"',
   ]) requireText(copilotCheck, required, 'agent-architecture.yml Copilot check');
   for (const forbidden of [
     'contents: write', 'pull-requests: write', 'issues: write', 'actions: write', 'copilot-requests: write',
@@ -1511,10 +1535,15 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
     requireText(dispatcher, 'any(.labels[]?; .name == "agent-review")', `${path} validation dispatcher`);
   }
   const review = read(reviewPath);
+  // Reviews run only as a workflow_dispatch from main. A pull_request run would use the pull
+  // request's merge commit as github.sha, so the workflow and the pinned Copilot CLI it installs
+  // could come from the pull request.
   const reviewTriggers = section(review, 'on:\n', 'permissions:\n', 'agent-review.yml triggers');
-  requireText(reviewTriggers, 'types: [labeled]', 'agent-review.yml triggers');
-  forbidText(reviewTriggers, 'synchronize', 'agent-review.yml triggers');
-  forbidText(reviewTriggers, 'ready_for_review', 'agent-review.yml triggers');
+  requireText(reviewTriggers, 'workflow_dispatch:', 'agent-review.yml triggers');
+  for (const forbidden of ['pull_request', 'issues:', 'issue_comment', 'workflow_run', 'push:', 'synchronize', 'ready_for_review']) {
+    forbidText(reviewTriggers, forbidden, 'agent-review.yml triggers');
+  }
+  verifyReviewRequestDispatcher(read(reviewRequestPath));
 
   for (const required of [
     'workflow_dispatch:',
@@ -1525,7 +1554,7 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
     'Refusing stale review',
     'persist-credentials: false',
     '.github/workflows/',
-    'group: agent-review-pr-${{ github.event.pull_request.number || inputs.pr_number || github.run_id }}',
+    'group: agent-review-pr-${{ inputs.pr_number || github.run_id }}',
   ]) {
     requireText(review, required, reviewPath);
   }
@@ -1539,12 +1568,9 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
   // A dispatched review accepts only the exact-SHA agent-validation status as evidence; the
   // merge-result status published by pull_request validation is never a substitute.
   requireText(reviewContext, 'select(.context == "agent-validation")', 'agent-review.yml dispatched context');
-  requireText(reviewContext, 'A manual agent-review request requires a successful latest agent-validation status on the exact head SHA.', 'agent-review.yml manual labeled context');
-  const authorGuardCount = (reviewContext.match(/\[ "\$author" = "\$EXPECTED_COPILOT_AUTHOR" \]/g) ?? []).length;
-  const appAuthorGuardCount = (reviewContext.match(/\[ "\$author" = "\$EXPECTED_AGENT_AUTHOR" \]/g) ?? []).length;
-  if (authorGuardCount < 2 || appAuthorGuardCount < 2) {
-    throw new Error('agent-review.yml context: both dispatched and manual labeled review paths must verify the implementer author.');
-  }
+  requireText(reviewContext, '[ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] || fail', 'agent-review.yml context');
+  requireText(reviewContext, '[ "$GITHUB_REF" = "refs/heads/main" ] || fail', 'agent-review.yml context');
+  forbidText(reviewContext, 'github.event.pull_request', 'agent-review.yml context');
   forbidText(reviewContext, MERGE_VALIDATION_STATUS, 'agent-review.yml dispatched context');
 
   const reviewJob = section(review, '  review:\n', '  copilot-review:\n', reviewPath);
@@ -1575,6 +1601,7 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
     copilotImplementPath,
     copilotHandoffPath,
     copilotArchitecturePath,
+    reviewRequestPath,
   ]) {
     forbidText(read(path), '.author.login', path);
   }

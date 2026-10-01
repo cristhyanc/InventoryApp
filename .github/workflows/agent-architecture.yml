@@ -134,6 +134,8 @@ jobs:
           TRUSTED_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
+          # The pinned manifest is trusted only when this run is the main-branch workflow.
+          [ "$GITHUB_REF" = "refs/heads/main" ] || { echo "::error::The Copilot CLI is installed only from main, not $GITHUB_REF."; exit 1; }
           cli_dir="$RUNNER_TEMP/copilot-cli"
           mkdir -p "$cli_dir"
           for file in package.json package-lock.json; do

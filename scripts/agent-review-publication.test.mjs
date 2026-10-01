@@ -27,6 +27,7 @@ const publishShell = stepShell(read('.github/workflows/agent-review.yml'), 'Guar
 const headUpdateShell = stepShell(read('.github/workflows/agent-head-update.yml'), 'Reverify current head and dispatch validation');
 const repairDispatchShell = stepShell(read('.github/workflows/agent-repair.yml'), 'Verify repaired head and dispatch trusted validation');
 const reviewDispatchShell = stepShell(read('.github/workflows/validate.yml'), 'Reverify current head and dispatch review');
+const reviewRequestShell = stepShell(read('.github/workflows/agent-review-request.yml'), 'Reverify current head and dispatch review');
 
 const REPO = 'owner/InventoryApp';
 const BOT = 'inventoryapp-agent-automation[bot]';
@@ -558,4 +559,32 @@ describe('Copilot CLI final review output', () => {
       assert.equal(outcome.output, '');
     }
   });
+});
+
+describe('manual re-review request (agent-review-request.yml)', () => {
+  const requested = (state, env = {}) => run(reviewRequestShell, { state, env });
+  const reviewDispatch = ['workflow', 'run', 'agent-review.yml', '--repo', REPO, '--ref', 'main', '-f', `pr_number=${PR}`, '-f', `head_sha=${SHA}`];
+
+  it('dispatches the review from main for a validated head of either implementer', () => {
+    for (const state of [eligibleState(), copilotState()]) {
+      const outcome = requested(state);
+      assert.equal(outcome.status, 0, outcome.stderr);
+      assert.deepEqual(dispatches(outcome.calls).map((d) => d.args), [reviewDispatch]);
+    }
+  });
+
+  for (const [name, state, reason] of [
+    ['an unvalidated head', eligibleState({ statuses: { [SHA]: [{ context: 'merge-validation', state: 'success' }] } }), /successful latest agent-validation/],
+    ['a stale head', eligibleState({ pr: { headRefOid: NEWER_SHA } }), /Refusing stale review request/],
+    ['a removed label', eligibleState({ pr: { labels: [] } }), /label was removed/],
+    ['a human-authored pull request', eligibleState({ author: 'cristhyanc' }), /not authored by/],
+    ['a workflow-changing pull request', copilotState({ files: ['.github/workflows/agent-review.yml'] }), /\.github\/workflows/],
+  ]) {
+    it(`refuses ${name} without dispatching`, () => {
+      const outcome = requested(state);
+      assert.notEqual(outcome.status, 0);
+      assert.equal(dispatches(outcome.calls).length, 0);
+      assert.match(outcome.stdout + outcome.stderr, reason);
+    });
+  }
 });
