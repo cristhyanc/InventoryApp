@@ -1098,7 +1098,14 @@ export function verifyArchitecturePass(implementationWorkflow, architectureWorkf
   const architectureJob = section(architectureWorkflow, '  architecture:\n', '  finalize:\n', 'agent-architecture.yml architecture job');
   requireText(architectureJob, '      - context\n      - copilot-check\n', 'agent-architecture.yml architecture job');
   requireText(architectureJob, "if: needs.copilot-check.outputs.verdict == 'findings'", 'agent-architecture.yml architecture job');
-  requireText(architectureJob, '${{ needs.copilot-check.outputs.findings }}', 'agent-architecture.yml architecture job');
+  requireText(architectureJob, 'COPILOT_FINDINGS: ${{ needs.copilot-check.outputs.findings }}', 'agent-architecture.yml architecture job');
+  requireText(architectureJob, '> .git/copilot-architecture-findings.md', 'agent-architecture.yml architecture job');
+  requireText(architectureJob, 'Read that file first', 'agent-architecture.yml architecture job');
+  forbidText(
+    architectureJob.slice(architectureJob.indexOf('prompt: |')),
+    'needs.copilot-check.outputs.findings',
+    'agent-architecture.yml architecture prompt',
+  );
   requireText(architectureJob, '      contents: read', 'agent-architecture.yml architecture permissions');
   requireText(architectureJob, '      pull-requests: write', 'agent-architecture.yml architecture permissions');
   requireText(architectureJob, '      issues: read', 'agent-architecture.yml architecture permissions');
