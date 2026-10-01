@@ -1,26 +1,29 @@
 name: Agent review
 
-# Independent review agent (Claude Code) for pull requests that carry `agent-review`.
+# Independent final review of agent pull requests that carry `agent-review`.
 #
 # Authority and lifecycle: AGENTS.md ("Automated task contract") and docs/automation.md ("Review agent").
-# - The implementation dispatcher applies `agent-review`, then exact-SHA validation dispatches the
-#   initial review automatically. A human may remove/re-apply the label to request another review of
-#   an already validated head. Repair pushes and other new commits are reviewed only through the
-#   post-validation dispatch (agent-head-update.yml schedules exact-SHA validation for a new head).
+# - Cross-review: the reviewer is always the agent that did not implement the change. Claude reviews
+#   Copilot-implemented pull requests (`copilot/*`, authored by the Copilot bot) in the `review` job;
+#   the Copilot CLI reviews Claude-implemented pull requests (`agent/issue-*`, authored by the
+#   automation App) in the `copilot-review` job. Both return the same structured review, and the same
+#   deterministic publish job turns it into a comment-only review and the `agent-review-verdict` status.
+# - agent-architecture.yml and agent-copilot-architecture.yml apply `agent-review` after the read-only
+#   architecture check; exact-SHA validation then dispatches the initial review automatically. A human
+#   may remove/re-apply the label to request another review of an already validated head; the label
+#   event starts agent-review-request.yml, which dispatches this workflow from main. Repair
+#   pushes and other new commits are reviewed only through the post-validation dispatch
+#   (agent-head-update.yml schedules exact-SHA validation for a new head).
 # - Dispatched runs execute this trusted workflow from `main`, then verify the open, non-draft, same-repository
 #   agent PR, its current head SHA, its successful `agent-validation` status, and the workflow-file exclusion.
 # - Every run is a fresh review of the pull request's current head SHA in a new job with its own context.
-# - The review job is read-only: Claude returns its verdict as structured output and publishes nothing.
-#   A separate deterministic publish job re-verifies the pull request immediately before publishing,
-#   binds the review to the exact reviewed SHA, suppresses stale or ineligible results, and records the
-#   outcome as the per-SHA `agent-review-verdict` commit status. Neither job can modify code, labels,
-#   branches, settings, merge, or deploy.
+# - The review jobs are read-only: the reviewer returns its verdict as structured output and publishes
+#   nothing. A separate deterministic publish job re-verifies the pull request immediately before
+#   publishing, binds the review to the exact reviewed SHA, suppresses stale or ineligible results, and
+#   records the outcome as the per-SHA `agent-review-verdict` commit status. No job can modify code,
+#   labels, branches, settings, merge, or deploy.
 
 on:
-  pull_request:
-    types: [labeled]
-    branches:
-      - develop
   workflow_dispatch:
     inputs:
       pr_number:
@@ -35,22 +38,12 @@ on:
 permissions: {}
 
 concurrency:
-  group: agent-review-pr-${{ github.event.pull_request.number || inputs.pr_number || github.run_id }}
+  group: agent-review-pr-${{ inputs.pr_number || github.run_id }}
   cancel-in-progress: true
 
 jobs:
   context:
     name: Resolve review context
-    if: |
-      github.event_name == 'workflow_dispatch' ||
-      (
-        github.event_name == 'pull_request' &&
-        github.event.pull_request.draft == false &&
-        github.event.pull_request.base.ref == 'develop' &&
-        github.event.pull_request.head.repo.full_name == github.repository &&
-        contains(github.event.pull_request.labels.*.name, 'agent-review') &&
-        (github.event.action != 'labeled' || github.event.label.name == 'agent-review')
-      )
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -60,6 +53,7 @@ jobs:
       pr_number: ${{ steps.context.outputs.pr_number }}
       head_sha: ${{ steps.context.outputs.head_sha }}
       base_ref: ${{ steps.context.outputs.base_ref }}
+      implementer: ${{ steps.context.outputs.implementer }}
 
     steps:
       - name: Resolve and verify pull request
@@ -67,99 +61,76 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}
-          EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
-          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          EVENT_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          EXPECTED_COPILOT_AUTHOR: ${{ vars.COPILOT_AGENT_BOT_LOGIN || 'Copilot' }}
           INPUT_PR_NUMBER: ${{ inputs.pr_number }}
           INPUT_HEAD_SHA: ${{ inputs.head_sha }}
         run: |
           set -euo pipefail
           fail() { echo "::error::$1"; exit 1; }
 
-          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
-            pr_number="$INPUT_PR_NUMBER"
-            head_sha="$INPUT_HEAD_SHA"
+          # Only trusted dispatches start a review: the post-validation dispatcher in validate.yml and
+          # the manual re-review dispatcher agent-review-request.yml, both with --ref main. This
+          # workflow, and the pinned Copilot CLI it installs, therefore always come from main.
+          [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] || fail "Reviews run only from a trusted workflow_dispatch."
+          [ "$GITHUB_REF" = "refs/heads/main" ] || fail "Reviews run only from main, not $GITHUB_REF."
+          pr_number="$INPUT_PR_NUMBER"
+          head_sha="$INPUT_HEAD_SHA"
 
-            [[ "$pr_number" =~ ^[1-9][0-9]*$ ]] || fail "A valid pull request number is required."
-            [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || fail "A full 40-character lowercase head SHA is required."
+          [[ "$pr_number" =~ ^[1-9][0-9]*$ ]] || fail "A valid pull request number is required."
+          [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || fail "A full 40-character lowercase head SHA is required."
 
-            pr_json="$(gh pr view "$pr_number" --repo "$GITHUB_REPOSITORY" \
-              --json state,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,labels)"
-            state="$(jq -r '.state' <<<"$pr_json")"
-            is_draft="$(jq -r '.isDraft' <<<"$pr_json")"
-            base_ref="$(jq -r '.baseRefName' <<<"$pr_json")"
-            head_ref="$(jq -r '.headRefName' <<<"$pr_json")"
-            current_sha="$(jq -r '.headRefOid // empty' <<<"$pr_json")"
-            head_repo="$(jq -r '"\(.headRepositoryOwner.login)/\(.headRepository.name)"' <<<"$pr_json")"
-            author="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr_number" \
-              --jq '.user.login // empty')"
+          pr_json="$(gh pr view "$pr_number" --repo "$GITHUB_REPOSITORY" \
+            --json state,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,labels)"
+          state="$(jq -r '.state' <<<"$pr_json")"
+          is_draft="$(jq -r '.isDraft' <<<"$pr_json")"
+          base_ref="$(jq -r '.baseRefName' <<<"$pr_json")"
+          head_ref="$(jq -r '.headRefName' <<<"$pr_json")"
+          current_sha="$(jq -r '.headRefOid // empty' <<<"$pr_json")"
+          head_repo="$(jq -r '"\(.headRepositoryOwner.login)/\(.headRepository.name)"' <<<"$pr_json")"
+          author="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr_number" \
+            --jq '.user.login // empty')"
 
-            [ "$state" = "OPEN" ] || fail "Pull request #$pr_number is not open."
-            [ "$is_draft" = "false" ] || fail "Pull request #$pr_number is a draft."
-            [ "$base_ref" = "develop" ] || fail "Automated review is limited to pull requests targeting develop."
-            [ "$head_repo" = "$GITHUB_REPOSITORY" ] || fail "Automated review is limited to same-repository branches."
-            [[ "$head_ref" == agent/issue-* ]] || fail "Automated review requires an agent/issue-* head branch."
+          [ "$state" = "OPEN" ] || fail "Pull request #$pr_number is not open."
+          [ "$is_draft" = "false" ] || fail "Pull request #$pr_number is a draft."
+          [ "$base_ref" = "develop" ] || fail "Automated review is limited to pull requests targeting develop."
+          [ "$head_repo" = "$GITHUB_REPOSITORY" ] || fail "Automated review is limited to same-repository branches."
+          if [[ "$head_ref" == agent/issue-* ]]; then
             [ -n "$EXPECTED_AGENT_AUTHOR" ] || fail "AGENT_AUTOMATION_APP_BOT_LOGIN is not configured."
-            [ "$author" = "$EXPECTED_AGENT_AUTHOR" ] || fail "Automated review requires $EXPECTED_AGENT_AUTHOR as the pull request author."
-            [ "$current_sha" = "$head_sha" ] || fail "Refusing stale review: pull request head is $current_sha, requested SHA is $head_sha."
-            jq -e 'any(.labels[]?; .name == "agent-review")' <<<"$pr_json" >/dev/null \
-              || fail "The agent-review label is required before review."
-
-            changed_files="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$pr_number/files?per_page=100" --jq '.[].filename')"
-            if grep -Eq '^\.github/workflows/' <<<"$changed_files"; then
-              fail "Pull requests that change .github/workflows/** require manual validation and review."
-            fi
-
-            validation_state="$(gh api "repos/$GITHUB_REPOSITORY/commits/$head_sha/status" \
-              --jq '[.statuses[] | select(.context == "agent-validation")][0].state // ""')"
-            [ "$validation_state" = "success" ] \
-              || fail "The exact head SHA does not have a successful latest agent-validation status."
+            [ "$author" = "$EXPECTED_AGENT_AUTHOR" ] || fail "Automated review of an agent/issue-* branch requires $EXPECTED_AGENT_AUTHOR as the pull request author."
+            implementer="claude"
+          elif [[ "$head_ref" == copilot/* ]]; then
+            [ "$author" = "$EXPECTED_COPILOT_AUTHOR" ] || fail "Automated review of a copilot/* branch requires $EXPECTED_COPILOT_AUTHOR as the pull request author."
+            implementer="copilot"
           else
-            pr_number="$EVENT_PR_NUMBER"
-            head_sha="$EVENT_HEAD_SHA"
-            base_ref="$EVENT_BASE_REF"
+            fail "Automated review requires an agent/issue-* (Claude) or copilot/* (Copilot) head branch."
+          fi
+          [ "$current_sha" = "$head_sha" ] || fail "Refusing stale review: pull request head is $current_sha, requested SHA is $head_sha."
+          jq -e 'any(.labels[]?; .name == "agent-review")' <<<"$pr_json" >/dev/null \
+            || fail "The agent-review label is required before review."
 
-            [[ "$pr_number" =~ ^[1-9][0-9]*$ ]] || fail "The pull_request event did not contain a valid pull request number."
-            [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || fail "The pull_request event did not contain a full head SHA."
-            [ "$base_ref" = "develop" ] || fail "Review is limited to pull requests targeting develop."
-            [ -n "$EXPECTED_AGENT_AUTHOR" ] || fail "AGENT_AUTOMATION_APP_BOT_LOGIN is not configured."
-
-            pr_json="$(gh pr view "$pr_number" --repo "$GITHUB_REPOSITORY" \
-              --json state,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,labels)"
-            state="$(jq -r '.state' <<<"$pr_json")"
-            is_draft="$(jq -r '.isDraft' <<<"$pr_json")"
-            head_ref="$(jq -r '.headRefName' <<<"$pr_json")"
-            current_sha="$(jq -r '.headRefOid // empty' <<<"$pr_json")"
-            head_repo="$(jq -r '"\(.headRepositoryOwner.login)/\(.headRepository.name)"' <<<"$pr_json")"
-            author="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr_number" --jq '.user.login // empty')"
-
-            [ "$state" = "OPEN" ] || fail "Pull request #$pr_number is not open."
-            [ "$is_draft" = "false" ] || fail "Pull request #$pr_number is a draft."
-            [ "$head_repo" = "$GITHUB_REPOSITORY" ] || fail "Review is limited to same-repository branches."
-            [[ "$head_ref" == agent/issue-* ]] || fail "Review requires an agent/issue-* head branch."
-            [ "$author" = "$EXPECTED_AGENT_AUTHOR" ] || fail "Review requires $EXPECTED_AGENT_AUTHOR as the pull request author."
-            [ "$current_sha" = "$head_sha" ] || fail "Refusing stale review: pull request head is $current_sha, event SHA is $head_sha."
-
-            changed_files="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$pr_number/files?per_page=100" --jq '.[].filename')"
-            if grep -Eq '^\.github/workflows/' <<<"$changed_files"; then
-              fail "Pull requests that change .github/workflows/** require manual validation and review."
-            fi
-
-            validation_state="$(gh api "repos/$GITHUB_REPOSITORY/commits/$head_sha/status" \
-              --jq '[.statuses[] | select(.context == "agent-validation")][0].state // ""')"
-            [ "$validation_state" = "success" ] \
-              || fail "A manual agent-review request requires a successful latest agent-validation status on the exact head SHA."
+          changed_files="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$pr_number/files?per_page=100" --jq '.[].filename')"
+          if grep -Eq '^\.github/workflows/' <<<"$changed_files"; then
+            fail "Pull requests that change .github/workflows/** require manual validation and review."
           fi
 
+          validation_state="$(gh api "repos/$GITHUB_REPOSITORY/commits/$head_sha/status" \
+            --jq '[.statuses[] | select(.context == "agent-validation")][0].state // ""')"
+          [ "$validation_state" = "success" ] \
+            || fail "The exact head SHA does not have a successful latest agent-validation status."
+
+          echo "::notice::Pull request #$pr_number was implemented by $implementer; the other agent reviews it."
           {
             echo "pr_number=$pr_number"
             echo "head_sha=$head_sha"
             echo "base_ref=$base_ref"
+            echo "implementer=$implementer"
           } >> "$GITHUB_OUTPUT"
 
   review:
-    name: Independent review of current head
+    name: Independent Claude review of current head
     needs: context
+    # Claude reviews only Copilot's work.
+    if: needs.context.outputs.implementer == 'copilot'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     # Read-only: this job runs Claude and holds no pull-request, issue, status or workflow write
@@ -193,7 +164,7 @@ jobs:
           additional_permissions: |
             actions: read
           prompt: |
-            You are the InventoryApp independent review agent running in GitHub Actions. You are a separate invocation from the implementation agent: do not rely on anything it may have claimed; verify it.
+            You are the InventoryApp independent review agent running in GitHub Actions. This pull request was implemented by GitHub Copilot, a different agent: do not rely on anything it may have claimed; verify it. A separate read-only Claude architecture check ran before validation, and its findings, if any, were posted on the pull request for Copilot to fix. Independently verify the architecture again on this exact SHA and confirm that every earlier architecture finding is resolved or was declined with a sound reason. Treat a violation of docs/architecture.md or the AGENTS.md architecture rules (controller and use-case boundaries, domain versus adapters, dependency direction, duplicated logic, testability), or an unresolved earlier finding, as a blocker, not a suggestion.
 
             REPOSITORY: ${{ github.repository }}
             PULL REQUEST: #${{ needs.context.outputs.pr_number }}
@@ -250,6 +221,150 @@ jobs:
             "Bash(gh pr review *),Bash(gh pr comment *),Bash(gh pr merge *),Bash(gh pr edit *),Bash(gh pr close *),Bash(gh pr reopen *),Bash(gh pr ready *),Bash(gh issue edit *),Bash(gh issue comment *),Bash(gh api *),Bash(gh workflow *),Bash(gh run rerun *),Bash(gh run cancel *),Bash(gh label *)"
             "Bash(git push *),Bash(git commit *),Bash(git add *),Bash(git checkout *),Bash(git switch *),Bash(git reset *),Bash(git rebase *),Bash(git merge *),Bash(git stash *),Bash(git restore *),Bash(git clean *)"
 
+  copilot-review:
+    name: Independent Copilot review of current head
+    needs: context
+    # Copilot reviews only Claude's work.
+    if: needs.context.outputs.implementer == 'claude'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Read-only: the Copilot CLI may run only read commands, the job holds no pull-request, issue,
+    # status or workflow write permission and no App or Anthropic credential, and the step fails if
+    # the working tree changes. Its only output is the review JSON, schema-checked below and published
+    # by the same deterministic publish job as Claude's review.
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      actions: read
+      checks: read
+      statuses: read
+    outputs:
+      structured_output: ${{ steps.copilot_review.outputs.structured_output }}
+
+    steps:
+      - name: Check out pull request head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.context.outputs.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      # The Copilot CLI version is pinned by the lockfile in .github/copilot-cli on the trusted
+      # workflow commit (github.sha), never by the pull request head, and installed without
+      # lifecycle scripts.
+      - name: Install pinned Copilot CLI
+        env:
+          TRUSTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # The pinned manifest is trusted only when this run is the main-branch workflow.
+          [ "$GITHUB_REF" = "refs/heads/main" ] || { echo "::error::The Copilot CLI is installed only from main, not $GITHUB_REF."; exit 1; }
+          cli_dir="$RUNNER_TEMP/copilot-cli"
+          mkdir -p "$cli_dir"
+          for file in package.json package-lock.json; do
+            git show "$TRUSTED_SHA:.github/copilot-cli/$file" > "$cli_dir/$file"
+          done
+          npm ci --prefix "$cli_dir" --ignore-scripts --no-audit --no-fund
+          echo "$cli_dir/node_modules/.bin" >> "$GITHUB_PATH"
+
+      - name: Run Copilot review
+        id: copilot_review
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_CLI_TOKEN }}
+          COPILOT_AUTO_UPDATE: "false"
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ needs.context.outputs.pr_number }}
+          HEAD_SHA: ${{ needs.context.outputs.head_sha }}
+          BASE_REF: ${{ needs.context.outputs.base_ref }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+          work="$(mktemp -d)"
+
+          [ -n "$COPILOT_GITHUB_TOKEN" ] || fail "The COPILOT_CLI_TOKEN secret is not configured, so Copilot cannot review this pull request."
+          [ "$(git rev-parse HEAD)" = "$HEAD_SHA" ] || fail "Checkout does not match the reviewed head."
+
+          prompt="$(cat <<'EOF'
+          You are the InventoryApp independent review agent. Pull request #@PR@ was implemented by Claude, a different agent: do not rely on anything it claimed; verify it. The working tree is its head @SHA@; compare with git diff origin/@BASE@...HEAD. A separate read-only Copilot architecture check ran before validation and its findings, if any, were posted on the pull request for Claude to fix. Independently verify the architecture again on this exact SHA and confirm that every earlier architecture finding is resolved or was declined with a sound reason.
+
+          Read, in this order, before judging anything:
+          1. CLAUDE.md, AGENTS.md, docs/automation.md and .github/copilot-instructions.md; docs/architecture.md where the change touches structure, EF Core, reporting, Nayax, or the Angular layout.
+          2. The pull request (gh pr view @PR@ --comments) and its full diff (gh pr diff @PR@).
+          3. The linked issue named in the PR body (gh issue view <n> --comments): its acceptance criteria and explicit exclusions define what the PR was allowed to do.
+          4. The validation evidence: the PR body's validation section and the CI state (gh pr checks @PR@, gh run view). A successful agent-validation commit status is the authoritative exact-SHA evidence; merge-validation never substitutes for it.
+          5. The documentation-impact declarations: the issue's decision, the PR's "## Documentation impact" section, and the actual diff.
+
+          Evaluate: every acceptance criterion; scope creep and unrelated edits; the AGENTS.md invariants (financial, inventory/costing, reconciliation, GST, commissions, migrations, Nayax, tenant isolation, files/security, frontend rules), citing the invariant you apply; architecture against docs/architecture.md and the AGENTS.md architecture rules; the tests AGENTS.md requires for this change type, and that no test was weakened, skipped or deleted; validation claims against CI; secrets, local databases, generated output, accidental migrations and public API changes; and whether the documentation-impact declaration matches the diff.
+
+          Blocking rules (you may not relax them):
+          - Assess every acceptance criterion individually as "met", "not met" or "not verified", each with concrete evidence (file and line, test name, CI run or command output). A criterion you could not verify is "not verified", never "met".
+          - "READY FOR HUMAN REVIEW" is allowed only when every criterion is "met" and there are no blockers. Any "not met" or "not verified" criterion, violated invariant, architecture violation, unresolved earlier architecture finding, or missing or inaccurate required documentation is a blocker, and the verdict is "CHANGES REQUESTED".
+          - Never waive a blocker because legacy behaviour is worse, the failure seems unlikely, the tests pass, or another check is green.
+          - When a high-risk requirement is materially ambiguous, record a blocker that starts with "Human decision required:".
+
+          You may only read. Never edit files, commit, push, comment, review, label, or run any write command.
+
+          Deliver your result as the last thing you output: a line containing only BEGIN_REVIEW_JSON, then one JSON object, then a line containing only END_REVIEW_JSON. The object has exactly these keys: "reviewed_head_sha" (exactly @SHA@), "verdict" ("CHANGES REQUESTED" or "READY FOR HUMAN REVIEW"), "blockers" (array of non-empty strings: file, line, what is wrong, which rule or criterion it violates), "criteria" (non-empty array of objects with "criterion", "status" and "evidence"), "suggestions" (array of strings, non-blocking only), "validation_evidence" (non-empty string: the checks, runs and results you confirmed), and "inline_comments" (array of objects with "path", "line" as a positive integer in the new file version, and "body"). Do not write a VERDICT: line inside any field.
+          EOF
+          )"
+          prompt="${prompt//@PR@/$PR_NUMBER}"
+          prompt="${prompt//@SHA@/$HEAD_SHA}"
+          prompt="${prompt//@BASE@/$BASE_REF}"
+
+          copilot -s --no-ask-user \
+            --allow-tool='shell(git diff:*)' --allow-tool='shell(git log:*)' --allow-tool='shell(git show:*)' --allow-tool='shell(git status:*)' \
+            --allow-tool='shell(gh pr view:*)' --allow-tool='shell(gh pr diff:*)' --allow-tool='shell(gh pr checks:*)' \
+            --allow-tool='shell(gh issue view:*)' --allow-tool='shell(gh run view:*)' --allow-tool='shell(gh run list:*)' \
+            --deny-tool='write' \
+            -p "$prompt" > "$work/copilot-output.md"
+
+          # The review is read-only: the tree and the head must be exactly as checked out.
+          [ -z "$(git status --porcelain)" ] || fail "Copilot changed the working tree during a read-only review."
+          [ "$(git rev-parse HEAD)" = "$HEAD_SHA" ] || fail "The head moved during the read-only review."
+
+          # Take the last marked JSON block; tolerate a Markdown code fence around the object.
+          awk '
+            /^[[:space:]]*BEGIN_REVIEW_JSON[[:space:]]*$/ { inside = 1; buf = ""; next }
+            /^[[:space:]]*END_REVIEW_JSON[[:space:]]*$/ { if (inside) { last = buf; found = 1 } inside = 0; next }
+            inside && !/^[[:space:]]*```[a-z]*[[:space:]]*$/ { buf = buf $0 "\n" }
+            END { if (found) printf "%s", last }
+          ' "$work/copilot-output.md" > "$work/review.json"
+          [ -s "$work/review.json" ] || fail "Copilot did not return a marked review JSON block."
+
+          # The same contract as Claude's --json-schema: required keys only, typed values, allowed enums.
+          jq -e '
+            def nonempty_string: type == "string" and length > 0;
+            type == "object"
+            and ((keys - ["blockers","criteria","inline_comments","reviewed_head_sha","suggestions","validation_evidence","verdict"]) | length) == 0
+            and ((["blockers","criteria","inline_comments","reviewed_head_sha","suggestions","validation_evidence","verdict"] - keys) | length) == 0
+            and (.reviewed_head_sha | type == "string" and test("^[0-9a-f]{40}$"))
+            and (.verdict == "CHANGES REQUESTED" or .verdict == "READY FOR HUMAN REVIEW")
+            and (.blockers | type == "array" and all(.[]; nonempty_string))
+            and (.criteria | type == "array" and length > 0 and all(.[];
+              type == "object" and ((keys - ["criterion","evidence","status"]) | length) == 0
+              and (.criterion | nonempty_string) and (.evidence | nonempty_string)
+              and (.status == "met" or .status == "not met" or .status == "not verified")))
+            and (.suggestions | type == "array" and all(.[]; type == "string"))
+            and (.validation_evidence | nonempty_string)
+            and (.inline_comments | type == "array" and all(.[];
+              type == "object" and ((keys - ["body","line","path"]) | length) == 0
+              and (.path | nonempty_string) and (.body | nonempty_string)
+              and (.line | type == "number" and . >= 1 and . == floor)))
+          ' "$work/review.json" >/dev/null || fail "Copilot's review JSON does not match the review contract."
+
+          delimiter="REVIEW_$(openssl rand -hex 16)"
+          {
+            echo "structured_output<<$delimiter"
+            jq -c . "$work/review.json"
+            echo "$delimiter"
+          } >> "$GITHUB_OUTPUT"
+
   publish:
     name: Guarded review publication
     # Runs even when the review job failed or was cancelled (for example superseded by a newer review
@@ -260,6 +375,7 @@ jobs:
     needs:
       - context
       - review
+      - copilot-review
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
@@ -270,10 +386,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}
+          EXPECTED_COPILOT_AUTHOR: ${{ vars.COPILOT_AGENT_BOT_LOGIN || 'Copilot' }}
           PR_NUMBER: ${{ needs.context.outputs.pr_number }}
           HEAD_SHA: ${{ needs.context.outputs.head_sha }}
-          REVIEW_RESULT: ${{ needs.review.result }}
-          REVIEW_OUTPUT: ${{ needs.review.outputs.structured_output }}
+          IMPLEMENTER: ${{ needs.context.outputs.implementer }}
+          # The review comes from the job for the agent that did not implement the change.
+          REVIEW_RESULT: ${{ needs.context.outputs.implementer == 'claude' && needs.copilot-review.result || needs.review.result }}
+          REVIEW_OUTPUT: ${{ needs.context.outputs.implementer == 'claude' && needs.copilot-review.outputs.structured_output || needs.review.outputs.structured_output }}
           VERDICT_CONTEXT: agent-review-verdict
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -298,6 +417,11 @@ jobs:
           [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] || { echo "::error::Invalid pull request number."; exit 1; }
           [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Invalid reviewed head SHA."; exit 1; }
 
+          case "$IMPLEMENTER" in
+            claude) reviewer="GitHub Copilot (Copilot CLI)" ;;
+            copilot) reviewer="Claude" ;;
+            *) suppress "unknown implementer '$IMPLEMENTER'." ;;
+          esac
           [ "$REVIEW_RESULT" = "success" ] || suppress "the review job ended with '$REVIEW_RESULT' (failed, cancelled or superseded)."
 
           # 1. The structured output must be well formed, bound to the reviewed SHA, and internally
@@ -338,9 +462,18 @@ jobs:
           [ "$is_draft" = "false" ] || suppress "pull request #$PR_NUMBER is now a draft."
           [ "$base_ref" = "develop" ] || suppress "pull request #$PR_NUMBER no longer targets develop."
           [ "$head_repo" = "$GITHUB_REPOSITORY" ] || suppress "pull request #$PR_NUMBER no longer uses a same-repository branch."
-          [[ "$head_ref" == agent/issue-* ]] || suppress "pull request #$PR_NUMBER no longer uses an agent/issue-* branch."
-          [ -n "$EXPECTED_AGENT_AUTHOR" ] || suppress "AGENT_AUTOMATION_APP_BOT_LOGIN is not configured."
-          [ "$author" = "$EXPECTED_AGENT_AUTHOR" ] || suppress "pull request #$PR_NUMBER is not authored by $EXPECTED_AGENT_AUTHOR."
+          if [[ "$head_ref" == agent/issue-* ]]; then
+            [ -n "$EXPECTED_AGENT_AUTHOR" ] || suppress "AGENT_AUTOMATION_APP_BOT_LOGIN is not configured."
+            [ "$author" = "$EXPECTED_AGENT_AUTHOR" ] || suppress "pull request #$PR_NUMBER is not authored by $EXPECTED_AGENT_AUTHOR."
+            live_implementer="claude"
+          elif [[ "$head_ref" == copilot/* ]]; then
+            [ "$author" = "$EXPECTED_COPILOT_AUTHOR" ] || suppress "pull request #$PR_NUMBER is not authored by $EXPECTED_COPILOT_AUTHOR."
+            live_implementer="copilot"
+          else
+            suppress "pull request #$PR_NUMBER no longer uses an agent/issue-* or copilot/* branch."
+          fi
+          # An agent never publishes a review of its own work.
+          [ "$live_implementer" = "$IMPLEMENTER" ] || suppress "pull request #$PR_NUMBER is now implemented by $live_implementer, not $IMPLEMENTER."
           [ "$current_sha" = "$HEAD_SHA" ] || suppress "Refusing stale review publication: head moved to $current_sha."
           jq -e 'any(.labels[]?; .name == "agent-review")' <<<"$pr_json" >/dev/null \
             || suppress "the agent-review label was removed."
@@ -351,9 +484,9 @@ jobs:
 
           # 3. Render the review deterministically. The publisher, not the model, writes the reviewed
           #    SHA, the single verdict line and the advisory sentence.
-          jq -r --arg sha "$HEAD_SHA" --arg run "$RUN_URL" '
+          jq -r --arg sha "$HEAD_SHA" --arg run "$RUN_URL" --arg reviewer "$reviewer" '
             def numbered(xs): [xs | to_entries[] | "\(.key + 1). \(.value)"] | join("\n");
-            "Head SHA reviewed: \($sha)\n\nVERDICT: \(.verdict)\n\n"
+            "Reviewer: \($reviewer)\nHead SHA reviewed: \($sha)\n\nVERDICT: \(.verdict)\n\n"
             + (if (.blockers | length) == 0 then "Blockers: none" else "Blockers:\n" + numbered(.blockers) end)
             + "\n\nAcceptance criteria:\n" + ([.criteria[] | "- [\(.status)] \(.criterion): \(.evidence)"] | join("\n"))
             + "\n\nNon-blocking suggestions:\n" + (if (.suggestions | length) == 0 then "none" else ([.suggestions[] | "- \(.)"] | join("\n")) end)

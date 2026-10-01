@@ -19,7 +19,7 @@ on:
         required: true
         type: string
       dispatch_review:
-        description: Dispatch an independent review after validation succeeds
+        description: Request the cross review (Copilot for Claude PRs, Claude for Copilot PRs) after validation succeeds
         required: false
         default: false
         type: boolean
@@ -59,6 +59,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}
+          EXPECTED_COPILOT_AUTHOR: ${{ vars.COPILOT_AGENT_BOT_LOGIN || 'Copilot' }}
           # Each validation mode owns its own commit-status context so the two modes never
           # overwrite each other. workflow_dispatch exact-SHA validation publishes the
           # authoritative agent-validation status that agent-review.yml requires;
@@ -99,9 +100,17 @@ jobs:
             [ "$is_draft" = "false" ] || fail "Pull request #$pr_number is a draft."
             [ "$base_ref" = "develop" ] || fail "Automated validation is limited to pull requests targeting develop."
             [ "$head_repo" = "$GITHUB_REPOSITORY" ] || fail "Automated validation is limited to same-repository branches."
-            [[ "$head_ref" == agent/issue-* ]] || fail "Automated validation requires an agent/issue-* head branch."
-            [ -n "$EXPECTED_AGENT_AUTHOR" ] || fail "AGENT_AUTOMATION_APP_BOT_LOGIN is not configured."
-            [ "$author" = "$EXPECTED_AGENT_AUTHOR" ] || fail "Automated validation requires $EXPECTED_AGENT_AUTHOR as the pull request author."
+            if [[ "$head_ref" == agent/issue-* ]]; then
+              [ -n "$EXPECTED_AGENT_AUTHOR" ] || fail "AGENT_AUTOMATION_APP_BOT_LOGIN is not configured."
+              [ "$author" = "$EXPECTED_AGENT_AUTHOR" ] || fail "Automated validation of an agent/issue-* branch requires $EXPECTED_AGENT_AUTHOR as the pull request author."
+              implementer="claude"
+            elif [[ "$head_ref" == copilot/* ]]; then
+              [ "$author" = "$EXPECTED_COPILOT_AUTHOR" ] || fail "Automated validation of a copilot/* branch requires $EXPECTED_COPILOT_AUTHOR as the pull request author."
+              implementer="copilot"
+            else
+              fail "Automated validation requires an agent/issue-* (Claude) or copilot/* (Copilot) head branch."
+            fi
+            echo "::notice::Pull request #$pr_number was implemented by $implementer."
             [ "$current_sha" = "$head_sha" ] || fail "Refusing stale validation: pull request head is $current_sha, requested SHA is $head_sha."
 
             changed_files="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$pr_number/files?per_page=100" --jq '.[].filename')"
@@ -256,7 +265,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       actions: write
-      pull-requests: read
+      pull-requests: write
+      issues: write
 
     steps:
       - name: Reverify current head and dispatch review
@@ -265,12 +275,13 @@ jobs:
           PR_NUMBER: ${{ needs.context.outputs.pr_number }}
           HEAD_SHA: ${{ needs.context.outputs.head_sha }}
           EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}
+          EXPECTED_COPILOT_AUTHOR: ${{ vars.COPILOT_AGENT_BOT_LOGIN || 'Copilot' }}
         run: |
           set -euo pipefail
           fail() { echo "::error::$1"; exit 1; }
 
           pr_json="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
-            --json state,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,labels)"
+            --json state,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,labels,closingIssuesReferences)"
           state="$(jq -r '.state' <<<"$pr_json")"
           is_draft="$(jq -r '.isDraft' <<<"$pr_json")"
           base_ref="$(jq -r '.baseRefName' <<<"$pr_json")"
@@ -284,9 +295,16 @@ jobs:
           [ "$is_draft" = "false" ] || fail "Pull request #$PR_NUMBER is now a draft."
           [ "$base_ref" = "develop" ] || fail "Pull request #$PR_NUMBER no longer targets develop."
           [ "$head_repo" = "$GITHUB_REPOSITORY" ] || fail "Pull request #$PR_NUMBER no longer uses a same-repository branch."
-          [[ "$head_ref" == agent/issue-* ]] || fail "Pull request #$PR_NUMBER no longer uses an agent/issue-* branch."
-          [ -n "$EXPECTED_AGENT_AUTHOR" ] || fail "AGENT_AUTOMATION_APP_BOT_LOGIN is not configured."
-          [ "$author" = "$EXPECTED_AGENT_AUTHOR" ] || fail "Pull request #$PR_NUMBER is not authored by $EXPECTED_AGENT_AUTHOR."
+          if [[ "$head_ref" == agent/issue-* ]]; then
+            [ -n "$EXPECTED_AGENT_AUTHOR" ] || fail "AGENT_AUTOMATION_APP_BOT_LOGIN is not configured."
+            [ "$author" = "$EXPECTED_AGENT_AUTHOR" ] || fail "Pull request #$PR_NUMBER is not authored by $EXPECTED_AGENT_AUTHOR."
+            implementer="claude"
+          elif [[ "$head_ref" == copilot/* ]]; then
+            [ "$author" = "$EXPECTED_COPILOT_AUTHOR" ] || fail "Pull request #$PR_NUMBER is not authored by $EXPECTED_COPILOT_AUTHOR."
+            implementer="copilot"
+          else
+            fail "Pull request #$PR_NUMBER no longer uses an agent/issue-* or copilot/* branch."
+          fi
           [ "$current_sha" = "$HEAD_SHA" ] || fail "Refusing stale review dispatch: pull request head is $current_sha, validated SHA is $HEAD_SHA."
 
           changed_files="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" --jq '.[].filename')"
@@ -294,11 +312,24 @@ jobs:
             fail "Pull requests that change .github/workflows/** require manual validation and review."
           fi
 
-          if ! jq -e 'any(.labels[]?; .name == "agent-review")' <<<"$pr_json" >/dev/null; then
+          # A Copilot pull request waiting on architecture fixes moves to agent-review only now, after
+          # Copilot's fix push has passed exact-SHA validation. GITHUB_TOKEN label events start no
+          # workflow, so the relabel itself never triggers a premature review.
+          if [ "$implementer" = "copilot" ] \
+            && ! jq -e 'any(.labels[]?; .name == "agent-review")' <<<"$pr_json" >/dev/null \
+            && jq -e 'any(.labels[]?; .name == "agent-architecture-fix")' <<<"$pr_json" >/dev/null; then
+            issue_number="$(jq -r 'if ([.closingIssuesReferences[]?] | length) == 1 then .closingIssuesReferences[0].number else "" end' <<<"$pr_json")"
+            [[ "$issue_number" =~ ^[1-9][0-9]*$ ]] || fail "Pull request #$PR_NUMBER must close exactly one issue to leave agent-architecture-fix."
+            gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --remove-label agent-architecture-fix --add-label agent-review
+            gh issue edit "$issue_number" --repo "$GITHUB_REPOSITORY" --remove-label agent-architecture-fix --add-label agent-review
+            echo "::notice::Copilot's architecture fix passed validation at $HEAD_SHA; pull request #$PR_NUMBER moved to agent-review."
+          elif ! jq -e 'any(.labels[]?; .name == "agent-review")' <<<"$pr_json" >/dev/null; then
             echo "::notice::The agent-review label is absent; validation passed, but no review was dispatched."
             exit 0
           fi
 
+          # Cross-review: agent-review.yml runs the reviewer that did not implement the change (the
+          # Copilot CLI for a Claude implementation, Claude for a Copilot implementation).
           gh workflow run agent-review.yml \
             --repo "$GITHUB_REPOSITORY" \
             --ref main \

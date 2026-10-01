@@ -1,0 +1,43 @@
+name: Copilot setup steps
+
+# Prepares the Copilot coding agent's environment so it can run `bash scripts/validate.sh`
+# (agent-ready-copilot issues; see docs/automation.md § Cross-review: Claude and Copilot).
+# GitHub runs the `copilot-setup-steps` job before Copilot starts work; it must keep that exact name.
+# It holds read-only permissions and no secrets. Dependencies are installed without lifecycle
+# scripts; scripts/validate.sh performs its own install when Copilot runs it.
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  copilot-setup-steps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/inventory-app/package-lock.json
+
+      - name: Restore backend and frontend dependencies
+        run: |
+          set -euo pipefail
+          dotnet restore backend/InventoryApi/InventoryApi.slnx
+          npm --prefix frontend/inventory-app ci --ignore-scripts

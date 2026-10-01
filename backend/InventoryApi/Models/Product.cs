@@ -2,6 +2,8 @@ using System.ComponentModel.DataAnnotations.Schema;
 
 using System.Text.Json.Serialization;
 
+using Inventory.Domain.Products;
+
 namespace InventoryApi.Models;
 
 public class Product : IBusinessOwned
@@ -41,14 +43,14 @@ public class Product : IBusinessOwned
     [NotMapped]
     public decimal OnOrderQuantity { get; set; }
     [NotMapped]
-    public decimal ProjectedStockForReorder => QuantityInStock + OnOrderQuantity - MachineReplenishmentNeed;
+    public decimal ProjectedStockForReorder =>
+        ProductReorderPolicy.ProjectedStockForReorder(QuantityInStock, OnOrderQuantity, MachineReplenishmentNeed);
     public int QuantityInStock { get; set; }
     public int LowStockThreshold { get; set; } = 0;
     public int RestockTo { get; set; }
     [NotMapped]
-    public decimal NeedToOrder => ProjectedStockForReorder > LowStockThreshold
-        ? 0m
-        : Math.Max(0m, RestockTo + MachineReplenishmentNeed - QuantityInStock - OnOrderQuantity);
+    public decimal NeedToOrder => ProductReorderPolicy.NeedToOrder(
+        QuantityInStock, OnOrderQuantity, MachineReplenishmentNeed, LowStockThreshold, RestockTo);
     public string? Unit { get; set; } = "unit";
     public bool IsActive { get; set; } = true;
     [NotMapped]
@@ -66,6 +68,6 @@ public class Product : IBusinessOwned
 
     public virtual ICollection<StockAdjustment> StockAdjustments { get; set; } = new List<StockAdjustment>();
 
-    public bool IsLowStock => QuantityInStock <= LowStockThreshold;
-    public bool IsReorderAlert => IsActive && NeedToOrder > 0;
+    public bool IsLowStock => ProductReorderPolicy.IsLowStock(QuantityInStock, LowStockThreshold);
+    public bool IsReorderAlert => ProductReorderPolicy.IsReorderAlert(IsActive, NeedToOrder);
 }
