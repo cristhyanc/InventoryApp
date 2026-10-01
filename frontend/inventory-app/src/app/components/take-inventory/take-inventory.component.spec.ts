@@ -241,12 +241,14 @@ describe('TakeInventoryComponent current stock control sizing', () => {
 
     for (const button of rendered) {
       const classes = Array.from(button.classList);
-      expect(classes).toEqual(expect.arrayContaining(['min-h-[44px]', 'min-w-[44px]', 'inline-flex', 'items-center', 'justify-center']));
+      expect(classes).toEqual(
+        expect.arrayContaining(['min-h-[44px]', 'min-w-[44px]', 'inline-flex', 'items-center', 'justify-center', 'whitespace-nowrap'])
+      );
     }
 
     const sizingClasses = rendered.map((b) =>
       Array.from(b.classList)
-        .filter((c) => /^(min-[hw]-|[pm][xytblr]?-|inline-flex$|items-|justify-|w-|h-)/.test(c))
+        .filter((c) => /^(min-[hw]-|[pm][xytblr]?-|inline-flex$|items-|justify-|whitespace-|w-|h-)/.test(c))
         .sort()
         .join(' ')
     );
