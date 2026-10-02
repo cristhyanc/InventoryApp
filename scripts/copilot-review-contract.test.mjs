@@ -19,7 +19,7 @@ set -euo pipefail
 fail() { echo "$1"; exit 1; }
 git() { if [ "$1" = rev-parse ]; then echo "$HEAD_SHA"; fi; }
 copilot() {
-  [ "$*" = "-s --no-ask-user --deny-tool=* -p $repair_prompt" ] || exit 99
+  [ "$*" = "-s --no-ask-user --disable-builtin-mcps --deny-tool=shell --deny-tool=write --deny-tool=url -p $repair_prompt" ] || exit 99
   echo retry >> "$work/retries"
   cat "$work/repair.md"
 }
@@ -37,5 +37,30 @@ for (const [name, invalid] of Object.entries({
   badEnum: { ...valid, verdict: 'APPROVED' },
   extraField: { ...valid, approved: true },
   invalidInlineLine: { ...valid, inline_comments: [{ path: 'file.cs', line: 0, body: 'finding' }] },
+  nestedStatus: { ...valid, criteria: [{ ...valid.criteria[0], status: 'partially met' }] },
   emptyCriteria: { ...valid, criteria: [] },
 })) test('fails closed after one retry: ' + name, () => { const r = run(invalid, invalid); assert.notEqual(r.status, 0); assert.equal(r.retries, 1); });
+test('diagnostics name the failing nested check without logging review content', () => {
+  const invalid = { ...valid, criteria: [{ ...valid.criteria[0], status: 'partially met' }] };
+  const r = run(invalid, invalid);
+  assert.notEqual(r.status, 0);
+  assert.match(r.stdout, /"criteria_status":false/);
+  assert.match(r.stdout, /"criteria_evidence":true/);
+  assert.doesNotMatch(r.stdout, /Regression test passed|partially met/);
+});
+test('diagnostics report a missing or unparseable block', () => {
+  const work = mkdtempSync(join(tmpdir(), 'review-contract-'));
+  writeFileSync(join(work, 'copilot-output.md'), 'no marked block');
+  writeFileSync(join(work, 'repair.md'), 'BEGIN_REVIEW_JSON\n{not json\nEND_REVIEW_JSON\n');
+  const setup = `set -euo pipefail
+fail() { echo "$1"; exit 1; }
+git() { if [ "$1" = rev-parse ]; then echo "$HEAD_SHA"; fi; }
+copilot() { cat "$work/repair.md"; }
+prompt="Contract"
+`;
+  const result = spawnSync('bash', ['-c', setup + processing], { encoding: 'utf8', env: { ...process.env, work, HEAD_SHA: sha } });
+  rmSync(work, { recursive: true, force: true });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stdout, /no marked review JSON block was found/);
+  assert.match(result.stdout, /not parseable JSON/);
+});

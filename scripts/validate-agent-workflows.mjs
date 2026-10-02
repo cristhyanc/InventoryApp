@@ -853,12 +853,23 @@ function verifyCopilotReviewJob(review) {
     'TRUSTED_SHA: ${{ github.sha }}', 'git show "$TRUSTED_SHA:.github/copilot-cli/$file"', '--ignore-scripts',
     '[ "$GITHUB_REF" = "refs/heads/main" ] ||',
     'COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_CLI_TOKEN }}', 'COPILOT_AUTO_UPDATE: "false"',
-    "--deny-tool='write'", '--no-ask-user',
+    "--deny-tool='write' \\\n            -p \"$prompt\" > \"$work/copilot-output.md\"", '--no-ask-user',
     '[ -z "$(git status --porcelain)" ]', '[ "$(git rev-parse HEAD)" = "$HEAD_SHA" ]',
-    'BEGIN_REVIEW_JSON', 'END_REVIEW_JSON', '.verdict == "CHANGES REQUESTED" or .verdict == "READY FOR HUMAN REVIEW"',
-    '.status == "met" or .status == "not met" or .status == "not verified"',
+    'BEGIN_REVIEW_JSON', 'END_REVIEW_JSON',
     'structured_output: ${{ steps.copilot_review.outputs.structured_output }}',
   ]) requireText(job, required, 'agent-review.yml Copilot review job');
+  // The enforced contract lives in validate_copilot_output; the diagnostics that repeat it do not count.
+  const validator = section(job, 'validate_copilot_output() {\n', '\n          }\n', 'agent-review.yml Copilot review contract');
+  for (const required of [
+    '.verdict == "CHANGES REQUESTED" or .verdict == "READY FOR HUMAN REVIEW"',
+    '.status == "met" or .status == "not met" or .status == "not verified"',
+  ]) requireText(validator, required, 'agent-review.yml Copilot review contract');
+  // The single format-only repair may not run shell commands, write files, fetch URLs or use built-in MCP servers.
+  requireText(
+    job,
+    "copilot -s --no-ask-user --disable-builtin-mcps \\\n              --deny-tool='shell' --deny-tool='write' --deny-tool='url' \\\n              -p \"$repair_prompt\"",
+    'agent-review.yml Copilot review format repair',
+  );
   const permissions = section(job, '    permissions:\n', '\n    outputs:\n', 'agent-review.yml Copilot review permissions');
   forbidText(permissions, 'write', 'agent-review.yml Copilot review permissions');
   for (const forbidden of [
