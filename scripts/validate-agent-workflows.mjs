@@ -1366,6 +1366,7 @@ function verifyCopilotHandoffWorkflow(handoffWorkflow) {
     'merge-validation',
     '[ -n "$COPILOT_AGENT_TOKEN" ] || fail',
     'GH_TOKEN="$COPILOT_AGENT_TOKEN" gh pr ready "$PR_NUMBER"',
+    'skip "the ready_for_review event from this transition dispatches the architecture check."',
     "startsWith(github.event.pull_request.head.ref, 'copilot/')",
     'closingIssuesReferences', 'any(.labels[]?; .name == "agent-working")',
     'gh workflow run agent-copilot-architecture.yml', '-f issue_number="$issue_number"',

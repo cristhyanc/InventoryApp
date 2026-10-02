@@ -9,7 +9,9 @@ name: Agent Copilot handoff
 # - Trusted source: pull_request_target and workflow_run both execute this definition from main.
 #   This workflow never checks out or executes pull request code. It uses GITHUB_TOKEN for all
 #   verification and dispatch calls, and the owner's COPILOT_AGENT_TOKEN only for Draft -> Ready
-#   because GitHub does not permit GITHUB_TOKEN to perform markPullRequestReadyForReview.
+#   because GitHub does not permit GITHUB_TOKEN to perform markPullRequestReadyForReview. That
+#   transition emits ready_for_review, so the pull_request_target path then dispatches the
+#   architecture check; the workflow_run path dispatches only for a PR that is already Ready.
 # - Automatic handoff accepts only a successful pull_request run of Validate pull request for the
 #   exact current head, after the latest Copilot session on the PR's branch (initial run or
 #   @copilot follow-up) has completed successfully.
@@ -162,6 +164,10 @@ jobs:
               [ -n "$COPILOT_AGENT_TOKEN" ] || fail "COPILOT_AGENT_TOKEN is not configured, so the trusted handoff cannot mark the Copilot pull request Ready for review."
               GH_TOKEN="$COPILOT_AGENT_TOKEN" gh pr ready "$PR_NUMBER" --repo "$GITHUB_REPOSITORY"
               echo "::notice::Marked Copilot pull request #$PR_NUMBER ready for review after successful current-head validation."
+              # A transition made with the owner token emits ready_for_review, which starts this workflow's
+              # pull_request_target path with the same guards; that run dispatches the architecture check, so
+              # dispatching here as well would run it twice.
+              skip "the ready_for_review event from this transition dispatches the architecture check."
             fi
           fi
 

@@ -163,7 +163,7 @@ describe('Copilot pull request handoff to the Claude architecture check', () => 
     ]);
   });
 
-  it('automatically marks a validated Copilot draft ready and dispatches the exact head', () => {
+  it('automatically marks a validated Copilot draft ready and leaves dispatch to the ready_for_review run', () => {
     const { status, stderr, calls } = run(handoffShell, {
       state: fixture({ pr: { isDraft: true } }),
       env: {
@@ -179,14 +179,32 @@ describe('Copilot pull request handoff to the Claude architecture check', () => 
     const [ready] = calls.filter((c) => c.kind === 'pr-ready');
     assert.ok(ready);
     assert.equal(ready.token, 'owner-copilot-token', 'Draft -> Ready must use the owner-scoped token');
+    assert.equal(dispatches(calls, 'agent-copilot-architecture.yml').length, 0,
+      'the ready_for_review event from the owner-token transition dispatches the check; dispatching here would run it twice');
+  });
+
+  it('dispatches the exact head on GITHUB_TOKEN when a validated Copilot PR is already Ready', () => {
+    const { status, stderr, calls } = run(handoffShell, {
+      state: fixture(),
+      env: {
+        GITHUB_EVENT_NAME: 'workflow_run',
+        RUN_PR_NUMBER: PR,
+        RUN_HEAD_SHA: SHA,
+        RUN_EVENT: 'pull_request',
+        RUN_CONCLUSION: 'success',
+        RUN_PATH: '.github/workflows/validate.yml',
+      },
+    });
+    assert.equal(status, 0, stderr);
+    assert.equal(calls.filter((c) => c.kind === 'pr-ready').length, 0);
     const [dispatch] = dispatches(calls, 'agent-copilot-architecture.yml');
-    assert.equal(dispatch.token, 'workflow-token', 'architecture dispatch must stay on GITHUB_TOKEN');
     assert.ok(dispatch);
+    assert.equal(dispatch.token, 'workflow-token', 'architecture dispatch must stay on GITHUB_TOKEN');
     assert.ok(dispatch.args.includes(`head_sha=${SHA}`));
   });
 
   it('fails closed when the owner token needed for Draft -> Ready is unavailable', () => {
-    const { status, stderr, calls } = run(handoffShell, {
+    const { status, stdout, calls } = run(handoffShell, {
       state: fixture({ pr: { isDraft: true } }),
       env: {
         GITHUB_EVENT_NAME: 'workflow_run',

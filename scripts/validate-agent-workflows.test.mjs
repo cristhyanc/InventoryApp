@@ -924,6 +924,7 @@ describe('cross-review contract (agent-ready-claude / agent-ready-copilot)', () 
     rejects({ [copilotHandoffPath]: replaceOnce(copilotHandoffWorkflow, 'workflows: ["Validate pull request"]', 'workflows: ["Something else"]') }, /agent-copilot-handoff.yml triggers/);
     rejects({ [copilotHandoffPath]: replaceOnce(copilotHandoffWorkflow, 'GH_TOKEN="$COPILOT_AGENT_TOKEN" gh pr ready "$PR_NUMBER"', 'gh pr ready "$PR_NUMBER"') }, /agent-copilot-handoff.yml handoff/);
     rejects({ [copilotHandoffPath]: replaceOnce(copilotHandoffWorkflow, 'COPILOT_AGENT_TOKEN: ${{ secrets.COPILOT_AGENT_TOKEN }}', 'COPILOT_AGENT_TOKEN:') }, /agent-copilot-handoff.yml/);
+    rejects({ [copilotHandoffPath]: replaceOnce(copilotHandoffWorkflow, 'skip "the ready_for_review event from this transition dispatches the architecture check."', 'true') }, /agent-copilot-handoff.yml handoff/);
     rejects({ [copilotHandoffPath]: replaceOnce(copilotHandoffWorkflow, '.path == "dynamic/copilot-swe-agent/copilot"', '.name == "Running Copilot cloud agent"') }, /agent-copilot-handoff.yml handoff/);
     rejects({ [copilotHandoffPath]: replaceOnce(copilotHandoffWorkflow, 'gh workflow run agent-copilot-architecture.yml', 'gh workflow run validate.yml') }, /agent-copilot-handoff.yml handoff/);
     rejects({ [copilotHandoffPath]: replaceOnce(copilotHandoffWorkflow, '[ "$author" = "$EXPECTED_COPILOT_AUTHOR" ] || skip', 'true || skip') }, /agent-copilot-handoff.yml handoff/);
