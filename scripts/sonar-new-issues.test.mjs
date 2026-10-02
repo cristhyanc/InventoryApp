@@ -19,18 +19,19 @@ const KEY = 'owner_InventoryApp';
 const SHA = '08f3b0a527fe74efc5d0b6fb1895da3452ad5032';
 const OTHER_SHA = '24ecdc6c1fc1f23e00bfea0d28b6bc41df03f56d';
 
-const checkRun = (overrides = {}) => ({ name: SONAR_CHECK_NAME, status: 'completed', head_sha: SHA, app: { slug: SONAR_APP_SLUG }, ...overrides });
+const checkRun = (overrides = {}) => ({ name: SONAR_CHECK_NAME, status: 'completed', conclusion: 'success', head_sha: SHA, app: { slug: SONAR_APP_SLUG }, ...overrides });
 const issue = (n, overrides = {}) => ({
   key: `AZ${n}`, rule: 'csharpsquid:S1172', severity: 'MAJOR', type: 'CODE_SMELL',
   component: `${KEY}:backend/Inventory.Domain/Purchases/Policy${n}.cs`, line: n, message: 'Remove this unused method parameter.',
   impacts: [{ softwareQuality: 'MAINTAINABILITY', severity: 'MEDIUM' }], ...overrides,
 });
 
-// A fake fetchJson: GitHub check-run responses are served in order (the last one repeats), and
-// SonarCloud issue pages by page number. Every URL is recorded.
-function fakeFetch({ checks = [[checkRun()]], pages = [[]], total, sonarError } = {}) {
+// A fake fetchJson: GitHub check-run responses and SonarCloud analysis revisions are served in order
+// (the last one repeats), and SonarCloud issue pages by page number. Every URL is recorded.
+function fakeFetch({ checks = [[checkRun({ conclusion: 'success' })]], revisions = [SHA], pages = [[]], total, sonarError } = {}) {
   const urls = [];
   let checkCall = 0;
+  let revisionCall = 0;
   const fetchJson = async (url, service) => {
     urls.push({ url, service });
     if (service === 'github') {
@@ -39,6 +40,11 @@ function fakeFetch({ checks = [[checkRun()]], pages = [[]], total, sonarError } 
       return { check_runs: runs };
     }
     if (sonarError) throw new Error(sonarError);
+    if (url.includes('/api/project_analyses/search')) {
+      const revision = revisions[Math.min(revisionCall, revisions.length - 1)];
+      revisionCall += 1;
+      return { analyses: revision === null ? [] : [{ key: `A${revisionCall}`, revision }] };
+    }
     const page = Number(new URL(url).searchParams.get('p'));
     const issues = pages[page - 1] ?? [];
     return { paging: { pageIndex: page, pageSize: 500, total: total ?? pages.flat().length }, issues };
@@ -57,7 +63,7 @@ describe('SonarCloud issue collection', () => {
     assert.equal(result.status, 'analysed');
     assert.equal(result.count, 2);
     assert.match(result.markdown, /Policy1\.cs:1/);
-    const sonarUrl = new URL(urls.find((u) => u.service === 'sonar').url);
+    const sonarUrl = new URL(urls.find((u) => u.url.includes('/api/issues/search')).url);
     assert.equal(sonarUrl.origin, 'https://sonarcloud.io');
     assert.equal(sonarUrl.searchParams.get('componentKeys'), KEY);
     assert.equal(sonarUrl.searchParams.get('pullRequest'), '285');
@@ -80,6 +86,58 @@ describe('SonarCloud issue collection', () => {
       assert.equal(result.count, 0);
       assert.ok(!urls.some((u) => u.service === 'sonar'), 'issues must not be read without an exact-SHA analysis');
     }
+  });
+
+  it('reads issues only when SonarCloud\'s analysis revision is the head, before and after the read', async () => {
+    const { fetchJson, urls } = fakeFetch({ pages: [[issue(1)]] });
+    await collectSonarIssues(options(fetchJson));
+    const order = urls.filter((u) => u.service === 'sonar').map((u) => new URL(u.url).pathname);
+    assert.deepEqual(order, ['/api/project_analyses/search', '/api/issues/search', '/api/project_analyses/search']);
+    const analysisUrl = new URL(urls.find((u) => u.url.includes('/api/project_analyses/search')).url);
+    assert.equal(analysisUrl.searchParams.get('project'), KEY);
+    assert.equal(analysisUrl.searchParams.get('pullRequest'), '285');
+  });
+
+  it('treats an analysis of another revision as unavailable and never reads its issues', async () => {
+    // A newer push already analysed, or a failed analysis of this head that left an older one in place.
+    for (const revisions of [[OTHER_SHA], [null], ['']]) {
+      const { fetchJson, urls } = fakeFetch({ revisions, pages: [[issue(1)]] });
+      const result = await collectSonarIssues(options(fetchJson));
+      assert.equal(result.status, 'unavailable');
+      assert.equal(result.count, 0);
+      assert.match(result.markdown, new RegExp(`not ${SHA}`));
+      assert.ok(!urls.some((u) => u.url.includes('/api/issues/search')), 'issues of another revision must not be read');
+    }
+  });
+
+  it('waits briefly for the analysis revision to catch up with the check run', async () => {
+    const { fetchJson } = fakeFetch({ revisions: [OTHER_SHA, SHA], pages: [[issue(1)]] });
+    const result = await collectSonarIssues(options(fetchJson));
+    assert.equal(result.status, 'analysed');
+    assert.equal(result.count, 1);
+  });
+
+  it('treats an analysis replaced while its issues were read as unavailable', async () => {
+    const { fetchJson } = fakeFetch({ revisions: [SHA, OTHER_SHA], pages: [[issue(1)]] });
+    const result = await collectSonarIssues(options(fetchJson));
+    assert.equal(result.status, 'unavailable');
+    assert.equal(result.count, 0);
+    assert.match(result.markdown, /changed from/);
+    assert.ok(!result.markdown.includes('Policy1'), 'issues read during the change must not be handed on');
+  });
+
+  it('treats a check run that produced no analysis as unavailable', async () => {
+    for (const conclusion of ['cancelled', 'timed_out', 'action_required', 'stale', 'skipped', null]) {
+      const { fetchJson, urls } = fakeFetch({ checks: [[checkRun({ conclusion })]] });
+      const result = await collectSonarIssues(options(fetchJson));
+      assert.equal(result.status, 'unavailable', String(conclusion));
+      assert.ok(!urls.some((u) => u.service === 'sonar'));
+    }
+  });
+
+  it('accepts a failed quality gate as a completed analysis', async () => {
+    const { fetchJson } = fakeFetch({ checks: [[checkRun({ conclusion: 'failure' })]], pages: [[issue(1)]] });
+    assert.equal((await collectSonarIssues(options(fetchJson))).count, 1);
   });
 
   it('reports a clean analysis as analysed with zero issues', async () => {

@@ -1,11 +1,15 @@
 // Collects the open SonarCloud issues reported on one pull request at one exact head SHA, so the
 // implementing agent can fix them in the architecture stage (docs/automation.md, "Sonar findings").
 //
-// Deterministic and read-only: it waits for the SonarCloud check run on the exact head SHA, reads
-// the pull request's open issues from the public SonarCloud Web API, and writes `status`, `count`
-// and a Markdown `issues` list to $GITHUB_OUTPUT. It never fails the job: any problem (no analysis,
-// timeout, API error) is reported as status=unavailable with count=0, because SonarCloud is a third
-// party and its outage must not block the task. The issue text is data for the agent, not a command.
+// Deterministic and read-only: it waits for the SonarCloud check run on the exact head SHA, confirms
+// that SonarCloud's latest pull-request analysis is of that same revision, reads the pull request's
+// open issues from the public SonarCloud Web API, and confirms the revision again afterwards. The
+// issue search is keyed only by pull request number, so without both revision checks a newer analysis
+// (a later push) or a failed one (older results left in place) could be reported as this head's.
+// It writes `status`, `count` and a Markdown `issues` list to $GITHUB_OUTPUT and never fails the job:
+// any problem (no analysis, a failed or mismatched analysis, timeout, API error) is reported as
+// status=unavailable with count=0, because SonarCloud is a third party and its outage must not block
+// the task. The issue text is data for the agent, not a command.
 import { appendFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -14,6 +18,11 @@ import { resolve } from 'node:path';
 export const SONAR_CHECK_NAME = 'SonarCloud Code Analysis';
 export const SONAR_APP_SLUG = 'sonarqubecloud';
 export const MAX_LISTED_ISSUES = 100;
+// GitHub check-run conclusions that mean SonarCloud produced an analysis (a failed quality gate is
+// still a completed analysis). Anything else (cancelled, timed_out, action_required, stale, skipped)
+// means there is no trustworthy analysis of this head.
+export const ANALYSED_CONCLUSIONS = new Set(['success', 'failure', 'neutral']);
+const REVISION_ATTEMPTS = 3;
 const MAX_MESSAGE_LENGTH = 300;
 
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
@@ -25,6 +34,13 @@ export async function findCompletedSonarCheck({ fetchJson, repository, sha }) {
   const runs = (body.check_runs ?? []).filter((run) => run.name === SONAR_CHECK_NAME && run.app?.slug === SONAR_APP_SLUG && run.head_sha === sha);
   const completed = runs.filter((run) => run.status === 'completed');
   return completed.length > 0 ? completed[0] : null;
+}
+
+/** Returns the revision (commit SHA) of SonarCloud's latest analysis of the pull request, or ''. */
+export async function fetchAnalysedRevision({ fetchJson, projectKey, pullRequest }) {
+  const query = new URLSearchParams({ project: projectKey, pullRequest: String(pullRequest), ps: '1' });
+  const body = await fetchJson(`https://sonarcloud.io/api/project_analyses/search?${query}`, 'sonar');
+  return String(body.analyses?.[0]?.revision ?? '').toLowerCase();
 }
 
 /** Reads every open SonarCloud issue on the pull request analysis (all of them are new code). */
@@ -80,11 +96,32 @@ export async function collectSonarIssues({ fetchJson, repository, sha, pullReque
     await wait(pollSeconds * 1000);
     check = await findCompletedSonarCheck({ fetchJson, repository, sha });
   }
-  if (!check) {
-    return { status: 'unavailable', count: 0, markdown: `No completed ${SONAR_CHECK_NAME} check run on ${sha} within ${waitSeconds} seconds.` };
+  const unavailable = (why) => ({ status: 'unavailable', count: 0, markdown: why });
+  if (!check) return unavailable(`No completed ${SONAR_CHECK_NAME} check run on ${sha} within ${waitSeconds} seconds.`);
+  if (!ANALYSED_CONCLUSIONS.has(check.conclusion)) {
+    return unavailable(`The ${SONAR_CHECK_NAME} check run on ${sha} did not produce an analysis (conclusion: ${clean(check.conclusion || 'none', 40)}).`);
+  }
+
+  // The check run can be posted a moment before the analysis is queryable, so allow a short wait for
+  // the revision to catch up; a different revision after that is a newer or older analysis, not this one.
+  let revision = await fetchAnalysedRevision({ fetchJson, projectKey, pullRequest });
+  for (let attempt = 1; revision !== sha && attempt < REVISION_ATTEMPTS; attempt += 1) {
+    await wait(pollSeconds * 1000);
+    revision = await fetchAnalysedRevision({ fetchJson, projectKey, pullRequest });
+  }
+  if (revision !== sha) {
+    return unavailable(`SonarCloud's latest analysis of pull request #${pullRequest} is of revision ${clean(revision || 'unknown', 40)}, not ${sha}.`);
   }
 
   const issues = await fetchOpenPullRequestIssues({ fetchJson, projectKey, pullRequest });
+
+  // A newer analysis can replace the pull request's issues while they are read; only a revision that
+  // is still the head afterwards proves the list belongs to it.
+  const revisionAfter = await fetchAnalysedRevision({ fetchJson, projectKey, pullRequest });
+  if (revisionAfter !== sha) {
+    return unavailable(`SonarCloud's analysis of pull request #${pullRequest} changed from ${sha} to ${clean(revisionAfter || 'unknown', 40)} while its issues were read.`);
+  }
+
   return { status: 'analysed', count: issues.length, markdown: issues.length > 0 ? renderIssues(issues, projectKey) : 'No open SonarCloud issues.' };
 }
 
