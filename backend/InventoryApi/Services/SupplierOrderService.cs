@@ -1,76 +1,64 @@
-using Inventory.Domain.Exceptions;
-using InventoryApi.Data;
+using Inventory.Application.SupplierOrders;
+using InventoryApi.Adapters.Mapping;
 using InventoryApi.DTOs;
 using InventoryApi.Models;
 using InventoryApi.Services.Interfaces;
-using Microsoft.EntityFrameworkCore;
 
 namespace InventoryApi.Services;
 
+/// <summary>
+/// A transitional delegator only (issue #281, the same shape #240 left <see cref="ProductService"/>
+/// in): every method maps the <see cref="ISupplierOrderService"/> request onto the migrated
+/// <see cref="Inventory.Application.SupplierOrders"/> use case that owns it, and maps the result
+/// back to the unchanged <see cref="SupplierOrder"/> API response through
+/// <see cref="SupplierOrderResponseMapper"/>. It holds no <c>AppDbContext</c>, no query, and no
+/// rule of its own. Deleting it, and with it <see cref="ISupplierOrderService"/>, is tracked by
+/// issue #153.
+/// </summary>
 public class SupplierOrderService : ISupplierOrderService
 {
-    private readonly AppDbContext _db;
+    private readonly ListActiveSupplierOrders _listActiveSupplierOrders;
+    private readonly GetSupplierOrder _getSupplierOrder;
+    private readonly CreateSupplierOrder _createSupplierOrder;
+    private readonly CancelSupplierOrder _cancelSupplierOrder;
 
-    public SupplierOrderService(AppDbContext db) => _db = db;
+    public SupplierOrderService(
+        ListActiveSupplierOrders listActiveSupplierOrders,
+        GetSupplierOrder getSupplierOrder,
+        CreateSupplierOrder createSupplierOrder,
+        CancelSupplierOrder cancelSupplierOrder)
+    {
+        _listActiveSupplierOrders = listActiveSupplierOrders;
+        _getSupplierOrder = getSupplierOrder;
+        _createSupplierOrder = createSupplierOrder;
+        _cancelSupplierOrder = cancelSupplierOrder;
+    }
 
-    public async Task<IEnumerable<SupplierOrder>> GetActive() => await _db.SupplierOrders
-        .AsNoTracking()
-        .Include(order => order.Supplier)
-        .Include(order => order.Lines)
-            .ThenInclude(line => line.Product)
-        .Where(order => order.Status != SupplierOrderStatus.Cancelled && order.Status != SupplierOrderStatus.Received)
-        .OrderBy(order => order.ExpectedDate ?? order.OrderDate)
-        .ThenBy(order => order.Id)
-        .ToListAsync();
+    public async Task<IEnumerable<SupplierOrder>> GetActive()
+    {
+        var records = await _listActiveSupplierOrders.Handle(CancellationToken.None);
+        return records.Select(SupplierOrderResponseMapper.ToSupplierOrder).ToList();
+    }
 
-    public async Task<SupplierOrder?> GetById(int id) => await _db.SupplierOrders
-        .AsNoTracking()
-        .Include(order => order.Supplier)
-        .Include(order => order.Lines)
-            .ThenInclude(line => line.Product)
-        .FirstOrDefaultAsync(order => order.Id == id);
+    public async Task<SupplierOrder?> GetById(int id)
+    {
+        var record = await _getSupplierOrder.Handle(id, CancellationToken.None);
+        return record is null ? null : SupplierOrderResponseMapper.ToSupplierOrder(record);
+    }
 
     public async Task<SupplierOrder?> Create(SupplierOrderCreateDto dto)
     {
-        if (dto.Lines.Count == 0 || dto.Lines.Any(line => line.QuantityOrdered <= 0 || line.QuantityOrdered != decimal.Truncate(line.QuantityOrdered)))
-            throw new DomainValidationException("An order must include at least one positive whole-unit quantity.");
-        if (!await _db.Suppliers.AnyAsync(supplier => supplier.Id == dto.SupplierId)) return null;
+        var fields = new SupplierOrderCreateFields(
+            dto.SupplierId,
+            dto.OrderDate,
+            dto.ExpectedDate,
+            dto.Reference,
+            dto.Notes,
+            dto.Lines.Select(line => new SupplierOrderLineInput(line.ProductId, line.QuantityOrdered, line.UnitPrice, line.Notes)).ToList());
 
-        var productIds = dto.Lines.Select(line => line.ProductId).Distinct().ToList();
-        if (productIds.Count != dto.Lines.Count || await _db.Products.CountAsync(product => productIds.Contains(product.Id)) != productIds.Count)
-            throw new DomainValidationException("Each order line must reference a distinct existing product.");
-
-        var now = DateTime.UtcNow;
-        var order = new SupplierOrder
-        {
-            SupplierId = dto.SupplierId,
-            OrderDate = dto.OrderDate,
-            ExpectedDate = dto.ExpectedDate,
-            Reference = dto.Reference,
-            Notes = dto.Notes,
-            CreatedAt = now,
-            UpdatedAt = now,
-            Lines = dto.Lines.Select(line => new SupplierOrderLine
-            {
-                ProductId = line.ProductId,
-                QuantityOrdered = line.QuantityOrdered,
-                UnitPrice = line.UnitPrice,
-                Notes = line.Notes
-            }).ToList()
-        };
-        _db.SupplierOrders.Add(order);
-        await _db.SaveChangesAsync();
-        return await _db.SupplierOrders.Include(item => item.Supplier).Include(item => item.Lines).ThenInclude(line => line.Product)
-            .SingleAsync(item => item.Id == order.Id);
+        var record = await _createSupplierOrder.Handle(fields, CancellationToken.None);
+        return record is null ? null : SupplierOrderResponseMapper.ToSupplierOrder(record);
     }
 
-    public async Task<bool> Cancel(int id)
-    {
-        var order = await _db.SupplierOrders.FindAsync(id);
-        if (order is null || order.Status is SupplierOrderStatus.Cancelled or SupplierOrderStatus.Received) return false;
-        order.Status = SupplierOrderStatus.Cancelled;
-        order.UpdatedAt = DateTime.UtcNow;
-        await _db.SaveChangesAsync();
-        return true;
-    }
+    public Task<bool> Cancel(int id) => _cancelSupplierOrder.Handle(id, CancellationToken.None);
 }

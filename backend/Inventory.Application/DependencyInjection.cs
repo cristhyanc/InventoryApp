@@ -21,6 +21,7 @@ using Inventory.Application.Reporting.Transactions;
 using Inventory.Application.SalesSync;
 using Inventory.Application.Sites;
 using Inventory.Application.Suppliers;
+using Inventory.Application.SupplierOrders;
 using Inventory.Application.Tenancy;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -60,6 +61,16 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<ResolveMachineStockEventsAsAlreadyRecorded>();
         services.AddScoped<SyncLatestNayaxSales>();
         services.AddScoped<ComputePurchaseTotalValidation>();
+        services.AddScoped<ListPurchases>();
+        services.AddScoped<GetPurchase>();
+        services.AddScoped<GetPurchaseFile>();
+        services.AddScoped<UploadPurchase>();
+        services.AddScoped<UpdatePurchase>();
+        services.AddScoped<DeletePurchase>();
+        services.AddScoped<ListActiveSupplierOrders>();
+        services.AddScoped<GetSupplierOrder>();
+        services.AddScoped<CreateSupplierOrder>();
+        services.AddScoped<CancelSupplierOrder>();
         services.AddScoped<CalculateReorderNeeds>();
         services.AddScoped<ListProducts>();
         services.AddScoped<GetProduct>();
