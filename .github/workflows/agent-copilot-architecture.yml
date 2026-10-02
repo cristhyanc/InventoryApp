@@ -142,8 +142,11 @@ jobs:
 
             Report only violations of an established rule in those documents. For each finding give the file, the line in the new file version, the rule it breaks, and the smallest structural fix that preserves observable behaviour, API contracts, data semantics and acceptance criteria. Do not propose broad migrations, new frameworks, scope expansion or changes to unrelated files. If a fix would need a migration, a documented-architecture change or a human decision, say so in the finding instead of prescribing it. A clean result is valid.
 
+            Nayax contract verification (AGENTS.md § Nayax contract verification): if this work touches code that calls the Nayax API or models a Nayax request or response, look up the relevant endpoint contract with the read-only Nayax documentation tools (search_nayax_developer_portal and query_docs_filesystem_nayax_developer_portal on the nayax MCP server) before defining, changing or accepting field names, types, nullability, identifiers, timestamps or endpoint semantics. Never invent a Nayax property that the documentation can confirm or refute. If the tools are unavailable or the contract cannot be found, state explicitly that authoritative Nayax verification could not be completed and treat the affected contract as unverified rather than guessing. Work that does not touch Nayax needs no lookup.
+
             Deliver the result only as the structured output defined by the JSON schema: `checked_head_sha` exactly ${{ needs.context.outputs.head_sha }}, `verdict` `CLEAN` (no findings) or `FINDINGS` (at least one), and `findings`. You have no permission to edit, comment, label or push, and must not try.
           claude_args: |
+            --mcp-config '{"mcpServers":{"nayax":{"type":"http","url":"https://devzone.nayax.com/mcp"}}}'
             --model sonnet
             --effort high
             --max-turns 100
@@ -151,7 +154,9 @@ jobs:
             --allowedTools "Read,Glob,Grep"
             "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh issue view *)"
             "Bash(git status *),Bash(git diff *),Bash(git log *),Bash(git show *),Bash(git rev-parse *)"
+            "mcp__nayax__search_nayax_developer_portal,mcp__nayax__query_docs_filesystem_nayax_developer_portal"
             --disallowedTools "Edit,MultiEdit,Write,NotebookEdit,Agent,WebFetch,WebSearch"
+            "mcp__nayax__submit_feedback"
             "mcp__github_inline_comment__create_inline_comment"
             "Bash(gh pr review *),Bash(gh pr comment *),Bash(gh pr merge *),Bash(gh pr edit *),Bash(gh issue edit *),Bash(gh issue comment *),Bash(gh api *),Bash(gh workflow *),Bash(gh label *)"
             "Bash(git push *),Bash(git commit *),Bash(git add *),Bash(git checkout *),Bash(git switch *),Bash(git reset *),Bash(git rebase *),Bash(git merge *),Bash(git restore *),Bash(git clean *)"
