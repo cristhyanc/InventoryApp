@@ -323,7 +323,18 @@ public class SaleCostingUseCaseTests
         SaleCostStatus status = SaleCostStatus.Pending,
         string? productName = "Snack",
         int? transactionStatusId = NayaxTransactionStatusIds.Completed) =>
-        new(transactionId, transactionStatusId, productId, productName, SaleAt, nayaxCost, unitCost, unitCost, status);
+        new()
+        {
+            TransactionId = transactionId,
+            TransactionStatusId = transactionStatusId,
+            NayaxProductId = productId,
+            ProductName = productName,
+            AuthorizationTime = SaleAt,
+            NayaxProductCostPrice = nayaxCost,
+            UnitCostAtSale = unitCost,
+            CostOfGoodsSold = unitCost,
+            CostingStatus = status,
+        };
 
     private sealed class FakeStore(params ProductMatchCandidate[] products) : ISaleCostingStore
     {

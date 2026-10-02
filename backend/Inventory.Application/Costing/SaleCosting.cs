@@ -34,40 +34,18 @@ public enum SaleCostOrigin
 /// </summary>
 public class CostableSale
 {
-    public CostableSale(
-        long transactionId,
-        int? transactionStatusId,
-        long? nayaxProductId,
-        string? productName,
-        DateTime authorizationTime,
-        decimal? nayaxProductCostPrice,
-        decimal? unitCostAtSale,
-        decimal? costOfGoodsSold,
-        SaleCostStatus costingStatus)
-    {
-        TransactionId = transactionId;
-        TransactionStatusId = transactionStatusId;
-        NayaxProductId = nayaxProductId;
-        ProductName = productName;
-        AuthorizationTime = authorizationTime;
-        NayaxProductCostPrice = nayaxProductCostPrice;
-        UnitCostAtSale = unitCostAtSale;
-        CostOfGoodsSold = costOfGoodsSold;
-        CostingStatus = costingStatus;
-    }
-
-    public long TransactionId { get; }
-    public int? TransactionStatusId { get; }
-    public long? NayaxProductId { get; }
-    public string? ProductName { get; }
-    public DateTime AuthorizationTime { get; }
+    public required long TransactionId { get; init; }
+    public int? TransactionStatusId { get; init; }
+    public long? NayaxProductId { get; init; }
+    public string? ProductName { get; init; }
+    public required DateTime AuthorizationTime { get; init; }
 
     /// <summary>The raw transaction-level Nayax <c>Product Cost Price</c>, as imported.</summary>
-    public decimal? NayaxProductCostPrice { get; }
+    public decimal? NayaxProductCostPrice { get; init; }
 
-    public decimal? UnitCostAtSale { get; }
-    public decimal? CostOfGoodsSold { get; }
-    public SaleCostStatus CostingStatus { get; }
+    public decimal? UnitCostAtSale { get; init; }
+    public decimal? CostOfGoodsSold { get; init; }
+    public SaleCostStatus CostingStatus { get; init; }
 }
 
 /// <summary>

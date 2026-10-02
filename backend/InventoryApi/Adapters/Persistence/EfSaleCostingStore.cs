@@ -50,30 +50,16 @@ public sealed class EfSaleCostingStore : ISaleCostingStore
             query = query.Where(s => s.MachineAuthorizationTime <= selection.To.Value);
 
         return (await query.OrderBy(s => s.MachineAuthorizationTime).ToListAsync(cancellationToken))
-            .Select(sale => (CostableSale)new EfCostableSale(sale))
+            .Select(sale => (CostableSale)new NayaxCostableSale(sale))
             .ToList();
     }
 
     public void StageCost(CostableSale sale, SaleCostAssignment cost)
     {
-        var efSale = sale as EfCostableSale
-            ?? throw new ArgumentException("The sale was not loaded by this store.", nameof(sale));
+        var efSale = sale as NayaxCostableSale
+            ?? throw new ArgumentException("The sale was not loaded from a NayaxSales row.", nameof(sale));
         efSale.Entity.ApplySaleCost(cost);
     }
 
     public Task SaveChangesAsync(CancellationToken cancellationToken) => _db.SaveChangesAsync(cancellationToken);
-
-    private sealed class EfCostableSale(NayaxSales entity) : CostableSale(
-        entity.TransactionID,
-        entity.TransactionStatusId,
-        entity.NayaxProductId,
-        entity.ProductName,
-        entity.MachineAuthorizationTime,
-        entity.NayaxProductCostPrice,
-        entity.UnitCostAtSale,
-        entity.CostOfGoodsSold,
-        (SaleCostStatus)entity.CostingStatus)
-    {
-        public NayaxSales Entity { get; } = entity;
-    }
 }
