@@ -816,6 +816,24 @@ Historical sale cost precedence is:
 
 Current product cost and selling price are never substitutes for historical cost. Reports preserve partial COGS and quality counts and do not turn missing cost into zero.
 
+The weighted-average cost rules are Domain-owned (issue #295, child 1 of #149).
+`Inventory.Domain.Costing.WeightedAverageCostReplay` replays a product's Domain-owned cost events
+(`CostReplayAdjustment` stock movements and `CostReplaySale` completed sales, strictly after an
+optional `CostReplayBaseline` cutoff) in timestamp order - ties: costed restocks, then machine
+refills, then sales, then other movements, then source ID - and returns the physical/costing
+quantity, inventory value, unrounded average unit cost, the cost assigned to each movement and sale,
+and its `CostDataQualityIssue`s. `CostDataQualityIssueCodes.IsFatal` is the one fatal/non-fatal split
+(`MissingOpening`, `UnknownCost`, `NegativePhysicalStock` and `NegativeCostingStock` are fatal;
+`LegacyUnlinkedCostedRestock` is not). `Inventory.Domain.Costing.StockMovementCostPolicy` is the
+movement unit/total cost rule (an outgoing movement uses the current average cost while costing
+quantity is positive, a restock uses its purchase unit cost, otherwise no cost) and rejects negative
+physical stock with `InsufficientStockException`. Neither takes an `InventoryApi.Models` entity or an
+EF type. The orchestration - loading the facts, applying the replay outcome to the tracked
+`StockAdjustment`/`NayaxSales`/`Product` rows, sale recosting from a changed date, the fatal-issue
+`InventoryCostDataQualityException`, sale costing and the cost transition - still lives in
+`InventoryApi.Services.InventoryCostRebuildService`/`InventoryCostService` (and their sibling
+costing services), which now delegate to these Domain rules, pending the remaining #149 children.
+
 #### Dashboard "Inventory Value" tile (issue #42)
 
 The home Dashboard's "Inventory Value" tile (`DashboardComponent`, distinct from the reporting
@@ -1896,6 +1914,16 @@ Backend and frontend tracks can progress independently when their contracts do n
        results onto that same persisted shape rather than introducing a second one; the vocabulary's
        typed Domain home and `StockService`/`IStockService`'s migration followed separately in sibling
        issue #282 (item 6 above).
+  - **Costing Domain rules done** (issue #295, child 1 of 4 of #149). The weighted-average replay
+    (`Inventory.Domain.Costing.WeightedAverageCostReplay`, with its Domain-owned event, baseline,
+    outcome and data-quality issue types and the `CostDataQualityIssueCodes.IsFatal` split) and the
+    stock-movement cost rule with its negative-stock guard (`StockMovementCostPolicy`) moved out of
+    the former private `InventoryCostRebuildService.Replay`/`ApplyAdjustmentCost`/`AverageUnitCost`/
+    `IsFatal` and the inline `InventoryCostService.ApplyMovement` logic, unchanged; see
+    [Historical inventory cost](#historical-inventory-cost). Both services keep their public
+    interfaces, behaviour and exceptions and now delegate to the Domain rules. The rebuild,
+    sale-costing and cost-transition orchestration remains in `InventoryApi.Services` pending the
+    remaining #149 children; no file was added to or removed from `InventoryApi/Services`.
 
 8. **Reporting slices**
    - Split bookkeeping, daily, reconciliation, machine/product profitability, GST, dashboard, and transactions into separate query handlers.

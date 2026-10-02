@@ -1,7 +1,8 @@
-using Inventory.Domain.Exceptions;
+using Inventory.Domain.Costing;
 using InventoryApi.Data;
 using InventoryApi.Models;
 using InventoryApi.Services.Interfaces;
+using DomainStock = Inventory.Domain.Stock;
 
 namespace InventoryApi.Services;
 
@@ -27,30 +28,26 @@ public sealed class InventoryCostService : IInventoryCostService
         if (purchaseUnitCost is < 0)
             throw new InvalidOperationException($"Purchase cost cannot be negative for product {productId}.");
 
-        var newStockQuantity = checked(product.QuantityInStock + quantityChange);
-        if (newStockQuantity < 0)
-            throw new InsufficientStockException(product.QuantityInStock);
+        var movementCost = StockMovementCostPolicy.Calculate(
+            product.QuantityInStock,
+            quantityChange,
+            (DomainStock.StockAdjustmentReason)reason,
+            product.CostingQuantity,
+            product.AverageUnitCost,
+            purchaseUnitCost);
 
-        var movementUnitCost = quantityChange < 0 && product.CostingQuantity is > 0 && product.AverageUnitCost >= 0
-            ? product.AverageUnitCost
-            : reason == StockAdjustmentReason.Restock
-                ? purchaseUnitCost
-                : null;
-
-        product.QuantityInStock = newStockQuantity;
+        product.QuantityInStock = movementCost.NewStockQuantity;
         product.UpdatedAt = DateTime.UtcNow;
 
         var adjustment = new StockAdjustment
         {
             ProductId = productId,
             QuantityChange = quantityChange,
-            QuantityAfter = newStockQuantity,
+            QuantityAfter = movementCost.NewStockQuantity,
             Reason = reason,
             ReceiptItem = purchaseItem,
-            UnitCost = movementUnitCost,
-            TotalCost = movementUnitCost.HasValue
-                ? movementUnitCost.Value * Math.Abs(quantityChange)
-                : null,
+            UnitCost = movementCost.UnitCost,
+            TotalCost = movementCost.TotalCost,
             Notes = notes
         };
         _db.StockAdjustments.Add(adjustment);
