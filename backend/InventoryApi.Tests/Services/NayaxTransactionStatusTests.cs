@@ -1,5 +1,6 @@
 using System.Text;
 using Inventory.Application.Costing;
+using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using Inventory.Application.Nayax;
 using InventoryApi.Models;
@@ -44,7 +45,7 @@ public class NayaxTransactionStatusTests
             Mock.Of<IWebHostEnvironment>(),
             Mock.Of<ILogger<ImportService>>(),
             Mock.Of<INayaxLynxClient>(),
-            new SaleCostingService(db),
+            TestCostingUseCases.CostSale(db),
             Mock.Of<IRebuildProductCost>());
 
         await service.ImportNayaxSalesFromExcelAsync(File("TransactionID,TransactionStatusId,MachineID,SettlementValue,MachineAuthorizationTime\n1,55,10,5,2/9/2026 2:30:00 PM"));
@@ -81,9 +82,9 @@ public class NayaxTransactionStatusTests
             SettlementValue = 10m,
             MachineAuthorizationTime = new DateTime(2025, 8, 2)
         };
-        var service = new SaleCostingService(db);
+        var service = TestCostingUseCases.CostSale(db);
 
-        await service.CostSaleAsync(sale);
+        await service.CostAsync(sale);
 
         Assert.Equal(2.10m, sale.UnitCostAtSale);
         Assert.Equal(2.10m, sale.CostOfGoodsSold);
@@ -108,7 +109,7 @@ public class NayaxTransactionStatusTests
         });
         await db.SaveChangesAsync();
 
-        var result = await new SaleCostingService(db).BackfillAsync(dryRun: true);
+        var result = await TestCostingUseCases.BackfillSaleCosts(db).Handle(dryRun: true);
 
         Assert.True(result.DryRun);
         Assert.Equal(SaleCostingStatus.Pending, (await db.NayaxSales.SingleAsync()).CostingStatus);
@@ -140,8 +141,8 @@ public class NayaxTransactionStatusTests
         };
         db.NayaxSales.Add(sale);
         await db.SaveChangesAsync();
-        var service = new SaleCostingService(db);
-        await service.CostSaleAsync(sale);
+        var service = TestCostingUseCases.CostSale(db);
+        await service.CostAsync(sale);
         await db.SaveChangesAsync();
 
         db.StockAdjustments.Add(new StockAdjustment

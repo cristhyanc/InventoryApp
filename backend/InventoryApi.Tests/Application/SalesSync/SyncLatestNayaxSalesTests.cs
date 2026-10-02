@@ -2,7 +2,6 @@ using Inventory.Application.Nayax;
 using Inventory.Application.SalesSync;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
-using InventoryApi.Services;
 using Microsoft.EntityFrameworkCore;
 using Moq;
 using Xunit;
@@ -34,7 +33,7 @@ public class SyncLatestNayaxSalesTests
     {
         var rebuild = TestCostingUseCases.Rebuild(db);
         return new SyncLatestNayaxSales(
-            nayax, new EfLatestNayaxSalesStore(db, new SaleCostingService(db, rebuild), rebuild));
+            nayax, new EfLatestNayaxSalesStore(db, TestCostingUseCases.CostSale(db, rebuild), rebuild));
     }
 
     [Fact]

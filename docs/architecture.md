@@ -321,13 +321,13 @@ Controllers do not implement accounting, inventory, persistence, or filesystem r
 
 #### Temporary API-owned exception and its enforcement (issue #145)
 
-`InventoryApi/Services` (import, sale costing, the inventory-cost transition, machine/site/product/
+`InventoryApi/Services` (import, the inventory-cost transition, machine/site/product/
 purchase/supplier-order orchestration) is use-case/domain logic that predates the
 `Inventory.Domain`/`Inventory.Application` split and has not migrated yet; inventory movement
-recording and the product cost rebuild have already left it for `Inventory.Application.Costing`
-(issue #296). `InventoryApi/Adapters/{Persistence,Export,Nayax,Mapping}` hold the
+recording and the product cost rebuild (issue #296) and sale costing with its backfills (issue #297)
+have already left it for `Inventory.Application.Costing`. `InventoryApi/Adapters/{Persistence,Export,Nayax,Mapping}` hold the
 temporary, API-owned adapters (`EfNayaxFeeRateStore`, the `Ef<Feature>ReportFactsProvider` family,
-`EfInventoryMovementStore`/`EfInventoryCostLedgerStore`, `ReportExportFileWriter`,
+`EfInventoryMovementStore`/`EfInventoryCostLedgerStore`, `EfSaleCostingStore`, `ReportExportFileWriter`,
 `NayaxCatalogSnapshotProvider`, `ProductResponseMapper`, ...) that implement
 or feed `Inventory.Application`
 ports until `AppDbContext` and its persistence models move into `Inventory.Infrastructure` - see the
@@ -383,7 +383,9 @@ exception is still possible, but only as a conscious, reviewed edit to both that
 paragraph, never as a silent side effect of an unrelated change. Shrinking it follows the same rule:
 issue #296 removed `InventoryCostService.cs`, `InventoryCostRebuildService.cs`,
 `InventoryCostRebuildResult.cs`, `Interfaces/IInventoryCostService.cs` and
-`Interfaces/IInventoryCostRebuildService.cs` from the allow-list in the same change that deleted them. `InventoryApi/Adapters/*` is not
+`Interfaces/IInventoryCostRebuildService.cs` from the allow-list in the same change that deleted them,
+and issue #297 likewise removed `SaleCostingService.cs` and `Interfaces/ISaleCostingService.cs`.
+`NayaxProductMatcher.cs` stays on the list for its remaining legacy callers. `InventoryApi/Adapters/*` is not
 frozen the same way: unlike `Services`, adding a new temporary EF/Nayax/export adapter there for a
 migrating slice (mirroring `EfNayaxFeeRateStore`) is the established, expected pattern for this
 migration track, not scope creep - it implements an `Inventory.Application`-owned port rather than
@@ -865,13 +867,14 @@ in behaviour:
   open a transaction or decide a cost.
 - Neither use case owns a transaction. The callers - `EfStockAdjustmentStore`,
   `EfInventoryCountAdjustmentStore` (Take Inventory), `EfMachineStockEventStore`, `EfPurchaseStore`,
-  `EfProductStore`, `EfLatestNayaxSalesStore`, and the not-yet-migrated `SaleCostingService`,
-  `InventoryCostTransitionService` and `ImportService` - keep their existing transaction around a
+  `EfProductStore`, `EfLatestNayaxSalesStore`, the sale-costing use cases (issue #297), and the
+  not-yet-migrated `InventoryCostTransitionService` and `ImportService` - keep their existing transaction around a
   movement and the rebuild it triggers, so both still commit or roll back together.
 
-Sale costing (`SaleCostingService`) and the inventory-cost transition
-(`InventoryCostTransitionService`) still live in `InventoryApi.Services`, consuming
-`IRebuildProductCost`, pending #149's children 3 and 4.
+Sale costing and its backfills are Application use cases since issue #297; see
+[Sale import and costing](#sale-import-and-costing). The inventory-cost transition
+(`InventoryCostTransitionService`) still lives in `InventoryApi.Services`, consuming
+`IRebuildProductCost`, pending #149's child 4.
 
 #### Dashboard "Inventory Value" tile (issue #42)
 
@@ -908,10 +911,10 @@ one coordinated refresh is stored in a single save, and then asks its narrow App
 a product - to rebuild that product's inventory costs.
 `InventoryApi.Adapters.Persistence.EfLatestNayaxSalesStore` is that port's temporary API-owned EF
 adapter (same reason as every other `InventoryApi/Adapters/Persistence` adapter: `AppDbContext`, the
-`NayaxSales` model, and the sale-costing service still live in `InventoryApi`). It holds the unchanged
+`NayaxSales` model, and `NayaxProductMatcher` still live in `InventoryApi`). It holds the unchanged
 import rules extracted from the former `MachineService.SaveMachinesLastSalesAsync` - transaction dedup
 by `TransactionID`, Nayax product matching, the settlement-value completed/cancelled default,
-`ISaleCostingService` costing, and the `IRebuildProductCost` rebuild for products whose
+historical costing through the Application `ICostSale` use case (issue #297), and the `IRebuildProductCost` rebuild for products whose
 transition-baseline cutoff a newly imported completed sale follows - and enriches an already stored
 transaction only where its product match or status is still missing, so an imported status or cost is
 never overwritten. `NayaxSalesSyncController` is a thin adapter that invokes the use case and maps it
@@ -1337,6 +1340,42 @@ mapping](#domain-and-application-error-mapping).
 3. Only completed sales enter sales/profit calculations.
 4. Historical cost is persisted on each sale with its status and source.
 5. Unknown products, statuses, payment methods, or missing costs remain visible.
+
+Historical sale costing and its backfills are `Inventory.Application.Costing` use cases (issue #297,
+child 3 of #149), moved unchanged in behaviour from the removed
+`InventoryApi.Services.SaleCostingService`/`ISaleCostingService`:
+
+- `CostSale` (`ICostSale`) decides one sale's cost and provenance. A sale that is not completed is
+  left uncosted and pending. A completed sale already costed or legacy-estimated with both costs
+  present is kept unless forced. Otherwise the precedence is the inventory-ledger (AVCO) cost from
+  `IRebuildProductCost.GetAverageUnitCostAtAsync` (skipped for an unmatched product or a sale at or
+  before the product's transition-baseline cutoff), then the persisted transaction-level Nayax
+  `Product Cost Price`, then uncosted: `Error` for an unmatched product or a negative Nayax cost,
+  `Pending` otherwise. It matches the product with the Domain
+  `Inventory.Domain.Reporting.ProductMatching.ProductMatcher` directly. Its Application-owned
+  `SaleCostStatus`/`SaleCostOrigin` mirror the persisted `SaleCostingStatus`/`SaleCostSource`
+  ordinal-for-ordinal (a parity test enforces this).
+- `CostPendingSales` costs every pending completed sale, optionally for one matched product, and
+  saves once.
+- `BackfillSaleCosts` (`POST api/sale-costing/backfill`) re-costs completed sales through
+  `CostSale`. Without `force` it counts already costed or legacy-estimated sales as finalized and
+  leaves them untouched. `BackfillNayaxHistoricalSaleCosts` (`POST
+  api/sale-costing/nayax-cost-backfill/dry-run` and `/apply`) costs pending or error sales (any status
+  with `force`) that have a non-negative persisted Nayax export cost, optionally within an
+  authorization-time range or for one product. It reads only the cost the Nayax transaction import
+  already persisted and makes no Nayax API call, so a Nayax outage cannot fail or partially apply
+  it. For both backfills a dry run loads untracked rows and stages and saves nothing, and repeating
+  an applied run yields the same costs.
+- The narrow `ISaleCostingStore` port (product candidates, transition cutoff, completed-sale
+  selection, stage and save) is implemented by the temporary API-owned
+  `InventoryApi.Adapters.Persistence.EfSaleCostingStore`, which keeps the former EF queries behind
+  `AppDbContext`'s business query filter and writes each decision back onto exactly the loaded row.
+  The API-owned `NayaxSaleCosting` mapping lets `ImportService`'s Nayax transaction import and
+  `EfLatestNayaxSalesStore` cost the `NayaxSales` entity they are importing through `ICostSale`
+  without changing their own transactions or the #187 synchronization boundary.
+  `SaleCostingController` calls the backfill use cases directly with unchanged routes,
+  request/response shapes and status codes. The pass-through `GetAverageUnitCostAtAsync` is
+  `IRebuildProductCost.GetAverageUnitCostAtAsync`.
 
 ### Reimbursement import and reconciliation
 
@@ -1894,7 +1933,7 @@ Backend and frontend tracks can progress independently when their contracts do n
    - **Purchases and Supplier Orders orchestration done** (issue #281, a child of the #148 umbrella;
      sibling to the Stock child, issue #282, migrated separately - see item 6 above). The
      costing-rebuild orchestration itself was migrated later by issue #296 (`IRebuildProductCost`,
-     see item 7); sale costing remains future work, tracked by #149.
+     see item 7); sale costing followed in issue #297 (also item 7).
      - **Domain.** `Inventory.Domain.Purchases.PurchaseItemFormatPolicy` validates a purchase line's
        product/quantity/cost shape (the inline check the former `PurchaseService.ValidateItemsAsync`
        made); `PurchaseStockMovementPolicy` holds the restock stock-movement quantity/total-cost
@@ -1990,8 +2029,20 @@ Backend and frontend tracks can progress independently when their contracts do n
     their transactions unchanged. The five removed files and their DI registrations are gone, and
     their entries were removed from the `Only_the_documented_legacy_services_remain_in_InventoryApi_Services`
     allow-list and (for `InventoryCostDataQualityException`, now Application-owned) from the
-    `No_new_business_exception_is_defined_in_InventoryApi` allow-list. Sale costing (child 3) and the
-    inventory-cost transition (child 4) remain in `InventoryApi.Services`.
+    `No_new_business_exception_is_defined_in_InventoryApi` allow-list. Sale costing (child 3) followed
+    below; the inventory-cost transition (child 4) remains in `InventoryApi.Services`.
+  - **Sale costing and backfills done** (issue #297, child 3 of 4 of #149).
+    `Inventory.Application.Costing.CostSale` (`ICostSale`), `CostPendingSales`, `BackfillSaleCosts`
+    and `BackfillNayaxHistoricalSaleCosts`, over the narrow `ISaleCostingStore` port implemented by
+    the temporary API-owned `InventoryApi.Adapters.Persistence.EfSaleCostingStore`, replaced
+    `InventoryApi.Services.SaleCostingService`/`ISaleCostingService`, unchanged in behaviour; see
+    [Sale import and costing](#sale-import-and-costing). They call the Domain `ProductMatcher`
+    directly instead of `NayaxProductMatcher`, and own the `SaleCostingBackfillResult` and
+    `NayaxCostBackfillResult` response records (moved from `InventoryApi/DTOs` with no JSON change).
+    `SaleCostingController`, `EfLatestNayaxSalesStore` and `ImportService` consume the Application
+    contracts. Both removed files and their DI registration are gone, and their entries were
+    removed from the `Only_the_documented_legacy_services_remain_in_InventoryApi_Services`
+    allow-list. The inventory-cost transition (child 4) remains in `InventoryApi.Services`.
 
 8. **Reporting slices**
    - Split bookkeeping, daily, reconciliation, machine/product profitability, GST, dashboard, and transactions into separate query handlers.

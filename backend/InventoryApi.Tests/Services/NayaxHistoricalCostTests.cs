@@ -133,7 +133,7 @@ public class NayaxHistoricalCostTests
             .ReturnsAsync(1.15m);
         var sale = Sale(1, 10, 1.20m, "Card");
 
-        await new SaleCostingService(db, rebuild.Object).CostSaleAsync(sale);
+        await TestCostingUseCases.CostSale(db, rebuild.Object).CostAsync(sale);
 
         Assert.Equal(1.15m, sale.UnitCostAtSale);
         Assert.Equal(1.15m, sale.CostOfGoodsSold);
@@ -152,7 +152,7 @@ public class NayaxHistoricalCostTests
             .ReturnsAsync(0m);
         var sale = Sale(1, 10, 1.20m, "Card");
 
-        await new SaleCostingService(db, rebuild.Object).CostSaleAsync(sale);
+        await TestCostingUseCases.CostSale(db, rebuild.Object).CostAsync(sale);
 
         Assert.Equal(0m, sale.UnitCostAtSale);
         Assert.Equal(0m, sale.CostOfGoodsSold);
@@ -169,7 +169,7 @@ public class NayaxHistoricalCostTests
         await db.SaveChangesAsync();
         var sale = Sale(1, 10, 1.25m, paymentMethod);
 
-        await new SaleCostingService(db).CostSaleAsync(sale);
+        await TestCostingUseCases.CostSale(db).CostAsync(sale);
 
         Assert.Equal(1.25m, sale.CostOfGoodsSold);
         Assert.Equal(SaleCostSource.NayaxTransactionExport, sale.CostSource);
@@ -182,7 +182,7 @@ public class NayaxHistoricalCostTests
         var sale = Sale(1, 10, 1.25m, "Card");
         sale.TransactionStatusId = NayaxTransactionStatusIds.CashlessCancelledProductNotDispensed;
 
-        await new SaleCostingService(db).CostSaleAsync(sale);
+        await TestCostingUseCases.CostSale(db).CostAsync(sale);
 
         Assert.Equal(1.25m, sale.NayaxProductCostPrice);
         Assert.Null(sale.CostOfGoodsSold);
@@ -198,7 +198,7 @@ public class NayaxHistoricalCostTests
         await db.SaveChangesAsync();
         var sale = Sale(1, 10, null, "Card");
 
-        await new SaleCostingService(db).CostSaleAsync(sale);
+        await TestCostingUseCases.CostSale(db).CostAsync(sale);
 
         Assert.Null(sale.CostOfGoodsSold);
         Assert.Equal(SaleCostingStatus.Pending, sale.CostingStatus);
@@ -213,7 +213,7 @@ public class NayaxHistoricalCostTests
         await db.SaveChangesAsync();
         var sale = Sale(1, 10, -1m, "Card");
 
-        await new SaleCostingService(db).CostSaleAsync(sale);
+        await TestCostingUseCases.CostSale(db).CostAsync(sale);
 
         Assert.Equal(-1m, sale.NayaxProductCostPrice);
         Assert.Null(sale.CostOfGoodsSold);
@@ -229,9 +229,9 @@ public class NayaxHistoricalCostTests
         db.NayaxSales.AddRange(Enumerable.Range(1, 100).Select(index =>
             Sale(index, 10, index <= 80 ? 1.10m : null, index % 2 == 0 ? "Cash" : "Card")));
         await db.SaveChangesAsync();
-        var service = new SaleCostingService(db);
+        var service = TestCostingUseCases.BackfillNayaxHistoricalSaleCosts(db);
 
-        var dryRun = await service.BackfillHistoricalCostsFromNayaxAsync(dryRun: true);
+        var dryRun = await service.Handle(dryRun: true);
 
         Assert.Equal(100, dryRun.SalesReviewed);
         Assert.Equal(80, dryRun.SalesWithNayaxCost);
@@ -239,7 +239,7 @@ public class NayaxHistoricalCostTests
         Assert.Equal(20, dryRun.SalesStillPending);
         Assert.All(await db.NayaxSales.ToListAsync(), sale => Assert.Equal(SaleCostingStatus.Pending, sale.CostingStatus));
 
-        var applied = await service.BackfillHistoricalCostsFromNayaxAsync(dryRun: false);
+        var applied = await service.Handle(dryRun: false);
 
         Assert.Equal(80, applied.SalesWouldBeCosted);
         Assert.Equal(80, await db.NayaxSales.CountAsync(s => s.CostingStatus == SaleCostingStatus.Costed &&
@@ -356,7 +356,7 @@ public class NayaxHistoricalCostTests
     {
         var rebuild = TestCostingUseCases.Rebuild(db);
         return new SyncLatestNayaxSales(
-            nayax, new EfLatestNayaxSalesStore(db, new SaleCostingService(db, rebuild), rebuild));
+            nayax, new EfLatestNayaxSalesStore(db, TestCostingUseCases.CostSale(db, rebuild), rebuild));
     }
 
     private static AppDbContext CreateDb() =>
@@ -369,7 +369,7 @@ public class NayaxHistoricalCostTests
             new Mock<IWebHostEnvironment>().Object,
             new Mock<ILogger<ImportService>>().Object,
             new Mock<INayaxLynxClient>().Object,
-            new SaleCostingService(db),
+            TestCostingUseCases.CostSale(db),
             new Mock<IRebuildProductCost>().Object);
 
     private static NayaxSales Sale(long id, long productId, decimal? nayaxCost, string paymentMethod) =>

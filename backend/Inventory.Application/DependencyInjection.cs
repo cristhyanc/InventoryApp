@@ -95,6 +95,11 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<IRecordInventoryMovement>(sp => sp.GetRequiredService<RecordInventoryMovement>());
         services.AddScoped<RebuildProductCost>();
         services.AddScoped<IRebuildProductCost>(sp => sp.GetRequiredService<RebuildProductCost>());
+        services.AddScoped<CostSale>();
+        services.AddScoped<ICostSale>(sp => sp.GetRequiredService<CostSale>());
+        services.AddScoped<CostPendingSales>();
+        services.AddScoped<BackfillSaleCosts>();
+        services.AddScoped<BackfillNayaxHistoricalSaleCosts>();
         services.AddScoped<ApplyInventoryCount>();
         services.AddScoped<GetStockHistory>();
         services.AddScoped<GetRestockCostSuggestion>();
