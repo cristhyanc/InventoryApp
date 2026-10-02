@@ -266,6 +266,16 @@ These rules come from the application's established bookkeeping design. Changing
 - Never log API tokens, authorization headers, connection strings, raw credentials, or sensitive imported payloads.
 - Keep raw imported facts separate from derived accounting values so calculations can be rerun and audited.
 
+### Nayax contract verification
+
+Nayax's developer documentation, not the code or a guess, is the authority on a Nayax API contract. The automated agents can read it through the official Nayax documentation MCP server (`https://devzone.nayax.com/mcp`, server name `nayax`), limited to its two read-only tools `search_nayax_developer_portal` and `query_docs_filesystem_nayax_developer_portal`; see `docs/automation.md` § Nayax documentation access.
+
+- When implementing, repairing, architecture-checking or reviewing code that calls the Nayax API or models a Nayax request or response, look up the relevant endpoint contract in that documentation **before** defining, changing or accepting request/response DTOs or any assumption about field names, types, nullability, identifiers, timestamps or endpoint semantics.
+- Never invent a Nayax response property when the authoritative contract can be retrieved. A field the documentation does not confirm stays unconfirmed.
+- If the documentation tools are unavailable, or the contract cannot be found, say so explicitly: in a pull request body, comment or review, state that authoritative Nayax verification could not be completed and which contract it affects, and treat that contract as unverified (a reviewer reports it as `not verified` or a blocker, never `met`). Never silently fall back to guessed fields for a contract-sensitive change.
+- Work that does not touch the Nayax integration needs no lookup, and an unreachable documentation server must not block it.
+- The documentation tools grant no other web access: `WebFetch`/`WebSearch` stay disabled, and the server's `submit_feedback` tool is denied. Model triage and the format-only Copilot review JSON repair have no Nayax documentation access and perform no lookup.
+
 ## Files and attachments
 
 - Validate extension, content type, size, and generated storage name on the server. Do not trust the uploaded filename or client MIME type alone.

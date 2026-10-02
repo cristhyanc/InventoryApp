@@ -47,6 +47,11 @@ import {
   copilotHandoffPath,
   copilotArchitecturePath,
   reviewRequestPath,
+  NAYAX_MCP_CONTRACT,
+  agentsPath,
+  copilotInstructionsPath,
+  modelSelectionPath,
+  verifyNayaxDocumentationAccess,
 } from './validate-agent-workflows.mjs';
 
 const validateWorkflow = readRepositoryFile(validatePath);
@@ -937,5 +942,73 @@ describe('cross-review contract (agent-ready-claude / agent-ready-copilot)', () 
 
   it('keeps updated-head scheduling for both implementers', () => {
     rejects({ [headUpdatePath]: replaceOnce(headUpdateWorkflow, 'elif [[ "$head_ref" == copilot/* ]]; then', 'elif false; then') }, /agent-head-update.yml dispatcher/);
+  });
+});
+
+describe('Nayax documentation access (issue #192)', () => {
+  const contract = NAYAX_MCP_CONTRACT;
+  const rejects = (overrides, pattern) => assert.throws(() => verifyNayaxDocumentationAccess(readWithOverrides(overrides)), pattern);
+  const architecture = readRepositoryFile(architecturePath);
+  const review = readRepositoryFile(reviewPath);
+
+  it('accepts the repository configuration and runs as part of the full contract check', () => {
+    verifyNayaxDocumentationAccess();
+    rejects({ [implementPath]: replaceOnce(implementWorkflow, contract.claudeMcpConfig, '') }, /agent-implement.yml/);
+    assert.throws(() => runContractChecks({ read: readWithOverrides({ [implementPath]: replaceOnce(implementWorkflow, contract.claudeMcpConfig, '') }) }), /Nayax/);
+  });
+
+  it('requires the server, both read-only tools, the feedback denial and the prompt rule in every Claude invocation', () => {
+    for (const path of contract.claudePaths) {
+      const workflow = readRepositoryFile(path);
+      for (const removed of [contract.claudeMcpConfig, contract.claudeAllowedTools, contract.claudeDeniedTool]) {
+        rejects({ [path]: replaceOnce(workflow, removed, '') }, new RegExp(path.replaceAll('.', '\\.')));
+      }
+      rejects({ [path]: replaceOnce(workflow, contract.promptRule, 'Use Nayax documentation when helpful.') }, /prompt/);
+    }
+  });
+
+  it('rejects broader or misplaced Claude grants', () => {
+    // Allowing the feedback tool, allowing every Nayax tool, or denying the documentation tools.
+    rejects({ [repairPath]: replaceOnce(repairWorkflow, contract.claudeAllowedTools, contract.claudeAllowedTools + contract.claudeDeniedTool) }, /submit_feedback|expected/);
+    rejects({ [repairPath]: replaceOnce(repairWorkflow, contract.claudeAllowedTools, contract.claudeAllowedTools + '            "mcp__nayax__*"\n') }, /mcp__nayax__\*/);
+    rejects({ [repairPath]: replaceOnce(repairWorkflow, contract.claudeDeniedTool, contract.claudeDeniedTool + contract.claudeAllowedTools) }, /search_nayax_developer_portal/);
+    rejects({ [repairPath]: replaceOnce(repairWorkflow, contract.claudeMcpConfig, contract.claudeMcpConfig + contract.claudeMcpConfig) }, /exactly one --mcp-config/);
+  });
+
+  it('requires the filtered server and exact tool rules in both Copilot CLI analysis steps', () => {
+    for (const [path, workflow] of [[architecturePath, architecture], [reviewPath, review]]) {
+      rejects({ [path]: replaceOnce(workflow, contract.copilotMcpConfig, "--additional-mcp-config '{\"mcpServers\":{\"nayax\":{\"type\":\"http\",\"url\":\"https://devzone.nayax.com/mcp\"}}}'") }, /Copilot/);
+      rejects({ [path]: replaceOnce(workflow, contract.copilotToolRules, "--allow-tool='nayax'") }, /Copilot/);
+      rejects({ [path]: replaceOnce(workflow, contract.copilotToolRules, "--allow-tool='nayax(search_nayax_developer_portal)' --allow-tool='nayax(query_docs_filesystem_nayax_developer_portal)'") }, /Copilot/);
+    }
+    rejects({ [architecturePath]: replaceOnce(architecture, ' ' + contract.promptRule, '') }, /architecture check prompt/);
+    rejects({ [reviewPath]: replaceOnce(review, '\n          ' + contract.promptRule + '\n', '\n') }, /Copilot review prompt/);
+  });
+
+  it('keeps model triage and the format-only review repair out of Nayax documentation access', () => {
+    const selection = readRepositoryFile(modelSelectionPath);
+    rejects({ [modelSelectionPath]: replaceOnce(selection, '            --max-turns 4\n', '            --max-turns 4\n' + contract.claudeMcpConfig) }, /model triage/);
+    rejects(
+      { [reviewPath]: replaceOnce(review, 'copilot -s --no-ask-user --disable-builtin-mcps \\\n', 'copilot -s --no-ask-user --disable-builtin-mcps \\\n              ' + contract.copilotMcpConfig + ' \\\n') },
+      /format repair|exactly one --additional-mcp-config/,
+    );
+    rejects({ [reviewPath]: replaceOnce(review, 'copilot -s --no-ask-user --disable-builtin-mcps', 'copilot -s --no-ask-user') }, /format repair/);
+    rejects({ '.mcp.json': '{"mcpServers":{"nayax":{"type":"http","url":"https://devzone.nayax.com/mcp"}}}' }, /workspace MCP configuration/);
+    rejects({ '.github/mcp.json': '{}' }, /workspace MCP configuration/);
+  });
+
+  it('keeps the prompt rule safe inside the double-quoted Copilot architecture prompt', () => {
+    for (const unsafe of ['`', '$', '"']) assert.ok(!contract.promptRule.includes(unsafe));
+  });
+
+  it('requires the binding rule in AGENTS.md and the Copilot instructions', () => {
+    const agents = readRepositoryFile(agentsPath);
+    const instructions = readRepositoryFile(copilotInstructionsPath);
+    for (const required of contract.agentsRequired) {
+      rejects({ [agentsPath]: replaceOnce(agents, required, 'removed') }, /AGENTS.md Nayax contract verification/);
+    }
+    for (const required of contract.copilotInstructionsRequired) {
+      rejects({ [copilotInstructionsPath]: replaceOnce(instructions, required, 'removed') }, /copilot-instructions.md Nayax contract verification/);
+    }
   });
 });

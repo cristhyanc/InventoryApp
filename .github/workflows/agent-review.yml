@@ -207,8 +207,11 @@ jobs:
             - `inline_comments`: specific lines in the diff that need a change (`path`, `line` in the new file version, `body` stating the problem, why it matters, and the rule or criterion it violates).
             Do not write a `VERDICT:` line inside any field; the publisher writes the head SHA, the single verdict line and the advisory sentence itself.
 
+            Nayax contract verification (AGENTS.md § Nayax contract verification): if this work touches code that calls the Nayax API or models a Nayax request or response, look up the relevant endpoint contract with the read-only Nayax documentation tools (search_nayax_developer_portal and query_docs_filesystem_nayax_developer_portal on the nayax MCP server) before defining, changing or accepting field names, types, nullability, identifiers, timestamps or endpoint semantics. Never invent a Nayax property that the documentation can confirm or refute. If the tools are unavailable or the contract cannot be found, state explicitly that authoritative Nayax verification could not be completed and treat the affected contract as unverified rather than guessing. Work that does not touch Nayax needs no lookup.
+
             Hard limits: never approve, request changes, comment, merge, edit files, commit, push, change labels, edit the PR or issue, trigger workflows, or run write operations of any kind. If a tool call is denied, do not look for another route; report what you could not verify instead.
           claude_args: |
+            --mcp-config '{"mcpServers":{"nayax":{"type":"http","url":"https://devzone.nayax.com/mcp"}}}'
             --model sonnet
             --effort high
             --max-turns 80
@@ -216,7 +219,9 @@ jobs:
             --allowedTools "mcp__github_ci__get_ci_status,mcp__github_ci__get_workflow_run_details,mcp__github_ci__download_job_log"
             "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh issue view *),Bash(gh run view *),Bash(gh run list *)"
             "Bash(git status *),Bash(git diff *),Bash(git log *),Bash(git show *),Bash(git rev-parse *),Bash(git branch *)"
+            "mcp__nayax__search_nayax_developer_portal,mcp__nayax__query_docs_filesystem_nayax_developer_portal"
             --disallowedTools "Edit,MultiEdit,Write,NotebookEdit,WebFetch,WebSearch"
+            "mcp__nayax__submit_feedback"
             "mcp__github_inline_comment__create_inline_comment"
             "Bash(gh pr review *),Bash(gh pr comment *),Bash(gh pr merge *),Bash(gh pr edit *),Bash(gh pr close *),Bash(gh pr reopen *),Bash(gh pr ready *),Bash(gh issue edit *),Bash(gh issue comment *),Bash(gh api *),Bash(gh workflow *),Bash(gh run rerun *),Bash(gh run cancel *),Bash(gh label *)"
             "Bash(git push *),Bash(git commit *),Bash(git add *),Bash(git checkout *),Bash(git switch *),Bash(git reset *),Bash(git rebase *),Bash(git merge *),Bash(git stash *),Bash(git restore *),Bash(git clean *)"
@@ -308,6 +313,8 @@ jobs:
           - Never waive a blocker because legacy behaviour is worse, the failure seems unlikely, the tests pass, or another check is green.
           - When a high-risk requirement is materially ambiguous, record a blocker that starts with "Human decision required:".
 
+          Nayax contract verification (AGENTS.md § Nayax contract verification): if this work touches code that calls the Nayax API or models a Nayax request or response, look up the relevant endpoint contract with the read-only Nayax documentation tools (search_nayax_developer_portal and query_docs_filesystem_nayax_developer_portal on the nayax MCP server) before defining, changing or accepting field names, types, nullability, identifiers, timestamps or endpoint semantics. Never invent a Nayax property that the documentation can confirm or refute. If the tools are unavailable or the contract cannot be found, state explicitly that authoritative Nayax verification could not be completed and treat the affected contract as unverified rather than guessing. Work that does not touch Nayax needs no lookup.
+
           You may only read. Never edit files, commit, push, comment, review, label, or run any write command.
 
           Deliver your result as the last thing you output: a line containing only BEGIN_REVIEW_JSON, then one JSON object, then a line containing only END_REVIEW_JSON. The object has exactly these keys: "reviewed_head_sha" (exactly @SHA@), "verdict" ("CHANGES REQUESTED" or "READY FOR HUMAN REVIEW"), "blockers" (array of non-empty strings: file, line, what is wrong, which rule or criterion it violates), "criteria" (non-empty array of objects with "criterion", "status" and "evidence"), "suggestions" (array of strings, non-blocking only), "validation_evidence" (non-empty string: the checks, runs and results you confirmed), and "inline_comments" (array of objects with "path", "line" as a positive integer in the new file version, and "body"). Do not write a VERDICT: line inside any field.
@@ -321,6 +328,8 @@ jobs:
             --allow-tool='shell(git diff:*)' --allow-tool='shell(git log:*)' --allow-tool='shell(git show:*)' --allow-tool='shell(git status:*)' \
             --allow-tool='shell(gh pr view:*)' --allow-tool='shell(gh pr diff:*)' --allow-tool='shell(gh pr checks:*)' \
             --allow-tool='shell(gh issue view:*)' --allow-tool='shell(gh run view:*)' --allow-tool='shell(gh run list:*)' \
+            --additional-mcp-config '{"mcpServers":{"nayax":{"type":"http","url":"https://devzone.nayax.com/mcp","tools":["search_nayax_developer_portal","query_docs_filesystem_nayax_developer_portal"]}}}' \
+            --allow-tool='nayax(search_nayax_developer_portal)' --allow-tool='nayax(query_docs_filesystem_nayax_developer_portal)' --deny-tool='nayax(submit_feedback)' \
             --deny-tool='write' \
             -p "$prompt" > "$work/copilot-output.md"
 
