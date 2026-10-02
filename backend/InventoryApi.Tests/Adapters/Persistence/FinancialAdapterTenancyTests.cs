@@ -32,38 +32,51 @@ public sealed class FinancialAdapterTenancyTests : IDisposable
         {
             seed.SiteCommissionAgreements.Add(new SiteCommissionAgreement
             {
-                BusinessId = businessId, SiteId = SiteId, EffectiveFrom = Day,
-                EffectiveTo = Day, CommissionRate = businessId / 10m,
+                BusinessId = businessId,
+                SiteId = SiteId,
+                EffectiveFrom = Day,
+                EffectiveTo = Day,
+                CommissionRate = businessId / 10m,
                 Basis = CommissionBasis.GrossSales
             });
             seed.CommissionPayments.Add(new InventoryApi.Models.CommissionPayment
             {
-                BusinessId = businessId, SiteId = SiteId, PeriodStart = Day,
-                PeriodEnd = Day, PaymentDate = Day, Amount = businessId
+                BusinessId = businessId,
+                SiteId = SiteId,
+                PeriodStart = Day,
+                PeriodEnd = Day,
+                PaymentDate = Day,
+                Amount = businessId
             });
             seed.ImportedFiles.Add(new ImportedFile
             {
-                BusinessId = businessId, FileName = "synthetic.xml", FileHash = "same-external-hash",
+                BusinessId = businessId,
+                FileName = "synthetic.xml",
+                FileHash = "same-external-hash",
                 ImportedAt = Day,
                 Reimbursements =
                 [
                     new ImportedReimbursement
                     {
-                        BusinessId = businessId, ReimbursementStartDate = Day,
+                        BusinessId = businessId,
+                        ReimbursementStartDate = Day,
                         ReimbursementEndDate = Day,
                         Fees =
                         [
                             new ImportedFee
                             {
-                                BusinessId = businessId, FeesTypeId = "processing",
-                                TotalSum = businessId, TotalSumWithVat = businessId * 1.1m
+                                BusinessId = businessId,
+                                FeesTypeId = "processing",
+                                TotalSum = businessId,
+                                TotalSumWithVat = businessId * 1.1m
                             }
                         ],
                         Devices =
                         [
                             new ImportedReimbursementDevice
                             {
-                                BusinessId = businessId, MachineNumber = "10",
+                                BusinessId = businessId,
+                                MachineNumber = "10",
                                 ProcessingFee = businessId
                             }
                         ]
@@ -86,10 +99,13 @@ public sealed class FinancialAdapterTenancyTests : IDisposable
     private static NayaxSales Sale(int businessId, long transactionId, int status, decimal amount) =>
         new()
         {
-            BusinessId = businessId, TransactionID = transactionId,
-            MachineID = MachineId, TransactionStatusId = status,
+            BusinessId = businessId,
+            TransactionID = transactionId,
+            MachineID = MachineId,
+            TransactionStatusId = status,
             MachineAuthorizationTime = Day.AddHours(businessId),
-            SettlementValue = amount, PaymentMethod = "Credit Card"
+            SettlementValue = amount,
+            PaymentMethod = "Credit Card"
         };
 
     [Theory]
@@ -141,8 +157,11 @@ public sealed class FinancialAdapterTenancyTests : IDisposable
         {
             seed.SiteCommissionAgreements.Add(new SiteCommissionAgreement
             {
-                BusinessId = otherBusinessId, SiteId = 99, EffectiveFrom = Day,
-                CommissionRate = .2m, Basis = CommissionBasis.GrossSales
+                BusinessId = otherBusinessId,
+                SiteId = 99,
+                EffectiveFrom = Day,
+                CommissionRate = .2m,
+                Basis = CommissionBasis.GrossSales
             });
             await seed.SaveChangesAsync();
         }
