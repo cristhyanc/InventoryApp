@@ -852,6 +852,10 @@ describe('cross-review contract (agent-ready-claude / agent-ready-copilot)', () 
     }
   });
 
+  it('requires CI to run the Copilot review contract regression suite', () => {
+    rejects({ [validatePath]: replaceOnce(validateWorkflow, '          node --test scripts/copilot-review-contract.test.mjs\n', '') }, /validate.yml validate job/);
+  });
+
   it('rejects review routing that bypasses agent-review.yml or moves a pull request to review too early', () => {
     rejects({ [validatePath]: replaceOnce(validateWorkflow, 'gh workflow run agent-review.yml', 'gh workflow run other-review.yml') }, /validate.yml review dispatcher/);
     rejects({ [validatePath]: replaceOnce(validateWorkflow, '          EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}\n          EXPECTED_COPILOT_AUTHOR: ${{ vars.COPILOT_AGENT_BOT_LOGIN || \'Copilot\' }}\n        run: |\n          set -euo pipefail\n          fail() { echo "::error::$1"; exit 1; }\n\n          pr_json', '          COPILOT_AGENT_TOKEN: ${{ secrets.COPILOT_AGENT_TOKEN }}\n          EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}\n          EXPECTED_COPILOT_AUTHOR: ${{ vars.COPILOT_AGENT_BOT_LOGIN || \'Copilot\' }}\n        run: |\n          set -euo pipefail\n          fail() { echo "::error::$1"; exit 1; }\n\n          pr_json') }, /validate.yml review dispatcher/);

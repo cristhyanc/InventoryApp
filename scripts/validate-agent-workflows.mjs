@@ -1470,6 +1470,7 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
   requireText(validationJob, 'persist-credentials: false', 'validate.yml validate job');
   requireText(validationJob, 'node scripts/validate-agent-workflows.mjs', 'validate.yml validate job');
   requireText(validationJob, 'node --test scripts/validate-agent-workflows.test.mjs', 'validate.yml validate job');
+  requireText(validationJob, 'node --test scripts/copilot-review-contract.test.mjs', 'validate.yml validate job');
   for (const forbidden of ['actions: write', 'statuses: write', 'CLAUDE_CODE_OAUTH_TOKEN']) {
     forbidText(validationJob, forbidden, 'validate.yml validate job');
   }
