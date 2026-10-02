@@ -845,9 +845,15 @@ describe('cross-review contract (agent-ready-claude / agent-ready-copilot)', () 
       reviewWorkflow.replace('npm ci --prefix "$cli_dir" --ignore-scripts --no-audit --no-fund\n          echo "$cli_dir/node_modules/.bin" >> "$GITHUB_PATH"\n\n      - name: Run Copilot review', 'npm install -g @github/copilot@latest\n\n      - name: Run Copilot review'),
       replaceOnce(reviewWorkflow, "--allow-tool='shell(gh run list:*)'", "--allow-tool='shell(gh run list:*)' --allow-tool='shell(gh pr comment:*)'"),
       replaceOnce(reviewWorkflow, '.status == "met" or .status == "not met" or .status == "not verified"', 'true'),
+      replaceOnce(reviewWorkflow, "--deny-tool='shell' --deny-tool='write' --deny-tool='url'", "--deny-tool='write'"),
+      replaceOnce(reviewWorkflow, 'copilot -s --no-ask-user --disable-builtin-mcps', 'copilot -s --no-ask-user'),
     ]) {
       rejects({ [reviewPath]: unsafe }, /agent-review.yml Copilot review/);
     }
+  });
+
+  it('requires CI to run the Copilot review contract regression suite', () => {
+    rejects({ [validatePath]: replaceOnce(validateWorkflow, '          node --test scripts/copilot-review-contract.test.mjs\n', '') }, /validate.yml validate job/);
   });
 
   it('rejects review routing that bypasses agent-review.yml or moves a pull request to review too early', () => {
