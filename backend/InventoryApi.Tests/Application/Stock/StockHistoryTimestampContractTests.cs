@@ -1,13 +1,14 @@
 using System.Text.Json;
+using Inventory.Application.Stock;
+using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using InventoryApi.Models;
 using InventoryApi.Services;
-using InventoryApi.Services.Interfaces;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
 
-namespace InventoryApi.Tests.Services;
+namespace InventoryApi.Tests.Application.Stock;
 
 /// <summary>
 /// Reproduces the production defect from issue #230: Stock History can render a manual-restock
@@ -18,7 +19,7 @@ namespace InventoryApi.Tests.Services;
 /// <see cref="DateTime.UtcNow"/> (<see cref="DateTimeKind.Utc"/>), but Microsoft's SQLite EF Core
 /// provider - the only provider this API ever runs against, see Program.cs - does not round-trip
 /// <see cref="DateTimeKind"/>: a value freshly queried back from the database (exactly what
-/// <see cref="IStockService.History"/> does for every request) always materialises with
+/// <see cref="GetStockHistory"/> does for every request, issue #282) always materialises with
 /// <see cref="DateTimeKind.Unspecified"/>. System.Text.Json then serialises it without a trailing
 /// "Z"/offset, so the JSON instant is ambiguous. The Angular <c>BusinessDateTimePipe</c> parses an
 /// unmarked string as browser-local time (see business-date-time.pipe.spec.ts, which already
@@ -29,7 +30,11 @@ namespace InventoryApi.Tests.Services;
 ///
 /// These tests use a real (non-InMemory) Sqlite provider deliberately: EF Core's InMemory
 /// provider keeps the original CLR object and does not reproduce the Kind loss, so it would not
-/// catch this regression.
+/// catch this regression. Serializing the Application-layer <see cref="StockAdjustmentRecord"/>
+/// directly, rather than the mapped API response entity, follows the same precedent
+/// <c>SyncRestockTimestampContractTests</c> established (issue #237): the defect is a plain
+/// <see cref="DateTime"/> property with no custom converter on either shape, so the Kind loss and
+/// its serialized ambiguity reproduce identically at this boundary.
 /// </summary>
 public class StockHistoryTimestampContractTests
 {
@@ -68,8 +73,8 @@ public class StockHistoryTimestampContractTests
         }
 
         await using var db = TestAppDbContext.Unrestricted(options);
-        IStockService svc = new StockService(db);
-        var history = (await svc.History(1)).ToList();
+        var useCase = new GetStockHistory(new EfStockAdjustmentStore(db, new InventoryCostService(db), new InventoryCostRebuildService(db)));
+        var history = await useCase.Handle(1, CancellationToken.None);
 
         var adjustment = Assert.Single(history);
 

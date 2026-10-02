@@ -597,7 +597,7 @@ The consequence for a throw site is explicit: **a check whose message is meant f
 
 Not-found handling is unchanged by this work: controllers continue to return `NotFound()` directly for a missing resource, and this issue introduces no typed not-found exception.
 
-Migrating a controller to the centralized mapping never changes its status code or message; the only observable difference is that the response body for a migrated action becomes a `ProblemDetails` object (`application/problem+json`) instead of a bare JSON string, which is why the `message` extension above exists. `StockController.Adjust`, `InventoryCostTransitionsController` (all four actions), and `SupplierOrdersController.Create` were migrated this way, and the deliberate validation throws in `StockService.Adjust`, `InventoryCostTransitionService`, and `SupplierOrderService.Create` were converted from `ArgumentException`/`InvalidOperationException` to `DomainValidationException` so those actions keep the exact `400` and message they returned before. `SiteCommissionsController.SaveAgreement`'s overlapping-agreement check moved from returning `Conflict(...)` directly to throwing `DomainConflictException`, still producing `409` with the same message. `ProductsController.Update`, `PurchasesController`, and `ImportsController.ImportNayaxSales` still catch their own exceptions and were intentionally left for a later, separate change. `OperatingExpensesController` no longer catches anything itself: the operating-expenses slice (issue #50) moved its attachment save/cleanup-on-failure try/catch into `Inventory.Application.Expenses.CreateOperatingExpense`/`UpdateOperatingExpense` as a side effect of the Clean Architecture migration, which is exactly the "way to run that cleanup from outside the controller" this paragraph used to call out as still missing; its validation failures are returned as explicit result values rather than thrown, so the controller still needs no exception mapping to keep its `400 Bad Request` behavior.
+Migrating a controller to the centralized mapping never changes its status code or message; the only observable difference is that the response body for a migrated action becomes a `ProblemDetails` object (`application/problem+json`) instead of a bare JSON string, which is why the `message` extension above exists. `StockController.Adjust`, `InventoryCostTransitionsController` (all four actions), and `SupplierOrdersController.Create` were migrated this way, and the deliberate validation throws in what was then `StockService.Adjust` (now `Inventory.Domain.Stock.ManualStockAdjustmentPolicy`, issue #282), `InventoryCostTransitionService`, and `SupplierOrderService.Create` were converted from `ArgumentException`/`InvalidOperationException` to `DomainValidationException` so those actions keep the exact `400` and message they returned before. `SiteCommissionsController.SaveAgreement`'s overlapping-agreement check moved from returning `Conflict(...)` directly to throwing `DomainConflictException`, still producing `409` with the same message. `ProductsController.Update`, `PurchasesController`, and `ImportsController.ImportNayaxSales` still catch their own exceptions and were intentionally left for a later, separate change. `OperatingExpensesController` no longer catches anything itself: the operating-expenses slice (issue #50) moved its attachment save/cleanup-on-failure try/catch into `Inventory.Application.Expenses.CreateOperatingExpense`/`UpdateOperatingExpense` as a side effect of the Clean Architecture migration, which is exactly the "way to run that cleanup from outside the controller" this paragraph used to call out as still missing; its validation failures are returned as explicit result values rather than thrown, so the controller still needs no exception mapping to keep its `400 Bad Request` behavior.
 
 ## Frontend architecture
 
@@ -1761,9 +1761,60 @@ Backend and frontend tracks can progress independently when their contracts do n
      - Machine product rows are matched back to their pricing results positionally, not by a
        product-id-keyed lookup, because one machine can list the same catalogue product in more than
        one slot at a different price.
-     - Still deferred, and not part of this slice: the stock-adjustment reason/source vocabulary stays
-       with the persistence model, so `ProductStockAdjustmentRecord` passes those two codes through as
-       integers; they migrate with the inventory-movement rules above.
+     - The stock-adjustment reason/source vocabulary this slice deferred migrated under issue #282
+       below: `ProductStockAdjustmentRecord.Reason`/`.Source` now carry the authoritative
+       `Inventory.Domain.Stock.StockAdjustmentReason`/`StockAdjustmentSource` enums instead of raw
+       integers, with no change to the serialized API shape (System.Text.Json still emits the same
+       numeric value for an enum it would for a plain `int`).
+   - **Stock slice done** (issue #282, a child of the #148 umbrella; sibling to the Purchases and
+     Supplier Orders slice, issue #281). Stock history, manual stock-adjustment orchestration, and the
+     restock-cost-suggestion path move into Domain/Application ownership, completing the
+     stock-adjustment reason/source vocabulary handoff #240 deferred (item 6 above) and giving Take
+     Inventory (#245) one authoritative restock-cost-suggestion path to consume instead of its own
+     dependency on the legacy service.
+     - **Domain.** `Inventory.Domain.Stock.StockAdjustmentReason`/`StockAdjustmentSource` mirror
+       `InventoryApi.Models.StockAdjustmentReason`/`StockAdjustmentSource` member-for-member, the same
+       convention `Inventory.Domain.Expenses.ExpenseCategory`/`Inventory.Domain.SupplierOrders.SupplierOrderStatus`
+       already established for their own persistence enums; their numeric values are persisted and
+       unchanged. `ManualStockAdjustmentPolicy` validates a manual adjustment request - a Correction
+       must remove stock, and a positive Restock must carry a non-negative unit cost - reusing the
+       exact messages the former `InventoryApi.Services.StockService.Adjust` inline checks threw.
+       `RestockCostSuggestionPolicy` is the one authoritative restock-cost-suggestion priority (the
+       latest purchase unit cost, else the product's average unit cost when valid, else none), given
+       already-queried facts; its three `Source` string constants (`"LastPurchase"`/`"AverageUnitCost"`/`"None"`)
+       are what `RestockCostSuggestionDto.Source` has always serialized and are unchanged.
+     - **Application.** `Inventory.Application.Stock.GetStockHistory`/`GetRestockCostSuggestion`/`AdjustStock`
+       are the use cases; `IStockAdjustmentStore` is their narrow persistence port.
+       `IGetRestockCostSuggestion` is `GetRestockCostSuggestion`'s public contract, the same
+       cross-slice-dependency precedent `Inventory.Application.Reporting.Bookkeeping.IGetBookkeepingReport`
+       established, so `EfInventoryCountAdjustmentStore` (Take Inventory, issue #245) depends on the
+       use case's contract rather than the concrete class or the retired `IStockService`, and reuses
+       this one authoritative restock-cost-suggestion path instead of duplicating the rule itself, as
+       it always has.
+     - **Ports and adapters.** `InventoryApi.Adapters.Persistence.EfStockAdjustmentStore` is a
+       temporary API-owned EF adapter, following the same precedent as `EfPurchaseStore`/`EfProductStore`,
+       and must move into `Inventory.Infrastructure` once `AppDbContext` and the shared persistence
+       models relocate there. It reuses `IInventoryCostService.ApplyMovement`/`IInventoryCostRebuildService.RebuildAsync`
+       exactly as the former `StockService.Adjust` did - the costing algorithm itself stays out of
+       scope for this slice (issue #149) - inside the same begin/save/rebuild/save/commit transaction
+       shape, and stamps `StockAdjustmentSource.Manual`, the machine id, and the eat-before date the
+       same way the former service did.
+       `InventoryApi.Adapters.Mapping.StockAdjustmentResponseMapper` maps the Application record back
+       onto the `StockAdjustment` entity shape `StockController`'s history/restock-cost-suggestion/adjust
+       actions have always serialized, the same response-mapper precedent `ProductResponseMapper`/`PurchaseResponseMapper`
+       established, so the migration changes no response key or status code.
+     - **API boundary.** `StockController` binds HTTP input, invokes the use cases, and maps results
+       through the response mapper; its routes, request/response JSON shapes, and status codes are
+       unchanged. `InventoryApi.Services.StockService`/`Services.Interfaces.IStockService` had no other
+       callers once `StockController` and `EfInventoryCountAdjustmentStore` migrated, so - unlike the
+       Products/Purchases slices, which left a thin delegator because their response contract needed
+       byte-for-byte reconstruction through a still-present entity-returning service - both files were
+       deleted outright, the same full-removal precedent the categories/suppliers slice (item 4 above)
+       established once its last caller migrated. `ProjectDependencyDirectionTests.Only_the_documented_legacy_services_remain_in_InventoryApi_Services`'s
+       allow-list was updated to match.
+     - Reused unchanged from issue #281: purchase-linked restock movements still persist through the
+       same `StockAdjustment` reason/source vocabulary this slice gives a typed Domain home to; this
+       slice did not reopen Purchase/Supplier Order orchestration.
 
 7. **Purchasing and costing slice**
    - Migrate purchases, supplier orders, stock ledger, AVCO, rebuilding, and sale costing as one coherent area.
@@ -1773,9 +1824,9 @@ Backend and frontend tracks can progress independently when their contracts do n
      renames, the canonical `api/purchases` contract, and the persistence compatibility surfaces
      intentionally left on their legacy names.
    - **Purchases and Supplier Orders orchestration done** (issue #281, a child of the #148 umbrella;
-     sibling to the Stock child, issue #282, which still owns `StockService`/`IStockService` and the
-     stock-adjustment reason/source vocabulary). The costing-rebuild orchestration itself (`IInventoryCostRebuildService`
-     and sale costing) remains future work, tracked by #149.
+     sibling to the Stock child, issue #282, migrated separately - see item 6 above). The
+     costing-rebuild orchestration itself (`IInventoryCostRebuildService` and sale costing) remains
+     future work, tracked by #149.
      - **Domain.** `Inventory.Domain.Purchases.PurchaseItemFormatPolicy` validates a purchase line's
        product/quantity/cost shape (the inline check the former `PurchaseService.ValidateItemsAsync`
        made); `PurchaseStockMovementPolicy` holds the restock stock-movement quantity/total-cost
@@ -1842,8 +1893,9 @@ Backend and frontend tracks can progress independently when their contracts do n
        `Inventory.Application.Purchases.ComputePurchaseTotalValidation`/`GetProductPriceComparison`,
        and `IProductPurchasePriceHistoryProvider`. Purchase stock movements still persist through the
        existing `StockAdjustment` reason/source vocabulary unchanged - this slice maps Domain allocation
-       results onto that same persisted shape rather than introducing a second one, leaving the
-       vocabulary's redesign and `StockService`/`IStockService`'s migration to sibling #282.
+       results onto that same persisted shape rather than introducing a second one; the vocabulary's
+       typed Domain home and `StockService`/`IStockService`'s migration followed separately in sibling
+       issue #282 (item 6 above).
 
 8. **Reporting slices**
    - Split bookkeeping, daily, reconciliation, machine/product profitability, GST, dashboard, and transactions into separate query handlers.
@@ -1868,7 +1920,8 @@ Backend and frontend tracks can progress independently when their contracts do n
 
 10. **Remove legacy structure**
     - Done for reporting (issue #92): `InventoryApi.Services.ReportingService`, `InventoryApi.Services.Interfaces.IReportingService`, their dependency-injection registration, and every production and test caller were removed, and both source files were deleted. Reporting exports now run through `Inventory.Application.Reporting.Export.GetReportExportRows` for row building and `InventoryApi.Adapters.Export.ReportExportFileWriter` for CSV/XLSX byte encoding.
-    - Still pending for every other feature area (products, stock, purchasing/costing, the Sites/Machines legacy delegator classes above, and the remaining direct-access controllers/services); only after each is migrated and tests prove equivalent behavior does this step complete overall.
+    - Done for stock (issue #282, item 6 above): `InventoryApi.Services.StockService`, `InventoryApi.Services.Interfaces.IStockService`, their dependency-injection registration, and every production and test caller were removed, and both source files were deleted.
+    - Still pending for every other feature area (products, purchasing/costing, the Sites/Machines legacy delegator classes above, and the remaining direct-access controllers/services); only after each is migrated and tests prove equivalent behavior does this step complete overall.
 
 ### Frontend migration track
 
