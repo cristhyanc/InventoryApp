@@ -165,8 +165,10 @@ jobs:
             --allow-tool='shell(git diff:*)' \
             --allow-tool='shell(git log:*)' \
             --allow-tool='shell(git show:*)' \
+            --additional-mcp-config '{"mcpServers":{"nayax":{"type":"http","url":"https://devzone.nayax.com/mcp","tools":["search_nayax_developer_portal","query_docs_filesystem_nayax_developer_portal"]}}}' \
+            --allow-tool='nayax(search_nayax_developer_portal)' --allow-tool='nayax(query_docs_filesystem_nayax_developer_portal)' --deny-tool='nayax(submit_feedback)' \
             --deny-tool='write' \
-            -p "You are the read-only InventoryApp architecture checker for pull request #$PR_NUMBER (issue #$ISSUE_NUMBER), implemented by a different agent (Claude). The working tree is the pull request head $HEAD_SHA; the change is \`git diff $base_sha..HEAD\`. Read AGENTS.md (Architecture rules) and docs/architecture.md, then review only the touched code and its directly affected boundaries: controllers versus use cases, domain rules versus adapters, dependency direction, framework or persistence leakage, duplicated calculations, information hiding, and testability. Report only violations of an established rule in those documents, each with file, line, the rule it breaks, and the smallest structural fix that preserves behaviour, API contracts and acceptance criteria. Do not propose broad migrations, new frameworks or changes to unrelated files. You must not edit, create or delete files or run any command that changes the repository. End your answer with exactly one final line: ARCHITECTURE: CLEAN when there are no findings, or ARCHITECTURE: FINDINGS when there is at least one." \
+            -p "You are the read-only InventoryApp architecture checker for pull request #$PR_NUMBER (issue #$ISSUE_NUMBER), implemented by a different agent (Claude). The working tree is the pull request head $HEAD_SHA; the change is \`git diff $base_sha..HEAD\`. Read AGENTS.md (Architecture rules) and docs/architecture.md, then review only the touched code and its directly affected boundaries: controllers versus use cases, domain rules versus adapters, dependency direction, framework or persistence leakage, duplicated calculations, information hiding, and testability. Report only violations of an established rule in those documents, each with file, line, the rule it breaks, and the smallest structural fix that preserves behaviour, API contracts and acceptance criteria. Do not propose broad migrations, new frameworks or changes to unrelated files. You must not edit, create or delete files or run any command that changes the repository. Nayax contract verification (AGENTS.md § Nayax contract verification): if this work touches code that calls the Nayax API or models a Nayax request or response, look up the relevant endpoint contract with the read-only Nayax documentation tools (search_nayax_developer_portal and query_docs_filesystem_nayax_developer_portal on the nayax MCP server) before defining, changing or accepting field names, types, nullability, identifiers, timestamps or endpoint semantics. Never invent a Nayax property that the documentation can confirm or refute. If the tools are unavailable or the contract cannot be found, state explicitly that authoritative Nayax verification could not be completed and treat the affected contract as unverified rather than guessing. Work that does not touch Nayax needs no lookup. End your answer with exactly one final line: ARCHITECTURE: CLEAN when there are no findings, or ARCHITECTURE: FINDINGS when there is at least one." \
             > "$out"
 
           [ -z "$(git status --porcelain)" ] || fail "The Copilot architecture check changed the working tree; it must be read-only."
@@ -323,9 +325,12 @@ jobs:
 
             If you edit: run exactly `bash scripts/validate.sh` in the foreground, with no redirection, pipe or background execution (the allowlist refuses any variant, and the 30-minute shell timeout covers a full run); if validation fails, fix only your structural change and rerun it. Check the final diff against the issue and PR body and commit a focused architecture change locally. Do not push; a deterministic workflow step will mint a fresh GitHub App token and push the verified local head after your invocation. Comment on the PR with each Copilot finding and each SonarCloud issue, whether you fixed or declined it and why, the structural changes, and the exact validation result. Never claim a command passed unless it ran successfully.
 
+            Nayax contract verification (AGENTS.md § Nayax contract verification): if this work touches code that calls the Nayax API or models a Nayax request or response, look up the relevant endpoint contract with the read-only Nayax documentation tools (search_nayax_developer_portal and query_docs_filesystem_nayax_developer_portal on the nayax MCP server) before defining, changing or accepting field names, types, nullability, identifiers, timestamps or endpoint semantics. Never invent a Nayax property that the documentation can confirm or refute. If the tools are unavailable or the contract cannot be found, state explicitly that authoritative Nayax verification could not be completed and treat the affected contract as unverified rather than guessing. Work that does not touch Nayax needs no lookup.
+
             Never merge, approve, deploy, edit labels, open another PR, change the PR description, or modify production data. Independent exact-SHA validation and the Copilot final review still follow this stage.
 
           claude_args: |
+            --mcp-config '{"mcpServers":{"nayax":{"type":"http","url":"https://devzone.nayax.com/mcp"}}}'
             --max-turns 100
             --allowedTools "Read,Glob,Grep,Edit,MultiEdit,Write"
             "Bash(gh issue view *),Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr list *),Bash(gh pr comment *)"
@@ -335,7 +340,9 @@ jobs:
             "Bash(mkdir -p backend/*),Bash(mkdir -p frontend/*),Bash(mkdir -p docs/*),Bash(mkdir -p scripts/*)"
             "Bash(git add *),Bash(git commit *)"
             "Bash(bash scripts/validate.sh),Bash(dotnet *),Bash(npm --prefix frontend/inventory-app *)"
+            "mcp__nayax__search_nayax_developer_portal,mcp__nayax__query_docs_filesystem_nayax_developer_portal"
             --disallowedTools "Agent,WebFetch,WebSearch"
+            "mcp__nayax__submit_feedback"
             "Bash(git push *),Bash(git push * --force *),Bash(git push * -f *),Bash(git push * --force-with-lease *),Bash(git reset --hard *),Bash(git rebase *)"
             "Bash(git checkout *),Bash(git switch *),Bash(gh pr merge *),Bash(gh pr review *),Bash(gh pr edit *),Bash(gh pr create *),Bash(gh issue edit *),Bash(gh api *),Bash(gh workflow *),Bash(gh run *)"
 

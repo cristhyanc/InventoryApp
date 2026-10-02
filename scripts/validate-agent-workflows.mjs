@@ -1647,6 +1647,7 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
   verifyReviewPublicationAndScheduling(read);
   verifyCopilotImplementationPath(read);
   verifyImplementationModelSelection(read);
+  verifyNayaxDocumentationAccess(read);
 }
 
 export function verifyImplementationModelSelection(read = readRepositoryFile) {
@@ -1668,6 +1669,158 @@ export function verifyImplementationModelSelection(read = readRepositoryFile) {
       forbidText(consumer, 'CLAUDE_CODE_OAUTH_TOKEN', `${path} model consumer`);
     }
   }
+}
+
+// ---------------------------------------------------------------------------------------
+// Nayax documentation access (issue #192): the analysis and implementation agents may read
+// Nayax's official documentation MCP server through exactly two read-only tools; model triage
+// and the format-only Copilot review repair get no access at all.
+// ---------------------------------------------------------------------------------------
+
+export const modelSelectionPath = '.github/workflows/agent-model-selection.yml';
+export const copilotInstructionsPath = '.github/copilot-instructions.md';
+export const agentsPath = 'AGENTS.md';
+
+export const NAYAX_MCP_CONTRACT = Object.freeze({
+  // Shared by every covered prompt; it sits inside a double-quoted shell string in the Copilot
+  // architecture check, so it must never contain a backtick, a dollar sign or a double quote.
+  promptRule:
+    'Nayax contract verification (AGENTS.md § Nayax contract verification): if this work touches code that calls the Nayax API or models a Nayax request or response, ' +
+    'look up the relevant endpoint contract with the read-only Nayax documentation tools (search_nayax_developer_portal and query_docs_filesystem_nayax_developer_portal on the nayax MCP server) ' +
+    'before defining, changing or accepting field names, types, nullability, identifiers, timestamps or endpoint semantics. Never invent a Nayax property that the documentation can confirm or refute. ' +
+    'If the tools are unavailable or the contract cannot be found, state explicitly that authoritative Nayax verification could not be completed and treat the affected contract as unverified rather than guessing. ' +
+    'Work that does not touch Nayax needs no lookup.',
+  claudeMcpConfig: `            --mcp-config '{"mcpServers":{"nayax":{"type":"http","url":"https://devzone.nayax.com/mcp"}}}'\n`,
+  claudeAllowedTools: '            "mcp__nayax__search_nayax_developer_portal,mcp__nayax__query_docs_filesystem_nayax_developer_portal"\n',
+  claudeDeniedTool: '            "mcp__nayax__submit_feedback"\n',
+  copilotMcpConfig:
+    `--additional-mcp-config '{"mcpServers":{"nayax":{"type":"http","url":"https://devzone.nayax.com/mcp","tools":["search_nayax_developer_portal","query_docs_filesystem_nayax_developer_portal"]}}}'`,
+  copilotToolRules:
+    "--allow-tool='nayax(search_nayax_developer_portal)' --allow-tool='nayax(query_docs_filesystem_nayax_developer_portal)' --deny-tool='nayax(submit_feedback)'",
+  agentsRequired: [
+    '### Nayax contract verification',
+    'https://devzone.nayax.com/mcp',
+    'look up the relevant endpoint contract in that documentation **before** defining, changing or accepting request/response DTOs',
+    'Never invent a Nayax response property when the authoritative contract can be retrieved.',
+    'state that authoritative Nayax verification could not be completed',
+    'Never silently fall back to guessed fields for a contract-sensitive change.',
+    'Work that does not touch the Nayax integration needs no lookup',
+    'Model triage and the format-only Copilot review JSON repair have no Nayax documentation access',
+  ],
+  copilotInstructionsRequired: [
+    '`AGENTS.md` § Nayax contract verification',
+    'Never invent a Nayax response property when the authoritative contract can be retrieved.',
+    'state explicitly that authoritative Nayax verification could not be completed',
+    'Never call the server\'s `submit_feedback` tool.',
+  ],
+  claudePaths: [implementPath, architecturePath, copilotArchitecturePath, repairPath, reviewPath],
+  workspaceMcpConfigPaths: ['.mcp.json', '.github/mcp.json'],
+});
+
+function countOccurrences(text, needle) {
+  return text.split(needle).length - 1;
+}
+
+/** The claude_args block: from its header to the first line indented less than its arguments. */
+function claudeArgsBlock(workflow, source) {
+  const start = workflow.indexOf('          claude_args: |\n');
+  if (start < 0) throw new Error(`${source}: missing section start: claude_args: |`);
+  const lines = workflow.slice(start).split('\n');
+  let end = 1;
+  while (end < lines.length && (lines[end].startsWith('            ') || lines[end] === '')) {
+    if (lines[end] === '' && !(lines[end + 1] ?? '').startsWith('            ')) break;
+    end += 1;
+  }
+  return lines.slice(0, end).join('\n') + '\n';
+}
+
+function verifyNoNayaxAccess(text, source) {
+  for (const forbidden of ['nayax', 'Nayax', 'mcp-config', 'mcp__']) forbidText(text, forbidden, source);
+}
+
+function verifyNayaxPromptRuleIsShellSafe(contract) {
+  for (const unsafe of ['`', '$', '"']) {
+    if (contract.promptRule.includes(unsafe)) throw new Error(`Nayax prompt rule must not contain ${unsafe}.`);
+  }
+}
+
+/** One Claude invocation: one server, two read-only tools, feedback denied, prompt rule present. */
+function verifyClaudeNayaxAccess(workflow, path, contract) {
+  const source = `${path} Nayax documentation access`;
+  if (countOccurrences(workflow, '--mcp-config') !== 1) throw new Error(`${source}: expected exactly one --mcp-config.`);
+  const args = claudeArgsBlock(workflow, source);
+  requireText(args, contract.claudeMcpConfig, source);
+  const allowed = extractAllowedTools(args, source);
+  requireText(allowed, contract.claudeAllowedTools, source);
+  for (const forbidden of ['submit_feedback', 'mcp__nayax"', 'mcp__nayax,', 'mcp__nayax__*', 'WebFetch,mcp', '--strict-mcp-config']) forbidText(allowed, forbidden, source);
+  const disallowed = section(args, '            --disallowedTools', null, source);
+  requireText(disallowed, contract.claudeDeniedTool, source);
+  forbidText(disallowed, 'search_nayax_developer_portal', source);
+  requireText(extractPromptText(workflow, source), contract.promptRule, `${path} prompt`);
+}
+
+/** One Copilot CLI analysis step: the same server, filtered and approved to the same two tools. */
+function verifyCopilotNayaxAccess({ invocation, prompt, workflow, source }, contract) {
+  requireText(invocation, contract.copilotMcpConfig, source);
+  requireText(invocation, contract.copilotToolRules, source);
+  requireText(prompt, contract.promptRule, `${source} prompt`);
+  if (countOccurrences(workflow, '--additional-mcp-config') !== 1) throw new Error(`${source}: expected exactly one --additional-mcp-config.`);
+  if (countOccurrences(workflow, "--allow-tool='nayax") !== 2) throw new Error(`${source}: expected exactly two Nayax tool approvals.`);
+  for (const forbidden of ["--allow-tool='nayax'", "--allow-tool='nayax(submit_feedback)'", '--allow-all']) forbidText(invocation, forbidden, source);
+}
+
+function copilotNayaxSteps(read) {
+  const architecture = read(architecturePath);
+  const review = read(reviewPath);
+  const checkSource = 'agent-architecture.yml Copilot architecture check';
+  const check = section(architecture, '          copilot -s --no-ask-user \\\n', '> "$out"', checkSource);
+  const reviewSource = 'agent-review.yml Copilot review';
+  return [
+    { invocation: check, prompt: check, workflow: architecture, source: checkSource },
+    {
+      invocation: section(review, "          copilot -s --no-ask-user \\\n            --allow-tool='shell(git diff:*)'", '-p "$prompt" > "$work/copilot-output.md"', reviewSource),
+      prompt: section(review, `prompt="$(cat <<'EOF'\n`, '\n          EOF\n', `${reviewSource} prompt`),
+      workflow: review,
+      source: reviewSource,
+    },
+  ];
+}
+
+function fileExists(read, path) {
+  try {
+    read(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Explicitly excluded: the format-only review repair, model triage, and any workspace MCP file. */
+function verifyNayaxExclusions(read, contract) {
+  const repairSource = 'agent-review.yml Copilot format repair';
+  const repair = section(read(reviewPath), 'repair_prompt="', '> "$work/copilot-output.md"', repairSource);
+  requireText(repair, "copilot -s --no-ask-user --disable-builtin-mcps \\\n              --deny-tool='shell' --deny-tool='write' --deny-tool='url' \\\n", repairSource);
+  verifyNoNayaxAccess(repair, repairSource);
+  verifyNoNayaxAccess(read(modelSelectionPath), `${modelSelectionPath} model triage`);
+  // A workspace MCP file would be loaded by every Copilot CLI invocation, including the excluded ones.
+  const present = contract.workspaceMcpConfigPaths.find((path) => fileExists(read, path));
+  if (present) throw new Error(`${present}: a workspace MCP configuration would give every Copilot CLI invocation, including the format-only repair, MCP access.`);
+}
+
+function verifyNayaxRuleDocuments(read, contract) {
+  const agents = read(agentsPath);
+  for (const required of contract.agentsRequired) requireText(agents, required, `${agentsPath} Nayax contract verification`);
+  const instructions = read(copilotInstructionsPath);
+  for (const required of contract.copilotInstructionsRequired) requireText(instructions, required, `${copilotInstructionsPath} Nayax contract verification`);
+}
+
+export function verifyNayaxDocumentationAccess(read = readRepositoryFile) {
+  const contract = NAYAX_MCP_CONTRACT;
+  verifyNayaxPromptRuleIsShellSafe(contract);
+  for (const path of contract.claudePaths) verifyClaudeNayaxAccess(read(path), path, contract);
+  for (const step of copilotNayaxSteps(read)) verifyCopilotNayaxAccess(step, contract);
+  verifyNayaxExclusions(read, contract);
+  verifyNayaxRuleDocuments(read, contract);
 }
 
 const invokedDirectly =

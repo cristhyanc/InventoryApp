@@ -219,8 +219,11 @@ jobs:
             - `.agent-pr-title` and `.agent-pr-body.md` exist and are untracked; and
             - `node scripts/validate-documentation-impact.mjs --pr-body .agent-pr-body.md` passed.
 
+            Nayax contract verification (AGENTS.md § Nayax contract verification): if this work touches code that calls the Nayax API or models a Nayax request or response, look up the relevant endpoint contract with the read-only Nayax documentation tools (search_nayax_developer_portal and query_docs_filesystem_nayax_developer_portal on the nayax MCP server) before defining, changing or accepting field names, types, nullability, identifiers, timestamps or endpoint semantics. Never invent a Nayax property that the documentation can confirm or refute. If the tools are unavailable or the contract cannot be found, state explicitly that authoritative Nayax verification could not be completed and treat the affected contract as unverified rather than guessing. Work that does not touch Nayax needs no lookup.
+
             Hard limits: do not merge, approve, deploy, run migrations against any environment, modify labels, change workflows, secrets or repository settings, touch anything outside the acceptance criteria, or claim a command passed unless it ran and succeeded in this session.
           claude_args: |
+            --mcp-config '{"mcpServers":{"nayax":{"type":"http","url":"https://devzone.nayax.com/mcp"}}}'
             --model ${{ needs.model.outputs.model }}
             --settings '{"availableModels":["${{ needs.model.outputs.model }}"]}'
             --max-turns ${{ needs.model.outputs.max_turns }}
@@ -233,7 +236,9 @@ jobs:
             "Bash(mkdir -p backend/*),Bash(mkdir -p frontend/*),Bash(mkdir -p docs/*),Bash(mkdir -p scripts/*)"
             "Bash(git add *),Bash(git commit *)"
             "Bash(bash scripts/validate.sh),Bash(dotnet *),Bash(npm --prefix frontend/inventory-app *),Bash(node scripts/validate-documentation-impact.mjs --pr-body *)"
+            "mcp__nayax__search_nayax_developer_portal,mcp__nayax__query_docs_filesystem_nayax_developer_portal"
             --disallowedTools "Agent,WebFetch,WebSearch"
+            "mcp__nayax__submit_feedback"
             "Bash(git push *),Bash(git push * --force *),Bash(git push * -f *),Bash(git push * --force-with-lease *),Bash(git push --force *),Bash(git push -f *)"
             "Bash(git reset --hard *),Bash(git rebase *),Bash(git checkout develop *),Bash(git checkout main *),Bash(git switch develop *),Bash(git switch main *)"
             "Bash(gh pr create *),Bash(gh pr merge *),Bash(gh pr review *),Bash(gh pr edit *),Bash(gh issue edit *),Bash(gh api *),Bash(gh workflow *),Bash(gh run *),Bash(gh release *),Bash(gh secret *),Bash(gh variable *)"

@@ -32,4 +32,13 @@ Claude and Copilot review each other. A human chooses the implementer with a lab
 - Check that the tests `AGENTS.md` requires exist and are meaningful, that the validation evidence matches CI, and that the `## Documentation impact` declaration matches the issue's decision and the actual diff.
 - Flag scope creep, unrelated edits, secrets, generated output, and accidental migrations.
 
+## Nayax contract verification
+
+Follow `AGENTS.md` § Nayax contract verification whenever you implement, architecture-check or review code that calls the Nayax API or models a Nayax request or response:
+
+- Look up the endpoint contract with the read-only Nayax documentation tools (`search_nayax_developer_portal` and `query_docs_filesystem_nayax_developer_portal` on the `nayax` MCP server) before defining, changing or accepting field names, types, nullability, identifiers, timestamps or endpoint semantics.
+- Never invent a Nayax response property when the authoritative contract can be retrieved.
+- If the tools are unavailable or the contract cannot be found, state explicitly that authoritative Nayax verification could not be completed and treat the contract as unverified; never fall back silently to guessed fields.
+- Work that does not touch Nayax needs no lookup. Never call the server's `submit_feedback` tool.
+
 Implementation model tiers: the `agent-ready-copilot-low` and `agent-ready-copilot-high` labels carry the same implementation authority as `agent-ready-copilot`, with a fixed model. Never switch models or delegate to bypass the selected tier. If inadequate, stop and report the limitation for a human to relabel the issue. The corresponding Claude low/high labels still mean you review Claude's work. See docs/automation.md § Implementation model tiers.
