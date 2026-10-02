@@ -4,6 +4,8 @@ using InventoryApi.Services;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
 
+using Inventory.Domain.FinancialConfiguration;
+
 namespace InventoryApi.Tests.Services;
 
 public class InventoryCostRebuildServiceTests

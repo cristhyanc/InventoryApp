@@ -1,7 +1,9 @@
 using InventoryApi.Data;
 using Inventory.Application.Nayax;
+using Inventory.Application.Commissions;
+using Inventory.Domain.FinancialConfiguration;
+using InventoryApi.Adapters.Persistence;
 using InventoryApi.Models;
-using InventoryApi.Services;
 using InventoryApi.Tests.Application.Time;
 using Microsoft.EntityFrameworkCore;
 using Moq;
@@ -18,7 +20,7 @@ public class SiteCommissionServiceTests
         AddSale(db, 1, 10, new DateTime(2025, 7, 15));
         await db.SaveChangesAsync();
 
-        var row = Assert.Single((await Service(db, (10, 91)).GetReportAsync(
+        var row = Assert.Single((await Report(Service(db, (10, 91)),
             new DateTime(2025, 7, 15), new DateTime(2025, 7, 15), null)).Rows);
 
         Assert.Equal(10m, row.GrossSales);
@@ -38,7 +40,7 @@ public class SiteCommissionServiceTests
         AddSale(db, 1, 10, new DateTime(2025, 7, 15));
         await db.SaveChangesAsync();
 
-        var row = Assert.Single((await Service(db, (10, 91)).GetReportAsync(
+        var row = Assert.Single((await Report(Service(db, (10, 91)),
             new DateTime(2025, 7, 15), new DateTime(2025, 7, 15), null)).Rows);
 
         Assert.Equal(10m, row.GrossSales);
@@ -58,7 +60,7 @@ public class SiteCommissionServiceTests
         AddSale(db, 1, 10, new DateTime(2025, 7, 15));
         await db.SaveChangesAsync();
 
-        var row = Assert.Single((await Service(db, (10, 91)).GetReportAsync(
+        var row = Assert.Single((await Report(Service(db, (10, 91)),
             new DateTime(2025, 7, 15), new DateTime(2025, 7, 15), null)).Rows);
 
         Assert.Equal(10m, row.GrossSales);
@@ -79,7 +81,7 @@ public class SiteCommissionServiceTests
         AddSale(db, 2, 10, new DateTime(2025, 7, 15));
         await db.SaveChangesAsync();
 
-        var row = Assert.Single((await Service(db, (10, 91)).GetReportAsync(
+        var row = Assert.Single((await Report(Service(db, (10, 91)),
             new DateTime(2025, 6, 1), new DateTime(2025, 7, 31), null)).Rows);
 
         Assert.Equal(20m, row.GrossSales);
@@ -99,7 +101,7 @@ public class SiteCommissionServiceTests
         AddSale(db, 2, 11, new DateTime(2025, 7, 15));
         await db.SaveChangesAsync();
 
-        var row = Assert.Single((await Service(db, (10, 91), (11, 91)).GetReportAsync(
+        var row = Assert.Single((await Report(Service(db, (10, 91), (11, 91)),
             new DateTime(2025, 6, 1), new DateTime(2025, 7, 31), null)).Rows);
 
         Assert.Equal(20m, row.GrossSales);
@@ -118,7 +120,7 @@ public class SiteCommissionServiceTests
         AddSale(db, 1, 10, new DateTime(2025, 7, 15));
         await db.SaveChangesAsync();
 
-        var row = Assert.Single((await Service(db, new DateTime(2025, 7, 16), (10, 91)).GetReportAsync(
+        var row = Assert.Single((await Report(Service(db, new DateTime(2025, 7, 16), (10, 91)),
             new DateTime(2025, 7, 15), new DateTime(2025, 7, 15), null)).Rows);
 
         Assert.Equal(new DateTime(2025, 7, 15), row.DueDate);
@@ -133,7 +135,7 @@ public class SiteCommissionServiceTests
         AddSale(db, 1, 10, new DateTime(2025, 7, 15));
         await db.SaveChangesAsync();
 
-        var row = Assert.Single((await Service(db, new DateTime(2025, 7, 15), (10, 91)).GetReportAsync(
+        var row = Assert.Single((await Report(Service(db, new DateTime(2025, 7, 15), (10, 91)),
             new DateTime(2025, 7, 15), new DateTime(2025, 7, 15), null)).Rows);
 
         Assert.Equal("Due", row.Status);
@@ -142,16 +144,24 @@ public class SiteCommissionServiceTests
     private static AppDbContext CreateDb() => TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>()
         .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
 
-    private static SiteCommissionService Service(AppDbContext db, params (long MachineId, long SiteId)[] machines) =>
+    private static GetSiteCommissionReport Service(AppDbContext db, params (long MachineId, long SiteId)[] machines) =>
         Service(db, DateTime.UtcNow, machines);
 
-    private static SiteCommissionService Service(AppDbContext db, DateTime businessToday, params (long MachineId, long SiteId)[] machines)
+    private static GetSiteCommissionReport Service(AppDbContext db, DateTime businessToday, params (long MachineId, long SiteId)[] machines)
     {
         var nayax = new Mock<INayaxLynxClient>();
         nayax.Setup(x => x.GetMachinesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(
             machines.Select(x => new NayaxMachine { MachineID = x.MachineId, CustomerID = x.SiteId }).ToList());
-        return new SiteCommissionService(db, nayax.Object, new FakeBusinessCalendar(businessToday));
+        return new GetSiteCommissionReport(
+            nayax.Object,
+            new EfSiteCommissionStore(db),
+            new SiteNameResolverAdapter(),
+            new FakeBusinessCalendar(businessToday));
     }
+
+    private static Task<SiteCommissionReport> Report(
+        GetSiteCommissionReport service, DateTime from, DateTime to, long? siteId) =>
+        service.Handle(from, to, siteId, CancellationToken.None);
 
     private static void AddSale(AppDbContext db, long id, long machineId, DateTime date) => db.NayaxSales.Add(new NayaxSales
     {

@@ -1,9 +1,8 @@
 using InventoryApi.Adapters.Persistence;
+using Inventory.Application.Commissions;
+using Inventory.Domain.FinancialConfiguration;
 using InventoryApi.Data;
-using InventoryApi.DTOs;
 using InventoryApi.Models;
-using InventoryApi.Services;
-using InventoryApi.Services.Interfaces;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Moq;
@@ -27,11 +26,11 @@ public class EfBookkeepingReportFactsProviderTests
         return (connection, options);
     }
 
-    private static ISiteCommissionService EmptyCommissions()
+    private static IGetSiteCommissionReport EmptyCommissions()
     {
-        var mock = new Mock<ISiteCommissionService>();
-        mock.Setup(x => x.GetReportAsync(It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((DateTime from, DateTime to, long? _, CancellationToken _) => new SiteCommissionReportDto(from, to, []));
+        var mock = new Mock<IGetSiteCommissionReport>();
+        mock.Setup(x => x.Handle(It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((DateTime from, DateTime to, long? _, CancellationToken _) => new SiteCommissionReport(from, to, []));
         return mock.Object;
     }
 
@@ -64,7 +63,7 @@ public class EfBookkeepingReportFactsProviderTests
                 CostOfGoodsSold = null
             });
         await db.SaveChangesAsync();
-        var provider = new EfBookkeepingReportFactsProvider(db, new NayaxProcessingFeeService(db), EmptyCommissions());
+        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions());
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), null, CancellationToken.None);
 
@@ -90,7 +89,7 @@ public class EfBookkeepingReportFactsProviderTests
             new NayaxSales { TransactionID = 3, MachineID = 10, SettlementValue = 4m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 2, 0, 0, 0), TransactionStatusId = NayaxTransactionStatusIds.Completed },
             new NayaxSales { TransactionID = 4, MachineID = 10, SettlementValue = 8m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 3, 0, 0, 0), TransactionStatusId = NayaxTransactionStatusIds.Completed });
         await db.SaveChangesAsync();
-        var provider = new EfBookkeepingReportFactsProvider(db, new NayaxProcessingFeeService(db), EmptyCommissions());
+        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions());
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 2), null, CancellationToken.None);
 
@@ -106,7 +105,7 @@ public class EfBookkeepingReportFactsProviderTests
             new NayaxSales { TransactionID = 1, MachineID = 10, SettlementValue = 10m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed },
             new NayaxSales { TransactionID = 2, MachineID = 20, SettlementValue = 30m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed });
         await db.SaveChangesAsync();
-        var provider = new EfBookkeepingReportFactsProvider(db, new NayaxProcessingFeeService(db), EmptyCommissions());
+        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions());
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), 10, CancellationToken.None);
 
@@ -122,7 +121,7 @@ public class EfBookkeepingReportFactsProviderTests
             new NayaxSales { TransactionID = 1, MachineID = 10, SettlementValue = 10m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed, CostOfGoodsSold = 4m },
             new NayaxSales { TransactionID = 2, MachineID = 10, SettlementValue = 99m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.PendingSettlementNotFinal, CostOfGoodsSold = null });
         await db.SaveChangesAsync();
-        var provider = new EfBookkeepingReportFactsProvider(db, new NayaxProcessingFeeService(db), EmptyCommissions());
+        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions());
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), null, CancellationToken.None);
 
@@ -135,7 +134,7 @@ public class EfBookkeepingReportFactsProviderTests
     {
         await using var connection = (await CreateSqliteAsync()).Connection;
         await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
-        var provider = new EfBookkeepingReportFactsProvider(db, new NayaxProcessingFeeService(db), EmptyCommissions());
+        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions());
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), null, CancellationToken.None);
 

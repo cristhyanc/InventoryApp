@@ -155,7 +155,7 @@ public class ProjectDependencyDirectionTests
 
     /// <summary>
     /// Issue #145: <c>InventoryApi/Services</c> is use-case/domain business logic (import,
-    /// costing, commissions, machine/site/product/purchase/stock orchestration, ...) that predates
+    /// costing, machine/site/product/purchase/stock orchestration, ...) that predates
     /// the <c>Inventory.Domain</c>/<c>Inventory.Application</c> split and has not migrated yet - the
     /// temporary, explicitly documented exception described in docs/architecture.md § Backend
     /// target. Migrating all of it is tracked feature-by-feature by issues #146-#151, with full
@@ -176,7 +176,6 @@ public class ProjectDependencyDirectionTests
     {
         string[] allowedRelativePaths =
         [
-            "EffectiveFinancialConfiguration.cs",
             "ImportService.cs",
             "ImportService.NayaxSales.cs",
             "ImportService.Products.cs",
@@ -186,11 +185,9 @@ public class ProjectDependencyDirectionTests
             "Interfaces/IInventoryCostService.cs",
             "Interfaces/IInventoryCostTransitionService.cs",
             "Interfaces/IMachineService.cs",
-            "Interfaces/INayaxProcessingFeeService.cs",
             "Interfaces/IProductService.cs",
             "Interfaces/IPurchaseService.cs",
             "Interfaces/ISaleCostingService.cs",
-            "Interfaces/ISiteCommissionService.cs",
             "Interfaces/ISiteService.cs",
             "Interfaces/IStockService.cs",
             "Interfaces/ISupplierOrderService.cs",
@@ -199,16 +196,11 @@ public class ProjectDependencyDirectionTests
             "InventoryCostService.cs",
             "InventoryCostTransitionService.cs",
             "MachineService.cs",
-            "NayaxProcessingFeeService.cs",
             "NayaxProductMatcher.cs",
             "NayaxSalesWorkbook.cs",
-            "NayaxTransactionStatusClassifier.cs",
-            "PaymentMethodClassifier.cs",
             "ProductService.cs",
             "PurchaseService.cs",
             "SaleCostingService.cs",
-            "SiteCommissionCalculator.cs",
-            "SiteCommissionService.cs",
             "SiteNameResolver.cs",
             "SiteService.cs",
             "StockService.cs",

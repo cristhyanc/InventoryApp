@@ -1,4 +1,8 @@
 using Inventory.Domain.Reporting.Transactions;
+using EffectiveFeeRate = Inventory.Domain.FinancialConfiguration.EffectiveNayaxFeeRate;
+using TransactionCommissionBasis = Inventory.Domain.FinancialConfiguration.CommissionBasis;
+using TransactionPaymentType = Inventory.Domain.FinancialConfiguration.NayaxPaymentType;
+using TransactionSaleStatus = Inventory.Domain.FinancialConfiguration.NayaxTransactionStatus;
 using Xunit;
 
 namespace InventoryApi.Tests.Domain.Reporting.Transactions;

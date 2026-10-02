@@ -1,10 +1,11 @@
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using InventoryApi.Models;
-using InventoryApi.Services;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
+
+using Inventory.Domain.FinancialConfiguration;
 
 namespace InventoryApi.Tests.Adapters.Persistence;
 

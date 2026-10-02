@@ -9,6 +9,8 @@ using Microsoft.EntityFrameworkCore;
 using Moq;
 using Xunit;
 
+using Inventory.Domain.FinancialConfiguration;
+
 namespace InventoryApi.Tests.Services;
 
 public class InventoryCostTransitionServiceTests

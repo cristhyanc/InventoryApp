@@ -1,4 +1,5 @@
 using Inventory.Domain.Reporting.Transactions;
+using TransactionPaymentType = Inventory.Domain.FinancialConfiguration.NayaxPaymentType;
 using Xunit;
 
 namespace InventoryApi.Tests.Domain.Reporting.Transactions;

@@ -1,6 +1,6 @@
 using Inventory.Application.Reporting.Dashboard;
+using Inventory.Application.Commissions;
 using InventoryApi.Data;
-using InventoryApi.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
 
 namespace InventoryApi.Adapters.Persistence;
@@ -9,8 +9,8 @@ namespace InventoryApi.Adapters.Persistence;
 /// Temporary EF Core implementation of <see cref="IDashboardReportFactsProvider"/>. It lives in
 /// InventoryApi, not Inventory.Infrastructure, for the same reason
 /// <see cref="EfBookkeepingReportFactsProvider"/> does: it depends on <see cref="AppDbContext"/>,
-/// which still lives in InventoryApi, and it also composes the existing
-/// <see cref="ISiteCommissionService"/> business service. Its completed-sale query,
+/// which still lives in InventoryApi, and it composes the Application-owned
+/// <see cref="IGetSiteCommissionReport"/> use case. Its completed-sale query,
 /// imported-reimbursement summary, and site-commission resolution are shared with the other
 /// migrated report facts providers through <see cref="EfReportingSharedQueries"/> rather than
 /// duplicated a further time; only the distinct machine/product counts unique to the dashboard
@@ -19,9 +19,9 @@ namespace InventoryApi.Adapters.Persistence;
 public sealed class EfDashboardReportFactsProvider : IDashboardReportFactsProvider
 {
     private readonly AppDbContext _db;
-    private readonly ISiteCommissionService _siteCommissions;
+    private readonly IGetSiteCommissionReport _siteCommissions;
 
-    public EfDashboardReportFactsProvider(AppDbContext db, ISiteCommissionService siteCommissions)
+    public EfDashboardReportFactsProvider(AppDbContext db, IGetSiteCommissionReport siteCommissions)
     {
         _db = db;
         _siteCommissions = siteCommissions;

@@ -1,3 +1,5 @@
+using Inventory.Domain.FinancialConfiguration;
+
 namespace Inventory.Domain.Reporting.Transactions;
 
 /// <summary>
@@ -7,7 +9,7 @@ namespace Inventory.Domain.Reporting.Transactions;
 public readonly record struct TransactionTotalsRowInputs(
     bool IsCompleted,
     decimal Sale,
-    TransactionPaymentType PaymentType,
+    NayaxPaymentType PaymentType,
     // Whether this row is costed (see TransactionRowResult.IsCosted); irrelevant when not completed.
     bool IsCosted,
     decimal? CostOfGoods,
@@ -87,8 +89,8 @@ public sealed class TransactionTotalsAccumulator
     {
         _transactionCount++;
         _sales += row.Sale;
-        if (row.PaymentType == TransactionPaymentType.Card) _cardSales += row.Sale;
-        else if (row.PaymentType == TransactionPaymentType.Cash) _cashSales += row.Sale;
+        if (row.PaymentType == NayaxPaymentType.Card) _cardSales += row.Sale;
+        else if (row.PaymentType == NayaxPaymentType.Cash) _cashSales += row.Sale;
 
         if (row.FeeIsEstimated)
         {

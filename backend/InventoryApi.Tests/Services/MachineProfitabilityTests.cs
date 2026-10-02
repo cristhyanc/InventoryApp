@@ -9,13 +9,15 @@ using Microsoft.EntityFrameworkCore;
 using Moq;
 using Xunit;
 
+using Inventory.Domain.FinancialConfiguration;
+
 namespace InventoryApi.Tests.Services;
 
 public class MachineProfitabilityTests
 {
     private static MachineService Service(AppDbContext db, INayaxLynxClient nayax)
     {
-        var facts = new EfMachineDashboardFactsStore(db, new NayaxProcessingFeeService(db));
+        var facts = new EfMachineDashboardFactsStore(db, TestFinancialUseCases.ProcessingFees(db));
         var listMachineProducts = new ListMachineProducts(
             nayax, new EfProductCatalogStore(db), new ResolveMachineProductPricing(new EfSiteFactsStore(db)));
         return new MachineService(

@@ -1,4 +1,5 @@
 using InventoryApi.Adapters.Persistence;
+using Inventory.Domain.FinancialConfiguration;
 using InventoryApi.Data;
 using InventoryApi.Models;
 using Microsoft.Data.Sqlite;
@@ -86,5 +87,51 @@ public class EfSiteFactsStoreTenancyTests : IDisposable
         // Business A has zero agreements for site 42 (business B's is invisible), which is the
         // valid zero-commission case, not an unavailable configuration.
         Assert.False(resolution.ConfigurationUnavailable);
+    }
+
+    [Fact]
+    public async Task Effective_fee_lookup_ignores_the_other_business_rate()
+    {
+        using (var seed = TestAppDbContext.Unrestricted(_options))
+        {
+            seed.NayaxProcessingFeeRates.Add(new NayaxProcessingFeeRate
+            {
+                BusinessId = BusinessB,
+                EffectiveFrom = new DateTime(2020, 1, 1),
+                FeeExGst = .25m,
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        using var db = TestAppDbContext.For(_options, BusinessA);
+        var store = new EfSiteFactsStore(db);
+
+        var fee = await store.ResolveEffectiveFeeExGstAsync(DateTime.Today, CancellationToken.None);
+
+        Assert.Null(fee);
+    }
+
+    [Fact]
+    public async Task Commission_store_hides_other_business_agreements_for_same_site_id()
+    {
+        using (var seed = TestAppDbContext.Unrestricted(_options))
+        {
+            seed.SiteCommissionAgreements.Add(new SiteCommissionAgreement
+            {
+                BusinessId = BusinessB,
+                SiteId = 42,
+                EffectiveFrom = new DateTime(2020, 1, 1),
+                CommissionRate = .50m,
+                Basis = CommissionBasis.GrossSales,
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        using var db = TestAppDbContext.For(_options, BusinessA);
+        var store = new EfSiteCommissionStore(db);
+
+        var agreements = await store.GetAgreementsAsync(42, CancellationToken.None);
+
+        Assert.Empty(agreements);
     }
 }
