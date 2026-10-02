@@ -29,8 +29,8 @@ export function resolveSelection(selection, triage) {
   let tier = selection.tier;
   let reason = 'Explicit human model-tier label.';
   if (selection.triage) {
-    if (!triage || Object.keys(triage).sort((a, b) => a.localeCompare(b)).join(',') !== 'reason,tier' || !['low', 'standard', 'high-required'].includes(triage.tier) || typeof triage.reason !== 'string' || !triage.reason.trim() || triage.reason.length > 240 || hasControlCharacter(triage.reason)) throw new Error('Invalid triage output; implementation was not started.');
-    if (triage.tier === 'high-required') throw new Error(`Human decision required: remove ${selection.label} and apply ${selection.label}-high to authorize a high model. ${triage.reason}`);
+    if (!triage || Object.keys(triage).sort((a, b) => a.localeCompare(b)).join(',') !== 'reason,tier' || !['low', 'standard', 'high', 'clarification-required'].includes(triage.tier) || typeof triage.reason !== 'string' || !triage.reason.trim() || triage.reason.length > 240 || hasControlCharacter(triage.reason)) throw new Error('Invalid triage output; implementation was not started.');
+    if (triage.tier === 'clarification-required') throw new Error(`Human clarification required: the requirements are ambiguous, so implementation was not started. Clarify the issue, then remove and re-apply ${selection.label}. ${triage.reason}`);
     tier = triage.tier;
     reason = triage.reason.trim();
   }
