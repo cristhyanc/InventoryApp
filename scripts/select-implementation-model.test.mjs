@@ -20,13 +20,18 @@ for (const provider of ['claude', 'copilot']) {
     assert.equal(high.maxTurns, 250);
     assert.notEqual(low.model, high.model);
   });
-  test(`${provider}: default triage selects low or standard but cannot select high`, () => {
+  test(`${provider}: default triage selects low, standard or high and stops only for clarification`, () => {
     const selection = prepare(provider);
     assert.equal(selection.triage, true);
     assert.equal(resolveSelection(selection, { tier: 'low', reason: 'One local change' }).tier, 'low');
     assert.equal(resolveSelection(selection, { tier: 'standard', reason: 'Several related components' }).tier, 'standard');
-    assert.throws(() => resolveSelection(selection, { tier: 'high-required', reason: 'Broad structural change' }), /human.*high/i);
-    assert.throws(() => resolveSelection(selection, { tier: 'high', reason: 'Override policy' }), /Invalid triage/);
+    const high = resolveSelection(selection, { tier: 'high', reason: 'Broad structural change' });
+    assert.equal(high.tier, 'high');
+    assert.equal(high.model, resolveSelection(prepare(provider, '-high')).model);
+    assert.equal(high.maxTurns, 250);
+    assert.throws(() => resolveSelection(selection, { tier: 'clarification-required', reason: 'Acceptance criteria contradict' }), /clarification required/i);
+    assert.throws(() => resolveSelection(selection, { tier: 'high-required', reason: 'Old tier' }), /Invalid triage/);
+    assert.throws(() => resolveSelection(selection, { tier: 'opus', reason: 'Model ID instead of tier' }), /Invalid triage/);
   });
 }
 test('malformed, injected or missing model output fails closed', () => {
@@ -63,6 +68,7 @@ test('workflow contract rejects missing model gates, triage write tools and unbo
   const copilotPath = '.github/workflows/agent-copilot.yml';
   for (const [path, from, to] of [
     [selectionPath, '--model haiku', '--model opus'],
+    [selectionPath, '"enum":["low","standard","high","clarification-required"]', '"enum":["low","standard","high","opus"]'],
     [selectionPath, '--max-turns 4', '--max-turns 100'],
     [selectionPath, '--allowedTools "Read"', '--allowedTools "Read,Write"'],
     [selectionPath, 'issues: read', 'issues: write'],
