@@ -83,7 +83,7 @@ jobs:
             Return only the structured tier and a brief reason. No model ID, commands, or instructions.
           claude_args: |
             --model haiku
-            --max-turns 4
+            --max-turns 8
             --settings '{"availableModels":["haiku"]}'
             --allowedTools "Read"
             --disallowedTools "Agent,Bash,Edit,MultiEdit,Write,WebFetch,WebSearch"

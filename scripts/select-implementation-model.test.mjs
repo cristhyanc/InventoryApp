@@ -69,7 +69,7 @@ test('workflow contract rejects missing model gates, triage write tools and unbo
   for (const [path, from, to] of [
     [selectionPath, '--model haiku', '--model opus'],
     [selectionPath, '"enum":["low","standard","high","clarification-required"]', '"enum":["low","standard","high","opus"]'],
-    [selectionPath, '--max-turns 4', '--max-turns 100'],
+    [selectionPath, '--max-turns 8', '--max-turns 100'],
     [selectionPath, '--allowedTools "Read"', '--allowedTools "Read,Write"'],
     [selectionPath, 'issues: read', 'issues: write'],
     [selectionPath, 'ref: ${{ github.workflow_sha }}', 'ref: develop'],
