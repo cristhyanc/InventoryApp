@@ -878,8 +878,27 @@ describe('cross-review contract (agent-ready-claude / agent-ready-copilot)', () 
     }
   });
 
-  it('rejects a Claude fix pass that runs without Copilot findings', () => {
-    rejects({ [architecturePath]: replaceOnce(architectureWorkflow, "    if: needs.copilot-check.outputs.verdict == 'findings'\n", '') }, /agent-architecture.yml architecture job/);
+  it('rejects a Claude fix pass that runs without Copilot findings or SonarCloud issues', () => {
+    rejects({ [architecturePath]: replaceOnce(architectureWorkflow, " || fromJSON(needs.sonar.outputs.count || '0') > 0)", ')') }, /agent-architecture.yml architecture job/);
+    rejects({ [architecturePath]: replaceOnce(architectureWorkflow, "needs.copilot-check.outputs.verdict == 'findings' || ", '') }, /agent-architecture.yml architecture job/);
+  });
+
+  it('rejects a SonarCloud job that could write, run an agent, or execute the pull request head', () => {
+    for (const [path, workflow] of [[architecturePath, architectureWorkflow], [copilotArchitecturePath, copilotArchitectureWorkflow]]) {
+      const job = workflow.slice(workflow.indexOf('  sonar:\n'));
+      for (const unsafe of [
+        replaceOnce(job, '      checks: read\n', '      checks: read\n      pull-requests: write\n'),
+        replaceOnce(job, 'ref: ${{ github.sha }}', 'ref: ${{ needs.context.outputs.head_sha }}'),
+        replaceOnce(job, 'SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}', 'SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}\n          COPILOT_AGENT_TOKEN: ${{ secrets.COPILOT_AGENT_TOKEN }}'),
+      ]) {
+        rejects({ [path]: workflow.replace(job, unsafe) }, /SonarCloud job/);
+      }
+    }
+  });
+
+  it('rejects an architecture fix prompt that interpolates SonarCloud text or allows suppressing issues', () => {
+    rejects({ [architecturePath]: replaceOnce(architectureWorkflow, 'Never silence an issue instead of fixing it', 'Prefer to fix issues') }, /agent-architecture.yml architecture job/);
+    rejects({ [architecturePath]: replaceOnce(architectureWorkflow, 'Read that file first, then the SonarCloud file;', 'Read that file first, then ${{ needs.sonar.outputs.issues }};') }, /agent-architecture.yml architecture prompt/);
   });
 
   it('rejects a Claude architecture check of Copilot work that could edit or publish', () => {
