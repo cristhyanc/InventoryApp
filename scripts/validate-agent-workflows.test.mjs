@@ -1,3 +1,4 @@
+import './select-implementation-model.test.mjs';
 import './agent-persistence.test.mjs';
 import './agent-review-publication.test.mjs';
 import './agent-architecture-handoff.test.mjs';
@@ -385,7 +386,10 @@ describe('documentation-impact gate: implementation workflow', () => {
       ['      contents: read\n      issues: read\n', '      contents: read\n      issues: write\n'],
       ['      contents: read\n      issues: read\n', '      contents: read\n      issues: read\n      pull-requests: write\n'],
     ]) {
-      assertGateRejects({ [implementPath]: replaceOnce(implementWorkflow, from, to) }, /preflight job: (contains forbidden text|missing required text)/);
+      const start = implementWorkflow.indexOf('  preflight:\n');
+      const end = implementWorkflow.indexOf('  implement:\n');
+      const mutated = implementWorkflow.slice(0, start) + replaceOnce(implementWorkflow.slice(start, end), from, to) + implementWorkflow.slice(end);
+      assertGateRejects({ [implementPath]: mutated }, /preflight job: (contains forbidden text|missing required text)/);
     }
     const preflightEnd = implementWorkflow.indexOf('  implement:\n');
     const withLabelChange = implementWorkflow.slice(0, preflightEnd) + '          gh issue edit "$ISSUE_NUMBER" --add-label agent-blocked\n' + implementWorkflow.slice(preflightEnd);
@@ -406,7 +410,7 @@ describe('documentation-impact gate: implementation workflow', () => {
   });
 
   it('requires the implementation job to depend on preflight and to gate on its success', () => {
-    assertGateRejects({ [implementPath]: replaceOnce(implementWorkflow, IMPLEMENT_JOB_DOCUMENTATION_CONTRACT.needs, '')}, /implement job: missing required text:\s+needs: preflight/);
+    assertGateRejects({ [implementPath]: replaceOnce(implementWorkflow, IMPLEMENT_JOB_DOCUMENTATION_CONTRACT.needs, '')}, /implement job: missing required text:\s+needs:/);
     assertGateRejects(
       { [implementPath]: replaceOnce(implementWorkflow, IMPLEMENT_JOB_DOCUMENTATION_CONTRACT.condition, "if: always() && github.event.label.name == 'agent-ready-claude' && github.event.issue.pull_request == null") },
       /implement job: missing required text: if: needs.preflight.result == 'success'/,
