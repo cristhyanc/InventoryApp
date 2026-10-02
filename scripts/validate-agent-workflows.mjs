@@ -1338,24 +1338,40 @@ function verifyCopilotAssignWorkflow(workflow) {
 
 function verifyCopilotHandoffWorkflow(handoffWorkflow) {
   const handoffTriggers = section(handoffWorkflow, 'on:\n', '\npermissions: {}\n', `${copilotHandoffPath} triggers`);
-  for (const required of ['pull_request_target:', 'types: [ready_for_review]', '      - develop']) requireText(handoffTriggers, required, `${copilotHandoffPath} triggers`);
-  for (const forbidden of ['  pull_request:\n', 'issues:', 'synchronize', 'issue_comment', 'workflow_run', 'push:']) forbidText(handoffTriggers, forbidden, `${copilotHandoffPath} triggers`);
-  requireText(handoffWorkflow, 'permissions: {}', copilotHandoffPath);
-  for (const forbidden of ['actions/checkout', 'secrets.COPILOT', 'CLAUDE_CODE_OAUTH_TOKEN', 'AGENT_AUTOMATION_APP_PRIVATE_KEY', 'ref: ${{ github.event.pull_request', 'git push']) {
-    forbidText(handoffWorkflow, forbidden, copilotHandoffPath);
+  for (const required of [
+    'pull_request_target:', 'types: [ready_for_review]', '      - develop',
+    'workflow_run:', 'workflows: ["Validate pull request"]', 'types: [completed]',
+  ]) requireText(handoffTriggers, required, `${copilotHandoffPath} triggers`);
+  for (const forbidden of ['  pull_request:\n', 'issues:', 'synchronize', 'issue_comment', 'push:']) {
+    forbidText(handoffTriggers, forbidden, `${copilotHandoffPath} triggers`);
   }
+  requireText(handoffWorkflow, 'permissions: {}', copilotHandoffPath);
+  for (const forbidden of [
+    'actions/checkout', 'secrets.COPILOT', 'CLAUDE_CODE_OAUTH_TOKEN',
+    'AGENT_AUTOMATION_APP_PRIVATE_KEY', 'ref: ${{ github.event.pull_request', 'git push',
+  ]) forbidText(handoffWorkflow, forbidden, copilotHandoffPath);
+
   const handoff = section(handoffWorkflow, '  handoff:\n', null, `${copilotHandoffPath} handoff`);
   verifySafeDispatcherBase(handoff, `${copilotHandoffPath} handoff`);
   verifyAgentPrGuards(handoff, `${copilotHandoffPath} handoff`, 'Refusing stale handoff', 'copilot');
   for (const required of [
+    "github.event_name == 'workflow_run'",
+    "github.event.workflow_run.event == 'pull_request'",
+    "github.event.workflow_run.conclusion == 'success'",
+    'pull-requests: write',
+    'RUN_PATH: ${{ github.event.workflow_run.path }}',
+    'Running Copilot cloud agent',
+    'merge-validation',
+    'gh pr ready "$PR_NUMBER"',
     "startsWith(github.event.pull_request.head.ref, 'copilot/')",
     'closingIssuesReferences', 'any(.labels[]?; .name == "agent-working")',
-    'gh workflow run agent-copilot-architecture.yml', '-f issue_number="$issue_number"', '-f pr_number="$PR_NUMBER"', '-f head_sha="$HEAD_SHA"',
+    'gh workflow run agent-copilot-architecture.yml', '-f issue_number="$issue_number"',
+    '-f pr_number="$PR_NUMBER"', '-f head_sha="$HEAD_SHA"',
   ]) requireText(handoff, required, `${copilotHandoffPath} handoff`);
-  for (const forbidden of ['validate.yml', 'agent-review.yml', 'COPILOT_AGENT_TOKEN', 'issues: write', 'gh pr edit', 'gh issue edit']) {
-    forbidText(handoff, forbidden, `${copilotHandoffPath} handoff`);
-  }
-
+  for (const forbidden of [
+    'agent-review.yml', 'COPILOT_AGENT_TOKEN', 'issues: write', 'contents: write',
+    'gh pr edit', 'gh issue edit',
+  ]) forbidText(handoff, forbidden, `${copilotHandoffPath} handoff`);
 }
 
 function verifyCopilotArchitectureContext(check) {
