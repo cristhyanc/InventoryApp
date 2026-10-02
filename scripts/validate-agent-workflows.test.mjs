@@ -987,7 +987,7 @@ describe('Nayax documentation access (issue #192)', () => {
 
   it('keeps model triage and the format-only review repair out of Nayax documentation access', () => {
     const selection = readRepositoryFile(modelSelectionPath);
-    rejects({ [modelSelectionPath]: replaceOnce(selection, '            --max-turns 4\n', '            --max-turns 4\n' + contract.claudeMcpConfig) }, /model triage/);
+    rejects({ [modelSelectionPath]: replaceOnce(selection, '            --max-turns 8\n', '            --max-turns 8\n' + contract.claudeMcpConfig) }, /model triage/);
     rejects(
       { [reviewPath]: replaceOnce(review, 'copilot -s --no-ask-user --disable-builtin-mcps \\\n', 'copilot -s --no-ask-user --disable-builtin-mcps \\\n              ' + contract.copilotMcpConfig + ' \\\n') },
       /format repair|exactly one --additional-mcp-config/,
