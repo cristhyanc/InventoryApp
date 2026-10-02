@@ -199,7 +199,7 @@ describe('Copilot pull request handoff to the Claude architecture check', () => 
       },
     });
     assert.notEqual(status, 0);
-    assert.match(stderr, /COPILOT_AGENT_TOKEN is not configured/);
+    assert.match(stdout, /COPILOT_AGENT_TOKEN is not configured/);
     assert.equal(calls.filter((c) => c.kind === 'pr-ready').length, 0);
     assert.equal(dispatches(calls, 'agent-copilot-architecture.yml').length, 0);
   });
