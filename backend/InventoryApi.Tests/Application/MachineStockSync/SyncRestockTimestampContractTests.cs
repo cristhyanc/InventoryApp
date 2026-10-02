@@ -5,7 +5,6 @@ using Inventory.Domain.Nayax;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using InventoryApi.Models;
-using InventoryApi.Services;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Moq;
@@ -75,7 +74,7 @@ public class SyncRestockTimestampContractTests
         }
 
         await using var db = Context(connection);
-        var store = new EfMachineStockEventStore(db, new InventoryCostService(db), new InventoryCostRebuildService(db));
+        var store = new EfMachineStockEventStore(db, TestCostingUseCases.RecordMovement(db), TestCostingUseCases.Rebuild(db));
         var useCase = new SyncMachineStockFromNayax(NoNewAlertsClient().Object, store);
 
         var preview = await useCase.Handle(MachineId, CancellationToken.None);
@@ -122,7 +121,7 @@ public class SyncRestockTimestampContractTests
         }
 
         await using var db = Context(connection);
-        var store = new EfMachineStockEventStore(db, new InventoryCostService(db), new InventoryCostRebuildService(db));
+        var store = new EfMachineStockEventStore(db, TestCostingUseCases.RecordMovement(db), TestCostingUseCases.Rebuild(db));
 
         var page = await store.GetUnprocessedEventsAsync(MachineId, CancellationToken.None);
         var pending = Assert.Single(page.Events);

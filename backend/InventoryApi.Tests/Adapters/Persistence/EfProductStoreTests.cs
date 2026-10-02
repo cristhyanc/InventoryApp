@@ -2,7 +2,6 @@ using Inventory.Application.Products;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using InventoryApi.Models;
-using InventoryApi.Services;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
@@ -54,7 +53,7 @@ public class EfProductStoreTests : IDisposable
         var productId = await SeedProductAsync();
 
         await using var db = TestAppDbContext.Unrestricted(_options);
-        var store = new EfProductStore(db, new InventoryCostRebuildService(db));
+        var store = new EfProductStore(db, TestCostingUseCases.Rebuild(db));
 
         Assert.True(await store.UpdateAsync(productId, UpdateFields(), CancellationToken.None));
     }
@@ -63,7 +62,7 @@ public class EfProductStoreTests : IDisposable
     public async Task UpdateAsync_ReturnsFalse_WhenNoSuchProductExists()
     {
         await using var db = TestAppDbContext.Unrestricted(_options);
-        var store = new EfProductStore(db, new InventoryCostRebuildService(db));
+        var store = new EfProductStore(db, TestCostingUseCases.Rebuild(db));
 
         Assert.False(await store.UpdateAsync(4242, UpdateFields(), CancellationToken.None));
     }
@@ -82,7 +81,7 @@ public class EfProductStoreTests : IDisposable
 
         await using var db = TestAppDbContext.Unrestricted(_options);
         var store = new DeleteAfterExistenceCheckProductStore(
-            new EfProductStore(db, new InventoryCostRebuildService(db)),
+            new EfProductStore(db, TestCostingUseCases.Rebuild(db)),
             async () =>
             {
                 await using var concurrent = TestAppDbContext.Unrestricted(_options);

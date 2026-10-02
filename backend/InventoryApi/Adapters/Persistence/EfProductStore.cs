@@ -1,7 +1,7 @@
+using Inventory.Application.Costing;
 using Inventory.Application.Products;
 using InventoryApi.Data;
 using InventoryApi.Models;
-using InventoryApi.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
 
 namespace InventoryApi.Adapters.Persistence;
@@ -16,9 +16,9 @@ namespace InventoryApi.Adapters.Persistence;
 public sealed class EfProductStore : IProductStore
 {
     private readonly AppDbContext _db;
-    private readonly IInventoryCostRebuildService _rebuild;
+    private readonly IRebuildProductCost _rebuild;
 
-    public EfProductStore(AppDbContext db, IInventoryCostRebuildService rebuild)
+    public EfProductStore(AppDbContext db, IRebuildProductCost rebuild)
     {
         _db = db;
         _rebuild = rebuild;

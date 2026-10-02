@@ -1,8 +1,8 @@
 using System.Text;
 using System.Text.Json;
+using Inventory.Application.Costing;
 using Inventory.Domain.Exceptions;
 using InventoryApi.Http;
-using InventoryApi.Services;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;

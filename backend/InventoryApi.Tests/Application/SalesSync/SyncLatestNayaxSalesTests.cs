@@ -32,7 +32,7 @@ public class SyncLatestNayaxSalesTests
 
     private static SyncLatestNayaxSales UseCase(AppDbContext db, INayaxLynxClient nayax)
     {
-        var rebuild = new InventoryCostRebuildService(db);
+        var rebuild = TestCostingUseCases.Rebuild(db);
         return new SyncLatestNayaxSales(
             nayax, new EfLatestNayaxSalesStore(db, new SaleCostingService(db, rebuild), rebuild));
     }

@@ -1,3 +1,4 @@
+using Inventory.Application.Costing;
 using Inventory.Application.Nayax;
 using Inventory.Application.SalesSync;
 using Inventory.Domain.FinancialConfiguration;
@@ -22,7 +23,7 @@ namespace InventoryApi.Adapters.Persistence;
 /// <c>TransactionID</c>, product matching through <see cref="NayaxProductMatcher"/>, the
 /// settlement-value completed/cancelled default, historical costing through
 /// <see cref="ISaleCostingService"/>, and the baseline-cutoff-gated
-/// <see cref="IInventoryCostRebuildService"/> replay. An already stored transaction is only enriched
+/// <see cref="IRebuildProductCost"/> replay. An already stored transaction is only enriched
 /// where it is still missing its product match or status, so an imported status or cost is never
 /// overwritten.
 /// </summary>
@@ -30,12 +31,12 @@ public sealed class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
 {
     private readonly AppDbContext _db;
     private readonly ISaleCostingService _saleCosting;
-    private readonly IInventoryCostRebuildService _inventoryCostRebuild;
+    private readonly IRebuildProductCost _inventoryCostRebuild;
 
     public EfLatestNayaxSalesStore(
         AppDbContext db,
         ISaleCostingService saleCosting,
-        IInventoryCostRebuildService inventoryCostRebuild)
+        IRebuildProductCost inventoryCostRebuild)
     {
         _db = db;
         _saleCosting = saleCosting;
