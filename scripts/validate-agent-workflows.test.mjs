@@ -920,7 +920,10 @@ describe('cross-review contract (agent-ready-claude / agent-ready-copilot)', () 
     }
   });
 
-  it('rejects a Copilot handoff that skips the architecture check or accepts non-Copilot work', () => {
+  it('rejects a Copilot handoff that skips automatic readiness guards, the architecture check, or Copilot authorship', () => {
+    rejects({ [copilotHandoffPath]: replaceOnce(copilotHandoffWorkflow, 'workflows: ["Validate pull request"]', 'workflows: ["Something else"]') }, /agent-copilot-handoff.yml triggers/);
+    rejects({ [copilotHandoffPath]: replaceOnce(copilotHandoffWorkflow, 'gh pr ready "$PR_NUMBER"', 'echo ready') }, /agent-copilot-handoff.yml handoff/);
+    rejects({ [copilotHandoffPath]: replaceOnce(copilotHandoffWorkflow, 'Running Copilot cloud agent', 'Any workflow') }, /agent-copilot-handoff.yml handoff/);
     rejects({ [copilotHandoffPath]: replaceOnce(copilotHandoffWorkflow, 'gh workflow run agent-copilot-architecture.yml', 'gh workflow run validate.yml') }, /agent-copilot-handoff.yml handoff/);
     rejects({ [copilotHandoffPath]: replaceOnce(copilotHandoffWorkflow, '[ "$author" = "$EXPECTED_COPILOT_AUTHOR" ] || skip', 'true || skip') }, /agent-copilot-handoff.yml handoff/);
   });
