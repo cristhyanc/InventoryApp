@@ -1,5 +1,5 @@
-// Unit tests for scripts/sonar-new-issues.mjs: exact-SHA check-run matching, fail-open behaviour,
-// pagination, and the Markdown list the architecture fix stage hands to the implementing agent.
+// Unit tests for scripts/sonar-new-issues.mjs: exact-SHA check-run matching, head binding through
+// GitHub, the check-run issue count, fail-open behaviour, pagination, and the Markdown list the architecture fix stage hands to the implementing agent.
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -10,6 +10,7 @@ import {
   SONAR_APP_SLUG,
   SONAR_CHECK_NAME,
   collectSonarIssues,
+  expectedIssueCount,
   renderIssues,
   writeOutputs,
 } from './sonar-new-issues.mjs';
@@ -18,6 +19,9 @@ const REPO = 'owner/InventoryApp';
 const KEY = 'owner_InventoryApp';
 const SHA = '08f3b0a527fe74efc5d0b6fb1895da3452ad5032';
 const OTHER_SHA = '24ecdc6c1fc1f23e00bfea0d28b6bc41df03f56d';
+// SonarCloud's automatic analysis reports the default branch's commit as a pull request analysis's revision.
+const MAIN_SHA = '69c12507e2b0a30a4d943ac37d34ebf0e4188481';
+const summary = (count) => `Issues\n![](passed.svg '') [${count} New ${count === 1 ? 'issue' : 'issues'}](https://sonarcloud.io/project/issues?id=${KEY}&pullRequest=285)\n![](accepted.svg '') [0 Accepted issues](https://sonarcloud.io)`;
 
 const checkRun = (overrides = {}) => ({ name: SONAR_CHECK_NAME, status: 'completed', conclusion: 'success', head_sha: SHA, app: { slug: SONAR_APP_SLUG }, ...overrides });
 const issue = (n, overrides = {}) => ({
@@ -26,28 +30,34 @@ const issue = (n, overrides = {}) => ({
   impacts: [{ softwareQuality: 'MAINTAINABILITY', severity: 'MEDIUM' }], ...overrides,
 });
 
-// A fake fetchJson: GitHub check-run responses and SonarCloud analysis revisions are served in order
-// (the last one repeats), and SonarCloud issue pages by page number. Every URL is recorded.
-function fakeFetch({ checks = [[checkRun({ conclusion: 'success' })]], revisions = [SHA], pages = [[]], total, sonarError } = {}) {
+// A fake fetchJson: GitHub check-run responses and pull request heads are served in order (the last one
+// repeats), and SonarCloud issue pages by page number, with the issue list switching to `laterPages`
+// after `staleReads` complete reads. Every URL is recorded.
+function fakeFetch({ checks = [[checkRun()]], heads = [SHA], pages = [[]], staleReads = 0, laterPages, total, sonarError } = {}) {
   const urls = [];
   let checkCall = 0;
-  let revisionCall = 0;
+  let headCall = 0;
+  let issueReads = 0;
   const fetchJson = async (url, service) => {
     urls.push({ url, service });
+    if (service === 'github' && url.includes('/git/ref/pull/')) {
+      const head = heads[Math.min(headCall, heads.length - 1)];
+      headCall += 1;
+      return head === null ? {} : { ref: 'refs/pull/285/head', object: { sha: head, type: 'commit' } };
+    }
     if (service === 'github') {
       const runs = checks[Math.min(checkCall, checks.length - 1)];
       checkCall += 1;
       return { check_runs: runs };
     }
     if (sonarError) throw new Error(sonarError);
-    if (url.includes('/api/project_analyses/search')) {
-      const revision = revisions[Math.min(revisionCall, revisions.length - 1)];
-      revisionCall += 1;
-      return { analyses: revision === null ? [] : [{ key: `A${revisionCall}`, revision }] };
-    }
+    if (url.includes('/api/project_analyses/search')) return { analyses: [{ key: 'A1', revision: MAIN_SHA }] };
     const page = Number(new URL(url).searchParams.get('p'));
-    const issues = pages[page - 1] ?? [];
-    return { paging: { pageIndex: page, pageSize: 500, total: total ?? pages.flat().length }, issues };
+    const source = issueReads < staleReads ? pages : (laterPages ?? pages);
+    const issues = source[page - 1] ?? [];
+    const pageTotal = total ?? source.flat().length;
+    if (page * 500 >= pageTotal || issues.length === 0) issueReads += 1;
+    return { paging: { pageIndex: page, pageSize: 500, total: pageTotal }, issues };
   };
   return { fetchJson, urls };
 }
@@ -75,7 +85,7 @@ describe('SonarCloud issue collection', () => {
     const { fetchJson, urls } = fakeFetch({ checks: [[], [checkRun({ status: 'in_progress' })], [checkRun()]], pages: [[issue(1)]] });
     const result = await collectSonarIssues(options(fetchJson));
     assert.equal(result.count, 1);
-    assert.equal(urls.filter((u) => u.service === 'github').length, 3);
+    assert.equal(urls.filter((u) => u.url.includes('/check-runs?')).length, 3);
   });
 
   it('ignores check runs for another SHA, another name, or another app', async () => {
@@ -88,42 +98,57 @@ describe('SonarCloud issue collection', () => {
     }
   });
 
-  it('reads issues only when SonarCloud\'s analysis revision is the head, before and after the read', async () => {
+  it('binds the read to the pull request head before and after it, ignoring SonarCloud\'s analysis revision', async () => {
     const { fetchJson, urls } = fakeFetch({ pages: [[issue(1)]] });
-    await collectSonarIssues(options(fetchJson));
-    const order = urls.filter((u) => u.service === 'sonar').map((u) => new URL(u.url).pathname);
-    assert.deepEqual(order, ['/api/project_analyses/search', '/api/issues/search', '/api/project_analyses/search']);
-    const analysisUrl = new URL(urls.find((u) => u.url.includes('/api/project_analyses/search')).url);
-    assert.equal(analysisUrl.searchParams.get('project'), KEY);
-    assert.equal(analysisUrl.searchParams.get('pullRequest'), '285');
+    const result = await collectSonarIssues(options(fetchJson));
+    assert.equal(result.status, 'analysed');
+    const order = urls.slice(1).map((u) => new URL(u.url).pathname);
+    assert.deepEqual(order, [`/repos/${REPO}/git/ref/pull/285/head`, '/api/issues/search', `/repos/${REPO}/git/ref/pull/285/head`]);
+    assert.ok(!urls.some((u) => u.url.includes('/api/project_analyses/search')), 'the analysis revision is the default branch commit, not the head');
   });
 
-  it('treats an analysis of another revision as unavailable and never reads its issues', async () => {
-    // A newer push already analysed, or a failed analysis of this head that left an older one in place.
-    for (const revisions of [[OTHER_SHA], [null], ['']]) {
-      const { fetchJson, urls } = fakeFetch({ revisions, pages: [[issue(1)]] });
+  it('treats a pull request whose head is no longer this SHA as unavailable and never reads its issues', async () => {
+    for (const heads of [[OTHER_SHA], [null]]) {
+      const { fetchJson, urls } = fakeFetch({ heads, pages: [[issue(1)]] });
       const result = await collectSonarIssues(options(fetchJson));
       assert.equal(result.status, 'unavailable');
       assert.equal(result.count, 0);
       assert.match(result.markdown, new RegExp(`not ${SHA}`));
-      assert.ok(!urls.some((u) => u.url.includes('/api/issues/search')), 'issues of another revision must not be read');
+      assert.ok(!urls.some((u) => u.url.includes('/api/issues/search')), 'issues of another head must not be read');
     }
   });
 
-  it('waits briefly for the analysis revision to catch up with the check run', async () => {
-    const { fetchJson } = fakeFetch({ revisions: [OTHER_SHA, SHA], pages: [[issue(1)]] });
-    const result = await collectSonarIssues(options(fetchJson));
-    assert.equal(result.status, 'analysed');
-    assert.equal(result.count, 1);
-  });
-
-  it('treats an analysis replaced while its issues were read as unavailable', async () => {
-    const { fetchJson } = fakeFetch({ revisions: [SHA, OTHER_SHA], pages: [[issue(1)]] });
+  it('treats a head that moved while the issues were read as unavailable', async () => {
+    const { fetchJson } = fakeFetch({ heads: [SHA, OTHER_SHA], pages: [[issue(1)]] });
     const result = await collectSonarIssues(options(fetchJson));
     assert.equal(result.status, 'unavailable');
     assert.equal(result.count, 0);
     assert.match(result.markdown, /changed from/);
     assert.ok(!result.markdown.includes('Policy1'), 'issues read during the change must not be handed on');
+  });
+
+  it('requires the issue count to match the check run summary, waiting briefly for it to catch up', async () => {
+    const { fetchJson } = fakeFetch({ checks: [[checkRun({ output: { summary: summary(2) } })]], staleReads: 1, pages: [[issue(9)]], laterPages: [[issue(1), issue(2)]] });
+    const result = await collectSonarIssues(options(fetchJson));
+    assert.equal(result.status, 'analysed');
+    assert.equal(result.count, 2);
+    assert.ok(!result.markdown.includes('Policy9'));
+  });
+
+  it('treats an issue count that never matches the check run summary as unavailable', async () => {
+    const { fetchJson } = fakeFetch({ checks: [[checkRun({ output: { summary: summary(4) } })]], pages: [[issue(1)]] });
+    const result = await collectSonarIssues(options(fetchJson));
+    assert.equal(result.status, 'unavailable');
+    assert.equal(result.count, 0);
+    assert.match(result.markdown, /returned 1 open issues .* reports 4/);
+  });
+
+  it('reads the "New issues" count from the SonarCloud check run summary', () => {
+    assert.equal(expectedIssueCount(checkRun({ output: { summary: summary(4) } })), 4);
+    assert.equal(expectedIssueCount(checkRun({ output: { summary: summary(1) } })), 1);
+    assert.equal(expectedIssueCount(checkRun({ output: { summary: summary(0) } })), 0);
+    assert.equal(expectedIssueCount(checkRun()), null);
+    assert.equal(expectedIssueCount(checkRun({ output: { summary: 'Quality Gate failed' } })), null);
   });
 
   it('treats a check run that produced no analysis as unavailable', async () => {
