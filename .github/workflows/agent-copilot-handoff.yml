@@ -7,8 +7,9 @@ name: Agent Copilot handoff
 # Authority and lifecycle: AGENTS.md ("Automated task contract") and docs/automation.md
 # (Cross-review: Claude and Copilot).
 # - Trusted source: pull_request_target and workflow_run both execute this definition from main.
-#   This workflow never checks out or executes pull request code and holds no credential other than
-#   its own GITHUB_TOKEN.
+#   This workflow never checks out or executes pull request code. It uses GITHUB_TOKEN for all
+#   verification and dispatch calls, and the owner's COPILOT_AGENT_TOKEN only for Draft -> Ready
+#   because GitHub does not permit GITHUB_TOKEN to perform markPullRequestReadyForReview.
 # - Automatic handoff accepts only a successful pull_request run of Validate pull request for the
 #   exact current head, after the latest Copilot session on the PR's branch (initial run or
 #   @copilot follow-up) has completed successfully.
@@ -57,6 +58,7 @@ jobs:
       - name: Verify Copilot pull request and dispatch architecture check
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COPILOT_AGENT_TOKEN: ${{ secrets.COPILOT_AGENT_TOKEN }}
           EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
           EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           RUN_PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
@@ -157,7 +159,8 @@ jobs:
             [ "$latest_sha" = "$HEAD_SHA" ] || skip "Refusing stale handoff: head is now $latest_sha."
             latest_draft="$(jq -r '.isDraft' <<<"$latest_pr_json")"
             if [ "$latest_draft" = "true" ]; then
-              gh pr ready "$PR_NUMBER" --repo "$GITHUB_REPOSITORY"
+              [ -n "$COPILOT_AGENT_TOKEN" ] || fail "COPILOT_AGENT_TOKEN is not configured, so the trusted handoff cannot mark the Copilot pull request Ready for review."
+              GH_TOKEN="$COPILOT_AGENT_TOKEN" gh pr ready "$PR_NUMBER" --repo "$GITHUB_REPOSITORY"
               echo "::notice::Marked Copilot pull request #$PR_NUMBER ready for review after successful current-head validation."
             fi
           fi
