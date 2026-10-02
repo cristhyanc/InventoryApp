@@ -1756,9 +1756,79 @@ Backend and frontend tracks can progress independently when their contracts do n
      **and its client/API compatibility shims removed** (issue #127). See
      [Purchase rename plan](#purchase-rename-plan) for the entity/service/component/DTO and source-file
      renames, the canonical `api/purchases` contract, and the persistence compatibility surfaces
-     intentionally left on their legacy names. The rest of this slice — moving the purchase
-     upload/update/delete orchestration itself, and the supplier-order/stock-ledger/AVCO code it
-     touches, into `Inventory.Application`/`Inventory.Infrastructure` — remains future work.
+     intentionally left on their legacy names.
+   - **Purchases and Supplier Orders orchestration done** (issue #281, a child of the #148 umbrella;
+     sibling to the Stock child, issue #282, which still owns `StockService`/`IStockService` and the
+     stock-adjustment reason/source vocabulary). The costing-rebuild orchestration itself (`IInventoryCostRebuildService`
+     and sale costing) remains future work, tracked by #149.
+     - **Domain.** `Inventory.Domain.Purchases.PurchaseItemFormatPolicy` validates a purchase line's
+       product/quantity/cost shape (the inline check the former `PurchaseService.ValidateItemsAsync`
+       made); `PurchaseStockMovementPolicy` holds the restock stock-movement quantity/total-cost
+       arithmetic (including the checked integer cast); `PurchaseCostTransitionPolicy` decides the three
+       pre-cutover-history guards the former service computed inline once its database facts were
+       fetched - the conflicting-baseline lookup, whether a purchase's existing movements include a
+       preserved one, whether a proposed date/item change on a preserved purchase is allowed, and which
+       movement in a deletion is protected. `Inventory.Domain.SupplierOrders.SupplierOrderLineValidationPolicy`
+       validates a new order's lines (positive whole-unit quantities, distinct products), reusing the
+       former `SupplierOrderService.Create` rules and their `DomainValidationException` messages
+       unchanged (issue #59). `SupplierOrderFulfillmentAllocationPolicy` is the pure FIFO
+       purchase-to-outstanding-order-line matching algorithm the former
+       `PurchaseService.AllocateSupplierOrderFulfillmentAsync` ran inline, given the same
+       already-queried, already-filtered, already-ordered (oldest order date, then order id, then line
+       id) candidate lines; `SupplierOrderStatusPolicy` is the received/partially-received/ordered
+       rollup the former `RecalculateSupplierOrderFulfillmentAsync` computed, and never answers
+       `Cancelled` - the caller leaves a cancelled order's status untouched, exactly as before.
+       `Inventory.Domain.SupplierOrders.SupplierOrderStatus` mirrors `InventoryApi.Models.SupplierOrderStatus`
+       member-for-member, the same convention `Inventory.Domain.Expenses.ExpenseCategory` uses for
+       `OperatingExpenseCategory`, so Domain/Application never reference the InventoryApi enum.
+     - **Application.** `Inventory.Application.Purchases.ListPurchases`/`GetPurchase`/`GetPurchaseFile`/
+       `UploadPurchase`/`UpdatePurchase`/`DeletePurchase` are the purchase use cases, and
+       `Inventory.Application.SupplierOrders.ListActiveSupplierOrders`/`GetSupplierOrder`/
+       `CreateSupplierOrder`/`CancelSupplierOrder` the supplier-order ones; `IPurchaseStore`/
+       `ISupplierOrderStore` are their narrow persistence ports. `UploadPurchase` runs the same
+       validation order the former `PurchaseService.Upload` did - file extension/size, supplier
+       existence, item format, item product existence, then the cost-transition-baseline conflict -
+       entirely before saving the document, then persists through the store and deletes the document
+       again if that fails, the same validate-before-write, delete-on-failure shape the operating-expenses
+       slice established. `CreateSupplierOrder` reuses `IDocumentStorage` for nothing (orders carry no
+       file) and otherwise mirrors the former service's validation order (quantity shape, then supplier
+       existence, then duplicate/unknown product) exactly. `GetPurchaseFile` moved the
+       buffer-into-memory document read the former `PurchaseService.GetFile` did into the Application
+       layer, following `GetOperatingExpenseAttachment`'s precedent of resolving the tenant-owned parent
+       record before opening its document.
+     - **Ports and adapters.** `InventoryApi.Adapters.Persistence.EfPurchaseStore`/`EfSupplierOrderStore`
+       are temporary API-owned EF adapters, following the same precedent as `EfProductStore`/
+       `EfOperatingExpenseStore`, and must move into `Inventory.Infrastructure` once `AppDbContext` and
+       the shared persistence models relocate there. Per this issue's target ownership, their multi-step
+       writes - `EfPurchaseStore.CreateAsync`/`UpdateAsync`/`DeleteAsync`'s purchase/item/stock-movement
+       persistence, supplier-order receipt-allocation insert/removal, and fulfillment-status
+       recalculation, all as one transaction - stay in the adapter rather than being decomposed into
+       Application-level orchestration, exactly mirroring the former `PurchaseService`'s transaction
+       boundaries step for step; only the deterministic decisions inside them call the Domain policies
+       above instead of recomputing the same logic inline. `UpdatePurchase`/`DeletePurchase`'s Application
+       use cases are consequently thin pass-throughs to their store methods, the same shape
+       `UpdateOperatingExpense`'s simpler field-only update already established for an EF-coupled write.
+       Receipt purchase documents continue through the existing `Inventory.Application.Documents.IDocumentStorage`
+       port under `DocumentCategory.PurchaseDocument` - no second storage boundary was introduced.
+     - **API boundary.** `PurchasesController`/`SupplierOrdersController` and the `Purchase`/`SupplierOrder`
+       API response shapes are unchanged. `InventoryApi.Services.PurchaseService`/`IPurchaseService` and
+       `SupplierOrderService`/`ISupplierOrderService` were not deleted (the same transitional shape
+       `ProductService`/`IProductService` left in place for issue #240): each method now only maps the
+       request onto the migrated use case and maps the Application record back to the unchanged response
+       entity through `InventoryApi.Adapters.Mapping.PurchaseResponseMapper`/`SupplierOrderResponseMapper`,
+       following `ProductResponseMapper`'s precedent - every key, nesting level, and the cases where the
+       former service left a navigation (`Purchase.Supplier`, `PurchaseItem.Product`) unloaded are
+       reproduced exactly, including `SupplierOrderLine.OutstandingQuantity`'s computed value, which
+       needs its reconstructed line wired back to its reconstructed parent order even though that
+       navigation is `[JsonIgnore]`d. Neither service holds an `AppDbContext`, a query, or a rule of its
+       own. Deleting these two now-thin delegators is left as explicit follow-up work, tracked the same
+       way the Sites/Machines and Products legacy delegators are (issue #153).
+     - Reused unchanged from issue #63: `Inventory.Domain.Purchases.PurchaseTotalValidationPolicy`,
+       `Inventory.Application.Purchases.ComputePurchaseTotalValidation`/`GetProductPriceComparison`,
+       and `IProductPurchasePriceHistoryProvider`. Purchase stock movements still persist through the
+       existing `StockAdjustment` reason/source vocabulary unchanged - this slice maps Domain allocation
+       results onto that same persisted shape rather than introducing a second one, leaving the
+       vocabulary's redesign and `StockService`/`IStockService`'s migration to sibling #282.
 
 8. **Reporting slices**
    - Split bookkeeping, daily, reconciliation, machine/product profitability, GST, dashboard, and transactions into separate query handlers.

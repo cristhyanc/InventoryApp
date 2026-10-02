@@ -210,6 +210,7 @@ jobs:
           node --test scripts/validate-agent-workflows.test.mjs
           node --test scripts/validate-documentation-impact.test.mjs
           node --test scripts/copilot-review-contract.test.mjs
+          node --test scripts/sonar-new-issues.test.mjs
 
       - name: Validate repository
         run: bash scripts/validate.sh

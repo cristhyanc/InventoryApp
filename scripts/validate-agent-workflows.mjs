@@ -1036,6 +1036,7 @@ export function verifyArchitecturePass(implementationWorkflow, architectureWorkf
   verifyArchitectureDispatcher(implementationWorkflow);
   verifyArchitectureContext(architectureWorkflow);
   verifyArchitectureCopilotCheck(architectureWorkflow);
+  verifySonarIssuesJob(architectureWorkflow, 'agent-architecture.yml', '  architecture:\n');
   verifyArchitectureFixJob(architectureWorkflow);
   verifyArchitectureFinalizer(architectureWorkflow);
 }
@@ -1170,7 +1171,7 @@ function verifyArchitectureContext(architectureWorkflow) {
 function verifyArchitectureCopilotCheck(architectureWorkflow) {
   // Cross-check: Copilot reviews Claude's architecture read-only; it holds no write permission, no
   // persisted checkout credentials, no App or Anthropic credential, and may not change the tree.
-  const copilotCheck = section(architectureWorkflow, '  copilot-check:\n', '  architecture:\n', 'agent-architecture.yml Copilot check');
+  const copilotCheck = section(architectureWorkflow, '  copilot-check:\n', '  sonar:\n', 'agent-architecture.yml Copilot check');
   for (const required of [
     '    needs: context', '      contents: read', 'ref: ${{ needs.context.outputs.head_sha }}', 'persist-credentials: false',
     'COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_CLI_TOKEN }}', "--deny-tool='write'", '--no-ask-user',
@@ -1188,18 +1189,38 @@ function verifyArchitectureCopilotCheck(architectureWorkflow) {
 
 }
 
+// SonarCloud issues are read by a deterministic, read-only job that runs only the trusted script from
+// the workflow's own commit; it holds no write permission and no agent or App credential.
+function verifySonarIssuesJob(workflow, source, nextJob) {
+  const sonar = section(workflow, '  sonar:\n', nextJob, `${source} SonarCloud job`);
+  for (const required of [
+    '    needs: context', '      contents: read', '      checks: read', 'ref: ${{ github.sha }}', 'persist-credentials: false',
+    'run: node scripts/sonar-new-issues.mjs', 'HEAD_SHA: ${{ needs.context.outputs.head_sha }}', 'PR_NUMBER: ${{ needs.context.outputs.pr_number }}',
+    'count: ${{ steps.sonar.outputs.count }}', 'issues: ${{ steps.sonar.outputs.issues }}',
+  ]) requireText(sonar, required, `${source} SonarCloud job`);
+  for (const forbidden of [
+    'write', 'claude-code-action', 'CLAUDE_CODE_OAUTH_TOKEN', 'COPILOT_', 'AGENT_AUTOMATION_APP_PRIVATE_KEY', 'create-github-app-token',
+    'ref: ${{ needs.context.outputs.head_sha }}', 'gh pr', 'gh issue', 'git push',
+  ]) forbidText(sonar, forbidden, `${source} SonarCloud job`);
+}
+
 function verifyArchitectureFixJob(architectureWorkflow) {
   const architectureJob = section(architectureWorkflow, '  architecture:\n', '  finalize:\n', 'agent-architecture.yml architecture job');
-  requireText(architectureJob, '      - context\n      - copilot-check\n', 'agent-architecture.yml architecture job');
-  requireText(architectureJob, "if: needs.copilot-check.outputs.verdict == 'findings'", 'agent-architecture.yml architecture job');
+  requireText(architectureJob, '      - context\n      - copilot-check\n      - sonar\n', 'agent-architecture.yml architecture job');
+  requireText(
+    architectureJob,
+    "if: ${{ !cancelled() && needs.context.result == 'success' && needs.copilot-check.result == 'success' && (needs.copilot-check.outputs.verdict == 'findings' || fromJSON(needs.sonar.outputs.count || '0') > 0) }}",
+    'agent-architecture.yml architecture job',
+  );
   requireText(architectureJob, 'COPILOT_FINDINGS: ${{ needs.copilot-check.outputs.findings }}', 'agent-architecture.yml architecture job');
   requireText(architectureJob, '> .git/copilot-architecture-findings.md', 'agent-architecture.yml architecture job');
+  requireText(architectureJob, 'SONAR_ISSUES: ${{ needs.sonar.outputs.issues }}', 'agent-architecture.yml architecture job');
+  requireText(architectureJob, '> .git/sonar-new-issues.md', 'agent-architecture.yml architecture job');
   requireText(architectureJob, 'Read that file first', 'agent-architecture.yml architecture job');
-  forbidText(
-    architectureJob.slice(architectureJob.indexOf('prompt: |')),
-    'needs.copilot-check.outputs.findings',
-    'agent-architecture.yml architecture prompt',
-  );
+  requireText(architectureJob, 'Never silence an issue instead of fixing it', 'agent-architecture.yml architecture job');
+  for (const external of ['needs.copilot-check.outputs.findings', 'needs.sonar.outputs.issues']) {
+    forbidText(architectureJob.slice(architectureJob.indexOf('prompt: |')), external, 'agent-architecture.yml architecture prompt');
+  }
   requireText(architectureJob, '      contents: read', 'agent-architecture.yml architecture permissions');
   requireText(architectureJob, '      pull-requests: write', 'agent-architecture.yml architecture permissions');
   requireText(architectureJob, '      issues: read', 'agent-architecture.yml architecture permissions');
@@ -1236,7 +1257,8 @@ function verifyArchitectureFixJob(architectureWorkflow) {
 function verifyArchitectureFinalizer(architectureWorkflow) {
   const finalize = section(architectureWorkflow, '  finalize:\n', null, 'agent-architecture.yml finalize');
   for (const required of [
-    "    if: always()\n", '      - context\n      - copilot-check\n      - architecture\n', 'actions: write', 'pull-requests: write', 'issues: write', 'statuses: read',
+    "    if: always()\n", '      - context\n      - copilot-check\n      - sonar\n      - architecture\n',
+    'SONAR_COUNT: ${{ needs.sonar.outputs.count }}', '[[ "$sonar_count" =~ ^[0-9]+$ ]] || sonar_count=0', 'actions: write', 'pull-requests: write', 'issues: write', 'statuses: read',
     'ISSUE_NUMBER: ${{ inputs.issue_number }}', 'CONTEXT_JOB_RESULT: ${{ needs.context.result }}',
     '[ "$CONTEXT_JOB_RESULT" = "success" ]', 'trap block_undispatched EXIT', 'dispatched=true',
     '[ "$labelled_by_this_run" = "true" ]', 'labelled_by_this_run=true',
@@ -1354,7 +1376,8 @@ function verifyCopilotArchitectureContext(check) {
 function verifyCopilotArchitectureCheckJob(check) {
   // Claude's architecture check of Copilot's work is read-only: no write permission, no editing or
   // publishing tools, and its result is schema-validated structured output.
-  const claudeCheck = section(check, '  check:\n', '  finalize:\n', `${copilotArchitecturePath} check`);
+  const claudeCheck = section(check, '  check:\n', '  sonar:\n', `${copilotArchitecturePath} check`);
+  verifySonarIssuesJob(check, copilotArchitecturePath, '  finalize:\n');
   const checkPermissions = section(claudeCheck, '    permissions:\n', '\n    outputs:\n', `${copilotArchitecturePath} check permissions`);
   for (const forbidden of ['write']) forbidText(checkPermissions, forbidden, `${copilotArchitecturePath} check permissions`);
   for (const required of [
@@ -1376,7 +1399,9 @@ function verifyCopilotArchitectureCheckJob(check) {
 function verifyCopilotArchitectureFinalizer(check) {
   const finalize = section(check, '  finalize:\n', null, `${copilotArchitecturePath} finalize`);
   for (const required of [
-    '    if: always()\n', '      - context\n      - check\n', 'actions: write', 'pull-requests: write', 'issues: write',
+    '    if: always()\n', '      - context\n      - check\n      - sonar\n', 'actions: write',
+    'SONAR_COUNT: ${{ needs.sonar.outputs.count }}', '[[ "$sonar_count" =~ ^[0-9]+$ ]] || sonar_count=0',
+    'Never silence a SonarCloud issue', 'pull-requests: write', 'issues: write',
     'trap block_unhanded EXIT', 'handed_off=true', '--remove-label agent-working --remove-label agent-review --remove-label agent-architecture-fix --add-label agent-blocked',
     'gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label agent-architecture-fix',
     'gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --remove-label agent-working --add-label agent-architecture-fix',
@@ -1392,7 +1417,7 @@ function verifyCopilotArchitectureFinalizer(check) {
   }
   // Findings put the pull request in agent-architecture-fix, never agent-review: no review may run
   // before Copilot's fix push has passed exact-SHA validation.
-  const findingsHandoff = section(finalize, 'if [ "$verdict" = "FINDINGS" ]; then', '            exit 0\n', `${copilotArchitecturePath} findings handoff`);
+  const findingsHandoff = section(finalize, 'if [ "$verdict" = "FINDINGS" ] || [ "$sonar_count" != "0" ]; then', '            exit 0\n', `${copilotArchitecturePath} findings handoff`);
   forbidText(findingsHandoff, '--add-label agent-review', `${copilotArchitecturePath} findings handoff`);
   forbidText(findingsHandoff, 'gh workflow run', `${copilotArchitecturePath} findings handoff`);
   requireOrder(finalize, '[ "$current_sha" = "$HEAD_SHA" ]', 'GH_TOKEN="$COPILOT_AGENT_TOKEN" gh pr comment', `${copilotArchitecturePath} finalize`, 'the current head must be re-verified before Copilot is asked to fix it.');

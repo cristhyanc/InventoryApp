@@ -196,6 +196,25 @@ describe('architecture finalizer', () => {
     assert.ok(!blocked(calls));
   });
 
+  it('accepts Claude\'s fix head when only SonarCloud reported issues', () => {
+    const sonarOnly = { ...clean, SONAR_STATUS: 'analysed', SONAR_COUNT: '2', SONAR_ISSUES: '- `a.cs:1` [S1] (CODE_SMELL): x', ARCHITECTURE_JOB_RESULT: 'success', FIX_SHA: SHA };
+    const { status, calls } = run(finalizeShell, { state: fixture(), env: sonarOnly });
+    assert.equal(status, 0);
+    assert.equal(dispatches(calls, 'validate.yml').length, 1);
+    const comment = calls.find((c) => c.kind === 'pr-comment');
+    assert.ok(comment, 'the SonarCloud issues must be recorded on the PR');
+    assert.ok(!blocked(calls));
+  });
+
+  it('treats an unavailable SonarCloud read as no issues', () => {
+    for (const sonar of [{ SONAR_STATUS: 'unavailable', SONAR_COUNT: '0' }, { SONAR_COUNT: '' }, { SONAR_COUNT: 'oops' }]) {
+      const { status, calls } = run(finalizeShell, { state: fixture(), env: { ...clean, ...sonar } });
+      assert.equal(status, 0);
+      assert.equal(dispatches(calls, 'validate.yml').length, 1);
+      assert.ok(!blocked(calls));
+    }
+  });
+
   it('does not dispatch validation twice when the SHA already has an agent-validation status', () => {
     const state = fixture({ statuses: { [SHA]: [{ context: 'agent-validation', state: 'pending' }] } });
     const { status, calls } = run(finalizeShell, { state, env: success });
@@ -210,6 +229,8 @@ describe('architecture finalizer', () => {
     ['an unknown Copilot verdict', { ...success, COPILOT_VERDICT: 'maybe' }],
     ['a failed Claude fix pass', { ...success, ARCHITECTURE_JOB_RESULT: 'failure', FIX_SHA: '' }],
     ['a clean verdict that still ran the fix pass', { ...clean, ARCHITECTURE_JOB_RESULT: 'success', FIX_SHA: NEWER_SHA }],
+    ['SonarCloud issues whose fix pass failed', { ...clean, SONAR_COUNT: '1', ARCHITECTURE_JOB_RESULT: 'failure' }],
+    ['SonarCloud issues whose fix pass was skipped', { ...clean, SONAR_COUNT: '1' }],
   ]) {
     it(`blocks an agent-working issue on ${name}`, () => {
       const { status, calls } = run(finalizeShell, { state: fixture(), env });

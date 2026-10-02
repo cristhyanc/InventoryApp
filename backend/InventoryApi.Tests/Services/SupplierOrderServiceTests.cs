@@ -1,4 +1,6 @@
+using Inventory.Application.SupplierOrders;
 using Inventory.Domain.Exceptions;
+using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using InventoryApi.DTOs;
 using InventoryApi.Models;
@@ -16,6 +18,16 @@ public class SupplierOrderServiceTests
             .UseInMemoryDatabase(dbName)
             .Options;
         return TestAppDbContext.Unrestricted(options);
+    }
+
+    private static SupplierOrderService CreateService(AppDbContext db)
+    {
+        var store = new EfSupplierOrderStore(db);
+        return new SupplierOrderService(
+            new ListActiveSupplierOrders(store),
+            new GetSupplierOrder(store),
+            new CreateSupplierOrder(store),
+            new CancelSupplierOrder(store));
     }
 
     [Fact]
@@ -39,7 +51,7 @@ public class SupplierOrderServiceTests
         });
         await db.SaveChangesAsync();
 
-        var service = new SupplierOrderService(db);
+        var service = CreateService(db);
         var order = await service.GetById(1);
 
         Assert.NotNull(order);
@@ -61,7 +73,7 @@ public class SupplierOrderServiceTests
     {
         using var db = CreateDbContext(Guid.NewGuid().ToString());
 
-        var service = new SupplierOrderService(db);
+        var service = CreateService(db);
         var order = await service.GetById(999);
 
         Assert.Null(order);
@@ -83,7 +95,7 @@ public class SupplierOrderServiceTests
         });
         await db.SaveChangesAsync();
 
-        var service = new SupplierOrderService(db);
+        var service = CreateService(db);
         var order = await service.GetById(1);
 
         Assert.NotNull(order);
@@ -110,7 +122,7 @@ public class SupplierOrderServiceTests
         });
         await db.SaveChangesAsync();
 
-        var service = new SupplierOrderService(db);
+        var service = CreateService(db);
         var order = await service.GetById(1);
 
         Assert.NotNull(order);
@@ -135,7 +147,7 @@ public class SupplierOrderServiceTests
         });
         await db.SaveChangesAsync();
 
-        var service = new SupplierOrderService(db);
+        var service = CreateService(db);
         var order = await service.GetById(1);
 
         Assert.NotNull(order);
@@ -157,7 +169,7 @@ public class SupplierOrderServiceTests
         );
         await db.SaveChangesAsync();
 
-        var service = new SupplierOrderService(db);
+        var service = CreateService(db);
         var orders = await service.GetActive();
 
         Assert.Equal(2, orders.Count());
@@ -173,7 +185,7 @@ public class SupplierOrderServiceTests
         db.Products.Add(new Product { Id = 2, Name = "Caramello" });
         await db.SaveChangesAsync();
 
-        var service = new SupplierOrderService(db);
+        var service = CreateService(db);
         var dto = new SupplierOrderCreateDto(
             1,
             new DateTime(2026, 9, 1),
@@ -208,7 +220,7 @@ public class SupplierOrderServiceTests
         await db.SaveChangesAsync();
 
         var exception = await Assert.ThrowsAsync<DomainValidationException>(() =>
-            new SupplierOrderService(db).Create(new SupplierOrderCreateDto(
+            CreateService(db).Create(new SupplierOrderCreateDto(
                 1, new DateTime(2026, 9, 1), null, null, null, [new SupplierOrderLineCreateDto(1, 0)])));
 
         Assert.Equal("An order must include at least one positive whole-unit quantity.", exception.Message);
@@ -222,7 +234,7 @@ public class SupplierOrderServiceTests
         await db.SaveChangesAsync();
 
         var exception = await Assert.ThrowsAsync<DomainValidationException>(() =>
-            new SupplierOrderService(db).Create(new SupplierOrderCreateDto(
+            CreateService(db).Create(new SupplierOrderCreateDto(
                 1, new DateTime(2026, 9, 1), null, null, null, [new SupplierOrderLineCreateDto(404, 5)])));
 
         Assert.Equal("Each order line must reference a distinct existing product.", exception.Message);
@@ -242,7 +254,7 @@ public class SupplierOrderServiceTests
         });
         await db.SaveChangesAsync();
 
-        var service = new SupplierOrderService(db);
+        var service = CreateService(db);
         var result = await service.Cancel(1);
 
         Assert.True(result);
@@ -255,7 +267,7 @@ public class SupplierOrderServiceTests
     {
         using var db = CreateDbContext(Guid.NewGuid().ToString());
 
-        var service = new SupplierOrderService(db);
+        var service = CreateService(db);
         var result = await service.Cancel(999);
 
         Assert.False(result);
@@ -275,7 +287,7 @@ public class SupplierOrderServiceTests
         });
         await db.SaveChangesAsync();
 
-        var service = new SupplierOrderService(db);
+        var service = CreateService(db);
         var result = await service.Cancel(1);
 
         Assert.False(result);
@@ -295,7 +307,7 @@ public class SupplierOrderServiceTests
         });
         await db.SaveChangesAsync();
 
-        var service = new SupplierOrderService(db);
+        var service = CreateService(db);
         var result = await service.Cancel(1);
 
         Assert.False(result);

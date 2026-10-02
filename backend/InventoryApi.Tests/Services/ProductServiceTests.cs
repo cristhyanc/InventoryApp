@@ -5,6 +5,7 @@ using InventoryApi.DTOs;
 using Inventory.Application.Nayax;
 using Inventory.Application.Products;
 using Inventory.Application.Reorder;
+using Inventory.Application.SupplierOrders;
 using InventoryApi.Models;
 using InventoryApi.Services;
 using InventoryApi.Services.Interfaces;
@@ -430,12 +431,22 @@ public class ProductServiceTests
         db.Products.Add(new Product { Id = 1, Name = "Coke" });
         await db.SaveChangesAsync();
 
-        var service = new SupplierOrderService(db);
+        var service = CreateSupplierOrderService(db);
         // Issue #59: the rule and its message are unchanged; only the exception type moved to the
         // narrowly typed DomainValidationException the central handler may publish as a 400.
         await Assert.ThrowsAsync<DomainValidationException>(() => service.Create(
             new SupplierOrderCreateDto(1, DateTime.UtcNow, null, null, null,
                 new[] { new SupplierOrderLineCreateDto(1, 1.5m) })));
+    }
+
+    private static SupplierOrderService CreateSupplierOrderService(AppDbContext db)
+    {
+        var store = new EfSupplierOrderStore(db);
+        return new SupplierOrderService(
+            new ListActiveSupplierOrders(store),
+            new GetSupplierOrder(store),
+            new CreateSupplierOrder(store),
+            new CancelSupplierOrder(store));
     }
 
     private static ProductService CreateService(AppDbContext db)
