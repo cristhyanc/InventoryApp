@@ -122,6 +122,7 @@ function run(shell, { state, env = {} }) {
         FAKE_GH_LOG: logPath,
         GITHUB_REPOSITORY: REPO,
         GH_TOKEN: 'workflow-token',
+        COPILOT_AGENT_TOKEN: 'owner-copilot-token',
         EXPECTED_COPILOT_AUTHOR: COPILOT,
         PR_NUMBER: PR,
         HEAD_SHA: SHA,
@@ -175,10 +176,32 @@ describe('Copilot pull request handoff to the Claude architecture check', () => 
       },
     });
     assert.equal(status, 0, stderr);
-    assert.equal(calls.filter((c) => c.kind === 'pr-ready').length, 1);
+    const [ready] = calls.filter((c) => c.kind === 'pr-ready');
+    assert.ok(ready);
+    assert.equal(ready.token, 'owner-copilot-token', 'Draft -> Ready must use the owner-scoped token');
     const [dispatch] = dispatches(calls, 'agent-copilot-architecture.yml');
+    assert.equal(dispatch.token, 'workflow-token', 'architecture dispatch must stay on GITHUB_TOKEN');
     assert.ok(dispatch);
     assert.ok(dispatch.args.includes(`head_sha=${SHA}`));
+  });
+
+  it('fails closed when the owner token needed for Draft -> Ready is unavailable', () => {
+    const { status, stderr, calls } = run(handoffShell, {
+      state: fixture({ pr: { isDraft: true } }),
+      env: {
+        GITHUB_EVENT_NAME: 'workflow_run',
+        RUN_PR_NUMBER: PR,
+        RUN_HEAD_SHA: SHA,
+        RUN_EVENT: 'pull_request',
+        RUN_CONCLUSION: 'success',
+        RUN_PATH: '.github/workflows/validate.yml',
+        COPILOT_AGENT_TOKEN: '',
+      },
+    });
+    assert.notEqual(status, 0);
+    assert.match(stderr, /COPILOT_AGENT_TOKEN is not configured/);
+    assert.equal(calls.filter((c) => c.kind === 'pr-ready').length, 0);
+    assert.equal(dispatches(calls, 'agent-copilot-architecture.yml').length, 0);
   });
 
   it('does not auto-ready when validation or the Copilot cloud run is not successful', () => {
