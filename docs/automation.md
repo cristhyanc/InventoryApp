@@ -86,7 +86,7 @@ Two implementation agents exist, and a human picks one per issue with a label. W
 agent-ready-claude                         agent-ready-copilot
     ↓                                          ↓
 Claude implements (agent-implement.yml)    Copilot coding agent implements (agent-copilot.yml assigns it)
-    ↓                                          ↓  a human (or Copilot) marks its PR ready for review
+    ↓                                          ↓  successful current-head validation auto-marks the draft Ready
 Copilot architecture check, read-only      Claude architecture check, read-only
   (Copilot CLI, agent-architecture.yml)      (agent-copilot-architecture.yml)
     ↓                                          ↓
@@ -434,7 +434,7 @@ The architecture stage is a read-only check by the agent that did not implement 
 
 For `agent-ready-claude`, `agent-implement.yml` verifies the PR and dispatches `agent-architecture.yml` from `main` for the exact implementation SHA. Its `copilot-check` job runs the Copilot CLI read-only against `AGENTS.md` and `docs/architecture.md` on the touched code: controller and use-case boundaries, domain versus adapters, dependency direction, duplicated logic and testability. Only when Copilot reports findings does the Claude `architecture` job run. Claude verifies each finding, fixes the correct in-scope ones with no observable behavior, API, data or acceptance-criteria change, reruns complete validation after edits, and commits locally. Only a deterministic GitHub App step pushes the commit. Claude comments on the PR with each finding and whether it fixed or declined it. An edit that would require a migration, widen scope, or make the PR body or documentation inaccurate is reported for human review instead of being made.
 
-For `agent-ready-copilot`, `agent-copilot-handoff.yml` dispatches `agent-copilot-architecture.yml` when Copilot's PR is marked ready for review. It is a `pull_request_target` workflow with no checkout and no secret beyond its own `GITHUB_TOKEN`, kept separate from `agent-copilot.yml` so that no workflow triggered by a pull request event contains a checkout. Claude checks the same concerns read-only and returns structured findings. The finalizer asks Copilot to fix them, together with any open SonarCloud issues, in an `@copilot` comment, or dispatches validation directly when there are neither.
+For `agent-ready-copilot`, `agent-copilot-handoff.yml` has two trusted entry points. A successful `workflow_run` of `Validate pull request` for the exact current Copilot PR head verifies the latest Copilot cloud-agent run completed successfully, re-verifies the PR/issue/author/branch/workflow-file guards, marks a still-draft PR Ready for review, and dispatches `agent-copilot-architecture.yml` directly. A human or Copilot can still mark the PR Ready manually; the existing `pull_request_target: ready_for_review` path performs the same guards and dispatches the architecture check as a fallback. The workflow never checks out PR code, uses only its own `GITHUB_TOKEN`, and cannot merge or deploy. Claude checks the same concerns read-only and returns structured findings. The finalizer asks Copilot to fix them, together with any open SonarCloud issues, in an `@copilot` comment, or dispatches validation directly when there are neither.
 
 #### SonarCloud issues in the architecture stage
 
