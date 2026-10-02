@@ -88,7 +88,7 @@ public sealed class PurchaseFileStorageTests : IDisposable
             ContentRootPath = _contentRoot,
             WebRootPath = _webRoot,
         });
-        var store = new EfPurchaseStore(db, new InventoryCostRebuildService(db));
+        var store = new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db));
         return new PurchaseService(
             new ListPurchases(store),
             new GetPurchase(store),

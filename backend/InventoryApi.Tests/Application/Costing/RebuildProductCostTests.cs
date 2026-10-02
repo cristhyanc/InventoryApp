@@ -1,14 +1,16 @@
+using Inventory.Application.Costing;
+using Inventory.Domain.Costing;
 using InventoryApi.Data;
 using InventoryApi.Models;
-using InventoryApi.Services;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
+using DomainStock = Inventory.Domain.Stock;
 
 using Inventory.Domain.FinancialConfiguration;
 
-namespace InventoryApi.Tests.Services;
+namespace InventoryApi.Tests.Application.Costing;
 
-public class InventoryCostRebuildServiceTests
+public class RebuildProductCostTests
 {
     [Fact]
     public async Task Rebuild_keeps_machine_refills_out_of_business_cost_quantity()
@@ -21,7 +23,7 @@ public class InventoryCostRebuildServiceTests
             Movement(1, 10, 4m, StockAdjustmentReason.Restock, Day(3)));
         await db.SaveChangesAsync();
 
-        await new InventoryCostRebuildService(db).RebuildAsync(1);
+        await TestCostingUseCases.Rebuild(db).RebuildAsync(1);
         await db.SaveChangesAsync();
 
         var product = await db.Products.SingleAsync();
@@ -45,7 +47,7 @@ public class InventoryCostRebuildServiceTests
         db.StockAdjustments.Add(Movement(1, 10, 4m, StockAdjustmentReason.Restock, Day(2)));
         await db.SaveChangesAsync();
 
-        var result = await new InventoryCostRebuildService(db).RebuildAsync(1, Day(1));
+        var result = await TestCostingUseCases.Rebuild(db).RebuildAsync(1, Day(1));
         await db.SaveChangesAsync();
 
         var product = await db.Products.SingleAsync();
@@ -71,7 +73,7 @@ public class InventoryCostRebuildServiceTests
         db.NayaxSales.AddRange(Sale(1, Day(3)), Sale(2, Day(3).AddMinutes(1)), Sale(3, Day(3).AddMinutes(2)));
         await db.SaveChangesAsync();
 
-        await new InventoryCostRebuildService(db).RebuildAsync(1, Day(1));
+        await TestCostingUseCases.Rebuild(db).RebuildAsync(1, Day(1));
         await db.SaveChangesAsync();
 
         var product = await db.Products.SingleAsync();
@@ -88,7 +90,7 @@ public class InventoryCostRebuildServiceTests
         var purchase = Movement(1, 10, 1m, StockAdjustmentReason.Restock, Day(1));
         db.StockAdjustments.Add(purchase);
         await db.SaveChangesAsync();
-        var rebuild = new InventoryCostRebuildService(db);
+        var rebuild = TestCostingUseCases.Rebuild(db);
 
         await rebuild.RebuildAsync(1, Day(1));
         purchase.UnitCost = 2m;
@@ -110,7 +112,7 @@ public class InventoryCostRebuildServiceTests
         db.StockAdjustments.AddRange(opening, Movement(1, 10, 4m, StockAdjustmentReason.Restock, Day(3)));
         db.NayaxSales.Add(Sale(1, Day(2)));
         await db.SaveChangesAsync();
-        var rebuild = new InventoryCostRebuildService(db);
+        var rebuild = TestCostingUseCases.Rebuild(db);
 
         await rebuild.RebuildAsync(1, Day(1));
         opening.UnitCost = 1m;
@@ -132,7 +134,7 @@ public class InventoryCostRebuildServiceTests
         db.NayaxSales.Add(Sale(1, Day(2)));
         await db.SaveChangesAsync();
 
-        var result = await new InventoryCostRebuildService(db).RebuildAsync(1, Day(1), dryRun: true);
+        var result = await TestCostingUseCases.Rebuild(db).RebuildAsync(1, Day(1), dryRun: true);
 
         Assert.Contains(result.Issues, issue => issue.Code == "MissingOpening");
         var product = await db.Products.SingleAsync();
@@ -150,7 +152,7 @@ public class InventoryCostRebuildServiceTests
         db.StockAdjustments.Add(Movement(1, 4, null, StockAdjustmentReason.Correction, Day(2)));
         await db.SaveChangesAsync();
 
-        var result = await new InventoryCostRebuildService(db).RebuildAsync(1);
+        var result = await TestCostingUseCases.Rebuild(db).RebuildAsync(1);
         await db.SaveChangesAsync();
 
         var product = await db.Products.SingleAsync();
@@ -173,7 +175,7 @@ public class InventoryCostRebuildServiceTests
         db.StockAdjustments.Add(Movement(1, -2, null, StockAdjustmentReason.Correction, Day(2)));
         await db.SaveChangesAsync();
 
-        await new InventoryCostRebuildService(db).RebuildAsync(1);
+        await TestCostingUseCases.Rebuild(db).RebuildAsync(1);
         await db.SaveChangesAsync();
 
         var product = await db.Products.SingleAsync();
@@ -196,12 +198,128 @@ public class InventoryCostRebuildServiceTests
         db.StockAdjustments.Add(Movement(1, quantityChange, null, StockAdjustmentReason.Correction, Day(2)));
         await db.SaveChangesAsync();
 
-        var result = await new InventoryCostRebuildService(db).RebuildAsync(1, dryRun: true);
+        var result = await TestCostingUseCases.Rebuild(db).RebuildAsync(1, dryRun: true);
 
         Assert.Contains(result.Issues, issue => issue.Code == "UnknownCost");
         var correction = await db.StockAdjustments.SingleAsync();
         Assert.Null(correction.UnitCost);
         Assert.Null(correction.TotalCost);
+    }
+
+    [Fact]
+    public async Task Repeated_rebuilds_are_idempotent()
+    {
+        await using var db = CreateDb();
+        db.Products.Add(new Product { Id = 1, Name = "Snack", QuantityInStock = 17 });
+        db.StockAdjustments.AddRange(
+            Movement(1, 10, 2m, StockAdjustmentReason.Restock, Day(1)),
+            Movement(1, -3, null, StockAdjustmentReason.Correction, Day(2)),
+            Movement(1, 10, 3m, StockAdjustmentReason.Restock, Day(3)));
+        db.NayaxSales.AddRange(Sale(1, Day(2).AddHours(1)), Sale(2, Day(4)));
+        await db.SaveChangesAsync();
+        var rebuild = TestCostingUseCases.Rebuild(db);
+
+        var first = await rebuild.RebuildAsync(1, Day(1));
+        await db.SaveChangesAsync();
+        var afterFirst = await Snapshot(db);
+        var second = await rebuild.RebuildAsync(1, Day(1));
+        await db.SaveChangesAsync();
+
+        Assert.Equal(afterFirst, await Snapshot(db));
+        Assert.Equal(first.CostingQuantity, second.CostingQuantity);
+        Assert.Equal(first.InventoryValue, second.InventoryValue);
+        Assert.Equal(first.AverageUnitCost, second.AverageUnitCost);
+        Assert.Equal(2, second.RecostedSaleCount);
+        Assert.Equal(15, second.CostingQuantity);
+    }
+
+    [Fact]
+    public async Task Fatal_data_quality_issue_throws_and_never_stages_the_product_position()
+    {
+        var store = new FakeLedgerStore(new InventoryCostLedger(
+            new CostReplayProduct(1, 0, null, null),
+            [new CostReplayAdjustment(1, Day(1), DomainStock.StockAdjustmentReason.Restock, 5, null, false)],
+            [],
+            null));
+
+        var exception = await Assert.ThrowsAsync<InventoryCostDataQualityException>(
+            () => new RebuildProductCost(store).RebuildAsync(1));
+
+        Assert.Contains("has no valid unit cost", exception.Message);
+        Assert.Null(store.StagedPosition);
+    }
+
+    [Fact]
+    public async Task Dry_run_stages_nothing_and_does_not_throw_for_a_fatal_issue()
+    {
+        var store = new FakeLedgerStore(new InventoryCostLedger(
+            new CostReplayProduct(1, 0, null, null),
+            [new CostReplayAdjustment(1, Day(1), DomainStock.StockAdjustmentReason.Restock, 5, null, false)],
+            [new CostReplaySale(9, Day(2))],
+            null));
+
+        var result = await new RebuildProductCost(store).RebuildAsync(1, Day(1), dryRun: true);
+
+        Assert.True(result.DryRun);
+        Assert.Equal(0, result.RecostedSaleCount);
+        Assert.Contains(result.Issues, issue => issue.Code == CostDataQualityIssueCodes.UnknownCost);
+        Assert.False(store.ForUpdate);
+        Assert.False(store.ReplayStaged);
+        Assert.Null(store.StagedPosition);
+    }
+
+    [Fact]
+    public async Task Rebuild_of_an_unknown_product_throws()
+    {
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => new RebuildProductCost(new FakeLedgerStore(null)).RebuildAsync(1));
+    }
+
+    [Fact]
+    public async Task Average_unit_cost_at_a_time_is_null_for_an_unknown_product_or_a_fatal_history()
+    {
+        Assert.Null(await new RebuildProductCost(new FakeLedgerStore(null)).GetAverageUnitCostAtAsync(1, Day(5)));
+
+        var fatal = new FakeLedgerStore(new InventoryCostLedger(
+            new CostReplayProduct(1, 0, null, null),
+            [new CostReplayAdjustment(1, Day(1), DomainStock.StockAdjustmentReason.Restock, 5, null, false)],
+            [],
+            null));
+        Assert.Null(await new RebuildProductCost(fatal).GetAverageUnitCostAtAsync(1, Day(5)));
+    }
+
+    private static async Task<string> Snapshot(AppDbContext db)
+    {
+        var product = await db.Products.AsNoTracking().SingleAsync();
+        var adjustments = await db.StockAdjustments.AsNoTracking().OrderBy(x => x.Id).ToListAsync();
+        var sales = await db.NayaxSales.AsNoTracking().OrderBy(x => x.TransactionID).ToListAsync();
+        return string.Join("|",
+            new[] { $"{product.QuantityInStock},{product.CostingQuantity},{product.InventoryValue},{product.AverageUnitCost}" }
+                .Concat(adjustments.Select(x => $"{x.Id},{x.QuantityAfter},{x.CostingQuantityAfter},{x.InventoryValueAfter},{x.AverageUnitCostAfter},{x.UnitCost},{x.TotalCost}"))
+                .Concat(sales.Select(x => $"{x.TransactionID},{x.UnitCostAtSale},{x.CostOfGoodsSold},{x.CostingStatus},{x.CostSource}")));
+    }
+
+    private sealed class FakeLedgerStore(InventoryCostLedger? ledger) : IInventoryCostLedgerStore
+    {
+        public bool? ForUpdate { get; private set; }
+        public bool ReplayStaged { get; private set; }
+        public ProductCostPosition? StagedPosition { get; private set; }
+
+        public Task<InventoryCostLedger?> LoadAsync(long productId, bool forUpdate, CancellationToken cancellationToken)
+        {
+            ForUpdate = forUpdate;
+            return Task.FromResult(ledger);
+        }
+
+        public Task<InventoryCostLedger?> LoadAsOfAsync(long productId, DateTime asOf, CancellationToken cancellationToken) =>
+            Task.FromResult(ledger);
+
+        public void StageReplay(
+            InventoryCostLedger ledger,
+            IReadOnlyCollection<CostReplayAdjustmentOutcome> adjustments,
+            IReadOnlyCollection<CostReplaySaleCost> recostedSales) => ReplayStaged = true;
+
+        public void StageProductPosition(InventoryCostLedger ledger, ProductCostPosition position) => StagedPosition = position;
     }
 
     private static AppDbContext CreateDb() =>

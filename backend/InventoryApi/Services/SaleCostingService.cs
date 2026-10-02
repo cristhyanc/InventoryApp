@@ -1,3 +1,4 @@
+using Inventory.Application.Costing;
 using Inventory.Domain.FinancialConfiguration;
 using InventoryApi.Data;
 using InventoryApi.DTOs;
@@ -11,12 +12,12 @@ namespace InventoryApi.Services;
 public sealed class SaleCostingService : ISaleCostingService
 {
     private readonly AppDbContext _db;
-    private readonly IInventoryCostRebuildService _rebuild;
+    private readonly IRebuildProductCost _rebuild;
 
-    public SaleCostingService(AppDbContext db, IInventoryCostRebuildService? rebuild = null)
+    public SaleCostingService(AppDbContext db, IRebuildProductCost? rebuild = null)
     {
         _db = db;
-        _rebuild = rebuild ?? new InventoryCostRebuildService(db);
+        _rebuild = rebuild ?? new RebuildProductCost(new EfInventoryCostLedgerStore(db));
     }
 
     public async Task CostSaleAsync(

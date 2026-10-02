@@ -1,9 +1,9 @@
 using System.Text;
+using Inventory.Application.Costing;
 using InventoryApi.Data;
 using Inventory.Application.Nayax;
 using InventoryApi.Models;
 using InventoryApi.Services;
-using InventoryApi.Services.Interfaces;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.EntityFrameworkCore;
@@ -45,7 +45,7 @@ public class NayaxTransactionStatusTests
             Mock.Of<ILogger<ImportService>>(),
             Mock.Of<INayaxLynxClient>(),
             new SaleCostingService(db),
-            Mock.Of<IInventoryCostRebuildService>());
+            Mock.Of<IRebuildProductCost>());
 
         await service.ImportNayaxSalesFromExcelAsync(File("TransactionID,TransactionStatusId,MachineID,SettlementValue,MachineAuthorizationTime\n1,55,10,5,2/9/2026 2:30:00 PM"));
         await service.ImportNayaxSalesFromExcelAsync(File("TransactionID,TransactionStatusId,MachineID,SettlementValue,MachineAuthorizationTime\n1,12,10,5,2/9/2026 2:30:00 PM"));

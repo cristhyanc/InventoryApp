@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Inventory.Application.Costing;
 using Inventory.Application.MachineStockSync;
 using Inventory.Application.Nayax;
 using Inventory.Application.Stock;
@@ -6,8 +7,6 @@ using Inventory.Domain.Nayax;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using InventoryApi.Models;
-using InventoryApi.Services;
-using InventoryApi.Services.Interfaces;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Moq;
@@ -62,26 +61,26 @@ public class MachineStockSyncTests
     private static (SyncMachineStockFromNayax Sync, ApplyMachineStockSync Apply) UseCases(
         AppDbContext db,
         INayaxLynxClient nayax,
-        IInventoryCostRebuildService? rebuild = null)
+        IRebuildProductCost? rebuild = null)
     {
         var store = new EfMachineStockEventStore(
-            db, new InventoryCostService(db), rebuild ?? new InventoryCostRebuildService(db));
+            db, TestCostingUseCases.RecordMovement(db), rebuild ?? TestCostingUseCases.Rebuild(db));
         return (new SyncMachineStockFromNayax(nayax, store), new ApplyMachineStockSync(store));
     }
 
     private static ResolveMachineStockDuplicate ResolveUseCase(
-        AppDbContext db, IInventoryCostRebuildService? rebuild = null) =>
+        AppDbContext db, IRebuildProductCost? rebuild = null) =>
         new(new EfMachineStockEventStore(
-            db, new InventoryCostService(db), rebuild ?? new InventoryCostRebuildService(db)));
+            db, TestCostingUseCases.RecordMovement(db), rebuild ?? TestCostingUseCases.Rebuild(db)));
 
     private static ResolveMachineStockEventsAsAlreadyRecorded BulkResolveUseCase(
-        AppDbContext db, IInventoryCostRebuildService? rebuild = null) =>
+        AppDbContext db, IRebuildProductCost? rebuild = null) =>
         new(new EfMachineStockEventStore(
-            db, new InventoryCostService(db), rebuild ?? new InventoryCostRebuildService(db)));
+            db, TestCostingUseCases.RecordMovement(db), rebuild ?? TestCostingUseCases.Rebuild(db)));
 
     /// <summary>The manual-fallback stock adjustment path a Nayax refill is compared/distinguished against, now routed through the issue #282 use case instead of the retired <c>StockService</c>.</summary>
-    private static AdjustStock ManualAdjustUseCase(AppDbContext db, IInventoryCostRebuildService? rebuild = null) =>
-        new(new EfStockAdjustmentStore(db, new InventoryCostService(db), rebuild ?? new InventoryCostRebuildService(db)));
+    private static AdjustStock ManualAdjustUseCase(AppDbContext db, IRebuildProductCost? rebuild = null) =>
+        new(new EfStockAdjustmentStore(db, TestCostingUseCases.RecordMovement(db), rebuild ?? TestCostingUseCases.Rebuild(db)));
 
     private static Task ApplyManualMachineRefillAsync(AppDbContext db, int quantityChange, string notes) =>
         ManualAdjustUseCase(db).Handle(
@@ -588,7 +587,7 @@ public class MachineStockSyncTests
             StockAlert(1, "Product MDB: 7 | Coke 375mL | 2")
         ], [new() { NayaxProductID = ProductId, MDBCode = 7, ProductName = "Coke 375mL" }]);
 
-        var failingRebuild = new Mock<IInventoryCostRebuildService>();
+        var failingRebuild = new Mock<IRebuildProductCost>();
         failingRebuild
             .Setup(x => x.RebuildAsync(ProductId, null, false, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("simulated rebuild failure"));
@@ -732,7 +731,7 @@ public class MachineStockSyncTests
         ResolveMachineStockDuplicate Resolve,
         int EventId,
         int ManualStockAdjustmentId)> SeedDuplicateScenarioAsync(
-        AppDbContext db, IInventoryCostRebuildService? rebuild = null)
+        AppDbContext db, IRebuildProductCost? rebuild = null)
     {
         SeedCostedProduct(db, ProductId, "Coke 375mL", 20, unitCost: 1m);
         await db.SaveChangesAsync();
@@ -996,7 +995,7 @@ public class MachineStockSyncTests
         await using var connection = new SqliteConnection("Data Source=:memory:");
         var options = await CreateSqliteDbAsync(connection);
 
-        var failingRebuild = new Mock<IInventoryCostRebuildService>();
+        var failingRebuild = new Mock<IRebuildProductCost>();
         failingRebuild
             .Setup(x => x.RebuildAsync(ProductId, null, false, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("simulated rebuild failure"));
@@ -1129,7 +1128,7 @@ public class MachineStockSyncTests
         await using var dbA = TestAppDbContext.For(options, BusinessA);
         SeedCostedProduct(dbA, ProductIdA, "Coke 375mL", 20);
         await dbA.SaveChangesAsync();
-        var storeA = new EfMachineStockEventStore(dbA, new InventoryCostService(dbA), new InventoryCostRebuildService(dbA));
+        var storeA = new EfMachineStockEventStore(dbA, TestCostingUseCases.RecordMovement(dbA), TestCostingUseCases.Rebuild(dbA));
         await storeA.ImportAsync(
             [new MachineStockEventImport(
                 1, MachineId, NayaxMachineAlertEventCodes.StockAdjustForMachine, EventTime, EventTime,
@@ -1140,7 +1139,7 @@ public class MachineStockSyncTests
         await using var dbB = TestAppDbContext.For(options, BusinessB);
         SeedCostedProduct(dbB, ProductIdB, "Coke 375mL", 20);
         await dbB.SaveChangesAsync();
-        var storeB = new EfMachineStockEventStore(dbB, new InventoryCostService(dbB), new InventoryCostRebuildService(dbB));
+        var storeB = new EfMachineStockEventStore(dbB, TestCostingUseCases.RecordMovement(dbB), TestCostingUseCases.Rebuild(dbB));
         await storeB.ImportAsync(
             [new MachineStockEventImport(
                 2, MachineId, NayaxMachineAlertEventCodes.StockAdjustForMachine, EventTime, EventTime,

@@ -1,35 +1,36 @@
+using Inventory.Application.Costing;
 using Inventory.Application.MachineStockSync;
 using Inventory.Domain.Nayax;
 using InventoryApi.Data;
 using InventoryApi.Models;
-using InventoryApi.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
+using DomainStock = Inventory.Domain.Stock;
 
 namespace InventoryApi.Adapters.Persistence;
 
 /// <summary>
 /// Temporary EF Core implementation of <see cref="IMachineStockEventStore"/> (issue #183). It lives
-/// in InventoryApi, not Inventory.Infrastructure, because it depends on <see cref="AppDbContext"/>,
-/// the persistence models, and the existing inventory/costing movement services, all of which still
-/// live in InventoryApi. Move it into Inventory.Infrastructure once the shared AppDbContext and
-/// persistence models relocate there; this follows the same pattern as <see cref="EfSupplierStore"/>.
+/// in InventoryApi, not Inventory.Infrastructure, because it depends on <see cref="AppDbContext"/>
+/// and the persistence models, both of which still live in InventoryApi. Move it into
+/// Inventory.Infrastructure once the shared AppDbContext and persistence models relocate there;
+/// this follows the same pattern as <see cref="EfSupplierStore"/>.
 ///
-/// Applying a refill deliberately reuses <see cref="IInventoryCostService.ApplyMovement"/> rather
-/// than writing its own movement, so a Nayax-sourced <see cref="StockAdjustmentReason.MachineRefill"/>
-/// inherits exactly the established internal-transfer invariants: it reduces storage quantity and
+/// Applying a refill deliberately reuses the Application <see cref="IRecordInventoryMovement"/> and
+/// <see cref="IRebuildProductCost"/> use cases (issue #296) rather than writing its own movement,
+/// so a Nayax-sourced <see cref="StockAdjustmentReason.MachineRefill"/> inherits exactly the established internal-transfer invariants: it reduces storage quantity and
 /// never touches costing quantity/value or creates COGS.
 /// </summary>
 public sealed class EfMachineStockEventStore : IMachineStockEventStore
 {
     private readonly AppDbContext _db;
-    private readonly IInventoryCostService _costing;
-    private readonly IInventoryCostRebuildService _rebuild;
+    private readonly IRecordInventoryMovement _recordMovement;
+    private readonly IRebuildProductCost _rebuild;
 
     public EfMachineStockEventStore(
-        AppDbContext db, IInventoryCostService costing, IInventoryCostRebuildService rebuild)
+        AppDbContext db, IRecordInventoryMovement recordMovement, IRebuildProductCost rebuild)
     {
         _db = db;
-        _costing = costing;
+        _recordMovement = recordMovement;
         _rebuild = rebuild;
     }
 
@@ -199,11 +200,13 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
             : null;
         try
         {
-            var adjustment = _costing.ApplyMovement(
-                productId, -quantity, StockAdjustmentReason.MachineRefill, null,
-                $"Nayax Sync Restock (EventLogID {nayaxEventLogId})");
-            adjustment.MachineId = machineId;
-            adjustment.Source = StockAdjustmentSource.Nayax;
+            var adjustment = await _recordMovement.RecordAsync(
+                new InventoryMovement(
+                    productId, -quantity, DomainStock.StockAdjustmentReason.MachineRefill,
+                    $"Nayax Sync Restock (EventLogID {nayaxEventLogId})",
+                    MachineId: machineId,
+                    Source: DomainStock.StockAdjustmentSource.Nayax),
+                cancellationToken);
 
             await _db.SaveChangesAsync(cancellationToken);
 

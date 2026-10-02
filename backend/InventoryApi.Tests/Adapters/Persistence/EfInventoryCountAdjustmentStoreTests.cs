@@ -3,7 +3,6 @@ using Inventory.Domain.InventoryCounting;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using InventoryApi.Models;
-using InventoryApi.Services;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
@@ -33,8 +32,8 @@ public class EfInventoryCountAdjustmentStoreTests
 
     private static EfInventoryCountAdjustmentStore StoreFor(AppDbContext db)
     {
-        var costing = new InventoryCostService(db);
-        var rebuild = new InventoryCostRebuildService(db);
+        var costing = TestCostingUseCases.RecordMovement(db);
+        var rebuild = TestCostingUseCases.Rebuild(db);
         var getRestockCostSuggestion = new GetRestockCostSuggestion(new EfStockAdjustmentStore(db, costing, rebuild));
         return new EfInventoryCountAdjustmentStore(db, costing, rebuild, getRestockCostSuggestion);
     }
@@ -109,7 +108,7 @@ public class EfInventoryCountAdjustmentStoreTests
         Assert.Null(unitCost);
     }
 
-    /// <summary>Seeds an opening costed Restock so <c>InventoryCostRebuildService</c>'s replay has a known average cost to work from - it recomputes quantity/costing purely from adjustment history, not from whatever a test sets directly on <see cref="Product"/>.</summary>
+    /// <summary>Seeds an opening costed Restock so <c>RebuildProductCost</c>'s replay has a known average cost to work from - it recomputes quantity/costing purely from adjustment history, not from whatever a test sets directly on <see cref="Product"/>.</summary>
     private static async Task SeedOpeningRestockAsync(DbContextOptions<AppDbContext> options, int businessId, long productId, int quantity, decimal unitCost)
     {
         await using var seed = TestAppDbContext.For(options, businessId);
@@ -175,5 +174,40 @@ public class EfInventoryCountAdjustmentStoreTests
         Assert.Equal(StockAdjustmentReason.Correction, adjustment.Reason);
         Assert.Equal(28, adjustment.QuantityAfter);
         Assert.Equal(2, await verify.StockAdjustments.CountAsync(a => a.ProductId == 100));
+    }
+
+    [Fact]
+    public async Task ApplyAsync_SurplusThenShortage_RebuildsCostingThroughTheApplicationUseCases()
+    {
+        using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await CreateSqliteAsync(connection);
+        await SeedOpeningRestockAsync(options, BusinessA, 100, quantity: 10, unitCost: 2m);
+
+        await using (var db = TestAppDbContext.For(options, BusinessA))
+        {
+            // Surplus: a positive Restock costed at the entered unit cost.
+            await StoreFor(db).ApplyAsync(100, InventoryCountMovementKind.Increase, 10, 4m, CancellationToken.None);
+        }
+
+        await using (var db = TestAppDbContext.For(options, BusinessA))
+        {
+            // Shortage: a negative Correction costed at the rebuilt average (60 / 20 = 3).
+            var application = await StoreFor(db)
+                .ApplyAsync(100, InventoryCountMovementKind.Decrease, -5, null, CancellationToken.None);
+            Assert.Equal(15, application.QuantityInStock);
+        }
+
+        await using var verify = TestAppDbContext.For(options, BusinessA);
+        var product = await verify.Products.SingleAsync(p => p.Id == 100);
+        Assert.Equal(15, product.QuantityInStock);
+        Assert.Equal(15, product.CostingQuantity);
+        Assert.Equal(45m, product.InventoryValue);
+        Assert.Equal(3m, product.AverageUnitCost);
+
+        var shortage = await verify.StockAdjustments.SingleAsync(a => a.ProductId == 100 && a.QuantityChange == -5);
+        Assert.Equal(StockAdjustmentReason.Correction, shortage.Reason);
+        Assert.Equal(3m, shortage.UnitCost);
+        Assert.Equal(15m, shortage.TotalCost);
+        Assert.Equal(15, shortage.CostingQuantityAfter);
     }
 }

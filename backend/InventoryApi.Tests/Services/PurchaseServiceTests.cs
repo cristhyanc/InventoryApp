@@ -1,3 +1,4 @@
+using Inventory.Application.Costing;
 using Inventory.Application.Documents;
 using Inventory.Application.Purchases;
 using Inventory.Infrastructure.Documents;
@@ -289,9 +290,9 @@ public class PurchaseServiceTests
     private static IPurchaseService CreateService(AppDbContext db) =>
         CreateService(db, TemporaryDocumentStorage());
 
-    private static IPurchaseService CreateService(AppDbContext db, IDocumentStorage documents, IInventoryCostRebuildService? rebuild = null)
+    private static IPurchaseService CreateService(AppDbContext db, IDocumentStorage documents, IRebuildProductCost? rebuild = null)
     {
-        var store = new EfPurchaseStore(db, rebuild ?? new InventoryCostRebuildService(db));
+        var store = new EfPurchaseStore(db, rebuild ?? TestCostingUseCases.Rebuild(db));
         return new PurchaseService(
             new ListPurchases(store),
             new GetPurchase(store),
@@ -544,7 +545,7 @@ public class PurchaseServiceTests
         using var db = CreateDbContext(Guid.NewGuid().ToString());
         db.Products.Add(new Product { Id = 1, Name = "M&M" });
         await db.SaveChangesAsync();
-        var rebuild = new Mock<IInventoryCostRebuildService>();
+        var rebuild = new Mock<IRebuildProductCost>();
         rebuild.Setup(x => x.RebuildAsync(
                 It.IsAny<long>(),
                 It.IsAny<DateTime?>(),

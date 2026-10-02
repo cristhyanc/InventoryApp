@@ -1,9 +1,8 @@
+using Inventory.Application.Costing;
 using Inventory.Application.Purchases;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using InventoryApi.Models;
-using InventoryApi.Services;
-using InventoryApi.Services.Interfaces;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Moq;
@@ -62,7 +61,7 @@ public sealed class EfPurchaseStoreTests : IDisposable
 
         await using (var db = TestAppDbContext.Unrestricted(_options))
         {
-            var store = new EfPurchaseStore(db, new InventoryCostRebuildService(db));
+            var store = new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db));
             await store.CreateAsync(
                 new PurchaseFields("Restock", null, null, null, null, new DateTime(2026, 1, 3), 1),
                 [new PurchaseItemInput(1, 12m, 1m)],
@@ -112,7 +111,7 @@ public sealed class EfPurchaseStoreTests : IDisposable
 
         await using (var db = TestAppDbContext.Unrestricted(_options))
         {
-            var failingRebuild = new Mock<IInventoryCostRebuildService>();
+            var failingRebuild = new Mock<IRebuildProductCost>();
             failingRebuild
                 .Setup(x => x.RebuildAsync(It.IsAny<long>(), It.IsAny<DateTime?>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
                 .ThrowsAsync(new InvalidOperationException("rebuild failure"));

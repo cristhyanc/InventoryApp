@@ -167,7 +167,7 @@ public sealed class NayaxImportTenantIsolationTests : IDisposable
 
     private static ImportService CreateImportService(AppDbContext db)
     {
-        var rebuild = new InventoryCostRebuildService(db);
+        var rebuild = TestCostingUseCases.Rebuild(db);
         return new ImportService(
             db,
             Mock.Of<IWebHostEnvironment>(),

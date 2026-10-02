@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Inventory.Application;
 using Inventory.Application.CatalogReconciliation;
 using Inventory.Application.Commissions;
+using Inventory.Application.Costing;
 using Inventory.Application.Categories;
 using Inventory.Application.Products;
 using Inventory.Application.Expenses;
@@ -146,8 +147,6 @@ builder.Services.AddNayaxLynxClient(nayaxLynxOptions);
 
 // Business services
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IProductService, InventoryApi.Services.ProductService>();
-builder.Services.AddScoped<InventoryApi.Services.Interfaces.IInventoryCostService, InventoryApi.Services.InventoryCostService>();
-builder.Services.AddScoped<InventoryApi.Services.Interfaces.IInventoryCostRebuildService, InventoryApi.Services.InventoryCostRebuildService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IInventoryCostTransitionService, InventoryApi.Services.InventoryCostTransitionService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.ISaleCostingService, InventoryApi.Services.SaleCostingService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IPurchaseService, InventoryApi.Services.PurchaseService>();
@@ -193,6 +192,11 @@ builder.Services.AddScoped<IProductCatalogStore, EfProductCatalogStore>();
 
 // Temporary API-owned adapter for the purchase create/read/update/delete persistence port; see EfPurchaseStore.
 builder.Services.AddScoped<IPurchaseStore, EfPurchaseStore>();
+
+// Temporary API-owned adapters for the inventory movement and product cost rebuild persistence
+// ports (issue #296); see EfInventoryMovementStore/EfInventoryCostLedgerStore.
+builder.Services.AddScoped<IInventoryMovementStore, EfInventoryMovementStore>();
+builder.Services.AddScoped<IInventoryCostLedgerStore, EfInventoryCostLedgerStore>();
 
 // Temporary API-owned adapter for the stock history/restock-cost-suggestion/manual-adjustment
 // persistence port (issue #282); see EfStockAdjustmentStore.

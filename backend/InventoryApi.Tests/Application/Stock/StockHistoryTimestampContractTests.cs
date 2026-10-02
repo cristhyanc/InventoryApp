@@ -3,7 +3,6 @@ using Inventory.Application.Stock;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using InventoryApi.Models;
-using InventoryApi.Services;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
@@ -73,7 +72,7 @@ public class StockHistoryTimestampContractTests
         }
 
         await using var db = TestAppDbContext.Unrestricted(options);
-        var useCase = new GetStockHistory(new EfStockAdjustmentStore(db, new InventoryCostService(db), new InventoryCostRebuildService(db)));
+        var useCase = new GetStockHistory(new EfStockAdjustmentStore(db, TestCostingUseCases.RecordMovement(db), TestCostingUseCases.Rebuild(db)));
         var history = await useCase.Handle(1, CancellationToken.None);
 
         var adjustment = Assert.Single(history);

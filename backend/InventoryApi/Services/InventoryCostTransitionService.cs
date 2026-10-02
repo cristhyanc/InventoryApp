@@ -1,3 +1,4 @@
+using Inventory.Application.Costing;
 using Inventory.Domain.Exceptions;
 using InventoryApi.Data;
 using InventoryApi.DTOs;
@@ -20,12 +21,12 @@ public sealed class InventoryCostTransitionService : IInventoryCostTransitionSer
 {
     private readonly AppDbContext _db;
     private readonly INayaxLynxClient _nayax;
-    private readonly IInventoryCostRebuildService _rebuild;
+    private readonly IRebuildProductCost _rebuild;
 
     public InventoryCostTransitionService(
         AppDbContext db,
         INayaxLynxClient nayax,
-        IInventoryCostRebuildService rebuild)
+        IRebuildProductCost rebuild)
     {
         _db = db;
         _nayax = nayax;
