@@ -1,11 +1,8 @@
-using Inventory.Domain.Exceptions;
-using InventoryApi.Data;
+using Inventory.Application.Commissions;
+using Inventory.Domain.FinancialConfiguration;
 using InventoryApi.DTOs;
-using InventoryApi.Models;
-using InventoryApi.Services.Interfaces;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Identity.Web.Resource;
 
 namespace InventoryApi.Controllers;
@@ -16,53 +13,109 @@ namespace InventoryApi.Controllers;
 [RequiredScope("access_as_user")]
 public sealed class SiteCommissionsController : ControllerBase
 {
-    private const decimal Tolerance = 0.01m;
-    private readonly AppDbContext _db;
-    private readonly ISiteCommissionService _commissions;
+    private readonly IGetSiteCommissionReport _getReport;
+    private readonly GetSiteCommissionAgreements _getAgreements;
+    private readonly SaveSiteCommissionAgreement _saveAgreement;
+    private readonly RecordSiteCommissionPayment _recordPayment;
 
-    public SiteCommissionsController(AppDbContext db, ISiteCommissionService commissions) { _db = db; _commissions = commissions; }
+    public SiteCommissionsController(
+        IGetSiteCommissionReport getReport,
+        GetSiteCommissionAgreements getAgreements,
+        SaveSiteCommissionAgreement saveAgreement,
+        RecordSiteCommissionPayment recordPayment)
+    {
+        _getReport = getReport;
+        _getAgreements = getAgreements;
+        _saveAgreement = saveAgreement;
+        _recordPayment = recordPayment;
+    }
 
     [HttpGet]
-    public Task<SiteCommissionReportDto> Get([FromQuery] DateTime from, [FromQuery] DateTime to, [FromQuery] long? siteId, CancellationToken ct) =>
-        _commissions.GetReportAsync(from, to, siteId, ct);
+    public async Task<SiteCommissionReportDto> Get(
+        [FromQuery] DateTime from,
+        [FromQuery] DateTime to,
+        [FromQuery] long? siteId,
+        CancellationToken ct)
+    {
+        var report = await _getReport.Handle(from, to, siteId, ct);
+        return new SiteCommissionReportDto(report.From, report.To, report.Rows.Select(row =>
+            new SiteCommissionRowDto(
+                row.SiteId,
+                row.SiteName,
+                row.PeriodStart,
+                row.PeriodEnd,
+                row.Frequency,
+                row.Basis,
+                row.GrossSales,
+                row.CardSales,
+                row.CashSales,
+                row.EligibleSales,
+                row.CommissionRate,
+                row.CommissionDue,
+                row.Paid,
+                row.Outstanding,
+                row.DueDate,
+                row.Status,
+                row.Machines.Select(machine => new SiteCommissionMachineDto(
+                    machine.MachineId,
+                    machine.MachineName,
+                    machine.TransactionCount,
+                    machine.GrossSales,
+                    machine.CardSales,
+                    machine.CashSales,
+                    machine.EligibleSales,
+                    machine.CommissionDue,
+                    machine.IsComplete,
+                    machine.HasConfigurationGap,
+                    machine.HasOverlap)).ToList(),
+                row.Products.Select(product => new SiteCommissionProductDto(
+                    product.ProductName, product.TotalVends, product.TotalSales)).ToList(),
+                row.Payments,
+                row.DataQuality)
+            {
+                HasConfigurationGap = row.HasConfigurationGap,
+                HasOverlap = row.HasOverlap,
+                UsesMultipleRates = row.UsesMultipleRates
+            }).ToList());
+    }
 
     [HttpGet("agreements")]
-    public Task<List<SiteCommissionAgreement>> Agreements([FromQuery] long? siteId, CancellationToken ct) =>
-        _db.SiteCommissionAgreements.AsNoTracking().Where(x => !siteId.HasValue || x.SiteId == siteId)
-            .OrderByDescending(x => x.EffectiveFrom).ToListAsync(ct);
+    public Task<IReadOnlyList<CommissionAgreement>> Agreements([FromQuery] long? siteId, CancellationToken ct) =>
+        _getAgreements.Handle(siteId, ct);
 
     [HttpPost("agreements")]
-    public async Task<ActionResult<SiteCommissionAgreement>> SaveAgreement(SiteCommissionAgreementDto dto, CancellationToken ct)
+    public async Task<ActionResult<CommissionAgreement>> SaveAgreement(SiteCommissionAgreementDto dto, CancellationToken ct)
     {
         if (dto.CommissionRate < 0 || dto.CommissionRate > 1 || dto.PaymentDueDaysAfterPeriodEnd < 0 || dto.EffectiveTo < dto.EffectiveFrom)
             return BadRequest("Commission agreement values are invalid.");
-        var overlaps = await _db.SiteCommissionAgreements.AnyAsync(x => x.SiteId == dto.SiteId &&
-            x.EffectiveFrom <= (dto.EffectiveTo ?? DateTime.MaxValue) && (x.EffectiveTo ?? DateTime.MaxValue) >= dto.EffectiveFrom, ct);
-        // Mapped centrally by DomainExceptionHandler into the same 409 this action used to
-        // return directly (see Http/DomainExceptionHandler.cs).
-        if (overlaps) throw new DomainConflictException("The agreement overlaps an existing agreement for this site.");
-        var agreement = new SiteCommissionAgreement
-        {
-            SiteId = dto.SiteId,
-            EffectiveFrom = dto.EffectiveFrom.Date,
-            EffectiveTo = dto.EffectiveTo?.Date,
-            CommissionRate = dto.CommissionRate,
-            Frequency = dto.Frequency,
-            Basis = dto.Basis,
-            PaymentDueDaysAfterPeriodEnd = dto.PaymentDueDaysAfterPeriodEnd
-        };
-        _db.SiteCommissionAgreements.Add(agreement); await _db.SaveChangesAsync(ct); return CreatedAtAction(nameof(Agreements), new { siteId = agreement.SiteId }, agreement);
+        var agreement = await _saveAgreement.Handle(
+            new SaveSiteCommissionAgreementInput(
+                dto.SiteId,
+                dto.EffectiveFrom,
+                dto.EffectiveTo,
+                dto.CommissionRate,
+                dto.Frequency,
+                dto.Basis,
+                dto.PaymentDueDaysAfterPeriodEnd),
+            ct);
+        return CreatedAtAction(nameof(Agreements), new { siteId = agreement.SiteId }, agreement);
     }
 
     [HttpPost("{siteId:long}/payments")]
-    public async Task<ActionResult<CommissionPayment>> RecordPayment(long siteId, [FromQuery] DateTime periodStart, [FromQuery] DateTime periodEnd, CommissionPaymentDto dto, CancellationToken ct)
+    public async Task<ActionResult<CommissionPayment>> RecordPayment(
+        long siteId,
+        [FromQuery] DateTime periodStart,
+        [FromQuery] DateTime periodEnd,
+        CommissionPaymentDto dto,
+        CancellationToken ct)
     {
         if (dto.Amount <= 0 || periodEnd < periodStart) return BadRequest("Payment amount and period are invalid.");
-        var report = await _commissions.GetReportAsync(periodStart, periodEnd, siteId, ct);
-        var row = report.Rows.SingleOrDefault();
-        if (row is null) return BadRequest("The site has no current Nayax machine assignment.");
-        if (row.Paid + dto.Amount > row.CommissionDue + Tolerance) return BadRequest("Payment exceeds commission due for this period.");
-        var payment = new CommissionPayment { SiteId = siteId, PeriodStart = periodStart.Date, PeriodEnd = periodEnd.Date, PaymentDate = dto.PaymentDate.Date, Amount = dto.Amount, Notes = dto.Notes?.Trim() };
-        _db.CommissionPayments.Add(payment); await _db.SaveChangesAsync(ct); return CreatedAtAction(nameof(Get), new { periodStart, periodEnd, siteId }, payment);
+        var result = await _recordPayment.Handle(
+            new RecordSiteCommissionPaymentInput(
+                siteId, periodStart, periodEnd, dto.PaymentDate, dto.Amount, dto.Notes),
+            ct);
+        if (result.Payment is null)
+            return BadRequest(result.Error);
+        return CreatedAtAction(nameof(Get), new { periodStart, periodEnd, siteId }, result.Payment);
     }
 }

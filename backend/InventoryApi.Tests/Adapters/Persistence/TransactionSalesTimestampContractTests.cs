@@ -5,10 +5,11 @@ using Inventory.Application.Reporting.Transactions;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using InventoryApi.Models;
-using InventoryApi.Services;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
+
+using Inventory.Domain.FinancialConfiguration;
 
 namespace InventoryApi.Tests.Adapters.Persistence;
 
@@ -120,7 +121,7 @@ public class TransactionSalesTimestampContractTests
         }
 
         await using var db = Context(connection);
-        var useCase = new GetDailyReport(new EfDailyReportFactsProvider(db, new NayaxProcessingFeeService(db)));
+        var useCase = new GetDailyReport(new EfDailyReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db)));
 
         var report = await useCase.Handle(
             new ReportingFilterDto(From: AestInstant.Date, To: AestInstant.Date),

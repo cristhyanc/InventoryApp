@@ -1,3 +1,5 @@
+using Inventory.Domain.FinancialConfiguration;
+
 namespace Inventory.Domain.Reporting.Transactions;
 
 /// <summary>
@@ -7,8 +9,8 @@ namespace Inventory.Domain.Reporting.Transactions;
 /// </summary>
 public readonly record struct TransactionRowInputs(
     decimal Sale,
-    TransactionPaymentType PaymentType,
-    TransactionSaleStatus Status,
+    NayaxPaymentType PaymentType,
+    NayaxTransactionStatus Status,
     DateTime AuthorizationDate,
     long? SiteId,
     decimal? CostOfGoodsSold,
@@ -23,7 +25,7 @@ public readonly record struct TransactionRowResult(
     string FeeSource,
     bool FeeUnavailable,
     decimal? CommissionRate,
-    TransactionCommissionBasis? CommissionBasis,
+    CommissionBasis? CommissionBasis,
     decimal? CommissionAmount,
     bool HasOverlappingCommission,
     bool CommissionUnavailable,
@@ -46,15 +48,15 @@ public static class TransactionRowPolicy
 {
     public static TransactionRowResult Calculate(
         TransactionRowInputs sale,
-        IReadOnlyList<EffectiveFeeRate> rates,
+        IReadOnlyList<EffectiveNayaxFeeRate> rates,
         IReadOnlyList<EffectiveCommissionAgreement> agreements)
     {
         decimal? feeExGst = 0m, feeGst = 0m, feeIncGst = 0m;
         var feeSource = "Not applicable";
         var feeUnavailable = false;
-        if (sale.Status == TransactionSaleStatus.Completed && sale.PaymentType == TransactionPaymentType.Card)
+        if (sale.Status == NayaxTransactionStatus.Completed && sale.PaymentType == NayaxPaymentType.Card)
         {
-            var rate = ResolveFeeRate(rates, sale.AuthorizationDate);
+            var rate = EffectiveFinancialConfiguration.ResolveNayaxFeeRate(rates, sale.AuthorizationDate);
             if (rate is null)
             {
                 feeExGst = feeGst = feeIncGst = null;
@@ -69,41 +71,52 @@ public static class TransactionRowPolicy
                 feeSource = "Estimated";
             }
         }
-        else if (sale.Status == TransactionSaleStatus.Completed && sale.PaymentType == TransactionPaymentType.Unknown)
+        else if (sale.Status == NayaxTransactionStatus.Completed && sale.PaymentType == NayaxPaymentType.Unknown)
         {
             feeExGst = feeGst = feeIncGst = null;
             feeSource = "Unavailable";
             feeUnavailable = true;
         }
 
-        EffectiveCommissionAgreement? agreement = null;
+        CommissionAgreement? agreement = null;
         var hasOverlappingCommission = false;
         var commissionUnavailable = false;
-        if (sale.Status == TransactionSaleStatus.Completed && sale.SiteId.HasValue)
+        if (sale.Status == NayaxTransactionStatus.Completed && sale.SiteId.HasValue)
         {
             var siteAgreements = agreements.Where(x => x.SiteId == sale.SiteId.Value).ToList();
-            var (resolved, hasOverlap) = ResolveAgreement(siteAgreements, sale.SiteId.Value, sale.AuthorizationDate);
-            if (hasOverlap)
+            try
+            {
+                agreement = EffectiveFinancialConfiguration.ResolveAgreement(
+                    siteAgreements.Select(item => new CommissionAgreement(
+                        0,
+                        item.SiteId,
+                        item.EffectiveFrom,
+                        item.EffectiveTo,
+                        item.CommissionRate,
+                        CommissionFrequency.None,
+                        item.Basis,
+                        null,
+                        default,
+                        default)),
+                    sale.SiteId.Value,
+                    sale.AuthorizationDate);
+            }
+            catch (InvalidOperationException)
             {
                 hasOverlappingCommission = true;
-                commissionUnavailable = true;
             }
-            else
-            {
-                agreement = resolved;
-                commissionUnavailable = agreement is null && siteAgreements.Count > 0;
-            }
+            commissionUnavailable = hasOverlappingCommission || agreement is null && siteAgreements.Count > 0;
         }
-        else if (sale.Status == TransactionSaleStatus.Completed)
+        else if (sale.Status == NayaxTransactionStatus.Completed)
         {
             commissionUnavailable = true;
         }
 
         decimal? commissionAmount = agreement is null
             ? (commissionUnavailable ? null : 0m)
-            : CommissionAmount(agreement.Value, sale.Sale, sale.PaymentType);
+            : SiteCommissionCalculator.CommissionAmount(agreement, sale.Sale, sale.PaymentType);
 
-        var isCosted = sale.HasPersistedCost && sale.Status == TransactionSaleStatus.Completed;
+        var isCosted = sale.HasPersistedCost && sale.Status == NayaxTransactionStatus.Completed;
         decimal? grossProfit = isCosted ? sale.Sale - sale.CostOfGoodsSold!.Value : null;
         decimal? directProfit = grossProfit.HasValue && feeIncGst.HasValue && commissionAmount.HasValue
             ? grossProfit.Value - feeIncGst.Value - commissionAmount.Value
@@ -117,40 +130,4 @@ public static class TransactionRowPolicy
             directProfit, directProfit.HasValue ? ReportingCalculations.PercentageOf(directProfit.Value, sale.Sale) : null);
     }
 
-    private static EffectiveFeeRate? ResolveFeeRate(IReadOnlyList<EffectiveFeeRate> rates, DateTime effectiveAt) =>
-        rates
-            .Where(x => x.EffectiveFrom.Date <= effectiveAt.Date)
-            .OrderByDescending(x => x.EffectiveFrom)
-            .Select(x => (EffectiveFeeRate?)x)
-            .FirstOrDefault();
-
-    // Returns the single matching agreement, or (null, HasOverlap: true) when more than one
-    // agreement covers the site on this date, mirroring the prior throwing behavior without using
-    // an exception for control flow.
-    private static (EffectiveCommissionAgreement? Agreement, bool HasOverlap) ResolveAgreement(
-        IReadOnlyList<EffectiveCommissionAgreement> agreements, long siteId, DateTime effectiveAt)
-    {
-        var matches = agreements.Where(x =>
-            x.SiteId == siteId &&
-            x.EffectiveFrom.Date <= effectiveAt.Date &&
-            (!x.EffectiveTo.HasValue || x.EffectiveTo.Value.Date >= effectiveAt.Date)).ToList();
-
-        return matches.Count switch
-        {
-            0 => (null, false),
-            1 => (matches[0], false),
-            _ => (null, true)
-        };
-    }
-
-    private static decimal EligibleSales(TransactionCommissionBasis basis, decimal sale, TransactionPaymentType paymentType) =>
-        basis switch
-        {
-            TransactionCommissionBasis.CardSales => paymentType == TransactionPaymentType.Card ? sale : 0m,
-            TransactionCommissionBasis.SalesExGst => sale - ReportingCalculations.GstFromInclusive(sale),
-            _ => sale
-        };
-
-    private static decimal CommissionAmount(EffectiveCommissionAgreement agreement, decimal sale, TransactionPaymentType paymentType) =>
-        EligibleSales(agreement.Basis, sale, paymentType) * agreement.CommissionRate;
 }

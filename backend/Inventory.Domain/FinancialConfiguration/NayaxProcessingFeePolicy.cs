@@ -1,52 +1,68 @@
-using Inventory.Application.Reporting.Shared;
 using Inventory.Domain.Reporting;
-using InventoryApi.Data;
-using InventoryApi.Models;
-using InventoryApi.Services.Interfaces;
-using Microsoft.EntityFrameworkCore;
 
-namespace InventoryApi.Services;
+namespace Inventory.Domain.FinancialConfiguration;
 
-public sealed class NayaxProcessingFeeService : INayaxProcessingFeeService
+public sealed record ImportedProcessingFee(
+    string? FeesTypeId,
+    string? FeeTypeDescription,
+    bool IsPreviousPeriod,
+    decimal? TotalSum,
+    decimal? TotalSumWithVat,
+    decimal? VatPercentage);
+
+public sealed record ImportedProcessingFeeDevice(string? MachineNumber, decimal? ProcessingFee);
+
+public sealed record ProcessingFeeReimbursement(
+    DateTime StartDate,
+    DateTime EndDate,
+    IReadOnlyList<ImportedProcessingFee> Fees,
+    IReadOnlyList<ImportedProcessingFeeDevice> Devices);
+
+public sealed record CompletedCardTransaction(DateTime MachineAuthorizationTime, string? PaymentMethod);
+
+public sealed record NayaxProcessingFeeTotals(
+    decimal ActualFeeExGst,
+    decimal ActualFeeGst,
+    decimal ActualFeeIncGst,
+    decimal EstimatedFeeExGst,
+    decimal EstimatedFeeGst,
+    decimal EstimatedFeeIncGst,
+    int EstimatedCardTransactionCount,
+    DateTime? ActualFeeCoverageEndDate,
+    DateTime? EstimatedFeeFromDate,
+    int MissingRateTransactionCount);
+
+public static class NayaxProcessingFeePolicy
 {
-    private readonly AppDbContext _db;
-
-    public NayaxProcessingFeeService(AppDbContext db) => _db = db;
-
-    public async Task<NayaxProcessingFeeResult> GetProcessingFeesAsync(
-        DateTime fromDate, DateTime toDate, long? machineId = null, CancellationToken cancellationToken = default)
+    public static NayaxProcessingFeeTotals Calculate(
+        DateTime fromDate,
+        DateTime toDate,
+        long? machineId,
+        IReadOnlyList<ProcessingFeeReimbursement> reimbursements,
+        IReadOnlyList<CompletedCardTransaction> eligibleSales,
+        IReadOnlyList<EffectiveNayaxFeeRate> rates)
     {
         var from = fromDate.Date;
         var to = toDate.Date;
         if (to < from) (from, to) = (to, from);
 
-        var reimbursements = await _db.ImportedReimbursements.AsNoTracking()
-            .Where(x => x.ReimbursementStartDate.HasValue && x.ReimbursementEndDate.HasValue &&
-                x.ReimbursementStartDate.Value.Date <= to && x.ReimbursementEndDate.Value.Date >= from)
-            .Include(x => x.Fees)
-            .Include(x => x.Devices)
-            .ToListAsync(cancellationToken);
-
         var actualByDay = new Dictionary<DateTime, decimal>();
         var actualGstByDay = new Dictionary<DateTime, decimal>();
         foreach (var reimbursement in reimbursements)
         {
-            var start = reimbursement.ReimbursementStartDate!.Value.Date;
-            var end = reimbursement.ReimbursementEndDate!.Value.Date;
+            var start = reimbursement.StartDate.Date;
+            var end = reimbursement.EndDate.Date;
+            var matchingFees = reimbursement.Fees.Where(fee => !fee.IsPreviousPeriod && IsProcessingFee(fee)).ToList();
+            var matchingDevices = reimbursement.Devices.Where(device =>
+                long.TryParse(device.MachineNumber, out var parsed) && parsed == machineId && device.ProcessingFee.HasValue).ToList();
             var reimbursementActualExGst = machineId.HasValue
-                ? reimbursement.Devices
-                    .Where(d => long.TryParse(d.MachineNumber, out var parsed) && parsed == machineId.Value && d.ProcessingFee.HasValue)
-                    .Sum(d => d.ProcessingFee!.Value)
-                : reimbursement.Fees
-                    .Where(f => !f.IsPreviousPeriod && IsProcessingFee(f))
-                    .Sum(FeeExGst);
+                ? matchingDevices.Sum(device => device.ProcessingFee!.Value)
+                : matchingFees.Sum(FeeExGst);
             var reimbursementActualGst = machineId.HasValue
                 ? ReportingCalculations.GstFromExcluding(reimbursementActualExGst)
-                : reimbursement.Fees.Where(f => !f.IsPreviousPeriod && IsProcessingFee(f)).Sum(FeeGst);
+                : matchingFees.Sum(FeeGst);
 
-            var hasAuthoritativeFee = machineId.HasValue
-                ? reimbursement.Devices.Any(d => long.TryParse(d.MachineNumber, out var parsed) && parsed == machineId.Value && d.ProcessingFee.HasValue)
-                : reimbursement.Fees.Any(f => !f.IsPreviousPeriod && IsProcessingFee(f));
+            var hasAuthoritativeFee = machineId.HasValue ? matchingDevices.Count != 0 : matchingFees.Count != 0;
             if (!hasAuthoritativeFee)
                 continue;
 
@@ -61,27 +77,12 @@ public sealed class NayaxProcessingFeeService : INayaxProcessingFeeService
                 }
         }
 
-        var eligibleSales = await _db.NayaxSales.AsNoTracking()
-            .Where(s => s.MachineAuthorizationTime >= from && s.MachineAuthorizationTime < to.AddDays(1) &&
-                (!machineId.HasValue || s.MachineID == machineId.Value) && s.TransactionStatusId == NayaxTransactionStatusIds.Completed)
-            .Select(s => new { s.MachineAuthorizationTime, s.PaymentMethod })
-            .ToListAsync(cancellationToken);
-        var rates = await _db.NayaxProcessingFeeRates.AsNoTracking()
-            .OrderBy(r => r.EffectiveFrom)
-            .ToListAsync(cancellationToken);
-
         var estimatedCardTransactions = 0;
         var missingRateTransactions = 0;
         var estimatedExGst = 0m;
         DateTime? estimatedFrom = null;
         foreach (var sale in eligibleSales)
         {
-            // The sale's authorization time materialises as a UTC instant (see the NayaxSales
-            // mapping in AppDbContext), but the fee coverage day it resolves to is a date-only
-            // business-calendar value that also leaves the API as EstimatedFeeFromDate. Dropping
-            // the Kind keeps it date-only so it is never serialised as a UTC instant a browser
-            // west of UTC would render as the previous day (issue #232); the day itself is
-            // unchanged, and the fee rate resolved for it is therefore unchanged too.
             var day = DateTime.SpecifyKind(sale.MachineAuthorizationTime.Date, DateTimeKind.Unspecified);
             if (actualByDay.ContainsKey(day) || PaymentMethodClassifier.Classify(sale.PaymentMethod) != NayaxPaymentType.Card)
                 continue;
@@ -93,7 +94,7 @@ public sealed class NayaxProcessingFeeService : INayaxProcessingFeeService
                 continue;
             }
 
-            estimatedExGst += rate.FeeExGst;
+            estimatedExGst += rate.Value.FeeExGst;
             estimatedCardTransactions++;
             estimatedFrom = estimatedFrom is null || day < estimatedFrom ? day : estimatedFrom;
         }
@@ -101,18 +102,18 @@ public sealed class NayaxProcessingFeeService : INayaxProcessingFeeService
         var actualExGst = actualByDay.Values.Sum();
         var actualGst = actualGstByDay.Values.Sum();
         var estimatedGst = ReportingCalculations.GstFromExcluding(estimatedExGst);
-        return new NayaxProcessingFeeResult(
+        return new NayaxProcessingFeeTotals(
             actualExGst, actualGst, actualExGst + actualGst,
             estimatedExGst, estimatedGst, estimatedExGst + estimatedGst,
             estimatedCardTransactions, actualByDay.Count == 0 ? null : actualByDay.Keys.Max(), estimatedFrom,
             missingRateTransactions);
     }
 
-    private static bool IsProcessingFee(ImportedFee fee) =>
+    private static bool IsProcessingFee(ImportedProcessingFee fee) =>
         (fee.FeesTypeId ?? string.Empty).Contains("processing", StringComparison.OrdinalIgnoreCase) ||
         (fee.FeeTypeDescription ?? string.Empty).Contains("processing", StringComparison.OrdinalIgnoreCase);
 
-    private static decimal FeeExGst(ImportedFee fee)
+    private static decimal FeeExGst(ImportedProcessingFee fee)
     {
         if (fee.TotalSum.HasValue) return fee.TotalSum.Value;
         if (!fee.TotalSumWithVat.HasValue) return 0m;
@@ -122,7 +123,7 @@ public sealed class NayaxProcessingFeeService : INayaxProcessingFeeService
         return fee.TotalSumWithVat.Value - gst;
     }
 
-    private static decimal FeeGst(ImportedFee fee)
+    private static decimal FeeGst(ImportedProcessingFee fee)
     {
         if (fee.TotalSumWithVat.HasValue && fee.TotalSum.HasValue)
             return fee.TotalSumWithVat.Value - fee.TotalSum.Value;

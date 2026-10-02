@@ -1,3 +1,4 @@
+using Inventory.Domain.FinancialConfiguration;
 using Inventory.Domain.Reporting.Transactions;
 
 namespace Inventory.Application.Reporting.Transactions;
@@ -13,7 +14,7 @@ namespace Inventory.Application.Reporting.Transactions;
 public sealed record TransactionSalesReportFacts(
     IAsyncEnumerable<TransactionSalesReportFactsRow> Transactions,
     IReadOnlyList<TransactionSalesCatalogueEntry> ProductCatalogue,
-    IReadOnlyList<EffectiveFeeRate> FeeRates,
+    IReadOnlyList<EffectiveNayaxFeeRate> FeeRates,
     IReadOnlyList<EffectiveCommissionAgreement> CommissionAgreements,
     // True when the live Nayax machine directory could not be retrieved, so SiteId/SiteName below
     // are unavailable for every row rather than genuinely unmapped.
@@ -32,7 +33,7 @@ public sealed record TransactionSalesReportFactsRow(
     string? SiteName,
     long? NayaxProductId,
     string? RawProductName,
-    TransactionPaymentType PaymentType,
+    NayaxPaymentType PaymentType,
     string? RawPaymentMethod,
     decimal Sale,
     decimal? NayaxProductCostPrice,
@@ -41,7 +42,7 @@ public sealed record TransactionSalesReportFactsRow(
     string CostingStatus,
     string CostSource,
     bool HasPersistedCost,
-    TransactionSaleStatus Status,
+    NayaxTransactionStatus Status,
     int? TransactionStatusId,
     string TransactionStatusDescription);
 

@@ -22,10 +22,9 @@ public sealed record MachineDashboardFacts(
     MachineProfitabilityStatusInputs StatusInputs);
 
 /// <summary>
-/// Narrow persistence/business-service port for the machine dashboard, owned by the Application
-/// layer. Its temporary EF Core implementation composes the still-legacy
-/// <c>EffectiveFinancialConfiguration</c>/<c>SiteCommissionCalculator</c>/<c>PaymentMethodClassifier</c>/
-/// <c>NayaxTransactionStatusClassifier</c>/<c>INayaxProcessingFeeService</c> (see <c>docs/architecture.md</c>).
+/// Narrow facts port for the machine dashboard, owned by the Application layer. Its temporary EF Core
+/// implementation applies Domain-owned commission, fee, payment, and transaction-status rules and
+/// composes the Application processing-fee use case (see <c>docs/architecture.md</c>).
 /// </summary>
 public interface IMachineDashboardFactsStore
 {

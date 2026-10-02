@@ -31,3 +31,5 @@ Claude and Copilot review each other. A human chooses the implementer with a lab
 - Check architecture against `docs/architecture.md`: controller and use-case boundaries, domain versus adapters, dependency direction, duplicated logic, and testability.
 - Check that the tests `AGENTS.md` requires exist and are meaningful, that the validation evidence matches CI, and that the `## Documentation impact` declaration matches the issue's decision and the actual diff.
 - Flag scope creep, unrelated edits, secrets, generated output, and accidental migrations.
+
+Implementation model tiers: the `agent-ready-copilot-low` and `agent-ready-copilot-high` labels carry the same implementation authority as `agent-ready-copilot`, with a fixed model. Never switch models or delegate to bypass the selected tier. If inadequate, stop and report the limitation for a human to relabel the issue. The corresponding Claude low/high labels still mean you review Claude's work. See docs/automation.md § Implementation model tiers.

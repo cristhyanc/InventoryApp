@@ -3,10 +3,11 @@ using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using Inventory.Application.Nayax;
 using InventoryApi.Models;
-using InventoryApi.Services;
 using Microsoft.EntityFrameworkCore;
 using Moq;
 using Xunit;
+
+using Inventory.Domain.FinancialConfiguration;
 
 namespace InventoryApi.Tests.Services;
 

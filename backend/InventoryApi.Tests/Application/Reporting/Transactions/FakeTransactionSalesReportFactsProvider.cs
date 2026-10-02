@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using Inventory.Application.Reporting.Transactions;
 using Inventory.Domain.Reporting.Transactions;
+using EffectiveFeeRate = Inventory.Domain.FinancialConfiguration.EffectiveNayaxFeeRate;
 
 namespace InventoryApi.Tests.Application.Reporting.Transactions;
 
@@ -59,8 +60,8 @@ public sealed class FakeTransactionSalesReportFactsProvider : ITransactionSalesR
         DateTime? transactionDate = null) => new(
         transactionId, transactionDate ?? new DateTime(2025, 8, 1), machineId, machineName,
         siteId, siteName, nayaxProductId, rawProductName,
-        TransactionPaymentType.Card, "Credit Card", sale,
+        Inventory.Domain.FinancialConfiguration.NayaxPaymentType.Card, "Credit Card", sale,
         null, costOfGoodsSold, costOfGoodsSold,
         "Costed", "Inventory Ledger", hasPersistedCost,
-        TransactionSaleStatus.Completed, 12, "Approved / Completed");
+        Inventory.Domain.FinancialConfiguration.NayaxTransactionStatus.Completed, 12, "Approved / Completed");
 }

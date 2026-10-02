@@ -2,6 +2,7 @@ using Inventory.Application.Products;
 using InventoryApi.Data;
 using InventoryApi.Models;
 using Microsoft.EntityFrameworkCore;
+using DomainStock = Inventory.Domain.Stock;
 
 namespace InventoryApi.Adapters.Persistence;
 
@@ -111,8 +112,8 @@ public sealed class EfProductCatalogStore : IProductCatalogStore
             adjustment.CostingQuantityAfter,
             adjustment.AverageUnitCostAfter,
             adjustment.InventoryValueAfter,
-            (int)adjustment.Reason,
-            (int)adjustment.Source,
+            (DomainStock.StockAdjustmentReason)adjustment.Reason,
+            (DomainStock.StockAdjustmentSource)adjustment.Source,
             adjustment.MachineId,
             adjustment.Notes,
             adjustment.EatBefore,

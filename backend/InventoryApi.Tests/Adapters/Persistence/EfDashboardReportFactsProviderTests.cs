@@ -1,9 +1,8 @@
 using InventoryApi.Adapters.Persistence;
+using Inventory.Application.Commissions;
+using Inventory.Domain.FinancialConfiguration;
 using InventoryApi.Data;
-using InventoryApi.DTOs;
 using InventoryApi.Models;
-using InventoryApi.Services;
-using InventoryApi.Services.Interfaces;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Moq;
@@ -27,11 +26,11 @@ public class EfDashboardReportFactsProviderTests
         return connection;
     }
 
-    private static ISiteCommissionService EmptyCommissions()
+    private static IGetSiteCommissionReport EmptyCommissions()
     {
-        var mock = new Mock<ISiteCommissionService>();
-        mock.Setup(x => x.GetReportAsync(It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((DateTime from, DateTime to, long? _, CancellationToken _) => new SiteCommissionReportDto(from, to, []));
+        var mock = new Mock<IGetSiteCommissionReport>();
+        mock.Setup(x => x.Handle(It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((DateTime from, DateTime to, long? _, CancellationToken _) => new SiteCommissionReport(from, to, []));
         return mock.Object;
     }
 

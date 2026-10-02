@@ -2,10 +2,11 @@ using Inventory.Application.Reporting.Daily;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using InventoryApi.Models;
-using InventoryApi.Services;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
+
+using Inventory.Domain.FinancialConfiguration;
 
 namespace InventoryApi.Tests.Adapters.Persistence;
 
@@ -83,7 +84,7 @@ public sealed class ReportTenantIsolationTests : IDisposable
         await SeedCompletedSaleAsync(BusinessB, transactionId: 2, machineId: 20, settlementValue: 500m);
 
         await using var denied = TestAppDbContext.Denied(_options);
-        var facts = await new EfDailyReportFactsProvider(denied, new NayaxProcessingFeeService(denied))
+        var facts = await new EfDailyReportFactsProvider(denied, TestFinancialUseCases.ProcessingFees(denied))
             .GetFactsAsync(ReportDay, ReportDay, null, CancellationToken.None);
 
         Assert.Empty(facts.Days);
@@ -93,7 +94,7 @@ public sealed class ReportTenantIsolationTests : IDisposable
     private async Task<DailyReportFacts> GetDailyFactsAsync(int businessId)
     {
         await using var db = TestAppDbContext.For(_options, businessId);
-        return await new EfDailyReportFactsProvider(db, new NayaxProcessingFeeService(db))
+        return await new EfDailyReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db))
             .GetFactsAsync(ReportDay, ReportDay, null, CancellationToken.None);
     }
 

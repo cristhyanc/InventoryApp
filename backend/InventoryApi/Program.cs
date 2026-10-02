@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Inventory.Application;
 using Inventory.Application.CatalogReconciliation;
+using Inventory.Application.Commissions;
 using Inventory.Application.Categories;
 using Inventory.Application.Products;
 using Inventory.Application.Expenses;
@@ -8,6 +9,7 @@ using Inventory.Application.InventoryCounting;
 using Inventory.Application.MachineStockSync;
 using Inventory.Application.Machines;
 using Inventory.Application.NayaxFeeSettings;
+using Inventory.Application.NayaxProcessingFees;
 using Inventory.Application.PickList;
 using Inventory.Application.Purchases;
 using Inventory.Application.Reorder;
@@ -21,6 +23,7 @@ using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Transactions;
 using Inventory.Application.SalesSync;
 using Inventory.Application.Sites;
+using Inventory.Application.Stock;
 using Inventory.Application.Suppliers;
 using Inventory.Application.SupplierOrders;
 using Inventory.Application.Tenancy;
@@ -143,7 +146,6 @@ builder.Services.AddNayaxLynxClient(nayaxLynxOptions);
 
 // Business services
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IProductService, InventoryApi.Services.ProductService>();
-builder.Services.AddScoped<InventoryApi.Services.Interfaces.IStockService, InventoryApi.Services.StockService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IInventoryCostService, InventoryApi.Services.InventoryCostService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IInventoryCostRebuildService, InventoryApi.Services.InventoryCostRebuildService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IInventoryCostTransitionService, InventoryApi.Services.InventoryCostTransitionService>();
@@ -153,8 +155,6 @@ builder.Services.AddScoped<InventoryApi.Services.Interfaces.ISupplierOrderServic
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IMachineService, InventoryApi.Services.MachineService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.ISiteService, InventoryApi.Services.SiteService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IImportService, InventoryApi.Services.ImportService>();
-builder.Services.AddScoped<InventoryApi.Services.Interfaces.INayaxProcessingFeeService, InventoryApi.Services.NayaxProcessingFeeService>();
-builder.Services.AddScoped<InventoryApi.Services.Interfaces.ISiteCommissionService, InventoryApi.Services.SiteCommissionService>();
 
 // Tenancy (issue #64). Claims parsing stays at this boundary: EntraActorIdentityAccessor is the
 // only implementation of the Application's actor port, and the current-business abstraction
@@ -173,6 +173,11 @@ builder.Services.AddScoped<IBusinessMembershipStore, EfBusinessMembershipStore>(
 // Temporary API-owned adapter for the Nayax fee-settings persistence port; see EfNayaxFeeRateStore.
 builder.Services.AddScoped<INayaxFeeRateStore, EfNayaxFeeRateStore>();
 
+// Temporary API-owned adapters for commission and processing-fee facts, pending persistence
+// consolidation in issue #153.
+builder.Services.AddScoped<INayaxProcessingFeeFactsProvider, EfNayaxProcessingFeeFactsProvider>();
+builder.Services.AddScoped<ISiteCommissionStore, EfSiteCommissionStore>();
+
 // Temporary API-owned adapters for the categories/suppliers persistence ports; see EfCategoryStore/EfSupplierStore.
 builder.Services.AddScoped<ICategoryStore, EfCategoryStore>();
 builder.Services.AddScoped<ISupplierStore, EfSupplierStore>();
@@ -188,6 +193,10 @@ builder.Services.AddScoped<IProductCatalogStore, EfProductCatalogStore>();
 
 // Temporary API-owned adapter for the purchase create/read/update/delete persistence port; see EfPurchaseStore.
 builder.Services.AddScoped<IPurchaseStore, EfPurchaseStore>();
+
+// Temporary API-owned adapter for the stock history/restock-cost-suggestion/manual-adjustment
+// persistence port (issue #282); see EfStockAdjustmentStore.
+builder.Services.AddScoped<IStockAdjustmentStore, EfStockAdjustmentStore>();
 
 // Temporary API-owned adapter for the supplier-order create/read/cancel persistence port; see EfSupplierOrderStore.
 builder.Services.AddScoped<ISupplierOrderStore, EfSupplierOrderStore>();

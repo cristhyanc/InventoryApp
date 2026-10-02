@@ -1,3 +1,4 @@
+using Inventory.Application.Stock;
 using Inventory.Domain.InventoryCounting;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
@@ -30,8 +31,13 @@ public class EfInventoryCountAdjustmentStoreTests
         return options;
     }
 
-    private static EfInventoryCountAdjustmentStore StoreFor(AppDbContext db) =>
-        new(db, new InventoryCostService(db), new InventoryCostRebuildService(db), new StockService(db));
+    private static EfInventoryCountAdjustmentStore StoreFor(AppDbContext db)
+    {
+        var costing = new InventoryCostService(db);
+        var rebuild = new InventoryCostRebuildService(db);
+        var getRestockCostSuggestion = new GetRestockCostSuggestion(new EfStockAdjustmentStore(db, costing, rebuild));
+        return new EfInventoryCountAdjustmentStore(db, costing, rebuild, getRestockCostSuggestion);
+    }
 
     [Fact]
     public async Task GetCurrentStockAsync_ReturnsTheAuthoritativeQuantity()

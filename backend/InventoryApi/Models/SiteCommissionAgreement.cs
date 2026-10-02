@@ -1,9 +1,7 @@
 using System.Text.Json.Serialization;
+using Inventory.Domain.FinancialConfiguration;
 
 namespace InventoryApi.Models;
-
-public enum CommissionFrequency { None, Monthly, Quarterly }
-public enum CommissionBasis { GrossSales, CardSales, SalesExGst }
 
 public class SiteCommissionAgreement : IBusinessOwned
 {

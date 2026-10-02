@@ -1,7 +1,9 @@
+using Inventory.Domain.FinancialConfiguration;
 using InventoryApi.Data;
 using InventoryApi.DTOs;
 using InventoryApi.Models;
 using InventoryApi.Services.Interfaces;
+using InventoryApi.Adapters.Persistence;
 using Microsoft.EntityFrameworkCore;
 
 namespace InventoryApi.Services;
@@ -22,7 +24,7 @@ public sealed class SaleCostingService : ISaleCostingService
         bool force = false,
         CancellationToken cancellationToken = default)
     {
-        if (!NayaxTransactionStatusClassifier.IsCompletedSale(sale))
+        if (!NayaxTransactionStatusClassifier.IsCompletedSale(sale.TransactionStatusId))
         {
             sale.UnitCostAtSale = null;
             sale.CostOfGoodsSold = null;
@@ -80,7 +82,7 @@ public sealed class SaleCostingService : ISaleCostingService
         var products = await _db.Products.AsNoTracking().ToListAsync(cancellationToken);
         var sales = (await _db.NayaxSales
             .Where(s => s.CostingStatus == SaleCostingStatus.Pending)
-            .Where(NayaxTransactionStatusClassifier.CompletedSalePredicate)
+            .Where(EfNayaxSalesQueries.CompletedSalePredicate)
             .OrderBy(s => s.MachineAuthorizationTime)
             .ToListAsync(cancellationToken))
             .Where(s => !productId.HasValue ||
@@ -98,7 +100,7 @@ public sealed class SaleCostingService : ISaleCostingService
     public async Task<SaleCostingBackfillResult> BackfillAsync(bool dryRun = true, bool force = false, CancellationToken cancellationToken = default)
     {
         var sales = await _db.NayaxSales
-            .Where(NayaxTransactionStatusClassifier.CompletedSalePredicate)
+            .Where(EfNayaxSalesQueries.CompletedSalePredicate)
             .OrderBy(s => s.MachineAuthorizationTime)
             .ToListAsync(cancellationToken);
         var costed = 0;
@@ -144,7 +146,7 @@ public sealed class SaleCostingService : ISaleCostingService
     {
         var products = await _db.Products.AsNoTracking().ToListAsync(cancellationToken);
         var query = _db.NayaxSales
-            .Where(NayaxTransactionStatusClassifier.CompletedSalePredicate);
+            .Where(EfNayaxSalesQueries.CompletedSalePredicate);
         if (from.HasValue)
             query = query.Where(s => s.MachineAuthorizationTime >= from.Value);
         if (to.HasValue)

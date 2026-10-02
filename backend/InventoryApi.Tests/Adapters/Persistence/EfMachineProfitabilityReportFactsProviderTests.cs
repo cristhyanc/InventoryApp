@@ -1,9 +1,8 @@
 using InventoryApi.Adapters.Persistence;
+using Inventory.Application.Commissions;
+using Inventory.Domain.FinancialConfiguration;
 using InventoryApi.Data;
-using InventoryApi.DTOs;
 using InventoryApi.Models;
-using InventoryApi.Services;
-using InventoryApi.Services.Interfaces;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Moq;
@@ -28,11 +27,11 @@ public class EfMachineProfitabilityReportFactsProviderTests
         return connection;
     }
 
-    private static ISiteCommissionService EmptyCommissions()
+    private static IGetSiteCommissionReport EmptyCommissions()
     {
-        var mock = new Mock<ISiteCommissionService>();
-        mock.Setup(x => x.GetReportAsync(It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((DateTime from, DateTime to, long? _, CancellationToken _) => new SiteCommissionReportDto(from, to, []));
+        var mock = new Mock<IGetSiteCommissionReport>();
+        mock.Setup(x => x.Handle(It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((DateTime from, DateTime to, long? _, CancellationToken _) => new SiteCommissionReport(from, to, []));
         return mock.Object;
     }
 
@@ -46,7 +45,7 @@ public class EfMachineProfitabilityReportFactsProviderTests
             new NayaxSales { TransactionID = 2, MachineID = 10, MachineName = "Machine A", SettlementValue = 5m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed, CostOfGoodsSold = null },
             new NayaxSales { TransactionID = 3, MachineID = 11, MachineName = "Machine B", SettlementValue = 7m, PaymentMethod = "Credit Card", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed, CostOfGoodsSold = 3m });
         await db.SaveChangesAsync();
-        var provider = new EfMachineProfitabilityReportFactsProvider(db, new NayaxProcessingFeeService(db), EmptyCommissions());
+        var provider = new EfMachineProfitabilityReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions());
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), null, CancellationToken.None);
 
@@ -72,7 +71,7 @@ public class EfMachineProfitabilityReportFactsProviderTests
             new NayaxSales { TransactionID = 1, MachineID = 10, SettlementValue = 10m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed },
             new NayaxSales { TransactionID = 2, MachineID = 11, SettlementValue = 20m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed });
         await db.SaveChangesAsync();
-        var provider = new EfMachineProfitabilityReportFactsProvider(db, new NayaxProcessingFeeService(db), EmptyCommissions());
+        var provider = new EfMachineProfitabilityReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions());
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), 10, CancellationToken.None);
 
@@ -92,7 +91,7 @@ public class EfMachineProfitabilityReportFactsProviderTests
             new OperatingExpense { ExpenseDate = date, MachineId = 10, TotalAmount = 6m },
             new OperatingExpense { ExpenseDate = date, TotalAmount = 20m });
         await db.SaveChangesAsync();
-        var provider = new EfMachineProfitabilityReportFactsProvider(db, new NayaxProcessingFeeService(db), EmptyCommissions());
+        var provider = new EfMachineProfitabilityReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions());
 
         var facts = await provider.GetFactsAsync(date, date, null, CancellationToken.None);
 
@@ -110,7 +109,7 @@ public class EfMachineProfitabilityReportFactsProviderTests
             new NayaxSales { TransactionID = 1, MachineID = 10, SettlementValue = 10m, PaymentMethod = "Credit Card", MachineAuthorizationTime = date, TransactionStatusId = NayaxTransactionStatusIds.Completed, CostOfGoodsSold = 4m },
             new NayaxSales { TransactionID = 2, MachineID = 11, SettlementValue = 10m, PaymentMethod = "Credit Card", MachineAuthorizationTime = date, TransactionStatusId = NayaxTransactionStatusIds.Completed, CostOfGoodsSold = 4m });
         await db.SaveChangesAsync();
-        var provider = new EfMachineProfitabilityReportFactsProvider(db, new NayaxProcessingFeeService(db), EmptyCommissions());
+        var provider = new EfMachineProfitabilityReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions());
 
         var facts = await provider.GetFactsAsync(date, date, null, CancellationToken.None);
 

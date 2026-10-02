@@ -1,4 +1,5 @@
 using System.Globalization;
+using Inventory.Domain.FinancialConfiguration;
 using Inventory.Application.Reporting.Shared;
 using Inventory.Domain.Reporting;
 using Inventory.Domain.Reporting.ProductMatching;
@@ -108,7 +109,7 @@ public sealed class GetTransactionSalesReport
 
             filteredCount++;
             totalsAccumulator.Add(new TransactionTotalsRowInputs(
-                detail.Status == TransactionSaleStatus.Completed, detail.Sale, detail.PaymentType, result.IsCosted,
+                detail.Status == NayaxTransactionStatus.Completed, detail.Sale, detail.PaymentType, result.IsCosted,
                 detail.CostOfGoodsSold, result.GrossProfit, result.DirectProfit,
                 result.FeeSource == "Estimated", result.FeeExGst ?? 0m, result.FeeGst ?? 0m, result.FeeIncGst ?? 0m,
                 result.CommissionAmount ?? 0m));
@@ -188,7 +189,7 @@ public sealed class GetTransactionSalesReport
             result.FeeExGst, result.FeeGst, result.FeeIncGst, result.FeeSource,
             result.CommissionRate, result.CommissionBasis?.ToString(), result.CommissionAmount,
             detail.TransactionStatusId, detail.TransactionStatusDescription,
-            detail.Status == TransactionSaleStatus.Completed);
+            detail.Status == NayaxTransactionStatus.Completed);
     }
 
     private static string DisplayMachineName(TransactionSalesReportFactsRow detail) =>
@@ -248,12 +249,12 @@ public sealed class GetTransactionSalesReport
         return descending ? -tie : tie;
     }
 
-    private static bool MatchesPayment(string value, TransactionPaymentType paymentType) =>
+    private static bool MatchesPayment(string value, NayaxPaymentType paymentType) =>
         value is "" or "all" || value == FilterValue(paymentType.ToString());
 
-    private static bool MatchesStatus(string value, TransactionSaleStatus status) =>
+    private static bool MatchesStatus(string value, NayaxTransactionStatus status) =>
         value is "" or "all" || value == FilterValue(status.ToString()) ||
-        (value is "cancelled" or "declined" && status == TransactionSaleStatus.CancelledOrDeclined);
+        (value is "cancelled" or "declined" && status == NayaxTransactionStatus.CancelledOrDeclined);
 
     private static bool MatchesCogs(string value, bool hasPersistedCost) =>
         value is "" or "all" || (value == "costed" && hasPersistedCost) ||

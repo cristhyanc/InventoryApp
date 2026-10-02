@@ -1,6 +1,8 @@
 using InventoryApi.Data;
+using Inventory.Application.NayaxProcessingFees;
+using Inventory.Domain.FinancialConfiguration;
+using InventoryApi.Adapters.Persistence;
 using InventoryApi.Models;
-using InventoryApi.Services;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
 
@@ -25,7 +27,7 @@ public class NayaxProcessingFeeServiceTests
             Sale(4, 1, "Credit Card", 62), Sale(5, 1, "Credit Card", null));
         await db.SaveChangesAsync();
 
-        var result = await new NayaxProcessingFeeService(db).GetProcessingFeesAsync(new DateTime(2026, 9, 1), new DateTime(2026, 9, 1));
+        var result = await Service(db).Handle(new DateTime(2026, 9, 1), new DateTime(2026, 9, 1), null, CancellationToken.None);
 
         Assert.Equal(.17m, result.EstimatedFeeExGst);
         Assert.Equal(.017m, result.EstimatedFeeGst);
@@ -47,7 +49,7 @@ public class NayaxProcessingFeeServiceTests
         });
         await db.SaveChangesAsync();
 
-        var result = await new NayaxProcessingFeeService(db).GetProcessingFeesAsync(new DateTime(2026, 9, 1), new DateTime(2026, 9, 2));
+        var result = await Service(db).Handle(new DateTime(2026, 9, 1), new DateTime(2026, 9, 2), null, CancellationToken.None);
 
         Assert.Equal(1m, result.ActualFeeExGst);
         Assert.Equal(.1m, result.ActualFeeGst);
@@ -72,7 +74,7 @@ public class NayaxProcessingFeeServiceTests
         });
         await db.SaveChangesAsync();
 
-        var machine = await new NayaxProcessingFeeService(db).GetProcessingFeesAsync(new DateTime(2026, 9, 1), new DateTime(2026, 9, 2), 10);
+        var machine = await Service(db).Handle(new DateTime(2026, 9, 1), new DateTime(2026, 9, 2), 10, CancellationToken.None);
 
         Assert.Equal(.25m, machine.ActualFeeExGst);
         Assert.Equal(.19m, machine.EstimatedFeeExGst);
@@ -113,11 +115,9 @@ public class NayaxProcessingFeeServiceTests
             });
         await db.SaveChangesAsync();
 
-        var service = new NayaxProcessingFeeService(db);
-        var june = await service.GetProcessingFeesAsync(
-            new DateTime(2026, 6, 30), new DateTime(2026, 6, 30));
-        var july = await service.GetProcessingFeesAsync(
-            new DateTime(2026, 7, 1), new DateTime(2026, 7, 1));
+        var service = Service(db);
+        var june = await service.Handle(new DateTime(2026, 6, 30), new DateTime(2026, 6, 30), null, CancellationToken.None);
+        var july = await service.Handle(new DateTime(2026, 7, 1), new DateTime(2026, 7, 1), null, CancellationToken.None);
 
         Assert.Equal(.17m, june.EstimatedFeeExGst);
         Assert.Equal(.20m, july.EstimatedFeeExGst);
@@ -131,8 +131,8 @@ public class NayaxProcessingFeeServiceTests
         db.NayaxSales.Add(Sale(20, 1, "Credit Card", NayaxTransactionStatusIds.Completed));
         await db.SaveChangesAsync();
 
-        var result = await new NayaxProcessingFeeService(db).GetProcessingFeesAsync(
-            new DateTime(2026, 9, 1), new DateTime(2026, 9, 1));
+        var result = await Service(db).Handle(
+            new DateTime(2026, 9, 1), new DateTime(2026, 9, 1), null, CancellationToken.None);
 
         Assert.True(result.HasMissingRates);
         Assert.Equal(1, result.MissingRateTransactionCount);
@@ -144,17 +144,17 @@ public class NayaxProcessingFeeServiceTests
     {
         var rates = new[]
         {
-            new NayaxProcessingFeeRate { EffectiveFrom = new DateTime(2026, 7, 1), FeeExGst = .20m },
-            new NayaxProcessingFeeRate { EffectiveFrom = new DateTime(2026, 1, 1), FeeExGst = .10m },
-            new NayaxProcessingFeeRate { EffectiveFrom = new DateTime(2026, 4, 1), FeeExGst = .15m },
+            new EffectiveNayaxFeeRate(new DateTime(2026, 7, 1), .20m),
+            new EffectiveNayaxFeeRate(new DateTime(2026, 1, 1), .10m),
+            new EffectiveNayaxFeeRate(new DateTime(2026, 4, 1), .15m),
         };
 
         var effectiveAt = new DateTime(2026, 5, 1);
         var expected = .15m;
 
-        Assert.Equal(expected, EffectiveFinancialConfiguration.ResolveNayaxFeeRate(rates, effectiveAt)!.FeeExGst);
-        Assert.Equal(expected, EffectiveFinancialConfiguration.ResolveNayaxFeeRate(rates.Reverse().ToArray(), effectiveAt)!.FeeExGst);
-        Assert.Equal(expected, EffectiveFinancialConfiguration.ResolveNayaxFeeRate(rates.OrderByDescending(x => x.EffectiveFrom).ToArray(), effectiveAt)!.FeeExGst);
+        Assert.Equal(expected, EffectiveFinancialConfiguration.ResolveNayaxFeeRate(rates, effectiveAt)!.Value.FeeExGst);
+        Assert.Equal(expected, EffectiveFinancialConfiguration.ResolveNayaxFeeRate(rates.Reverse().ToArray(), effectiveAt)!.Value.FeeExGst);
+        Assert.Equal(expected, EffectiveFinancialConfiguration.ResolveNayaxFeeRate(rates.OrderByDescending(x => x.EffectiveFrom).ToArray(), effectiveAt)!.Value.FeeExGst);
     }
 
     [Fact]
@@ -162,14 +162,14 @@ public class NayaxProcessingFeeServiceTests
     {
         var rates = new[]
         {
-            new NayaxProcessingFeeRate { EffectiveFrom = new DateTime(2026, 1, 1), FeeExGst = .10m },
-            new NayaxProcessingFeeRate { EffectiveFrom = new DateTime(2026, 4, 1), FeeExGst = .15m },
-            new NayaxProcessingFeeRate { EffectiveFrom = new DateTime(2026, 7, 1), FeeExGst = .20m },
+            new EffectiveNayaxFeeRate(new DateTime(2026, 1, 1), .10m),
+            new EffectiveNayaxFeeRate(new DateTime(2026, 4, 1), .15m),
+            new EffectiveNayaxFeeRate(new DateTime(2026, 7, 1), .20m),
         };
 
         var result = EffectiveFinancialConfiguration.ResolveNayaxFeeRate(rates, new DateTime(2026, 8, 1));
 
-        Assert.Equal(.20m, result!.FeeExGst);
+        Assert.Equal(.20m, result!.Value.FeeExGst);
     }
 
     [Fact]
@@ -177,14 +177,14 @@ public class NayaxProcessingFeeServiceTests
     {
         var rates = new[]
         {
-            new NayaxProcessingFeeRate { EffectiveFrom = new DateTime(2026, 1, 1), FeeExGst = .10m },
-            new NayaxProcessingFeeRate { EffectiveFrom = new DateTime(2026, 4, 1), FeeExGst = .15m },
-            new NayaxProcessingFeeRate { EffectiveFrom = new DateTime(2026, 12, 1), FeeExGst = .30m },
+            new EffectiveNayaxFeeRate(new DateTime(2026, 1, 1), .10m),
+            new EffectiveNayaxFeeRate(new DateTime(2026, 4, 1), .15m),
+            new EffectiveNayaxFeeRate(new DateTime(2026, 12, 1), .30m),
         };
 
         var result = EffectiveFinancialConfiguration.ResolveNayaxFeeRate(rates, new DateTime(2026, 6, 1));
 
-        Assert.Equal(.15m, result!.FeeExGst);
+        Assert.Equal(.15m, result!.Value.FeeExGst);
     }
 
     [Fact]
@@ -192,12 +192,12 @@ public class NayaxProcessingFeeServiceTests
     {
         var rates = new[]
         {
-            new NayaxProcessingFeeRate { EffectiveFrom = new DateTime(2026, 4, 1), FeeExGst = .15m },
+            new EffectiveNayaxFeeRate(new DateTime(2026, 4, 1), .15m),
         };
 
         var result = EffectiveFinancialConfiguration.ResolveNayaxFeeRate(rates, new DateTime(2026, 4, 1));
 
-        Assert.Equal(.15m, result!.FeeExGst);
+        Assert.Equal(.15m, result!.Value.FeeExGst);
     }
 
     [Fact]
@@ -205,7 +205,7 @@ public class NayaxProcessingFeeServiceTests
     {
         var rates = new[]
         {
-            new NayaxProcessingFeeRate { EffectiveFrom = new DateTime(2026, 4, 1), FeeExGst = .15m },
+            new EffectiveNayaxFeeRate(new DateTime(2026, 4, 1), .15m),
         };
 
         var result = EffectiveFinancialConfiguration.ResolveNayaxFeeRate(rates, new DateTime(2026, 3, 1));
@@ -223,4 +223,7 @@ public class NayaxProcessingFeeServiceTests
             SettlementValue = 1m,
             MachineAuthorizationTime = new DateTime(2026, 9, day)
         };
+
+    private static GetNayaxProcessingFees Service(AppDbContext db) =>
+        new(new EfNayaxProcessingFeeFactsProvider(db), new EfNayaxFeeRateStore(db));
 }
