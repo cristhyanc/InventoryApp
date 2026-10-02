@@ -1,4 +1,5 @@
 using Inventory.Application.InventoryCounting;
+using Inventory.Application.Stock;
 using Inventory.Domain.InventoryCounting;
 using InventoryApi.Data;
 using InventoryApi.Models;
@@ -15,23 +16,24 @@ namespace InventoryApi.Adapters.Persistence;
 /// <see cref="IInventoryCostService.ApplyMovement"/> rather than writing its own, so a Take Inventory
 /// increase inherits exactly the established positive-Restock costing/audit behavior and a decrease
 /// inherits the established Correction behavior; it never uses <see cref="StockAdjustmentReason.MachineRefill"/>.
-/// The restock-cost suggestion is the same one an operator-entered positive Restock already offers
-/// (<see cref="IStockService.GetRestockCostSuggestion"/>), reused rather than reimplemented.
+/// The restock-cost suggestion is the same authoritative use case an operator-entered positive
+/// Restock already uses (<see cref="IGetRestockCostSuggestion"/>, issue #282), reused rather than
+/// reimplemented.
 /// </summary>
 public sealed class EfInventoryCountAdjustmentStore : IInventoryCountAdjustmentStore
 {
     private readonly AppDbContext _db;
     private readonly IInventoryCostService _costing;
     private readonly IInventoryCostRebuildService _rebuild;
-    private readonly IStockService _stockService;
+    private readonly IGetRestockCostSuggestion _getRestockCostSuggestion;
 
     public EfInventoryCountAdjustmentStore(
-        AppDbContext db, IInventoryCostService costing, IInventoryCostRebuildService rebuild, IStockService stockService)
+        AppDbContext db, IInventoryCostService costing, IInventoryCostRebuildService rebuild, IGetRestockCostSuggestion getRestockCostSuggestion)
     {
         _db = db;
         _costing = costing;
         _rebuild = rebuild;
-        _stockService = stockService;
+        _getRestockCostSuggestion = getRestockCostSuggestion;
     }
 
     public async Task<InventoryCountProduct?> GetCurrentStockAsync(long productId, CancellationToken cancellationToken)
@@ -47,7 +49,7 @@ public sealed class EfInventoryCountAdjustmentStore : IInventoryCountAdjustmentS
 
     public async Task<decimal?> GetRestockUnitCostAsync(long productId, CancellationToken cancellationToken)
     {
-        var suggestion = await _stockService.GetRestockCostSuggestion(productId);
+        var suggestion = await _getRestockCostSuggestion.Handle(productId, cancellationToken);
         return suggestion?.UnitCost;
     }
 

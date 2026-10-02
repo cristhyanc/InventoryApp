@@ -22,6 +22,7 @@ using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Transactions;
 using Inventory.Application.SalesSync;
 using Inventory.Application.Sites;
+using Inventory.Application.Stock;
 using Inventory.Application.Suppliers;
 using Inventory.Application.SupplierOrders;
 using Inventory.Application.Tenancy;
@@ -90,6 +91,10 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<ResolveMachineProductPricing>();
         services.AddScoped<GetPickList>();
         services.AddScoped<ApplyInventoryCount>();
+        services.AddScoped<GetStockHistory>();
+        services.AddScoped<GetRestockCostSuggestion>();
+        services.AddScoped<IGetRestockCostSuggestion>(sp => sp.GetRequiredService<GetRestockCostSuggestion>());
+        services.AddScoped<AdjustStock>();
         services.AddScoped<GetProductPriceComparison>();
         services.AddScoped<GetBookkeepingReport>();
         services.AddScoped<IGetBookkeepingReport>(sp => sp.GetRequiredService<GetBookkeepingReport>());

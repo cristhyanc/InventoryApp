@@ -1,4 +1,5 @@
 using Inventory.Domain.Products;
+using Inventory.Domain.Stock;
 
 namespace Inventory.Application.Products;
 
@@ -62,10 +63,10 @@ public sealed record ProductSupplierRecord(
 
 /// <summary>
 /// One persisted stock movement in a product's history. <paramref name="Reason"/> and
-/// <paramref name="Source"/> are the persisted reason/source codes, passed through unchanged: the
-/// stock-movement rules and their enum vocabulary have not migrated out of the persistence model yet
-/// (docs/architecture.md backend migration track item 6), and no product read orchestration branches
-/// on them.
+/// <paramref name="Source"/> use the authoritative Stock vocabulary
+/// (<see cref="Inventory.Domain.Stock.StockAdjustmentReason"/>/<see cref="Inventory.Domain.Stock.StockAdjustmentSource"/>,
+/// issue #282's #240 handoff); no product read orchestration branches on them, so this record only
+/// carries them through unchanged.
 /// </summary>
 public sealed record ProductStockAdjustmentRecord(
     int Id,
@@ -78,8 +79,8 @@ public sealed record ProductStockAdjustmentRecord(
     int? CostingQuantityAfter,
     decimal? AverageUnitCostAfter,
     decimal? InventoryValueAfter,
-    int Reason,
-    int Source,
+    StockAdjustmentReason Reason,
+    StockAdjustmentSource Source,
     long? MachineId,
     string? Notes,
     DateTime? EatBefore,

@@ -23,6 +23,7 @@ using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Transactions;
 using Inventory.Application.SalesSync;
 using Inventory.Application.Sites;
+using Inventory.Application.Stock;
 using Inventory.Application.Suppliers;
 using Inventory.Application.SupplierOrders;
 using Inventory.Application.Tenancy;
@@ -145,7 +146,6 @@ builder.Services.AddNayaxLynxClient(nayaxLynxOptions);
 
 // Business services
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IProductService, InventoryApi.Services.ProductService>();
-builder.Services.AddScoped<InventoryApi.Services.Interfaces.IStockService, InventoryApi.Services.StockService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IInventoryCostService, InventoryApi.Services.InventoryCostService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IInventoryCostRebuildService, InventoryApi.Services.InventoryCostRebuildService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IInventoryCostTransitionService, InventoryApi.Services.InventoryCostTransitionService>();
@@ -193,6 +193,10 @@ builder.Services.AddScoped<IProductCatalogStore, EfProductCatalogStore>();
 
 // Temporary API-owned adapter for the purchase create/read/update/delete persistence port; see EfPurchaseStore.
 builder.Services.AddScoped<IPurchaseStore, EfPurchaseStore>();
+
+// Temporary API-owned adapter for the stock history/restock-cost-suggestion/manual-adjustment
+// persistence port (issue #282); see EfStockAdjustmentStore.
+builder.Services.AddScoped<IStockAdjustmentStore, EfStockAdjustmentStore>();
 
 // Temporary API-owned adapter for the supplier-order create/read/cancel persistence port; see EfSupplierOrderStore.
 builder.Services.AddScoped<ISupplierOrderStore, EfSupplierOrderStore>();
