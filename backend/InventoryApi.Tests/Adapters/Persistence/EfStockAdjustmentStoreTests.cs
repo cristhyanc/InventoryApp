@@ -3,7 +3,6 @@ using Inventory.Domain.Exceptions;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using InventoryApi.Models;
-using InventoryApi.Services;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
@@ -42,7 +41,7 @@ public class EfStockAdjustmentStoreTests
         TestAppDbContext.For(new DbContextOptionsBuilder<AppDbContext>().UseInMemoryDatabase(dbName).Options, BusinessA);
 
     private static EfStockAdjustmentStore StoreFor(AppDbContext db) =>
-        new(db, new InventoryCostService(db), new InventoryCostRebuildService(db));
+        new(db, TestCostingUseCases.RecordMovement(db), TestCostingUseCases.Rebuild(db));
 
     private static ManualStockAdjustmentInput ManualInput(
         int quantityChange, DomainStock.StockAdjustmentReason reason, decimal? unitCost = null, long? machineId = null) =>

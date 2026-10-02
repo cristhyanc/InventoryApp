@@ -1,3 +1,4 @@
+using Inventory.Application.Costing;
 using InventoryApi.Data;
 using Inventory.Application.Nayax;
 using InventoryApi.Services.Interfaces;
@@ -11,7 +12,7 @@ public sealed partial class ImportService : IImportService
     private readonly ILogger<ImportService> _logger;
     private readonly INayaxLynxClient _nayaxLynxClient;
     private readonly ISaleCostingService _saleCosting;
-    private readonly IInventoryCostRebuildService _inventoryCostRebuild;
+    private readonly IRebuildProductCost _inventoryCostRebuild;
 
     public ImportService(
         AppDbContext db,
@@ -19,7 +20,7 @@ public sealed partial class ImportService : IImportService
         ILogger<ImportService> logger,
         INayaxLynxClient nayaxLynxClient,
         ISaleCostingService saleCosting,
-        IInventoryCostRebuildService inventoryCostRebuild)
+        IRebuildProductCost inventoryCostRebuild)
     {
         _db = db;
         _environment = environment;

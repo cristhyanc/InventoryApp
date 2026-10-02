@@ -1,4 +1,5 @@
 using System.Text;
+using Inventory.Application.Costing;
 using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Reporting.Dashboard;
 using Inventory.Application.Reporting.Daily;
@@ -16,7 +17,6 @@ using InventoryApi.Data;
 using Inventory.Application.Nayax;
 using InventoryApi.Models;
 using InventoryApi.Services;
-using InventoryApi.Services.Interfaces;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
@@ -127,7 +127,7 @@ public class NayaxHistoricalCostTests
         await using var db = CreateDb();
         db.Products.Add(new Product { Id = 10, Name = "Snack" });
         await db.SaveChangesAsync();
-        var rebuild = new Mock<IInventoryCostRebuildService>();
+        var rebuild = new Mock<IRebuildProductCost>();
         rebuild.Setup(x => x.GetAverageUnitCostAtAsync(
                 10, It.IsAny<DateTime>(), 1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(1.15m);
@@ -146,7 +146,7 @@ public class NayaxHistoricalCostTests
         await using var db = CreateDb();
         db.Products.Add(new Product { Id = 10, Name = "Snack" });
         await db.SaveChangesAsync();
-        var rebuild = new Mock<IInventoryCostRebuildService>();
+        var rebuild = new Mock<IRebuildProductCost>();
         rebuild.Setup(x => x.GetAverageUnitCostAtAsync(
                 10, It.IsAny<DateTime>(), 1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(0m);
@@ -354,7 +354,7 @@ public class NayaxHistoricalCostTests
     /// </summary>
     private static SyncLatestNayaxSales LatestSalesSync(AppDbContext db, INayaxLynxClient nayax)
     {
-        var rebuild = new InventoryCostRebuildService(db);
+        var rebuild = TestCostingUseCases.Rebuild(db);
         return new SyncLatestNayaxSales(
             nayax, new EfLatestNayaxSalesStore(db, new SaleCostingService(db, rebuild), rebuild));
     }
@@ -370,7 +370,7 @@ public class NayaxHistoricalCostTests
             new Mock<ILogger<ImportService>>().Object,
             new Mock<INayaxLynxClient>().Object,
             new SaleCostingService(db),
-            new Mock<IInventoryCostRebuildService>().Object);
+            new Mock<IRebuildProductCost>().Object);
 
     private static NayaxSales Sale(long id, long productId, decimal? nayaxCost, string paymentMethod) =>
         new()

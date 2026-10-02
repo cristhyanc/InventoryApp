@@ -230,11 +230,10 @@ public class CleanArchitectureDependencyTests
     /// <see cref="InventoryApi.Data.CrossBusinessAccessException"/> are startup/persistence
     /// guards intimately coupled to <c>AppDbContext</c>, which itself still lives in InventoryApi
     /// (see docs/architecture.md's temporary API-owned exception); moving them means moving
-    /// AppDbContext first, which is out of this issue's scope. <c>InventoryCostDataQualityException</c>
-    /// (nested in <c>InventoryApi/Services/InventoryCostService.cs</c>) is an internal
-    /// data-integrity invariant with the same developer-facing-message shape as
-    /// <see cref="InvalidOperationException"/>, which it derives from, not a caller-safe business
-    /// exception the HTTP boundary maps by type.
+    /// AppDbContext first, which is out of this issue's scope. The former fourth entry,
+    /// <c>InventoryCostDataQualityException</c>, moved to
+    /// <c>Inventory.Application.Costing</c> with the product cost rebuild use case that throws it
+    /// (issue #296) and is no longer allowed here.
     ///
     /// What this test enforces is that the set does not grow silently: a new exception type landing
     /// in InventoryApi fails here and must be moved to the layer that owns it, or added to the
@@ -248,7 +247,6 @@ public class CleanArchitectureDependencyTests
             "InventoryApi.Bootstrap.PendingMigrationsException",
             "InventoryApi.Bootstrap.DatabaseMigrationFailedException",
             "InventoryApi.Data.CrossBusinessAccessException",
-            "InventoryApi.Services.InventoryCostDataQualityException",
         ];
 
         var offenders = ApiAssembly

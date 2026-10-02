@@ -1,7 +1,7 @@
+using Inventory.Application.Costing;
 using Inventory.Application.Stock;
 using InventoryApi.Data;
 using InventoryApi.Models;
-using InventoryApi.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
 using DomainStock = Inventory.Domain.Stock;
 
@@ -10,27 +10,27 @@ namespace InventoryApi.Adapters.Persistence;
 /// <summary>
 /// Temporary EF Core implementation of <see cref="IStockAdjustmentStore"/> (issue #282). It lives in
 /// InventoryApi, not Inventory.Infrastructure, because it depends on <see cref="AppDbContext"/> and
-/// the existing costing services, following the same precedent as <c>EfPurchaseStore</c>/
+/// the persistence models, following the same precedent as <c>EfPurchaseStore</c>/
 /// <c>EfProductStore</c>; move it into Inventory.Infrastructure once <see cref="AppDbContext"/> and
 /// the shared persistence models relocate there (issue #153).
 ///
-/// <see cref="ApplyAsync"/> reuses <see cref="IInventoryCostService.ApplyMovement"/> and
-/// <see cref="IInventoryCostRebuildService.RebuildAsync"/> exactly as the former
-/// <c>InventoryApi.Services.StockService.Adjust</c> did - the costing algorithm itself stays out of
-/// scope for this slice (issue #149) - and stamps <see cref="StockAdjustmentSource.Manual"/>, the
-/// machine id, and the eat-before date the same way the former service did, after the movement is
-/// created.
+/// <see cref="ApplyAsync"/> records the movement through the Application
+/// <see cref="IRecordInventoryMovement"/> use case and rebuilds the product's cost through
+/// <see cref="IRebuildProductCost"/> (issue #296), inside the same transaction as the former
+/// <c>InventoryApi.Services.StockService.Adjust</c>, stamping <see cref="StockAdjustmentSource.Manual"/>,
+/// the machine id, and the eat-before date on the recorded movement. It applies no costing rule of
+/// its own.
 /// </summary>
 public sealed class EfStockAdjustmentStore : IStockAdjustmentStore
 {
     private readonly AppDbContext _db;
-    private readonly IInventoryCostService _costing;
-    private readonly IInventoryCostRebuildService _rebuild;
+    private readonly IRecordInventoryMovement _recordMovement;
+    private readonly IRebuildProductCost _rebuild;
 
-    public EfStockAdjustmentStore(AppDbContext db, IInventoryCostService costing, IInventoryCostRebuildService rebuild)
+    public EfStockAdjustmentStore(AppDbContext db, IRecordInventoryMovement recordMovement, IRebuildProductCost rebuild)
     {
         _db = db;
-        _costing = costing;
+        _recordMovement = recordMovement;
         _rebuild = rebuild;
     }
 
@@ -72,11 +72,11 @@ public sealed class EfStockAdjustmentStore : IStockAdjustmentStore
     public async Task<StockAdjustmentRecord> ApplyAsync(
         long productId, ManualStockAdjustmentInput input, CancellationToken cancellationToken)
     {
-        var adjustment = _costing.ApplyMovement(
-            productId, input.QuantityChange, (StockAdjustmentReason)input.Reason, null,
-            input.Notes ?? string.Empty, input.UnitCost);
-        adjustment.MachineId = input.MachineId;
-        adjustment.EatBefore = input.EatBefore;
+        var movement = await _recordMovement.RecordAsync(
+            new InventoryMovement(
+                productId, input.QuantityChange, input.Reason, input.Notes ?? string.Empty, input.UnitCost,
+                input.MachineId, input.EatBefore, DomainStock.StockAdjustmentSource.Manual),
+            cancellationToken);
 
         await using var transaction = _db.Database.IsRelational()
             ? await _db.Database.BeginTransactionAsync(cancellationToken)
@@ -96,6 +96,8 @@ public sealed class EfStockAdjustmentStore : IStockAdjustmentStore
             throw;
         }
 
+        var adjustment = await _db.StockAdjustments.FindAsync([movement.Id], cancellationToken)
+            ?? throw new InvalidOperationException($"Stock adjustment {movement.Id} was not saved.");
         return ToRecord(adjustment);
     }
 

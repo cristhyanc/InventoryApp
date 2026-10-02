@@ -2,7 +2,6 @@ using Inventory.Application.Products;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using InventoryApi.Models;
-using InventoryApi.Services;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
@@ -59,7 +58,7 @@ public class EfProductStoreTenancyTests : IDisposable
         }
 
         using var db = TestAppDbContext.For(_options, BusinessA);
-        var store = new EfProductStore(db, new InventoryCostRebuildService(db));
+        var store = new EfProductStore(db, TestCostingUseCases.Rebuild(db));
 
         Assert.False(await store.ExistsAsync(otherBusinessProductId, CancellationToken.None));
     }
@@ -79,7 +78,7 @@ public class EfProductStoreTenancyTests : IDisposable
         bool updated;
         using (var db = TestAppDbContext.For(_options, BusinessA))
         {
-            var store = new EfProductStore(db, new InventoryCostRebuildService(db));
+            var store = new EfProductStore(db, TestCostingUseCases.Rebuild(db));
             updated = await store.UpdateAsync(otherBusinessProductId, UpdateFields(), CancellationToken.None);
         }
 
@@ -107,7 +106,7 @@ public class EfProductStoreTenancyTests : IDisposable
         bool deleted;
         using (var db = TestAppDbContext.For(_options, BusinessA))
         {
-            var store = new EfProductStore(db, new InventoryCostRebuildService(db));
+            var store = new EfProductStore(db, TestCostingUseCases.Rebuild(db));
             deleted = await store.DeleteAsync(otherBusinessProductId, CancellationToken.None);
         }
 

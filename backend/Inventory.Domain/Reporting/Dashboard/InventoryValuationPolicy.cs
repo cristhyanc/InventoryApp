@@ -2,8 +2,8 @@ namespace Inventory.Domain.Reporting.Dashboard;
 
 /// <summary>
 /// Total business-owned inventory value and its completeness, derived from each product's
-/// already-persisted <c>InventoryValue</c> (the perpetual AVCO valuation InventoryCostRebuildService
-/// maintains) - never from selling price. A product's inventory value is <c>null</c> only when it
+/// already-persisted <c>InventoryValue</c> (the perpetual AVCO valuation the Application
+/// <c>RebuildProductCost</c> use case maintains) - never from selling price. A product's inventory value is <c>null</c> only when it
 /// has never had a cost rebuild run for it, which is a genuinely unknown cost, not a zero one.
 /// </summary>
 public readonly record struct InventoryValuationResult(

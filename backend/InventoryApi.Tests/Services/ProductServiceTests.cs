@@ -460,7 +460,7 @@ public class ProductServiceTests
 
     private static ProductService CreateService(AppDbContext db, CalculateReorderNeeds calculateReorderNeeds)
     {
-        var store = new EfProductStore(db, new InventoryCostRebuildService(db));
+        var store = new EfProductStore(db, TestCostingUseCases.Rebuild(db));
         var catalog = new EfProductCatalogStore(db);
         var listLowStockProducts = new ListLowStockProducts(catalog, calculateReorderNeeds);
         return new ProductService(

@@ -1,9 +1,9 @@
+using Inventory.Application.Costing;
 using Inventory.Application.Purchases;
 using Inventory.Domain.Purchases;
 using Inventory.Domain.SupplierOrders;
 using InventoryApi.Data;
 using InventoryApi.Models;
-using InventoryApi.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
 
 namespace InventoryApi.Adapters.Persistence;
@@ -32,9 +32,9 @@ namespace InventoryApi.Adapters.Persistence;
 public sealed class EfPurchaseStore : IPurchaseStore
 {
     private readonly AppDbContext _db;
-    private readonly IInventoryCostRebuildService _rebuild;
+    private readonly IRebuildProductCost _rebuild;
 
-    public EfPurchaseStore(AppDbContext db, IInventoryCostRebuildService rebuild)
+    public EfPurchaseStore(AppDbContext db, IRebuildProductCost rebuild)
     {
         _db = db;
         _rebuild = rebuild;

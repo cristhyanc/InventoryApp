@@ -1,7 +1,11 @@
-namespace InventoryApi.Services;
+namespace Inventory.Application.Costing;
 
 public sealed record InventoryCostDataQualityIssue(string Code, string Message);
 
+/// <summary>
+/// The outcome of <see cref="IRebuildProductCost.RebuildAsync"/>, moved unchanged from the former
+/// <c>InventoryApi.Services.InventoryCostRebuildResult</c> (issue #296).
+/// </summary>
 public sealed class InventoryCostRebuildResult
 {
     public long ProductId { get; init; }

@@ -98,7 +98,7 @@ public class ImportServiceTests
 
     private static ImportService CreateImportService(AppDbContext db, INayaxLynxClient? nayax = null)
     {
-        var rebuild = new InventoryCostRebuildService(db);
+        var rebuild = TestCostingUseCases.Rebuild(db);
         return new ImportService(
             db,
             Mock.Of<IWebHostEnvironment>(),

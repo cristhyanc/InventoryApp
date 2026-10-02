@@ -215,7 +215,7 @@ public sealed class ProtectedDocumentTenantIsolationTests : IDisposable
 
     private static IPurchaseService CreatePurchaseService(AppDbContext db, IDocumentStorage documents)
     {
-        var store = new EfPurchaseStore(db, new InventoryCostRebuildService(db));
+        var store = new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db));
         return new InventoryApi.Services.PurchaseService(
             new ListPurchases(store),
             new GetPurchase(store),

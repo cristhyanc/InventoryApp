@@ -30,7 +30,7 @@ public class InventoryCostTransitionServiceTests
         await db.SaveChangesAsync();
         var nayax = NayaxWithStock(10);
         var service = new InventoryCostTransitionService(
-            db, nayax.Object, new InventoryCostRebuildService(db));
+            db, nayax.Object, TestCostingUseCases.Rebuild(db));
 
         var preview = await service.PreviewAsync(new(
             10, 1.25m, InventoryCostBaselineSource.ManualAuthoritative));
@@ -55,7 +55,7 @@ public class InventoryCostTransitionServiceTests
     {
         await using var db = CreateDb();
         var service = new InventoryCostTransitionService(
-            db, NayaxWithStock(10).Object, new InventoryCostRebuildService(db));
+            db, NayaxWithStock(10).Object, TestCostingUseCases.Rebuild(db));
 
         var exception = await Assert.ThrowsAsync<DomainValidationException>(() =>
             service.PreviewAsync(new(10, -1m, InventoryCostBaselineSource.ManualAuthoritative)));
@@ -68,7 +68,7 @@ public class InventoryCostTransitionServiceTests
     {
         await using var db = CreateDb();
         var service = new InventoryCostTransitionService(
-            db, NayaxWithStock(10).Object, new InventoryCostRebuildService(db));
+            db, NayaxWithStock(10).Object, TestCostingUseCases.Rebuild(db));
 
         var exception = await Assert.ThrowsAsync<DomainValidationException>(() =>
             service.ApplyAsync(new(Guid.NewGuid(), false)));
@@ -105,7 +105,7 @@ public class InventoryCostTransitionServiceTests
         db.AddRange(legacyRestock, historicalSale);
         await db.SaveChangesAsync();
         var nayax = NayaxWithStock(10);
-        var rebuild = new InventoryCostRebuildService(db);
+        var rebuild = TestCostingUseCases.Rebuild(db);
         var service = new InventoryCostTransitionService(db, nayax.Object, rebuild);
         var preview = await service.PreviewAsync(new(
             10, 1.25m, InventoryCostBaselineSource.ManualAuthoritative));
@@ -281,7 +281,7 @@ public class InventoryCostTransitionServiceTests
                 new() { NayaxProductID = 20, PAR = 10, MissingStockByMDB = 2 }
             });
         var service = new InventoryCostTransitionService(
-            db, nayax.Object, new InventoryCostRebuildService(db));
+            db, nayax.Object, TestCostingUseCases.Rebuild(db));
 
         var preview = await service.PreviewAllAsync(
             new(InventoryCostBaselineSource.ManualAuthoritative));
@@ -356,7 +356,7 @@ public class InventoryCostTransitionServiceTests
     /// </summary>
     private static SyncLatestNayaxSales LatestSalesSync(AppDbContext db, INayaxLynxClient nayax)
     {
-        var rebuild = new InventoryCostRebuildService(db);
+        var rebuild = TestCostingUseCases.Rebuild(db);
         return new SyncLatestNayaxSales(
             nayax, new EfLatestNayaxSalesStore(db, new SaleCostingService(db, rebuild), rebuild));
     }

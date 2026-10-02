@@ -321,11 +321,14 @@ Controllers do not implement accounting, inventory, persistence, or filesystem r
 
 #### Temporary API-owned exception and its enforcement (issue #145)
 
-`InventoryApi/Services` (import, costing, machine/site/product/purchase/stock
-orchestration) is use-case/domain logic that predates the `Inventory.Domain`/`Inventory.Application`
-split and has not migrated yet. `InventoryApi/Adapters/{Persistence,Export,Nayax,Mapping}` hold the
+`InventoryApi/Services` (import, sale costing, the inventory-cost transition, machine/site/product/
+purchase/supplier-order orchestration) is use-case/domain logic that predates the
+`Inventory.Domain`/`Inventory.Application` split and has not migrated yet; inventory movement
+recording and the product cost rebuild have already left it for `Inventory.Application.Costing`
+(issue #296). `InventoryApi/Adapters/{Persistence,Export,Nayax,Mapping}` hold the
 temporary, API-owned adapters (`EfNayaxFeeRateStore`, the `Ef<Feature>ReportFactsProvider` family,
-`ReportExportFileWriter`, `NayaxCatalogSnapshotProvider`, `ProductResponseMapper`, ...) that implement
+`EfInventoryMovementStore`/`EfInventoryCostLedgerStore`, `ReportExportFileWriter`,
+`NayaxCatalogSnapshotProvider`, `ProductResponseMapper`, ...) that implement
 or feed `Inventory.Application`
 ports until `AppDbContext` and its persistence models move into `Inventory.Infrastructure` - see the
 per-slice detail under [Backend migration track](#backend-migration-track). Both are deliberate,
@@ -377,7 +380,10 @@ migration found already in that folder; the moment a file is added, removed, or 
 test fails and names the mismatch. A new slice's use-case or domain logic must go into
 `Inventory.Application`/`Inventory.Domain` instead of extending the legacy folder; growing the
 exception is still possible, but only as a conscious, reviewed edit to both that allow-list and this
-paragraph, never as a silent side effect of an unrelated change. `InventoryApi/Adapters/*` is not
+paragraph, never as a silent side effect of an unrelated change. Shrinking it follows the same rule:
+issue #296 removed `InventoryCostService.cs`, `InventoryCostRebuildService.cs`,
+`InventoryCostRebuildResult.cs`, `Interfaces/IInventoryCostService.cs` and
+`Interfaces/IInventoryCostRebuildService.cs` from the allow-list in the same change that deleted them. `InventoryApi/Adapters/*` is not
 frozen the same way: unlike `Services`, adding a new temporary EF/Nayax/export adapter there for a
 migrating slice (mirroring `EfNayaxFeeRateStore`) is the established, expected pattern for this
 migration track, not scope creep - it implements an `Inventory.Application`-owned port rather than
@@ -583,7 +589,7 @@ Issue #59 replaced ad hoc, per-controller exception handling with a small typed 
 | `Inventory.Infrastructure` | Provider-specific failures (EF Core, Azure Blob, filesystem, HTTP, Nayax), translated to a plain answer or a narrow typed exception at that layer's own boundary so the provider SDK's exception type and message never cross it | `Nayax.NayaxUpstreamException`; `Documents.AzureBlobContainer` translates `Azure.RequestFailedException` by `ErrorCode` into a `bool`/`null` return and lets every other Azure failure propagate untranslated (never re-wrapped, never given a caller-safe message) | `502` via `NayaxUpstreamExceptionHandler` for Nayax; an untranslated provider failure (a missing container, a revoked role assignment) reaches `GlobalExceptionHandler` as a generic `500` with no SDK detail |
 | `InventoryApi` | No business exceptions. Only `IExceptionHandler` implementations that translate an already-thrown exception to HTTP `ProblemDetails` | `DomainExceptionHandler`, `NayaxUpstreamExceptionHandler`, `GlobalExceptionHandler` | n/a - these are the translators, not the failures |
 
-The allowed dependency direction is the same one enforced everywhere else in this document - `Inventory.Domain` ← `Inventory.Application` ← `Inventory.Infrastructure` ← `InventoryApi` - so a domain exception may be thrown from any layer, but only `Inventory.Domain` may *define* one, `Inventory.Application` may define a use-case-specific one without reaching into `Inventory.Domain`'s hierarchy, and a provider-specific exception must never leave `Inventory.Infrastructure` for `Inventory.Application`, `Inventory.Domain`, or `InventoryApi` to see its concrete type or raw message. `CleanArchitectureDependencyTests.No_new_business_exception_is_defined_in_InventoryApi` enforces the `InventoryApi` row: it freezes an explicit allow-list of exceptions that predate this rule and are intimately coupled to code that has not migrated out of `InventoryApi` yet (`Bootstrap.PendingMigrationsException`, `Bootstrap.DatabaseMigrationFailedException` (issue #201, added alongside the pending-migrations one for the same reason), and `Data.CrossBusinessAccessException`, all coupled to `AppDbContext`; `Services.InventoryCostService`'s nested `InventoryCostDataQualityException`, a developer-facing `InvalidOperationException` subclass rather than a caller-safe type), and fails if any other exception type is added there.
+The allowed dependency direction is the same one enforced everywhere else in this document - `Inventory.Domain` ← `Inventory.Application` ← `Inventory.Infrastructure` ← `InventoryApi` - so a domain exception may be thrown from any layer, but only `Inventory.Domain` may *define* one, `Inventory.Application` may define a use-case-specific one without reaching into `Inventory.Domain`'s hierarchy, and a provider-specific exception must never leave `Inventory.Infrastructure` for `Inventory.Application`, `Inventory.Domain`, or `InventoryApi` to see its concrete type or raw message. `CleanArchitectureDependencyTests.No_new_business_exception_is_defined_in_InventoryApi` enforces the `InventoryApi` row: it freezes an explicit allow-list of exceptions that predate this rule and are intimately coupled to code that has not migrated out of `InventoryApi` yet (`Bootstrap.PendingMigrationsException`, `Bootstrap.DatabaseMigrationFailedException` (issue #201, added alongside the pending-migrations one for the same reason), and `Data.CrossBusinessAccessException`, all coupled to `AppDbContext`), and fails if any other exception type is added there. `InventoryCostDataQualityException`, a developer-facing `InvalidOperationException` subclass rather than a caller-safe type, was on that list until issue #296 moved it to `Inventory.Application.Costing` with the product cost rebuild use case that throws it; the HTTP boundary still does not map it.
 
 `Inventory.Domain.Exceptions` defines a small, documented hierarchy with no ASP.NET Core reference, matching the Clean Architecture rule that a Domain failure must not know about HTTP: the abstract `DomainException` root (a deliberate business-rule failure, never a programming error, an infrastructure fault, or an unexpected condition), `DomainValidationException` for a deliberate business-rule/input check, `DomainConflictException` for a request that cannot proceed because of the current state of the data (an overlapping agreement, a concurrent change), and `InsufficientStockException`, which specializes `DomainConflictException` because the conflicting state it reports is a stock level rather than an overlapping record. Their messages are written for the caller and must never carry an internal path, identifier, or another actor's data. `DomainValidationException` and `InsufficientStockException` are sealed; `DomainConflictException` stays unsealed so a future specialization can join it the same way `InsufficientStockException` did.
 
@@ -828,18 +834,51 @@ and its `CostDataQualityIssue`s. `CostDataQualityIssueCodes.IsFatal` is the one 
 movement unit/total cost rule (an outgoing movement uses the current average cost while costing
 quantity is positive, a restock uses its purchase unit cost, otherwise no cost) and rejects negative
 physical stock with `InsufficientStockException`. Neither takes an `InventoryApi.Models` entity or an
-EF type. The orchestration - loading the facts, applying the replay outcome to the tracked
-`StockAdjustment`/`NayaxSales`/`Product` rows, sale recosting from a changed date, the fatal-issue
-`InventoryCostDataQualityException`, sale costing and the cost transition - still lives in
-`InventoryApi.Services.InventoryCostRebuildService`/`InventoryCostService` (and their sibling
-costing services), which now delegate to these Domain rules, pending the remaining #149 children.
+EF type.
+
+Movement recording and the product cost rebuild are Application use cases (issue #296, child 2 of
+#149) that orchestrate those Domain rules; they replaced the removed
+`InventoryApi.Services.InventoryCostService`/`IInventoryCostService` and
+`InventoryCostRebuildService`/`IInventoryCostRebuildService`/`InventoryCostRebuildResult`, unchanged
+in behaviour:
+
+- `Inventory.Application.Costing.RecordInventoryMovement` (`IRecordInventoryMovement`) rejects a
+  negative purchase cost, costs the movement through `StockMovementCostPolicy` and stages the
+  product's new physical stock with the costed, auditable movement (reason, source, machine,
+  eat-before date and notes) through the narrow `IInventoryMovementStore` port. It never saves.
+- `Inventory.Application.Costing.RebuildProductCost` (`IRebuildProductCost`) loads the product's
+  ledger through the narrow `IInventoryCostLedgerStore` port, replays it with
+  `WeightedAverageCostReplay` and decides what to persist: every replayed movement's running position
+  and assigned cost, the ledger cost of completed sales at or after the requested recost date, and -
+  only when the history has no fatal issue - the product's physical/costing position; a fatal issue
+  throws `Inventory.Application.Costing.InventoryCostDataQualityException` instead. A dry run loads
+  untracked rows, stages nothing and never throws for data quality. No rounding is applied and a
+  repeated rebuild over the same history yields the same result. `GetAverageUnitCostAtAsync` replays
+  the read-only ledger as of a sale time and returns `null` for an unknown product or a fatal history.
+  It also returns `InventoryCostRebuildResult` and its `InventoryCostDataQualityIssue`s.
+- Their ports are implemented by the temporary API-owned adapters
+  `InventoryApi.Adapters.Persistence.EfInventoryMovementStore` and `EfInventoryCostLedgerStore` (same
+  reason as every other `InventoryApi/Adapters/Persistence` adapter: `AppDbContext`, the persistence
+  models and `NayaxProductMatcher` still live in `InventoryApi`, until #153). They only run the
+  unchanged EF queries through `AppDbContext`'s business query filter, map rows to the Domain replay
+  inputs, and write the use case's decisions back to exactly those tracked rows; they never save,
+  open a transaction or decide a cost.
+- Neither use case owns a transaction. The callers - `EfStockAdjustmentStore`,
+  `EfInventoryCountAdjustmentStore` (Take Inventory), `EfMachineStockEventStore`, `EfPurchaseStore`,
+  `EfProductStore`, `EfLatestNayaxSalesStore`, and the not-yet-migrated `SaleCostingService`,
+  `InventoryCostTransitionService` and `ImportService` - keep their existing transaction around a
+  movement and the rebuild it triggers, so both still commit or roll back together.
+
+Sale costing (`SaleCostingService`) and the inventory-cost transition
+(`InventoryCostTransitionService`) still live in `InventoryApi.Services`, consuming
+`IRebuildProductCost`, pending #149's children 3 and 4.
 
 #### Dashboard "Inventory Value" tile (issue #42)
 
 The home Dashboard's "Inventory Value" tile (`DashboardComponent`, distinct from the reporting
 dashboard at `/reports/dashboard`, `GetDashboardReport`) represents the business-owned perpetual
 inventory value described above - the sum of every product's persisted `InventoryValue` (the AVCO
-valuation `InventoryCostRebuildService` maintains) - not `QuantityInStock * UnitPrice` retail value
+valuation the `RebuildProductCost` use case maintains) - not `QuantityInStock * UnitPrice` retail value
 and not home/storage stock quantity on its own.
 
 The backend is authoritative: `Inventory.Domain.Reporting.Dashboard.InventoryValuationPolicy`
@@ -869,10 +908,10 @@ one coordinated refresh is stored in a single save, and then asks its narrow App
 a product - to rebuild that product's inventory costs.
 `InventoryApi.Adapters.Persistence.EfLatestNayaxSalesStore` is that port's temporary API-owned EF
 adapter (same reason as every other `InventoryApi/Adapters/Persistence` adapter: `AppDbContext`, the
-`NayaxSales` model, and the costing services still live in `InventoryApi`). It holds the unchanged
+`NayaxSales` model, and the sale-costing service still live in `InventoryApi`). It holds the unchanged
 import rules extracted from the former `MachineService.SaveMachinesLastSalesAsync` - transaction dedup
 by `TransactionID`, Nayax product matching, the settlement-value completed/cancelled default,
-`ISaleCostingService` costing, and the `IInventoryCostRebuildService` rebuild for products whose
+`ISaleCostingService` costing, and the `IRebuildProductCost` rebuild for products whose
 transition-baseline cutoff a newly imported completed sale follows - and enriches an already stored
 transaction only where its product match or status is still missing, so an imported status or cost is
 never overwritten. `NayaxSalesSyncController` is a thin adapter that invokes the use case and maps it
@@ -968,6 +1007,16 @@ original CLR object and does not reproduce the `Kind` loss at all: `StockHistory
 2. Purchase-linked restock movements add physical and costing inventory at purchase cost.
 3. Delivery/package amounts remain identifiable for whole-business reporting.
 4. Supplier-order allocations are reconciled without fabricating purchase quantities.
+
+Manual stock adjustments (`EfStockAdjustmentStore`), Take Inventory
+(`EfInventoryCountAdjustmentStore`) and machine Sync Restock (`EfMachineStockEventStore`) record
+their movement through `Inventory.Application.Costing.IRecordInventoryMovement`. Purchase
+create/update/delete (`EfPurchaseStore`, whose purchase-linked restock movements still come from
+`PurchaseStockMovementPolicy`) and product creation with a costed initial stock (`EfProductStore`)
+write their movements as before. All five then rebuild the affected product's cost through
+`Inventory.Application.Costing.IRebuildProductCost` inside the same transaction as before (issue
+#296; see [Historical inventory cost](#historical-inventory-cost)). None of them applies a costing
+rule of its own.
 
 #### Reorder-alert machine-product fan-out (issue #47)
 
@@ -1263,7 +1312,7 @@ deterministic `Inventory.Domain.InventoryCounting.InventoryCountAdjustmentPolicy
    (`StockAdjustmentReason.Correction`).
 
 Both non-zero cases persist an ordinary `StockAdjustment` through the same
-`IInventoryCostService.ApplyMovement`/`IInventoryCostRebuildService.RebuildAsync` transaction every
+`IRecordInventoryMovement.RecordAsync`/`IRebuildProductCost.RebuildAsync` transaction every
 other stock movement in this document uses, so a successful count difference is auditable in the
 existing Stock History view exactly like a manual Restock or Correction - there is no separate
 audit trail for Take Inventory.
@@ -1438,7 +1487,7 @@ that meaning.
      totals, since it will never draw down storage.
    - **Apply as separate restock** calls the same endpoint with `ApplyAsSeparateRestock`, an
      explicit override confirming the two events are different physical restocks. It applies the
-     event through the same `IInventoryCostService.ApplyMovement`/`MachineRefill` path as an
+     event through the same `IRecordInventoryMovement`/`MachineRefill` path as an
      ordinary apply (reducing storage exactly once) and additionally stamps
      `DuplicateResolution = AppliedAsSeparateRestock` and `MatchedManualStockAdjustmentId` in the
      same transaction, so the override itself remains auditable alongside the movement it created.
@@ -1478,7 +1527,7 @@ that meaning.
    `Inventory.Application.MachineStockSync.ApplyMachineStockSync` over exactly the event ids the
    operator selects, one at a time, each in its own transaction. `NayaxMachineStockApplyPolicy` is
    the deterministic Domain rule that decides each one. A validated positive event is applied
-   through the same `IInventoryCostService.ApplyMovement` movement logic as every other stock
+   through the same `IRecordInventoryMovement` movement logic as every other stock
    adjustment, as a `StockAdjustmentReason.MachineRefill` with
    `StockAdjustmentSource.Nayax` - it reduces `QuantityInStock` but never touches costing
    quantity/value, the same invariant an internal transfer already preserves. If the requested
@@ -1579,10 +1628,10 @@ this feature is added to the legacy `InventoryApi/Services` layer:
 - **Infrastructure/adapters.** `Inventory.Infrastructure.Nayax.NayaxLynxClient` remains the Nayax
   HTTP adapter. `InventoryApi.Adapters.Persistence.EfMachineStockEventStore` implements the
   persistence port over `AppDbContext`, owns the per-event transaction, and reuses
-  `IInventoryCostService`/`IInventoryCostRebuildService` so the refill inherits the established
-  movement and costing invariants instead of re-implementing them. Like `EfSupplierStore` and
-  `EfLocalCatalogSnapshotProvider`, it is a temporary API-owned adapter only because
-  `AppDbContext`, the persistence models, and the costing services still live in `InventoryApi`.
+  the Application `IRecordInventoryMovement`/`IRebuildProductCost` use cases (issue #296) so the
+  refill inherits the established movement and costing invariants instead of re-implementing them.
+  Like `EfSupplierStore` and `EfLocalCatalogSnapshotProvider`, it is a temporary API-owned adapter
+  only because `AppDbContext` and the persistence models still live in `InventoryApi`.
 - **API.** `MachinesController` binds the request, invokes the use case, and returns its result;
   `POST /api/machines/{id}/sync-restock/resolve-duplicate` (issue #196) is the third, equally thin
   binding for `ResolveMachineStockDuplicate`, and `POST /api/machines/{id}/sync-restock/resolve-manual`
@@ -1812,10 +1861,11 @@ Backend and frontend tracks can progress independently when their contracts do n
      - **Ports and adapters.** `InventoryApi.Adapters.Persistence.EfStockAdjustmentStore` is a
        temporary API-owned EF adapter, following the same precedent as `EfPurchaseStore`/`EfProductStore`,
        and must move into `Inventory.Infrastructure` once `AppDbContext` and the shared persistence
-       models relocate there. It reuses `IInventoryCostService.ApplyMovement`/`IInventoryCostRebuildService.RebuildAsync`
-       exactly as the former `StockService.Adjust` did - the costing algorithm itself stays out of
-       scope for this slice (issue #149) - inside the same begin/save/rebuild/save/commit transaction
-       shape, and stamps `StockAdjustmentSource.Manual`, the machine id, and the eat-before date the
+       models relocate there. It records the movement and rebuilds the cost through the Application
+       `IRecordInventoryMovement.RecordAsync`/`IRebuildProductCost.RebuildAsync` use cases (issue
+       #296; formerly `IInventoryCostService.ApplyMovement`/`IInventoryCostRebuildService.RebuildAsync`)
+       exactly as the former `StockService.Adjust` did, inside the same begin/save/rebuild/save/commit
+       transaction shape, and stamps `StockAdjustmentSource.Manual`, the machine id, and the eat-before date the
        same way the former service did.
        `InventoryApi.Adapters.Mapping.StockAdjustmentResponseMapper` maps the Application record back
        onto the `StockAdjustment` entity shape `StockController`'s history/restock-cost-suggestion/adjust
@@ -1843,8 +1893,8 @@ Backend and frontend tracks can progress independently when their contracts do n
      intentionally left on their legacy names.
    - **Purchases and Supplier Orders orchestration done** (issue #281, a child of the #148 umbrella;
      sibling to the Stock child, issue #282, migrated separately - see item 6 above). The
-     costing-rebuild orchestration itself (`IInventoryCostRebuildService` and sale costing) remains
-     future work, tracked by #149.
+     costing-rebuild orchestration itself was migrated later by issue #296 (`IRebuildProductCost`,
+     see item 7); sale costing remains future work, tracked by #149.
      - **Domain.** `Inventory.Domain.Purchases.PurchaseItemFormatPolicy` validates a purchase line's
        product/quantity/cost shape (the inline check the former `PurchaseService.ValidateItemsAsync`
        made); `PurchaseStockMovementPolicy` holds the restock stock-movement quantity/total-cost
@@ -1924,6 +1974,24 @@ Backend and frontend tracks can progress independently when their contracts do n
     interfaces, behaviour and exceptions and now delegate to the Domain rules. The rebuild,
     sale-costing and cost-transition orchestration remains in `InventoryApi.Services` pending the
     remaining #149 children; no file was added to or removed from `InventoryApi/Services`.
+  - **Inventory movement and cost rebuild done** (issue #296, child 2 of 4 of #149).
+    `Inventory.Application.Costing.RecordInventoryMovement` (`IRecordInventoryMovement`, over the
+    narrow `IInventoryMovementStore` port) and `RebuildProductCost` (`IRebuildProductCost`, over the
+    narrow `IInventoryCostLedgerStore` port, with `InventoryCostRebuildResult`,
+    `InventoryCostDataQualityIssue` and `InventoryCostDataQualityException`) replaced
+    `InventoryApi.Services.InventoryCostService`/`IInventoryCostService` and
+    `InventoryCostRebuildService`/`IInventoryCostRebuildService`/`InventoryCostRebuildResult`,
+    unchanged in behaviour; see [Historical inventory cost](#historical-inventory-cost). The temporary
+    API-owned adapters `InventoryApi.Adapters.Persistence.EfInventoryMovementStore` and
+    `EfInventoryCostLedgerStore` implement the ports. `EfStockAdjustmentStore`,
+    `EfInventoryCountAdjustmentStore`, `EfMachineStockEventStore`, `EfPurchaseStore`,
+    `EfProductStore` and `EfLatestNayaxSalesStore`, and the not-yet-migrated `SaleCostingService`,
+    `InventoryCostTransitionService` and `ImportService`, consume the Application contracts and keep
+    their transactions unchanged. The five removed files and their DI registrations are gone, and
+    their entries were removed from the `Only_the_documented_legacy_services_remain_in_InventoryApi_Services`
+    allow-list and (for `InventoryCostDataQualityException`, now Application-owned) from the
+    `No_new_business_exception_is_defined_in_InventoryApi` allow-list. Sale costing (child 3) and the
+    inventory-cost transition (child 4) remain in `InventoryApi.Services`.
 
 8. **Reporting slices**
    - Split bookkeeping, daily, reconciliation, machine/product profitability, GST, dashboard, and transactions into separate query handlers.

@@ -1,6 +1,7 @@
 using Inventory.Application.CatalogReconciliation;
 using Inventory.Application.Categories;
 using Inventory.Application.Commissions;
+using Inventory.Application.Costing;
 using Inventory.Application.Expenses;
 using Inventory.Application.InventoryCounting;
 using Inventory.Application.MachineStockSync;
@@ -90,6 +91,10 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<DeleteProduct>();
         services.AddScoped<ResolveMachineProductPricing>();
         services.AddScoped<GetPickList>();
+        services.AddScoped<RecordInventoryMovement>();
+        services.AddScoped<IRecordInventoryMovement>(sp => sp.GetRequiredService<RecordInventoryMovement>());
+        services.AddScoped<RebuildProductCost>();
+        services.AddScoped<IRebuildProductCost>(sp => sp.GetRequiredService<RebuildProductCost>());
         services.AddScoped<ApplyInventoryCount>();
         services.AddScoped<GetStockHistory>();
         services.AddScoped<GetRestockCostSuggestion>();
