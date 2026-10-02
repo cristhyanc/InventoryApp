@@ -113,13 +113,14 @@ jobs:
           JS
 
           assigned=false
+          assign_error=""
           block_unassigned() {
             local status=$?
             if [ "$status" -ne 0 ] && [ "$assigned" != "true" ]; then
               gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
                 --remove-label "$READY_LABEL" --remove-label agent-working --add-label agent-blocked || true
               gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
-                --body "Copilot could not be assigned to this issue, so implementation did not start. The task is now agent-blocked. Check that the COPILOT_AGENT_TOKEN secret is configured and that the Copilot coding agent is enabled for this repository, then remove agent-blocked and re-apply agent-ready-copilot. Run: $RUN_URL" || true
+                --body "Copilot could not be assigned to this issue, so implementation did not start. The task is now agent-blocked. Requested implementation model: $IMPLEMENTATION_MODEL ($MODEL_TIER). ${assign_error:+GitHub responded: $assign_error. }If GitHub rejected the model, the model is not available to the Copilot coding agent: update the Copilot mapping in scripts/select-implementation-model.mjs or choose another tier. Otherwise check that the COPILOT_AGENT_TOKEN secret is configured and that the Copilot coding agent is enabled for this repository. Then remove agent-blocked and re-apply $READY_LABEL. Run: $RUN_URL" || true
             fi
           }
           trap block_unassigned EXIT
@@ -149,11 +150,15 @@ jobs:
             --arg instructions "$instructions" \
             --arg model "$IMPLEMENTATION_MODEL" \
             '{assignees: ["copilot-swe-agent[bot]"], agent_assignment: {target_repo: $repo, base_branch: "develop", custom_instructions: $instructions, model: $model}}')"
-          GH_TOKEN="$COPILOT_AGENT_TOKEN" gh api \
+          # Keep GitHub's error (for example an unavailable model) so the blocked comment says why.
+          if ! api_output="$(GH_TOKEN="$COPILOT_AGENT_TOKEN" gh api \
             --method POST \
             -H "X-GitHub-Api-Version: 2022-11-28" \
             "repos/$GITHUB_REPOSITORY/issues/$ISSUE_NUMBER/assignees" \
-            --input - <<<"$payload" >/dev/null
+            --input - <<<"$payload" 2>&1 >/dev/null)"; then
+            assign_error="$(printf '%s' "$api_output" | tr -d '\000-\037\177' | cut -c1-300)"
+            fail "Copilot assignment with model $IMPLEMENTATION_MODEL was rejected: $assign_error"
+          fi
           assigned=true
 
           gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \

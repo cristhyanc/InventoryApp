@@ -9,6 +9,7 @@ export const MODELS = Object.freeze({
 });
 export const READY_LABELS = Object.keys(MODELS).flatMap(provider => [`agent-ready-${provider}`, `agent-ready-${provider}-low`, `agent-ready-${provider}-high`]);
 const activeStates = ['agent-working', 'agent-architecture-fix', 'agent-review', 'agent-blocked'];
+const hasControlCharacter = text => [...text].some(char => char.charCodeAt(0) < 0x20 || char.charCodeAt(0) === 0x7f);
 const fingerprint = issue => createHash('sha256').update(JSON.stringify({ title: issue.title, body: issue.body })).digest('hex');
 
 export function prepareSelection({ provider, label, issue, attempt = 1 }) {
@@ -28,14 +29,14 @@ export function resolveSelection(selection, triage) {
   let tier = selection.tier;
   let reason = 'Explicit human model-tier label.';
   if (selection.triage) {
-    if (!triage || Object.keys(triage).sort().join(',') !== 'reason,tier' || !['low', 'standard', 'high-required'].includes(triage.tier) || typeof triage.reason !== 'string' || !triage.reason.trim() || triage.reason.length > 240 || /[\x00-\x1f\x7f]/.test(triage.reason)) throw new Error('Invalid triage output; implementation was not started.');
+    if (!triage || Object.keys(triage).sort((a, b) => a.localeCompare(b)).join(',') !== 'reason,tier' || !['low', 'standard', 'high-required'].includes(triage.tier) || typeof triage.reason !== 'string' || !triage.reason.trim() || triage.reason.length > 240 || hasControlCharacter(triage.reason)) throw new Error('Invalid triage output; implementation was not started.');
     if (triage.tier === 'high-required') throw new Error(`Human decision required: remove ${selection.label} and apply ${selection.label}-high to authorize a high model. ${triage.reason}`);
     tier = triage.tier;
     reason = triage.reason.trim();
   }
   const model = MODELS[selection.provider]?.[tier];
   if (!model) throw new Error('Invalid selected model tier.');
-  return { ...selection, tier, model, maxTurns: { low: 80, standard: 150, high: 250 }[tier], reason };
+  return { ...selection, tier, model, maxTurns: { low: 300, standard: 150, high: 250 }[tier], reason };
 }
 
 export function verifySnapshot(selection, issue) {

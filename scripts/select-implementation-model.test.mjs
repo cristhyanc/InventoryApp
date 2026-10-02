@@ -16,7 +16,7 @@ for (const provider of ['claude', 'copilot']) {
     const high = resolveSelection(prepare(provider, '-high'));
     assert.equal(low.tier, 'low');
     assert.equal(high.tier, 'high');
-    assert.equal(low.maxTurns, 80);
+    assert.equal(low.maxTurns, 300);
     assert.equal(high.maxTurns, 250);
     assert.notEqual(low.model, high.model);
   });
@@ -31,7 +31,7 @@ for (const provider of ['claude', 'copilot']) {
 }
 test('malformed, injected or missing model output fails closed', () => {
   const selection = prepare('claude');
-  for (const result of [null, {}, { tier: 'low', reason: '' }, { tier: 'low', reason: 'a\nmodel=opus' }, { tier: 'low', reason: 'a'.repeat(241) }, { tier: 'low', reason: 'ok', model: 'opus' }]) {
+  for (const result of [null, {}, { tier: 'low', reason: '' }, { tier: 'low', reason: 'a\nmodel=opus' }, { tier: 'low', reason: 'a\u007fb' }, { tier: 'low', reason: 'a'.repeat(241) }, { tier: 'low', reason: 'ok', model: 'opus' }]) {
     assert.throws(() => resolveSelection(selection, result), /Invalid triage/);
   }
 });
@@ -77,7 +77,7 @@ test('workflow contract rejects missing model gates, triage write tools and unbo
   }
 });
 
-test('real Copilot assignment shell forwards each tier model and refuses scope edits before mutations', () => {
+test('real Copilot assignment shell forwards each tier model, refuses scope edits before mutations and reports model rejection', () => {
   const workflow = readRepositoryFile('.github/workflows/agent-copilot.yml');
   const script = workflow.slice(workflow.indexOf('        run: |', workflow.indexOf('      - name: Relabel and assign Copilot'))).split('\n').slice(1).map(line => line.startsWith('          ') ? line.slice(10) : line).join('\n');
   const dir = mkdtempSync(join(tmpdir(), 'model-assignment-'));
@@ -85,7 +85,7 @@ test('real Copilot assignment shell forwards each tier model and refuses scope e
     writeFileSync(join(dir, 'gh'), `#!/bin/bash
 if [[ "$1 $2" == "issue view" ]]; then cat "$TEST_ISSUE"; exit 0; fi
 echo "$*" >> "$TEST_CALLS"
-if [[ "$1" == "api" ]]; then cat > "$TEST_PAYLOAD"; fi
+if [[ "$1" == "api" ]]; then cat > "$TEST_PAYLOAD"; if [[ -n "$TEST_API_FAIL" ]]; then echo "$TEST_API_FAIL" >&2; exit 1; fi; fi
 `, { mode: 0o755 });
     writeFileSync(join(dir, 'assign.sh'), script);
     for (const suffix of ['-low', '', '-high']) {
@@ -108,6 +108,13 @@ if [[ "$1" == "api" ]]; then cat > "$TEST_PAYLOAD"; fi
       const stale = spawnSync('bash', [join(dir, 'assign.sh')], { env, encoding: 'utf8' });
       assert.notEqual(stale.status, 0);
       assert.equal(readFileSync(join(dir, 'calls'), 'utf8'), '');
+      writeFileSync(join(dir, 'issue.json'), JSON.stringify(snapshot));
+      const rejected = spawnSync('bash', [join(dir, 'assign.sh')], { env: { ...env, TEST_API_FAIL: 'Model not available (HTTP 422)' }, encoding: 'utf8' });
+      assert.notEqual(rejected.status, 0);
+      const calls = readFileSync(join(dir, 'calls'), 'utf8');
+      assert.ok(calls.includes('--add-label agent-blocked'));
+      assert.ok(calls.includes(`Requested implementation model: ${resolved.model}`));
+      assert.ok(calls.includes('GitHub responded: Model not available (HTTP 422)'));
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
