@@ -1360,7 +1360,8 @@ function verifyCopilotHandoffWorkflow(handoffWorkflow) {
     "github.event.workflow_run.conclusion == 'success'",
     'pull-requests: write',
     'RUN_PATH: ${{ github.event.workflow_run.path }}',
-    'Running Copilot cloud agent',
+    "startsWith(github.event.workflow_run.head_branch, 'copilot/')",
+    'event=dynamic', '.path == "dynamic/copilot-swe-agent/copilot"', '.head_branch == $branch',
     'merge-validation',
     'gh pr ready "$PR_NUMBER"',
     "startsWith(github.event.pull_request.head.ref, 'copilot/')",
@@ -1370,7 +1371,7 @@ function verifyCopilotHandoffWorkflow(handoffWorkflow) {
   ]) requireText(handoff, required, `${copilotHandoffPath} handoff`);
   for (const forbidden of [
     'agent-review.yml', 'COPILOT_AGENT_TOKEN', 'issues: write', 'contents: write',
-    'gh pr edit', 'gh issue edit',
+    'gh pr edit', 'gh issue edit', 'gh workflow run validate.yml', 'any(.pull_requests',
   ]) forbidText(handoff, forbidden, `${copilotHandoffPath} handoff`);
 }
 

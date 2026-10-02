@@ -10,8 +10,8 @@ name: Agent Copilot handoff
 #   This workflow never checks out or executes pull request code and holds no credential other than
 #   its own GITHUB_TOKEN.
 # - Automatic handoff accepts only a successful pull_request run of Validate pull request for the
-#   exact current head, after the latest Copilot cloud-agent run for the PR has completed
-#   successfully.
+#   exact current head, after the latest Copilot session on the PR's branch (initial run or
+#   @copilot follow-up) has completed successfully.
 # - Both paths accept only an open, same-repository copilot/* PR into develop, authored by the
 #   Copilot bot, closing exactly one issue still in agent-working, with no .github/workflows/**
 #   changes.
@@ -44,7 +44,8 @@ jobs:
        startsWith(github.event.pull_request.head.ref, 'copilot/')) ||
       (github.event_name == 'workflow_run' &&
        github.event.workflow_run.event == 'pull_request' &&
-       github.event.workflow_run.conclusion == 'success')
+       github.event.workflow_run.conclusion == 'success' &&
+       startsWith(github.event.workflow_run.head_branch, 'copilot/'))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -126,25 +127,29 @@ jobs:
             encoded_head="$(jq -rn --arg value "$head_ref" '$value | @uri')"
             copilot_state=""
             for attempt in $(seq 1 "$COPILOT_RUN_POLL_ATTEMPTS"); do
-              runs_json="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?branch=$encoded_head&per_page=100")"
-              copilot_state="$(jq -r --argjson pr "$PR_NUMBER" '
+              # Every Copilot session on the branch (the initial "Running Copilot cloud agent" run and any
+              # "Addressing comment on PR #N" run) is a dynamic run of this path. The copilot/* branch
+              # identifies the PR; the runs' pull_requests list is not relied on.
+              runs_json="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?branch=$encoded_head&event=dynamic&per_page=100")"
+              copilot_state="$(jq -r --arg branch "$head_ref" '
                 (.workflow_runs | map(select(
-                  .name == "Running Copilot cloud agent" and
-                  any(.pull_requests[]?; .number == $pr)
-                )) | .[0] // {}) |
+                  .event == "dynamic" and
+                  .path == "dynamic/copilot-swe-agent/copilot" and
+                  .head_branch == $branch
+                )) | sort_by(.created_at) | reverse | .[0] // {}) |
                 "\(.status // ""):\(.conclusion // "")"
               ' <<<"$runs_json")"
 
               case "$copilot_state" in
                 completed:success) break ;;
-                completed:*) skip "latest Copilot cloud-agent run did not succeed ($copilot_state)." ;;
+                completed:*) skip "latest Copilot session did not succeed ($copilot_state)." ;;
               esac
 
               if [ "$attempt" -lt "$COPILOT_RUN_POLL_ATTEMPTS" ]; then
                 sleep "$COPILOT_RUN_POLL_SECONDS"
               fi
             done
-            [ "$copilot_state" = "completed:success" ] || skip "Copilot cloud-agent run has not completed successfully."
+            [ "$copilot_state" = "completed:success" ] || skip "latest Copilot session has not completed successfully."
 
             latest_pr_json="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json state,isDraft,headRefOid)"
             [ "$(jq -r '.state' <<<"$latest_pr_json")" = "OPEN" ] || skip "pull request #$PR_NUMBER is no longer open."

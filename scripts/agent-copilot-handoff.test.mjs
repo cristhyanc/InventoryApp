@@ -68,6 +68,19 @@ else if (args[0] === 'api') {
 } else fail('unexpected gh call: ' + args.join(' '));
 `;
 
+// GitHub lists Copilot sessions as dynamic runs with an empty pull_requests list.
+function copilotRun(fields) {
+  return {
+    name: 'Running Copilot cloud agent',
+    event: 'dynamic',
+    path: 'dynamic/copilot-swe-agent/copilot',
+    head_branch: 'copilot/fix-281',
+    created_at: '2026-10-02T12:00:00Z',
+    pull_requests: [],
+    ...fields,
+  };
+}
+
 function fixture(overrides = {}) {
   return {
     pr: {
@@ -85,12 +98,7 @@ function fixture(overrides = {}) {
     author: overrides.author ?? COPILOT,
     files: overrides.files ?? ['backend/Inventory.Application/Products/ListProducts.cs'],
     statuses: overrides.statuses ?? { [SHA]: [{ context: 'merge-validation', state: 'success' }] },
-    runs: overrides.runs ?? [{
-      name: 'Running Copilot cloud agent',
-      status: 'completed',
-      conclusion: 'success',
-      pull_requests: [{ number: Number(PR) }],
-    }],
+    runs: overrides.runs ?? [copilotRun({ status: 'completed', conclusion: 'success' })],
     unavailable: overrides.unavailable ?? [],
   };
 }
@@ -176,8 +184,18 @@ describe('Copilot pull request handoff to the Claude architecture check', () => 
   it('does not auto-ready when validation or the Copilot cloud run is not successful', () => {
     for (const state of [
       fixture({ statuses: { [SHA]: [{ context: 'merge-validation', state: 'failure' }] }, pr: { isDraft: true } }),
-      fixture({ runs: [{ name: 'Running Copilot cloud agent', status: 'in_progress', conclusion: null, pull_requests: [{ number: Number(PR) }] }], pr: { isDraft: true } }),
-      fixture({ runs: [{ name: 'Running Copilot cloud agent', status: 'completed', conclusion: 'failure', pull_requests: [{ number: Number(PR) }] }], pr: { isDraft: true } }),
+      fixture({ runs: [copilotRun({ status: 'in_progress', conclusion: null })], pr: { isDraft: true } }),
+      fixture({ runs: [copilotRun({ status: 'completed', conclusion: 'failure' })], pr: { isDraft: true } }),
+      // A newer @copilot follow-up session is still pushing, even though the initial run finished.
+      fixture({
+        runs: [
+          copilotRun({ status: 'completed', conclusion: 'success' }),
+          copilotRun({ name: `Addressing comment on PR #${PR}`, status: 'in_progress', conclusion: null, created_at: '2026-10-02T12:30:00Z' }),
+        ],
+        pr: { isDraft: true },
+      }),
+      // No Copilot session on this PR's branch.
+      fixture({ runs: [copilotRun({ status: 'completed', conclusion: 'success', head_branch: 'copilot/other' })], pr: { isDraft: true } }),
     ]) {
       const { status, calls } = run(handoffShell, {
         state,
