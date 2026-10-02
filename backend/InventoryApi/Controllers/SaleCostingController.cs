@@ -1,5 +1,4 @@
-using InventoryApi.DTOs;
-using InventoryApi.Services.Interfaces;
+using Inventory.Application.Costing;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Identity.Web.Resource;
@@ -12,9 +11,14 @@ namespace InventoryApi.Controllers;
 [RequiredScope("access_as_user")]
 public sealed class SaleCostingController : ControllerBase
 {
-    private readonly ISaleCostingService _service;
+    private readonly BackfillSaleCosts _backfill;
+    private readonly BackfillNayaxHistoricalSaleCosts _nayaxCostBackfill;
 
-    public SaleCostingController(ISaleCostingService service) => _service = service;
+    public SaleCostingController(BackfillSaleCosts backfill, BackfillNayaxHistoricalSaleCosts nayaxCostBackfill)
+    {
+        _backfill = backfill;
+        _nayaxCostBackfill = nayaxCostBackfill;
+    }
 
     [HttpPost("backfill")]
     public async Task<ActionResult<SaleCostingBackfillResult>> Backfill(
@@ -25,7 +29,7 @@ public sealed class SaleCostingController : ControllerBase
         if (!dryRun && !force)
             return BadRequest("A non-dry-run backfill requires force=true.");
 
-        return Ok(await _service.BackfillAsync(dryRun, force, cancellationToken));
+        return Ok(await _backfill.Handle(dryRun, force, cancellationToken));
     }
 
     [HttpPost("nayax-cost-backfill/dry-run")]
@@ -35,7 +39,7 @@ public sealed class SaleCostingController : ControllerBase
         [FromQuery] long? productId = null,
         [FromQuery] bool force = false,
         CancellationToken cancellationToken = default) =>
-        Ok(await _service.BackfillHistoricalCostsFromNayaxAsync(
+        Ok(await _nayaxCostBackfill.Handle(
             dryRun: true, force: force, from: from, to: to, productId: productId,
             cancellationToken: cancellationToken));
 
@@ -46,7 +50,7 @@ public sealed class SaleCostingController : ControllerBase
         [FromQuery] long? productId = null,
         [FromQuery] bool force = false,
         CancellationToken cancellationToken = default) =>
-        Ok(await _service.BackfillHistoricalCostsFromNayaxAsync(
+        Ok(await _nayaxCostBackfill.Handle(
             dryRun: false, force: force, from: from, to: to, productId: productId,
             cancellationToken: cancellationToken));
 }

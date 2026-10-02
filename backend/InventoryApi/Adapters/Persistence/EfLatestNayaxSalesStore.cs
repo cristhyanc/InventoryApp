@@ -5,7 +5,6 @@ using Inventory.Domain.FinancialConfiguration;
 using InventoryApi.Data;
 using InventoryApi.Models;
 using InventoryApi.Services;
-using InventoryApi.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
 
 namespace InventoryApi.Adapters.Persistence;
@@ -13,16 +12,16 @@ namespace InventoryApi.Adapters.Persistence;
 /// <summary>
 /// Temporary EF Core implementation of <see cref="ILatestNayaxSalesStore"/> (issue #187). It lives in
 /// InventoryApi, not Inventory.Infrastructure, because it depends on <see cref="AppDbContext"/>, the
-/// <see cref="NayaxSales"/> persistence model, and the existing costing services, all of which still
-/// live in InventoryApi. Move it into Inventory.Infrastructure once the shared AppDbContext and
+/// <see cref="NayaxSales"/> persistence model, and <see cref="NayaxProductMatcher"/>, all of which
+/// still live in InventoryApi. Move it into Inventory.Infrastructure once the shared AppDbContext and
 /// persistence models relocate there; this follows the same pattern as
 /// <see cref="EfMachineStockEventStore"/>.
 ///
 /// The import rules themselves are unchanged from the former private
 /// <c>MachineService.SaveMachinesLastSalesAsync</c>: deduplication by the remote
 /// <c>TransactionID</c>, product matching through <see cref="NayaxProductMatcher"/>, the
-/// settlement-value completed/cancelled default, historical costing through
-/// <see cref="ISaleCostingService"/>, and the baseline-cutoff-gated
+/// settlement-value completed/cancelled default, historical costing through the Application
+/// <see cref="ICostSale"/> use case (issue #297), and the baseline-cutoff-gated
 /// <see cref="IRebuildProductCost"/> replay. An already stored transaction is only enriched
 /// where it is still missing its product match or status, so an imported status or cost is never
 /// overwritten.
@@ -30,12 +29,12 @@ namespace InventoryApi.Adapters.Persistence;
 public sealed class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
 {
     private readonly AppDbContext _db;
-    private readonly ISaleCostingService _saleCosting;
+    private readonly ICostSale _saleCosting;
     private readonly IRebuildProductCost _inventoryCostRebuild;
 
     public EfLatestNayaxSalesStore(
         AppDbContext db,
-        ISaleCostingService saleCosting,
+        ICostSale saleCosting,
         IRebuildProductCost inventoryCostRebuild)
     {
         _db = db;
@@ -75,7 +74,7 @@ public sealed class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
                     MachineAuthorizationTime = sale.MachineAuthorizationTime
                 };
                 _db.NayaxSales.Add(added);
-                await _saleCosting.CostSaleAsync(added, cancellationToken: cancellationToken);
+                await _saleCosting.CostAsync(added, cancellationToken: cancellationToken);
                 if (NayaxTransactionStatusClassifier.IsCompletedSale(added.TransactionStatusId))
                 {
                     if (matchedProduct is not null &&
@@ -107,7 +106,7 @@ public sealed class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
             }
             if (enriched)
             {
-                await _saleCosting.CostSaleAsync(
+                await _saleCosting.CostAsync(
                     existing,
                     cancellationToken: cancellationToken);
                 if (NayaxTransactionStatusClassifier.IsCompletedSale(existing.TransactionStatusId))

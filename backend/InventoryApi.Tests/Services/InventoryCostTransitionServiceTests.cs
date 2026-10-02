@@ -196,7 +196,7 @@ public class InventoryCostTransitionServiceTests
             NayaxProductCostPrice = 1.10m
         };
 
-        await new SaleCostingService(db).CostSaleAsync(sale);
+        await TestCostingUseCases.CostSale(db).CostAsync(sale);
 
         Assert.Equal(1.10m, sale.CostOfGoodsSold);
         Assert.Equal(SaleCostSource.NayaxTransactionExport, sale.CostSource);
@@ -358,7 +358,7 @@ public class InventoryCostTransitionServiceTests
     {
         var rebuild = TestCostingUseCases.Rebuild(db);
         return new SyncLatestNayaxSales(
-            nayax, new EfLatestNayaxSalesStore(db, new SaleCostingService(db, rebuild), rebuild));
+            nayax, new EfLatestNayaxSalesStore(db, TestCostingUseCases.CostSale(db, rebuild), rebuild));
     }
 
     private static async Task<NayaxSales> SaleAsync(AppDbContext db, long transactionId) =>

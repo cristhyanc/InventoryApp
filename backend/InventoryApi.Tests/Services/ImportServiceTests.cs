@@ -104,7 +104,7 @@ public class ImportServiceTests
             Mock.Of<IWebHostEnvironment>(),
             Mock.Of<ILogger<ImportService>>(),
             nayax ?? Mock.Of<INayaxLynxClient>(),
-            new SaleCostingService(db, rebuild),
+            TestCostingUseCases.CostSale(db, rebuild),
             rebuild);
     }
 

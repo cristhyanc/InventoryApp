@@ -173,7 +173,7 @@ public sealed class NayaxImportTenantIsolationTests : IDisposable
             Mock.Of<IWebHostEnvironment>(),
             Mock.Of<ILogger<ImportService>>(),
             Mock.Of<INayaxLynxClient>(),
-            new SaleCostingService(db, rebuild),
+            TestCostingUseCases.CostSale(db, rebuild),
             rebuild);
     }
 }
