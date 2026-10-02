@@ -509,7 +509,7 @@ export const PULL_REQUEST_TEMPLATE_DOCUMENTATION_CONTRACT = Object.freeze({
 
 export const PREFLIGHT_JOB_CONTRACT = Object.freeze({
   required: [
-    "if: github.event.label.name == 'agent-ready-claude' && github.event.issue.pull_request == null",
+    "if: (github.event.label.name == 'agent-ready-claude' || github.event.label.name == 'agent-ready-claude-low' || github.event.label.name == 'agent-ready-claude-high') && github.event.issue.pull_request == null",
     'contents: read',
     'issues: read',
     'actions/checkout',
@@ -535,8 +535,8 @@ export const PREFLIGHT_JOB_CONTRACT = Object.freeze({
 });
 
 export const IMPLEMENT_JOB_DOCUMENTATION_CONTRACT = Object.freeze({
-  needs: '    needs: preflight\n',
-  condition: "if: needs.preflight.result == 'success' && github.event.label.name == 'agent-ready-claude' && github.event.issue.pull_request == null",
+  needs: '    needs: [preflight, model]\n',
+  condition: "if: needs.preflight.result == 'success' && needs.model.result == 'success' && (github.event.label.name == 'agent-ready-claude' || github.event.label.name == 'agent-ready-claude-low' || github.event.label.name == 'agent-ready-claude-high') && github.event.issue.pull_request == null",
   prompt: [
     'Restate its acceptance criteria, its explicit exclusions, and its Documentation impact decision and Documentation impact details.',
     "Follow the issue's Documentation impact decision exactly.",
@@ -1309,22 +1309,22 @@ function verifyCopilotAssignWorkflow(workflow) {
     forbidText(triggers, forbidden, `${copilotImplementPath} triggers`);
   }
   requireText(workflow, 'permissions: {}', copilotImplementPath);
-  for (const forbidden of ['CLAUDE_CODE_OAUTH_TOKEN', 'claude-code-action', 'AGENT_AUTOMATION_APP_PRIVATE_KEY', 'gh pr merge', 'git push', 'ref: ${{ github.event.pull_request']) {
+  for (const forbidden of ['claude-code-action', 'AGENT_AUTOMATION_APP_PRIVATE_KEY', 'gh pr merge', 'git push', 'ref: ${{ github.event.pull_request']) {
     forbidText(workflow, forbidden, copilotImplementPath);
   }
 
   const preflight = section(workflow, '  preflight:\n', '  assign:\n', `${copilotImplementPath} preflight`);
-  requireText(preflight, "if: github.event_name == 'issues' && github.event.label.name == 'agent-ready-copilot' && github.event.issue.pull_request == null", `${copilotImplementPath} preflight`);
+  requireText(preflight, "if: github.event_name == 'issues' && (github.event.label.name == 'agent-ready-copilot' || github.event.label.name == 'agent-ready-copilot-low' || github.event.label.name == 'agent-ready-copilot-high') && github.event.issue.pull_request == null", `${copilotImplementPath} preflight`);
   for (const required of PREFLIGHT_JOB_CONTRACT.required.slice(1)) requireText(preflight, required, `${copilotImplementPath} preflight`);
   for (const forbidden of [...PREFLIGHT_JOB_CONTRACT.forbidden, 'COPILOT_AGENT_TOKEN']) forbidText(preflight, forbidden, `${copilotImplementPath} preflight`);
 
   const assign = section(workflow, '  assign:\n', null, `${copilotImplementPath} assign`);
   for (const required of [
-    '    needs: preflight\n',
-    "if: needs.preflight.result == 'success' && github.event_name == 'issues' && github.event.label.name == 'agent-ready-copilot'",
+    '    needs: [preflight, model]\n',
+    "if: needs.preflight.result == 'success' && needs.model.result == 'success' && github.event_name == 'issues' && (github.event.label.name == 'agent-ready-copilot' || github.event.label.name == 'agent-ready-copilot-low' || github.event.label.name == 'agent-ready-copilot-high')",
     '      issues: write', 'COPILOT_AGENT_TOKEN: ${{ secrets.COPILOT_AGENT_TOKEN }}',
-    '--remove-label agent-ready-copilot --add-label agent-working',
-    'assignees: ["copilot-swe-agent[bot]"]', 'base_branch: "develop"', 'custom_instructions: $instructions',
+    '--remove-label "$READY_LABEL" --add-label agent-working',
+    'assignees: ["copilot-swe-agent[bot]"]', 'base_branch: "develop"', 'custom_instructions: $instructions', 'model: $model', '--arg model "$IMPLEMENTATION_MODEL"',
     'GH_TOKEN="$COPILOT_AGENT_TOKEN" gh api', 'repos/$GITHUB_REPOSITORY/issues/$ISSUE_NUMBER/assignees',
     'trap block_unassigned EXIT', '--add-label agent-blocked', 'assigned=true',
     'Base branch is develop.', 'bash scripts/validate.sh', '## Documentation impact', 'Do not change anything under .github/',
@@ -1332,7 +1332,7 @@ function verifyCopilotAssignWorkflow(workflow) {
   for (const forbidden of ['actions/checkout', 'actions: write', 'contents: write', 'pull-requests: write']) {
     forbidText(assign, forbidden, `${copilotImplementPath} assign`);
   }
-  requireOrder(assign, '--remove-label agent-ready-copilot --add-label agent-working', 'repos/$GITHUB_REPOSITORY/issues/$ISSUE_NUMBER/assignees', `${copilotImplementPath} assign`, 'the issue must be agent-working before Copilot starts.');
+  requireOrder(assign, '--remove-label "$READY_LABEL" --add-label agent-working', 'repos/$GITHUB_REPOSITORY/issues/$ISSUE_NUMBER/assignees', `${copilotImplementPath} assign`, 'the issue must be agent-working before Copilot starts.');
 
 }
 
@@ -1646,6 +1646,28 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
   verifyDocumentationImpactGate(read);
   verifyReviewPublicationAndScheduling(read);
   verifyCopilotImplementationPath(read);
+  verifyImplementationModelSelection(read);
+}
+
+export function verifyImplementationModelSelection(read = readRepositoryFile) {
+  const selection = read('.github/workflows/agent-model-selection.yml');
+  for (const required of ['workflow_call:', 'permissions: {}', 'contents: read', 'issues: read', 'ref: ${{ github.workflow_sha }}', 'persist-credentials: false', "if: steps.prepare.outputs.triage == 'true'", '--model haiku', '--max-turns 4', '--settings \'{"availableModels":["haiku"]}\'', '--allowedTools "Read"', '--disallowedTools "Agent,Bash,Edit,MultiEdit,Write,WebFetch,WebSearch"', 'node scripts/select-implementation-model.mjs prepare', 'node scripts/select-implementation-model.mjs resolve', 'TRIAGE_OUTPUT: ${{ steps.triage.outputs.structured_output }}']) requireText(selection, required, 'implementation model selection');
+  for (const forbidden of ['contents: write', 'issues: write', 'pull-requests: write', 'actions: write', 'COPILOT_AGENT_TOKEN', 'AGENT_AUTOMATION_APP_PRIVATE_KEY', 'gh issue edit', 'gh issue comment', 'git push', 'github.event.pull_request']) forbidText(selection, forbidden, 'implementation model selection');
+  for (const [provider, path, job] of [['claude', implementPath, 'implement'], ['copilot', copilotImplementPath, 'assign']]) {
+    const workflow = read(path);
+    const caller = section(workflow, '  model:\n', '  preflight:\n', `${path} model caller`);
+    for (const required of ['needs: preflight', 'uses: ./.github/workflows/agent-model-selection.yml', `provider: ${provider}`, 'ready_label: ${{ github.event.label.name }}', 'contents: read', 'issues: read']) requireText(caller, required, `${path} model caller`);
+    requireText(workflow, 'group: agent-implementation-issue-${{ github.event.issue.number }}', path);
+    requireText(workflow, 'cancel-in-progress: false', path);
+    const consumer = section(workflow, `  ${job}:\n`, provider === 'claude' ? '  dispatch-architecture:\n' : null, path);
+    for (const required of ['needs: [preflight, model]', "needs.model.result == 'success'", 'TASK_FINGERPRINT: ${{ needs.model.outputs.fingerprint }}', 'IMPLEMENTATION_MODEL: ${{ needs.model.outputs.model }}', '--remove-label "$READY_LABEL" --add-label agent-working']) requireText(consumer, required, `${path} model consumer`);
+    if (provider === 'claude') {
+      for (const required of ['--model ${{ needs.model.outputs.model }}', '--settings \'{"availableModels":["${{ needs.model.outputs.model }}"]}\'', '--max-turns ${{ needs.model.outputs.max_turns }}', 'node scripts/select-implementation-model.mjs verify']) requireText(consumer, required, `${path} model consumer`);
+    } else {
+      for (const required of ['model: $model', '--arg model "$IMPLEMENTATION_MODEL"', "fingerprint !== process.env.TASK_FINGERPRINT"]) requireText(consumer, required, `${path} model consumer`);
+      forbidText(consumer, 'CLAUDE_CODE_OAUTH_TOKEN', `${path} model consumer`);
+    }
+  }
 }
 
 const invokedDirectly =
@@ -1655,4 +1677,3 @@ if (invokedDirectly) {
   runContractChecks();
   console.log('Agent workflow contract validation passed.');
 }
-
