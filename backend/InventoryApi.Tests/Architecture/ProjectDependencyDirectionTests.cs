@@ -189,7 +189,6 @@ public class ProjectDependencyDirectionTests
             "Interfaces/IPurchaseService.cs",
             "Interfaces/ISaleCostingService.cs",
             "Interfaces/ISiteService.cs",
-            "Interfaces/IStockService.cs",
             "Interfaces/ISupplierOrderService.cs",
             "InventoryCostRebuildResult.cs",
             "InventoryCostRebuildService.cs",
@@ -203,7 +202,6 @@ public class ProjectDependencyDirectionTests
             "SaleCostingService.cs",
             "SiteNameResolver.cs",
             "SiteService.cs",
-            "StockService.cs",
             "SupplierOrderService.cs",
         ];
 

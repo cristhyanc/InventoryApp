@@ -1,10 +1,10 @@
 using System.Text.Json;
 using Inventory.Application.MachineStockSync;
 using Inventory.Application.Nayax;
+using Inventory.Application.Stock;
 using Inventory.Domain.Nayax;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
-using InventoryApi.DTOs;
 using InventoryApi.Models;
 using InventoryApi.Services;
 using InventoryApi.Services.Interfaces;
@@ -12,6 +12,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Moq;
 using Xunit;
+using DomainStock = Inventory.Domain.Stock;
 
 namespace InventoryApi.Tests.Application.MachineStockSync;
 
@@ -77,6 +78,16 @@ public class MachineStockSyncTests
         AppDbContext db, IInventoryCostRebuildService? rebuild = null) =>
         new(new EfMachineStockEventStore(
             db, new InventoryCostService(db), rebuild ?? new InventoryCostRebuildService(db)));
+
+    /// <summary>The manual-fallback stock adjustment path a Nayax refill is compared/distinguished against, now routed through the issue #282 use case instead of the retired <c>StockService</c>.</summary>
+    private static AdjustStock ManualAdjustUseCase(AppDbContext db, IInventoryCostRebuildService? rebuild = null) =>
+        new(new EfStockAdjustmentStore(db, new InventoryCostService(db), rebuild ?? new InventoryCostRebuildService(db)));
+
+    private static Task ApplyManualMachineRefillAsync(AppDbContext db, int quantityChange, string notes) =>
+        ManualAdjustUseCase(db).Handle(
+            ProductId,
+            new ManualStockAdjustmentInput(quantityChange, DomainStock.StockAdjustmentReason.MachineRefill, notes, MachineId, null, null),
+            CancellationToken.None);
 
     private static Product SeedCostedProduct(
         AppDbContext db, long id, string name, int quantityInStock, decimal unitCost = 1m)
@@ -608,8 +619,7 @@ public class MachineStockSyncTests
         SeedCostedProduct(db, ProductId, "Coke 375mL", 20, unitCost: 1m);
         await db.SaveChangesAsync();
 
-        IStockService stockService = new StockService(db);
-        await stockService.Adjust(ProductId, new StockAdjustmentDto(-3, StockAdjustmentReason.MachineRefill, "manual restock", MachineId, null));
+        await ApplyManualMachineRefillAsync(db, -3, "manual restock");
 
         var nayax = NayaxClientReturning([
             StockAlert(2, "Product MDB: 7 | Coke 375mL | 4", EventTime.AddHours(3))
@@ -640,8 +650,7 @@ public class MachineStockSyncTests
         SeedCostedProduct(db, ProductId, "Coke 375mL", 20, unitCost: 1m);
         await db.SaveChangesAsync();
 
-        IStockService stockService = new StockService(db);
-        await stockService.Adjust(ProductId, new StockAdjustmentDto(-4, StockAdjustmentReason.MachineRefill, "operator restocked before Nayax reported it", MachineId, null));
+        await ApplyManualMachineRefillAsync(db, -4, "operator restocked before Nayax reported it");
         var manualMovement = await db.StockAdjustments.SingleAsync(x => x.Reason == StockAdjustmentReason.MachineRefill);
         manualMovement.EffectiveAt = EventTime.AddHours(-1);
         await db.SaveChangesAsync();
@@ -670,8 +679,7 @@ public class MachineStockSyncTests
         SeedCostedProduct(db, ProductId, "Coke 375mL", 20, unitCost: 1m);
         await db.SaveChangesAsync();
 
-        IStockService stockService = new StockService(db);
-        await stockService.Adjust(ProductId, new StockAdjustmentDto(-4, StockAdjustmentReason.MachineRefill, "operator restocked before Nayax reported it", MachineId, null));
+        await ApplyManualMachineRefillAsync(db, -4, "operator restocked before Nayax reported it");
         var manualMovement = await db.StockAdjustments.SingleAsync(x => x.Reason == StockAdjustmentReason.MachineRefill);
         manualMovement.EffectiveAt = EventTime;
         await db.SaveChangesAsync();
@@ -694,8 +702,7 @@ public class MachineStockSyncTests
         SeedCostedProduct(db, ProductId, "Coke 375mL", 20, unitCost: 1m);
         await db.SaveChangesAsync();
 
-        IStockService stockService = new StockService(db);
-        await stockService.Adjust(ProductId, new StockAdjustmentDto(-4, StockAdjustmentReason.MachineRefill, "an unrelated much earlier manual restock", MachineId, null));
+        await ApplyManualMachineRefillAsync(db, -4, "an unrelated much earlier manual restock");
         var manualMovement = await db.StockAdjustments.SingleAsync(x => x.Reason == StockAdjustmentReason.MachineRefill);
         manualMovement.EffectiveAt = EventTime.AddDays(-30);
         await db.SaveChangesAsync();
@@ -730,10 +737,7 @@ public class MachineStockSyncTests
         SeedCostedProduct(db, ProductId, "Coke 375mL", 20, unitCost: 1m);
         await db.SaveChangesAsync();
 
-        IStockService stockService = new StockService(db);
-        await stockService.Adjust(
-            ProductId,
-            new StockAdjustmentDto(-4, StockAdjustmentReason.MachineRefill, "operator restocked before Nayax reported it", MachineId, null));
+        await ApplyManualMachineRefillAsync(db, -4, "operator restocked before Nayax reported it");
         var manualMovement = await db.StockAdjustments.SingleAsync(x => x.Reason == StockAdjustmentReason.MachineRefill);
         manualMovement.EffectiveAt = EventTime.AddHours(-1);
         await db.SaveChangesAsync();
