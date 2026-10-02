@@ -123,7 +123,8 @@ export async function collectSonarIssues({ fetchJson, repository, sha, pullReque
   // count to match the check run's summary; a different count after that is an older or newer analysis.
   const expected = expectedIssueCount(check);
   let issues = await fetchOpenPullRequestIssues({ fetchJson, projectKey, pullRequest });
-  for (let attempt = 1; expected !== null && issues.length !== expected && attempt < ISSUE_READ_ATTEMPTS; attempt += 1) {
+  for (let attempt = 1; attempt < ISSUE_READ_ATTEMPTS; attempt += 1) {
+    if (expected === null || issues.length === expected) break;
     await wait(pollSeconds * 1000);
     issues = await fetchOpenPullRequestIssues({ fetchJson, projectKey, pullRequest });
   }
