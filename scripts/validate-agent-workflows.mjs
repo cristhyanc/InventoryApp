@@ -1347,9 +1347,10 @@ function verifyCopilotHandoffWorkflow(handoffWorkflow) {
   }
   requireText(handoffWorkflow, 'permissions: {}', copilotHandoffPath);
   for (const forbidden of [
-    'actions/checkout', 'secrets.COPILOT', 'CLAUDE_CODE_OAUTH_TOKEN',
+    'actions/checkout', 'secrets.COPILOT_CLI_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN',
     'AGENT_AUTOMATION_APP_PRIVATE_KEY', 'ref: ${{ github.event.pull_request', 'git push',
   ]) forbidText(handoffWorkflow, forbidden, copilotHandoffPath);
+  requireText(handoffWorkflow, 'COPILOT_AGENT_TOKEN: ${{ secrets.COPILOT_AGENT_TOKEN }}', copilotHandoffPath);
 
   const handoff = section(handoffWorkflow, '  handoff:\n', null, `${copilotHandoffPath} handoff`);
   verifySafeDispatcherBase(handoff, `${copilotHandoffPath} handoff`, 'write');
@@ -1363,14 +1364,16 @@ function verifyCopilotHandoffWorkflow(handoffWorkflow) {
     "startsWith(github.event.workflow_run.head_branch, 'copilot/')",
     'event=dynamic', '.path == "dynamic/copilot-swe-agent/copilot"', '.head_branch == $branch',
     'merge-validation',
-    'gh pr ready "$PR_NUMBER"',
+    '[ -n "$COPILOT_AGENT_TOKEN" ] || fail',
+    'GH_TOKEN="$COPILOT_AGENT_TOKEN" gh pr ready "$PR_NUMBER"',
+    'skip "the ready_for_review event from this transition dispatches the architecture check."',
     "startsWith(github.event.pull_request.head.ref, 'copilot/')",
     'closingIssuesReferences', 'any(.labels[]?; .name == "agent-working")',
     'gh workflow run agent-copilot-architecture.yml', '-f issue_number="$issue_number"',
     '-f pr_number="$PR_NUMBER"', '-f head_sha="$HEAD_SHA"',
   ]) requireText(handoff, required, `${copilotHandoffPath} handoff`);
   for (const forbidden of [
-    'agent-review.yml', 'COPILOT_AGENT_TOKEN', 'issues: write', 'contents: write',
+    'agent-review.yml', 'issues: write', 'contents: write',
     'gh pr edit', 'gh issue edit', 'gh workflow run validate.yml', 'any(.pull_requests',
   ]) forbidText(handoff, forbidden, `${copilotHandoffPath} handoff`);
 }
