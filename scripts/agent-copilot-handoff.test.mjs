@@ -52,6 +52,7 @@ const fail = (why) => { process.stderr.write(why + '\\n'); process.exit(1); };
 if ((state.unavailable ?? []).some((prefix) => args.join(' ').startsWith(prefix))) fail('HTTP 502: fixture outage');
 const pick = (obj) => Object.fromEntries(opt('--json').split(',').map((f) => [f, obj[f]]));
 if (args[0] === 'pr' && args[1] === 'view') out(pick(state.pr));
+else if (args[0] === 'pr' && args[1] === 'ready') log({ kind: 'pr-ready', args });
 else if (args[0] === 'issue' && args[1] === 'view') out(pick(state.issue));
 else if (['edit', 'comment'].includes(args[1]) && ['pr', 'issue'].includes(args[0])) {
   const bodyFile = opt('--body-file');
@@ -59,12 +60,26 @@ else if (['edit', 'comment'].includes(args[1]) && ['pr', 'issue'].includes(args[
 } else if (args[0] === 'workflow' && args[1] === 'run') log({ kind: 'dispatch', workflow: args[2], args });
 else if (args[0] === 'api') {
   const path = args.find((a, i) => i > 0 && !a.startsWith('-') && args[i - 1] !== '--jq');
-  if (/\\/commits\\/[0-9a-f]{40}\\/status$/.test(path)) out({ statuses: state.statuses[path.split('/commits/')[1].split('/')[0]] ?? [] });
+  if (path.includes('/actions/runs?')) out({ workflow_runs: state.runs ?? [] });
+  else if (/\\/commits\\/[0-9a-f]{40}\\/status$/.test(path)) out({ statuses: state.statuses[path.split('/commits/')[1].split('/')[0]] ?? [] });
   else if (path.includes('/files')) out(state.files.map((filename) => ({ filename })));
   else if (/\\/pulls\\/\\d+$/.test(path)) out({ user: { login: state.author } });
   else fail('unexpected api call: ' + args.join(' '));
 } else fail('unexpected gh call: ' + args.join(' '));
 `;
+
+// GitHub lists Copilot sessions as dynamic runs with an empty pull_requests list.
+function copilotRun(fields) {
+  return {
+    name: 'Running Copilot cloud agent',
+    event: 'dynamic',
+    path: 'dynamic/copilot-swe-agent/copilot',
+    head_branch: 'copilot/fix-281',
+    created_at: '2026-10-02T12:00:00Z',
+    pull_requests: [],
+    ...fields,
+  };
+}
 
 function fixture(overrides = {}) {
   return {
@@ -82,7 +97,8 @@ function fixture(overrides = {}) {
     issue: { state: 'OPEN', labels: [{ name: 'agent-working' }], ...(overrides.issue ?? {}) },
     author: overrides.author ?? COPILOT,
     files: overrides.files ?? ['backend/Inventory.Application/Products/ListProducts.cs'],
-    statuses: overrides.statuses ?? {},
+    statuses: overrides.statuses ?? { [SHA]: [{ context: 'merge-validation', state: 'success' }] },
+    runs: overrides.runs ?? [copilotRun({ status: 'completed', conclusion: 'success' })],
     unavailable: overrides.unavailable ?? [],
   };
 }
@@ -110,6 +126,16 @@ function run(shell, { state, env = {} }) {
         PR_NUMBER: PR,
         HEAD_SHA: SHA,
         RUN_URL: 'https://github.com/owner/InventoryApp/actions/runs/1',
+        GITHUB_EVENT_NAME: 'pull_request_target',
+        EVENT_PR_NUMBER: PR,
+        EVENT_HEAD_SHA: SHA,
+        RUN_PR_NUMBER: '',
+        RUN_HEAD_SHA: '',
+        RUN_EVENT: '',
+        RUN_CONCLUSION: '',
+        RUN_PATH: '',
+        COPILOT_RUN_POLL_ATTEMPTS: '1',
+        COPILOT_RUN_POLL_SECONDS: '0',
         ...env,
       },
     });
@@ -134,6 +160,58 @@ describe('Copilot pull request handoff to the Claude architecture check', () => 
       'workflow', 'run', 'agent-copilot-architecture.yml', '--repo', REPO, '--ref', 'main',
       '-f', `issue_number=${ISSUE}`, '-f', `pr_number=${PR}`, '-f', `head_sha=${SHA}`,
     ]);
+  });
+
+  it('automatically marks a validated Copilot draft ready and dispatches the exact head', () => {
+    const { status, stderr, calls } = run(handoffShell, {
+      state: fixture({ pr: { isDraft: true } }),
+      env: {
+        GITHUB_EVENT_NAME: 'workflow_run',
+        RUN_PR_NUMBER: PR,
+        RUN_HEAD_SHA: SHA,
+        RUN_EVENT: 'pull_request',
+        RUN_CONCLUSION: 'success',
+        RUN_PATH: '.github/workflows/validate.yml',
+      },
+    });
+    assert.equal(status, 0, stderr);
+    assert.equal(calls.filter((c) => c.kind === 'pr-ready').length, 1);
+    const [dispatch] = dispatches(calls, 'agent-copilot-architecture.yml');
+    assert.ok(dispatch);
+    assert.ok(dispatch.args.includes(`head_sha=${SHA}`));
+  });
+
+  it('does not auto-ready when validation or the Copilot cloud run is not successful', () => {
+    for (const state of [
+      fixture({ statuses: { [SHA]: [{ context: 'merge-validation', state: 'failure' }] }, pr: { isDraft: true } }),
+      fixture({ runs: [copilotRun({ status: 'in_progress', conclusion: null })], pr: { isDraft: true } }),
+      fixture({ runs: [copilotRun({ status: 'completed', conclusion: 'failure' })], pr: { isDraft: true } }),
+      // A newer @copilot follow-up session is still pushing, even though the initial run finished.
+      fixture({
+        runs: [
+          copilotRun({ status: 'completed', conclusion: 'success' }),
+          copilotRun({ name: `Addressing comment on PR #${PR}`, status: 'in_progress', conclusion: null, created_at: '2026-10-02T12:30:00Z' }),
+        ],
+        pr: { isDraft: true },
+      }),
+      // No Copilot session on this PR's branch.
+      fixture({ runs: [copilotRun({ status: 'completed', conclusion: 'success', head_branch: 'copilot/other' })], pr: { isDraft: true } }),
+    ]) {
+      const { status, calls } = run(handoffShell, {
+        state,
+        env: {
+          GITHUB_EVENT_NAME: 'workflow_run',
+          RUN_PR_NUMBER: PR,
+          RUN_HEAD_SHA: SHA,
+          RUN_EVENT: 'pull_request',
+          RUN_CONCLUSION: 'success',
+          RUN_PATH: '.github/workflows/validate.yml',
+        },
+      });
+      assert.equal(status, 0);
+      assert.equal(calls.filter((c) => c.kind === 'pr-ready').length, 0);
+      assert.equal(dispatches(calls, 'agent-copilot-architecture.yml').length, 0);
+    }
   });
 
   for (const [name, overrides] of [
