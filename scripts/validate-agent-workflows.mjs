@@ -1352,7 +1352,7 @@ function verifyCopilotHandoffWorkflow(handoffWorkflow) {
   ]) forbidText(handoffWorkflow, forbidden, copilotHandoffPath);
 
   const handoff = section(handoffWorkflow, '  handoff:\n', null, `${copilotHandoffPath} handoff`);
-  verifySafeDispatcherBase(handoff, `${copilotHandoffPath} handoff`);
+  verifySafeDispatcherBase(handoff, `${copilotHandoffPath} handoff`, 'write');
   verifyAgentPrGuards(handoff, `${copilotHandoffPath} handoff`, 'Refusing stale handoff', 'copilot');
   for (const required of [
     "github.event_name == 'workflow_run'",
