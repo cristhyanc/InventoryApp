@@ -24,6 +24,7 @@ using Inventory.Application.Reporting.Transactions;
 using Inventory.Application.SalesSync;
 using Inventory.Application.Sites;
 using Inventory.Application.Suppliers;
+using Inventory.Application.SupplierOrders;
 using Inventory.Application.Tenancy;
 using Inventory.Infrastructure;
 using Inventory.Infrastructure.Documents;
@@ -189,6 +190,12 @@ builder.Services.AddScoped<IProductStore, EfProductStore>();
 
 // Temporary API-owned adapter for the product catalogue read port; see EfProductCatalogStore.
 builder.Services.AddScoped<IProductCatalogStore, EfProductCatalogStore>();
+
+// Temporary API-owned adapter for the purchase create/read/update/delete persistence port; see EfPurchaseStore.
+builder.Services.AddScoped<IPurchaseStore, EfPurchaseStore>();
+
+// Temporary API-owned adapter for the supplier-order create/read/cancel persistence port; see EfSupplierOrderStore.
+builder.Services.AddScoped<ISupplierOrderStore, EfSupplierOrderStore>();
 
 // Temporary API-owned adapters for the site dashboard ports; see EfSiteFactsStore/SiteNameResolverAdapter.
 builder.Services.AddScoped<ISiteFactsStore, EfSiteFactsStore>();

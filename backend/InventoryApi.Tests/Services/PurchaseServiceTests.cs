@@ -1,5 +1,7 @@
 using Inventory.Application.Documents;
+using Inventory.Application.Purchases;
 using Inventory.Infrastructure.Documents;
+using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using InventoryApi.DTOs;
 using InventoryApi.Models;
@@ -285,7 +287,20 @@ public class PurchaseServiceTests
     }
 
     private static IPurchaseService CreateService(AppDbContext db) =>
-        new PurchaseService(db, TemporaryDocumentStorage());
+        CreateService(db, TemporaryDocumentStorage());
+
+    private static IPurchaseService CreateService(AppDbContext db, IDocumentStorage documents, IInventoryCostRebuildService? rebuild = null)
+    {
+        var store = new EfPurchaseStore(db, rebuild ?? new InventoryCostRebuildService(db));
+        return new PurchaseService(
+            new ListPurchases(store),
+            new GetPurchase(store),
+            new GetPurchaseFile(store, documents),
+            new UploadPurchase(store, documents),
+            new UpdatePurchase(store),
+            new DeletePurchase(store, documents),
+            new ComputePurchaseTotalValidation());
+    }
 
     /// <summary>
     /// Document storage rooted in a fresh temporary folder. These tests are about purchase
@@ -332,7 +347,7 @@ public class PurchaseServiceTests
     {
         using var db = CreateDbContext("purchase_test");
 
-        IPurchaseService svc = new PurchaseService(db, TemporaryDocumentStorage());
+        IPurchaseService svc = CreateService(db, TemporaryDocumentStorage());
 
         var content = new MemoryStream(new byte[] { 1, 2, 3 });
         var fileMock = new Mock<IFormFile>();
@@ -353,7 +368,7 @@ public class PurchaseServiceTests
     {
         using var db = CreateDbContext("purchase_update_test");
 
-        IPurchaseService svc = new PurchaseService(db, TemporaryDocumentStorage());
+        IPurchaseService svc = CreateService(db, TemporaryDocumentStorage());
 
         var content = new MemoryStream(new byte[] { 1, 2, 3 });
         var fileMock = new Mock<IFormFile>();
@@ -397,7 +412,7 @@ public class PurchaseServiceTests
         }
         await using (var uploadDb = TestAppDbContext.Unrestricted(options))
         {
-            IPurchaseService uploadSvc = new PurchaseService(uploadDb, TemporaryDocumentStorage());
+            IPurchaseService uploadSvc = CreateService(uploadDb, TemporaryDocumentStorage());
             var content = new MemoryStream(new byte[] { 1 });
             var fileMock = new Mock<IFormFile>();
             fileMock.Setup(f => f.Length).Returns(1);
@@ -433,7 +448,7 @@ public class PurchaseServiceTests
         AddTransitionBaseline(db, 1, 2);
         AddTransitionBaseline(db, 2, 4);
         await db.SaveChangesAsync();
-        IPurchaseService svc = new PurchaseService(db, TemporaryDocumentStorage());
+        IPurchaseService svc = CreateService(db, TemporaryDocumentStorage());
 
         var content = new MemoryStream(new byte[] { 1 });
         var fileMock = new Mock<IFormFile>();
@@ -462,7 +477,7 @@ public class PurchaseServiceTests
         db.Products.Add(new Product { Id = 1, Name = "M&M", QuantityInStock = 0 });
         AddTransitionBaseline(db, 1, 0);
         await db.SaveChangesAsync();
-        IPurchaseService svc = new PurchaseService(db, TemporaryDocumentStorage());
+        IPurchaseService svc = CreateService(db, TemporaryDocumentStorage());
 
         var content = new MemoryStream(new byte[] { 1 });
         var fileMock = new Mock<IFormFile>();
@@ -501,7 +516,7 @@ public class PurchaseServiceTests
         db.Products.Add(new Product { Id = 1, Name = "M&M", QuantityInStock = 10, AverageUnitCost = 2.10m });
         AddTransitionBaseline(db, 1, 10, 10, 21m, 2.10m);
         await db.SaveChangesAsync();
-        IPurchaseService svc = new PurchaseService(db, TemporaryDocumentStorage());
+        IPurchaseService svc = CreateService(db, TemporaryDocumentStorage());
 
         var content = new MemoryStream(new byte[] { 1 });
         var fileMock = new Mock<IFormFile>();
@@ -537,7 +552,7 @@ public class PurchaseServiceTests
                 It.IsAny<System.Threading.CancellationToken>()))
             .ReturnsAsync((long productId, DateTime? _, bool dryRun, System.Threading.CancellationToken _) =>
                 new InventoryCostRebuildResult { ProductId = productId, DryRun = dryRun });
-        IPurchaseService svc = new PurchaseService(db, TemporaryDocumentStorage(), rebuild.Object);
+        IPurchaseService svc = CreateService(db, TemporaryDocumentStorage(), rebuild.Object);
         var content = new MemoryStream(new byte[] { 1 });
         var fileMock = new Mock<IFormFile>();
         fileMock.Setup(f => f.Length).Returns(1);
@@ -591,7 +606,7 @@ public class PurchaseServiceTests
             DataQualityNote = "Legacy discrepancy retired at cutover."
         });
         await db.SaveChangesAsync();
-        IPurchaseService svc = new PurchaseService(db, TemporaryDocumentStorage());
+        IPurchaseService svc = CreateService(db, TemporaryDocumentStorage());
         var content = new MemoryStream(new byte[] { 1 });
         var fileMock = new Mock<IFormFile>();
         fileMock.Setup(f => f.Length).Returns(1);
@@ -630,7 +645,7 @@ public class PurchaseServiceTests
         AddTransitionBaseline(db, 1, 0);
         await db.SaveChangesAsync();
 
-        IPurchaseService svc = new PurchaseService(db, TemporaryDocumentStorage());
+        IPurchaseService svc = CreateService(db, TemporaryDocumentStorage());
 
         var content = new MemoryStream(new byte[] { 1 });
         var fileMock = new Mock<IFormFile>();
@@ -664,7 +679,7 @@ public class PurchaseServiceTests
         AddTransitionBaseline(db, 1, 0);
         await db.SaveChangesAsync();
 
-        IPurchaseService svc = new PurchaseService(db, TemporaryDocumentStorage());
+        IPurchaseService svc = CreateService(db, TemporaryDocumentStorage());
 
         var content = new MemoryStream(new byte[] { 1 });
         var fileMock = new Mock<IFormFile>();
@@ -699,7 +714,7 @@ public class PurchaseServiceTests
         AddTransitionBaseline(db, 1, 0);
         await db.SaveChangesAsync();
 
-        IPurchaseService svc = new PurchaseService(db, TemporaryDocumentStorage());
+        IPurchaseService svc = CreateService(db, TemporaryDocumentStorage());
 
         var content = new MemoryStream(new byte[] { 1 });
         var fileMock = new Mock<IFormFile>();
@@ -733,7 +748,7 @@ public class PurchaseServiceTests
         AddTransitionBaseline(db, 1, 0);
         await db.SaveChangesAsync();
 
-        IPurchaseService svc = new PurchaseService(db, TemporaryDocumentStorage());
+        IPurchaseService svc = CreateService(db, TemporaryDocumentStorage());
 
         var content = new MemoryStream(new byte[] { 1 });
         var fileMock = new Mock<IFormFile>();
@@ -780,7 +795,7 @@ public class PurchaseServiceTests
         // Calculated = 0 + 5 + 2 = 7
         // Difference = 13 (exceeds tolerance)
         using var db = CreateDbContext("purchase_empty_items_mismatch_test");
-        IPurchaseService svc = new PurchaseService(db, TemporaryDocumentStorage());
+        IPurchaseService svc = CreateService(db, TemporaryDocumentStorage());
 
         var content = new MemoryStream(new byte[] { 1 });
         var fileMock = new Mock<IFormFile>();
@@ -811,7 +826,7 @@ public class PurchaseServiceTests
         // Empty items, no delivery/package, null total
         // Should not compute validation
         using var db = CreateDbContext("purchase_empty_items_null_total_test");
-        IPurchaseService svc = new PurchaseService(db, TemporaryDocumentStorage());
+        IPurchaseService svc = CreateService(db, TemporaryDocumentStorage());
 
         var content = new MemoryStream(new byte[] { 1 });
         var fileMock = new Mock<IFormFile>();

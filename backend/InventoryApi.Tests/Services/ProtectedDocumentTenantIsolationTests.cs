@@ -1,11 +1,13 @@
 using Inventory.Application.Documents;
 using Inventory.Application.Expenses;
+using Inventory.Application.Purchases;
 using Inventory.Infrastructure.Documents;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Controllers;
 using InventoryApi.Data;
 using InventoryApi.Models;
 using InventoryApi.Services;
+using InventoryApi.Services.Interfaces;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.Sqlite;
@@ -75,7 +77,7 @@ public sealed class ProtectedDocumentTenantIsolationTests : IDisposable
         var (purchaseId, storedFileName) = await UploadPurchaseDocumentAsync(BusinessB);
 
         await using var db = TestAppDbContext.For(_options, BusinessB);
-        var (content, contentType, fileName) = await new PurchaseService(db, Documents()).GetFile(purchaseId);
+        var (content, contentType, fileName) = await CreatePurchaseService(db, Documents()).GetFile(purchaseId);
 
         Assert.Equal(new byte[] { 1, 2, 3 }, content);
         Assert.Equal("image/jpeg", contentType);
@@ -95,7 +97,7 @@ public sealed class ProtectedDocumentTenantIsolationTests : IDisposable
         var path = PurchaseDocumentPath(storedFileName);
 
         await using var db = TestAppDbContext.For(_options, BusinessA);
-        var (content, contentType, fileName) = await new PurchaseService(db, Documents()).GetFile(purchaseId);
+        var (content, contentType, fileName) = await CreatePurchaseService(db, Documents()).GetFile(purchaseId);
 
         Assert.Null(content);
         Assert.Null(contentType);
@@ -115,7 +117,7 @@ public sealed class ProtectedDocumentTenantIsolationTests : IDisposable
 
         await using (var db = TestAppDbContext.For(_options, BusinessA))
         {
-            Assert.False(await new PurchaseService(db, Documents()).Delete(purchaseId));
+            Assert.False(await CreatePurchaseService(db, Documents()).Delete(purchaseId));
         }
 
         Assert.True(File.Exists(path), "business B's document must survive another business's delete.");
@@ -211,6 +213,19 @@ public sealed class ProtectedDocumentTenantIsolationTests : IDisposable
         WebRootPath = _webRoot,
     });
 
+    private static IPurchaseService CreatePurchaseService(AppDbContext db, IDocumentStorage documents)
+    {
+        var store = new EfPurchaseStore(db, new InventoryCostRebuildService(db));
+        return new InventoryApi.Services.PurchaseService(
+            new ListPurchases(store),
+            new GetPurchase(store),
+            new GetPurchaseFile(store, documents),
+            new UploadPurchase(store, documents),
+            new UpdatePurchase(store),
+            new DeletePurchase(store, documents),
+            new ComputePurchaseTotalValidation());
+    }
+
     private OperatingExpensesController ExpensesController(AppDbContext db)
     {
         var store = new EfOperatingExpenseStore(db);
@@ -243,7 +258,7 @@ public sealed class ProtectedDocumentTenantIsolationTests : IDisposable
     private async Task<(int PurchaseId, string StoredFileName)> UploadPurchaseDocumentAsync(int businessId)
     {
         await using var db = TestAppDbContext.For(_options, businessId);
-        var purchase = await new PurchaseService(db, Documents())
+        var purchase = await CreatePurchaseService(db, Documents())
             .Upload(CreateFile("receipt.jpg"), "Purchase", null, null, null, null, null, null);
 
         Assert.NotNull(purchase);

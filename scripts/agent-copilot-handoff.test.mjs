@@ -199,6 +199,32 @@ describe('Claude architecture check finalizer', () => {
     assert.ok(!blocked(calls));
   });
 
+  const sonarIssue = '- `backend/Inventory.Domain/Purchases/PurchaseCostTransitionPolicy.cs:41` [csharpsquid:S1172] (CODE_SMELL, MAJOR): Remove this unused method parameter.';
+
+  it('asks Copilot to fix SonarCloud issues even when Claude finds no architecture problem', () => {
+    const { status, stderr, calls } = run(finalizeShell, { state: fixture(), env: env({ SONAR_STATUS: 'analysed', SONAR_COUNT: '1', SONAR_ISSUES: sonarIssue }) });
+    assert.equal(status, 0, stderr);
+    const request = calls.find((c) => c.kind === 'pr-comment');
+    assert.equal(request.token, 'owner-copilot-token');
+    assert.match(request.body, /^@copilot /);
+    assert.match(request.body, /PurchaseCostTransitionPolicy\.cs:41/);
+    assert.match(request.body, /Never silence a SonarCloud issue/);
+    assert.equal(dispatches(calls, 'validate.yml').length, 0, 'the unfixed head is not validated');
+    assert.ok(calls.some((c) => c.kind === 'pr-edit' && c.args.includes('agent-architecture-fix')));
+    assert.ok(!calls.some((c) => c.args?.includes('agent-review')));
+    assert.ok(!blocked(calls));
+  });
+
+  it('treats an unavailable or malformed SonarCloud read as no issues and still validates a clean head', () => {
+    for (const sonar of [{ SONAR_STATUS: 'unavailable', SONAR_COUNT: '0', SONAR_ISSUES: 'timeout' }, { SONAR_COUNT: '' }, { SONAR_COUNT: 'many' }]) {
+      const { status, stderr, calls } = run(finalizeShell, { state: fixture(), env: env(sonar) });
+      assert.equal(status, 0, stderr);
+      assert.equal(dispatches(calls, 'validate.yml').length, 1);
+      assert.ok(!calls.some((c) => c.kind === 'pr-comment' && /^@copilot/.test(c.body ?? '')));
+      assert.ok(!blocked(calls));
+    }
+  });
+
   for (const [name, overrides] of [
     ['a rejected target check', { CONTEXT_JOB_RESULT: 'failure', CHECK_JOB_RESULT: 'skipped', CHECK_OUTPUT: '' }],
     ['a failed Claude check', { CHECK_JOB_RESULT: 'failure', CHECK_OUTPUT: '' }],

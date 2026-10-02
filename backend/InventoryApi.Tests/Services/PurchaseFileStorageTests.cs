@@ -1,4 +1,6 @@
+using Inventory.Application.Purchases;
 using Inventory.Infrastructure.Documents;
+using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using InventoryApi.Models;
 using InventoryApi.Services;
@@ -79,12 +81,23 @@ public sealed class PurchaseFileStorageTests : IDisposable
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options);
 
-    private IPurchaseService CreateService(AppDbContext db) =>
-        new PurchaseService(db, new FileSystemDocumentStorage(new FileSystemDocumentStorageOptions
+    private IPurchaseService CreateService(AppDbContext db)
+    {
+        var documents = new FileSystemDocumentStorage(new FileSystemDocumentStorageOptions
         {
             ContentRootPath = _contentRoot,
             WebRootPath = _webRoot,
-        }));
+        });
+        var store = new EfPurchaseStore(db, new InventoryCostRebuildService(db));
+        return new PurchaseService(
+            new ListPurchases(store),
+            new GetPurchase(store),
+            new GetPurchaseFile(store, documents),
+            new UploadPurchase(store, documents),
+            new UpdatePurchase(store),
+            new DeletePurchase(store, documents),
+            new ComputePurchaseTotalValidation());
+    }
 
     private static IFormFile CreateFile(string fileName)
     {
