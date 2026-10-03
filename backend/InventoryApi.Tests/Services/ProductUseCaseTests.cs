@@ -1,14 +1,10 @@
-using Inventory.Domain.Exceptions;
-using InventoryApi.Adapters.Persistence;
-using InventoryApi.Data;
-using InventoryApi.DTOs;
 using Inventory.Application.Nayax;
 using Inventory.Application.Products;
 using Inventory.Application.Reorder;
-using Inventory.Application.SupplierOrders;
+using InventoryApi.Adapters.Mapping;
+using InventoryApi.Adapters.Persistence;
+using InventoryApi.Data;
 using InventoryApi.Models;
-using InventoryApi.Services;
-using InventoryApi.Services.Interfaces;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Moq;
@@ -16,7 +12,16 @@ using Xunit;
 
 namespace InventoryApi.Tests.Services;
 
-public class ProductServiceTests
+/// <summary>
+/// The former <c>ProductServiceTests</c>, retargeted onto the
+/// <see cref="Inventory.Application.Products"/> use cases over the real EF adapters when issue #303
+/// deleted the <c>ProductService</c> delegator the product endpoints used to call. The behaviour
+/// covered is unchanged - the explicitly loaded stock-adjustment history, the create/update/delete
+/// round trip, the restock-settings validation, the reorder-alert selection and ranking with
+/// outstanding supplier orders, and the restock-to migration backfill - and the response-shape test
+/// now asserts the API-owned <c>ProductResponse</c> the endpoints serialise instead of the entity.
+/// </summary>
+public class ProductUseCaseTests
 {
     private static AppDbContext CreateDbContext(string dbName)
     {
@@ -32,7 +37,7 @@ public class ProductServiceTests
     /// product's <c>StockAdjustments</c> after this context is disposed still sees it.
     /// </summary>
     [Fact]
-    public async Task GetAll_IncludesStockAdjustmentHistoryWithoutLazyLoading()
+    public async Task ListProducts_IncludesStockAdjustmentHistoryWithoutLazyLoading()
     {
         await using var connection = new SqliteConnection("Data Source=:memory:");
         await connection.OpenAsync();
@@ -55,22 +60,24 @@ public class ProductServiceTests
         }
 
         await using var db = TestAppDbContext.Unrestricted(options);
-        var service = CreateService(db);
+        var useCases = CreateUseCases(db);
 
-        var products = await service.GetAll(null, null, null, null);
+        var products = await useCases.List.Handle(ProductCatalogFilter.None, null, CancellationToken.None);
 
         var product = Assert.Single(products);
         Assert.Single(product.StockAdjustments);
     }
 
     /// <summary>
-    /// Issue #240 moved the product reads behind Application use cases and a read port, with the API
-    /// mapping the result back to the unchanged <see cref="Product"/> response. This pins that the whole
-    /// response shape survives the round trip: the scalar catalogue/costing fields, the nested category
-    /// and supplier, the stock-adjustment history, and the derived reorder values.
+    /// Issue #240 moved the product reads behind Application use cases and a read port; issue #303
+    /// replaced the entity-shaped response with the API-owned <c>ProductResponse</c>. This pins that
+    /// the whole response shape survives the round trip: the scalar catalogue/costing fields, the
+    /// nested category and supplier, the stock-adjustment history, and the derived reorder values.
+    /// The serialised bytes themselves are pinned by
+    /// <c>InventoryApi.Tests.DTOs.ProductJsonContractTests</c>.
     /// </summary>
     [Fact]
-    public async Task Get_ReturnsTheCompleteProductResponseShape_IncludingNestedDetailAndDerivedValues()
+    public async Task GetProduct_MapsTheCompleteProductResponseShape_IncludingNestedDetailAndDerivedValues()
     {
         await using var connection = new SqliteConnection("Data Source=:memory:");
         await connection.OpenAsync();
@@ -125,9 +132,10 @@ public class ProductServiceTests
 
         await using var db = TestAppDbContext.Unrestricted(options);
 
-        var product = await CreateService(db).Get(1);
+        var record = await CreateUseCases(db).Get.Handle(1, CancellationToken.None);
 
-        Assert.NotNull(product);
+        Assert.NotNull(record);
+        var product = ProductRecordResponseMapper.ToResponse(record);
         Assert.Equal("Coke", product.Name);
         Assert.Equal("SKU-1", product.Sku);
         Assert.Equal("A can", product.Description);
@@ -155,8 +163,8 @@ public class ProductServiceTests
         Assert.Equal(StockAdjustmentSource.Nayax, adjustment.Source);
         Assert.Equal("Initial", adjustment.Notes);
 
-        // Derived reorder values: GetAll/Get resolve no live machine need or outstanding orders, so
-        // these follow from the persisted fields alone, exactly as before the migration.
+        // Derived reorder values: the plain listing and single read resolve no live machine need or
+        // outstanding orders, so these follow from the persisted fields alone, exactly as before.
         Assert.Equal(0, product.MachineReplenishmentNeed);
         Assert.Equal(0m, product.OnOrderQuantity);
         Assert.Equal(4m, product.ProjectedStockForReorder);
@@ -171,11 +179,14 @@ public class ProductServiceTests
         using var db = CreateDbContext("prod_test");
         var calculateReorderNeeds = new CalculateReorderNeeds(
             new Mock<INayaxLynxClient>().Object, new EfOutstandingSupplierOrderQuantityStore(db));
-        IProductService svc = CreateService(db, calculateReorderNeeds);
+        var useCases = CreateUseCases(db, calculateReorderNeeds);
 
-        var dto = new ProductCreateDto("p1", null, null, 10m, 5, 1, 10, "unit", null, null, true);
-        var product = await svc.Create(new ProductCreateDto("p1", null, null, 10m, 5, 1, 10, "unit", null, null, true));
+        var created = await useCases.Create.Handle(
+            new ProductCreateFields("p1", null, null, 10m, 5, 1, 10, "unit", null, null, true, null),
+            CancellationToken.None);
 
+        Assert.True(created.IsValid);
+        var product = await useCases.Get.Handle(created.ProductId!.Value, CancellationToken.None);
         Assert.NotNull(product);
         Assert.Equal("p1", product.Name);
         Assert.Equal(10, product.RestockTo);
@@ -184,12 +195,12 @@ public class ProductServiceTests
         var adjustments = await db.StockAdjustments.ToListAsync();
         Assert.Single(adjustments);
 
-        var updateDto = new ProductUpdateDto("p1-up", null, null, 12m, 1, 12, "unit", null, null, true);
-        var ok = await svc.Update(product.Id, updateDto);
-        Assert.True(ok);
+        var updated = await useCases.Update.Handle(
+            product.Id, new ProductUpdateFields(null, null, 1, 12, "unit", null, true), CancellationToken.None);
+        Assert.Equal(UpdateProductOutcome.Success, updated.Outcome);
         Assert.Equal(12, (await db.Products.FindAsync(product.Id))!.RestockTo);
 
-        var deleted = await svc.Delete(product.Id);
+        var deleted = await useCases.Delete.Handle(product.Id, CancellationToken.None);
         Assert.True(deleted);
     }
 
@@ -276,7 +287,7 @@ public class ProductServiceTests
         db.SupplierOrders.Add(new SupplierOrder { SupplierId = 1, Lines = { new SupplierOrderLine { ProductId = 1, QuantityOrdered = 12 } } });
         await db.SaveChangesAsync();
 
-        var alerts = await CreateService(db).LowStock();
+        var alerts = await LowStock(db);
 
         Assert.Empty(alerts);
     }
@@ -289,7 +300,7 @@ public class ProductServiceTests
         db.SupplierOrders.Add(new SupplierOrder { SupplierId = 1, Lines = { new SupplierOrderLine { ProductId = 1, QuantityOrdered = 8 } } });
         await db.SaveChangesAsync();
 
-        var product = Assert.Single(await CreateService(db).LowStock());
+        var product = Assert.Single(await LowStock(db));
 
         Assert.Equal(8m, product.OnOrderQuantity);
         Assert.Equal(7m, product.NeedToOrder);
@@ -323,9 +334,9 @@ public class ProductServiceTests
         nayaxMock.Setup(x => x.GetMachineProductsAsync(2, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct> { new() { NayaxProductID = 1, MissingStockByMDB = 4 } });
         var calculateReorderNeeds = new CalculateReorderNeeds(nayaxMock.Object, new EfOutstandingSupplierOrderQuantityStore(db));
-        var service = CreateService(db, calculateReorderNeeds);
+        var useCases = CreateUseCases(db, calculateReorderNeeds);
 
-        var alerts = (await service.LowStock()).ToList();
+        var alerts = await useCases.LowStock.Handle(ProductCatalogFilter.None, CancellationToken.None);
 
         var coke = Assert.Single(alerts);
         Assert.Equal("Coke", coke.Name);
@@ -336,14 +347,23 @@ public class ProductServiceTests
     public async Task Create_RejectsInvalidRestockSettings()
     {
         using var db = CreateDbContext(Guid.NewGuid().ToString());
-        var service = CreateService(db);
+        var create = CreateUseCases(db).Create;
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => service.Create(
-            new ProductCreateDto("Coke", null, null, 1m, 0, 10, 9, "unit", null, null, true)));
-        await Assert.ThrowsAsync<InvalidOperationException>(() => service.Create(
-            new ProductCreateDto("Coke", null, null, 1m, 0, -1, 0, "unit", null, null, true)));
-        await Assert.ThrowsAsync<InvalidOperationException>(() => service.Create(
-            new ProductCreateDto("Coke", null, null, 1m, 0, 0, -1, "unit", null, null, true)));
+        foreach (var fields in new[]
+        {
+            new ProductCreateFields("Coke", null, null, 1m, 0, 10, 9, "unit", null, null, true, null),
+            new ProductCreateFields("Coke", null, null, 1m, 0, -1, 0, "unit", null, null, true, null),
+            new ProductCreateFields("Coke", null, null, 1m, 0, 0, -1, "unit", null, null, true, null),
+        })
+        {
+            var result = await create.Handle(fields, CancellationToken.None);
+
+            Assert.False(result.IsValid);
+            Assert.False(string.IsNullOrWhiteSpace(result.ValidationError));
+            Assert.Null(result.ProductId);
+        }
+
+        Assert.Empty(await db.Products.ToListAsync());
     }
 
     [Fact]
@@ -353,8 +373,11 @@ public class ProductServiceTests
         db.Products.Add(new Product { Id = 1, Name = "Coke", LowStockThreshold = 5, RestockTo = 10 });
         await db.SaveChangesAsync();
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => CreateService(db).Update(1,
-            new ProductUpdateDto("Coke", null, null, 1m, 10, 9, "unit", null, null, true)));
+        var result = await CreateUseCases(db).Update.Handle(
+            1, new ProductUpdateFields(null, null, 10, 9, "unit", null, true), CancellationToken.None);
+
+        Assert.Equal(UpdateProductOutcome.Invalid, result.Outcome);
+        Assert.Equal("Restock To must be greater than or equal to the Low Stock Threshold.", result.ValidationError);
     }
 
     [Fact]
@@ -367,7 +390,7 @@ public class ProductServiceTests
             new Product { Id = 3, Name = "Middle", QuantityInStock = 10, LowStockThreshold = 20, RestockTo = 30 });
         await db.SaveChangesAsync();
 
-        var alerts = (await CreateService(db).LowStock()).ToList();
+        var alerts = await LowStock(db);
 
         Assert.Equal(new[] { "Alpha", "Zulu", "Middle" }, alerts.Select(product => product.Name));
     }
@@ -380,8 +403,7 @@ public class ProductServiceTests
         db.SupplierOrders.Add(new SupplierOrder { SupplierId = 1, Lines = { new SupplierOrderLine { ProductId = 1, QuantityOrdered = 12 } } });
         await db.SaveChangesAsync();
 
-        var alerts = await CreateService(db).LowStock();
-        var product = Assert.Single(alerts);
+        var product = Assert.Single(await LowStock(db));
         Assert.Equal(12m, product.OnOrderQuantity);
         Assert.Equal(4m, product.NeedToOrder);
     }
@@ -394,7 +416,7 @@ public class ProductServiceTests
         db.SupplierOrders.Add(new SupplierOrder { SupplierId = 1, Lines = { new SupplierOrderLine { ProductId = 1, QuantityOrdered = 12 } } });
         await db.SaveChangesAsync();
 
-        Assert.Empty(await CreateService(db).LowStock());
+        Assert.Empty(await LowStock(db));
     }
 
     [Fact]
@@ -405,7 +427,7 @@ public class ProductServiceTests
         db.SupplierOrders.Add(new SupplierOrder { SupplierId = 1, Status = SupplierOrderStatus.PartiallyReceived, Lines = { new SupplierOrderLine { ProductId = 1, QuantityOrdered = 12, QuantityReceived = 8 } } });
         await db.SaveChangesAsync();
 
-        var product = Assert.Single(await CreateService(db).LowStock());
+        var product = Assert.Single(await LowStock(db));
         Assert.Equal(4m, product.OnOrderQuantity);
         Assert.Equal(12m, product.NeedToOrder);
     }
@@ -418,52 +440,29 @@ public class ProductServiceTests
         db.SupplierOrders.Add(new SupplierOrder { SupplierId = 1, Status = SupplierOrderStatus.Cancelled, Lines = { new SupplierOrderLine { ProductId = 1, QuantityOrdered = 12 } } });
         await db.SaveChangesAsync();
 
-        var product = Assert.Single(await CreateService(db).LowStock());
+        var product = Assert.Single(await LowStock(db));
         Assert.Equal(0m, product.OnOrderQuantity);
         Assert.Equal(16m, product.NeedToOrder);
     }
 
-    [Fact]
-    public async Task SupplierOrder_Create_RejectsFractionalQuantities()
-    {
-        using var db = CreateDbContext(Guid.NewGuid().ToString());
-        db.Suppliers.Add(new Supplier { Id = 1, Name = "Supplier" });
-        db.Products.Add(new Product { Id = 1, Name = "Coke" });
-        await db.SaveChangesAsync();
+    private static Task<IReadOnlyList<ProductRecord>> LowStock(AppDbContext db) =>
+        CreateUseCases(db).LowStock.Handle(ProductCatalogFilter.None, CancellationToken.None);
 
-        var service = CreateSupplierOrderService(db);
-        // Issue #59: the rule and its message are unchanged; only the exception type moved to the
-        // narrowly typed DomainValidationException the central handler may publish as a 400.
-        await Assert.ThrowsAsync<DomainValidationException>(() => service.Create(
-            new SupplierOrderCreateDto(1, DateTime.UtcNow, null, null, null,
-                new[] { new SupplierOrderLineCreateDto(1, 1.5m) })));
-    }
-
-    private static SupplierOrderService CreateSupplierOrderService(AppDbContext db)
-    {
-        var store = new EfSupplierOrderStore(db);
-        return new SupplierOrderService(
-            new ListActiveSupplierOrders(store),
-            new GetSupplierOrder(store),
-            new CreateSupplierOrder(store),
-            new CancelSupplierOrder(store));
-    }
-
-    private static ProductService CreateService(AppDbContext db)
+    private static ProductUseCases CreateUseCases(AppDbContext db)
     {
         var nayaxMock = new Mock<INayaxLynxClient>();
-        nayaxMock.Setup(client => client.GetMachinesAsync(It.IsAny<System.Threading.CancellationToken>()))
+        nayaxMock.Setup(client => client.GetMachinesAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachine>());
         var calculateReorderNeeds = new CalculateReorderNeeds(nayaxMock.Object, new EfOutstandingSupplierOrderQuantityStore(db));
-        return CreateService(db, calculateReorderNeeds);
+        return CreateUseCases(db, calculateReorderNeeds);
     }
 
-    private static ProductService CreateService(AppDbContext db, CalculateReorderNeeds calculateReorderNeeds)
+    private static ProductUseCases CreateUseCases(AppDbContext db, CalculateReorderNeeds calculateReorderNeeds)
     {
         var store = new EfProductStore(db, TestCostingUseCases.Rebuild(db));
         var catalog = new EfProductCatalogStore(db);
         var listLowStockProducts = new ListLowStockProducts(catalog, calculateReorderNeeds);
-        return new ProductService(
+        return new ProductUseCases(
             new ListProducts(catalog, listLowStockProducts),
             new GetProduct(catalog),
             listLowStockProducts,
@@ -471,4 +470,16 @@ public class ProductServiceTests
             new UpdateProduct(store),
             new DeleteProduct(store));
     }
+
+    /// <summary>
+    /// The product use cases the controller is composed from, bundled only so these tests can build
+    /// them in one step. It holds no behaviour of its own.
+    /// </summary>
+    private sealed record ProductUseCases(
+        ListProducts List,
+        GetProduct Get,
+        ListLowStockProducts LowStock,
+        CreateProduct Create,
+        UpdateProduct Update,
+        DeleteProduct Delete);
 }
