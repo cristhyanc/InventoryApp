@@ -106,7 +106,8 @@ jobs:
           LIVE_ISSUE="$live_issue" node --input-type=module <<'JS'
           import { createHash } from 'node:crypto';
           const issue = JSON.parse(process.env.LIVE_ISSUE);
-          const ready = issue.labels.map(x => x.name).filter(x => /^agent-ready-(claude|copilot)(-low|-high)?$/.test(x));
+          // Same pattern as READINESS_LABEL_PATTERN in scripts/select-implementation-model.mjs (contract-checked).
+          const ready = issue.labels.map(x => x.name).filter(x => /^agent-ready-(?:(?:claude|copilot)(?:-low|-high)?|full-(?:claude|copilot))$/.test(x));
           const active = issue.labels.some(x => ['agent-working','agent-architecture-fix','agent-review','agent-blocked'].includes(x.name));
           const fingerprint = createHash('sha256').update(JSON.stringify({ title: issue.title, body: issue.body })).digest('hex');
           if (issue.state !== 'OPEN' || active || ready.length !== 1 || ready[0] !== process.env.READY_LABEL || fingerprint !== process.env.TASK_FINGERPRINT) throw new Error('Task changed after model selection; resolve labels/scope and re-apply readiness.');
