@@ -17,13 +17,15 @@ const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf
 function stepShell(workflow, name) {
   const step = workflow.split(`      - name: ${name}\n`)[1]?.split('\n      - name: ')[0];
   assert.ok(step, `missing trusted step: ${name}`);
-  const run = step.split('        run: |\n')[1];
+  // The last step of a job ends where the next job begins.
+  const run = step.split('        run: |\n')[1]?.split(/\n\n {2}[a-z]/)[0];
   assert.ok(run, `step has no run block: ${name}`);
   return run.split('\n').map((line) => line.slice(10)).join('\n');
 }
 
 const dispatchShell = stepShell(read('.github/workflows/agent-implement.yml'), 'Verify pull request and dispatch trusted architecture workflow');
 const finalizeShell = stepShell(read('.github/workflows/agent-architecture.yml'), 'Record architecture outcome and dispatch exact-SHA validation');
+const contextShell = stepShell(read('.github/workflows/agent-architecture.yml'), 'Verify exact agent pull request');
 
 const REPO = 'owner/InventoryApp';
 const BOT = 'inventoryapp-agent-automation[bot]';
@@ -95,7 +97,9 @@ function run(shell, { state, env = {} }) {
     chmodSync(join(bin, 'gh'), 0o755);
     const statePath = join(root, 'state.json');
     const logPath = join(root, 'calls.jsonl');
+    const outputPath = join(root, 'github-output');
     writeFileSync(statePath, JSON.stringify(state));
+    writeFileSync(outputPath, '');
     const result = spawnSync('bash', ['-c', shell], {
       encoding: 'utf8',
       env: {
@@ -104,6 +108,7 @@ function run(shell, { state, env = {} }) {
         AGENT_MODE_GH_PATH: join(bin, 'gh'),
         FAKE_GH_STATE: statePath,
         FAKE_GH_LOG: logPath,
+        GITHUB_OUTPUT: outputPath,
         GITHUB_REPOSITORY: REPO,
         RUNNER_TEMP: root,
         GITHUB_WORKFLOW_SHA: 'a'.repeat(40),
@@ -119,7 +124,7 @@ function run(shell, { state, env = {} }) {
     const calls = existsSync(logPath)
       ? readFileSync(logPath, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line))
       : [];
-    return { status: result.status, stderr: result.stderr, calls };
+    return { status: result.status, stderr: result.stderr, calls, outputs: readFileSync(outputPath, 'utf8') };
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -163,9 +168,15 @@ describe('provider mode at the architecture handoff', () => {
     assert.equal(dispatches(calls, 'agent-architecture.yml').length, 1);
   });
 
+  it('dispatches when the issue was claimed for the full-claude fallback', () => {
+    const { status, stderr, calls } = run(dispatchShell, { state: { ...fixture(), events: claimEvents('agent-ready-full-claude') }, env });
+    assert.equal(status, 0, stderr);
+    assert.equal(dispatches(calls, 'agent-architecture.yml').length, 1);
+  });
+
   for (const [name, events] of [
     ['last claimed for Copilot', claimEvents('agent-ready-copilot')],
-    ['claimed for a disabled full-provider route', claimEvents('agent-ready-full-claude')],
+    ['last claimed for the full-copilot fallback', claimEvents('agent-ready-full-copilot')],
     ['never claimed', []],
     ['claimed again after this pull request was opened', claimEvents('agent-ready-claude', '2026-10-03T03:00:00Z')],
   ]) {
@@ -174,6 +185,28 @@ describe('provider mode at the architecture handoff', () => {
       assert.notEqual(status, 0);
       assert.equal(dispatches(calls, 'agent-architecture.yml').length, 0);
       assert.ok(blocked(calls));
+    });
+  }
+});
+
+describe('architecture checker selected by the verified route', () => {
+  // Four-mode matrix on the Claude-implementer side: only the Claude routes reach this workflow, and
+  // each names exactly one checker; the Copilot routes fail closed and name none.
+  for (const [label, checker] of [['agent-ready-claude', 'copilot'], ['agent-ready-claude-high', 'copilot'], ['agent-ready-full-claude', 'claude']]) {
+    it(`${label} selects the ${checker} architecture check`, () => {
+      const { status, stderr, outputs } = run(contextShell, { state: { ...fixture(), events: claimEvents(label) }, env: { HEAD_SHA: SHA } });
+      assert.equal(status, 0, stderr);
+      assert.match(outputs, new RegExp(`^checker=${checker}$`, 'm'));
+      assert.match(outputs, new RegExp(`^agent_mode=${label === 'agent-ready-full-claude' ? 'full-claude' : 'cross-claude'}$`, 'm'));
+      if (checker === 'claude') assert.match(outputs, /^checker_name=.*same-provider check, not an independent one/m);
+      else assert.match(outputs, /^checker_name=GitHub Copilot, a different agent,$/m);
+    });
+  }
+  for (const label of ['agent-ready-copilot', 'agent-ready-full-copilot']) {
+    it(`${label} names no checker and fails closed`, () => {
+      const { status, outputs } = run(contextShell, { state: { ...fixture(), events: claimEvents(label) }, env: { HEAD_SHA: SHA } });
+      assert.notEqual(status, 0);
+      assert.doesNotMatch(outputs, /^checker=/m);
     });
   }
 });
@@ -200,15 +233,29 @@ describe('architecture finalizer', () => {
   // Copilot's read-only check reported findings and Claude's fix pass produced the final head.
   const success = {
     CONTEXT_JOB_RESULT: 'success',
-    COPILOT_CHECK_RESULT: 'success',
-    COPILOT_VERDICT: 'findings',
-    COPILOT_FINDINGS: 'backend/Api/ProductsController.cs:12 calls the repository directly.\nARCHITECTURE: FINDINGS',
+    CHECKER: 'copilot',
+    CHECK_JOB_RESULT: 'success',
+    CHECK_VERDICT: 'findings',
+    CHECK_FINDINGS: 'backend/Api/ProductsController.cs:12 calls the repository directly.\nARCHITECTURE: FINDINGS',
     ARCHITECTURE_JOB_RESULT: 'success',
     EXPECTED_START_SHA: SHA,
     FIX_SHA: SHA,
   };
   // Copilot reported a clean architecture, so Claude's fix pass was skipped.
-  const clean = { ...success, COPILOT_VERDICT: 'clean', COPILOT_FINDINGS: 'ARCHITECTURE: CLEAN', ARCHITECTURE_JOB_RESULT: 'skipped', FIX_SHA: '' };
+  const clean = { ...success, CHECK_VERDICT: 'clean', CHECK_FINDINGS: 'ARCHITECTURE: CLEAN', ARCHITECTURE_JOB_RESULT: 'skipped', FIX_SHA: '' };
+  // Full-claude: the separate read-only Claude check reported findings; the record says same-provider.
+  const sameProvider = { ...success, CHECKER: 'claude', CHECK_FINDINGS: '- `backend/Api/ProductsController.cs:12` (Use cases): calls the repository directly.' };
+
+  it('records a same-provider Claude check as not independent and dispatches validation', () => {
+    for (const env of [sameProvider, { ...sameProvider, CHECK_VERDICT: 'clean', CHECK_FINDINGS: '', ARCHITECTURE_JOB_RESULT: 'skipped', FIX_SHA: '' }]) {
+      const { status, stderr, calls } = run(finalizeShell, { state: fixture(), env });
+      assert.equal(status, 0, stderr);
+      assert.equal(dispatches(calls, 'validate.yml').length, 1);
+      const comment = calls.find((c) => c.kind === 'pr-comment');
+      assert.ok(comment);
+      assert.ok(!blocked(calls));
+    }
+  });
 
   it('labels for review and dispatches exact-SHA validation after Claude fixes Copilot findings', () => {
     const { status, calls } = run(finalizeShell, { state: fixture(), env: success });
@@ -255,9 +302,12 @@ describe('architecture finalizer', () => {
   });
 
   for (const [name, env] of [
-    ['a rejected target check', { ...success, CONTEXT_JOB_RESULT: 'failure', COPILOT_CHECK_RESULT: 'skipped', ARCHITECTURE_JOB_RESULT: 'skipped', FIX_SHA: '' }],
-    ['a failed Copilot check', { ...success, COPILOT_CHECK_RESULT: 'failure', COPILOT_VERDICT: '', ARCHITECTURE_JOB_RESULT: 'skipped', FIX_SHA: '' }],
-    ['an unknown Copilot verdict', { ...success, COPILOT_VERDICT: 'maybe' }],
+    ['a rejected target check', { ...success, CONTEXT_JOB_RESULT: 'failure', CHECKER: '', CHECK_JOB_RESULT: 'skipped', ARCHITECTURE_JOB_RESULT: 'skipped', FIX_SHA: '' }],
+    ['a failed Copilot check', { ...success, CHECK_JOB_RESULT: 'failure', CHECK_VERDICT: '', ARCHITECTURE_JOB_RESULT: 'skipped', FIX_SHA: '' }],
+    ['a failed same-provider Claude check (no fallback to Copilot)', { ...sameProvider, CHECK_JOB_RESULT: 'failure', CHECK_VERDICT: '', ARCHITECTURE_JOB_RESULT: 'skipped', FIX_SHA: '' }],
+    ['a skipped checker for the route', { ...sameProvider, CHECK_JOB_RESULT: 'skipped', CHECK_VERDICT: '', ARCHITECTURE_JOB_RESULT: 'skipped', FIX_SHA: '' }],
+    ['an unknown checker', { ...success, CHECKER: 'gemini' }],
+    ['an unknown Copilot verdict', { ...success, CHECK_VERDICT: 'maybe' }],
     ['a failed Claude fix pass', { ...success, ARCHITECTURE_JOB_RESULT: 'failure', FIX_SHA: '' }],
     ['a clean verdict that still ran the fix pass', { ...clean, ARCHITECTURE_JOB_RESULT: 'success', FIX_SHA: NEWER_SHA }],
     ['SonarCloud issues whose fix pass failed', { ...clean, SONAR_COUNT: '1', ARCHITECTURE_JOB_RESULT: 'failure' }],

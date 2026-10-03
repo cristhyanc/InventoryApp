@@ -32,9 +32,10 @@ export const ROUTES = Object.freeze({
   'full-claude': Object.freeze({ implementer: 'claude', reviewer: 'claude', sameProviderReview: true }),
   'full-copilot': Object.freeze({ implementer: 'copilot', reviewer: 'copilot', sameProviderReview: true }),
 });
-// Full-provider labels are recognised (for exclusivity) but must not start work until #340
-// connects same-provider architecture review, repair and final review.
-export const FULL_PROVIDER_EXECUTION_ENABLED = false;
+// Kill switch for the single-provider fallbacks. #340 connected their same-provider architecture
+// check, repair and final review, so the full labels may start work. Setting this to false makes
+// every full-provider claim fail closed again at every boundary.
+export const FULL_PROVIDER_EXECUTION_ENABLED = true;
 
 // The only actor whose label changes count as a claim: deterministic workflow steps using GITHUB_TOKEN.
 export const CLAIM_ACTOR = 'github-actions[bot]';

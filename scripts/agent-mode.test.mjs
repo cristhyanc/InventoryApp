@@ -2,7 +2,7 @@
 // Run with: node --test scripts/agent-mode.test.mjs (also imported by validate-agent-workflows.test.mjs).
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { resolveMode, implementerForBranch, verifyPullRequest, ROUTES } from './agent-mode.mjs';
+import { resolveMode, implementerForBranch, verifyPullRequest, ROUTES, FULL_PROVIDER_EXECUTION_ENABLED } from './agent-mode.mjs';
 import { claimEvents } from './agent-mode.fixtures.mjs';
 
 const ISSUE = 245;
@@ -29,9 +29,14 @@ test('all four routes resolve from the claim in the label history, with the revi
   }
 });
 
-test('full-provider claims fail closed while the routes are not enabled', () => {
-  assert.throws(() => resolve(CLAUDE_BRANCH, claim('agent-ready-full-claude')), /not enabled yet/);
-  assert.throws(() => resolve(COPILOT_BRANCH, claim('agent-ready-full-copilot')), /not enabled yet/);
+test('full-provider routes are enabled by default and fail closed when the kill switch is off', () => {
+  assert.equal(FULL_PROVIDER_EXECUTION_ENABLED, true);
+  assert.equal(resolve(CLAUDE_BRANCH, claim('agent-ready-full-claude')).mode, 'full-claude');
+  assert.equal(resolve(COPILOT_BRANCH, claim('agent-ready-full-copilot')).mode, 'full-copilot');
+  assert.throws(() => resolve(CLAUDE_BRANCH, claim('agent-ready-full-claude'), { fullProviderEnabled: false }), /not enabled yet/);
+  assert.throws(() => resolve(COPILOT_BRANCH, claim('agent-ready-full-copilot'), { fullProviderEnabled: false }), /not enabled yet/);
+  // The kill switch never affects the cross routes.
+  assert.equal(resolve(CLAUDE_BRANCH, claim('agent-ready-claude'), { fullProviderEnabled: false }).mode, 'cross-claude');
 });
 
 test('a task with no verifiable claim fails closed instead of becoming a cross-review task', () => {

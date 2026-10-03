@@ -1,9 +1,12 @@
 name: Agent implementation
 
-# Implementation agent (Claude Code) for issues a human has marked `agent-ready-claude`.
+# Implementation agent (Claude Code) for issues a human has marked `agent-ready-claude` (the default
+# Claude-primary route: Copilot checks the architecture and does the final review) or
+# `agent-ready-full-claude` (single-provider fallback: separate read-only Claude invocations check and
+# review instead; see docs/automation.md "Single-provider fallback routes").
 #
 # Authority and lifecycle: AGENTS.md ("Automated task contract") and docs/automation.md.
-# - Starts only when a human applies the `agent-ready-claude` label to an issue.
+# - Starts only when a human applies one of those labels (or a -low/-high tier of `agent-ready-claude`) to an issue.
 # - Works from the latest `develop`, on a feature branch named `agent/issue-<n>-*`.
 # - Runs the complete repository validation and opens a pull request targeting `develop`.
 # - Never merges, deploys, or pushes to `develop`/`main`. Branch protection must also enforce this.
@@ -49,7 +52,7 @@ jobs:
 
   preflight:
     name: Validate issue documentation-impact declaration
-    if: (github.event.label.name == 'agent-ready-claude' || github.event.label.name == 'agent-ready-claude-low' || github.event.label.name == 'agent-ready-claude-high') && github.event.issue.pull_request == null
+    if: (github.event.label.name == 'agent-ready-claude' || github.event.label.name == 'agent-ready-claude-low' || github.event.label.name == 'agent-ready-claude-high' || github.event.label.name == 'agent-ready-full-claude') && github.event.issue.pull_request == null
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -83,9 +86,9 @@ jobs:
           fi
 
   implement:
-    name: Implement agent-ready-claude issue
+    name: Implement issue with Claude
     needs: [preflight, model]
-    if: needs.preflight.result == 'success' && needs.model.result == 'success' && (github.event.label.name == 'agent-ready-claude' || github.event.label.name == 'agent-ready-claude-low' || github.event.label.name == 'agent-ready-claude-high') && github.event.issue.pull_request == null
+    if: needs.preflight.result == 'success' && needs.model.result == 'success' && (github.event.label.name == 'agent-ready-claude' || github.event.label.name == 'agent-ready-claude-low' || github.event.label.name == 'agent-ready-claude-high' || github.event.label.name == 'agent-ready-full-claude') && github.event.issue.pull_request == null
     runs-on: ubuntu-latest
     timeout-minutes: 180
     permissions:
@@ -550,7 +553,7 @@ jobs:
             gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
               --remove-label agent-working --add-label agent-blocked
             gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "$(cat <<EOF
-          Implementation ended without a verified completed pull request targeting develop from an \`agent/issue-$ISSUE_NUMBER-*\` branch (coder: $CLAUDE_OUTCOME; publish: $PUBLISH_OUTCOME). The task is now \`agent-blocked\` and needs a human decision. Read the run log and any agent comment, resolve the blocker, then remove \`agent-blocked\` and re-apply \`agent-ready-claude\` to start again.
+          Implementation ended without a verified completed pull request targeting develop from an \`agent/issue-$ISSUE_NUMBER-*\` branch (coder: $CLAUDE_OUTCOME; publish: $PUBLISH_OUTCOME). The task is now \`agent-blocked\` and needs a human decision. Read the run log and any agent comment, resolve the blocker, then remove \`agent-blocked\` and re-apply \`$READY_LABEL\` to start again.
 
           Run: $RUN_URL
           EOF
