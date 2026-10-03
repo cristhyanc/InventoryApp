@@ -221,7 +221,7 @@ flowchart TD
 - Reconciliation and incomplete-data states are represented explicitly.
 - The frontend has a centralized runtime API configuration, typed services, reusable report-page behavior, and shared toast/confirmation UI.
 - Standalone Angular components keep feature code independent of NgModule structure.
-- Backend CI restores, builds, and tests before a `main` deployment.
+- Every production deployment runs complete repository validation on the exact `main` commit before deploying it (Deploy Production, issue #343).
 - `AppDbContext` no longer enables `UseLazyLoadingProxies()` (issue #52). Every navigation an endpoint serialises or a service reads after materialization is loaded explicitly with `Include`/`ThenInclude` (for example `EfProductCatalogStore`, which serves both the product endpoints and the machine product listing, and `PurchaseService.Update`) or, where the caller may still change the owning foreign key afterwards, with a single explicit `Entry(...).Reference(...).LoadAsync()` once the final value is known (`EfOperatingExpenseStore.UpdateAsync`, formerly `OperatingExpensesController.Update`/`UpdateWithAttachment` before the operating-expenses slice moved persistence into that adapter). What a request loads from the database is visible in its query, not implied by which properties a response happens to touch.
 
 ## Current pressure points
@@ -2201,10 +2201,10 @@ Frontend build flow is:
 3. `ng build` creates `dist/inventory-app` and enforces the production budgets in `angular.json`.
 4. Azure Static Web Apps serves the compiled assets and runtime configuration; the host must provide Angular navigation fallback.
 
-Current production delivery is triggered from `main`:
+`main` holds approved, releasable code; a push or merge to `main` deploys nothing (issue #343):
 
-- `.github/workflows/vm-manager.yml` builds/tests and deploys the API.
-- `.github/workflows/azure-static-web-apps-red-island-0c128c000.yml` builds/deploys the Angular frontend.
+- `.github/workflows/vm-manager.yml` builds and tests the API on every push to `develop` and `main`, without deploying.
+- `.github/workflows/deploy-production.yml` (**Deploy Production**) is the only path to production, and only a human starts it, from `main`, for one exact commit. It validates that commit with `scripts/validate.sh`, runs a migration preflight that lists the EF Core migrations production startup is expected to apply (derived from the repository by comparing the release with the last production release recorded after a successful health check, because the runner cannot read the production SQLite database), builds the API package and the Angular bundle once from that commit, deploys the API, waits for `/health/ready`, records that healthy backend as the next baseline, and only then deploys the prebuilt frontend bundle to Azure Static Web Apps. Backend and frontend therefore always come from the same commit, and a failed backend deployment or health check stops the frontend.
 
 Consequently, automated engineering agents stop at a pull request. Merge and production deployment remain human-controlled. The branch flow, agent authority model, task states, and risk classification for automated changes are defined in [docs/automation.md](automation.md).
 
