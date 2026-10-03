@@ -41,7 +41,7 @@ public class ImportsControllerProductsTests
         var result = await controller.ImportProducts(CancellationToken.None);
 
         var ok = Assert.IsType<OkObjectResult>(result.Result);
-        Assert.Equal(true, ok.Value);
+        Assert.True(Assert.IsType<bool>(ok.Value));
         store.Verify(
             x => x.ApplyAsync(It.IsAny<NayaxProductCatalogImport>(), It.IsAny<CancellationToken>()),
             Times.Once);

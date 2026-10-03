@@ -40,16 +40,15 @@ public sealed class EfNayaxProductCatalogImportStore : INayaxProductCatalogImpor
         var localCategories = await _db.Categories.ToListAsync(cancellationToken);
 
         var newCategories = new List<Category>();
-        foreach (var category in import.Categories)
+        // Only a missing category is created; an existing one keeps its local name.
+        foreach (var category in import.Categories.Where(incoming => localCategories.All(local => local.Id != incoming.Id)))
         {
-            // Only a missing category is created; an existing one keeps its local name.
-            if (localCategories.All(local => local.Id != category.Id))
-                newCategories.Add(new Category
-                {
-                    Id = category.Id,
-                    Name = category.Name,
-                    Description = category.Description,
-                });
+            newCategories.Add(new Category
+            {
+                Id = category.Id,
+                Name = category.Name,
+                Description = category.Description,
+            });
         }
 
         var newProducts = new List<Product>();
