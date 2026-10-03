@@ -2,7 +2,7 @@
 // Run with: node --test scripts/agent-mode.test.mjs (also imported by validate-agent-workflows.test.mjs).
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { buildModeRecord, resolveMode, implementerForBranch, MODE_RECORD_AUTHOR, ROUTES } from './agent-mode.mjs';
+import { buildModeRecord, resolveMode, implementerForBranch, verifyPullRequest, MODE_RECORD_AUTHOR, ROUTES } from './agent-mode.mjs';
 
 const ISSUE = 245;
 const CLAUDE_BRANCH = `agent/issue-${ISSUE}-take-inventory`;
@@ -81,6 +81,13 @@ test('the pull request identity must match the issue and the expected implemente
   assert.throws(() => resolveMode({ issue: ISSUE, headRef: CLAUDE_BRANCH, expectedImplementer: 'copilot', comments: [] }), /belongs to claude/);
   assert.throws(() => resolveMode({ issue: ISSUE, headRef: 'feature/x', expectedImplementer: 'claude', comments: [] }), /not an agent/);
   assert.throws(() => resolveMode({ issue: ISSUE, headRef: CLAUDE_BRANCH, expectedImplementer: 'claude', comments: undefined }), /could not be read/);
+});
+
+test('verify-pr rejects unexpected arguments before calling GitHub', () => {
+  const valid = { repository: 'cristhyanc/InventoryApp', pr: '12', expectedImplementer: 'claude' };
+  for (const bad of [{ pr: '12; rm' }, { pr: '0' }, { repository: 'a/b/c' }, { repository: '--repo=x' }, { expectedImplementer: 'gemini' }]) {
+    assert.throws(() => verifyPullRequest({ ...valid, ...bad }), /valid|must be claude or copilot/, JSON.stringify(bad));
+  }
 });
 
 test('workflow contract requires the mode gate at every boundary and the record before readiness is consumed', async () => {

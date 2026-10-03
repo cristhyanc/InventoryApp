@@ -9,7 +9,6 @@
 // This file is standalone (no imports besides Node built-ins) because jobs that never check out
 // code fetch it from the trusted workflow commit and run it directly.
 import { execFileSync } from 'node:child_process';
-import { appendFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 export const PROVIDERS = Object.freeze(['claude', 'copilot']);
@@ -117,6 +116,8 @@ const gh = (args) => execFileSync('gh', args, { encoding: 'utf8', stdio: ['ignor
 /** Reads the live pull request and its issue's comments, then resolves the mode. */
 export function verifyPullRequest({ repository, pr, expectedImplementer }) {
   if (!/^[1-9]\d*$/.test(String(pr))) throw new Error('A valid pull request number is required.');
+  if (!/^[\w.-]+\/[\w.-]+$/.test(String(repository))) throw new Error('A valid owner/repository is required.');
+  if (!PROVIDERS.includes(expectedImplementer)) throw new Error('The expected implementer must be claude or copilot.');
   const live = JSON.parse(gh(['pr', 'view', String(pr), '--repo', repository, '--json', 'headRefName,closingIssuesReferences']));
   const closing = (live.closingIssuesReferences ?? []).map(item => item.number);
   const branchIssue = /^agent\/issue-([1-9]\d*)-/.exec(live.headRefName ?? '')?.[1];
@@ -144,7 +145,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       const result = verifyPullRequest({ repository: process.env.GITHUB_REPOSITORY, pr, expectedImplementer });
       const summary = `Provider mode for pull request #${pr}: ${result.mode} (implementer ${result.implementer}, reviewer ${result.reviewer}${result.sameProviderReview ? ', same-provider review' : ''}; ${result.source === 'legacy' ? 'legacy task without a mode record' : `recorded by run ${result.run} from ${result.label}`}).`;
       console.error(`::notice::${summary}`);
-      if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${summary}\n`);
       process.stdout.write(`${result.mode}\n`);
     } else throw new Error('Expected record or verify-pr.');
   } catch (error) {
