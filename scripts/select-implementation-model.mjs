@@ -32,9 +32,9 @@ const fingerprint = issue => createHash('sha256').update(JSON.stringify({ title:
 /** Parses one readiness label into its trusted route, or returns null for any other label. */
 export function parseReadinessLabel(label) {
   if (typeof label !== 'string' || !READINESS_LABEL_PATTERN.test(label) || !READINESS_LABELS.includes(label)) return null;
-  const full = label.match(/^agent-ready-full-(claude|copilot)$/);
+  const full = /^agent-ready-full-(claude|copilot)$/.exec(label);
   if (full) return { label, mode: `full-${full[1]}`, ...ROUTES[`full-${full[1]}`], tier: 'default' };
-  const [, provider, suffix = ''] = label.match(/^agent-ready-(claude|copilot)(-low|-high)?$/);
+  const [, provider, suffix = ''] = /^agent-ready-(claude|copilot)(-low|-high)?$/.exec(label);
   return { label, mode: `cross-${provider}`, ...ROUTES[`cross-${provider}`], tier: suffix ? suffix.slice(1) : 'default' };
 }
 
