@@ -2582,6 +2582,124 @@ Deploying the API restarts the process, and that restart is how its database sch
 
 The separate, human-invoked `migrate-database` command (`InventoryApi/Bootstrap/DatabaseMigrationCommand`), run with `--dry-run` to inspect and `--apply` to migrate, remains available for diagnostics and manual use — inspecting what a pending deployment will apply, or applying a high-risk migration ahead of a deployment window under review — but is no longer mandatory before a normal Production deployment. Recovery from a bad apply, automatic or manual, is restoring a verified backup taken beforehand; neither startup nor the command rolls a migration back. Concurrent same-machine startups (an overlapping restart during a deployment, for example) are not separately locked: EF Core's `Database.Migrate()` re-reads the applied-migrations history when it runs rather than trusting an earlier snapshot, and SQLite's single-writer lock (see [SQLite operating assumptions and scale strategy](#sqlite-operating-assumptions-and-scale-strategy-issue-53) above) already serializes the two attempts, which `DatabaseSchemaStartupTests.Concurrent_production_startups_do_not_race_to_apply_the_same_migration_twice` exercises against a real on-disk database. See `docs/tenant-rollout.md` for the worked historical example and `AGENTS.md` § Database and migrations for the current invariant.
 
+## Inventory workloads: decision criteria (issue #68)
+
+InventoryApp manages recurring and on-demand inventory operations: Nayax product catalogue imports, Nayax reimbursement reconciliation, historical inventory cost rebuilds, and scheduled reports. These workloads run outside the request/response cycle and must succeed reliably, remain idempotent, and avoid unnecessary resource consumption. This section defines the decision criteria for inventory workload design.
+
+### Scope
+
+This section applies to:
+- Scheduled jobs (e.g., daily/hourly catalogue refreshes, reconciliation batches)
+- On-demand long-running operations (e.g., manual import triggers, cost rebuilds, reconciliation corrections)
+- Background tasks initiated by API requests (e.g., bulk file uploads, delayed report generation)
+
+It does not cover request-scoped, synchronous operations within a single API call.
+
+### Frequency: When to schedule work
+
+**Decision principle:** A workload's frequency is determined by business requirements for freshness, technical constraints on resource consumption, and impact on tenant isolation.
+
+**Criteria:**
+
+1. **Business freshness requirement:** Define the acceptable staleness of the imported/computed data. Nayax catalogue imports can tolerate daily updates; reconciliation might require hourly checks during settlement windows. Avoid more-frequent polling than the upstream source provides. Use push notifications/webhooks when available instead of polling.
+
+2. **Concurrency and single-instance constraint:** This application uses a single App Service instance with SQLite (see [SQLite operating assumptions](#sqlite-operating-assumptions-and-scale-strategy-issue-53)). A heavy write workload runs only one at a time, limited by the single writer lock and the 30-second busy timeout. Measure end-to-end duration under realistic data volume. If a workload takes 5 minutes and runs every 5 minutes, a slow run overlaps with the next one; schedule less frequently or optimize before adding frequency.
+
+3. **Tenant isolation:** Multi-tenant workloads must not block each other. A single-business dedicated background task can run on its own schedule. A shared import service used by multiple businesses must process each tenant's work in isolated transactions to avoid cross-tenant write blocking.
+
+4. **Cost and resource consumption:** Frequent polling of external APIs (Nayax, Azure Blob for documents) consumes bandwidth, quota, and potentially incurs charges. Batch imports and reconciliation windows to off-peak hours and reduce frequency where freshness permits.
+
+**Anti-pattern:** Never poll every minute for data that changes weekly, and never skip scheduling a task that changes hourly because "it hasn't failed yet."
+
+### Retries: Handling transient failures
+
+**Decision principle:** Retries distinguish transient failures (network hiccup, temporary resource unavailable) from permanent ones (auth failure, invalid data), and prevent cascading outages when upstream services recover.
+
+**Criteria:**
+
+1. **Idempotent-safe operations only:** Retry only operations that can be safely re-run. Importing a product catalogue by name/ID is safe (idempotent). Recording a sale or payment is not safe without additional deduplication logic. Never retry destructive operations (deletes, overwrites) without proof that the workload is idempotent.
+
+2. **Exponential backoff:** Do not retry immediately; use exponential backoff (e.g. 1s, 2s, 4s, 8s, 16s, 32s) with jitter to avoid thundering herds when multiple instances (future: if scaling) wake up at the same time. Cap maximum backoff (e.g. 5 minutes) and total attempts (e.g. 5 retries).
+
+3. **Transient detection:** Retry on HTTP 5xx, network timeouts, and database `SQLITE_BUSY` errors. Do not retry on HTTP 4xx (bad request), authentication errors, or data validation failures — these require human intervention or code fix, not more attempts.
+
+4. **Dead-letter handling:** After retries are exhausted, log the failure with full context (tenant, operation, error, attempt count) and notify operations (e.g. via monitoring alert). Do not silently drop the workload. A persistent failure must be visible and actionable.
+
+5. **Circuit breaker:** If a dependency (Nayax API, Blob storage) fails consistently, stop retrying it and fail fast. Allow the dependency time to recover without flooding it with retry traffic. Implement a circuit-breaker pattern (fail-open after N consecutive failures, try again after a wait period).
+
+**Anti-pattern:** Retrying 100 times per minute or retrying a permanent failure indefinitely. The API log becomes noise and the failure goes unnoticed.
+
+### Idempotency: Safe re-execution
+
+**Decision principle:** A workload must produce the same result if run once or multiple times, so retries and replays do not corrupt data.
+
+**Criteria:**
+
+1. **Unique external IDs:** When importing external data, use the upstream entity's unique ID (e.g. Nayax product ID, reimbursement period ID) as the primary key or a unique constraint to detect and skip duplicates. Never rely only on timestamps or sequence numbers, which can repeat or overlap.
+
+2. **Upsert semantics:** For catalogue/configuration imports, use "insert or update" (upsert) semantics so a re-run updates stale records in place rather than creating duplicates. For transactional imports (sales, payments), use insert-only with duplicate detection; never upsert a financial transaction, because updating the amount paid or commission recorded is a data correction that needs a separate audit trail.
+
+3. **Transaction boundaries:** Wrap each logical unit of work (e.g. one product import, one reimbursement period reconciliation) in a database transaction. If the transaction commits, the workload is considered done; if it rolls back, the entire unit is undone and can be retried. This prevents partial states (half-imported product, partially reconciled period).
+
+4. **Versioning and state tracking:** Store a version or import timestamp alongside imported data so you can detect stale overwrites. For example, if importing a product catalogue, record the import time so a slow re-run does not overwrite a fresher catalogue with an older one.
+
+5. **Audit trail for corrections:** Financial workloads (reconciliation corrections, manual cost rebuilds) must log what changed, by whom, when, and why. This is not strictly idempotent re-execution, but prevents accidental overwrites and supports audit.
+
+**Anti-pattern:** Importing a catalogue by truncating the entire table and re-loading. A failed import leaves the table empty and corrupts live data. Use upsert instead.
+
+### Observability: Detecting and diagnosing failures
+
+**Decision principle:** Every workload failure must be visible, traceable, and actionable so operations can respond quickly.
+
+**Criteria:**
+
+1. **Structured logging:** Log the workload name, execution ID (a unique GUID per run), tenant/business ID, operation type, key inputs, and outcomes (success/failure, item count, duration). Log at the start, before external calls, and at completion with the result. Use structured fields (JSON) so logs are queryable.
+
+2. **Failure logging:** On failure, log the full exception (stack trace), the last successful state (e.g. "imported 50 products before error on product ID 123"), any retry attempt number, and the decision (will retry / dead-letter / circuit-breaker activated). Do not log credentials, API tokens, or sensitive imported data.
+
+3. **Metrics and alerting:** Export metrics (import duration, item count, success/failure rate) to a monitoring system (e.g. Application Insights). Alert on:
+   - Any workload failure after retries are exhausted
+   - Slow execution (duration approaching timeout or frequency window)
+   - High failure rate (e.g. 3 consecutive failures)
+   - Dead-letter queue backing up (too many unresolved failures)
+
+4. **Correlation across components:** If a workload triggers downstream operations (e.g. an import kicks off a cost-rebuild job), use the same execution ID (correlation ID) in logs so all related events are traceable end-to-end.
+
+5. **Visibility in the UI (future):** Display the status of recent workloads (last import time, success/failure, next scheduled run) in an operations dashboard so a human operator can quickly confirm the system is working or diagnose why a refresh is stale.
+
+**Anti-pattern:** Silent failures ("import ran but found no data, so nothing happened") and vague logs ("error in import step"). The operator has no idea if the silence is normal or if data is stale.
+
+### Cost: Resource consumption and efficiency
+
+**Decision principle:** Workloads should consume resources proportional to the work they do and avoid waste through redundant polling, unnecessary transfers, or inefficient queries.
+
+**Criteria:**
+
+1. **Minimize external API calls:** Nayax API and Azure Blob calls are billed or quota-limited. Batch imports in one call instead of one product at a time. Use incremental imports (only import products changed since last import) if the upstream API supports it. Cache stable data (e.g. product list) and only refresh on demand or on a long interval.
+
+2. **Database query efficiency:** Avoid N+1 queries (one query per item) in loops. Batch operations into one SQL statement: insert/upsert many rows in one call, not one row per transaction. Use indices so lookups (duplicate detection, existing record location) are fast. Avoid full table scans when filtering by ID.
+
+3. **Limit memory consumption:** When importing large files (reconciliation statements), stream or paginate the file instead of loading the entire contents into memory. Process a batch of 100 rows, commit, then load the next 100, so memory is bounded regardless of file size.
+
+4. **Avoid redundant work:** If two workloads import the same data, combine them or let one import feed the other (producer/consumer). Do not run the same query twice in the same job. Cache intermediate results if the next step needs them.
+
+5. **Storage size and backup cost:** As the database grows, backups and restores take longer and consume more storage. Monitor database file size. Implement retention/archival for old transactions/reports so the live database stays lean. This is a long-term concern; flag it in monitoring.
+
+6. **Scheduling off-peak hours:** Schedule heavy operations (full cost rebuilds, reconciliation runs) during low-traffic hours (e.g. 2 AM Sydney time) so they do not compete with interactive requests for the single SQLite writer lock. This reduces timeout/failure risk and improves user experience.
+
+**Anti-pattern:** Polling Nayax every minute for the catalogue, or importing all historic sales on every run instead of just new sales since the last import.
+
+### Implementation path
+
+Inventory workloads are implemented in `Inventory.Application` as use cases, called directly from API endpoints or from scheduled job runners (when background job infrastructure is added in the future). Today, long-running operations are invoked synchronously or through explicit API endpoints; once scheduled job infrastructure is adopted (issue TBD), this same use-case design will serve as the workload entry point, with the infrastructure handling frequency, retries, observability and resource limits.
+
+Until then, observe these patterns:
+
+1. Implement the workload logic in `Inventory.Application` (e.g. `Inventory.Application.Imports.ImportNayaxProductCatalog`) as a pure use case that returns success/failure and item counts.
+2. Call it from `InventoryApi` controllers or command endpoints. Do not put external API calls, database logic or file I/O in the controller.
+3. Wrap the call in explicit error handling (try-catch) that logs the failure with full context before re-raising or returning error to the caller.
+4. For long-running operations, return immediately and use a polling/callback pattern if the frontend needs status updates, rather than blocking the request indefinitely.
+
 ## Architectural decision rules
 
 Use this order when considering new structure:
