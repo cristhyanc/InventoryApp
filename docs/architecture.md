@@ -2133,6 +2133,19 @@ Backend and frontend tracks can progress independently when their contracts do n
        constants so the response stays byte-identical.
        `InventoryApi.Tests.DTOs.ProductJsonContractTests` compares the serialised bytes of the new
        response with the entity shape it replaced, for a fully populated and a bare product.
+     - **Approved error-path narrowing in `PUT /api/products/{id}`.** The one deliberate status-code
+       change in this slice, approved by the repository owner in the review of PR #355. Every outcome
+       a client can cause is unchanged - 204 on success, 404 for an unknown id (still answered before
+       validation), 400 with the same message for invalid restock settings - because `UpdateProduct`
+       reports validation as an `UpdateProductOutcome`. The delegator instead signalled validation by
+       throwing `InvalidOperationException`, which forced the action to wrap the call in a broad
+       `catch (InvalidOperationException)` that also turned an unexpected failure from below the use
+       case (an exhausted connection pool, a programming error) into a 400 echoing that exception's
+       internal message. That catch is gone, so such a failure now reaches `GlobalExceptionHandler`
+       and is logged once and answered as a generic 500 with no exception message - the same shape
+       issue #59 gave `StockController` (§ "Domain and application error mapping"). `ProductsControllerTests`
+       pins both halves: the unexpected store failure propagates uncaught, and an invalid request
+       still answers the unchanged 400 without the store being written to.
      - **Not in this slice.** `Adapters/Mapping/ProductResponseMapper.cs` is untouched: the
        machine-product response still uses it, and issue #302 owns that migration together with
        `SiteService`/`MachineService`. The `price-history` existence check now uses `GetProduct`

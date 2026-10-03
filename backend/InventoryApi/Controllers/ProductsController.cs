@@ -98,6 +98,23 @@ public class ProductsController : ControllerBase
         return Ok(items.Select(ProductRecordResponseMapper.ToResponse).ToList());
     }
 
+    /// <summary>
+    /// The one deliberate, human-approved error-path change in issue #303 (approved by the repository
+    /// owner in the review of PR #355). Every outcome a client can cause is unchanged: 204 on success,
+    /// 404 for an unknown id - still answered before validation - and 400 with the same
+    /// <see cref="UpdateProductResult.ValidationError"/> text for invalid restock settings.
+    ///
+    /// What changed is the failure path the retired delegator could not distinguish: it signalled
+    /// invalid settings by throwing <see cref="InvalidOperationException"/>, so this action had to
+    /// wrap the call in a broad <c>catch (InvalidOperationException)</c> that also converted an
+    /// unexpected failure from below the use case - an exhausted connection pool, a programming
+    /// error - into a 400 echoing that exception's internal message. The use case now reports
+    /// validation as an <see cref="UpdateProductOutcome"/>, so the catch is gone and such a failure
+    /// propagates to <see cref="InventoryApi.Http.GlobalExceptionHandler"/>, which logs it once and
+    /// answers a generic 500 that carries no exception message - the same shape issue #59 gave
+    /// <c>StockController</c>. Pinned by
+    /// <c>InventoryApi.Tests.Controllers.ProductsControllerTests</c>'s update error-path tests.
+    /// </summary>
     [HttpPut("{id:long}")]
     public async Task<IActionResult> Update(long id, ProductUpdateDto dto)
     {

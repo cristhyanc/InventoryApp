@@ -25,7 +25,11 @@ public class ProductsControllerTests
         return TestAppDbContext.Unrestricted(options);
     }
 
-    private static ProductsController CreateController(AppDbContext db)
+    /// <summary>
+    /// <paramref name="productStore"/> overrides the real <c>EfProductStore</c> only for the
+    /// error-path tests that need a write to fail; every other test exercises the EF adapter.
+    /// </summary>
+    private static ProductsController CreateController(AppDbContext db, IProductStore? productStore = null)
     {
         var nayaxMock = new Mock<INayaxLynxClient>();
         // No machine fleet: the reorder-alert listing then accounts for storage stock and
@@ -35,7 +39,7 @@ public class ProductsControllerTests
         var calculateReorderNeeds = new CalculateReorderNeeds(nayaxMock.Object, new EfOutstandingSupplierOrderQuantityStore(db));
         var getInventoryValuationSummary = new GetInventoryValuationSummary(new EfInventoryValuationFactsProvider(db));
         var getProductPriceComparison = new GetProductPriceComparison(new EfProductPurchasePriceHistoryProvider(db));
-        var store = new EfProductStore(db, TestCostingUseCases.Rebuild(db));
+        var store = productStore ?? new EfProductStore(db, TestCostingUseCases.Rebuild(db));
         var catalog = new EfProductCatalogStore(db);
         var listLowStockProducts = new ListLowStockProducts(catalog, calculateReorderNeeds);
         return new ProductsController(
@@ -101,6 +105,66 @@ public class ProductsControllerTests
         var result = await CreateController(db).Update(999, UpdateDto(57, 40));
 
         Assert.IsType<NotFoundResult>(result);
+    }
+
+    /// <summary>
+    /// A product store whose write fails the way infrastructure does: it reports the product exists,
+    /// then throws from the update. <paramref name="failure"/> is deliberately an
+    /// <see cref="InvalidOperationException"/> - the exact type the retired delegator used to signal
+    /// *validation* with, and therefore the one the removed broad catch in
+    /// <c>ProductsController.Update</c> would have converted into a 400.
+    /// </summary>
+    private static Mock<IProductStore> StoreThatFailsTheUpdate(Exception failure)
+    {
+        var store = new Mock<IProductStore>();
+        store.Setup(s => s.ExistsAsync(1, It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        store.Setup(s => s.UpdateAsync(1, It.IsAny<ProductUpdateFields>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(failure);
+        return store;
+    }
+
+    /// <summary>
+    /// Issue #303's one deliberate, human-approved error-path change (approved by the repository owner
+    /// in the review of PR #355): <c>Update</c> no longer wraps the call in a broad
+    /// <c>catch (InvalidOperationException)</c>, so an unexpected failure from below the use case is
+    /// no longer reported to the client as a 400 carrying that exception's internal message. It
+    /// propagates uncaught to <see cref="InventoryApi.Http.GlobalExceptionHandler"/>, which logs it
+    /// once and answers a generic 500 with no exception message -
+    /// <c>InventoryApi.Tests.Http.GlobalExceptionHandlerTests</c> pins that half for exactly this
+    /// exception type. This is the same shape issue #59 gave <c>StockController</c>, whose
+    /// propagation tests read the same way.
+    /// </summary>
+    [Fact]
+    public async Task Update_UnexpectedStoreFailure_PropagatesUncaught_InsteadOfBecomingABadRequest()
+    {
+        using var db = CreateDbContext();
+        var failure = new InvalidOperationException("The connection pool was exhausted.");
+
+        var thrown = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => CreateController(db, StoreThatFailsTheUpdate(failure).Object).Update(1, UpdateDto(5, 10)));
+
+        Assert.Same(failure, thrown);
+    }
+
+    /// <summary>
+    /// The other half of the same change: the narrowing is confined to the unexpected failure. An
+    /// invalid request is still answered by the use case's outcome as a 400 with the unchanged
+    /// message, decided before the store is written to at all, so a store that would throw never
+    /// gets the chance to.
+    /// </summary>
+    [Fact]
+    public async Task Update_InvalidRestockSettings_StillReturnsBadRequest_WithoutWritingToTheStore()
+    {
+        using var db = CreateDbContext();
+        var store = StoreThatFailsTheUpdate(new InvalidOperationException("The connection pool was exhausted."));
+
+        var result = await CreateController(db, store.Object).Update(1, UpdateDto(57, 40));
+
+        var badRequest = Assert.IsType<BadRequestObjectResult>(result);
+        Assert.Equal("Restock To must be greater than or equal to the Low Stock Threshold.", badRequest.Value);
+        store.Verify(
+            s => s.UpdateAsync(It.IsAny<long>(), It.IsAny<ProductUpdateFields>(), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     /// <summary>
