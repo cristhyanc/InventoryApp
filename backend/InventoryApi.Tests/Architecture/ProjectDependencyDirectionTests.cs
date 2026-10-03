@@ -173,9 +173,11 @@ public class ProjectDependencyDirectionTests
     ///
     /// Shrinking it follows the same rule: issue #299 removed <c>ImportService.Xml.cs</c> in the same
     /// change that migrated the pending reimbursement XML import to
-    /// <c>Inventory.Application.Imports.ImportPendingReimbursementXmlFiles</c>.
-    /// <c>Interfaces/IImportService.cs</c> stays on the list for the product and Nayax sales imports,
-    /// which the remaining children of #151 migrate.
+    /// <c>Inventory.Application.Imports.ImportPendingReimbursementXmlFiles</c>, and issue #300
+    /// removed <c>ImportService.Products.cs</c> in the same change that migrated the Nayax product
+    /// catalogue import to <c>Inventory.Application.Imports.ImportNayaxProductCatalog</c>.
+    /// <c>Interfaces/IImportService.cs</c> stays on the list for the Nayax sales import, which the
+    /// last child of #151 migrates.
     /// </summary>
     [Fact]
     public void Only_the_documented_legacy_services_remain_in_InventoryApi_Services()
@@ -184,7 +186,6 @@ public class ProjectDependencyDirectionTests
         [
             "ImportService.cs",
             "ImportService.NayaxSales.cs",
-            "ImportService.Products.cs",
             "Interfaces/IImportService.cs",
             "Interfaces/IMachineService.cs",
             "Interfaces/IProductService.cs",

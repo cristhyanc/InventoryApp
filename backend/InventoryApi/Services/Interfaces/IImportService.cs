@@ -2,7 +2,6 @@ namespace InventoryApi.Services.Interfaces;
 
 public interface IImportService
 {
-    Task<bool> ImportProductsAsync();
     Task<NayaxSalesImportResult> ImportNayaxSalesFromExcelAsync(IFormFile file, CancellationToken cancellationToken = default);
 }
 

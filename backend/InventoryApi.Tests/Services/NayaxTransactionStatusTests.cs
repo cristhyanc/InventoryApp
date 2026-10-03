@@ -2,7 +2,6 @@ using System.Text;
 using Inventory.Application.Costing;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
-using Inventory.Application.Nayax;
 using InventoryApi.Models;
 using InventoryApi.Services;
 using Microsoft.AspNetCore.Http;
@@ -44,7 +43,6 @@ public class NayaxTransactionStatusTests
             db,
             Mock.Of<IWebHostEnvironment>(),
             Mock.Of<ILogger<ImportService>>(),
-            Mock.Of<INayaxLynxClient>(),
             TestCostingUseCases.CostSale(db),
             Mock.Of<IRebuildProductCost>());
 
