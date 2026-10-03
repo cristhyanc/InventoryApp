@@ -20,7 +20,7 @@ namespace InventoryApi.Tests.Application.SalesSync;
 /// stub, so the import behaviour is covered end to end; the rest use a stubbed port, because what they
 /// prove is the use case's own orchestration (read every machine before persisting anything, rebuild
 /// only what a completed sale affected). The transaction dedup/costing/classification rules
-/// themselves stay covered by <c>InventoryCostTransitionServiceTests</c> and
+/// themselves stay covered by <c>InventoryCostTransitionTests</c> and
 /// <c>NayaxHistoricalCostTests</c>, which already exercised them before the extraction.
 /// </summary>
 public class SyncLatestNayaxSalesTests

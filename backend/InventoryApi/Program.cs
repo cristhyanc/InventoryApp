@@ -147,7 +147,6 @@ builder.Services.AddNayaxLynxClient(nayaxLynxOptions);
 
 // Business services
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IProductService, InventoryApi.Services.ProductService>();
-builder.Services.AddScoped<InventoryApi.Services.Interfaces.IInventoryCostTransitionService, InventoryApi.Services.InventoryCostTransitionService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IPurchaseService, InventoryApi.Services.PurchaseService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.ISupplierOrderService, InventoryApi.Services.SupplierOrderService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IMachineService, InventoryApi.Services.MachineService>();
@@ -199,6 +198,10 @@ builder.Services.AddScoped<IInventoryCostLedgerStore, EfInventoryCostLedgerStore
 
 // Temporary API-owned adapter for the sale-costing port (issue #297); see EfSaleCostingStore.
 builder.Services.AddScoped<ISaleCostingStore, EfSaleCostingStore>();
+
+// Temporary API-owned adapter for the inventory-cost transition port (issue #298); see
+// EfInventoryCostTransitionStore.
+builder.Services.AddScoped<IInventoryCostTransitionStore, EfInventoryCostTransitionStore>();
 
 // Temporary API-owned adapter for the stock history/restock-cost-suggestion/manual-adjustment
 // persistence port (issue #282); see EfStockAdjustmentStore.

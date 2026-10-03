@@ -4,16 +4,22 @@ using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using Inventory.Application.Nayax;
 using InventoryApi.Models;
-using InventoryApi.Services;
 using Microsoft.EntityFrameworkCore;
 using Moq;
 using Xunit;
 
 using Inventory.Domain.FinancialConfiguration;
+using DomainBaselineSource = Inventory.Domain.Costing.InventoryCostBaselineSource;
 
-namespace InventoryApi.Tests.Services;
+namespace InventoryApi.Tests.Application.Costing;
 
-public class InventoryCostTransitionServiceTests
+/// <summary>
+/// The inventory-cost transition use cases (issue #298, child 4 of #149), moved from the former
+/// <c>InventoryCostTransitionServiceTests</c> and run over the temporary API-owned
+/// <c>EfInventoryCostTransitionStore</c> exactly as production composes them, together with the
+/// live-sale costing behaviour that depends on a transition baseline.
+/// </summary>
+public class InventoryCostTransitionTests
 {
     [Fact]
     public async Task Preview_uses_home_plus_each_machine_and_reports_legacy_discrepancy()
@@ -29,11 +35,8 @@ public class InventoryCostTransitionServiceTests
         });
         await db.SaveChangesAsync();
         var nayax = NayaxWithStock(10);
-        var service = new InventoryCostTransitionService(
-            db, nayax.Object, TestCostingUseCases.Rebuild(db));
-
-        var preview = await service.PreviewAsync(new(
-            10, 1.25m, InventoryCostBaselineSource.ManualAuthoritative));
+        var preview = await TestCostingUseCases.PreviewTransition(db, nayax.Object).Handle(new(
+            10, 1.25m, DomainBaselineSource.ManualAuthoritative));
 
         Assert.Equal(19, preview.HomeStockQuantity);
         Assert.Equal(11, preview.MachineStockQuantity);
@@ -47,18 +50,17 @@ public class InventoryCostTransitionServiceTests
             stock => Assert.Equal(5, stock.StockQuantity));
     }
 
-    // Issue #59: every deliberate check in this service is caller-facing validation, so it throws
+    // Issue #59: every deliberate check in these use cases is caller-facing validation, so it throws
     // the narrowly typed DomainValidationException the central handler is allowed to publish as a
     // 400. An ordinary InvalidOperationException would now become a generic logged 500 instead.
     [Fact]
     public async Task Preview_rejects_a_negative_opening_cost_with_a_domain_validation_exception()
     {
         await using var db = CreateDb();
-        var service = new InventoryCostTransitionService(
-            db, NayaxWithStock(10).Object, TestCostingUseCases.Rebuild(db));
+        var preview = TestCostingUseCases.PreviewTransition(db, NayaxWithStock(10).Object);
 
         var exception = await Assert.ThrowsAsync<DomainValidationException>(() =>
-            service.PreviewAsync(new(10, -1m, InventoryCostBaselineSource.ManualAuthoritative)));
+            preview.Handle(new(10, -1m, DomainBaselineSource.ManualAuthoritative)));
 
         Assert.Equal("The opening average unit cost cannot be negative.", exception.Message);
     }
@@ -67,11 +69,10 @@ public class InventoryCostTransitionServiceTests
     public async Task Apply_without_confirmation_throws_a_domain_validation_exception()
     {
         await using var db = CreateDb();
-        var service = new InventoryCostTransitionService(
-            db, NayaxWithStock(10).Object, TestCostingUseCases.Rebuild(db));
+        var apply = TestCostingUseCases.ApplyTransition(db, NayaxWithStock(10).Object);
 
         var exception = await Assert.ThrowsAsync<DomainValidationException>(() =>
-            service.ApplyAsync(new(Guid.NewGuid(), false)));
+            apply.Handle(new(Guid.NewGuid(), false)));
 
         Assert.Equal("Explicit confirmation is required to save the transition baseline.", exception.Message);
     }
@@ -106,11 +107,10 @@ public class InventoryCostTransitionServiceTests
         await db.SaveChangesAsync();
         var nayax = NayaxWithStock(10);
         var rebuild = TestCostingUseCases.Rebuild(db);
-        var service = new InventoryCostTransitionService(db, nayax.Object, rebuild);
-        var preview = await service.PreviewAsync(new(
-            10, 1.25m, InventoryCostBaselineSource.ManualAuthoritative));
+        var preview = await TestCostingUseCases.PreviewTransition(db, nayax.Object).Handle(new(
+            10, 1.25m, DomainBaselineSource.ManualAuthoritative));
 
-        await service.ApplyAsync(new(preview.PreviewId, Confirmed: true));
+        await TestCostingUseCases.ApplyTransition(db, nayax.Object, rebuild).Handle(new(preview.PreviewId, Confirmed: true));
 
         var baseline = await db.InventoryCostTransitionBaselines
             .Include(x => x.MachineStocks)
@@ -280,11 +280,8 @@ public class InventoryCostTransitionServiceTests
                 new() { NayaxProductID = 10, PAR = 8, MissingStockByMDB = 3 },
                 new() { NayaxProductID = 20, PAR = 10, MissingStockByMDB = 2 }
             });
-        var service = new InventoryCostTransitionService(
-            db, nayax.Object, TestCostingUseCases.Rebuild(db));
-
-        var preview = await service.PreviewAllAsync(
-            new(InventoryCostBaselineSource.ManualAuthoritative));
+        var preview = await TestCostingUseCases.PreviewAllTransitions(db, nayax.Object).Handle(
+            new(DomainBaselineSource.ManualAuthoritative));
 
         Assert.Equal(2, preview.ProductCount);
         Assert.Equal(10, preview.HomeStockQuantity);
@@ -292,7 +289,7 @@ public class InventoryCostTransitionServiceTests
         Assert.Equal(23, preview.OpeningCostingQuantity);
         Assert.Equal(41.50m, preview.InventoryValue);
 
-        await service.ApplyAllAsync(new(preview.PreviewId, Confirmed: true));
+        await TestCostingUseCases.ApplyAllTransitions(db, nayax.Object).Handle(new(preview.PreviewId, Confirmed: true));
 
         Assert.Equal(2, await db.InventoryCostTransitionBaselines.CountAsync());
         var products = await db.Products.OrderBy(x => x.Id).ToListAsync();

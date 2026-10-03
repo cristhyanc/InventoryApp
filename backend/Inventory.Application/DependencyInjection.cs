@@ -100,6 +100,10 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<CostPendingSales>();
         services.AddScoped<BackfillSaleCosts>();
         services.AddScoped<BackfillNayaxHistoricalSaleCosts>();
+        services.AddScoped<PreviewInventoryCostTransition>();
+        services.AddScoped<ApplyInventoryCostTransition>();
+        services.AddScoped<PreviewAllInventoryCostTransitions>();
+        services.AddScoped<ApplyAllInventoryCostTransitions>();
         services.AddScoped<ApplyInventoryCount>();
         services.AddScoped<GetStockHistory>();
         services.AddScoped<GetRestockCostSuggestion>();
