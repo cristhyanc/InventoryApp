@@ -244,6 +244,82 @@ public sealed class DatabaseBackupUploadRunnerTests : IDisposable
         Assert.Empty(StagedFiles(_stagingDirectory));
     }
 
+    /// <summary>
+    /// Two runs can overlap: the scheduled job and an operator running the command by hand, or a
+    /// slow upload still in flight when the next run starts. The staged path is derived from a UTC
+    /// instant precise only to the second, so both can name the same second - and the cleanup is
+    /// unconditional. Each invocation therefore stages into its own directory: the second run must
+    /// take and upload its own snapshot rather than being refused by the "destination must not
+    /// already exist" guard, and must not delete the first run's staged file (or its SQLite
+    /// sidecars) while the first run is still uploading it.
+    ///
+    /// The overlap is created deterministically by starting the second run from inside the first
+    /// run's upload, which is exactly the window in which the staged file must survive.
+    /// </summary>
+    [Fact]
+    public async Task An_overlapping_run_at_the_same_instant_neither_collides_with_nor_deletes_the_first_runs_staged_copy()
+    {
+        CreateSourceDatabase();
+        var overlappingUploader = new RecordingBackupSnapshotUploader();
+        DatabaseBackupUploadOutcome? overlapping = null;
+        var firstUploader = new RecordingBackupSnapshotUploader
+        {
+            DuringUpload = async () => overlapping = await RunAsync(overlappingUploader),
+        };
+
+        var first = await RunAsync(firstUploader);
+
+        // The first run's staged snapshot was still there after the overlapping run had finished
+        // - taken its own snapshot, uploaded it, and run its own cleanup.
+        Assert.True(firstUploader.StagedFileExistedDuringUpload);
+        Assert.True(firstUploader.StagedFileExistedAfterOverlap);
+
+        Assert.NotNull(overlapping);
+        Assert.Equal(DatabaseBackupFailureReason.None, overlapping!.Snapshot.Failure);
+        Assert.True(overlapping.Succeeded);
+        Assert.True(first.Succeeded);
+
+        var firstStaged = Assert.Single(firstUploader.Uploads);
+        var overlappingStaged = Assert.Single(overlappingUploader.Uploads);
+        Assert.NotEqual(firstStaged.LocalPath, overlappingStaged.LocalPath);
+        Assert.NotEqual(
+            Path.GetDirectoryName(firstStaged.LocalPath), Path.GetDirectoryName(overlappingStaged.LocalPath));
+
+        // Both runs cleaned up after themselves, and neither left its own directory behind.
+        Assert.True(first.StagedCopyRemoved);
+        Assert.True(overlapping.StagedCopyRemoved);
+        Assert.Empty(StagedFiles(_stagingDirectory));
+    }
+
+    /// <summary>
+    /// The cleanup deletes only what this invocation created. A file already sitting in the staging
+    /// root - another run's snapshot, or something an operator put there - survives untouched, even
+    /// when it carries exactly the name this run's snapshot would once have had, and even when it
+    /// has SQLite sidecar files beside it.
+    /// </summary>
+    [Fact]
+    public async Task Leaves_a_pre_existing_file_in_the_staging_directory_untouched()
+    {
+        CreateSourceDatabase();
+        Directory.CreateDirectory(_stagingDirectory);
+        var preExisting = Path.Combine(_stagingDirectory, "inventory-20260301T023015Z.db");
+        File.WriteAllText(preExisting, "another run's snapshot");
+        File.WriteAllText(preExisting + "-wal", "another run's write-ahead log");
+        File.WriteAllText(preExisting + "-shm", "another run's shared memory file");
+
+        var outcome = await RunAsync(new AzureBlobBackupUploader(new InMemoryBackupBlobContainer()));
+
+        Assert.True(outcome.Succeeded);
+        Assert.True(outcome.StagedCopyRemoved);
+        Assert.Equal("another run's snapshot", File.ReadAllText(preExisting));
+        Assert.Equal("another run's write-ahead log", File.ReadAllText(preExisting + "-wal"));
+        Assert.Equal("another run's shared memory file", File.ReadAllText(preExisting + "-shm"));
+
+        // Nothing but those three pre-existing files is left: this run removed its own staged copy
+        // and its own directory.
+        Assert.Equal(3, StagedFiles(_stagingDirectory).Count);
+    }
+
     #endregion
 
     #region Reporting
@@ -270,7 +346,9 @@ public sealed class DatabaseBackupUploadRunnerTests : IDisposable
     /// <summary>
     /// A stand-in uploader that records what the workflow handed it, and can fail or throw on
     /// demand. It checks the staged file's existence while the "upload" is in progress, which is
-    /// the only moment that can be observed from outside.
+    /// the only moment that can be observed from outside. <see cref="DuringUpload"/> runs in that
+    /// same window, so a test can make a second run overlap this one deterministically and then
+    /// see whether this run's staged file survived it.
     /// </summary>
     private sealed class RecordingBackupSnapshotUploader : IBackupSnapshotUploader
     {
@@ -278,11 +356,16 @@ public sealed class DatabaseBackupUploadRunnerTests : IDisposable
 
         public bool StagedFileExistedDuringUpload { get; private set; }
 
+        /// <summary>Null when <see cref="DuringUpload"/> was not set.</summary>
+        public bool? StagedFileExistedAfterOverlap { get; private set; }
+
+        public Func<Task>? DuringUpload { get; set; }
+
         public Exception? ThrowWith { get; set; }
 
         public BackupUploadOutcome? Result { get; set; }
 
-        public Task<BackupUploadOutcome> UploadAsync(
+        public async Task<BackupUploadOutcome> UploadAsync(
             VerifiedBackupSnapshot snapshot, CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(snapshot);
@@ -290,15 +373,21 @@ public sealed class DatabaseBackupUploadRunnerTests : IDisposable
             Uploads.Add(snapshot);
             StagedFileExistedDuringUpload = File.Exists(snapshot.LocalPath);
 
+            if (DuringUpload is not null)
+            {
+                await DuringUpload();
+                StagedFileExistedAfterOverlap = File.Exists(snapshot.LocalPath);
+            }
+
             if (ThrowWith is not null) throw ThrowWith;
 
-            return Task.FromResult(Result ?? new BackupUploadOutcome(
+            return Result ?? new BackupUploadOutcome(
                 Succeeded: true,
                 BackupUploadFailureReason.None,
                 DailyObjectName: "daily/inventory-20260301T023015Z.db",
                 MonthlyObjectName: "monthly/2026-03/inventory-2026-03.db",
                 MonthlyObjectCreated: true,
-                Message: "Uploaded."));
+                Message: "Uploaded.");
         }
     }
 }

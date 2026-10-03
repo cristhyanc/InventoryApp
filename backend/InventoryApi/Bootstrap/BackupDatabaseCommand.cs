@@ -397,10 +397,11 @@ public static class BackupDatabaseCommand
     public const string CommandName = BackupDatabaseArguments.CommandName;
 
     /// <summary>
-    /// Where <c>--upload</c> stages the snapshot it is about to upload: the OS temporary path,
-    /// which is outside the API's content root and web root on every host the application runs on,
-    /// so the staged copy is never served, published or captured by a redeploy. The snapshot
-    /// runner's own content-root guard still checks this rather than trusting it.
+    /// The staging root <c>--upload</c> works under: the OS temporary path, which is outside the
+    /// API's content root and web root on every host the application runs on, so the staged copy is
+    /// never served, published or captured by a redeploy. The snapshot runner's own content-root
+    /// guard still checks this rather than trusting it. The run itself stages into its own
+    /// subdirectory of this root, so overlapping runs never share a path.
     /// </summary>
     private static string StagingDirectory => Path.Combine(Path.GetTempPath(), "inventoryapp-backup-staging");
 

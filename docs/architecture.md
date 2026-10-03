@@ -162,14 +162,21 @@ It takes and verifies the snapshot exactly as the retained mode does — Online 
 `PRAGMA integrity_check`, SHA-256 — but into a staging file under the OS temporary path
 (`inventoryapp-backup-staging/`), which is outside the API's content root and `wwwroot`; the same
 content-root guard that protects `--output` still checks the staged path rather than trusting it.
-Only a snapshot that completed and passed verification is uploaded: the uploader accepts a type
-that can only describe a verified snapshot, and re-hashes the staged file against the checksum
-verification produced before sending a byte, so a staged copy that was replaced or truncated in
-between is refused. The staged file (and any SQLite sidecar files) are removed in a `finally` path
-after success, failure, or an exception such as an unreachable storage account — a cleanup that
-could not finish is reported and exits non-zero rather than quietly leaving a complete copy of
-every business's data on the instance's disk. Exit code is `0` only when the snapshot verified,
-the upload verified, and nothing was left behind.
+Each invocation stages into its own freshly named subdirectory of that staging root
+(`run-<yyyyMMdd>T<HHmmss>Z-<random>/`) rather than straight into it, because the UTC instant is
+precise only to the second: two runs that overlap — the scheduled job and an operator running the
+command by hand, or a slow upload still in flight when the next run starts — must not contend for
+one path, and neither run's cleanup may remove the other's snapshot while it is still being
+uploaded. Only a snapshot that completed and passed verification is uploaded: the uploader accepts
+a type that can only describe a verified snapshot, and re-hashes the staged file against the
+checksum verification produced before sending a byte, so a staged copy that was replaced or
+truncated in between is refused. The staged file (and any SQLite sidecar files) are removed in a
+`finally` path after success, failure, or an exception such as an unreachable storage account,
+followed by the run's own now-empty directory — the cleanup deletes only those paths, by name and
+inside that directory, so another run's staged snapshot and anything an operator keeps in the
+staging root are never touched. A cleanup that could not finish is reported and exits non-zero
+rather than quietly leaving a complete copy of every business's data on the instance's disk. Exit
+code is `0` only when the snapshot verified, the upload verified, and nothing was left behind.
 
 Each run writes to a private container, under two prefixes:
 

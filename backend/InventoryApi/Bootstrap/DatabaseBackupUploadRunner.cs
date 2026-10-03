@@ -6,7 +6,7 @@ namespace InventoryApi.Bootstrap;
 /// <param name="Succeeded">True only when the snapshot was verified, both uploads are accounted for, and no local copy was left behind.</param>
 /// <param name="Snapshot">The snapshot step's own outcome; always present, because it always runs.</param>
 /// <param name="Upload">The upload step's outcome, or <c>null</c> when the snapshot never qualified for one.</param>
-/// <param name="StagedCopyRemoved">Whether the staged snapshot (and any SQLite sidecar files) are gone.</param>
+/// <param name="StagedCopyRemoved">Whether this run's staged snapshot (and any SQLite sidecar files) are gone.</param>
 /// <param name="Message">Operator-facing summary, safe to print.</param>
 public sealed record DatabaseBackupUploadOutcome(
     bool Succeeded,
@@ -37,17 +37,21 @@ public sealed record DatabaseBackupUploadOutcome(
 /// verification did not approve.
 /// </description></item>
 /// <item><description>
-/// <b>The snapshot is staged outside the served content.</b> The staging directory is supplied by
-/// the caller and validated by the snapshot runner's existing content-root guard, so the temporary
-/// copy can never sit under <c>wwwroot</c> or anywhere else a redeploy would capture or the
-/// application would serve.
+/// <b>The snapshot is staged outside the served content, in a directory this run owns.</b> The
+/// staging root is supplied by the caller and validated by the snapshot runner's existing
+/// content-root guard, so the temporary copy can never sit under <c>wwwroot</c> or anywhere else a
+/// redeploy would capture or the application would serve. Within it, each invocation stages into
+/// its own freshly named subdirectory, so two runs that overlap - a scheduled one and an operator's
+/// manual one, say - never contend for a path, and neither can delete the other's snapshot.
 /// </description></item>
 /// <item><description>
-/// <b>The staged copy is removed either way.</b> Cleanup is a <c>finally</c> path, so an upload
-/// that failed, or that threw because the storage account was unreachable or the role assignment
-/// was refused, still does not leave a complete copy of every business's data on the instance's
-/// local disk. A cleanup that could not finish is reported and fails the command rather than being
-/// swallowed.
+/// <b>The staged copy is removed either way, and only ever this run's.</b> Cleanup is a
+/// <c>finally</c> path, so an upload that failed, or that threw because the storage account was
+/// unreachable or the role assignment was refused, still does not leave a complete copy of every
+/// business's data on the instance's local disk. A cleanup that could not finish is reported and
+/// fails the command rather than being swallowed. It deletes only the paths this invocation could
+/// have created inside its own directory, so nothing another run or an operator put in the staging
+/// root is ever touched.
 /// </description></item>
 /// </list>
 /// </summary>
@@ -66,11 +70,22 @@ public static class DatabaseBackupUploadRunner
         ArgumentNullException.ThrowIfNull(uploader);
         ArgumentNullException.ThrowIfNull(output);
 
-        // Named from the same UTC instant the uploaded objects are, so an interrupted run leaves a
-        // file an operator can recognise - and so the snapshot runner's "destination must not
-        // already exist" guard is meaningful rather than accidentally reusing one name forever.
-        var stagedPath = Path.Combine(
+        // Each invocation stages inside its own subdirectory of the staging root. The UTC instant
+        // alone is precise only to the second, so two runs that start in the same second - a
+        // scheduled backup and an operator's manual one - would otherwise pick the same path: the
+        // second would be refused by the snapshot runner's "destination must not already exist"
+        // guard, and would then delete the first run's snapshot from under it on the way out. The
+        // random suffix makes the directory this run's alone; the instant is kept in the name so an
+        // interrupted run still leaves something an operator can recognise, and the file inside
+        // keeps the plain timestamped name the uploaded objects use.
+        var runDirectory = Path.Combine(
             Path.GetFullPath(stagingDirectory),
+            string.Create(
+                CultureInfo.InvariantCulture,
+                $"run-{createdUtc.ToUniversalTime():yyyyMMdd'T'HHmmss}Z-{Guid.NewGuid():N}"));
+
+        var stagedPath = Path.Combine(
+            runDirectory,
             string.Create(
                 CultureInfo.InvariantCulture,
                 $"inventory-{createdUtc.ToUniversalTime():yyyyMMdd'T'HHmmss}Z.db"));
@@ -94,6 +109,7 @@ public static class DatabaseBackupUploadRunner
         finally
         {
             stagedCopyRemoved = TryRemoveStagedCopy(stagedPath);
+            TryRemoveRunDirectory(runDirectory);
         }
 
         var succeeded = snapshot.Succeeded && upload is { Succeeded: true } && stagedCopyRemoved;
@@ -173,10 +189,11 @@ public static class DatabaseBackupUploadRunner
     }
 
     /// <summary>
-    /// Removes the staged snapshot and any SQLite sidecar files, reporting whether the staging
-    /// location is actually clean afterwards. Nothing else in the staging directory is touched:
-    /// this run only ever created these three paths, and deleting anything it did not create would
-    /// make the command destructive on a directory an operator may have chosen for other reasons.
+    /// Removes this run's staged snapshot and any SQLite sidecar files, reporting whether they are
+    /// actually gone afterwards. Nothing else is touched, by name and by location: these are the
+    /// only three paths this invocation could have created, and they are inside a directory no
+    /// other run uses, so a concurrent run's snapshot and anything an operator keeps in the staging
+    /// root both survive.
     /// </summary>
     private static bool TryRemoveStagedCopy(string stagedPath)
     {
@@ -200,5 +217,27 @@ public static class DatabaseBackupUploadRunner
         }
 
         return removed;
+    }
+
+    /// <summary>
+    /// Removes this run's now-empty staging subdirectory so repeated runs do not accumulate
+    /// directories under the staging root. The delete is deliberately non-recursive: if anything
+    /// unexpected is in there it fails rather than taking that content with it. Failure is not
+    /// reported as an unremoved staged copy - an empty directory is not a copy of the database,
+    /// and <see cref="TryRemoveStagedCopy"/> has already answered the question the operator needs.
+    /// </summary>
+    private static void TryRemoveRunDirectory(string runDirectory)
+    {
+        try
+        {
+            if (Directory.Exists(runDirectory))
+            {
+                Directory.Delete(runDirectory, recursive: false);
+            }
+        }
+        catch (Exception failure) when (failure is IOException or UnauthorizedAccessException)
+        {
+            // Best effort: the staged files themselves are reported separately and are what matters.
+        }
     }
 }
