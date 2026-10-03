@@ -1,0 +1,521 @@
+name: Deploy Production
+
+# The only path that changes production (issue #343). A push or merge to `main` deploys
+# nothing: `main` is releasable code, and a human starts this workflow from `main` to deploy one
+# exact commit of it. The run validates that commit, reports the EF Core migrations production
+# startup is expected to apply, deploys the API, verifies its health, and only then deploys the
+# frontend built from the same commit. A failure stops the run; it never reverts, merges,
+# relabels or starts an agent repair. Recovery is a human decision.
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Full 40-character main commit SHA to deploy. Leave empty to deploy the main commit this run starts from.
+        required: false
+        default: ''
+        type: string
+      baseline_sha:
+        description: Full SHA of the backend production runs now. Needed only when no earlier Deploy Production release is recorded.
+        required: false
+        default: ''
+        type: string
+
+permissions: {}
+
+# One production deployment at a time, and never cancel one that is already running.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  AZURE_WEBAPP_NAME: vm-manager
+  PRODUCTION_ENVIRONMENT: VmInventoryApi_Env
+  # GitHub deployment records written by this workflow after each backend deployment; the newest
+  # one is the baseline for the next run's migration preflight.
+  RELEASE_RECORD_TASK: deploy:production-backend
+  API_PROJECT: ./backend/InventoryApi/InventoryApi.csproj
+  FRONTEND_DIR: frontend/inventory-app
+  FRONTEND_OUTPUT: frontend/inventory-app/dist/inventory-app/browser
+
+jobs:
+  resolve:
+    name: Resolve release commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      deployments: read
+    outputs:
+      sha: ${{ steps.release.outputs.sha }}
+      baseline_sha: ${{ steps.baseline.outputs.baseline_sha }}
+      baseline_source: ${{ steps.baseline.outputs.baseline_source }}
+
+    steps:
+      - name: Refuse runs not started from main
+        if: github.ref != 'refs/heads/main'
+        env:
+          RUN_REF: ${{ github.ref }}
+        run: |
+          echo "::error::Deploy Production must be started from main; this run was started from $RUN_REF."
+          exit 1
+
+      - name: Check out main history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: refs/heads/main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve and verify the release SHA
+        id: release
+        env:
+          INPUT_SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          sha="${INPUT_SHA:-$GITHUB_SHA}"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || fail "The release SHA must be a full 40-character lowercase commit SHA."
+          git cat-file -e "${sha}^{commit}" 2>/dev/null || fail "Commit $sha does not exist in this repository."
+          git merge-base --is-ancestor "$sha" refs/remotes/origin/main \
+            || fail "Commit $sha is not contained in main. Only main commits are deployed to production."
+
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Release SHA: $sha"
+
+      - name: Resolve the production baseline
+        id: baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_BASELINE: ${{ inputs.baseline_sha }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          recorded="$(gh api "repos/$GITHUB_REPOSITORY/deployments?environment=$PRODUCTION_ENVIRONMENT&task=$RELEASE_RECORD_TASK&per_page=1" \
+            --jq '.[0].sha // empty')" || fail "Could not read the recorded production releases."
+
+          if [ -n "$recorded" ]; then
+            if [ -n "$INPUT_BASELINE" ] && [ "$INPUT_BASELINE" != "$recorded" ]; then
+              fail "baseline_sha $INPUT_BASELINE differs from the last recorded production release $recorded. Leave baseline_sha empty, or resolve the difference before deploying."
+            fi
+            baseline="$recorded"
+            source="recorded"
+          elif [ -n "$INPUT_BASELINE" ]; then
+            baseline="$INPUT_BASELINE"
+            source="operator input"
+          else
+            fail "No production release is recorded yet. Start the run again with baseline_sha set to the main commit production runs now (the previous release's merge commit)."
+          fi
+
+          [[ "$baseline" =~ ^[0-9a-f]{40}$ ]] || fail "The baseline must be a full 40-character lowercase commit SHA."
+          git merge-base --is-ancestor "$baseline" refs/remotes/origin/main \
+            || fail "Baseline $baseline is not contained in main."
+
+          echo "baseline_sha=$baseline" >> "$GITHUB_OUTPUT"
+          echo "baseline_source=$source" >> "$GITHUB_OUTPUT"
+          echo "Baseline SHA: $baseline ($source)"
+
+  validate:
+    name: Validate release commit
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out release commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/inventory-app/package-lock.json
+
+      - name: Validate repository
+        run: bash scripts/validate.sh
+
+  preflight:
+    name: Migration preflight
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      pending_count: ${{ steps.preflight.outputs.pending_count }}
+      pending: ${{ steps.preflight.outputs.pending }}
+
+    steps:
+      - name: Check out main history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+
+      - name: Compare release and baseline migrations
+        id: preflight
+        env:
+          RELEASE_SHA: ${{ needs.resolve.outputs.sha }}
+          BASELINE_SHA: ${{ needs.resolve.outputs.baseline_sha }}
+          BASELINE_SOURCE: ${{ needs.resolve.outputs.baseline_source }}
+        run: |
+          set -euo pipefail
+          result="$(node scripts/deployment-migration-preflight.mjs --release "$RELEASE_SHA" --baseline "$BASELINE_SHA")"
+          count="$(jq -r '.expectedPending | length' <<<"$result")"
+          pending="$(jq -r '.expectedPending | join(",")' <<<"$result")"
+          [[ "$count" =~ ^[0-9]+$ ]] || { echo "::error::The migration preflight returned no usable result."; exit 1; }
+
+          echo "pending_count=$count" >> "$GITHUB_OUTPUT"
+          echo "pending=$pending" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## Migration preflight"
+            echo
+            echo "Derived from the repository (migrations in the release minus migrations in the baseline); production's database was not read."
+            echo
+            echo "- Release: \`$RELEASE_SHA\`"
+            echo "- Baseline: \`$BASELINE_SHA\` ($BASELINE_SOURCE)"
+            if [ "$count" -gt 0 ]; then
+              echo "- **This release contains $count EF Core migration(s) that production startup is expected to apply automatically:**"
+              jq -r '.expectedPending[] | "  - `\(.)`"' <<<"$result"
+            else
+              echo "- No new EF Core migrations; production startup is not expected to change the schema."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$count" -gt 0 ]; then
+            echo "::warning::This release contains $count EF Core migration(s) that production startup is expected to apply: $pending"
+          fi
+
+  build:
+    name: Build release artifacts
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out release commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/inventory-app/package-lock.json
+
+      # The complete publish output is deployed, so publish content added by other changes (for
+      # example a scheduled WebJob) reaches production with the API.
+      - name: Publish API
+        run: dotnet publish "$API_PROJECT" --configuration Release --output "$RUNNER_TEMP/api"
+
+      - name: Build frontend
+        run: |
+          npm --prefix "$FRONTEND_DIR" ci
+          npm --prefix "$FRONTEND_DIR" run build
+
+      - name: Upload API package
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-${{ needs.resolve.outputs.sha }}
+          path: ${{ runner.temp }}/api
+          if-no-files-found: error
+
+      - name: Upload frontend bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-${{ needs.resolve.outputs.sha }}
+          path: ${{ env.FRONTEND_OUTPUT }}
+          if-no-files-found: error
+
+  deploy-api:
+    name: Deploy API
+    if: github.ref == 'refs/heads/main'
+    needs:
+      - resolve
+      - validate
+      - preflight
+      - build
+    environment: VmInventoryApi_Env
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      deployed: ${{ steps.deployed.outputs.deployed }}
+      webapp_url: ${{ steps.deploy.outputs.webapp-url }}
+
+    steps:
+      - name: Announce release and migrations
+        env:
+          RELEASE_SHA: ${{ needs.resolve.outputs.sha }}
+          PENDING_COUNT: ${{ needs.preflight.outputs.pending_count }}
+          PENDING: ${{ needs.preflight.outputs.pending }}
+        run: |
+          echo "Deploying API from $RELEASE_SHA."
+          if [ "$PENDING_COUNT" -gt 0 ]; then
+            echo "::warning::Production startup is expected to apply $PENDING_COUNT EF Core migration(s) after this deployment: $PENDING"
+          else
+            echo "No new EF Core migrations in this release."
+          fi
+
+      # Approval of this environment can come long after the run started, so containment in main
+      # is checked again immediately before Azure authentication.
+      - name: Reverify release SHA is in main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ needs.resolve.outputs.sha }}
+        run: |
+          set -euo pipefail
+          status="$(gh api "repos/$GITHUB_REPOSITORY/compare/$RELEASE_SHA...main" --jq '.status')"
+          case "$status" in
+            identical|ahead) echo "Release $RELEASE_SHA is contained in main." ;;
+            *) echo "::error::Release $RELEASE_SHA is no longer contained in main (compare status: $status)."; exit 1 ;;
+          esac
+
+      - name: Download API package
+        uses: actions/download-artifact@v4
+        with:
+          name: api-${{ needs.resolve.outputs.sha }}
+          path: ${{ runner.temp }}/api
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.VmInventoryApi_CLIENT_ID_4D7F }}
+          tenant-id: ${{ vars.VmInventoryApi_TENANT_ID_4D7F }}
+          subscription-id: ${{ vars.VmInventoryApi_SUBSCRIPTION_ID_4D7F }}
+
+      - name: Deploy to Azure WebApp
+        id: deploy
+        uses: azure/webapps-deploy@v2
+        with:
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
+          package: ${{ runner.temp }}/api
+
+      - name: Mark API deployed
+        id: deployed
+        run: echo "deployed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Azure Logout
+        if: always()
+        run: az logout || true
+
+  record-release:
+    name: Record production backend release
+    if: always() && needs.deploy-api.outputs.deployed == 'true'
+    needs:
+      - resolve
+      - deploy-api
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      deployments: write
+
+    steps:
+      - name: Record the deployed backend SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ needs.resolve.outputs.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          deployment_id="$(jq -n \
+            --arg ref "$RELEASE_SHA" \
+            --arg task "$RELEASE_RECORD_TASK" \
+            --arg environment "$PRODUCTION_ENVIRONMENT" \
+            '{ref: $ref, task: $task, environment: $environment, auto_merge: false, required_contexts: [], production_environment: true, transient_environment: false, description: "Backend deployed by Deploy Production"}' \
+            | gh api --method POST "repos/$GITHUB_REPOSITORY/deployments" --input - --jq '.id')"
+          [[ "$deployment_id" =~ ^[0-9]+$ ]] || { echo "::error::The production release record was not created."; exit 1; }
+          jq -n --arg url "$RUN_URL" '{state: "success", log_url: $url, auto_inactive: false}' \
+            | gh api --method POST "repos/$GITHUB_REPOSITORY/deployments/$deployment_id/statuses" --input - >/dev/null
+          echo "Recorded production backend release $RELEASE_SHA (deployment $deployment_id)."
+
+  verify-api:
+    name: Verify API health
+    needs:
+      - resolve
+      - deploy-api
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions: {}
+
+    steps:
+      - name: Wait for /health/ready
+        env:
+          WEBAPP_URL: ${{ vars.PRODUCTION_API_BASE_URL || needs.deploy-api.outputs.webapp_url }}
+        run: |
+          set -uo pipefail
+          base="${WEBAPP_URL%/}"
+          base="${base/#http:\/\//https://}"
+          [[ "$base" =~ ^https://[A-Za-z0-9.-]+$ ]] || { echo "::error::No usable HTTPS API URL ('$base'); the API health cannot be verified."; exit 1; }
+
+          # Startup may be applying migrations, so allow up to about 15 minutes.
+          for attempt in $(seq 1 90); do
+            code="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 10 "$base/health/ready" || true)"
+            if [ "$code" = "200" ]; then
+              echo "API is healthy: $base/health/ready returned 200 (attempt $attempt)."
+              exit 0
+            fi
+            echo "Attempt $attempt: $base/health/ready returned ${code:-no response}; retrying."
+            sleep 10
+          done
+
+          echo "::error::$base/health/ready did not return 200; the frontend will not be deployed."
+          exit 1
+
+  deploy-frontend:
+    name: Deploy frontend
+    if: github.ref == 'refs/heads/main'
+    needs:
+      - resolve
+      - build
+      - deploy-api
+      - verify-api
+    environment: VmInventoryApi_Env
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      url: ${{ steps.deploy.outputs.static_web_app_url }}
+
+    steps:
+      - name: Reverify release SHA is in main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ needs.resolve.outputs.sha }}
+        run: |
+          set -euo pipefail
+          status="$(gh api "repos/$GITHUB_REPOSITORY/compare/$RELEASE_SHA...main" --jq '.status')"
+          case "$status" in
+            identical|ahead) echo "Release $RELEASE_SHA is contained in main." ;;
+            *) echo "::error::Release $RELEASE_SHA is no longer contained in main (compare status: $status)."; exit 1 ;;
+          esac
+
+      - name: Download frontend bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-${{ needs.resolve.outputs.sha }}
+          path: release-frontend
+
+      # Deploys the bundle built from the release SHA as is; the action does not rebuild it.
+      - name: Deploy to Azure Static Web Apps
+        id: deploy
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN_RED_ISLAND_0C128C000 }}
+          action: upload
+          app_location: release-frontend
+          output_location: ''
+          skip_app_build: true
+          skip_api_build: true
+
+      - name: Verify frontend responds
+        env:
+          SITE_URL: ${{ steps.deploy.outputs.static_web_app_url }}
+        run: |
+          set -uo pipefail
+          base="${SITE_URL%/}"
+          base="${base/#http:\/\//https://}"
+          [[ "$base" =~ ^https://[A-Za-z0-9.-]+$ ]] || { echo "::error::No usable frontend URL ('$base')."; exit 1; }
+          for attempt in $(seq 1 12); do
+            code="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 10 "$base/" || true)"
+            if [ "$code" = "200" ]; then
+              echo "Frontend responds: $base/ returned 200."
+              exit 0
+            fi
+            echo "Attempt $attempt: $base/ returned ${code:-no response}; retrying."
+            sleep 10
+          done
+          echo "::error::$base/ did not return 200 after deployment."
+          exit 1
+
+  summary:
+    name: Deployment summary
+    if: always()
+    needs:
+      - resolve
+      - validate
+      - preflight
+      - build
+      - deploy-api
+      - record-release
+      - verify-api
+      - deploy-frontend
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+
+    steps:
+      - name: Publish deployment summary
+        env:
+          RELEASE_SHA: ${{ needs.resolve.outputs.sha }}
+          BASELINE_SHA: ${{ needs.resolve.outputs.baseline_sha }}
+          BASELINE_SOURCE: ${{ needs.resolve.outputs.baseline_source }}
+          RESOLVE_RESULT: ${{ needs.resolve.result }}
+          VALIDATE_RESULT: ${{ needs.validate.result }}
+          PREFLIGHT_RESULT: ${{ needs.preflight.result }}
+          PENDING_COUNT: ${{ needs.preflight.outputs.pending_count }}
+          PENDING: ${{ needs.preflight.outputs.pending }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          API_RESULT: ${{ needs.deploy-api.result }}
+          RECORD_RESULT: ${{ needs.record-release.result }}
+          HEALTH_RESULT: ${{ needs.verify-api.result }}
+          FRONTEND_RESULT: ${{ needs.deploy-frontend.result }}
+        run: |
+          if [ "$PREFLIGHT_RESULT" = "success" ]; then
+            if [ "${PENDING_COUNT:-0}" -gt 0 ]; then
+              migrations="$PENDING_COUNT expected: $PENDING"
+            else
+              migrations="none expected"
+            fi
+          else
+            migrations="not established"
+          fi
+          {
+            echo "## Deploy Production"
+            echo
+            echo "| Item | Result |"
+            echo "| --- | --- |"
+            echo "| Release SHA | \`${RELEASE_SHA:-not resolved}\` ($RESOLVE_RESULT) |"
+            echo "| Baseline SHA | \`${BASELINE_SHA:-none}\` (${BASELINE_SOURCE:-n/a}) |"
+            echo "| Validation | $VALIDATE_RESULT |"
+            echo "| Migration preflight | $PREFLIGHT_RESULT; migrations $migrations |"
+            echo "| Build | $BUILD_RESULT |"
+            echo "| Backend deployment | $API_RESULT |"
+            echo "| Release record | $RECORD_RESULT |"
+            echo "| Backend health (/health/ready) | $HEALTH_RESULT |"
+            echo "| Frontend deployment | $FRONTEND_RESULT |"
+            echo
+            echo "A failed run changes nothing else: it does not revert, merge, relabel or start an agent repair. Recovery is a human decision."
+          } >> "$GITHUB_STEP_SUMMARY"
