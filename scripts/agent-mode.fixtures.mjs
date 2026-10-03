@@ -9,8 +9,8 @@ export function claimEvents(label, claimedAt = '2026-10-03T01:00:00Z', firstId =
   const at = new Date(claimedAt).getTime();
   const iso = (offsetMs) => new Date(at + offsetMs).toISOString().replace('.000Z', 'Z');
   return [
-    { id: firstId, event: 'labeled', actor: { login: 'cristhyanc' }, label: { name: label }, created_at: iso(-60000) },
-    { id: firstId + 1, event: 'unlabeled', actor: { login: 'github-actions[bot]' }, label: { name: label }, created_at: iso(0) },
-    { id: firstId + 2, event: 'labeled', actor: { login: 'github-actions[bot]' }, label: { name: 'agent-working' }, created_at: iso(1000) },
+    { id: firstId, event: 'labeled', actor: { login: 'cristhyanc', type: 'User' }, label: { name: label }, created_at: iso(-60000) },
+    { id: firstId + 1, event: 'unlabeled', actor: { login: 'github-actions[bot]', type: 'Bot' }, label: { name: label }, created_at: iso(0) },
+    { id: firstId + 2, event: 'labeled', actor: { login: 'github-actions[bot]', type: 'Bot' }, label: { name: 'agent-working' }, created_at: iso(1000) },
   ];
 }

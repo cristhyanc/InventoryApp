@@ -5,7 +5,7 @@
 // own label history, which GitHub records and nobody can edit or delete: the newest *claim* (the
 // claiming workflow step replacing the readiness label with `agent-working`, as
 // github-actions[bot]) names the label that was consumed, and the label must have been applied by
-// a person before that. Agents cannot change issue labels (their tool lists deny `gh issue edit`
+// a person (GitHub actor type User, never any bot) before that. Agents cannot change issue labels (their tool lists deny `gh issue edit`
 // and `gh api`), so they cannot fake a claim. Every boundary (architecture dispatch, Copilot
 // handoff, validation, review, publication and repair) re-derives the route from that history and
 // checks that the pull request was opened after the newest claim, so a pull request left over
@@ -62,7 +62,8 @@ export function implementerForBranch(headRef) {
 
 /**
  * Resolves the verified mode of an agent pull request.
- * events: the issue's label events as { id, event: 'labeled' | 'unlabeled', actor, label, created_at }.
+ * events: the issue's label events as { id, event: 'labeled' | 'unlabeled', actor, actorType, label, created_at },
+ * where actor and actorType are GitHub's actor.login and actor.type ('User', 'Bot', ...).
  * prCreatedAt: when the pull request was opened.
  */
 export function resolveMode({ issue, headRef, expectedImplementer, prCreatedAt, events, fullProviderEnabled = FULL_PROVIDER_EXECUTION_ENABLED }) {
@@ -86,8 +87,8 @@ export function resolveMode({ issue, headRef, expectedImplementer, prCreatedAt, 
 /**
  * Finds the newest claim in the issue's label history and the readiness label it consumed.
  * A claim is CLAIM_ACTOR adding CLAIM_LABEL; it must be paired with CLAIM_ACTOR removing exactly
- * one readiness label at the same moment, and that label must have been applied by someone else
- * (a person) before the claim. Anything else fails closed.
+ * one readiness label at the same moment, and that label must have been applied before the claim
+ * by a person (actor type User). Anything else fails closed.
  */
 function latestClaim(events, issue) {
   if (!Array.isArray(events)) throw new Error(`The label history of issue #${issue} could not be read; provider mode is unverified.`);
@@ -95,18 +96,23 @@ function latestClaim(events, issue) {
     .map(event => ({ ...event, at: Date.parse(event?.created_at), id: Number(event?.id) || 0 }))
     .filter(event => Number.isFinite(event.at) && typeof event.label === 'string')
     .sort((a, b) => a.at - b.at || a.id - b.id);
-  const claims = timeline.filter(event => event.event === 'labeled' && event.label === CLAIM_LABEL && event.actor === CLAIM_ACTOR);
+  const claims = timeline.filter(event => event.event === 'labeled' && event.label === CLAIM_LABEL && isClaimActor(event));
   if (!claims.length) throw new Error(`Issue #${issue} has no verifiable claim in its label history; nothing runs without one. A human must resolve it.`);
   const claim = claims.at(-1);
   const consumed = new Set(timeline
-    .filter(event => event.event === 'unlabeled' && event.actor === CLAIM_ACTOR && parseReadinessLabel(event.label) && Math.abs(event.at - claim.at) <= CLAIM_PAIR_WINDOW_MS)
+    .filter(event => event.event === 'unlabeled' && isClaimActor(event) && parseReadinessLabel(event.label) && Math.abs(event.at - claim.at) <= CLAIM_PAIR_WINDOW_MS)
     .map(event => event.label));
   if (consumed.size !== 1) throw new Error(`Issue #${issue}'s latest claim did not consume exactly one readiness label; a human must resolve it.`);
   const [label] = consumed;
   const applied = timeline.filter(event => event.event === 'labeled' && event.label === label && event.at <= claim.at).at(-1);
-  if (!applied || applied.actor === CLAIM_ACTOR) throw new Error(`Issue #${issue}'s claimed label ${label} was not applied by a person; a human must resolve it.`);
+  // Only a person may choose the route: any bot, an unknown actor type or a missing identity is refused.
+  if (!applied || applied.actorType !== 'User' || typeof applied.actor !== 'string' || !applied.actor) {
+    throw new Error(`Issue #${issue}'s claimed label ${label} was not applied by a person; a human must resolve it.`);
+  }
   return { label, at: claim.at };
 }
+
+const isClaimActor = (event) => event.actor === CLAIM_ACTOR && event.actorType === 'Bot';
 
 /** Checks that the head branch is an agent branch of the expected implementer and issue; returns the implementer. */
 function verifyBranchIdentity({ issue, headRef, expectedImplementer }) {
@@ -139,7 +145,7 @@ export function verifyPullRequest({ repository, pr, expectedImplementer }) {
     if (closing.length !== 1) throw new Error(`Pull request #${pr} must close exactly one issue (found ${closing.length}).`);
     issue = closing[0];
   }
-  const lines = gh(['api', '--paginate', `repos/${repository}/issues/${issue}/events?per_page=100`, '--jq', '.[] | select(.event == "labeled" or .event == "unlabeled") | {id, event, actor: .actor.login, label: .label.name, created_at} | @json']);
+  const lines = gh(['api', '--paginate', `repos/${repository}/issues/${issue}/events?per_page=100`, '--jq', '.[] | select(.event == "labeled" or .event == "unlabeled") | {id, event, actor: .actor.login, actorType: .actor.type, label: .label.name, created_at} | @json']);
   const events = lines.split('\n').filter(Boolean).map(line => JSON.parse(line));
   return resolveMode({ issue, headRef: live.headRefName, expectedImplementer, prCreatedAt: live.createdAt, events });
 }

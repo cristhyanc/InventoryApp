@@ -10,7 +10,7 @@ const CLAUDE_BRANCH = `agent/issue-${ISSUE}-take-inventory`;
 const COPILOT_BRANCH = 'copilot/fix-245-take-inventory';
 const OPENED = '2026-10-03T02:00:00Z';
 // The resolver receives events already flattened by verifyPullRequest's jq filter.
-const flat = (events) => events.map(({ id, event, actor, label, created_at }) => ({ id, event, actor: actor.login, label: label.name, created_at }));
+const flat = (events) => events.map(({ id, event, actor, label, created_at }) => ({ id, event, actor: actor.login, actorType: actor.type, label: label.name, created_at }));
 const claim = (label, at, firstId) => flat(claimEvents(label, at, firstId));
 const resolve = (headRef, events, extra = {}) => resolveMode({ issue: ISSUE, headRef, expectedImplementer: implementerForBranch(headRef), prCreatedAt: OPENED, events, ...extra });
 
@@ -37,15 +37,29 @@ test('full-provider claims fail closed while the routes are not enabled', () => 
 test('a task with no verifiable claim fails closed instead of becoming a cross-review task', () => {
   assert.throws(() => resolve(CLAUDE_BRANCH, []), /no verifiable claim/);
   // A person adding agent-working, or a readiness label that was never consumed, is not a claim.
-  const human = claim('agent-ready-full-claude').map(event => ({ ...event, actor: 'cristhyanc' }));
+  const human = claim('agent-ready-full-claude').map(event => ({ ...event, actor: 'cristhyanc', actorType: 'User' }));
   assert.throws(() => resolve(CLAUDE_BRANCH, human), /no verifiable claim/);
   assert.throws(() => resolve(CLAUDE_BRANCH, claim('agent-ready-claude').slice(0, 1)), /no verifiable claim/);
   assert.throws(() => resolve(CLAUDE_BRANCH, undefined), /could not be read/);
 });
 
 test('the claimed label must have been applied by a person and consumed by the claim itself', () => {
-  const botApplied = claim('agent-ready-claude').map((event, i) => (i === 0 ? { ...event, actor: 'github-actions[bot]' } : event));
-  assert.throws(() => resolve(CLAUDE_BRANCH, botApplied), /not applied by a person/);
+  const appliedBy = (fields) => claim('agent-ready-claude').map((event, i) => (i === 0 ? { ...event, ...fields } : event));
+  for (const fields of [
+    { actor: 'github-actions[bot]', actorType: 'Bot' },
+    { actor: 'copilot-swe-agent[bot]', actorType: 'Bot' },
+    { actor: 'inventoryapp-agent-automation[bot]', actorType: 'Bot' },
+    { actor: 'someone', actorType: 'Organization' },
+    { actor: 'cristhyanc', actorType: undefined },
+    { actor: undefined, actorType: 'User' },
+    { actor: '', actorType: 'User' },
+  ]) {
+    assert.throws(() => resolve(CLAUDE_BRANCH, appliedBy(fields)), /not applied by a person/, JSON.stringify(fields));
+  }
+  assert.equal(resolve(CLAUDE_BRANCH, appliedBy({ actor: 'cristhyanc', actorType: 'User' })).label, 'agent-ready-claude');
+  // The claim itself must come from the workflow bot as a Bot actor.
+  const userNamedLikeBot = claim('agent-ready-claude').map((event, i) => (i > 0 ? { ...event, actorType: 'User' } : event));
+  assert.throws(() => resolve(CLAUDE_BRANCH, userNamedLikeBot), /no verifiable claim/);
   // A removal far from the agent-working add is not part of the claim.
   const [applied, removed, working] = claim('agent-ready-claude');
   assert.throws(() => resolve(CLAUDE_BRANCH, [applied, { ...removed, created_at: '2026-10-03T00:59:30Z' }, working]), /exactly one readiness label/);
