@@ -1725,7 +1725,7 @@ function jobBlock(workflow, job, source) {
   const start = workflow.indexOf(`\n  ${job}:\n`);
   if (start < 0) throw new Error(`${source}: missing job ${job}.`);
   const rest = workflow.slice(start + 1);
-  const next = rest.slice(1).search(/\n  [a-z][a-z0-9-]*:\n/);
+  const next = rest.slice(1).search(/\n {2}[a-z][a-z0-9-]*:\n/);
   return next < 0 ? rest : rest.slice(0, next + 1);
 }
 
@@ -1741,7 +1741,7 @@ export function verifyProviderModeProvenance(read = readRepositoryFile) {
     const jobText = jobBlock(read(path), job, source);
     // Reading the resolver needs contents: read; reading the issue's record needs issues access.
     requireText(jobText, 'contents: read', source);
-    if (!/\n      issues: (read|write)\n/.test(jobText)) throw new Error(`${source}: missing required text: issues: read`);
+    if (!/\n {6}issues: (read|write)\n/.test(jobText)) throw new Error(`${source}: missing required text: issues: read`);
     const text = stepBlock(jobText, step, source);
     requireText(text, MODE_RESOLVER_FETCH, source);
     requireText(text, verify, source);

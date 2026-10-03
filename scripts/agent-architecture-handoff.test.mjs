@@ -100,6 +100,7 @@ function run(shell, { state, env = {} }) {
       env: {
         ...process.env,
         PATH: `${bin}:${process.env.PATH}`,
+        AGENT_MODE_GH_PATH: join(bin, 'gh'),
         FAKE_GH_STATE: statePath,
         FAKE_GH_LOG: logPath,
         GITHUB_REPOSITORY: REPO,

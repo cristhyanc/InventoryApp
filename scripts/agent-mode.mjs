@@ -82,20 +82,8 @@ function parseRecord(text, issue) {
  * route; full-provider tasks always carry a record, so they can never fall back this way.
  */
 export function resolveMode({ issue, headRef, expectedImplementer, comments, fullProviderEnabled = FULL_PROVIDER_EXECUTION_ENABLED }) {
-  if (!Number.isInteger(issue) || issue < 1) throw new Error('Provider mode needs the pull request\'s issue number.');
-  const implementer = implementerForBranch(headRef);
-  if (!implementer) throw new Error(`Branch '${headRef}' is not an agent/issue-* or copilot/* branch.`);
-  if (expectedImplementer !== implementer) throw new Error(`Branch '${headRef}' belongs to ${implementer}, not ${expectedImplementer}.`);
-  if (implementer === 'claude' && !headRef.startsWith(`agent/issue-${issue}-`)) throw new Error(`Branch '${headRef}' does not belong to issue #${issue}.`);
-  if (!Array.isArray(comments)) throw new Error('Issue comments could not be read; provider mode is unverified.');
-  const records = [];
-  for (const comment of comments) {
-    if (comment?.author !== MODE_RECORD_AUTHOR || typeof comment.body !== 'string') continue;
-    const found = [...comment.body.matchAll(recordPattern)];
-    if (!found.length && comment.body.includes(MODE_RECORD_MARKER)) throw new Error(`Malformed provider-mode record on issue #${issue}; a human must resolve it.`);
-    if (found.length > 1) throw new Error(`A comment on issue #${issue} carries more than one provider-mode record.`);
-    if (found.length) records.push({ at: String(comment.created_at ?? ''), id: Number(comment.id) || 0, record: parseRecord(found[0][1], issue) });
-  }
+  const implementer = verifyBranchIdentity({ issue, headRef, expectedImplementer });
+  const records = collectRecords(comments, issue);
   if (!records.length) {
     return { issue, mode: `cross-${implementer}`, ...ROUTES[`cross-${implementer}`], source: 'legacy' };
   }
@@ -111,7 +99,34 @@ export function resolveMode({ issue, headRef, expectedImplementer, comments, ful
   return { issue, mode: record.mode, implementer, reviewer: record.reviewer, sameProviderReview: record.sameProviderReview, source: 'record', label: record.label, run: record.run };
 }
 
-const gh = (args) => execFileSync('gh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
+/** Checks that the head branch is an agent branch of the expected implementer and issue; returns the implementer. */
+function verifyBranchIdentity({ issue, headRef, expectedImplementer }) {
+  if (!Number.isInteger(issue) || issue < 1) throw new Error('Provider mode needs the pull request\'s issue number.');
+  const implementer = implementerForBranch(headRef);
+  if (!implementer) throw new Error(`Branch '${headRef}' is not an agent/issue-* or copilot/* branch.`);
+  if (expectedImplementer !== implementer) throw new Error(`Branch '${headRef}' belongs to ${implementer}, not ${expectedImplementer}.`);
+  if (implementer === 'claude' && !headRef.startsWith(`agent/issue-${issue}-`)) throw new Error(`Branch '${headRef}' does not belong to issue #${issue}.`);
+  return implementer;
+}
+
+/** Parses the trusted mode records among an issue's comments; anything by another author is ignored. */
+function collectRecords(comments, issue) {
+  if (!Array.isArray(comments)) throw new Error('Issue comments could not be read; provider mode is unverified.');
+  const records = [];
+  for (const comment of comments) {
+    if (comment?.author !== MODE_RECORD_AUTHOR || typeof comment.body !== 'string') continue;
+    const found = [...comment.body.matchAll(recordPattern)];
+    if (!found.length && comment.body.includes(MODE_RECORD_MARKER)) throw new Error(`Malformed provider-mode record on issue #${issue}; a human must resolve it.`);
+    if (found.length > 1) throw new Error(`A comment on issue #${issue} carries more than one provider-mode record.`);
+    if (found.length) records.push({ at: String(comment.created_at ?? ''), id: Number(comment.id) || 0, record: parseRecord(found[0][1], issue) });
+  }
+  return records;
+}
+
+// An absolute path, so the lookup never depends on PATH. GitHub's Ubuntu runners install gh at
+// /usr/bin/gh; tests point AGENT_MODE_GH_PATH at a fake.
+const GH_PATH = process.env.AGENT_MODE_GH_PATH || '/usr/bin/gh';
+const gh = (args) => execFileSync(GH_PATH, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
 
 /** Reads the live pull request and its issue's comments, then resolves the mode. */
 export function verifyPullRequest({ repository, pr, expectedImplementer }) {
@@ -143,7 +158,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     } else if (command === 'verify-pr') {
       const [pr, expectedImplementer] = rest;
       const result = verifyPullRequest({ repository: process.env.GITHUB_REPOSITORY, pr, expectedImplementer });
-      const summary = `Provider mode for pull request #${pr}: ${result.mode} (implementer ${result.implementer}, reviewer ${result.reviewer}${result.sameProviderReview ? ', same-provider review' : ''}; ${result.source === 'legacy' ? 'legacy task without a mode record' : `recorded by run ${result.run} from ${result.label}`}).`;
+      const review = result.sameProviderReview ? ', same-provider review' : '';
+      const origin = result.source === 'legacy' ? 'legacy task without a mode record' : `recorded by run ${result.run} from ${result.label}`;
+      const summary = `Provider mode for pull request #${pr}: ${result.mode} (implementer ${result.implementer}, reviewer ${result.reviewer}${review}; ${origin}).`;
       console.error(`::notice::${summary}`);
       process.stdout.write(`${result.mode}\n`);
     } else throw new Error('Expected record or verify-pr.');
