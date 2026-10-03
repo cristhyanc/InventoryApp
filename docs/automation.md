@@ -6,7 +6,7 @@ This document defines how InventoryApp intends to run a controlled, automated so
 
 ```text
 GitHub issue → implementation agent → feature branch → pull request → read-only architecture check by the other agent
-→ implementer fixes findings → CI validation → final review by the other agent → human approval → develop → release PR → main → Azure deployment → monitoring
+→ implementer fixes findings → CI validation → final review by the other agent → human approval → develop → release PR → main (releasable) → human-started Deploy Production → monitoring
 ```
 
 It describes the lifecycle, the authority of each participant, task states, risk classification, failure handling, traceability, branch policy, and the incremental phases in which the system will be built.
@@ -73,8 +73,8 @@ The target lifecycle for one automated change is:
 10. If validation or review fails, a human may request a repair; the implementation agent may make **no more than two** repair attempts per pull request.
 11. If the pull request still fails, or the requirements are materially ambiguous or conflicting, the task becomes blocked and returns to a human with a precise statement of the decision needed.
 12. A human decides whether to merge into `develop`.
-13. A separate release pull request from `develop` to `main` controls production deployment.
-14. Production deployment remains human-controlled (a human merges the release pull request that triggers it); the resulting schema migration, if any, is then applied automatically by the API on its next Production startup (issue #201), not by a human command.
+13. A separate release pull request from `develop` to `main` makes the change releasable. Merging it deploys nothing.
+14. Production deployment is a separate human decision: a human starts the **Deploy Production** workflow for an exact `main` commit (issue #343). The resulting schema migration, if any, is then applied automatically by the API on its next Production startup (issue #201), not by a human command, and the workflow reports the expected migrations before it deploys.
 
 Today: steps 1–3 are human, except that the preflight in step 3 is the deterministic first job of `agent-implement.yml`. Steps 4–7 are split across two workflows: `agent-implement.yml` performs coding, full validation, persistence and PR creation, then its trusted dispatcher invokes `agent-architecture.yml` from `main` for the exact published head SHA. The architecture workflow independently checks out that SHA, runs the architecture agent and publishes any narrowly scoped structural commit to the same branch. For step 8, only the architecture workflow's deterministic finalizer moves the issue/PR to `agent-review` and invokes trusted `validate.yml` from `main` for the exact final head SHA with `dispatch_review: true`; validation publishes the stable `agent-validation` commit status. For step 9, the initial Claude Code review is then dispatched automatically once `agent-validation` succeeds; no human action requests it. Step 10 exists only as a human-invoked repair (`agent-repair.yml`, started by an `@claude repair` comment); the two-attempt limit is counted by the human, not by a workflow. When a repair actually pushes a new head, its separate dispatcher invokes exact-SHA validation, and successful validation dispatches a fresh review while the `agent-review` label (applied automatically at step 8, or by a human if ever reapplied) remains present. Any other new commit on an eligible labelled agent pull request (for example a human push or an "Update branch" merge) is scheduled the same way by `agent-head-update.yml`; see [Updated-head scheduling](#updated-head-scheduling). Step 11 is partly automatic (the implementation workflow labels the issue `agent-blocked` when implementation or architecture cannot complete with a verified PR head) and otherwise human. Steps 12–14 are human.
 
@@ -219,23 +219,31 @@ This section is derived from the triggers, conditions, and jobs in `.github/work
 
 ### Push to `develop`
 
-`.github/workflows/vm-manager.yml` ("Build and deploy .NET application to Azure Web App vm-manager") triggers on `push` to `develop` and to `main`.
-
-On a push to `develop`:
-
-- The `build` job restores, builds, and tests `backend/InventoryApi.Tests` in Release configuration.
-- The `Publish` and `Publish Artifacts` steps are skipped because they are conditioned on `github.ref == 'refs/heads/main'`.
-- The `deploy` job is skipped for the same reason.
-- No workflow builds or deploys the frontend on a push to `develop`.
+`.github/workflows/vm-manager.yml` ("Build and test API") triggers on `push` to `develop` and to `main`. Its only job restores, builds, and tests `backend/InventoryApi.Tests` in Release configuration. It has no publish, Azure login or deploy step, and only `contents: read`.
 
 A push to `develop` therefore runs backend build and tests but **does not deploy** the API or the frontend.
 
 ### Push or merge to `main`
 
-A merge of a pull request into `main` is a push to `main` and triggers two deployment workflows:
+A merge of a pull request into `main` is a push to `main`. It runs `vm-manager.yml`'s backend build and tests, exactly as a push to `develop` does, and **deploys nothing** (issue #343). `main` means approved, releasable code; production changes only when a human starts [Deploy Production](#deploy-production).
 
-- `.github/workflows/vm-manager.yml`: the `build` job restores, builds, tests, publishes the API, and uploads the package; the `deploy` job then logs in to Azure and deploys the package to the Azure Web App `vm-manager`. The `deploy` job runs against the GitHub environment `VmInventoryApi_Env`. Whether that environment requires a reviewer is a repository setting, not a repository file, and is not verified by this document.
-- `.github/workflows/azure-static-web-apps-red-island-0c128c000.yml` ("Azure Static Web Apps CI/CD"): triggers only on `push` to `main`, builds `frontend/inventory-app`, and deploys `dist/inventory-app/browser` to Azure Static Web Apps. The workflow also contains a `close_pull_request_job`, but because the workflow has no `pull_request` trigger that job never runs.
+### Deploy Production
+
+`.github/workflows/deploy-production.yml` ("Deploy Production") is the only workflow that changes production. It has only a `workflow_dispatch` trigger, so it runs only when a human starts it from the Actions tab. It takes two optional inputs: `sha`, the full 40-character `main` commit to deploy (empty means the `main` commit the run starts from), and `baseline_sha` (see the migration preflight below). One production deployment runs at a time; a second waits rather than cancelling the first.
+
+The jobs run in this order, and each stops everything after it when it fails:
+
+1. **Resolve release commit** (`contents: read`, `deployments: read`). Refuses any run not started from `refs/heads/main` before it checks anything out, requires a full commit SHA, and verifies that the SHA is contained in `main`. That one SHA is the release for the whole run; every later job checks out or downloads artifacts named by it, never a branch tip.
+2. **Validate release commit** (`contents: read` only, no environment, no secrets). Runs `bash scripts/validate.sh` on the exact SHA. Pull-request validation validates the PR merged with its base, which is a different commit from the `main` merge commit, so the release is validated again here.
+3. **Migration preflight** (`contents: read`). Production keeps its data in SQLite on the App Service, and a runner cannot read its applied-migration history, so the preflight derives the *expected* pending migrations from the repository: the EF Core migrations in the release commit minus those in the **baseline**, the last backend commit production is known to run healthily (`scripts/deployment-migration-preflight.mjs`). The baseline is the newest production release this workflow recorded after a successful health check (a GitHub deployment on `VmInventoryApi_Env` with task `deploy:production-backend`); before the first recorded release, the operator supplies `baseline_sha`, and the run fails closed when neither exists or when both exist and differ. The run also fails closed when the scan finds no migrations, or when the baseline contains migrations the release lacks (older code over a newer schema; startup never rolls a migration back). When the release adds migrations, the run summary lists them and the log warns before any deployment step. The preflight never connects to production and never applies a migration.
+4. **Build release artifacts** (`contents: read`). Publishes the API (`dotnet publish` of `InventoryApi.csproj`; the whole publish output is deployed, so other publish content such as a WebJob ships with it) and builds the Angular bundle once, from the release SHA, as artifacts named `api-<sha>` and `frontend-<sha>`.
+5. **Deploy API** (environment `VmInventoryApi_Env`, `contents: read` and `id-token: write`). Repeats the migration warning, re-checks that the SHA is still contained in `main` immediately before Azure authentication (environment approval can come much later than the run started), logs in to Azure with OIDC and deploys the `api-<sha>` package to `vm-manager`.
+6. **Verify API health** (no permissions). Polls `GET /health/ready` on the deployed API for up to about 15 minutes, because startup may be applying migrations. The URL comes from the non-secret repository variable `PRODUCTION_API_BASE_URL` when it is set, otherwise from the deploy step's `webapp-url`. The API does not expose which build is answering, so this proves the API is ready, not which commit it runs.
+7. **Record production backend release** (`deployments: write` only). Runs only after the health check succeeded, and records the SHA as the next run's baseline. A successful package upload alone is never recorded: when the API then fails to start, fails a migration or never becomes healthy, the baseline stays at the last healthy release. The next run then lists this release's migrations again even if startup already applied some of them, which over-reports rather than hides them, and the run summary says the unhealthy package was not recorded.
+8. **Deploy frontend** (environment `VmInventoryApi_Env`, `contents: read`). Runs only after the API deployed, passed its health check and was recorded. Re-checks the SHA against `main`, then uploads the prebuilt `frontend-<sha>` bundle to Azure Static Web Apps with the app build skipped, so the deployed bundle is the one built from the release SHA. It authenticates with the existing Static Web Apps deployment token (a repository secret; Static Web Apps upload does not use Azure OIDC), and then checks that the site answers.
+9. **Deployment summary** (always runs, no permissions). Publishes the release SHA, baseline SHA, validation, preflight and migration result, build, backend deployment, release record, health check and frontend result.
+
+Both deploy jobs use the `VmInventoryApi_Env` environment, so a required reviewer on that environment approves the API and the frontend separately. A failed run changes nothing else: it never reverts or merges code, never changes a label, and never starts an agent or repair. Recovery is a human decision, normally fixing forward through a new release, or restoring a verified backup when a migration must be undone.
 
 Deploying the API restarts the process, and that restart applies its database schema (issue #54, revised by issue #201). **Normal Production startup applies pending migrations automatically**, the same as Development and `Testing`, and fails closed with a `DatabaseMigrationFailedException` naming the environment and the pending migrations if the attempt does not succeed — the API never starts and never serves requests against a schema its code does not match. A non-Production environment that is neither Development nor `Testing` (an ephemeral integration or Staging database, for example) still applies nothing by default and fails closed with a `PendingMigrationsException` instead, unless `Database:AllowAutomaticMigrationUnsafeOutsideDevelopment` is `true` for that disposable database. The explicit `migrate-database` command shipped inside the published application (`dotnet InventoryApi.dll migrate-database --dry-run`, then `--apply`, after taking a verified backup — see `docs/tenant-rollout.md`) remains available; it is no longer mandatory before a normal Production deployment, but is still how an operator inspects what a pending deployment will apply, or applies a high-risk migration ahead of a deployment window under review. Recovery from a failed or unwanted apply — automatic or manual — is a database restore from a verified backup, not a further automated migration: neither startup nor `migrate-database` ever rolls back a migration, and re-running either only applies what is still pending.
 
@@ -377,14 +385,16 @@ Documentation (`AGENTS.md`, `CLAUDE.md`, `docs/`, `README.md`, and the issue and
 | `agent-review-request.yml` | Nothing | — |
 | `agent-head-update.yml` | Nothing | — |
 | `agent-repair.yml` | Nothing | — |
-| `vm-manager.yml` | API to Azure App Service | `push` to `main` only |
-| `azure-static-web-apps-red-island-0c128c000.yml` | Frontend to Azure Static Web Apps | `push` to `main` only |
+| `vm-manager.yml` | Nothing (backend build and tests on `push` to `develop` and `main`) | — |
+| `deploy-production.yml` | API to Azure App Service, then frontend to Azure Static Web Apps | `workflow_dispatch` started by a human from `main` only |
+
+`scripts/validate-deployment-workflows.mjs` (run by `validate.yml`, with its tests) enforces this table: no workflow other than `deploy-production.yml` may contain an Azure login, App Service or Static Web Apps deploy step, the Static Web Apps token or the production environment, and Deploy Production must keep its manual-only trigger, `main` gate, single release SHA, job ordering and permission boundaries.
 
 There is no staging environment and no automated path from an issue to `main`.
 
 ### Where agents stop today
 
-`AGENTS.md` requires every agent to work on a feature branch, run complete validation, and open a pull request targeting `develop`. After that, the agent may update only its feature branch, for at most two permitted repair attempts in response to CI or review failures, each explicitly requested by a human, and then stops and returns control to a human. Agents do not merge and do not deploy. Because a merge to `main` deploys production, this boundary is a safety control, not a convention, and the workflow permissions above are chosen so that the agents cannot cross it even if instructed to.
+`AGENTS.md` requires every agent to work on a feature branch, run complete validation, and open a pull request targeting `develop`. After that, the agent may update only its feature branch, for at most two permitted repair attempts in response to CI or review failures, each explicitly requested by a human, and then stops and returns control to a human. Agents do not merge and do not deploy. Because production changes only through the human-started Deploy Production workflow, and agents can neither merge to `main` nor start that workflow, this boundary is a safety control, not a convention, and the workflow permissions above are chosen so that the agents cannot cross it even if instructed to.
 
 ## Roles and authority
 
@@ -412,8 +422,8 @@ The authority matrix below applies to every phase. The implementation agent is t
 | Merge to `develop` | Yes | **No** | **No** | No | No |
 | Prepare or update a `develop` → `main` release PR | Yes | Only when a human explicitly and separately requests it | **No** | No | No |
 | Approve or merge a release PR | Yes | **No** | **No** | No | No |
-| Deploy an environment | Yes, indirectly, by merging a release PR to `main` | **No** | **No** | No | Yes, on `push` to `main` |
-| Run production migrations | Yes, via the human-invoked `migrate-database --apply` command, for diagnostics or ahead of a deployment window | **No** | **No** | No | Indirectly: the API process applies pending migrations automatically on normal Production startup after a deploy (issue #201); the deployment workflow itself does not run migration commands (see [Push or merge to `main`](#push-or-merge-to-main)) |
+| Deploy an environment | Yes, by starting Deploy Production for a `main` commit | **No** | **No** | No | Yes, only `deploy-production.yml` and only when a human starts it from `main` |
+| Run production migrations | Yes, via the human-invoked `migrate-database --apply` command, for diagnostics or ahead of a deployment window | **No** | **No** | No | Indirectly: the API process applies pending migrations automatically on normal Production startup after a deploy (issue #201); the deployment workflow itself does not run migration commands; it reports the expected pending migrations before deploying (see [Deploy Production](#deploy-production)) |
 | Modify production data | Yes | **No** | **No** | No | No |
 | Access production secrets | Only through approved secure platform administration when required | **No** | **No** | No | Consume configured secrets without displaying or returning them |
 | Expose production secrets | **No** | **No** | **No** | **No** | **No** |
@@ -511,7 +521,7 @@ CI (`validate.yml`) validates pull requests independently of the agent's own val
 
 ### Deployment workflows
 
-The deployment workflows run only on a push to `main`. They are not invoked by agents, review steps, or CI. Their credentials are repository/environment secrets and variables that are not available to the implementation or review agent.
+The only deployment workflow, `deploy-production.yml`, runs only when a human starts it from `main`. It is not invoked by agents, review steps, CI, or a push. Their credentials are repository/environment secrets and variables that are not available to the implementation or review agent.
 
 ## Task states and labels
 
@@ -615,7 +625,7 @@ Every automated change must maintain an unbroken, inspectable chain:
 | Agent run | GitHub Actions run of `agent-implement.yml`, `agent-architecture.yml`, `agent-review.yml`, or `agent-repair.yml`, linked from the closing comment | Full log of what the agent read, ran, and changed. |
 | Review result | PR review/comments | Review-agent comment review with its `VERDICT:` line, plus human review. |
 | Human merge decision | PR merge by a human | Records who accepted the change into `develop`. |
-| Release/deployment record | `develop` → `main` release PR and the workflow run | Applies when the change reaches production. |
+| Release/deployment record | `develop` → `main` release PR, then the Deploy Production run (its summary and the `deploy:production-backend` deployment record) | The release PR makes the change releasable; the Deploy Production run records the exact SHA that reached production. |
 
 A change whose chain is broken (for example a PR without an issue, or a validation claim without evidence) is not eligible for automated handling and must be reviewed as an ordinary human change.
 
@@ -625,9 +635,9 @@ A change whose chain is broken (for example a PR without an issue, or a validati
 - Normal feature and fix pull requests target `develop`.
 - `develop` is the integration branch. A push to `develop` runs backend build and tests (`vm-manager.yml` build job) but does not deploy.
 - Production releases use a **separate** pull request from `develop` to `main`.
-- A merge or push to `main` deploys the API and the frontend to Azure through the existing workflows. The deployment workflow itself does not apply EF Core migrations; the API process does, automatically, on its next Production startup after the deploy (issue #201), and fails closed if that attempt does not succeed. Outside Development, `Testing`, and Production, API startup still applies no schema change and fails closed if one is pending (see [Push or merge to `main`](#push-or-merge-to-main)).
-- An agent may prepare or update a `develop` to `main` release pull request only when a human explicitly requests it. Permission to implement a feature never grants permission to create a release pull request. Agents never merge or deploy: a human reviews and merges the release pull request, and the existing workflow performs the deployment.
-- Production deployments require human control: a human reviews and merges the release pull request that triggers one. There is no automated path from an issue to production. The schema migration a deployment may trigger is applied automatically by the API itself, not by any agent or workflow; an agent must still never invoke `migrate-database --apply` against Production, and never deploy, on its own initiative.
+- A merge or push to `main` deploys nothing: `main` is approved, releasable code. A human deploys it by starting [Deploy Production](#deploy-production) for an exact `main` commit, which deploys the API, verifies its health, then deploys the frontend from the same commit. The deployment workflow itself does not apply EF Core migrations; it reports the expected ones, and the API process applies them automatically on its next Production startup after the deploy (issue #201), failing closed if that attempt does not succeed. Outside Development, `Testing`, and Production, API startup still applies no schema change and fails closed if one is pending.
+- An agent may prepare or update a `develop` to `main` release pull request only when a human explicitly requests it. Permission to implement a feature never grants permission to create a release pull request. Agents never merge or deploy: a human reviews and merges the release pull request, and a human starts Deploy Production.
+- Production deployments require human control: a human starts each one. A failed deployment never gives an agent authority to merge, revert, roll back or deploy. There is no automated path from an issue to production. The schema migration a deployment may trigger is applied automatically by the API itself, not by any agent or workflow; an agent must still never invoke `migrate-database --apply` against Production, and never deploy, on its own initiative.
 
 ## Recommended repository protection checklist
 
@@ -644,7 +654,8 @@ A change whose chain is broken (for example a PR without an issue, or a validati
 | Deployment credentials | Keep Azure deployment secrets/variables and the `VmInventoryApi_Env` environment unavailable to implementation and review agents. The agent workflows request none of them. |
 | Agent credential | Keep `CLAUDE_CODE_OAUTH_TOKEN` a repository secret used only by the agent workflows; rotate it by regenerating it with `claude setup-token`. Do not make it available to forks (GitHub already withholds secrets from fork pull requests). |
 | Workflow branches | The agent workflows must exist on `main` (where `issues` and `issue_comment` workflows run from) and on `develop` (where `pull_request` workflows targeting `develop` run from). Keep them identical on both. The documentation impact preflight in `agent-implement.yml` takes effect when it reaches `main`; backfill issues #87–#92 before then (see [Documentation impact gate](#documentation-impact-gate)). |
-| Production approval | Configure a human-controlled required reviewer on the production deployment environment, when available on the repository's plan. |
+| Production approval | Configure a human-controlled required reviewer on the production deployment environment (`VmInventoryApi_Env`), when available on the repository's plan. Both Deploy Production deploy jobs use it, so the reviewer approves the API and then the frontend. |
+| Production deployment branch | Restrict `VmInventoryApi_Env`'s deployment branches to `main`. Deploy Production refuses other refs itself, but that check lives in the workflow file, which someone could edit on another branch; the environment rule is the boundary that cannot be edited from a branch. Also restrict who may run workflows (write access) to people trusted to deploy: `workflow_dispatch` can also be started through the GitHub API by anyone with that access, so the environment's required reviewer is the actual human approval barrier, and should be configured before the first production run. |
 | Review count | Require at least one human approving review on `main`; consider the same for `develop`. |
 
 `docs/architecture.md` already notes that branch protection and required-check configuration live in repository settings and must be enabled separately from source-controlled workflows.

@@ -218,6 +218,12 @@ jobs:
           node --test scripts/copilot-review-contract.test.mjs
           node --test scripts/sonar-new-issues.test.mjs
 
+      - name: Validate deployment workflow contracts
+        run: |
+          node scripts/validate-deployment-workflows.mjs
+          node --test scripts/validate-deployment-workflows.test.mjs
+          node --test scripts/deployment-migration-preflight.test.mjs
+
       - name: Validate repository
         run: bash scripts/validate.sh
 

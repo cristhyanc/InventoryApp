@@ -34,6 +34,8 @@ frontend/inventory-app/eslint.config.js    Angular/TypeScript ESLint flat config
 scripts/validate.ps1                  Complete Windows validation
 scripts/validate.sh                   Complete Bash validation
 scripts/validate-agent-workflows.mjs  Agent workflow and template contract checks (with .test.mjs)
+scripts/validate-deployment-workflows.mjs  Production deployment workflow contract checks (with .test.mjs)
+scripts/deployment-migration-preflight.mjs Deploy Production migration preflight (with .test.mjs)
 scripts/validate-documentation-impact.mjs  Documentation-impact declaration parser for issues and PRs (with .test.mjs)
 scripts/run-agent-evals.mjs           InventoryApp Agent Evals runner (with .test.mjs)
 evals/agent/                          Agent Evals corpus, schema and baseline report (see evals/agent/README.md)
@@ -66,8 +68,8 @@ If complete validation cannot run, state exactly which command failed or was una
 
 - The default base branch for normal work is `develop`. Create feature branches from the latest `develop`.
 - Normal feature and fix pull requests target `develop`, which is the integration branch. A push to `develop` runs backend build and tests but does not deploy.
-- Production releases are separate pull requests from `develop` to `main`. A merge to `main` deploys the API and frontend to Azure.
-- An agent may prepare or update a `develop` to `main` release pull request only when a human explicitly requests it. Permission to implement a feature never grants permission to create a release pull request. Agents never merge or deploy: a human reviews and merges the release pull request, and the existing workflow performs the deployment.
+- Production releases are separate pull requests from `develop` to `main`. A merge to `main` deploys nothing: `main` is approved, releasable code. Production changes only when a human starts the **Deploy Production** workflow (`.github/workflows/deploy-production.yml`) for an exact `main` commit; it validates that commit, reports the EF Core migrations production startup is expected to apply, deploys the API, verifies its health, and then deploys the frontend from the same commit (see `docs/automation.md` § Deploy Production).
+- An agent may prepare or update a `develop` to `main` release pull request only when a human explicitly requests it. Permission to implement a feature never grants permission to create a release pull request. Agents never merge or deploy: a human reviews and merges the release pull request, and a human starts Deploy Production.
 
 ## Automated task contract
 
@@ -311,7 +313,7 @@ Do not weaken or delete a failing test merely to obtain a green build. If an est
 
 - Never add secrets to source, test fixtures, logs, screenshots, documentation, issues, pull-request text, build output, or API responses. No participant, human or agent, may expose a production secret; humans access production secrets only through approved secure platform administration when required.
 - Do not alter GitHub/Azure credentials, environment variables, production CORS origins, deployment environments, or infrastructure unless explicitly requested.
-- A push to `main` deploys both the API and frontend. Agents must create a branch and a pull request targeting `develop`. Agents never merge or deploy. Production releases are separate `develop` to `main` pull requests that an agent prepares only on explicit human request and that only a human approves and merges; the existing workflow performs the deployment after that merge.
+- A push to `main` deploys nothing; only the human-started Deploy Production workflow deploys the API and frontend. Agents must create a branch and a pull request targeting `develop`. Agents never merge, deploy, or start Deploy Production. Production releases are separate `develop` to `main` pull requests that an agent prepares only on explicit human request and that only a human approves and merges; a human then starts Deploy Production. A failed production deployment never gives an agent authority to merge, revert, roll back or deploy; recovery is a human decision. Do not add Azure login, deploy steps, the production environment or deployment secrets to any other workflow; `scripts/validate-deployment-workflows.mjs` rejects it.
 - Agents never deploy, run production migrations, import production statements, modify production data, or invoke destructive remote operations. These remain human-controlled operations performed outside the agent's authority.
 - Do not use `git push --force`, destructive resets, or history rewriting.
 
