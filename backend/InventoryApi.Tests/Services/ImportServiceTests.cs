@@ -1,5 +1,4 @@
 using InventoryApi.Data;
-using Inventory.Application.Nayax;
 using InventoryApi.Models;
 using InventoryApi.Services;
 using Microsoft.AspNetCore.Hosting;
@@ -15,48 +14,6 @@ namespace InventoryApi.Tests.Services;
 
 public class ImportServiceTests
 {
-    [Fact]
-    public async Task ImportProducts_adds_new_products_and_categories()
-    {
-        await using var db = CreateDbContext();
-        var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(client => client.GetProductsAsync(It.IsAny<System.Threading.CancellationToken>()))
-            .ReturnsAsync(new List<NayaxProduct>
-            {
-                new() { NayaxProductId = 100, ProductName = "X", ProductGroupId = 10, ProductCostPrice = 2 }
-            });
-        nayax.Setup(client => client.GetProductGroupssAsync(It.IsAny<System.Threading.CancellationToken>()))
-            .ReturnsAsync(new List<NayaxProductGroup>
-            {
-                new() { ProductGroupID = 10, ProductGroupName = "G1" }
-            });
-
-        var result = await CreateImportService(db, nayax.Object).ImportProductsAsync();
-
-        Assert.True(result);
-        Assert.NotNull(await db.Products.FindAsync(100L));
-        Assert.NotNull(await db.Categories.FindAsync(10L));
-    }
-
-    [Fact]
-    public async Task ImportProducts_sets_unit_price_from_retail_price_not_cost_price()
-    {
-        await using var db = CreateDbContext();
-        var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(client => client.GetProductsAsync(It.IsAny<System.Threading.CancellationToken>()))
-            .ReturnsAsync(new List<NayaxProduct>
-            {
-                new() { NayaxProductId = 100, ProductName = "X", ProductCostPrice = 1.10m, RetailPrice = 3.50m }
-            });
-        nayax.Setup(client => client.GetProductGroupssAsync(It.IsAny<System.Threading.CancellationToken>()))
-            .ReturnsAsync(new List<NayaxProductGroup>());
-
-        await CreateImportService(db, nayax.Object).ImportProductsAsync();
-
-        var product = await db.Products.SingleAsync(p => p.Id == 100);
-        Assert.Equal(3.50m, product.UnitPrice);
-    }
-
     [Fact]
     public async Task Sales_import_recosts_an_updated_transaction()
     {
@@ -96,14 +53,13 @@ public class ImportServiceTests
         TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
 
-    private static ImportService CreateImportService(AppDbContext db, INayaxLynxClient? nayax = null)
+    private static ImportService CreateImportService(AppDbContext db)
     {
         var rebuild = TestCostingUseCases.Rebuild(db);
         return new ImportService(
             db,
             Mock.Of<IWebHostEnvironment>(),
             Mock.Of<ILogger<ImportService>>(),
-            nayax ?? Mock.Of<INayaxLynxClient>(),
             TestCostingUseCases.CostSale(db, rebuild),
             rebuild);
     }

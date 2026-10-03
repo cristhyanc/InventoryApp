@@ -39,7 +39,8 @@ public class CalculateReorderNeedsTests
     /// constructor (for the concurrency-bound test above) whose extra <c>int</c> parameter is never
     /// registered as a service. If the DI container ever treated that as ambiguous rather than falling
     /// back to the two-argument constructor, every consumer resolved through
-    /// <c>AddApplicationServices</c> - including <c>ProductService</c> - would fail at startup.
+    /// <c>AddApplicationServices</c> - including <c>ListLowStockProducts</c>, which
+    /// <c>ProductsController</c> depends on - would fail at startup.
     /// </summary>
     [Fact]
     public void AddApplicationServices_ResolvesCalculateReorderNeeds_DespiteItsSecondTestOnlyConstructor()

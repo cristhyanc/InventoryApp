@@ -166,7 +166,6 @@ nayaxLynxOptions.AccessToken = NayaxLynxConfiguration.ResolveAccessToken(
 builder.Services.AddNayaxLynxClient(nayaxLynxOptions);
 
 // Business services
-builder.Services.AddScoped<InventoryApi.Services.Interfaces.IProductService, InventoryApi.Services.ProductService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IPurchaseService, InventoryApi.Services.PurchaseService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.ISupplierOrderService, InventoryApi.Services.SupplierOrderService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IMachineService, InventoryApi.Services.MachineService>();
@@ -298,6 +297,10 @@ builder.Services.AddScoped<IInventoryCountAdjustmentStore, EfInventoryCountAdjus
 // Temporary API-owned adapter for the imported-reimbursement persistence port (issue #299); see
 // EfImportedReimbursementStore.
 builder.Services.AddScoped<IImportedReimbursementStore, EfImportedReimbursementStore>();
+
+// Temporary API-owned adapter for the Nayax product catalogue import persistence port (issue
+// #300); see EfNayaxProductCatalogImportStore.
+builder.Services.AddScoped<INayaxProductCatalogImportStore, EfNayaxProductCatalogImportStore>();
 
 var app = builder.Build();
 
