@@ -87,13 +87,15 @@ test('readiness labels map to trusted routes; Claude-primary is the default', ()
   }
 });
 
-test('full-provider labels are recognised but cannot start work until every route is connected', () => {
-  assert.equal(FULL_PROVIDER_EXECUTION_ENABLED, false);
+test('full-provider labels start work by default and refuse to start when the kill switch is off', () => {
+  assert.equal(FULL_PROVIDER_EXECUTION_ENABLED, true);
   for (const provider of ['claude', 'copilot']) {
     const label = `agent-ready-full-${provider}`;
-    assert.throws(() => prepareSelection({ provider, label, issue: issue(label) }), /not enabled yet/);
-    // A forged selection cannot switch the gate on during the pre-mutation recheck.
-    assert.throws(() => verifySnapshot({ provider, label, fingerprint: 'x', fullProviderEnabled: true }, issue(label)), /not enabled yet/);
+    const selection = prepareSelection({ provider, label, issue: issue(label) });
+    assert.equal(selection.mode, `full-${provider}`);
+    // Haiku triage runs for the full labels too: they carry no explicit tier.
+    assert.equal(selection.triage, true);
+    assert.throws(() => prepareSelection({ provider, label, issue: issue(label), fullProviderEnabled: false }), /not enabled yet/);
   }
 });
 
@@ -153,12 +155,14 @@ test('workflow contract rejects missing model gates, triage write tools and unbo
     [implementPath, '--model ${{ needs.model.outputs.model }}', '--model opus'],
     [copilotPath, 'model: $model', 'model: ""'],
     [copilotPath, '/^agent-ready-(?:(?:claude|copilot)(?:-low|-high)?|full-(?:claude|copilot))$/', '/^agent-ready-(claude|copilot)(-low|-high)?$/'],
-    [implementPath, "github.event.label.name == 'agent-ready-claude-high')", "github.event.label.name == 'agent-ready-claude-high' || github.event.label.name == 'agent-ready-full-claude')"],
-    [copilotPath, "github.event.label.name == 'agent-ready-copilot-high')", "github.event.label.name == 'agent-ready-copilot-high' || github.event.label.name == 'agent-ready-full-copilot')"],
+    // The full label must stay in the trigger while full-provider execution is enabled.
+    [implementPath, " || github.event.label.name == 'agent-ready-full-claude')", ")"],
+    // The full label must stay in the trigger while full-provider execution is enabled.
+    [copilotPath, " || github.event.label.name == 'agent-ready-full-copilot')", ")"],
   ]) {
     const original = readRepositoryFile(path);
     assert.ok(original.includes(from));
-    assert.throws(() => verifyImplementationModelSelection(p => p === path ? original.replace(from, to) : readRepositoryFile(p)), /missing required|forbidden/);
+    assert.throws(() => verifyImplementationModelSelection(p => p === path ? original.replaceAll(from, to) : readRepositoryFile(p)), /missing required|forbidden/);
   }
 });
 

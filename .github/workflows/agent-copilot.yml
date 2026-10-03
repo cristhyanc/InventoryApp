@@ -1,11 +1,16 @@
 name: Agent Copilot implementation
 
-# Implementation by GitHub Copilot for issues a human has marked `agent-ready-copilot`.
+# Implementation by GitHub Copilot for issues a human has marked `agent-ready-copilot` (explicit
+# Copilot-standard override; Claude-primary `agent-ready-claude` is the default) or
+# `agent-ready-full-copilot` (single-provider fallback).
 #
 # Authority and lifecycle: AGENTS.md ("Automated task contract") and docs/automation.md.
-# Cross-review: Copilot implements, Claude checks the architecture read-only, Copilot fixes Claude's
-# architecture findings, exact-SHA validation runs, and Claude does the final review. A human merges.
-# - preflight/assign: when a human applies `agent-ready-copilot` to an issue, the read-only preflight
+# Cross-review (`agent-ready-copilot`): Copilot implements, Claude checks the architecture read-only,
+# Copilot fixes the findings, exact-SHA validation runs, and Claude does the final review.
+# Full Copilot (`agent-ready-full-copilot`): the same stages, but a separate read-only Copilot CLI
+# invocation checks the architecture and does the final review (same-provider, not independent). Only
+# the shared Claude Haiku model triage uses Claude on that path. A human merges.
+# - preflight/assign: when a human applies one of those labels to an issue, the read-only preflight
 #   validates the issue's documentation-impact declaration; only then is the issue relabelled
 #   `agent-working` and assigned to the Copilot coding agent with base branch `develop`.
 #   Assigning Copilot needs a user-to-server token (COPILOT_AGENT_TOKEN, the owner's fine-grained
@@ -42,7 +47,7 @@ jobs:
 
   preflight:
     name: Validate issue documentation-impact declaration
-    if: github.event_name == 'issues' && (github.event.label.name == 'agent-ready-copilot' || github.event.label.name == 'agent-ready-copilot-low' || github.event.label.name == 'agent-ready-copilot-high') && github.event.issue.pull_request == null
+    if: github.event_name == 'issues' && (github.event.label.name == 'agent-ready-copilot' || github.event.label.name == 'agent-ready-copilot-low' || github.event.label.name == 'agent-ready-copilot-high' || github.event.label.name == 'agent-ready-full-copilot') && github.event.issue.pull_request == null
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -78,7 +83,7 @@ jobs:
   assign:
     name: Assign agent-ready-copilot issue to Copilot
     needs: [preflight, model]
-    if: needs.preflight.result == 'success' && needs.model.result == 'success' && github.event_name == 'issues' && (github.event.label.name == 'agent-ready-copilot' || github.event.label.name == 'agent-ready-copilot-low' || github.event.label.name == 'agent-ready-copilot-high') && github.event.issue.pull_request == null
+    if: needs.preflight.result == 'success' && needs.model.result == 'success' && github.event_name == 'issues' && (github.event.label.name == 'agent-ready-copilot' || github.event.label.name == 'agent-ready-copilot-low' || github.event.label.name == 'agent-ready-copilot-high' || github.event.label.name == 'agent-ready-full-copilot') && github.event.issue.pull_request == null
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -112,8 +117,9 @@ jobs:
           const active = issue.labels.some(x => ['agent-working','agent-architecture-fix','agent-review','agent-blocked'].includes(x.name));
           const fingerprint = createHash('sha256').update(JSON.stringify({ title: issue.title, body: issue.body })).digest('hex');
           if (issue.state !== 'OPEN' || active || ready.length !== 1 || ready[0] !== process.env.READY_LABEL || fingerprint !== process.env.TASK_FINGERPRINT) throw new Error('Task changed after model selection; resolve labels/scope and re-apply readiness.');
-          // Only the standard Copilot labels start this job, so the trusted selection must be cross-copilot.
-          if (process.env.AGENT_MODE !== 'cross-copilot') throw new Error('Selected provider mode does not match the readiness label.');
+          // The trusted selection's mode must be the one this label names; a mismatch never switches the route.
+          const expectedMode = process.env.READY_LABEL === 'agent-ready-full-copilot' ? 'full-copilot' : 'cross-copilot';
+          if (process.env.AGENT_MODE !== expectedMode) throw new Error('Selected provider mode does not match the readiness label.');
           JS
 
           assigned=false
@@ -144,11 +150,19 @@ jobs:
           - Do not change anything under .github/, secrets, credentials or repository settings, and never commit local databases, uploaded documents, secrets or build output.
           - Run bash scripts/validate.sh and report its real result. Never claim a check passed unless it ran and succeeded.
           - Write the pull request description with the sections of .github/pull_request_template.md, including "## Documentation impact" with exactly one "Decision: UPDATED" or "Decision: NOT REQUIRED" line and one specific "Evidence:" line that honours the issue's decision, and "Fixes #<issue>" for this issue.
-          - When the work is complete, request review from the person who assigned you. A human marks the pull request ready for review, which starts Claude's read-only architecture check; you then fix any architecture findings Claude reports, and Claude does the final review.
+          - When the work is complete, request review from the person who assigned you. A human marks the pull request ready for review, which starts a separate read-only architecture check; you then fix any architecture findings it reports, and a separate read-only final review follows.
           EOF
           )"
 
+          # The provider route decides who checks and reviews; Copilot is never told it reviews itself independently.
+          case "$AGENT_MODE" in
+            cross-copilot) checker="Claude" ;;
+            full-copilot) checker="a separate read-only Copilot invocation (same-provider review, not independent)" ;;
+            *) fail "Unknown provider mode '$AGENT_MODE'." ;;
+          esac
+
           instructions="$instructions
+          Provider mode: $AGENT_MODE. The architecture check and final review are done by $checker.
           Implementation model is fixed to $IMPLEMENTATION_MODEL ($MODEL_TIER). Do not switch models or delegate to another model. If inadequate, stop and report the limitation for a human to relabel the task."
 
           payload="$(jq -n \
@@ -168,4 +182,4 @@ jobs:
           assigned=true
 
           gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
-            --body "Assigned to the Copilot coding agent with base branch develop. Provider mode: $AGENT_MODE. Implementation model: $IMPLEMENTATION_MODEL ($MODEL_TIER). $MODEL_REASON When Copilot's pull request is marked ready for review, Claude runs a read-only architecture check, Copilot fixes any findings, exact-SHA validation runs, and Claude does the final review. Run: $RUN_URL"
+            --body "Assigned to the Copilot coding agent with base branch develop. Provider mode: $AGENT_MODE. Implementation model: $IMPLEMENTATION_MODEL ($MODEL_TIER). $MODEL_REASON When Copilot's pull request is marked ready for review, $checker runs a read-only architecture check, Copilot fixes any findings, exact-SHA validation runs, and $checker does the final review. Run: $RUN_URL"

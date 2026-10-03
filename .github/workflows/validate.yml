@@ -19,7 +19,7 @@ on:
         required: true
         type: string
       dispatch_review:
-        description: Request the cross review (Copilot for Claude PRs, Claude for Copilot PRs) after validation succeeds
+        description: Request the route's final review (agent-review.yml picks the reviewer from the verified provider mode) after validation succeeds
         required: false
         default: false
         type: boolean
@@ -347,8 +347,8 @@ jobs:
             exit 0
           fi
 
-          # Cross-review: agent-review.yml runs the reviewer that did not implement the change (the
-          # Copilot CLI for a Claude implementation, Claude for a Copilot implementation).
+          # agent-review.yml picks the reviewer from the verified provider mode: the other provider on
+          # the cross routes, a separate same-provider invocation on the full-provider fallbacks.
           gh workflow run agent-review.yml \
             --repo "$GITHUB_REPOSITORY" \
             --ref main \

@@ -1,18 +1,25 @@
 name: Agent Copilot architecture check
 
-# Claude's read-only architecture check of a Copilot-implemented pull request (`agent-ready-copilot`).
-# Invoked only through workflow_dispatch from trusted default-branch automation (agent-copilot-handoff.yml).
+# Read-only architecture check of a Copilot-implemented pull request (`agent-ready-copilot` or
+# `agent-ready-full-copilot`). Invoked only through workflow_dispatch from trusted default-branch
+# automation (agent-copilot-handoff.yml).
 #
-# Cross-check: Claude reads the touched code and returns findings as schema-validated structured
-# output; the check job has no write permission and Claude's tools are read-only, so it cannot edit,
-# commit, push, comment or label. In parallel a deterministic job reads the open SonarCloud issues
-# reported on the exact head SHA. A separate deterministic finalize job then:
+# The verified provider mode picks exactly one read-only checker; the other job is skipped, so its
+# provider and secret are never touched:
+# - cross-copilot (explicit Copilot-standard override): Claude reads the touched code and returns
+#   findings as schema-validated structured output (check). Its tools are read-only.
+# - full-copilot (single-provider fallback): a separate, fresh read-only Copilot CLI invocation does the
+#   same check (copilot-check) and is labelled a same-provider check, not an independent one. No Claude
+#   invocation or Claude secret is used.
+# Neither check job has write permission, so neither can edit, commit, push, comment or label. In
+# parallel a deterministic job reads the open SonarCloud issues reported on the exact head SHA. A
+# separate deterministic finalize job then:
 # - with findings or SonarCloud issues: asks Copilot to fix them in an @copilot comment posted with the owner's token
 #   (Copilot only acts on mentions from people with write access), and labels the pull request
 #   `agent-review`, so Copilot's fix push is validated at its exact SHA by agent-head-update.yml and
-#   then reviewed by Claude;
+#   then gets its final review (Claude, or a separate Copilot invocation on full-copilot);
 # - with a clean result and no SonarCloud issues: labels the pull request `agent-review` and dispatches exact-SHA validation
-#   with dispatch_review=true, which dispatches Claude's final review on success.
+#   with dispatch_review=true, which dispatches the route's final review on success.
 # Any failure before that handoff moves the issue from agent-working to agent-blocked.
 # Nothing here approves, merges, releases, or deploys.
 
@@ -51,6 +58,8 @@ jobs:
       issue_number: ${{ steps.context.outputs.issue_number }}
       pr_number: ${{ steps.context.outputs.pr_number }}
       head_sha: ${{ steps.context.outputs.head_sha }}
+      agent_mode: ${{ steps.context.outputs.agent_mode }}
+      checker: ${{ steps.context.outputs.checker }}
 
     steps:
       - name: Verify exact Copilot pull request
@@ -83,7 +92,7 @@ jobs:
           [ "$is_draft" = "false" ] || fail "Pull request #$PR_NUMBER is a draft."
           [ "$base_ref" = "develop" ] || fail "Architecture check is limited to pull requests targeting develop."
           [ "$head_repo" = "$GITHUB_REPOSITORY" ] || fail "Architecture check is limited to same-repository branches."
-          [[ "$head_ref" == copilot/* ]] || fail "Claude's architecture check is limited to Copilot-implemented copilot/* branches."
+          [[ "$head_ref" == copilot/* ]] || fail "This architecture check is limited to Copilot-implemented copilot/* branches."
           [ "$author" = "$EXPECTED_COPILOT_AUTHOR" ] || fail "Architecture check requires $EXPECTED_COPILOT_AUTHOR as the pull request author."
           [ "$current_sha" = "$HEAD_SHA" ] || fail "Refusing stale architecture check: pull request head is $current_sha, expected $HEAD_SHA."
           jq -e --argjson n "$ISSUE_NUMBER" '[.closingIssuesReferences[]?.number] == [$n]' <<<"$pr_json" >/dev/null \
@@ -92,6 +101,12 @@ jobs:
           # resolver from this workflow's own commit. A conflicting, malformed or disabled mode fails closed.
           gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/scripts/agent-mode.mjs?ref=$GITHUB_WORKFLOW_SHA" > "$RUNNER_TEMP/agent-mode.mjs"
           agent_mode="$(node "$RUNNER_TEMP/agent-mode.mjs" verify-pr "$PR_NUMBER" "copilot")" || fail "the provider mode of pull request #$PR_NUMBER could not be verified."
+          # The route picks the read-only checker. Nothing falls back to the other provider.
+          case "$agent_mode" in
+            cross-copilot) checker=claude ;;
+            full-copilot) checker=copilot ;;
+            *) fail "Provider mode '$agent_mode' is not a Copilot-implemented route." ;;
+          esac
 
           issue_json="$(gh issue view "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --json state,labels)"
           [ "$(jq -r '.state' <<<"$issue_json")" = "OPEN" ] || fail "Issue #$ISSUE_NUMBER is not open."
@@ -106,11 +121,15 @@ jobs:
             echo "issue_number=$ISSUE_NUMBER"
             echo "pr_number=$PR_NUMBER"
             echo "head_sha=$HEAD_SHA"
+            echo "agent_mode=$agent_mode"
+            echo "checker=$checker"
           } >> "$GITHUB_OUTPUT"
 
   check:
     name: Claude architecture check (read-only)
     needs: context
+    # Copilot-standard route only; the full-copilot route never runs Claude here.
+    if: needs.context.outputs.checker == 'claude'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     # Read-only: this job runs Claude and holds no pull-request, issue, status or workflow write
@@ -166,6 +185,100 @@ jobs:
             "Bash(gh pr review *),Bash(gh pr comment *),Bash(gh pr merge *),Bash(gh pr edit *),Bash(gh issue edit *),Bash(gh issue comment *),Bash(gh api *),Bash(gh workflow *),Bash(gh label *)"
             "Bash(git push *),Bash(git commit *),Bash(git add *),Bash(git checkout *),Bash(git switch *),Bash(git reset *),Bash(git rebase *),Bash(git merge *),Bash(git restore *),Bash(git clean *)"
 
+  copilot-check:
+    name: Same-provider Copilot architecture check (read-only)
+    needs: context
+    # Full-copilot route only: a fresh Copilot CLI invocation with no implementation session state.
+    if: needs.context.outputs.checker == 'copilot'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Read-only: no write permission, no persisted checkout credentials, no Anthropic or App
+    # credential, and the Copilot token is a fine-grained token that only meters Copilot requests.
+    # Copilot returns findings as text; it cannot change the branch, the pull request, labels or the issue.
+    permissions:
+      contents: read
+    outputs:
+      verdict: ${{ steps.copilot_check.outputs.verdict }}
+      findings: ${{ steps.copilot_check.outputs.findings }}
+
+    steps:
+      - name: Check out exact Copilot head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.context.outputs.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      # The Copilot CLI version is pinned by the lockfile in .github/copilot-cli on the trusted
+      # workflow commit (github.sha), never by the pull request head, and installed without
+      # lifecycle scripts.
+      - name: Install pinned Copilot CLI
+        env:
+          TRUSTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # The pinned manifest is trusted only when this run is the main-branch workflow.
+          [ "$GITHUB_REF" = "refs/heads/main" ] || { echo "::error::The Copilot CLI is installed only from main, not $GITHUB_REF."; exit 1; }
+          cli_dir="$RUNNER_TEMP/copilot-cli"
+          mkdir -p "$cli_dir"
+          for file in package.json package-lock.json; do
+            git show "$TRUSTED_SHA:.github/copilot-cli/$file" > "$cli_dir/$file"
+          done
+          npm ci --prefix "$cli_dir" --ignore-scripts --no-audit --no-fund
+          echo "$cli_dir/node_modules/.bin" >> "$GITHUB_PATH"
+
+      - name: Run same-provider Copilot architecture check
+        id: copilot_check
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_CLI_TOKEN }}
+          COPILOT_AUTO_UPDATE: "false"
+          HEAD_SHA: ${{ needs.context.outputs.head_sha }}
+          ISSUE_NUMBER: ${{ needs.context.outputs.issue_number }}
+          PR_NUMBER: ${{ needs.context.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+          [ -n "$COPILOT_GITHUB_TOKEN" ] || fail "The COPILOT_CLI_TOKEN secret is not configured, so the same-provider Copilot architecture check cannot run."
+          # The fetch-depth 0 checkout already holds origin/develop; no credential is needed or kept.
+          base_sha="$(git merge-base origin/develop HEAD)"
+          out="$RUNNER_TEMP/copilot-architecture.md"
+
+          copilot -s --no-ask-user \
+            --allow-tool='shell(git diff:*)' \
+            --allow-tool='shell(git log:*)' \
+            --allow-tool='shell(git show:*)' \
+            --additional-mcp-config '{"mcpServers":{"nayax":{"type":"http","url":"https://devzone.nayax.com/mcp","tools":["search_nayax_developer_portal","query_docs_filesystem_nayax_developer_portal"]}}}' \
+            --allow-tool='nayax(search_nayax_developer_portal)' --allow-tool='nayax(query_docs_filesystem_nayax_developer_portal)' --deny-tool='nayax(submit_feedback)' \
+            --deny-tool='write' \
+            -p "You are the read-only InventoryApp architecture checker for pull request #$PR_NUMBER (issue #$ISSUE_NUMBER), a new and separate Copilot invocation. The pull request was implemented by the GitHub Copilot coding agent in its own session under the full-copilot single-provider fallback route. This is a same-provider check, not an independent one: do not rely on anything the implementation claimed and verify everything yourself. The working tree is the pull request head $HEAD_SHA; the change is the output of git diff $base_sha..HEAD. Read AGENTS.md (Architecture rules) and docs/architecture.md, then review only the touched code and its directly affected boundaries: controllers versus use cases, domain rules versus adapters, dependency direction, framework or persistence leakage, duplicated calculations, information hiding, and testability. Report only violations of an established rule in those documents, each with file, line, the rule it breaks, and the smallest structural fix that preserves behaviour, API contracts and acceptance criteria. Do not propose broad migrations, new frameworks or changes to unrelated files. You must not edit, create or delete files or run any command that changes the repository. Nayax contract verification (AGENTS.md § Nayax contract verification): if this work touches code that calls the Nayax API or models a Nayax request or response, look up the relevant endpoint contract with the read-only Nayax documentation tools (search_nayax_developer_portal and query_docs_filesystem_nayax_developer_portal on the nayax MCP server) before defining, changing or accepting field names, types, nullability, identifiers, timestamps or endpoint semantics. Never invent a Nayax property that the documentation can confirm or refute. If the tools are unavailable or the contract cannot be found, state explicitly that authoritative Nayax verification could not be completed and treat the affected contract as unverified rather than guessing. Work that does not touch Nayax needs no lookup. End your answer with exactly one final line: ARCHITECTURE: CLEAN when there are no findings, or ARCHITECTURE: FINDINGS when there is at least one." \
+            > "$out"
+
+          [ -z "$(git status --porcelain)" ] || fail "The Copilot architecture check changed the working tree; it must be read-only."
+          [ "$(git rev-parse HEAD)" = "$HEAD_SHA" ] || fail "The Copilot architecture check moved HEAD; it must be read-only."
+
+          # Tolerate Markdown emphasis around the final verdict line, but nothing else on it.
+          verdict_line="$(grep -E '^[*`[:space:]]*ARCHITECTURE: (CLEAN|FINDINGS)[*`[:space:]]*$' "$out" | tail -n 1 | tr -d '*`[:space:]' || true)"
+          case "$verdict_line" in
+            ARCHITECTURE:CLEAN) verdict=clean ;;
+            ARCHITECTURE:FINDINGS) verdict=findings ;;
+            *) fail "The Copilot architecture check did not end with an ARCHITECTURE: CLEAN or ARCHITECTURE: FINDINGS line." ;;
+          esac
+
+          delimiter="COPILOT_FINDINGS_$(openssl rand -hex 16)"
+          {
+            echo "verdict=$verdict"
+            echo "findings<<$delimiter"
+            head -c 60000 "$out"
+            echo
+            echo "$delimiter"
+          } >> "$GITHUB_OUTPUT"
+          echo "::notice::Same-provider Copilot architecture verdict: $verdict"
+
   sonar:
     name: Read SonarCloud issues on the Copilot head
     needs: context
@@ -205,6 +318,7 @@ jobs:
     needs:
       - context
       - check
+      - copilot-check
       - sonar
     # Runs even when the check fails, so a broken handoff never leaves the issue agent-working.
     if: always()
@@ -225,8 +339,12 @@ jobs:
           PR_NUMBER: ${{ inputs.pr_number }}
           HEAD_SHA: ${{ inputs.head_sha }}
           CONTEXT_JOB_RESULT: ${{ needs.context.result }}
-          CHECK_JOB_RESULT: ${{ needs.check.result }}
+          # Only the checker the verified route selected counts; the other job is skipped.
+          CHECKER: ${{ needs.context.outputs.checker }}
+          CHECK_JOB_RESULT: ${{ needs.context.outputs.checker == 'copilot' && needs.copilot-check.result || needs.check.result }}
           CHECK_OUTPUT: ${{ needs.check.outputs.structured_output }}
+          COPILOT_CHECK_VERDICT: ${{ needs.copilot-check.outputs.verdict }}
+          COPILOT_CHECK_FINDINGS: ${{ needs.copilot-check.outputs.findings }}
           SONAR_STATUS: ${{ needs.sonar.outputs.status }}
           SONAR_COUNT: ${{ needs.sonar.outputs.count }}
           SONAR_ISSUES: ${{ needs.sonar.outputs.issues }}
@@ -240,6 +358,11 @@ jobs:
           [[ "$ISSUE_NUMBER" =~ ^[1-9][0-9]*$ ]] || fail "A valid issue number is required."
           [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] || fail "A valid pull request number is required."
           [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "A full head SHA is required."
+          case "$CHECKER" in
+            claude) checker_label="Claude" ;;
+            copilot) checker_label="same-provider Copilot" ;;
+            *) checker_label="Unknown" ;;
+          esac
 
           handed_off=false
           block_unhanded() {
@@ -251,25 +374,35 @@ jobs:
                 gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
                   --remove-label agent-working --remove-label agent-review --remove-label agent-architecture-fix --add-label agent-blocked || true
                 gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
-                  --body "Claude's architecture check did not hand Copilot pull request #$PR_NUMBER on (target check: $CONTEXT_JOB_RESULT; Claude check: $CHECK_JOB_RESULT). The task is now agent-blocked. Run: $RUN_URL" || true
+                  --body "The $checker_label architecture check did not hand Copilot pull request #$PR_NUMBER on (target check: $CONTEXT_JOB_RESULT; $checker_label check: $CHECK_JOB_RESULT). The task is now agent-blocked. Run: $RUN_URL" || true
               fi
             fi
           }
           trap block_unhanded EXIT
 
           [ "$CONTEXT_JOB_RESULT" = "success" ] || fail "Architecture target check did not succeed ($CONTEXT_JOB_RESULT)."
-          [ "$CHECK_JOB_RESULT" = "success" ] || fail "Claude's architecture check did not complete successfully ($CHECK_JOB_RESULT)."
+          [ "$checker_label" != "Unknown" ] || fail "The verified route named no known architecture checker ('$CHECKER')."
+          [ "$CHECK_JOB_RESULT" = "success" ] || fail "The $checker_label architecture check did not complete successfully ($CHECK_JOB_RESULT)."
 
-          printf '%s' "$CHECK_OUTPUT" > "$work/check.json"
-          jq -e 'type == "object"' "$work/check.json" >/dev/null 2>&1 || fail "The architecture check produced no valid structured output."
-          checked_sha="$(jq -r '.checked_head_sha // ""' "$work/check.json")"
-          [ "$checked_sha" = "$HEAD_SHA" ] || fail "The architecture check names SHA '$checked_sha', not $HEAD_SHA."
-          verdict="$(jq -r '.verdict // ""' "$work/check.json")"
-          case "$verdict" in
-            CLEAN) jq -e '(.findings | length) == 0' "$work/check.json" >/dev/null || fail "A CLEAN verdict must not list findings." ;;
-            FINDINGS) jq -e '(.findings | length) > 0' "$work/check.json" >/dev/null || fail "A FINDINGS verdict must list at least one finding." ;;
-            *) fail "Unknown architecture verdict '$verdict'." ;;
-          esac
+          if [ "$CHECKER" = "claude" ]; then
+            printf '%s' "$CHECK_OUTPUT" > "$work/check.json"
+            jq -e 'type == "object"' "$work/check.json" >/dev/null 2>&1 || fail "The architecture check produced no valid structured output."
+            checked_sha="$(jq -r '.checked_head_sha // ""' "$work/check.json")"
+            [ "$checked_sha" = "$HEAD_SHA" ] || fail "The architecture check names SHA '$checked_sha', not $HEAD_SHA."
+            verdict="$(jq -r '.verdict // ""' "$work/check.json")"
+            case "$verdict" in
+              CLEAN) jq -e '(.findings | length) == 0' "$work/check.json" >/dev/null || fail "A CLEAN verdict must not list findings." ;;
+              FINDINGS) jq -e '(.findings | length) > 0' "$work/check.json" >/dev/null || fail "A FINDINGS verdict must list at least one finding." ;;
+              *) fail "Unknown architecture verdict '$verdict'." ;;
+            esac
+          else
+            # The same-provider Copilot check returns a verdict line and findings text (copilot-check).
+            case "$COPILOT_CHECK_VERDICT" in
+              clean) verdict=CLEAN ;;
+              findings) verdict=FINDINGS; [ -n "$COPILOT_CHECK_FINDINGS" ] || fail "A FINDINGS verdict must list at least one finding." ;;
+              *) fail "Unknown architecture verdict '$COPILOT_CHECK_VERDICT'." ;;
+            esac
+          fi
 
           # Re-verify the live pull request immediately before handing off: fail closed.
           pr_json="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
@@ -284,10 +417,24 @@ jobs:
           current_sha="$(jq -r '.headRefOid // empty' <<<"$pr_json")"
           [ "$current_sha" = "$HEAD_SHA" ] || fail "Refusing stale architecture handoff: pull request head is $current_sha, checked $HEAD_SHA."
 
-          jq -r --arg sha "$HEAD_SHA" '
-            "### Claude architecture check (read-only) at \($sha)\n\nVerdict: **\(.verdict)**\n" +
-            ( .findings | map("- `\(.path):\(.line)` (\(.rule)): \(.problem)\n  Fix: \(.fix)") | join("\n") )
-          ' "$work/check.json" > "$work/summary.md"
+          if [ "$CHECKER" = "claude" ]; then
+            jq -r --arg sha "$HEAD_SHA" '
+              "### Claude architecture check (read-only) at \($sha)\n\nVerdict: **\(.verdict)**\n" +
+              ( .findings | map("- `\(.path):\(.line)` (\(.rule)): \(.problem)\n  Fix: \(.fix)") | join("\n") )
+            ' "$work/check.json" > "$work/summary.md"
+          else
+            {
+              echo "### Same-provider Copilot architecture check (read-only) at $HEAD_SHA"
+              echo
+              echo "Same-provider check (full-copilot fallback route): a separate read-only Copilot CLI invocation, not an independent provider."
+              echo
+              echo "Verdict: **$verdict**"
+              if [ "$verdict" = "FINDINGS" ]; then
+                echo
+                printf '%s\n' "$COPILOT_CHECK_FINDINGS"
+              fi
+            } > "$work/summary.md"
+          fi
 
           # SonarCloud is read fail-open: a missing or unreadable analysis counts as zero issues.
           sonar_count="${SONAR_COUNT:-0}"
@@ -310,7 +457,7 @@ jobs:
             gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label agent-architecture-fix
             gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --remove-label agent-working --add-label agent-architecture-fix
             {
-              echo "@copilot Claude's read-only architecture check and SonarCloud found the problems below in this pull request. Verify each against the code, docs/architecture.md and AGENTS.md, fix the ones that are correct with the smallest change that preserves behaviour and the issue's acceptance criteria, re-run bash scripts/validate.sh, and explain in a comment any finding you decline and why. Never silence a SonarCloud issue with NOSONAR, pragma or SuppressMessage suppressions or analyzer-configuration changes. Do not change anything outside the issue's scope."
+              echo "@copilot The read-only $checker_label architecture check and SonarCloud found the problems below in this pull request. Verify each against the code, docs/architecture.md and AGENTS.md, fix the ones that are correct with the smallest change that preserves behaviour and the issue's acceptance criteria, re-run bash scripts/validate.sh, and explain in a comment any finding you decline and why. Never silence a SonarCloud issue with NOSONAR, pragma or SuppressMessage suppressions or analyzer-configuration changes. Do not change anything outside the issue's scope."
               echo
               cat "$work/summary.md"
             } > "$work/copilot-request.md"
@@ -318,7 +465,7 @@ jobs:
             GH_TOKEN="$COPILOT_AGENT_TOKEN" gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$work/copilot-request.md"
             handed_off=true
             gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
-              --body "Claude's architecture check ($verdict) and SonarCloud ($sonar_count open issues) found problems in pull request #$PR_NUMBER, and Copilot was asked to fix them. The pull request is agent-architecture-fix until Copilot's fix push passes exact-SHA validation; it then moves to agent-review and Claude reviews it. Run: $RUN_URL"
+              --body "The $checker_label architecture check ($verdict) and SonarCloud ($sonar_count open issues) found problems in pull request #$PR_NUMBER, and Copilot was asked to fix them. The pull request is agent-architecture-fix until Copilot's fix push passes exact-SHA validation; it then moves to agent-review for the final review. Run: $RUN_URL"
             exit 0
           fi
 
@@ -341,4 +488,4 @@ jobs:
           handed_off=true
 
           gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
-            --body "Claude's architecture check found no problems and SonarCloud reported no open issues (${SONAR_STATUS:-unavailable}) in pull request #$PR_NUMBER at $HEAD_SHA. Exact-SHA validation is running; on success Claude does the final review. Run: $RUN_URL"
+            --body "The $checker_label architecture check found no problems and SonarCloud reported no open issues (${SONAR_STATUS:-unavailable}) in pull request #$PR_NUMBER at $HEAD_SHA. Exact-SHA validation is running; on success the final review starts. Run: $RUN_URL"

@@ -20,13 +20,15 @@ const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf
 function stepShell(workflow, name) {
   const step = workflow.split(`      - name: ${name}\n`)[1]?.split('\n      - name: ')[0];
   assert.ok(step, `missing trusted step: ${name}`);
-  const run = step.split('        run: |\n')[1];
+  // The last step of a job ends where the next job begins.
+  const run = step.split('        run: |\n')[1]?.split(/\n\n {2}[a-z]/)[0];
   assert.ok(run, `step has no run block: ${name}`);
   return run.split('\n').map((line) => line.slice(10)).join('\n');
 }
 
 const handoffShell = stepShell(read('.github/workflows/agent-copilot-handoff.yml'), 'Verify Copilot pull request and dispatch architecture check');
 const finalizeShell = stepShell(read('.github/workflows/agent-copilot-architecture.yml'), 'Record architecture outcome and hand off');
+const contextShell = stepShell(read('.github/workflows/agent-copilot-architecture.yml'), 'Verify exact Copilot pull request');
 
 const REPO = 'owner/InventoryApp';
 const COPILOT = 'Copilot';
@@ -116,7 +118,9 @@ function run(shell, { state, env = {} }) {
     chmodSync(join(bin, 'gh'), 0o755);
     const statePath = join(root, 'state.json');
     const logPath = join(root, 'calls.jsonl');
+    const outputPath = join(root, 'github-output');
     writeFileSync(statePath, JSON.stringify(state));
+    writeFileSync(outputPath, '');
     const result = spawnSync('bash', ['-c', shell], {
       encoding: 'utf8',
       env: {
@@ -125,6 +129,7 @@ function run(shell, { state, env = {} }) {
         AGENT_MODE_GH_PATH: join(bin, 'gh'),
         FAKE_GH_STATE: statePath,
         FAKE_GH_LOG: logPath,
+        GITHUB_OUTPUT: outputPath,
         GITHUB_REPOSITORY: REPO,
         RUNNER_TEMP: root,
         GITHUB_WORKFLOW_SHA: 'a'.repeat(40),
@@ -151,7 +156,7 @@ function run(shell, { state, env = {} }) {
     const calls = existsSync(logPath)
       ? readFileSync(logPath, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line))
       : [];
-    return { status: result.status, stdout: result.stdout, stderr: result.stderr, calls };
+    return { status: result.status, stdout: result.stdout, stderr: result.stderr, calls, outputs: readFileSync(outputPath, 'utf8') };
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -181,6 +186,18 @@ describe('Copilot pull request handoff to the Claude architecture check', () => 
     const { status, stderr, calls } = run(handoffShell, { state: { ...fixture(), events: claimEvents('agent-ready-copilot') } });
     assert.equal(status, 0, stderr);
     assert.equal(dispatches(calls, 'agent-copilot-architecture.yml').length, 1);
+  });
+
+  it('hands off when the issue was claimed for the full-copilot fallback', () => {
+    const { status, stderr, calls } = run(handoffShell, { state: { ...fixture(), events: claimEvents('agent-ready-full-copilot') } });
+    assert.equal(status, 0, stderr);
+    assert.equal(dispatches(calls, 'agent-copilot-architecture.yml').length, 1);
+  });
+
+  it('refuses a Copilot pull request whose issue was last claimed for full-claude', () => {
+    const { status, calls } = run(handoffShell, { state: { ...fixture(), events: claimEvents('agent-ready-full-claude') } });
+    assert.notEqual(status, 0);
+    assert.equal(dispatches(calls, 'agent-copilot-architecture.yml').length, 0);
   });
 
   it('automatically marks a validated Copilot draft ready and leaves dispatch to the ready_for_review run', () => {
@@ -303,12 +320,30 @@ describe('Copilot pull request handoff to the Claude architecture check', () => 
   }
 });
 
+describe('architecture checker selected by the verified route (Copilot implementer)', () => {
+  for (const [label, checker] of [['agent-ready-copilot', 'claude'], ['agent-ready-copilot-low', 'claude'], ['agent-ready-full-copilot', 'copilot']]) {
+    it(`${label} selects the ${checker} architecture check`, () => {
+      const { status, stderr, outputs } = run(contextShell, { state: { ...fixture(), events: claimEvents(label) }, env: { ISSUE_NUMBER: ISSUE } });
+      assert.equal(status, 0, stderr);
+      assert.match(outputs, new RegExp(`^checker=${checker}$`, 'm'));
+    });
+  }
+  for (const label of ['agent-ready-claude', 'agent-ready-full-claude']) {
+    it(`${label} names no checker and fails closed`, () => {
+      const { status, outputs } = run(contextShell, { state: { ...fixture(), events: claimEvents(label) }, env: { ISSUE_NUMBER: ISSUE } });
+      assert.notEqual(status, 0);
+      assert.doesNotMatch(outputs, /^checker=/m);
+    });
+  }
+});
+
 describe('Claude architecture check finalizer', () => {
   const finding = { path: 'backend/Api/ProductsController.cs', line: 12, rule: 'Controllers delegate to use cases', problem: 'Controller queries the DbContext directly.', fix: 'Move the query into ListProducts.' };
   const output = (overrides = {}) => JSON.stringify({ checked_head_sha: SHA, verdict: 'CLEAN', findings: [], ...overrides });
   const env = (overrides = {}) => ({
     ISSUE_NUMBER: ISSUE,
     CONTEXT_JOB_RESULT: 'success',
+    CHECKER: 'claude',
     CHECK_JOB_RESULT: 'success',
     CHECK_OUTPUT: output(),
     COPILOT_AGENT_TOKEN: 'owner-copilot-token',
@@ -392,4 +427,57 @@ describe('Claude architecture check finalizer', () => {
     assert.notEqual(status, 0);
     assert.equal(calls.length, 0);
   });
+});
+
+describe('same-provider Copilot architecture check finalizer (full-copilot)', () => {
+  const findings = 'backend/Api/ProductsController.cs:12 queries the DbContext directly.\nARCHITECTURE: FINDINGS';
+  const env = (overrides = {}) => ({
+    ISSUE_NUMBER: ISSUE,
+    CONTEXT_JOB_RESULT: 'success',
+    CHECKER: 'copilot',
+    CHECK_JOB_RESULT: 'success',
+    CHECK_OUTPUT: '',
+    COPILOT_CHECK_VERDICT: 'clean',
+    COPILOT_CHECK_FINDINGS: 'ARCHITECTURE: CLEAN',
+    COPILOT_AGENT_TOKEN: 'owner-copilot-token',
+    ...overrides,
+  });
+
+  it('validates a clean head and records the check as same-provider, never using Claude output', () => {
+    const { status, stderr, calls } = run(finalizeShell, { state: fixture(), env: env({ CHECK_OUTPUT: 'not json' }) });
+    assert.equal(status, 0, stderr);
+    assert.equal(dispatches(calls, 'validate.yml').length, 1);
+    const summary = calls.find((c) => c.kind === 'pr-comment');
+    assert.match(summary.body, /Same-provider Copilot architecture check \(read-only\)/);
+    assert.match(summary.body, /not an independent provider/);
+    assert.ok(!blocked(calls));
+  });
+
+  it('sends findings back to Copilot as a same-provider check', () => {
+    const { status, stderr, calls } = run(finalizeShell, { state: fixture(), env: env({ COPILOT_CHECK_VERDICT: 'findings', COPILOT_CHECK_FINDINGS: findings }) });
+    assert.equal(status, 0, stderr);
+    const request = calls.find((c) => c.kind === 'pr-comment');
+    assert.equal(request.token, 'owner-copilot-token');
+    assert.match(request.body, /^@copilot The read-only same-provider Copilot architecture check/);
+    assert.match(request.body, /ProductsController\.cs:12/);
+    assert.equal(dispatches(calls, 'validate.yml').length, 0);
+    assert.ok(calls.some((c) => c.kind === 'pr-edit' && c.args.includes('agent-architecture-fix')));
+    assert.ok(!blocked(calls));
+  });
+
+  for (const [name, overrides] of [
+    ['a failed same-provider check (no fallback to Claude)', { CHECK_JOB_RESULT: 'failure', COPILOT_CHECK_VERDICT: '' }],
+    ['a skipped same-provider check', { CHECK_JOB_RESULT: 'skipped', COPILOT_CHECK_VERDICT: '' }],
+    ['an unknown verdict', { COPILOT_CHECK_VERDICT: 'maybe' }],
+    ['findings without text', { COPILOT_CHECK_VERDICT: 'findings', COPILOT_CHECK_FINDINGS: '' }],
+    ['an unknown checker', { CHECKER: 'gemini' }],
+  ]) {
+    it(`blocks the agent-working issue on ${name}`, () => {
+      const { status, calls } = run(finalizeShell, { state: fixture(), env: env(overrides) });
+      assert.notEqual(status, 0);
+      assert.ok(blocked(calls));
+      assert.equal(dispatches(calls, 'validate.yml').length, 0);
+      assert.ok(!calls.some((c) => c.kind === 'pr-comment' && /^@copilot/.test(c.body ?? '')));
+    });
+  }
 });

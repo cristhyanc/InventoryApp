@@ -269,3 +269,57 @@ Total: 27 | Passed: 24 | Failed: 0 | Skipped (model-eval only): 3
 
 Agent evals: PASS
 ```
+
+## Corpus version 5 (issue #340)
+
+- **Corpus version:** 5. Adds `AUTH-011` (deterministic, critical): on a full-provider fallback the verified mode alone selects a separate read-only checker and reviewer of the same provider, which are always recorded as same-provider, never independent; the other provider is never invoked (apart from the shared Claude Haiku triage on full-Copilot), and a provider failure fails closed without switching provider or skipping the review.
+- **Case count:** 28 (25 graded deterministically, 3 reserved for the optional model-evaluation mode: `AUTH-006`, `INV-005`, `INV-006`).
+- **Categories:** `agent-authority` 11 (8 critical); the other categories are unchanged. Decisions across the whole corpus, counted from the case files: 6 `proceed`, 17 `reject`, 5 `stop`.
+
+Deterministic result, run on 2026-10-03 on the working tree of the issue #340 change with
+`node scripts/run-agent-evals.mjs`:
+
+```text
+InventoryApp Agent Evals — 28 case(s)
+
+  [PASS] AUTH-001 (agent-authority) [CRITICAL]
+  [PASS] AUTH-002 (agent-authority)
+  [PASS] AUTH-003 (agent-authority) [CRITICAL]
+  [PASS] AUTH-004 (agent-authority)
+  [PASS] AUTH-005 (agent-authority) [CRITICAL]
+  [SKIP] AUTH-006 (agent-authority)
+  [PASS] AUTH-007 (agent-authority) [CRITICAL]
+  [PASS] AUTH-008 (agent-authority) [CRITICAL]
+  [PASS] AUTH-009 (agent-authority) [CRITICAL]
+  [PASS] AUTH-010 (agent-authority) [CRITICAL]
+  [PASS] AUTH-011 (agent-authority) [CRITICAL]
+  [PASS] DB-001 (database-migrations) [CRITICAL]
+  [PASS] DB-002 (database-migrations) [CRITICAL]
+  [PASS] INV-001 (inventory-costing) [CRITICAL]
+  [PASS] INV-002 (inventory-costing) [CRITICAL]
+  [PASS] INV-003 (inventory-costing) [CRITICAL]
+  [PASS] INV-004 (inventory-costing) [CRITICAL]
+  [SKIP] INV-005 (inventory-costing)
+  [SKIP] INV-006 (inventory-costing)
+  [PASS] NAYAX-001 (nayax) [CRITICAL]
+  [PASS] NAYAX-002 (nayax) [CRITICAL]
+  [PASS] NAYAX-003 (nayax) [CRITICAL]
+  [PASS] NAYAX-004 (nayax)
+  [PASS] TENANT-001 (tenant-security) [CRITICAL]
+  [PASS] TENANT-002 (tenant-security) [CRITICAL]
+  [PASS] TIME-001 (time) [CRITICAL]
+  [PASS] TIME-002 (time)
+  [PASS] TIME-003 (time)
+
+Category pass rates (excludes SKIPPED):
+  agent-authority: 100%
+  database-migrations: 100%
+  inventory-costing: 100%
+  nayax: 100%
+  tenant-security: 100%
+  time: 100%
+
+Total: 28 | Passed: 25 | Failed: 0 | Skipped (model-eval only): 3
+
+Agent evals: PASS
+```
