@@ -123,8 +123,33 @@ running API process) and confirms the resulting copy passes `PRAGMA integrity_ch
 exactly the committed rows, then proves a second backup taken later, still without closing that
 connection, reflects the writes committed in between.
 
+**The supported command (issue #331).** `backend/InventoryApi`'s published executable has a
+`backup-database` CLI mode, dispatched before the web host is built — the same early-command
+pattern as `bootstrap-business` and `migrate-database`, so taking a backup and starting the API
+are mutually exclusive paths through `Program.cs` and never run during normal startup. It opens the
+same configured database the API would (`ConnectionStrings:DefaultConnection`, falling back to the
+relative `Data Source=inventory.db` default — that relative default is not rejected merely for
+being relative, only if the resolved file does not exist or cannot be opened), copies it with the
+same Online Backup API described above (never a filesystem `cp`), and refuses an `--output` path
+that already exists, matches the source, or sits inside the API's content root/web root, so a
+snapshot can never land somewhere a redeploy or publish step would silently discard or overwrite
+it. Once the snapshot is written it runs `PRAGMA integrity_check` itself and reports the result,
+the snapshot's SHA-256, and the elapsed duration — without ever printing the connection string — and
+exits non-zero on any failure:
+
+```bash
+dotnet InventoryApi.dll backup-database --output /home/data/backups/inventory-20260101T000000.db
+```
+
+This is the command the scheduled backup job (issue #333) also calls; routine backups are
+scheduled, not run by hand. Manual, one-off verification uses the identical command. Blob upload,
+retention/alerting, and automated restore are explicitly out of scope for this command — restore
+stays the deliberate, human-run `sqlite3` procedure below.
+
 The equivalent operator procedure, using the `sqlite3` CLI (the standard SQLite tool;
-<https://sqlite.org/cli.html>) against the App Service's persistent database path:
+<https://sqlite.org/cli.html>) against the App Service's persistent database path, remains
+available for a host where the published `dotnet` application is not on hand, or to rehearse the
+underlying mechanism:
 
 1. **Prefer a quiet window, but do not rely on stopping the app.** The Online Backup API produces
    a consistent snapshot even while writes continue; stopping the App Service first (or scaling to

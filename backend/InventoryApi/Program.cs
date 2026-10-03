@@ -68,6 +68,14 @@ if (DocumentMigrationCommand.Matches(args))
     return await DocumentMigrationCommand.RunAsync(args, CancellationToken.None);
 }
 
+// Taking a verified snapshot is likewise a deliberate, human- or scheduler-invoked command, not
+// something normal startup performs (issue #331). It is callable manually for one-off
+// verification and by the scheduled backup job (issue #333) against the same configured database.
+if (BackupDatabaseCommand.Matches(args))
+{
+    return await BackupDatabaseCommand.RunAsync(args, CancellationToken.None);
+}
+
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
