@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { describe, it } from 'node:test';
+import { buildModeRecord } from './agent-mode.mjs';
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8').replaceAll('\r\n', '\n');
 
@@ -62,7 +63,7 @@ if (args[0] === 'pr' && args[1] === 'view') {
   log({ kind: 'label', target: args[0], number: args[2], args: args.slice(3) });
 } else if (args[0] === 'api') {
   const method = opt('--method') ?? 'GET';
-  const path = args.find((a, i) => i > 0 && !a.startsWith('-') && !['--method', '--jq', '--input', '-f'].includes(args[i - 1]));
+  const path = args.find((a, i) => i > 0 && !a.startsWith('-') && !['--method', '--jq', '--input', '-f', '-H'].includes(args[i - 1]));
   if (method === 'POST' && path.endsWith('/reviews')) {
     const payload = JSON.parse(fs.readFileSync(opt('--input'), 'utf8'));
     if (state.rejectInlineComments && payload.comments.length > 0) { log({ kind: 'review-rejected', payload }); fail('HTTP 422: line could not be resolved'); }
@@ -77,6 +78,10 @@ if (args[0] === 'pr' && args[1] === 'view') {
     out(state.files.map((filename) => ({ filename })));
   } else if (/\\/pulls\\/\\d+$/.test(path)) {
     out({ user: { login: state.author } });
+  } else if (path.includes('/contents/scripts/agent-mode.mjs')) {
+    process.stdout.write(fs.readFileSync(process.env.AGENT_MODE_SCRIPT, 'utf8'));
+  } else if (/\\/issues\\/\\d+\\/comments/.test(path)) {
+    out(state.comments ?? []);
   } else fail('unexpected api call: ' + args.join(' '));
 } else fail('unexpected gh call: ' + args.join(' '));
 `;
@@ -153,6 +158,9 @@ function run(shell, { state, env = {} }) {
         FAKE_GH_STATE: statePath,
         FAKE_GH_LOG: logPath,
         GITHUB_REPOSITORY: REPO,
+        RUNNER_TEMP: root,
+        GITHUB_WORKFLOW_SHA: 'a'.repeat(40),
+        AGENT_MODE_SCRIPT: new URL('./agent-mode.mjs', import.meta.url).pathname,
         GH_TOKEN: 'fixture-token',
         EXPECTED_AGENT_AUTHOR: BOT,
         EXPECTED_COPILOT_AUTHOR: COPILOT,
@@ -175,6 +183,7 @@ function publish({ state = copilotState(), output = readyOutput(), result = 'suc
     state,
     env: {
       IMPLEMENTER: implementer,
+      AGENT_MODE: `cross-${implementer}`,
       REVIEW_RESULT: result,
       REVIEW_OUTPUT: output === null ? '' : JSON.stringify(output),
       VERDICT_CONTEXT: 'agent-review-verdict',
@@ -247,6 +256,21 @@ describe('guarded review publication', () => {
       assertSuppressed(publish({ state: copilotState({ pr }) }), reason);
     });
   }
+
+  // Provider mode (#339): the verdict is published only under the mode the review ran with.
+  const modeComment = (label) => ({ id: 1, user: { login: 'github-actions[bot]' }, created_at: '2026-10-03T01:00:00Z', body: buildModeRecord({ issue: 245, label, run: '7' }) });
+  it('publishes when the recorded provider mode still matches the review', () => {
+    const outcome = publish({ state: { ...copilotState(), comments: [modeComment('agent-ready-copilot')] } });
+    assert.equal(outcome.status, 0, outcome.stderr);
+    assert.equal(reviews(outcome.calls).length, 1);
+  });
+  it('suppresses the verdict when the issue was re-claimed for another provider during the review', () => {
+    assertSuppressed(publish({ state: { ...copilotState(), comments: [modeComment('agent-ready-claude')] } }), /provider mode of pull request #267 could not be verified/);
+  });
+  it('suppresses the verdict when the provider-mode record is malformed', () => {
+    const bad = { id: 1, user: { login: 'github-actions[bot]' }, created_at: '2026-10-03T01:00:00Z', body: '<!-- agent-routing-mode:v1 {"issue":245} -->' };
+    assertSuppressed(publish({ state: { ...copilotState(), comments: [bad] } }), /could not be verified/);
+  });
 
   it('publishes the Copilot review of a Claude-implemented pull request through the same guarded path', () => {
     const outcome = publish({ state: eligibleState(), implementer: 'claude', output: changesOutput() });

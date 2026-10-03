@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { describe, it } from 'node:test';
+import { buildModeRecord } from './agent-mode.mjs';
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8').replaceAll('\r\n', '\n');
 
@@ -54,10 +55,12 @@ else if (args[0] === 'issue' && args[1] === 'view') out(pick(state.issue));
 else if (['edit', 'comment'].includes(args[1]) && ['pr', 'issue'].includes(args[0])) log({ kind: args[0] + '-' + args[1], args });
 else if (args[0] === 'workflow' && args[1] === 'run') log({ kind: 'dispatch', workflow: args[2], args });
 else if (args[0] === 'api') {
-  const path = args.find((a, i) => i > 0 && !a.startsWith('-') && args[i - 1] !== '--jq');
+  const path = args.find((a, i) => i > 0 && !a.startsWith('-') && !['--jq', '-H'].includes(args[i - 1]));
   if (/\\/commits\\/[0-9a-f]{40}\\/status$/.test(path)) out({ statuses: state.statuses[path.split('/commits/')[1].split('/')[0]] ?? [] });
   else if (path.includes('/files')) out(state.files.map((filename) => ({ filename })));
   else if (/\\/pulls\\/\\d+$/.test(path)) out({ user: { login: state.author } });
+  else if (path.includes('/contents/scripts/agent-mode.mjs')) process.stdout.write(fs.readFileSync(process.env.AGENT_MODE_SCRIPT, 'utf8'));
+  else if (/\\/issues\\/\\d+\\/comments/.test(path)) out(state.comments ?? []);
   else fail('unexpected api call: ' + args.join(' '));
 } else fail('unexpected gh call: ' + args.join(' '));
 `;
@@ -100,6 +103,9 @@ function run(shell, { state, env = {} }) {
         FAKE_GH_STATE: statePath,
         FAKE_GH_LOG: logPath,
         GITHUB_REPOSITORY: REPO,
+        RUNNER_TEMP: root,
+        GITHUB_WORKFLOW_SHA: 'a'.repeat(40),
+        AGENT_MODE_SCRIPT: new URL('./agent-mode.mjs', import.meta.url).pathname,
         GH_TOKEN: 'fixture-token',
         EXPECTED_AGENT_AUTHOR: BOT,
         ISSUE_NUMBER: ISSUE,
@@ -143,6 +149,26 @@ describe('implementation to architecture handoff', () => {
       assert.notEqual(status, 0);
       assert.ok(blocked(calls), 'issue must move to agent-blocked');
       assert.ok(commented(calls), 'the failure comment must post (RUN_URL is defined)');
+    });
+  }
+});
+
+describe('provider mode at the architecture handoff', () => {
+  const env = { HEAD_SHA: SHA };
+  const record = (label) => ({ id: 1, user: { login: 'github-actions[bot]' }, created_at: '2026-10-03T01:00:00Z', body: buildModeRecord({ issue: Number(ISSUE), label, run: '9' }) });
+
+  it('dispatches when the issue is recorded as Claude-primary', () => {
+    const { status, stderr, calls } = run(dispatchShell, { state: { ...fixture(), comments: [record('agent-ready-claude')] }, env });
+    assert.equal(status, 0, stderr);
+    assert.equal(dispatches(calls, 'agent-architecture.yml').length, 1);
+  });
+
+  for (const [name, label] of [['recorded for Copilot', 'agent-ready-copilot'], ['recorded for a disabled full-provider route', 'agent-ready-full-claude']]) {
+    it(`blocks instead of dispatching when the issue is ${name}`, () => {
+      const { status, calls } = run(dispatchShell, { state: { ...fixture(), comments: [record(label)] }, env });
+      assert.notEqual(status, 0);
+      assert.equal(dispatches(calls, 'agent-architecture.yml').length, 0);
+      assert.ok(blocked(calls));
     });
   }
 });

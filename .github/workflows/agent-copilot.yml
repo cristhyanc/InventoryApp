@@ -95,6 +95,7 @@ jobs:
           IMPLEMENTATION_MODEL: ${{ needs.model.outputs.model }}
           MODEL_TIER: ${{ needs.model.outputs.tier }}
           MODEL_REASON: ${{ needs.model.outputs.reason }}
+          AGENT_MODE: ${{ needs.model.outputs.mode }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
@@ -111,6 +112,8 @@ jobs:
           const active = issue.labels.some(x => ['agent-working','agent-architecture-fix','agent-review','agent-blocked'].includes(x.name));
           const fingerprint = createHash('sha256').update(JSON.stringify({ title: issue.title, body: issue.body })).digest('hex');
           if (issue.state !== 'OPEN' || active || ready.length !== 1 || ready[0] !== process.env.READY_LABEL || fingerprint !== process.env.TASK_FINGERPRINT) throw new Error('Task changed after model selection; resolve labels/scope and re-apply readiness.');
+          // Only the standard Copilot labels start this job, so the trusted selection must be cross-copilot.
+          if (process.env.AGENT_MODE !== 'cross-copilot') throw new Error('Selected provider mode does not match the readiness label.');
           JS
 
           assigned=false
@@ -127,6 +130,13 @@ jobs:
           trap block_unassigned EXIT
 
           [ -n "$COPILOT_AGENT_TOKEN" ] || fail "The COPILOT_AGENT_TOKEN secret is not configured."
+
+          # Record the provider mode on the issue before consuming readiness (same format as
+          # scripts/agent-mode.mjs record); every later boundary verifies it.
+          mode_record="<!-- agent-routing-mode:v1 $(jq -cn --argjson issue "$ISSUE_NUMBER" --arg label "$READY_LABEL" --arg mode "$AGENT_MODE" --arg run "$GITHUB_RUN_ID" '{issue: $issue, label: $label, mode: $mode, run: $run}') -->"
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --body "Provider mode: $AGENT_MODE. Copilot implementation is starting. Run: $RUN_URL
+          $mode_record"
 
           gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
             --remove-label "$READY_LABEL" --add-label agent-working

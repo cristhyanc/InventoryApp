@@ -1668,6 +1668,7 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
   verifyReviewPublicationAndScheduling(read);
   verifyCopilotImplementationPath(read);
   verifyImplementationModelSelection(read);
+  verifyProviderModeProvenance(read);
   verifyNayaxDocumentationAccess(read);
 }
 
@@ -1694,6 +1695,76 @@ export function verifyImplementationModelSelection(read = readRepositoryFile) {
       forbidText(consumer, 'CLAUDE_CODE_OAUTH_TOKEN', `${path} model consumer`);
     }
   }
+}
+
+// ---------------------------------------------------------------------------------------
+// Provider mode provenance (#339): the readiness choice is recorded on the issue before readiness
+// is consumed, and every boundary that acts on an agent pull request re-verifies it with the
+// trusted resolver from its own workflow commit. Pure dispatchers that hold no contents
+// permission (agent-review-request.yml, agent-head-update.yml) rely on the workflow they
+// dispatch, which verifies the mode before doing anything.
+// ---------------------------------------------------------------------------------------
+
+export const MODE_RESOLVER_FETCH = 'gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/scripts/agent-mode.mjs?ref=$GITHUB_WORKFLOW_SHA" > "$RUNNER_TEMP/agent-mode.mjs"';
+
+export const PROVIDER_MODE_GATES = [
+  // [workflow, job, step name, exact verify command]
+  [implementPath, 'dispatch-architecture', 'Verify pull request and dispatch trusted architecture workflow', 'agent_mode="$(node "$RUNNER_TEMP/agent-mode.mjs" verify-pr "$PR_NUMBER" "claude")" || fail'],
+  ['.github/workflows/agent-architecture.yml', 'context', 'Verify exact agent pull request', 'agent_mode="$(node "$RUNNER_TEMP/agent-mode.mjs" verify-pr "$PR_NUMBER" "claude")" || fail'],
+  [copilotHandoffPath, 'handoff', 'Verify Copilot pull request and dispatch architecture check', 'agent_mode="$(node "$RUNNER_TEMP/agent-mode.mjs" verify-pr "$PR_NUMBER" "copilot")" || fail'],
+  [copilotArchitecturePath, 'context', 'Verify exact Copilot pull request', 'agent_mode="$(node "$RUNNER_TEMP/agent-mode.mjs" verify-pr "$PR_NUMBER" "copilot")" || fail'],
+  ['.github/workflows/validate.yml', 'context', 'Resolve and verify pull request', 'agent_mode="$(node "$RUNNER_TEMP/agent-mode.mjs" verify-pr "$pr_number" "$implementer")" || fail'],
+  ['.github/workflows/validate.yml', 'dispatch-review', 'Reverify current head and dispatch review', 'agent_mode="$(node "$RUNNER_TEMP/agent-mode.mjs" verify-pr "$PR_NUMBER" "$implementer")" || fail'],
+  ['.github/workflows/agent-review.yml', 'context', 'Resolve and verify pull request', 'agent_mode="$(node "$RUNNER_TEMP/agent-mode.mjs" verify-pr "$pr_number" "$implementer")" || fail'],
+  ['.github/workflows/agent-review.yml', 'publish', 'Guard and publish review', 'live_mode="$(node "$RUNNER_TEMP/agent-mode.mjs" verify-pr "$PR_NUMBER" "$live_implementer")"'],
+  ['.github/workflows/agent-repair.yml', 'repair', 'Resolve and verify pull request head', 'agent_mode="$(node "$RUNNER_TEMP/agent-mode.mjs" verify-pr "$PR_NUMBER" "claude")" || fail'],
+  ['.github/workflows/agent-repair.yml', 'dispatch-validation', 'Verify repaired head and dispatch trusted validation', 'agent_mode="$(node "$RUNNER_TEMP/agent-mode.mjs" verify-pr "$PR_NUMBER" "claude")" || fail'],
+];
+
+function jobBlock(workflow, job, source) {
+  const start = workflow.indexOf(`\n  ${job}:\n`);
+  if (start < 0) throw new Error(`${source}: missing job ${job}.`);
+  const rest = workflow.slice(start + 1);
+  const next = rest.slice(1).search(/\n  [a-z][a-z0-9-]*:\n/);
+  return next < 0 ? rest : rest.slice(0, next + 1);
+}
+
+function stepBlock(jobText, name, source) {
+  const step = jobText.split(`      - name: ${name}\n`)[1]?.split('\n      - name: ')[0];
+  if (!step) throw new Error(`${source}: missing step ${name}.`);
+  return step;
+}
+
+export function verifyProviderModeProvenance(read = readRepositoryFile) {
+  for (const [path, job, step, verify] of PROVIDER_MODE_GATES) {
+    const source = `${path} ${job} provider mode`;
+    const jobText = jobBlock(read(path), job, source);
+    // Reading the resolver needs contents: read; reading the issue's record needs issues access.
+    requireText(jobText, 'contents: read', source);
+    if (!/\n      issues: (read|write)\n/.test(jobText)) throw new Error(`${source}: missing required text: issues: read`);
+    const text = stepBlock(jobText, step, source);
+    requireText(text, MODE_RESOLVER_FETCH, source);
+    requireText(text, verify, source);
+    // The resolver is always fetched from the trusted workflow commit, never from a checkout or a PR ref.
+    forbidText(text, 'node scripts/agent-mode.mjs verify-pr', source);
+    forbidText(text, 'agent-mode.mjs?ref=$HEAD_SHA', source);
+  }
+  const review = read('.github/workflows/agent-review.yml');
+  requireText(review, 'agent_mode: ${{ steps.context.outputs.agent_mode }}', 'agent-review.yml context outputs');
+  requireText(review, 'AGENT_MODE: ${{ needs.context.outputs.agent_mode }}', 'agent-review.yml publish');
+  requireText(review, '[ "$live_mode" = "$AGENT_MODE" ] || suppress', 'agent-review.yml publish');
+  requireOrder(review, 'live_mode="$(node "$RUNNER_TEMP/agent-mode.mjs" verify-pr', 'gh api --method POST "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews"', 'agent-review.yml publish', 'the provider mode must be rechecked before a review is posted.');
+
+  // The record is posted on the issue before readiness is consumed, in the shared format.
+  const implement = read(implementPath);
+  requireText(implement, 'AGENT_MODE: ${{ needs.model.outputs.mode }}', `${implementPath} implement`);
+  requireOrder(implement, 'mode_record="$(node scripts/agent-mode.mjs record "$ISSUE_NUMBER" "$READY_LABEL" "$GITHUB_RUN_ID")"', '--remove-label "$READY_LABEL" --add-label agent-working', `${implementPath} implement`, 'the provider mode must be recorded before readiness is consumed.');
+  const copilot = read(copilotImplementPath);
+  requireText(copilot, 'AGENT_MODE: ${{ needs.model.outputs.mode }}', `${copilotImplementPath} assign`);
+  requireText(copilot, "if (process.env.AGENT_MODE !== 'cross-copilot') throw", `${copilotImplementPath} assign`);
+  requireOrder(copilot, 'mode_record="<!-- agent-routing-mode:v1 $(jq -cn --argjson issue "$ISSUE_NUMBER" --arg label "$READY_LABEL" --arg mode "$AGENT_MODE" --arg run "$GITHUB_RUN_ID"', '--remove-label "$READY_LABEL" --add-label agent-working', `${copilotImplementPath} assign`, 'the provider mode must be recorded before readiness is consumed.');
+  const selection = read('.github/workflows/agent-model-selection.yml');
+  requireText(selection, 'mode: ${{ steps.resolve.outputs.mode }}', 'implementation model selection');
 }
 
 // ---------------------------------------------------------------------------------------

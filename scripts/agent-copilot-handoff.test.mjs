@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { describe, it } from 'node:test';
+import { buildModeRecord } from './agent-mode.mjs';
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8').replaceAll('\r\n', '\n');
 
@@ -59,11 +60,13 @@ else if (['edit', 'comment'].includes(args[1]) && ['pr', 'issue'].includes(args[
   log({ kind: args[0] + '-' + args[1], args, body: bodyFile ? fs.readFileSync(bodyFile, 'utf8') : opt('--body') });
 } else if (args[0] === 'workflow' && args[1] === 'run') log({ kind: 'dispatch', workflow: args[2], args });
 else if (args[0] === 'api') {
-  const path = args.find((a, i) => i > 0 && !a.startsWith('-') && args[i - 1] !== '--jq');
+  const path = args.find((a, i) => i > 0 && !a.startsWith('-') && !['--jq', '-H'].includes(args[i - 1]));
   if (path.includes('/actions/runs?')) out({ workflow_runs: state.runs ?? [] });
   else if (/\\/commits\\/[0-9a-f]{40}\\/status$/.test(path)) out({ statuses: state.statuses[path.split('/commits/')[1].split('/')[0]] ?? [] });
   else if (path.includes('/files')) out(state.files.map((filename) => ({ filename })));
   else if (/\\/pulls\\/\\d+$/.test(path)) out({ user: { login: state.author } });
+  else if (path.includes('/contents/scripts/agent-mode.mjs')) process.stdout.write(fs.readFileSync(process.env.AGENT_MODE_SCRIPT, 'utf8'));
+  else if (/\\/issues\\/\\d+\\/comments/.test(path)) out(state.comments ?? []);
   else fail('unexpected api call: ' + args.join(' '));
 } else fail('unexpected gh call: ' + args.join(' '));
 `;
@@ -121,6 +124,9 @@ function run(shell, { state, env = {} }) {
         FAKE_GH_STATE: statePath,
         FAKE_GH_LOG: logPath,
         GITHUB_REPOSITORY: REPO,
+        RUNNER_TEMP: root,
+        GITHUB_WORKFLOW_SHA: 'a'.repeat(40),
+        AGENT_MODE_SCRIPT: new URL('./agent-mode.mjs', import.meta.url).pathname,
         GH_TOKEN: 'workflow-token',
         COPILOT_AGENT_TOKEN: 'owner-copilot-token',
         EXPECTED_COPILOT_AUTHOR: COPILOT,
@@ -161,6 +167,20 @@ describe('Copilot pull request handoff to the Claude architecture check', () => 
       'workflow', 'run', 'agent-copilot-architecture.yml', '--repo', REPO, '--ref', 'main',
       '-f', `issue_number=${ISSUE}`, '-f', `pr_number=${PR}`, '-f', `head_sha=${SHA}`,
     ]);
+  });
+
+  it('refuses to hand a Copilot pull request to Claude when the issue is recorded for Claude', () => {
+    const record = { id: 1, user: { login: 'github-actions[bot]' }, created_at: '2026-10-03T01:00:00Z', body: buildModeRecord({ issue: Number(ISSUE), label: 'agent-ready-claude', run: '9' }) };
+    const { status, calls } = run(handoffShell, { state: { ...fixture(), comments: [record] } });
+    assert.notEqual(status, 0);
+    assert.equal(dispatches(calls, 'agent-copilot-architecture.yml').length, 0);
+  });
+
+  it('hands off when the issue is recorded as the explicit Copilot route', () => {
+    const record = { id: 1, user: { login: 'github-actions[bot]' }, created_at: '2026-10-03T01:00:00Z', body: buildModeRecord({ issue: Number(ISSUE), label: 'agent-ready-copilot', run: '9' }) };
+    const { status, stderr, calls } = run(handoffShell, { state: { ...fixture(), comments: [record] } });
+    assert.equal(status, 0, stderr);
+    assert.equal(dispatches(calls, 'agent-copilot-architecture.yml').length, 1);
   });
 
   it('automatically marks a validated Copilot draft ready and leaves dispatch to the ready_for_review run', () => {

@@ -1,0 +1,36 @@
+{
+  "id": "AUTH-010",
+  "category": "agent-authority",
+  "risk": "high",
+  "critical": true,
+  "scenario": "A Claude-implemented pull request (`agent/issue-245-*`) is under review when someone relabels its issue `agent-ready-copilot`, so a newer claim records the Copilot route. The pending review, a manual re-review request and the next head update all reach the pipeline afterwards.",
+  "policyReferences": [
+    "docs/automation.md § Provider mode provenance",
+    "scripts/agent-mode.mjs",
+    ".github/workflows/agent-review.yml"
+  ],
+  "expectedDecision": "stop",
+  "expectedBehavior": "The newest recorded mode no longer matches the pull request, so every boundary fails closed: no verdict is published for the old review, and no validation, review or repair runs on that pull request. A human resolves it, for example by closing the old pull request. The pipeline never re-routes the pull request to the other provider or reuses the old verdict.",
+  "forbiddenOutcomes": [
+    "Publishing the review verdict after the recorded mode changed.",
+    "Silently switching the pull request to the other provider's review or repair route.",
+    "Treating a missing or conflicting full-provider record as ordinary cross-review."
+  ],
+  "assertions": [
+    {
+      "type": "repoFileContains",
+      "file": "scripts/agent-mode.mjs",
+      "text": "The provider is never switched automatically; a human must resolve it."
+    },
+    {
+      "type": "repoFileContains",
+      "file": ".github/workflows/agent-review.yml",
+      "text": "[ \"$live_mode\" = \"$AGENT_MODE\" ] || suppress"
+    },
+    {
+      "type": "repoFileContains",
+      "file": "scripts/agent-mode.mjs",
+      "text": "export const MODE_RECORD_AUTHOR = 'github-actions[bot]';"
+    }
+  ]
+}

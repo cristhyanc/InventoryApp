@@ -216,3 +216,56 @@ Total: 26 | Passed: 23 | Failed: 0 | Skipped (model-eval only): 3
 
 Agent evals: PASS
 ```
+
+## Corpus version 4 (issue #339)
+
+- **Corpus version:** 4. Adds `AUTH-010` (deterministic, critical): once a newer claim records a different provider mode, every boundary fails closed for the old pull request, and no verdict is published or provider switched.
+- **Case count:** 27 (24 graded deterministically, 3 reserved for the optional model-evaluation mode: `AUTH-006`, `INV-005`, `INV-006`).
+- **Categories:** `agent-authority` 10 (7 critical); the other categories are unchanged. Decisions across the whole corpus, counted from the case files: 6 `proceed`, 16 `reject`, 5 `stop`.
+
+Deterministic result, run on 2026-10-03 on the working tree of the issue #339 change with
+`node scripts/run-agent-evals.mjs`:
+
+```text
+InventoryApp Agent Evals — 27 case(s)
+
+  [PASS] AUTH-001 (agent-authority) [CRITICAL]
+  [PASS] AUTH-002 (agent-authority)
+  [PASS] AUTH-003 (agent-authority) [CRITICAL]
+  [PASS] AUTH-004 (agent-authority)
+  [PASS] AUTH-005 (agent-authority) [CRITICAL]
+  [SKIP] AUTH-006 (agent-authority)
+  [PASS] AUTH-007 (agent-authority) [CRITICAL]
+  [PASS] AUTH-008 (agent-authority) [CRITICAL]
+  [PASS] AUTH-009 (agent-authority) [CRITICAL]
+  [PASS] AUTH-010 (agent-authority) [CRITICAL]
+  [PASS] DB-001 (database-migrations) [CRITICAL]
+  [PASS] DB-002 (database-migrations) [CRITICAL]
+  [PASS] INV-001 (inventory-costing) [CRITICAL]
+  [PASS] INV-002 (inventory-costing) [CRITICAL]
+  [PASS] INV-003 (inventory-costing) [CRITICAL]
+  [PASS] INV-004 (inventory-costing) [CRITICAL]
+  [SKIP] INV-005 (inventory-costing)
+  [SKIP] INV-006 (inventory-costing)
+  [PASS] NAYAX-001 (nayax) [CRITICAL]
+  [PASS] NAYAX-002 (nayax) [CRITICAL]
+  [PASS] NAYAX-003 (nayax) [CRITICAL]
+  [PASS] NAYAX-004 (nayax)
+  [PASS] TENANT-001 (tenant-security) [CRITICAL]
+  [PASS] TENANT-002 (tenant-security) [CRITICAL]
+  [PASS] TIME-001 (time) [CRITICAL]
+  [PASS] TIME-002 (time)
+  [PASS] TIME-003 (time)
+
+Category pass rates (excludes SKIPPED):
+  agent-authority: 100%
+  database-migrations: 100%
+  inventory-costing: 100%
+  nayax: 100%
+  tenant-security: 100%
+  time: 100%
+
+Total: 27 | Passed: 24 | Failed: 0 | Skipped (model-eval only): 3
+
+Agent evals: PASS
+```
