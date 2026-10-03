@@ -219,7 +219,7 @@ Agent evals: PASS
 
 ## Corpus version 4 (issue #339)
 
-- **Corpus version:** 4. Adds `AUTH-010` (deterministic, critical): once a newer claim records a different provider mode, every boundary fails closed for the old pull request, and no verdict is published or provider switched.
+- **Corpus version:** 4. Adds `AUTH-010` (deterministic, critical): once a newer claim in the issue's label history names a different provider mode, every boundary fails closed for the old pull request, and no verdict is published or provider switched; comments never decide the route.
 - **Case count:** 27 (24 graded deterministically, 3 reserved for the optional model-evaluation mode: `AUTH-006`, `INV-005`, `INV-006`).
 - **Categories:** `agent-authority` 10 (7 critical); the other categories are unchanged. Decisions across the whole corpus, counted from the case files: 6 `proceed`, 16 `reject`, 5 `stop`.
 

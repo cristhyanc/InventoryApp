@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { describe, it } from 'node:test';
-import { buildModeRecord } from './agent-mode.mjs';
+import { claimEvents } from './agent-mode.fixtures.mjs';
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8').replaceAll('\r\n', '\n');
 
@@ -37,6 +37,7 @@ const FAKE_GH = `#!/usr/bin/env node
 const fs = require('node:fs');
 const { spawnSync } = require('node:child_process');
 const args = process.argv.slice(2);
+const claimEvents = ${claimEvents.toString()};
 const state = JSON.parse(fs.readFileSync(process.env.FAKE_GH_STATE, 'utf8'));
 const log = (entry) => fs.appendFileSync(process.env.FAKE_GH_LOG, JSON.stringify(entry) + '\\n');
 const opt = (name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
@@ -50,7 +51,7 @@ const out = (value) => {
 const fail = (why) => { process.stderr.write(why + '\\n'); process.exit(1); };
 if ((state.unavailable ?? []).some((prefix) => args.join(' ').startsWith(prefix))) fail('HTTP 502: fixture outage');
 const pick = (obj) => Object.fromEntries(opt('--json').split(',').map((f) => [f, obj[f]]));
-if (args[0] === 'pr' && args[1] === 'view') out(pick(state.pr));
+if (args[0] === 'pr' && args[1] === 'view') out(pick({ createdAt: '2026-10-03T02:00:00Z', ...state.pr }));
 else if (args[0] === 'issue' && args[1] === 'view') out(pick(state.issue));
 else if (['edit', 'comment'].includes(args[1]) && ['pr', 'issue'].includes(args[0])) log({ kind: args[0] + '-' + args[1], args });
 else if (args[0] === 'workflow' && args[1] === 'run') log({ kind: 'dispatch', workflow: args[2], args });
@@ -60,7 +61,7 @@ else if (args[0] === 'api') {
   else if (path.includes('/files')) out(state.files.map((filename) => ({ filename })));
   else if (/\\/pulls\\/\\d+$/.test(path)) out({ user: { login: state.author } });
   else if (path.includes('/contents/scripts/agent-mode.mjs')) process.stdout.write(fs.readFileSync(process.env.AGENT_MODE_SCRIPT, 'utf8'));
-  else if (/\\/issues\\/\\d+\\/comments/.test(path)) out(state.comments ?? []);
+  else if (/\\/issues\\/\\d+\\/events/.test(path)) out(state.events ?? claimEvents(state.pr.headRefName.startsWith('copilot/') ? 'agent-ready-copilot' : 'agent-ready-claude'));
   else fail('unexpected api call: ' + args.join(' '));
 } else fail('unexpected gh call: ' + args.join(' '));
 `;
@@ -156,17 +157,20 @@ describe('implementation to architecture handoff', () => {
 
 describe('provider mode at the architecture handoff', () => {
   const env = { HEAD_SHA: SHA };
-  const record = (label) => ({ id: 1, user: { login: 'github-actions[bot]' }, created_at: '2026-10-03T01:00:00Z', body: buildModeRecord({ issue: Number(ISSUE), label, run: '9' }) });
-
-  it('dispatches when the issue is recorded as Claude-primary', () => {
-    const { status, stderr, calls } = run(dispatchShell, { state: { ...fixture(), comments: [record('agent-ready-claude')] }, env });
+  it('dispatches when the issue was claimed as Claude-primary', () => {
+    const { status, stderr, calls } = run(dispatchShell, { state: { ...fixture(), events: claimEvents('agent-ready-claude') }, env });
     assert.equal(status, 0, stderr);
     assert.equal(dispatches(calls, 'agent-architecture.yml').length, 1);
   });
 
-  for (const [name, label] of [['recorded for Copilot', 'agent-ready-copilot'], ['recorded for a disabled full-provider route', 'agent-ready-full-claude']]) {
-    it(`blocks instead of dispatching when the issue is ${name}`, () => {
-      const { status, calls } = run(dispatchShell, { state: { ...fixture(), comments: [record(label)] }, env });
+  for (const [name, events] of [
+    ['last claimed for Copilot', claimEvents('agent-ready-copilot')],
+    ['claimed for a disabled full-provider route', claimEvents('agent-ready-full-claude')],
+    ['never claimed', []],
+    ['claimed again after this pull request was opened', claimEvents('agent-ready-claude', '2026-10-03T03:00:00Z')],
+  ]) {
+    it(`blocks instead of dispatching when the issue was ${name}`, () => {
+      const { status, calls } = run(dispatchShell, { state: { ...fixture(), events }, env });
       assert.notEqual(status, 0);
       assert.equal(dispatches(calls, 'agent-architecture.yml').length, 0);
       assert.ok(blocked(calls));

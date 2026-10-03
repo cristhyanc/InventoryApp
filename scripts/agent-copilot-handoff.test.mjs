@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { describe, it } from 'node:test';
-import { buildModeRecord } from './agent-mode.mjs';
+import { claimEvents } from './agent-mode.fixtures.mjs';
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8').replaceAll('\r\n', '\n');
 
@@ -39,6 +39,7 @@ const FAKE_GH = `#!/usr/bin/env node
 const fs = require('node:fs');
 const { spawnSync } = require('node:child_process');
 const args = process.argv.slice(2);
+const claimEvents = ${claimEvents.toString()};
 const state = JSON.parse(fs.readFileSync(process.env.FAKE_GH_STATE, 'utf8'));
 const log = (entry) => fs.appendFileSync(process.env.FAKE_GH_LOG, JSON.stringify({ ...entry, token: process.env.GH_TOKEN }) + '\\n');
 const opt = (name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
@@ -52,7 +53,7 @@ const out = (value) => {
 const fail = (why) => { process.stderr.write(why + '\\n'); process.exit(1); };
 if ((state.unavailable ?? []).some((prefix) => args.join(' ').startsWith(prefix))) fail('HTTP 502: fixture outage');
 const pick = (obj) => Object.fromEntries(opt('--json').split(',').map((f) => [f, obj[f]]));
-if (args[0] === 'pr' && args[1] === 'view') out(pick(state.pr));
+if (args[0] === 'pr' && args[1] === 'view') out(pick({ createdAt: '2026-10-03T02:00:00Z', ...state.pr }));
 else if (args[0] === 'pr' && args[1] === 'ready') log({ kind: 'pr-ready', args });
 else if (args[0] === 'issue' && args[1] === 'view') out(pick(state.issue));
 else if (['edit', 'comment'].includes(args[1]) && ['pr', 'issue'].includes(args[0])) {
@@ -66,7 +67,7 @@ else if (args[0] === 'api') {
   else if (path.includes('/files')) out(state.files.map((filename) => ({ filename })));
   else if (/\\/pulls\\/\\d+$/.test(path)) out({ user: { login: state.author } });
   else if (path.includes('/contents/scripts/agent-mode.mjs')) process.stdout.write(fs.readFileSync(process.env.AGENT_MODE_SCRIPT, 'utf8'));
-  else if (/\\/issues\\/\\d+\\/comments/.test(path)) out(state.comments ?? []);
+  else if (/\\/issues\\/\\d+\\/events/.test(path)) out(state.events ?? claimEvents(state.pr.headRefName.startsWith('copilot/') ? 'agent-ready-copilot' : 'agent-ready-claude'));
   else fail('unexpected api call: ' + args.join(' '));
 } else fail('unexpected gh call: ' + args.join(' '));
 `;
@@ -170,16 +171,14 @@ describe('Copilot pull request handoff to the Claude architecture check', () => 
     ]);
   });
 
-  it('refuses to hand a Copilot pull request to Claude when the issue is recorded for Claude', () => {
-    const record = { id: 1, user: { login: 'github-actions[bot]' }, created_at: '2026-10-03T01:00:00Z', body: buildModeRecord({ issue: Number(ISSUE), label: 'agent-ready-claude', run: '9' }) };
-    const { status, calls } = run(handoffShell, { state: { ...fixture(), comments: [record] } });
+  it('refuses to hand a Copilot pull request to Claude when the issue was last claimed for Claude', () => {
+    const { status, calls } = run(handoffShell, { state: { ...fixture(), events: claimEvents('agent-ready-claude') } });
     assert.notEqual(status, 0);
     assert.equal(dispatches(calls, 'agent-copilot-architecture.yml').length, 0);
   });
 
-  it('hands off when the issue is recorded as the explicit Copilot route', () => {
-    const record = { id: 1, user: { login: 'github-actions[bot]' }, created_at: '2026-10-03T01:00:00Z', body: buildModeRecord({ issue: Number(ISSUE), label: 'agent-ready-copilot', run: '9' }) };
-    const { status, stderr, calls } = run(handoffShell, { state: { ...fixture(), comments: [record] } });
+  it('hands off when the issue was claimed for the explicit Copilot route', () => {
+    const { status, stderr, calls } = run(handoffShell, { state: { ...fixture(), events: claimEvents('agent-ready-copilot') } });
     assert.equal(status, 0, stderr);
     assert.equal(dispatches(calls, 'agent-copilot-architecture.yml').length, 1);
   });

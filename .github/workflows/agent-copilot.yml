@@ -131,13 +131,8 @@ jobs:
 
           [ -n "$COPILOT_AGENT_TOKEN" ] || fail "The COPILOT_AGENT_TOKEN secret is not configured."
 
-          # Record the provider mode on the issue before consuming readiness (same format as
-          # scripts/agent-mode.mjs record); every later boundary verifies it.
-          mode_record="<!-- agent-routing-mode:v1 $(jq -cn --argjson issue "$ISSUE_NUMBER" --arg label "$READY_LABEL" --arg mode "$AGENT_MODE" --arg run "$GITHUB_RUN_ID" '{issue: $issue, label: $label, mode: $mode, run: $run}') -->"
-          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
-            --body "Provider mode: $AGENT_MODE. Copilot implementation is starting. Run: $RUN_URL
-          $mode_record"
-
+          # The claim: one edit that swaps the readiness label for agent-working. GitHub's label history
+          # of this edit is what every later boundary verifies (scripts/agent-mode.mjs).
           gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
             --remove-label "$READY_LABEL" --add-label agent-working
 
@@ -173,4 +168,4 @@ jobs:
           assigned=true
 
           gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
-            --body "Assigned to the Copilot coding agent with base branch develop. Implementation model: $IMPLEMENTATION_MODEL ($MODEL_TIER). $MODEL_REASON When Copilot's pull request is marked ready for review, Claude runs a read-only architecture check, Copilot fixes any findings, exact-SHA validation runs, and Claude does the final review. Run: $RUN_URL"
+            --body "Assigned to the Copilot coding agent with base branch develop. Provider mode: $AGENT_MODE. Implementation model: $IMPLEMENTATION_MODEL ($MODEL_TIER). $MODEL_REASON When Copilot's pull request is marked ready for review, Claude runs a read-only architecture check, Copilot fixes any findings, exact-SHA validation runs, and Claude does the final review. Run: $RUN_URL"

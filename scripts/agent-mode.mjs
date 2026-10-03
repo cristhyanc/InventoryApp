@@ -1,10 +1,15 @@
 // Trusted provider-mode policy for the agent pipeline (#337, #338, #339).
 //
-// Readiness labels choose one of four routes. The choice is recorded once, on the issue, by a
-// deterministic workflow step (GITHUB_TOKEN, so the comment author is github-actions[bot]) before
-// the readiness label is consumed. Every later boundary (architecture dispatch, Copilot handoff,
-// validation, review request, review publication, repair and head updates) re-reads that record
-// and verifies it against the live pull request instead of trusting a label or PR text.
+// Readiness labels choose one of four routes. The route of an agent pull request is never taken
+// from a comment, a label that is still on the issue, or PR text. It is derived from the issue's
+// own label history, which GitHub records and nobody can edit or delete: the newest *claim* (the
+// claiming workflow step replacing the readiness label with `agent-working`, as
+// github-actions[bot]) names the label that was consumed, and the label must have been applied by
+// a person before that. Agents cannot change issue labels (their tool lists deny `gh issue edit`
+// and `gh api`), so they cannot fake a claim. Every boundary (architecture dispatch, Copilot
+// handoff, validation, review, publication and repair) re-derives the route from that history and
+// checks that the pull request was opened after the newest claim, so a pull request left over
+// from an earlier claim is refused instead of re-routed.
 //
 // This file is standalone (no imports besides Node built-ins) because jobs that never check out
 // code fetch it from the trusted workflow commit and run it directly.
@@ -31,10 +36,12 @@ export const ROUTES = Object.freeze({
 // connects same-provider architecture review, repair and final review.
 export const FULL_PROVIDER_EXECUTION_ENABLED = false;
 
-// The only author whose mode records count: deterministic workflow steps posting with GITHUB_TOKEN.
-export const MODE_RECORD_AUTHOR = 'github-actions[bot]';
-export const MODE_RECORD_MARKER = 'agent-routing-mode:v1';
-const recordPattern = /<!-- agent-routing-mode:v1 (\{[^\n]*?\}) -->/g;
+// The only actor whose label changes count as a claim: deterministic workflow steps using GITHUB_TOKEN.
+export const CLAIM_ACTOR = 'github-actions[bot]';
+export const CLAIM_LABEL = 'agent-working';
+// The claiming step removes the readiness label and adds agent-working in one `gh issue edit`;
+// GitHub may record the two events up to a few seconds apart.
+const CLAIM_PAIR_WINDOW_MS = 10_000;
 
 /** Parses one readiness label into its trusted route, or returns null for any other label. */
 export function parseReadinessLabel(label) {
@@ -53,50 +60,52 @@ export function implementerForBranch(headRef) {
   return null;
 }
 
-/** Builds the hidden record a claim step posts on the issue before consuming readiness. */
-export function buildModeRecord({ issue, label, run }) {
-  const route = parseReadinessLabel(label);
-  if (!route) throw new Error('A mode record needs a readiness label.');
-  if (!Number.isInteger(issue) || issue < 1) throw new Error('A mode record needs a valid issue number.');
-  if (!/^[1-9]\d*$/.test(String(run))) throw new Error('A mode record needs the claiming run ID.');
-  return `<!-- ${MODE_RECORD_MARKER} ${JSON.stringify({ issue, label, mode: route.mode, run: String(run) })} -->`;
-}
-
-function parseRecord(text, issue) {
-  let record;
-  try { record = JSON.parse(text); } catch { throw new Error(`Malformed provider-mode record on issue #${issue}; a human must resolve it.`); }
-  const keys = record && typeof record === 'object' && !Array.isArray(record) ? Object.keys(record).sort((a, b) => a.localeCompare(b)).join(',') : '';
-  const route = keys === 'issue,label,mode,run' ? parseReadinessLabel(record.label) : null;
-  if (!route || route.mode !== record.mode || !Number.isInteger(record.issue) || typeof record.run !== 'string' || !/^[1-9]\d*$/.test(record.run)) {
-    throw new Error(`Malformed provider-mode record on issue #${issue}; a human must resolve it.`);
+/**
+ * Resolves the verified mode of an agent pull request.
+ * events: the issue's label events as { id, event: 'labeled' | 'unlabeled', actor, label, created_at }.
+ * prCreatedAt: when the pull request was opened.
+ */
+export function resolveMode({ issue, headRef, expectedImplementer, prCreatedAt, events, fullProviderEnabled = FULL_PROVIDER_EXECUTION_ENABLED }) {
+  const implementer = verifyBranchIdentity({ issue, headRef, expectedImplementer });
+  const claim = latestClaim(events, issue);
+  const route = parseReadinessLabel(claim.label);
+  if (route.implementer !== implementer) {
+    throw new Error(`Issue #${issue} was last claimed for ${route.mode} (${claim.label}), but this pull request belongs to ${implementer}. The provider is never switched automatically; a human must resolve it.`);
   }
-  if (record.issue !== issue) throw new Error(`Provider-mode record names issue #${record.issue}, not #${issue}.`);
-  return { ...record, ...ROUTES[record.mode] };
+  if (route.sameProviderReview && !fullProviderEnabled) {
+    throw new Error(`Issue #${issue} was claimed for ${route.mode}, which is not enabled yet; nothing will run for it.`);
+  }
+  const opened = Date.parse(prCreatedAt);
+  if (!Number.isFinite(opened)) throw new Error('The pull request creation time could not be read; provider mode is unverified.');
+  if (opened < claim.at) {
+    throw new Error(`This pull request was opened before issue #${issue}'s latest claim (${claim.label} at ${new Date(claim.at).toISOString()}), so it belongs to an earlier run. A human must resolve it.`);
+  }
+  return { issue, mode: route.mode, implementer, reviewer: route.reviewer, sameProviderReview: route.sameProviderReview, label: claim.label, claimedAt: new Date(claim.at).toISOString() };
 }
 
 /**
- * Resolves the verified mode of an agent pull request.
- * comments: the issue's comments as { id, author, created_at, body }.
- * A record by any author other than MODE_RECORD_AUTHOR is ignored. Without a trusted record the
- * pull request is a legacy task (started before #339) and keeps its branch-derived cross-review
- * route; full-provider tasks always carry a record, so they can never fall back this way.
+ * Finds the newest claim in the issue's label history and the readiness label it consumed.
+ * A claim is CLAIM_ACTOR adding CLAIM_LABEL; it must be paired with CLAIM_ACTOR removing exactly
+ * one readiness label at the same moment, and that label must have been applied by someone else
+ * (a person) before the claim. Anything else fails closed.
  */
-export function resolveMode({ issue, headRef, expectedImplementer, comments, fullProviderEnabled = FULL_PROVIDER_EXECUTION_ENABLED }) {
-  const implementer = verifyBranchIdentity({ issue, headRef, expectedImplementer });
-  const records = collectRecords(comments, issue);
-  if (!records.length) {
-    return { issue, mode: `cross-${implementer}`, ...ROUTES[`cross-${implementer}`], source: 'legacy' };
-  }
-  // The newest claim wins: a human relabel that started a new run supersedes the old choice.
-  records.sort((a, b) => a.at.localeCompare(b.at) || a.id - b.id);
-  const { record } = records.at(-1);
-  if (record.implementer !== implementer) {
-    throw new Error(`Issue #${issue} was last claimed for ${record.mode} (${record.label}), but this pull request belongs to ${implementer}. The provider is never switched automatically; a human must resolve it.`);
-  }
-  if (record.sameProviderReview && !fullProviderEnabled) {
-    throw new Error(`Issue #${issue} is recorded as ${record.mode}, which is not enabled yet; nothing will run for it.`);
-  }
-  return { issue, mode: record.mode, implementer, reviewer: record.reviewer, sameProviderReview: record.sameProviderReview, source: 'record', label: record.label, run: record.run };
+function latestClaim(events, issue) {
+  if (!Array.isArray(events)) throw new Error(`The label history of issue #${issue} could not be read; provider mode is unverified.`);
+  const timeline = events
+    .map(event => ({ ...event, at: Date.parse(event?.created_at), id: Number(event?.id) || 0 }))
+    .filter(event => Number.isFinite(event.at) && typeof event.label === 'string')
+    .sort((a, b) => a.at - b.at || a.id - b.id);
+  const claims = timeline.filter(event => event.event === 'labeled' && event.label === CLAIM_LABEL && event.actor === CLAIM_ACTOR);
+  if (!claims.length) throw new Error(`Issue #${issue} has no verifiable claim in its label history; nothing runs without one. A human must resolve it.`);
+  const claim = claims.at(-1);
+  const consumed = new Set(timeline
+    .filter(event => event.event === 'unlabeled' && event.actor === CLAIM_ACTOR && parseReadinessLabel(event.label) && Math.abs(event.at - claim.at) <= CLAIM_PAIR_WINDOW_MS)
+    .map(event => event.label));
+  if (consumed.size !== 1) throw new Error(`Issue #${issue}'s latest claim did not consume exactly one readiness label; a human must resolve it.`);
+  const [label] = consumed;
+  const applied = timeline.filter(event => event.event === 'labeled' && event.label === label && event.at <= claim.at).at(-1);
+  if (!applied || applied.actor === CLAIM_ACTOR) throw new Error(`Issue #${issue}'s claimed label ${label} was not applied by a person; a human must resolve it.`);
+  return { label, at: claim.at };
 }
 
 /** Checks that the head branch is an agent branch of the expected implementer and issue; returns the implementer. */
@@ -109,31 +118,17 @@ function verifyBranchIdentity({ issue, headRef, expectedImplementer }) {
   return implementer;
 }
 
-/** Parses the trusted mode records among an issue's comments; anything by another author is ignored. */
-function collectRecords(comments, issue) {
-  if (!Array.isArray(comments)) throw new Error('Issue comments could not be read; provider mode is unverified.');
-  const records = [];
-  for (const comment of comments) {
-    if (comment?.author !== MODE_RECORD_AUTHOR || typeof comment.body !== 'string') continue;
-    const found = [...comment.body.matchAll(recordPattern)];
-    if (!found.length && comment.body.includes(MODE_RECORD_MARKER)) throw new Error(`Malformed provider-mode record on issue #${issue}; a human must resolve it.`);
-    if (found.length > 1) throw new Error(`A comment on issue #${issue} carries more than one provider-mode record.`);
-    if (found.length) records.push({ at: String(comment.created_at ?? ''), id: Number(comment.id) || 0, record: parseRecord(found[0][1], issue) });
-  }
-  return records;
-}
-
 // An absolute path, so the lookup never depends on PATH. GitHub's Ubuntu runners install gh at
 // /usr/bin/gh; tests point AGENT_MODE_GH_PATH at a fake.
 const GH_PATH = process.env.AGENT_MODE_GH_PATH || '/usr/bin/gh';
 const gh = (args) => execFileSync(GH_PATH, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
 
-/** Reads the live pull request and its issue's comments, then resolves the mode. */
+/** Reads the live pull request and its issue's label history, then resolves the mode. */
 export function verifyPullRequest({ repository, pr, expectedImplementer }) {
   if (!/^[1-9]\d*$/.test(String(pr))) throw new Error('A valid pull request number is required.');
   if (!/^[\w.-]+\/[\w.-]+$/.test(String(repository))) throw new Error('A valid owner/repository is required.');
   if (!PROVIDERS.includes(expectedImplementer)) throw new Error('The expected implementer must be claude or copilot.');
-  const live = JSON.parse(gh(['pr', 'view', String(pr), '--repo', repository, '--json', 'headRefName,closingIssuesReferences']));
+  const live = JSON.parse(gh(['pr', 'view', String(pr), '--repo', repository, '--json', 'headRefName,closingIssuesReferences,createdAt']));
   const closing = (live.closingIssuesReferences ?? []).map(item => item.number);
   const branchIssue = /^agent\/issue-([1-9]\d*)-/.exec(live.headRefName ?? '')?.[1];
   let issue;
@@ -144,26 +139,22 @@ export function verifyPullRequest({ repository, pr, expectedImplementer }) {
     if (closing.length !== 1) throw new Error(`Pull request #${pr} must close exactly one issue (found ${closing.length}).`);
     issue = closing[0];
   }
-  const lines = gh(['api', '--paginate', `repos/${repository}/issues/${issue}/comments?per_page=100`, '--jq', '.[] | {id, author: .user.login, created_at, body} | @json']);
-  const comments = lines.split('\n').filter(Boolean).map(line => JSON.parse(line));
-  return resolveMode({ issue, headRef: live.headRefName, expectedImplementer, comments });
+  const lines = gh(['api', '--paginate', `repos/${repository}/issues/${issue}/events?per_page=100`, '--jq', '.[] | select(.event == "labeled" or .event == "unlabeled") | {id, event, actor: .actor.login, label: .label.name, created_at} | @json']);
+  const events = lines.split('\n').filter(Boolean).map(line => JSON.parse(line));
+  return resolveMode({ issue, headRef: live.headRefName, expectedImplementer, prCreatedAt: live.createdAt, events });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     const [command, ...rest] = process.argv.slice(2);
-    if (command === 'record') {
-      const [issue, label, run] = rest;
-      process.stdout.write(buildModeRecord({ issue: Number(issue), label, run }));
-    } else if (command === 'verify-pr') {
+    if (command === 'verify-pr') {
       const [pr, expectedImplementer] = rest;
       const result = verifyPullRequest({ repository: process.env.GITHUB_REPOSITORY, pr, expectedImplementer });
       const review = result.sameProviderReview ? ', same-provider review' : '';
-      const origin = result.source === 'legacy' ? 'legacy task without a mode record' : `recorded by run ${result.run} from ${result.label}`;
-      const summary = `Provider mode for pull request #${pr}: ${result.mode} (implementer ${result.implementer}, reviewer ${result.reviewer}${review}; ${origin}).`;
+      const summary = `Provider mode for pull request #${pr}: ${result.mode} (implementer ${result.implementer}, reviewer ${result.reviewer}${review}; claimed from ${result.label} at ${result.claimedAt}).`;
       console.error(`::notice::${summary}`);
       process.stdout.write(`${result.mode}\n`);
-    } else throw new Error('Expected record or verify-pr.');
+    } else throw new Error('Expected verify-pr.');
   } catch (error) {
     console.error(error.message);
     process.exitCode = 1;

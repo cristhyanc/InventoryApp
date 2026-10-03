@@ -107,7 +107,7 @@ jobs:
             fail "Automated review requires an agent/issue-* (Claude) or copilot/* (Copilot) head branch."
           fi
           [ "$current_sha" = "$head_sha" ] || fail "Refusing stale review: pull request head is $current_sha, requested SHA is $head_sha."
-          # Provider mode (#339): verify the issue's trusted mode record against this pull request, using the
+          # Provider mode (#339): verify the route claimed in the issue's label history against this pull request, using the
           # resolver from this workflow's own commit. A conflicting, malformed or disabled mode fails closed.
           gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/scripts/agent-mode.mjs?ref=$GITHUB_WORKFLOW_SHA" > "$RUNNER_TEMP/agent-mode.mjs"
           agent_mode="$(node "$RUNNER_TEMP/agent-mode.mjs" verify-pr "$pr_number" "$implementer")" || fail "the provider mode of pull request #$pr_number could not be verified."

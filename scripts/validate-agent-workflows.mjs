@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FULL_PROVIDER_EXECUTION_ENABLED, READINESS_LABEL_PATTERN } from './select-implementation-model.mjs';
@@ -1698,11 +1698,12 @@ export function verifyImplementationModelSelection(read = readRepositoryFile) {
 }
 
 // ---------------------------------------------------------------------------------------
-// Provider mode provenance (#339): the readiness choice is recorded on the issue before readiness
-// is consumed, and every boundary that acts on an agent pull request re-verifies it with the
-// trusted resolver from its own workflow commit. Pure dispatchers that hold no contents
-// permission (agent-review-request.yml, agent-head-update.yml) rely on the workflow they
-// dispatch, which verifies the mode before doing anything.
+// Provider mode provenance (#339): the route of an agent pull request is derived from the
+// issue's own label history (the newest claim, which swaps the readiness label for agent-working
+// as github-actions[bot]), never from a comment or PR text. Every boundary that acts on an agent
+// pull request re-derives it with the trusted resolver from its own workflow commit. Pure
+// dispatchers that hold no contents permission (agent-review-request.yml, agent-head-update.yml)
+// rely on the workflow they dispatch, which verifies the mode before doing anything.
 // ---------------------------------------------------------------------------------------
 
 export const MODE_RESOLVER_FETCH = 'gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/scripts/agent-mode.mjs?ref=$GITHUB_WORKFLOW_SHA" > "$RUNNER_TEMP/agent-mode.mjs"';
@@ -1720,6 +1721,16 @@ export const PROVIDER_MODE_GATES = [
   ['.github/workflows/agent-repair.yml', 'repair', 'Resolve and verify pull request head', 'agent_mode="$(node "$RUNNER_TEMP/agent-mode.mjs" verify-pr "$PR_NUMBER" "claude")" || fail'],
   ['.github/workflows/agent-repair.yml', 'dispatch-validation', 'Verify repaired head and dispatch trusted validation', 'agent_mode="$(node "$RUNNER_TEMP/agent-mode.mjs" verify-pr "$PR_NUMBER" "claude")" || fail'],
 ];
+
+export const CLAIM_STEPS = [
+  // [workflow, job, claim step]
+  [implementPath, 'implement', 'Mark issue as agent-working'],
+  [copilotImplementPath, 'assign', 'Relabel and assign Copilot'],
+];
+
+function listWorkflowFiles() {
+  return readdirSync(new URL('../.github/workflows/', import.meta.url)).filter(name => /\.ya?ml$/.test(name)).map(name => `.github/workflows/${name}`);
+}
 
 function jobBlock(workflow, job, source) {
   const start = workflow.indexOf(`\n  ${job}:\n`);
@@ -1739,7 +1750,7 @@ export function verifyProviderModeProvenance(read = readRepositoryFile) {
   for (const [path, job, step, verify] of PROVIDER_MODE_GATES) {
     const source = `${path} ${job} provider mode`;
     const jobText = jobBlock(read(path), job, source);
-    // Reading the resolver needs contents: read; reading the issue's record needs issues access.
+    // Reading the resolver needs contents: read; reading the issue's label history needs issues access.
     requireText(jobText, 'contents: read', source);
     if (!/\n {6}issues: (read|write)\n/.test(jobText)) throw new Error(`${source}: missing required text: issues: read`);
     const text = stepBlock(jobText, step, source);
@@ -1755,14 +1766,26 @@ export function verifyProviderModeProvenance(read = readRepositoryFile) {
   requireText(review, '[ "$live_mode" = "$AGENT_MODE" ] || suppress', 'agent-review.yml publish');
   requireOrder(review, 'live_mode="$(node "$RUNNER_TEMP/agent-mode.mjs" verify-pr', 'gh api --method POST "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews"', 'agent-review.yml publish', 'the provider mode must be rechecked before a review is posted.');
 
-  // The record is posted on the issue before readiness is consumed, in the shared format.
+  // A claim is the only workflow change that adds agent-working, done in one edit with the
+  // readiness label's removal, in the step that consumes readiness. Any other agent-working add
+  // would look like a claim to the resolver.
+  const claimSwap = '--remove-label "$READY_LABEL" --add-label agent-working';
+  for (const [path, job, step] of CLAIM_STEPS) {
+    const source = `${path} ${job} claim`;
+    const text = stepBlock(jobBlock(read(path), job, source), step, source);
+    requireText(text, claimSwap, source);
+    if (text.split('--add-label agent-working').length !== 2) throw new Error(`${source}: must add agent-working exactly once, in the claim.`);
+  }
+  for (const path of listWorkflowFiles()) {
+    const text = read(path);
+    const allowed = CLAIM_STEPS.filter(([claimPath]) => claimPath === path).length;
+    if (text.split('add-label agent-working').length - 1 !== allowed) throw new Error(`${path}: only the claim steps may add agent-working.`);
+  }
   const implement = read(implementPath);
   requireText(implement, 'AGENT_MODE: ${{ needs.model.outputs.mode }}', `${implementPath} implement`);
-  requireOrder(implement, 'mode_record="$(node scripts/agent-mode.mjs record "$ISSUE_NUMBER" "$READY_LABEL" "$GITHUB_RUN_ID")"', '--remove-label "$READY_LABEL" --add-label agent-working', `${implementPath} implement`, 'the provider mode must be recorded before readiness is consumed.');
   const copilot = read(copilotImplementPath);
   requireText(copilot, 'AGENT_MODE: ${{ needs.model.outputs.mode }}', `${copilotImplementPath} assign`);
   requireText(copilot, "if (process.env.AGENT_MODE !== 'cross-copilot') throw", `${copilotImplementPath} assign`);
-  requireOrder(copilot, 'mode_record="<!-- agent-routing-mode:v1 $(jq -cn --argjson issue "$ISSUE_NUMBER" --arg label "$READY_LABEL" --arg mode "$AGENT_MODE" --arg run "$GITHUB_RUN_ID"', '--remove-label "$READY_LABEL" --add-label agent-working', `${copilotImplementPath} assign`, 'the provider mode must be recorded before readiness is consumed.');
   const selection = read('.github/workflows/agent-model-selection.yml');
   requireText(selection, 'mode: ${{ steps.resolve.outputs.mode }}', 'implementation model selection');
 }

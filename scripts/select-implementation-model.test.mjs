@@ -179,7 +179,7 @@ if [[ "$1" == "api" ]]; then cat > "$TEST_PAYLOAD"; if [[ -n "$TEST_API_FAIL" ]]
       const resolved = resolveSelection(prepared, suffix === '' ? { tier: 'standard', reason: 'Normal development' } : undefined);
       writeFileSync(join(dir, 'issue.json'), JSON.stringify(snapshot));
       writeFileSync(join(dir, 'calls'), '');
-      const env = { ...process.env, PATH: `${dir}:${process.env.PATH}`, TEST_ISSUE: join(dir, 'issue.json'), TEST_CALLS: join(dir, 'calls'), TEST_PAYLOAD: join(dir, 'payload.json'), ISSUE_NUMBER: '123', GITHUB_REPOSITORY: 'test/repo', READY_LABEL: prepared.label, TASK_FINGERPRINT: prepared.fingerprint, IMPLEMENTATION_MODEL: resolved.model, MODEL_TIER: resolved.tier, MODEL_REASON: resolved.reason, AGENT_MODE: prepared.mode, GITHUB_RUN_ID: '4242', COPILOT_AGENT_TOKEN: 'synthetic-token', GH_TOKEN: 'synthetic-token', RUN_URL: 'https://example.invalid/run' };
+      const env = { ...process.env, PATH: `${dir}:${process.env.PATH}`, TEST_ISSUE: join(dir, 'issue.json'), TEST_CALLS: join(dir, 'calls'), TEST_PAYLOAD: join(dir, 'payload.json'), ISSUE_NUMBER: '123', GITHUB_REPOSITORY: 'test/repo', READY_LABEL: prepared.label, TASK_FINGERPRINT: prepared.fingerprint, IMPLEMENTATION_MODEL: resolved.model, MODEL_TIER: resolved.tier, MODEL_REASON: resolved.reason, AGENT_MODE: prepared.mode, COPILOT_AGENT_TOKEN: 'synthetic-token', GH_TOKEN: 'synthetic-token', RUN_URL: 'https://example.invalid/run' };
       const run = spawnSync('bash', [join(dir, 'assign.sh')], { env, encoding: 'utf8' });
       assert.equal(run.status, 0, run.stderr);
       const payload = JSON.parse(readFileSync(join(dir, 'payload.json'), 'utf8'));
@@ -187,13 +187,11 @@ if [[ "$1" == "api" ]]; then cat > "$TEST_PAYLOAD"; if [[ -n "$TEST_API_FAIL" ]]
       assert.equal(payload.agent_assignment.base_branch, 'develop');
       assert.deepEqual(payload.assignees, ['copilot-swe-agent[bot]']);
       assert.match(payload.agent_assignment.custom_instructions, /Do not switch models/);
+      // The claim swaps the readiness label for agent-working in one edit; that label history is the
+      // provider-mode evidence, and no hidden record comment is written.
       const claimCalls = readFileSync(join(dir, 'calls'), 'utf8');
       assert.ok(claimCalls.includes(`--remove-label ${prepared.label} --add-label agent-working`));
-      // The provider mode is recorded on the issue before readiness is consumed.
-      const recordAt = claimCalls.indexOf('<!-- agent-routing-mode:v1 ');
-      assert.ok(recordAt >= 0 && recordAt < claimCalls.indexOf('--add-label agent-working'), claimCalls);
-      const record = JSON.parse(/<!-- agent-routing-mode:v1 (\{[^\n]*?\}) -->/.exec(claimCalls)[1]);
-      assert.deepEqual(record, { issue: 123, label: prepared.label, mode: 'cross-copilot', run: '4242' });
+      assert.ok(!claimCalls.includes('agent-routing-mode'), claimCalls);
       writeFileSync(join(dir, 'issue.json'), JSON.stringify({ ...snapshot, body: 'New scope' }));
       writeFileSync(join(dir, 'calls'), '');
       const stale = spawnSync('bash', [join(dir, 'assign.sh')], { env, encoding: 'utf8' });

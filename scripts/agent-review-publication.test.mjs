@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { describe, it } from 'node:test';
-import { buildModeRecord } from './agent-mode.mjs';
+import { claimEvents } from './agent-mode.fixtures.mjs';
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8').replaceAll('\r\n', '\n');
 
@@ -42,6 +42,7 @@ const FAKE_GH = `#!/usr/bin/env node
 const fs = require('node:fs');
 const { spawnSync } = require('node:child_process');
 const args = process.argv.slice(2);
+const claimEvents = ${claimEvents.toString()};
 const state = JSON.parse(fs.readFileSync(process.env.FAKE_GH_STATE, 'utf8'));
 const log = (entry) => fs.appendFileSync(process.env.FAKE_GH_LOG, JSON.stringify(entry) + '\\n');
 const opt = (name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
@@ -56,7 +57,7 @@ const fail = (why) => { process.stderr.write(why + '\\n'); process.exit(1); };
 if ((state.unavailable ?? []).some((prefix) => args.join(' ').includes(prefix))) fail('HTTP 502: fixture outage');
 if (args[0] === 'pr' && args[1] === 'view') {
   const fields = opt('--json').split(',');
-  out(Object.fromEntries(fields.map((f) => [f, state.pr[f]])));
+  out(Object.fromEntries(fields.map((f) => [f, { createdAt: '2026-10-03T02:00:00Z', ...state.pr }[f]])));
 } else if (args[0] === 'workflow' && args[1] === 'run') {
   log({ kind: 'dispatch', args });
 } else if ((args[0] === 'pr' || args[0] === 'issue') && args[1] === 'edit') {
@@ -80,8 +81,8 @@ if (args[0] === 'pr' && args[1] === 'view') {
     out({ user: { login: state.author } });
   } else if (path.includes('/contents/scripts/agent-mode.mjs')) {
     process.stdout.write(fs.readFileSync(process.env.AGENT_MODE_SCRIPT, 'utf8'));
-  } else if (/\\/issues\\/\\d+\\/comments/.test(path)) {
-    out(state.comments ?? []);
+  } else if (/\\/issues\\/\\d+\\/events/.test(path)) {
+    out(state.events ?? claimEvents(state.pr.headRefName.startsWith('copilot/') ? 'agent-ready-copilot' : 'agent-ready-claude'));
   } else fail('unexpected api call: ' + args.join(' '));
 } else fail('unexpected gh call: ' + args.join(' '));
 `;
@@ -259,18 +260,17 @@ describe('guarded review publication', () => {
   }
 
   // Provider mode (#339): the verdict is published only under the mode the review ran with.
-  const modeComment = (label) => ({ id: 1, user: { login: 'github-actions[bot]' }, created_at: '2026-10-03T01:00:00Z', body: buildModeRecord({ issue: 245, label, run: '7' }) });
-  it('publishes when the recorded provider mode still matches the review', () => {
-    const outcome = publish({ state: { ...copilotState(), comments: [modeComment('agent-ready-copilot')] } });
+  it('publishes when the claimed provider mode still matches the review', () => {
+    const outcome = publish({ state: { ...copilotState(), events: claimEvents('agent-ready-copilot') } });
     assert.equal(outcome.status, 0, outcome.stderr);
     assert.equal(reviews(outcome.calls).length, 1);
   });
   it('suppresses the verdict when the issue was re-claimed for another provider during the review', () => {
-    assertSuppressed(publish({ state: { ...copilotState(), comments: [modeComment('agent-ready-claude')] } }), /provider mode of pull request #267 could not be verified/);
+    const events = [...claimEvents('agent-ready-copilot'), ...claimEvents('agent-ready-claude', '2026-10-03T01:30:00Z', 10)];
+    assertSuppressed(publish({ state: { ...copilotState(), events } }), /provider mode of pull request #267 could not be verified/);
   });
-  it('suppresses the verdict when the provider-mode record is malformed', () => {
-    const bad = { id: 1, user: { login: 'github-actions[bot]' }, created_at: '2026-10-03T01:00:00Z', body: '<!-- agent-routing-mode:v1 {"issue":245} -->' };
-    assertSuppressed(publish({ state: { ...copilotState(), comments: [bad] } }), /could not be verified/);
+  it('suppresses the verdict when the label history shows no verifiable claim', () => {
+    assertSuppressed(publish({ state: { ...copilotState(), events: [] } }), /could not be verified/);
   });
 
   it('publishes the Copilot review of a Claude-implemented pull request through the same guarded path', () => {
