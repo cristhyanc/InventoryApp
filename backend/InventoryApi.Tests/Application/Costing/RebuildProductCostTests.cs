@@ -234,18 +234,19 @@ public class RebuildProductCostTests
     }
 
     [Fact]
-    public async Task Fatal_data_quality_issue_throws_and_never_stages_the_product_position()
+    public async Task Fatal_data_quality_issue_throws_and_stages_nothing()
     {
         var store = new FakeLedgerStore(new InventoryCostLedger(
             new CostReplayProduct(1, 0, null, null),
             [new CostReplayAdjustment(1, Day(1), DomainStock.StockAdjustmentReason.Restock, 5, null, false)],
-            [],
+            [new CostReplaySale(9, Day(2))],
             null));
 
         var exception = await Assert.ThrowsAsync<InventoryCostDataQualityException>(
-            () => new RebuildProductCost(store).RebuildAsync(1));
+            () => new RebuildProductCost(store).RebuildAsync(1, Day(1)));
 
         Assert.Contains("has no valid unit cost", exception.Message);
+        Assert.False(store.ReplayStaged);
         Assert.Null(store.StagedPosition);
     }
 

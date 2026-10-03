@@ -1007,7 +1007,8 @@ in behaviour:
   `WeightedAverageCostReplay` and decides what to persist: every replayed movement's running position
   and assigned cost, the ledger cost of completed sales at or after the requested recost date, and -
   only when the history has no fatal issue - the product's physical/costing position; a fatal issue
-  throws `Inventory.Application.Costing.InventoryCostDataQualityException` instead. A dry run loads
+  stages nothing at all and throws `Inventory.Application.Costing.InventoryCostDataQualityException`
+  instead. A dry run loads
   untracked rows, stages nothing and never throws for data quality. No rounding is applied and a
   repeated rebuild over the same history yields the same result. `GetAverageUnitCostAtAsync` replays
   the read-only ledger as of a sale time and returns `null` for an unknown product or a fatal history.
@@ -1105,7 +1106,12 @@ by `TransactionID`, Nayax product matching, the settlement-value completed/cance
 historical costing through the Application `ICostSale` use case (issue #297), and the `IRebuildProductCost` rebuild for products whose
 transition-baseline cutoff a newly imported completed sale follows - and enriches an already stored
 transaction only where its product match or status is still missing, so an imported status or cost is
-never overwritten. `NayaxSalesSyncController` is a thin adapter that invokes the use case and maps it
+never overwritten. Because the sales are already saved before the rebuilds run, a later sync never
+retries a skipped rebuild, so one product's fatal cost history (for example a completed sale with no
+costed stock left) must not discard the other products' rebuilds: the adapter rebuilds every affected
+product it can, saves them, and then raises the failures together as one
+`InventoryCostDataQualityException` (still a logged, generic `500`), leaving the failing product
+unchanged. `NayaxSalesSyncController` is a thin adapter that invokes the use case and maps it
 to `POST /api/nayax-sales-sync` (204); a Nayax upstream failure still surfaces as the centralized
 `502` from `NayaxUpstreamExceptionHandler`. `MachineService.GetAll()` no longer imports latest sales
 itself; its only responsibility is calculating machine sales/profit from whatever `NayaxSales` rows

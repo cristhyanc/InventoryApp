@@ -34,7 +34,9 @@ public interface ILatestNayaxSalesStore
     /// <summary>
     /// Rebuilds the affected products' inventory costs chronologically from the given earliest
     /// completed-sale instants, for the products whose transition baseline cutoff that instant is
-    /// actually after.
+    /// actually after. A product whose cost history has a fatal data-quality issue does not stop
+    /// the others: every rebuildable product is saved, then the failures are raised together as
+    /// one <see cref="Inventory.Application.Costing.InventoryCostDataQualityException"/>.
     /// </summary>
     Task RebuildInventoryCostsAsync(
         IReadOnlyDictionary<long, DateTime> earliestCompletedSaleByProductId,

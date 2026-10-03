@@ -136,9 +136,26 @@ public sealed class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
         var baselines = await _db.InventoryCostTransitionBaselines.AsNoTracking()
             .Where(x => productIds.Contains(x.ProductId))
             .ToDictionaryAsync(x => x.ProductId, x => x.CutoffAt, cancellationToken);
+        // One product's fatal cost history must not discard the other products' rebuilds: their
+        // sales are already saved, so a skipped rebuild would never be retried by a later sync.
+        // The failing product stages nothing, the rest are saved, and the failure is still raised.
+        var failures = new List<string>();
         foreach (var item in earliestCompletedSaleByProductId)
-            if (baselines.TryGetValue(item.Key, out var cutoff) && item.Value > cutoff)
+        {
+            if (!baselines.TryGetValue(item.Key, out var cutoff) || item.Value <= cutoff)
+                continue;
+            try
+            {
                 await _inventoryCostRebuild.RebuildAsync(item.Key, item.Value, cancellationToken: cancellationToken);
+            }
+            catch (InventoryCostDataQualityException ex)
+            {
+                failures.Add(ex.Message);
+            }
+        }
+
         await _db.SaveChangesAsync(cancellationToken);
+        if (failures.Count > 0)
+            throw new InventoryCostDataQualityException(string.Join(" ", failures));
     }
 }

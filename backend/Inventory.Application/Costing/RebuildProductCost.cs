@@ -8,9 +8,10 @@ namespace Inventory.Application.Costing;
 /// ledger through <see cref="IInventoryCostLedgerStore"/>, replays it with
 /// <see cref="WeightedAverageCostReplay"/> (issue #295) and decides what to persist: on a real
 /// rebuild every replayed movement's running position, the cost of each completed sale at or after
-/// the requested recost date, and - only when the history has no fatal data-quality issue - the
-/// product's position, otherwise <see cref="InventoryCostDataQualityException"/>. A dry run stages
-/// nothing and never throws for data quality. No rounding is applied. Rebuilding twice over the
+/// the requested recost date, and the product's position - but only when the history has no fatal
+/// data-quality issue; otherwise it stages nothing and throws
+/// <see cref="InventoryCostDataQualityException"/>. A dry run stages nothing and never throws for
+/// data quality. No rounding is applied. Rebuilding twice over the
 /// same history yields the same result.
 /// </summary>
 public sealed class RebuildProductCost : IRebuildProductCost
@@ -29,6 +30,12 @@ public sealed class RebuildProductCost : IRebuildProductCost
             ?? throw new InvalidOperationException($"Product {productId} does not exist.");
 
         var replay = WeightedAverageCostReplay.Replay(ledger.Product, ledger.Adjustments, ledger.Sales, ledger.Baseline);
+
+        // A real rebuild with a fatal issue stages nothing, so a caller that isolates one product's
+        // failure (the latest-sales sync) cannot persist a half-applied replay for it.
+        var fatal = replay.Issues.Where(x => x.IsFatal).Select(x => x.Message).Distinct().ToArray();
+        if (!dryRun && fatal.Length > 0)
+            throw new InventoryCostDataQualityException(string.Join(" ", fatal));
 
         var recostedSaleCount = 0;
         if (!dryRun)
@@ -54,10 +61,6 @@ public sealed class RebuildProductCost : IRebuildProductCost
 
         if (dryRun)
             return result;
-
-        var fatal = replay.Issues.Where(x => x.IsFatal).Select(x => x.Message).Distinct().ToArray();
-        if (fatal.Length > 0)
-            throw new InventoryCostDataQualityException(string.Join(" ", fatal));
 
         _store.StageProductPosition(ledger, new ProductCostPosition(
             replay.PhysicalQuantity,

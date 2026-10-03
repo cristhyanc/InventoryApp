@@ -347,6 +347,41 @@ public class NayaxHistoricalCostTests
         Assert.Equal(SaleCostSource.InventoryLedger, sale.CostSource);
     }
 
+    [Fact]
+    public async Task Latest_sales_sync_saves_other_products_rebuilds_when_one_product_has_no_costed_stock()
+    {
+        await using var db = CreateDb();
+        var cutoff = new DateTime(2026, 9, 1, 0, 0, 0);
+        db.Products.AddRange(
+            new Product { Id = 10, Name = "Snack", QuantityInStock = 0, CostingQuantity = 5, InventoryValue = 10m, AverageUnitCost = 2m },
+            new Product { Id = 20, Name = "Water", QuantityInStock = 0, CostingQuantity = 0, InventoryValue = 0m, AverageUnitCost = 0m });
+        db.InventoryCostTransitionBaselines.AddRange(
+            new InventoryCostTransitionBaseline { ProductId = 10, CutoffAt = cutoff, OpeningCostingQuantity = 5, AverageUnitCost = 2m, InventoryValue = 10m },
+            new InventoryCostTransitionBaseline { ProductId = 20, CutoffAt = cutoff });
+        await db.SaveChangesAsync();
+        var nayax = new Mock<INayaxLynxClient>();
+        nayax.Setup(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<NayaxMachine> { new() { MachineID = 1, MachineName = "Machine" } });
+        nayax.Setup(x => x.GetMachineLastSalesAsync(1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<NayaxLastSalesReport>
+            {
+                new() { TransactionID = 2, MachineID = 1, NayaxProductId = 20, ProductName = "Water", SettlementValue = 3m, MachineAuthorizationTime = cutoff.AddDays(1) },
+                new() { TransactionID = 1, MachineID = 1, NayaxProductId = 10, ProductName = "Snack", SettlementValue = 3m, MachineAuthorizationTime = cutoff.AddDays(1) }
+            });
+
+        var exception = await Assert.ThrowsAsync<InventoryCostDataQualityException>(
+            () => LatestSalesSync(db, nayax.Object).Handle());
+
+        Assert.Contains("Completed Nayax sale 2 for product 20 has no known opening cost", exception.Message);
+        var snack = await db.Products.AsNoTracking().SingleAsync(x => x.Id == 10);
+        Assert.Equal(4, snack.CostingQuantity);
+        Assert.Equal(8m, snack.InventoryValue);
+        var water = await db.Products.AsNoTracking().SingleAsync(x => x.Id == 20);
+        Assert.Equal(0, water.CostingQuantity);
+        Assert.Equal(SaleCostingStatus.Costed, (await db.NayaxSales.AsNoTracking().SingleAsync(x => x.TransactionID == 1)).CostingStatus);
+        Assert.Equal(SaleCostingStatus.Pending, (await db.NayaxSales.AsNoTracking().SingleAsync(x => x.TransactionID == 2)).CostingStatus);
+    }
+
     /// <summary>
     /// The latest-sales synchronization use case (issue #187) over the real
     /// <see cref="EfLatestNayaxSalesStore"/> adapter, so the historical-cost behaviour asserted here
