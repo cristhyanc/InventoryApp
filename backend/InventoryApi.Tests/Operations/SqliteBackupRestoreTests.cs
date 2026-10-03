@@ -320,9 +320,10 @@ public sealed class DatabaseBackupRunnerTests : IDisposable
 }
 
 /// <summary>
-/// Issue #331. Proves the <c>backup-database</c> argument parsing: an explicit, unambiguous
-/// <c>--output &lt;path&gt;</c> is required, matching the same strictness as the other early
-/// CLI commands in <c>Program.cs</c>.
+/// Issues #331 and #332. Proves the <c>backup-database</c> argument parsing: exactly one explicit,
+/// unambiguous mode is required - a retained snapshot at <c>--output &lt;path&gt;</c> or an
+/// <c>--upload</c> to the configured backup container - matching the same strictness as the other
+/// early CLI commands in <c>Program.cs</c>.
 /// </summary>
 public sealed class BackupDatabaseArgumentsTests
 {
@@ -335,13 +336,14 @@ public sealed class BackupDatabaseArgumentsTests
     }
 
     [Fact]
-    public void Requires_an_explicit_output_path()
+    public void Requires_an_explicit_mode()
     {
         var ok = BackupDatabaseArguments.TryParse(
             new[] { "backup-database" }, out _, out var error);
 
         Assert.False(ok);
         Assert.Contains("--output", error, StringComparison.Ordinal);
+        Assert.Contains("--upload", error, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -368,10 +370,48 @@ public sealed class BackupDatabaseArgumentsTests
     public void Parses_a_valid_output_path()
     {
         var ok = BackupDatabaseArguments.TryParse(
-            new[] { "backup-database", "--output", "x.db" }, out var outputPath, out var error);
+            new[] { "backup-database", "--output", "x.db" }, out var request, out var error);
 
         Assert.True(ok);
-        Assert.Equal("x.db", outputPath);
+        Assert.Equal(BackupDatabaseMode.RetainedSnapshot, request.Mode);
+        Assert.Equal("x.db", request.OutputPath);
         Assert.Equal(string.Empty, error);
+    }
+
+    [Fact]
+    public void Parses_the_upload_mode()
+    {
+        var ok = BackupDatabaseArguments.TryParse(
+            new[] { "backup-database", "--upload" }, out var request, out var error);
+
+        Assert.True(ok);
+        Assert.Equal(BackupDatabaseMode.Upload, request.Mode);
+        Assert.Equal(string.Empty, request.OutputPath);
+        Assert.Equal(string.Empty, error);
+    }
+
+    /// <summary>
+    /// The two modes dispose of the snapshot in opposite ways: <c>--output</c> retains a file the
+    /// operator named, while <c>--upload</c> stages its own copy and deletes it. Accepting both
+    /// would mean either silently ignoring the path or deleting a file the operator asked to keep.
+    /// </summary>
+    [Fact]
+    public void Rejects_output_combined_with_upload()
+    {
+        var ok = BackupDatabaseArguments.TryParse(
+            new[] { "backup-database", "--output", "x.db", "--upload" }, out _, out var error);
+
+        Assert.False(ok);
+        Assert.Contains("mutually exclusive", error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Rejects_a_repeated_upload_flag()
+    {
+        var ok = BackupDatabaseArguments.TryParse(
+            new[] { "backup-database", "--upload", "--upload" }, out _, out var error);
+
+        Assert.False(ok);
+        Assert.Contains("--upload", error, StringComparison.Ordinal);
     }
 }

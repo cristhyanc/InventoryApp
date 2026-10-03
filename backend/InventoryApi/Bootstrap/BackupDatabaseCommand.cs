@@ -1,45 +1,86 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
+using Inventory.Infrastructure.Backups;
 using Microsoft.Data.Sqlite;
 
 namespace InventoryApi.Bootstrap;
 
 /// <summary>
+/// What the <c>backup-database</c> command was asked to do with the snapshot it takes.
+/// </summary>
+public enum BackupDatabaseMode
+{
+    /// <summary>Write a verified snapshot to the operator-chosen path and keep it (issue #331).</summary>
+    RetainedSnapshot,
+
+    /// <summary>
+    /// Stage a verified snapshot, upload it to the configured private backup container, and remove
+    /// the local copy (issue #332).
+    /// </summary>
+    Upload,
+}
+
+/// <param name="Mode">Which of the two mutually exclusive modes was requested.</param>
+/// <param name="OutputPath">The retained snapshot's destination; empty in upload mode.</param>
+public sealed record BackupDatabaseRequest(BackupDatabaseMode Mode, string OutputPath);
+
+/// <summary>
 /// Parses the <c>backup-database</c> command line. Unlike <see cref="DatabaseMigrationArguments"/>
-/// and <see cref="BusinessBootstrapArguments"/>, there is no implicit/default mode: a retained
-/// manual snapshot always needs an explicit, operator-chosen destination, so <c>--output &lt;path&gt;</c>
-/// is required rather than optional.
+/// and <see cref="BusinessBootstrapArguments"/>, there is no implicit/default mode: exactly one of
+/// <c>--output &lt;path&gt;</c> (a retained snapshot at an operator-chosen destination) or
+/// <c>--upload</c> (a staged snapshot uploaded to the configured backup container) is required.
+///
+/// They are mutually exclusive because they dispose of the snapshot in opposite ways: one keeps a
+/// file the operator named, the other stages its own copy and deletes it afterwards. Accepting
+/// both would mean either silently ignoring the path or deleting a file the operator asked to
+/// keep, and neither is something to guess at for a backup.
 /// </summary>
 public static class BackupDatabaseArguments
 {
     public const string CommandName = "backup-database";
     public const string OutputFlag = "--output";
+    public const string UploadFlag = "--upload";
+
+    private const string Usage = $"Usage: {CommandName} ({OutputFlag} <path> | {UploadFlag})";
 
     public static bool Matches(string[] args) =>
         args.Length > 0 && string.Equals(args[0], CommandName, StringComparison.OrdinalIgnoreCase);
 
     /// <param name="args">The full argument list, including the command name at position 0.</param>
-    /// <param name="outputPath">The requested snapshot destination.</param>
+    /// <param name="request">The parsed mode and, for a retained snapshot, its destination.</param>
     /// <param name="error">Operator-facing reason the arguments were rejected, or empty.</param>
-    public static bool TryParse(string[] args, out string outputPath, out string error)
+    public static bool TryParse(string[] args, out BackupDatabaseRequest request, out string error)
     {
-        outputPath = string.Empty;
+        request = new BackupDatabaseRequest(BackupDatabaseMode.RetainedSnapshot, string.Empty);
         error = string.Empty;
 
         string? seenOutput = null;
+        var sawUpload = false;
         var remaining = args.Skip(1).ToArray();
 
         for (var i = 0; i < remaining.Length; i++)
         {
+            if (string.Equals(remaining[i], UploadFlag, StringComparison.OrdinalIgnoreCase))
+            {
+                if (sawUpload)
+                {
+                    error = $"{UploadFlag} was specified more than once.";
+                    return false;
+                }
+
+                sawUpload = true;
+                continue;
+            }
+
             if (!string.Equals(remaining[i], OutputFlag, StringComparison.OrdinalIgnoreCase))
             {
-                error = $"Unrecognised argument '{remaining[i]}'. Usage: {CommandName} {OutputFlag} <path>";
+                error = $"Unrecognised argument '{remaining[i]}'. {Usage}";
                 return false;
             }
 
             if (i + 1 >= remaining.Length)
             {
-                error = $"{OutputFlag} requires a path argument. Usage: {CommandName} {OutputFlag} <path>";
+                error = $"{OutputFlag} requires a path argument. {Usage}";
                 return false;
             }
 
@@ -52,13 +93,28 @@ public static class BackupDatabaseArguments
             seenOutput = remaining[++i];
         }
 
-        if (string.IsNullOrWhiteSpace(seenOutput))
+        if (sawUpload && seenOutput is not null)
         {
-            error = $"{OutputFlag} <path> is required. Usage: {CommandName} {OutputFlag} <path>";
+            error = $"{OutputFlag} and {UploadFlag} are mutually exclusive. {UploadFlag} stages its "
+                + "own snapshot and removes the local copy after uploading it, so there is no "
+                + $"retained destination to name; use {OutputFlag} <path> when a local snapshot is "
+                + "what you want. Pass exactly one.";
             return false;
         }
 
-        outputPath = seenOutput;
+        if (sawUpload)
+        {
+            request = new BackupDatabaseRequest(BackupDatabaseMode.Upload, string.Empty);
+            return true;
+        }
+
+        if (string.IsNullOrWhiteSpace(seenOutput))
+        {
+            error = $"Pass exactly one of {OutputFlag} <path> or {UploadFlag}. {Usage}";
+            return false;
+        }
+
+        request = new BackupDatabaseRequest(BackupDatabaseMode.RetainedSnapshot, seenOutput);
         return true;
     }
 }
@@ -305,21 +361,36 @@ public static class DatabaseBackupRunner
 /// Backup API rather than a filesystem copy, and refuses a destination that already exists,
 /// matches the source, or sits inside the API's content root/web root - so a snapshot never lands
 /// somewhere a redeploy or publish step would silently overwrite or discard it.
+///
+/// <c>--upload</c> is the second mode (issue #332): it creates and verifies a snapshot exactly as
+/// above, into a staging directory under the OS temporary path rather than a retained destination,
+/// uploads it to the configured private backup container, and removes the local copy. It is one
+/// workflow on purpose - there is no way to upload a file this command did not just take and
+/// verify, and no way to leave a verified snapshot sitting on the instance the database is on.
+/// Authentication is the App Service's managed identity through <c>DefaultAzureCredential</c>;
+/// <c>BackupStorage:BlobServiceUri</c> and <c>BackupStorage:ContainerName</c> are the only settings
+/// it reads, and neither is or may become a secret. An unconfigured or unusable destination is
+/// refused before any snapshot is taken.
 /// </summary>
 public static class BackupDatabaseCommand
 {
     public const string CommandName = BackupDatabaseArguments.CommandName;
 
+    /// <summary>
+    /// Where <c>--upload</c> stages the snapshot it is about to upload: the OS temporary path,
+    /// which is outside the API's content root and web root on every host the application runs on,
+    /// so the staged copy is never served, published or captured by a redeploy. The snapshot
+    /// runner's own content-root guard still checks this rather than trusting it.
+    /// </summary>
+    private static string StagingDirectory => Path.Combine(Path.GetTempPath(), "inventoryapp-backup-staging");
+
     public static bool Matches(string[] args) => BackupDatabaseArguments.Matches(args);
 
     public static async Task<int> RunAsync(string[] args, CancellationToken cancellationToken)
     {
-        if (!BackupDatabaseArguments.TryParse(args, out var outputPath, out var argumentError))
+        if (!BackupDatabaseArguments.TryParse(args, out var request, out var argumentError))
         {
-            Console.WriteLine();
-            Console.WriteLine($"Database backup - REFUSED: {argumentError}");
-            Console.WriteLine();
-            return 1;
+            return Refuse(argumentError);
         }
 
         var builder = WebApplication.CreateBuilder(args);
@@ -327,13 +398,53 @@ public static class BackupDatabaseCommand
             ?? "Data Source=inventory.db";
         var sourcePath = new SqliteConnectionStringBuilder(connectionString).DataSource;
 
-        var outcome = await DatabaseBackupRunner.RunAsync(
+        if (request.Mode == BackupDatabaseMode.RetainedSnapshot)
+        {
+            var outcome = await DatabaseBackupRunner.RunAsync(
+                sourcePath,
+                request.OutputPath,
+                builder.Environment.ContentRootPath,
+                Console.Out,
+                cancellationToken);
+
+            return outcome.ExitCode;
+        }
+
+        var storageOptions = builder.Configuration
+            .GetSection(BackupStorageOptions.SectionName)
+            .Get<BackupStorageOptions>() ?? new BackupStorageOptions();
+
+        IBackupSnapshotUploader uploader;
+        try
+        {
+            // Resolved before the snapshot is taken: an upload that cannot reach its destination
+            // must not first spend time copying the database and then report that the verified
+            // snapshot it just deleted had nowhere to go.
+            uploader = BackupSnapshotUploaderFactory.CreateAzureBlob(
+                BackupStorageConfiguration.Resolve(storageOptions));
+        }
+        catch (InvalidOperationException configurationError)
+        {
+            return Refuse(configurationError.Message);
+        }
+
+        var uploadOutcome = await DatabaseBackupUploadRunner.RunAsync(
             sourcePath,
-            outputPath,
+            StagingDirectory,
             builder.Environment.ContentRootPath,
+            uploader,
+            DateTimeOffset.UtcNow,
             Console.Out,
             cancellationToken);
 
-        return outcome.ExitCode;
+        return uploadOutcome.ExitCode;
+    }
+
+    private static int Refuse(string reason)
+    {
+        Console.WriteLine();
+        Console.WriteLine($"Database backup - REFUSED: {reason}");
+        Console.WriteLine();
+        return 1;
     }
 }
