@@ -54,9 +54,51 @@ public static class BackupDatabaseArguments
         request = new BackupDatabaseRequest(BackupDatabaseMode.RetainedSnapshot, string.Empty);
         error = string.Empty;
 
-        string? seenOutput = null;
-        var sawUpload = false;
         var remaining = args.Skip(1).ToArray();
+
+        if (!TryParseFlags(remaining, out var seenOutput, out var sawUpload, out error))
+        {
+            return false;
+        }
+
+        if (sawUpload && seenOutput is not null)
+        {
+            error = $"{OutputFlag} and {UploadFlag} are mutually exclusive. {UploadFlag} stages its "
+                + "own snapshot and removes the local copy after uploading it, so there is no "
+                + $"retained destination to name; use {OutputFlag} <path> when a local snapshot is "
+                + "what you want. Pass exactly one.";
+            return false;
+        }
+
+        if (sawUpload)
+        {
+            request = new BackupDatabaseRequest(BackupDatabaseMode.Upload, string.Empty);
+            return true;
+        }
+
+        if (string.IsNullOrWhiteSpace(seenOutput))
+        {
+            error = $"Pass exactly one of {OutputFlag} <path> or {UploadFlag}. {Usage}";
+            return false;
+        }
+
+        request = new BackupDatabaseRequest(BackupDatabaseMode.RetainedSnapshot, seenOutput);
+        return true;
+    }
+
+    /// <summary>
+    /// Walks the arguments after the command name, recognising <see cref="UploadFlag"/> and
+    /// <see cref="OutputFlag"/> and rejecting anything else. Split out of <see cref="TryParse"/>
+    /// purely to keep the per-flag validation (each flag used at most once, <c>--output</c> needs a
+    /// value) readable as its own unit; the mutual-exclusion/required-flag rules that depend on the
+    /// combined result stay in <see cref="TryParse"/>.
+    /// </summary>
+    private static bool TryParseFlags(
+        string[] remaining, out string? seenOutput, out bool sawUpload, out string error)
+    {
+        seenOutput = null;
+        sawUpload = false;
+        error = string.Empty;
 
         for (var i = 0; i < remaining.Length; i++)
         {
@@ -93,28 +135,6 @@ public static class BackupDatabaseArguments
             seenOutput = remaining[++i];
         }
 
-        if (sawUpload && seenOutput is not null)
-        {
-            error = $"{OutputFlag} and {UploadFlag} are mutually exclusive. {UploadFlag} stages its "
-                + "own snapshot and removes the local copy after uploading it, so there is no "
-                + $"retained destination to name; use {OutputFlag} <path> when a local snapshot is "
-                + "what you want. Pass exactly one.";
-            return false;
-        }
-
-        if (sawUpload)
-        {
-            request = new BackupDatabaseRequest(BackupDatabaseMode.Upload, string.Empty);
-            return true;
-        }
-
-        if (string.IsNullOrWhiteSpace(seenOutput))
-        {
-            error = $"Pass exactly one of {OutputFlag} <path> or {UploadFlag}. {Usage}";
-            return false;
-        }
-
-        request = new BackupDatabaseRequest(BackupDatabaseMode.RetainedSnapshot, seenOutput);
         return true;
     }
 }

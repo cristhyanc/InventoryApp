@@ -139,13 +139,23 @@ public static class DatabaseBackupUploadRunner
         else
         {
             output.WriteLine($"Daily object    : {upload.DailyObjectName ?? "(none)"}");
+
+            string monthlyStatusSuffix;
+            if (upload.MonthlyObjectName is null)
+            {
+                monthlyStatusSuffix = string.Empty;
+            }
+            else if (upload.MonthlyObjectCreated)
+            {
+                monthlyStatusSuffix = " (created as this month's recovery point)";
+            }
+            else
+            {
+                monthlyStatusSuffix = " (already existed; left unchanged)";
+            }
+
             output.WriteLine(
-                $"Monthly object  : {upload.MonthlyObjectName ?? "(none)"}"
-                    + (upload.MonthlyObjectName is null
-                        ? string.Empty
-                        : upload.MonthlyObjectCreated
-                            ? " (created as this month's recovery point)"
-                            : " (already existed; left unchanged)"));
+                $"Monthly object  : {upload.MonthlyObjectName ?? "(none)"}" + monthlyStatusSuffix);
             output.WriteLine(
                 upload.Succeeded
                     ? "Upload          : verified"
