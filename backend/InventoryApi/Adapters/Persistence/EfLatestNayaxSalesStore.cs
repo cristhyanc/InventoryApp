@@ -24,7 +24,9 @@ namespace InventoryApi.Adapters.Persistence;
 /// <see cref="ICostSale"/> use case (issue #297), and the baseline-cutoff-gated
 /// <see cref="IRebuildProductCost"/> replay. An already stored transaction is only enriched
 /// where it is still missing its product match or status, so an imported status or cost is never
-/// overwritten.
+/// overwritten. The rebuild step is per product rather than all-or-nothing (issue #362): the sales
+/// are saved first and never retried, so one product's unreplayable history must not discard the
+/// other products' rebuilds, and the collected failures are raised afterwards instead.
 /// </summary>
 public sealed class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
 {
@@ -136,9 +138,33 @@ public sealed class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
         var baselines = await _db.InventoryCostTransitionBaselines.AsNoTracking()
             .Where(x => productIds.Contains(x.ProductId))
             .ToDictionaryAsync(x => x.ProductId, x => x.CutoffAt, cancellationToken);
+
+        // One product's unreplayable history used to discard the whole batch's staged rebuilds,
+        // leaving every other product's costing position stale until its next sale, because the
+        // sales themselves were already saved and are never reconsidered (issue #362). A fatal
+        // rebuild now stages nothing, so the products that did rebuild are saved and the collected
+        // failures are raised together afterwards - never swallowed.
+        var failures = new List<string>();
         foreach (var item in earliestCompletedSaleByProductId)
-            if (baselines.TryGetValue(item.Key, out var cutoff) && item.Value > cutoff)
+        {
+            if (!baselines.TryGetValue(item.Key, out var cutoff) || item.Value <= cutoff)
+                continue;
+
+            try
+            {
                 await _inventoryCostRebuild.RebuildAsync(item.Key, item.Value, cancellationToken: cancellationToken);
+            }
+            catch (InventoryCostDataQualityException ex)
+            {
+                failures.Add($"Product {item.Key}: {ex.Message}");
+            }
+        }
+
         await _db.SaveChangesAsync(cancellationToken);
+
+        if (failures.Count > 0)
+            throw new InventoryCostDataQualityException(
+                "The latest Nayax sales synchronization could not rebuild every affected product's inventory cost. " +
+                string.Join(" ", failures));
     }
 }

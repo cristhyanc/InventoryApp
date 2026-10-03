@@ -12,7 +12,9 @@ public interface IRebuildProductCost
     /// <summary>
     /// Replays the product's cost history and, unless <paramref name="dryRun"/>, stages the rebuilt
     /// movement and product positions without saving. Completed sales authorised at or after
-    /// <paramref name="recostCompletedSalesFrom"/> are recosted from the inventory ledger.
+    /// <paramref name="recostCompletedSalesFrom"/> are recosted from the inventory ledger. A fatal
+    /// data-quality issue stages nothing at all before it throws (issue #362), so a caller may catch
+    /// it and still save the products it rebuilt successfully.
     /// </summary>
     /// <exception cref="InvalidOperationException">The product does not exist.</exception>
     /// <exception cref="InventoryCostDataQualityException">Not a dry run and the history has a fatal data-quality issue.</exception>

@@ -1018,9 +1018,12 @@ in behaviour:
 - `Inventory.Application.Costing.RebuildProductCost` (`IRebuildProductCost`) loads the product's
   ledger through the narrow `IInventoryCostLedgerStore` port, replays it with
   `WeightedAverageCostReplay` and decides what to persist: every replayed movement's running position
-  and assigned cost, the ledger cost of completed sales at or after the requested recost date, and -
-  only when the history has no fatal issue - the product's physical/costing position; a fatal issue
-  throws `Inventory.Application.Costing.InventoryCostDataQualityException` instead. A dry run loads
+  and assigned cost, the ledger cost of completed sales at or after the requested recost date, and
+  the product's physical/costing position - but it decides before it stages, so this happens only
+  when the history has no fatal issue. A fatal issue stages nothing at all (issue #362) and throws
+  `Inventory.Application.Costing.InventoryCostDataQualityException` instead, leaving the caller's
+  unit of work untouched for that product, which is what lets a caller rebuilding several products
+  catch the failure and still save the ones that replayed cleanly. A dry run loads
   untracked rows, stages nothing and never throws for data quality. No rounding is applied and a
   repeated rebuild over the same history yields the same result. `GetAverageUnitCostAtAsync` replays
   the read-only ledger as of a sale time and returns `null` for an unknown product or a fatal history.
@@ -1118,7 +1121,22 @@ by `TransactionID`, Nayax product matching, the settlement-value completed/cance
 historical costing through the Application `ICostSale` use case (issue #297), and the `IRebuildProductCost` rebuild for products whose
 transition-baseline cutoff a newly imported completed sale follows - and enriches an already stored
 transaction only where its product match or status is still missing, so an imported status or cost is
-never overwritten. `NayaxSalesSyncController` is a thin adapter that invokes the use case and maps it
+never overwritten.
+
+The persist step and the rebuild step have deliberately different failure boundaries. The sales
+batch is one save, but the rebuild is per product (issue #362): the sales are already persisted and
+no later sync reconsiders them, so one product's unreplayable cost history must not discard the
+rebuilds the same batch produced for the other products - that silently left their costing quantity
+and value stale until their own next sale. `EfLatestNayaxSalesStore.RebuildInventoryCostsAsync`
+therefore rebuilds every affected product it can, saves them in one `SaveChangesAsync`, leaves a
+product whose replay has a fatal issue exactly as it was (the rebuild use case stages nothing for
+it), and only then raises the collected failures together as one
+`InventoryCostDataQualityException`. The failure is never swallowed: like any other fatal costing
+data-quality failure it is an internal data-integrity error, so it still surfaces as a logged,
+generic `500`. Products a previous failed sync left stale recover on their next rebuild, because a
+rebuild always replays the product's full history after its transition baseline.
+
+`NayaxSalesSyncController` is a thin adapter that invokes the use case and maps it
 to `POST /api/nayax-sales-sync` (204); a Nayax upstream failure still surfaces as the centralized
 `502` from `NayaxUpstreamExceptionHandler`. `MachineService.GetAll()` no longer imports latest sales
 itself; its only responsibility is calculating machine sales/profit from whatever `NayaxSales` rows
