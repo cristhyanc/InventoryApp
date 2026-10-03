@@ -5,10 +5,12 @@ namespace Inventory.Domain.Machines;
 /// comparable week, last full week, month-to-date, two weeks ago), given an already-resolved
 /// reference instant. Mirrors the former <c>InventoryApi.Services.MachineService</c>
 /// <c>GetWeekRange</c>/<c>GetWeekToDateRange</c>/<c>GetPreviousComparableWeekRange</c>/
-/// <c>GetMonthToDateRange</c> static helpers exactly (issue #241). The reference instant is still
-/// acquired with the server-local clock at the call site, unchanged from before this migration and
-/// tracked as an existing follow-up (see docs/architecture.md § Time); this type only makes the
-/// range arithmetic itself deterministic and testable in isolation.
+/// <c>GetMonthToDateRange</c> static helpers exactly (issue #241). This type only makes the range
+/// arithmetic itself deterministic and testable in isolation: the reference date is resolved by the
+/// caller, and since issue #310 that caller is
+/// <c>Inventory.Application.Machines.MachineDashboardWindow</c>, which derives it from the
+/// <c>Australia/Sydney</c> business day through the Application time ports and converts these
+/// business-date boundaries back to UTC instants (see docs/architecture.md § Time).
 /// </summary>
 public static class MachineDashboardPeriods
 {

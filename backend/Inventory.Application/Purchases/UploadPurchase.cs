@@ -1,4 +1,5 @@
 using Inventory.Application.Documents;
+using Inventory.Application.Time;
 using Inventory.Domain.Purchases;
 
 namespace Inventory.Application.Purchases;
@@ -17,11 +18,13 @@ public sealed class UploadPurchase
 
     private readonly IPurchaseStore _store;
     private readonly IDocumentStorage _documents;
+    private readonly IClock _clock;
 
-    public UploadPurchase(IPurchaseStore store, IDocumentStorage documents)
+    public UploadPurchase(IPurchaseStore store, IDocumentStorage documents, IClock clock)
     {
         _store = store;
         _documents = documents;
+        _clock = clock;
     }
 
     public async Task<PurchaseRecord?> Handle(
@@ -46,7 +49,9 @@ public sealed class UploadPurchase
         if (productIds.Count > 0 && !await _store.AllProductsExistAsync(productIds, cancellationToken))
             throw new InvalidOperationException("One or more purchase products do not exist.");
 
-        var effectivePurchaseDate = fields.PurchaseDate ?? DateTime.UtcNow;
+        // The same UTC instant the host clock used to supply directly, now through the port so the
+        // default is deterministic and testable; the persisted value for a given instant is unchanged.
+        var effectivePurchaseDate = fields.PurchaseDate ?? _clock.UtcNow;
         var conflict = await _store.FindConflictingCostTransitionBaselineAsync(productIds, effectivePurchaseDate, cancellationToken);
         if (conflict is { } conflictingBaseline)
             throw new InvalidOperationException(

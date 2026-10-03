@@ -8,6 +8,7 @@ using InventoryApi.DTOs;
 using InventoryApi.Models;
 using InventoryApi.Services;
 using InventoryApi.Services.Interfaces;
+using InventoryApi.Tests.Application.Time;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -297,7 +298,7 @@ public class PurchaseServiceTests
             new ListPurchases(store),
             new GetPurchase(store),
             new GetPurchaseFile(store, documents),
-            new UploadPurchase(store, documents),
+            new UploadPurchase(store, documents, new FakeClock(DateTime.UtcNow)),
             new UpdatePurchase(store),
             new DeletePurchase(store, documents),
             new ComputePurchaseTotalValidation());

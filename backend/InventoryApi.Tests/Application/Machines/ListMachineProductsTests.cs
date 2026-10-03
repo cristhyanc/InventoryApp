@@ -2,6 +2,7 @@ using Inventory.Application.Machines;
 using Inventory.Application.Nayax;
 using Inventory.Application.Products;
 using InventoryApi.Tests.Application.Products;
+using InventoryApi.Tests.Application.Time;
 using Moq;
 using Xunit;
 
@@ -33,7 +34,8 @@ public class ListMachineProductsTests
             nayax.Object,
             catalog,
             new ResolveMachineProductPricing(
-                new FakeSiteFactsStore(new Dictionary<decimal, decimal>(), feeExGst)));
+                new FakeSiteFactsStore(new Dictionary<decimal, decimal>(), feeExGst),
+                new FakeBusinessCalendar(new DateTime(2026, 3, 12))));
 
     [Fact]
     public async Task Handle_OverlaysTheMachineSlotFactsOnTheCatalogueProduct()
