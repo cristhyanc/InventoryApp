@@ -13,19 +13,29 @@ namespace InventoryApi.Controllers;
 public sealed class ImportsController : ControllerBase
 {
     private readonly IImportService _service;
+    private readonly ImportNayaxProductCatalog _importProductCatalog;
     private readonly ImportPendingReimbursementXmlFiles _importPendingXmlFiles;
 
     public ImportsController(
         IImportService service,
+        ImportNayaxProductCatalog importProductCatalog,
         ImportPendingReimbursementXmlFiles importPendingXmlFiles)
     {
         _service = service;
+        _importProductCatalog = importProductCatalog;
         _importPendingXmlFiles = importPendingXmlFiles;
     }
 
     [HttpPost("products")]
-    public async Task<ActionResult<bool>> ImportProducts() =>
-        Ok(await _service.ImportProductsAsync());
+    public async Task<ActionResult<bool>> ImportProducts(CancellationToken cancellationToken)
+    {
+        await _importProductCatalog.Handle(cancellationToken);
+
+        // This endpoint has always answered a constant `true`; a failed import surfaces as an
+        // exception, never as `false`. The use case therefore reports no result of its own and the
+        // response body is kept exactly as it was.
+        return Ok(true);
+    }
 
     [HttpPost("nayax-sales")]
     [Consumes("multipart/form-data")]
