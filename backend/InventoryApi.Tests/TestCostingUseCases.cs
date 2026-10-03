@@ -1,11 +1,14 @@
 using Inventory.Application.Costing;
+using Inventory.Application.Nayax;
+using Inventory.Application.Time;
+using Inventory.Infrastructure.Clock;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 
 namespace InventoryApi.Tests;
 
 /// <summary>
-/// Wires the Application costing use cases (issues #296 and #297) to their temporary API-owned EF adapters
+/// Wires the Application costing use cases (issues #296, #297 and #298) to their temporary API-owned EF adapters
 /// over one <see cref="AppDbContext"/>, the way the production DI container does.
 /// </summary>
 internal static class TestCostingUseCases
@@ -28,4 +31,19 @@ internal static class TestCostingUseCases
 
     public static BackfillNayaxHistoricalSaleCosts BackfillNayaxHistoricalSaleCosts(AppDbContext db) =>
         new(new EfSaleCostingStore(db));
+
+    /// <summary>The inventory-cost transition use cases (issue #298), on the system clock unless one is given.</summary>
+    public static PreviewInventoryCostTransition PreviewTransition(AppDbContext db, INayaxLynxClient nayax, IClock? clock = null) =>
+        new(new EfInventoryCostTransitionStore(db), nayax, clock ?? new SystemClock());
+
+    public static ApplyInventoryCostTransition ApplyTransition(
+        AppDbContext db, INayaxLynxClient nayax, IRebuildProductCost? rebuild = null, IClock? clock = null) =>
+        new(new EfInventoryCostTransitionStore(db), nayax, rebuild ?? Rebuild(db), clock ?? new SystemClock());
+
+    public static PreviewAllInventoryCostTransitions PreviewAllTransitions(AppDbContext db, INayaxLynxClient nayax, IClock? clock = null) =>
+        new(new EfInventoryCostTransitionStore(db), nayax, clock ?? new SystemClock());
+
+    public static ApplyAllInventoryCostTransitions ApplyAllTransitions(
+        AppDbContext db, INayaxLynxClient nayax, IRebuildProductCost? rebuild = null, IClock? clock = null) =>
+        new(new EfInventoryCostTransitionStore(db), nayax, rebuild ?? Rebuild(db), clock ?? new SystemClock());
 }
