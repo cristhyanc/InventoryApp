@@ -469,16 +469,22 @@ Controllers do not implement accounting, inventory, persistence, or filesystem r
 
 #### Temporary API-owned exception and its enforcement (issue #145)
 
-`InventoryApi/Services` (import, machine/site/product/purchase/supplier-order orchestration) is
+`InventoryApi/Services` (import, machine/site/purchase/supplier-order orchestration) is
 use-case/domain logic that predates the `Inventory.Domain`/`Inventory.Application` split and has
 not migrated yet; inventory movement recording and the product cost rebuild (issue #296), sale
 costing with its backfills (issue #297) and the inventory-cost transition (issue #298) have already
 left it for `Inventory.Application.Costing`, and the pending reimbursement XML import (issue #299)
-for `Inventory.Application.Imports`. `InventoryApi/Adapters/{Persistence,Export,Nayax,Mapping}` hold the
+for `Inventory.Application.Imports`. The products delegator has left it entirely: issue #303 deleted
+`ProductService`/`IProductService` and their registration, so `ProductsController` now injects the
+`Inventory.Application.Products` use cases directly and serialises the API-owned
+`InventoryApi.DTOs.ProductResponse` instead of the EF `Product` entity (item 6 of the
+[Backend migration track](#backend-migration-track)). `InventoryApi/Adapters/{Persistence,Export,Nayax,Mapping}` hold the
 temporary, API-owned adapters (`EfNayaxFeeRateStore`, the `Ef<Feature>ReportFactsProvider` family,
 `EfInventoryMovementStore`/`EfInventoryCostLedgerStore`, `EfSaleCostingStore`,
 `EfInventoryCostTransitionStore`, `ReportExportFileWriter`,
-`NayaxCatalogSnapshotProvider`, `ProductResponseMapper`, ...) that implement
+`NayaxCatalogSnapshotProvider`, `ProductRecordResponseMapper` (the products DTO projection),
+`ProductResponseMapper` (the machine-product view's entity-shaped mapping, until issue #302),
+...) that implement
 or feed `Inventory.Application`
 ports until `AppDbContext` and its persistence models move into `Inventory.Infrastructure` - see the
 per-slice detail under [Backend migration track](#backend-migration-track). Both are deliberate,
@@ -536,9 +542,13 @@ issue #296 removed `InventoryCostService.cs`, `InventoryCostRebuildService.cs`,
 `Interfaces/IInventoryCostRebuildService.cs` from the allow-list in the same change that deleted them,
 issue #297 likewise removed `SaleCostingService.cs` and `Interfaces/ISaleCostingService.cs`,
 issue #298 removed `InventoryCostTransitionService.cs` and `Interfaces/IInventoryCostTransitionService.cs`,
-and issue #299 removed `ImportService.Xml.cs` in the same change that migrated the pending
+issue #299 removed `ImportService.Xml.cs` in the same change that migrated the pending
 reimbursement XML import (`Interfaces/IImportService.cs` stays on the list for the product and Nayax
-sales imports the remaining children of #151 migrate).
+sales imports the remaining children of #151 migrate), and issue #303 removed `ProductService.cs`
+and `Interfaces/IProductService.cs` in the same change that pointed `ProductsController` at the
+Products use cases and gave the product endpoints their own response DTO. `MachineService.cs`,
+`SiteService.cs` and their interfaces stay on the list until issue #302 does the same for the
+Sites/Machines delegators.
 `NayaxProductMatcher.cs` stays on the list for its remaining legacy callers. `InventoryApi/Adapters/*` is not
 frozen the same way: unlike `Services`, adding a new temporary EF/Nayax/export adapter there for a
 migrating slice (mirroring `EfNayaxFeeRateStore`) is the established, expected pattern for this
@@ -958,7 +968,7 @@ Site commissions use effective-dated agreements and one of three bases: gross sa
 - `Product.MachinePrice` (`[NotMapped]`) — the machine-specific live price, sourced from the per-machine Nayax `RetailPrice` (`NayaxMachineProduct.RetailPrice`) in `MachineService`/`SiteService`;
 - the Nayax `ProductCostPrice` field on an imported sale (`NayaxSales.NayaxProductCostPrice`) — a genuine cost value used for historical COGS, never a selling price. `ImportService.ImportProductsAsync` previously set `UnitPrice` from this cost field by mistake; it now uses the catalog `RetailPrice` instead.
 
-The public property name `UnitPrice` is retained for API/contract compatibility. Only the Nayax catalog import may change its value; `ProductService.Update` and the product edit UI treat it as Nayax-managed and read-only. It is never an inventory-valuation input: the home Dashboard's "Inventory Value" tile is a backend-authoritative cost valuation (see [Dashboard "Inventory Value" tile](#dashboard-inventory-value-tile-issue-42) below, issue #42), and a `quantityInStock * unitPrice` selling-price valuation must not be introduced anywhere.
+The public property name `UnitPrice` is retained for API/contract compatibility. Only the Nayax catalog import may change its value; `Inventory.Application.Products.UpdateProduct` (whose `ProductUpdateFields` carries no price at all) and the product edit UI treat it as Nayax-managed and read-only. It is never an inventory-valuation input: the home Dashboard's "Inventory Value" tile is a backend-authoritative cost valuation (see [Dashboard "Inventory Value" tile](#dashboard-inventory-value-tile-issue-42) below, issue #42), and a `quantityInStock * unitPrice` selling-price valuation must not be introduced anywhere.
 
 ### Historical inventory cost
 
@@ -2092,9 +2102,10 @@ Backend and frontend tracks can progress independently when their contracts do n
        a mapping step: it invokes the owning use case and maps the Application record back to the
        `Product`/`Machine` response through `InventoryApi.Adapters.Mapping.ProductResponseMapper`.
        Neither service holds an `AppDbContext`, a Nayax client, a query or a rule any more. Replacing
-       the entity-shaped response with a dedicated response DTO, and deleting the two delegators, is
+       the entity-shaped response with a dedicated response DTO, and deleting the two delegators, was
        tracked with the other legacy-delegator removals (#153), not here, because this slice had to keep
-       the response contract byte-for-byte identical.
+       the response contract byte-for-byte identical; the products half of that landed in issue #303
+       below, and the Sites/Machines half is issue #302.
      - Machine product rows are matched back to their pricing results positionally, not by a
        product-id-keyed lookup, because one machine can list the same catalogue product in more than
        one slot at a different price.
@@ -2103,6 +2114,30 @@ Backend and frontend tracks can progress independently when their contracts do n
        `Inventory.Domain.Stock.StockAdjustmentReason`/`StockAdjustmentSource` enums instead of raw
        integers, with no change to the serialized API shape (System.Text.Json still emits the same
        numeric value for an enum it would for a plain `int`).
+   - **Products delegator removed and the product response is API-owned** (issue #303, child 2 of 8
+     of #153). `ProductsController` injects `ListProducts`, `GetProduct`, `ListLowStockProducts`,
+     `CreateProduct`, `UpdateProduct` and `DeleteProduct` directly; `ProductService`,
+     `IProductService` and their registration are deleted, and the
+     `Only_the_documented_legacy_services_remain_in_InventoryApi_Services` allow-list shrank by both
+     files in the same change.
+     - **Response contract.** `InventoryApi.DTOs.ProductResponse` (with
+       `ProductStockAdjustmentResponse`, and the existing `CategoryResponse`/`SupplierResponse` for
+       its nested detail) replaced the EF `Product` entity the product endpoints used to serialise.
+       `InventoryApi.Adapters.Mapping.ProductRecordResponseMapper` projects a `ProductRecord` onto it.
+       Routes, status codes, validation messages and JSON are unchanged - same keys in the same
+       order, the same category/supplier nesting, the same stock-adjustment history, and the same
+       derived `needToOrder`/`isLowStock`/`isReorderAlert`/`projectedStockForReorder` values, which
+       the response still computes through `Inventory.Domain.Products.ProductReorderPolicy` rather
+       than carrying as data. The machine-slot fields (`machinePrice`, `commissionValue`, `mdbCode`,
+       ...) that the catalogue endpoints have always emitted at their defaults are reproduced as
+       constants so the response stays byte-identical.
+       `InventoryApi.Tests.DTOs.ProductJsonContractTests` compares the serialised bytes of the new
+       response with the entity shape it replaced, for a fully populated and a bare product.
+     - **Not in this slice.** `Adapters/Mapping/ProductResponseMapper.cs` is untouched: the
+       machine-product response still uses it, and issue #302 owns that migration together with
+       `SiteService`/`MachineService`. The `price-history` existence check now uses `GetProduct`
+       directly and keeps its 404. `CreateProduct` is injected but has no route to invoke it - the
+       API has never exposed a product-create endpoint, and adding one would be a contract change.
    - **Stock slice done** (issue #282, a child of the #148 umbrella; sibling to the Purchases and
      Supplier Orders slice, issue #281). Stock history, manual stock-adjustment orchestration, and the
      restock-cost-suggestion path move into Domain/Application ownership, completing the
@@ -2217,7 +2252,8 @@ Backend and frontend tracks can progress independently when their contracts do n
      - **API boundary.** `PurchasesController`/`SupplierOrdersController` and the `Purchase`/`SupplierOrder`
        API response shapes are unchanged. `InventoryApi.Services.PurchaseService`/`IPurchaseService` and
        `SupplierOrderService`/`ISupplierOrderService` were not deleted (the same transitional shape
-       `ProductService`/`IProductService` left in place for issue #240): each method now only maps the
+       `ProductService`/`IProductService` left in place for issue #240 and issue #303 has since
+       removed): each method now only maps the
        request onto the migrated use case and maps the Application record back to the unchanged response
        entity through `InventoryApi.Adapters.Mapping.PurchaseResponseMapper`/`SupplierOrderResponseMapper`,
        following `ProductResponseMapper`'s precedent - every key, nesting level, and the cases where the
