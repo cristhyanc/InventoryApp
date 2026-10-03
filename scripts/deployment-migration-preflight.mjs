@@ -21,6 +21,14 @@ const FULL_SHA = /^[0-9a-f]{40}$/;
 // not migrations.
 const MIGRATION_FILE = /^backend\/(?:.+\/)?Migrations\/(\d{14}_[A-Za-z0-9_]+)\.cs$/;
 
+// Code-unit order, so the timestamp prefix sorts migrations chronologically.
+const compareStrings = (left, right) => {
+  if (left === right) {
+    return 0;
+  }
+  return left < right ? -1 : 1;
+};
+
 export function migrationIdsFromPaths(paths) {
   const ids = new Set();
   for (const path of paths) {
@@ -32,7 +40,7 @@ export function migrationIdsFromPaths(paths) {
       ids.add(match[1]);
     }
   }
-  return [...ids].sort();
+  return [...ids].sort(compareStrings);
 }
 
 export function compareMigrations(releaseIds, baselineIds) {

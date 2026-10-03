@@ -44,6 +44,13 @@ const FORBIDDEN_IN_DEPLOY = Object.freeze([
   'actions: write',
 ]);
 
+const compareStrings = (left, right) => {
+  if (left === right) {
+    return 0;
+  }
+  return left < right ? -1 : 1;
+};
+
 function fail(source, message) {
   throw new Error(`${source}: ${message}`);
 }
@@ -165,7 +172,7 @@ function requirePermissions(jobs, jobId, expected, source) {
   if (actual === null) {
     fail(source, `job '${jobId}' must declare its own permissions`);
   }
-  const format = (value) => JSON.stringify(Object.fromEntries(Object.entries(value).sort()));
+  const format = (value) => JSON.stringify(Object.fromEntries(Object.entries(value).sort(([left], [right]) => compareStrings(left, right))));
   if (format(actual) !== format(expected)) {
     fail(source, `job '${jobId}' permissions must be exactly ${format(expected)}, found ${format(actual)}`);
   }
@@ -315,7 +322,7 @@ export function verifyDeployProductionWorkflow(text, source = deployProductionPa
 export function readWorkflows(read = readRepositoryFile) {
   const directory = resolve(repositoryRoot, '.github/workflows');
   const workflows = {};
-  for (const name of readdirSync(directory).sort()) {
+  for (const name of readdirSync(directory).sort(compareStrings)) {
     if (name.endsWith('.yml') || name.endsWith('.yaml')) {
       const path = `.github/workflows/${name}`;
       workflows[path] = read(path);

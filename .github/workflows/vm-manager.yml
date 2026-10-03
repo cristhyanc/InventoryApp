@@ -31,10 +31,10 @@ jobs:
           dotnet-version: ${{ env.DOTNET_CORE_VERSION }}
 
       - name: Restore
-        run: dotnet restore "${{ env.TEST_PROJECT }}"
+        run: dotnet restore "$TEST_PROJECT"
 
       - name: Build
-        run: dotnet build "${{ env.TEST_PROJECT }}" --configuration ${{ env.CONFIGURATION }} --no-restore
+        run: dotnet build "$TEST_PROJECT" --configuration "$CONFIGURATION" --no-restore
 
       - name: Test
-        run: dotnet test "${{ env.TEST_PROJECT }}" --configuration ${{ env.CONFIGURATION }} --no-build
+        run: dotnet test "$TEST_PROJECT" --configuration "$CONFIGURATION" --no-build
