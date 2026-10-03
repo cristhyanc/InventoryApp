@@ -18,6 +18,12 @@ public sealed class FakePurchaseStore : IPurchaseStore
     public bool ThrowOnCreate { get; set; }
     public PurchaseRecord? LastCreated { get; private set; }
 
+    /// <summary>
+    /// The effective purchase date the use case checked against the cost-transition baselines, so a
+    /// test can see the date the validation used and not only the date that was persisted.
+    /// </summary>
+    public DateTime? LastConflictCheckedPurchaseDate { get; private set; }
+
     public Task<IReadOnlyList<PurchaseRecord>> ListAsync(int? supplierId, CancellationToken cancellationToken)
     {
         IEnumerable<PurchaseRecord> query = _records.Values;
@@ -39,8 +45,11 @@ public sealed class FakePurchaseStore : IPurchaseStore
         Task.FromResult(AllProductsExist);
 
     public Task<(long ProductId, DateTime CutoffAt)?> FindConflictingCostTransitionBaselineAsync(
-        IReadOnlyCollection<long> productIds, DateTime purchaseDate, CancellationToken cancellationToken) =>
-        Task.FromResult(ConflictingBaseline);
+        IReadOnlyCollection<long> productIds, DateTime purchaseDate, CancellationToken cancellationToken)
+    {
+        LastConflictCheckedPurchaseDate = purchaseDate;
+        return Task.FromResult(ConflictingBaseline);
+    }
 
     public Task<PurchaseRecord> CreateAsync(
         PurchaseFields fields, IReadOnlyList<PurchaseItemInput> items, PurchaseFileMetadata file, CancellationToken cancellationToken)

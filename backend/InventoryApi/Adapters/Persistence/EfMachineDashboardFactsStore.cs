@@ -28,24 +28,23 @@ public sealed class EfMachineDashboardFactsStore : IMachineDashboardFactsStore
     }
 
     public async Task<MachineDashboardFacts> GetFactsAsync(
-        long machineId, long? siteId, DateTime now, CancellationToken cancellationToken)
+        long machineId, long? siteId, MachineDashboardWindow window, CancellationToken cancellationToken)
     {
-        var today = now.Date;
-        var currentWeek = MachineDashboardPeriods.WeekToDate(now);
-        var previousComparableWeek = MachineDashboardPeriods.PreviousComparableWeek(now);
-        var lastWeek = MachineDashboardPeriods.WeekRange(today, -1);
-        var monthToDate = MachineDashboardPeriods.MonthToDate(now);
-        var twoWeeksAgo = MachineDashboardPeriods.WeekRange(today, -2);
-
+        // Every period boundary is an already-resolved UTC instant derived from the Australia/Sydney
+        // business day by the use case (issue #310), and MachineAuthorizationTime is a persisted true
+        // UTC instant, so the comparisons below stay in one time base. This adapter no longer decides
+        // which day "today" is.
         var lastSales = await _db.NayaxSales.AsNoTracking()
-            .Where(sale => sale.MachineID == machineId && sale.MachineAuthorizationTime > now.AddMonths(-1))
+            .Where(sale => sale.MachineID == machineId && sale.MachineAuthorizationTime > window.NowUtc.AddMonths(-1))
             .ToListAsync(cancellationToken);
 
-        var agreementFrom = lastSales.Count == 0 ? today : lastSales.Min(sale => sale.MachineAuthorizationTime.Date);
+        var agreementFrom = lastSales.Count == 0
+            ? window.BusinessToday
+            : lastSales.Min(sale => sale.MachineAuthorizationTime.Date);
         var agreementEntities = siteId.HasValue
             ? await _db.SiteCommissionAgreements.AsNoTracking()
                 .Where(agreement => agreement.SiteId == siteId.Value &&
-                    agreement.EffectiveFrom <= now &&
+                    agreement.EffectiveFrom <= window.BusinessToday &&
                     (agreement.EffectiveTo == null || agreement.EffectiveTo >= agreementFrom))
                 .OrderBy(agreement => agreement.EffectiveFrom)
                 .ToListAsync(cancellationToken)
@@ -62,12 +61,12 @@ public sealed class EfMachineDashboardFactsStore : IMachineDashboardFactsStore
             agreement.CreatedAt,
             agreement.UpdatedAt)).ToList();
 
-        var today0 = await BuildPeriodFactsAsync(CompletedSales(lastSales, today, now), agreements, siteId, today, now, machineId, cancellationToken);
-        var currentWeekFacts = await BuildPeriodFactsAsync(CompletedSales(lastSales, currentWeek.Start, currentWeek.End), agreements, siteId, currentWeek.Start, currentWeek.End, machineId, cancellationToken);
-        var previousComparableWeekFacts = await BuildPeriodFactsAsync(CompletedSales(lastSales, previousComparableWeek.Start, previousComparableWeek.End), agreements, siteId, previousComparableWeek.Start, previousComparableWeek.End, machineId, cancellationToken);
-        var lastWeekFacts = await BuildPeriodFactsAsync(CompletedSales(lastSales, lastWeek.Start, lastWeek.End), agreements, siteId, lastWeek.Start, lastWeek.End, machineId, cancellationToken);
-        var monthToDateFacts = await BuildPeriodFactsAsync(CompletedSales(lastSales, monthToDate.Start, monthToDate.End), agreements, siteId, monthToDate.Start, monthToDate.End, machineId, cancellationToken);
-        var twoWeeksAgoFacts = await BuildPeriodFactsAsync(CompletedSales(lastSales, twoWeeksAgo.Start, twoWeeksAgo.End), agreements, siteId, twoWeeksAgo.Start, twoWeeksAgo.End, machineId, cancellationToken);
+        var today0 = await BuildPeriodFactsAsync(lastSales, agreements, siteId, window.Today, machineId, cancellationToken);
+        var currentWeekFacts = await BuildPeriodFactsAsync(lastSales, agreements, siteId, window.CurrentWeek, machineId, cancellationToken);
+        var previousComparableWeekFacts = await BuildPeriodFactsAsync(lastSales, agreements, siteId, window.PreviousComparableWeek, machineId, cancellationToken);
+        var lastWeekFacts = await BuildPeriodFactsAsync(lastSales, agreements, siteId, window.LastWeek, machineId, cancellationToken);
+        var monthToDateFacts = await BuildPeriodFactsAsync(lastSales, agreements, siteId, window.MonthToDate, machineId, cancellationToken);
+        var twoWeeksAgoFacts = await BuildPeriodFactsAsync(lastSales, agreements, siteId, window.TwoWeeksAgo, machineId, cancellationToken);
 
         var completedSales = lastSales.Where(sale => NayaxTransactionStatusClassifier.IsCompletedSale(sale.TransactionStatusId)).ToList();
         var statusInputs = new MachineProfitabilityStatusInputs(
@@ -83,20 +82,21 @@ public sealed class EfMachineDashboardFactsStore : IMachineDashboardFactsStore
             today0, currentWeekFacts, previousComparableWeekFacts, lastWeekFacts, monthToDateFacts, twoWeeksAgoFacts, statusInputs);
     }
 
-    private static List<NayaxSales> CompletedSales(List<NayaxSales> sales, DateTime start, DateTime end) =>
-        sales.Where(sale => sale.MachineAuthorizationTime >= start && sale.MachineAuthorizationTime <= end &&
+    private static List<NayaxSales> CompletedSales(List<NayaxSales> sales, MachineDashboardPeriodUtc period) =>
+        sales.Where(sale => sale.MachineAuthorizationTime >= period.StartUtc &&
+                             sale.MachineAuthorizationTime <= period.EndUtc &&
                              NayaxTransactionStatusClassifier.IsCompletedSale(sale.TransactionStatusId))
             .ToList();
 
     private async Task<MachineDashboardPeriodFacts> BuildPeriodFactsAsync(
-        List<NayaxSales> sales,
+        List<NayaxSales> allSales,
         IReadOnlyList<CommissionAgreement> agreements,
         long? siteId,
-        DateTime from,
-        DateTime to,
+        MachineDashboardPeriodUtc period,
         long machineId,
         CancellationToken cancellationToken)
     {
+        var sales = CompletedSales(allSales, period);
         var grossRevenue = sales.Sum(sale => sale.SettlementValue);
 
         if (sales.Count > 0 && (!siteId.HasValue || sales.Any(sale => !sale.CostOfGoodsSold.HasValue)))
@@ -125,7 +125,15 @@ public sealed class EfMachineDashboardFactsStore : IMachineDashboardFactsStore
             netSalesBeforeFees += sale.SettlementValue - sale.CostOfGoodsSold!.Value - commission;
         }
 
-        var fees = await _nayaxProcessingFees.Handle(from, to, machineId, cancellationToken);
+        // The fee use case takes each period's own bounds, as it always has, but as a business-day
+        // period rather than a pair of instants it would truncate to whole UTC dates: the fees this
+        // period's profit subtracts are charged to exactly the sales its revenue counted above, on the
+        // Australia/Sydney business dates the period covers (issue #310).
+        var fees = await _nayaxProcessingFees.HandleBusinessPeriod(
+            new NayaxProcessingFeeBusinessPeriod(
+                period.StartUtc, period.EndUtc, period.FirstBusinessDate, period.LastBusinessDate),
+            machineId,
+            cancellationToken);
         return new MachineDashboardPeriodFacts(
             grossRevenue,
             new MachineDashboardDirectProfitInputs(false, netSalesBeforeFees, fees.HasMissingRates, fees.TotalFeeIncGst));

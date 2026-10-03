@@ -18,7 +18,18 @@ public sealed record ProcessingFeeReimbursement(
     IReadOnlyList<ImportedProcessingFee> Fees,
     IReadOnlyList<ImportedProcessingFeeDevice> Devices);
 
-public sealed record CompletedCardTransaction(DateTime MachineAuthorizationTime, string? PaymentMethod);
+public sealed record CompletedCardTransaction(DateTime MachineAuthorizationTime, string? PaymentMethod)
+{
+    /// <summary>
+    /// The calendar day this transaction's processing fee belongs to: the day whose authoritative
+    /// imported fee covers it, and otherwise the day whose effective rate estimates it. Null means the
+    /// date part of <see cref="MachineAuthorizationTime"/>, which is what a caller asking for a range
+    /// of calendar dates means. A caller whose period is bounded by <c>Australia/Sydney</c> business
+    /// days supplies the sale's business date instead, so a sale is charged a fee on the same day its
+    /// revenue was counted even when the two dates differ (issue #310).
+    /// </summary>
+    public DateTime? FeeDate { get; init; }
+}
 
 public sealed record NayaxProcessingFeeTotals(
     decimal ActualFeeExGst,
@@ -83,7 +94,7 @@ public static class NayaxProcessingFeePolicy
         DateTime? estimatedFrom = null;
         foreach (var sale in eligibleSales)
         {
-            var day = DateTime.SpecifyKind(sale.MachineAuthorizationTime.Date, DateTimeKind.Unspecified);
+            var day = DateTime.SpecifyKind((sale.FeeDate ?? sale.MachineAuthorizationTime).Date, DateTimeKind.Unspecified);
             if (actualByDay.ContainsKey(day) || PaymentMethodClassifier.Classify(sale.PaymentMethod) != NayaxPaymentType.Card)
                 continue;
 

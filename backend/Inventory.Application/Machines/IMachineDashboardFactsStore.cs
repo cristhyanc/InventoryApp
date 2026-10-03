@@ -8,7 +8,7 @@ public readonly record struct MachineDashboardPeriodFacts(
     MachineDashboardDirectProfitInputs ProfitInputs);
 
 /// <summary>
-/// A machine's complete dashboard facts as of a reference instant: gross revenue and direct-profit
+/// A machine's complete dashboard facts as of a reference window: gross revenue and direct-profit
 /// inputs for each of the six rolling comparison periods, and the facts needed to choose its overall
 /// profitability status message.
 /// </summary>
@@ -25,9 +25,14 @@ public sealed record MachineDashboardFacts(
 /// Narrow facts port for the machine dashboard, owned by the Application layer. Its temporary EF Core
 /// implementation applies Domain-owned commission, fee, payment, and transaction-status rules and
 /// composes the Application processing-fee use case (see <c>docs/architecture.md</c>).
+///
+/// The adapter is given the already-resolved <see cref="MachineDashboardWindow"/> rather than a bare
+/// "now", so the decision of which business day the dashboard means stays in the use case, with the
+/// <c>IClock</c>/<c>IBusinessCalendar</c> ports, and the adapter only selects persisted sales between
+/// the UTC instants it is handed (issue #310).
 /// </summary>
 public interface IMachineDashboardFactsStore
 {
     Task<MachineDashboardFacts> GetFactsAsync(
-        long machineId, long? siteId, DateTime now, CancellationToken cancellationToken);
+        long machineId, long? siteId, MachineDashboardWindow window, CancellationToken cancellationToken);
 }

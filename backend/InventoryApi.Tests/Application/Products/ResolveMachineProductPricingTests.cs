@@ -1,16 +1,28 @@
+using System.Globalization;
 using Inventory.Application.Products;
 using Inventory.Application.Sites;
+using Inventory.Application.Time;
 using Inventory.Domain.Sites;
+using InventoryApi.Tests.Application.Sites;
+using InventoryApi.Tests.Application.Time;
 using Xunit;
 
 namespace InventoryApi.Tests.Application.Products;
 
 public class ResolveMachineProductPricingTests
 {
+    /// <summary>
+    /// The business date the commission/fee configuration is selected for. These cases are not about
+    /// which date that is - <see cref="Handle_SelectsTheSydneyEffectiveConfiguration_WhenTheUtcDateDiffers"/>
+    /// is - so any fixed business date serves them.
+    /// </summary>
+    private static readonly IBusinessCalendar Calendar = new FakeBusinessCalendar(new DateTime(2026, 3, 12));
+
     [Fact]
     public async Task Handle_ReturnsNoSuggestions_WhenTheMachineHasNoSite()
     {
-        var useCase = new ResolveMachineProductPricing(new FakeSiteFactsStore(new Dictionary<decimal, decimal>(), 0.2m));
+        var useCase = new ResolveMachineProductPricing(
+            new FakeSiteFactsStore(new Dictionary<decimal, decimal>(), 0.2m), Calendar);
 
         var results = await useCase.Handle(
             siteId: null,
@@ -26,7 +38,7 @@ public class ResolveMachineProductPricingTests
     public async Task Handle_ReturnsNoSuggestions_WhenTheCommissionConfigurationIsUnavailable()
     {
         var facts = new FakeSiteFactsStore(new Dictionary<decimal, decimal>(), 0.2m, configurationUnavailable: true);
-        var useCase = new ResolveMachineProductPricing(facts);
+        var useCase = new ResolveMachineProductPricing(facts, Calendar);
 
         var results = await useCase.Handle(91, [new MachineProductPricingFact(200, 10m, 2m)], CancellationToken.None);
 
@@ -45,7 +57,7 @@ public class ResolveMachineProductPricingTests
     {
         var commissionByPrice = new Dictionary<decimal, decimal> { [10m] = 1.0m, [20m] = 4.0m, [1m] = 0.1m };
         var store = new FakeSiteFactsStore(commissionByPrice, 0.2m);
-        var useCase = new ResolveMachineProductPricing(store);
+        var useCase = new ResolveMachineProductPricing(store, Calendar);
 
         var results = await useCase.Handle(
             siteId: 91,
@@ -67,12 +79,50 @@ public class ResolveMachineProductPricingTests
     public async Task Handle_TreatsNoAgreementsAsZeroCommission_NotAsUnavailable()
     {
         var store = new FakeSiteFactsStore(new Dictionary<decimal, decimal>(), 0.2m, configurationUnavailable: false);
-        var useCase = new ResolveMachineProductPricing(store);
+        var useCase = new ResolveMachineProductPricing(store, Calendar);
 
         var results = await useCase.Handle(91, [new MachineProductPricingFact(200, 10m, 2m)], CancellationToken.None);
 
         var result = Assert.Single(results);
         Assert.Equal(7.78m, result.SuggestedNetValue);
+    }
+
+    /// <summary>
+    /// Issue #310: the effective-dated commission and Nayax fee configuration is selected for the
+    /// <c>Australia/Sydney</c> business date, not the host's UTC date. Each case is an instant where
+    /// the two differ, including both daylight-saving transition days: the store answers with a
+    /// different configuration per date, so a use case that asked for the UTC date would price the
+    /// slot from the wrong day's commission and fee rate (4.45 net and 8.50 suggested, here) instead
+    /// of failing on an argument assertion alone.
+    /// </summary>
+    [Theory]
+    [InlineData("2026-03-11T14:30:00Z", "2026-03-12")]
+    [InlineData("2026-04-04T13:30:00Z", "2026-04-05")]
+    [InlineData("2026-10-03T14:00:00Z", "2026-10-04")]
+    public async Task Handle_SelectsTheSydneyEffectiveConfiguration_WhenTheUtcDateDiffers(
+        string nowUtc, string expectedBusinessDate)
+    {
+        var time = new FixedSydneyTime(DateTime.Parse(
+            nowUtc, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal));
+        var businessDate = DateTime.Parse(expectedBusinessDate, CultureInfo.InvariantCulture);
+        var store = new EffectiveDatedSiteFactsStore(new Dictionary<DateTime, SiteFinancialConfigurationOnDate>
+        {
+            [businessDate] = new(new Dictionary<decimal, decimal> { [10m] = 1.0m, [1m] = 0.1m }, 0.20m),
+            [time.NowUtc.Date] = new(new Dictionary<decimal, decimal> { [10m] = 3.0m, [1m] = 0.2m }, 0.50m),
+        });
+        var useCase = new ResolveMachineProductPricing(store, time.Calendar);
+
+        var result = Assert.Single(
+            await useCase.Handle(91, [new MachineProductPricingFact(200, 10m, 2m)], CancellationToken.None));
+
+        Assert.Equal(businessDate, time.BusinessToday);
+        Assert.NotEqual(businessDate, time.NowUtc.Date);
+        Assert.All(store.AsOfDates, asOfDate => Assert.Equal(businessDate, asOfDate));
+
+        // 10.00 retail - 2.00 cost - 1.00 commission - 0.22 fee including GST.
+        Assert.Equal(6.78m, result.SuggestedNetValue);
+        // (2.00 cost + 0.22 fee including GST) / (0.5 - 0.10 commission per dollar).
+        Assert.Equal(5.55m, result.SuggestedPriceValue);
     }
 
     /// <summary>
@@ -88,7 +138,7 @@ public class ResolveMachineProductPricingTests
     public async Task Handle_AwaitsTheCommissionAndFeeReadsOneAtATime()
     {
         var recorder = new CallSequenceRecordingSiteFactsStore(new Dictionary<decimal, decimal> { [10m] = 1m }, 0.2m);
-        var useCase = new ResolveMachineProductPricing(recorder);
+        var useCase = new ResolveMachineProductPricing(recorder, Calendar);
 
         await useCase.Handle(91, [new MachineProductPricingFact(200, 10m, 2m)], CancellationToken.None);
 

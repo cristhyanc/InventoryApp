@@ -1,4 +1,5 @@
 using Inventory.Application.Nayax;
+using Inventory.Application.Time;
 using Inventory.Domain.Sites;
 
 namespace Inventory.Application.Sites;
@@ -12,11 +13,13 @@ public sealed class GetSiteProducts
 {
     private readonly INayaxLynxClient _nayax;
     private readonly ISiteFactsStore _facts;
+    private readonly IBusinessCalendar _businessCalendar;
 
-    public GetSiteProducts(INayaxLynxClient nayax, ISiteFactsStore facts)
+    public GetSiteProducts(INayaxLynxClient nayax, ISiteFactsStore facts, IBusinessCalendar businessCalendar)
     {
         _nayax = nayax;
         _facts = facts;
+        _businessCalendar = businessCalendar;
     }
 
     public async Task<IReadOnlyList<SiteProductRecord>> Handle(long siteId, CancellationToken cancellationToken)
@@ -32,7 +35,10 @@ public sealed class GetSiteProducts
             .Where(mp => mp.NayaxProductID.HasValue)
             .ToList();
 
-        var today = DateTime.Today;
+        // The effective-dated commission and Nayax fee configuration is selected by the Australia/Sydney
+        // business date (issue #310), not the host's local date, exactly as ResolveMachineProductPricing
+        // selects it for the machine product listing that shares this port.
+        var today = _businessCalendar.Today;
         var distinctPrices = machineProducts
             .Where(mp => mp.RetailPrice.HasValue)
             .Select(mp => mp.RetailPrice!.Value)

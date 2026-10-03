@@ -1,5 +1,6 @@
+using Inventory.Application.Machines;
 using Inventory.Application.Nayax;
-using Inventory.Domain.Machines;
+using Inventory.Application.Time;
 using Inventory.Domain.Sites;
 
 namespace Inventory.Application.Sites;
@@ -12,19 +13,30 @@ namespace Inventory.Application.Sites;
 /// The two <see cref="ISiteFactsStore"/> reads are awaited one at a time and the completed-sale facts
 /// for every site are loaded by one scoped read and distributed per machine in memory (issue #313),
 /// because the scoped store's EF adapter shares a single <c>AppDbContext</c>, which supports only one
-/// operation at a time.
+/// operation at a time. Its today/week-to-date/previous-comparable-week periods come from the
+/// <c>Australia/Sydney</c> business day rather than the host's local clock (issue #310; see
+/// <see cref="MachineDashboardWindow"/>, shared with the machine dashboard).
 /// </summary>
 public sealed class GetSiteSummaries
 {
     private readonly INayaxLynxClient _nayax;
     private readonly ISiteFactsStore _facts;
     private readonly ISiteNameResolver _siteNames;
+    private readonly IClock _clock;
+    private readonly IBusinessCalendar _businessCalendar;
 
-    public GetSiteSummaries(INayaxLynxClient nayax, ISiteFactsStore facts, ISiteNameResolver siteNames)
+    public GetSiteSummaries(
+        INayaxLynxClient nayax,
+        ISiteFactsStore facts,
+        ISiteNameResolver siteNames,
+        IClock clock,
+        IBusinessCalendar businessCalendar)
     {
         _nayax = nayax;
         _facts = facts;
         _siteNames = siteNames;
+        _clock = clock;
+        _businessCalendar = businessCalendar;
     }
 
     public async Task<IReadOnlyList<SiteSummary>> Handle(CancellationToken cancellationToken)
@@ -53,11 +65,12 @@ public sealed class GetSiteSummaries
 
         // One scoped read covers every site's machines over the same 16-day lookback the former
         // per-site reads each requested, instead of one overlapping read per site; the facts carry
-        // their machine id, so each site's own sales are selected from the result in memory.
-        var now = DateTime.Now;
+        // their machine id, so each site's own sales are selected from the result in memory. The
+        // lookback counts back from the current UTC instant, the time base the sale facts are stored in.
+        var window = MachineDashboardWindow.Resolve(_clock, _businessCalendar);
         var salesTask = _facts.GetRecentCompletedSalesAsync(
             pending.SelectMany(site => site.Machines).Select(machine => machine.MachineID).Distinct().ToList(),
-            now.AddDays(-16),
+            window.NowUtc.AddDays(-16),
             cancellationToken);
 
         // Awaits both together, as before, so a failure on either side propagates and no fan-out
@@ -72,7 +85,7 @@ public sealed class GetSiteSummaries
         {
             var machineProducts = (await site.MachineProducts).SelectMany(items => items).ToList();
             summaries.Add(BuildSummary(
-                site.SiteId, site.Machines, machineProducts, SalesFor(site.Machines, salesByMachine), productActivity, now));
+                site.SiteId, site.Machines, machineProducts, SalesFor(site.Machines, salesByMachine), productActivity, window));
         }
 
         return summaries.OrderBy(summary => summary.SiteName).ToList();
@@ -93,12 +106,8 @@ public sealed class GetSiteSummaries
         IReadOnlyList<NayaxMachineProduct> machineProducts,
         IReadOnlyList<SiteCompletedSaleFact> sales,
         IReadOnlyDictionary<long, bool> productActivity,
-        DateTime now)
+        MachineDashboardWindow window)
     {
-        var today = now.Date;
-        var currentWeek = MachineDashboardPeriods.WeekToDate(now);
-        var previousComparableWeek = MachineDashboardPeriods.PreviousComparableWeek(now);
-
         var stockFacts = machineProducts
             .Select(mp => new SiteMachineProductStockFact(
                 mp.NayaxProductID,
@@ -116,11 +125,20 @@ public sealed class GetSiteSummaries
             SiteStockPolicy.CalculateStockPercentage(stockFacts),
             lowProductCount,
             emptyProductCount,
-            sales.Where(sale => sale.MachineAuthorizationTime >= today && sale.MachineAuthorizationTime <= now)
-                .Sum(sale => sale.SettlementValue),
-            sales.Where(sale => sale.MachineAuthorizationTime >= currentWeek.Start && sale.MachineAuthorizationTime <= currentWeek.End)
-                .Sum(sale => sale.SettlementValue),
-            sales.Where(sale => sale.MachineAuthorizationTime >= previousComparableWeek.Start && sale.MachineAuthorizationTime <= previousComparableWeek.End)
-                .Sum(sale => sale.SettlementValue));
+            RevenueIn(sales, window.Today),
+            RevenueIn(sales, window.CurrentWeek),
+            RevenueIn(sales, window.PreviousComparableWeek));
     }
+
+    /// <summary>
+    /// A period's completed-sale revenue. Both bounds are UTC instants resolved from the Sydney
+    /// business day, and <c>MachineAuthorizationTime</c> is a persisted true UTC instant, so period
+    /// and sale are compared in the same time base.
+    /// </summary>
+    private static decimal RevenueIn(
+        IReadOnlyList<SiteCompletedSaleFact> sales, MachineDashboardPeriodUtc period) =>
+        sales
+            .Where(sale => sale.MachineAuthorizationTime >= period.StartUtc &&
+                           sale.MachineAuthorizationTime <= period.EndUtc)
+            .Sum(sale => sale.SettlementValue);
 }

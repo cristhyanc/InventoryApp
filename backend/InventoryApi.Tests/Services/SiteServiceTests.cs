@@ -1,4 +1,5 @@
 using Inventory.Application.Sites;
+using InventoryApi.Tests.Application.Time;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using Inventory.Application.Nayax;
@@ -19,6 +20,13 @@ namespace InventoryApi.Tests.Services;
 /// </summary>
 public class SiteServiceTests
 {
+    /// <summary>
+    /// One pinned instant drives both the seeded sale timestamps and the use cases' clock, so a sale
+    /// "just now" falls inside the Australia/Sydney business day the use case resolves (issue #310)
+    /// whatever the host's own timezone is and whatever real time the suite runs at.
+    /// </summary>
+    private static readonly FixedSydneyTime Time = FixedSydneyTime.PinnedToNow();
+
     [Fact]
     public async Task Site_summary_aggregates_all_machines_and_separates_low_and_empty_products()
     {
@@ -30,8 +38,8 @@ public class SiteServiceTests
             new Product { Id = 1, Name = "Low", UnitPrice = 1m, LowStockThreshold = 0 },
             new Product { Id = 2, Name = "Empty", UnitPrice = 1m, LowStockThreshold = 0 });
         db.NayaxSales.AddRange(
-            new NayaxSales { TransactionID = 1, MachineID = 10, SettlementValue = 5m, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = DateTime.Now },
-            new NayaxSales { TransactionID = 2, MachineID = 11, SettlementValue = 7m, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = DateTime.Now });
+            new NayaxSales { TransactionID = 1, MachineID = 10, SettlementValue = 5m, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = Time.NowUtc },
+            new NayaxSales { TransactionID = 2, MachineID = 11, SettlementValue = 7m, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = Time.NowUtc });
         await db.SaveChangesAsync();
 
         var nayax = new Mock<INayaxLynxClient>();
@@ -54,7 +62,8 @@ public class SiteServiceTests
                 new() { MachineID = 11, NayaxProductID = 2, PAR = 5, MissingStockByMDB = 5, VendOutAlertThreshold = 1 }
             });
 
-        var service = new GetSiteSummaries(nayax.Object, new EfSiteFactsStore(db), new SiteNameResolverAdapter());
+        var service = new GetSiteSummaries(
+            nayax.Object, new EfSiteFactsStore(db), new SiteNameResolverAdapter(), Time.Clock, Time.Calendar);
         var summary = Assert.Single(await service.Handle(CancellationToken.None));
 
         Assert.Equal(12m, summary.TodayRevenue);
@@ -98,7 +107,7 @@ public class SiteServiceTests
             {
                 new() { MachineID = 10, NayaxProductID = 1, RetailPrice = 5m }
             });
-        var service = new GetSiteProducts(nayax.Object, new EfSiteFactsStore(db));
+        var service = new GetSiteProducts(nayax.Object, new EfSiteFactsStore(db), Time.Calendar);
 
         var first = Assert.Single(await service.Handle(42, CancellationToken.None));
         rate.FeeExGst = .25m;
@@ -129,7 +138,7 @@ public class SiteServiceTests
         nayax.Setup(x => x.GetMachinesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([new NayaxMachine { MachineID = 10, CustomerID = 42 }]);
         nayax.Setup(x => x.GetMachineProductsAsync(10, It.IsAny<CancellationToken>())).ReturnsAsync([new NayaxMachineProduct { MachineID = 10, NayaxProductID = 1, RetailPrice = 5m }]);
 
-        var service = new GetSiteProducts(nayax.Object, new EfSiteFactsStore(db));
+        var service = new GetSiteProducts(nayax.Object, new EfSiteFactsStore(db), Time.Calendar);
         var product = Assert.Single(await service.Handle(42, CancellationToken.None));
 
         Assert.Equal(overlapping ? null : 2.78m, product.EstimatedCardProfit);
