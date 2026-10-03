@@ -11,7 +11,7 @@ public sealed partial class ImportService : IImportService
     private readonly IWebHostEnvironment _environment;
     private readonly ILogger<ImportService> _logger;
     private readonly INayaxLynxClient _nayaxLynxClient;
-    private readonly ISaleCostingService _saleCosting;
+    private readonly ICostSale _saleCosting;
     private readonly IRebuildProductCost _inventoryCostRebuild;
 
     public ImportService(
@@ -19,7 +19,7 @@ public sealed partial class ImportService : IImportService
         IWebHostEnvironment environment,
         ILogger<ImportService> logger,
         INayaxLynxClient nayaxLynxClient,
-        ISaleCostingService saleCosting,
+        ICostSale saleCosting,
         IRebuildProductCost inventoryCostRebuild)
     {
         _db = db;

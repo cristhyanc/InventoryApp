@@ -6,10 +6,10 @@ namespace InventoryApi.Services;
 
 /// <summary>
 /// Thin wrapper over the deterministic <see cref="DomainProductMatcher"/> for the callers that
-/// still operate on the persistence <see cref="Product"/> entity (machine service, sale costing,
-/// inventory cost rebuild, import, site commissions). The migrated product-profitability report
-/// calls the Domain matcher directly on its own candidate projection instead of through this
-/// wrapper, so both stay on one authoritative matching implementation.
+/// still operate on the persistence <see cref="Product"/> entity (machine service, inventory cost
+/// rebuild, import, site commissions). The migrated product-profitability report and sale-costing
+/// use cases (issue #297) call the Domain matcher directly on their own candidate projections
+/// instead of through this wrapper, so all stay on one authoritative matching implementation.
 /// </summary>
 public static class NayaxProductMatcher
 {

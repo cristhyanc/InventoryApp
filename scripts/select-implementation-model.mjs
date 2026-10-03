@@ -1,28 +1,32 @@
 import { createHash } from 'node:crypto';
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
+import { FULL_PROVIDER_EXECUTION_ENABLED, parseReadinessLabel } from './agent-mode.mjs';
 
 // Trusted policy: model output can select a tier, never supply a model ID or CLI arguments.
 export const MODELS = Object.freeze({
   claude: { low: 'haiku', standard: 'sonnet', high: 'opus' },
   copilot: { low: 'claude-haiku-4.5', standard: 'claude-sonnet-5.5', high: 'claude-opus-5.5' },
 });
-export const READY_LABELS = Object.keys(MODELS).flatMap(provider => [`agent-ready-${provider}`, `agent-ready-${provider}-low`, `agent-ready-${provider}-high`]);
+// Readiness labels, routes and the full-provider gate live in the standalone agent-mode.mjs, which
+// jobs without a checkout also fetch from the trusted workflow commit.
+export { READINESS_LABELS, READINESS_LABEL_PATTERN, FULL_READY_LABELS, DEFAULT_READY_LABEL, ROUTES, FULL_PROVIDER_EXECUTION_ENABLED, parseReadinessLabel, STANDARD_READY_LABELS as READY_LABELS } from './agent-mode.mjs';
 const activeStates = ['agent-working', 'agent-architecture-fix', 'agent-review', 'agent-blocked'];
 const hasControlCharacter = text => [...text].some(char => char.charCodeAt(0) < 0x20 || char.charCodeAt(0) === 0x7f);
 const fingerprint = issue => createHash('sha256').update(JSON.stringify({ title: issue.title, body: issue.body })).digest('hex');
 
-export function prepareSelection({ provider, label, issue, attempt = 1 }) {
-  if (!Object.hasOwn(MODELS, provider) || !READY_LABELS.includes(label) || !label.startsWith(`agent-ready-${provider}`)) throw new Error('Invalid implementation label/provider.');
+export function prepareSelection({ provider, label, issue, attempt = 1, fullProviderEnabled = FULL_PROVIDER_EXECUTION_ENABLED }) {
+  const route = parseReadinessLabel(label);
+  if (!Object.hasOwn(MODELS, provider) || !route || route.implementer !== provider) throw new Error('Invalid implementation label/provider.');
+  if (route.sameProviderReview && !fullProviderEnabled) throw new Error(`${label} is not enabled yet: single-provider review and repair routes are not connected. Remove ${label}; nothing was started.`);
   if (issue.state !== 'OPEN') throw new Error('Implementation requires an open issue.');
   const labels = issue.labels.map(item => typeof item === 'string' ? item : item.name);
-  const ready = labels.filter(item => READY_LABELS.includes(item));
+  const ready = labels.filter(item => parseReadinessLabel(item));
   const active = labels.filter(item => activeStates.includes(item));
   const resumed = provider === 'claude' && Number.isInteger(attempt) && attempt > 1 && ready.length === 0 && active.length === 1 && active[0] === 'agent-working';
   if (!resumed && active.length) throw new Error('Task already has an active or blocked state; human must resolve it first.');
   if (!resumed && (ready.length !== 1 || ready[0] !== label)) throw new Error('Exactly one matching readiness label is required; remove conflicting or stale labels.');
-  const tier = label.endsWith('-low') ? 'low' : label.endsWith('-high') ? 'high' : 'default';
-  return { provider, label, tier, triage: tier === 'default', fingerprint: fingerprint(issue), attempt };
+  return { provider, label, mode: route.mode, reviewer: route.reviewer, sameProviderReview: route.sameProviderReview, tier: route.tier, triage: route.tier === 'default', fingerprint: fingerprint(issue), attempt };
 }
 
 export function resolveSelection(selection, triage) {
@@ -40,7 +44,7 @@ export function resolveSelection(selection, triage) {
 }
 
 export function verifySnapshot(selection, issue) {
-  prepareSelection({ ...selection, issue });
+  prepareSelection({ provider: selection.provider, label: selection.label, attempt: selection.attempt, issue });
   if (fingerprint(issue) !== selection.fingerprint) throw new Error('Task scope changed after model selection; re-apply the readiness label.');
 }
 
@@ -64,7 +68,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     } else if (command === 'resolve') {
       const selection = JSON.parse(readFileSync(selectionFile, 'utf8'));
       const result = resolveSelection(selection, selection.triage ? JSON.parse(process.env.TRIAGE_OUTPUT || 'null') : undefined);
-      output({ model: result.model, max_turns: result.maxTurns, tier: result.tier, reason: result.reason, fingerprint: result.fingerprint });
+      output({ model: result.model, max_turns: result.maxTurns, tier: result.tier, reason: result.reason, fingerprint: result.fingerprint, mode: result.mode });
       if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `Implementation selection: ${result.provider} / ${result.tier} / ${result.model}. ${result.reason}\n`);
     } else if (command === 'verify') {
       verifySnapshot({ provider: process.env.PROVIDER, label: process.env.READY_LABEL, fingerprint: process.env.TASK_FINGERPRINT, attempt: Number(process.env.RUN_ATTEMPT || 1) }, JSON.parse(readFileSync(issueFile, 'utf8')));

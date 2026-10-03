@@ -12,18 +12,22 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { describe, it } from 'node:test';
+import { claimEvents } from './agent-mode.fixtures.mjs';
+import { ROUTES } from './agent-mode.mjs';
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8').replaceAll('\r\n', '\n');
 
 function stepShell(workflow, name) {
   const step = workflow.split(`      - name: ${name}\n`)[1]?.split('\n      - name: ')[0];
   assert.ok(step, `missing trusted step: ${name}`);
-  const run = step.split('        run: |\n')[1];
+  // The last step of a job ends where the next job begins.
+  const run = step.split('        run: |\n')[1]?.split(/\n\n {2}[a-z]/)[0];
   assert.ok(run, `step has no run block: ${name}`);
   return run.split('\n').map((line) => line.slice(10)).join('\n');
 }
 
 const publishShell = stepShell(read('.github/workflows/agent-review.yml'), 'Guard and publish review');
+const reviewContextShell = stepShell(read('.github/workflows/agent-review.yml'), 'Resolve and verify pull request');
 const headUpdateShell = stepShell(read('.github/workflows/agent-head-update.yml'), 'Reverify current head and dispatch validation');
 const repairDispatchShell = stepShell(read('.github/workflows/agent-repair.yml'), 'Verify repaired head and dispatch trusted validation');
 const reviewDispatchShell = stepShell(read('.github/workflows/validate.yml'), 'Reverify current head and dispatch review');
@@ -41,6 +45,7 @@ const FAKE_GH = `#!/usr/bin/env node
 const fs = require('node:fs');
 const { spawnSync } = require('node:child_process');
 const args = process.argv.slice(2);
+const claimEvents = ${claimEvents.toString()};
 const state = JSON.parse(fs.readFileSync(process.env.FAKE_GH_STATE, 'utf8'));
 const log = (entry) => fs.appendFileSync(process.env.FAKE_GH_LOG, JSON.stringify(entry) + '\\n');
 const opt = (name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
@@ -55,14 +60,14 @@ const fail = (why) => { process.stderr.write(why + '\\n'); process.exit(1); };
 if ((state.unavailable ?? []).some((prefix) => args.join(' ').includes(prefix))) fail('HTTP 502: fixture outage');
 if (args[0] === 'pr' && args[1] === 'view') {
   const fields = opt('--json').split(',');
-  out(Object.fromEntries(fields.map((f) => [f, state.pr[f]])));
+  out(Object.fromEntries(fields.map((f) => [f, { createdAt: '2026-10-03T02:00:00Z', ...state.pr }[f]])));
 } else if (args[0] === 'workflow' && args[1] === 'run') {
   log({ kind: 'dispatch', args });
 } else if ((args[0] === 'pr' || args[0] === 'issue') && args[1] === 'edit') {
   log({ kind: 'label', target: args[0], number: args[2], args: args.slice(3) });
 } else if (args[0] === 'api') {
   const method = opt('--method') ?? 'GET';
-  const path = args.find((a, i) => i > 0 && !a.startsWith('-') && !['--method', '--jq', '--input', '-f'].includes(args[i - 1]));
+  const path = args.find((a, i) => i > 0 && !a.startsWith('-') && !['--method', '--jq', '--input', '-f', '-H'].includes(args[i - 1]));
   if (method === 'POST' && path.endsWith('/reviews')) {
     const payload = JSON.parse(fs.readFileSync(opt('--input'), 'utf8'));
     if (state.rejectInlineComments && payload.comments.length > 0) { log({ kind: 'review-rejected', payload }); fail('HTTP 422: line could not be resolved'); }
@@ -77,6 +82,10 @@ if (args[0] === 'pr' && args[1] === 'view') {
     out(state.files.map((filename) => ({ filename })));
   } else if (/\\/pulls\\/\\d+$/.test(path)) {
     out({ user: { login: state.author } });
+  } else if (path.includes('/contents/scripts/agent-mode.mjs')) {
+    process.stdout.write(fs.readFileSync(process.env.AGENT_MODE_SCRIPT, 'utf8'));
+  } else if (/\\/issues\\/\\d+\\/events/.test(path)) {
+    out(state.events ?? claimEvents(state.pr.headRefName.startsWith('copilot/') ? 'agent-ready-copilot' : 'agent-ready-claude'));
   } else fail('unexpected api call: ' + args.join(' '));
 } else fail('unexpected gh call: ' + args.join(' '));
 `;
@@ -144,15 +153,22 @@ function run(shell, { state, env = {} }) {
     chmodSync(join(bin, 'gh'), 0o755);
     const statePath = join(root, 'state.json');
     const logPath = join(root, 'calls.jsonl');
+    const outputPath = join(root, 'github-output');
     writeFileSync(statePath, JSON.stringify(state));
+    writeFileSync(outputPath, '');
     const result = spawnSync('bash', ['-c', shell], {
       encoding: 'utf8',
       env: {
         ...process.env,
         PATH: `${bin}:${process.env.PATH}`,
+        AGENT_MODE_GH_PATH: join(bin, 'gh'),
         FAKE_GH_STATE: statePath,
         FAKE_GH_LOG: logPath,
+        GITHUB_OUTPUT: outputPath,
         GITHUB_REPOSITORY: REPO,
+        RUNNER_TEMP: root,
+        GITHUB_WORKFLOW_SHA: 'a'.repeat(40),
+        AGENT_MODE_SCRIPT: new URL('./agent-mode.mjs', import.meta.url).pathname,
         GH_TOKEN: 'fixture-token',
         EXPECTED_AGENT_AUTHOR: BOT,
         EXPECTED_COPILOT_AUTHOR: COPILOT,
@@ -164,17 +180,19 @@ function run(shell, { state, env = {} }) {
     const calls = existsSync(logPath)
       ? readFileSync(logPath, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line))
       : [];
-    return { status: result.status, stdout: result.stdout, stderr: result.stderr, calls };
+    return { status: result.status, stdout: result.stdout, stderr: result.stderr, calls, outputs: readFileSync(outputPath, 'utf8') };
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 }
 
-function publish({ state = copilotState(), output = readyOutput(), result = 'success', implementer = 'copilot' } = {}) {
+function publish({ state = copilotState(), output = readyOutput(), result = 'success', implementer = 'copilot', mode = `cross-${implementer}`, reviewer = ROUTES[mode]?.reviewer ?? '' } = {}) {
   return run(publishShell, {
     state,
     env: {
       IMPLEMENTER: implementer,
+      AGENT_MODE: mode,
+      REVIEWER: reviewer,
       REVIEW_RESULT: result,
       REVIEW_OUTPUT: output === null ? '' : JSON.stringify(output),
       VERDICT_CONTEXT: 'agent-review-verdict',
@@ -205,7 +223,7 @@ describe('guarded review publication', () => {
     const [review] = reviews(outcome.calls);
     assert.equal(review.payload.commit_id, SHA);
     assert.equal(review.payload.event, 'COMMENT');
-    assert.match(review.payload.body, new RegExp(`^Reviewer: Claude\\nHead SHA reviewed: ${SHA}\\n\\nVERDICT: READY FOR HUMAN REVIEW\\n`));
+    assert.match(review.payload.body, new RegExp(`^Reviewer: Claude\\nReview type: Cross-provider review \\(Copilot implemented, Claude reviewed\\)\\nHead SHA reviewed: ${SHA}\\n\\nVERDICT: READY FOR HUMAN REVIEW\\n`));
     assert.equal(review.payload.body.match(/^VERDICT:/gm).length, 1);
     assert.match(review.payload.body, /This is an advisory review\. Human approval and branch protection remain the merge gate\.\n?$/);
     assert.deepEqual(statuses(outcome.calls).map(({ sha, state, context }) => ({ sha, state, context })), [{ sha: SHA, state: 'success', context: 'agent-review-verdict' }]);
@@ -248,20 +266,58 @@ describe('guarded review publication', () => {
     });
   }
 
+  // Provider mode (#339): the verdict is published only under the mode the review ran with.
+  it('publishes when the claimed provider mode still matches the review', () => {
+    const outcome = publish({ state: { ...copilotState(), events: claimEvents('agent-ready-copilot') } });
+    assert.equal(outcome.status, 0, outcome.stderr);
+    assert.equal(reviews(outcome.calls).length, 1);
+  });
+  it('suppresses the verdict when the issue was re-claimed for another provider during the review', () => {
+    const events = [...claimEvents('agent-ready-copilot'), ...claimEvents('agent-ready-claude', '2026-10-03T01:30:00Z', 10)];
+    assertSuppressed(publish({ state: { ...copilotState(), events } }), /provider mode of pull request #267 could not be verified/);
+  });
+  it('suppresses the verdict when the label history shows no verifiable claim', () => {
+    assertSuppressed(publish({ state: { ...copilotState(), events: [] } }), /could not be verified/);
+  });
+
   it('publishes the Copilot review of a Claude-implemented pull request through the same guarded path', () => {
     const outcome = publish({ state: eligibleState(), implementer: 'claude', output: changesOutput() });
     assert.equal(outcome.status, 0, outcome.stderr);
     const [review] = reviews(outcome.calls);
-    assert.match(review.payload.body, new RegExp(`^Reviewer: GitHub Copilot \\(Copilot CLI\\)\\nHead SHA reviewed: ${SHA}\\n\\nVERDICT: CHANGES REQUESTED\\n`));
+    assert.match(review.payload.body, new RegExp(`^Reviewer: GitHub Copilot \\(Copilot CLI\\)\\nReview type: Cross-provider review \\(Claude implemented, Copilot reviewed\\)\\nHead SHA reviewed: ${SHA}\\n\\nVERDICT: CHANGES REQUESTED\\n`));
     assert.equal(review.payload.commit_id, SHA);
     assert.deepEqual(statuses(outcome.calls).map(({ sha, state, context }) => ({ sha, state, context })), [{ sha: SHA, state: 'failure', context: 'agent-review-verdict' }]);
   });
 
-  it('never publishes a review by the implementer of the pull request', () => {
+  it('never publishes a review whose implementer or reviewer does not match the verified route', () => {
     // Claude's review (implementer copilot) of a Claude pull request, and Copilot's review of a Copilot one.
     assertSuppressed(publish({ state: eligibleState(), implementer: 'copilot' }), /now implemented by claude, not copilot/);
     assertSuppressed(publish({ state: copilotState(), implementer: 'claude' }), /now implemented by copilot, not claude/);
-    assertSuppressed(publish({ implementer: '' }), /unknown implementer/);
+    assertSuppressed(publish({ implementer: '' }), /unknown review route/);
+    // A cross route never publishes a same-provider review, and a full route never publishes the other provider's.
+    assertSuppressed(publish({ state: eligibleState(), implementer: 'claude', mode: 'cross-claude', reviewer: 'claude' }), /unknown review route/);
+    assertSuppressed(publish({ state: copilotState(), implementer: 'copilot', mode: 'cross-copilot', reviewer: 'copilot' }), /unknown review route/);
+    assertSuppressed(publish({ state: eligibleState(), implementer: 'claude', mode: 'full-claude', reviewer: 'copilot' }), /unknown review route/);
+    assertSuppressed(publish({ state: copilotState(), implementer: 'copilot', mode: 'full-copilot', reviewer: 'claude' }), /unknown review route/);
+  });
+
+  it('publishes full-provider reviews labelled as same-provider, not independent', () => {
+    for (const [state, implementer, label, reviewer] of [
+      [eligibleState(), 'claude', 'agent-ready-full-claude', 'Claude \\(separate read-only invocation\\)'],
+      [copilotState(), 'copilot', 'agent-ready-full-copilot', 'GitHub Copilot \\(Copilot CLI, separate read-only invocation\\)'],
+    ]) {
+      const mode = `full-${implementer}`;
+      const outcome = publish({ state: { ...state, events: claimEvents(label) }, implementer, mode });
+      assert.equal(outcome.status, 0, outcome.stderr);
+      const [review] = reviews(outcome.calls);
+      assert.match(review.payload.body, new RegExp(`^Reviewer: ${reviewer}\\nReview type: Same-provider review \\(${mode} fallback\\): not independent\\nHead SHA reviewed: ${SHA}\\n`));
+      assert.equal(statuses(outcome.calls)[0].state, 'success');
+    }
+  });
+
+  it('suppresses a full-provider review when the issue was re-claimed for the cross route during the review', () => {
+    const events = [...claimEvents('agent-ready-full-claude'), ...claimEvents('agent-ready-claude', '2026-10-03T01:30:00Z', 10)];
+    assertSuppressed(publish({ state: { ...eligibleState(), events }, implementer: 'claude', mode: 'full-claude' }), /now in provider mode cross-claude, not full-claude/);
   });
 
   it('suppresses the verdict for an agent/issue-* pull request not authored by the automation App', () => {
@@ -437,6 +493,37 @@ describe('repair dispatch deduplication', () => {
   });
 });
 
+describe('review route selected by the verified provider mode', () => {
+  // The complete four-mode matrix: the reviewer job and the prompt relation come only from the route.
+  const resolveReview = (state, label) => run(reviewContextShell, {
+    state: { ...state, events: claimEvents(label) },
+    env: { GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_REF: 'refs/heads/main', INPUT_PR_NUMBER: PR, INPUT_HEAD_SHA: SHA },
+  });
+  for (const [label, state, mode, reviewer, sameProvider] of [
+    ['agent-ready-claude', eligibleState(), 'cross-claude', 'copilot', false],
+    ['agent-ready-copilot', copilotState(), 'cross-copilot', 'claude', false],
+    ['agent-ready-full-claude', eligibleState(), 'full-claude', 'claude', true],
+    ['agent-ready-full-copilot', copilotState(), 'full-copilot', 'copilot', true],
+  ]) {
+    it(`${label} is reviewed by ${reviewer}${sameProvider ? ' as a same-provider review' : ' as a cross-provider review'}`, () => {
+      const outcome = resolveReview(state, label);
+      assert.equal(outcome.status, 0, outcome.stderr);
+      assert.match(outcome.outputs, new RegExp(`^agent_mode=${mode}$`, 'm'));
+      assert.match(outcome.outputs, new RegExp(`^reviewer=${reviewer}$`, 'm'));
+      const relation = outcome.outputs.match(/^review_relation=(.*)$/m)?.[1] ?? '';
+      if (sameProvider) assert.match(relation, /This is a same-provider review, not an independent one/);
+      else assert.match(relation, /a different agent/);
+    });
+  }
+  it('names no reviewer when the claim belongs to the other implementer', () => {
+    for (const [state, label] of [[eligibleState(), 'agent-ready-full-copilot'], [copilotState(), 'agent-ready-full-claude'], [eligibleState(), 'agent-ready-copilot']]) {
+      const outcome = resolveReview(state, label);
+      assert.notEqual(outcome.status, 0);
+      assert.doesNotMatch(outcome.outputs, /^reviewer=/m);
+    }
+  });
+});
+
 describe('cross-review routing after exact-SHA validation', () => {
   const routed = (state, env = {}) => run(reviewDispatchShell, { state, env });
   const labels = (calls) => calls.filter((c) => c.kind === 'label');
@@ -494,7 +581,9 @@ describe('cross-review routing after exact-SHA validation', () => {
 // in a throwaway repository. It must turn only a well-formed, marked review JSON into output.
 const copilotReviewShell = stepShell(read('.github/workflows/agent-review.yml').split('\n  publish:\n')[0], 'Run Copilot review');
 
-function runCopilotReview(copilotOutput, { touchTree = false, token = 'cli-token' } = {}) {
+const CROSS_RELATION = 'This pull request was implemented by Claude, a different agent: do not rely on anything it claimed; verify it.';
+
+function runCopilotReview(copilotOutput, { touchTree = false, token = 'cli-token', relation = CROSS_RELATION } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'agent-copilot-review-'));
   try {
     const repo = join(root, 'repo');
@@ -507,16 +596,18 @@ function runCopilotReview(copilotOutput, { touchTree = false, token = 'cli-token
     git('-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '-qm', 'fixture');
     const head = git('rev-parse', 'HEAD').stdout.trim();
     writeFileSync(join(root, 'copilot-output.md'), copilotOutput.replaceAll('@SHA@', head));
-    writeFileSync(join(bin, 'copilot'), `#!/usr/bin/env bash\n${touchTree ? 'echo changed > README.md\n' : ''}cat "${join(root, 'copilot-output.md')}"\n`);
+    const promptLog = join(root, 'prompts.log');
+    writeFileSync(promptLog, '');
+    writeFileSync(join(bin, 'copilot'), `#!/usr/bin/env bash\nprintf '%s\\n' "$@" >> "${promptLog}"\n${touchTree ? 'echo changed > README.md\n' : ''}cat "${join(root, 'copilot-output.md')}"\n`);
     chmodSync(join(bin, 'copilot'), 0o755);
     const outputPath = join(root, 'github-output');
     writeFileSync(outputPath, '');
     const result = spawnSync('bash', ['-c', copilotReviewShell], {
       cwd: repo,
       encoding: 'utf8',
-      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, GITHUB_OUTPUT: outputPath, COPILOT_GITHUB_TOKEN: token, PR_NUMBER: PR, HEAD_SHA: head, BASE_REF: 'develop' },
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, GITHUB_OUTPUT: outputPath, COPILOT_GITHUB_TOKEN: token, PR_NUMBER: PR, HEAD_SHA: head, BASE_REF: 'develop', REVIEW_RELATION: relation },
     });
-    return { status: result.status, stderr: result.stderr + result.stdout, output: readFileSync(outputPath, 'utf8'), head };
+    return { status: result.status, stderr: result.stderr + result.stdout, output: readFileSync(outputPath, 'utf8'), head, prompts: readFileSync(promptLog, 'utf8') };
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -551,6 +642,21 @@ describe('Copilot CLI final review output', () => {
       assert.equal(outcome.output, '');
     });
   }
+
+  it('states the route relation in the prompt and calls a full-copilot review same-provider', () => {
+    const good = marked(readyOutput({ reviewed_head_sha: '@SHA@' }));
+    const cross = runCopilotReview(good);
+    assert.equal(cross.status, 0, cross.stderr);
+    assert.ok(cross.prompts.includes(CROSS_RELATION));
+    const full = 'This pull request was implemented by the GitHub Copilot coding agent in its own session under the full-copilot single-provider fallback route. This is a same-provider review, not an independent one: you are a fresh invocation with no implementation session state, so do not rely on anything the implementation claimed; verify it.';
+    const same = runCopilotReview(good, { relation: full });
+    assert.equal(same.status, 0, same.stderr);
+    assert.ok(same.prompts.includes(full));
+    assert.ok(!same.prompts.includes('@RELATION@'));
+    const missing = runCopilotReview(good, { relation: '' });
+    assert.notEqual(missing.status, 0);
+    assert.equal(missing.output, '');
+  });
 
   it('fails when Copilot changes the working tree, and when the CLI token is missing', () => {
     const good = marked(readyOutput({ reviewed_head_sha: '@SHA@' }));

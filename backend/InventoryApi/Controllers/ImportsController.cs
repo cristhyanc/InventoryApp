@@ -1,3 +1,4 @@
+using Inventory.Application.Imports;
 using InventoryApi.Services.Interfaces;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -12,8 +13,15 @@ namespace InventoryApi.Controllers;
 public sealed class ImportsController : ControllerBase
 {
     private readonly IImportService _service;
+    private readonly ImportPendingReimbursementXmlFiles _importPendingXmlFiles;
 
-    public ImportsController(IImportService service) => _service = service;
+    public ImportsController(
+        IImportService service,
+        ImportPendingReimbursementXmlFiles importPendingXmlFiles)
+    {
+        _service = service;
+        _importPendingXmlFiles = importPendingXmlFiles;
+    }
 
     [HttpPost("products")]
     public async Task<ActionResult<bool>> ImportProducts() =>
@@ -40,6 +48,7 @@ public sealed class ImportsController : ControllerBase
     }
 
     [HttpPost("pending-xml")]
-    public async Task<ActionResult<ImportedFileImportResult>> ImportPendingXmlFiles() =>
-        Ok(await _service.ImportPendingXmlFilesAsync());
+    public async Task<ActionResult<ImportedFileImportResult>> ImportPendingXmlFiles(
+        CancellationToken cancellationToken) =>
+        Ok(await _importPendingXmlFiles.Handle(cancellationToken));
 }

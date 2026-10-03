@@ -1,6 +1,12 @@
-using InventoryApi.Models;
+using Inventory.Domain.Costing;
 
-namespace InventoryApi.DTOs;
+namespace Inventory.Application.Costing;
+
+// The inventory-cost transition's request and response contracts (issue #298, child 4 of #149),
+// moved unchanged in name and shape from the former InventoryApi/DTOs/InventoryCostTransitionDtos.cs
+// so the POST api/admin/inventory-cost-transition/* JSON and the stored preview snapshots keep the
+// same properties. InventoryCostBaselineSource is the Domain mirror of the persisted enum, with the
+// same numeric values.
 
 public sealed record InventoryCostTransitionPreviewRequest(
     long ProductId,

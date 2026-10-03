@@ -26,6 +26,8 @@ on:
         value: ${{ jobs.select.outputs.reason }}
       fingerprint:
         value: ${{ jobs.select.outputs.fingerprint }}
+      mode:
+        value: ${{ jobs.select.outputs.mode }}
 
 permissions: {}
 
@@ -42,6 +44,7 @@ jobs:
       tier: ${{ steps.resolve.outputs.tier }}
       reason: ${{ steps.resolve.outputs.reason }}
       fingerprint: ${{ steps.resolve.outputs.fingerprint }}
+      mode: ${{ steps.resolve.outputs.mode }}
     steps:
       - name: Check out trusted workflow policy
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0

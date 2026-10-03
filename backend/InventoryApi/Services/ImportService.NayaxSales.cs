@@ -1,5 +1,6 @@
 using ClosedXML.Excel;
 using Inventory.Domain.FinancialConfiguration;
+using InventoryApi.Adapters.Persistence;
 using InventoryApi.Models;
 using InventoryApi.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
@@ -62,7 +63,7 @@ public sealed partial class ImportService
             if (existing is null)
             {
                 _db.NayaxSales.Add(sale);
-                await _saleCosting.CostSaleAsync(sale, cancellationToken: cancellationToken);
+                await _saleCosting.CostAsync(sale, cancellationToken: cancellationToken);
                 imported++;
             }
             else
@@ -79,7 +80,7 @@ public sealed partial class ImportService
 
                 if (sale.NayaxProductCostPrice.HasValue)
                     existing.NayaxProductCostPrice = sale.NayaxProductCostPrice;
-                await _saleCosting.CostSaleAsync(existing, cancellationToken: cancellationToken);
+                await _saleCosting.CostAsync(existing, cancellationToken: cancellationToken);
                 updated++;
             }
             TrackAffectedProduct(products, existing ?? sale, affected);

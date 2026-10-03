@@ -232,7 +232,23 @@ are met today.
 
 **Backup and restore** uses SQLite's Online Backup API (the same mechanism behind the `sqlite3`
 CLI's `.backup` command and `Microsoft.Data.Sqlite`'s `SqliteConnection.BackupDatabase`), which
-produces a consistent snapshot without requiring the API process to stop:
+produces a consistent snapshot without requiring the API process to stop.
+
+The supported way to take a retained snapshot is the API executable's `backup-database` command
+(issue #331) — an early CLI mode, like `bootstrap-business` and `migrate-database`, that never
+runs during normal startup. It opens the same configured database the API would, requires an
+explicit `--output <path>` outside the API's web root/published content, refuses a destination
+that already exists or matches the source, runs `PRAGMA integrity_check` on the result itself, and
+reports the snapshot's SHA-256 and duration (never the connection string), exiting non-zero on any
+failure:
+
+```bash
+dotnet InventoryApi.dll backup-database --output /home/data/backups/inventory-<timestamp>.db
+```
+
+This is the same command the scheduled backup job (issue #333) calls; routine backups are
+scheduled, not run by hand. The equivalent manual `sqlite3` CLI sequence remains available where
+the published `dotnet` application is not on hand:
 
 ```bash
 sqlite3 /home/data/inventory.db ".backup '/home/data/backups/inventory-<timestamp>.db'"
@@ -241,17 +257,21 @@ sqlite3 /home/data/backups/inventory-<timestamp>.db "PRAGMA integrity_check;"
 
 Store the verified backup somewhere other than the App Service's own `/home` mount. Restoring
 (`sqlite3 <backup> ".backup '/home/data/inventory.db'"`) overwrites live data and must be run
-deliberately, by a human, after stopping the API — never automatically. The full step-by-step
-procedure, including why a plain filesystem copy is unsafe on a live database, is in
+deliberately, by a human, after stopping the API — never automatically. Blob upload,
+retention/alerting, and automated restore are out of scope for `backup-database`. The full
+step-by-step procedure, including why a plain filesystem copy is unsafe on a live database, is in
 [docs/architecture.md](docs/architecture.md#sqlite-operating-assumptions-and-scale-strategy-issue-53).
 
 **Non-destructive local validation.**
 `backend/InventoryApi.Tests/Operations/SqliteBackupRestoreTests.cs` proves the backup mechanism
-itself works — it runs as part of the normal test suite and only ever touches throwaway SQLite
-files under the OS temp directory, never a developer's or production `inventory.db`:
+itself and, built on top of it, the `backup-database` command's path validation, verification,
+hashing, and failure reporting (`DatabaseBackupRunnerTests`) and its argument parsing
+(`BackupDatabaseArgumentsTests`) — all of it running as part of the normal test suite and only ever
+touching throwaway SQLite files under the OS temp directory, never a developer's or production
+`inventory.db`:
 
 ```bash
-dotnet test backend/InventoryApi/InventoryApi.slnx --filter FullyQualifiedName~SqliteBackupRestoreTests
+dotnet test backend/InventoryApi/InventoryApi.slnx --filter "FullyQualifiedName~SqliteBackupRestoreTests|FullyQualifiedName~DatabaseBackupRunnerTests|FullyQualifiedName~BackupDatabaseArgumentsTests"
 ```
 
 To rehearse the `sqlite3` CLI sequence above before relying on it in production, run it against a
@@ -351,9 +371,9 @@ The complete invariants and change rules are in [AGENTS.md](AGENTS.md).
 
 ## Delivery workflow
 
-Changes are made on feature branches created from `develop` and validated through pull requests that target `develop`. Every pull request to `develop` or `main` runs the validation workflow. A push to `develop` builds and tests the backend without deploying. Production releases are separate pull requests from `develop` to `main`; a merge to `main` triggers the Azure API and frontend deployment workflows. After opening a pull request, an automated engineering agent may update only its feature branch, for at most two permitted repair attempts in response to CI or review failures, and then returns control to a human. It never merges or deploys. An agent may prepare a release pull request only when a human explicitly requests it; a human reviews and merges that pull request, and the existing workflow performs the deployment.
+Changes are made on feature branches created from `develop` and validated through pull requests that target `develop`. Every pull request to `develop` or `main` runs the validation workflow. A push to `develop` builds and tests the backend without deploying. Production releases are separate pull requests from `develop` to `main`; a merge to `main` makes the code releasable but deploys nothing. A human deploys production by starting the **Deploy Production** workflow from the Actions tab for an exact `main` commit; it validates that commit, reports the database migrations production startup is expected to apply, deploys the API, checks `/health/ready`, and then deploys the frontend from the same commit (see `docs/automation.md` § Deploy Production). After opening a pull request, an automated engineering agent may update only its feature branch, for at most two permitted repair attempts in response to CI or review failures, and then returns control to a human. It never merges or deploys. An agent may prepare a release pull request only when a human explicitly requests it; a human reviews and merges that pull request, and a human starts Deploy Production.
 
-Tasks intended for an implementation agent use the **Agent task** issue form, and every pull request uses the repository pull request template. Two agents cross-review each other: applying `agent-ready-claude` to a reviewed issue has Claude Code implement it, Copilot check its architecture read-only, Claude fix the findings, and Copilot (through the Copilot CLI) do the final review after exact-SHA validation; applying `agent-ready-copilot` has the Copilot coding agent implement it, Claude check its architecture read-only, Copilot fix the findings, and Claude do the final review. Both final reviews are comment-only and publish an explicit verdict. The repository owner may request at most two repairs, with `@claude repair` on a Claude pull request or `@copilot` on a Copilot pull request. Human approval and branch protection remain the merge gate. The full lifecycle, authority model, task labels, risk classification, and retry policy are in [docs/automation.md](docs/automation.md).
+Tasks intended for an implementation agent use the **Agent task** issue form, and every pull request uses the repository pull request template. Claude is the primary implementer and Copilot the normal reviewer. Two agents cross-review each other: applying `agent-ready-claude` (the default) to a reviewed issue has Claude Code implement it, Copilot check its architecture read-only, Claude fix the findings, and Copilot (through the Copilot CLI) do the final review after exact-SHA validation; applying `agent-ready-copilot` (an explicit override) has the Copilot coding agent implement it, Claude check its architecture read-only, Copilot fix the findings, and Claude do the final review. When one provider is unavailable, a human may apply a single-provider fallback label instead, `agent-ready-full-claude` or `agent-ready-full-copilot`: that provider implements, and separate read-only invocations of the same provider check the architecture and do the final review, recorded as a same-provider review rather than an independent one. Model triage always uses Claude Haiku, on every route. All final reviews are comment-only and publish an explicit verdict. The repository owner may request at most two repairs, with `@claude repair` on a Claude pull request or `@copilot` on a Copilot pull request. Human approval and branch protection remain the merge gate. The full lifecycle, authority model, task labels, risk classification, and retry policy are in [docs/automation.md](docs/automation.md).
 
 Implementation model tiers: append `-low` for a cheap model or `-high` for a stronger model to either readiness label. The existing labels use a brief cheap triage to select low, standard or high automatically, and stop only when the requirements need clarification. Apply exactly one readiness label per issue. Architecture/review/repair models remain unchanged; see [Implementation model tiers](docs/automation.md#implementation-model-tiers) for models, costs, limits and rollout.
 

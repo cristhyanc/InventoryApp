@@ -1,14 +1,18 @@
 name: Agent Copilot handoff
 
-# Hands a Copilot-implemented pull request (agent-ready-copilot) to Claude's read-only architecture
-# check. A successful current-head PR validation can automatically move Copilot's draft to Ready
+# Hands a Copilot-implemented pull request (agent-ready-copilot or agent-ready-full-copilot) to the
+# read-only architecture check (agent-copilot-architecture.yml picks Claude, or a separate Copilot
+# invocation on full-copilot, from the verified provider mode). A successful current-head PR validation can automatically move Copilot's draft to Ready
 # for review; a manual Ready for review transition remains a fallback.
 #
 # Authority and lifecycle: AGENTS.md ("Automated task contract") and docs/automation.md
-# (Cross-review: Claude and Copilot).
+# (Provider roles and readiness labels).
 # - Trusted source: pull_request_target and workflow_run both execute this definition from main.
-#   This workflow never checks out or executes pull request code and holds no credential other than
-#   its own GITHUB_TOKEN.
+#   This workflow never checks out or executes pull request code. It uses GITHUB_TOKEN for all
+#   verification and dispatch calls, and the owner's COPILOT_AGENT_TOKEN only for Draft -> Ready
+#   because GitHub does not permit GITHUB_TOKEN to perform markPullRequestReadyForReview. That
+#   transition emits ready_for_review, so the pull_request_target path then dispatches the
+#   architecture check; the workflow_run path dispatches only for a PR that is already Ready.
 # - Automatic handoff accepts only a successful pull_request run of Validate pull request for the
 #   exact current head, after the latest Copilot session on the PR's branch (initial run or
 #   @copilot follow-up) has completed successfully.
@@ -35,7 +39,7 @@ concurrency:
 
 jobs:
   handoff:
-    name: Hand Copilot pull request to Claude architecture check
+    name: Hand Copilot pull request to the architecture check
     if: |
       (github.event_name == 'pull_request_target' &&
        github.event.pull_request.draft == false &&
@@ -52,11 +56,13 @@ jobs:
       actions: write
       pull-requests: write
       issues: read
+      contents: read
 
     steps:
       - name: Verify Copilot pull request and dispatch architecture check
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COPILOT_AGENT_TOKEN: ${{ secrets.COPILOT_AGENT_TOKEN }}
           EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
           EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           RUN_PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
@@ -114,11 +120,15 @@ jobs:
           fi
 
           issue_count="$(jq '[.closingIssuesReferences[]?] | length' <<<"$pr_json")"
-          [ "$issue_count" = "1" ] || fail "Copilot pull request #$PR_NUMBER must close exactly one agent-ready-copilot issue (found $issue_count)."
+          [ "$issue_count" = "1" ] || fail "Copilot pull request #$PR_NUMBER must close exactly one Copilot-implemented agent issue (found $issue_count)."
           issue_number="$(jq -r '.closingIssuesReferences[0].number' <<<"$pr_json")"
           issue_json="$(gh issue view "$issue_number" --repo "$GITHUB_REPOSITORY" --json state,labels)"
           [ "$(jq -r '.state' <<<"$issue_json")" = "OPEN" ] || fail "Issue #$issue_number is not open."
-          jq -e 'any(.labels[]?; .name == "agent-working")' <<<"$issue_json" >/dev/null             || skip "issue #$issue_number is not agent-working (the architecture check already ran or the task was not started with agent-ready-copilot)."
+          jq -e 'any(.labels[]?; .name == "agent-working")' <<<"$issue_json" >/dev/null             || skip "issue #$issue_number is not agent-working (the architecture check already ran or the task was not started with a Copilot readiness label)."
+          # Provider mode (#339): verify the route claimed in the issue's label history against this pull request, using the
+          # resolver from this workflow's own commit. A conflicting, malformed or disabled mode fails closed.
+          gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/scripts/agent-mode.mjs?ref=$GITHUB_WORKFLOW_SHA" > "$RUNNER_TEMP/agent-mode.mjs"
+          agent_mode="$(node "$RUNNER_TEMP/agent-mode.mjs" verify-pr "$PR_NUMBER" "copilot")" || fail "the provider mode of pull request #$PR_NUMBER could not be verified."
 
           if [ "$auto_ready" = "true" ]; then
             validation_state="$(gh api "repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA/status"               --jq '.statuses | map(select(.context == "merge-validation")) | .[0].state // empty')"
@@ -157,8 +167,13 @@ jobs:
             [ "$latest_sha" = "$HEAD_SHA" ] || skip "Refusing stale handoff: head is now $latest_sha."
             latest_draft="$(jq -r '.isDraft' <<<"$latest_pr_json")"
             if [ "$latest_draft" = "true" ]; then
-              gh pr ready "$PR_NUMBER" --repo "$GITHUB_REPOSITORY"
+              [ -n "$COPILOT_AGENT_TOKEN" ] || fail "COPILOT_AGENT_TOKEN is not configured, so the trusted handoff cannot mark the Copilot pull request Ready for review."
+              GH_TOKEN="$COPILOT_AGENT_TOKEN" gh pr ready "$PR_NUMBER" --repo "$GITHUB_REPOSITORY"
               echo "::notice::Marked Copilot pull request #$PR_NUMBER ready for review after successful current-head validation."
+              # A transition made with the owner token emits ready_for_review, which starts this workflow's
+              # pull_request_target path with the same guards; that run dispatches the architecture check, so
+              # dispatching here as well would run it twice.
+              skip "the ready_for_review event from this transition dispatches the architecture check."
             fi
           fi
 

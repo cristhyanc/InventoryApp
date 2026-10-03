@@ -1,13 +1,19 @@
 name: Agent review
 
-# Independent final review of agent pull requests that carry `agent-review`.
+# Final review of agent pull requests that carry `agent-review`.
 #
 # Authority and lifecycle: AGENTS.md ("Automated task contract") and docs/automation.md ("Review agent").
-# - Cross-review: the reviewer is always the agent that did not implement the change. Claude reviews
-#   Copilot-implemented pull requests (`copilot/*`, authored by the Copilot bot) in the `review` job;
-#   the Copilot CLI reviews Claude-implemented pull requests (`agent/issue-*`, authored by the
-#   automation App) in the `copilot-review` job. Both return the same structured review, and the same
-#   deterministic publish job turns it into a comment-only review and the `agent-review-verdict` status.
+# - The verified provider mode picks the reviewer; the other review job is skipped, so its provider and
+#   secret are never touched (docs/automation.md "Provider roles and readiness labels"):
+#   - cross-claude (default, Claude-primary): the Copilot CLI reviews Claude's `agent/issue-*` pull
+#     request in the `copilot-review` job;
+#   - cross-copilot (explicit override): Claude reviews Copilot's `copilot/*` pull request in the
+#     `review` job;
+#   - full-claude / full-copilot (single-provider fallbacks): a separate, fresh read-only invocation of
+#     the implementing provider reviews it in the same job, and the prompt and published review state
+#     that it is a same-provider review, not an independent one.
+#   Both jobs return the same structured review, and the same deterministic publish job turns it into a
+#   comment-only review and the `agent-review-verdict` status.
 # - agent-architecture.yml and agent-copilot-architecture.yml apply `agent-review` after the read-only
 #   architecture check; exact-SHA validation then dispatches the initial review automatically. A human
 #   may remove/re-apply the label to request another review of an already validated head; the label
@@ -49,11 +55,15 @@ jobs:
       contents: read
       pull-requests: read
       statuses: read
+      issues: read
     outputs:
       pr_number: ${{ steps.context.outputs.pr_number }}
       head_sha: ${{ steps.context.outputs.head_sha }}
       base_ref: ${{ steps.context.outputs.base_ref }}
       implementer: ${{ steps.context.outputs.implementer }}
+      agent_mode: ${{ steps.context.outputs.agent_mode }}
+      reviewer: ${{ steps.context.outputs.reviewer }}
+      review_relation: ${{ steps.context.outputs.review_relation }}
 
     steps:
       - name: Resolve and verify pull request
@@ -105,6 +115,26 @@ jobs:
             fail "Automated review requires an agent/issue-* (Claude) or copilot/* (Copilot) head branch."
           fi
           [ "$current_sha" = "$head_sha" ] || fail "Refusing stale review: pull request head is $current_sha, requested SHA is $head_sha."
+          # Provider mode (#339): verify the route claimed in the issue's label history against this pull request, using the
+          # resolver from this workflow's own commit. A conflicting, malformed or disabled mode fails closed.
+          gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/scripts/agent-mode.mjs?ref=$GITHUB_WORKFLOW_SHA" > "$RUNNER_TEMP/agent-mode.mjs"
+          agent_mode="$(node "$RUNNER_TEMP/agent-mode.mjs" verify-pr "$pr_number" "$implementer")" || fail "the provider mode of pull request #$pr_number could not be verified."
+          # The verified route picks the reviewer. Nothing falls back to the other provider.
+          case "$agent_mode:$implementer" in
+            cross-claude:claude)
+              reviewer=copilot
+              review_relation="This pull request was implemented by Claude, a different agent: do not rely on anything it claimed; verify it." ;;
+            cross-copilot:copilot)
+              reviewer=claude
+              review_relation="This pull request was implemented by GitHub Copilot, a different agent: do not rely on anything it may have claimed; verify it." ;;
+            full-claude:claude)
+              reviewer=claude
+              review_relation="This pull request was implemented by another Claude invocation under the full-claude single-provider fallback route. This is a same-provider review, not an independent one: you are a fresh invocation with no implementation conversation state, so do not rely on anything the implementation claimed; verify it." ;;
+            full-copilot:copilot)
+              reviewer=copilot
+              review_relation="This pull request was implemented by the GitHub Copilot coding agent in its own session under the full-copilot single-provider fallback route. This is a same-provider review, not an independent one: you are a fresh invocation with no implementation session state, so do not rely on anything the implementation claimed; verify it." ;;
+            *) fail "Provider mode '$agent_mode' does not match implementer $implementer." ;;
+          esac
           jq -e 'any(.labels[]?; .name == "agent-review")' <<<"$pr_json" >/dev/null \
             || fail "The agent-review label is required before review."
 
@@ -118,19 +148,22 @@ jobs:
           [ "$validation_state" = "success" ] \
             || fail "The exact head SHA does not have a successful latest agent-validation status."
 
-          echo "::notice::Pull request #$pr_number was implemented by $implementer; the other agent reviews it."
+          echo "::notice::Pull request #$pr_number was implemented by $implementer in provider mode $agent_mode; $reviewer reviews it."
           {
             echo "pr_number=$pr_number"
             echo "head_sha=$head_sha"
             echo "base_ref=$base_ref"
             echo "implementer=$implementer"
+            echo "agent_mode=$agent_mode"
+            echo "reviewer=$reviewer"
+            echo "review_relation=$review_relation"
           } >> "$GITHUB_OUTPUT"
 
   review:
-    name: Independent Claude review of current head
+    name: Claude review of current head
     needs: context
-    # Claude reviews only Copilot's work.
-    if: needs.context.outputs.implementer == 'copilot'
+    # Claude reviews on the cross-copilot route and, as a separate same-provider invocation, on full-claude.
+    if: needs.context.outputs.reviewer == 'claude'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     # Read-only: this job runs Claude and holds no pull-request, issue, status or workflow write
@@ -164,7 +197,7 @@ jobs:
           additional_permissions: |
             actions: read
           prompt: |
-            You are the InventoryApp independent review agent running in GitHub Actions. This pull request was implemented by GitHub Copilot, a different agent: do not rely on anything it may have claimed; verify it. A separate read-only Claude architecture check ran before validation, and its findings, if any, were posted on the pull request for Copilot to fix. Independently verify the architecture again on this exact SHA and confirm that every earlier architecture finding is resolved or was declined with a sound reason. Treat a violation of docs/architecture.md or the AGENTS.md architecture rules (controller and use-case boundaries, domain versus adapters, dependency direction, duplicated logic, testability), or an unresolved earlier finding, as a blocker, not a suggestion.
+            You are the InventoryApp review agent running in GitHub Actions. ${{ needs.context.outputs.review_relation }} A separate read-only architecture check ran before validation, and its findings, if any, were posted on the pull request for the implementer to fix. Independently verify the architecture again on this exact SHA and confirm that every earlier architecture finding is resolved or was declined with a sound reason. Treat a violation of docs/architecture.md or the AGENTS.md architecture rules (controller and use-case boundaries, domain versus adapters, dependency direction, duplicated logic, testability), or an unresolved earlier finding, as a blocker, not a suggestion.
 
             REPOSITORY: ${{ github.repository }}
             PULL REQUEST: #${{ needs.context.outputs.pr_number }}
@@ -227,10 +260,10 @@ jobs:
             "Bash(git push *),Bash(git commit *),Bash(git add *),Bash(git checkout *),Bash(git switch *),Bash(git reset *),Bash(git rebase *),Bash(git merge *),Bash(git stash *),Bash(git restore *),Bash(git clean *)"
 
   copilot-review:
-    name: Independent Copilot review of current head
+    name: Copilot review of current head
     needs: context
-    # Copilot reviews only Claude's work.
-    if: needs.context.outputs.implementer == 'claude'
+    # Copilot reviews on the default cross-claude route and, as a separate same-provider invocation, on full-copilot.
+    if: needs.context.outputs.reviewer == 'copilot'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     # Read-only: the Copilot CLI may run only read commands, the job holds no pull-request, issue,
@@ -287,6 +320,7 @@ jobs:
           PR_NUMBER: ${{ needs.context.outputs.pr_number }}
           HEAD_SHA: ${{ needs.context.outputs.head_sha }}
           BASE_REF: ${{ needs.context.outputs.base_ref }}
+          REVIEW_RELATION: ${{ needs.context.outputs.review_relation }}
         run: |
           set -euo pipefail
           fail() { echo "::error::$1"; exit 1; }
@@ -296,7 +330,7 @@ jobs:
           [ "$(git rev-parse HEAD)" = "$HEAD_SHA" ] || fail "Checkout does not match the reviewed head."
 
           prompt="$(cat <<'EOF'
-          You are the InventoryApp independent review agent. Pull request #@PR@ was implemented by Claude, a different agent: do not rely on anything it claimed; verify it. The working tree is its head @SHA@; compare with git diff origin/@BASE@...HEAD. A separate read-only Copilot architecture check ran before validation and its findings, if any, were posted on the pull request for Claude to fix. Independently verify the architecture again on this exact SHA and confirm that every earlier architecture finding is resolved or was declined with a sound reason.
+          You are the InventoryApp review agent for pull request #@PR@. @RELATION@ The working tree is its head @SHA@; compare with git diff origin/@BASE@...HEAD. A separate read-only architecture check ran before validation and its findings, if any, were posted on the pull request for the implementer to fix. Independently verify the architecture again on this exact SHA and confirm that every earlier architecture finding is resolved or was declined with a sound reason.
 
           Read, in this order, before judging anything:
           1. CLAUDE.md, AGENTS.md, docs/automation.md and .github/copilot-instructions.md; docs/architecture.md where the change touches structure, EF Core, reporting, Nayax, or the Angular layout.
@@ -320,6 +354,8 @@ jobs:
           Deliver your result as the last thing you output: a line containing only BEGIN_REVIEW_JSON, then one JSON object, then a line containing only END_REVIEW_JSON. The object has exactly these keys: "reviewed_head_sha" (exactly @SHA@), "verdict" ("CHANGES REQUESTED" or "READY FOR HUMAN REVIEW"), "blockers" (array of non-empty strings: file, line, what is wrong, which rule or criterion it violates), "criteria" (non-empty array of objects with "criterion", "status" and "evidence"), "suggestions" (array of strings, non-blocking only), "validation_evidence" (non-empty string: the checks, runs and results you confirmed), and "inline_comments" (array of objects with "path", "line" as a positive integer in the new file version, and "body"). Do not write a VERDICT: line inside any field.
           EOF
           )"
+          [ -n "$REVIEW_RELATION" ] || fail "The verified review route is missing."
+          prompt="${prompt//@RELATION@/$REVIEW_RELATION}"
           prompt="${prompt//@PR@/$PR_NUMBER}"
           prompt="${prompt//@SHA@/$HEAD_SHA}"
           prompt="${prompt//@BASE@/$BASE_REF}"
@@ -446,6 +482,8 @@ jobs:
     permissions:
       pull-requests: write
       statuses: write
+      contents: read
+      issues: read
 
     steps:
       - name: Guard and publish review
@@ -456,9 +494,11 @@ jobs:
           PR_NUMBER: ${{ needs.context.outputs.pr_number }}
           HEAD_SHA: ${{ needs.context.outputs.head_sha }}
           IMPLEMENTER: ${{ needs.context.outputs.implementer }}
-          # The review comes from the job for the agent that did not implement the change.
-          REVIEW_RESULT: ${{ needs.context.outputs.implementer == 'claude' && needs.copilot-review.result || needs.review.result }}
-          REVIEW_OUTPUT: ${{ needs.context.outputs.implementer == 'claude' && needs.copilot-review.outputs.structured_output || needs.review.outputs.structured_output }}
+          AGENT_MODE: ${{ needs.context.outputs.agent_mode }}
+          REVIEWER: ${{ needs.context.outputs.reviewer }}
+          # The review comes only from the job of the reviewer the verified route selected.
+          REVIEW_RESULT: ${{ needs.context.outputs.reviewer == 'copilot' && needs.copilot-review.result || needs.review.result }}
+          REVIEW_OUTPUT: ${{ needs.context.outputs.reviewer == 'copilot' && needs.copilot-review.outputs.structured_output || needs.review.outputs.structured_output }}
           VERDICT_CONTEXT: agent-review-verdict
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -483,10 +523,13 @@ jobs:
           [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] || { echo "::error::Invalid pull request number."; exit 1; }
           [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Invalid reviewed head SHA."; exit 1; }
 
-          case "$IMPLEMENTER" in
-            claude) reviewer="GitHub Copilot (Copilot CLI)" ;;
-            copilot) reviewer="Claude" ;;
-            *) suppress "unknown implementer '$IMPLEMENTER'." ;;
+          # The trusted route table decides who reviewed and whether the review was independent.
+          case "$AGENT_MODE:$IMPLEMENTER:$REVIEWER" in
+            cross-claude:claude:copilot) reviewer="GitHub Copilot (Copilot CLI)"; review_type="Cross-provider review (Claude implemented, Copilot reviewed)" ;;
+            cross-copilot:copilot:claude) reviewer="Claude"; review_type="Cross-provider review (Copilot implemented, Claude reviewed)" ;;
+            full-claude:claude:claude) reviewer="Claude (separate read-only invocation)"; review_type="Same-provider review (full-claude fallback): not independent" ;;
+            full-copilot:copilot:copilot) reviewer="GitHub Copilot (Copilot CLI, separate read-only invocation)"; review_type="Same-provider review (full-copilot fallback): not independent" ;;
+            *) suppress "unknown review route '$AGENT_MODE' (implementer '$IMPLEMENTER', reviewer '$REVIEWER')." ;;
           esac
           [ "$REVIEW_RESULT" = "success" ] || suppress "the review job ended with '$REVIEW_RESULT' (failed, cancelled or superseded)."
 
@@ -538,9 +581,15 @@ jobs:
           else
             suppress "pull request #$PR_NUMBER no longer uses an agent/issue-* or copilot/* branch."
           fi
-          # An agent never publishes a review of its own work.
+          # The implementer and route must still be the ones the review ran under.
           [ "$live_implementer" = "$IMPLEMENTER" ] || suppress "pull request #$PR_NUMBER is now implemented by $live_implementer, not $IMPLEMENTER."
           [ "$current_sha" = "$HEAD_SHA" ] || suppress "Refusing stale review publication: head moved to $current_sha."
+          # The provider mode must still be the one the review ran under; a relabel never reuses an old verdict.
+          gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/scripts/agent-mode.mjs?ref=$GITHUB_WORKFLOW_SHA" > "$RUNNER_TEMP/agent-mode.mjs" \
+            || suppress "the provider-mode resolver could not be read."
+          live_mode="$(node "$RUNNER_TEMP/agent-mode.mjs" verify-pr "$PR_NUMBER" "$live_implementer")" \
+            || suppress "the provider mode of pull request #$PR_NUMBER could not be verified."
+          [ "$live_mode" = "$AGENT_MODE" ] || suppress "pull request #$PR_NUMBER is now in provider mode $live_mode, not $AGENT_MODE."
           jq -e 'any(.labels[]?; .name == "agent-review")' <<<"$pr_json" >/dev/null \
             || suppress "the agent-review label was removed."
           if grep -Eq '^\.github/workflows/' <<<"$changed_files"; then
@@ -550,9 +599,9 @@ jobs:
 
           # 3. Render the review deterministically. The publisher, not the model, writes the reviewed
           #    SHA, the single verdict line and the advisory sentence.
-          jq -r --arg sha "$HEAD_SHA" --arg run "$RUN_URL" --arg reviewer "$reviewer" '
+          jq -r --arg sha "$HEAD_SHA" --arg run "$RUN_URL" --arg reviewer "$reviewer" --arg review_type "$review_type" '
             def numbered(xs): [xs | to_entries[] | "\(.key + 1). \(.value)"] | join("\n");
-            "Reviewer: \($reviewer)\nHead SHA reviewed: \($sha)\n\nVERDICT: \(.verdict)\n\n"
+            "Reviewer: \($reviewer)\nReview type: \($review_type)\nHead SHA reviewed: \($sha)\n\nVERDICT: \(.verdict)\n\n"
             + (if (.blockers | length) == 0 then "Blockers: none" else "Blockers:\n" + numbered(.blockers) end)
             + "\n\nAcceptance criteria:\n" + ([.criteria[] | "- [\(.status)] \(.criterion): \(.evidence)"] | join("\n"))
             + "\n\nNon-blocking suggestions:\n" + (if (.suggestions | length) == 0 then "none" else ([.suggestions[] | "- \(.)"] | join("\n")) end)

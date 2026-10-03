@@ -1,3 +1,4 @@
+import './agent-mode.test.mjs';
 import './select-implementation-model.test.mjs';
 import './agent-persistence.test.mjs';
 import './agent-review-publication.test.mjs';
@@ -627,7 +628,7 @@ describe('architecture pass contract', () => {
   });
 
   it('rejects an architect allowed to edit the PR description', () => {
-    const unsafe = replaceOnce(architectureWorkflow, 'Bash(gh pr comment *)', 'Bash(gh pr comment *),Bash(gh pr edit *)');
+    const unsafe = replaceOnce(architectureWorkflow, 'Bash(gh pr list *),Bash(gh pr comment *)', 'Bash(gh pr list *),Bash(gh pr comment *),Bash(gh pr edit *)');
     assert.throws(() => runContractChecks({ read: readWithOverrides({ [architecturePath]: unsafe }) }), /agent-architecture.yml architect allowed tools/);
   });
 });
@@ -837,10 +838,25 @@ describe('cross-review contract (agent-ready-claude / agent-ready-copilot)', () 
 
   it('rejects a review that could let an agent review its own implementation', () => {
     for (const [unsafe, reason] of [
-      [replaceOnce(reviewWorkflow, "if: needs.context.outputs.implementer == 'copilot'", "if: needs.context.outputs.implementer != ''"), /agent-review.yml review job/],
-      [replaceOnce(reviewWorkflow, "    if: needs.context.outputs.implementer == 'claude'", "    if: always()"), /agent-review.yml Copilot review job/],
+      [replaceOnce(reviewWorkflow, "if: needs.context.outputs.reviewer == 'claude'", "if: needs.context.outputs.reviewer != ''"), /agent-review.yml review job/],
+      [replaceOnce(reviewWorkflow, "    if: needs.context.outputs.reviewer == 'copilot'", "    if: always()"), /agent-review.yml Copilot review job/],
       [replaceOnce(reviewWorkflow, '[ "$live_implementer" = "$IMPLEMENTER" ] || suppress', 'true || suppress'), /agent-review.yml publish job/],
-      [replaceOnce(reviewWorkflow, "needs.context.outputs.implementer == 'claude' && needs.copilot-review.result || needs.review.result", 'needs.review.result'), /agent-review.yml publish job/],
+      [replaceOnce(reviewWorkflow, "needs.context.outputs.reviewer == 'copilot' && needs.copilot-review.result || needs.review.result", 'needs.review.result'), /agent-review.yml publish job/],
+      // The route table: a cross route may never be reviewed by its implementer, a full route never by the other provider.
+      [replaceOnce(reviewWorkflow, '            cross-claude:claude)\n              reviewer=copilot\n', '            cross-claude:claude)\n              reviewer=claude\n'), /agent-review.yml cross-claude route/],
+      [replaceOnce(reviewWorkflow, '            full-copilot:copilot)\n              reviewer=copilot\n', '            full-copilot:copilot)\n              reviewer=claude\n'), /agent-review.yml full-copilot route/],
+      [replaceOnce(reviewWorkflow, '            *) fail "Provider mode \'$agent_mode\' does not match implementer $implementer." ;;', '            *) reviewer=claude ;;'), /agent-review.yml context/],
+      [replaceOnce(reviewWorkflow, 'cross-copilot:copilot:claude) reviewer="Claude"', 'cross-copilot:copilot:copilot) reviewer="Claude"'), /agent-review.yml publish job/],
+    ]) {
+      rejects({ [reviewPath]: unsafe }, reason);
+    }
+  });
+
+  it('rejects a same-provider review that is not called out as such', () => {
+    for (const [unsafe, reason] of [
+      [reviewWorkflow.replace(/(full-claude:claude\)\n {14}reviewer=claude\n {14}review_relation="[^"]*)This is a same-provider review, not an independent one/, '$1This is an independent review'), /agent-review.yml full-claude route/],
+      [replaceOnce(reviewWorkflow, 'review_type="Same-provider review (full-copilot fallback): not independent"', 'review_type="Independent review"'), /agent-review.yml publish job/],
+      [replaceOnce(reviewWorkflow, 'Review type: \\($review_type)\\n', ''), /agent-review.yml publish job/],
     ]) {
       rejects({ [reviewPath]: unsafe }, reason);
     }
@@ -889,7 +905,29 @@ describe('cross-review contract (agent-ready-claude / agent-ready-copilot)', () 
 
   it('rejects a Claude fix pass that runs without Copilot findings or SonarCloud issues', () => {
     rejects({ [architecturePath]: replaceOnce(architectureWorkflow, " || fromJSON(needs.sonar.outputs.count || '0') > 0)", ')') }, /agent-architecture.yml architecture job/);
-    rejects({ [architecturePath]: replaceOnce(architectureWorkflow, "needs.copilot-check.outputs.verdict == 'findings' || ", '') }, /agent-architecture.yml architecture job/);
+    rejects({ [architecturePath]: replaceOnce(architectureWorkflow, "(needs.context.outputs.checker == 'copilot' && needs.copilot-check.outputs.verdict == 'findings') || ", '') }, /agent-architecture.yml architecture job/);
+    rejects({ [architecturePath]: replaceOnce(architectureWorkflow, "(needs.context.outputs.checker == 'claude' && needs.claude-check.outputs.verdict == 'findings') || ", '') }, /agent-architecture.yml architecture job/);
+  });
+
+  it('rejects an architecture checker that is not selected by the verified route, or not read-only', () => {
+    for (const [path, workflow, from, to, reason] of [
+      // Each checker runs only on its route, so the other provider is never invoked.
+      [architecturePath, architectureWorkflow, "    # Claude-primary route only; the full-claude route never runs Copilot.\n    if: needs.context.outputs.checker == 'copilot'\n", '', /agent-architecture.yml Copilot check/],
+      [architecturePath, architectureWorkflow, "    if: needs.context.outputs.checker == 'claude'\n", '', /agent-architecture.yml same-provider Claude check/],
+      [copilotArchitecturePath, copilotArchitectureWorkflow, "    if: needs.context.outputs.checker == 'claude'\n", '', /agent-copilot-architecture.yml check/],
+      [copilotArchitecturePath, copilotArchitectureWorkflow, "    if: needs.context.outputs.checker == 'copilot'\n", '', /agent-copilot-architecture.yml same-provider Copilot check/],
+      // The route table: full-claude never maps to Copilot, cross-copilot never to Copilot.
+      [architecturePath, architectureWorkflow, 'full-claude) checker=claude;', 'full-claude) checker=copilot;', /agent-architecture.yml context/],
+      [copilotArchitecturePath, copilotArchitectureWorkflow, 'cross-copilot) checker=claude', 'cross-copilot) checker=copilot', /agent-copilot-architecture.yml context/],
+      // A same-provider checker must say so, and may not write or hold the other provider's secret.
+      [architecturePath, architectureWorkflow, 'This is a same-provider check, not an independent one', 'This is an independent check', /agent-architecture.yml same-provider Claude check/],
+      [copilotArchitecturePath, copilotArchitectureWorkflow, 'This is a same-provider check, not an independent one', 'This is an independent check', /agent-copilot-architecture.yml same-provider Copilot check/],
+      [architecturePath, architectureWorkflow, "    permissions:\n      contents: read\n      pull-requests: read\n      issues: read\n    outputs:\n      verdict: ${{ steps.check.outputs.verdict }}", "    permissions:\n      contents: read\n      pull-requests: write\n      issues: read\n    outputs:\n      verdict: ${{ steps.check.outputs.verdict }}", /agent-architecture.yml same-provider Claude check/],
+      [architecturePath, architectureWorkflow, '          CHECK_OUTPUT: ${{ steps.architecture_check.outputs.structured_output }}\n', '          CHECK_OUTPUT: ${{ steps.architecture_check.outputs.structured_output }}\n          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_CLI_TOKEN }}\n', /agent-architecture.yml same-provider Claude check/],
+      [copilotArchitecturePath, copilotArchitectureWorkflow, '          COPILOT_AUTO_UPDATE: "false"\n', '          COPILOT_AUTO_UPDATE: "false"\n          ANTHROPIC: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\n', /agent-copilot-architecture.yml same-provider Copilot check/],
+    ]) {
+      rejects({ [path]: replaceOnce(workflow, from, to) }, reason);
+    }
   });
 
   it('rejects a SonarCloud job that could write, run an agent, or execute the pull request head', () => {
@@ -922,7 +960,9 @@ describe('cross-review contract (agent-ready-claude / agent-ready-copilot)', () 
 
   it('rejects a Copilot handoff that skips automatic readiness guards, the architecture check, or Copilot authorship', () => {
     rejects({ [copilotHandoffPath]: replaceOnce(copilotHandoffWorkflow, 'workflows: ["Validate pull request"]', 'workflows: ["Something else"]') }, /agent-copilot-handoff.yml triggers/);
-    rejects({ [copilotHandoffPath]: replaceOnce(copilotHandoffWorkflow, 'gh pr ready "$PR_NUMBER"', 'echo ready') }, /agent-copilot-handoff.yml handoff/);
+    rejects({ [copilotHandoffPath]: replaceOnce(copilotHandoffWorkflow, 'GH_TOKEN="$COPILOT_AGENT_TOKEN" gh pr ready "$PR_NUMBER"', 'gh pr ready "$PR_NUMBER"') }, /agent-copilot-handoff.yml handoff/);
+    rejects({ [copilotHandoffPath]: replaceOnce(copilotHandoffWorkflow, 'COPILOT_AGENT_TOKEN: ${{ secrets.COPILOT_AGENT_TOKEN }}', 'COPILOT_AGENT_TOKEN:') }, /agent-copilot-handoff.yml/);
+    rejects({ [copilotHandoffPath]: replaceOnce(copilotHandoffWorkflow, 'skip "the ready_for_review event from this transition dispatches the architecture check."', 'true') }, /agent-copilot-handoff.yml handoff/);
     rejects({ [copilotHandoffPath]: replaceOnce(copilotHandoffWorkflow, '.path == "dynamic/copilot-swe-agent/copilot"', '.name == "Running Copilot cloud agent"') }, /agent-copilot-handoff.yml handoff/);
     rejects({ [copilotHandoffPath]: replaceOnce(copilotHandoffWorkflow, 'gh workflow run agent-copilot-architecture.yml', 'gh workflow run validate.yml') }, /agent-copilot-handoff.yml handoff/);
     rejects({ [copilotHandoffPath]: replaceOnce(copilotHandoffWorkflow, '[ "$author" = "$EXPECTED_COPILOT_AUTHOR" ] || skip', 'true || skip') }, /agent-copilot-handoff.yml handoff/);

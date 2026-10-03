@@ -6,6 +6,7 @@ using Inventory.Application.Costing;
 using Inventory.Application.Categories;
 using Inventory.Application.Products;
 using Inventory.Application.Expenses;
+using Inventory.Application.Imports;
 using Inventory.Application.InventoryCounting;
 using Inventory.Application.MachineStockSync;
 using Inventory.Application.Machines;
@@ -30,6 +31,7 @@ using Inventory.Application.SupplierOrders;
 using Inventory.Application.Tenancy;
 using Inventory.Infrastructure;
 using Inventory.Infrastructure.Documents;
+using Inventory.Infrastructure.Imports;
 using Inventory.Infrastructure.Nayax;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Bootstrap;
@@ -64,6 +66,14 @@ if (DatabaseMigrationCommand.Matches(args))
 if (DocumentMigrationCommand.Matches(args))
 {
     return await DocumentMigrationCommand.RunAsync(args, CancellationToken.None);
+}
+
+// Taking a verified snapshot is likewise a deliberate, human- or scheduler-invoked command, not
+// something normal startup performs (issue #331). It is callable manually for one-off
+// verification and by the scheduled backup job (issue #333) against the same configured database.
+if (BackupDatabaseCommand.Matches(args))
+{
+    return await BackupDatabaseCommand.RunAsync(args, CancellationToken.None);
 }
 
 var builder = WebApplication.CreateBuilder(args);
@@ -108,6 +118,16 @@ builder.Services.AddDocumentStorage(
         WebRootPath = builder.Environment.WebRootPath,
     });
 
+// Pending reimbursement XML files (issue #299). Same arrangement as document storage above: the
+// composition root is the only place that knows the host's content and web roots, so the
+// Infrastructure adapter sees plain paths and the pending-XML import use case sees only the
+// IPendingReimbursementXmlSource port.
+builder.Services.AddPendingReimbursementXmlSource(new PendingReimbursementXmlOptions
+{
+    ContentRootPath = builder.Environment.ContentRootPath,
+    WebRootPath = builder.Environment.WebRootPath,
+});
+
 // Controlled RFC 7807 responses for Nayax upstream failures.
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<NayaxUpstreamExceptionHandler>();
@@ -147,8 +167,6 @@ builder.Services.AddNayaxLynxClient(nayaxLynxOptions);
 
 // Business services
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IProductService, InventoryApi.Services.ProductService>();
-builder.Services.AddScoped<InventoryApi.Services.Interfaces.IInventoryCostTransitionService, InventoryApi.Services.InventoryCostTransitionService>();
-builder.Services.AddScoped<InventoryApi.Services.Interfaces.ISaleCostingService, InventoryApi.Services.SaleCostingService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IPurchaseService, InventoryApi.Services.PurchaseService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.ISupplierOrderService, InventoryApi.Services.SupplierOrderService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IMachineService, InventoryApi.Services.MachineService>();
@@ -197,6 +215,13 @@ builder.Services.AddScoped<IPurchaseStore, EfPurchaseStore>();
 // ports (issue #296); see EfInventoryMovementStore/EfInventoryCostLedgerStore.
 builder.Services.AddScoped<IInventoryMovementStore, EfInventoryMovementStore>();
 builder.Services.AddScoped<IInventoryCostLedgerStore, EfInventoryCostLedgerStore>();
+
+// Temporary API-owned adapter for the sale-costing port (issue #297); see EfSaleCostingStore.
+builder.Services.AddScoped<ISaleCostingStore, EfSaleCostingStore>();
+
+// Temporary API-owned adapter for the inventory-cost transition port (issue #298); see
+// EfInventoryCostTransitionStore.
+builder.Services.AddScoped<IInventoryCostTransitionStore, EfInventoryCostTransitionStore>();
 
 // Temporary API-owned adapter for the stock history/restock-cost-suggestion/manual-adjustment
 // persistence port (issue #282); see EfStockAdjustmentStore.
@@ -269,6 +294,10 @@ builder.Services.AddScoped<ILatestNayaxSalesStore, EfLatestNayaxSalesStore>();
 // Temporary API-owned adapter for the Take Inventory apply port (issue #245); see
 // EfInventoryCountAdjustmentStore.
 builder.Services.AddScoped<IInventoryCountAdjustmentStore, EfInventoryCountAdjustmentStore>();
+
+// Temporary API-owned adapter for the imported-reimbursement persistence port (issue #299); see
+// EfImportedReimbursementStore.
+builder.Services.AddScoped<IImportedReimbursementStore, EfImportedReimbursementStore>();
 
 var app = builder.Build();
 

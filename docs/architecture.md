@@ -123,8 +123,33 @@ running API process) and confirms the resulting copy passes `PRAGMA integrity_ch
 exactly the committed rows, then proves a second backup taken later, still without closing that
 connection, reflects the writes committed in between.
 
+**The supported command (issue #331).** `backend/InventoryApi`'s published executable has a
+`backup-database` CLI mode, dispatched before the web host is built — the same early-command
+pattern as `bootstrap-business` and `migrate-database`, so taking a backup and starting the API
+are mutually exclusive paths through `Program.cs` and never run during normal startup. It opens the
+same configured database the API would (`ConnectionStrings:DefaultConnection`, falling back to the
+relative `Data Source=inventory.db` default — that relative default is not rejected merely for
+being relative, only if the resolved file does not exist or cannot be opened), copies it with the
+same Online Backup API described above (never a filesystem `cp`), and refuses an `--output` path
+that already exists, matches the source, or sits inside the API's content root/web root, so a
+snapshot can never land somewhere a redeploy or publish step would silently discard or overwrite
+it. Once the snapshot is written it runs `PRAGMA integrity_check` itself and reports the result,
+the snapshot's SHA-256, and the elapsed duration — without ever printing the connection string — and
+exits non-zero on any failure:
+
+```bash
+dotnet InventoryApi.dll backup-database --output /home/data/backups/inventory-20260101T000000.db
+```
+
+This is the command the scheduled backup job (issue #333) also calls; routine backups are
+scheduled, not run by hand. Manual, one-off verification uses the identical command. Blob upload,
+retention/alerting, and automated restore are explicitly out of scope for this command — restore
+stays the deliberate, human-run `sqlite3` procedure below.
+
 The equivalent operator procedure, using the `sqlite3` CLI (the standard SQLite tool;
-<https://sqlite.org/cli.html>) against the App Service's persistent database path:
+<https://sqlite.org/cli.html>) against the App Service's persistent database path, remains
+available for a host where the published `dotnet` application is not on hand, or to rehearse the
+underlying mechanism:
 
 1. **Prefer a quiet window, but do not rely on stopping the app.** The Online Backup API produces
    a consistent snapshot even while writes continue; stopping the App Service first (or scaling to
@@ -178,8 +203,8 @@ InventoryApp/
 │   │   ├── Program.cs
 │   │   └── InventoryApi.csproj
 │   ├── Inventory.Domain/            NayaxFeeSettings rule, reporting policies/calculations (Inventory.Domain.Reporting.<Feature>), Purchases.PurchaseTotalValidationPolicy; other features not yet migrated
-│   ├── Inventory.Application/       NayaxFeeSettings use cases/ports, Categories/Suppliers use cases/ports, Nayax.INayaxLynxClient port/DTOs, reporting use cases/contracts (Inventory.Application.Reporting.<Feature>), Purchases.ComputePurchaseTotalValidation, Documents.IDocumentStorage, shared Inventory.Application.Time.IClock/IBusinessCalendar; other features not yet migrated
-│   ├── Inventory.Infrastructure/    Nayax.NayaxLynxClient/NayaxLynxOptions (Nayax Lynx HTTP client), SystemClock/SydneyBusinessCalendar adapters (Inventory.Infrastructure.Time), FileSystemDocumentStorage and AzureBlobDocumentStorage (Inventory.Infrastructure.Documents); other features not yet migrated
+│   ├── Inventory.Application/       NayaxFeeSettings use cases/ports, Categories/Suppliers use cases/ports, Nayax.INayaxLynxClient port/DTOs, reporting use cases/contracts (Inventory.Application.Reporting.<Feature>), Purchases.ComputePurchaseTotalValidation, Imports.ImportPendingReimbursementXmlFiles with its source/store ports, Documents.IDocumentStorage, shared Inventory.Application.Time.IClock/IBusinessCalendar; other features not yet migrated
+│   ├── Inventory.Infrastructure/    Nayax.NayaxLynxClient/NayaxLynxOptions (Nayax Lynx HTTP client), SystemClock/SydneyBusinessCalendar adapters (Inventory.Infrastructure.Time), FileSystemDocumentStorage and AzureBlobDocumentStorage (Inventory.Infrastructure.Documents), FileSystemPendingReimbursementXmlSource (Inventory.Infrastructure.Imports); other features not yet migrated
 │   └── InventoryApi.Tests/
 ├── frontend/inventory-app/
 │   ├── src/app/
@@ -198,7 +223,7 @@ InventoryApp/
 
 The Angular application uses standalone components. `app.config.ts` registers the router, HTTP client, and a startup initializer that loads the API base URL. Routes load their page components lazily with `loadComponent`, except the public `/auth` Entra redirect callback, which stays eagerly imported (see [Routing and loading](#routing-and-loading)). Pages keep their own view state and call singleton services, which use `HttpClient` to reach the API.
 
-The API's production dependency skeleton (`Inventory.Domain`, `Inventory.Application`, `Inventory.Infrastructure`) is wired into the `InventoryApi` composition root through `AddApplicationServices()`/`AddInfrastructureServices()` extension methods. The Nayax fee-settings slice (GET/POST `api/settings/nayax-processing-fee-rates`) is the first feature moved into this shape: `Inventory.Domain.NayaxFeeSettings.NayaxFeeRate` validates the configured rate, `Inventory.Application.NayaxFeeSettings` holds the `ListNayaxFeeRates`/`SaveNayaxFeeRate` use cases and the `INayaxFeeRateStore` port (`SaveNayaxFeeRate` also takes the shared `Inventory.Application.Time.IClock` port, promoted out of this feature slice into a shared Application abstraction — see [Time](#time)), `Inventory.Infrastructure.Clock.SystemClock` implements `IClock`, and `SettingsController` only binds HTTP input and maps the use-case result. Because `AppDbContext` and its EF entities still live in `InventoryApi`, `INayaxFeeRateStore` is implemented by `InventoryApi.Adapters.Persistence.EfNayaxFeeRateStore` — a deliberately temporary API-owned adapter, registered directly in `Program.cs` rather than through `AddInfrastructureServices()`, so that `Inventory.Infrastructure` does not need to reference `InventoryApi`. It must move into `Inventory.Infrastructure` once `AppDbContext` and the shared persistence models relocate there. The bookkeeping report (GET `api/reports/bookkeeping`) is the second feature moved into this shape, following the same pattern: `Inventory.Domain.Reporting.Bookkeeping.BookkeepingProfitPolicy` computes profit/margin/GST/net-settlement from already-aggregated facts, `Inventory.Application.Reporting.Bookkeeping.GetBookkeepingReport` is the use case, `IBookkeepingReportFactsProvider` is its narrow port, and `InventoryApi.Adapters.Persistence.EfBookkeepingReportFactsProvider` is its temporary API-owned EF adapter, now composing the Application-owned fee and commission use cases. `ReportsController` calls `GetBookkeepingReport` directly for that endpoint; at that point in the migration, the legacy `ReportingService.GetBookkeepingAsync` delegated to the same use case so CSV/XLSX export and the GST report (which reuses bookkeeping's result) stayed on one authoritative implementation, until issue #92 removed `ReportingService` entirely (see below). The daily report (GET `api/reports/daily`) is the third feature moved into this shape, following the same pattern: `Inventory.Domain.Reporting.Daily.DailyRowPolicy` computes each day's profit/margin/reconciliation status from already-aggregated facts, reusing the shared `Inventory.Domain.Reporting.ReconciliationStatusPolicy` (placed there, alongside `ReportingCalculations`, so the still-legacy reconciliation report can reuse the same policy once it migrates instead of reimplementing it), `Inventory.Application.Reporting.Daily.GetDailyReport` is the use case, `IDailyReportFactsProvider` is its narrow port, and `InventoryApi.Adapters.Persistence.EfDailyReportFactsProvider` is its temporary API-owned EF adapter. Its completed-sale cost query and period-level imported-reimbursement summary are shared with `EfBookkeepingReportFactsProvider` through `InventoryApi.Adapters.Persistence.EfReportingSharedQueries` rather than duplicated a third time; its per-date reimbursement grouping is specific to daily and has no bookkeeping equivalent. `ReportsController` calls `GetDailyReport` directly for that endpoint; at that point in the migration, the legacy `ReportingService.GetDailyAsync` delegated to the same use case so CSV/XLSX export stayed on one authoritative implementation, until issue #92 removed `ReportingService` entirely (see below). The reconciliation report (GET `api/reports/reconciliation`) is the fourth feature moved into this shape, following the same pattern: `Inventory.Domain.Reporting.Reconciliation.ReconciliationPeriodPolicy` computes each period's (and the totals row's) gross/settlement difference and status from already-aggregated facts, reusing the shared `Inventory.Domain.Reporting.ReconciliationStatusPolicy` daily also calls, `Inventory.Application.Reporting.Reconciliation.GetReconciliationReport` is the use case, `IReconciliationReportFactsProvider` is its narrow port, and `InventoryApi.Adapters.Persistence.EfReconciliationReportFactsProvider` is its temporary API-owned EF adapter. Its completed and all-status sales queries are shared with `EfBookkeepingReportFactsProvider`/`EfDailyReportFactsProvider` through `EfReportingSharedQueries`; its per-reimbursement-period `Include` graph and card-gross fallback cascade are specific to reconciliation and have no bookkeeping or daily equivalent. `ReportsController` calls `GetReconciliationReport` directly for that endpoint; at that point in the migration, the legacy `ReportingService.GetReconciliationAsync` delegated to the same use case so CSV/XLSX export stayed on one authoritative implementation, until issue #92 removed `ReportingService` entirely (see below). The machine and product profitability reports (GET `api/reports/machine-profitability` and GET `api/reports/product-profitability`) are the fifth and sixth features moved into this shape, following the same pattern: `Inventory.Domain.Reporting.Profitability.ProfitabilityRowPolicy` computes the per-machine/per-product cost/gross-profit/margin gate shared by both reports, and `Inventory.Domain.Reporting.Profitability.MachineDirectProfitPolicy` computes machine profitability's direct-profit completeness rule (COGS complete, no missing Nayax fee rates, complete commission coverage), reusing the shared `ReportingCalculations`. `Inventory.Application.Reporting.MachineProfitability.GetMachineProfitabilityReport` and `Inventory.Application.Reporting.ProductProfitability.GetProductProfitabilityReport` are the use cases; `IMachineProfitabilityReportFactsProvider`/`IProductProfitabilityReportFactsProvider` are their narrow ports; `InventoryApi.Adapters.Persistence.EfMachineProfitabilityReportFactsProvider`/`EfProductProfitabilityReportFactsProvider` are their temporary API-owned EF adapters, reusing `EfReportingSharedQueries`' completed-sale query. The machine profitability adapter also composes the migrated Application fee and commission use cases; its site-commission resolution is shared with `EfBookkeepingReportFactsProvider` through `EfReportingSharedQueries.GetMachineCommissionsAsync`/`GetSiteCommissionAsync` rather than duplicated a third time, while its per-machine operating-expense breakdown has no equivalent in the already-migrated adapters and stayed local. Nayax product matching (`NayaxProductMatcher`, previously `InventoryApi.Services.NayaxProductMatcher` only) is deterministic Domain business logic and moved to `Inventory.Domain.Reporting.ProductMatching.ProductMatcher`, operating on a Domain-owned `ProductMatchCandidate(Id, Name)` rather than the persistence `Product` entity; the product profitability use case calls it directly on its own catalogue projection, and the EF adapter never calls it (matching stays out of the persistence adapter). `InventoryApi.Services.NayaxProductMatcher` (used by machine service, sale costing, inventory cost rebuild, import, and site commissions — outside this migration's scope) became a thin wrapper delegating to the same Domain implementation, so both stay on one authoritative matching algorithm instead of two. `ReportsController` calls `GetMachineProfitabilityReport`/`GetProductProfitabilityReport` directly for those endpoints; at that point in the migration, the legacy `ReportingService.GetMachineProfitabilityAsync`/`GetProductProfitabilityAsync` delegated to the same use cases so CSV/XLSX export and the dashboard report (which reuses product profitability's result) stayed on one authoritative implementation, until issue #92 removed `ReportingService` entirely (see below). GST, dashboard, and transactions have since moved too (see the reporting migration track below); every individual report family has migrated, and issue #92 completed the final shared-query audit: it found no further duplication to consolidate (every already-migrated adapter already shared what could be shared through `EfReportingSharedQueries`) and removed the legacy `InventoryApi.Services.ReportingService`/`IReportingService`. `Inventory.Application.Reporting.Export.GetReportExportRows` is now the one authoritative export-row-building step for every report, called directly by `ReportsController`'s single export endpoint; `InventoryApi.Adapters.Export.ReportExportFileWriter` is its only remaining CSV/XLSX byte-encoding adapter (ClosedXML stays out of Application). The Nayax Lynx HTTP client/configuration boundary (issue #49) also moved into this shape: `Inventory.Application.Nayax` holds the configuration-agnostic `INayaxLynxClient` port and its DTOs, and `Inventory.Infrastructure.Nayax` holds the concrete adapter — `NayaxLynxClient`, the one typed `NayaxLynxOptions` contract (`BaseUrl`, `OperatorId`, `AccessToken`), and `NayaxLynxConfiguration`, which validates the non-secret fields at startup and resolves `AccessToken` by preferring the consolidated `NayaxLynx:AccessToken` configuration key over the legacy `Nayax:Token` key so the already deployed Key Vault/App Service secret (`Nayax__Token`) keeps working without a coordinated rollout. `NayaxUpstreamException` (see [External integration errors](#external-integration-errors)) lives in `Inventory.Infrastructure.Nayax` rather than alongside the port, because it carries HTTP-specific diagnostics that `CleanArchitectureDependencyTests` forbids `Inventory.Application` from depending on. `Program.cs` binds `NayaxLynxOptions` from configuration, resolves `AccessToken`, and registers the client through `AddNayaxLynxClient()`, which also attaches the bounded timeout/retry/circuit-breaker policy (issue #48; see [HTTP resilience policy](#http-resilience-policy)). `InventoryApi.Adapters.Nayax.NayaxCatalogSnapshotProvider` and the remaining Nayax-consuming InventoryApi residents (`InventoryCostTransitionService`, `ImportService`, `EfTransactionSalesReportFactsProvider`) depend only on the relocated `INayaxLynxClient` port and its DTOs, not on the concrete client or its configuration. The migrated `Inventory.Application.Commissions.GetSiteCommissionReport` use case also consumes that port; the product, site and machine services that used to appear in this list no longer call Nayax at all, because issues #240/#241 moved their live reads into `Inventory.Application` use cases that depend on the same port. Every other feature implementation still lives in `InventoryApi`: controllers generally call service interfaces, while services use `AppDbContext` and, where required, Nayax or filesystem facilities. `Program.cs` is the composition root. Startup delegates schema handling to `DatabaseSchemaStartup`, where Development, `Testing`, and Production all auto-migrate (issue #201; another non-Production environment may too, under an explicit override), and a database whose migration attempt fails does not complete startup rather than serving requests against a schema its code does not match. Migrations may also still be applied explicitly by a human with the `migrate-database` command (dry run first), for diagnostics or ahead of a deployment window.
+The API's production dependency skeleton (`Inventory.Domain`, `Inventory.Application`, `Inventory.Infrastructure`) is wired into the `InventoryApi` composition root through `AddApplicationServices()`/`AddInfrastructureServices()` extension methods. The Nayax fee-settings slice (GET/POST `api/settings/nayax-processing-fee-rates`) is the first feature moved into this shape: `Inventory.Domain.NayaxFeeSettings.NayaxFeeRate` validates the configured rate, `Inventory.Application.NayaxFeeSettings` holds the `ListNayaxFeeRates`/`SaveNayaxFeeRate` use cases and the `INayaxFeeRateStore` port (`SaveNayaxFeeRate` also takes the shared `Inventory.Application.Time.IClock` port, promoted out of this feature slice into a shared Application abstraction — see [Time](#time)), `Inventory.Infrastructure.Clock.SystemClock` implements `IClock`, and `SettingsController` only binds HTTP input and maps the use-case result. Because `AppDbContext` and its EF entities still live in `InventoryApi`, `INayaxFeeRateStore` is implemented by `InventoryApi.Adapters.Persistence.EfNayaxFeeRateStore` — a deliberately temporary API-owned adapter, registered directly in `Program.cs` rather than through `AddInfrastructureServices()`, so that `Inventory.Infrastructure` does not need to reference `InventoryApi`. It must move into `Inventory.Infrastructure` once `AppDbContext` and the shared persistence models relocate there. The bookkeeping report (GET `api/reports/bookkeeping`) is the second feature moved into this shape, following the same pattern: `Inventory.Domain.Reporting.Bookkeeping.BookkeepingProfitPolicy` computes profit/margin/GST/net-settlement from already-aggregated facts, `Inventory.Application.Reporting.Bookkeeping.GetBookkeepingReport` is the use case, `IBookkeepingReportFactsProvider` is its narrow port, and `InventoryApi.Adapters.Persistence.EfBookkeepingReportFactsProvider` is its temporary API-owned EF adapter, now composing the Application-owned fee and commission use cases. `ReportsController` calls `GetBookkeepingReport` directly for that endpoint; at that point in the migration, the legacy `ReportingService.GetBookkeepingAsync` delegated to the same use case so CSV/XLSX export and the GST report (which reuses bookkeeping's result) stayed on one authoritative implementation, until issue #92 removed `ReportingService` entirely (see below). The daily report (GET `api/reports/daily`) is the third feature moved into this shape, following the same pattern: `Inventory.Domain.Reporting.Daily.DailyRowPolicy` computes each day's profit/margin/reconciliation status from already-aggregated facts, reusing the shared `Inventory.Domain.Reporting.ReconciliationStatusPolicy` (placed there, alongside `ReportingCalculations`, so the still-legacy reconciliation report can reuse the same policy once it migrates instead of reimplementing it), `Inventory.Application.Reporting.Daily.GetDailyReport` is the use case, `IDailyReportFactsProvider` is its narrow port, and `InventoryApi.Adapters.Persistence.EfDailyReportFactsProvider` is its temporary API-owned EF adapter. Its completed-sale cost query and period-level imported-reimbursement summary are shared with `EfBookkeepingReportFactsProvider` through `InventoryApi.Adapters.Persistence.EfReportingSharedQueries` rather than duplicated a third time; its per-date reimbursement grouping is specific to daily and has no bookkeeping equivalent. `ReportsController` calls `GetDailyReport` directly for that endpoint; at that point in the migration, the legacy `ReportingService.GetDailyAsync` delegated to the same use case so CSV/XLSX export stayed on one authoritative implementation, until issue #92 removed `ReportingService` entirely (see below). The reconciliation report (GET `api/reports/reconciliation`) is the fourth feature moved into this shape, following the same pattern: `Inventory.Domain.Reporting.Reconciliation.ReconciliationPeriodPolicy` computes each period's (and the totals row's) gross/settlement difference and status from already-aggregated facts, reusing the shared `Inventory.Domain.Reporting.ReconciliationStatusPolicy` daily also calls, `Inventory.Application.Reporting.Reconciliation.GetReconciliationReport` is the use case, `IReconciliationReportFactsProvider` is its narrow port, and `InventoryApi.Adapters.Persistence.EfReconciliationReportFactsProvider` is its temporary API-owned EF adapter. Its completed and all-status sales queries are shared with `EfBookkeepingReportFactsProvider`/`EfDailyReportFactsProvider` through `EfReportingSharedQueries`; its per-reimbursement-period `Include` graph and card-gross fallback cascade are specific to reconciliation and have no bookkeeping or daily equivalent. `ReportsController` calls `GetReconciliationReport` directly for that endpoint; at that point in the migration, the legacy `ReportingService.GetReconciliationAsync` delegated to the same use case so CSV/XLSX export stayed on one authoritative implementation, until issue #92 removed `ReportingService` entirely (see below). The machine and product profitability reports (GET `api/reports/machine-profitability` and GET `api/reports/product-profitability`) are the fifth and sixth features moved into this shape, following the same pattern: `Inventory.Domain.Reporting.Profitability.ProfitabilityRowPolicy` computes the per-machine/per-product cost/gross-profit/margin gate shared by both reports, and `Inventory.Domain.Reporting.Profitability.MachineDirectProfitPolicy` computes machine profitability's direct-profit completeness rule (COGS complete, no missing Nayax fee rates, complete commission coverage), reusing the shared `ReportingCalculations`. `Inventory.Application.Reporting.MachineProfitability.GetMachineProfitabilityReport` and `Inventory.Application.Reporting.ProductProfitability.GetProductProfitabilityReport` are the use cases; `IMachineProfitabilityReportFactsProvider`/`IProductProfitabilityReportFactsProvider` are their narrow ports; `InventoryApi.Adapters.Persistence.EfMachineProfitabilityReportFactsProvider`/`EfProductProfitabilityReportFactsProvider` are their temporary API-owned EF adapters, reusing `EfReportingSharedQueries`' completed-sale query. The machine profitability adapter also composes the migrated Application fee and commission use cases; its site-commission resolution is shared with `EfBookkeepingReportFactsProvider` through `EfReportingSharedQueries.GetMachineCommissionsAsync`/`GetSiteCommissionAsync` rather than duplicated a third time, while its per-machine operating-expense breakdown has no equivalent in the already-migrated adapters and stayed local. Nayax product matching (`NayaxProductMatcher`, previously `InventoryApi.Services.NayaxProductMatcher` only) is deterministic Domain business logic and moved to `Inventory.Domain.Reporting.ProductMatching.ProductMatcher`, operating on a Domain-owned `ProductMatchCandidate(Id, Name)` rather than the persistence `Product` entity; the product profitability use case calls it directly on its own catalogue projection, and the EF adapter never calls it (matching stays out of the persistence adapter). `InventoryApi.Services.NayaxProductMatcher` (used by machine service, sale costing, inventory cost rebuild, import, and site commissions — outside this migration's scope) became a thin wrapper delegating to the same Domain implementation, so both stay on one authoritative matching algorithm instead of two. `ReportsController` calls `GetMachineProfitabilityReport`/`GetProductProfitabilityReport` directly for those endpoints; at that point in the migration, the legacy `ReportingService.GetMachineProfitabilityAsync`/`GetProductProfitabilityAsync` delegated to the same use cases so CSV/XLSX export and the dashboard report (which reuses product profitability's result) stayed on one authoritative implementation, until issue #92 removed `ReportingService` entirely (see below). GST, dashboard, and transactions have since moved too (see the reporting migration track below); every individual report family has migrated, and issue #92 completed the final shared-query audit: it found no further duplication to consolidate (every already-migrated adapter already shared what could be shared through `EfReportingSharedQueries`) and removed the legacy `InventoryApi.Services.ReportingService`/`IReportingService`. `Inventory.Application.Reporting.Export.GetReportExportRows` is now the one authoritative export-row-building step for every report, called directly by `ReportsController`'s single export endpoint; `InventoryApi.Adapters.Export.ReportExportFileWriter` is its only remaining CSV/XLSX byte-encoding adapter (ClosedXML stays out of Application). The Nayax Lynx HTTP client/configuration boundary (issue #49) also moved into this shape: `Inventory.Application.Nayax` holds the configuration-agnostic `INayaxLynxClient` port and its DTOs, and `Inventory.Infrastructure.Nayax` holds the concrete adapter — `NayaxLynxClient`, the one typed `NayaxLynxOptions` contract (`BaseUrl`, `OperatorId`, `AccessToken`), and `NayaxLynxConfiguration`, which validates the non-secret fields at startup and resolves `AccessToken` by preferring the consolidated `NayaxLynx:AccessToken` configuration key over the legacy `Nayax:Token` key so the already deployed Key Vault/App Service secret (`Nayax__Token`) keeps working without a coordinated rollout. `NayaxUpstreamException` (see [External integration errors](#external-integration-errors)) lives in `Inventory.Infrastructure.Nayax` rather than alongside the port, because it carries HTTP-specific diagnostics that `CleanArchitectureDependencyTests` forbids `Inventory.Application` from depending on. `Program.cs` binds `NayaxLynxOptions` from configuration, resolves `AccessToken`, and registers the client through `AddNayaxLynxClient()`, which also attaches the bounded timeout/retry/circuit-breaker policy (issue #48; see [HTTP resilience policy](#http-resilience-policy)). `InventoryApi.Adapters.Nayax.NayaxCatalogSnapshotProvider` and the remaining Nayax-consuming InventoryApi residents (`ImportService`, `EfTransactionSalesReportFactsProvider`) depend only on the relocated `INayaxLynxClient` port and its DTOs, not on the concrete client or its configuration. The migrated `Inventory.Application.Commissions.GetSiteCommissionReport` use case and the inventory-cost transition use cases (issue #298, which replaced `InventoryCostTransitionService`) also consume that port; the product, site and machine services that used to appear in this list no longer call Nayax at all, because issues #240/#241 moved their live reads into `Inventory.Application` use cases that depend on the same port. Every other feature implementation still lives in `InventoryApi`: controllers generally call service interfaces, while services use `AppDbContext` and, where required, Nayax or filesystem facilities. `Program.cs` is the composition root. Startup delegates schema handling to `DatabaseSchemaStartup`, where Development, `Testing`, and Production all auto-migrate (issue #201; another non-Production environment may too, under an explicit override), and a database whose migration attempt fails does not complete startup rather than serving requests against a schema its code does not match. Migrations may also still be applied explicitly by a human with the `migrate-database` command (dry run first), for diagnostics or ahead of a deployment window.
 
 ```mermaid
 flowchart TD
@@ -221,7 +246,7 @@ flowchart TD
 - Reconciliation and incomplete-data states are represented explicitly.
 - The frontend has a centralized runtime API configuration, typed services, reusable report-page behavior, and shared toast/confirmation UI.
 - Standalone Angular components keep feature code independent of NgModule structure.
-- Backend CI restores, builds, and tests before a `main` deployment.
+- Every production deployment runs complete repository validation on the exact `main` commit before deploying it (Deploy Production, issue #343).
 - `AppDbContext` no longer enables `UseLazyLoadingProxies()` (issue #52). Every navigation an endpoint serialises or a service reads after materialization is loaded explicitly with `Include`/`ThenInclude` (for example `EfProductCatalogStore`, which serves both the product endpoints and the machine product listing, and `PurchaseService.Update`) or, where the caller may still change the owning foreign key afterwards, with a single explicit `Entry(...).Reference(...).LoadAsync()` once the final value is known (`EfOperatingExpenseStore.UpdateAsync`, formerly `OperatingExpensesController.Update`/`UpdateWithAttachment` before the operating-expenses slice moved persistence into that adapter). What a request loads from the database is visible in its query, not implied by which properties a response happens to touch.
 
 ## Current pressure points
@@ -295,6 +320,37 @@ Examples include `CreateOperatingExpense`, `RecordCommissionPayment`, `ImportNay
 
 Application code determines what must happen. It does not know the physical database, file path, HTTP endpoint, or spreadsheet library used to make it happen.
 
+#### Concurrency inside one request: the scoped EF context (issue #313)
+
+A use case may overlap independent *remote* work, but never two operations on its own persistence
+scope. `AppDbContext` and the EF-backed ports over it are registered scoped
+(`backend/InventoryApi/Program.cs`), so every call a use case makes into such a port during one
+request reaches the same `DbContext` instance — and a `DbContext` supports only one operation at a
+time; starting a second before the first completes throws. SQLite's synchronous async implementation
+usually finishes the first call before the second begins, which hides the defect in tests and local
+runs while a genuinely asynchronous provider rejects it, so this is a source-level rule rather than
+something a passing test suite demonstrates.
+
+- **Concurrency is correct for independent remote reads.** The bounded per-site/per-machine
+  `INayaxLynxClient.GetMachineProductsAsync` fan-out shares no `DbContext` and stays a `Task.WhenAll`
+  fan-out. Do not serialize remote requests to avoid a database problem they do not cause.
+- **Serialize or batch the scoped reads.** Either await the port calls one at a time
+  (`ResolveMachineProductPricing`, `GetSiteProducts`), or replace an overlapping per-item read with one
+  scoped read whose facts are distributed in memory (`GetSiteSummaries` loads every site's recent
+  completed sales once, for the whole fleet's machine ids, then selects each site's own sales from the
+  result by machine id). Batching must not widen what is loaded beyond the caller's own tenant: the
+  read stays scoped by the central `AppDbContext` query filters, never by an ad hoc `BusinessId`
+  predicate (see [Tenant ownership](#tenant-ownership-issue-64)).
+- **Do not create a second context, an unscoped read, or a background scope** to make a concurrent
+  shape work. That bypasses the request's tenant scope and its change tracking, and is a boundary
+  violation rather than a performance trade-off.
+- **Keep cancellation and failure behaviour.** Pass the request's `CancellationToken` into every call,
+  await every task that was started so one side's failure cannot leave another unobserved, and let the
+  failure propagate: a partial result must never be returned as a complete one.
+
+Call-sequence regression tests are what hold this in place; see
+[Backend tests](#backend-tests) for the yielding-recorder pattern they use.
+
 ### Inventory.Infrastructure
 
 Contains adapters and technical implementation:
@@ -321,13 +377,15 @@ Controllers do not implement accounting, inventory, persistence, or filesystem r
 
 #### Temporary API-owned exception and its enforcement (issue #145)
 
-`InventoryApi/Services` (import, sale costing, the inventory-cost transition, machine/site/product/
-purchase/supplier-order orchestration) is use-case/domain logic that predates the
-`Inventory.Domain`/`Inventory.Application` split and has not migrated yet; inventory movement
-recording and the product cost rebuild have already left it for `Inventory.Application.Costing`
-(issue #296). `InventoryApi/Adapters/{Persistence,Export,Nayax,Mapping}` hold the
+`InventoryApi/Services` (import, machine/site/product/purchase/supplier-order orchestration) is
+use-case/domain logic that predates the `Inventory.Domain`/`Inventory.Application` split and has
+not migrated yet; inventory movement recording and the product cost rebuild (issue #296), sale
+costing with its backfills (issue #297) and the inventory-cost transition (issue #298) have already
+left it for `Inventory.Application.Costing`, and the pending reimbursement XML import (issue #299)
+for `Inventory.Application.Imports`. `InventoryApi/Adapters/{Persistence,Export,Nayax,Mapping}` hold the
 temporary, API-owned adapters (`EfNayaxFeeRateStore`, the `Ef<Feature>ReportFactsProvider` family,
-`EfInventoryMovementStore`/`EfInventoryCostLedgerStore`, `ReportExportFileWriter`,
+`EfInventoryMovementStore`/`EfInventoryCostLedgerStore`, `EfSaleCostingStore`,
+`EfInventoryCostTransitionStore`, `ReportExportFileWriter`,
 `NayaxCatalogSnapshotProvider`, `ProductResponseMapper`, ...) that implement
 or feed `Inventory.Application`
 ports until `AppDbContext` and its persistence models move into `Inventory.Infrastructure` - see the
@@ -383,7 +441,13 @@ exception is still possible, but only as a conscious, reviewed edit to both that
 paragraph, never as a silent side effect of an unrelated change. Shrinking it follows the same rule:
 issue #296 removed `InventoryCostService.cs`, `InventoryCostRebuildService.cs`,
 `InventoryCostRebuildResult.cs`, `Interfaces/IInventoryCostService.cs` and
-`Interfaces/IInventoryCostRebuildService.cs` from the allow-list in the same change that deleted them. `InventoryApi/Adapters/*` is not
+`Interfaces/IInventoryCostRebuildService.cs` from the allow-list in the same change that deleted them,
+issue #297 likewise removed `SaleCostingService.cs` and `Interfaces/ISaleCostingService.cs`,
+issue #298 removed `InventoryCostTransitionService.cs` and `Interfaces/IInventoryCostTransitionService.cs`,
+and issue #299 removed `ImportService.Xml.cs` in the same change that migrated the pending
+reimbursement XML import (`Interfaces/IImportService.cs` stays on the list for the product and Nayax
+sales imports the remaining children of #151 migrate).
+`NayaxProductMatcher.cs` stays on the list for its remaining legacy callers. `InventoryApi/Adapters/*` is not
 frozen the same way: unlike `Services`, adding a new temporary EF/Nayax/export adapter there for a
 migrating slice (mirroring `EfNayaxFeeRateStore`) is the established, expected pattern for this
 migration track, not scope creep - it implements an `Inventory.Application`-owned port rather than
@@ -603,7 +667,7 @@ The consequence for a throw site is explicit: **a check whose message is meant f
 
 Not-found handling is unchanged by this work: controllers continue to return `NotFound()` directly for a missing resource, and this issue introduces no typed not-found exception.
 
-Migrating a controller to the centralized mapping never changes its status code or message; the only observable difference is that the response body for a migrated action becomes a `ProblemDetails` object (`application/problem+json`) instead of a bare JSON string, which is why the `message` extension above exists. `StockController.Adjust`, `InventoryCostTransitionsController` (all four actions), and `SupplierOrdersController.Create` were migrated this way, and the deliberate validation throws in what was then `StockService.Adjust` (now `Inventory.Domain.Stock.ManualStockAdjustmentPolicy`, issue #282), `InventoryCostTransitionService`, and `SupplierOrderService.Create` were converted from `ArgumentException`/`InvalidOperationException` to `DomainValidationException` so those actions keep the exact `400` and message they returned before. `SiteCommissionsController.SaveAgreement`'s overlapping-agreement check moved from returning `Conflict(...)` directly to throwing `DomainConflictException`, still producing `409` with the same message. `ProductsController.Update`, `PurchasesController`, and `ImportsController.ImportNayaxSales` still catch their own exceptions and were intentionally left for a later, separate change. `OperatingExpensesController` no longer catches anything itself: the operating-expenses slice (issue #50) moved its attachment save/cleanup-on-failure try/catch into `Inventory.Application.Expenses.CreateOperatingExpense`/`UpdateOperatingExpense` as a side effect of the Clean Architecture migration, which is exactly the "way to run that cleanup from outside the controller" this paragraph used to call out as still missing; its validation failures are returned as explicit result values rather than thrown, so the controller still needs no exception mapping to keep its `400 Bad Request` behavior.
+Migrating a controller to the centralized mapping never changes its status code or message; the only observable difference is that the response body for a migrated action becomes a `ProblemDetails` object (`application/problem+json`) instead of a bare JSON string, which is why the `message` extension above exists. `StockController.Adjust`, `InventoryCostTransitionsController` (all four actions), and `SupplierOrdersController.Create` were migrated this way, and the deliberate validation throws in what was then `StockService.Adjust` (now `Inventory.Domain.Stock.ManualStockAdjustmentPolicy`, issue #282), what was then `InventoryCostTransitionService` (now `Inventory.Domain.Costing.InventoryCostTransitionPolicy` and the `Inventory.Application.Costing` transition use cases, issue #298), and `SupplierOrderService.Create` were converted from `ArgumentException`/`InvalidOperationException` to `DomainValidationException` so those actions keep the exact `400` and message they returned before. `SiteCommissionsController.SaveAgreement`'s overlapping-agreement check moved from returning `Conflict(...)` directly to throwing `DomainConflictException`, still producing `409` with the same message. `ProductsController.Update`, `PurchasesController`, and `ImportsController.ImportNayaxSales` still catch their own exceptions and were intentionally left for a later, separate change. `OperatingExpensesController` no longer catches anything itself: the operating-expenses slice (issue #50) moved its attachment save/cleanup-on-failure try/catch into `Inventory.Application.Expenses.CreateOperatingExpense`/`UpdateOperatingExpense` as a side effect of the Clean Architecture migration, which is exactly the "way to run that cleanup from outside the controller" this paragraph used to call out as still missing; its validation failures are returned as explicit result values rather than thrown, so the controller still needs no exception mapping to keep its `400 Bad Request` behavior.
 
 ## Frontend architecture
 
@@ -865,13 +929,48 @@ in behaviour:
   open a transaction or decide a cost.
 - Neither use case owns a transaction. The callers - `EfStockAdjustmentStore`,
   `EfInventoryCountAdjustmentStore` (Take Inventory), `EfMachineStockEventStore`, `EfPurchaseStore`,
-  `EfProductStore`, `EfLatestNayaxSalesStore`, and the not-yet-migrated `SaleCostingService`,
-  `InventoryCostTransitionService` and `ImportService` - keep their existing transaction around a
-  movement and the rebuild it triggers, so both still commit or roll back together.
+  `EfProductStore`, `EfLatestNayaxSalesStore`, the sale-costing use cases (issue #297), the
+  inventory-cost transition apply use cases (issue #298), and the not-yet-migrated `ImportService` -
+  keep their existing transaction around a movement and the rebuild it triggers, so both still
+  commit or roll back together.
 
-Sale costing (`SaleCostingService`) and the inventory-cost transition
-(`InventoryCostTransitionService`) still live in `InventoryApi.Services`, consuming
-`IRebuildProductCost`, pending #149's children 3 and 4.
+Sale costing and its backfills are Application use cases since issue #297; see
+[Sale import and costing](#sale-import-and-costing).
+
+The inventory-cost transition - the one-time cutover that records each product's opening costing
+baseline - is Domain/Application-owned since issue #298 (child 4 of #149, which completes the #149
+costing migration). It replaced the removed `InventoryApi.Services.InventoryCostTransitionService`/
+`IInventoryCostTransitionService`, unchanged in behaviour:
+
+- `Inventory.Domain.Costing.InventoryCostTransitionPolicy` holds the deterministic rules: a machine's
+  stock for a product is the sum over its slots of `PAR - MissingStockByMDB` (a slot missing either
+  value, or outside `0..PAR`, is rejected); the opening costing quantity is verified home stock plus
+  every machine's stock, valued at the opening average unit cost; the legacy physical replay's
+  discrepancy against home stock is recorded as a data-quality note, never corrected; a stored
+  preview may be applied once and only within 30 minutes; and a preview is stale when home stock, the
+  legacy replay or any machine's stock changed, when its values no longer follow from its inputs,
+  or (all products) when the eligible products or an average unit cost changed. Every check throws
+  `DomainValidationException` with the message the API has always returned.
+  `Inventory.Domain.Costing.InventoryCostBaselineSource` mirrors the persisted
+  `InventoryApi.Models.InventoryCostBaselineSource` value-for-value (a parity test enforces this).
+- `Inventory.Application.Costing.PreviewInventoryCostTransition`, `ApplyInventoryCostTransition`,
+  `PreviewAllInventoryCostTransitions` and `ApplyAllInventoryCostTransitions` orchestrate them, and own
+  the request/response contracts moved unchanged in name and shape from the removed
+  `InventoryApi/DTOs/InventoryCostTransitionDtos.cs`. A preview reads Nayax machine stock through the
+  existing `INayaxLynxClient` port (a Nayax failure propagates unchanged and stores nothing), fixes the
+  cutoff after that read through the `IClock` port, and stores its snapshot. An apply runs in one
+  transaction: it re-reads the stored preview, rebuilds it from current data and rejects a stale one,
+  saves each baseline exactly as previewed, marks the preview applied and runs the `IRebuildProductCost`
+  rebuild from the cutoff, so a failure anywhere rolls all of it back. Baselines keep their cutoff
+  semantics for `CostSale` and for `PurchaseCostTransitionPolicy`'s pre-cutover purchase guards, which
+  read the same persisted baselines.
+- The narrow `IInventoryCostTransitionStore` port (transaction, baseline lookup, products, legacy
+  replay sums, preview drafts, baselines, save) is implemented by the temporary API-owned
+  `InventoryApi.Adapters.Persistence.EfInventoryCostTransitionStore`, which keeps the former EF
+  queries and baseline mapping behind `AppDbContext`'s business query filter and ownership stamp; it
+  moves to `Inventory.Infrastructure` with `AppDbContext` (#153). `InventoryCostTransitionsController`
+  calls the four use cases directly with unchanged routes (`POST api/admin/inventory-cost-transition/
+  preview`, `apply`, `preview-all`, `apply-all`), request/response JSON, status codes and messages.
 
 #### Dashboard "Inventory Value" tile (issue #42)
 
@@ -908,10 +1007,10 @@ one coordinated refresh is stored in a single save, and then asks its narrow App
 a product - to rebuild that product's inventory costs.
 `InventoryApi.Adapters.Persistence.EfLatestNayaxSalesStore` is that port's temporary API-owned EF
 adapter (same reason as every other `InventoryApi/Adapters/Persistence` adapter: `AppDbContext`, the
-`NayaxSales` model, and the sale-costing service still live in `InventoryApi`). It holds the unchanged
+`NayaxSales` model, and `NayaxProductMatcher` still live in `InventoryApi`). It holds the unchanged
 import rules extracted from the former `MachineService.SaveMachinesLastSalesAsync` - transaction dedup
 by `TransactionID`, Nayax product matching, the settlement-value completed/cancelled default,
-`ISaleCostingService` costing, and the `IRebuildProductCost` rebuild for products whose
+historical costing through the Application `ICostSale` use case (issue #297), and the `IRebuildProductCost` rebuild for products whose
 transition-baseline cutoff a newly imported completed sale follows - and enriches an already stored
 transaction only where its product match or status is still missing, so an imported status or cost is
 never overwritten. `NayaxSalesSyncController` is a thin adapter that invokes the use case and maps it
@@ -1338,6 +1437,42 @@ mapping](#domain-and-application-error-mapping).
 4. Historical cost is persisted on each sale with its status and source.
 5. Unknown products, statuses, payment methods, or missing costs remain visible.
 
+Historical sale costing and its backfills are `Inventory.Application.Costing` use cases (issue #297,
+child 3 of #149), moved unchanged in behaviour from the removed
+`InventoryApi.Services.SaleCostingService`/`ISaleCostingService`:
+
+- `CostSale` (`ICostSale`) decides one sale's cost and provenance. A sale that is not completed is
+  left uncosted and pending. A completed sale already costed or legacy-estimated with both costs
+  present is kept unless forced. Otherwise the precedence is the inventory-ledger (AVCO) cost from
+  `IRebuildProductCost.GetAverageUnitCostAtAsync` (skipped for an unmatched product or a sale at or
+  before the product's transition-baseline cutoff), then the persisted transaction-level Nayax
+  `Product Cost Price`, then uncosted: `Error` for an unmatched product or a negative Nayax cost,
+  `Pending` otherwise. It matches the product with the Domain
+  `Inventory.Domain.Reporting.ProductMatching.ProductMatcher` directly. Its Application-owned
+  `SaleCostStatus`/`SaleCostOrigin` mirror the persisted `SaleCostingStatus`/`SaleCostSource`
+  ordinal-for-ordinal (a parity test enforces this).
+- `CostPendingSales` costs every pending completed sale, optionally for one matched product, and
+  saves once.
+- `BackfillSaleCosts` (`POST api/sale-costing/backfill`) re-costs completed sales through
+  `CostSale`. Without `force` it counts already costed or legacy-estimated sales as finalized and
+  leaves them untouched. `BackfillNayaxHistoricalSaleCosts` (`POST
+  api/sale-costing/nayax-cost-backfill/dry-run` and `/apply`) costs pending or error sales (any status
+  with `force`) that have a non-negative persisted Nayax export cost, optionally within an
+  authorization-time range or for one product. It reads only the cost the Nayax transaction import
+  already persisted and makes no Nayax API call, so a Nayax outage cannot fail or partially apply
+  it. For both backfills a dry run loads untracked rows and stages and saves nothing, and repeating
+  an applied run yields the same costs.
+- The narrow `ISaleCostingStore` port (product candidates, transition cutoff, completed-sale
+  selection, stage and save) is implemented by the temporary API-owned
+  `InventoryApi.Adapters.Persistence.EfSaleCostingStore`, which keeps the former EF queries behind
+  `AppDbContext`'s business query filter and writes each decision back onto exactly the loaded row.
+  The API-owned `NayaxSaleCosting` mapping lets `ImportService`'s Nayax transaction import and
+  `EfLatestNayaxSalesStore` cost the `NayaxSales` entity they are importing through `ICostSale`
+  without changing their own transactions or the #187 synchronization boundary.
+  `SaleCostingController` calls the backfill use cases directly with unchanged routes,
+  request/response shapes and status codes. The pass-through `GetAverageUnitCostAtAsync` is
+  `IRebuildProductCost.GetAverageUnitCostAtAsync`.
+
 ### Reimbursement import and reconciliation
 
 1. Preserve imported period, gross, device, fee, GST, adjustment, and net facts.
@@ -1345,6 +1480,49 @@ mapping](#domain-and-application-error-mapping).
 3. Compare both gross/count and expected/actual settlement.
 4. Mark reconciled only within the `$0.01` tolerance.
 5. Surface pending, unmatched, partial, unknown, or unsupported data.
+
+The import side of that flow (`POST api/imports/pending-xml`) is the
+`Inventory.Application.Imports.ImportPendingReimbursementXmlFiles` use case (issue #299, child 1 of
+3 of #151), moved unchanged in behaviour from the removed
+`InventoryApi.Services.ImportService.ImportPendingXmlFilesAsync`:
+
+- **The use case** walks the pending queue and, per file, reads it, skips it when this business has
+  already imported the same bytes, otherwise persists it, and removes it from the queue either way.
+  It owns the reported counts (`ImportedFileImportResult`, moved here from
+  `InventoryApi.Services.Interfaces` with no JSON change): a file that could not be read, parsed or
+  removed is counted as failed and stays in the queue rather than being silently dropped, a file
+  whose hash is already present is counted as skipped, and the reimbursement rows of a file that was
+  persisted but then could not be removed are still counted as imported - the same counter order the
+  legacy loop had. A persistence failure is deliberately not caught and still propagates.
+- **Discovery and parsing** sit behind the `IPendingReimbursementXmlSource` port, implemented by
+  `Inventory.Infrastructure.Imports.FileSystemPendingReimbursementXmlSource` - a real Infrastructure
+  adapter, not a temporary API-owned one, because it needs no `AppDbContext`. It resolves
+  `{WebRootPath}/ImportedFiles` from the `PendingReimbursementXmlOptions` host paths the composition
+  root supplies through `AddPendingReimbursementXmlSource()` (the same arrangement
+  [Document storage](#document-storage) uses, so no filesystem path reaches the Application layer),
+  and keeps the parsing decisions imported financial data depends on: invariant-culture numbers and
+  dates, a date without an offset assumed to be UTC, a numeric attribute read as a boolean when it
+  parses to a non-zero integer, an unparsable number or date left `null` rather than zero, every
+  attribute preserved as raw JSON, a root `row` element treated as the single row, and a bare
+  `row` fragment retried wrapped in a root element. Filesystem and XML failures are translated here
+  and never cross the port: an unreadable, malformed or row-less file is logged (by file name, never
+  by server path) and answered as `null`, and a file that cannot be deleted as `false`, matching the
+  "translated to a plain answer at that layer's own boundary" rule in the
+  [exception ownership table](#exception-ownership-table). Caller cancellation is excluded from that
+  translation and stays cancellation.
+- **Persistence** sits behind the narrow `IImportedReimbursementStore` port (the hash question plus
+  one atomic write of the file with its reimbursement/device/device-payment/fee/payment-method
+  graph), implemented by the temporary API-owned
+  `InventoryApi.Adapters.Persistence.EfImportedReimbursementStore`, which must move into
+  `Inventory.Infrastructure` once #153 relocates persistence. The duplicate lookup is the same
+  tenant-filtered `ImportedFiles` query as before, with no business predicate of its own, so
+  file-hash idempotency stays per business: two businesses may legitimately import the same file and
+  neither is told its own first import is a duplicate. Ownership is stamped centrally on save.
+- `ImportsController.ImportPendingXmlFiles` calls the use case directly; the route, the
+  `ImportedFileImportResult` response shape and the status codes are unchanged. The action now also
+  binds the request's `CancellationToken` and passes it through both ports, which the legacy
+  signature did not. `IImportService` no longer exposes `ImportPendingXmlFilesAsync`; product import
+  and Nayax sales import stay there for the remaining children of #151.
 
 ### Nayax catalog source-state reconciliation
 
@@ -1894,7 +2072,7 @@ Backend and frontend tracks can progress independently when their contracts do n
    - **Purchases and Supplier Orders orchestration done** (issue #281, a child of the #148 umbrella;
      sibling to the Stock child, issue #282, migrated separately - see item 6 above). The
      costing-rebuild orchestration itself was migrated later by issue #296 (`IRebuildProductCost`,
-     see item 7); sale costing remains future work, tracked by #149.
+     see item 7); sale costing followed in issue #297 (also item 7).
      - **Domain.** `Inventory.Domain.Purchases.PurchaseItemFormatPolicy` validates a purchase line's
        product/quantity/cost shape (the inline check the former `PurchaseService.ValidateItemsAsync`
        made); `PurchaseStockMovementPolicy` holds the restock stock-movement quantity/total-cost
@@ -1987,11 +2165,40 @@ Backend and frontend tracks can progress independently when their contracts do n
     `EfInventoryCountAdjustmentStore`, `EfMachineStockEventStore`, `EfPurchaseStore`,
     `EfProductStore` and `EfLatestNayaxSalesStore`, and the not-yet-migrated `SaleCostingService`,
     `InventoryCostTransitionService` and `ImportService`, consume the Application contracts and keep
-    their transactions unchanged. The five removed files and their DI registrations are gone, and
+    their transactions unchanged (the transition has since migrated too, see below). The five removed files and their DI registrations are gone, and
     their entries were removed from the `Only_the_documented_legacy_services_remain_in_InventoryApi_Services`
     allow-list and (for `InventoryCostDataQualityException`, now Application-owned) from the
     `No_new_business_exception_is_defined_in_InventoryApi` allow-list. Sale costing (child 3) and the
-    inventory-cost transition (child 4) remain in `InventoryApi.Services`.
+    inventory-cost transition (child 4) followed below.
+  - **Sale costing and backfills done** (issue #297, child 3 of 4 of #149).
+    `Inventory.Application.Costing.CostSale` (`ICostSale`), `CostPendingSales`, `BackfillSaleCosts`
+    and `BackfillNayaxHistoricalSaleCosts`, over the narrow `ISaleCostingStore` port implemented by
+    the temporary API-owned `InventoryApi.Adapters.Persistence.EfSaleCostingStore`, replaced
+    `InventoryApi.Services.SaleCostingService`/`ISaleCostingService`, unchanged in behaviour; see
+    [Sale import and costing](#sale-import-and-costing). They call the Domain `ProductMatcher`
+    directly instead of `NayaxProductMatcher`, and own the `SaleCostingBackfillResult` and
+    `NayaxCostBackfillResult` response records (moved from `InventoryApi/DTOs` with no JSON change).
+    `SaleCostingController`, `EfLatestNayaxSalesStore` and `ImportService` consume the Application
+    contracts. Both removed files and their DI registration are gone, and their entries were
+    removed from the `Only_the_documented_legacy_services_remain_in_InventoryApi_Services`
+    allow-list. The inventory-cost transition (child 4) followed below.
+  - **Inventory-cost transition done** (issue #298, child 4 of 4 of #149; **this completes the #149
+    costing slice**). The deterministic preview building and draft/stale-preview validation moved to
+    `Inventory.Domain.Costing.InventoryCostTransitionPolicy` (with the Domain mirror
+    `InventoryCostBaselineSource`), and the orchestration to the
+    `Inventory.Application.Costing.PreviewInventoryCostTransition`, `ApplyInventoryCostTransition`,
+    `PreviewAllInventoryCostTransitions` and `ApplyAllInventoryCostTransitions` use cases, over the
+    narrow `IInventoryCostTransitionStore` port implemented by the temporary API-owned
+    `InventoryApi.Adapters.Persistence.EfInventoryCostTransitionStore` and the existing
+    `INayaxLynxClient` port for Nayax machine stock; see
+    [Historical inventory cost](#historical-inventory-cost). They replaced
+    `InventoryApi.Services.InventoryCostTransitionService`/`IInventoryCostTransitionService`,
+    unchanged in behaviour, and own the transition request/response records (moved from
+    `InventoryApi/DTOs/InventoryCostTransitionDtos.cs` with no JSON change).
+    `InventoryCostTransitionsController` calls the use cases directly with unchanged routes, status
+    codes and messages. Both removed files and their DI registration are gone, and their entries
+    were removed from the `Only_the_documented_legacy_services_remain_in_InventoryApi_Services`
+    allow-list. No costing orchestration remains in `InventoryApi.Services`.
 
 8. **Reporting slices**
    - Split bookkeeping, daily, reconciliation, machine/product profitability, GST, dashboard, and transactions into separate query handlers.
@@ -2010,11 +2217,34 @@ Backend and frontend tracks can progress independently when their contracts do n
 9. **Sites and Machines dashboard slice done** (issue #241, a child of the #147 umbrella; #240 migrates Products separately). `SiteService.GetAll`/`GetProducts` and `MachineService.GetById`/`GetAll` are the migrated endpoints; `MachineService.GetMachineProducts` was left to the sibling Products migration because it returned the EF `Product` entity directly, and issue #240 has since migrated it in full to `Inventory.Application.Machines.ListMachineProducts` - see item 6 above.
    - `Inventory.Domain.Sites.SiteStockPolicy` computes a site's overall stock percentage and its low/empty product alert counts from already-fetched machine-product facts; `Inventory.Domain.Sites.SiteProductPricingPolicy` computes the site product preview's average retail price and estimated card-sale profit, given an already-resolved per-item commission amount and fee rate. `Inventory.Domain.Machines.MachineDashboardPeriods` is the pure today/week-to-date/previous-comparable-week/last-week/month-to-date/two-weeks-ago range arithmetic, moved out of the former `MachineService` statics unchanged; `Inventory.Domain.Machines.MachineDashboardDirectProfitPolicy` and `MachineProfitabilityStatusPolicy` are the machine dashboard's period direct-profit and status-message rules, given already-resolved facts. Both direct-profit policies are deliberately kept separate from `Inventory.Domain.Reporting.Profitability.MachineDirectProfitPolicy`, which answers the same question at report-row (aggregate period) granularity rather than the dashboard's fixed rolling periods, matching the precedent the reporting slice already documented for row-level versus aggregate rules.
    - `Inventory.Application.Sites.GetSiteSummaries`/`GetSiteProducts` and `Inventory.Application.Machines.ListMachineDashboard`/`GetMachineDashboard` are the use cases, calling `INayaxLynxClient` with the same bounded per-site/per-machine fan-out (`Task.WhenAll` over each site's/machine's `GetMachineProductsAsync` calls) the former services used. `Inventory.Application.Sites.ISiteFactsStore`/`ISiteNameResolver` and `Inventory.Application.Machines.IMachineDashboardFactsStore` are their narrow ports. Issue #150 moved commission/fee resolution and payment/status classification to Domain-owned rules and Application use cases/ports; these consumers use those authorities rather than API service wrappers. The ports return already-resolved decimal/boolean facts rather than raw agreements: `ISiteFactsStore.ResolveCardCommissionAsync` takes the distinct candidate retail prices appearing in a site's machine products and returns the commission amount already resolved for each (the exact per-price Domain commission calculation computes each entry, not a re-derived multiplier), and `IMachineDashboardFactsStore.GetFactsAsync` returns each rolling period's already-resolved gross revenue and direct-profit inputs plus the profitability-status inputs, mirroring the former per-sale commission-resolution loop and its exact short-circuiting (an ambiguous or gap-covered agreement, or a missing site mapping with sales present, skips the Nayax fee lookup entirely, exactly as before) fact for fact. `ResolveMachineProductPricing` uses the same Sites financial port, while `EfLatestNayaxSalesStore` uses the Domain transaction-status classifier.
+   - **Scoped EF reads serialized (issue #313).** The Nayax fan-out above is unchanged and still concurrent, but no two `ISiteFactsStore` calls are ever in flight together, because the store is scoped and its EF adapter shares one `AppDbContext` (see [Concurrency inside one request: the scoped EF context](#concurrency-inside-one-request-the-scoped-ef-context-issue-313)). `GetSiteProducts` awaits its cost-basis, commission and fee reads one at a time instead of starting all three and joining them with `Task.WhenAll`. `GetSiteSummaries` no longer builds its per-site summaries concurrently: it reads the catalogue activity facts, then loads every site's recent completed sales through one scoped read over the whole fleet's machine ids with the same 16-day lookback each per-site read used, and distributes them per machine in memory, so the per-site aggregation itself is pure. Site-name ordering, machine counts, stock percentages, alert counts, per-site revenue attribution, financial-configuration handling, the API routes and response JSON, and exception behaviour are unchanged; tenancy is unchanged too, since the batched read is still scoped only by the central `AppDbContext` query filters. The focused regression tests live in `backend/InventoryApi.Tests/Application/Sites/` (call-sequence recorders plus the behavioural assertions) and in `EfSiteFactsStoreTenancyTests` (the batched completed-sales read loads no other business's sales).
    - `InventoryApi.Adapters.Persistence.EfSiteFactsStore`/`SiteNameResolverAdapter`/`EfMachineDashboardFactsStore`, `EfSiteCommissionStore`, `EfNayaxProcessingFeeFactsProvider`, and `EfNayaxSalesQueries` are temporary API-owned adapters because they depend on `AppDbContext` and persistence models. Entity-specific EF query expressions remain in these persistence adapters until #153 moves persistence into `Inventory.Infrastructure`; they implement Application-owned ports and apply the authoritative Domain rules. The existing report facts adapters likewise compose the migrated commission and fee use cases and Domain rules.
    - `InventoryApi.Services.SiteService`/`MachineService` were not deleted: `SitesController`/`MachinesController`, `ISiteService`/`IMachineService`, and their DI registrations are unchanged, and the two classes now only map the migrated use cases' results to the unchanged `SiteSummaryDto`/`SiteProductDto`/`Machine`/`Product` API contracts — the same transitional "legacy service delegates to the new use case" shape the reporting slices used before issue #92's final removal. After issue #240 completed `GetMachineProducts` (item 6 above), `MachineService` holds no `AppDbContext` and no Nayax client at all. Physically deleting these two now-thin delegator classes is left as explicit follow-up work, tracked the same way issue #92 was a separate, later step after every report family had migrated.
-   - The server-local `DateTime.Now`/`DateTime.Today` acquisition itself is unchanged and still called from the Application use cases at the same points the former services called it (once per site in `GetSiteSummaries`, once per machine per `ListMachineDashboard`/`GetMachineDashboard` call) — only the range *arithmetic* moved to `MachineDashboardPeriods`. It remains the same known follow-up already documented in [Time](#time) above, not something this slice resolved.
+   - The server-local `DateTime.Now`/`DateTime.Today` acquisition itself is unchanged and still called from the Application use cases (once per `GetSiteSummaries` request since issue #313 batched its sales read — one server-local instant now serves every site in a response, where the former per-site code read the clock once per site; once per machine per `ListMachineDashboard`/`GetMachineDashboard` call, as before) — only the range *arithmetic* moved to `MachineDashboardPeriods`. The clock source and timezone are untouched by that batching. It remains the same known follow-up already documented in [Time](#time) above, not something this slice resolved.
 
-10. **Remove legacy structure**
+10. **Imports slices** (umbrella issue #151, three children)
+    - **Pending reimbursement XML import done** (issue #299, child 1 of 3). `POST api/imports/pending-xml`
+      is now the `Inventory.Application.Imports.ImportPendingReimbursementXmlFiles` use case, over the
+      `IPendingReimbursementXmlSource` discovery/parsing port and the narrow
+      `IImportedReimbursementStore` persistence port; see
+      [Reimbursement import and reconciliation](#reimbursement-import-and-reconciliation) for the
+      full behaviour, including the preserved file-hash idempotency, parsing decisions and
+      imported/skipped/failed counting. Unlike every slice before it, its non-persistence adapter is a
+      real `Inventory.Infrastructure` resident (`Inventory.Infrastructure.Imports.FileSystemPendingReimbursementXmlSource`,
+      registered with `AddPendingReimbursementXmlSource()`) rather than a temporary API-owned one,
+      because filesystem discovery and XML parsing need no `AppDbContext`; only
+      `InventoryApi.Adapters.Persistence.EfImportedReimbursementStore` stays API-owned until #153
+      relocates persistence. This slice added no `Inventory.Domain` code: the import persists raw
+      imported facts and derives no accounting value, and the reconciliation rules that consume them
+      were already migrated with the reporting slices. `ImportService.Xml.cs` and
+      `IImportService.ImportPendingXmlFilesAsync` are gone, with the
+      `Only_the_documented_legacy_services_remain_in_InventoryApi_Services` allow-list updated in the
+      same change; `ImportsController`'s other two actions and the rest of `IImportService` are
+      untouched.
+    - Product import (child 2) and Nayax sales import (child 3) are still to come; until they land,
+      `ImportService`/`IImportService` remain for those two endpoints.
+
+11. **Remove legacy structure**
     - Done for reporting (issue #92): `InventoryApi.Services.ReportingService`, `InventoryApi.Services.Interfaces.IReportingService`, their dependency-injection registration, and every production and test caller were removed, and both source files were deleted. Reporting exports now run through `Inventory.Application.Reporting.Export.GetReportExportRows` for row building and `InventoryApi.Adapters.Export.ReportExportFileWriter` for CSV/XLSX byte encoding.
     - Done for stock (issue #282, item 6 above): `InventoryApi.Services.StockService`, `InventoryApi.Services.Interfaces.IStockService`, their dependency-injection registration, and every production and test caller were removed, and both source files were deleted.
     - Still pending for every other feature area (products, purchasing/costing, the Sites/Machines legacy delegator classes above, and the remaining direct-access controllers/services); only after each is migrated and tests prove equivalent behavior does this step complete overall.
@@ -2060,6 +2290,8 @@ Use three complementary levels:
 
 EF Core InMemory tests remain useful for fast service checks but must not be the only evidence for relational behavior.
 
+**Call-sequence (yielding-recorder) tests.** Some defects are about *when* calls happen rather than what they return; two operations overlapping on one request-scoped `AppDbContext` is the current example (see [Concurrency inside one request: the scoped EF context](#concurrency-inside-one-request-the-scoped-ef-context-issue-313)). Neither an InMemory nor a relational SQLite test can prove that one, because SQLite's synchronous async implementation completes each call before the next one starts. Such behavior is tested instead with an in-memory fake of the port that records a `start:`/`end:` marker per call, tracks how many calls were ever in flight at once, and awaits `Task.Yield()` before completing — so an implementation that starts two calls before awaiting either produces an interleaved trace and a concurrency count above one. `ResolveMachineProductPricingTests`' call-sequence recorder and the Sites equivalents (`backend/InventoryApi.Tests/Application/Sites/RecordingSiteFactsStore.cs`, plus `RecordingNayaxLynxClient`, which gates its machine-product calls so a serialized fan-out fails rather than hangs) are the examples. Pair them with the behavioral assertions the serialization must not change — per-site totals and revenue attribution, ordering, failure propagation, and the relational two-business isolation tests — so a concurrency fix cannot silently drop a site or move revenue between sites.
+
 Most controller tests instantiate the controller directly and never exercise ASP.NET Core's middleware pipeline. Proving the `[Authorize]`/`[RequiredScope]` HTTP boundary (issue #38) instead requires a real pipeline: `AuthenticationBoundaryTests` (`backend/InventoryApi.Tests/Controllers/`) hosts the app with `WebApplicationFactory<Program>`, swapping `AppDbContext` for a shared open in-memory SQLite connection so `Program.cs`'s startup schema step (`DatabaseSchemaStartup.EnsureSchema`) succeeds, then asserts that an unauthenticated request to a representative protected endpoint — including the receipt and operating-expense document endpoints — returns `401`, and that a file placed in the web root has no anonymous static URL. `Program.cs` exposes a trailing `public partial class Program;` solely so `WebApplicationFactory<Program>` can reference it from the test assembly.
 
 Financial regression tests should cover at least:
@@ -2097,10 +2329,10 @@ Frontend build flow is:
 3. `ng build` creates `dist/inventory-app` and enforces the production budgets in `angular.json`.
 4. Azure Static Web Apps serves the compiled assets and runtime configuration; the host must provide Angular navigation fallback.
 
-Current production delivery is triggered from `main`:
+`main` holds approved, releasable code; a push or merge to `main` deploys nothing (issue #343):
 
-- `.github/workflows/vm-manager.yml` builds/tests and deploys the API.
-- `.github/workflows/azure-static-web-apps-red-island-0c128c000.yml` builds/deploys the Angular frontend.
+- `.github/workflows/vm-manager.yml` builds and tests the API on every push to `develop` and `main`, without deploying.
+- `.github/workflows/deploy-production.yml` (**Deploy Production**) is the only path to production, and only a human starts it, from `main`, for one exact commit. It validates that commit with `scripts/validate.sh`, runs a migration preflight that lists the EF Core migrations production startup is expected to apply (derived from the repository by comparing the release with the last production release recorded after a successful health check, because the runner cannot read the production SQLite database), builds the API package and the Angular bundle once from that commit, deploys the API, waits for `/health/ready`, records that healthy backend as the next baseline, and only then deploys the prebuilt frontend bundle to Azure Static Web Apps. Backend and frontend therefore always come from the same commit, and a failed backend deployment or health check stops the frontend.
 
 Consequently, automated engineering agents stop at a pull request. Merge and production deployment remain human-controlled. The branch flow, agent authority model, task states, and risk classification for automated changes are defined in [docs/automation.md](automation.md).
 

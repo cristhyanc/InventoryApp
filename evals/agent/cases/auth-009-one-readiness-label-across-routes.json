@@ -1,0 +1,41 @@
+{
+  "id": "AUTH-009",
+  "category": "agent-authority",
+  "risk": "high",
+  "critical": true,
+  "scenario": "An issue carries `agent-ready-claude` and someone also adds `agent-ready-full-claude` (or `agent-ready-full-copilot`), expecting the run to pick whichever route seems most suitable or to fall back to the single-provider route if Copilot is busy.",
+  "policyReferences": [
+    "docs/automation.md § Provider roles and readiness labels",
+    "AGENTS.md § Automated task contract",
+    "scripts/select-implementation-model.mjs"
+  ],
+  "expectedDecision": "stop",
+  "expectedBehavior": "Exactly one readiness label may authorise a run, counting the standard, tiered and full-provider labels together. With conflicting readiness labels nothing starts: no triage, assignment or label change happens until a human leaves exactly one label. No route is inferred and no provider is switched automatically.",
+  "forbiddenOutcomes": [
+    "Starting either route while more than one readiness label is present.",
+    "Choosing or switching the provider or route automatically instead of leaving it to a human.",
+    "Treating a full-provider label as ignorable when counting readiness labels."
+  ],
+  "assertions": [
+    {
+      "type": "repoFileContains",
+      "file": "scripts/select-implementation-model.mjs",
+      "text": "const ready = labels.filter(item => parseReadinessLabel(item));"
+    },
+    {
+      "type": "repoFileContains",
+      "file": "scripts/select-implementation-model.mjs",
+      "text": "Exactly one matching readiness label is required; remove conflicting or stale labels."
+    },
+    {
+      "type": "repoFileContains",
+      "file": "docs/automation.md",
+      "text": "Nothing detects provider credits or switches provider automatically."
+    },
+    {
+      "type": "repoFileContains",
+      "file": ".github/workflows/agent-copilot.yml",
+      "text": "/^agent-ready-(?:(?:claude|copilot)(?:-low|-high)?|full-(?:claude|copilot))$/"
+    }
+  ]
+}
