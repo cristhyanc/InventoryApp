@@ -107,7 +107,7 @@ public class InventoryCostTransitionPolicyTests
 
     [Fact]
     public void An_unchanged_preview_is_accepted() =>
-        InventoryCostTransitionPolicy.EnsureUnchanged(State(), State());
+        Assert.Null(Record.Exception(() => InventoryCostTransitionPolicy.EnsureUnchanged(State(), State())));
 
     [Theory]
     [InlineData("home")]
@@ -132,7 +132,8 @@ public class InventoryCostTransitionPolicyTests
 
     [Fact]
     public void Machine_stock_order_does_not_matter() =>
-        InventoryCostTransitionPolicy.EnsureUnchanged(State(), State() with { MachineStocks = [new(2, 5), new(1, 6)] });
+        Assert.Null(Record.Exception(() =>
+            InventoryCostTransitionPolicy.EnsureUnchanged(State(), State() with { MachineStocks = [new(2, 5), new(1, 6)] })));
 
     [Theory]
     [InlineData("machine-total")]
