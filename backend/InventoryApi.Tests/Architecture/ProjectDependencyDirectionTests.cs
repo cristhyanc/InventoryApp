@@ -170,6 +170,12 @@ public class ProjectDependencyDirectionTests
     /// <c>InventoryApi/Services</c>, this test fails and names the mismatch, forcing that change to
     /// be a conscious update to both this allow-list and the docs/architecture.md exception it
     /// documents, rather than a silent expansion of code Clean Architecture no longer allows to grow.
+    ///
+    /// Shrinking it follows the same rule: issue #299 removed <c>ImportService.Xml.cs</c> in the same
+    /// change that migrated the pending reimbursement XML import to
+    /// <c>Inventory.Application.Imports.ImportPendingReimbursementXmlFiles</c>.
+    /// <c>Interfaces/IImportService.cs</c> stays on the list for the product and Nayax sales imports,
+    /// which the remaining children of #151 migrate.
     /// </summary>
     [Fact]
     public void Only_the_documented_legacy_services_remain_in_InventoryApi_Services()
@@ -179,7 +185,6 @@ public class ProjectDependencyDirectionTests
             "ImportService.cs",
             "ImportService.NayaxSales.cs",
             "ImportService.Products.cs",
-            "ImportService.Xml.cs",
             "Interfaces/IImportService.cs",
             "Interfaces/IMachineService.cs",
             "Interfaces/IProductService.cs",

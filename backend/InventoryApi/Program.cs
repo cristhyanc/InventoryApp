@@ -6,6 +6,7 @@ using Inventory.Application.Costing;
 using Inventory.Application.Categories;
 using Inventory.Application.Products;
 using Inventory.Application.Expenses;
+using Inventory.Application.Imports;
 using Inventory.Application.InventoryCounting;
 using Inventory.Application.MachineStockSync;
 using Inventory.Application.Machines;
@@ -30,6 +31,7 @@ using Inventory.Application.SupplierOrders;
 using Inventory.Application.Tenancy;
 using Inventory.Infrastructure;
 using Inventory.Infrastructure.Documents;
+using Inventory.Infrastructure.Imports;
 using Inventory.Infrastructure.Nayax;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Bootstrap;
@@ -107,6 +109,16 @@ builder.Services.AddDocumentStorage(
         ContentRootPath = builder.Environment.ContentRootPath,
         WebRootPath = builder.Environment.WebRootPath,
     });
+
+// Pending reimbursement XML files (issue #299). Same arrangement as document storage above: the
+// composition root is the only place that knows the host's content and web roots, so the
+// Infrastructure adapter sees plain paths and the pending-XML import use case sees only the
+// IPendingReimbursementXmlSource port.
+builder.Services.AddPendingReimbursementXmlSource(new PendingReimbursementXmlOptions
+{
+    ContentRootPath = builder.Environment.ContentRootPath,
+    WebRootPath = builder.Environment.WebRootPath,
+});
 
 // Controlled RFC 7807 responses for Nayax upstream failures.
 builder.Services.AddProblemDetails();
@@ -274,6 +286,10 @@ builder.Services.AddScoped<ILatestNayaxSalesStore, EfLatestNayaxSalesStore>();
 // Temporary API-owned adapter for the Take Inventory apply port (issue #245); see
 // EfInventoryCountAdjustmentStore.
 builder.Services.AddScoped<IInventoryCountAdjustmentStore, EfInventoryCountAdjustmentStore>();
+
+// Temporary API-owned adapter for the imported-reimbursement persistence port (issue #299); see
+// EfImportedReimbursementStore.
+builder.Services.AddScoped<IImportedReimbursementStore, EfImportedReimbursementStore>();
 
 var app = builder.Build();
 
