@@ -178,8 +178,8 @@ InventoryApp/
 │   │   ├── Program.cs
 │   │   └── InventoryApi.csproj
 │   ├── Inventory.Domain/            NayaxFeeSettings rule, reporting policies/calculations (Inventory.Domain.Reporting.<Feature>), Purchases.PurchaseTotalValidationPolicy; other features not yet migrated
-│   ├── Inventory.Application/       NayaxFeeSettings use cases/ports, Categories/Suppliers use cases/ports, Nayax.INayaxLynxClient port/DTOs, reporting use cases/contracts (Inventory.Application.Reporting.<Feature>), Purchases.ComputePurchaseTotalValidation, Documents.IDocumentStorage, shared Inventory.Application.Time.IClock/IBusinessCalendar; other features not yet migrated
-│   ├── Inventory.Infrastructure/    Nayax.NayaxLynxClient/NayaxLynxOptions (Nayax Lynx HTTP client), SystemClock/SydneyBusinessCalendar adapters (Inventory.Infrastructure.Time), FileSystemDocumentStorage and AzureBlobDocumentStorage (Inventory.Infrastructure.Documents); other features not yet migrated
+│   ├── Inventory.Application/       NayaxFeeSettings use cases/ports, Categories/Suppliers use cases/ports, Nayax.INayaxLynxClient port/DTOs, reporting use cases/contracts (Inventory.Application.Reporting.<Feature>), Purchases.ComputePurchaseTotalValidation, Imports.ImportPendingReimbursementXmlFiles with its source/store ports, Documents.IDocumentStorage, shared Inventory.Application.Time.IClock/IBusinessCalendar; other features not yet migrated
+│   ├── Inventory.Infrastructure/    Nayax.NayaxLynxClient/NayaxLynxOptions (Nayax Lynx HTTP client), SystemClock/SydneyBusinessCalendar adapters (Inventory.Infrastructure.Time), FileSystemDocumentStorage and AzureBlobDocumentStorage (Inventory.Infrastructure.Documents), FileSystemPendingReimbursementXmlSource (Inventory.Infrastructure.Imports); other features not yet migrated
 │   └── InventoryApi.Tests/
 ├── frontend/inventory-app/
 │   ├── src/app/
@@ -356,7 +356,8 @@ Controllers do not implement accounting, inventory, persistence, or filesystem r
 use-case/domain logic that predates the `Inventory.Domain`/`Inventory.Application` split and has
 not migrated yet; inventory movement recording and the product cost rebuild (issue #296), sale
 costing with its backfills (issue #297) and the inventory-cost transition (issue #298) have already
-left it for `Inventory.Application.Costing`. `InventoryApi/Adapters/{Persistence,Export,Nayax,Mapping}` hold the
+left it for `Inventory.Application.Costing`, and the pending reimbursement XML import (issue #299)
+for `Inventory.Application.Imports`. `InventoryApi/Adapters/{Persistence,Export,Nayax,Mapping}` hold the
 temporary, API-owned adapters (`EfNayaxFeeRateStore`, the `Ef<Feature>ReportFactsProvider` family,
 `EfInventoryMovementStore`/`EfInventoryCostLedgerStore`, `EfSaleCostingStore`,
 `EfInventoryCostTransitionStore`, `ReportExportFileWriter`,
@@ -416,8 +417,11 @@ paragraph, never as a silent side effect of an unrelated change. Shrinking it fo
 issue #296 removed `InventoryCostService.cs`, `InventoryCostRebuildService.cs`,
 `InventoryCostRebuildResult.cs`, `Interfaces/IInventoryCostService.cs` and
 `Interfaces/IInventoryCostRebuildService.cs` from the allow-list in the same change that deleted them,
-issue #297 likewise removed `SaleCostingService.cs` and `Interfaces/ISaleCostingService.cs`, and
-issue #298 removed `InventoryCostTransitionService.cs` and `Interfaces/IInventoryCostTransitionService.cs`.
+issue #297 likewise removed `SaleCostingService.cs` and `Interfaces/ISaleCostingService.cs`,
+issue #298 removed `InventoryCostTransitionService.cs` and `Interfaces/IInventoryCostTransitionService.cs`,
+and issue #299 removed `ImportService.Xml.cs` in the same change that migrated the pending
+reimbursement XML import (`Interfaces/IImportService.cs` stays on the list for the product and Nayax
+sales imports the remaining children of #151 migrate).
 `NayaxProductMatcher.cs` stays on the list for its remaining legacy callers. `InventoryApi/Adapters/*` is not
 frozen the same way: unlike `Services`, adding a new temporary EF/Nayax/export adapter there for a
 migrating slice (mirroring `EfNayaxFeeRateStore`) is the established, expected pattern for this
@@ -1452,6 +1456,49 @@ child 3 of #149), moved unchanged in behaviour from the removed
 4. Mark reconciled only within the `$0.01` tolerance.
 5. Surface pending, unmatched, partial, unknown, or unsupported data.
 
+The import side of that flow (`POST api/imports/pending-xml`) is the
+`Inventory.Application.Imports.ImportPendingReimbursementXmlFiles` use case (issue #299, child 1 of
+3 of #151), moved unchanged in behaviour from the removed
+`InventoryApi.Services.ImportService.ImportPendingXmlFilesAsync`:
+
+- **The use case** walks the pending queue and, per file, reads it, skips it when this business has
+  already imported the same bytes, otherwise persists it, and removes it from the queue either way.
+  It owns the reported counts (`ImportedFileImportResult`, moved here from
+  `InventoryApi.Services.Interfaces` with no JSON change): a file that could not be read, parsed or
+  removed is counted as failed and stays in the queue rather than being silently dropped, a file
+  whose hash is already present is counted as skipped, and the reimbursement rows of a file that was
+  persisted but then could not be removed are still counted as imported - the same counter order the
+  legacy loop had. A persistence failure is deliberately not caught and still propagates.
+- **Discovery and parsing** sit behind the `IPendingReimbursementXmlSource` port, implemented by
+  `Inventory.Infrastructure.Imports.FileSystemPendingReimbursementXmlSource` - a real Infrastructure
+  adapter, not a temporary API-owned one, because it needs no `AppDbContext`. It resolves
+  `{WebRootPath}/ImportedFiles` from the `PendingReimbursementXmlOptions` host paths the composition
+  root supplies through `AddPendingReimbursementXmlSource()` (the same arrangement
+  [Document storage](#document-storage) uses, so no filesystem path reaches the Application layer),
+  and keeps the parsing decisions imported financial data depends on: invariant-culture numbers and
+  dates, a date without an offset assumed to be UTC, a numeric attribute read as a boolean when it
+  parses to a non-zero integer, an unparsable number or date left `null` rather than zero, every
+  attribute preserved as raw JSON, a root `row` element treated as the single row, and a bare
+  `row` fragment retried wrapped in a root element. Filesystem and XML failures are translated here
+  and never cross the port: an unreadable, malformed or row-less file is logged (by file name, never
+  by server path) and answered as `null`, and a file that cannot be deleted as `false`, matching the
+  "translated to a plain answer at that layer's own boundary" rule in the
+  [exception ownership table](#exception-ownership-table). Caller cancellation is excluded from that
+  translation and stays cancellation.
+- **Persistence** sits behind the narrow `IImportedReimbursementStore` port (the hash question plus
+  one atomic write of the file with its reimbursement/device/device-payment/fee/payment-method
+  graph), implemented by the temporary API-owned
+  `InventoryApi.Adapters.Persistence.EfImportedReimbursementStore`, which must move into
+  `Inventory.Infrastructure` once #153 relocates persistence. The duplicate lookup is the same
+  tenant-filtered `ImportedFiles` query as before, with no business predicate of its own, so
+  file-hash idempotency stays per business: two businesses may legitimately import the same file and
+  neither is told its own first import is a duplicate. Ownership is stamped centrally on save.
+- `ImportsController.ImportPendingXmlFiles` calls the use case directly; the route, the
+  `ImportedFileImportResult` response shape and the status codes are unchanged. The action now also
+  binds the request's `CancellationToken` and passes it through both ports, which the legacy
+  signature did not. `IImportService` no longer exposes `ImportPendingXmlFilesAsync`; product import
+  and Nayax sales import stay there for the remaining children of #151.
+
 ### Nayax catalog source-state reconciliation
 
 Local catalog data and live Nayax data can drift: a product or machine can be renamed, remapped, or
@@ -2150,7 +2197,29 @@ Backend and frontend tracks can progress independently when their contracts do n
    - `InventoryApi.Services.SiteService`/`MachineService` were not deleted: `SitesController`/`MachinesController`, `ISiteService`/`IMachineService`, and their DI registrations are unchanged, and the two classes now only map the migrated use cases' results to the unchanged `SiteSummaryDto`/`SiteProductDto`/`Machine`/`Product` API contracts — the same transitional "legacy service delegates to the new use case" shape the reporting slices used before issue #92's final removal. After issue #240 completed `GetMachineProducts` (item 6 above), `MachineService` holds no `AppDbContext` and no Nayax client at all. Physically deleting these two now-thin delegator classes is left as explicit follow-up work, tracked the same way issue #92 was a separate, later step after every report family had migrated.
    - The server-local `DateTime.Now`/`DateTime.Today` acquisition itself is unchanged and still called from the Application use cases (once per `GetSiteSummaries` request since issue #313 batched its sales read — one server-local instant now serves every site in a response, where the former per-site code read the clock once per site; once per machine per `ListMachineDashboard`/`GetMachineDashboard` call, as before) — only the range *arithmetic* moved to `MachineDashboardPeriods`. The clock source and timezone are untouched by that batching. It remains the same known follow-up already documented in [Time](#time) above, not something this slice resolved.
 
-10. **Remove legacy structure**
+10. **Imports slices** (umbrella issue #151, three children)
+    - **Pending reimbursement XML import done** (issue #299, child 1 of 3). `POST api/imports/pending-xml`
+      is now the `Inventory.Application.Imports.ImportPendingReimbursementXmlFiles` use case, over the
+      `IPendingReimbursementXmlSource` discovery/parsing port and the narrow
+      `IImportedReimbursementStore` persistence port; see
+      [Reimbursement import and reconciliation](#reimbursement-import-and-reconciliation) for the
+      full behaviour, including the preserved file-hash idempotency, parsing decisions and
+      imported/skipped/failed counting. Unlike every slice before it, its non-persistence adapter is a
+      real `Inventory.Infrastructure` resident (`Inventory.Infrastructure.Imports.FileSystemPendingReimbursementXmlSource`,
+      registered with `AddPendingReimbursementXmlSource()`) rather than a temporary API-owned one,
+      because filesystem discovery and XML parsing need no `AppDbContext`; only
+      `InventoryApi.Adapters.Persistence.EfImportedReimbursementStore` stays API-owned until #153
+      relocates persistence. This slice added no `Inventory.Domain` code: the import persists raw
+      imported facts and derives no accounting value, and the reconciliation rules that consume them
+      were already migrated with the reporting slices. `ImportService.Xml.cs` and
+      `IImportService.ImportPendingXmlFilesAsync` are gone, with the
+      `Only_the_documented_legacy_services_remain_in_InventoryApi_Services` allow-list updated in the
+      same change; `ImportsController`'s other two actions and the rest of `IImportService` are
+      untouched.
+    - Product import (child 2) and Nayax sales import (child 3) are still to come; until they land,
+      `ImportService`/`IImportService` remain for those two endpoints.
+
+11. **Remove legacy structure**
     - Done for reporting (issue #92): `InventoryApi.Services.ReportingService`, `InventoryApi.Services.Interfaces.IReportingService`, their dependency-injection registration, and every production and test caller were removed, and both source files were deleted. Reporting exports now run through `Inventory.Application.Reporting.Export.GetReportExportRows` for row building and `InventoryApi.Adapters.Export.ReportExportFileWriter` for CSV/XLSX byte encoding.
     - Done for stock (issue #282, item 6 above): `InventoryApi.Services.StockService`, `InventoryApi.Services.Interfaces.IStockService`, their dependency-injection registration, and every production and test caller were removed, and both source files were deleted.
     - Still pending for every other feature area (products, purchasing/costing, the Sites/Machines legacy delegator classes above, and the remaining direct-access controllers/services); only after each is migrated and tests prove equivalent behavior does this step complete overall.

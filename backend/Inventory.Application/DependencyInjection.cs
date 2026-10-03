@@ -3,6 +3,7 @@ using Inventory.Application.Categories;
 using Inventory.Application.Commissions;
 using Inventory.Application.Costing;
 using Inventory.Application.Expenses;
+using Inventory.Application.Imports;
 using Inventory.Application.InventoryCounting;
 using Inventory.Application.MachineStockSync;
 using Inventory.Application.Machines;
@@ -105,6 +106,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<PreviewAllInventoryCostTransitions>();
         services.AddScoped<ApplyAllInventoryCostTransitions>();
         services.AddScoped<ApplyInventoryCount>();
+        services.AddScoped<ImportPendingReimbursementXmlFiles>();
         services.AddScoped<GetStockHistory>();
         services.AddScoped<GetRestockCostSuggestion>();
         services.AddScoped<IGetRestockCostSuggestion>(sp => sp.GetRequiredService<GetRestockCostSuggestion>());
