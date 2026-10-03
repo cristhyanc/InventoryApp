@@ -25,6 +25,7 @@ InventoryApp is a full-stack operations and bookkeeping system for a vending-mac
 | Authentication | Microsoft Entra ID, `Microsoft.Identity.Web` (API), MSAL (`@azure/msal-angular`/`@azure/msal-browser`, SPA) |
 | Tests | xUnit, Moq, EF Core InMemory and SQLite |
 | Integrations | Nayax Lynx API and imported reimbursement/workbook data |
+| Observability | Azure Monitor OpenTelemetry (`Azure.Monitor.OpenTelemetry.AspNetCore`) to Application Insights, enabled by configuration |
 | Hosting | Azure App Service and Azure Static Web Apps |
 | Automation | GitHub Actions |
 
@@ -209,9 +210,12 @@ ConnectionStrings__DefaultConnection
 NayaxLynx__BaseUrl
 NayaxLynx__OperatorId
 NayaxLynx__AccessToken
+APPLICATIONINSIGHTS_CONNECTION_STRING
 ```
 
 `NayaxLynx__BaseUrl` and `NayaxLynx__OperatorId` are non-secret and validated at startup — the API refuses to start with a missing or invalid value rather than failing on the first Nayax call. `NayaxLynx__AccessToken` is the Nayax Core bearer token, a secret: set it through user-secrets locally or Key Vault/App Service configuration in Azure, and it is never logged. The already deployed secret, `Nayax__Token`, keeps working as a fallback with no rollout required — `Inventory.Infrastructure.Nayax.NayaxLynxConfiguration.ResolveAccessToken` prefers `NayaxLynx__AccessToken` when both are set. New environments should set `NayaxLynx__AccessToken`; `Nayax__Token` is retained only for the deployment that predates this consolidation.
+
+`APPLICATIONINSIGHTS_CONNECTION_STRING` is the Application Insights connection string, a secret that is never committed — see [Observability and error diagnostics](#observability-and-error-diagnostics). Unlike the Nayax settings it is optional: with the variable absent or blank no telemetry is registered at all and the API starts and runs normally, which is what local development and the automated tests do.
 
 Uploaded purchase and expense documents are stored outside the API web root, under the content root's `protected-files/` folder, with their metadata in SQLite; they are readable only through the authenticated API endpoints. Do not commit uploaded business documents, local databases, or credentials.
 
@@ -334,6 +338,160 @@ Service → Monitoring → Health check; or the `healthCheckPath` site configura
 `/health/ready`, so App Service routes traffic only to instances that can reach the database and
 restarts instances that cannot. Do not point Health check at `/health/live` — that would keep an
 instance in rotation even while its database connection is down.
+
+## Observability and error diagnostics
+
+The API reports failures to **Azure Application Insights** through the Microsoft-supported Azure
+Monitor OpenTelemetry distribution (`Azure.Monitor.OpenTelemetry.AspNetCore`, issue #165), so an
+operator can search retained logs, exceptions, requests and dependencies after the fact and
+correlate them by trace/operation ID. It is the only instrumentation pipeline in the process: the
+classic Application Insights SDK is deliberately not referenced, because two pipelines double the
+cost and emit duplicate telemetry that no longer correlates.
+
+Registration lives in one place,
+`backend/InventoryApi/Observability/ObservabilityServiceCollectionExtensions.cs`, called from
+`Program.cs` before `builder.Build()`. It collects, automatically and with no per-feature code:
+
+- incoming ASP.NET Core requests;
+- outgoing `HttpClient` dependencies, which is how every Nayax Lynx call is recorded;
+- the SQL dependencies the distribution's `SqlClient` instrumentation supports;
+- runtime, HTTP and ASP.NET Core metrics;
+- every `Microsoft.Extensions.Logging` log and the exception attached to it.
+
+Application code logs through `ILogger` only. Nothing calls a telemetry client directly, so
+telemetry can be switched off — or replaced — in that one file.
+
+**App Service configuration.** Set one application setting (Portal: App Service →
+Settings → Environment variables; or `az webapp config appsettings set`):
+
+```text
+APPLICATIONINSIGHTS_CONNECTION_STRING=<connection string of the Application Insights resource>
+```
+
+Its value is a secret and is never committed to this repository, written into a pull request, an
+issue, or a log. The Application Insights resource itself is created and connected by a human in
+Azure; no Azure resource is provisioned from repository automation.
+
+**Telemetry is optional, by design.** With the variable absent or blank, nothing OpenTelemetry-related
+is registered and the API starts and serves requests exactly as before. Telemetry is diagnostics,
+not a dependency the API needs in order to work, so a missing setting must never be a startup
+failure. Local development and the whole test suite run that way.
+
+### Error handling and what reaches a log
+
+The three centrally registered exception handlers decide both the caller's response and the log
+entry (see
+[docs/architecture.md § Domain and application error mapping](docs/architecture.md#domain-and-application-error-mapping)):
+
+| Failure | Response | Logged as |
+| --- | --- | --- |
+| Expected validation failure (`DomainValidationException`, `InsufficientStockException`) | `400` with the caller-safe message | not logged — it is a normal outcome, not an error |
+| Expected business conflict (`DomainConflictException`) | `409` with the caller-safe message | one `Warning` with the trace ID and the caller-safe detail |
+| Nayax upstream failure (`NayaxUpstreamException`) | `502`, fixed generic detail | one `Error` with the operation, upstream method, relative endpoint and numeric upstream status, plus the request method, path and trace ID |
+| Anything else | `500`, fixed generic detail | one `Error` with the exception, the request method and path, and the trace ID |
+| Caller cancellation | ASP.NET Core's normal handling | not logged — the caller went away, the server did not fail |
+
+Every response carries a `traceId` and no stack trace, exception type or unexpected exception
+message, so the caller can quote an identifier that finds the server-side detail without being
+told any of it.
+
+**Safe logging rules.** Telemetry is retained and searchable, so these are hard rules, not
+preferences:
+
+- Never log a Nayax token, an `Authorization` header, a cookie, a connection string or any other
+  credential. The request's query string and headers are never logged for this reason: the handlers
+  add only the request **method** and **path**.
+- Never log document contents, customer information or sensitive business data.
+- The Nayax upstream handler logs only fields this application composed and deliberately does not
+  attach the exception, because its inner transport exception's message is outside this
+  application's control and can repeat a request header or an upstream response body.
+- The per-query EF Core SQL command log is suppressed in deployed environments; it is the most
+  expensive category and the one most likely to carry business data.
+
+### Logging levels
+
+The deployed levels are in `backend/InventoryApi/appsettings.json` (there is no committed
+`appsettings.Production.json`), and every log that passes them is exported and retained. The policy
+is "every application warning and error, and nothing a framework emits per request":
+
+| Category | Level | Why |
+| --- | --- | --- |
+| `Default` | `Information` | application code (`InventoryApi.*`, `Inventory.Application.*`, …) |
+| `Microsoft`, `Microsoft.AspNetCore` | `Warning` | per-request framework noise |
+| `Microsoft.Hosting.Lifetime` | `Information` | the record that a deployment came up |
+| `Microsoft.EntityFrameworkCore`, `…Database.Command` | `Warning` | suppresses the per-query SQL log |
+| `Microsoft.EntityFrameworkCore.Migrations` | `Information` | Production startup applies pending migrations (issue #201), so "Applying migration …" is an audit record |
+| `Microsoft.Identity.Web` | `Warning` | per-request token validation detail |
+| `System.Net.Http`, `Azure` | `Warning` | SDK/HttpClient chatter, and it keeps the exporter's own logs out of the exporter |
+
+No category may be set below `Warning`: that would hide a real failure from the only place an
+operator can look afterwards. `appsettings.Development.json` raises the framework, EF command and
+Identity.Web categories back to `Information` for local debugging, where nothing is exported.
+`backend/InventoryApi.Tests/Observability/LoggingLevelPolicyTests.cs` enforces all of this.
+
+### KQL troubleshooting queries
+
+Run these in the Application Insights resource (Portal: Application Insights → Monitoring → Logs).
+
+Recent exceptions:
+
+```kusto
+exceptions
+| where timestamp > ago(24h)
+| project timestamp, operation_Id, type, outerMessage, problemId, operation_Name
+| order by timestamp desc
+```
+
+Error-level traces, with the structured properties the handlers attach:
+
+```kusto
+traces
+| where timestamp > ago(24h) and severityLevel >= 3     // 3 = Error, 4 = Critical
+| project timestamp, operation_Id, message,
+          method = tostring(customDimensions.Method),
+          path = tostring(customDimensions.Path),
+          traceId = tostring(customDimensions.TraceId)
+| order by timestamp desc
+```
+
+Everything recorded for one request, from the `traceId` the caller was given. That value is a W3C
+`traceparent` (`00-<trace-id>-<span-id>-<flags>`), and Application Insights indexes its middle
+segment as `operation_Id`:
+
+```kusto
+let responseTraceId = "<traceId from the ProblemDetails response>";
+let operationId = tostring(split(responseTraceId, "-")[1]);
+union isfuzzy=true requests, dependencies, traces, exceptions
+| where operation_Id == operationId
+| project timestamp, itemType, name, message, resultCode, success, duration
+| order by timestamp asc
+```
+
+### Verifying a change
+
+Automated, as part of `bash scripts/validate.sh`:
+
+```bash
+dotnet test backend/InventoryApi/InventoryApi.slnx --filter "FullyQualifiedName~InventoryApi.Tests.Observability|FullyQualifiedName~ExceptionHandlerTests"
+```
+
+That covers telemetry registration with a synthetic, non-secret connection string, startup with
+the setting absent, the deployed logging levels, the structured `Method`/`Path`/`TraceId`
+properties on an unexpected-exception log, the log levels for expected domain failures, and the
+rule that no header, query string, token or upstream body reaches a log entry.
+
+By hand, against a running API:
+
+1. Start the API with no `APPLICATIONINSIGHTS_CONNECTION_STRING` and confirm it starts and
+   `GET /health/ready` answers `200`.
+2. Call an endpoint that fails unexpectedly and confirm the response is a generic `500`
+   `ProblemDetails` with a `traceId` and no exception detail, and that the console shows exactly
+   one `Error` entry with that trace ID.
+3. Call an endpoint that fails validation and confirm nothing is logged at `Error`.
+
+Confirming that telemetry actually arrives in Azure requires the production connection string and
+is a human step performed outside this repository: set the App Service setting, restart the app,
+and run the KQL queries above.
 
 ## Validate a change
 

@@ -18,6 +18,14 @@ public class GlobalExceptionHandlerTests
     /// </summary>
     private const string SensitiveDetail = "sensitive-detail-sentinel-must-not-be-published";
 
+    /// <summary>
+    /// Sentinels for the two places a request can carry a credential that must never reach a log
+    /// sink: the <c>Authorization</c> header and the query string. Like
+    /// <see cref="SensitiveDetail"/> they are deliberately not shaped like real credentials.
+    /// </summary>
+    private const string SensitiveHeaderValue = "header-sentinel-must-not-be-logged";
+    private const string SensitiveQueryValue = "query-sentinel-must-not-be-logged";
+
     [Fact]
     public async Task Unexpected_exception_becomes_a_generic_500_problem_json_response()
     {
@@ -92,6 +100,57 @@ public class GlobalExceptionHandlerTests
         Assert.Equal("trace-for-this-request", traceId);
     }
 
+    /// <summary>
+    /// Issue #165: the error log is the operator's entry point into Application Insights, so the
+    /// request method, the request path and the trace ID have to be queryable structured
+    /// properties - the documented KQL queries in README.md read them by name - not just text
+    /// inside the rendered message.
+    /// </summary>
+    [Fact]
+    public async Task Unexpected_exception_log_carries_structured_method_path_and_trace_id()
+    {
+        var (handler, context, _, logger) = CreateHandler();
+        context.TraceIdentifier = "trace-for-this-request";
+        context.Request.Method = HttpMethods.Post;
+        context.Request.Path = "/api/purchases/42";
+
+        await handler.TryHandleAsync(context, new InvalidOperationException("boom"), CancellationToken.None);
+
+        var entry = Assert.Single(logger.Entries);
+        Assert.Equal(LogLevel.Error, entry.Level);
+        Assert.Equal("POST", entry.Properties["Method"]);
+        Assert.Equal("/api/purchases/42", entry.Properties["Path"]);
+        Assert.Equal("trace-for-this-request", entry.Properties["TraceId"]);
+    }
+
+    /// <summary>
+    /// Issue #165: telemetry is retained and searchable, so what the handler adds to the log must
+    /// stay inside the safe request context it chose. The <c>Authorization</c> header and the query
+    /// string are the two parts of a request that routinely carry a credential, and neither is
+    /// logged.
+    /// </summary>
+    [Fact]
+    public async Task Unexpected_exception_log_excludes_request_headers_and_the_query_string()
+    {
+        var (handler, context, _, logger) = CreateHandler();
+        context.Request.Method = HttpMethods.Get;
+        context.Request.Path = "/api/nayax/machines";
+        context.Request.QueryString = new QueryString($"?access_token={SensitiveQueryValue}");
+        context.Request.Headers.Authorization = $"Bearer {SensitiveHeaderValue}";
+        context.Request.Headers.Cookie = $"session={SensitiveHeaderValue}";
+
+        await handler.TryHandleAsync(context, new InvalidOperationException("boom"), CancellationToken.None);
+
+        var entry = Assert.Single(logger.Entries);
+        Assert.Equal("/api/nayax/machines", entry.Properties["Path"]);
+
+        var logged = string.Join('\n', entry.Properties.Select(p => $"{p.Key}={p.Value}").Append(entry.Message));
+        Assert.DoesNotContain(SensitiveHeaderValue, logged, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(SensitiveQueryValue, logged, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("access_token", logged, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Bearer", logged, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Fact]
     public async Task Caller_cancellation_is_not_logged_as_an_unexpected_error()
     {
@@ -106,7 +165,7 @@ public class GlobalExceptionHandlerTests
 
     private static string ReadBody(MemoryStream body) => Encoding.UTF8.GetString(body.ToArray());
 
-    private static (GlobalExceptionHandler Handler, DefaultHttpContext Context, MemoryStream Body, CapturingLogger Logger) CreateHandler()
+    private static (GlobalExceptionHandler Handler, DefaultHttpContext Context, MemoryStream Body, CapturingLogger<GlobalExceptionHandler> Logger) CreateHandler()
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -118,28 +177,9 @@ public class GlobalExceptionHandlerTests
         context.Response.Body = body;
         context.Request.Headers.Accept = "application/json";
 
-        var logger = new CapturingLogger();
+        var logger = new CapturingLogger<GlobalExceptionHandler>();
         var handler = new GlobalExceptionHandler(provider.GetRequiredService<IProblemDetailsService>(), logger);
 
         return (handler, context, body, logger);
-    }
-
-    private sealed class CapturingLogger : ILogger<GlobalExceptionHandler>
-    {
-        public List<(LogLevel Level, string Message, Exception? Exception)> Entries { get; } = new();
-
-        IDisposable? ILogger.BeginScope<TState>(TState state) => null;
-
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(
-            LogLevel logLevel,
-            EventId eventId,
-            TState state,
-            Exception? exception,
-            Func<TState, Exception?, string> formatter)
-        {
-            Entries.Add((logLevel, formatter(state, exception), exception));
-        }
     }
 }
