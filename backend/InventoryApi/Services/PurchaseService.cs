@@ -8,8 +8,8 @@ using InventoryApi.Services.Interfaces;
 namespace InventoryApi.Services;
 
 /// <summary>
-/// A transitional delegator only (issue #281, the same shape #240 left <see cref="ProductService"/>
-/// in): every method maps the <see cref="IPurchaseService"/> request onto the migrated
+/// A transitional delegator only (issue #281, the same shape #240 left the <c>ProductService</c>
+/// issue #303 has since deleted): every method maps the <see cref="IPurchaseService"/> request onto the migrated
 /// <see cref="Inventory.Application.Purchases"/> use case that owns it, and maps the result back to
 /// the unchanged <see cref="Purchase"/> API response through <see cref="PurchaseResponseMapper"/>.
 /// It holds no <c>AppDbContext</c>, no query, and no rule of its own. Deleting it, and with it
