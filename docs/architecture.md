@@ -959,6 +959,8 @@ Site commissions use effective-dated agreements and one of three bases: gross sa
 - `Product.MachinePrice` (`[NotMapped]`) — the machine-specific live price, sourced from the per-machine Nayax `RetailPrice` (`NayaxMachineProduct.RetailPrice`) in `MachineService`/`SiteService`;
 - the Nayax `ProductCostPrice` field on an imported sale (`NayaxSales.NayaxProductCostPrice`) — a genuine cost value used for historical COGS, never a selling price. The catalogue import previously set `UnitPrice` from this cost field by mistake; it now uses the catalog `RetailPrice` instead.
 
+**The JSON field this value is imported from is unverified (open human decision).** The Nayax developer portal documents `GET /v1/operators/{OperatorID}/products` as returning `ProductDefaultRetailPrice` and documents no `RetailPrice` field on that endpoint; `RetailPrice` is documented only on the machine-product endpoints (`GET /v1/machines/{MachineID}/machineProducts`), which is what `NayaxMachineProduct.RetailPrice` and `Product.MachinePrice` above correctly use. The operator-catalogue DTO `Inventory.Application.Nayax.NayaxProduct.RetailPrice` nevertheless binds the JSON name `RetailPrice`, so if the live operator response matches the published contract this import reads `null` and writes `UnitPrice` as `0`. Confirming the live payload requires an actual operator response, which an agent may not fetch, so under `AGENTS.md` § Nayax contract verification this contract is recorded as **not verified** rather than accepted: issue #300 carried the pre-existing mapping over unchanged, and changing the JSON name is a `Product.UnitPrice` semantics change needing a human decision, its own issue, a live-payload check and a backfill decision. Until that decision is made, treat an imported `UnitPrice` of `0` as possibly a mapping artefact rather than a real Nayax price.
+
 The public property name `UnitPrice` is retained for API/contract compatibility. Only the Nayax catalog import may change its value; `ProductService.Update` and the product edit UI treat it as Nayax-managed and read-only. It is never an inventory-valuation input: the home Dashboard's "Inventory Value" tile is a backend-authoritative cost valuation (see [Dashboard "Inventory Value" tile](#dashboard-inventory-value-tile-issue-42) below, issue #42), and a `quantityInStock * unitPrice` selling-price valuation must not be introduced anywhere.
 
 ### Historical inventory cost
@@ -1641,13 +1643,22 @@ product and category tables. It is `Inventory.Application.Imports.ImportNayaxPro
   only the Nayax-managed catalogue fields.
 - The read-decide-write sequence stays inside that adapter, step for step as the legacy method ran
   it, rather than being decomposed into Application-level orchestration - the same ownership
-  precedent `EfPurchaseStore`'s multi-step writes follow - so the new-versus-existing decision and
-  the write it feeds remain one operation on one scoped `AppDbContext`. The two catalogue reads the
-  legacy method started concurrently on that shared context are now awaited one at a time (see
+  precedent `EfPurchaseStore`'s multi-step writes follow. The two catalogue reads the legacy method
+  started concurrently on that shared context are now awaited one at a time (see
   [Concurrency inside one request](#concurrency-inside-one-request-the-scoped-ef-context-issue-313)).
+  That keeps the new-versus-existing decision and the write it feeds together *within one request*,
+  and nothing more: this import has no cross-request isolation, and the single scoped `AppDbContext`
+  provides none. Its reads run outside the transaction `SaveChangesAsync` opens, with no lock, no
+  expected-state comparison and no concurrency token, so two overlapping imports can both decide the
+  same product is new (the later `SaveChanges` then fails on its primary key) and a local catalogue
+  edit committed between the read and the write is overwritten by whichever writer commits last.
+  This is the legacy behaviour, carried over unchanged; making the import safe under concurrent
+  callers needs an explicit transaction or concurrency token and is a behaviour change for its own
+  issue.
 - Only four fields are Nayax-managed: `Name`, `Description`, `UnitPrice` (from the catalogue
   `RetailPrice`, never the Nayax `ProductCostPrice` - see
-  [Product selling price](#product-selling-price)) and `CategoryId`, plus `UpdatedAt`. Stock,
+  [Product selling price](#product-selling-price), including the unverified field name recorded
+  there) and `CategoryId`, plus `UpdatedAt`. Stock,
   costing, supplier and the operator's own catalogue edits are local state the import does not
   write. A new product is created with `RestockTo` 0 and the import instant as its `CreatedAt`; an
   existing category is never renamed, only a missing one is created; and a local product Nayax

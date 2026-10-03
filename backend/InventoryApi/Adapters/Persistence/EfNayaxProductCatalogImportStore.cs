@@ -17,11 +17,18 @@ namespace InventoryApi.Adapters.Persistence;
 /// The read-decide-write sequence stays in this adapter, exactly as the former
 /// <c>ImportService.ImportProductsAsync</c> ran it, rather than being decomposed into
 /// Application-level orchestration - the same ownership precedent <c>EfPurchaseStore</c>'s
-/// multi-step writes follow. Keeping the catalogue read and the upsert in one operation on one
-/// scoped <c>DbContext</c> is also what keeps the new/existing decision and the write from being
-/// separated by a window another request could change the catalogue in. Both reads are awaited one
-/// at a time, because they share that scoped context (docs/architecture.md § Concurrency inside one
-/// request).
+/// multi-step writes follow. Both reads are awaited one at a time, because they share the request's
+/// scoped context (docs/architecture.md § Concurrency inside one request).
+///
+/// That shape gives no isolation against a *concurrent* request, and must not be read as if it did.
+/// The catalogue reads run outside the transaction <c>SaveChangesAsync</c> opens, and there is no
+/// lock, no expected-state comparison and no concurrency token, so two overlapping imports can both
+/// decide the same product is new (the later <c>SaveChanges</c> then fails on its primary key), and
+/// a local catalogue edit committed between this import's read and its write is simply overwritten
+/// by whichever writer commits last. Keeping the sequence in one adapter only keeps the
+/// new/existing decision and the write it feeds together within this one request; closing the
+/// cross-request window would need an explicit transaction or a concurrency token, which is a
+/// behaviour change outside issue #300.
 /// </summary>
 public sealed class EfNayaxProductCatalogImportStore : INayaxProductCatalogImportStore
 {
