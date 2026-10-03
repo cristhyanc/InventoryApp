@@ -247,18 +247,40 @@ dotnet InventoryApi.dll backup-database --output /home/data/backups/inventory-<t
 ```
 
 This is the same command the scheduled backup job (issue #333) calls; routine backups are
-scheduled, not run by hand. The equivalent manual `sqlite3` CLI sequence remains available where
-the published `dotnet` application is not on hand:
+scheduled, not run by hand.
+
+The same command's `--upload` mode (issue #332) creates, verifies and uploads a snapshot as one
+workflow, so the verified copy ends up off the instance instead of next to the database it
+protects:
+
+```bash
+dotnet InventoryApi.dll backup-database --upload
+```
+
+It stages the snapshot outside `wwwroot`, writes it to a private Azure Blob container under a
+`daily/` prefix (and under `monthly/<YYYY-MM>/` on the first successful upload of each UTC calendar
+month, never overwriting an existing recovery point), verifies the upload, and removes the local
+staged copy either way. Authentication is the App Service's managed identity through
+`DefaultAzureCredential`; the only settings are the non-secret `BackupStorage__BlobServiceUri` and
+`BackupStorage__ContainerName`, and there is no account key or SAS token to configure. `--output`
+and `--upload` are mutually exclusive. The required container, least-privilege
+`Storage Blob Data Contributor` assignment and encryption expectations are in
+[docs/architecture.md](docs/architecture.md#sqlite-operating-assumptions-and-scale-strategy-issue-53);
+no production Azure resource or role assignment is created by this repository.
+
+The equivalent manual `sqlite3` CLI sequence remains available where the published `dotnet`
+application is not on hand:
 
 ```bash
 sqlite3 /home/data/inventory.db ".backup '/home/data/backups/inventory-<timestamp>.db'"
 sqlite3 /home/data/backups/inventory-<timestamp>.db "PRAGMA integrity_check;"
 ```
 
-Store the verified backup somewhere other than the App Service's own `/home` mount. Restoring
-(`sqlite3 <backup> ".backup '/home/data/inventory.db'"`) overwrites live data and must be run
-deliberately, by a human, after stopping the API — never automatically. Blob upload,
-retention/alerting, and automated restore are out of scope for `backup-database`. The full
+Store the verified backup somewhere other than the App Service's own `/home` mount — which is what
+`--upload` does for you. Restoring (`sqlite3 <backup> ".backup '/home/data/inventory.db'"`)
+overwrites live data and must be run deliberately, by a human, after stopping the API — never
+automatically. Retention/alerting and automated restore remain out of scope for
+`backup-database`. The full
 step-by-step procedure, including why a plain filesystem copy is unsafe on a live database, is in
 [docs/architecture.md](docs/architecture.md#sqlite-operating-assumptions-and-scale-strategy-issue-53).
 
@@ -266,12 +288,16 @@ step-by-step procedure, including why a plain filesystem copy is unsafe on a liv
 `backend/InventoryApi.Tests/Operations/SqliteBackupRestoreTests.cs` proves the backup mechanism
 itself and, built on top of it, the `backup-database` command's path validation, verification,
 hashing, and failure reporting (`DatabaseBackupRunnerTests`) and its argument parsing
-(`BackupDatabaseArgumentsTests`) — all of it running as part of the normal test suite and only ever
-touching throwaway SQLite files under the OS temp directory, never a developer's or production
+(`BackupDatabaseArgumentsTests`). The upload workflow is covered the same way:
+`DatabaseBackupUploadRunnerTests` drives create-verify-upload-cleanup end to end and
+`AzureBlobBackupUploaderTests` covers the object naming, the monthly recovery point and the
+refusals — both against an in-memory stand-in for the container, so no Azure account, credential
+or network is involved. All of it runs as part of the normal test suite and only ever touches
+throwaway SQLite files under the OS temp directory, never a developer's or production
 `inventory.db`:
 
 ```bash
-dotnet test backend/InventoryApi/InventoryApi.slnx --filter "FullyQualifiedName~SqliteBackupRestoreTests|FullyQualifiedName~DatabaseBackupRunnerTests|FullyQualifiedName~BackupDatabaseArgumentsTests"
+dotnet test backend/InventoryApi/InventoryApi.slnx --filter "FullyQualifiedName~SqliteBackupRestoreTests|FullyQualifiedName~DatabaseBackupRunnerTests|FullyQualifiedName~BackupDatabaseArgumentsTests|FullyQualifiedName~DatabaseBackupUploadRunnerTests|FullyQualifiedName~AzureBlobBackupUploaderTests"
 ```
 
 To rehearse the `sqlite3` CLI sequence above before relying on it in production, run it against a
