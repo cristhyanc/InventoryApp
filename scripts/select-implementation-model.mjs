@@ -1,42 +1,19 @@
 import { createHash } from 'node:crypto';
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
+import { FULL_PROVIDER_EXECUTION_ENABLED, parseReadinessLabel } from './agent-mode.mjs';
 
 // Trusted policy: model output can select a tier, never supply a model ID or CLI arguments.
 export const MODELS = Object.freeze({
   claude: { low: 'haiku', standard: 'sonnet', high: 'opus' },
   copilot: { low: 'claude-haiku-4.5', standard: 'claude-sonnet-5.5', high: 'claude-opus-5.5' },
 });
-export const READY_LABELS = Object.keys(MODELS).flatMap(provider => [`agent-ready-${provider}`, `agent-ready-${provider}-low`, `agent-ready-${provider}-high`]);
-// Single-provider fallbacks (#337): one provider implements, architecture-checks, repairs and reviews.
-export const FULL_READY_LABELS = Object.keys(MODELS).map(provider => `agent-ready-full-${provider}`);
-export const READINESS_LABELS = Object.freeze([...READY_LABELS, ...FULL_READY_LABELS]);
-// Workflow shell checks must use exactly this pattern (enforced by validate-agent-workflows.mjs).
-export const READINESS_LABEL_PATTERN = /^agent-ready-(?:(?:claude|copilot)(?:-low|-high)?|full-(?:claude|copilot))$/;
-// Claude-primary is the documented default when both providers are available.
-export const DEFAULT_READY_LABEL = 'agent-ready-claude';
-// Trusted routing policy. Provider names come from this table, never from model output.
-export const ROUTES = Object.freeze({
-  'cross-claude': Object.freeze({ implementer: 'claude', reviewer: 'copilot', sameProviderReview: false }),
-  'cross-copilot': Object.freeze({ implementer: 'copilot', reviewer: 'claude', sameProviderReview: false }),
-  'full-claude': Object.freeze({ implementer: 'claude', reviewer: 'claude', sameProviderReview: true }),
-  'full-copilot': Object.freeze({ implementer: 'copilot', reviewer: 'copilot', sameProviderReview: true }),
-});
-// Full-provider labels are recognised (for exclusivity) but must not start work until #340
-// connects same-provider architecture review, repair and final review.
-export const FULL_PROVIDER_EXECUTION_ENABLED = false;
+// Readiness labels, routes and the full-provider gate live in the standalone agent-mode.mjs, which
+// jobs without a checkout also fetch from the trusted workflow commit.
+export { READINESS_LABELS, READINESS_LABEL_PATTERN, FULL_READY_LABELS, DEFAULT_READY_LABEL, ROUTES, FULL_PROVIDER_EXECUTION_ENABLED, parseReadinessLabel, STANDARD_READY_LABELS as READY_LABELS } from './agent-mode.mjs';
 const activeStates = ['agent-working', 'agent-architecture-fix', 'agent-review', 'agent-blocked'];
 const hasControlCharacter = text => [...text].some(char => char.charCodeAt(0) < 0x20 || char.charCodeAt(0) === 0x7f);
 const fingerprint = issue => createHash('sha256').update(JSON.stringify({ title: issue.title, body: issue.body })).digest('hex');
-
-/** Parses one readiness label into its trusted route, or returns null for any other label. */
-export function parseReadinessLabel(label) {
-  if (typeof label !== 'string' || !READINESS_LABEL_PATTERN.test(label) || !READINESS_LABELS.includes(label)) return null;
-  const full = /^agent-ready-full-(claude|copilot)$/.exec(label);
-  if (full) return { label, mode: `full-${full[1]}`, ...ROUTES[`full-${full[1]}`], tier: 'default' };
-  const [, provider, suffix = ''] = /^agent-ready-(claude|copilot)(-low|-high)?$/.exec(label);
-  return { label, mode: `cross-${provider}`, ...ROUTES[`cross-${provider}`], tier: suffix ? suffix.slice(1) : 'default' };
-}
 
 export function prepareSelection({ provider, label, issue, attempt = 1, fullProviderEnabled = FULL_PROVIDER_EXECUTION_ENABLED }) {
   const route = parseReadinessLabel(label);
@@ -91,7 +68,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     } else if (command === 'resolve') {
       const selection = JSON.parse(readFileSync(selectionFile, 'utf8'));
       const result = resolveSelection(selection, selection.triage ? JSON.parse(process.env.TRIAGE_OUTPUT || 'null') : undefined);
-      output({ model: result.model, max_turns: result.maxTurns, tier: result.tier, reason: result.reason, fingerprint: result.fingerprint });
+      output({ model: result.model, max_turns: result.maxTurns, tier: result.tier, reason: result.reason, fingerprint: result.fingerprint, mode: result.mode });
       if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `Implementation selection: ${result.provider} / ${result.tier} / ${result.model}. ${result.reason}\n`);
     } else if (command === 'verify') {
       verifySnapshot({ provider: process.env.PROVIDER, label: process.env.READY_LABEL, fingerprint: process.env.TASK_FINGERPRINT, attempt: Number(process.env.RUN_ATTEMPT || 1) }, JSON.parse(readFileSync(issueFile, 'utf8')));

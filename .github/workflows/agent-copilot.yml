@@ -95,6 +95,7 @@ jobs:
           IMPLEMENTATION_MODEL: ${{ needs.model.outputs.model }}
           MODEL_TIER: ${{ needs.model.outputs.tier }}
           MODEL_REASON: ${{ needs.model.outputs.reason }}
+          AGENT_MODE: ${{ needs.model.outputs.mode }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
@@ -111,6 +112,8 @@ jobs:
           const active = issue.labels.some(x => ['agent-working','agent-architecture-fix','agent-review','agent-blocked'].includes(x.name));
           const fingerprint = createHash('sha256').update(JSON.stringify({ title: issue.title, body: issue.body })).digest('hex');
           if (issue.state !== 'OPEN' || active || ready.length !== 1 || ready[0] !== process.env.READY_LABEL || fingerprint !== process.env.TASK_FINGERPRINT) throw new Error('Task changed after model selection; resolve labels/scope and re-apply readiness.');
+          // Only the standard Copilot labels start this job, so the trusted selection must be cross-copilot.
+          if (process.env.AGENT_MODE !== 'cross-copilot') throw new Error('Selected provider mode does not match the readiness label.');
           JS
 
           assigned=false
@@ -128,6 +131,8 @@ jobs:
 
           [ -n "$COPILOT_AGENT_TOKEN" ] || fail "The COPILOT_AGENT_TOKEN secret is not configured."
 
+          # The claim: one edit that swaps the readiness label for agent-working. GitHub's label history
+          # of this edit is what every later boundary verifies (scripts/agent-mode.mjs).
           gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
             --remove-label "$READY_LABEL" --add-label agent-working
 
@@ -163,4 +168,4 @@ jobs:
           assigned=true
 
           gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
-            --body "Assigned to the Copilot coding agent with base branch develop. Implementation model: $IMPLEMENTATION_MODEL ($MODEL_TIER). $MODEL_REASON When Copilot's pull request is marked ready for review, Claude runs a read-only architecture check, Copilot fixes any findings, exact-SHA validation runs, and Claude does the final review. Run: $RUN_URL"
+            --body "Assigned to the Copilot coding agent with base branch develop. Provider mode: $AGENT_MODE. Implementation model: $IMPLEMENTATION_MODEL ($MODEL_TIER). $MODEL_REASON When Copilot's pull request is marked ready for review, Claude runs a read-only architecture check, Copilot fixes any findings, exact-SHA validation runs, and Claude does the final review. Run: $RUN_URL"

@@ -49,11 +49,13 @@ jobs:
       contents: read
       pull-requests: read
       statuses: read
+      issues: read
     outputs:
       pr_number: ${{ steps.context.outputs.pr_number }}
       head_sha: ${{ steps.context.outputs.head_sha }}
       base_ref: ${{ steps.context.outputs.base_ref }}
       implementer: ${{ steps.context.outputs.implementer }}
+      agent_mode: ${{ steps.context.outputs.agent_mode }}
 
     steps:
       - name: Resolve and verify pull request
@@ -105,6 +107,10 @@ jobs:
             fail "Automated review requires an agent/issue-* (Claude) or copilot/* (Copilot) head branch."
           fi
           [ "$current_sha" = "$head_sha" ] || fail "Refusing stale review: pull request head is $current_sha, requested SHA is $head_sha."
+          # Provider mode (#339): verify the route claimed in the issue's label history against this pull request, using the
+          # resolver from this workflow's own commit. A conflicting, malformed or disabled mode fails closed.
+          gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/scripts/agent-mode.mjs?ref=$GITHUB_WORKFLOW_SHA" > "$RUNNER_TEMP/agent-mode.mjs"
+          agent_mode="$(node "$RUNNER_TEMP/agent-mode.mjs" verify-pr "$pr_number" "$implementer")" || fail "the provider mode of pull request #$pr_number could not be verified."
           jq -e 'any(.labels[]?; .name == "agent-review")' <<<"$pr_json" >/dev/null \
             || fail "The agent-review label is required before review."
 
@@ -124,6 +130,7 @@ jobs:
             echo "head_sha=$head_sha"
             echo "base_ref=$base_ref"
             echo "implementer=$implementer"
+            echo "agent_mode=$agent_mode"
           } >> "$GITHUB_OUTPUT"
 
   review:
@@ -446,6 +453,8 @@ jobs:
     permissions:
       pull-requests: write
       statuses: write
+      contents: read
+      issues: read
 
     steps:
       - name: Guard and publish review
@@ -456,6 +465,7 @@ jobs:
           PR_NUMBER: ${{ needs.context.outputs.pr_number }}
           HEAD_SHA: ${{ needs.context.outputs.head_sha }}
           IMPLEMENTER: ${{ needs.context.outputs.implementer }}
+          AGENT_MODE: ${{ needs.context.outputs.agent_mode }}
           # The review comes from the job for the agent that did not implement the change.
           REVIEW_RESULT: ${{ needs.context.outputs.implementer == 'claude' && needs.copilot-review.result || needs.review.result }}
           REVIEW_OUTPUT: ${{ needs.context.outputs.implementer == 'claude' && needs.copilot-review.outputs.structured_output || needs.review.outputs.structured_output }}
@@ -541,6 +551,12 @@ jobs:
           # An agent never publishes a review of its own work.
           [ "$live_implementer" = "$IMPLEMENTER" ] || suppress "pull request #$PR_NUMBER is now implemented by $live_implementer, not $IMPLEMENTER."
           [ "$current_sha" = "$HEAD_SHA" ] || suppress "Refusing stale review publication: head moved to $current_sha."
+          # The provider mode must still be the one the review ran under; a relabel never reuses an old verdict.
+          gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/scripts/agent-mode.mjs?ref=$GITHUB_WORKFLOW_SHA" > "$RUNNER_TEMP/agent-mode.mjs" \
+            || suppress "the provider-mode resolver could not be read."
+          live_mode="$(node "$RUNNER_TEMP/agent-mode.mjs" verify-pr "$PR_NUMBER" "$live_implementer")" \
+            || suppress "the provider mode of pull request #$PR_NUMBER could not be verified."
+          [ "$live_mode" = "$AGENT_MODE" ] || suppress "pull request #$PR_NUMBER is now in provider mode $live_mode, not $AGENT_MODE."
           jq -e 'any(.labels[]?; .name == "agent-review")' <<<"$pr_json" >/dev/null \
             || suppress "the agent-review label was removed."
           if grep -Eq '^\.github/workflows/' <<<"$changed_files"; then

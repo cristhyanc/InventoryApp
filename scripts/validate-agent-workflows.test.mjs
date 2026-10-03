@@ -1,3 +1,4 @@
+import './agent-mode.test.mjs';
 import './select-implementation-model.test.mjs';
 import './agent-persistence.test.mjs';
 import './agent-review-publication.test.mjs';
