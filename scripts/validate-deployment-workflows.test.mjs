@@ -140,3 +140,14 @@ test('a failed deployment cannot push, relabel or start an agent', () => {
     assert.throws(() => verifyDeployProductionWorkflow(tampered), /forbidden text/);
   }
 });
+
+test('the production baseline is recorded only after the API is healthy', () => {
+  const recordedOnUpload = replaceInJob('record-release', '      - verify-api\n', '');
+  assert.throws(() => verifyDeployProductionWorkflow(recordedOnUpload), /record-release' must need 'verify-api'/);
+
+  const recordedAlways = replaceInJob('record-release', '    runs-on: ubuntu-latest\n', '    if: always()\n    runs-on: ubuntu-latest\n');
+  assert.throws(() => verifyDeployProductionWorkflow(recordedAlways), /record-release/);
+
+  const frontendBeforeRecord = replaceInJob('deploy-frontend', '      - record-release\n', '');
+  assert.throws(() => verifyDeployProductionWorkflow(frontendBeforeRecord), /must need 'record-release'/);
+});

@@ -271,7 +271,6 @@ jobs:
       contents: read
       id-token: write
     outputs:
-      deployed: ${{ steps.deployed.outputs.deployed }}
       webapp_url: ${{ steps.deploy.outputs.webapp-url }}
 
     steps:
@@ -322,43 +321,9 @@ jobs:
           app-name: ${{ env.AZURE_WEBAPP_NAME }}
           package: ${{ runner.temp }}/api
 
-      - name: Mark API deployed
-        id: deployed
-        run: echo "deployed=true" >> "$GITHUB_OUTPUT"
-
       - name: Azure Logout
         if: always()
         run: az logout || true
-
-  record-release:
-    name: Record production backend release
-    if: always() && needs.deploy-api.outputs.deployed == 'true'
-    needs:
-      - resolve
-      - deploy-api
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      deployments: write
-
-    steps:
-      - name: Record the deployed backend SHA
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_SHA: ${{ needs.resolve.outputs.sha }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          deployment_id="$(jq -n \
-            --arg ref "$RELEASE_SHA" \
-            --arg task "$RELEASE_RECORD_TASK" \
-            --arg environment "$PRODUCTION_ENVIRONMENT" \
-            '{ref: $ref, task: $task, environment: $environment, auto_merge: false, required_contexts: [], production_environment: true, transient_environment: false, description: "Backend deployed by Deploy Production"}' \
-            | gh api --method POST "repos/$GITHUB_REPOSITORY/deployments" --input - --jq '.id')"
-          [[ "$deployment_id" =~ ^[0-9]+$ ]] || { echo "::error::The production release record was not created."; exit 1; }
-          jq -n --arg url "$RUN_URL" '{state: "success", log_url: $url, auto_inactive: false}' \
-            | gh api --method POST "repos/$GITHUB_REPOSITORY/deployments/$deployment_id/statuses" --input - >/dev/null
-          echo "Recorded production backend release $RELEASE_SHA (deployment $deployment_id)."
 
   verify-api:
     name: Verify API health
@@ -393,6 +358,39 @@ jobs:
           echo "::error::$base/health/ready did not return 200; the frontend will not be deployed."
           exit 1
 
+  # The baseline for the next run's migration preflight is the backend production is known to
+  # run healthily, so the release is recorded only after /health/ready succeeded. An upload whose
+  # startup or migration then fails leaves the last healthy release as the baseline.
+  record-release:
+    name: Record production backend release
+    needs:
+      - resolve
+      - deploy-api
+      - verify-api
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      deployments: write
+
+    steps:
+      - name: Record the deployed backend SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ needs.resolve.outputs.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          deployment_id="$(jq -n \
+            --arg ref "$RELEASE_SHA" \
+            --arg task "$RELEASE_RECORD_TASK" \
+            --arg environment "$PRODUCTION_ENVIRONMENT" \
+            '{ref: $ref, task: $task, environment: $environment, auto_merge: false, required_contexts: [], production_environment: true, transient_environment: false, description: "Backend deployed and healthy (Deploy Production)"}' \
+            | gh api --method POST "repos/$GITHUB_REPOSITORY/deployments" --input - --jq '.id')"
+          [[ "$deployment_id" =~ ^[0-9]+$ ]] || { echo "::error::The production release record was not created."; exit 1; }
+          jq -n --arg url "$RUN_URL" '{state: "success", log_url: $url, auto_inactive: false}' \
+            | gh api --method POST "repos/$GITHUB_REPOSITORY/deployments/$deployment_id/statuses" --input - >/dev/null
+          echo "Recorded production backend release $RELEASE_SHA (deployment $deployment_id)."
+
   deploy-frontend:
     name: Deploy frontend
     if: github.ref == 'refs/heads/main'
@@ -401,6 +399,7 @@ jobs:
       - build
       - deploy-api
       - verify-api
+      - record-release
     environment: VmInventoryApi_Env
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -517,5 +516,9 @@ jobs:
             echo "| Backend health (/health/ready) | $HEALTH_RESULT |"
             echo "| Frontend deployment | $FRONTEND_RESULT |"
             echo
+            if [ "$API_RESULT" = "success" ] && [ "$HEALTH_RESULT" != "success" ]; then
+              echo "**The API package was deployed but did not become healthy.** It was not recorded as a production release, so the next run's baseline stays at \`${BASELINE_SHA:-the previous release}\`, and startup may already have applied some of this release's migrations."
+              echo
+            fi
             echo "A failed run changes nothing else: it does not revert, merge, relabel or start an agent repair. Recovery is a human decision."
           } >> "$GITHUB_STEP_SUMMARY"

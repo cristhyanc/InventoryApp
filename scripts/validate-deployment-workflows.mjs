@@ -271,9 +271,14 @@ export function verifyDeployProductionWorkflow(text, source = deployProductionPa
   requireOrder(deployApi, 'uses: azure/login', 'uses: azure/webapps-deploy', `${source} job 'deploy-api'`);
   forbidText(deployApi, 'secrets.', `${source} job 'deploy-api'`);
 
+  // The release becomes the next run's migration baseline, so it is recorded only once the API
+  // passed its health check, never merely because the package upload succeeded.
   requirePermissions(jobs, 'record-release', { deployments: 'write' }, source);
   forbidEnvironment(jobs, 'record-release', source);
-  requireNeeds(jobs, 'record-release', ['resolve', 'deploy-api'], source);
+  requireNeeds(jobs, 'record-release', ['resolve', 'deploy-api', 'verify-api'], source);
+  if (/^ {4}if:/m.test(jobs['record-release'])) {
+    fail(source, "job 'record-release' must run only when 'verify-api' succeeded (no custom if:)");
+  }
 
   requireNeeds(jobs, 'verify-api', ['deploy-api'], source);
   requireText(jobs['verify-api'], '/health/ready', `${source} job 'verify-api'`);
@@ -286,7 +291,7 @@ export function verifyDeployProductionWorkflow(text, source = deployProductionPa
   const deployFrontend = jobs['deploy-frontend'];
   requireText(deployFrontend, "if: github.ref == 'refs/heads/main'", `${source} job 'deploy-frontend'`);
   requireText(deployFrontend, `environment: ${PRODUCTION_ENVIRONMENT}`, `${source} job 'deploy-frontend'`);
-  requireNeeds(jobs, 'deploy-frontend', ['resolve', 'build', 'deploy-api', 'verify-api'], source);
+  requireNeeds(jobs, 'deploy-frontend', ['resolve', 'build', 'deploy-api', 'verify-api', 'record-release'], source);
   requirePermissions(jobs, 'deploy-frontend', { contents: 'read' }, source);
   requireText(deployFrontend, `name: frontend-${RELEASE_SHA}`, `${source} job 'deploy-frontend'`);
   requireText(deployFrontend, 'skip_app_build: true', `${source} job 'deploy-frontend'`);
