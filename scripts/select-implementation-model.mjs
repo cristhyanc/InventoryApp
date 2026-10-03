@@ -8,21 +8,48 @@ export const MODELS = Object.freeze({
   copilot: { low: 'claude-haiku-4.5', standard: 'claude-sonnet-5.5', high: 'claude-opus-5.5' },
 });
 export const READY_LABELS = Object.keys(MODELS).flatMap(provider => [`agent-ready-${provider}`, `agent-ready-${provider}-low`, `agent-ready-${provider}-high`]);
+// Single-provider fallbacks (#337): one provider implements, architecture-checks, repairs and reviews.
+export const FULL_READY_LABELS = Object.keys(MODELS).map(provider => `agent-ready-full-${provider}`);
+export const READINESS_LABELS = Object.freeze([...READY_LABELS, ...FULL_READY_LABELS]);
+// Workflow shell checks must use exactly this pattern (enforced by validate-agent-workflows.mjs).
+export const READINESS_LABEL_PATTERN = /^agent-ready-(?:(?:claude|copilot)(?:-low|-high)?|full-(?:claude|copilot))$/;
+// Claude-primary is the documented default when both providers are available.
+export const DEFAULT_READY_LABEL = 'agent-ready-claude';
+// Trusted routing policy. Provider names come from this table, never from model output.
+export const ROUTES = Object.freeze({
+  'cross-claude': Object.freeze({ implementer: 'claude', reviewer: 'copilot', sameProviderReview: false }),
+  'cross-copilot': Object.freeze({ implementer: 'copilot', reviewer: 'claude', sameProviderReview: false }),
+  'full-claude': Object.freeze({ implementer: 'claude', reviewer: 'claude', sameProviderReview: true }),
+  'full-copilot': Object.freeze({ implementer: 'copilot', reviewer: 'copilot', sameProviderReview: true }),
+});
+// Full-provider labels are recognised (for exclusivity) but must not start work until #340
+// connects same-provider architecture review, repair and final review.
+export const FULL_PROVIDER_EXECUTION_ENABLED = false;
 const activeStates = ['agent-working', 'agent-architecture-fix', 'agent-review', 'agent-blocked'];
 const hasControlCharacter = text => [...text].some(char => char.charCodeAt(0) < 0x20 || char.charCodeAt(0) === 0x7f);
 const fingerprint = issue => createHash('sha256').update(JSON.stringify({ title: issue.title, body: issue.body })).digest('hex');
 
-export function prepareSelection({ provider, label, issue, attempt = 1 }) {
-  if (!Object.hasOwn(MODELS, provider) || !READY_LABELS.includes(label) || !label.startsWith(`agent-ready-${provider}`)) throw new Error('Invalid implementation label/provider.');
+/** Parses one readiness label into its trusted route, or returns null for any other label. */
+export function parseReadinessLabel(label) {
+  if (typeof label !== 'string' || !READINESS_LABEL_PATTERN.test(label) || !READINESS_LABELS.includes(label)) return null;
+  const full = /^agent-ready-full-(claude|copilot)$/.exec(label);
+  if (full) return { label, mode: `full-${full[1]}`, ...ROUTES[`full-${full[1]}`], tier: 'default' };
+  const [, provider, suffix = ''] = /^agent-ready-(claude|copilot)(-low|-high)?$/.exec(label);
+  return { label, mode: `cross-${provider}`, ...ROUTES[`cross-${provider}`], tier: suffix ? suffix.slice(1) : 'default' };
+}
+
+export function prepareSelection({ provider, label, issue, attempt = 1, fullProviderEnabled = FULL_PROVIDER_EXECUTION_ENABLED }) {
+  const route = parseReadinessLabel(label);
+  if (!Object.hasOwn(MODELS, provider) || !route || route.implementer !== provider) throw new Error('Invalid implementation label/provider.');
+  if (route.sameProviderReview && !fullProviderEnabled) throw new Error(`${label} is not enabled yet: single-provider review and repair routes are not connected. Remove ${label}; nothing was started.`);
   if (issue.state !== 'OPEN') throw new Error('Implementation requires an open issue.');
   const labels = issue.labels.map(item => typeof item === 'string' ? item : item.name);
-  const ready = labels.filter(item => READY_LABELS.includes(item));
+  const ready = labels.filter(item => parseReadinessLabel(item));
   const active = labels.filter(item => activeStates.includes(item));
   const resumed = provider === 'claude' && Number.isInteger(attempt) && attempt > 1 && ready.length === 0 && active.length === 1 && active[0] === 'agent-working';
   if (!resumed && active.length) throw new Error('Task already has an active or blocked state; human must resolve it first.');
   if (!resumed && (ready.length !== 1 || ready[0] !== label)) throw new Error('Exactly one matching readiness label is required; remove conflicting or stale labels.');
-  const tier = label.endsWith('-low') ? 'low' : label.endsWith('-high') ? 'high' : 'default';
-  return { provider, label, tier, triage: tier === 'default', fingerprint: fingerprint(issue), attempt };
+  return { provider, label, mode: route.mode, reviewer: route.reviewer, sameProviderReview: route.sameProviderReview, tier: route.tier, triage: route.tier === 'default', fingerprint: fingerprint(issue), attempt };
 }
 
 export function resolveSelection(selection, triage) {
@@ -40,7 +67,7 @@ export function resolveSelection(selection, triage) {
 }
 
 export function verifySnapshot(selection, issue) {
-  prepareSelection({ ...selection, issue });
+  prepareSelection({ provider: selection.provider, label: selection.label, attempt: selection.attempt, issue });
   if (fingerprint(issue) !== selection.fingerprint) throw new Error('Task scope changed after model selection; re-apply the readiness label.');
 }
 

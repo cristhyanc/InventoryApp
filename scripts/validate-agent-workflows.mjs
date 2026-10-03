@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { FULL_PROVIDER_EXECUTION_ENABLED, READINESS_LABEL_PATTERN } from './select-implementation-model.mjs';
 
 export const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -1676,6 +1677,8 @@ export function verifyImplementationModelSelection(read = readRepositoryFile) {
   for (const forbidden of ['contents: write', 'issues: write', 'pull-requests: write', 'actions: write', 'COPILOT_AGENT_TOKEN', 'AGENT_AUTOMATION_APP_PRIVATE_KEY', 'gh issue edit', 'gh issue comment', 'git push', 'github.event.pull_request']) forbidText(selection, forbidden, 'implementation model selection');
   for (const [provider, path, job] of [['claude', implementPath, 'implement'], ['copilot', copilotImplementPath, 'assign']]) {
     const workflow = read(path);
+    // Full-provider labels stay inert until every same-provider route exists (#337, #340).
+    if (!FULL_PROVIDER_EXECUTION_ENABLED) forbidText(workflow, 'agent-ready-full-', `${path} (full-provider execution is not enabled)`);
     const caller = section(workflow, '  model:\n', '  preflight:\n', `${path} model caller`);
     for (const required of ['needs: preflight', 'uses: ./.github/workflows/agent-model-selection.yml', `provider: ${provider}`, 'ready_label: ${{ github.event.label.name }}', 'contents: read', 'issues: read']) requireText(caller, required, `${path} model caller`);
     requireText(workflow, 'group: agent-implementation-issue-${{ github.event.issue.number }}', path);
@@ -1685,7 +1688,9 @@ export function verifyImplementationModelSelection(read = readRepositoryFile) {
     if (provider === 'claude') {
       for (const required of ['--model ${{ needs.model.outputs.model }}', '--settings \'{"availableModels":["${{ needs.model.outputs.model }}"]}\'', '--max-turns ${{ needs.model.outputs.max_turns }}', 'node scripts/select-implementation-model.mjs verify']) requireText(consumer, required, `${path} model consumer`);
     } else {
-      for (const required of ['model: $model', '--arg model "$IMPLEMENTATION_MODEL"', "fingerprint !== process.env.TASK_FINGERPRINT"]) requireText(consumer, required, `${path} model consumer`);
+      for (const required of ['model: $model', '--arg model "$IMPLEMENTATION_MODEL"', "fingerprint !== process.env.TASK_FINGERPRINT", "ready.length !== 1 || ready[0] !== process.env.READY_LABEL", `filter(x => /${READINESS_LABEL_PATTERN.source}/.test(x))`]) requireText(consumer, required, `${path} model consumer`);
+      // The live recheck must count every readiness label, including the full-provider ones.
+      forbidText(consumer, '/^agent-ready-(claude|copilot)(-low|-high)?$/', `${path} model consumer`);
       forbidText(consumer, 'CLAUDE_CODE_OAUTH_TOKEN', `${path} model consumer`);
     }
   }

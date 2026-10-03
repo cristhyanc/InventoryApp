@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { prepareSelection, resolveSelection, verifySnapshot } from './select-implementation-model.mjs';
+import { prepareSelection, resolveSelection, verifySnapshot, parseReadinessLabel, READINESS_LABELS, READINESS_LABEL_PATTERN, FULL_READY_LABELS, DEFAULT_READY_LABEL, FULL_PROVIDER_EXECUTION_ENABLED, MODELS } from './select-implementation-model.mjs';
 import { verifyImplementationModelSelection, readRepositoryFile } from './validate-agent-workflows.mjs';
 
 const issue = (label, extra = {}) => ({ state: 'OPEN', title: 'Fix typo', body: 'Bounded task', labels: [{ name: label }], ...extra });
@@ -62,6 +62,82 @@ test('Claude reruns can resume working tasks, but a fresh run and Copilot cannot
   assert.throws(() => prepareSelection({ provider: 'copilot', label: 'agent-ready-copilot', issue: working, attempt: 2 }), /active|readiness/i);
 });
 
+test('readiness labels map to trusted routes; Claude-primary is the default', () => {
+  assert.equal(DEFAULT_READY_LABEL, 'agent-ready-claude');
+  assert.deepEqual(FULL_READY_LABELS, ['agent-ready-full-claude', 'agent-ready-full-copilot']);
+  const expected = {
+    'agent-ready-claude': ['cross-claude', 'claude', 'copilot', false, 'default'],
+    'agent-ready-claude-low': ['cross-claude', 'claude', 'copilot', false, 'low'],
+    'agent-ready-claude-high': ['cross-claude', 'claude', 'copilot', false, 'high'],
+    'agent-ready-copilot': ['cross-copilot', 'copilot', 'claude', false, 'default'],
+    'agent-ready-copilot-low': ['cross-copilot', 'copilot', 'claude', false, 'low'],
+    'agent-ready-copilot-high': ['cross-copilot', 'copilot', 'claude', false, 'high'],
+    'agent-ready-full-claude': ['full-claude', 'claude', 'claude', true, 'default'],
+    'agent-ready-full-copilot': ['full-copilot', 'copilot', 'copilot', true, 'default'],
+  };
+  assert.deepEqual([...READINESS_LABELS].sort(), Object.keys(expected).sort());
+  for (const [label, [mode, implementer, reviewer, sameProviderReview, tier]] of Object.entries(expected)) {
+    assert.deepEqual(parseReadinessLabel(label), { label, mode, implementer, reviewer, sameProviderReview, tier });
+    assert.ok(READINESS_LABEL_PATTERN.test(label));
+  }
+  assert.equal(parseReadinessLabel(DEFAULT_READY_LABEL).reviewer, 'copilot');
+  for (const other of ['agent-ready', 'agent-ready-full', 'agent-ready-full-claude-high', 'agent-ready-full-claude-low', 'agent-ready-claude-full', 'agent-ready-gemini', 'Agent-Ready-Claude', ' agent-ready-claude', 'agent-ready-claude\n', 'agent-working', null, undefined, 42]) {
+    assert.equal(parseReadinessLabel(other), null, String(other));
+    if (typeof other === 'string') assert.equal(READINESS_LABEL_PATTERN.test(other), false, other);
+  }
+});
+
+test('full-provider labels are recognised but cannot start work until every route is connected', () => {
+  assert.equal(FULL_PROVIDER_EXECUTION_ENABLED, false);
+  for (const provider of ['claude', 'copilot']) {
+    const label = `agent-ready-full-${provider}`;
+    assert.throws(() => prepareSelection({ provider, label, issue: issue(label) }), /not enabled yet/);
+    // A forged selection cannot switch the gate on during the pre-mutation recheck.
+    assert.throws(() => verifySnapshot({ provider, label, fingerprint: 'x', fullProviderEnabled: true }, issue(label)), /not enabled yet/);
+  }
+});
+
+test('full-provider labels use their provider and the existing tier policy once enabled', () => {
+  for (const provider of ['claude', 'copilot']) {
+    const label = `agent-ready-full-${provider}`;
+    const selection = prepareSelection({ provider, label, issue: issue(label), fullProviderEnabled: true });
+    assert.equal(selection.mode, `full-${provider}`);
+    assert.equal(selection.reviewer, provider);
+    assert.equal(selection.sameProviderReview, true);
+    assert.equal(selection.triage, true);
+    for (const tier of ['low', 'standard', 'high']) assert.equal(resolveSelection(selection, { tier, reason: 'Triage' }).model, MODELS[provider][tier]);
+    const other = provider === 'claude' ? 'copilot' : 'claude';
+    assert.throws(() => prepareSelection({ provider: other, label, issue: issue(label), fullProviderEnabled: true }), /Invalid implementation label/);
+  }
+});
+
+test('exactly one readiness label across standard and full variants may authorise a run', () => {
+  const conflicts = [
+    ['agent-ready-claude', 'agent-ready-full-claude'],
+    ['agent-ready-claude', 'agent-ready-full-copilot'],
+    ['agent-ready-copilot', 'agent-ready-full-copilot'],
+    ['agent-ready-claude-high', 'agent-ready-full-claude'],
+    ['agent-ready-full-claude', 'agent-ready-full-copilot'],
+  ];
+  for (const labels of conflicts) {
+    for (const label of labels) {
+      const provider = parseReadinessLabel(label).implementer;
+      assert.throws(() => prepareSelection({ provider, label, issue: issue(label, { labels: labels.map(name => ({ name })) }), fullProviderEnabled: true }), /Exactly one matching readiness/, labels.join('+'));
+    }
+  }
+  for (const state of ['agent-working', 'agent-architecture-fix', 'agent-review', 'agent-blocked']) {
+    for (const label of ['agent-ready-claude', 'agent-ready-copilot', 'agent-ready-full-claude', 'agent-ready-full-copilot']) {
+      const provider = parseReadinessLabel(label).implementer;
+      assert.throws(() => prepareSelection({ provider, label, issue: issue(label, { labels: [{ name: label }, { name: state }] }), fullProviderEnabled: true }), /active or blocked/);
+    }
+  }
+  // A stale event: the label that fired was swapped for another readiness label before the run.
+  assert.throws(() => prepareSelection({ provider: 'claude', label: 'agent-ready-claude', issue: issue('agent-ready-full-claude') }), /Exactly one matching readiness/);
+  assert.throws(() => prepareSelection({ provider: 'claude', label: 'agent-ready-full-claude', issue: issue('agent-ready-claude'), fullProviderEnabled: true }), /Exactly one matching readiness/);
+  // A Claude re-run may resume its own working task, but never while any readiness label (full included) is present.
+  assert.throws(() => prepareSelection({ provider: 'claude', label: 'agent-ready-claude', issue: issue('agent-working', { labels: [{ name: 'agent-working' }, { name: 'agent-ready-full-claude' }] }), attempt: 2 }), /active|readiness/i);
+});
+
 test('workflow contract rejects missing model gates, triage write tools and unbounded models', () => {
   const selectionPath = '.github/workflows/agent-model-selection.yml';
   const implementPath = '.github/workflows/agent-implement.yml';
@@ -76,6 +152,9 @@ test('workflow contract rejects missing model gates, triage write tools and unbo
     [implementPath, 'needs: [preflight, model]', 'needs: preflight'],
     [implementPath, '--model ${{ needs.model.outputs.model }}', '--model opus'],
     [copilotPath, 'model: $model', 'model: ""'],
+    [copilotPath, '/^agent-ready-(?:(?:claude|copilot)(?:-low|-high)?|full-(?:claude|copilot))$/', '/^agent-ready-(claude|copilot)(-low|-high)?$/'],
+    [implementPath, "github.event.label.name == 'agent-ready-claude-high')", "github.event.label.name == 'agent-ready-claude-high' || github.event.label.name == 'agent-ready-full-claude')"],
+    [copilotPath, "github.event.label.name == 'agent-ready-copilot-high')", "github.event.label.name == 'agent-ready-copilot-high' || github.event.label.name == 'agent-ready-full-copilot')"],
   ]) {
     const original = readRepositoryFile(path);
     assert.ok(original.includes(from));
@@ -114,6 +193,13 @@ if [[ "$1" == "api" ]]; then cat > "$TEST_PAYLOAD"; if [[ -n "$TEST_API_FAIL" ]]
       const stale = spawnSync('bash', [join(dir, 'assign.sh')], { env, encoding: 'utf8' });
       assert.notEqual(stale.status, 0);
       assert.equal(readFileSync(join(dir, 'calls'), 'utf8'), '');
+      for (const extra of ['agent-ready-full-copilot', 'agent-ready-full-claude']) {
+        writeFileSync(join(dir, 'issue.json'), JSON.stringify({ ...snapshot, labels: [...snapshot.labels, { name: extra }] }));
+        writeFileSync(join(dir, 'calls'), '');
+        const conflicting = spawnSync('bash', [join(dir, 'assign.sh')], { env, encoding: 'utf8' });
+        assert.notEqual(conflicting.status, 0, extra);
+        assert.equal(readFileSync(join(dir, 'calls'), 'utf8'), '', extra);
+      }
       writeFileSync(join(dir, 'issue.json'), JSON.stringify(snapshot));
       const rejected = spawnSync('bash', [join(dir, 'assign.sh')], { env: { ...env, TEST_API_FAIL: 'Model not available (HTTP 422)' }, encoding: 'utf8' });
       assert.notEqual(rejected.status, 0);

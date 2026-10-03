@@ -9,7 +9,7 @@ body:
 
         - **Never paste credentials, access tokens, connection strings, customer data, imported business files, or other secrets into an issue.** Describe where configuration lives instead.
         - Readiness model tiers: use the existing labels for automatic low/standard/high selection, or append `-low` / `-high` for an explicit implementation model. Apply exactly one readiness label. Model tier never reduces review, risk or testing requirements; see docs/automation.md.
-        - **Creating this issue does not authorize any work, deployment, or production change.** A human must review it and apply `agent-ready-claude` or `agent-ready-copilot` before an implementation agent may begin.
+        - **Creating this issue does not authorize any work, deployment, or production change.** A human must review it and apply `agent-ready-claude` (the default: Claude implements, Copilot reviews) or, as an explicit override, `agent-ready-copilot` before an implementation agent may begin.
         - **The agent's work ends at the pull request.** After opening it, the agent may update only its feature branch, for at most two permitted repair attempts, and then returns control to a human. Agents never merge or deploy. Merge, release, deployment, and production migrations remain human-controlled.
 
         The lifecycle, authority model, and risk rules are in [docs/automation.md](https://github.com/cristhyanc/InventoryApp/blob/develop/docs/automation.md). Engineering invariants are in [AGENTS.md](https://github.com/cristhyanc/InventoryApp/blob/develop/AGENTS.md).
