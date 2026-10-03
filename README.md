@@ -232,7 +232,23 @@ are met today.
 
 **Backup and restore** uses SQLite's Online Backup API (the same mechanism behind the `sqlite3`
 CLI's `.backup` command and `Microsoft.Data.Sqlite`'s `SqliteConnection.BackupDatabase`), which
-produces a consistent snapshot without requiring the API process to stop:
+produces a consistent snapshot without requiring the API process to stop.
+
+The supported way to take a retained snapshot is the API executable's `backup-database` command
+(issue #331) — an early CLI mode, like `bootstrap-business` and `migrate-database`, that never
+runs during normal startup. It opens the same configured database the API would, requires an
+explicit `--output <path>` outside the API's web root/published content, refuses a destination
+that already exists or matches the source, runs `PRAGMA integrity_check` on the result itself, and
+reports the snapshot's SHA-256 and duration (never the connection string), exiting non-zero on any
+failure:
+
+```bash
+dotnet InventoryApi.dll backup-database --output /home/data/backups/inventory-<timestamp>.db
+```
+
+This is the same command the scheduled backup job (issue #333) calls; routine backups are
+scheduled, not run by hand. The equivalent manual `sqlite3` CLI sequence remains available where
+the published `dotnet` application is not on hand:
 
 ```bash
 sqlite3 /home/data/inventory.db ".backup '/home/data/backups/inventory-<timestamp>.db'"
@@ -241,17 +257,21 @@ sqlite3 /home/data/backups/inventory-<timestamp>.db "PRAGMA integrity_check;"
 
 Store the verified backup somewhere other than the App Service's own `/home` mount. Restoring
 (`sqlite3 <backup> ".backup '/home/data/inventory.db'"`) overwrites live data and must be run
-deliberately, by a human, after stopping the API — never automatically. The full step-by-step
-procedure, including why a plain filesystem copy is unsafe on a live database, is in
+deliberately, by a human, after stopping the API — never automatically. Blob upload,
+retention/alerting, and automated restore are out of scope for `backup-database`. The full
+step-by-step procedure, including why a plain filesystem copy is unsafe on a live database, is in
 [docs/architecture.md](docs/architecture.md#sqlite-operating-assumptions-and-scale-strategy-issue-53).
 
 **Non-destructive local validation.**
 `backend/InventoryApi.Tests/Operations/SqliteBackupRestoreTests.cs` proves the backup mechanism
-itself works — it runs as part of the normal test suite and only ever touches throwaway SQLite
-files under the OS temp directory, never a developer's or production `inventory.db`:
+itself and, built on top of it, the `backup-database` command's path validation, verification,
+hashing, and failure reporting (`DatabaseBackupRunnerTests`) and its argument parsing
+(`BackupDatabaseArgumentsTests`) — all of it running as part of the normal test suite and only ever
+touching throwaway SQLite files under the OS temp directory, never a developer's or production
+`inventory.db`:
 
 ```bash
-dotnet test backend/InventoryApi/InventoryApi.slnx --filter FullyQualifiedName~SqliteBackupRestoreTests
+dotnet test backend/InventoryApi/InventoryApi.slnx --filter "FullyQualifiedName~SqliteBackupRestoreTests|FullyQualifiedName~DatabaseBackupRunnerTests|FullyQualifiedName~BackupDatabaseArgumentsTests"
 ```
 
 To rehearse the `sqlite3` CLI sequence above before relying on it in production, run it against a
