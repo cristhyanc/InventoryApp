@@ -24,6 +24,44 @@ public sealed class EfNayaxProcessingFeeFactsProvider : INayaxProcessingFeeFacts
         var to = toDate.Date;
         if (to < from) (from, to) = (to, from);
 
+        var reimbursements = await ReimbursementFactsAsync(from, to, cancellationToken);
+
+        var completedSales = await _db.NayaxSales.AsNoTracking()
+            .Where(sale => sale.MachineAuthorizationTime >= from &&
+                sale.MachineAuthorizationTime < to.AddDays(1) &&
+                (!machineId.HasValue || sale.MachineID == machineId.Value))
+            .Where(EfNayaxSalesQueries.CompletedSalePredicate)
+            .Select(sale => new CompletedCardTransaction(sale.MachineAuthorizationTime, sale.PaymentMethod))
+            .ToListAsync(cancellationToken);
+
+        return new NayaxProcessingFeeFacts(reimbursements, completedSales);
+    }
+
+    public async Task<NayaxProcessingFeeFacts> GetBusinessPeriodFactsAsync(
+        NayaxProcessingFeeBusinessPeriod period,
+        long? machineId,
+        CancellationToken cancellationToken)
+    {
+        var reimbursements = await ReimbursementFactsAsync(
+            period.FirstBusinessDate.Date, period.LastBusinessDate.Date, cancellationToken);
+
+        // Selected between the period's own UTC instants, inclusive at both ends, exactly as the
+        // dashboard selects the sales whose revenue it reports - not by the whole UTC dates those
+        // instants fall on, which for a Sydney business day spans two of them (issue #310).
+        var completedSales = await _db.NayaxSales.AsNoTracking()
+            .Where(sale => sale.MachineAuthorizationTime >= period.StartUtc &&
+                sale.MachineAuthorizationTime <= period.EndUtc &&
+                (!machineId.HasValue || sale.MachineID == machineId.Value))
+            .Where(EfNayaxSalesQueries.CompletedSalePredicate)
+            .Select(sale => new CompletedCardTransaction(sale.MachineAuthorizationTime, sale.PaymentMethod))
+            .ToListAsync(cancellationToken);
+
+        return new NayaxProcessingFeeFacts(reimbursements, completedSales);
+    }
+
+    private async Task<List<ProcessingFeeReimbursement>> ReimbursementFactsAsync(
+        DateTime from, DateTime to, CancellationToken cancellationToken)
+    {
         var reimbursements = await _db.ImportedReimbursements.AsNoTracking()
             .Where(reimbursement =>
                 reimbursement.ReimbursementStartDate.HasValue &&
@@ -66,7 +104,7 @@ public sealed class EfNayaxProcessingFeeFactsProvider : INayaxProcessingFeeFacts
                 })
                 .ToListAsync(cancellationToken);
 
-        var reimbursementFacts = reimbursements.Select(reimbursement =>
+        return reimbursements.Select(reimbursement =>
             new ProcessingFeeReimbursement(
                 reimbursement.StartDate,
                 reimbursement.EndDate,
@@ -83,15 +121,5 @@ public sealed class EfNayaxProcessingFeeFactsProvider : INayaxProcessingFeeFacts
                     .Select(device => new ImportedProcessingFeeDevice(device.MachineNumber, device.ProcessingFee))
                     .ToList()))
             .ToList();
-
-        var completedSales = await _db.NayaxSales.AsNoTracking()
-            .Where(sale => sale.MachineAuthorizationTime >= from &&
-                sale.MachineAuthorizationTime < to.AddDays(1) &&
-                (!machineId.HasValue || sale.MachineID == machineId.Value))
-            .Where(EfNayaxSalesQueries.CompletedSalePredicate)
-            .Select(sale => new CompletedCardTransaction(sale.MachineAuthorizationTime, sale.PaymentMethod))
-            .ToListAsync(cancellationToken);
-
-        return new NayaxProcessingFeeFacts(reimbursementFacts, completedSales);
     }
 }

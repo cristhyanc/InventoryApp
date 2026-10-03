@@ -1,3 +1,4 @@
+using Inventory.Application.Machines;
 using InventoryApi.Tests.Application.Time;
 using Xunit;
 
@@ -133,6 +134,103 @@ public class MachineDashboardWindowTests
         Assert.Equal(Utc(2026, 9, 27, 14, 0).AddMilliseconds(-1), window.LastWeek.EndUtc);
         Assert.Equal(Utc(2026, 9, 30, 14, 0), window.MonthToDate.StartUtc);
     }
+
+    /// <summary>
+    /// The Monday after daylight saving starts. 13:30 UTC on Sunday 4 October 2026 is 00:30 on Monday
+    /// 5 October in Sydney, half an hour into a business week whose AEDT (+11) Monday midnight is
+    /// 4 October 13:00 UTC, while the previous week's AEST (+10) Monday midnight is 27 September
+    /// 14:00 UTC. The comparable period must therefore end half an hour into *that* week. Subtracting
+    /// seven days from the current UTC instant instead lands at 27 September 13:30 UTC - thirty
+    /// minutes before its own start - and reports an empty previous week.
+    /// </summary>
+    [Fact]
+    public void Resolve_KeepsThePreviousComparableWeekComparable_OnTheMondayAfterDaylightSavingStarts()
+    {
+        var time = new FixedSydneyTime(new DateTime(2026, 10, 4, 13, 30, 0, DateTimeKind.Utc));
+
+        var window = time.Window;
+
+        Assert.Equal(new DateTime(2026, 10, 5), window.BusinessToday);
+        Assert.Equal(Utc(2026, 10, 4, 13, 0), window.CurrentWeek.StartUtc);
+        Assert.Equal(Utc(2026, 9, 27, 14, 0), window.PreviousComparableWeek.StartUtc);
+        Assert.Equal(Utc(2026, 9, 27, 14, 30), window.PreviousComparableWeek.EndUtc);
+        Assert.True(window.PreviousComparableWeek.EndUtc > window.PreviousComparableWeek.StartUtc);
+    }
+
+    /// <summary>
+    /// The Monday after daylight saving ends, the mirror image of the case above: 14:30 UTC on Sunday
+    /// 5 April 2026 is 00:30 on Monday 6 April in Sydney (AEST, +10), and the previous week's Monday
+    /// midnight was an AEDT (+11) one at 29 March 13:00 UTC, so the comparable period ends at
+    /// 29 March 13:30 UTC - 00:30 on Monday 30 March in Sydney, the same half hour into its week.
+    /// </summary>
+    [Fact]
+    public void Resolve_KeepsThePreviousComparableWeekComparable_OnTheMondayAfterDaylightSavingEnds()
+    {
+        var time = new FixedSydneyTime(new DateTime(2026, 4, 5, 14, 30, 0, DateTimeKind.Utc));
+
+        var window = time.Window;
+
+        Assert.Equal(new DateTime(2026, 4, 6), window.BusinessToday);
+        Assert.Equal(Utc(2026, 4, 5, 14, 0), window.CurrentWeek.StartUtc);
+        Assert.Equal(Utc(2026, 3, 29, 13, 0), window.PreviousComparableWeek.StartUtc);
+        Assert.Equal(Utc(2026, 3, 29, 13, 30), window.PreviousComparableWeek.EndUtc);
+        Assert.True(window.PreviousComparableWeek.EndUtc > window.PreviousComparableWeek.StartUtc);
+    }
+
+    /// <summary>
+    /// 23:30 on Sunday 5 April 2026 in Sydney is 169 hours into its own business week, because
+    /// daylight saving ended inside it and made that week an hour longer than the one before. The
+    /// comparable period is held at the end of the previous week rather than extended into the
+    /// current one, so the two periods can never count the same sale twice.
+    /// </summary>
+    [Fact]
+    public void Resolve_NeverExtendsThePreviousComparableWeekIntoTheCurrentWeek()
+    {
+        var time = new FixedSydneyTime(new DateTime(2026, 4, 5, 13, 30, 0, DateTimeKind.Utc));
+
+        var window = time.Window;
+
+        Assert.Equal(Utc(2026, 3, 29, 13, 0), window.CurrentWeek.StartUtc);
+        Assert.Equal(Utc(2026, 3, 22, 13, 0), window.PreviousComparableWeek.StartUtc);
+        Assert.Equal(Utc(2026, 3, 29, 13, 0).AddMilliseconds(-1), window.PreviousComparableWeek.EndUtc);
+        Assert.True(window.PreviousComparableWeek.EndUtc < window.CurrentWeek.StartUtc);
+    }
+
+    /// <summary>
+    /// Every period also carries the <c>Australia/Sydney</c> business dates it covers, because the
+    /// Nayax processing fee engine charges fees by business date: those dates must describe exactly the
+    /// same period as the UTC instants beside them, or a period's profit would subtract a fee for a day
+    /// whose revenue it does not count (issue #310).
+    /// </summary>
+    [Fact]
+    public void Resolve_CarriesTheBusinessDatesEachPeriodCovers()
+    {
+        var time = new FixedSydneyTime(new DateTime(2026, 3, 11, 14, 30, 0, DateTimeKind.Utc));
+
+        var window = time.Window;
+
+        Assert.Equal((new DateTime(2026, 3, 12), new DateTime(2026, 3, 12)), BusinessDates(window.Today));
+        Assert.Equal((new DateTime(2026, 3, 9), new DateTime(2026, 3, 12)), BusinessDates(window.CurrentWeek));
+        Assert.Equal((new DateTime(2026, 3, 2), new DateTime(2026, 3, 5)), BusinessDates(window.PreviousComparableWeek));
+        Assert.Equal((new DateTime(2026, 3, 2), new DateTime(2026, 3, 8)), BusinessDates(window.LastWeek));
+        Assert.Equal((new DateTime(2026, 3, 1), new DateTime(2026, 3, 12)), BusinessDates(window.MonthToDate));
+        Assert.Equal((new DateTime(2026, 2, 23), new DateTime(2026, 3, 1)), BusinessDates(window.TwoWeeksAgo));
+
+        // Each period's own instants fall on the first and last business date it claims to cover.
+        MachineDashboardPeriodUtc[] periods =
+        [
+            window.Today, window.CurrentWeek, window.PreviousComparableWeek,
+            window.LastWeek, window.MonthToDate, window.TwoWeeksAgo
+        ];
+        Assert.All(periods, period =>
+        {
+            Assert.Equal(period.FirstBusinessDate, time.Calendar.ToBusinessDate(period.StartUtc));
+            Assert.Equal(period.LastBusinessDate, time.Calendar.ToBusinessDate(period.EndUtc));
+        });
+    }
+
+    private static (DateTime First, DateTime Last) BusinessDates(MachineDashboardPeriodUtc period) =>
+        (period.FirstBusinessDate, period.LastBusinessDate);
 
     private static DateTime Utc(int year, int month, int day, int hour, int minute) =>
         new(year, month, day, hour, minute, 0, DateTimeKind.Utc);

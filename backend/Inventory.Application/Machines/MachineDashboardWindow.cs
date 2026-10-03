@@ -4,10 +4,24 @@ using Inventory.Domain.Machines;
 namespace Inventory.Application.Machines;
 
 /// <summary>
-/// One dashboard comparison period as the pair of UTC instants its sales are selected between,
-/// inclusive at both ends exactly as the dashboard has always compared them.
+/// One dashboard comparison period, in both time bases it is measured in: the pair of UTC instants its
+/// sales are selected between, inclusive at both ends exactly as the dashboard has always compared
+/// them, and the first and last <c>Australia/Sydney</c> business date those instants cover. The two
+/// describe the same period: the instants are the business dates' own Sydney midnight boundaries.
+///
+/// Both are needed because the dashboard's financial inputs are measured in both bases. Sales are
+/// persisted UTC instants, so revenue and commission are selected by instant. The Nayax processing fee
+/// engine is a date-range contract - imported fee data is authoritative per day it covers, and an
+/// estimated fee uses the rate effective on the transaction's day - so fees are charged by business
+/// date. Truncating the instants to UTC dates instead would charge a Sydney period for the fees of
+/// every UTC day it touches, which for a business day that straddles two UTC dates subtracts fees for
+/// sales the period's own revenue excludes (issue #310).
 /// </summary>
-public readonly record struct MachineDashboardPeriodUtc(DateTime StartUtc, DateTime EndUtc);
+public readonly record struct MachineDashboardPeriodUtc(
+    DateTime StartUtc,
+    DateTime EndUtc,
+    DateTime FirstBusinessDate,
+    DateTime LastBusinessDate);
 
 /// <summary>
 /// The machine and site dashboards' reference window (issue #310): the current instant, the
@@ -53,26 +67,54 @@ public sealed record MachineDashboardWindow(
         var twoWeeksAgo = MachineDashboardPeriods.WeekRange(businessToday, -2);
         var monthToDate = MachineDashboardPeriods.MonthToDate(businessToday);
 
+        var currentWeekStartUtc = businessCalendar.StartOfBusinessDayUtc(currentWeek.Start);
+        var previousComparableWeekStartUtc = businessCalendar.StartOfBusinessDayUtc(previousComparableWeek.Start);
+
         return new MachineDashboardWindow(
             nowUtc,
             businessToday,
-            Today: new(businessCalendar.StartOfBusinessDayUtc(businessToday), nowUtc),
-            CurrentWeek: new(businessCalendar.StartOfBusinessDayUtc(currentWeek.Start), nowUtc),
-
-            // The previous comparable week is the current week-to-date shifted back seven days, as
-            // MachineDashboardPeriods defines it: its start is the previous business week's Monday
-            // midnight in Sydney, and its end is the same elapsed distance into that week as now is
-            // into this one, so the two periods cover comparable trading time.
+            Today: new(
+                businessCalendar.StartOfBusinessDayUtc(businessToday), nowUtc, businessToday, businessToday),
+            CurrentWeek: new(currentWeekStartUtc, nowUtc, currentWeek.Start, businessToday),
             PreviousComparableWeek: new(
-                businessCalendar.StartOfBusinessDayUtc(previousComparableWeek.Start), nowUtc.AddDays(-7)),
-
+                previousComparableWeekStartUtc,
+                ComparableEndUtc(previousComparableWeekStartUtc, currentWeekStartUtc, nowUtc),
+                previousComparableWeek.Start,
+                previousComparableWeek.End.Date),
             LastWeek: new(
                 businessCalendar.StartOfBusinessDayUtc(lastWeek.Start),
-                EndOfBusinessDayUtc(businessCalendar, lastWeek.End)),
-            MonthToDate: new(businessCalendar.StartOfBusinessDayUtc(monthToDate.Start), nowUtc),
+                EndOfBusinessDayUtc(businessCalendar, lastWeek.End),
+                lastWeek.Start,
+                lastWeek.End.Date),
+            MonthToDate: new(
+                businessCalendar.StartOfBusinessDayUtc(monthToDate.Start), nowUtc, monthToDate.Start, businessToday),
             TwoWeeksAgo: new(
                 businessCalendar.StartOfBusinessDayUtc(twoWeeksAgo.Start),
-                EndOfBusinessDayUtc(businessCalendar, twoWeeksAgo.End)));
+                EndOfBusinessDayUtc(businessCalendar, twoWeeksAgo.End),
+                twoWeeksAgo.Start,
+                twoWeeksAgo.End.Date));
+    }
+
+    /// <summary>
+    /// The previous comparable week's inclusive end: the same elapsed trading time into the previous
+    /// Sydney business week as now is into the current one, which is what makes the two periods
+    /// comparable (<see cref="MachineDashboardPeriods.PreviousComparableWeek"/> defines it as the
+    /// current week-to-date shifted back one week). Both endpoints are measured from their own week's
+    /// Sydney Monday midnight, never by subtracting seven days from the current UTC instant: across a
+    /// daylight-saving transition the two weeks start an hour apart in UTC, so on the Monday after the
+    /// transition that subtraction lands before the previous week even began and the comparison period
+    /// is empty.
+    ///
+    /// Held at the previous week's own end when the current week is the longer of the two - the week
+    /// daylight saving ends is 169 hours - so the comparable period can never reach into the current
+    /// week and count the same sale in both.
+    /// </summary>
+    private static DateTime ComparableEndUtc(
+        DateTime previousComparableWeekStartUtc, DateTime currentWeekStartUtc, DateTime nowUtc)
+    {
+        var endUtc = previousComparableWeekStartUtc + (nowUtc - currentWeekStartUtc);
+        var previousWeekEndUtc = currentWeekStartUtc.AddMilliseconds(-1);
+        return endUtc <= previousWeekEndUtc ? endUtc : previousWeekEndUtc;
     }
 
     /// <summary>

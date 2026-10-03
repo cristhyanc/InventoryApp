@@ -125,12 +125,15 @@ public sealed class EfMachineDashboardFactsStore : IMachineDashboardFactsStore
             netSalesBeforeFees += sale.SettlementValue - sale.CostOfGoodsSold!.Value - commission;
         }
 
-        // The fee use case takes each period's own bounds, as it always has. It is a date-range
-        // contract that buckets sales by UTC date, so for a Sydney period that straddles two UTC
-        // dates the estimated-fee window is the whole UTC day(s) the period touches rather than
-        // exactly that period - unchanged in kind by issue #310 and tracked as the same
-        // business-date-bucketing follow-up (see docs/architecture.md § Time).
-        var fees = await _nayaxProcessingFees.Handle(period.StartUtc, period.EndUtc, machineId, cancellationToken);
+        // The fee use case takes each period's own bounds, as it always has, but as a business-day
+        // period rather than a pair of instants it would truncate to whole UTC dates: the fees this
+        // period's profit subtracts are charged to exactly the sales its revenue counted above, on the
+        // Australia/Sydney business dates the period covers (issue #310).
+        var fees = await _nayaxProcessingFees.HandleBusinessPeriod(
+            new NayaxProcessingFeeBusinessPeriod(
+                period.StartUtc, period.EndUtc, period.FirstBusinessDate, period.LastBusinessDate),
+            machineId,
+            cancellationToken);
         return new MachineDashboardPeriodFacts(
             grossRevenue,
             new MachineDashboardDirectProfitInputs(false, netSalesBeforeFees, fees.HasMissingRates, fees.TotalFeeIncGst));

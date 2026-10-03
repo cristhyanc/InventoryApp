@@ -35,7 +35,7 @@ public class MachineServiceTests
 
     private static MachineService Service(AppDbContext db, INayaxLynxClient nayax)
     {
-        var facts = new EfMachineDashboardFactsStore(db, TestFinancialUseCases.ProcessingFees(db));
+        var facts = new EfMachineDashboardFactsStore(db, TestFinancialUseCases.ProcessingFees(db, Time.Calendar));
         var listMachineProducts = new ListMachineProducts(
             nayax,
             new EfProductCatalogStore(db),
