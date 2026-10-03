@@ -33,19 +33,20 @@ public sealed class GetSiteProducts
             .ToList();
 
         var today = DateTime.Today;
-        var costBasisTask = _facts.GetProductCostBasisAsync(cancellationToken);
         var distinctPrices = machineProducts
             .Where(mp => mp.RetailPrice.HasValue)
             .Select(mp => mp.RetailPrice!.Value)
             .Distinct()
             .ToList();
-        var commissionTask = _facts.ResolveCardCommissionAsync(siteId, today, distinctPrices, cancellationToken);
-        var feeExGstTask = _facts.ResolveEffectiveFeeExGstAsync(today, cancellationToken);
 
-        await Task.WhenAll(costBasisTask, commissionTask, feeExGstTask);
-        var costBasis = await costBasisTask;
-        var commission = await commissionTask;
-        var feeExGst = await feeExGstTask;
+        // Awaited one at a time, deliberately not with Task.WhenAll: all three reads land on the same
+        // scoped ISiteFactsStore, whose EF adapter shares one AppDbContext, and a DbContext supports
+        // only one operation at a time. SQLite's synchronous async implementation would usually hide
+        // the overlap locally while failing against a real asynchronous provider. The Nayax requests
+        // above stay a concurrent fan-out: they are independent remote reads that touch no DbContext.
+        var costBasis = await _facts.GetProductCostBasisAsync(cancellationToken);
+        var commission = await _facts.ResolveCardCommissionAsync(siteId, today, distinctPrices, cancellationToken);
+        var feeExGst = await _facts.ResolveEffectiveFeeExGstAsync(today, cancellationToken);
 
         var priceFacts = machineProducts.Select(mp => new SiteProductPriceFact(
             mp.NayaxProductID!.Value,

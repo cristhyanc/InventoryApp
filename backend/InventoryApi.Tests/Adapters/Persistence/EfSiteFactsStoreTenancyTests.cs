@@ -61,6 +61,37 @@ public class EfSiteFactsStoreTenancyTests : IDisposable
         Assert.Equal("A-Product", Assert.Single(costBasis.Values).Name);
     }
 
+    /// <summary>
+    /// The site dashboard now loads every site's recent completed sales with one batched read over the
+    /// whole fleet's machine ids instead of one overlapping read per site (issue #313). A Nayax machine
+    /// id is an external identity another business can legitimately hold rows for, so the batched read
+    /// must still return only the caller's business's sales, through the same central query filters the
+    /// former per-site reads used.
+    /// </summary>
+    [Fact]
+    public async Task Batched_recent_completed_sales_read_excludes_the_other_business_sales()
+    {
+        var authorizationTime = DateTime.Now.AddDays(-1);
+        using (var seed = TestAppDbContext.Unrestricted(_options))
+        {
+            seed.NayaxSales.AddRange(
+                new NayaxSales { BusinessId = BusinessA, TransactionID = 1, MachineID = 10, SettlementValue = 5m, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = authorizationTime },
+                new NayaxSales { BusinessId = BusinessA, TransactionID = 2, MachineID = 20, SettlementValue = 7m, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = authorizationTime },
+                // The same machine ids on purpose: business B's rows for them must stay invisible.
+                new NayaxSales { BusinessId = BusinessB, TransactionID = 1, MachineID = 10, SettlementValue = 900m, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = authorizationTime },
+                new NayaxSales { BusinessId = BusinessB, TransactionID = 2, MachineID = 20, SettlementValue = 900m, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = authorizationTime });
+            await seed.SaveChangesAsync();
+        }
+
+        using var db = TestAppDbContext.For(_options, BusinessA);
+        var store = new EfSiteFactsStore(db);
+
+        var sales = await store.GetRecentCompletedSalesAsync([10, 20], DateTime.Now.AddDays(-16), CancellationToken.None);
+
+        Assert.Equal(12m, sales.Sum(sale => sale.SettlementValue));
+        Assert.Equal(new long[] { 10, 20 }, sales.Select(sale => sale.MachineId).Order());
+    }
+
     [Fact]
     public async Task Card_commission_resolution_ignores_the_other_business_agreement()
     {
