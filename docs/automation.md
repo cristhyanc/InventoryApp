@@ -17,7 +17,7 @@ It deliberately separates three things:
 | --- | --- |
 | **Exists now** | Behaviour implemented by files in this repository today: the validation and deployment workflows, the Claude Code and Copilot implementation, cross-architecture-check, review, repair and updated-head scheduling workflows (`agent-implement.yml`, `agent-architecture.yml`, `agent-copilot.yml`, `agent-copilot-handoff.yml`, `agent-copilot-architecture.yml`, `agent-review.yml`, `agent-review-request.yml`, `agent-repair.yml`, `agent-head-update.yml`; see [Cross-review: Claude and Copilot](#cross-review-claude-and-copilot)), the validation scripts, the workflow-contract and documentation-impact validators in `scripts/`, `AGENTS.md`, `CLAUDE.md`, the agent task issue form, the pull request template, the [documentation impact gate](#documentation-impact-gate), and the deterministic [Agent Evals](#guardrails-ci-validation-review-and-evals) corpus/runner in `evals/agent/`. |
 | **Proposed for future pull requests** | Automation that is designed here but **not implemented**: mechanical enforcement of the two-attempt repair limit, staging, release automation, monitoring, and any auto-merge. |
-| **Human-controlled** | Decisions that stay with a human regardless of how much automation is added: choosing the implementer by applying `agent-ready-claude` or `agent-ready-copilot`, authorising and counting repair attempts (and the fresh review that follows one), approving, merging, releasing, deploying. The *initial* independent review is requested automatically once validation succeeds; it is no longer a separate human decision. |
+| **Human-controlled** | Decisions that stay with a human regardless of how much automation is added: choosing the route by applying exactly one readiness label (`agent-ready-claude` by default, `agent-ready-copilot` as an explicit override, or a full-provider fallback label), authorising and counting repair attempts (and the fresh review that follows one), approving, merging, releasing, deploying. The *initial* final review is requested automatically once validation succeeds; it is no longer a separate human decision. |
 
 Nothing in this document creates an automation capability by itself. Where a capability is described as future work, it does not exist until a later pull request implements it and this document is updated.
 
@@ -34,7 +34,7 @@ problem:
 | --- | --- | --- |
 | **Guardrails** | What is an agent allowed to do at all? | `AGENTS.md`, `CLAUDE.md`, this document, the `.github/workflows/agent-*.yml` prompts and tool permissions, `scripts/validate-agent-workflows.mjs`. |
 | **CI validation** | Does this specific change build, test, and lint? | `scripts/validate.sh`/`scripts/validate.ps1`, `validate.yml`. |
-| **Independent review** | Did this specific pull request actually honour the guardrails? | `agent-review.yml`. |
+| **Final review** | Did this specific pull request actually honour the guardrails? Independent (the other provider) on the cross routes; same-provider, and so not independent, on a full-provider fallback. | `agent-review.yml`. |
 | **Evals** | Do representative scenarios still resolve the way the guardrails say they should, across changes to the guardrails themselves? | `evals/agent/` (corpus and deterministic runner in `scripts/run-agent-evals.mjs`; see `evals/agent/README.md`). |
 
 Evals are the odd one out: they do not validate a specific pull request's diff, and today's
@@ -76,7 +76,7 @@ The target lifecycle for one automated change is:
 13. A separate release pull request from `develop` to `main` makes the change releasable. Merging it deploys nothing.
 14. Production deployment is a separate human decision: a human starts the **Deploy Production** workflow for an exact `main` commit (issue #343). The resulting schema migration, if any, is then applied automatically by the API on its next Production startup (issue #201), not by a human command, and the workflow reports the expected migrations before it deploys.
 
-Today: steps 1–3 are human, except that the preflight in step 3 is the deterministic first job of `agent-implement.yml`. Steps 4–7 are split across two workflows: `agent-implement.yml` performs coding, full validation, persistence and PR creation, then its trusted dispatcher invokes `agent-architecture.yml` from `main` for the exact published head SHA. The architecture workflow independently checks out that SHA, runs the architecture agent and publishes any narrowly scoped structural commit to the same branch. For step 8, only the architecture workflow's deterministic finalizer moves the issue/PR to `agent-review` and invokes trusted `validate.yml` from `main` for the exact final head SHA with `dispatch_review: true`; validation publishes the stable `agent-validation` commit status. For step 9, the initial Claude Code review is then dispatched automatically once `agent-validation` succeeds; no human action requests it. Step 10 exists only as a human-invoked repair (`agent-repair.yml`, started by an `@claude repair` comment); the two-attempt limit is counted by the human, not by a workflow. When a repair actually pushes a new head, its separate dispatcher invokes exact-SHA validation, and successful validation dispatches a fresh review while the `agent-review` label (applied automatically at step 8, or by a human if ever reapplied) remains present. Any other new commit on an eligible labelled agent pull request (for example a human push or an "Update branch" merge) is scheduled the same way by `agent-head-update.yml`; see [Updated-head scheduling](#updated-head-scheduling). Step 11 is partly automatic (the implementation workflow labels the issue `agent-blocked` when implementation or architecture cannot complete with a verified PR head) and otherwise human. Steps 12–14 are human.
+Today: steps 1–3 are human, except that the preflight in step 3 is the deterministic first job of `agent-implement.yml`. Steps 4–7 are split across two workflows: `agent-implement.yml` performs coding, full validation, persistence and PR creation, then its trusted dispatcher invokes `agent-architecture.yml` from `main` for the exact published head SHA. The architecture workflow independently checks out that SHA, runs the architecture agent and publishes any narrowly scoped structural commit to the same branch. For step 8, only the architecture workflow's deterministic finalizer moves the issue/PR to `agent-review` and invokes trusted `validate.yml` from `main` for the exact final head SHA with `dispatch_review: true`; validation publishes the stable `agent-validation` commit status. For step 9, the initial final review by the route's reviewer (see [Provider roles and readiness labels](#provider-roles-and-readiness-labels)) is then dispatched automatically once `agent-validation` succeeds; no human action requests it. Step 10 exists only as a human-invoked repair (`agent-repair.yml`, started by an `@claude repair` comment on a Claude pull request, or an `@copilot` comment on a Copilot pull request); the two-attempt limit is counted by the human, not by a workflow. When a repair actually pushes a new head, its separate dispatcher invokes exact-SHA validation, and successful validation dispatches a fresh review while the `agent-review` label (applied automatically at step 8, or by a human if ever reapplied) remains present. Any other new commit on an eligible labelled agent pull request (for example a human push or an "Update branch" merge) is scheduled the same way by `agent-head-update.yml`; see [Updated-head scheduling](#updated-head-scheduling). Step 11 is partly automatic (the implementation workflow labels the issue `agent-blocked` when implementation or architecture cannot complete with a verified PR head) and otherwise human. Steps 12–14 are human.
 
 ## Provider roles and readiness labels
 
@@ -137,13 +137,13 @@ Human merge                                Human merge
 
 Setup a human must do once (these are repository settings and credentials, which no agent may change):
 
-- Create the labels `agent-ready-claude`, `agent-ready-copilot` and `agent-architecture-fix`. The old `agent-ready` label no longer starts anything once this change reaches `main`.
+- Create the labels `agent-ready-claude`, `agent-ready-copilot` and `agent-architecture-fix`. The old `agent-ready` label no longer starts anything once this change reaches `main`. The fallback labels `agent-ready-full-claude` and `agent-ready-full-copilot` are created the same way, by a human, following [Rolling out, recovering and verifying provider routes](#rolling-out-recovering-and-verifying-provider-routes).
 - Enable the Copilot coding agent for the repository. Copilot code review is not used; the Copilot final review runs through the Copilot CLI.
 - Add repository secret `COPILOT_AGENT_TOKEN`: the owner's fine-grained personal access token for this repository only, with read access to metadata and read and write access to Actions, Contents, Issues and Pull requests. Those four are what GitHub documents as required to assign Copilot to an issue through the API ("Use cloud agent via the API"); `GITHUB_TOKEN` and the App installation token cannot assign Copilot at all. It is used only in jobs that never check out pull request code: Copilot assignment, the trusted Copilot Draft → Ready transition, and the `@copilot` fix request. The handoff uses this token only for `gh pr ready`; verification and architecture dispatch stay on `GITHUB_TOKEN`.
 - Add repository secret `COPILOT_CLI_TOKEN`: a separate fine-grained personal access token whose only permission is Copilot Requests. It is the only Copilot credential given to the Copilot CLI architecture check and final review, which check out pull request code; both also set `COPILOT_AUTO_UPDATE=false`.
 - Add the Nayax documentation MCP server to the Copilot coding agent; see [Nayax documentation access](#nayax-documentation-access) for the exact steps.
 - Optional variable: `COPILOT_AGENT_BOT_LOGIN`, if the Copilot pull request author login is not `Copilot`. The Copilot CLI version used by the architecture check and final review is pinned by `.github/copilot-cli/package-lock.json`, read from the trusted workflow commit and installed with `npm ci --ignore-scripts`; change that lockfile to upgrade it.
-- Copilot's own pushes may need a human to approve their workflow runs, depending on the repository's Copilot settings. The architecture check, validation dispatches and Claude review all run from trusted `main` through `workflow_dispatch`, so they are not affected.
+- Copilot's own pushes may need a human to approve their workflow runs, depending on the repository's Copilot settings. The architecture checks, validation dispatches and both review jobs all run from trusted `main` through `workflow_dispatch`, so they are not affected.
 
 Every one of these workflows runs from `main`, so the cross-review starts working only after a `develop` → `main` release.
 
@@ -165,6 +165,50 @@ Every one of these workflows runs from `main`, so the cross-review starts workin
 | Credentials used | `CLAUDE_CODE_OAUTH_TOKEN`, the automation App, `GITHUB_TOKEN`, `SONAR_TOKEN`; no Copilot secret | `COPILOT_AGENT_TOKEN`, `COPILOT_CLI_TOKEN`, `GITHUB_TOKEN`, `SONAR_TOKEN`, and `CLAUDE_CODE_OAUTH_TOKEN` only for Haiku triage |
 
 Every new head is validated and reviewed again under the same verified mode, and the review publisher suppresses a verdict if the mode changed while the review ran. When the selected provider fails, the job fails closed: the architecture finalizer moves the task to `agent-blocked`, or the review publisher records an `error` `agent-review-verdict`. Nothing falls back to the other provider, weakens a check or skips a review. To switch provider, a human follows the blocked-recovery steps in [Provider mode provenance](#provider-mode-provenance).
+
+#### Limits of same-provider review
+
+A same-provider check and review are a fallback, not an equivalent of the cross routes:
+
+- The implementer, the checker and the reviewer share one provider, model family and billing credential, so they tend to share blind spots. A mistake the provider makes systematically is likely to be missed by its own review.
+- Separation is by invocation only: a fresh job, working tree, prompt and conversation, read-only tools and permissions, and no publishing or App credential. That prevents the reviewer being steered by the implementation, but it does not make the review independent.
+- A `READY FOR HUMAN REVIEW` verdict with `Review type: Same-provider review (...): not independent` therefore deserves more human scrutiny than a cross-provider verdict, especially on `risk:high` tasks. For a high-risk task that can wait, prefer waiting for the other provider and using a cross route.
+- The verdict stays advisory on every route. It never approves, merges, releases or deploys, and it does not change branch protection or the human merge gate.
+
+### Rolling out, recovering and verifying provider routes
+
+Issue #337 was delivered as four reviewed pull requests into `develop` (#338 label parsing and exclusivity, #339 provider mode provenance, #340 routing and enabling the fallbacks, #341 this audit). Every agent workflow runs from `main` and downloads `scripts/agent-mode.mjs` from its own trusted workflow commit, so the workflows and the trusted scripts always come from the same commit; there is no separate script rollout.
+
+Rollout order:
+
+1. Merge the reviewed pull requests into `develop` in order. On `develop` nothing changes for live tasks, because the agent workflows run from `main`.
+2. Release `develop` → `main` with one normal release pull request that carries all of #338–#340 (and #341). Never copy single workflow files or scripts to `main`: a `main` with the full labels in its triggers but without the routing jobs, or the reverse, is not a supported state. The contract checks require the full labels in the implementation triggers exactly when `FULL_PROVIDER_EXECUTION_ENABLED` is `true`, and the routing jobs are on the same commit.
+3. After that release reaches `main`, confirm the setup in the checklist below, then a human creates `agent-ready-full-claude` and `agent-ready-full-copilot` in repository settings. Creating the labels does not enable anything by itself: the fallbacks work only because the released `main` routes them. A label created before the release only lets a run fail closed on the older `main`.
+4. Tasks claimed before the release keep their route: their label history resolves the same way (see [Provider mode provenance](#provider-mode-provenance)), and a pull request already in review keeps its cross-provider reviewer.
+
+Existing pull requests and blocked runs:
+
+- To retry the same pull request, fix the cause and use the manual paths: re-apply `agent-review`, comment `@claude repair` on a Claude pull request, or `@copilot` on a Copilot pull request. The claim, and so the route, is unchanged.
+- To start over, or to move a task to the other provider, close the old pull request first, then remove `agent-blocked` and apply exactly one readiness label. Never re-apply a readiness label while the old pull request is open: that starts a second implementation, and the old pull request is then refused at every boundary.
+- Never add a second readiness label to change route while a task is active, and never remove `agent-working`, `agent-architecture-fix` or `agent-review` by hand to make a new claim possible. Both start a duplicate run or leave the old pull request without a valid route. Only the claim steps and the deterministic finalizers move these labels.
+
+Verification checklist, for one low-risk test issue per route after the release (a human applies the label and reads the results):
+
+| Check | `agent-ready-claude` | `agent-ready-copilot` | `agent-ready-full-claude` | `agent-ready-full-copilot` |
+| --- | --- | --- | --- | --- |
+| Claim | The readiness label is replaced by `agent-working`, and the claim comment says `Provider mode: cross-claude` | The same, with `cross-copilot`; Copilot is assigned | The same, with `full-claude` | The same, with `full-copilot`; Copilot is assigned |
+| Architecture check | `copilot-check` runs; `claude-check` is skipped | `check` (Claude) runs; `copilot-check` is skipped | `claude-check` runs, and the PR record is headed "Same-provider Claude architecture check"; `copilot-check` is skipped | `copilot-check` runs, and the summary is headed "Same-provider Copilot architecture check"; Claude's `check` is skipped |
+| Exact-SHA validation | `agent-validation` succeeds on the head SHA the review names | The same | The same | The same |
+| Final review | `copilot-review` runs; `Review type: Cross-provider review (Claude implemented, Copilot reviewed)` | `review` runs; `Review type: Cross-provider review (Copilot implemented, Claude reviewed)` | `review` runs; `Review type: Same-provider review (full-claude fallback): not independent` | `copilot-review` runs; `Review type: Same-provider review (full-copilot fallback): not independent` |
+| Verdict | One comment-only review and an `agent-review-verdict` status on the same SHA | The same | The same | The same |
+| Credentials | `CLAUDE_CODE_OAUTH_TOKEN`, `COPILOT_CLI_TOKEN`, the automation App, `SONAR_TOKEN` | `CLAUDE_CODE_OAUTH_TOKEN`, `COPILOT_AGENT_TOKEN`, `SONAR_TOKEN`; `COPILOT_CLI_TOKEN` is not read (both Copilot CLI jobs are skipped) | No Copilot secret is read (the Copilot jobs are skipped) | `CLAUDE_CODE_OAUTH_TOKEN` only in Haiku triage; Claude's check and review jobs are skipped |
+
+Also confirm on any route that a test failure or provider error ends in `agent-blocked` or an `error` verdict and never in the other provider running. The pipeline refuses any task that changes `.github/workflows/**` on every route, so workflow changes, including any fix found by this checklist, go through a normal human-reviewed pull request into `develop`.
+
+Rollback:
+
+- To turn the fallbacks off, open a reviewed pull request that sets `FULL_PROVIDER_EXECUTION_ENABLED = false` in `scripts/agent-mode.mjs` and removes `agent-ready-full-claude` and `agent-ready-full-copilot` from the triggers of `agent-implement.yml` and `agent-copilot.yml` (the contract checks require both together), then release it to `main`. Every full-provider claim then fails closed at every boundary, including tasks already in flight, which a human recovers as above. The cross routes are unaffected. A human may also delete the two labels.
+- To undo the whole change, revert the release pull request through a normal reviewed pull request and release again. Nothing in this rollout changes secrets, branch protection, deployment or data.
 
 ## Nayax documentation access
 
@@ -348,7 +392,7 @@ GitHub treats pull requests created or updated with the repository `GITHUB_TOKEN
 - **The bot-author check reads the canonical login from the REST pull request endpoint.** Every guarded section resolves the author with `gh api "repos/$GITHUB_REPOSITORY/pulls/<number>" --jq '.user.login // empty'` and compares it for exact equality with repository variable `AGENT_AUTOMATION_APP_BOT_LOGIN`. It must not use `gh pr view --json author`, whose GraphQL actor representation is not the canonical bot login.
 - The dispatched workflow definition always comes from `main`. The validation job then checks out the separately verified PR SHA with a read-only token and persisted credentials disabled.
 - The `agent-validation` status linked to the dispatched run remains the authoritative exact-SHA validation result for an agent-created or agent-updated PR. Normal `pull_request` validation independently publishes `merge-validation`.
-- The `agent-review` label still authorises review; successful exact-SHA validation dispatches the independent review automatically, for the initial head, a repaired head, or any later head scheduled by `agent-head-update.yml`. Human approval and merge remain required.
+- The `agent-review` label still authorises review; successful exact-SHA validation dispatches the route's final review automatically, for the initial head, a repaired head, or any later head scheduled by `agent-head-update.yml`. Human approval and merge remain required.
 
 The one-time prerequisite is the dedicated GitHub App plus the two repository variables and one repository secret described above. App installation tokens expire after about an hour, so they are deliberately created only after an agent invocation has finished and immediately before the remote mutation. No PAT is used.
 
@@ -382,8 +426,8 @@ Documentation (`AGENTS.md`, `CLAUDE.md`, `docs/`, `README.md`, and the issue and
 | --- | --- | --- |
 | Collect the decision | Templates | The agent task form requires a `Documentation impact decision` (exactly `Documentation changes required` or `No documentation changes required`) and `Documentation impact details`, plus a readiness confirmation. The pull request template requires a `## Documentation impact` section with exactly one `Decision:` line (`UPDATED` or `NOT REQUIRED`) and one `Evidence:` entry, placed before **Known limitations and follow-up work**. |
 | Validate that a meaningful declaration exists | Automation (`scripts/validate-documentation-impact.mjs`, the `preflight` job of `agent-implement.yml`, the validation job of `validate.yml`) | Rejects missing or duplicate sections/fields, unsupported or duplicate decisions, any pull request decision other than exactly `UPDATED` or `NOT REQUIRED`, empty evidence, unreplaced template placeholders, bare `None`/`N/A`/`Not applicable`, and generic answers (`UPDATED` must name documentation files and what changed; `NOT REQUIRED` must explain, specifically for the change, why behaviour, contracts, architecture, configuration, automation, deployment, operations and user workflows are unaffected). It never infers impact from changed filenames. |
-| Decide whether the declaration is correct | Independent review (`agent-review.yml`), then the human reviewer | Compares the issue decision, the pull request declaration and the actual diff. Missing, inaccurate or incomplete required documentation is a blocker. |
-| Approve and merge | Human | Confirms the decision when applying `agent-ready-claude` or `agent-ready-copilot` and again when approving and merging. Automation never approves, merges or edits a declaration. |
+| Decide whether the declaration is correct | Final review (`agent-review.yml`), then the human reviewer | Compares the issue decision, the pull request declaration and the actual diff. Missing, inaccurate or incomplete required documentation is a blocker. |
+| Approve and merge | Human | Confirms the decision when applying a readiness label and again when approving and merging. Automation never approves, merges or edits a declaration. |
 
 `scripts/validate-agent-workflows.mjs` enforces, and `scripts/validate-agent-workflows.test.mjs` proves by mutation, that both templates keep the contract, that the read-only preflight job exists before the implementation job and gates it, that `validate.yml` obtains the body in the trusted context job, hands it over base64-encoded and invokes the validator before repository validation without a GitHub token, that the implementation, architecture, review and repair prompts keep their documentation requirements, that the architecture pass cannot be skipped before validation dispatch, and that no reviewer or repair write authority (in particular `gh pr edit`) is added. `scripts/validate-documentation-impact.test.mjs` covers both valid decisions, missing and duplicate sections, invalid decisions, empty evidence, the HTML template placeholders, and generic answers.
 
@@ -422,7 +466,7 @@ The authority matrix below applies to every phase. The implementation agent is t
 | Capability | Human owner/maintainer | Implementation agent | Review agent | CI (`validate.yml`) | Deployment workflows |
 | --- | --- | --- | --- | --- | --- |
 | Create or refine an agent task issue | Yes | No (may propose in a comment) | No | No | No |
-| Apply `agent-ready-claude` or `agent-ready-copilot` | Yes | **No** | No | No | No |
+| Apply any readiness label (`agent-ready-*`: standard, tiered or full-provider) | Yes | **No** | No | No | No |
 | Read repository files | Yes | Yes | Yes | Yes | Yes |
 | Create a feature branch from `develop` | Yes | Yes | No | No | No |
 | Modify files within the approved issue scope | Yes | Yes | No | No | No |
@@ -468,7 +512,7 @@ The implementation agent **may**:
 
 The implementation agent **may not**:
 
-- Mark its own issue `agent-ready-claude` or `agent-ready-copilot`.
+- Mark its own issue with any readiness label (`agent-ready-*`).
 - Broaden acceptance criteria.
 - Merge any pull request, feature or release.
 - Prepare a release pull request on its own initiative; it does so only on a separate, explicit human request, and never approves or merges it.
@@ -511,9 +555,9 @@ If any stage fails, the finalizer labels the issue `agent-blocked` and dispatche
 
 ### Review agent
 
-The review agent (`agent-review.yml`: Claude for Copilot-implemented pull requests, the Copilot CLI for Claude-implemented ones) must, and is configured to:
+The review agent (`agent-review.yml`) is the reviewer the verified route selects: the Copilot CLI on `agent-ready-claude`, Claude on `agent-ready-copilot`, and a separate read-only invocation of the implementing provider on `agent-ready-full-claude` or `agent-ready-full-copilot`. It must, and is configured to:
 
-- Be independent of the implementation step: a separate workflow run, a separate job with its own working tree, conversation, and prompt, and its own job-scoped GitHub permissions, so that it cannot be steered by the implementation agent's own reasoning. Each reviewer runs with only the model credential it needs: `CLAUDE_CODE_OAUTH_TOKEN` for Claude, or `COPILOT_CLI_TOKEN` for the Copilot CLI. A model credential only meters usage (see below).
+- Be separate from the implementation step: a separate workflow run, a separate job with its own working tree, conversation, and prompt, and its own job-scoped GitHub permissions, so that it cannot be steered by the implementation agent's own reasoning. Each reviewer runs with only the model credential it needs: `CLAUDE_CODE_OAUTH_TOKEN` for Claude, or `COPILOT_CLI_TOKEN` for the Copilot CLI. A model credential only meters usage (see below). On the cross routes the reviewer is also a different provider, so the review is independent. On a full-provider fallback it is the same provider, so the published review says `Review type: Same-provider review (...): not independent` (see [Limits of same-provider review](#limits-of-same-provider-review)).
 - Review the pull request's current head SHA afresh on every run.
 - Evaluate the pull request against the issue's acceptance criteria and exclusions, `AGENTS.md`, `docs/architecture.md`, the validation evidence in the pull request and CI, security, scope, and documentation impact (issue decision versus pull request declaration versus actual diff).
 - Produce a written result for the exact reviewed SHA as structured output, which the separate deterministic `publish` job turns into inline comments and exactly one comment-only review bound to that commit, whose body carries one verdict line, `VERDICT: CHANGES REQUESTED` or `VERDICT: READY FOR HUMAN REVIEW`, with the blockers listed under it, and into the per-SHA `agent-review-verdict` status. Only when the pull request is still eligible and still at that SHA; otherwise the result is recorded as superseded and not published. Neither job submits an approve or request-changes review.
@@ -522,7 +566,7 @@ The review agent (`agent-review.yml`: Claude for Copilot-implemented pull reques
 
 Its result is advisory. A human still reviews and decides whether to merge.
 
-For a Claude-implemented pull request, the Copilot CLI cannot return schema-enforced structured output, so the `copilot-review` job asks for the review as one JSON object between `BEGIN_REVIEW_JSON` and `END_REVIEW_JSON` lines, takes the last such block, and checks it with `jq` against the same contract as Claude's `--json-schema` (exact keys, typed values, allowed verdicts and criterion statuses). Output that does not match fails the job, and the publish job then records an `error` verdict status instead of a review.
+Whenever the Copilot CLI reviews (`agent-ready-claude` and `agent-ready-full-copilot`), it cannot return schema-enforced structured output, so the `copilot-review` job asks for the review as one JSON object between `BEGIN_REVIEW_JSON` and `END_REVIEW_JSON` lines, takes the last such block, and checks it with `jq` against the same contract as Claude's `--json-schema` (exact keys, typed values, allowed verdicts and criterion statuses). Output that does not match fails the job, and the publish job then records an `error` verdict status instead of a review.
 
 ### Shared billing credential, separate invocations
 
@@ -544,7 +588,7 @@ The only deployment workflow, `deploy-production.yml`, runs only when a human st
 
 ## Task states and labels
 
-A human creates the labels below in the repository's label settings; no file in this repository creates labels. `agent-ready-claude`, `agent-ready-copilot` and `agent-architecture-fix` are new with the cross-review workflows and must be created before those workflows are used (see [Cross-review: Claude and Copilot](#cross-review-claude-and-copilot)). Only the deterministic steps of `agent-implement.yml`, `agent-architecture.yml`, `agent-copilot.yml`, `agent-copilot-architecture.yml` and the review dispatcher in `validate.yml` apply or remove labels, and only on the issue they were started from and its pull request.
+A human creates the labels below in the repository's label settings; no file in this repository creates labels. `agent-ready-claude`, `agent-ready-copilot` and `agent-architecture-fix` are new with the cross-review workflows and must be created before those workflows are used (see [Cross-review: Claude and Copilot](#cross-review-claude-and-copilot)); `agent-ready-full-claude` and `agent-ready-full-copilot` are created only as described in [Rolling out, recovering and verifying provider routes](#rolling-out-recovering-and-verifying-provider-routes). Only the deterministic steps of `agent-implement.yml`, `agent-architecture.yml`, `agent-copilot.yml`, `agent-copilot-architecture.yml` and the review dispatcher in `validate.yml` apply or remove labels, and only on the issue they were started from and its pull request.
 
 | Label | Meaning | Applied by |
 | --- | --- | --- |
@@ -554,8 +598,8 @@ A human creates the labels below in the repository's label settings; no file in 
 | `agent-ready-copilot-low` / `agent-ready-copilot-high` | The same reviewed Copilot task authority, with the explicit implementation model tier described above. | **Human only** |
 | `agent-ready-full-claude` / `agent-ready-full-copilot` | The same human confirmation for a single-provider fallback: the named provider implements, and separate read-only invocations of the same provider check the architecture and do the final review (same-provider, not independent; see [Single-provider fallback routes](#single-provider-fallback-routes)). Applying one starts `agent-implement.yml` or `agent-copilot.yml` like the standard label of that provider; applying one alongside another readiness label blocks the run. A human creates these labels; they do nothing until the release that routes them reaches `main`. | **Human only** |
 | `agent-working` | An implementation agent has started and owns a feature branch for this issue. | `agent-implement.yml` (replaces a Claude readiness label) or `agent-copilot.yml` (replaces a Copilot readiness label), at the start of the run |
-| `agent-architecture-fix` | A Copilot pull request (and its issue) whose read-only Claude architecture check found problems that Copilot has been asked to fix. Copilot's pushes are validated at their exact SHA, but no review runs in this state. | `agent-copilot-architecture.yml` finalizer (replaces `agent-working` on the issue); `validate.yml` replaces it with `agent-review` after a fix push passes exact-SHA validation |
-| `agent-review` | On an **issue**: a pull request is open and awaiting independent review. On a **pull request**: authorises the (now automatic) initial independent review and a fresh review after any later repair or other new commit. `agent-repair.yml` accepts the repository owner's `@claude repair` comments while the label remains present; a pushed repair, and any other new commit, is validated and reviewed again automatically. Removing the label stops further automatic reviews and makes the publish job suppress a review still in progress. | Issue and pull request: the `agent-architecture.yml` or `agent-copilot-architecture.yml` finalizer after a successful architecture stage and exact current-head recheck, or `validate.yml` when a Copilot architecture fix passes exact-SHA validation; a human may also apply it manually (for example to re-request review outside a repair) |
+| `agent-architecture-fix` | A Copilot pull request (and its issue) whose read-only architecture check (Claude's on `agent-ready-copilot`, a same-provider Copilot check on `agent-ready-full-copilot`) found problems that Copilot has been asked to fix. Copilot's pushes are validated at their exact SHA, but no review runs in this state. | `agent-copilot-architecture.yml` finalizer (replaces `agent-working` on the issue); `validate.yml` replaces it with `agent-review` after a fix push passes exact-SHA validation |
+| `agent-review` | On an **issue**: a pull request is open and awaiting the route's final review. On a **pull request**: authorises the (now automatic) initial final review and a fresh review after any later repair or other new commit. `agent-repair.yml` accepts the repository owner's `@claude repair` comments while the label remains present; a pushed repair, and any other new commit, is validated and reviewed again automatically. Removing the label stops further automatic reviews and makes the publish job suppress a review still in progress. | Issue and pull request: the `agent-architecture.yml` or `agent-copilot-architecture.yml` finalizer after a successful architecture stage and exact current-head recheck, or `validate.yml` when a Copilot architecture fix passes exact-SHA validation; a human may also apply it manually (for example to re-request review outside a repair) |
 | `agent-blocked` | The agent stopped because validation/review failed after the permitted repair attempts, or because a human decision or permission is required. The issue or PR must state the exact blocker. | `agent-implement.yml` for coding/publication failure; `agent-architecture.yml` for architecture or architecture-to-validation handoff failure; otherwise human (including after the second failed repair) |
 | `risk:low` | See risk classification. | Human at triage |
 | `risk:medium` | See risk classification. | Human at triage |
@@ -563,26 +607,27 @@ A human creates the labels below in the repository's label settings; no file in 
 
 Rules:
 
-- A human applies `agent-ready-claude` (the default), `agent-ready-copilot` (explicit override) or, when one provider is unavailable, a full-provider fallback label. Submitting the issue form does not apply either label; the form only explains that a human must apply one after review.
-- An agent must not start from an issue that has not been reviewed and labelled `agent-ready-claude` or `agent-ready-copilot` by a human.
+- A human applies `agent-ready-claude` (the default), `agent-ready-copilot` (explicit override) or, when one provider is unavailable, a full-provider fallback label. Submitting the issue form does not apply any readiness label; the form only explains that a human must apply one after review.
+- An agent must not start from an issue that has not been reviewed and given a readiness label by a human.
 - An agent must not apply an `agent-ready-*` label to any issue, including one it drafted. Claude itself is denied `gh issue edit`, `gh pr edit`, and `gh label` in every agent workflow, and Copilot's instructions forbid label changes; the only label transitions are the deterministic workflow steps listed above.
 - The state labels are mutually exclusive: an issue is in at most one of the readiness labels above (full-provider labels included), `agent-working`, `agent-architecture-fix`, `agent-review`, or `agent-blocked`. `agent-architecture-fix` is used only on the Copilot routes (`agent-ready-copilot` and `agent-ready-full-copilot`).
-- Removing `agent-blocked` and returning an issue to an `agent-ready-*` label is a human decision. Re-applying one starts a new implementation run with the agent it names.
+- Removing `agent-blocked` and returning an issue to an `agent-ready-*` label is a human decision. Re-applying one starts a new implementation run with the agent it names, so first follow the blocked-recovery steps in [Provider mode provenance](#provider-mode-provenance): close the old pull request when starting over, and never re-apply a readiness label just to retry an open one.
 
 State flow:
 
 ```text
-(new issue) → [human review] ─┬→ agent-ready-claude  → agent-working ───────────────────────────────────────→ agent-review → [human merge decision]
-                              └→ agent-ready-copilot → agent-working ─┬─ clean architecture check ────────────→ agent-review
-                                                                      └─ findings → agent-architecture-fix
-                                                                                    → Copilot fix push passes exact-SHA validation → agent-review
+(new issue) → [human review] ─┬→ agent-ready-claude       ─┬→ agent-working ──────────────────────────────────────────→ agent-review → [human merge decision]
+                              ├→ agent-ready-full-claude  ─┘
+                              ├→ agent-ready-copilot      ─┬→ agent-working ─┬─ clean architecture check ────────────→ agent-review
+                              └→ agent-ready-full-copilot ─┘                 └─ findings → agent-architecture-fix
+                                                                                           → Copilot fix push passes exact-SHA validation → agent-review
 
-Any stage that fails closed → agent-blocked → (human decision) → agent-ready-claude | agent-ready-copilot
+Any stage that fails closed → agent-blocked → (human decision) → exactly one readiness label (any route)
 ```
 
 ## Risk classification
 
-Every agent task issue proposes a risk level, and a human confirms it before applying `agent-ready-claude` or `agent-ready-copilot`. When a task touches more than one area, use the highest applicable classification.
+Every agent task issue proposes a risk level, and a human confirms it before applying a readiness label. When a task touches more than one area, use the highest applicable classification.
 
 ### Low risk
 
@@ -686,8 +731,8 @@ Each phase is delivered as its own pull request and must be proven reliable befo
 | Phase | Scope | Status |
 | --- | --- | --- |
 | 1 | Automation documentation and templates: this document, the agent task issue form, the PR template, and `AGENTS.md`/`README.md` updates. | **Implemented** |
-| 2 | Issue label to implementation-agent PR creation: labels, an implementation agent connected to `agent-ready-claude` issues (and, with cross-review, the Copilot coding agent connected to `agent-ready-copilot` issues), and `agent-working`/`agent-review`/`agent-blocked` transitions. No merge or deploy authority. | **Implemented** with Claude Code (`agent-implement.yml`, `CLAUDE.md`). Labels were created by a human in repository settings. After implementation PR creation, trusted `agent-architecture.yml` runs first; its successful finalizer dispatches exact-SHA validation from `main`; see [Workflow-token behaviour](#workflow-token-behaviour). |
-| 3 | Independent automated review and bounded repair: a separate review step, its written result, and the two-attempt repair limit enforced mechanically. | **Partially implemented.** The independent review step exists (`agent-review.yml`) and its initial run is dispatched automatically once validation succeeds (`agent-architecture.yml`'s deterministic finalizer applies `agent-review` before exact-SHA validation); a human-invoked repair step exists (`agent-repair.yml`), and a pushed repair automatically receives exact-SHA validation followed by fresh review under the same label. The [documentation impact gate](#documentation-impact-gate) (templates, preflight, validation, review comparison) is **implemented**. Mechanical enforcement of the two-attempt limit is **not implemented**: repair attempts are requested and counted by a human. |
+| 2 | Issue label to implementation-agent PR creation: labels, an implementation agent connected to `agent-ready-claude` issues (and, with cross-review, the Copilot coding agent connected to `agent-ready-copilot` issues; since #340 also the `agent-ready-full-claude` and `agent-ready-full-copilot` fallbacks), and `agent-working`/`agent-review`/`agent-blocked` transitions. No merge or deploy authority. | **Implemented** with Claude Code (`agent-implement.yml`, `CLAUDE.md`). Labels were created by a human in repository settings. After implementation PR creation, trusted `agent-architecture.yml` runs first; its successful finalizer dispatches exact-SHA validation from `main`; see [Workflow-token behaviour](#workflow-token-behaviour). |
+| 3 | Independent automated review and bounded repair: a separate review step, its written result, and the two-attempt repair limit enforced mechanically. | **Partially implemented.** The final review step exists (`agent-review.yml`) and its initial run is dispatched automatically once validation succeeds (`agent-architecture.yml`'s deterministic finalizer applies `agent-review` before exact-SHA validation); a human-invoked repair step exists (`agent-repair.yml`), and a pushed repair automatically receives exact-SHA validation followed by fresh review under the same label. The [documentation impact gate](#documentation-impact-gate) (templates, preflight, validation, review comparison) is **implemented**. Mechanical enforcement of the two-attempt limit is **not implemented**: repair attempts are requested and counted by a human. |
 | 4 | Staging deployment and smoke tests: a non-production environment deployed from `develop` with automated smoke checks. No staging environment exists today. | Proposed |
 | 5 | Controlled release PR and production approval: a `develop` → `main` release PR process with human environment approval. | Proposed |
 | 6 | Production monitoring and proposed issue creation: monitoring that can draft issues for humans to review; it must not apply an `agent-ready-*` label. | Proposed |
