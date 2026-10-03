@@ -298,6 +298,10 @@ builder.Services.AddScoped<IInventoryCountAdjustmentStore, EfInventoryCountAdjus
 // EfImportedReimbursementStore.
 builder.Services.AddScoped<IImportedReimbursementStore, EfImportedReimbursementStore>();
 
+// Temporary API-owned adapter for the Nayax product catalogue import persistence port (issue
+// #300); see EfNayaxProductCatalogImportStore.
+builder.Services.AddScoped<INayaxProductCatalogImportStore, EfNayaxProductCatalogImportStore>();
+
 var app = builder.Build();
 
 // Schema handling at startup (issue #64, revised by issue #201). Development, Testing, and

@@ -40,6 +40,10 @@ public class ImportsControllerPendingXmlTests
         store.Setup(x => x.HasFileWithContentHashAsync("HASH-A", It.IsAny<CancellationToken>())).ReturnsAsync(false);
         var controller = new ImportsController(
             Mock.Of<IImportService>(),
+            new ImportNayaxProductCatalog(
+                Mock.Of<Inventory.Application.Nayax.INayaxLynxClient>(),
+                Mock.Of<INayaxProductCatalogImportStore>(),
+                Mock.Of<IClock>()),
             new ImportPendingReimbursementXmlFiles(source.Object, store.Object, Mock.Of<IClock>()));
 
         var result = await controller.ImportPendingXmlFiles(CancellationToken.None);

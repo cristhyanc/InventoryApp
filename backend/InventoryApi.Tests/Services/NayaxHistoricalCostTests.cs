@@ -368,7 +368,6 @@ public class NayaxHistoricalCostTests
             db,
             new Mock<IWebHostEnvironment>().Object,
             new Mock<ILogger<ImportService>>().Object,
-            new Mock<INayaxLynxClient>().Object,
             TestCostingUseCases.CostSale(db),
             new Mock<IRebuildProductCost>().Object);
 
