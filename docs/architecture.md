@@ -123,10 +123,15 @@ running API process) and confirms the resulting copy passes `PRAGMA integrity_ch
 exactly the committed rows, then proves a second backup taken later, still without closing that
 connection, reflects the writes committed in between.
 
-**The supported command (issue #331).** `backend/InventoryApi`'s published executable has a
-`backup-database` CLI mode, dispatched before the web host is built — the same early-command
+**The supported command (issues #331 and #332).** `backend/InventoryApi`'s published executable has
+a `backup-database` CLI mode, dispatched before the web host is built — the same early-command
 pattern as `bootstrap-business` and `migrate-database`, so taking a backup and starting the API
-are mutually exclusive paths through `Program.cs` and never run during normal startup. It opens the
+are mutually exclusive paths through `Program.cs` and never run during normal startup. It takes
+exactly one of two mutually exclusive modes: `--output <path>` retains a verified snapshot at a
+path the operator names (issue #331), and `--upload` stages a verified snapshot, uploads it to the
+private backup container, and removes the local copy (issue #332, described below). They are
+mutually exclusive because they dispose of the snapshot in opposite ways; passing both is refused
+rather than resolved by guessing. It opens the
 same configured database the API would (`ConnectionStrings:DefaultConnection`, falling back to the
 relative `Data Source=inventory.db` default — that relative default is not rejected merely for
 being relative, only if the resolved file does not exist or cannot be opened), copies it with the
@@ -142,9 +147,94 @@ dotnet InventoryApi.dll backup-database --output /home/data/backups/inventory-20
 ```
 
 This is the command the scheduled backup job (issue #333) also calls; routine backups are
-scheduled, not run by hand. Manual, one-off verification uses the identical command. Blob upload,
-retention/alerting, and automated restore are explicitly out of scope for this command — restore
-stays the deliberate, human-run `sqlite3` procedure below.
+scheduled, not run by hand. Manual, one-off verification uses the identical command.
+Retention/alerting and automated restore remain out of scope for this command — restore stays the
+deliberate, human-run `sqlite3` procedure below.
+
+**Uploading the verified snapshot off the instance (issue #332).** `backup-database --upload` is
+the create-verify-upload workflow, in one command:
+
+```bash
+dotnet InventoryApi.dll backup-database --upload
+```
+
+It takes and verifies the snapshot exactly as the retained mode does — Online Backup API,
+`PRAGMA integrity_check`, SHA-256 — but into a staging file under the OS temporary path
+(`inventoryapp-backup-staging/`), which is outside the API's content root and `wwwroot`; the same
+content-root guard that protects `--output` still checks the staged path rather than trusting it.
+Each invocation stages into its own freshly named subdirectory of that staging root
+(`run-<yyyyMMdd>T<HHmmss>Z-<random>/`) rather than straight into it, because the UTC instant is
+precise only to the second: two runs that overlap — the scheduled job and an operator running the
+command by hand, or a slow upload still in flight when the next run starts — must not contend for
+one path, and neither run's cleanup may remove the other's snapshot while it is still being
+uploaded. Only a snapshot that completed and passed verification is uploaded: the uploader accepts
+a type that can only describe a verified snapshot, and re-hashes the staged file against the
+checksum verification produced before sending a byte, so a staged copy that was replaced or
+truncated in between is refused. The staged file (and any SQLite sidecar files) are removed in a
+`finally` path after success, failure, or an exception such as an unreachable storage account,
+followed by the run's own now-empty directory — the cleanup deletes only those paths, by name and
+inside that directory, so another run's staged snapshot and anything an operator keeps in the
+staging root are never touched. A cleanup that could not finish is reported and exits non-zero
+rather than quietly leaving a complete copy of every business's data on the instance's disk. Exit
+code is `0` only when the snapshot verified, the upload verified, and nothing was left behind.
+
+Each run writes to a private container, under two prefixes:
+
+| Object | Name | Written |
+|---|---|---|
+| Per-snapshot | `daily/inventory-<yyyyMMdd>T<HHmmss>Z.db` | Every run, from the snapshot's UTC instant |
+| Per-month recovery point | `monthly/<YYYY-MM>/inventory-<YYYY-MM>.db` | On the first successful upload in that UTC calendar month |
+
+The monthly recovery point is chosen by the upload itself, not by a storage lifecycle rule: a rule
+can expire objects, but nothing in the account knows which daily snapshot a month should keep. The
+name is deterministic from the month alone, and the write is a conditional create
+(`If-None-Match: *`), so "is this the first upload of this month?" is answered by the service in
+the same request that would write it. Three consequences matter operationally: a month whose first
+scheduled run was missed still gets a recovery point from whichever verified snapshot arrives
+first (including a manual `--upload` early in the month, which is acceptable because it is a
+verified snapshot); a retry or any later upload in the same month leaves the existing monthly
+object byte-for-byte unchanged and reports it as already present rather than as a failure; and no
+object under either prefix is ever overwritten — an occupied `daily/` name stops the run instead.
+The seam the uploader is written against (`IBackupBlobContainer`) has no delete and no overwrite
+operation at all, so retention cannot be performed by this code path even accidentally.
+
+Each uploaded object carries three pieces of metadata — `createdutc` (the snapshot's UTC instant),
+`sha256` (the checksum verification computed) and `kind` (`daily` or `monthly`). They are
+operational facts, readable from a storage browser; none describes, samples or summarises the data
+inside the snapshot, and none is or can become a credential. The upload is then verified as
+completed by reading each object's length and recorded checksum back and comparing them to the
+snapshot that was sent — the content itself is never downloaded. A write the service accepted but
+did not store as sent is reported as a failure, not as a recovery point.
+
+**Required configuration, identity and container (issue #332).** Two non-secret settings, read
+from App Service application settings or environment variables, and read only by this command:
+
+```text
+BackupStorage__BlobServiceUri=https://<storage-account>.blob.core.windows.net
+BackupStorage__ContainerName=database-backups          # database-backups-dev for development
+```
+
+There is no account key, SAS token, client secret or storage connection string to configure, and
+none is accepted: authentication is `DefaultAzureCredential` — the App Service's managed identity
+when the scheduled job runs the command, and the operator's own Azure sign-in when they run it by
+hand — and the configuration gate rejects a service URI carrying a query string or embedded
+credentials, which is what a SAS token or an account key would look like. Nothing in the upload
+path logs a credential; the command prints object names, byte counts, the checksum and the
+integrity result, never a connection string or snapshot content. An unconfigured or unusable
+destination is refused **before** any snapshot is taken, so an upload that cannot reach its
+destination never spends time copying the database first.
+
+The human prerequisites below are stated for a human to apply; **no production Azure resource,
+role assignment or policy is created or changed by this repository or by any agent**, and the
+deployment configuration is not visible here, so a human must verify it before rollout:
+
+| # | Prerequisite | Why |
+|---|---|---|
+| 1 | A **private** container (for example `database-backups`), separate from the `business-documents` container | A snapshot is a complete copy of every business's data. Its own container keeps its access, retention and auditing independent of document storage, and no public/anonymous access is a hard requirement. |
+| 2 | A storage account outside the App Service's own storage failure domain | A backup that lives only next to the database it protects does not survive whatever destroys the database. |
+| 3 | **System-assigned managed identity** on the App Service | The command authenticates as the application itself, with no credential stored anywhere. |
+| 4 | **`Storage Blob Data Contributor`** granted to that identity at the narrowest practical scope — preferably the backup container alone | Least privilege for what this flow actually does: create an object that does not exist and read object properties back. `Storage Blob Data Reader` cannot write; account-wide Contributor would also grant access to business documents. Delete is not required by this flow — retention is separate, human-controlled work. |
+| 5 | Encryption confirmed: **at rest** by Azure Storage service-side encryption (AES-256, enabled on every account and not optional), and **in transit** by HTTPS/TLS — the configuration gate refuses any non-loopback endpoint that is not `https`, and "secure transfer required" should be enabled on the account | The snapshot contains financial and business records. Infrastructure-level encryption is the expectation for both states; the final encryption policy (including any customer-managed key) remains a human decision. |
 
 The equivalent operator procedure, using the `sqlite3` CLI (the standard SQLite tool;
 <https://sqlite.org/cli.html>) against the App Service's persistent database path, remains
@@ -172,6 +262,8 @@ underlying mechanism:
 4. **Store the verified backup somewhere other than the App Service's own `/home` mount** (for
    example downloaded to a workstation, or uploaded to separate storage) — a backup that lives only
    next to the database it protects does not survive whatever destroys the database.
+   `backup-database --upload` is the supported, automated form of this step; this manual
+   alternative exists for a host where the published `dotnet` application is not on hand.
 5. **Restore** by stopping the API, replacing the live database file with the verified backup (or
    pointing the connection string at the restored file), and starting the API again:
 
@@ -204,7 +296,7 @@ InventoryApp/
 │   │   └── InventoryApi.csproj
 │   ├── Inventory.Domain/            NayaxFeeSettings rule, reporting policies/calculations (Inventory.Domain.Reporting.<Feature>), Purchases.PurchaseTotalValidationPolicy; other features not yet migrated
 │   ├── Inventory.Application/       NayaxFeeSettings use cases/ports, Categories/Suppliers use cases/ports, Nayax.INayaxLynxClient port/DTOs, reporting use cases/contracts (Inventory.Application.Reporting.<Feature>), Purchases.ComputePurchaseTotalValidation, Imports.ImportPendingReimbursementXmlFiles and Imports.ImportNayaxProductCatalog with their source/store ports, Documents.IDocumentStorage, shared Inventory.Application.Time.IClock/IBusinessCalendar; other features not yet migrated
-│   ├── Inventory.Infrastructure/    Nayax.NayaxLynxClient/NayaxLynxOptions (Nayax Lynx HTTP client), SystemClock/SydneyBusinessCalendar adapters (Inventory.Infrastructure.Time), FileSystemDocumentStorage and AzureBlobDocumentStorage (Inventory.Infrastructure.Documents), FileSystemPendingReimbursementXmlSource (Inventory.Infrastructure.Imports); other features not yet migrated
+│   ├── Inventory.Infrastructure/    Nayax.NayaxLynxClient/NayaxLynxOptions (Nayax Lynx HTTP client), SystemClock/SydneyBusinessCalendar adapters (Inventory.Infrastructure.Time), FileSystemDocumentStorage and AzureBlobDocumentStorage (Inventory.Infrastructure.Documents), FileSystemPendingReimbursementXmlSource (Inventory.Infrastructure.Imports), the verified-snapshot blob uploader (Inventory.Infrastructure.Backups); other features not yet migrated
 │   └── InventoryApi.Tests/
 ├── frontend/inventory-app/
 │   ├── src/app/
