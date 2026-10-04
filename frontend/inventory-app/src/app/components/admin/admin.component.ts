@@ -15,7 +15,13 @@ import {
   InventoryCostTransitionPreview,
   InventoryCostTransitionService
 } from '../../services/inventory-cost-transition.service';
+import {
+  InventoryCostRepairPreview,
+  InventoryCostRepairRecord,
+  InventoryCostRepairService
+} from '../../services/inventory-cost-repair.service';
 import { BusinessDateTimePipe } from '../../formatting/business-date-time.pipe';
+import { BUSINESS_TIME_ZONE, formatForDateTimeLocalInput, zonedDateTimeToUtc } from '../../formatting/business-time-zone';
 
 @Component({
   selector: 'app-admin',
@@ -236,6 +242,92 @@ import { BusinessDateTimePipe } from '../../formatting/business-date-time.pipe';
           </div>
         }
       </section>
+
+      <section class="rounded-xl bg-white p-6 shadow-sm md:col-span-2">
+        <h2 class="text-lg font-semibold text-slate-800">Costing Repair</h2>
+        <p class="mt-1 text-sm text-slate-500">For a product whose cost history is missing (a fatal MissingOpening/UnknownCost replay issue), record a human-entered historical costing repair. It changes historical COGS for this product; it is never proof that the recorded history is correct, and it does not change physical stock.</p>
+        <div class="mt-4 grid gap-3 sm:grid-cols-3">
+          <label class="text-sm text-slate-700">Product
+            <select class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2" [(ngModel)]="repairProductId" (ngModelChange)="selectRepairProduct()">
+              <option [ngValue]="null">Select a product</option>
+              @for (product of products; track product.id) {
+                <option [ngValue]="product.id">{{ product.name }}</option>
+              }
+            </select>
+          </label>
+          <label class="text-sm text-slate-700">Quantity
+            <input type="number" min="1" step="1" class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2" [(ngModel)]="repairQuantity" />
+          </label>
+          <label class="text-sm text-slate-700">Unit cost
+            <input type="number" min="0" step="0.000001" class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2" [(ngModel)]="repairUnitCost" />
+          </label>
+          <label class="text-sm text-slate-700 sm:col-span-2">Effective date/time ({{ repairTimeZoneLabel }})
+            <input type="datetime-local" class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2" [(ngModel)]="repairEffectiveAtLocal" />
+          </label>
+          <label class="text-sm text-slate-700 sm:col-span-3">Reason
+            <input type="text" placeholder="A specific, auditable reason for this repair" class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2" [(ngModel)]="repairReason" />
+          </label>
+        </div>
+        <button type="button" class="mt-3 rounded-md border border-blue-300 px-3 py-2 text-sm text-blue-700 disabled:opacity-50" [disabled]="loading || repairProductId == null" (click)="previewRepair()">Preview repair</button>
+
+        @if (repairPreview) {
+          <div class="mt-5 rounded-lg border border-slate-200 p-4">
+            <div class="grid gap-2 text-sm text-slate-700 sm:grid-cols-3">
+              <div>Cost position before: <strong>{{ repairPreview.costingQuantityBefore }}</strong> units / <strong>{{ repairPreview.inventoryValueBefore | currency:'AUD' }}</strong></div>
+              <div>Quantity/value added: <strong>{{ repairPreview.quantity }}</strong> units / <strong>{{ repairPreview.totalValue | currency:'AUD' }}</strong></div>
+              <div>Resulting average unit cost: <strong>{{ repairPreview.averageUnitCostAfter != null ? (repairPreview.averageUnitCostAfter | currency:'AUD':'symbol':'1.2-6') : 'n/a' }}</strong></div>
+              <div>Cost position after: <strong>{{ repairPreview.costingQuantityAfter }}</strong> units / <strong>{{ repairPreview.inventoryValueAfter | currency:'AUD' }}</strong></div>
+              <div>Projected position: <strong>{{ repairPreview.projectedCostingQuantity }}</strong> units / <strong>{{ repairPreview.projectedInventoryValue | currency:'AUD' }}</strong></div>
+              <div>Projected average unit cost: <strong>{{ repairPreview.projectedAverageUnitCost != null ? (repairPreview.projectedAverageUnitCost | currency:'AUD':'symbol':'1.2-6') : 'n/a' }}</strong></div>
+            </div>
+            <div class="mt-3 text-sm text-slate-700">
+              @if (repairPreview.firstUncostableSale) {
+                <div>First previously uncostable sale: <strong>Transaction {{ repairPreview.firstUncostableSale.transactionId }}</strong> at {{ repairPreview.firstUncostableSale.authorizationTime | businessDateTime }} &mdash; repair replays before it: <strong>{{ repairPreview.replaysBeforeFirstUncostableSale ? 'Yes' : 'No' }}</strong></div>
+              } @else {
+                <div>No completed sale is currently uncostable for this product.</div>
+              }
+            </div>
+            <div class="mt-3 text-sm">
+              @if (repairPreview.remainingFatalIssues.length) {
+                <p class="text-red-700">This repair would still leave fatal issues, and cannot be applied until a preview reports none:</p>
+                <ul class="mt-1 list-disc pl-5 text-red-700">
+                  @for (issue of repairPreview.remainingFatalIssues; track issue.code + issue.message) {
+                    <li><strong>{{ issue.code }}</strong>: {{ issue.message }}</li>
+                  }
+                </ul>
+              } @else {
+                <p class="text-emerald-700">No fatal issues would remain after this repair.</p>
+              }
+            </div>
+            <button type="button" class="mt-4 rounded-md bg-amber-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50" [disabled]="loading || repairPreview.remainingFatalIssues.length > 0" (click)="applyRepair()">Apply repair</button>
+          </div>
+        }
+
+        <div class="mt-5 border-t border-slate-100 pt-4">
+          <h3 class="mb-2 text-sm font-semibold text-slate-700">Repair history (newest first)</h3>
+          @if (repairHistory.length) {
+            <div class="overflow-x-auto">
+              <table class="min-w-full text-left text-sm">
+                <thead class="bg-slate-50 text-xs text-slate-600"><tr><th class="px-3 py-2">Effective</th><th class="px-3 py-2">Quantity</th><th class="px-3 py-2">Unit cost</th><th class="px-3 py-2">Total value</th><th class="px-3 py-2">Reason</th><th class="px-3 py-2">Recorded</th></tr></thead>
+                <tbody>
+                  @for (repair of repairHistory; track repair.id) {
+                    <tr class="border-t border-slate-100" data-testid="repair-history-row" [attr.data-repair-id]="repair.id">
+                      <td class="px-3 py-2">{{ repair.effectiveAt | businessDateTime }}</td>
+                      <td class="px-3 py-2">{{ repair.quantity }}</td>
+                      <td class="px-3 py-2">{{ repair.unitCost | currency:'AUD':'symbol':'1.2-6' }}</td>
+                      <td class="px-3 py-2">{{ repair.totalValue | currency:'AUD' }}</td>
+                      <td class="px-3 py-2">{{ repair.reason }}</td>
+                      <td class="px-3 py-2">{{ repair.createdAt | businessDateTime }}</td>
+                    </tr>
+                  }
+                </tbody>
+              </table>
+            </div>
+          } @else {
+            <p class="text-sm text-slate-500">{{ repairProductId == null ? 'Select a product to see its costing repair history.' : 'No costing repairs recorded for this product.' }}</p>
+          }
+        </div>
+      </section>
     </div>
   `
 })
@@ -263,6 +355,17 @@ export class AdminComponent {
   transitionAllProducts = false;
   readonly baselineSources = InventoryCostBaselineSource;
 
+  /** Matches `CostingRepairPolicy.MinimumReasonLength` (backend-authoritative); a client-side hint only. */
+  private readonly minimumRepairReasonLength = 10;
+  readonly repairTimeZoneLabel = 'Sydney time';
+  repairProductId: number | null = null;
+  repairEffectiveAtLocal = formatForDateTimeLocalInput(new Date(), BUSINESS_TIME_ZONE);
+  repairQuantity: number | null = null;
+  repairUnitCost: number | null = null;
+  repairReason = '';
+  repairPreview: InventoryCostRepairPreview | null = null;
+  repairHistory: InventoryCostRepairRecord[] = [];
+
   constructor(
     private importService: ImportService,
     private reportingService: ReportingService,
@@ -270,7 +373,8 @@ export class AdminComponent {
     private nayaxSettings: NayaxSettingsService,
     private siteService: SiteService,
     private productService: ProductService,
-    private inventoryCostTransition: InventoryCostTransitionService
+    private inventoryCostTransition: InventoryCostTransitionService,
+    private inventoryCostRepair: InventoryCostRepairService
   ) {
     this.loadFeeRates();
     this.loadCommissionAgreements();
@@ -350,6 +454,72 @@ export class AdminComponent {
       },
       error: err => { this.loading = false; this.toast.error(this.extractErrorMessage(err, 'Unable to save all transition baselines.')); }
     });
+  }
+
+  selectRepairProduct(): void {
+    this.repairPreview = null;
+    this.repairHistory = [];
+    if (this.repairProductId == null) return;
+    this.inventoryCostRepair.history(this.repairProductId).subscribe({
+      next: history => this.repairHistory = history,
+      error: () => this.toast.error('Unable to load this product\'s costing repair history.')
+    });
+  }
+
+  previewRepair(): void {
+    if (this.repairProductId == null) {
+      this.toast.error('Select a product to preview a costing repair.');
+      return;
+    }
+    if (!this.repairQuantity || this.repairQuantity <= 0 || this.repairUnitCost == null || this.repairUnitCost < 0) {
+      this.toast.error('Enter a positive quantity and a non-negative unit cost.');
+      return;
+    }
+    if (this.repairReason.trim().length < this.minimumRepairReasonLength) {
+      this.toast.error(`Record a specific reason for this costing repair: at least ${this.minimumRepairReasonLength} characters.`);
+      return;
+    }
+    this.loading = true;
+    this.repairPreview = null;
+    this.inventoryCostRepair.preview(
+      this.repairProductId,
+      this.repairEffectiveAtUtcIso(),
+      this.repairQuantity,
+      this.repairUnitCost,
+      this.repairReason
+    ).subscribe({
+      next: preview => { this.repairPreview = preview; this.loading = false; },
+      error: err => { this.loading = false; this.toast.error(this.extractErrorMessage(err, 'Unable to preview the costing repair.')); }
+    });
+  }
+
+  applyRepair(): void {
+    if (!this.repairPreview ||
+        !window.confirm('Save this human-entered historical costing repair? It changes historical COGS for this product and does not change physical stock.')) return;
+    this.loading = true;
+    this.inventoryCostRepair.apply(this.repairPreview).subscribe({
+      next: () => {
+        this.loading = false;
+        this.toast.success('Costing repair saved.');
+        this.repairPreview = null;
+        this.selectRepairProduct();
+      },
+      error: err => {
+        this.loading = false;
+        this.toast.error(this.extractErrorMessage(err, 'Unable to save the costing repair.'));
+        // Every apply failure (a stale ledger fingerprint, a sale-ordering violation, or a rebuild
+        // that still finds a fatal issue) means the world has moved since this preview was taken,
+        // so the stale preview is cleared and the operator must preview again before retrying.
+        this.repairPreview = null;
+      }
+    });
+  }
+
+  private repairEffectiveAtUtcIso(): string {
+    const [datePart, timePart] = this.repairEffectiveAtLocal.split('T');
+    const [year, month, day] = datePart.split('-').map(Number);
+    const [hour, minute] = timePart.split(':').map(Number);
+    return zonedDateTimeToUtc(year, month, day, hour, minute, 0, BUSINESS_TIME_ZONE).toISOString();
   }
 
   saveCommissionAgreement(): void {
