@@ -19,11 +19,12 @@ public static class SwaggerServiceCollectionExtensions
             });
 
             // The purchase and supplier-order response bodies are produced by API-owned DTOs since
-            // issue #304, but keep the schema ids and the (absent) requiredness the document has
-            // always published - see PublishedResponseSchemaContract. Everything else stays on
-            // Swashbuckle's default derivation, which this selector falls back to.
+            // issue #304, but keep the schema ids, the (absent) requiredness and the nested
+            // product/supplier references the document has always published - see
+            // PublishedResponseSchemaContract. Everything else stays on Swashbuckle's default
+            // derivation, which this selector falls back to.
             c.CustomSchemaIds(PublishedResponseSchemaContract.SchemaIdSelector(c.SchemaGeneratorOptions.SchemaIdSelector));
-            c.SchemaFilter<PublishedResponseSchemaContract.RequirednessFilter>();
+            c.SchemaFilter<PublishedResponseSchemaContract.PublishedShapeFilter>();
         });
 
         return services;
