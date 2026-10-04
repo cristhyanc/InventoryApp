@@ -1,8 +1,8 @@
 using Inventory.Application.Costing;
 using Inventory.Domain.Costing;
+using Inventory.Domain.Reporting.ProductMatching;
 using InventoryApi.Data;
 using InventoryApi.Models;
-using InventoryApi.Services;
 using Microsoft.EntityFrameworkCore;
 using DomainStock = Inventory.Domain.Stock;
 
@@ -10,13 +10,15 @@ namespace InventoryApi.Adapters.Persistence;
 
 /// <summary>
 /// Temporary EF Core implementation of <see cref="IInventoryCostLedgerStore"/> (issue #296). It lives
-/// in InventoryApi, not Inventory.Infrastructure, because it depends on <see cref="AppDbContext"/>,
-/// the persistence models and <see cref="NayaxProductMatcher"/>, all of which still live in
-/// InventoryApi; move it into Inventory.Infrastructure once they relocate there (issue #153).
+/// in InventoryApi, not Inventory.Infrastructure, because it depends on <see cref="AppDbContext"/>
+/// and the persistence models, which still live in InventoryApi; move it into
+/// Inventory.Infrastructure once they relocate there (issue #153).
 ///
 /// The queries are unchanged from the former <c>InventoryCostRebuildService</c>: the product's stock
-/// movements, the business's completed Nayax sales matched to the product through
-/// <see cref="NayaxProductMatcher"/>, its costing repairs (issue #359) and its latest transition
+/// movements, the business's completed Nayax sales matched to the product through the Domain
+/// <see cref="ProductMatcher"/> (issue #301 removed the <c>NayaxProductMatcher</c> wrapper this used
+/// to call; the catalogue is projected onto candidates once per read and the ID/name matching
+/// semantics are unchanged), its costing repairs (issue #359) and its latest transition
 /// baseline, all read through <see cref="AppDbContext"/>'s business query filter. Each replay input keeps a reference to the
 /// row it came from, so <see cref="StageReplay"/> writes the outcome
 /// <see cref="RebuildProductCost"/> decided back onto exactly that tracked row. It never saves, never
@@ -38,11 +40,11 @@ public sealed class EfInventoryCostLedgerStore : IInventoryCostLedgerStore
         var adjustmentQuery = forUpdate ? _db.StockAdjustments.AsQueryable() : _db.StockAdjustments.AsNoTracking();
         var saleQuery = forUpdate ? _db.NayaxSales.AsQueryable() : _db.NayaxSales.AsNoTracking();
         var adjustments = await adjustmentQuery.Where(x => x.ProductId == productId).ToListAsync(cancellationToken);
-        var products = await _db.Products.AsNoTracking().ToListAsync(cancellationToken);
+        var candidates = await ProductCandidatesAsync(cancellationToken);
         var sales = (await saleQuery
                 .Where(EfNayaxSalesQueries.CompletedSalePredicate)
                 .ToListAsync(cancellationToken))
-            .Where(s => NayaxProductMatcher.Match(products, s.NayaxProductId, s.ProductName)?.Id == productId)
+            .Where(s => ProductMatcher.Match(candidates, s.NayaxProductId, s.ProductName) == productId)
             .ToList();
         var repairs = await LoadRepairsAsync(productId, asOf: null, cancellationToken);
         var baseline = await _db.InventoryCostTransitionBaselines.AsNoTracking()
@@ -62,12 +64,12 @@ public sealed class EfInventoryCostLedgerStore : IInventoryCostLedgerStore
         var adjustments = await _db.StockAdjustments.AsNoTracking()
             .Where(x => x.ProductId == productId && x.EffectiveAt <= asOf)
             .ToListAsync(cancellationToken);
-        var products = await _db.Products.AsNoTracking().ToListAsync(cancellationToken);
+        var candidates = await ProductCandidatesAsync(cancellationToken);
         var sales = (await _db.NayaxSales.AsNoTracking()
                 .Where(EfNayaxSalesQueries.CompletedSalePredicate)
                 .Where(s => s.MachineAuthorizationTime <= asOf)
                 .ToListAsync(cancellationToken))
-            .Where(s => NayaxProductMatcher.Match(products, s.NayaxProductId, s.ProductName)?.Id == productId)
+            .Where(s => ProductMatcher.Match(candidates, s.NayaxProductId, s.ProductName) == productId)
             .ToList();
         var repairs = await LoadRepairsAsync(productId, asOf, cancellationToken);
         var baseline = await _db.InventoryCostTransitionBaselines.AsNoTracking()
@@ -77,6 +79,15 @@ public sealed class EfInventoryCostLedgerStore : IInventoryCostLedgerStore
 
         return EfInventoryCostLedger.Create(product, adjustments, sales, repairs, baseline);
     }
+
+    /// <summary>
+    /// The business's product catalogue as the Domain <see cref="ProductMatcher"/> consumes it,
+    /// projected once per read so matching a whole sale history stays one pass over one list.
+    /// </summary>
+    private async Task<IReadOnlyList<ProductMatchCandidate>> ProductCandidatesAsync(CancellationToken cancellationToken) =>
+        (await _db.Products.AsNoTracking().ToListAsync(cancellationToken))
+            .Select(product => new ProductMatchCandidate(product.Id, product.Name))
+            .ToList();
 
     /// <summary>
     /// The product's costing repairs (issue #359), effective at or before <paramref name="asOf"/>

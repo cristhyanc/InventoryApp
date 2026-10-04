@@ -2,24 +2,27 @@ using Inventory.Application.Costing;
 using Inventory.Application.Nayax;
 using Inventory.Application.SalesSync;
 using Inventory.Domain.FinancialConfiguration;
+using Inventory.Domain.Reporting.ProductMatching;
 using InventoryApi.Data;
 using InventoryApi.Models;
-using InventoryApi.Services;
 using Microsoft.EntityFrameworkCore;
 
 namespace InventoryApi.Adapters.Persistence;
 
 /// <summary>
 /// Temporary EF Core implementation of <see cref="ILatestNayaxSalesStore"/> (issue #187). It lives in
-/// InventoryApi, not Inventory.Infrastructure, because it depends on <see cref="AppDbContext"/>, the
-/// <see cref="NayaxSales"/> persistence model, and <see cref="NayaxProductMatcher"/>, all of which
+/// InventoryApi, not Inventory.Infrastructure, because it depends on <see cref="AppDbContext"/> and
+/// the <see cref="NayaxSales"/> persistence model, both of which
 /// still live in InventoryApi. Move it into Inventory.Infrastructure once the shared AppDbContext and
 /// persistence models relocate there; this follows the same pattern as
 /// <see cref="EfMachineStockEventStore"/>.
 ///
 /// The import rules themselves are unchanged from the former private
 /// <c>MachineService.SaveMachinesLastSalesAsync</c>: deduplication by the remote
-/// <c>TransactionID</c>, product matching through <see cref="NayaxProductMatcher"/>, the
+/// <c>TransactionID</c>, product matching through the Domain <see cref="ProductMatcher"/> (issue
+/// #301 removed the <c>NayaxProductMatcher</c> wrapper these calls went through; the catalogue is
+/// projected onto candidates once per batch and the ID/name matching semantics, candidate selection
+/// and business scoping are unchanged), the
 /// settlement-value completed/cancelled default, historical costing through the Application
 /// <see cref="ICostSale"/> use case (issue #297), and the baseline-cutoff-gated
 /// <see cref="IRebuildProductCost"/> replay. An already stored transaction is only enriched
@@ -51,11 +54,13 @@ public sealed class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
         if (sales.Count == 0)
             return new LatestNayaxSalesPersistResult(affected);
 
-        var products = await _db.Products.AsNoTracking().ToListAsync(cancellationToken);
+        var candidates = (await _db.Products.AsNoTracking().ToListAsync(cancellationToken))
+            .Select(product => new ProductMatchCandidate(product.Id, product.Name))
+            .ToList();
         foreach (var sale in sales)
         {
-            var matchedProduct = NayaxProductMatcher.Match(
-                products,
+            var matchedProductId = ProductMatcher.Match(
+                candidates,
                 sale.NayaxProductId,
                 sale.ProductName);
             var existing = await _db.NayaxSales
@@ -67,7 +72,7 @@ public sealed class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
                     TransactionID = sale.TransactionID,
                     TransactionStatusId = sale.SettlementValue > 0 ? NayaxTransactionStatusIds.Completed : NayaxTransactionStatusIds.CancelledOrDeclined250,
                     MachineID = sale.MachineID,
-                    NayaxProductId = matchedProduct?.Id ?? sale.NayaxProductId,
+                    NayaxProductId = matchedProductId ?? sale.NayaxProductId,
                     MachineName = sale.MachineName,
                     SettlementValue = sale.SettlementValue,
                     PaymentMethod = sale.PaymentMethod,
@@ -79,9 +84,9 @@ public sealed class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
                 await _saleCosting.CostAsync(added, cancellationToken: cancellationToken);
                 if (NayaxTransactionStatusClassifier.IsCompletedSale(added.TransactionStatusId))
                 {
-                    if (matchedProduct is not null &&
-                        (!affected.TryGetValue(matchedProduct.Id, out var existingAt) || added.MachineAuthorizationTime < existingAt))
-                        affected[matchedProduct.Id] = added.MachineAuthorizationTime;
+                    if (matchedProductId is not null &&
+                        (!affected.TryGetValue(matchedProductId.Value, out var existingAt) || added.MachineAuthorizationTime < existingAt))
+                        affected[matchedProductId.Value] = added.MachineAuthorizationTime;
                 }
                 continue;
             }
@@ -89,14 +94,14 @@ public sealed class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
             var enriched = false;
             if (!existing.NayaxProductId.HasValue)
             {
-                var existingMatch = NayaxProductMatcher.Match(
-                    products,
+                var existingMatch = ProductMatcher.Match(
+                    candidates,
                     sale.NayaxProductId,
                     sale.ProductName ?? existing.ProductName);
                 if (existingMatch is not null)
                 {
-                    existing.NayaxProductId = existingMatch.Id;
-                    matchedProduct = existingMatch;
+                    existing.NayaxProductId = existingMatch.Value;
+                    matchedProductId = existingMatch;
                     enriched = true;
                 }
             }
@@ -113,12 +118,12 @@ public sealed class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
                     cancellationToken: cancellationToken);
                 if (NayaxTransactionStatusClassifier.IsCompletedSale(existing.TransactionStatusId))
                 {
-                    matchedProduct ??= NayaxProductMatcher.Match(
-                        products, existing.NayaxProductId, existing.ProductName);
-                    if (matchedProduct is not null &&
-                        (!affected.TryGetValue(matchedProduct.Id, out var existingAt) ||
+                    matchedProductId ??= ProductMatcher.Match(
+                        candidates, existing.NayaxProductId, existing.ProductName);
+                    if (matchedProductId is not null &&
+                        (!affected.TryGetValue(matchedProductId.Value, out var existingAt) ||
                          existing.MachineAuthorizationTime < existingAt))
-                        affected[matchedProduct.Id] = existing.MachineAuthorizationTime;
+                        affected[matchedProductId.Value] = existing.MachineAuthorizationTime;
                 }
             }
         }

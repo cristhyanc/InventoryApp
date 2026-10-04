@@ -1,13 +1,11 @@
 using System.Text;
 using Inventory.Application.Costing;
+using Inventory.Application.Imports;
+using Inventory.Infrastructure.Imports;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using InventoryApi.Models;
-using InventoryApi.Services;
-using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Hosting;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Logging;
 using Moq;
 using Xunit;
 
@@ -39,15 +37,14 @@ public class NayaxTransactionStatusTests
         var options = new DbContextOptionsBuilder<AppDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
         using var db = TestAppDbContext.Unrestricted(options);
-        var service = new ImportService(
-            db,
-            Mock.Of<IWebHostEnvironment>(),
-            Mock.Of<ILogger<ImportService>>(),
+        var import = new ImportNayaxSales(
+            new ClosedXmlNayaxSalesWorkbookReader(),
+            new EfNayaxSalesImportStore(db),
             TestCostingUseCases.CostSale(db),
             Mock.Of<IRebuildProductCost>());
 
-        await service.ImportNayaxSalesFromExcelAsync(File("TransactionID,TransactionStatusId,MachineID,SettlementValue,MachineAuthorizationTime\n1,55,10,5,2/9/2026 2:30:00 PM"));
-        await service.ImportNayaxSalesFromExcelAsync(File("TransactionID,TransactionStatusId,MachineID,SettlementValue,MachineAuthorizationTime\n1,12,10,5,2/9/2026 2:30:00 PM"));
+        await import.Handle(File("TransactionID,TransactionStatusId,MachineID,SettlementValue,MachineAuthorizationTime\n1,55,10,5,2/9/2026 2:30:00 PM"));
+        await import.Handle(File("TransactionID,TransactionStatusId,MachineID,SettlementValue,MachineAuthorizationTime\n1,12,10,5,2/9/2026 2:30:00 PM"));
 
         var sale = Assert.Single(db.NayaxSales);
         Assert.Equal(12, sale.TransactionStatusId);
@@ -158,9 +155,6 @@ public class NayaxTransactionStatusTests
         Assert.Equal(2.10m, (await db.NayaxSales.SingleAsync()).CostOfGoodsSold);
     }
 
-    private static IFormFile File(string csv)
-    {
-        var stream = new MemoryStream(Encoding.UTF8.GetBytes(csv));
-        return new FormFile(stream, 0, stream.Length, "file", "sales.csv");
-    }
+    private static NayaxSalesFileInput File(string csv) =>
+        new("sales.csv", () => new MemoryStream(Encoding.UTF8.GetBytes(csv)));
 }

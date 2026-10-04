@@ -11,16 +11,14 @@ using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Transactions;
 using Inventory.Application.SalesSync;
 using Inventory.Application.Commissions;
+using Inventory.Application.Imports;
+using Inventory.Infrastructure.Imports;
 using InventoryApi.Adapters.Export;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using Inventory.Application.Nayax;
 using InventoryApi.Models;
-using InventoryApi.Services;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Logging;
 using Moq;
 using Xunit;
 
@@ -42,7 +40,7 @@ public class NayaxHistoricalCostTests
         db.Products.Add(new Product { Id = 10, Name = "Snack", UnitPrice = 3m, AverageUnitCost = 2m });
         await db.SaveChangesAsync();
 
-        var result = await CreateImportService(db).ImportNayaxSalesFromExcelAsync(Csv(
+        var result = await CreateSalesImport(db).Handle(Csv(
             $"TransactionID,TransactionStatusId,MachineID,NayaxProductId,SettlementValue,PaymentMethod,ProductName,{header},MachineAuthorizationTime\n" +
             "1001,12,1,10,3.00,Card,Snack,1.10,2/9/2026 2:30:00 PM"));
 
@@ -74,12 +72,12 @@ public class NayaxHistoricalCostTests
             MachineAuthorizationTime = new DateTime(2026, 9, 2, 14, 30, 0)
         });
         await db.SaveChangesAsync();
-        var importer = CreateImportService(db);
+        var importer = CreateSalesImport(db);
 
-        await importer.ImportNayaxSalesFromExcelAsync(Csv(
+        await importer.Handle(Csv(
             "TransactionID,TransactionStatusId,MachineID,NayaxProductId,SettlementValue,ProductName,Product Cost Price,MachineAuthorizationTime\n" +
             "1001,12,1,10,3.00,Snack,1.20,2/9/2026 2:30:00 PM"));
-        await importer.ImportNayaxSalesFromExcelAsync(Csv(
+        await importer.Handle(Csv(
             "TransactionID,TransactionStatusId,MachineID,NayaxProductId,SettlementValue,ProductName,MachineAuthorizationTime\n" +
             "1001,12,1,10,3.00,Snack,2/9/2026 2:30:00 PM"));
 
@@ -110,7 +108,7 @@ public class NayaxHistoricalCostTests
         });
         await db.SaveChangesAsync();
 
-        await CreateImportService(db).ImportNayaxSalesFromExcelAsync(Csv(
+        await CreateSalesImport(db).Handle(Csv(
             "TransactionID,TransactionStatusId,MachineID,NayaxProductId,SettlementValue,ProductName,ProductCostPrice,MachineAuthorizationTime\n" +
             "1001,12,1,10,3.00,Snack,1.20,2/9/2026 2:30:00 PM"));
 
@@ -437,11 +435,16 @@ public class NayaxHistoricalCostTests
         TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
 
-    private static ImportService CreateImportService(AppDbContext db) =>
+    /// <summary>
+    /// The uploaded Nayax sales import use case (issue #301) over its real workbook reader and EF
+    /// store, with a stubbed post-transition rebuild: these tests assert the imported historical
+    /// cost and its provenance, which <see cref="TestCostingUseCases.CostSale"/> decides over the
+    /// real inventory ledger, not the replay the import then triggers.
+    /// </summary>
+    private static ImportNayaxSales CreateSalesImport(AppDbContext db) =>
         new(
-            db,
-            new Mock<IWebHostEnvironment>().Object,
-            new Mock<ILogger<ImportService>>().Object,
+            new ClosedXmlNayaxSalesWorkbookReader(),
+            new EfNayaxSalesImportStore(db),
             TestCostingUseCases.CostSale(db),
             new Mock<IRebuildProductCost>().Object);
 
@@ -459,9 +462,6 @@ public class NayaxHistoricalCostTests
             MachineAuthorizationTime = new DateTime(2026, 9, 2, 14, 30, 0)
         };
 
-    private static IFormFile Csv(string content)
-    {
-        var stream = new MemoryStream(Encoding.UTF8.GetBytes(content));
-        return new FormFile(stream, 0, stream.Length, "file", "sales.csv");
-    }
+    private static NayaxSalesFileInput Csv(string content) =>
+        new("sales.csv", () => new MemoryStream(Encoding.UTF8.GetBytes(content)));
 }
