@@ -39,6 +39,7 @@ using InventoryApi.Auth;
 using InventoryApi.Data;
 using InventoryApi.Http;
 using InventoryApi.Http.HealthChecks;
+using InventoryApi.Observability;
 using InventoryApi.Swagger;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
@@ -77,6 +78,14 @@ if (BackupDatabaseCommand.Matches(args))
 }
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Error observability (issue #165). Registered before anything else is built so that startup,
+// requests, dependencies, metrics and ILogger logs are all instrumented, and only when
+// APPLICATIONINSIGHTS_CONNECTION_STRING is configured - with no connection string nothing is
+// registered and the API starts exactly as it did before, which is what Development and the test
+// suite rely on. See InventoryApi.Observability.ObservabilityServiceCollectionExtensions and
+// README.md § Observability and error diagnostics.
+builder.Services.AddInventoryApiTelemetry(builder.Configuration);
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddMicrosoftIdentityWebApi(builder.Configuration.GetSection("AzureAd"));
