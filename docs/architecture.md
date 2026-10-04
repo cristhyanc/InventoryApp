@@ -1204,10 +1204,45 @@ and it never substitutes for a real purchase, correction or write-off.
   preview, an apply and a rebuild all read one ledger. `GetInventoryCostRepairHistory` returns a
   product's repairs newest effective first (ties by most recently recorded), and reports a product
   belonging to another business exactly as it reports one that does not exist.
-- **HTTP endpoints and UI are separate tasks** (the API and UI children of #358). Authorization is
-  the same as the inventory-cost transition - any authenticated member of the business - because the
-  application has no admin role; adding one is out of scope. Applying a repair changes historical
-  COGS for later sales, so production use needs human scrutiny.
+- **The HTTP surface (issue #360)** is `InventoryApi.Controllers.InventoryCostRepairsController`,
+  three thin adapters over the use cases above, following `InventoryCostTransitionsController`:
+
+  | Endpoint | Request | Success response |
+  | --- | --- | --- |
+  | `POST api/admin/inventory-cost-repair/preview` | `InventoryCostRepairRequest` (`productId`, `effectiveAt`, `quantity`, `unitCost`, `reason`) | `200` `InventoryCostRepairPreview`, complete: the before/after and projected costing positions, the resulting average unit costs, `firstUncostableSale`, `replaysBeforeFirstUncostableSale`, `remainingFatalIssues` and the `ledgerFingerprint` the apply requires back. Persists nothing. |
+  | `POST api/admin/inventory-cost-repair/apply` | `ApplyInventoryCostRepairRequest` - the same proposal plus the `ledgerFingerprint` the preview reported | `200` `InventoryCostRepairApplied`: the stored `repair` record (including `createdAt` and the creating `(tid, oid)` pair) and the product's rebuilt `costingQuantity`, `inventoryValue`, `averageUnitCost` and `recostedSaleCount`. |
+  | `GET api/admin/inventory-cost-repair/{productId}` | - | `200` the product's `InventoryCostRepairRecord` list, newest effective first. |
+
+  The controller binds a request, invokes one use case with the request's cancellation token and
+  returns its result unchanged. It holds no costing logic, no EF query, no transaction, no
+  recomputation of an Application result and no business filter of its own - ownership is the
+  central query filter and `SaveChanges` stamp, so another business's product is invisible and is
+  reported exactly like a product that does not exist (`400`, `Product {id} does not exist.`).
+  There is no update, delete or reversal endpoint, because a repair has no such path.
+- **Error contract.** Nothing is caught at the boundary. Every deliberate refusal - quantity, unit
+  cost, reason, the transition cutoff, placement before the sale being covered, a repair that would
+  leave the history fatally incomplete, and a **stale preview** whose fingerprint no longer matches
+  the ledger - is a `DomainValidationException`, so `DomainExceptionHandler` answers `400`
+  ProblemDetails with the Application's caller-safe message in `detail` and in the `message`
+  extension the Angular client reads, plus a `traceId`. A stale preview is deliberately part of
+  that `400` contract and not a `409`: the HTTP boundary does not reclassify what the use case
+  decided. An authenticated caller with no usable business membership is `BusinessScopeMiddleware`'s
+  `403`, and an unexpected failure stays unmapped - `GlobalExceptionHandler`'s logged, generic `500`
+  with no exception message - with the apply's transaction leaving no repair behind.
+- **Timestamps.** `effectiveAt` is a UTC instant in both directions. `CostingRepairPolicy`
+  normalises what the request named - an offset-bearing value is converted, and a timezone-less one
+  is read as UTC (issue #359's policy, unchanged) - so the preview, the apply and the history all
+  report the UTC spelling of the instant the caller meant. The machine-local sale time versus UTC
+  movement time mismatch the replay already carries is untouched by #360; placement is still judged
+  by the replay's own ordering, not by comparing those timestamps.
+- **Authorization** is the same as the inventory-cost transition - authenticated, `access_as_user`,
+  and any member of the business - because the application has no admin role; adding one is out of
+  scope. Applying a repair changes historical COGS for later sales, so production use needs human
+  scrutiny. `InventoryCostRepairApiTests` exercises all of this through the real request pipeline on
+  relational SQLite: the JSON contracts, the fingerprint round trip, the `400` mappings, the UTC
+  timestamps, the unauthenticated and missing-scope refusals, and two businesses proving a
+  cross-business product is indistinguishable from a missing one. The UI remains a separate task
+  (the UI child of #358).
 
 #### Dashboard "Inventory Value" tile (issue #42)
 
