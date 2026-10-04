@@ -16,11 +16,12 @@ import {
   InventoryCostTransitionService
 } from '../../services/inventory-cost-transition.service';
 import { BusinessDateTimePipe } from '../../formatting/business-date-time.pipe';
+import { CostingRepairComponent } from './costing-repair/costing-repair.component';
 
 @Component({
   selector: 'app-admin',
   standalone: true,
-  imports: [CommonModule, FormsModule, BusinessDateTimePipe],
+  imports: [CommonModule, FormsModule, BusinessDateTimePipe, CostingRepairComponent],
   template: `
     <div class="mb-6">
       <h1 class="text-2xl font-semibold text-slate-800">Admin</h1>
@@ -236,6 +237,8 @@ import { BusinessDateTimePipe } from '../../formatting/business-date-time.pipe';
           </div>
         }
       </section>
+
+      <app-costing-repair [products]="products"></app-costing-repair>
     </div>
   `
 })
