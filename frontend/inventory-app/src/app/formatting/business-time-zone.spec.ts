@@ -2,6 +2,7 @@ import {
   currentDateInTimeZone,
   currentDateTimeInTimeZone,
   fromDateTimeLocalValue,
+  resolveZonedDateTime,
   shiftCalendarDate,
   startOfDayUtc,
   toDateTimeLocalValue,
@@ -116,5 +117,45 @@ describe('toDateTimeLocalValue / fromDateTimeLocalValue (issue #361)', () => {
     const wallClock = fromDateTimeLocalValue('2026-01-02T09:05')!;
     const utcInstant = zonedDateTimeToUtc(wallClock.year, wallClock.month, wallClock.day, wallClock.hour, wallClock.minute, 'Australia/Canberra');
     expect(toDateTimeLocalValue(currentDateTimeInTimeZone(utcInstant, 'Australia/Canberra'))).toBe('2026-01-02T09:05');
+  });
+});
+
+describe('resolveZonedDateTime (issue #361 review: DST gap and repeated hour)', () => {
+  const zone = 'Australia/Canberra';
+
+  it('reports a time inside the October daylight-saving gap as nonexistent instead of moving it', () => {
+    // 2026-10-04 02:00-02:59 never happens in Sydney: the clocks jump from 02:00 AEST to 03:00 AEDT.
+    expect(resolveZonedDateTime(2026, 10, 4, 2, 30, zone)).toEqual({ kind: 'nonexistent' });
+    expect(resolveZonedDateTime(2026, 10, 4, 2, 0, zone)).toEqual({ kind: 'nonexistent' });
+    expect(resolveZonedDateTime(2026, 10, 4, 2, 59, zone)).toEqual({ kind: 'nonexistent' });
+  });
+
+  it('resolves valid times on both sides of the October gap with the offset each side uses', () => {
+    expect(resolveZonedDateTime(2026, 10, 4, 1, 59, zone)).toEqual({ kind: 'valid', utc: new Date('2026-10-03T15:59:00Z') });
+    expect(resolveZonedDateTime(2026, 10, 4, 3, 0, zone)).toEqual({ kind: 'valid', utc: new Date('2026-10-03T16:00:00Z') });
+  });
+
+  it('reports a time inside the April repeated hour as ambiguous, with both of its instants', () => {
+    // 2026-04-05 02:00-02:59 happens twice: first in AEDT (UTC+11), then again in AEST (UTC+10).
+    expect(resolveZonedDateTime(2026, 4, 5, 2, 30, zone)).toEqual({
+      kind: 'ambiguous',
+      earlier: new Date('2026-04-04T15:30:00Z'),
+      later: new Date('2026-04-04T16:30:00Z')
+    });
+  });
+
+  it('resolves valid times on both sides of the April repeated hour with the offset each side uses', () => {
+    expect(resolveZonedDateTime(2026, 4, 5, 1, 59, zone)).toEqual({ kind: 'valid', utc: new Date('2026-04-04T14:59:00Z') });
+    expect(resolveZonedDateTime(2026, 4, 5, 3, 0, zone)).toEqual({ kind: 'valid', utc: new Date('2026-04-04T17:00:00Z') });
+  });
+
+  it('agrees with zonedDateTimeToUtc for ordinary AEST and AEDT times', () => {
+    expect(resolveZonedDateTime(2026, 6, 15, 14, 30, zone)).toEqual({ kind: 'valid', utc: zonedDateTimeToUtc(2026, 6, 15, 14, 30, zone) });
+    expect(resolveZonedDateTime(2026, 1, 15, 14, 30, zone)).toEqual({ kind: 'valid', utc: zonedDateTimeToUtc(2026, 1, 15, 14, 30, zone) });
+  });
+
+  it('keeps start-of-day resolution unchanged on both transition days', () => {
+    expect(resolveZonedDateTime(2026, 10, 4, 0, 0, zone)).toEqual({ kind: 'valid', utc: startOfDayUtc(2026, 10, 4, zone) });
+    expect(resolveZonedDateTime(2026, 4, 5, 0, 0, zone)).toEqual({ kind: 'valid', utc: startOfDayUtc(2026, 4, 5, zone) });
   });
 });

@@ -30,7 +30,9 @@ function timeZoneOffsetMinutes(instant: Date, timeZone: string): number {
  * `timeZone`, resolved from the IANA timezone database so AEST/AEDT daylight-saving transitions
  * are applied automatically rather than a fixed UTC offset (issue #218; generalised from
  * whole-day resolution to also carry a time-of-day component by issue #361's costing-repair
- * effective-time input).
+ * effective-time input). It always returns some instant: a time inside a daylight-saving gap is
+ * moved forward and a repeated-hour time resolves to one of its two instants. Operator-entered
+ * times must go through `resolveZonedDateTime` instead, which reports those cases.
  */
 export function zonedDateTimeToUtc(
   year: number, month: number, day: number, hour: number, minute: number, timeZone: string
@@ -45,6 +47,54 @@ export function zonedDateTimeToUtc(
   return refinedOffsetMinutes === offsetMinutes
     ? new Date(candidateMillis)
     : new Date(utcGuessMillis - refinedOffsetMinutes * 60_000);
+}
+
+/**
+ * How a wall-clock time in a timezone maps onto real instants:
+ * - `valid`: exactly one instant shows that wall-clock time.
+ * - `nonexistent`: no instant does, because the clocks skipped over it (the hour lost when
+ *   daylight saving starts, e.g. Sydney 02:00-02:59 on the first Sunday of October).
+ * - `ambiguous`: two instants do, because the clocks went back over it (the hour repeated when
+ *   daylight saving ends, e.g. Sydney 02:00-02:59 on the first Sunday of April); `earlier` and
+ *   `later` are the daylight-saving and standard-time instants respectively.
+ */
+export type ZonedDateTimeResolution =
+  | { kind: 'valid'; utc: Date }
+  | { kind: 'nonexistent' }
+  | { kind: 'ambiguous'; earlier: Date; later: Date };
+
+/**
+ * Resolves a `year`/`month`(1-12)/`day`/`hour`/`minute` wall-clock time in `timeZone` without
+ * silently normalising it (issue #361 review): unlike `zonedDateTimeToUtc`, a time inside a
+ * daylight-saving gap is reported as `nonexistent` rather than shifted, and a time inside the
+ * repeated hour is reported as `ambiguous` rather than picking one of its two instants, so an
+ * operator-entered time is only ever used exactly as entered.
+ */
+export function resolveZonedDateTime(
+  year: number, month: number, day: number, hour: number, minute: number, timeZone: string
+): ZonedDateTimeResolution {
+  const wallClockAsUtcMillis = Date.UTC(year, month - 1, day, hour, minute);
+  const dayMillis = 24 * 60 * 60_000;
+  // A transition shifts the offset at most once around a given day in any real timezone, so the
+  // offsets a day either side are the only ones that can apply to this wall-clock time.
+  const offsets = new Set([
+    timeZoneOffsetMinutes(new Date(wallClockAsUtcMillis - dayMillis), timeZone),
+    timeZoneOffsetMinutes(new Date(wallClockAsUtcMillis), timeZone),
+    timeZoneOffsetMinutes(new Date(wallClockAsUtcMillis + dayMillis), timeZone)
+  ]);
+
+  const matches = [...offsets]
+    .map(offset => wallClockAsUtcMillis - offset * 60_000)
+    .filter(candidate => {
+      const shown = currentDateTimeInTimeZone(new Date(candidate), timeZone);
+      return shown.year === year && shown.month === month && shown.day === day &&
+        shown.hour === hour && shown.minute === minute;
+    })
+    .sort((a, b) => a - b);
+
+  if (matches.length === 0) return { kind: 'nonexistent' };
+  if (matches.length === 1) return { kind: 'valid', utc: new Date(matches[0]) };
+  return { kind: 'ambiguous', earlier: new Date(matches[0]), later: new Date(matches[matches.length - 1]) };
 }
 
 /**

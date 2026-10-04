@@ -1,5 +1,5 @@
 import { TestBed } from '@angular/core/testing';
-import { of, throwError } from 'rxjs';
+import { Subject, of, throwError } from 'rxjs';
 import { CostingRepairComponent } from './costing-repair.component';
 import {
   InventoryCostRepairApplied,
@@ -115,6 +115,17 @@ async function createHarness(
   return { component: fixture.componentInstance, fixture, host: fixture.nativeElement as HTMLElement, previewFn, applyFn, historyFn, toast };
 }
 
+/** Reaches a preview the way the operator does: select product 1, fill the form, preview. */
+function previewForProductOne(component: CostingRepairComponent): void {
+  component.productId = 1;
+  component.selectProduct();
+  component.quantity = 4;
+  component.unitCost = 2;
+  component.reason = 'Machine stock at the 2026 cutover was never costed.';
+  component.previewRepair();
+  expect(component.preview).not.toBeNull();
+}
+
 describe('CostingRepairComponent (issue #361)', () => {
   it('rejects a preview request when quantity, unit cost or reason are missing, without calling the API', async () => {
     const { component, previewFn, toast } = await createHarness();
@@ -207,7 +218,7 @@ describe('CostingRepairComponent (issue #361)', () => {
       } as InventoryCostRepairApplied)
     );
     const { component, toast } = await createHarness(undefined, applyFn);
-    component.preview = preview();
+    previewForProductOne(component);
     window.confirm = jest.fn(() => true);
     // The form fields have since been edited; the apply must still use the previewed values.
     component.quantity = 999;
@@ -221,7 +232,7 @@ describe('CostingRepairComponent (issue #361)', () => {
 
   it('does not apply when the confirmation dialog is declined', async () => {
     const { component, applyFn } = await createHarness();
-    component.preview = preview();
+    previewForProductOne(component);
     window.confirm = jest.fn(() => false);
 
     component.applyRepair();
@@ -234,7 +245,7 @@ describe('CostingRepairComponent (issue #361)', () => {
       error: { message: "This product's cost history changed after the preview. Run the preview again before applying the repair." }
     })));
     const { component, toast } = await createHarness(undefined, applyFn);
-    component.preview = preview();
+    previewForProductOne(component);
     window.confirm = jest.fn(() => true);
 
     component.applyRepair();
@@ -262,5 +273,246 @@ describe('CostingRepairComponent (issue #361)', () => {
     const reasons = Array.from(host.querySelectorAll('tbody tr')).map(row => row.textContent);
     expect(reasons[0]).toContain('Second repair, more specific detail.');
     expect(reasons[1]).toContain('First repair, more specific detail.');
+  });
+
+  describe('product switching (issue #361 review P1)', () => {
+    const productA = product({ id: 1, name: 'Coke Zero' });
+    const productB = product({ id: 2, name: 'Nu Water' });
+
+    function record(id: number, productId: number, reason: string): InventoryCostRepairRecord {
+      return {
+        id, productId, effectiveAt: '2026-01-02T00:00:00Z', quantity: 1, unitCost: 1, totalValue: 1, reason,
+        createdAt: '2026-01-03T00:00:00Z', createdByDirectoryTenantId: 't', createdByObjectId: 'o'
+      };
+    }
+
+    function fillForm(component: CostingRepairComponent): void {
+      component.quantity = 4;
+      component.unitCost = 2;
+      component.reason = 'Machine stock at the 2026 cutover was never costed.';
+      component.effectiveAtLocal = '2026-01-02T12:00';
+    }
+
+    function select(component: CostingRepairComponent, productId: number | null): void {
+      component.productId = productId;
+      component.selectProduct();
+    }
+
+    /** A service double whose every call returns a Subject the test resolves by hand, in any order. */
+    function controlled() {
+      const previews: Subject<InventoryCostRepairPreview>[] = [];
+      const histories = new Map<number, Subject<InventoryCostRepairRecord[]>[]>();
+      const previewFn = jest.fn(() => { const s = new Subject<InventoryCostRepairPreview>(); previews.push(s); return s; });
+      const historyFn = jest.fn((productId: number) => {
+        const s = new Subject<InventoryCostRepairRecord[]>();
+        histories.set(productId, [...(histories.get(productId) ?? []), s]);
+        return s;
+      });
+      return { previews, histories, previewFn, historyFn };
+    }
+
+    async function switchingHarness() {
+      const c = controlled();
+      const harness = await createHarness(c.previewFn, undefined, c.historyFn);
+      harness.component.products = [productA, productB];
+      return { ...harness, ...c };
+    }
+
+    it('discards product A\'s preview response once product B is selected, so Apply cannot submit it', async () => {
+      const { component, previews, applyFn, toast } = await switchingHarness();
+      select(component, 1);
+      fillForm(component);
+      component.previewRepair();
+      expect(component.loading).toBe(true);
+
+      select(component, 2);
+      previews[0].next(preview({ productId: 1 }));
+      previews[0].complete();
+
+      expect(component.preview).toBeNull();
+      expect(component.loading).toBe(false);
+      window.confirm = jest.fn(() => true);
+      component.applyRepair();
+      expect(applyFn).not.toHaveBeenCalled();
+      expect(toast.error).not.toHaveBeenCalled();
+    });
+
+    it('cancels the obsolete preview request when the product changes', async () => {
+      const { component, previews } = await switchingHarness();
+      select(component, 1);
+      fillForm(component);
+      component.previewRepair();
+
+      select(component, 2);
+
+      expect(previews[0].observed).toBe(false);
+    });
+
+    it('keeps only the latest preview across A -> B -> A switching', async () => {
+      const { component, previews } = await switchingHarness();
+      select(component, 1);
+      fillForm(component);
+      component.previewRepair();
+      select(component, 2);
+      select(component, 1);
+      component.previewRepair();
+
+      previews[0].next(preview({ productId: 1, ledgerFingerprint: 'old' }));
+      expect(component.preview).toBeNull();
+      expect(component.loading).toBe(true);
+
+      previews[1].next(preview({ productId: 1, ledgerFingerprint: 'new' }));
+      expect(component.preview?.ledgerFingerprint).toBe('new');
+      expect(component.loading).toBe(false);
+    });
+
+    it('does not let an obsolete preview failure touch the current loading or error state', async () => {
+      const { component, previews, toast } = await switchingHarness();
+      select(component, 1);
+      fillForm(component);
+      component.previewRepair();
+      select(component, 2);
+      fillForm(component);
+      component.previewRepair();
+
+      previews[0].error({ error: { message: 'Product A failed.' } });
+
+      expect(component.loading).toBe(true);
+      expect(toast.error).not.toHaveBeenCalled();
+    });
+
+    it('refuses to apply a preview that belongs to a different product than the one selected', async () => {
+      const { component, applyFn, toast } = await createHarness();
+      component.products = [productA, productB];
+      component.productId = 2;
+      component.preview = preview({ productId: 1 });
+      window.confirm = jest.fn(() => true);
+
+      component.applyRepair();
+
+      expect(applyFn).not.toHaveBeenCalled();
+      expect(component.preview).toBeNull();
+      expect(toast.error).toHaveBeenCalledWith('This preview is not for the selected product. Preview the repair again before applying it.');
+    });
+
+    it('clears product A\'s history as soon as B is selected and ignores A\'s late history response', async () => {
+      const { component, fixture, host, histories } = await switchingHarness();
+      select(component, 1);
+      histories.get(1)![0].next([record(1, 1, 'Product A repair reason.')]);
+      fixture.detectChanges();
+      expect(host.textContent).toContain('Product A repair reason.');
+
+      select(component, 2);
+      fixture.detectChanges();
+      expect(component.history).toEqual([]);
+      expect(host.textContent).not.toContain('Product A repair reason.');
+      expect(host.textContent).toContain('Loading repair history');
+
+      histories.get(2)![0].next([record(2, 2, 'Product B repair reason.')]);
+      histories.get(1)![0].next([record(3, 1, 'Late product A repair reason.')]);
+      fixture.detectChanges();
+
+      expect(component.history.map(r => r.id)).toEqual([2]);
+      expect(host.textContent).toContain('Product B repair reason.');
+      expect(host.textContent).not.toContain('Late product A repair reason.');
+    });
+
+    it('ignores an out-of-order A history arriving after A -> B -> A and keeps the newest A request\'s result', async () => {
+      const { component, histories } = await switchingHarness();
+      select(component, 1);
+      select(component, 2);
+      select(component, 1);
+
+      histories.get(1)![1].next([record(5, 1, 'Newest request.')]);
+      histories.get(1)![0].next([record(4, 1, 'Oldest request.')]);
+
+      expect(component.history.map(r => r.id)).toEqual([5]);
+    });
+
+    it('shows no stale records when B\'s history fails to load after switching from A', async () => {
+      const { component, fixture, host, histories, toast } = await switchingHarness();
+      select(component, 1);
+      histories.get(1)![0].next([record(1, 1, 'Product A repair reason.')]);
+
+      select(component, 2);
+      histories.get(2)![0].error(new Error('boom'));
+      fixture.detectChanges();
+
+      expect(component.history).toEqual([]);
+      expect(host.textContent).not.toContain('Product A repair reason.');
+      expect(host.textContent).toContain('The costing repair history could not be loaded.');
+      expect(toast.error).toHaveBeenCalledWith('Unable to load the costing repair history.');
+    });
+
+    it('does not report an obsolete history failure for a product no longer selected', async () => {
+      const { component, histories, toast } = await switchingHarness();
+      select(component, 1);
+      select(component, 2);
+
+      histories.get(1)![0].error(new Error('boom'));
+
+      expect(component.historyError).toBe(false);
+      expect(toast.error).not.toHaveBeenCalled();
+    });
+
+    it('disables the product selector while a repair is being applied', async () => {
+      const applied = new Subject<InventoryCostRepairApplied>();
+      const { component, fixture, host } = await createHarness(undefined, jest.fn(() => applied));
+      previewForProductOne(component);
+      window.confirm = jest.fn(() => true);
+
+      component.applyRepair();
+      fixture.detectChanges();
+      await fixture.whenStable();
+
+      expect(host.querySelector('select')?.disabled).toBe(true);
+    });
+  });
+
+  describe('effective time validation (issue #361 review P2)', () => {
+    async function filledHarness(effectiveAtLocal: string) {
+      const harness = await createHarness();
+      harness.component.productId = 1;
+      harness.component.quantity = 4;
+      harness.component.unitCost = 2;
+      harness.component.reason = 'Machine stock at the 2026 cutover was never costed.';
+      harness.component.effectiveAtLocal = effectiveAtLocal;
+      return harness;
+    }
+
+    it('rejects a time inside the October daylight-saving gap with a form message and makes no API call', async () => {
+      const { component, fixture, host, previewFn, toast } = await filledHarness('2026-10-04T02:30');
+
+      component.previewRepair();
+      fixture.detectChanges();
+
+      expect(previewFn).not.toHaveBeenCalled();
+      expect(component.effectiveAtError).toContain('does not exist in Sydney');
+      expect(host.textContent).toContain('does not exist in Sydney');
+      expect(toast.error).toHaveBeenCalledWith(component.effectiveAtError);
+    });
+
+    it('rejects a time inside the April repeated hour with guidance and makes no API call', async () => {
+      const { component, previewFn } = await filledHarness('2026-04-05T02:30');
+
+      component.previewRepair();
+
+      expect(previewFn).not.toHaveBeenCalled();
+      expect(component.effectiveAtError).toContain('happens twice in Sydney');
+    });
+
+    it.each([
+      ['2026-10-04T01:59', '2026-10-03T15:59:00.000Z'],
+      ['2026-10-04T03:00', '2026-10-03T16:00:00.000Z'],
+      ['2026-04-05T01:59', '2026-04-04T14:59:00.000Z'],
+      ['2026-04-05T03:00', '2026-04-04T17:00:00.000Z']
+    ])('sends the exact UTC instant for valid time %s next to a transition', async (local, expectedUtc) => {
+      const { component, previewFn } = await filledHarness(local);
+
+      component.previewRepair();
+
+      expect(component.effectiveAtError).toBeNull();
+      expect((previewFn.mock.calls[0][0] as InventoryCostRepairRequest).effectiveAt).toBe(expectedUtc);
+    });
   });
 });

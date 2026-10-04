@@ -563,7 +563,11 @@ resulting average unit cost, the first previously uncostable sale, the projected
 rest of the history replays, and any fatal issues still remaining. **Apply repair** only becomes
 available once that preview is shown, and reapplies exactly the previewed proposal; if the
 product's cost history changed in the meantime, the apply is refused and asks for a fresh preview.
-The product's repair history is shown underneath, newest first.
+Changing the selected product discards any preview or history still loading for the previous
+product, and a preview can only be applied to the product it was taken for. An effective time that
+does not exist in Sydney (the hour skipped when daylight saving starts in October) or that happens
+twice (the hour repeated when it ends in April) is rejected before preview; enter a time outside
+that hour. The product's repair history is shown underneath, newest first.
 
 A costing repair is a human-entered historical correction: it changes the product's historical
 cost of goods sold from the effective time onward, and it is never proof that the recorded history

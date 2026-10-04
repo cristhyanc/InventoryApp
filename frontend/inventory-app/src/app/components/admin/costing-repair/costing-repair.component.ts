@@ -1,6 +1,7 @@
-import { Component, Input } from '@angular/core';
+import { Component, Input, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { Subscription } from 'rxjs';
 import { Product } from '../../../models/models';
 import { ToastService } from '../../../services/toast.service';
 import {
@@ -14,8 +15,8 @@ import {
   BUSINESS_TIME_ZONE,
   currentDateTimeInTimeZone,
   fromDateTimeLocalValue,
-  toDateTimeLocalValue,
-  zonedDateTimeToUtc
+  resolveZonedDateTime,
+  toDateTimeLocalValue
 } from '../../../formatting/business-time-zone';
 
 /**
@@ -30,7 +31,14 @@ import {
  * The effective date/time is entered and displayed in Sydney time (`BUSINESS_TIME_ZONE`) and
  * converted to/from the UTC instant the API contract requires, through the same IANA-timezone-
  * aware conversion `business-time-zone.ts` already uses for other operator-facing date/time
- * input.
+ * input. A time that does not exist in Sydney (the hour skipped when daylight saving starts) or
+ * that occurs twice (the hour repeated when it ends) is rejected with guidance rather than
+ * silently moved or guessed, because the effective time decides which historical sales the
+ * repair affects.
+ *
+ * Switching product discards every in-flight preview and history response for the previous
+ * product (each request carries a sequence number and its subscription is cancelled), and Apply
+ * refuses a preview that does not belong to the currently selected product.
  */
 @Component({
   selector: 'app-costing-repair',
@@ -54,6 +62,7 @@ import {
             class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2"
             [(ngModel)]="productId"
             (ngModelChange)="selectProduct()"
+            [disabled]="applying"
           >
             <option [ngValue]="null">Select a product</option>
             @for (product of products; track product.id) {
@@ -88,7 +97,11 @@ import {
             type="datetime-local"
             class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2"
             [(ngModel)]="effectiveAtLocal"
+            (ngModelChange)="effectiveAtError = null"
           />
+          @if (effectiveAtError) {
+            <span class="mt-1 block text-xs text-red-600">{{ effectiveAtError }}</span>
+          }
         </label>
       </div>
 
@@ -154,7 +167,11 @@ import {
       @if (productId != null) {
         <div class="mt-5 border-t border-slate-100 pt-4">
           <h3 class="mb-2 text-sm font-semibold text-slate-700">Repair history</h3>
-          @if (history.length) {
+          @if (historyLoading) {
+            <p class="text-sm text-slate-500">Loading repair history…</p>
+          } @else if (historyError) {
+            <p class="text-sm text-red-600">The costing repair history could not be loaded.</p>
+          } @else if (history.length) {
             <div class="overflow-x-auto">
               <table class="min-w-full text-left text-sm">
                 <thead class="bg-slate-50 text-xs text-slate-600">
@@ -189,25 +206,49 @@ import {
     </section>
   `
 })
-export class CostingRepairComponent {
+export class CostingRepairComponent implements OnDestroy {
   @Input() products: Product[] = [];
 
-  loading = false;
+  previewLoading = false;
+  applying = false;
+  historyLoading = false;
+  historyError = false;
   productId: number | null = null;
   quantity: number | null = null;
   unitCost: number | null = null;
   reason = '';
   effectiveAtLocal = toDateTimeLocalValue(currentDateTimeInTimeZone(new Date(), BUSINESS_TIME_ZONE));
+  effectiveAtError: string | null = null;
   preview: InventoryCostRepairPreview | null = null;
   history: InventoryCostRepairRecord[] = [];
+
+  // The product the current preview was requested for, and a sequence number per request kind:
+  // a response is only accepted while its sequence number is still the latest, so a response for
+  // a product the operator has since switched away from (including A -> B -> A) is discarded.
+  private previewProductId: number | null = null;
+  private previewSequence = 0;
+  private historySequence = 0;
+  private previewSubscription: Subscription | null = null;
+  private historySubscription: Subscription | null = null;
 
   constructor(
     private readonly repairService: InventoryCostRepairService,
     private readonly toast: ToastService
   ) {}
 
+  get loading(): boolean {
+    return this.previewLoading || this.applying;
+  }
+
+  ngOnDestroy(): void {
+    this.cancelPreview();
+    this.cancelHistory();
+  }
+
   selectProduct(): void {
+    this.cancelPreview();
     this.preview = null;
+    this.previewProductId = null;
     this.loadHistory();
   }
 
@@ -230,35 +271,60 @@ export class CostingRepairComponent {
     }
     const effectiveAt = this.effectiveAtUtcIso();
     if (!effectiveAt) {
-      this.toast.error('Enter a valid effective date/time.');
+      this.toast.error(this.effectiveAtError ?? 'Enter a valid effective date/time.');
       return;
     }
 
-    this.loading = true;
+    this.cancelPreview();
+    const sequence = ++this.previewSequence;
+    const productId = this.productId;
+    this.previewLoading = true;
     this.preview = null;
-    this.repairService.preview({
-      productId: this.productId,
+    this.previewProductId = null;
+    this.previewSubscription = this.repairService.preview({
+      productId,
       effectiveAt,
       quantity: this.quantity,
       unitCost: this.unitCost,
       reason: this.reason
     }).subscribe({
-      next: preview => { this.preview = preview; this.loading = false; },
-      error: err => { this.loading = false; this.toast.error(this.extractErrorMessage(err, 'Unable to preview the costing repair.')); }
+      next: preview => {
+        if (sequence !== this.previewSequence) return;
+        this.preview = preview;
+        this.previewProductId = productId;
+        this.previewLoading = false;
+      },
+      error: err => {
+        if (sequence !== this.previewSequence) return;
+        this.previewLoading = false;
+        this.toast.error(this.extractErrorMessage(err, 'Unable to preview the costing repair.'));
+      }
     });
   }
 
   applyRepair(): void {
-    if (!this.preview ||
-        !window.confirm(
+    if (!this.preview) return;
+    // The apply boundary: only a preview requested for, and returned for, the product currently
+    // selected may be applied. Anything else is discarded and must be previewed again.
+    if (this.productId == null ||
+        this.previewProductId !== this.productId ||
+        this.preview.productId !== this.productId) {
+      this.preview = null;
+      this.previewProductId = null;
+      this.toast.error('This preview is not for the selected product. Preview the repair again before applying it.');
+      return;
+    }
+    if (!window.confirm(
           "Save this human-entered historical costing repair? It changes this product's historical cost of goods sold and does not change physical stock. It is not proof the recorded cost history is correct."
         )) return;
 
-    this.loading = true;
+    // The product selector is disabled while applying, so the selection cannot change under it.
+    this.applying = true;
     this.repairService.apply(this.preview).subscribe({
       next: (applied: InventoryCostRepairApplied) => {
-        this.loading = false;
+        this.applying = false;
         this.preview = null;
+        this.previewProductId = null;
         this.quantity = null;
         this.unitCost = null;
         this.reason = '';
@@ -266,32 +332,76 @@ export class CostingRepairComponent {
         this.loadHistory();
       },
       error: err => {
-        this.loading = false;
+        this.applying = false;
         // The preview may now be stale (its own error message asks to preview again); clearing it
         // forces a fresh preview before another apply can be attempted.
         this.preview = null;
+        this.previewProductId = null;
         this.toast.error(this.extractErrorMessage(err, 'Unable to apply the costing repair.'));
       }
     });
   }
 
   private loadHistory(): void {
+    this.cancelHistory();
+    const sequence = ++this.historySequence;
+    // Never show another product's records while this product's history loads or fails.
+    this.history = [];
+    this.historyError = false;
     if (this.productId == null) {
-      this.history = [];
+      this.historyLoading = false;
       return;
     }
-    this.repairService.history(this.productId).subscribe({
-      next: history => this.history = history,
-      error: () => this.toast.error('Unable to load the costing repair history.')
+    this.historyLoading = true;
+    this.historySubscription = this.repairService.history(this.productId).subscribe({
+      next: history => {
+        if (sequence !== this.historySequence) return;
+        this.history = history;
+        this.historyLoading = false;
+      },
+      error: () => {
+        if (sequence !== this.historySequence) return;
+        this.historyLoading = false;
+        this.historyError = true;
+        this.toast.error('Unable to load the costing repair history.');
+      }
     });
   }
 
+  private cancelPreview(): void {
+    this.previewSequence++;
+    this.previewSubscription?.unsubscribe();
+    this.previewSubscription = null;
+    this.previewLoading = false;
+  }
+
+  private cancelHistory(): void {
+    this.historySequence++;
+    this.historySubscription?.unsubscribe();
+    this.historySubscription = null;
+  }
+
   private effectiveAtUtcIso(): string | null {
+    this.effectiveAtError = null;
     const wallClock = fromDateTimeLocalValue(this.effectiveAtLocal);
     if (!wallClock) return null;
-    return zonedDateTimeToUtc(
+    const resolution = resolveZonedDateTime(
       wallClock.year, wallClock.month, wallClock.day, wallClock.hour, wallClock.minute, BUSINESS_TIME_ZONE
-    ).toISOString();
+    );
+    switch (resolution.kind) {
+      case 'valid':
+        return resolution.utc.toISOString();
+      case 'nonexistent':
+        this.effectiveAtError =
+          'This time does not exist in Sydney: the clocks skip forward an hour when daylight saving starts. ' +
+          'Enter a time outside the skipped hour.';
+        return null;
+      case 'ambiguous':
+        this.effectiveAtError =
+          'This time happens twice in Sydney: the clocks go back an hour when daylight saving ends. ' +
+          'Enter a time outside the repeated hour so the effective time is unambiguous.';
+        return null;
+    }
   }
 
   // Some admin actions return a plain string error body rather than a ProblemDetails object;

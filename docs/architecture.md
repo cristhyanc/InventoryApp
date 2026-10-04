@@ -1675,7 +1675,16 @@ and it never substitutes for a real purchase, correction or write-off.
   previewed proposal object - never the form's current field values - matching the inventory-cost
   transition UI's own apply call; a stale-preview `400` (or any other apply failure) clears the
   shown preview so Apply is disabled until a fresh preview is taken, consistent with the use case's
-  own "preview again" message. The product dropdown reuses the product list `AdminComponent`
+  own "preview again" message. Preview and history responses are guarded by a per-kind request
+  sequence number and their subscriptions are cancelled on a product change, so a late response for
+  a previously selected product (including after A -> B -> A switching) is discarded and cannot
+  touch the current loading or error state; history is cleared on every selection change; Apply
+  refuses a preview whose product is not the one currently selected; and the product selector is
+  disabled while an apply is in flight. The operator's effective time goes through
+  `resolveZonedDateTime`, not `zonedDateTimeToUtc`: a wall-clock time in the October daylight-saving
+  gap (`nonexistent`) or the April repeated hour (`ambiguous`) is rejected with a form message
+  before any preview call, so the effective time is never silently moved or guessed;
+  `zonedDateTimeToUtc`/`startOfDayUtc` keep their normalising behaviour for start-of-day callers. The product dropdown reuses the product list `AdminComponent`
   already loads for the inventory-cost transition section; #361 does not add a per-product
   fatal-issue list of its own - the Dashboard's existing aggregate unknown-cost
   count/completeness indicator (see [Dashboard "Inventory Value" tile](#dashboard-inventory-value-tile-issue-42))
