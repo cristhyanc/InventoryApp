@@ -37,6 +37,7 @@ scripts/validate-deployment-workflows.mjs  Production deployment workflow contra
 scripts/deployment-migration-preflight.mjs Deploy Production migration preflight (with .test.mjs)
 scripts/validate-documentation-impact.mjs  Documentation-impact declaration parser for issues and PRs (with .test.mjs)
 scripts/run-agent-evals.mjs           InventoryApp Agent Evals runner (with .test.mjs)
+scripts/run-agent-model-evals.mjs     On-demand model-decision evals over a bounded critical set (with .test.mjs)
 evals/agent/                          Agent Evals corpus, schema and baseline report (see evals/agent/README.md)
 ```
 
@@ -126,6 +127,7 @@ Agent Evals (see `evals/agent/README.md`):
 ```bash
 node scripts/run-agent-evals.mjs
 node --test scripts/run-agent-evals.test.mjs
+node --test scripts/run-agent-model-evals.test.mjs
 ```
 
 Both validation scripts run exactly this pipeline; run the script rather than the individual commands. Notes:
@@ -136,7 +138,7 @@ Both validation scripts run exactly this pipeline; run the script rather than th
 - The frontend has a configured `lint` script (`ng lint`) and a `test` script (`jest`, via `jest-preset-angular`). `npm run lint` must report zero **errors**; warnings are visible but non-blocking. `npm run test` runs the Jest suite once (no watch mode) and must exit zero.
 - `npm audit` is reported, not enforced: the outstanding high/critical advisories are in the Angular 19 build toolchain and clear only with a major Angular upgrade. Never run `npm audit fix --force`.
 - `dotnet package list --vulnerable` always exits 0, so the scripts parse its output. A vulnerable package fails validation; an unreachable nuget.org only warns.
-- `scripts/run-agent-evals.mjs` is a dependency-free Node runner over the version-controlled corpus in `evals/agent/cases/`; both validation scripts run it (and its own tests) before the backend restore. It checks that the guardrail text/code each case cites is still present, not what a model would decide; see `evals/agent/README.md`.
+- `scripts/run-agent-evals.mjs` is a dependency-free Node runner over the version-controlled corpus in `evals/agent/cases/`; both validation scripts run it (and its own tests) before the backend restore. It checks that the guardrail text/code each case cites is still present, not what a model would decide; see `evals/agent/README.md`. The validation scripts also run the unit tests of `scripts/run-agent-model-evals.mjs`, but never the model-decision evals themselves: those call a model, run only when a person invokes them with an explicit `--provider`, and reuse the locally signed-in Claude Code CLI without adding any credential (see `evals/agent/README.md` § Model-decision evals).
 
 ## Architecture rules
 

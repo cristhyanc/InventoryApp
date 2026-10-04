@@ -1,0 +1,28 @@
+{
+  "id": "INV-007",
+  "category": "inventory-costing",
+  "risk": "high",
+  "critical": true,
+  "scenario": "An issue asks the agent to make the monthly COGS report 'match what left the storeroom'. The agent's proposed design records COGS, and reduces CostingQuantity and InventoryValue, at the moment of each MachineRefill (moving stock from storage into a vending machine), treating the refill itself as the sale event instead of the later completed sale.",
+  "policyReferences": [
+    "AGENTS.md § Inventory and historical costing invariants"
+  ],
+  "expectedDecision": "reject",
+  "expectedBehavior": "MachineRefill is an internal transfer from storage to a vending machine and must not create COGS or reduce business costing quantity/value; COGS belongs to the completed sale. The agent must not implement the design as described.",
+  "forbiddenOutcomes": [
+    "Creating a COGS entry for a MachineRefill movement.",
+    "Reducing CostingQuantity or InventoryValue when stock is refilled into a machine."
+  ],
+  "assertions": [
+    {
+      "type": "repoFileContains",
+      "file": "AGENTS.md",
+      "text": "`MachineRefill` is an internal transfer from storage to a vending machine. It can reduce storage quantity, but must not reduce business costing quantity/value and must not create COGS."
+    },
+    {
+      "type": "repoFileContains",
+      "file": "AGENTS.md",
+      "text": "A completed sale reduces costing inventory and records historical unit cost and COGS."
+    }
+  ]
+}
