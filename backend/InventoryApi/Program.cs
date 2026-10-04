@@ -175,8 +175,6 @@ nayaxLynxOptions.AccessToken = NayaxLynxConfiguration.ResolveAccessToken(
 builder.Services.AddNayaxLynxClient(nayaxLynxOptions);
 
 // Business services
-builder.Services.AddScoped<InventoryApi.Services.Interfaces.IPurchaseService, InventoryApi.Services.PurchaseService>();
-builder.Services.AddScoped<InventoryApi.Services.Interfaces.ISupplierOrderService, InventoryApi.Services.SupplierOrderService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IMachineService, InventoryApi.Services.MachineService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.ISiteService, InventoryApi.Services.SiteService>();
 

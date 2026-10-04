@@ -1,10 +1,9 @@
+using Inventory.Application.Documents;
 using Inventory.Application.Purchases;
 using Inventory.Infrastructure.Documents;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using InventoryApi.Models;
-using InventoryApi.Services;
-using InventoryApi.Services.Interfaces;
 using InventoryApi.Tests.Application.Time;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
@@ -28,9 +27,9 @@ public sealed class PurchaseFileStorageTests : IDisposable
     public async Task Uploaded_document_is_stored_outside_the_static_web_root()
     {
         using var db = CreateDbContext();
-        var service = CreateService(db);
+        var useCases = CreateUseCases(db);
 
-        var purchase = await service.Upload(CreateFile("receipt.jpg"), "Purchase", null, null, null, null, null, null);
+        var purchase = await Upload(useCases, CreateFile("receipt.jpg"));
 
         Assert.NotNull(purchase);
         var storedFileName = purchase!.StoredFileName;
@@ -43,7 +42,7 @@ public sealed class PurchaseFileStorageTests : IDisposable
     public async Task Document_stored_before_protected_storage_is_still_served_and_deleted()
     {
         using var db = CreateDbContext();
-        var service = CreateService(db);
+        var useCases = CreateUseCases(db);
         var storedFileName = $"{Guid.NewGuid()}.jpg";
         var legacyFolder = Path.Combine(_webRoot, "receipts");
         Directory.CreateDirectory(legacyFolder);
@@ -61,13 +60,14 @@ public sealed class PurchaseFileStorageTests : IDisposable
         await db.SaveChangesAsync();
         var purchaseId = (await db.Receipts.AsNoTracking().SingleAsync()).Id;
 
-        var (content, contentType, fileName) = await service.GetFile(purchaseId);
+        var file = await useCases.GetFile.Handle(purchaseId, CancellationToken.None);
 
-        Assert.Equal(new byte[] { 1, 2, 3 }, content);
-        Assert.Equal("image/jpeg", contentType);
-        Assert.Equal("legacy.jpg", fileName);
+        Assert.NotNull(file);
+        Assert.Equal(new byte[] { 1, 2, 3 }, file.Content);
+        Assert.Equal("image/jpeg", file.ContentType);
+        Assert.Equal("legacy.jpg", file.FileName);
 
-        Assert.True(await service.Delete(purchaseId));
+        Assert.True(await useCases.Delete.Handle(purchaseId, CancellationToken.None));
         Assert.False(File.Exists(legacyPath));
     }
 
@@ -82,23 +82,39 @@ public sealed class PurchaseFileStorageTests : IDisposable
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options);
 
-    private IPurchaseService CreateService(AppDbContext db)
+    private PurchaseDocumentUseCases CreateUseCases(AppDbContext db)
     {
-        var documents = new FileSystemDocumentStorage(new FileSystemDocumentStorageOptions
+        IDocumentStorage documents = new FileSystemDocumentStorage(new FileSystemDocumentStorageOptions
         {
             ContentRootPath = _contentRoot,
             WebRootPath = _webRoot,
         });
         var store = new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db));
-        return new PurchaseService(
-            new ListPurchases(store),
-            new GetPurchase(store),
-            new GetPurchaseFile(store, documents),
+        return new PurchaseDocumentUseCases(
             new UploadPurchase(store, documents, new FakeClock(DateTime.UtcNow)),
-            new UpdatePurchase(store),
-            new DeletePurchase(store, documents),
-            new ComputePurchaseTotalValidation());
+            new GetPurchaseFile(store, documents),
+            new DeletePurchase(store, documents));
     }
+
+    /// <summary>
+    /// Uploads exactly as <c>PurchasesController.Upload</c> does, adapting the posted
+    /// <see cref="IFormFile"/> to the Application layer's <see cref="PurchaseFileInput"/> port.
+    /// </summary>
+    private static Task<PurchaseRecord?> Upload(PurchaseDocumentUseCases useCases, IFormFile file) =>
+        useCases.Upload.Handle(
+            new PurchaseFileInput(file.FileName, file.ContentType, file.Length, file.OpenReadStream),
+            new PurchaseFields("Purchase", null, null, null, null, null, null),
+            [],
+            CancellationToken.None);
+
+    /// <summary>
+    /// The three purchase-document use cases these tests exercise, bundled only so they can be
+    /// built in one step. It holds no behaviour of its own.
+    /// </summary>
+    private sealed record PurchaseDocumentUseCases(
+        UploadPurchase Upload,
+        GetPurchaseFile GetFile,
+        DeletePurchase Delete);
 
     private static IFormFile CreateFile(string fileName)
     {

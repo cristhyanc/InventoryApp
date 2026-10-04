@@ -1,25 +1,24 @@
 using Inventory.Application.Purchases;
-using InventoryApi.Models;
+using InventoryApi.DTOs;
 
 namespace InventoryApi.Adapters.Mapping;
 
 /// <summary>
-/// Maps the Application layer's purchase read models back onto the <see cref="Purchase"/> shape
-/// the purchase endpoints have always serialised (issue #281): every key and nesting level a
-/// client already receives is reproduced here, including a product/supplier navigation being
-/// absent exactly when the former service never loaded it (a newly uploaded purchase's line items,
-/// for example, carry no <see cref="PurchaseItem.Product"/>).
+/// Projects the Application layer's <see cref="PurchaseRecord"/> onto the API-owned
+/// <see cref="PurchaseResponse"/> the purchase endpoints serialize (issue #304). It replaces the
+/// step that used to rebuild the EF <c>InventoryApi.Models.Purchase</c> entity for those endpoints,
+/// so nothing here references the persistence model any more.
 ///
-/// The returned instances are detached response objects, never attached to a
-/// <see cref="Data.AppDbContext"/>. Replacing them with a dedicated response DTO belongs with
-/// deleting the remaining legacy delegators (issue #153), not with this slice, which must keep the
-/// contract byte-for-byte identical.
+/// It copies only facts: every key and nesting level a client already receives is reproduced,
+/// including a supplier/product navigation being absent exactly when the read path did not load it
+/// (a newly uploaded purchase's line items, for example, carry no product), and the line total and
+/// the nested product's reorder values stay derived by the response types themselves from their
+/// Domain policies rather than being computed a second time here.
 /// </summary>
-internal static class PurchaseResponseMapper
+public static class PurchaseResponseMapper
 {
-    public static Purchase ToPurchase(PurchaseRecord record) => new()
+    public static PurchaseResponse ToResponse(PurchaseRecord record) => new()
     {
-        BusinessId = record.BusinessId,
         Id = record.Id,
         Title = record.Title,
         Notes = record.Notes,
@@ -30,16 +29,14 @@ internal static class PurchaseResponseMapper
         SupplierId = record.SupplierId,
         Supplier = record.Supplier is null
             ? null
-            : new Supplier
-            {
-                Id = record.Supplier.Id,
-                Name = record.Supplier.Name,
-                ContactName = record.Supplier.ContactName,
-                Phone = record.Supplier.Phone,
-                Email = record.Supplier.Email,
-                Address = record.Supplier.Address,
-            },
-        Items = record.Items.Select(ToPurchaseItem).ToList(),
+            : new SupplierResponse(
+                record.Supplier.Id,
+                record.Supplier.Name,
+                record.Supplier.ContactName,
+                record.Supplier.Phone,
+                record.Supplier.Email,
+                record.Supplier.Address),
+        Items = record.Items.Select(ToItemResponse).ToList(),
         FileName = record.FileName,
         StoredFileName = record.StoredFileName,
         ContentType = record.ContentType,
@@ -47,17 +44,24 @@ internal static class PurchaseResponseMapper
         CreatedAt = record.CreatedAt,
     };
 
-    private static PurchaseItem ToPurchaseItem(PurchaseItemRecord record) => new()
+    private static PurchaseItemResponse ToItemResponse(PurchaseItemRecord record) => new()
     {
         Id = record.Id,
         ReceiptId = record.ReceiptId,
         ProductId = record.ProductId,
+        Product = record.Product is null ? null : ToProductResponse(record.Product),
         Quantity = record.Quantity,
         UnitCost = record.UnitCost,
-        Product = record.Product is null ? null : ToProduct(record.Product),
     };
 
-    private static Product ToProduct(PurchaseProductSummaryRecord record) => new()
+    /// <summary>
+    /// The catalogue snapshot a line item's product navigation carries. It is the same
+    /// <see cref="ProductResponse"/> the product endpoints serialize - as it was the same
+    /// <c>Product</c> entity before - so the nested object keeps every key it always had, with the
+    /// category/supplier detail and stock history the purchase read path never loaded absent and the
+    /// unresolved reorder inputs at zero.
+    /// </summary>
+    private static ProductResponse ToProductResponse(PurchaseProductSummaryRecord record) => new()
     {
         Id = record.Id,
         Name = record.Name,

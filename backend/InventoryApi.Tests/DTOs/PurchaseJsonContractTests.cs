@@ -1,13 +1,16 @@
 using System.Text.Json;
 using InventoryApi.DTOs;
-using InventoryApi.Models;
 using Xunit;
 
 namespace InventoryApi.Tests.DTOs;
 
 /// <summary>
 /// Locks the canonical wire contract of the "/api/purchases" endpoints (issue #127): the
-/// business record serializes under the "purchase" key, not the legacy "receipt" key.
+/// business record serializes under the "purchase" key, not the legacy "receipt" key. Issue #304
+/// replaced the EF <c>Purchase</c> entity in that key with the API-owned
+/// <see cref="PurchaseResponse"/>; the envelope itself is unchanged, and
+/// <see cref="PurchaseResponseJsonContractTests"/> pins the bytes inside the key against the entity
+/// shape they replaced.
 /// </summary>
 public class PurchaseJsonContractTests
 {
@@ -16,7 +19,7 @@ public class PurchaseJsonContractTests
     [Fact]
     public void Response_serializes_with_the_purchase_and_validation_keys()
     {
-        var purchase = new Purchase
+        var purchase = new PurchaseResponse
         {
             Id = 7,
             Title = "Weekly restock",
@@ -24,10 +27,12 @@ public class PurchaseJsonContractTests
             FileName = "scan.jpg",
             StoredFileName = "abc.jpg",
             ContentType = "image/jpeg",
-            Items = new List<PurchaseItem>
-            {
-                new() { Id = 1, ReceiptId = 7, ProductId = 3, Quantity = 2m, UnitCost = 1.5m }
-            }
+            FileSizeBytes = 3,
+            CreatedAt = new DateTime(2026, 3, 1),
+            Items =
+            [
+                new PurchaseItemResponse { Id = 1, ReceiptId = 7, ProductId = 3, Quantity = 2m, UnitCost = 1.5m }
+            ]
         };
         var validation = new PurchaseValidationDto(true, 3m, 3m, 0.5m);
         var response = new PurchaseResponseDto(purchase, validation);

@@ -1,13 +1,12 @@
 using Inventory.Application.Costing;
 using Inventory.Application.Documents;
 using Inventory.Application.Purchases;
+using Inventory.Domain.Purchases;
 using Inventory.Infrastructure.Documents;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using InventoryApi.DTOs;
 using InventoryApi.Models;
-using InventoryApi.Services;
-using InventoryApi.Services.Interfaces;
 using InventoryApi.Tests.Application.Time;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Data.Sqlite;
@@ -17,7 +16,18 @@ using Xunit;
 
 namespace InventoryApi.Tests.Services;
 
-public class PurchaseServiceTests
+/// <summary>
+/// The former <c>PurchaseServiceTests</c>, retargeted onto the
+/// <see cref="Inventory.Application.Purchases"/> use cases over the real EF adapter when issue #304
+/// deleted the <c>PurchaseService</c> delegator the purchase endpoints used to call. The behaviour
+/// covered is unchanged: supplier-order fulfillment and reallocation, purchase stock movements and
+/// AVCO, the pre-cutover-history guards, document round trips, and the total-validation block.
+///
+/// The validation block is computed here exactly as <c>PurchasesController</c> computes it - the
+/// <see cref="ComputePurchaseTotalValidation"/> use case over the record's own items - so these
+/// tests still cover the shape a client receives rather than a test-only formula.
+/// </summary>
+public class PurchaseUseCaseTests
 {
     private static AppDbContext CreateDbContext(string dbName)
     {
@@ -34,7 +44,7 @@ public class PurchaseServiceTests
         SeedOrder(db, supplierId: 1, productId: 1, quantity: 24);
         await db.SaveChangesAsync();
 
-        await UploadPurchase(CreateService(db), supplierId: 1, productId: 1, quantity: 24);
+        await UploadPurchase(CreateUseCases(db), supplierId: 1, productId: 1, quantity: 24);
 
         var line = await db.SupplierOrderLines.SingleAsync();
         Assert.Equal(24m, line.QuantityReceived);
@@ -48,7 +58,7 @@ public class PurchaseServiceTests
         SeedOrder(db, supplierId: 1, productId: 1, quantity: 24);
         await db.SaveChangesAsync();
 
-        await UploadPurchase(CreateService(db), supplierId: 1, productId: 1, quantity: 18);
+        await UploadPurchase(CreateUseCases(db), supplierId: 1, productId: 1, quantity: 18);
 
         var line = await db.SupplierOrderLines.SingleAsync();
         Assert.Equal(18m, line.QuantityReceived);
@@ -62,10 +72,10 @@ public class PurchaseServiceTests
         using var db = CreateDbContext(Guid.NewGuid().ToString());
         SeedOrder(db, supplierId: 1, productId: 1, quantity: 24);
         await db.SaveChangesAsync();
-        var service = CreateService(db);
+        var useCases = CreateUseCases(db);
 
-        await UploadPurchase(service, 1, 1, 18);
-        await UploadPurchase(service, 1, 1, 6);
+        await UploadPurchase(useCases, 1, 1, 18);
+        await UploadPurchase(useCases, 1, 1, 6);
 
         var line = await db.SupplierOrderLines.SingleAsync();
         Assert.Equal(24m, line.QuantityReceived);
@@ -79,7 +89,7 @@ public class PurchaseServiceTests
         SeedOrder(db, supplierId: 1, productId: 1, quantity: 6);
         await db.SaveChangesAsync();
 
-        await UploadPurchase(CreateService(db), 1, 1, 10);
+        await UploadPurchase(CreateUseCases(db), 1, 1, 10);
 
         Assert.Equal(6m, (await db.SupplierOrderLines.SingleAsync()).QuantityReceived);
         Assert.Equal(6m, (await db.SupplierOrderReceiptAllocations.SingleAsync()).QuantityApplied);
@@ -94,7 +104,7 @@ public class PurchaseServiceTests
         SeedOrder(db, supplierId: 1, productId: 1, quantity: 10);
         await db.SaveChangesAsync();
 
-        await UploadPurchase(CreateService(db), 1, 1, 10);
+        await UploadPurchase(CreateUseCases(db), 1, 1, 10);
 
         Assert.Single(await db.StockAdjustments.Where(item => item.ProductId == 1).ToListAsync());
     }
@@ -111,7 +121,7 @@ public class PurchaseServiceTests
             new SupplierOrder { SupplierId = 1, OrderDate = new DateTime(2026, 1, 2), Lines = { new SupplierOrderLine { ProductId = 1, QuantityOrdered = 10 } } });
         await db.SaveChangesAsync();
 
-        await UploadPurchase(CreateService(db), 1, 1, 12);
+        await UploadPurchase(CreateUseCases(db), 1, 1, 12);
 
         var lines = await db.SupplierOrderLines.Include(line => line.SupplierOrder).OrderBy(line => line.SupplierOrder.OrderDate).ToListAsync();
         Assert.Equal(10m, lines[0].QuantityReceived);
@@ -126,7 +136,7 @@ public class PurchaseServiceTests
         SeedSupplier(db, 1);
         await db.SaveChangesAsync();
 
-        await UploadPurchase(CreateService(db), 1, 1, 10);
+        await UploadPurchase(CreateUseCases(db), 1, 1, 10);
 
         Assert.Equal(0m, (await db.SupplierOrderLines.SingleAsync()).QuantityReceived);
     }
@@ -137,11 +147,11 @@ public class PurchaseServiceTests
         using var db = CreateDbContext(Guid.NewGuid().ToString());
         SeedOrder(db, 1, 1, 10);
         await db.SaveChangesAsync();
-        var service = CreateService(db);
-        await UploadPurchase(service, 1, 1, 10);
+        var useCases = CreateUseCases(db);
+        await UploadPurchase(useCases, 1, 1, 10);
         var purchaseId = (await db.Receipts.SingleAsync()).Id;
 
-        Assert.True(await service.Delete(purchaseId));
+        Assert.True(await useCases.Delete.Handle(purchaseId, CancellationToken.None));
 
         Assert.Equal(0m, (await db.SupplierOrderLines.SingleAsync()).QuantityReceived);
         Assert.Equal(SupplierOrderStatus.Ordered, (await db.SupplierOrders.SingleAsync()).Status);
@@ -154,11 +164,11 @@ public class PurchaseServiceTests
         using var db = CreateDbContext(Guid.NewGuid().ToString());
         SeedOrder(db, 1, 1, 24);
         await db.SaveChangesAsync();
-        var service = CreateService(db);
-        await UploadPurchase(service, 1, 1, 24);
+        var useCases = CreateUseCases(db);
+        await UploadPurchase(useCases, 1, 1, 24);
         var purchase = await db.Receipts.SingleAsync();
 
-        await service.Update(purchase.Id, null, null, null, null, null, null, 1,
+        await UpdateThroughUseCase(useCases, purchase.Id, null, null, null, null, null, null, 1,
             new[] { new PurchaseItemDto(1, 18m, 1m) });
 
         Assert.Equal(18m, (await db.SupplierOrderLines.SingleAsync()).QuantityReceived);
@@ -171,11 +181,11 @@ public class PurchaseServiceTests
         using var db = CreateDbContext(Guid.NewGuid().ToString());
         SeedOrder(db, 1, 1, 24);
         await db.SaveChangesAsync();
-        var service = CreateService(db);
-        await UploadPurchase(service, 1, 1, 18);
+        var useCases = CreateUseCases(db);
+        await UploadPurchase(useCases, 1, 1, 18);
         var purchase = await db.Receipts.SingleAsync();
 
-        await service.Update(purchase.Id, null, null, null, null, null, null, 1,
+        await UpdateThroughUseCase(useCases, purchase.Id, null, null, null, null, null, null, 1,
             new[] { new PurchaseItemDto(1, 24m, 1m) });
 
         Assert.Equal(24m, (await db.SupplierOrderLines.SingleAsync()).QuantityReceived);
@@ -189,11 +199,11 @@ public class PurchaseServiceTests
         SeedOrder(db, 1, 1, 10);
         SeedSupplier(db, 2);
         await db.SaveChangesAsync();
-        var service = CreateService(db);
-        await UploadPurchase(service, 1, 1, 10);
+        var useCases = CreateUseCases(db);
+        await UploadPurchase(useCases, 1, 1, 10);
         var purchase = await db.Receipts.SingleAsync();
 
-        await service.Update(purchase.Id, null, null, null, null, null, null, 2,
+        await UpdateThroughUseCase(useCases, purchase.Id, null, null, null, null, null, null, 2,
             new[] { new PurchaseItemDto(1, 10m, 1m) });
 
         Assert.Equal(0m, (await db.SupplierOrderLines.SingleAsync()).QuantityReceived);
@@ -209,11 +219,11 @@ public class PurchaseServiceTests
         AddTransitionBaseline(db, 2, 0);
         db.SupplierOrders.Add(new SupplierOrder { SupplierId = 1, Lines = { new SupplierOrderLine { ProductId = 2, QuantityOrdered = 10 } } });
         await db.SaveChangesAsync();
-        var service = CreateService(db);
-        await UploadPurchase(service, 1, 1, 10);
+        var useCases = CreateUseCases(db);
+        await UploadPurchase(useCases, 1, 1, 10);
         var purchase = await db.Receipts.SingleAsync();
 
-        await service.Update(purchase.Id, null, null, null, null, null, null, 1,
+        await UpdateThroughUseCase(useCases, purchase.Id, null, null, null, null, null, null, 1,
             new[] { new PurchaseItemDto(2, 10m, 1m) });
 
         var lines = await db.SupplierOrderLines.OrderBy(line => line.ProductId).ToListAsync();
@@ -231,7 +241,7 @@ public class PurchaseServiceTests
         db.InventoryCostTransitionBaselines.Local.Single().CutoffAt = new DateTime(2026, 9, 1);
         await db.SaveChangesAsync();
 
-        await UploadPurchase(CreateService(db), 1, 1, 10, new DateTime(2026, 9, 5));
+        await UploadPurchase(CreateUseCases(db), 1, 1, 10, new DateTime(2026, 9, 5));
 
         Assert.Equal(0m, (await db.SupplierOrderLines.SingleAsync()).QuantityReceived);
         Assert.Equal(SupplierOrderStatus.Ordered, (await db.SupplierOrders.SingleAsync()).Status);
@@ -244,7 +254,7 @@ public class PurchaseServiceTests
         SeedOrder(db, 1, 1, 10);
         await db.SaveChangesAsync();
 
-        await UploadPurchaseItems(CreateService(db), 1,
+        await UploadPurchaseItems(CreateUseCases(db), 1,
             new PurchaseItemDto(1, 8m, 1m),
             new PurchaseItemDto(1, 8m, 1m));
 
@@ -264,7 +274,7 @@ public class PurchaseServiceTests
         db.InventoryCostTransitionBaselines.Local.Single().CutoffAt = new DateTime(2026, 9, 1);
         await db.SaveChangesAsync();
 
-        await UploadPurchase(CreateService(db), 1, 1, 10, new DateTime(2026, 9, 13, 0, 1, 0));
+        await UploadPurchase(CreateUseCases(db), 1, 1, 10, new DateTime(2026, 9, 13, 0, 1, 0));
 
         Assert.Equal(10m, (await db.SupplierOrderLines.SingleAsync()).QuantityReceived);
         Assert.Equal(SupplierOrderStatus.Received, (await db.SupplierOrders.SingleAsync()).Status);
@@ -288,13 +298,13 @@ public class PurchaseServiceTests
             db.Suppliers.Add(new Supplier { Id = supplierId, Name = $"Supplier {supplierId}" });
     }
 
-    private static IPurchaseService CreateService(AppDbContext db) =>
-        CreateService(db, TemporaryDocumentStorage());
+    private static PurchaseUseCases CreateUseCases(AppDbContext db) =>
+        CreateUseCases(db, TemporaryDocumentStorage());
 
-    private static IPurchaseService CreateService(AppDbContext db, IDocumentStorage documents, IRebuildProductCost? rebuild = null)
+    private static PurchaseUseCases CreateUseCases(AppDbContext db, IDocumentStorage documents, IRebuildProductCost? rebuild = null)
     {
         var store = new EfPurchaseStore(db, rebuild ?? TestCostingUseCases.Rebuild(db));
-        return new PurchaseService(
+        return new PurchaseUseCases(
             new ListPurchases(store),
             new GetPurchase(store),
             new GetPurchaseFile(store, documents),
@@ -320,28 +330,87 @@ public class PurchaseServiceTests
         });
     }
 
-    private static async Task UploadPurchase(IPurchaseService service, int supplierId, long productId, decimal quantity, DateTime? purchaseDate = null)
+    private static async Task<PurchaseRecord?> UploadPurchase(PurchaseUseCases useCases, int supplierId, long productId, decimal quantity, DateTime? purchaseDate = null) =>
+        await UploadPurchaseItems(useCases, supplierId, new[] { new PurchaseItemDto(productId, quantity, 1m) }, purchaseDate);
+
+    private static async Task<PurchaseRecord?> UploadPurchaseItems(PurchaseUseCases useCases, int supplierId, params PurchaseItemDto[] items) =>
+        await UploadPurchaseItems(useCases, supplierId, items, null);
+
+    private static async Task<PurchaseRecord?> UploadPurchaseItems(PurchaseUseCases useCases, int supplierId, PurchaseItemDto[] items, DateTime? purchaseDate) =>
+        await Upload(useCases, CreateFile("purchase.jpg"), "Purchase", null, null, null, null, purchaseDate, supplierId, items);
+
+    /// <summary>
+    /// Invokes <see cref="UploadPurchase"/> exactly as <c>PurchasesController.Upload</c> does: the
+    /// posted <see cref="IFormFile"/> adapted to the Application layer's
+    /// <see cref="PurchaseFileInput"/> port, and the posted items to
+    /// <see cref="PurchaseItemInput"/>.
+    /// </summary>
+    private static Task<PurchaseRecord?> Upload(
+        PurchaseUseCases useCases,
+        IFormFile file,
+        string? title,
+        string? notes,
+        decimal? totalAmount,
+        decimal? deliveryCost,
+        decimal? packageCost,
+        DateTime? purchaseDate,
+        int? supplierId,
+        IReadOnlyList<PurchaseItemDto>? items = null) =>
+        useCases.Upload.Handle(
+            new PurchaseFileInput(file.FileName, file.ContentType, file.Length, file.OpenReadStream),
+            new PurchaseFields(title, notes, totalAmount, deliveryCost, packageCost, purchaseDate, supplierId),
+            (items ?? []).Select(item => new PurchaseItemInput(item.ProductId, item.Quantity, item.UnitCost)).ToList(),
+            CancellationToken.None);
+
+    /// <summary>
+    /// Invokes <see cref="UpdatePurchase"/> exactly as <c>PurchasesController.Update</c> does,
+    /// including passing a null item list through unchanged so "leave the stored items alone" keeps
+    /// meaning what it did.
+    /// </summary>
+    private static Task<PurchaseRecord?> UpdateThroughUseCase(
+        PurchaseUseCases useCases,
+        int id,
+        string? title,
+        string? notes,
+        decimal? totalAmount,
+        decimal? deliveryCost,
+        decimal? packageCost,
+        DateTime? purchaseDate,
+        int? supplierId,
+        IReadOnlyList<PurchaseItemDto>? items = null) =>
+        useCases.Update.Handle(
+            id,
+            new PurchaseFields(title, notes, totalAmount, deliveryCost, packageCost, purchaseDate, supplierId),
+            items?.Select(item => new PurchaseItemInput(item.ProductId, item.Quantity, item.UnitCost)).ToList(),
+            CancellationToken.None);
+
+    /// <summary>
+    /// The total-validation block the purchase endpoints return next to the purchase, computed the
+    /// way <c>PurchasesController</c> computes it.
+    /// </summary>
+    private static PurchaseValidationDto Validation(PurchaseUseCases useCases, PurchaseRecord purchase)
     {
-        await UploadPurchaseItems(service, supplierId, new[] { new PurchaseItemDto(productId, quantity, 1m) }, purchaseDate);
+        var result = useCases.Validation.Handle(
+            purchase.TotalAmount,
+            purchase.DeliveryCost,
+            purchase.PackageCost,
+            purchase.Items.Select(item => new PurchaseTotalValidationItem(item.Quantity, item.UnitCost)));
+
+        return new PurchaseValidationDto(
+            result.HasMismatch, result.ItemSubtotal, result.CalculatedTotal, result.Difference);
     }
 
-    private static async Task UploadPurchaseItems(IPurchaseService service, int supplierId, params PurchaseItemDto[] items)
+    private static IFormFile CreateFile(string fileName, byte[]? bytes = null)
     {
-        await UploadPurchaseItems(service, supplierId, items, null);
-    }
-
-    private static async Task UploadPurchaseItems(IPurchaseService service, int supplierId, PurchaseItemDto[] items, DateTime? purchaseDate)
-    {
-        var content = new MemoryStream(new byte[] { 1 });
+        var content = new MemoryStream(bytes ?? new byte[] { 1 });
         var file = new Mock<IFormFile>();
-        file.Setup(item => item.Length).Returns(1);
-        file.Setup(item => item.FileName).Returns("purchase.jpg");
+        file.Setup(item => item.Length).Returns(content.Length);
+        file.Setup(item => item.FileName).Returns(fileName);
         file.Setup(item => item.ContentType).Returns("image/jpeg");
         file.Setup(item => item.OpenReadStream()).Returns(content);
-        file.Setup(item => item.CopyToAsync(It.IsAny<Stream>(), default))
-            .Returns((Stream stream, System.Threading.CancellationToken token) => content.CopyToAsync(stream, token));
-        await service.Upload(file.Object, "Purchase", null, null, null, null, purchaseDate, supplierId,
-            items);
+        file.Setup(item => item.CopyToAsync(It.IsAny<Stream>(), It.IsAny<CancellationToken>()))
+            .Returns((Stream stream, CancellationToken token) => content.CopyToAsync(stream, token));
+        return file.Object;
     }
 
     [Fact]
@@ -349,17 +418,9 @@ public class PurchaseServiceTests
     {
         using var db = CreateDbContext("purchase_test");
 
-        IPurchaseService svc = CreateService(db, TemporaryDocumentStorage());
+        var useCases = CreateUseCases(db, TemporaryDocumentStorage());
 
-        var content = new MemoryStream(new byte[] { 1, 2, 3 });
-        var fileMock = new Mock<IFormFile>();
-        fileMock.Setup(f => f.Length).Returns(3);
-        fileMock.Setup(f => f.FileName).Returns("t.jpg");
-        fileMock.Setup(f => f.ContentType).Returns("image/jpeg");
-        fileMock.Setup(f => f.OpenReadStream()).Returns(content);
-        fileMock.Setup(f => f.CopyToAsync(It.IsAny<Stream>(), default)).Returns((Stream s, System.Threading.CancellationToken ct) => content.CopyToAsync(s, ct));
-
-        var purchase = await svc.Upload(fileMock.Object, "t", null, null, null, null, null, null);
+        var purchase = await Upload(useCases, CreateFile("t.jpg", new byte[] { 1, 2, 3 }), "t", null, null, null, null, null, null);
         Assert.NotNull(purchase);
         var stored = await db.Receipts.FindAsync(purchase.Id);
         Assert.NotNull(stored);
@@ -370,20 +431,12 @@ public class PurchaseServiceTests
     {
         using var db = CreateDbContext("purchase_update_test");
 
-        IPurchaseService svc = CreateService(db, TemporaryDocumentStorage());
+        var useCases = CreateUseCases(db, TemporaryDocumentStorage());
 
-        var content = new MemoryStream(new byte[] { 1, 2, 3 });
-        var fileMock = new Mock<IFormFile>();
-        fileMock.Setup(f => f.Length).Returns(3);
-        fileMock.Setup(f => f.FileName).Returns("t.jpg");
-        fileMock.Setup(f => f.ContentType).Returns("image/jpeg");
-        fileMock.Setup(f => f.OpenReadStream()).Returns(content);
-        fileMock.Setup(f => f.CopyToAsync(It.IsAny<Stream>(), default)).Returns((Stream s, System.Threading.CancellationToken ct) => content.CopyToAsync(s, ct));
-
-        var created = await svc.Upload(fileMock.Object, "Original", "Notes", 10m, 1.5m, 2.5m, null, null);
+        var created = await Upload(useCases, CreateFile("t.jpg", new byte[] { 1, 2, 3 }), "Original", "Notes", 10m, 1.5m, 2.5m, null, null);
         Assert.NotNull(created);
 
-        var updated = await svc.Update(created!.Id, "Updated", "New notes", 12m, 3m, 4m, new DateTime(2024, 1, 1), null);
+        var updated = await UpdateThroughUseCase(useCases, created!.Id, "Updated", "New notes", 12m, 3m, 4m, new DateTime(2024, 1, 1), null);
         Assert.NotNull(updated);
         Assert.Equal("Updated", updated.Title);
         Assert.Equal(3m, updated.DeliveryCost);
@@ -414,26 +467,17 @@ public class PurchaseServiceTests
         }
         await using (var uploadDb = TestAppDbContext.Unrestricted(options))
         {
-            IPurchaseService uploadSvc = CreateService(uploadDb, TemporaryDocumentStorage());
-            var content = new MemoryStream(new byte[] { 1 });
-            var fileMock = new Mock<IFormFile>();
-            fileMock.Setup(f => f.Length).Returns(1);
-            fileMock.Setup(f => f.FileName).Returns("p.jpg");
-            fileMock.Setup(f => f.ContentType).Returns("image/jpeg");
-            fileMock.Setup(f => f.OpenReadStream()).Returns(content);
-            fileMock.Setup(f => f.CopyToAsync(It.IsAny<Stream>(), default))
-                .Returns((Stream s, System.Threading.CancellationToken ct) => content.CopyToAsync(s, ct));
-
-            var created = await uploadSvc.Upload(fileMock.Object, "Purchase", null, null, null, null, null, null,
+            var created = await Upload(
+                CreateUseCases(uploadDb, TemporaryDocumentStorage()),
+                CreateFile("p.jpg"), "Purchase", null, null, null, null, null, null,
                 new[] { new PurchaseItemDto(1, 2m, 5m) });
             Assert.NotNull(created);
             purchaseId = created!.Id;
         }
 
         await using var db = TestAppDbContext.Unrestricted(options);
-        var service = CreateService(db);
 
-        var updated = await service.Update(purchaseId, "Updated title", null, null, null, null, null, null);
+        var updated = await UpdateThroughUseCase(CreateUseCases(db), purchaseId, "Updated title", null, null, null, null, null, null);
 
         var item = Assert.Single(updated!.Items);
         Assert.NotNull(item.Product);
@@ -450,18 +494,9 @@ public class PurchaseServiceTests
         AddTransitionBaseline(db, 1, 2);
         AddTransitionBaseline(db, 2, 4);
         await db.SaveChangesAsync();
-        IPurchaseService svc = CreateService(db, TemporaryDocumentStorage());
+        var useCases = CreateUseCases(db, TemporaryDocumentStorage());
 
-        var content = new MemoryStream(new byte[] { 1 });
-        var fileMock = new Mock<IFormFile>();
-        fileMock.Setup(f => f.Length).Returns(1);
-        fileMock.Setup(f => f.FileName).Returns("t.jpg");
-        fileMock.Setup(f => f.ContentType).Returns("image/jpeg");
-        fileMock.Setup(f => f.OpenReadStream()).Returns(content);
-        fileMock.Setup(f => f.CopyToAsync(It.IsAny<Stream>(), default))
-            .Returns((Stream s, System.Threading.CancellationToken ct) => content.CopyToAsync(s, ct));
-
-        var purchase = await svc.Upload(fileMock.Object, "Purchase", null, 65.40m, null, null, null, null,
+        var purchase = await Upload(useCases, CreateFile("t.jpg"), "Purchase", null, 65.40m, null, null, null, null,
             new[] { new PurchaseItemDto(1, 24m, 1.00m), new PurchaseItemDto(2, 36m, 1.15m) });
 
         Assert.NotNull(purchase);
@@ -479,24 +514,15 @@ public class PurchaseServiceTests
         db.Products.Add(new Product { Id = 1, Name = "M&M", QuantityInStock = 0 });
         AddTransitionBaseline(db, 1, 0);
         await db.SaveChangesAsync();
-        IPurchaseService svc = CreateService(db, TemporaryDocumentStorage());
+        var useCases = CreateUseCases(db, TemporaryDocumentStorage());
 
-        var content = new MemoryStream(new byte[] { 1 });
-        var fileMock = new Mock<IFormFile>();
-        fileMock.Setup(f => f.Length).Returns(1);
-        fileMock.Setup(f => f.FileName).Returns("t.jpg");
-        fileMock.Setup(f => f.ContentType).Returns("image/jpeg");
-        fileMock.Setup(f => f.OpenReadStream()).Returns(content);
-        fileMock.Setup(f => f.CopyToAsync(It.IsAny<Stream>(), default))
-            .Returns((Stream s, System.Threading.CancellationToken ct) => content.CopyToAsync(s, ct));
-
-        var purchase = await svc.Upload(fileMock.Object, "Purchase", null, 10m, null, null, null, null,
+        var purchase = await Upload(useCases, CreateFile("t.jpg"), "Purchase", null, 10m, null, null, null, null,
             new[] { new PurchaseItemDto(1, 10m, 1m) });
         Assert.NotNull(purchase);
         Assert.Equal(10, (await db.Products.FindAsync(1L))!.QuantityInStock);
         var originalItemId = (await db.ReceiptItems.SingleAsync()).Id;
 
-        await svc.Update(purchase!.Id, "Purchase", null, 12m, null, null, null, null,
+        await UpdateThroughUseCase(useCases, purchase!.Id, "Purchase", null, 12m, null, null, null, null,
             new[] { new PurchaseItemDto(1, 10m, 2m) });
         Assert.Equal(10, (await db.Products.FindAsync(1L))!.QuantityInStock);
         Assert.Equal(2m, (await db.Products.FindAsync(1L))!.AverageUnitCost);
@@ -506,7 +532,7 @@ public class PurchaseServiceTests
         Assert.Equal(item.Id, movement.ReceiptItemId);
         Assert.Equal(2m, movement.UnitCost);
 
-        Assert.True(await svc.Delete(purchase.Id));
+        Assert.True(await useCases.Delete.Handle(purchase.Id, CancellationToken.None));
         Assert.Equal(0, (await db.Products.FindAsync(1L))!.QuantityInStock);
         Assert.Empty(await db.StockAdjustments.ToListAsync());
     }
@@ -518,18 +544,9 @@ public class PurchaseServiceTests
         db.Products.Add(new Product { Id = 1, Name = "M&M", QuantityInStock = 10, AverageUnitCost = 2.10m });
         AddTransitionBaseline(db, 1, 10, 10, 21m, 2.10m);
         await db.SaveChangesAsync();
-        IPurchaseService svc = CreateService(db, TemporaryDocumentStorage());
+        var useCases = CreateUseCases(db, TemporaryDocumentStorage());
 
-        var content = new MemoryStream(new byte[] { 1 });
-        var fileMock = new Mock<IFormFile>();
-        fileMock.Setup(f => f.Length).Returns(1);
-        fileMock.Setup(f => f.FileName).Returns("t.jpg");
-        fileMock.Setup(f => f.ContentType).Returns("image/jpeg");
-        fileMock.Setup(f => f.OpenReadStream()).Returns(content);
-        fileMock.Setup(f => f.CopyToAsync(It.IsAny<Stream>(), default))
-            .Returns((Stream s, System.Threading.CancellationToken ct) => content.CopyToAsync(s, ct));
-
-        await svc.Upload(fileMock.Object, "Purchase", null, null, null, null, null, null,
+        await Upload(useCases, CreateFile("t.jpg"), "Purchase", null, null, null, null, null, null,
             new[] { new PurchaseItemDto(1, 24m, 1.00m) });
 
         var product = await db.Products.FindAsync(1L);
@@ -551,21 +568,14 @@ public class PurchaseServiceTests
                 It.IsAny<long>(),
                 It.IsAny<DateTime?>(),
                 It.IsAny<bool>(),
-                It.IsAny<System.Threading.CancellationToken>()))
-            .ReturnsAsync((long productId, DateTime? _, bool dryRun, System.Threading.CancellationToken _) =>
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((long productId, DateTime? _, bool dryRun, CancellationToken _) =>
                 new InventoryCostRebuildResult { ProductId = productId, DryRun = dryRun });
-        IPurchaseService svc = CreateService(db, TemporaryDocumentStorage(), rebuild.Object);
-        var content = new MemoryStream(new byte[] { 1 });
-        var fileMock = new Mock<IFormFile>();
-        fileMock.Setup(f => f.Length).Returns(1);
-        fileMock.Setup(f => f.FileName).Returns("t.jpg");
-        fileMock.Setup(f => f.ContentType).Returns("image/jpeg");
-        fileMock.Setup(f => f.OpenReadStream()).Returns(content);
-        fileMock.Setup(f => f.CopyToAsync(It.IsAny<Stream>(), default))
-            .Returns((Stream stream, System.Threading.CancellationToken ct) => content.CopyToAsync(stream, ct));
+        var useCases = CreateUseCases(db, TemporaryDocumentStorage(), rebuild.Object);
 
-        var purchase = await svc.Upload(
-            fileMock.Object,
+        var purchase = await Upload(
+            useCases,
+            CreateFile("t.jpg"),
             "Purchase",
             null,
             totalAmount: 27m,
@@ -608,18 +618,11 @@ public class PurchaseServiceTests
             DataQualityNote = "Legacy discrepancy retired at cutover."
         });
         await db.SaveChangesAsync();
-        IPurchaseService svc = CreateService(db, TemporaryDocumentStorage());
-        var content = new MemoryStream(new byte[] { 1 });
-        var fileMock = new Mock<IFormFile>();
-        fileMock.Setup(f => f.Length).Returns(1);
-        fileMock.Setup(f => f.FileName).Returns("t.jpg");
-        fileMock.Setup(f => f.ContentType).Returns("image/jpeg");
-        fileMock.Setup(f => f.OpenReadStream()).Returns(content);
-        fileMock.Setup(f => f.CopyToAsync(It.IsAny<Stream>(), default))
-            .Returns((Stream s, System.Threading.CancellationToken ct) => content.CopyToAsync(s, ct));
+        var useCases = CreateUseCases(db, TemporaryDocumentStorage());
 
-        var purchase = await svc.Upload(
-            fileMock.Object,
+        var purchase = await Upload(
+            useCases,
+            CreateFile("t.jpg"),
             "Purchase",
             null,
             20m,
@@ -647,19 +650,10 @@ public class PurchaseServiceTests
         AddTransitionBaseline(db, 1, 0);
         await db.SaveChangesAsync();
 
-        IPurchaseService svc = CreateService(db, TemporaryDocumentStorage());
-
-        var content = new MemoryStream(new byte[] { 1 });
-        var fileMock = new Mock<IFormFile>();
-        fileMock.Setup(f => f.Length).Returns(1);
-        fileMock.Setup(f => f.FileName).Returns("t.jpg");
-        fileMock.Setup(f => f.ContentType).Returns("image/jpeg");
-        fileMock.Setup(f => f.OpenReadStream()).Returns(content);
-        fileMock.Setup(f => f.CopyToAsync(It.IsAny<Stream>(), default))
-            .Returns((Stream s, System.Threading.CancellationToken ct) => content.CopyToAsync(s, ct));
+        var useCases = CreateUseCases(db, TemporaryDocumentStorage());
 
         const string userNotes = "Purchased during Costco promotion";
-        var purchase = await svc.Upload(fileMock.Object, "Purchase", userNotes,
+        var purchase = await Upload(useCases, CreateFile("t.jpg"), "Purchase", userNotes,
             30m, // totalAmount - intentionally high (items=20, no delivery/package, so calculated=20)
             null, null, null, null,
             new[] { new PurchaseItemDto(1, 20m, 1m) });
@@ -681,25 +675,15 @@ public class PurchaseServiceTests
         AddTransitionBaseline(db, 1, 0);
         await db.SaveChangesAsync();
 
-        IPurchaseService svc = CreateService(db, TemporaryDocumentStorage());
+        var useCases = CreateUseCases(db, TemporaryDocumentStorage());
 
-        var content = new MemoryStream(new byte[] { 1 });
-        var fileMock = new Mock<IFormFile>();
-        fileMock.Setup(f => f.Length).Returns(1);
-        fileMock.Setup(f => f.FileName).Returns("t.jpg");
-        fileMock.Setup(f => f.ContentType).Returns("image/jpeg");
-        fileMock.Setup(f => f.OpenReadStream()).Returns(content);
-        fileMock.Setup(f => f.CopyToAsync(It.IsAny<Stream>(), default))
-            .Returns((Stream s, System.Threading.CancellationToken ct) => content.CopyToAsync(s, ct));
-
-        var purchase = await svc.Upload(fileMock.Object, "Purchase", null,
+        var purchase = await Upload(useCases, CreateFile("t.jpg"), "Purchase", null,
             30m, null, null, null, null,
             new[] { new PurchaseItemDto(1, 20m, 1m) });
 
         Assert.NotNull(purchase);
-        var validation = svc.ComputeValidation(purchase);
+        var validation = Validation(useCases, purchase);
 
-        Assert.NotNull(validation);
         Assert.True(validation.HasTotalMismatch);
         Assert.Equal(20m, validation.CalculatedItemSubtotal);
         Assert.Equal(20m, validation.CalculatedTotal);
@@ -716,25 +700,15 @@ public class PurchaseServiceTests
         AddTransitionBaseline(db, 1, 0);
         await db.SaveChangesAsync();
 
-        IPurchaseService svc = CreateService(db, TemporaryDocumentStorage());
+        var useCases = CreateUseCases(db, TemporaryDocumentStorage());
 
-        var content = new MemoryStream(new byte[] { 1 });
-        var fileMock = new Mock<IFormFile>();
-        fileMock.Setup(f => f.Length).Returns(1);
-        fileMock.Setup(f => f.FileName).Returns("t.jpg");
-        fileMock.Setup(f => f.ContentType).Returns("image/jpeg");
-        fileMock.Setup(f => f.OpenReadStream()).Returns(content);
-        fileMock.Setup(f => f.CopyToAsync(It.IsAny<Stream>(), default))
-            .Returns((Stream s, System.Threading.CancellationToken ct) => content.CopyToAsync(s, ct));
-
-        var purchase = await svc.Upload(fileMock.Object, "Purchase", null,
+        var purchase = await Upload(useCases, CreateFile("t.jpg"), "Purchase", null,
             27m, 5m, 2m, null, null,
             new[] { new PurchaseItemDto(1, 20m, 1m) });
 
         Assert.NotNull(purchase);
-        var validation = svc.ComputeValidation(purchase);
+        var validation = Validation(useCases, purchase);
 
-        Assert.NotNull(validation);
         Assert.False(validation.HasTotalMismatch);
         Assert.Equal(20m, validation.CalculatedItemSubtotal);
         Assert.Equal(27m, validation.CalculatedTotal);
@@ -750,31 +724,21 @@ public class PurchaseServiceTests
         AddTransitionBaseline(db, 1, 0);
         await db.SaveChangesAsync();
 
-        IPurchaseService svc = CreateService(db, TemporaryDocumentStorage());
-
-        var content = new MemoryStream(new byte[] { 1 });
-        var fileMock = new Mock<IFormFile>();
-        fileMock.Setup(f => f.Length).Returns(1);
-        fileMock.Setup(f => f.FileName).Returns("t.jpg");
-        fileMock.Setup(f => f.ContentType).Returns("image/jpeg");
-        fileMock.Setup(f => f.OpenReadStream()).Returns(content);
-        fileMock.Setup(f => f.CopyToAsync(It.IsAny<Stream>(), default))
-            .Returns((Stream s, System.Threading.CancellationToken ct) => content.CopyToAsync(s, ct));
+        var useCases = CreateUseCases(db, TemporaryDocumentStorage());
 
         const string userNotes = "Supplier note: fragile items";
-        var purchase = await svc.Upload(fileMock.Object, "Purchase", userNotes,
+        var purchase = await Upload(useCases, CreateFile("t.jpg"), "Purchase", userNotes,
             20m, null, null, null, null,
             new[] { new PurchaseItemDto(1, 20m, 1m) });
         Assert.NotNull(purchase);
 
         // Update with mismatched total
-        var updated = await svc.Update(purchase.Id, null, userNotes, 25m, null, null, null, null,
+        var updated = await UpdateThroughUseCase(useCases, purchase.Id, null, userNotes, 25m, null, null, null, null,
             new[] { new PurchaseItemDto(1, 20m, 1m) });
 
         Assert.NotNull(updated);
         Assert.Equal(userNotes, updated.Notes);
-        var validation = svc.ComputeValidation(updated);
-        Assert.True(validation!.HasTotalMismatch);
+        Assert.True(Validation(useCases, updated).HasTotalMismatch);
     }
 
     private static void AddTransitionBaseline(AppDbContext db, long productId, int homeStockQuantity,
@@ -797,25 +761,15 @@ public class PurchaseServiceTests
         // Calculated = 0 + 5 + 2 = 7
         // Difference = 13 (exceeds tolerance)
         using var db = CreateDbContext("purchase_empty_items_mismatch_test");
-        IPurchaseService svc = CreateService(db, TemporaryDocumentStorage());
+        var useCases = CreateUseCases(db, TemporaryDocumentStorage());
 
-        var content = new MemoryStream(new byte[] { 1 });
-        var fileMock = new Mock<IFormFile>();
-        fileMock.Setup(f => f.Length).Returns(1);
-        fileMock.Setup(f => f.FileName).Returns("t.jpg");
-        fileMock.Setup(f => f.ContentType).Returns("image/jpeg");
-        fileMock.Setup(f => f.OpenReadStream()).Returns(content);
-        fileMock.Setup(f => f.CopyToAsync(It.IsAny<Stream>(), default))
-            .Returns((Stream s, System.Threading.CancellationToken ct) => content.CopyToAsync(s, ct));
-
-        var purchase = await svc.Upload(fileMock.Object, "Delivery Only", null,
+        var purchase = await Upload(useCases, CreateFile("t.jpg"), "Delivery Only", null,
             20m, 5m, 2m, null, null,
             Array.Empty<PurchaseItemDto>());
 
         Assert.NotNull(purchase);
-        var validation = svc.ComputeValidation(purchase);
+        var validation = Validation(useCases, purchase);
 
-        Assert.NotNull(validation);
         Assert.True(validation.HasTotalMismatch);
         Assert.Equal(0m, validation.CalculatedItemSubtotal);
         Assert.Equal(7m, validation.CalculatedTotal);
@@ -828,28 +782,31 @@ public class PurchaseServiceTests
         // Empty items, no delivery/package, null total
         // Should not compute validation
         using var db = CreateDbContext("purchase_empty_items_null_total_test");
-        IPurchaseService svc = CreateService(db, TemporaryDocumentStorage());
+        var useCases = CreateUseCases(db, TemporaryDocumentStorage());
 
-        var content = new MemoryStream(new byte[] { 1 });
-        var fileMock = new Mock<IFormFile>();
-        fileMock.Setup(f => f.Length).Returns(1);
-        fileMock.Setup(f => f.FileName).Returns("t.jpg");
-        fileMock.Setup(f => f.ContentType).Returns("image/jpeg");
-        fileMock.Setup(f => f.OpenReadStream()).Returns(content);
-        fileMock.Setup(f => f.CopyToAsync(It.IsAny<Stream>(), default))
-            .Returns((Stream s, System.Threading.CancellationToken ct) => content.CopyToAsync(s, ct));
-
-        var purchase = await svc.Upload(fileMock.Object, "No Total", null,
+        var purchase = await Upload(useCases, CreateFile("t.jpg"), "No Total", null,
             null, null, null, null, null,
             Array.Empty<PurchaseItemDto>());
 
         Assert.NotNull(purchase);
-        var validation = svc.ComputeValidation(purchase);
+        var validation = Validation(useCases, purchase);
 
-        Assert.NotNull(validation);
         Assert.False(validation.HasTotalMismatch);
         Assert.Null(validation.CalculatedItemSubtotal);
         Assert.Null(validation.CalculatedTotal);
         Assert.Null(validation.TotalDifference);
     }
+
+    /// <summary>
+    /// The purchase use cases <c>PurchasesController</c> is composed from, bundled only so these
+    /// tests can build them in one step. It holds no behaviour of its own.
+    /// </summary>
+    private sealed record PurchaseUseCases(
+        ListPurchases List,
+        GetPurchase Get,
+        GetPurchaseFile GetFile,
+        UploadPurchase Upload,
+        UpdatePurchase Update,
+        DeletePurchase Delete,
+        ComputePurchaseTotalValidation Validation);
 }

@@ -344,12 +344,12 @@ flowchart TD
 - The frontend has a centralized runtime API configuration, typed services, reusable report-page behavior, and shared toast/confirmation UI.
 - Standalone Angular components keep feature code independent of NgModule structure.
 - Every production deployment runs complete repository validation on the exact `main` commit before deploying it (Deploy Production, issue #343).
-- `AppDbContext` no longer enables `UseLazyLoadingProxies()` (issue #52). Every navigation an endpoint serialises or a service reads after materialization is loaded explicitly with `Include`/`ThenInclude` (for example `EfProductCatalogStore`, which serves both the product endpoints and the machine product listing, and `PurchaseService.Update`) or, where the caller may still change the owning foreign key afterwards, with a single explicit `Entry(...).Reference(...).LoadAsync()` once the final value is known (`EfOperatingExpenseStore.UpdateAsync`, formerly `OperatingExpensesController.Update`/`UpdateWithAttachment` before the operating-expenses slice moved persistence into that adapter). What a request loads from the database is visible in its query, not implied by which properties a response happens to touch.
+- `AppDbContext` no longer enables `UseLazyLoadingProxies()` (issue #52). Every navigation an endpoint serialises or a service reads after materialization is loaded explicitly with `Include`/`ThenInclude` (for example `EfProductCatalogStore`, which serves both the product endpoints and the machine product listing, and `EfPurchaseStore.UpdateAsync`) or, where the caller may still change the owning foreign key afterwards, with a single explicit `Entry(...).Reference(...).LoadAsync()` once the final value is known (`EfOperatingExpenseStore.UpdateAsync`, formerly `OperatingExpensesController.Update`/`UpdateWithAttachment` before the operating-expenses slice moved persistence into that adapter). What a request loads from the database is visible in its query, not implied by which properties a response happens to touch.
 
 ## Current pressure points
 
-- HTTP, use cases, domain calculations, EF Core, Nayax, file storage, and export generation live in one project for every feature area still pending migration (purchases, machine services, inventory-cost transition, and the remaining direct-`AppDbContext` controllers/services). Reporting is no longer part of this pressure point: its use cases live in `Inventory.Application.Reporting.<Feature>` and its calculations in `Inventory.Domain.Reporting.<Feature>`; only its temporary EF/Nayax adapters, HTTP controller, and CSV/XLSX byte encoding remain in `InventoryApi`. `Purchases.PurchaseTotalValidationPolicy`/`ComputePurchaseTotalValidation` are the first pieces of the purchase slice to move out (see the [Purchase rename plan](#purchase-rename-plan)); the purchase upload/update/delete orchestration itself is still in `InventoryApi`.
-- `PurchaseService`, the machine services, and the inventory-cost-transition services each combine orchestration and persistence, and are large.
+- HTTP, use cases, domain calculations, EF Core, Nayax, file storage, and export generation live in one project for every feature area still pending migration (purchases, machine services, inventory-cost transition, and the remaining direct-`AppDbContext` controllers/services). Reporting is no longer part of this pressure point: its use cases live in `Inventory.Application.Reporting.<Feature>` and its calculations in `Inventory.Domain.Reporting.<Feature>`; only its temporary EF/Nayax adapters, HTTP controller, and CSV/XLSX byte encoding remain in `InventoryApi`. `Purchases.PurchaseTotalValidationPolicy`/`ComputePurchaseTotalValidation` were the first pieces of the purchase slice to move out (see the [Purchase rename plan](#purchase-rename-plan)); the purchase and supplier-order upload/update/delete orchestration followed in issue #281, and issue #304 removed the last `InventoryApi` services for them, so only their temporary EF adapters, their HTTP controllers, and the API-owned response DTOs remain here.
+- The machine services combine orchestration and persistence, and are large. The purchase and inventory-cost-transition services no longer exist: the transition services moved to `Inventory.Application.Costing` (issue #298) and `PurchaseService`/`SupplierOrderService` were deleted by issue #304, leaving `EfPurchaseStore`/`EfSupplierOrderStore` as the documented temporary API-owned persistence adapters.
 - The site-commission controller still directly accesses `AppDbContext`. Fee-setting, categories/suppliers, and operating expenses no longer do (see the Nayax fee-settings slice above and the Operating expenses slice below), except through each slice's temporary API-owned persistence adapter.
 - `Product` contains persistence state, business calculations, and transient Nayax/UI fields.
 - Several tests use EF Core InMemory where SQLite behavior may be more representative.
@@ -474,7 +474,7 @@ Controllers do not implement accounting, inventory, persistence, or filesystem r
 
 #### Temporary API-owned exception and its enforcement (issue #145)
 
-`InventoryApi/Services` (machine/site/purchase/supplier-order orchestration) is
+`InventoryApi/Services` (machine/site orchestration) is
 use-case/domain logic that predates the `Inventory.Domain`/`Inventory.Application` split and has
 not migrated yet; inventory movement recording and the product cost rebuild (issue #296), sale
 costing with its backfills (issue #297) and the inventory-cost transition (issue #298) have already
@@ -486,13 +486,22 @@ this folder any more. The products
 delegator has left it entirely too: issue #303 deleted `ProductService`/`IProductService` and their
 registration, so `ProductsController` now injects the `Inventory.Application.Products` use cases
 directly and serialises the API-owned `InventoryApi.DTOs.ProductResponse` instead of the EF `Product`
-entity (item 6 of the [Backend migration track](#backend-migration-track)). `InventoryApi/Adapters/{Persistence,Export,Nayax,Mapping}` hold the
+entity (item 6 of the [Backend migration track](#backend-migration-track)). The purchases and
+supplier-orders delegators followed: issue #304 deleted
+`PurchaseService`/`IPurchaseService`/`SupplierOrderService`/`ISupplierOrderService` and their
+registrations, so `PurchasesController`/`SupplierOrdersController` inject the
+`Inventory.Application.Purchases`/`Inventory.Application.SupplierOrders` use cases directly and
+serialise the API-owned `InventoryApi.DTOs.PurchaseResponse`/`SupplierOrderResponse` instead of the EF
+`Purchase`/`SupplierOrder` entities (item 7 of the same track).
+`InventoryApi/Adapters/{Persistence,Export,Nayax,Mapping}` hold the
 temporary, API-owned adapters (`EfNayaxFeeRateStore`, the `Ef<Feature>ReportFactsProvider` family,
 `EfInventoryMovementStore`/`EfInventoryCostLedgerStore`, `EfSaleCostingStore`,
 `EfInventoryCostTransitionStore`, `EfInventoryCostRepairStore`, `EfNayaxSalesImportStore`,
 `ReportExportFileWriter`,
 `NayaxCatalogSnapshotProvider`, `ProductRecordResponseMapper` (the products DTO projection),
-`ProductResponseMapper` (the machine-product view's entity-shaped mapping, until issue #302),
+`PurchaseResponseMapper`/`SupplierOrderResponseMapper` (the purchase and supplier-order DTO
+projections), `ProductResponseMapper` (the machine-product view's entity-shaped mapping, until issue
+#302),
 ...) that implement
 or feed `Inventory.Application`
 ports until `AppDbContext` and its persistence models move into `Inventory.Infrastructure` - see the
@@ -558,7 +567,10 @@ migrated the Nayax product catalogue import, issue #301 removed the last four im
 `NayaxSalesWorkbook.cs` - in the same change that migrated the uploaded Nayax sales import, and
 issue #303 removed `ProductService.cs`
 and `Interfaces/IProductService.cs` in the same change that pointed `ProductsController` at the
-Products use cases and gave the product endpoints their own response DTO. `MachineService.cs`,
+Products use cases and gave the product endpoints their own response DTO, and issue #304 removed
+`PurchaseService.cs`, `SupplierOrderService.cs`, `Interfaces/IPurchaseService.cs` and
+`Interfaces/ISupplierOrderService.cs` in the same change that did the same for
+`PurchasesController`/`SupplierOrdersController`. `MachineService.cs`,
 `SiteService.cs` and their interfaces stay on the list until issue #302 does the same for the
 Sites/Machines delegators.
 `NayaxProductMatcher.cs` left the list with the import (issue #301): its last callers - the uploaded
@@ -628,7 +640,9 @@ file name already held on the tenant-owned purchase or operating-expense record,
 `SaveAsync`, `OpenReadAsync` and `DeleteAsync`. It exposes no filesystem path, no container or
 URL, no `IWebHostEnvironment`, and no business identifier: ownership is resolved before a call
 reaches the port, by loading the parent record through the tenant-filtered `AppDbContext`, so the
-#64 boundary is what decides whether a document may be touched at all. `PurchaseService` and, since the operating-expenses slice (issue #50),
+#64 boundary is what decides whether a document may be touched at all.
+`Inventory.Application.Purchases.UploadPurchase`/`DeletePurchase` (issue #281) and, since the
+operating-expenses slice (issue #50),
 `Inventory.Application.Expenses.CreateOperatingExpense`/`UpdateOperatingExpense`/`DeleteOperatingExpense`
 compose `SaveAsync` and `DeleteAsync` around their own database work to replace a document, which
 is what keeps cleanup-on-failure ordering visible at the call site rather than hidden in storage.
@@ -1214,10 +1228,45 @@ and it never substitutes for a real purchase, correction or write-off.
   preview, an apply and a rebuild all read one ledger. `GetInventoryCostRepairHistory` returns a
   product's repairs newest effective first (ties by most recently recorded), and reports a product
   belonging to another business exactly as it reports one that does not exist.
-- **HTTP endpoints and UI are separate tasks** (the API and UI children of #358). Authorization is
-  the same as the inventory-cost transition - any authenticated member of the business - because the
-  application has no admin role; adding one is out of scope. Applying a repair changes historical
-  COGS for later sales, so production use needs human scrutiny.
+- **The HTTP surface (issue #360)** is `InventoryApi.Controllers.InventoryCostRepairsController`,
+  three thin adapters over the use cases above, following `InventoryCostTransitionsController`:
+
+  | Endpoint | Request | Success response |
+  | --- | --- | --- |
+  | `POST api/admin/inventory-cost-repair/preview` | `InventoryCostRepairRequest` (`productId`, `effectiveAt`, `quantity`, `unitCost`, `reason`) | `200` `InventoryCostRepairPreview`, complete: the before/after and projected costing positions, the resulting average unit costs, `firstUncostableSale`, `replaysBeforeFirstUncostableSale`, `remainingFatalIssues` and the `ledgerFingerprint` the apply requires back. Persists nothing. |
+  | `POST api/admin/inventory-cost-repair/apply` | `ApplyInventoryCostRepairRequest` - the same proposal plus the `ledgerFingerprint` the preview reported | `200` `InventoryCostRepairApplied`: the stored `repair` record (including `createdAt` and the creating `(tid, oid)` pair) and the product's rebuilt `costingQuantity`, `inventoryValue`, `averageUnitCost` and `recostedSaleCount`. |
+  | `GET api/admin/inventory-cost-repair/{productId}` | - | `200` the product's `InventoryCostRepairRecord` list, newest effective first. |
+
+  The controller binds a request, invokes one use case with the request's cancellation token and
+  returns its result unchanged. It holds no costing logic, no EF query, no transaction, no
+  recomputation of an Application result and no business filter of its own - ownership is the
+  central query filter and `SaveChanges` stamp, so another business's product is invisible and is
+  reported exactly like a product that does not exist (`400`, `Product {id} does not exist.`).
+  There is no update, delete or reversal endpoint, because a repair has no such path.
+- **Error contract.** Nothing is caught at the boundary. Every deliberate refusal - quantity, unit
+  cost, reason, the transition cutoff, placement before the sale being covered, a repair that would
+  leave the history fatally incomplete, and a **stale preview** whose fingerprint no longer matches
+  the ledger - is a `DomainValidationException`, so `DomainExceptionHandler` answers `400`
+  ProblemDetails with the Application's caller-safe message in `detail` and in the `message`
+  extension the Angular client reads, plus a `traceId`. A stale preview is deliberately part of
+  that `400` contract and not a `409`: the HTTP boundary does not reclassify what the use case
+  decided. An authenticated caller with no usable business membership is `BusinessScopeMiddleware`'s
+  `403`, and an unexpected failure stays unmapped - `GlobalExceptionHandler`'s logged, generic `500`
+  with no exception message - with the apply's transaction leaving no repair behind.
+- **Timestamps.** `effectiveAt` is a UTC instant in both directions. `CostingRepairPolicy`
+  normalises what the request named - an offset-bearing value is converted, and a timezone-less one
+  is read as UTC (issue #359's policy, unchanged) - so the preview, the apply and the history all
+  report the UTC spelling of the instant the caller meant. The machine-local sale time versus UTC
+  movement time mismatch the replay already carries is untouched by #360; placement is still judged
+  by the replay's own ordering, not by comparing those timestamps.
+- **Authorization** is the same as the inventory-cost transition - authenticated, `access_as_user`,
+  and any member of the business - because the application has no admin role; adding one is out of
+  scope. Applying a repair changes historical COGS for later sales, so production use needs human
+  scrutiny. `InventoryCostRepairApiTests` exercises all of this through the real request pipeline on
+  relational SQLite: the JSON contracts, the fingerprint round trip, the `400` mappings, the UTC
+  timestamps, the unauthenticated and missing-scope refusals, and two businesses proving a
+  cross-business product is indistinguishable from a missing one. The UI remains a separate task
+  (the UI child of #358).
 
 #### Dashboard "Inventory Value" tile (issue #42)
 
@@ -1594,10 +1643,10 @@ now agree:
 | --- | --- |
 | `backend/InventoryApi/Models/Receipt.cs` | `backend/InventoryApi/Models/Purchase.cs` |
 | `backend/InventoryApi/Models/ReceiptItem.cs` | `backend/InventoryApi/Models/PurchaseItem.cs` |
-| `backend/InventoryApi/Services/Interfaces/IReceiptService.cs` | `backend/InventoryApi/Services/Interfaces/IPurchaseService.cs` |
-| `backend/InventoryApi/Services/ReceiptService.cs` | `backend/InventoryApi/Services/PurchaseService.cs` |
+| `backend/InventoryApi/Services/Interfaces/IReceiptService.cs` | `backend/InventoryApi/Services/Interfaces/IPurchaseService.cs` (deleted by issue #304) |
+| `backend/InventoryApi/Services/ReceiptService.cs` | `backend/InventoryApi/Services/PurchaseService.cs` (deleted by issue #304) |
 | `backend/InventoryApi/Controllers/ReceiptsController.cs` | `backend/InventoryApi/Controllers/PurchasesController.cs` |
-| `backend/InventoryApi.Tests/Services/ReceiptServiceTests.cs` | `backend/InventoryApi.Tests/Services/PurchaseServiceTests.cs` |
+| `backend/InventoryApi.Tests/Services/ReceiptServiceTests.cs` | `backend/InventoryApi.Tests/Services/PurchaseServiceTests.cs`, retargeted onto the use cases as `PurchaseUseCaseTests.cs` by issue #304 |
 | `frontend/.../services/receipt.service.ts` | `frontend/.../services/purchase.service.ts` |
 | `frontend/.../components/receipts/` | `frontend/.../components/purchases/` |
 | `frontend/.../components/purchases/receipt-list.component.{ts,html}` | `.../purchase-list.component.{ts,html}` |
@@ -1618,24 +1667,66 @@ deliberately preserved concern and was not touched.
 ##### OpenAPI documentation
 
 `PurchasesController` no longer pins an explicit legacy route; its `[Route("api/purchases")]`
-publishes the canonical route, and Swashbuckle's default schema-id/tag derivation from CLR/controller
-names is used unmodified — there is no `LegacyOpenApiCompatibility`/`UseLegacyReceiptNames` step in
-`SwaggerServiceCollectionExtensions.AddInventoryApiSwagger` any more. The published document therefore
-carries the `Purchase`/`PurchaseItem`/`PurchaseResponseDto`/`PurchaseValidationDto` schema ids and the
+publishes the canonical route, and the tag still comes from Swashbuckle's default controller-name
+derivation — there is no `LegacyOpenApiCompatibility`/`UseLegacyReceiptNames` step in
+`SwaggerServiceCollectionExtensions.AddInventoryApiSwagger` any more. The published document carries
+the `Purchase`/`PurchaseItem`/`PurchaseResponseDto`/`PurchaseValidationDto` schema ids and the
 `Purchases` tag, with no remaining `Receipt*` schema id or `Receipts` tag.
+
+The `Purchase`/`PurchaseItem` ids are **public contract, not a reflection of the current CLR
+names**. Issue #304 replaced the serialised EF `Purchase`/`PurchaseItem` entities with the API-owned
+`InventoryApi.DTOs.PurchaseResponse`/`PurchaseItemResponse`, and Swashbuckle derives the published
+description from the CLR types: it would otherwise have renamed both schemas, added a `required`
+list from the DTOs' C# `required` members, and repointed the nested `product`/`supplier` objects at
+the DTOs' own `ProductResponse`/`SupplierResponse`. All three are API-contract changes, which issue
+#304 excludes, and byte-identical runtime JSON does not excuse them, because a generated client
+reads the document rather than the payload.
+
+`InventoryApi.Swagger.PublishedResponseSchemaContract` is the **Swagger compatibility boundary**
+that holds the published description still. It does three narrowly scoped things:
+
+- maps `PurchaseResponse`/`PurchaseItemResponse` and the equivalent
+  `SupplierOrderResponse`/`SupplierOrderLineResponse` pair on the supplier-order endpoints back onto
+  the `Purchase`/`PurchaseItem`/`SupplierOrder`/`SupplierOrderLine` ids, by wrapping Swashbuckle's
+  own schema-id selector so every other type keeps the default CLR-name derivation;
+- clears the `required` list on exactly those four schemas, leaving the C# members `required`, where
+  they stop a response mapper forgetting a field at compile time;
+- inside exactly those four schemas, replaces a property that references `ProductResponse` or
+  `SupplierResponse` with the schema Swashbuckle generates for the legacy `InventoryApi.Models.Product`/
+  `Supplier` entity, so `product` keeps pointing at `#/components/schemas/Product` and `supplier` at
+  `#/components/schemas/Supplier`. Because the replacement runs through the generator rather than
+  rewriting a reference string, the referenced component is registered with its complete shape —
+  including its own nested `category`/`supplier`/`stockAdjustments` references — instead of dangling.
+
+This boundary is the one place outside the persistence model itself that the API project names
+`InventoryApi.Models` for presentation purposes; the controllers, the use cases and the response
+mappers stay free of it, as issue #304 requires. Nothing global changes: `ProductResponse` and
+`SupplierResponse` keep the contracts the product and supplier endpoints have published since issues
+#302/#303, and if an endpoint ever publishes the EF entity one of the four pinned ids belonged to,
+Swashbuckle fails document generation with a duplicate-schema-id error rather than renaming one of
+them silently.
+
 `InventoryApi.Tests.Swagger.PurchaseOpenApiContractTests` (schema ids, tag, and the schemas the
-purchase operations reference) and `InventoryApi.Tests.Controllers.PurchasesControllerRouteTests`
-(the effective `api/purchases` base route and its GET/POST/PUT/DELETE/file endpoints, read from the
-MVC API explorer) cover this contract.
+purchase operations reference), `InventoryApi.Tests.Swagger.PublishedResponseSchemaContractTests`
+and `InventoryApi.Tests.Controllers.PurchasesControllerRouteTests` (the effective `api/purchases`
+base route and its GET/POST/PUT/DELETE/file endpoints, read from the MVC API explorer) cover this
+contract. `PublishedResponseSchemaContractTests` compares the whole published schema of
+`Purchase`/`PurchaseItem`/`SupplierOrder`/`SupplierOrderLine` **literally** with the contract
+generated before the DTOs replaced the entities — no substitution is applied to excuse a difference
+— and additionally asserts the nested `product`/`supplier` reference targets, the complete base
+shape of the `Supplier` and `Product` components they point at, that every published property
+reference resolves, that `ProductResponse`/`SupplierResponse` are untouched by the boundary, that
+the internal DTO names and a requiredness declaration are absent, and that no Receipt-named schema
+or tag exists.
 
 | Layer | Canonical Purchase language | Left as a legacy/compatibility surface | Why |
 | --- | --- | --- | --- |
 | `Inventory.Domain` | `Purchases.PurchaseTotalValidationPolicy` | — | New pure calculation; the one authoritative total-mismatch formula. |
-| `Inventory.Application` | `Purchases.ComputePurchaseTotalValidation` | — | Thin use case wrapping the Domain policy; `InventoryApi.Services.PurchaseService` calls it instead of duplicating the formula. |
+| `Inventory.Application` | `Purchases.ComputePurchaseTotalValidation` | — | Thin use case wrapping the Domain policy; `PurchasesController` calls it directly (issue #304) instead of duplicating the formula. |
 | `InventoryApi.Models` | CLR types and files `Purchase.cs`, `PurchaseItem.cs` | DbSet properties `Receipts`/`ReceiptItems`, table names `Receipts`/`ReceiptItems` (mapped explicitly with `ToTable`), `PurchaseItem.ReceiptId` column/property, `StockAdjustment.ReceiptItemId`/`ReceiptItem`, `SupplierOrderReceiptAllocation` (type and its `ReceiptItemId`/`ReceiptItem` members) | Schema/migration history must not change; these are persistence compatibility, not client/API compatibility, and stay out of scope until the purchasing/costing slice moves this persistence into `Inventory.Infrastructure`. |
-| `InventoryApi.Services` | `PurchaseService : IPurchaseService` (files `PurchaseService.cs`/`IPurchaseService.cs`) | Physical upload folder keeps the name `receipts` (`FileSystemDocumentStorage.PurchaseDocumentsFolderName`), now under `{ContentRoot}/protected-files/` rather than `wwwroot/` | Already-uploaded purchase document scans must stay reachable by their stored file name; the storage adapter still falls back to the old `wwwroot/receipts` location. Renaming the on-disk category needs its own verified file-migration. |
+| Purchase orchestration | `Inventory.Application.Purchases.*` and `InventoryApi.Adapters.Persistence.EfPurchaseStore`; the `PurchaseService : IPurchaseService` delegator this row used to name was deleted by issue #304 | Physical upload folder keeps the name `receipts` (`FileSystemDocumentStorage.PurchaseDocumentsFolderName`), now under `{ContentRoot}/protected-files/` rather than `wwwroot/` | Already-uploaded purchase document scans must stay reachable by their stored file name; the storage adapter still falls back to the old `wwwroot/receipts` location. Renaming the on-disk category needs its own verified file-migration. |
 | `InventoryApi.Controllers` | `PurchasesController` (file `PurchasesController.cs`), `[Route("api/purchases")]` | — | The route is now canonical; there is no supported external client left to preserve `api/receipts` for. |
-| `InventoryApi.DTOs` | `PurchaseItemDto`, `PurchaseCreateMetaDto`, `PurchaseValidationDto`, `PurchaseResponseDto` (JSON keys `purchase`/`validation`) | — | The `receipt`/`validation` wrapper existed only for old clients; `PurchaseResponseDto`'s property is now named `Purchase`. |
+| `InventoryApi.DTOs` | `PurchaseItemDto`, `PurchaseCreateMetaDto`, `PurchaseValidationDto`, `PurchaseResponseDto` (JSON keys `purchase`/`validation`), and since issue #304 the API-owned `PurchaseResponse`/`PurchaseItemResponse` the `purchase` key carries | — | The `receipt`/`validation` wrapper existed only for old clients; `PurchaseResponseDto`'s property is now named `Purchase`. `PurchaseItemResponse.ReceiptId` keeps the persistence-facing JSON name, as the entity's did. |
 | Frontend `models.ts`/`purchase.service.ts` | `Purchase`, `PurchaseItem`, `PurchaseValidation`, `PurchaseResponse` (`purchase` field), `PurchaseService` (canonical `/purchases` base URL), `PurchaseUploadPayload`/`PurchaseItemPayload`/`PurchaseUpdatePayload` | JSON-bound field `receiptId` on `PurchaseItem` | `receiptId` matches the backend `PurchaseItem.ReceiptId` persistence/JSON contract above, which is out of this issue's scope. |
 | Frontend routing | `/purchases` and `/purchases/new` are the only supported purchase routes | — | The `/receipts` and `/receipts/new` redirect aliases were removed; there is no supported bookmark to preserve. |
 | Supporting documents | Not renamed: `Purchase.FileName`/`StoredFileName`/`ContentType`/`FileSizeBytes`, the "Receipt or invoice" upload copy, `OperatingExpense` receipt-attachment naming | — | A purchase's attached scan/photo, and an operating expense's attachment, are supporting *documents*, a distinct concept from the Purchase business record. |
@@ -2501,7 +2592,8 @@ Backend and frontend tracks can progress independently when their contracts do n
        same way the former service did.
        `InventoryApi.Adapters.Mapping.StockAdjustmentResponseMapper` maps the Application record back
        onto the `StockAdjustment` entity shape `StockController`'s history/restock-cost-suggestion/adjust
-       actions have always serialized, the same response-mapper precedent `ProductResponseMapper`/`PurchaseResponseMapper`
+       actions have always serialized, the same response-mapper precedent `ProductResponseMapper` and the
+       then entity-shaped `PurchaseResponseMapper` (since issue #304 a DTO projection)
        established, so the migration changes no response key or status code.
      - **API boundary.** `StockController` binds HTTP input, invokes the use cases, and maps results
        through the response mapper; its routes, request/response JSON shapes, and status codes are
@@ -2578,8 +2670,8 @@ Backend and frontend tracks can progress independently when their contracts do n
        port under `DocumentCategory.PurchaseDocument` - no second storage boundary was introduced.
      - **API boundary.** `PurchasesController`/`SupplierOrdersController` and the `Purchase`/`SupplierOrder`
        API response shapes are unchanged. `InventoryApi.Services.PurchaseService`/`IPurchaseService` and
-       `SupplierOrderService`/`ISupplierOrderService` were not deleted (the same transitional shape
-       `ProductService`/`IProductService` left in place for issue #240 and issue #303 has since
+       `SupplierOrderService`/`ISupplierOrderService` were not deleted by this slice (the same transitional
+       shape `ProductService`/`IProductService` left in place for issue #240 and issue #303 has since
        removed): each method now only maps the
        request onto the migrated use case and maps the Application record back to the unchanged response
        entity through `InventoryApi.Adapters.Mapping.PurchaseResponseMapper`/`SupplierOrderResponseMapper`,
@@ -2587,9 +2679,8 @@ Backend and frontend tracks can progress independently when their contracts do n
        former service left a navigation (`Purchase.Supplier`, `PurchaseItem.Product`) unloaded are
        reproduced exactly, including `SupplierOrderLine.OutstandingQuantity`'s computed value, which
        needs its reconstructed line wired back to its reconstructed parent order even though that
-       navigation is `[JsonIgnore]`d. Neither service holds an `AppDbContext`, a query, or a rule of its
-       own. Deleting these two now-thin delegators is left as explicit follow-up work, tracked the same
-       way the Sites/Machines and Products legacy delegators are (issue #153).
+       navigation is `[JsonIgnore]`d. Neither service held an `AppDbContext`, a query, or a rule of its
+       own, and both were deleted by issue #304 below.
      - Reused unchanged from issue #63: `Inventory.Domain.Purchases.PurchaseTotalValidationPolicy`,
        `Inventory.Application.Purchases.ComputePurchaseTotalValidation`/`GetProductPriceComparison`,
        and `IProductPurchasePriceHistoryProvider`. Purchase stock movements still persist through the
@@ -2597,6 +2688,66 @@ Backend and frontend tracks can progress independently when their contracts do n
        results onto that same persisted shape rather than introducing a second one; the vocabulary's
        typed Domain home and `StockService`/`IStockService`'s migration followed separately in sibling
        issue #282 (item 6 above).
+   - **Purchases and Supplier Orders delegators removed and their responses are API-owned** (issue
+     #304, child 3 of 8 of #153). `PurchasesController` injects `ListPurchases`, `GetPurchase`,
+     `GetPurchaseFile`, `UploadPurchase`, `UpdatePurchase`, `DeletePurchase` and
+     `ComputePurchaseTotalValidation` directly, and `SupplierOrdersController` injects
+     `ListActiveSupplierOrders`, `GetSupplierOrder`, `CreateSupplierOrder` and `CancelSupplierOrder`.
+     `PurchaseService`, `SupplierOrderService`, `IPurchaseService`, `ISupplierOrderService` and their
+     two registrations are deleted, and the
+     `Only_the_documented_legacy_services_remain_in_InventoryApi_Services` allow-list shrank by all
+     four files in the same change. `IFormFile` stays at the HTTP boundary: the controller is the only
+     place that sees it and adapts it to `PurchaseFileInput`, and it still parses the multipart
+     `items` JSON string itself.
+     - **Response contract.** `InventoryApi.DTOs.PurchaseResponse`/`PurchaseItemResponse` and
+       `SupplierOrderResponse`/`SupplierOrderLineResponse` replaced the EF `Purchase`/`PurchaseItem`
+       and `SupplierOrder`/`SupplierOrderLine` entities these endpoints used to serialise, with
+       `PurchaseResponseMapper`/`SupplierOrderResponseMapper` rewritten to project the Application
+       records onto them; neither controller nor mapper references `InventoryApi.Models` any more.
+       Routes, status codes, validation messages, the document-download behaviour and the JSON are
+       unchanged - same keys in the same order, the same `purchase`/`validation` envelope, the same
+       absent-navigation nulls, and the same derived `lineTotal` and `outstandingQuantity`.
+       The nested product on a purchase item and a supplier-order line is the same
+       `InventoryApi.DTOs.ProductResponse` the product endpoints serialise, as it was the same
+       `Product` entity before; the published document still describes it as the legacy `Product`
+       component, which the OpenAPI bullet below covers. `SupplierOrderResponse.Status` carries
+       `Inventory.Domain.SupplierOrders.SupplierOrderStatus`, which mirrors the InventoryApi enum
+       member-for-member, so the numeric value on the wire is unchanged.
+       `InventoryApi.Tests.DTOs.PurchaseResponseJsonContractTests`/`SupplierOrderJsonContractTests`
+       compare the serialised bytes of the new responses with the entity shapes they replaced.
+     - **One outstanding-quantity rule.** `SupplierOrderLine.OutstandingQuantity` was a computed
+       property on the entity. It is now
+       `Inventory.Domain.SupplierOrders.SupplierOrderLineOutstandingPolicy`, which both
+       `SupplierOrderLineResponse` and the entity call, so the value a client reads cannot drift from
+       the value the persistence model reports - the same arrangement `Product.NeedToOrder` has with
+       `ProductReorderPolicy`. It stays distinct from the aggregate per-product on-order quantity
+       `IOutstandingSupplierOrderQuantityStore` sums for the reorder calculation.
+     - **The published OpenAPI document stayed behind.** Swashbuckle derives schema ids from CLR
+       names, `required` from C# `required` members, and a nested object's reference from that
+       member's CLR type, so the replacement would by itself have renamed the published
+       `Purchase`/`PurchaseItem`/`SupplierOrder`/`SupplierOrderLine` schemas after the internal
+       DTOs, added a requiredness declaration the document never carried, and repointed the nested
+       `product`/`supplier` objects at `ProductResponse`/`SupplierResponse` - API-contract changes
+       this issue excludes, which byte-identical runtime JSON does not excuse because a generated
+       client reads the document, not the payload.
+       `InventoryApi.Swagger.PublishedResponseSchemaContract` is the Swagger compatibility boundary
+       that reverses all three: it maps the four response DTOs back onto the published ids, keeps
+       their requiredness out of the document, and regenerates the legacy
+       `InventoryApi.Models.Product`/`Supplier` schemas for the nested `product`/`supplier`
+       properties of those four schemas only, so they keep referencing
+       `#/components/schemas/Product` and `#/components/schemas/Supplier` with complete, registered
+       shapes. That is the only place in the API project outside the persistence model itself that
+       names `InventoryApi.Models` for presentation purposes - the controllers, use cases and
+       response mappers stay free of it, as this issue requires - and nothing global changes, so the
+       `ProductResponse`/`SupplierResponse` contracts the product and supplier endpoints publish are
+       untouched. Each of the four schemas therefore comes out equal to the base branch's, which the
+       regression tests compare literally. See
+       [OpenAPI documentation](#openapi-documentation) under the Purchase rename plan for the
+       mechanism and the regression tests. No `Receipt*` schema id or `Receipts` tag reappeared.
+     - **Not in this slice.** `EfPurchaseStore`/`EfSupplierOrderStore` stay API-owned temporary
+       adapters until `AppDbContext` relocates, purchase totals/validation, supplier-order
+       reallocation and document storage are untouched, and the `Purchase`/`SupplierOrder` entities
+       remain the persistence model.
   - **Costing Domain rules done** (issue #295, child 1 of 4 of #149). The weighted-average replay
     (`Inventory.Domain.Costing.WeightedAverageCostReplay`, with its Domain-owned event, baseline,
     outcome and data-quality issue types and the `CostDataQualityIssueCodes.IsFatal` split) and the
@@ -2744,7 +2895,8 @@ Backend and frontend tracks can progress independently when their contracts do n
     - Done for reporting (issue #92): `InventoryApi.Services.ReportingService`, `InventoryApi.Services.Interfaces.IReportingService`, their dependency-injection registration, and every production and test caller were removed, and both source files were deleted. Reporting exports now run through `Inventory.Application.Reporting.Export.GetReportExportRows` for row building and `InventoryApi.Adapters.Export.ReportExportFileWriter` for CSV/XLSX byte encoding.
     - Done for stock (issue #282, item 6 above): `InventoryApi.Services.StockService`, `InventoryApi.Services.Interfaces.IStockService`, their dependency-injection registration, and every production and test caller were removed, and both source files were deleted.
     - Done for imports (issue #301, item 10 above): `InventoryApi.Services.ImportService` (both partials), `InventoryApi.Services.Interfaces.IImportService`, the API-owned `NayaxSalesWorkbook` and `NayaxProductMatcher` helpers, their dependency-injection registration, and every production and test caller were removed, and all five source files were deleted.
-    - Still pending for every other feature area (products, purchasing/costing, the Sites/Machines legacy delegator classes above, and the remaining direct-access controllers/services); only after each is migrated and tests prove equivalent behavior does this step complete overall.
+    - Done for products (issue #303, item 6 above) and for purchases and supplier orders (issue #304, item 7 above): `ProductService`/`IProductService`, `PurchaseService`/`IPurchaseService` and `SupplierOrderService`/`ISupplierOrderService`, their dependency-injection registrations, and every production and test caller were removed, the source files were deleted, and each slice's endpoints moved to an API-owned response DTO in the same change.
+    - Still pending for the remaining feature areas (the Sites/Machines legacy delegator classes above, and the remaining direct-access controllers/services); only after each is migrated and tests prove equivalent behavior does this step complete overall.
 
 ### Frontend migration track
 

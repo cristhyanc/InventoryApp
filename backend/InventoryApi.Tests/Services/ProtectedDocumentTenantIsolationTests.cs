@@ -6,8 +6,6 @@ using InventoryApi.Adapters.Persistence;
 using InventoryApi.Controllers;
 using InventoryApi.Data;
 using InventoryApi.Models;
-using InventoryApi.Services;
-using InventoryApi.Services.Interfaces;
 using InventoryApi.Tests.Application.Time;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -24,7 +22,7 @@ namespace InventoryApi.Tests.Services;
 /// <see cref="Adapters.Persistence.BusinessDataIsolationTests"/> proves the database rows of one business are
 /// invisible to another. A document is the harder case, because the bytes live outside the
 /// database: the row could be hidden while the file stayed reachable. These tests therefore go
-/// through the real retrieval paths - <see cref="PurchaseService.GetFile"/> and
+/// through the real retrieval paths - <see cref="GetPurchaseFile"/> and
 /// <see cref="OperatingExpensesController.GetAttachment"/> - and grant the attacker everything
 /// short of a valid membership: the parent record's id, the server-generated stored file name,
 /// and the exact path of the file on disk.
@@ -78,11 +76,12 @@ public sealed class ProtectedDocumentTenantIsolationTests : IDisposable
         var (purchaseId, storedFileName) = await UploadPurchaseDocumentAsync(BusinessB);
 
         await using var db = TestAppDbContext.For(_options, BusinessB);
-        var (content, contentType, fileName) = await CreatePurchaseService(db, Documents()).GetFile(purchaseId);
+        var file = await CreatePurchaseUseCases(db, Documents()).GetFile.Handle(purchaseId, CancellationToken.None);
 
-        Assert.Equal(new byte[] { 1, 2, 3 }, content);
-        Assert.Equal("image/jpeg", contentType);
-        Assert.Equal("receipt.jpg", fileName);
+        Assert.NotNull(file);
+        Assert.Equal(new byte[] { 1, 2, 3 }, file.Content);
+        Assert.Equal("image/jpeg", file.ContentType);
+        Assert.Equal("receipt.jpg", file.FileName);
         Assert.True(File.Exists(PurchaseDocumentPath(storedFileName)));
     }
 
@@ -98,11 +97,9 @@ public sealed class ProtectedDocumentTenantIsolationTests : IDisposable
         var path = PurchaseDocumentPath(storedFileName);
 
         await using var db = TestAppDbContext.For(_options, BusinessA);
-        var (content, contentType, fileName) = await CreatePurchaseService(db, Documents()).GetFile(purchaseId);
+        var file = await CreatePurchaseUseCases(db, Documents()).GetFile.Handle(purchaseId, CancellationToken.None);
 
-        Assert.Null(content);
-        Assert.Null(contentType);
-        Assert.Null(fileName);
+        Assert.Null(file);
         Assert.True(File.Exists(path), "business B's document must still exist; it was refused, not consumed.");
     }
 
@@ -118,7 +115,7 @@ public sealed class ProtectedDocumentTenantIsolationTests : IDisposable
 
         await using (var db = TestAppDbContext.For(_options, BusinessA))
         {
-            Assert.False(await CreatePurchaseService(db, Documents()).Delete(purchaseId));
+            Assert.False(await CreatePurchaseUseCases(db, Documents()).Delete.Handle(purchaseId, CancellationToken.None));
         }
 
         Assert.True(File.Exists(path), "business B's document must survive another business's delete.");
@@ -214,18 +211,23 @@ public sealed class ProtectedDocumentTenantIsolationTests : IDisposable
         WebRootPath = _webRoot,
     });
 
-    private static IPurchaseService CreatePurchaseService(AppDbContext db, IDocumentStorage documents)
+    private static PurchaseDocumentUseCases CreatePurchaseUseCases(AppDbContext db, IDocumentStorage documents)
     {
         var store = new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db));
-        return new InventoryApi.Services.PurchaseService(
-            new ListPurchases(store),
-            new GetPurchase(store),
-            new GetPurchaseFile(store, documents),
+        return new PurchaseDocumentUseCases(
             new UploadPurchase(store, documents, new FakeClock(DateTime.UtcNow)),
-            new UpdatePurchase(store),
-            new DeletePurchase(store, documents),
-            new ComputePurchaseTotalValidation());
+            new GetPurchaseFile(store, documents),
+            new DeletePurchase(store, documents));
     }
+
+    /// <summary>
+    /// The three purchase-document use cases these tests exercise, bundled only so they can be
+    /// built in one step. It holds no behaviour of its own.
+    /// </summary>
+    private sealed record PurchaseDocumentUseCases(
+        UploadPurchase Upload,
+        GetPurchaseFile GetFile,
+        DeletePurchase Delete);
 
     private OperatingExpensesController ExpensesController(AppDbContext db)
     {
@@ -253,18 +255,23 @@ public sealed class ProtectedDocumentTenantIsolationTests : IDisposable
         storedFileName);
 
     /// <summary>
-    /// Uploads through the real scoped service, so the stored document is owned exactly the way a
-    /// genuine request would own it rather than by a hand-written BusinessId.
+    /// Uploads through the real scoped use case, so the stored document is owned exactly the way a
+    /// genuine request would own it rather than by a hand-written BusinessId. The posted
+    /// <see cref="IFormFile"/> is adapted the way <c>PurchasesController.Upload</c> adapts it.
     /// </summary>
     private async Task<(int PurchaseId, string StoredFileName)> UploadPurchaseDocumentAsync(int businessId)
     {
         await using var db = TestAppDbContext.For(_options, businessId);
-        var purchase = await CreatePurchaseService(db, Documents())
-            .Upload(CreateFile("receipt.jpg"), "Purchase", null, null, null, null, null, null);
+        var file = CreateFile("receipt.jpg");
+        var purchase = await CreatePurchaseUseCases(db, Documents()).Upload.Handle(
+            new PurchaseFileInput(file.FileName, file.ContentType, file.Length, file.OpenReadStream),
+            new PurchaseFields("Purchase", null, null, null, null, null, null),
+            [],
+            CancellationToken.None);
 
         Assert.NotNull(purchase);
-        Assert.Equal(businessId, purchase!.BusinessId);
-        return (purchase.Id, purchase.StoredFileName!);
+        Assert.Equal(businessId, purchase.BusinessId);
+        return (purchase.Id, purchase.StoredFileName);
     }
 
     private async Task<(int ExpenseId, string StoredFileName)> SeedExpenseAttachmentAsync(int businessId)
