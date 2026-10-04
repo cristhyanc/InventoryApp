@@ -190,6 +190,7 @@ public class BusinessOwnershipCoverageTests
     [InlineData(typeof(InventoryCostTransitionBaseline))]
     [InlineData(typeof(InventoryCostTransitionMachineStock))]
     [InlineData(typeof(InventoryCostTransitionPreviewDraft))]
+    [InlineData(typeof(InventoryCostRepair))]
     [InlineData(typeof(ImportedFile))]
     [InlineData(typeof(ImportedReimbursement))]
     [InlineData(typeof(ImportedReimbursementDevice))]

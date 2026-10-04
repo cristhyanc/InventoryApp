@@ -250,6 +250,7 @@ These rules come from the application's established bookkeeping design. Changing
 - `MachineRefill` is an internal transfer from storage to a vending machine. It can reduce storage quantity, but must not reduce business costing quantity/value and must not create COGS.
 - A completed sale reduces costing inventory and records historical unit cost and COGS.
 - Cost-bearing write-offs such as damaged/expired stock must follow their explicit inventory movement semantics and remain auditable.
+- A costing repair (`InventoryCostRepair`, issue #359) is the only supported way to restore costing history that was never recorded, and it is costing-only: it increases `CostingQuantity`/`InventoryValue` and recosts later sales, and never changes `QuantityInStock`, machine quantities, `StockAdjustment` rows, MachineRefill history or a transition baseline. Repairs are explicit, auditable, positive-only historical events: quantity greater than zero, a non-negative unit cost, a specific reason, the creating identity and the effective instant recorded, and append-only - there is no update, delete or reversal path. Never infer one from a machine-refill gap, a Nayax event, the product's current cost, or anything else, and never let one stand in for a real purchase, correction or write-off. A repair that leaves a fatal data-quality issue must persist nothing.
 - Never infer historical COGS from the product's current cost or selling price.
 - Historical sale-cost precedence is:
   1. persisted internal AVCO/ledger cost when the ledger is reliable;

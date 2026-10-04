@@ -20,6 +20,12 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<IClock, SystemClock>();
         services.AddSingleton<IBusinessCalendar, SydneyBusinessCalendar>();
 
+        // The uploaded Nayax sales export reader (issue #301). Unlike the pending-XML source below
+        // it needs no host path and no configuration - the caller hands it the uploaded bytes - so
+        // it is registered here rather than through its own extension, and is a singleton because
+        // it holds no state between reads.
+        services.AddSingleton<INayaxSalesWorkbookReader, ClosedXmlNayaxSalesWorkbookReader>();
+
         return services;
     }
 

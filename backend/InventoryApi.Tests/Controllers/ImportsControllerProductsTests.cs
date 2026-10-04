@@ -1,8 +1,8 @@
 using Inventory.Application.Imports;
 using Inventory.Application.Nayax;
 using Inventory.Application.Time;
+using Inventory.Application.Costing;
 using InventoryApi.Controllers;
-using InventoryApi.Services.Interfaces;
 using InventoryApi.Tests.Swagger;
 using Microsoft.AspNetCore.Mvc;
 using Moq;
@@ -13,8 +13,8 @@ namespace InventoryApi.Tests.Controllers;
 /// <summary>
 /// Locks the HTTP surface of <c>POST api/imports/products</c> across its move into
 /// <see cref="ImportNayaxProductCatalog"/> (issue #300): the same route, the same <c>200 OK</c>
-/// with the same constant <c>true</c> body, and a controller that now calls the use case directly
-/// instead of <c>IImportService</c>.
+/// with the same constant <c>true</c> body, and a controller that calls the use case directly
+/// rather than the removed legacy import service.
 /// </summary>
 public class ImportsControllerProductsTests
 {
@@ -71,8 +71,12 @@ public class ImportsControllerProductsTests
 
     private static ImportsController Controller(INayaxLynxClient nayax, INayaxProductCatalogImportStore store) =>
         new(
-            Mock.Of<IImportService>(),
             new ImportNayaxProductCatalog(nayax, store, Mock.Of<IClock>()),
+            new ImportNayaxSales(
+                Mock.Of<INayaxSalesWorkbookReader>(),
+                Mock.Of<INayaxSalesImportStore>(),
+                Mock.Of<ICostSale>(),
+                Mock.Of<IRebuildProductCost>()),
             new ImportPendingReimbursementXmlFiles(
                 Mock.Of<IPendingReimbursementXmlSource>(),
                 Mock.Of<IImportedReimbursementStore>(),

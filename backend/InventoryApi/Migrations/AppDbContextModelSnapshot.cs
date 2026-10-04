@@ -510,6 +510,56 @@ namespace InventoryApi.Migrations
                     b.ToTable("ImportedReimbursementDevices");
                 });
 
+            modelBuilder.Entity("InventoryApi.Models.InventoryCostRepair", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CreatedByDirectoryTenantId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CreatedByObjectId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("EffectiveAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("ProductId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Quantity")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("TotalValue")
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<decimal>("UnitCost")
+                        .HasColumnType("decimal(18,6)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex("ProductId");
+
+                    b.HasIndex("BusinessId", "ProductId", "EffectiveAt");
+
+                    b.ToTable("InventoryCostRepairs");
+                });
+
             modelBuilder.Entity("InventoryApi.Models.InventoryCostTransitionBaseline", b =>
                 {
                     b.Property<int>("Id")
@@ -1373,6 +1423,17 @@ namespace InventoryApi.Migrations
                         .IsRequired();
 
                     b.Navigation("ImportedReimbursement");
+                });
+
+            modelBuilder.Entity("InventoryApi.Models.InventoryCostRepair", b =>
+                {
+                    b.HasOne("InventoryApi.Models.Product", "Product")
+                        .WithMany()
+                        .HasForeignKey("ProductId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Product");
                 });
 
             modelBuilder.Entity("InventoryApi.Models.InventoryCostTransitionBaseline", b =>
