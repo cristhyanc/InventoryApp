@@ -151,8 +151,8 @@ exits non-zero on any failure:
 dotnet InventoryApi.dll backup-database --output /home/data/backups/inventory-20260101T000000.db
 ```
 
-This is the command the scheduled backup job (issue #333) also calls; routine backups are
-scheduled, not run by hand. Manual, one-off verification uses the identical command.
+This is the command the scheduled backup WebJob (issue #333, below) also calls; routine backups
+are scheduled, not run by hand. Manual, one-off verification uses the identical command.
 Retention/alerting and automated restore remain out of scope for this command — retention is a
 storage-lifecycle policy and alerting is an Azure Monitor rule, both human-applied (see [Backup
 retention, alerting and restore rehearsal](#backup-retention-alerting-and-restore-rehearsal-issue-334)
@@ -285,6 +285,115 @@ underlying mechanism:
 This procedure, and the non-destructive local check in the README, do not touch any production
 connection string, credential, or data; every example above uses a placeholder path that a human
 operator supplies for their own environment.
+
+#### Scheduling the backup with an App Service WebJob (issue #333)
+
+A backup must happen whether or not anyone signs in, which is the one workload in this application
+that genuinely cannot stay request-driven (see [Azure Functions and background
+workloads](#azure-functions-and-background-workloads-decision-criteria-issue-68)). The schedule is
+a **triggered Linux App Service WebJob** that runs inside the App Service the API already runs in,
+and it ships in the API's own `dotnet publish` output:
+
+```text
+backend/InventoryApi/App_Data/jobs/triggered/database-backup/
+├── run.sh          # invokes the published executable's backup-database --upload
+└── settings.job    # {"schedule": "0 0 15 * * *"} - daily at 15:00 UTC
+```
+
+App Service reads a triggered WebJob from `App_Data/jobs/triggered/<job name>/` under the deployed
+site root, and that site root is the publish directory, so the two files are declared as publish
+content in `InventoryApi.csproj` (`<Content Include="App_Data\jobs\**\*"
+CopyToPublishDirectory="PreserveNewest" />`) and need an explicit declaration because the Web SDK's
+default content globs cover `wwwroot`, `*.config` and `*.json` only. **Deploy Production** already
+publishes that project and deploys the whole output directory, so the job reaches production with
+the API and **no GitHub Actions workflow changed** (`.github/workflows/vm-manager.yml` builds and
+tests only; it has not published or deployed since issue #343 — see [Build and
+delivery](#build-and-delivery)). `App_Data` is not under `wwwroot` and is never served as static
+content.
+
+**The job holds no logic, no path and no setting.** `run.sh` invokes the one supported command,
+from the application's own directory, and propagates its exit code:
+
+```bash
+dotnet InventoryApi.dll backup-database --upload
+```
+
+Five properties of that script are deliberate:
+
+- **It names no database.** The database backed up is whatever
+  `ConnectionStrings:DefaultConnection` resolves to for the API — an absolute path under `/home` if
+  one is configured, or the relative default. The script passes no path and sets no connection
+  string, and because it runs the command **from the published application's directory** a relative
+  default resolves exactly where it resolves for the running API. Moving the database is therefore
+  a configuration change only; nothing in the job has to be edited to follow it.
+- **It finds the application rather than assuming its own working directory is it.** App Service
+  copies a triggered WebJob's files to a temporary directory before running them, so the script
+  looks for `InventoryApi.dll` in `WEBROOT_PATH` (when the platform provides it), then
+  `$HOME/site/wwwroot`, then four levels above itself for a host that runs it in place. Not finding
+  it fails the run; it never falls back to a guessed path.
+- **Exit code is the contract.** `backup-database --upload` exits `0` only when the snapshot
+  verified, the upload verified and the staged copy was removed, and the script exits with exactly
+  that code, so a failed backup is a failed WebJob run in the job's history rather than a green run
+  with a bad log line.
+- **It logs the run and nothing sensitive.** A UTC-stamped `START` line, then either `COMPLETED` or
+  `FAILED (<reason>)`, both with the elapsed duration. The artifact metadata an operator needs —
+  the uploaded `daily/`/`monthly/` object names, the snapshot's SHA-256, its byte count and the
+  integrity result — comes from the command's own output, which the job inherits, so there is one
+  place that decides what a backup run reports and no second parser to keep in step. Neither the
+  script nor the command prints a connection string, a credential, a query or any row of business
+  data. The job's own failures use the same `FAILED (<reason>)` shape as the command's, so the
+  failed-run alert below catches a job-level failure (the application not found, no `dotnet` host)
+  as well as a command-level one.
+- **It needs no monthly logic.** The month's single recovery point is created by the upload itself,
+  on the first successful upload in each UTC calendar month, scheduled or manual (see above).
+
+**Why 15:00 UTC, and why in the artifact.** The schedule lives in `settings.job` in the deployment
+artifact rather than in portal configuration, so it is reviewable in a diff and survives a
+redeploy. `settings.job` CRON has **six** fields starting at seconds, so `0 0 15 * * *` is
+15:00:00 daily — a five-field expression would silently mean something else. 15:00 UTC is 01:00 or
+02:00 in `Australia/Sydney` depending on daylight saving, which is outside trading hours for a
+vending business, and it is the cadence the 36-hour missing-backup alert of issue #334 is specified
+against. A WebJob's CRON is evaluated in UTC unless the app's `WEBSITE_TIME_ZONE` setting changes
+the container's time zone, which is one of the settings a human must confirm below. Changing the
+window means changing this file and re-confirming the alert window with it.
+
+**Prerequisites, and what only a human can confirm.** This repository contains no Azure resource
+configuration and cannot see the deployed App Service, so the rows below are the operating
+assumptions this packaging is built on, each with the human check that confirms it against the live
+app. **No agent and no workflow in this repository applies any of them.**
+
+| # | Prerequisite | Why it matters | How a human confirms it |
+|---|---|---|---|
+| 1 | The app is a **code deployment of the publish output to a Linux App Service** (the mode `deploy-production.yml` performs with `azure/webapps-deploy`), not a custom container | A custom container image does not read `App_Data/jobs`, so the job would never be discovered and this packaging would be the wrong mechanism | The App Service's deployment/publish mode in the portal. If it is ever moved to a container, this job stops working and needs its own issue, not a quiet fix |
+| 2 | **WebJobs are available on the plan and the job is listed after a deployment** | The schedule is inert if the platform never registers the job | After the first deployment carrying it, the WebJobs blade lists `database-backup` as `Triggered` with the `0 0 15 * * *` schedule |
+| 3 | **Always On** is enabled, which requires **Basic or higher** (Free/Shared cannot) | A scheduled WebJob only fires while the app is running; an idle app that has been unloaded runs nothing, and the missed run is then only visible through issue #334's alert | Configuration → General settings → Always On = On, and the plan tier |
+| 4 | The plan stays pinned to **one instance** | The database is a single SQLite file on the App Service's `/home` mount, which is why the whole deployment is single-instance (see above). Scaling out would also multiply the scheduled run | The plan's instance count and any autoscale rule |
+| 5 | `ConnectionStrings__DefaultConnection` points at the **persistent, absolute** `/home` path the API actually uses | The job backs up exactly what the API reads. An absolute configured path removes the relative default's dependence on the working directory for both of them | The App Service application setting, read in the portal — never pasted into this repository, an issue or a pull request |
+| 6 | `WEBSITE_RUN_FROM_PACKAGE`, if set, still exposes `App_Data/jobs` from the mounted package, and the database is **not** inside `wwwroot` | Run-from-package mounts `wwwroot` read-only; a database inside the deployment target is an avoidable risk either way (see the README) | The application setting, plus confirming the job appears and runs (row 2 and row 7) |
+| 7 | The **first scheduled run succeeds end to end** | Everything above is an assumption until one real run has taken a snapshot, uploaded it and exited `0` | The job's run history and its log output, plus the new `daily/` object (and the month's `monthly/` object) in the backup container |
+| 8 | The managed identity and backup container prerequisites of issue #332 are in place | The job authenticates as the application; it adds no credential of its own, and there is no secret in the WebJob | The prerequisite table above (private container, system-assigned identity, least-privilege `Storage Blob Data Contributor`) |
+
+Two further notes a human should know when confirming row 2 and row 7. The platform runs a `.sh`
+WebJob through a shell, so the script does not rely on its Unix executable bit surviving the
+artifact upload, the zip deployment and the extraction — a chain this repository cannot control;
+`.gitattributes` does pin the job's files to LF endings in every checkout, because a CRLF `run.sh`
+would fail on its first line. And the WebJob is a second process reading the same SQLite file as
+the API: that is a reader, not a second writer, and the Online Backup API is what makes it
+consistent (see the top of this section), so it stays inside the single-writer envelope the
+deployment already requires.
+
+**What the repository verifies, and what it cannot.**
+`backend/InventoryApi.Tests/Operations/BackupWebJobPackagingTests.cs` asserts the packaging and the
+invocation: both files exist at the triggered-WebJob path, the project declares them as publish
+content with `CopyToPublishDirectory` (the exact mechanism that puts them in the deployed artifact),
+the schedule is the six-field daily 15:00 UTC expression, the script's executable lines name no
+database path, connection string or `--output` destination, and — by running the real script under
+`bash` against a fake `dotnet` and a throwaway application directory — that it invokes
+`InventoryApi.dll backup-database --upload` from the application's directory, exits with the
+command's own exit code, logs start, completion/failure and duration, and fails without invoking
+anything when the application is not found. No test takes a backup, reaches Azure or runs
+`dotnet publish`. **Nothing about the live plan, Always On, the connection string or the schedule
+actually firing is verified from this repository**; those are rows 1-7 above.
 
 #### Backup retention, alerting and restore rehearsal (issue #334)
 
@@ -457,9 +566,11 @@ demands exactly that: "nothing in the log" and "the job never started" must be d
 | **No backup in 36 hours** | A run that never happened or produced nothing: the WebJob disabled, removed by a deployment, starved by Always On being off, the App Service stopped, or a "successful" run that wrote no object | Log search over `StorageBlobLogs` for successful writes under the `daily/` prefix | It observes the **artifact** rather than the job's own claim about itself. A job that cannot run also cannot report that it did not run, so the absence of a recovery point has to be detected somewhere other than in the job |
 
 *Alert 1 — failed backup run.* Exit code is the contract: `backup-database` exits `0` only when the
-snapshot verified, the upload verified and nothing was left behind, and #333 requires the WebJob to
-propagate a non-zero result. The queryable manifestation of that exit code is the command's own
-output, which the WebJob inherits:
+snapshot verified, the upload verified and nothing was left behind, and the WebJob of #333 exits
+with that code unchanged. The queryable manifestation of that exit code is the command's own
+output, which the WebJob inherits — plus the job's own `FAILED (<reason>)` line, written in the same
+shape for a failure before the command is reached (see [Scheduling the backup with an App Service
+WebJob](#scheduling-the-backup-with-an-app-service-webjob-issue-333)):
 
 ```kusto
 AppServiceConsoleLogs
@@ -483,8 +594,8 @@ prefers at most one notification per failure sets the time range equal to the fr
 and accepts that a late-ingested failure line can then be missed entirely. Two further caveats a
 human must close when applying it: confirm which diagnostic category actually carries the job's
 standard output on the deployed plan (on a Linux App Service the container's stdout/stderr lands in
-`AppServiceConsoleLogs`) and, once #333 exists, re-check the query against one real failed run,
-because this alert is specified before the job that feeds it. Where
+`AppServiceConsoleLogs`) and re-check the query against one real failed run of the job, because
+this alert was specified before the job that feeds it existed. Where
 `APPLICATIONINSIGHTS_CONNECTION_STRING` is configured (see [Observability and error
 telemetry](#observability-and-error-telemetry-issue-165)), the same `ILogger` output is also
 queryable in Application Insights `traces`; the rule above deliberately does not depend on that,
@@ -3384,6 +3495,7 @@ Frontend build flow is:
 
 - `.github/workflows/vm-manager.yml` builds and tests the API on every push to `develop` and `main`, without deploying.
 - `.github/workflows/deploy-production.yml` (**Deploy Production**) is the only path to production, and only a human starts it, from `main`, for one exact commit. It validates that commit with `scripts/validate.sh`, runs a migration preflight that lists the EF Core migrations production startup is expected to apply (derived from the repository by comparing the release with the last production release recorded after a successful health check, because the runner cannot read the production SQLite database), builds the API package and the Angular bundle once from that commit, deploys the API, waits for `/health/ready`, records that healthy backend as the next baseline, and only then deploys the prebuilt frontend bundle to Azure Static Web Apps. Backend and frontend therefore always come from the same commit, and a failed backend deployment or health check stops the frontend.
+- The API package is the complete `dotnet publish` output of `backend/InventoryApi`, deployed whole, so publish content is how operational assets reach production without a workflow change. The scheduled database backup WebJob (issue #333) ships that way, as `App_Data/jobs/triggered/database-backup/` inside the package; see [Scheduling the backup with an App Service WebJob](#scheduling-the-backup-with-an-app-service-webjob-issue-333). Activating it in the App Service — Always On, the plan, confirming the job is listed and its first run succeeded — stays human work, like every other production setting.
 
 Consequently, automated engineering agents stop at a pull request. Merge and production deployment remain human-controlled. The branch flow, agent authority model, task states, and risk classification for automated changes are defined in [docs/automation.md](automation.md).
 
@@ -3396,7 +3508,7 @@ The separate, human-invoked `migrate-database` command (`InventoryApi/Bootstrap/
 
 ## Azure Functions and background workloads: decision criteria (issue #68)
 
-**Decision: no Azure Functions yet.** No workload this application runs today, and none that is already planned, justifies adding a Function App. Every background or scheduled workload in the inventory below is served by one of three mechanisms that already exist: an operator-triggered HTTP endpoint on the API, a CLI mode of the published `InventoryApi` executable, or the scheduled Linux App Service WebJob planned in issue #333, which invokes that same executable inside the App Service this application already runs in. A Function App would add a second deployment unit, a second managed identity and role assignment to grant, a second configuration and secret surface, a second place a schedule can be defined, and a second telemetry source to wire up — while removing work from none of those three. It would also be unable to do the one thing most of these workloads exist to do: write to the database. The production store is a single SQLite file on the App Service's own persistent `/home` mount, and SQLite's file locking is not supported across concurrently writing processes on that shared storage, which is why the plan must stay pinned to a single instance (see [SQLite operating assumptions and scale strategy](#sqlite-operating-assumptions-and-scale-strategy-issue-53)). An out-of-process Function writing the same file is not a configuration detail to be solved later; it is outside the supported operating envelope of the current store.
+**Decision: no Azure Functions yet.** No workload this application runs today, and none that is already planned, justifies adding a Function App. Every background or scheduled workload in the inventory below is served by one of three mechanisms that already exist: an operator-triggered HTTP endpoint on the API, a CLI mode of the published `InventoryApi` executable, or the scheduled Linux App Service WebJob of issue #333, which invokes that same executable inside the App Service this application already runs in. A Function App would add a second deployment unit, a second managed identity and role assignment to grant, a second configuration and secret surface, a second place a schedule can be defined, and a second telemetry source to wire up — while removing work from none of those three. It would also be unable to do the one thing most of these workloads exist to do: write to the database. The production store is a single SQLite file on the App Service's own persistent `/home` mount, and SQLite's file locking is not supported across concurrently writing processes on that shared storage, which is why the plan must stay pinned to a single instance (see [SQLite operating assumptions and scale strategy](#sqlite-operating-assumptions-and-scale-strategy-issue-53)). An out-of-process Function writing the same file is not a configuration detail to be solved later; it is outside the supported operating envelope of the current store.
 
 This section records the assessment the decision was made against, the criteria any future proposal must answer, the conditions that would reverse the decision, and the boundary rule a Function must obey if one is ever approved.
 
@@ -3412,7 +3524,7 @@ This is the inventory the decision was made against. "Request-driven" means a si
 |---|---|---|---|
 | Verified SQLite snapshot — `backup-database --output` | `InventoryApi` CLI mode dispatched before the web host is built; human-run | Implemented (#331) | No. The published executable already is the job. |
 | Verified snapshot upload to the private backup container — `backup-database --upload` | Same CLI mode, authenticating with `DefaultAzureCredential`: the App Service managed identity when a job runs it, the operator's own Azure sign-in when run by hand | Implemented (#332) | No. |
-| Scheduling that backup and upload | Nothing schedules it yet. Planned as a Linux App Service WebJob packaged into the existing `dotnet publish` output, invoking `backup-database --upload` | Planned (#333) | No. The WebJob runs inside the App Service plan already paid for, ships with the existing deployment artifact, reaches the same `/home` database file, and inherits the same managed identity and application settings. This is the only workload in the table that genuinely cannot stay request-driven — a backup must happen whether or not anyone signs in — and it is the one a Function would most plausibly claim, so it is assessed explicitly under each criterion below. |
+| Scheduling that backup and upload | A triggered Linux App Service WebJob packaged into the existing `dotnet publish` output (`App_Data/jobs/triggered/database-backup/`), invoking `backup-database --upload` daily at 15:00 UTC and exiting with the command's own exit code | Implemented (#333); human App Service activation and verification outstanding — see [Scheduling the backup with an App Service WebJob](#scheduling-the-backup-with-an-app-service-webjob-issue-333) | No. The WebJob runs inside the App Service plan already paid for, ships with the existing deployment artifact, reaches the same `/home` database file, and inherits the same managed identity and application settings. This is the only workload in the table that genuinely cannot stay request-driven — a backup must happen whether or not anyone signs in — and it is the one a Function would most plausibly claim, so it is assessed explicitly under each criterion below. |
 | Backup retention, alerting and restore runbook | No compute at all. Retention is an Azure Blob lifecycle policy executed by the storage service, the two alerts are Azure Monitor log search rules, and restore stays a deliberate, human-run procedure with a non-production rehearsal; all of it is applied by a human, and the uploader's seam (`IBackupBlobContainer`) still exposes no delete and no overwrite, so retention cannot be performed by that code path even accidentally | Designed and documented (#334); human Azure setup outstanding — see [Backup retention, alerting and restore rehearsal](#backup-retention-alerting-and-restore-rehearsal-issue-334) | No, and no compute host either. Retention turned out to be a storage-lifecycle question, which is why it needs neither a WebJob nor a Function. |
 | Latest Nayax sales synchronization — `Inventory.Application.SalesSync.SyncLatestNayaxSales` | Request-driven: `POST /api/nayax-sales-sync`, called once by the home dashboard before it loads Sites and Machines (#187) | Implemented, request-driven | No. Its result is precisely what the operator is waiting to see; moving it onto a schedule would decouple the refresh from the screen that needs it, and would not remove the request-driven path. |
 | Machine stock event import and Sync Restock reconciliation — `Inventory.Application.MachineStockSync` | Request-driven from the machines feature (#183) | Implemented, request-driven | No. |
@@ -3421,7 +3533,7 @@ This is the inventory the decision was made against. "Request-driven" means a si
 | Historical inventory cost rebuild — `Inventory.Application.Costing.IRebuildProductCost` | In-process, invoked by the use case whose write invalidated a product's costs (for example an imported completed sale) | Implemented | No. |
 | Database schema migration | `DatabaseSchemaStartup` at API startup, plus the human-run `migrate-database` command | Implemented (#54, revised by #201) | No. |
 
-Two properties of the existing automation model matter to this assessment. First, no GitHub Actions workflow in this repository runs on a schedule: workflows are triggered by pull requests, pushes, or a human dispatch, and **Deploy Production** is human-started for one exact commit (see [Build and delivery](#build-and-delivery) and `docs/automation.md`). CI is a validation and delivery mechanism, not an operational scheduler; it has no route to the production database and must not acquire one. Second, every workload above except the planned backup schedule is started by a human — an operator in the application, or an operator on the instance. The gap between those two facts is exactly one slot wide, and issue #333 fills it with a WebJob.
+Two properties of the existing automation model matter to this assessment. First, no GitHub Actions workflow in this repository runs on a schedule: workflows are triggered by pull requests, pushes, or a human dispatch, and **Deploy Production** is human-started for one exact commit (see [Build and delivery](#build-and-delivery) and `docs/automation.md`). CI is a validation and delivery mechanism, not an operational scheduler; it has no route to the production database and must not acquire one. Second, every workload above except the backup schedule is started by a human — an operator in the application, or an operator on the instance. The gap between those two facts is exactly one slot wide, and issue #333 fills it with a WebJob.
 
 ### Decision criteria for any future background workload
 
@@ -3429,7 +3541,7 @@ Any proposal to move a workload onto a different host must answer all seven crit
 
 #### Frequency
 
-How often must the work run, and what is the acceptable staleness of its result? Prefer the upstream's own push mechanism over polling, and never poll more often than the source changes. Two constraints bound any answer here: the single App Service instance with a single-writer SQLite file and a 30-second busy timeout, so a heavy write workload effectively runs alone; and overlap, since a workload that takes five minutes must not be scheduled every five minutes — measure end-to-end duration at realistic data volume before choosing an interval. Schedule heavy work in a quiet window (issue #333 proposes 15:00 UTC, early morning in Sydney) so it does not compete with interactive requests for the writer lock.
+How often must the work run, and what is the acceptable staleness of its result? Prefer the upstream's own push mechanism over polling, and never poll more often than the source changes. Two constraints bound any answer here: the single App Service instance with a single-writer SQLite file and a 30-second busy timeout, so a heavy write workload effectively runs alone; and overlap, since a workload that takes five minutes must not be scheduled every five minutes — measure end-to-end duration at realistic data volume before choosing an interval. Schedule heavy work in a quiet window (issue #333's backup runs at 15:00 UTC, early morning in Sydney) so it does not compete with interactive requests for the writer lock.
 
 *What the current model gives:* a WebJob expresses an arbitrary cron schedule in the deployment artifact. A Function's timer trigger expresses the same schedule and is not more capable. Frequency alone never justifies a new host.
 
@@ -3455,7 +3567,7 @@ What credentials does the work need, where do they live, and how many places mus
 
 How does an operator learn that the work ran, that it succeeded, and what it did — and how do they diagnose it when it did not? Log the workload name, a per-run correlation identifier, the tenant/business, key inputs, duration and outcome as structured fields; on failure log the exception, how far the run got, the attempt number and the decision taken; and never log credentials, Nayax tokens, connection strings or imported row content. Silence must never be ambiguous: "nothing in the log" and "the job never started" must be distinguishable.
 
-*What the current model gives:* the API and its CLI commands log through `ILogger` to the App Service log stream, and `backup-database` already reports object names, byte counts, the SHA-256 and the integrity result while never printing a connection string or snapshot content; issue #333 requires the WebJob to log start, completion or failure, and duration, and WebJob run history is visible in the App Service itself. Centralized error telemetry (Azure Monitor OpenTelemetry) is planned in issue #165 and not implemented today — which is an argument against a second host rather than for one, since a Function would be a second emitter to instrument before the first one is even wired up. Alerting on a missed or failed backup is specified by issue #334: two log search rules, one on the
+*What the current model gives:* the API and its CLI commands log through `ILogger` to the App Service log stream, and `backup-database` already reports object names, byte counts, the SHA-256 and the integrity result while never printing a connection string or snapshot content; the WebJob of issue #333 logs start, completion or failure, and duration, and WebJob run history is visible in the App Service itself. Centralized error telemetry (Azure Monitor OpenTelemetry) is planned in issue #165 and not implemented today — which is an argument against a second host rather than for one, since a Function would be a second emitter to instrument before the first one is even wired up. Alerting on a missed or failed backup is specified by issue #334: two log search rules, one on the
 job's non-zero result and one on the absence of a `daily/` object within 36 hours, with the rules
 themselves applied by a human (see [Backup retention, alerting and restore
 rehearsal](#backup-retention-alerting-and-restore-rehearsal-issue-334)).
@@ -3505,7 +3617,7 @@ No candidate is approved today, so there is no function boundary to define yet. 
 
 ### Follow-up work
 
-- Issue #333 — schedule the existing verified backup and upload with an App Service WebJob. This decision endorses that approach and does not reopen it.
+- Issue #333 — scheduling the existing verified backup and upload with an App Service WebJob, now implemented and packaged into the API's publish output; see [Scheduling the backup with an App Service WebJob](#scheduling-the-backup-with-an-app-service-webjob-issue-333). This decision endorsed that approach and does not reopen it; the App Service prerequisites it depends on (Always On, the plan, the first verified run) are human work.
 - Issue #334 — backup retention, alerting and the restore runbook, now designed in [Backup retention, alerting and restore rehearsal](#backup-retention-alerting-and-restore-rehearsal-issue-334); the alerting that makes a missed or failed scheduled run visible, which the failure-recovery criterion above depends on, is specified there and applied in Azure by a human.
 - Issue #165 — Azure Monitor OpenTelemetry error observability; it is the centralized telemetry the observability criterion currently lacks.
 
