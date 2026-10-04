@@ -202,8 +202,8 @@ export class CostingRepairComponent {
   history: InventoryCostRepairRecord[] = [];
 
   constructor(
-    private repairService: InventoryCostRepairService,
-    private toast: ToastService
+    private readonly repairService: InventoryCostRepairService,
+    private readonly toast: ToastService
   ) {}
 
   selectProduct(): void {

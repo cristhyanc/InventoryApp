@@ -79,7 +79,7 @@ export class InventoryCostRepairService {
     return `${this.config.apiBaseUrl.replace(/\/$/, '')}/admin/inventory-cost-repair`;
   }
 
-  constructor(private http: HttpClient, private config: ConfigService) {}
+  constructor(private readonly http: HttpClient, private readonly config: ConfigService) {}
 
   preview(request: InventoryCostRepairRequest): Observable<InventoryCostRepairPreview> {
     return this.http.post<InventoryCostRepairPreview>(`${this.baseUrl}/preview`, request);
