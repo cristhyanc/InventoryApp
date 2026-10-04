@@ -1,6 +1,8 @@
 using System.ComponentModel.DataAnnotations.Schema;
 using System.Text.Json.Serialization;
 
+using Inventory.Domain.SupplierOrders;
+
 namespace InventoryApi.Models;
 
 public enum SupplierOrderStatus
@@ -55,10 +57,16 @@ public class SupplierOrderLine : IBusinessOwned
     [JsonIgnore]
     public virtual ICollection<SupplierOrderReceiptAllocation> ReceiptAllocations { get; set; } = new List<SupplierOrderReceiptAllocation>();
 
+    /// <summary>
+    /// Delegates to the one authoritative rule in
+    /// <see cref="Inventory.Domain.SupplierOrders.SupplierOrderLineOutstandingPolicy"/>, which the
+    /// API-owned <c>SupplierOrderLineResponse</c> clients actually receive also uses (issue #304),
+    /// the same arrangement <see cref="Product.NeedToOrder"/> has with
+    /// <c>Inventory.Domain.Products.ProductReorderPolicy</c>. The value is unchanged.
+    /// </summary>
     [NotMapped]
-    public decimal OutstandingQuantity => SupplierOrder.Status == SupplierOrderStatus.Cancelled
-        ? 0m
-        : Math.Max(0m, QuantityOrdered - QuantityReceived);
+    public decimal OutstandingQuantity => SupplierOrderLineOutstandingPolicy.Outstanding(
+        (Inventory.Domain.SupplierOrders.SupplierOrderStatus)SupplierOrder.Status, QuantityOrdered, QuantityReceived);
 }
 
 public class SupplierOrderReceiptAllocation : IBusinessOwned

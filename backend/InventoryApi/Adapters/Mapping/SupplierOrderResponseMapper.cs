@@ -1,68 +1,68 @@
 using Inventory.Application.SupplierOrders;
-using InventoryApi.Models;
+using Inventory.Domain.SupplierOrders;
+using InventoryApi.DTOs;
 
 namespace InventoryApi.Adapters.Mapping;
 
 /// <summary>
-/// Maps the Application layer's supplier-order read models back onto the
-/// <see cref="SupplierOrder"/> shape the supplier-order endpoints have always serialised (issue
-/// #281). <see cref="SupplierOrderLine.OutstandingQuantity"/> is a computed property that reads the
-/// line's own <see cref="SupplierOrderLine.SupplierOrder"/> navigation (for its cancelled check),
-/// so each reconstructed line is wired back to its reconstructed parent order even though that
-/// navigation is <c>[JsonIgnore]</c>d - otherwise the computed value would be wrong rather than
-/// merely unserialised.
+/// Projects the Application layer's <see cref="SupplierOrderRecord"/> onto the API-owned
+/// <see cref="SupplierOrderResponse"/> the supplier-order endpoints serialize (issue #304). It
+/// replaces the step that used to rebuild the EF <c>InventoryApi.Models.SupplierOrder</c> entity for
+/// those endpoints, so nothing here references the persistence model any more.
 ///
-/// The returned instances are detached response objects, never attached to a
-/// <see cref="Data.AppDbContext"/>. Replacing them with a dedicated response DTO belongs with
-/// deleting the remaining legacy delegators (issue #153), not with this slice, which must keep the
-/// contract byte-for-byte identical.
+/// Each line carries its parent order's status, which the response needs - and does not serialize -
+/// to derive its outstanding quantity through
+/// <c>Inventory.Domain.SupplierOrders.SupplierOrderLineOutstandingPolicy</c>. That replaces the
+/// entity-shaped mapping's trick of wiring every reconstructed line back to its reconstructed parent
+/// so the entity's computed property could reach the same fact through a <c>[JsonIgnore]</c>d
+/// navigation.
 /// </summary>
-internal static class SupplierOrderResponseMapper
+public static class SupplierOrderResponseMapper
 {
-    public static SupplierOrder ToSupplierOrder(SupplierOrderRecord record)
+    public static SupplierOrderResponse ToResponse(SupplierOrderRecord record) => new()
     {
-        var order = new SupplierOrder
-        {
-            Id = record.Id,
-            BusinessId = record.BusinessId,
-            SupplierId = record.SupplierId,
-            Supplier = record.Supplier is null
-                ? null
-                : new Supplier
-                {
-                    Id = record.Supplier.Id,
-                    Name = record.Supplier.Name,
-                    ContactName = record.Supplier.ContactName,
-                    Phone = record.Supplier.Phone,
-                    Email = record.Supplier.Email,
-                    Address = record.Supplier.Address,
-                },
-            OrderDate = record.OrderDate,
-            ExpectedDate = record.ExpectedDate,
-            Reference = record.Reference,
-            Notes = record.Notes,
-            Status = (SupplierOrderStatus)record.Status,
-            CreatedAt = record.CreatedAt,
-            UpdatedAt = record.UpdatedAt,
-        };
-        order.Lines = record.Lines.Select(line => ToLine(line, order)).ToList();
-        return order;
-    }
+        Id = record.Id,
+        SupplierId = record.SupplierId,
+        Supplier = record.Supplier is null
+            ? null
+            : new SupplierResponse(
+                record.Supplier.Id,
+                record.Supplier.Name,
+                record.Supplier.ContactName,
+                record.Supplier.Phone,
+                record.Supplier.Email,
+                record.Supplier.Address),
+        OrderDate = record.OrderDate,
+        ExpectedDate = record.ExpectedDate,
+        Reference = record.Reference,
+        Notes = record.Notes,
+        Status = record.Status,
+        CreatedAt = record.CreatedAt,
+        UpdatedAt = record.UpdatedAt,
+        Lines = record.Lines.Select(line => ToLineResponse(line, record.Status)).ToList(),
+    };
 
-    private static SupplierOrderLine ToLine(SupplierOrderLineRecord record, SupplierOrder order) => new()
+    private static SupplierOrderLineResponse ToLineResponse(SupplierOrderLineRecord record, SupplierOrderStatus orderStatus) => new()
     {
         Id = record.Id,
         SupplierOrderId = record.SupplierOrderId,
-        SupplierOrder = order,
         ProductId = record.ProductId,
-        Product = ToProduct(record.Product),
+        Product = ToProductResponse(record.Product),
         QuantityOrdered = record.QuantityOrdered,
         QuantityReceived = record.QuantityReceived,
         UnitPrice = record.UnitPrice,
         Notes = record.Notes,
+        OrderStatus = orderStatus,
     };
 
-    private static Product ToProduct(SupplierOrderProductSummaryRecord record) => new()
+    /// <summary>
+    /// The catalogue snapshot a line's product navigation carries. It is the same
+    /// <see cref="ProductResponse"/> the product endpoints serialize - as it was the same
+    /// <c>Product</c> entity before - so the nested object keeps every key it always had, with the
+    /// category/supplier detail and stock history the supplier-order read path never loaded absent
+    /// and the unresolved reorder inputs at zero.
+    /// </summary>
+    private static ProductResponse ToProductResponse(SupplierOrderProductSummaryRecord record) => new()
     {
         Id = record.Id,
         Name = record.Name,
