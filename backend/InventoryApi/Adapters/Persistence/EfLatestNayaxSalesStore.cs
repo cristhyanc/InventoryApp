@@ -82,12 +82,10 @@ public sealed class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
                 };
                 _db.NayaxSales.Add(added);
                 await _saleCosting.CostAsync(added, cancellationToken: cancellationToken);
-                if (NayaxTransactionStatusClassifier.IsCompletedSale(added.TransactionStatusId))
-                {
-                    if (matchedProductId is not null &&
-                        (!affected.TryGetValue(matchedProductId.Value, out var existingAt) || added.MachineAuthorizationTime < existingAt))
-                        affected[matchedProductId.Value] = added.MachineAuthorizationTime;
-                }
+                if (NayaxTransactionStatusClassifier.IsCompletedSale(added.TransactionStatusId) &&
+                    matchedProductId is not null &&
+                    (!affected.TryGetValue(matchedProductId.Value, out var existingAt) || added.MachineAuthorizationTime < existingAt))
+                    affected[matchedProductId.Value] = added.MachineAuthorizationTime;
                 continue;
             }
 

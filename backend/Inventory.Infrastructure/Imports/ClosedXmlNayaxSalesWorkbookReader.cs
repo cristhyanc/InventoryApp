@@ -104,7 +104,8 @@ public sealed class ClosedXmlNayaxSalesWorkbookReader : INayaxSalesWorkbookReade
         var value = new StringBuilder();
         var quoted = false;
 
-        for (var index = 0; index < line.Length; index++)
+        var index = 0;
+        while (index < line.Length)
         {
             var character = line[index];
             if (character == '"')
@@ -112,12 +113,11 @@ public sealed class ClosedXmlNayaxSalesWorkbookReader : INayaxSalesWorkbookReade
                 if (quoted && index + 1 < line.Length && line[index + 1] == '"')
                 {
                     value.Append('"');
-                    index++;
+                    index += 2;
+                    continue;
                 }
-                else
-                {
-                    quoted = !quoted;
-                }
+
+                quoted = !quoted;
             }
             else if (character == ',' && !quoted)
             {
@@ -128,6 +128,8 @@ public sealed class ClosedXmlNayaxSalesWorkbookReader : INayaxSalesWorkbookReade
             {
                 value.Append(character);
             }
+
+            index++;
         }
 
         values.Add(value.ToString());
@@ -157,9 +159,17 @@ public sealed class ClosedXmlNayaxSalesWorkbookReader : INayaxSalesWorkbookReade
     private static decimal? DecimalValue(IXLCell? cell) =>
         decimal.TryParse(TextValue(cell), NumberStyles.Number, CultureInfo.InvariantCulture, out var value) ? value : null;
 
-    private static DateTime? DateValue(IXLCell? cell) =>
-        cell is null || cell.IsEmpty() ? null :
-        cell.Value.IsDateTime ? cell.Value.GetDateTime() :
-        cell.Value.IsNumber ? DateTime.FromOADate(cell.Value.GetNumber()) :
-        DateTime.TryParseExact(cell.GetString().Trim(), "d/M/yyyy h:mm:ss tt", CultureInfo.InvariantCulture, DateTimeStyles.None, out var value) ? value : null;
+    private static DateTime? DateValue(IXLCell? cell)
+    {
+        if (cell is null || cell.IsEmpty())
+            return null;
+        if (cell.Value.IsDateTime)
+            return cell.Value.GetDateTime();
+        if (cell.Value.IsNumber)
+            return DateTime.FromOADate(cell.Value.GetNumber());
+        return DateTime.TryParseExact(
+            cell.GetString().Trim(), "d/M/yyyy h:mm:ss tt", CultureInfo.InvariantCulture, DateTimeStyles.None, out var value)
+            ? value
+            : null;
+    }
 }
