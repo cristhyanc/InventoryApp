@@ -1066,6 +1066,15 @@ in behaviour:
   repeated rebuild over the same history yields the same result. `GetAverageUnitCostAtAsync` replays
   the read-only ledger as of a sale time and returns `null` for an unknown product or a fatal history.
   It also returns `InventoryCostRebuildResult` and its `InventoryCostDataQualityIssue`s.
+- `RebuildCostingOnlyAsync` is the same replay and the same decide-before-staging rule with a
+  narrower mandate, and exists for the [costing repair](#costing-repairs-issue-359) apply: it stages
+  the product's costing quantity, inventory value and average unit cost and the recosted sale costs,
+  and stages no physical quantity (`ProductCostPosition.PhysicalQuantity` of `null` leaves the stored
+  one alone, the way a null assigned movement cost does) and no movement outcome at all. The
+  replayed physical quantity is still reported in the result, just not persisted. Every other
+  caller - purchase, Take Inventory count, machine refill apply, product edit, sales sync and import -
+  keeps calling `RebuildAsync`, which still synchronises the product's physical quantity and every
+  movement's running position from the replay.
 - Their ports are implemented by the temporary API-owned adapters
   `InventoryApi.Adapters.Persistence.EfInventoryMovementStore` and `EfInventoryCostLedgerStore` (same
   reason as every other `InventoryApi/Adapters/Persistence` adapter: `AppDbContext`, the persistence
@@ -1141,6 +1150,22 @@ and it never substitutes for a real purchase, correction or write-off.
   transition baseline. There is no update or delete path anywhere - no use case, port method or
   endpoint - because an applied repair is a historical fact that was recorded; the migration that
   adds the table backfills nothing.
+- **Costing-only is enforced by what the apply stages, not by convention.** A full rebuild restates
+  the product's physical quantity and every movement's running position from the replay, so routing
+  a repair through it would overwrite `Product.QuantityInStock` with the replayed quantity whenever
+  the two differ - which is exactly the state a product needing a repair tends to be in. The apply
+  therefore calls `RebuildCostingOnlyAsync` (same ledger, same `WeightedAverageCostReplay`, same
+  decide-before-staging rule - not a second costing algorithm), which stages the costing position
+  and the recosted sale costs and nothing else. Two consequences are deliberate and visible in
+  `EfInventoryCostRepairStoreTests.A_repair_changes_neither_physical_stock_nor_a_stored_movement`:
+  a stored physical quantity that disagrees with the movement history stays as it is, still reported
+  as a data-quality issue rather than silently corrected by a repair; and a stock movement after the
+  repair keeps its stored `UnitCost`/`TotalCost` and running-position snapshot even when the repaired
+  ledger could now cost it, because #359 recosts completed sales only and excludes changing stock
+  adjustments. The product's own position does account for those movements - the replay consumes
+  them - so the gap is in the movement's audit snapshot, not in the valuation. The next ordinary
+  rebuild (a purchase, count, refill apply, product edit or sales sync for that product) refreshes
+  those snapshots; recosting a movement from a repair would need its own issue.
 - **`Inventory.Domain.Costing.CostingRepairPolicy`** holds the rules, each throwing
   `DomainValidationException`: quantity > 0, unit cost >= 0 (zero allowed - free stock is a real
   acquisition), a reason that is neither empty nor a placeholder, an effective instant strictly after
@@ -1167,9 +1192,10 @@ and it never substitutes for a real purchase, correction or write-off.
   SHA-256 over everything the replay consumes (product position, movements, completed sales, existing
   repairs, baseline), with timestamps as ticks and decimals normalised, which the preview reports and
   the apply recomputes and requires to match. It then enforces the placement rule, appends the
-  repair, and rebuilds through the existing `IRebuildProductCost` path from the repair's effective
-  instant. The rebuild decides before it stages (issue #362), so a repair that leaves any fatal
-  data-quality issue fails and persists nothing at all - a partial repair cannot half-cost a product.
+  repair, and rebuilds costing-only through the existing `IRebuildProductCost` path from the repair's
+  effective instant. The rebuild decides before it stages (issue #362), so a repair that leaves any
+  fatal data-quality issue fails and persists nothing at all - a partial repair cannot half-cost a
+  product.
 - **The narrow `IInventoryCostRepairStore` port** (transaction, product lookup, append, history,
   save) is implemented by the temporary API-owned
   `InventoryApi.Adapters.Persistence.EfInventoryCostRepairStore`; it moves to

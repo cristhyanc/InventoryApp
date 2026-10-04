@@ -41,9 +41,14 @@ public class InventoryCostLedger
     public CostReplayBaseline? Baseline { get; }
 }
 
-/// <summary>The product's rebuilt perpetual costing position, as persisted on the product.</summary>
+/// <summary>
+/// The product's rebuilt perpetual costing position, as persisted on the product. A
+/// <see cref="PhysicalQuantity"/> of <c>null</c> leaves the stored physical quantity unchanged, the
+/// way a null assigned movement cost leaves the persisted one unchanged: a costing-only rebuild
+/// (issue #359) has no authority over physical stock.
+/// </summary>
 public sealed record ProductCostPosition(
-    int PhysicalQuantity,
+    int? PhysicalQuantity,
     int CostingQuantity,
     decimal InventoryValue,
     decimal AverageUnitCost);
@@ -81,6 +86,9 @@ public interface IInventoryCostLedgerStore
         IReadOnlyCollection<CostReplayAdjustmentOutcome> adjustments,
         IReadOnlyCollection<CostReplaySaleCost> recostedSales);
 
-    /// <summary>Stages the product's rebuilt physical and costing position.</summary>
+    /// <summary>
+    /// Stages the product's rebuilt costing position, and its physical quantity unless
+    /// <see cref="ProductCostPosition.PhysicalQuantity"/> is <c>null</c>.
+    /// </summary>
     void StageProductPosition(InventoryCostLedger ledger, ProductCostPosition position);
 }

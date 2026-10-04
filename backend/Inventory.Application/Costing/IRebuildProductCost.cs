@@ -25,6 +25,23 @@ public interface IRebuildProductCost
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// The same replay and the same decide-before-staging rule as <see cref="RebuildAsync"/>, but
+    /// staging only what a costing repair has authority over (issue #359): the product's costing
+    /// quantity, inventory value and average unit cost, and the ledger cost of the completed sales
+    /// authorised at or after <paramref name="recostCompletedSalesFrom"/>. The product's physical
+    /// quantity and every stock movement's stored running position and cost are left exactly as
+    /// they are, so applying a repair cannot restate physical stock, a <c>StockAdjustment</c> row or
+    /// MachineRefill history. The returned physical quantity is still the replayed one, reported and
+    /// not persisted. There is no dry run: the repair preview replays the ledger itself.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The product does not exist.</exception>
+    /// <exception cref="InventoryCostDataQualityException">The history has a fatal data-quality issue.</exception>
+    Task<InventoryCostRebuildResult> RebuildCostingOnlyAsync(
+        long productId,
+        DateTime recostCompletedSalesFrom,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// The weighted-average unit cost immediately before the given sale (or the average at
     /// <paramref name="saleTime"/> when that sale is not reached); <c>null</c> when the product
     /// does not exist or its history up to then has a fatal data-quality issue.

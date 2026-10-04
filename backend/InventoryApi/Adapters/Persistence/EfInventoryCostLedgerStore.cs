@@ -128,7 +128,10 @@ public sealed class EfInventoryCostLedgerStore : IInventoryCostLedgerStore
         ArgumentNullException.ThrowIfNull(position);
 
         var product = AsEfLedger(ledger).ProductEntity;
-        product.QuantityInStock = position.PhysicalQuantity;
+        // A null physical quantity means the use case has no authority over physical stock (issue
+        // #359): the stored value stays, exactly as a null assigned movement cost leaves one alone.
+        if (position.PhysicalQuantity.HasValue)
+            product.QuantityInStock = position.PhysicalQuantity.Value;
         product.CostingQuantity = position.CostingQuantity;
         product.InventoryValue = position.InventoryValue;
         product.AverageUnitCost = position.AverageUnitCost;

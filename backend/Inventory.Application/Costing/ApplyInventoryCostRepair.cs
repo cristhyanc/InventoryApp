@@ -19,13 +19,16 @@ namespace Inventory.Application.Costing;
 /// Two more checks stand between a proposal and historical COGS changing. The repair must replay
 /// before the first completed sale the ledger cannot cost, verified through the replay's own
 /// ordering rather than a timestamp comparison (see <see cref="CostingRepairPolicy"/>). And the
-/// rebuild has to come out clean: <see cref="IRebuildProductCost"/> recosts the completed sales
-/// from the repair's effective time, but refuses a history that still has a fatal data-quality
-/// issue, and stages nothing when it does, so a repair that only partly explains the missing
-/// history fails and persists nothing rather than half-costing the product.
+/// rebuild has to come out clean: <see cref="IRebuildProductCost.RebuildCostingOnlyAsync"/> recosts
+/// the completed sales from the repair's effective time, but refuses a history that still has a
+/// fatal data-quality issue, and stages nothing when it does, so a repair that only partly explains
+/// the missing history fails and persists nothing rather than half-costing the product.
 ///
 /// What it never touches: physical home stock, machine quantities, stock adjustments, machine
-/// refills, and the transition baseline.
+/// refills, and the transition baseline. That is why it rebuilds costing-only rather than through
+/// the full <see cref="IRebuildProductCost.RebuildAsync"/> the purchase, count, refill and
+/// sales-sync writes use: a full rebuild restates the product's physical quantity and every
+/// movement's running position from the replay, which a costing repair has no authority to do.
 /// </summary>
 public sealed class ApplyInventoryCostRepair
 {
@@ -89,8 +92,8 @@ public sealed class ApplyInventoryCostRepair
         InventoryCostRebuildResult rebuilt;
         try
         {
-            rebuilt = await _rebuild.RebuildAsync(
-                preview.ProductId, preview.EffectiveAt, cancellationToken: cancellationToken);
+            rebuilt = await _rebuild.RebuildCostingOnlyAsync(
+                preview.ProductId, preview.EffectiveAt, cancellationToken);
         }
         catch (InventoryCostDataQualityException exception)
         {

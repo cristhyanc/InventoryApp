@@ -158,6 +158,63 @@ public class EfInventoryCostRepairStoreTests
             sale => Assert.Equal(SaleCostingStatus.Pending, sale.CostingStatus));
     }
 
+    /// <summary>
+    /// Issue #359: applying a repair must never change <c>Product.QuantityInStock</c>, and never a
+    /// stored <c>StockAdjustment</c> row (home refills and write-offs are the MachineRefill history
+    /// and the physical movement audit trail).
+    ///
+    /// The stored physical quantity and the movement history deliberately disagree here - 7 on the
+    /// product against a baseline of 13 less a 3-unit refill and a 1-unit write-off, so the replay
+    /// ends at 9 - because that is the only state in which the violation is visible. A rebuild
+    /// stages the replayed physical quantity onto the product and the replayed running position onto
+    /// every movement; a costing repair has no authority over either, so the apply rebuilds
+    /// costing-only and both stay exactly as they were, while the repair, the costing position and
+    /// the sale costs the repaired history supports are saved.
+    ///
+    /// The write-off keeps its stored <c>UnitCost</c>/<c>TotalCost</c> of <c>null</c> for the same
+    /// reason, even though the repaired replay can now cost it at 2.00: recosting a stock movement
+    /// is explicitly out of scope for #359, which recosts completed sales only. See
+    /// docs/architecture.md § Costing repairs.
+    /// </summary>
+    [Fact]
+    public async Task A_repair_changes_neither_physical_stock_nor_a_stored_movement()
+    {
+        using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await SeedPhysicalDriftAsync(connection);
+
+        await using (var a = TestAppDbContext.For(options, BusinessA))
+        {
+            var preview = await TestCostingUseCases.PreviewRepair(a).Handle(new(ProductA, Day(2), 5, 2m, Reason));
+            Assert.Empty(preview.RemainingFatalIssues);
+
+            var applied = await TestCostingUseCases.ApplyRepair(a, Actor(), clock: new FakeClock(Now))
+                .Handle(new(ProductA, Day(2), 5, 2m, Reason, preview.LedgerFingerprint));
+
+            Assert.Equal((2, 4m, 2m, 2), (applied.CostingQuantity, applied.InventoryValue, applied.AverageUnitCost, applied.RecostedSaleCount));
+        }
+
+        await using var verify = TestAppDbContext.Unrestricted(options);
+        var product = await verify.Products.SingleAsync(x => x.Id == ProductA);
+        Assert.Equal(7, product.QuantityInStock);
+        Assert.Equal((2, 4m, 2m), (product.CostingQuantity, product.InventoryValue, product.AverageUnitCost));
+
+        var repair = await verify.InventoryCostRepairs.SingleAsync();
+        Assert.Equal((BusinessA, ProductA, Day(2), 5, 2m, 10m), (repair.BusinessId, repair.ProductId, repair.EffectiveAt, repair.Quantity, repair.UnitCost, repair.TotalValue));
+
+        var refill = await verify.StockAdjustments.SingleAsync(x => x.Reason == StockAdjustmentReason.MachineRefill);
+        Assert.Equal((4, 9, 18m, 2m), (refill.QuantityAfter, refill.CostingQuantityAfter, refill.InventoryValueAfter, refill.AverageUnitCostAfter));
+        Assert.Equal((1.5m, 4.5m), (refill.UnitCost, refill.TotalCost));
+        var writeOff = await verify.StockAdjustments.SingleAsync(x => x.Reason == StockAdjustmentReason.Damaged);
+        Assert.Equal((3, 0, 0m, (decimal?)null), (writeOff.QuantityAfter, writeOff.CostingQuantityAfter, writeOff.InventoryValueAfter, writeOff.AverageUnitCostAfter));
+        Assert.Null(writeOff.UnitCost);
+        Assert.Null(writeOff.TotalCost);
+
+        Assert.All(
+            await verify.NayaxSales.Where(x => x.BusinessId == BusinessA).ToListAsync(),
+            sale => Assert.Equal((2m, 2m, SaleCostingStatus.Costed, SaleCostSource.InventoryLedger),
+                (sale.UnitCostAtSale, sale.CostOfGoodsSold, sale.CostingStatus, sale.CostSource)));
+    }
+
     [Fact]
     public async Task A_caller_without_a_business_reads_nothing_and_cannot_apply_a_repair()
     {
@@ -234,6 +291,65 @@ public class EfInventoryCostRepairStoreTests
             Sale(productId, productName, productId * 10, Day(3)),
             Sale(productId, productName, (productId * 10) + 1, Day(4)));
         await db.SaveChangesAsync();
+    }
+
+    /// <summary>
+    /// One business whose stored physical quantity (7) deliberately disagrees with what its movement
+    /// history replays to (a baseline of 13, a 3-unit machine refill and a 1-unit damaged write-off,
+    /// so 9), with both movements carrying the stale running position and cost an earlier rebuild of
+    /// a different history left on them. A repair of 5 units at 2.00 completes the costing history
+    /// for the write-off and both completed sales.
+    /// </summary>
+    private static async Task<DbContextOptions<AppDbContext>> SeedPhysicalDriftAsync(SqliteConnection connection)
+    {
+        await connection.OpenAsync();
+        var options = new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options;
+        await using (var setup = TestAppDbContext.Unrestricted(options))
+            await setup.Database.EnsureCreatedAsync();
+
+        await using var db = TestAppDbContext.For(options, BusinessA);
+        db.Products.Add(new Product { Id = ProductA, Name = "Coke Zero", QuantityInStock = 7 });
+        db.InventoryCostTransitionBaselines.Add(new InventoryCostTransitionBaseline
+        {
+            ProductId = ProductA,
+            CutoffAt = Day(1),
+            HomeStockQuantity = 13,
+            OpeningCostingQuantity = 0,
+            InventoryValue = 0m,
+            AverageUnitCost = 0m
+        });
+        db.StockAdjustments.AddRange(
+            new StockAdjustment
+            {
+                ProductId = ProductA,
+                QuantityChange = -3,
+                Reason = StockAdjustmentReason.MachineRefill,
+                EffectiveAt = Day(1).AddHours(6),
+                QuantityAfter = 4,
+                CostingQuantityAfter = 9,
+                InventoryValueAfter = 18m,
+                AverageUnitCostAfter = 2m,
+                UnitCost = 1.5m,
+                TotalCost = 4.5m
+            },
+            new StockAdjustment
+            {
+                ProductId = ProductA,
+                QuantityChange = -1,
+                Reason = StockAdjustmentReason.Damaged,
+                EffectiveAt = Day(2).AddHours(6),
+                QuantityAfter = 3,
+                CostingQuantityAfter = 0,
+                InventoryValueAfter = 0m,
+                AverageUnitCostAfter = null,
+                UnitCost = null,
+                TotalCost = null
+            });
+        db.NayaxSales.AddRange(
+            Sale(ProductA, "Coke Zero", ProductA * 10, Day(3)),
+            Sale(ProductA, "Coke Zero", (ProductA * 10) + 1, Day(4)));
+        await db.SaveChangesAsync();
+        return options;
     }
 
     private static NayaxSales Sale(long productId, string productName, long transactionId, DateTime at) =>

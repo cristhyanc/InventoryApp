@@ -392,6 +392,79 @@ public class RebuildProductCostTests
         Assert.Null(store.StagedPosition);
     }
 
+    /// <summary>
+    /// Issue #359: the costing-only rebuild a repair apply uses stages the costing position and the
+    /// recosted sale costs, and deliberately stages no physical quantity (null leaves the stored one
+    /// alone) and no movement outcome, so a repair cannot restate physical stock, a
+    /// <c>StockAdjustment</c> row or MachineRefill history. It still replays the whole ledger, so it
+    /// reports the replayed physical quantity it did not persist.
+    /// </summary>
+    [Fact]
+    public async Task Costing_only_rebuild_stages_the_costing_position_and_sale_costs_and_nothing_physical()
+    {
+        var store = new FakeLedgerStore(DriftedLedger());
+
+        var result = await new RebuildProductCost(store).RebuildCostingOnlyAsync(1, Day(1));
+
+        Assert.Equal(10, result.PhysicalQuantity);
+        Assert.Equal(1, result.RecostedSaleCount);
+        Assert.Equal(new ProductCostPosition(null, 9, 18m, 2m), store.StagedPosition);
+        Assert.Empty(store.StagedAdjustments);
+        Assert.Equal(2m, Assert.Single(store.StagedSaleCosts).UnitCost);
+    }
+
+    /// <summary>
+    /// The complement of the test above: a normal rebuild - what the purchase, count, refill and
+    /// sales-sync writes still call - keeps synchronising the product's physical quantity and every
+    /// movement's running position from the replay.
+    /// </summary>
+    [Fact]
+    public async Task Rebuild_still_stages_the_replayed_physical_quantity_and_movement_positions()
+    {
+        var store = new FakeLedgerStore(DriftedLedger());
+
+        await new RebuildProductCost(store).RebuildAsync(1, Day(1));
+
+        Assert.Equal(new ProductCostPosition(10, 9, 18m, 2m), store.StagedPosition);
+        Assert.Equal(10, Assert.Single(store.StagedAdjustments).QuantityAfter);
+    }
+
+    /// <summary>
+    /// Issue #362 holds for the costing-only rebuild too: it decides before it stages, so the repair
+    /// apply's transaction has nothing to roll back when the repaired history is still fatal.
+    /// </summary>
+    [Fact]
+    public async Task Costing_only_rebuild_stages_nothing_for_a_fatal_history()
+    {
+        var store = new FakeLedgerStore(new InventoryCostLedger(
+            new CostReplayProduct(1, 0, 0, 0m),
+            [new CostReplayAdjustment(1, Day(1), DomainStock.StockAdjustmentReason.Restock, 5, null, false)],
+            [new CostReplaySale(9, Day(2))],
+            [],
+            null));
+
+        var exception = await Assert.ThrowsAsync<InventoryCostDataQualityException>(
+            () => new RebuildProductCost(store).RebuildCostingOnlyAsync(1, Day(1)));
+
+        Assert.Contains("has no valid unit cost", exception.Message);
+        Assert.False(store.ReplayStaged);
+        Assert.Null(store.StagedPosition);
+    }
+
+    /// <summary>
+    /// A product whose stored physical quantity (7) does not match what its movements replay to
+    /// (10), so staging the physical quantity is visible rather than a no-op. Its costing quantity
+    /// and value are stored as zero so the stored-versus-replayed physical reconciliation issue -
+    /// which only applies to a product with no costing position at all - stays out of the way.
+    /// </summary>
+    private static InventoryCostLedger DriftedLedger() =>
+        new(
+            new CostReplayProduct(1, 7, 0, 0m),
+            [new CostReplayAdjustment(1, Day(1), DomainStock.StockAdjustmentReason.Restock, 10, 2m, true)],
+            [new CostReplaySale(9, Day(2))],
+            [],
+            null);
+
     [Fact]
     public async Task Rebuild_of_an_unknown_product_throws()
     {
@@ -428,6 +501,8 @@ public class RebuildProductCostTests
     {
         public bool? ForUpdate { get; private set; }
         public bool ReplayStaged { get; private set; }
+        public IReadOnlyCollection<CostReplayAdjustmentOutcome> StagedAdjustments { get; private set; } = [];
+        public IReadOnlyCollection<CostReplaySaleCost> StagedSaleCosts { get; private set; } = [];
         public ProductCostPosition? StagedPosition { get; private set; }
 
         public Task<InventoryCostLedger?> LoadAsync(long productId, bool forUpdate, CancellationToken cancellationToken)
@@ -442,7 +517,12 @@ public class RebuildProductCostTests
         public void StageReplay(
             InventoryCostLedger ledger,
             IReadOnlyCollection<CostReplayAdjustmentOutcome> adjustments,
-            IReadOnlyCollection<CostReplaySaleCost> recostedSales) => ReplayStaged = true;
+            IReadOnlyCollection<CostReplaySaleCost> recostedSales)
+        {
+            ReplayStaged = true;
+            StagedAdjustments = adjustments;
+            StagedSaleCosts = recostedSales;
+        }
 
         public void StageProductPosition(InventoryCostLedger ledger, ProductCostPosition position) => StagedPosition = position;
     }
