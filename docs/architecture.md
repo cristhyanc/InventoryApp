@@ -2582,123 +2582,126 @@ Deploying the API restarts the process, and that restart is how its database sch
 
 The separate, human-invoked `migrate-database` command (`InventoryApi/Bootstrap/DatabaseMigrationCommand`), run with `--dry-run` to inspect and `--apply` to migrate, remains available for diagnostics and manual use — inspecting what a pending deployment will apply, or applying a high-risk migration ahead of a deployment window under review — but is no longer mandatory before a normal Production deployment. Recovery from a bad apply, automatic or manual, is restoring a verified backup taken beforehand; neither startup nor the command rolls a migration back. Concurrent same-machine startups (an overlapping restart during a deployment, for example) are not separately locked: EF Core's `Database.Migrate()` re-reads the applied-migrations history when it runs rather than trusting an earlier snapshot, and SQLite's single-writer lock (see [SQLite operating assumptions and scale strategy](#sqlite-operating-assumptions-and-scale-strategy-issue-53) above) already serializes the two attempts, which `DatabaseSchemaStartupTests.Concurrent_production_startups_do_not_race_to_apply_the_same_migration_twice` exercises against a real on-disk database. See `docs/tenant-rollout.md` for the worked historical example and `AGENTS.md` § Database and migrations for the current invariant.
 
-## Inventory workloads: decision criteria (issue #68)
+## Azure Functions and background workloads: decision criteria (issue #68)
 
-InventoryApp manages recurring and on-demand inventory operations: Nayax product catalogue imports, Nayax reimbursement reconciliation, historical inventory cost rebuilds, and scheduled reports. These workloads run outside the request/response cycle and must succeed reliably, remain idempotent, and avoid unnecessary resource consumption. This section defines the decision criteria for inventory workload design.
+**Decision: no Azure Functions yet.** No workload this application runs today, and none that is already planned, justifies adding a Function App. Every background or scheduled workload in the inventory below is served by one of three mechanisms that already exist: an operator-triggered HTTP endpoint on the API, a CLI mode of the published `InventoryApi` executable, or the scheduled Linux App Service WebJob planned in issue #333, which invokes that same executable inside the App Service this application already runs in. A Function App would add a second deployment unit, a second managed identity and role assignment to grant, a second configuration and secret surface, a second place a schedule can be defined, and a second telemetry source to wire up — while removing work from none of those three. It would also be unable to do the one thing most of these workloads exist to do: write to the database. The production store is a single SQLite file on the App Service's own persistent `/home` mount, and SQLite's file locking is not supported across concurrently writing processes on that shared storage, which is why the plan must stay pinned to a single instance (see [SQLite operating assumptions and scale strategy](#sqlite-operating-assumptions-and-scale-strategy-issue-53)). An out-of-process Function writing the same file is not a configuration detail to be solved later; it is outside the supported operating envelope of the current store.
 
-### Scope
+This section records the assessment the decision was made against, the criteria any future proposal must answer, the conditions that would reverse the decision, and the boundary rule a Function must obey if one is ever approved.
 
-This section applies to:
-- Scheduled jobs (e.g., daily/hourly catalogue refreshes, reconciliation batches)
-- On-demand long-running operations (e.g., manual import triggers, cost rebuilds, reconciliation corrections)
-- Background tasks initiated by API requests (e.g., bulk file uploads, delayed report generation)
+### Status and scope of this decision
 
-It does not cover request-scoped, synchronous operations within a single API call.
+This is an architecture decision only. It creates no Azure resource, no Function App, no deployment workflow and no proof of concept, and it does not authorize one; a concrete candidate needs its own separately approved issue, and a production implementation would be High-risk work for a human to review. It also does not replace or reopen the WebJob approach chosen in issue #333. "Background workload" here means work that is not a single synchronous step inside one API request: scheduled jobs, long-running operations an operator starts and waits for, and maintenance commands run against the deployed instance.
 
-### Frequency: When to schedule work
+### Current and planned workloads
 
-**Decision principle:** A workload's frequency is determined by business requirements for freshness, technical constraints on resource consumption, and impact on tenant isolation.
+This is the inventory the decision was made against. "Request-driven" means a signed-in operator starts the work from the Angular application and waits for its result — it is not a schedule, and must not be described as one.
 
-**Criteria:**
+| Workload | How it runs | Status | Needs another host? |
+|---|---|---|---|
+| Verified SQLite snapshot — `backup-database --output` | `InventoryApi` CLI mode dispatched before the web host is built; human-run | Implemented (#331) | No. The published executable already is the job. |
+| Verified snapshot upload to the private backup container — `backup-database --upload` | Same CLI mode, authenticating with `DefaultAzureCredential`: the App Service managed identity when a job runs it, the operator's own Azure sign-in when run by hand | Implemented (#332) | No. |
+| Scheduling that backup and upload | Nothing schedules it yet. Planned as a Linux App Service WebJob packaged into the existing `dotnet publish` output, invoking `backup-database --upload` | Planned (#333) | No. The WebJob runs inside the App Service plan already paid for, ships with the existing deployment artifact, reaches the same `/home` database file, and inherits the same managed identity and application settings. This is the only workload in the table that genuinely cannot stay request-driven — a backup must happen whether or not anyone signs in — and it is the one a Function would most plausibly claim, so it is assessed explicitly under each criterion below. |
+| Backup retention, alerting and restore runbook | Not implemented. The uploader's seam (`IBackupBlobContainer`) deliberately exposes no delete and no overwrite, so retention cannot be performed by that code path even accidentally; restore stays a deliberate, human-run procedure | Planned (#334) | Undecided, and not decided here. Retention is a storage-lifecycle and human-operations question before it is a compute question; #334 owns it. |
+| Latest Nayax sales synchronization — `Inventory.Application.SalesSync.SyncLatestNayaxSales` | Request-driven: `POST /api/nayax-sales-sync`, called once by the home dashboard before it loads Sites and Machines (#187) | Implemented, request-driven | No. Its result is precisely what the operator is waiting to see; moving it onto a schedule would decouple the refresh from the screen that needs it, and would not remove the request-driven path. |
+| Machine stock event import and Sync Restock reconciliation — `Inventory.Application.MachineStockSync` | Request-driven from the machines feature (#183) | Implemented, request-driven | No. |
+| Nayax product catalogue import — `Inventory.Application.Imports.ImportNayaxProductCatalog` | Request-driven: `ImportsController` (#300) | Implemented, request-driven | No. |
+| Pending reimbursement XML import — `Inventory.Application.Imports.ImportPendingReimbursementXmlFiles` | Request-driven: `ImportsController`, over files the operator has supplied | Implemented, request-driven | No. |
+| Historical inventory cost rebuild — `Inventory.Application.Costing.IRebuildProductCost` | In-process, invoked by the use case whose write invalidated a product's costs (for example an imported completed sale) | Implemented | No. |
+| Database schema migration | `DatabaseSchemaStartup` at API startup, plus the human-run `migrate-database` command | Implemented (#54, revised by #201) | No. |
 
-1. **Business freshness requirement:** Define the acceptable staleness of the imported/computed data. Nayax catalogue imports can tolerate daily updates; reconciliation might require hourly checks during settlement windows. Avoid more-frequent polling than the upstream source provides. Use push notifications/webhooks when available instead of polling.
+Two properties of the existing automation model matter to this assessment. First, no GitHub Actions workflow in this repository runs on a schedule: workflows are triggered by pull requests, pushes, or a human dispatch, and **Deploy Production** is human-started for one exact commit (see [Build and delivery](#build-and-delivery) and `docs/automation.md`). CI is a validation and delivery mechanism, not an operational scheduler; it has no route to the production database and must not acquire one. Second, every workload above except the planned backup schedule is started by a human — an operator in the application, or an operator on the instance. The gap between those two facts is exactly one slot wide, and issue #333 fills it with a WebJob.
 
-2. **Concurrency and single-instance constraint:** This application uses a single App Service instance with SQLite (see [SQLite operating assumptions](#sqlite-operating-assumptions-and-scale-strategy-issue-53)). A heavy write workload runs only one at a time, limited by the single writer lock and the 30-second busy timeout. Measure end-to-end duration under realistic data volume. If a workload takes 5 minutes and runs every 5 minutes, a slow run overlaps with the next one; schedule less frequently or optimize before adding frequency.
+### Decision criteria for any future background workload
 
-3. **Tenant isolation:** Multi-tenant workloads must not block each other. A single-business dedicated background task can run on its own schedule. A shared import service used by multiple businesses must process each tenant's work in isolated transactions to avoid cross-tenant write blocking.
+Any proposal to move a workload onto a different host must answer all seven criteria. Each states what to ask, what the existing model already provides, and therefore what a Function would have to beat.
 
-4. **Cost and resource consumption:** Frequent polling of external APIs (Nayax, Azure Blob for documents) consumes bandwidth, quota, and potentially incurs charges. Batch imports and reconciliation windows to off-peak hours and reduce frequency where freshness permits.
+#### Frequency
 
-**Anti-pattern:** Never poll every minute for data that changes weekly, and never skip scheduling a task that changes hourly because "it hasn't failed yet."
+How often must the work run, and what is the acceptable staleness of its result? Prefer the upstream's own push mechanism over polling, and never poll more often than the source changes. Two constraints bound any answer here: the single App Service instance with a single-writer SQLite file and a 30-second busy timeout, so a heavy write workload effectively runs alone; and overlap, since a workload that takes five minutes must not be scheduled every five minutes — measure end-to-end duration at realistic data volume before choosing an interval. Schedule heavy work in a quiet window (issue #333 proposes 15:00 UTC, early morning in Sydney) so it does not compete with interactive requests for the writer lock.
 
-### Retries: Handling transient failures
+*What the current model gives:* a WebJob expresses an arbitrary cron schedule in the deployment artifact. A Function's timer trigger expresses the same schedule and is not more capable. Frequency alone never justifies a new host.
 
-**Decision principle:** Retries distinguish transient failures (network hiccup, temporary resource unavailable) from permanent ones (auth failure, invalid data), and prevent cascading outages when upstream services recover.
+#### Retries
 
-**Criteria:**
+Which failures are transient, how many times is the work retried, and with what backoff? Retry only on transient conditions — HTTP 5xx, network timeouts, `SQLITE_BUSY` — and never on authentication failures, HTTP 4xx, or validation errors, which need a human or a code change rather than another attempt. Use bounded exponential backoff with jitter and a cap on total attempts, and stop retrying a consistently failing dependency rather than flooding it.
 
-1. **Idempotent-safe operations only:** Retry only operations that can be safely re-run. Importing a product catalogue by name/ID is safe (idempotent). Recording a sale or payment is not safe without additional deduplication logic. Never retry destructive operations (deletes, overwrites) without proof that the workload is idempotent.
+*What the current model gives:* calls to Nayax already pass through `Inventory.Infrastructure.Nayax.NayaxResilienceHandler` (issue #48; see [HTTP resilience policy](#http-resilience-policy)) — bounded per-attempt timeout, bounded retry, and a circuit breaker — regardless of which host invokes the use case, because the policy is attached to the HTTP client, not to the trigger. A whole-run retry is the scheduler's job, and a WebJob that exits non-zero is a failed run that the next scheduled run follows. A Function's retry policy would duplicate, not improve, the per-call layer that already exists.
 
-2. **Exponential backoff:** Do not retry immediately; use exponential backoff (e.g. 1s, 2s, 4s, 8s, 16s, 32s) with jitter to avoid thundering herds when multiple instances (future: if scaling) wake up at the same time. Cap maximum backoff (e.g. 5 minutes) and total attempts (e.g. 5 retries).
+#### Idempotency
 
-3. **Transient detection:** Retry on HTTP 5xx, network timeouts, and database `SQLITE_BUSY` errors. Do not retry on HTTP 4xx (bad request), authentication errors, or data validation failures — these require human intervention or code fix, not more attempts.
+Can the work be run twice — by a retry, by an overlapping schedule, or by an operator repeating it by hand — without corrupting data? This is a property of the use case, not of the host, and it is the property that makes every other criterion tractable. Use the upstream entity's own identifier for duplicate detection rather than a timestamp or sequence number; upsert configuration and catalogue data, but insert financial transactions with explicit deduplication and never upsert a recorded amount, because changing one is a correction with its own audit trail; wrap each logical unit in one transaction so a failure leaves no partial state; never implement an import as truncate-and-reload.
 
-4. **Dead-letter handling:** After retries are exhausted, log the failure with full context (tenant, operation, error, attempt count) and notify operations (e.g. via monitoring alert). Do not silently drop the workload. A persistent failure must be visible and actionable.
+*What the current model gives:* the implemented workloads already behave this way. `SyncLatestNayaxSales` deduplicates by `TransactionID` and only enriches a stored transaction where its match or status is still missing. `backup-database --upload` refuses to overwrite an occupied `daily/` object name and creates the month's single `monthly/` recovery point with a conditional create (`If-None-Match: *`), so a repeat run in the same month reports the existing object as already present instead of as a failure, and overlapping runs stage into separate directories. A Function changes none of this; a Function that reimplemented any of it would be the duplication this decision exists to prevent.
 
-5. **Circuit breaker:** If a dependency (Nayax API, Blob storage) fails consistently, stop retrying it and fail fast. Allow the dependency time to recover without flooding it with retry traffic. Implement a circuit-breaker pattern (fail-open after N consecutive failures, try again after a wait period).
+#### Secrets
 
-**Anti-pattern:** Retrying 100 times per minute or retrying a permanent failure indefinitely. The API log becomes noise and the failure goes unnoticed.
+What credentials does the work need, where do they live, and how many places must hold them? The standing rule is that a credential belongs in Azure configuration — App Service application settings or Key Vault — never in the repository, never in a log line, and never in an error message or artifact metadata, and that managed identity is preferred over any stored credential wherever the platform supports it.
 
-### Idempotency: Safe re-execution
+*What the current model gives:* the backup upload and document storage have **no secret at all** — both authenticate with `DefaultAzureCredential`, the configuration gate rejects a service URI carrying a query string or embedded credentials (which is what a SAS token or account key would look like), and nothing in the upload path logs a credential. The one real secret in this system is the Nayax Lynx access token, resolved by `NayaxLynxConfiguration` from `NayaxLynx:AccessToken`, falling back to the already deployed Key Vault/App Service secret `Nayax__Token`. A Function App is a separate application: it would need its own managed identity, its own `Storage Blob Data Contributor` assignment on the backup container, its own copy of the Nayax token reference, and its own Functions-runtime storage account. That is strictly more credential surface to grant, rotate and audit, in exchange for no capability the WebJob lacks — the WebJob runs under the App Service's existing identity and reads the settings already configured for it. On this criterion the current model is not merely adequate; it is safer.
 
-**Decision principle:** A workload must produce the same result if run once or multiple times, so retries and replays do not corrupt data.
+#### Observability
 
-**Criteria:**
+How does an operator learn that the work ran, that it succeeded, and what it did — and how do they diagnose it when it did not? Log the workload name, a per-run correlation identifier, the tenant/business, key inputs, duration and outcome as structured fields; on failure log the exception, how far the run got, the attempt number and the decision taken; and never log credentials, Nayax tokens, connection strings or imported row content. Silence must never be ambiguous: "nothing in the log" and "the job never started" must be distinguishable.
 
-1. **Unique external IDs:** When importing external data, use the upstream entity's unique ID (e.g. Nayax product ID, reimbursement period ID) as the primary key or a unique constraint to detect and skip duplicates. Never rely only on timestamps or sequence numbers, which can repeat or overlap.
+*What the current model gives:* the API and its CLI commands log through `ILogger` to the App Service log stream, and `backup-database` already reports object names, byte counts, the SHA-256 and the integrity result while never printing a connection string or snapshot content; issue #333 requires the WebJob to log start, completion or failure, and duration, and WebJob run history is visible in the App Service itself. Centralized error telemetry (Azure Monitor OpenTelemetry) is planned in issue #165 and not implemented today — which is an argument against a second host rather than for one, since a Function would be a second emitter to instrument before the first one is even wired up. Alerting on a missed or failed backup belongs to issue #334.
 
-2. **Upsert semantics:** For catalogue/configuration imports, use "insert or update" (upsert) semantics so a re-run updates stale records in place rather than creating duplicates. For transactional imports (sales, payments), use insert-only with duplicate detection; never upsert a financial transaction, because updating the amount paid or commission recorded is a data correction that needs a separate audit trail.
+#### Cost
 
-3. **Transaction boundaries:** Wrap each logical unit of work (e.g. one product import, one reimbursement period reconciliation) in a database transaction. If the transaction commits, the workload is considered done; if it rolls back, the entire unit is undone and can be retried. This prevents partial states (half-imported product, partially reconciled period).
+What does the work consume, and what does hosting it cost beyond the work itself? For the work: minimize billed or quota-limited external calls (batch, import incrementally, cache stable data), avoid N+1 queries and full scans, stream or page large files so memory stays bounded regardless of input size, and do not run two workloads that fetch the same data. For the host: count the whole bill, not the compute — a Function App adds a deployment unit, a runtime storage account, CI/CD surface, role assignments and an operational surface to monitor.
 
-4. **Versioning and state tracking:** Store a version or import timestamp alongside imported data so you can detect stale overwrites. For example, if importing a product catalogue, record the import time so a slow re-run does not overwrite a fresher catalogue with an older one.
+*What the current model gives:* a WebJob consumes the App Service plan that is already paid for and already running, and ships inside the publish output the existing deployment already carries, so its marginal infrastructure cost is zero (its prerequisite is Always On on an appropriate plan, which issue #333 owns). No measured workload in the table is large enough that the compute itself, rather than the hosting, is the cost driver.
 
-5. **Audit trail for corrections:** Financial workloads (reconciliation corrections, manual cost rebuilds) must log what changed, by whom, when, and why. This is not strictly idempotent re-execution, but prevents accidental overwrites and supports audit.
+#### Failure recovery
 
-**Anti-pattern:** Importing a catalogue by truncating the entire table and re-loading. A failed import leaves the table empty and corrupts live data. Use upsert instead.
+This is a distinct question from retries, and must be answered separately: **after the retries are exhausted and the run is abandoned, how does the system get back to a correct state?** Every workload must declare one of three recovery modes, and the declaration is part of its design, not an afterthought:
 
-### Observability: Detecting and diagnosing failures
+1. **Self-healing** — the next scheduled run restores correctness with no human action. The backup upload is this: a missed run loses that day's snapshot, and the next successful upload still establishes the month's recovery point if none exists yet, because the monthly name is deterministic from the month and written as a conditional create. The cost of a missed run is a widened recovery window, which is bounded and visible, not a corrupted state.
+2. **Operator replay** — correctness is restored by re-running the same operation by hand, which is safe precisely because the workload is idempotent. Every request-driven import in the table is this: a failed catalogue import, sales sync or reimbursement import leaves no partial state, because each unit commits as one transaction, and the operator simply runs it again.
+3. **Runbook** — recovery needs a documented human procedure because it is not safe to automate. Database restore is this, deliberately: it overwrites live data and must only be run by a human who has confirmed the target file (see the restore procedure in [SQLite operating assumptions and scale strategy](#sqlite-operating-assumptions-and-scale-strategy-issue-53)). Issue #334 owns the restore runbook and the alerting that tells an operator recovery is needed.
 
-**Decision principle:** Every workload failure must be visible, traceable, and actionable so operations can respond quickly.
+A workload that fits none of these three is not ready to be scheduled on any host, and moving it to a Function would not make it ready. A failure that is invisible is the worst outcome in every mode, which is why the observability criterion and #334's alerting are prerequisites for trusting a schedule, not enhancements to it.
 
-**Criteria:**
+### Why "no Functions yet" is the answer today
 
-1. **Structured logging:** Log the workload name, execution ID (a unique GUID per run), tenant/business ID, operation type, key inputs, and outcomes (success/failure, item count, duration). Log at the start, before external calls, and at completion with the result. Use structured fields (JSON) so logs are queryable.
+Applying the seven criteria to the inventory: six of the seven are satisfied by the existing model for every workload listed, and the seventh — secrets — is actively better in the existing model, because the backup path carries no credential at all and a Function App would introduce an identity, a role assignment and a token reference that do not exist today. The only workload that needs a non-interactive trigger is the scheduled backup, and a WebJob provides that trigger inside the existing host, with access to the `/home` database file that an out-of-process Function could not safely write anyway. No workload is blocked by the current API/automation model. Adding a second host would therefore buy no capability and cost deployment, identity, configuration and observability surface — so the default stated in issue #68 stands: **no Functions yet.**
 
-2. **Failure logging:** On failure, log the full exception (stack trace), the last successful state (e.g. "imported 50 products before error on product ID 123"), any retry attempt number, and the decision (will retry / dead-letter / circuit-breaker activated). Do not log credentials, API tokens, or sensitive imported data.
+### What would change this decision
 
-3. **Metrics and alerting:** Export metrics (import duration, item count, success/failure rate) to a monitoring system (e.g. Application Insights). Alert on:
-   - Any workload failure after retries are exhausted
-   - Slow execution (duration approaching timeout or frequency window)
-   - High failure rate (e.g. 3 consecutive failures)
-   - Dead-letter queue backing up (too many unresolved failures)
+The decision is not permanent. Any one of the following is a genuine reason to re-open it, as a new issue with its own risk classification:
 
-4. **Correlation across components:** If a workload triggers downstream operations (e.g. an import kicks off a cost-rebuild job), use the same execution ID (correlation ID) in logs so all related events are traceable end-to-end.
+- The store moves off single-file SQLite to a server database (the trigger conditions are listed in [SQLite operating assumptions and scale strategy](#sqlite-operating-assumptions-and-scale-strategy-issue-53)), removing the single-writer, single-instance constraint that currently makes an out-of-process writer unsupportable.
+- A workload must run when the App Service is not running, or must survive the API being down — a WebJob cannot, because it is hosted by that App Service.
+- A genuinely event-driven trigger appears that the API cannot receive, such as a queue or blob-created event with its own delivery and dead-letter semantics, where re-implementing the trigger inside the API would be the worse design.
+- A workload's resource profile is so different from the API's that co-tenancy in one plan harms interactive latency, and the measurement to prove it exists.
+- Scheduling needs outgrow a WebJob's cron — fan-out, per-tenant parallelism, or durable multi-step orchestration with checkpointing.
 
-5. **Visibility in the UI (future):** Display the status of recent workloads (last import time, success/failure, next scheduled run) in an operations dashboard so a human operator can quickly confirm the system is working or diagnose why a refresh is stale.
+Scale ambition, architectural fashion, and "we might need it later" are explicitly not reasons; issue #68 records that constraint and this decision keeps it.
 
-**Anti-pattern:** Silent failures ("import ran but found no data, so nothing happened") and vague logs ("error in import step"). The operator has no idea if the silence is normal or if data is stale.
+### If a Function is ever approved: the minimal boundary
 
-### Cost: Resource consumption and efficiency
+No candidate is approved today, so there is no function boundary to define yet. When one is proposed, these rules bind it, and a proposal that cannot satisfy them is not approved:
 
-**Decision principle:** Workloads should consume resources proportional to the work they do and avoid waste through redundant polling, unnecessary transfers, or inefficient queries.
+1. **A Function is an additional host, never a second home for business logic.** It is a trigger adapter in exactly the sense `InventoryApi`'s controllers are: it binds a trigger to an input, invokes an existing `Inventory.Application` use case, and maps the result. Controllers and triggers sit at the same layer and must stay equally thin.
+2. **No business rule may be copied into it.** Accounting, costing, matching, reconciliation and inventory rules live in `Inventory.Domain` and `Inventory.Application` and are invoked, not reimplemented. If a workload needs a rule the Application layer does not expose yet, the rule is added there first and the API and the Function both call it — the architecture tests in `backend/InventoryApi.Tests/Architecture` enforce the dependency direction this depends on.
+3. **Ports and adapters are reused, not duplicated.** The Function composes `Inventory.Infrastructure` adapters through the same registration extensions the API uses. A second Nayax client, a second blob client or a second persistence adapter is a defect, not a deployment convenience.
+4. **The boundary is the smallest unit of work that is idempotent on its own.** One trigger invokes one use case that is safe to re-run, so the host's retry and the operator's replay are the same operation.
+5. **No shared SQLite writer.** While the store is the single SQLite file, a Function must not open it. A Function that needs to write is blocked on the store change, not on the Function App.
+6. **Its secrets, telemetry and failure-recovery mode are specified before it is built**, under the criteria above, and its production resources, role assignments and deployment remain human-controlled work in a separately approved High-risk issue.
 
-**Criteria:**
+### Follow-up work
 
-1. **Minimize external API calls:** Nayax API and Azure Blob calls are billed or quota-limited. Batch imports in one call instead of one product at a time. Use incremental imports (only import products changed since last import) if the upstream API supports it. Cache stable data (e.g. product list) and only refresh on demand or on a long interval.
+- Issue #333 — schedule the existing verified backup and upload with an App Service WebJob. This decision endorses that approach and does not reopen it.
+- Issue #334 — backup retention, alerting and the restore runbook; it owns the alerting that makes a missed or failed scheduled run visible, which the failure-recovery criterion above depends on.
+- Issue #165 — Azure Monitor OpenTelemetry error observability; it is the centralized telemetry the observability criterion currently lacks.
 
-2. **Database query efficiency:** Avoid N+1 queries (one query per item) in loops. Batch operations into one SQL statement: insert/upsert many rows in one call, not one row per transaction. Use indices so lookups (duplicate detection, existing record location) are fast. Avoid full table scans when filtering by ID.
+### Implementing a background workload under the current decision
 
-3. **Limit memory consumption:** When importing large files (reconciliation statements), stream or paginate the file instead of loading the entire contents into memory. Process a batch of 100 rows, commit, then load the next 100, so memory is bounded regardless of file size.
+Until something on the "what would change this decision" list happens, implement background work as follows:
 
-4. **Avoid redundant work:** If two workloads import the same data, combine them or let one import feed the other (producer/consumer). Do not run the same query twice in the same job. Cache intermediate results if the next step needs them.
-
-5. **Storage size and backup cost:** As the database grows, backups and restores take longer and consume more storage. Monitor database file size. Implement retention/archival for old transactions/reports so the live database stays lean. This is a long-term concern; flag it in monitoring.
-
-6. **Scheduling off-peak hours:** Schedule heavy operations (full cost rebuilds, reconciliation runs) during low-traffic hours (e.g. 2 AM Sydney time) so they do not compete with interactive requests for the single SQLite writer lock. This reduces timeout/failure risk and improves user experience.
-
-**Anti-pattern:** Polling Nayax every minute for the catalogue, or importing all historic sales on every run instead of just new sales since the last import.
-
-### Implementation path
-
-Inventory workloads are implemented in `Inventory.Application` as use cases, called directly from API endpoints or from scheduled job runners (when background job infrastructure is added in the future). Today, long-running operations are invoked synchronously or through explicit API endpoints; once scheduled job infrastructure is adopted (issue TBD), this same use-case design will serve as the workload entry point, with the infrastructure handling frequency, retries, observability and resource limits.
-
-Until then, observe these patterns:
-
-1. Implement the workload logic in `Inventory.Application` (e.g. `Inventory.Application.Imports.ImportNayaxProductCatalog`) as a pure use case that returns success/failure and item counts.
-2. Call it from `InventoryApi` controllers or command endpoints. Do not put external API calls, database logic or file I/O in the controller.
-3. Wrap the call in explicit error handling (try-catch) that logs the failure with full context before re-raising or returning error to the caller.
-4. For long-running operations, return immediately and use a polling/callback pattern if the frontend needs status updates, rather than blocking the request indefinitely.
+1. Put the work in `Inventory.Application` as a use case that returns an explicit result (outcome and counts), with its external boundaries behind narrow ports.
+2. Invoke it from the thinnest possible adapter: a controller for operator-triggered work, an early-dispatch CLI mode in `InventoryApi` for maintenance work that must run without the web host (the pattern `backup-database`, `migrate-database` and `bootstrap-business` already share), and the WebJob of issue #333 for scheduled work, which calls that same CLI mode rather than containing logic of its own.
+3. Keep external calls, database access and file I/O out of the adapter, and let a failure surface through the existing centralized mapping (see [External integration errors](#external-integration-errors)) rather than a bespoke handler.
+4. State the workload's idempotency guarantee and its failure-recovery mode (self-healing, operator replay, or runbook) in the pull request, and log enough structured context for an operator to tell success, failure and "never ran" apart.
 
 ## Architectural decision rules
 
