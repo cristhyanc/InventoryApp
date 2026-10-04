@@ -47,13 +47,13 @@ in_place_root="$(cd -- "${script_directory}/../../../.." 2>/dev/null && pwd || t
 
 application_directory=""
 for candidate in "${WEBROOT_PATH:-}" "${HOME:-}/site/wwwroot" "${in_place_root}"; do
-    if [ -n "${candidate}" ] && [ -f "${candidate}/${entry_assembly}" ]; then
+    if [[ -n "${candidate}" ]] && [[ -f "${candidate}/${entry_assembly}" ]]; then
         application_directory="${candidate}"
         break
     fi
 done
 
-if [ -z "${application_directory}" ]; then
+if [[ -z "${application_directory}" ]]; then
     log "FAILED (ApplicationNotFound): ${entry_assembly} was not found in WEBROOT_PATH, \$HOME/site/wwwroot or ${in_place_root}. No backup was taken."
     exit 1
 fi
@@ -61,11 +61,11 @@ fi
 # The .NET host. It is on PATH on a Linux App Service running a .NET application; DOTNET_ROOT is
 # the fallback for a host that provides the runtime without putting it on PATH.
 dotnet_host="$(command -v dotnet || true)"
-if [ -z "${dotnet_host}" ] && [ -n "${DOTNET_ROOT:-}" ] && [ -x "${DOTNET_ROOT}/dotnet" ]; then
+if [[ -z "${dotnet_host}" ]] && [[ -n "${DOTNET_ROOT:-}" ]] && [[ -x "${DOTNET_ROOT}/dotnet" ]]; then
     dotnet_host="${DOTNET_ROOT}/dotnet"
 fi
 
-if [ -z "${dotnet_host}" ]; then
+if [[ -z "${dotnet_host}" ]]; then
     log "FAILED (DotnetHostNotFound): no 'dotnet' host is available on PATH or under DOTNET_ROOT. No backup was taken."
     exit 1
 fi
@@ -84,7 +84,7 @@ duration=$(( $(date -u '+%s') - started_at ))
 # and never a connection string, a credential or any row of business data. It is inherited by this
 # job's log rather than captured and reparsed here, so there is exactly one place that decides what
 # a backup run reports.
-if [ "${exit_code}" -eq 0 ]; then
+if [[ "${exit_code}" -eq 0 ]]; then
     log "COMPLETED: the snapshot was verified and uploaded; duration ${duration}s. Object names and checksum are in the command output above."
 else
     log "FAILED (NonZeroExit): ${entry_assembly} ${command_arguments[*]} exited ${exit_code}; duration ${duration}s. The reason is in the command output above."
