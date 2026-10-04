@@ -153,8 +153,10 @@ dotnet InventoryApi.dll backup-database --output /home/data/backups/inventory-20
 
 This is the command the scheduled backup job (issue #333) also calls; routine backups are
 scheduled, not run by hand. Manual, one-off verification uses the identical command.
-Retention/alerting and automated restore remain out of scope for this command — restore stays the
-deliberate, human-run `sqlite3` procedure below.
+Retention/alerting and automated restore remain out of scope for this command — retention is a
+storage-lifecycle policy and alerting is an Azure Monitor rule, both human-applied (see [Backup
+retention, alerting and restore rehearsal](#backup-retention-alerting-and-restore-rehearsal-issue-334)
+below), and restore stays the deliberate, human-run `sqlite3` procedure below.
 
 **Uploading the verified snapshot off the instance (issue #332).** `backup-database --upload` is
 the create-verify-upload workflow, in one command:
@@ -283,6 +285,373 @@ underlying mechanism:
 This procedure, and the non-destructive local check in the README, do not touch any production
 connection string, credential, or data; every example above uses a placeholder path that a human
 operator supplies for their own environment.
+
+#### Backup retention, alerting and restore rehearsal (issue #334)
+
+Taking and uploading a verified snapshot (#331, #332) and scheduling it (#333) answer "does a
+recovery point exist?". Three questions are left, and this subsection answers all three as
+**design and operator instructions only**:
+
+1. **Retention** — backup storage must stay bounded without losing the long-horizon recovery
+   points, which is a storage-lifecycle question, not a compute one.
+2. **Alerting** — a failed run and a run that never happened must both become visible, because an
+   unnoticed gap in backups is only discovered when a restore is needed.
+3. **Rehearsal** — a backup nobody has ever restored is an assumption, so restoring must be
+   practised somewhere that is not production.
+
+**Nothing here creates or changes an Azure resource.** This repository contains no Bicep,
+Terraform or Azure resource configuration, and deliberately gains none in this change: the
+lifecycle policy, the diagnostic settings, the action group and the two alert rules are **human
+production setup steps**, listed with their verification in [Human production setup, and how to
+verify it](#human-production-setup-and-how-to-verify-it) below. No agent and no workflow in this
+repository may apply them. The values below (30 days, 12 months, 36 hours, the proposed severities
+and destination) are proposals that a human confirms against the business's recovery point and
+recovery time objectives before applying them; see [Decisions a human must confirm
+first](#decisions-a-human-must-confirm-first).
+
+**Retention: an Azure Blob lifecycle policy on the backup container.** Retention is expressed as a
+storage-account lifecycle management policy, not as code. That choice is deliberate and matters for
+safety: the lifecycle engine deletes as the storage *service*, so the App Service's managed
+identity still needs nothing beyond the create/read permissions prerequisite 4 above grants it, the
+`IBackupBlobContainer` seam still has no delete or overwrite operation, and no application code
+path — scheduled or manual — can ever remove a recovery point. Retention and backup creation stay
+in different hands on purpose.
+
+The policy expires per-snapshot objects after 30 days and monthly recovery points after 12 months:
+
+```json
+{
+  "rules": [
+    {
+      "enabled": true,
+      "name": "expire-daily-database-snapshots-after-30-days",
+      "type": "Lifecycle",
+      "definition": {
+        "filters": {
+          "blobTypes": [ "blockBlob" ],
+          "prefixMatch": [ "database-backups/daily/" ]
+        },
+        "actions": {
+          "baseBlob": {
+            "delete": { "daysAfterCreationGreaterThan": 30 }
+          }
+        }
+      }
+    },
+    {
+      "enabled": true,
+      "name": "expire-monthly-recovery-points-after-12-months",
+      "type": "Lifecycle",
+      "definition": {
+        "filters": {
+          "blobTypes": [ "blockBlob" ],
+          "prefixMatch": [ "database-backups/monthly/" ]
+        },
+        "actions": {
+          "baseBlob": {
+            "delete": { "daysAfterCreationGreaterThan": 365 }
+          }
+        }
+      }
+    }
+  ]
+}
+```
+
+Applying and reading it back (the operator's own Azure sign-in; `--policy @<file>` takes exactly
+the JSON above):
+
+```bash
+az storage account management-policy create \
+  --account-name <storage-account> --resource-group <resource-group> \
+  --policy @backup-lifecycle-policy.json
+
+az storage account management-policy show \
+  --account-name <storage-account> --resource-group <resource-group>
+```
+
+Seven properties of that policy are decisions rather than syntax:
+
+- **A lifecycle `prefixMatch` starts with the container name**, so the prefixes above must be
+  edited to match whatever `BackupStorage__ContainerName` is actually set to. The development
+  container (`database-backups-dev`) needs its own rules — a second prefix entry when it shares the
+  account, or the same policy applied to its own account — because a policy is per storage account
+  and a prefix is per container.
+- **The two prefixes are disjoint and nothing broader is ever used.** A rule whose prefix were the
+  container alone, or the shared `inventory-` file-name stem, would match both object families and
+  expire the monthly recovery points after 30 days. The prefixes are the whole safety mechanism
+  here, which is why the uploader writes two separate prefixes rather than one flat namespace.
+- **The `kind` metadata (`daily`/`monthly`) cannot be used as a filter.** Lifecycle rules can match
+  blob index tags, not blob metadata, and the uploader writes metadata. The prefix is therefore the
+  only discriminator available, and the metadata stays what it was designed to be: an operational
+  fact a human reads from a storage browser.
+- **`daysAfterCreationGreaterThan`, not `daysAfterModificationGreaterThan`.** No object under
+  either prefix is ever overwritten (an occupied `daily/` name stops the run; the monthly object is
+  a conditional create), so creation is the snapshot's own instant and the only age that means
+  anything. Measuring from a modification time would make retention depend on an event that by
+  design never happens.
+- **12 months is written as 365 days**, because the policy's unit is whole days. In a 12-month
+  window containing 29 February the deletion therefore falls one day before the calendar
+  anniversary; a human who wants the anniversary guaranteed sets 366 instead. This is an
+  approximation that is documented rather than hidden.
+- **Deletion is not instantaneous.** The lifecycle engine runs once a day, changes to a policy can
+  take up to 24 hours to take effect and the first run after enabling can take up to 48 hours, so
+  an object a day or two past its threshold is expected, not a policy failure. Nothing in the
+  recovery design depends on prompt deletion.
+- **A lifecycle delete is permanent unless the account says otherwise.** If blob soft delete or
+  versioning is enabled on the account, add the corresponding `snapshot`/`version` delete actions
+  or expired copies accumulate and retention stops being bounded; if neither is enabled, a
+  mis-scoped prefix is unrecoverable. Enabling a short blob soft-delete window as a safety net
+  against a mistyped prefix is a reasonable human decision, and it is a decision, not a
+  requirement.
+
+**How a monthly recovery point survives daily expiry.** The 30-day rule and the 12-month rule
+would be in conflict if the month's recovery point were a *reference* to a daily snapshot. It is
+not, and three independent properties keep the two retention horizons from interacting:
+
+1. **The monthly object is its own complete copy, written by the upload itself.** The uploader
+   creates `monthly/<YYYY-MM>/inventory-<YYYY-MM>.db` on the **first successful upload of that UTC
+   calendar month** — a full-content write, not a snapshot, a soft link, a tag or a server-side
+   reference to a `daily/` object. Deleting every `daily/` object in that month leaves it
+   byte-for-byte intact.
+2. **It is created at the start of the month, not at the end of the daily horizon.** With the daily
+   schedule of #333 the month's recovery point exists within a day of the month beginning, roughly
+   29 days before the earliest `daily/` object of that month can reach 30 days. There is no window
+   in which a month has no recovery point but its daily objects are already expiring, and no
+   ordering dependency between the lifecycle engine and the backup job.
+3. **The prefixes isolate the rules.** The daily rule cannot match a `monthly/` name, so the only
+   way to lose a monthly point to retention is to broaden a prefix — the mistake the second bullet
+   list above exists to prevent.
+
+The consequence is a predictable recovery horizon: every day of the last 30 days, plus one verified
+point per month for the last 12 months, and the oldest monthly point disappearing about a year
+after the month it represents. The one case that produces no monthly recovery point at all is a
+calendar month in which **no** upload ever succeeded — which is exactly what the missing-backup
+alert below exists to make impossible to miss, rather than something retention can repair.
+
+**Alerting: a failed run and a missing backup are two different signals.** The scheduled job can
+fail in two shapes, and only covering both makes silence unambiguous (the observability criterion
+in [Azure Functions and background workloads](#azure-functions-and-background-workloads-decision-criteria-issue-68)
+demands exactly that: "nothing in the log" and "the job never started" must be distinguishable):
+
+| Alert | What it catches | Source | Why this source |
+|---|---|---|---|
+| **Backup run failed** | A run that happened and reported failure: the command exited non-zero because the snapshot, its `PRAGMA integrity_check`, the upload, the upload's read-back verification, or the staged-copy cleanup failed | Log search over the App Service's `AppServiceConsoleLogs` diagnostic category in a Log Analytics workspace | App Service exposes no platform **metric** for a WebJob's exit code, so the non-zero result has to be observed through the job's log output. The `backup-database` command already prints a distinctive failure line before exiting non-zero |
+| **No backup in 36 hours** | A run that never happened or produced nothing: the WebJob disabled, removed by a deployment, starved by Always On being off, the App Service stopped, or a "successful" run that wrote no object | Log search over `StorageBlobLogs` for successful writes under the `daily/` prefix | It observes the **artifact** rather than the job's own claim about itself. A job that cannot run also cannot report that it did not run, so the absence of a recovery point has to be detected somewhere other than in the job |
+
+*Alert 1 — failed backup run.* Exit code is the contract: `backup-database` exits `0` only when the
+snapshot verified, the upload verified and nothing was left behind, and #333 requires the WebJob to
+propagate a non-zero result. The queryable manifestation of that exit code is the command's own
+output, which the WebJob inherits:
+
+```kusto
+AppServiceConsoleLogs
+| where _ResourceId =~ "<app-service-resource-id>"
+| where ResultDescription contains "FAILED ("
+    or ResultDescription contains "Database backup - REFUSED:"
+    or ResultDescription contains "No snapshot was uploaded:"
+    or ResultDescription contains "Staged copy     : NOT REMOVED"
+| project TimeGenerated, ResultDescription
+```
+
+Rule settings: evaluation frequency 1 hour, time range 1 hour (frequency equal to the window, so
+every minute is examined exactly once), threshold "number of results greater than 0", severity 2.
+Two caveats a human must close when applying it: confirm which diagnostic category actually carries
+the job's standard output on the deployed plan (on a Linux App Service the container's
+stdout/stderr lands in `AppServiceConsoleLogs`) and, once #333 exists, re-check the query against
+one real failed run, because this alert is specified before the job that feeds it. Where
+`APPLICATIONINSIGHTS_CONNECTION_STRING` is configured (see [Observability and error
+telemetry](#observability-and-error-telemetry-issue-165)), the same `ILogger` output is also
+queryable in Application Insights `traces`; the rule above deliberately does not depend on that,
+because a backup alert should not be switched off by a telemetry setting.
+
+*Alert 2 — no `daily/` object within 36 hours.* The query asks the storage account whether a new
+per-snapshot object actually arrived:
+
+```kusto
+StorageBlobLogs
+| where AccountName == "<storage-account>"
+| where OperationName in ("PutBlob", "PutBlockList")
+| where StatusText == "Success"
+| where Uri contains "/database-backups/daily/"
+| summarize uploads = count()
+| where uploads == 0
+```
+
+Rule settings: evaluation frequency 1 hour, time range **36 hours**, threshold "number of results
+greater than 0", severity 1. Three details are load-bearing:
+
+- **`summarize` without a `by` clause returns one row even when nothing matched**, so `uploads == 0`
+  produces a row to alert on. A query that merely filtered rows would return nothing in the failure
+  case and fire no alert — the classic way a missing-signal alert silently never works.
+- **Do not enable the rule's "alert on no data" option.** The healthy case legitimately returns no
+  rows; treating no data as a failure would invert the alert.
+- **36 hours is chosen against #333's daily 15:00 UTC schedule.** A 24-hour cadence means one
+  missed or failed run leaves the newest recovery point 24 hours stale, and the alert fires 12
+  hours after the missed run rather than waiting for a second consecutive miss. It therefore
+  tolerates nothing worse than a single late run, while leaving enough slack for a slow upload or a
+  rescheduled window not to page anyone. The trade-off is accepted deliberately: a single transient
+  failure that the next run would have healed still raises one alert, which for the business's last
+  line of defence is the right direction to err in.
+
+Both rules need the same two prerequisites — a diagnostic setting on the **App Service** sending
+`AppServiceConsoleLogs`, and one on the storage account's **blob service** sending `StorageWrite`,
+both to the same Log Analytics workspace — plus an action group holding the destination. Two things
+to note when enabling the storage setting: `StorageWrite` logs every write to the account,
+including the `business-documents` container, so it carries business document object names (never
+content, and never a credential) and has a volume and retention cost; and a short workspace
+retention is appropriate for both reasons. The alert's action group must notify a human and must
+**not** invoke an automation runbook, Logic App or Function that restores anything — see the
+prohibition below.
+
+**Restore rehearsal in a separate test location.** A recovery point is only proven by restoring it,
+so the rehearsal below is the evidence that the backup chain works. It is deliberately a *copy*
+procedure: every step reads from the backup container and writes only inside a throwaway directory,
+and no step touches the live database file, the production connection string or production
+configuration. A rehearsal needs no more than read access to the backup container (the operator's
+own Azure sign-in with `Storage Blob Data Reader` is enough — it never writes to the container, and
+must not be given a role that could).
+
+1. **Choose the recovery point and record its facts.** The newest `daily/` object proves the
+   current chain; a `monthly/` object proves the long-horizon one, and a rehearsal should
+   occasionally use a monthly point rather than always the newest daily snapshot. Read back the
+   object's `createdutc`, `sha256` and `kind` metadata:
+
+   ```bash
+   az storage blob metadata show --auth-mode login \
+     --account-name <storage-account> --container-name database-backups \
+     --name daily/inventory-<yyyyMMdd>T<HHmmss>Z.db
+   ```
+
+2. **Download into a dedicated, empty test location** — a workstation or a non-production host,
+   outside any API content root, `wwwroot` and `/home/data`, and never over an existing file:
+
+   ```bash
+   rehearsal_dir="$HOME/restore-rehearsal/$(date -u +%Y%m%dT%H%M%SZ)"
+   mkdir -p "$rehearsal_dir"
+   az storage blob download --auth-mode login \
+     --account-name <storage-account> --container-name database-backups \
+     --name daily/inventory-<yyyyMMdd>T<HHmmss>Z.db \
+     --file "$rehearsal_dir/inventory-restored.db"
+   ```
+
+3. **Verify the checksum** of the downloaded file against the `sha256` metadata from step 1 — the
+   same checksum the upload verified before and after transfer, which is what makes this an
+   end-to-end check of the whole path rather than of the download alone:
+
+   ```bash
+   sha256sum "$rehearsal_dir/inventory-restored.db"   # shasum -a 256 on macOS; Get-FileHash on Windows
+   ```
+
+   A mismatch ends the rehearsal: the object is not a recovery point, and that is an incident to
+   investigate before the next scheduled run, not something to retry.
+4. **Verify integrity**, which must return exactly one `ok` row:
+
+   ```bash
+   sqlite3 "$rehearsal_dir/inventory-restored.db" "PRAGMA integrity_check;"
+   ```
+
+5. **Run application-level checks against the copy.** Integrity only proves the file is a
+   structurally sound SQLite database; these prove it is *this application's* database and that the
+   current code can work with it:
+
+   ```bash
+   sqlite3 "$rehearsal_dir/inventory-restored.db" "PRAGMA foreign_key_check;"            # no rows
+   sqlite3 "$rehearsal_dir/inventory-restored.db" \
+     "SELECT MigrationId FROM __EFMigrationsHistory ORDER BY MigrationId DESC LIMIT 1;"
+
+   ConnectionStrings__DefaultConnection="Data Source=$rehearsal_dir/inventory-restored.db" \
+     dotnet InventoryApi.dll migrate-database --dry-run
+   ```
+
+   `migrate-database --dry-run` is an early CLI mode that never builds the web host and never
+   applies anything, so it reports whether the snapshot's schema matches the deployed code —
+   "already up to date", or the exact list of migrations a restore of this snapshot would need —
+   while leaving the copy unmodified. Follow it with business-level spot checks that compare the
+   copy against figures already known for a **closed** period: machine, product, sale and purchase
+   row counts, the latest sale date, that every tenant-owned row still carries its owning business,
+   and one or two report totals (a closed month's bookkeeping figures, for example) against what
+   was recorded for that month. For a fuller rehearsal a non-production API instance can be pointed
+   at the copy and the report loaded through the application; that instance must use its own
+   non-production Nayax, Entra and storage settings, never production ones.
+6. **Record the evidence.** A rehearsal that leaves no record cannot be relied on later. Note the
+   date and operator, the object name and its `createdutc`/`kind`, the checksum comparison result,
+   the `integrity_check` and `foreign_key_check` results, the pending-migration result, which
+   business figures were compared, and the **elapsed wall-clock time from step 2 to the end of step
+   5**. That duration is the measured input to the recovery-time trigger in [Measurable triggers to
+   migrate to a server database](#sqlite-operating-assumptions-and-scale-strategy-issue-53) above —
+   trigger 3 is otherwise an assumption nobody has tested.
+7. **Delete the copy.** The download is a complete copy of every business's financial data. Remove
+   the file and the rehearsal directory when the checks are done, never leave it on a shared
+   machine, and never commit it:
+
+   ```bash
+   rm -rf "$rehearsal_dir"
+   ```
+
+Cadence is a human decision (see below), but the rehearsal should at least follow any change to the
+backup, upload or restore path, any release that adds migrations touching large or financial
+tables, and a regular calendar interval — quarterly is the proposal — so that the recovery-time
+measurement stays current rather than historical.
+
+**No automatic overwrite or restore of the live production database.** This is a prohibition, not a
+preference, and it binds every participant:
+
+- **No code path, CLI mode, WebJob, GitHub Actions workflow, alert action, automation runbook,
+  script or agent may write to, overwrite or replace the live production database file.** The
+  `backup-database` command only ever reads the database and writes a new snapshot; nothing in this
+  repository restores one. Automating the restore is not a missing feature, it is excluded by
+  design.
+- **An alert must never trigger a restore.** The two alert rules above notify a human; their action
+  group exists to tell somebody that recovery may be needed, and the decision about whether, from
+  which recovery point, and when is the human's.
+- **A restore is the deliberate, human-run procedure in step 5 of the operator procedure above** —
+  stop the API, confirm the target file is the one meant to be replaced, write the verified backup
+  over it, start the API again. It overwrites live business data, so it is run by a human who has
+  confirmed the target, never by a schedule, a retry, a repair or a convenience script.
+- **The rehearsal is not a restore and must never become one.** Every command in it names a
+  throwaway path under the rehearsal directory; a rehearsal that writes to `/home/data/inventory.db`
+  is a production restore performed by accident, which is why the download, the integrity check,
+  the schema check and the cleanup all operate on the copy by name.
+- **Recovery from a bad schema migration is a restore, decided by a human** (see
+  [Build and delivery](#build-and-delivery)): neither startup nor `migrate-database` rolls a
+  migration back, and a failed deployment never gives an agent authority to restore, revert or
+  deploy (`AGENTS.md` § Security and deployment safeguards).
+
+##### Human production setup, and how to verify it
+
+Every row below is applied by a human in Azure. This repository creates none of them, has no
+infrastructure-as-code to express them, and no agent may apply them; the verification column is how
+the human proves the step actually took effect, since none of it is visible from this repository.
+
+| # | Human setup step | How to verify it |
+|---|---|---|
+| 1 | Apply the lifecycle policy to the backup storage account, with the prefixes edited to the real container name | Read the policy back with `az storage account management-policy show` and compare it to the JSON above. There is no dry run for lifecycle, so also check the first expiry window: more than 31 days after enabling, `az storage blob list --auth-mode login --account-name <storage-account> --container-name database-backups --prefix daily/` should show no object older than about 31–32 days |
+| 2 | Confirm the monthly recovery points survived the first daily expiry | The same `az storage blob list` with `--prefix monthly/` lists one object per calendar month since the uploader started, each with its own `createdutc`; none of them disappears when the daily objects of the same month do |
+| 3 | Add a diagnostic setting on the App Service sending `AppServiceConsoleLogs` to a Log Analytics workspace | Run the Alert 1 query in Log Analytics over a window containing a known backup run and confirm the job's output is there at all — if the query returns nothing for a run that happened, the category is wrong, not the job |
+| 4 | Add a diagnostic setting on the storage account's blob service sending `StorageWrite` to the same workspace | Run the Alert 2 query's body without the final two lines and confirm it lists the `daily/` writes of the last day |
+| 5 | Create the action group with the confirmed destination | Use the action group's own test-notification feature and confirm the notification arrives |
+| 6 | Create the two log search alert rules with the settings above | For Alert 2, evaluate the query over a window that is known to contain no `daily/` upload (any window before the backup job existed) and confirm it returns a row — this proves the missing-backup detection works without disabling anything in production. For Alert 1, confirm end to end on a **non-production** instance or development container by making a run fail there (for example an unreachable `BackupStorage__BlobServiceUri`); never break the production configuration to test an alert |
+| 7 | Run the first restore rehearsal and record its evidence | The recorded rehearsal evidence from step 6 of the rehearsal procedure, including the measured duration |
+
+##### Decisions a human must confirm first
+
+These are not decided by this document, and the parent backup work (#330) is not operationally
+complete until they are:
+
+- **Recovery point objective.** The daily schedule of #333 implies up to 24 hours of lost work
+  (36 hours before the alert fires). Confirm that is acceptable for a business whose data is
+  financial, or change the schedule.
+- **Recovery time objective.** Measured by the rehearsal, not assumed. Confirm the measured
+  duration is acceptable; a rehearsal that exceeds it is trigger 3 for moving off single-file
+  SQLite.
+- **Retention values.** 30 days of daily snapshots and 12 months of monthly recovery points, and
+  whether any longer-horizon or compliance retention applies to financial records.
+- **Alert destination and severity.** Which person or address the action group notifies, and
+  whether severity 1/2 matches how they are monitored.
+- **Rehearsal cadence**, and who owns running it.
+- **Optional blob soft delete** on the backup container as a safety net against a mis-scoped
+  lifecycle prefix.
 
 ## Current repository structure
 
@@ -2750,7 +3119,7 @@ This is the inventory the decision was made against. "Request-driven" means a si
 | Verified SQLite snapshot — `backup-database --output` | `InventoryApi` CLI mode dispatched before the web host is built; human-run | Implemented (#331) | No. The published executable already is the job. |
 | Verified snapshot upload to the private backup container — `backup-database --upload` | Same CLI mode, authenticating with `DefaultAzureCredential`: the App Service managed identity when a job runs it, the operator's own Azure sign-in when run by hand | Implemented (#332) | No. |
 | Scheduling that backup and upload | Nothing schedules it yet. Planned as a Linux App Service WebJob packaged into the existing `dotnet publish` output, invoking `backup-database --upload` | Planned (#333) | No. The WebJob runs inside the App Service plan already paid for, ships with the existing deployment artifact, reaches the same `/home` database file, and inherits the same managed identity and application settings. This is the only workload in the table that genuinely cannot stay request-driven — a backup must happen whether or not anyone signs in — and it is the one a Function would most plausibly claim, so it is assessed explicitly under each criterion below. |
-| Backup retention, alerting and restore runbook | Not implemented. The uploader's seam (`IBackupBlobContainer`) deliberately exposes no delete and no overwrite, so retention cannot be performed by that code path even accidentally; restore stays a deliberate, human-run procedure | Planned (#334) | Undecided, and not decided here. Retention is a storage-lifecycle and human-operations question before it is a compute question; #334 owns it. |
+| Backup retention, alerting and restore runbook | No compute at all. Retention is an Azure Blob lifecycle policy executed by the storage service, the two alerts are Azure Monitor log search rules, and restore stays a deliberate, human-run procedure with a non-production rehearsal; all of it is applied by a human, and the uploader's seam (`IBackupBlobContainer`) still exposes no delete and no overwrite, so retention cannot be performed by that code path even accidentally | Designed and documented (#334); human Azure setup outstanding — see [Backup retention, alerting and restore rehearsal](#backup-retention-alerting-and-restore-rehearsal-issue-334) | No, and no compute host either. Retention turned out to be a storage-lifecycle question, which is why it needs neither a WebJob nor a Function. |
 | Latest Nayax sales synchronization — `Inventory.Application.SalesSync.SyncLatestNayaxSales` | Request-driven: `POST /api/nayax-sales-sync`, called once by the home dashboard before it loads Sites and Machines (#187) | Implemented, request-driven | No. Its result is precisely what the operator is waiting to see; moving it onto a schedule would decouple the refresh from the screen that needs it, and would not remove the request-driven path. |
 | Machine stock event import and Sync Restock reconciliation — `Inventory.Application.MachineStockSync` | Request-driven from the machines feature (#183) | Implemented, request-driven | No. |
 | Nayax product catalogue import — `Inventory.Application.Imports.ImportNayaxProductCatalog` | Request-driven: `ImportsController` (#300) | Implemented, request-driven | No. |
@@ -2792,7 +3161,10 @@ What credentials does the work need, where do they live, and how many places mus
 
 How does an operator learn that the work ran, that it succeeded, and what it did — and how do they diagnose it when it did not? Log the workload name, a per-run correlation identifier, the tenant/business, key inputs, duration and outcome as structured fields; on failure log the exception, how far the run got, the attempt number and the decision taken; and never log credentials, Nayax tokens, connection strings or imported row content. Silence must never be ambiguous: "nothing in the log" and "the job never started" must be distinguishable.
 
-*What the current model gives:* the API and its CLI commands log through `ILogger` to the App Service log stream, and `backup-database` already reports object names, byte counts, the SHA-256 and the integrity result while never printing a connection string or snapshot content; issue #333 requires the WebJob to log start, completion or failure, and duration, and WebJob run history is visible in the App Service itself. Centralized error telemetry (Azure Monitor OpenTelemetry) is planned in issue #165 and not implemented today — which is an argument against a second host rather than for one, since a Function would be a second emitter to instrument before the first one is even wired up. Alerting on a missed or failed backup belongs to issue #334.
+*What the current model gives:* the API and its CLI commands log through `ILogger` to the App Service log stream, and `backup-database` already reports object names, byte counts, the SHA-256 and the integrity result while never printing a connection string or snapshot content; issue #333 requires the WebJob to log start, completion or failure, and duration, and WebJob run history is visible in the App Service itself. Centralized error telemetry (Azure Monitor OpenTelemetry) is planned in issue #165 and not implemented today — which is an argument against a second host rather than for one, since a Function would be a second emitter to instrument before the first one is even wired up. Alerting on a missed or failed backup is specified by issue #334: two log search rules, one on the
+job's non-zero result and one on the absence of a `daily/` object within 36 hours, with the rules
+themselves applied by a human (see [Backup retention, alerting and restore
+rehearsal](#backup-retention-alerting-and-restore-rehearsal-issue-334)).
 
 #### Cost
 
@@ -2806,7 +3178,7 @@ This is a distinct question from retries, and must be answered separately: **aft
 
 1. **Self-healing** — the next scheduled run restores correctness with no human action. The backup upload is this: a missed run loses that day's snapshot, and the next successful upload still establishes the month's recovery point if none exists yet, because the monthly name is deterministic from the month and written as a conditional create. The cost of a missed run is a widened recovery window, which is bounded and visible, not a corrupted state.
 2. **Operator replay** — correctness is restored by re-running the same operation by hand, which is safe precisely because the workload is idempotent. Every request-driven import in the table is this: a failed catalogue import, sales sync or reimbursement import leaves no partial state, because each unit commits as one transaction, and the operator simply runs it again.
-3. **Runbook** — recovery needs a documented human procedure because it is not safe to automate. Database restore is this, deliberately: it overwrites live data and must only be run by a human who has confirmed the target file (see the restore procedure in [SQLite operating assumptions and scale strategy](#sqlite-operating-assumptions-and-scale-strategy-issue-53)). Issue #334 owns the restore runbook and the alerting that tells an operator recovery is needed.
+3. **Runbook** — recovery needs a documented human procedure because it is not safe to automate. Database restore is this, deliberately: it overwrites live data and must only be run by a human who has confirmed the target file (see the restore procedure in [SQLite operating assumptions and scale strategy](#sqlite-operating-assumptions-and-scale-strategy-issue-53)). Issue #334 defines that runbook, its non-production rehearsal and the alerting that tells an operator recovery is needed, and restates that no code path, workflow, alert action or agent may restore the live database (see [Backup retention, alerting and restore rehearsal](#backup-retention-alerting-and-restore-rehearsal-issue-334)).
 
 A workload that fits none of these three is not ready to be scheduled on any host, and moving it to a Function would not make it ready. A failure that is invisible is the worst outcome in every mode, which is why the observability criterion and #334's alerting are prerequisites for trusting a schedule, not enhancements to it.
 
@@ -2840,7 +3212,7 @@ No candidate is approved today, so there is no function boundary to define yet. 
 ### Follow-up work
 
 - Issue #333 — schedule the existing verified backup and upload with an App Service WebJob. This decision endorses that approach and does not reopen it.
-- Issue #334 — backup retention, alerting and the restore runbook; it owns the alerting that makes a missed or failed scheduled run visible, which the failure-recovery criterion above depends on.
+- Issue #334 — backup retention, alerting and the restore runbook, now designed in [Backup retention, alerting and restore rehearsal](#backup-retention-alerting-and-restore-rehearsal-issue-334); the alerting that makes a missed or failed scheduled run visible, which the failure-recovery criterion above depends on, is specified there and applied in Azure by a human.
 - Issue #165 — Azure Monitor OpenTelemetry error observability; it is the centralized telemetry the observability criterion currently lacks.
 
 ### Implementing a background workload under the current decision
