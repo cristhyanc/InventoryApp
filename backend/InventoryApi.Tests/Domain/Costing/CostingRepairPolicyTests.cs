@@ -105,8 +105,8 @@ public class CostingRepairPolicyTests
     [Fact]
     public void A_repair_after_the_baseline_cutoff_is_accepted_and_no_baseline_accepts_any_time()
     {
-        CostingRepairPolicy.EnsureAfterBaselineCutoff(EffectiveAt, EffectiveAt.AddTicks(-1));
-        CostingRepairPolicy.EnsureAfterBaselineCutoff(EffectiveAt, null);
+        Assert.Null(Record.Exception(() => CostingRepairPolicy.EnsureAfterBaselineCutoff(EffectiveAt, EffectiveAt.AddTicks(-1))));
+        Assert.Null(Record.Exception(() => CostingRepairPolicy.EnsureAfterBaselineCutoff(EffectiveAt, null)));
     }
 
     [Theory]
@@ -146,7 +146,9 @@ public class CostingRepairPolicyTests
     {
         var sale = new CostReplaySale(987654, EffectiveAt);
 
-        CostingRepairPolicy.EnsureReplaysBeforeSale(new CostReplayRepair(1, EffectiveAt, 1, 1m), sale);
-        CostingRepairPolicy.EnsureReplaysBeforeSale(new CostReplayRepair(1, EffectiveAt.AddTicks(-1), 1, 1m), sale);
+        Assert.Null(Record.Exception(() =>
+            CostingRepairPolicy.EnsureReplaysBeforeSale(new CostReplayRepair(1, EffectiveAt, 1, 1m), sale)));
+        Assert.Null(Record.Exception(() =>
+            CostingRepairPolicy.EnsureReplaysBeforeSale(new CostReplayRepair(1, EffectiveAt.AddTicks(-1), 1, 1m), sale)));
     }
 }
