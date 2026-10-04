@@ -1,35 +1,50 @@
 using Inventory.Application.Stock;
+using InventoryApi.DTOs;
 using InventoryApi.Models;
 
 namespace InventoryApi.Adapters.Mapping;
 
 /// <summary>
-/// Maps the Application layer's <see cref="StockAdjustmentRecord"/> back onto the
-/// <see cref="StockAdjustment"/> shape the stock endpoints have always serialised (issue #282):
-/// every key this API response already carries is reproduced here. The returned instance is a
-/// detached response object, never attached to a <see cref="Data.AppDbContext"/>.
+/// Projects the Application layer's <see cref="StockAdjustmentRecord"/> onto the API-owned
+/// <see cref="ProductStockAdjustmentResponse"/> the stock endpoints serialise (issue #305). It
+/// replaced the step that rebuilt the <c>InventoryApi.Models.StockAdjustment</c> entity for those
+/// endpoints (issue #282), so no production code maps a stock read model back onto a persistence
+/// entity any more.
+///
+/// The response is the same wire shape the product endpoints have published for a movement in a
+/// product's history since issue #303 - one shape, not two, so the two places a client reads a
+/// stock movement cannot drift apart. It carries every key the entity serialised, in the same
+/// order: the owning business and the <c>Product</c>/<c>ReceiptItem</c> navigations were
+/// <c>[JsonIgnore]</c>d on the entity and are simply absent here, which is also the tenancy rule
+/// (AGENTS.md § Tenant ownership and data isolation).
+///
+/// <see cref="ProductStockAdjustmentResponse.Reason"/>/<c>Source</c> are the
+/// <c>InventoryApi.Models</c> enums rather than API-owned copies, because the published document
+/// still reaches those CLR enums through the legacy <c>Product</c> component the pinned
+/// purchase/supplier-order schemas reference (see
+/// <c>InventoryApi.Swagger.PublishedResponseSchemaContract</c>). A second enum of the same simple
+/// name makes Swashbuckle fail document generation with a duplicate-schema-id error, so the shared
+/// wire vocabulary stays where it is until the persistence models relocate; the persisted numeric
+/// values a client switches on are unchanged either way.
 /// </summary>
-internal static class StockAdjustmentResponseMapper
+public static class StockAdjustmentResponseMapper
 {
-    public static StockAdjustment ToStockAdjustment(StockAdjustmentRecord record) => new()
-    {
-        BusinessId = record.BusinessId,
-        Id = record.Id,
-        ProductId = record.ProductId,
-        ReceiptItemId = record.ReceiptItemId,
-        QuantityChange = record.QuantityChange,
-        QuantityAfter = record.QuantityAfter,
-        UnitCost = record.UnitCost,
-        TotalCost = record.TotalCost,
-        CostingQuantityAfter = record.CostingQuantityAfter,
-        AverageUnitCostAfter = record.AverageUnitCostAfter,
-        InventoryValueAfter = record.InventoryValueAfter,
-        Reason = (StockAdjustmentReason)record.Reason,
-        Source = (StockAdjustmentSource)record.Source,
-        MachineId = record.MachineId,
-        Notes = record.Notes,
-        EatBefore = record.EatBefore,
-        CreatedAt = record.CreatedAt,
-        EffectiveAt = record.EffectiveAt,
-    };
+    public static ProductStockAdjustmentResponse ToResponse(StockAdjustmentRecord record) => new(
+        record.Id,
+        record.ProductId,
+        record.ReceiptItemId,
+        record.QuantityChange,
+        record.QuantityAfter,
+        record.UnitCost,
+        record.TotalCost,
+        record.CostingQuantityAfter,
+        record.AverageUnitCostAfter,
+        record.InventoryValueAfter,
+        (StockAdjustmentReason)record.Reason,
+        (StockAdjustmentSource)record.Source,
+        record.MachineId,
+        record.Notes,
+        record.EatBefore,
+        record.CreatedAt,
+        record.EffectiveAt);
 }

@@ -120,10 +120,18 @@ public sealed record ProductResponse
 }
 
 /// <summary>
-/// One stock movement in a product's history, as the product endpoints serialize it. Matches the
+/// One stock movement in a product's history, as the product endpoints serialize it and, since
+/// issue #305, as the "/api/products/{productId}/stock" history and adjust endpoints serialize it
+/// too - one wire shape for a stock movement, not two. Matches the
 /// serializable surface of the <c>InventoryApi.Models.StockAdjustment</c> entity it replaced: the owning
 /// business, the product back-reference and the receipt-item navigation stay off the wire, and
 /// <see cref="Reason"/>/<see cref="Source"/> keep the persisted numeric values.
+///
+/// Those two members are the one place an API contract still names the persistence enums, because
+/// the published document reaches the same CLR enums through the legacy <c>Product</c> component
+/// the pinned purchase/supplier-order schemas reference; an API-owned copy under the same simple
+/// name makes Swashbuckle fail document generation with a duplicate schema id. See
+/// <c>InventoryApi.Adapters.Mapping.StockAdjustmentResponseMapper</c>.
 /// </summary>
 public sealed record ProductStockAdjustmentResponse(
     int Id,
