@@ -486,7 +486,7 @@ directly and serialises the API-owned `InventoryApi.DTOs.ProductResponse` instea
 entity (item 6 of the [Backend migration track](#backend-migration-track)). `InventoryApi/Adapters/{Persistence,Export,Nayax,Mapping}` hold the
 temporary, API-owned adapters (`EfNayaxFeeRateStore`, the `Ef<Feature>ReportFactsProvider` family,
 `EfInventoryMovementStore`/`EfInventoryCostLedgerStore`, `EfSaleCostingStore`,
-`EfInventoryCostTransitionStore`, `ReportExportFileWriter`,
+`EfInventoryCostTransitionStore`, `EfInventoryCostRepairStore`, `ReportExportFileWriter`,
 `NayaxCatalogSnapshotProvider`, `ProductRecordResponseMapper` (the products DTO projection),
 `ProductResponseMapper` (the machine-product view's entity-shaped mapping, until issue #302),
 ...) that implement
@@ -1017,7 +1017,7 @@ Physical storage stock and costing inventory answer different questions:
 - `CostingQuantity`: total business-owned quantity still carrying inventory value.
 - `InventoryValue`: remaining value used with `CostingQuantity` to derive AVCO.
 
-A machine refill is an internal location transfer: it changes physical storage but does not consume business inventory value or create COGS. Completed sales and explicit cost-bearing write-offs consume costing inventory.
+A machine refill is an internal location transfer: it changes physical storage but does not consume business inventory value or create COGS. Completed sales and explicit cost-bearing write-offs consume costing inventory. Costing inventory the business held but never recorded is restored only by an explicit [costing repair](#costing-repairs-issue-359), which changes costing quantity and value alone - never physical stock.
 
 Historical sale cost precedence is:
 
@@ -1029,11 +1029,12 @@ Current product cost and selling price are never substitutes for historical cost
 
 The weighted-average cost rules are Domain-owned (issue #295, child 1 of #149).
 `Inventory.Domain.Costing.WeightedAverageCostReplay` replays a product's Domain-owned cost events
-(`CostReplayAdjustment` stock movements and `CostReplaySale` completed sales, strictly after an
-optional `CostReplayBaseline` cutoff) in timestamp order - ties: costed restocks, then machine
-refills, then sales, then other movements, then source ID - and returns the physical/costing
-quantity, inventory value, unrounded average unit cost, the cost assigned to each movement and sale,
-and its `CostDataQualityIssue`s. `CostDataQualityIssueCodes.IsFatal` is the one fatal/non-fatal split
+(`CostReplayAdjustment` stock movements, `CostReplaySale` completed sales and `CostReplayRepair`
+costing repairs, strictly after an optional `CostReplayBaseline` cutoff) in timestamp order - ties:
+costing repairs, then costed restocks, then machine refills, then sales, then other movements, then
+source ID - and returns the physical/costing quantity, inventory value, unrounded average unit cost,
+the cost assigned to each movement and sale, the position each repair landed on, the completed sales
+it could not cost, and its `CostDataQualityIssue`s. `CostDataQualityIssueCodes.IsFatal` is the one fatal/non-fatal split
 (`MissingOpening`, `UnknownCost`, `NegativePhysicalStock` and `NegativeCostingStock` are fatal;
 `LegacyUnlinkedCostedRestock` is not). `Inventory.Domain.Costing.StockMovementCostPolicy` is the
 movement unit/total cost rule (an outgoing movement uses the current average cost while costing
@@ -1052,7 +1053,8 @@ in behaviour:
   product's new physical stock with the costed, auditable movement (reason, source, machine,
   eat-before date and notes) through the narrow `IInventoryMovementStore` port. It never saves.
 - `Inventory.Application.Costing.RebuildProductCost` (`IRebuildProductCost`) loads the product's
-  ledger through the narrow `IInventoryCostLedgerStore` port, replays it with
+  ledger - movements, completed sales, costing repairs and the latest baseline - through the narrow
+  `IInventoryCostLedgerStore` port, replays it with
   `WeightedAverageCostReplay` and decides what to persist: every replayed movement's running position
   and assigned cost, the ledger cost of completed sales at or after the requested recost date, and
   the product's physical/costing position - but it decides before it stages, so this happens only
@@ -1115,6 +1117,71 @@ costing migration). It replaced the removed `InventoryApi.Services.InventoryCost
   moves to `Inventory.Infrastructure` with `AppDbContext` (#153). `InventoryCostTransitionsController`
   calls the four use cases directly with unchanged routes (`POST api/admin/inventory-cost-transition/
   preview`, `apply`, `preview-all`, `apply-all`), request/response JSON, status codes and messages.
+
+#### Costing repairs (issue #359)
+
+A costing repair is the one supported way to restore costing history that was never recorded. It
+exists for a single situation: physical stock the business genuinely held was never valued in the
+ledger - an incomplete opening or acquisition history - so `WeightedAverageCostReplay` reports
+`UnknownCost`/`MissingOpening` for the completed sales that depend on it, and every later write to
+that product (purchase, count, refill apply, sales sync) fails on the same fatal issue. Restock,
+Correction, Damaged, Expired and MachineRefill are physical movements and keep their meanings, so
+none of them can express "the costing history was incomplete" without misstating physical stock; a
+repair is the explicit, auditable, costing-only alternative. It is never inferred - not from
+machine-refill gaps, not from Nayax events, never from the product's current cost or selling price -
+and it never substitutes for a real purchase, correction or write-off.
+
+- **It is costing-only, and append-only.** `InventoryApi.Models.InventoryCostRepair` is tenant-owned
+  (`IBusinessOwned`, so filtered, indexed and stamped centrally) and stores the product, the UTC
+  effective instant, a positive quantity, a non-negative unit cost, the total value, the reason, the
+  creation time and the creating identity as the validated Entra `(tid, oid)` pair - the same
+  identity convention as `BusinessMembership`, and deliberately no email or display name. Applying
+  one changes `CostingQuantity`/`InventoryValue` and historical sale costs only: never
+  `Product.QuantityInStock`, machine quantities, `StockAdjustment` rows, MachineRefill history or a
+  transition baseline. There is no update or delete path anywhere - no use case, port method or
+  endpoint - because an applied repair is a historical fact that was recorded; the migration that
+  adds the table backfills nothing.
+- **`Inventory.Domain.Costing.CostingRepairPolicy`** holds the rules, each throwing
+  `DomainValidationException`: quantity > 0, unit cost >= 0 (zero allowed - free stock is a real
+  acquisition), a reason that is neither empty nor a placeholder, an effective instant strictly after
+  the product's transition cutoff (the replay ignores everything at or before it, so a repair there
+  would silently do nothing), and a placement that actually reaches the sale it must cover.
+- **Placement is judged by the replay's own ordering**, through
+  `WeightedAverageCostReplay.ReplaysBefore`, not by comparing timestamps in the use case. Sale
+  authorization times are machine-local (Sydney) while movement and repair times are UTC, and the
+  replay compares them without converting (existing behaviour, unchanged here), so the only
+  trustworthy question is where the replay itself puts the two events. A repair replays first at its
+  own instant, because it is the opening it restores: anything else at that instant - a restock, a
+  refill, the very sale being covered - must already see the repaired value.
+- **`Inventory.Application.Costing.PreviewInventoryCostRepair`** persists nothing, not even a draft.
+  It replays the ledger twice through the shared `InventoryCostRepairProjection` - as it stands, and
+  with the proposed repair - and reports the costing quantity/value immediately before the repair,
+  the quantity/value it adds, the resulting average unit cost, the first completed sale the ledger
+  cannot cost today, whether the repair replays before it, the projected costing quantity/value, and
+  the fatal issues a partial repair would leave behind.
+- **`ApplyInventoryCostRepair`** runs in one transaction, and in one order deliberately: the
+  authoritative ledger read, the expected-state comparison and the write are a single operation.
+  Because the preview stores nothing, the stale-preview model of
+  `PreviewInventoryCostTransition`/`ApplyInventoryCostTransition` is carried by
+  `Inventory.Domain.Costing.CostLedgerFingerprint` rather than a stored draft: a deterministic
+  SHA-256 over everything the replay consumes (product position, movements, completed sales, existing
+  repairs, baseline), with timestamps as ticks and decimals normalised, which the preview reports and
+  the apply recomputes and requires to match. It then enforces the placement rule, appends the
+  repair, and rebuilds through the existing `IRebuildProductCost` path from the repair's effective
+  instant. The rebuild decides before it stages (issue #362), so a repair that leaves any fatal
+  data-quality issue fails and persists nothing at all - a partial repair cannot half-cost a product.
+- **The narrow `IInventoryCostRepairStore` port** (transaction, product lookup, append, history,
+  save) is implemented by the temporary API-owned
+  `InventoryApi.Adapters.Persistence.EfInventoryCostRepairStore`; it moves to
+  `Inventory.Infrastructure` with `AppDbContext` (#153). The replay inputs themselves come from
+  `IInventoryCostLedgerStore`, whose `InventoryCostLedger` now carries the product's repairs, so a
+  preview, an apply and a rebuild all read one ledger. `GetInventoryCostRepairHistory` returns a
+  product's repairs newest effective first (ties by most recently recorded), and reports a product
+  belonging to another business exactly as it reports one that does not exist.
+- **HTTP endpoints and UI are separate tasks** (the API and UI children of #358). Authorization is
+  the same as the inventory-cost transition - any authenticated member of the business - because the
+  application has no admin role; adding one is out of scope. Applying a repair changes historical
+  COGS for later sales, so production use needs human scrutiny.
 
 #### Dashboard "Inventory Value" tile (issue #42)
 
