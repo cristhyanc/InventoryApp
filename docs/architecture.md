@@ -1527,19 +1527,38 @@ deliberately preserved concern and was not touched.
 ##### OpenAPI documentation
 
 `PurchasesController` no longer pins an explicit legacy route; its `[Route("api/purchases")]`
-publishes the canonical route, and Swashbuckle's default schema-id/tag derivation from CLR/controller
-names is used unmodified — there is no `LegacyOpenApiCompatibility`/`UseLegacyReceiptNames` step in
-`SwaggerServiceCollectionExtensions.AddInventoryApiSwagger` any more. The published document therefore
-carries the `PurchaseResponse`/`PurchaseItemResponse`/`PurchaseResponseDto`/`PurchaseValidationDto`
-schema ids and the `Purchases` tag, with no remaining `Receipt*` schema id or `Receipts` tag. The
-first two were `Purchase`/`PurchaseItem` until issue #304 replaced the serialised EF entities with
-the API-owned response DTOs: the schema ids follow Swashbuckle's CLR-name derivation, so they moved
-with the types, while the payload they describe is byte-for-byte unchanged (pinned by
-`InventoryApi.Tests.DTOs.PurchaseResponseJsonContractTests`).
+publishes the canonical route, and the tag still comes from Swashbuckle's default controller-name
+derivation — there is no `LegacyOpenApiCompatibility`/`UseLegacyReceiptNames` step in
+`SwaggerServiceCollectionExtensions.AddInventoryApiSwagger` any more. The published document carries
+the `Purchase`/`PurchaseItem`/`PurchaseResponseDto`/`PurchaseValidationDto` schema ids and the
+`Purchases` tag, with no remaining `Receipt*` schema id or `Receipts` tag.
+
+The `Purchase`/`PurchaseItem` ids are **public contract, not a reflection of the current CLR
+names**. Issue #304 replaced the serialised EF `Purchase`/`PurchaseItem` entities with the API-owned
+`InventoryApi.DTOs.PurchaseResponse`/`PurchaseItemResponse`, and Swashbuckle would otherwise have
+renamed both schemas (and added a `required` list derived from the DTOs' C# `required` members) with
+them. Because issue #304 excludes API-contract changes, `InventoryApi.Swagger.PublishedResponseSchemaContract`
+maps those two types — and the equivalent `SupplierOrder`/`SupplierOrderLine` pair on the
+supplier-order endpoints — back onto the published ids and keeps the requiredness out of the
+document, so an internal DTO rename does not reach a client. The pin names
+four types explicitly; everything else stays on the default CLR-name derivation, and if an endpoint
+ever publishes the EF entity one of those ids belonged to, Swashbuckle fails document generation
+with a duplicate-schema-id error rather than renaming one of them silently.
+
 `InventoryApi.Tests.Swagger.PurchaseOpenApiContractTests` (schema ids, tag, and the schemas the
-purchase operations reference) and `InventoryApi.Tests.Controllers.PurchasesControllerRouteTests`
-(the effective `api/purchases` base route and its GET/POST/PUT/DELETE/file endpoints, read from the
-MVC API explorer) cover this contract.
+purchase operations reference), `InventoryApi.Tests.Swagger.PublishedResponseSchemaContractTests`
+(the whole published schema of `Purchase`/`PurchaseItem`/`SupplierOrder`/`SupplierOrderLine`
+compared with the generated contract before the DTOs replaced the entities, plus the absence of the
+internal DTO names, of a requiredness declaration, and of any Receipt-named schema or tag) and
+`InventoryApi.Tests.Controllers.PurchasesControllerRouteTests` (the effective `api/purchases` base
+route and its GET/POST/PUT/DELETE/file endpoints, read from the MVC API explorer) cover this
+contract. The one difference those tests record as unavoidable is the nested object: a purchase
+item's and a supplier-order line's `product` now references `ProductResponse` and a `supplier`
+references `SupplierResponse` — the API-owned types the product and supplier endpoints already
+publish — because the response mappers may no longer touch `InventoryApi.Models` and the `Product`
+and `Supplier` ids belong to the EF entities other endpoints still serialise. `SupplierResponse` is
+schema-identical to `Supplier`; `ProductResponse` is the products slice's own published schema
+(issue #303), which adds a `required` list and `readOnly` flags over the `Product` entity schema.
 
 | Layer | Canonical Purchase language | Left as a legacy/compatibility surface | Why |
 | --- | --- | --- | --- |
@@ -2465,11 +2484,18 @@ Backend and frontend tracks can progress independently when their contracts do n
        the value the persistence model reports - the same arrangement `Product.NeedToOrder` has with
        `ProductReorderPolicy`. It stays distinct from the aggregate per-product on-order quantity
        `IOutstandingSupplierOrderQuantityStore` sums for the reorder calculation.
-     - **Published OpenAPI schema ids moved with the types.** Swashbuckle derives schema ids from CLR
-       names, so the purchase response schemas are now `PurchaseResponse`/`PurchaseItemResponse`
-       rather than `Purchase`/`PurchaseItem`; see
-       [OpenAPI documentation](#openapi-documentation) under the Purchase rename plan. The payload is
-       unchanged, and no `Receipt*` schema id or `Receipts` tag reappeared.
+     - **Published OpenAPI schema ids stayed behind.** Swashbuckle derives schema ids from CLR names
+       and `required` from C# `required` members, so the replacement would by itself have renamed
+       the published `Purchase`/`PurchaseItem`/`SupplierOrder`/`SupplierOrderLine` schemas after the
+       internal DTOs and added a requiredness declaration the document never carried - an
+       API-contract change this issue excludes, which byte-identical runtime JSON does not excuse
+       because a generated client reads the document, not the payload.
+       `InventoryApi.Swagger.PublishedResponseSchemaContract` therefore maps the four response DTOs
+       back onto those published ids and keeps their requiredness out of the document; the ids are
+       public contract, independent of the internal type names. See
+       [OpenAPI documentation](#openapi-documentation) under the Purchase rename plan for the pin,
+       the nested-object difference it cannot remove, and the regression tests. No `Receipt*` schema
+       id or `Receipts` tag reappeared.
      - **Not in this slice.** `EfPurchaseStore`/`EfSupplierOrderStore` stay API-owned temporary
        adapters until `AppDbContext` relocates, purchase totals/validation, supplier-order
        reallocation and document storage are untouched, and the `Purchase`/`SupplierOrder` entities

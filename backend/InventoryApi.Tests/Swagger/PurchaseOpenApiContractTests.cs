@@ -6,15 +6,15 @@ namespace InventoryApi.Tests.Swagger;
 
 /// <summary>
 /// Locks the canonical generated OpenAPI document for the Purchase business record (issue
-/// #127): Swashbuckle's default schema ids (derived from CLR type names) and tag (derived from
-/// the controller name) are published as-is, with no legacy Receipt-named schema/tag surviving.
+/// #127): the canonical Purchase schema ids and the tag Swashbuckle derives from the controller
+/// name are published as-is, with no legacy Receipt-named schema/tag surviving.
 ///
 /// Issue #304 replaced the serialised EF <c>Purchase</c>/<c>PurchaseItem</c> entities with the
-/// API-owned <c>PurchaseResponse</c>/<c>PurchaseItemResponse</c>, so the schema ids derived from
-/// those CLR names moved with them. The payload itself is unchanged - the property names, order and
-/// values are compared byte for byte against the entity shape in
-/// <c>InventoryApi.Tests.DTOs.PurchaseResponseJsonContractTests</c> - and the rule these tests
-/// exist for, that no Receipt-named schema or tag survives, is unaffected.
+/// API-owned <c>InventoryApi.DTOs.PurchaseResponse</c>/<c>PurchaseItemResponse</c>. The published
+/// ids below are unaffected by that: <c>InventoryApi.Swagger.PublishedResponseSchemaContract</c>
+/// pins the new types onto them, and
+/// <c>InventoryApi.Tests.Swagger.PublishedResponseSchemaContractTests</c> compares the whole
+/// published schema of each with the contract this pull request's base branch generated.
 /// </summary>
 public class PurchaseOpenApiContractTests
 {
@@ -22,8 +22,8 @@ public class PurchaseOpenApiContractTests
     private const string PurchaseByIdPath = "/api/purchases/{id}";
 
     [Theory]
-    [InlineData("PurchaseResponse")]
-    [InlineData("PurchaseItemResponse")]
+    [InlineData("Purchase")]
+    [InlineData("PurchaseItem")]
     [InlineData("PurchaseResponseDto")]
     [InlineData("PurchaseValidationDto")]
     public void Canonical_schema_identifier_is_published(string schemaId)
@@ -104,15 +104,13 @@ public class PurchaseOpenApiContractTests
         Assert.Equal(
             new[] { "purchase", "validation" },
             response.Properties.Keys.Order().ToArray());
-        Assert.Equal("PurchaseResponse", response.Properties["purchase"].Reference?.Id);
+        Assert.Equal("Purchase", response.Properties["purchase"].Reference?.Id);
         Assert.Equal("PurchaseValidationDto", response.Properties["validation"].Reference?.Id);
-        Assert.Equal(
-            "PurchaseItemResponse",
-            document.Components.Schemas["PurchaseResponse"].Properties["items"].Items.Reference?.Id);
+        Assert.Equal("PurchaseItem", document.Components.Schemas["Purchase"].Properties["items"].Items.Reference?.Id);
 
         // `receiptId` is the persistence-facing field issue #127 deliberately leaves unrenamed
-        // (the physical Receipt-named column stays); keep it locked in the published contract.
-        Assert.Contains("receiptId", document.Components.Schemas["PurchaseItemResponse"].Properties.Keys);
+        // (the physical Receipt-named schema stays); keep it locked in the published contract.
+        Assert.Contains("receiptId", document.Components.Schemas["PurchaseItem"].Properties.Keys);
     }
 
     private static IEnumerable<OpenApiOperation> PurchaseOperations(OpenApiDocument document) =>
