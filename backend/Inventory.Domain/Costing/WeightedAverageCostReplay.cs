@@ -5,19 +5,24 @@ namespace Inventory.Domain.Costing;
 /// <summary>
 /// The perpetual weighted-average (AVCO) cost replay for one product. Extracted unchanged from the
 /// former private <c>InventoryApi.Services.InventoryCostRebuildService.Replay</c>/<c>ApplyAdjustmentCost</c>
-/// (issue #295, child 1 of #149): it replays the product's stock movements and completed sales
-/// strictly after the optional transition baseline, in timestamp order (ties: costed restocks,
-/// then machine refills, then sales, then other movements; then by source ID), and returns the
-/// resulting physical/costing quantity, inventory value, average unit cost, the cost assigned to
-/// each movement and sale, and every data-quality issue found. It never persists anything; the
-/// caller decides whether and how to apply the outcome.
+/// (issue #295, child 1 of #149): it replays the product's costing repairs, stock movements and
+/// completed sales strictly after the optional transition baseline, in timestamp order (ties:
+/// costing repairs, then costed restocks, then machine refills, then sales, then other movements;
+/// then by source ID), and returns the resulting physical/costing quantity, inventory value,
+/// average unit cost, the cost assigned to each movement and sale, and every data-quality issue
+/// found. It never persists anything; the caller decides whether and how to apply the outcome.
+///
+/// A costing repair (issue #359) replays first at its own timestamp because it is the opening it
+/// restores: anything else at that instant - a restock, a refill, the very sale the repair is meant
+/// to cover - must see the repaired value already in the ledger.
 /// </summary>
 public static class WeightedAverageCostReplay
 {
-    private const int RestockPriority = 0;
-    private const int MachineRefillPriority = 1;
-    private const int SalePriority = 2;
-    private const int OtherAdjustmentPriority = 3;
+    private const int RepairPriority = 0;
+    private const int RestockPriority = 1;
+    private const int MachineRefillPriority = 2;
+    private const int SalePriority = 3;
+    private const int OtherAdjustmentPriority = 4;
 
     /// <summary>
     /// Replays the product's history. When <paramref name="targetSaleTime"/> is set, events after it
@@ -29,6 +34,7 @@ public static class WeightedAverageCostReplay
         CostReplayProduct product,
         IReadOnlyCollection<CostReplayAdjustment> adjustments,
         IReadOnlyCollection<CostReplaySale> sales,
+        IReadOnlyCollection<CostReplayRepair> repairs,
         CostReplayBaseline? baseline,
         long? targetSaleTransactionId = null,
         DateTime? targetSaleTime = null)
@@ -36,17 +42,19 @@ public static class WeightedAverageCostReplay
         ArgumentNullException.ThrowIfNull(product);
         ArgumentNullException.ThrowIfNull(adjustments);
         ArgumentNullException.ThrowIfNull(sales);
+        ArgumentNullException.ThrowIfNull(repairs);
 
         var events = adjustments.Select(x => new CostEvent(x))
             .Concat(sales.Select(x => new CostEvent(x)))
+            .Concat(repairs.Select(x => new CostEvent(x)))
             .Where(x => baseline is null || x.Timestamp > baseline.CutoffAt)
-            .OrderBy(x => x.Timestamp)
-            .ThenBy(x => x.Priority)
-            .ThenBy(x => x.SourceId)
+            .OrderBy(ReplayOrder)
             .ToList();
         var issues = new List<CostDataQualityIssue>();
         var adjustmentOutcomes = new List<CostReplayAdjustmentOutcome>();
+        var repairOutcomes = new List<CostReplayRepairOutcome>();
         var saleCosts = new List<CostReplaySaleCost>();
+        var uncostableSales = new List<CostReplaySale>();
         var physicalQuantity = baseline?.HomeStockQuantity ?? 0;
         var costingQuantity = baseline?.OpeningCostingQuantity ?? 0;
         decimal inventoryValue = baseline?.InventoryValue ?? 0;
@@ -68,6 +76,23 @@ public static class WeightedAverageCostReplay
             {
                 targetSaleUnitCost = AverageUnitCost(costingQuantity, inventoryValue);
                 break;
+            }
+
+            if (entry.Repair is { } repair)
+            {
+                var costingQuantityBefore = costingQuantity;
+                var inventoryValueBefore = inventoryValue;
+                costingQuantity = checked(costingQuantity + repair.Quantity);
+                inventoryValue += repair.TotalValue;
+                hasCostedAcquisition = true;
+                repairOutcomes.Add(new(
+                    repair,
+                    costingQuantityBefore,
+                    inventoryValueBefore,
+                    costingQuantity,
+                    inventoryValue,
+                    AverageUnitCost(costingQuantity, inventoryValue)));
+                continue;
             }
 
             if (entry.Adjustment is { } adjustment)
@@ -95,6 +120,7 @@ public static class WeightedAverageCostReplay
             {
                 issues.Add(new(hasCostedAcquisition ? CostDataQualityIssueCodes.UnknownCost : CostDataQualityIssueCodes.MissingOpening,
                     $"Completed Nayax sale {sale.TransactionId} for product {product.ProductId} has no known opening cost at {sale.AuthorizationTime:O}."));
+                uncostableSales.Add(sale);
                 continue;
             }
 
@@ -113,7 +139,7 @@ public static class WeightedAverageCostReplay
         }
 
         return new(physicalQuantity, costingQuantity, inventoryValue, AverageUnitCost(costingQuantity, inventoryValue),
-            targetSaleUnitCost, adjustmentOutcomes, saleCosts, issues);
+            targetSaleUnitCost, adjustmentOutcomes, repairOutcomes, saleCosts, uncostableSales, issues);
     }
 
     /// <summary>
@@ -122,6 +148,33 @@ public static class WeightedAverageCostReplay
     /// </summary>
     public static decimal? AverageUnitCost(int quantity, decimal value) =>
         quantity > 0 ? value / quantity : null;
+
+    /// <summary>
+    /// Whether <paramref name="repair"/> replays before <paramref name="sale"/>, decided by the
+    /// replay's own ordering rather than by a timestamp comparison of its own (issue #359).
+    ///
+    /// The costing-repair apply uses this to verify placement, because a repair's effective time
+    /// and a Nayax sale's authorization time are not recorded in the same time zone (an existing
+    /// mismatch this does not fix): the only question that can be answered reliably is the one the
+    /// replay itself asks, which is where the two events fall in this order. Both answers come from
+    /// the same key, so they cannot drift apart.
+    /// </summary>
+    public static bool ReplaysBefore(CostReplayRepair repair, CostReplaySale sale)
+    {
+        ArgumentNullException.ThrowIfNull(repair);
+        ArgumentNullException.ThrowIfNull(sale);
+
+        return Comparer<(DateTime, int, long)>.Default.Compare(
+            ReplayOrder(new CostEvent(repair)),
+            ReplayOrder(new CostEvent(sale))) < 0;
+    }
+
+    /// <summary>
+    /// The one replay ordering key: timestamp, then event priority, then source ID. Both the replay
+    /// loop and <see cref="ReplaysBefore"/> read it, so there is a single definition of "before".
+    /// </summary>
+    private static (DateTime Timestamp, int Priority, long SourceId) ReplayOrder(CostEvent entry) =>
+        (entry.Timestamp, entry.Priority, entry.SourceId);
 
     private static (decimal? UnitCost, decimal? TotalCost) ApplyAdjustmentCost(
         long productId,
@@ -207,8 +260,17 @@ public static class WeightedAverageCostReplay
             SourceId = sale.TransactionId;
         }
 
+        public CostEvent(CostReplayRepair repair)
+        {
+            Repair = repair;
+            Timestamp = repair.EffectiveAt;
+            Priority = RepairPriority;
+            SourceId = repair.Id;
+        }
+
         public CostReplayAdjustment? Adjustment { get; }
         public CostReplaySale? Sale { get; }
+        public CostReplayRepair? Repair { get; }
         public DateTime Timestamp { get; }
         public int Priority { get; }
         public long SourceId { get; }

@@ -105,6 +105,9 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<ApplyInventoryCostTransition>();
         services.AddScoped<PreviewAllInventoryCostTransitions>();
         services.AddScoped<ApplyAllInventoryCostTransitions>();
+        services.AddScoped<PreviewInventoryCostRepair>();
+        services.AddScoped<ApplyInventoryCostRepair>();
+        services.AddScoped<GetInventoryCostRepairHistory>();
         services.AddScoped<ApplyInventoryCount>();
         services.AddScoped<ImportNayaxProductCatalog>();
         services.AddScoped<ImportPendingReimbursementXmlFiles>();

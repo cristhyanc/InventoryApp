@@ -1,5 +1,6 @@
 using Inventory.Application.Costing;
 using Inventory.Application.Nayax;
+using Inventory.Application.Tenancy;
 using Inventory.Application.Time;
 using Inventory.Infrastructure.Clock;
 using InventoryApi.Adapters.Persistence;
@@ -39,6 +40,25 @@ internal static class TestCostingUseCases
     public static ApplyInventoryCostTransition ApplyTransition(
         AppDbContext db, INayaxLynxClient nayax, IRebuildProductCost? rebuild = null, IClock? clock = null) =>
         new(new EfInventoryCostTransitionStore(db), nayax, rebuild ?? Rebuild(db), clock ?? new SystemClock());
+
+    /// <summary>The costing-repair use cases (issue #359), on the system clock unless one is given.</summary>
+    public static PreviewInventoryCostRepair PreviewRepair(AppDbContext db) =>
+        new(new EfInventoryCostRepairStore(db), new EfInventoryCostLedgerStore(db));
+
+    public static ApplyInventoryCostRepair ApplyRepair(
+        AppDbContext db,
+        IAuthenticatedActorAccessor actors,
+        IRebuildProductCost? rebuild = null,
+        IClock? clock = null) =>
+        new(
+            new EfInventoryCostRepairStore(db),
+            new EfInventoryCostLedgerStore(db),
+            rebuild ?? Rebuild(db),
+            actors,
+            clock ?? new SystemClock());
+
+    public static GetInventoryCostRepairHistory RepairHistory(AppDbContext db) =>
+        new(new EfInventoryCostRepairStore(db));
 
     public static PreviewAllInventoryCostTransitions PreviewAllTransitions(AppDbContext db, INayaxLynxClient nayax, IClock? clock = null) =>
         new(new EfInventoryCostTransitionStore(db), nayax, clock ?? new SystemClock());

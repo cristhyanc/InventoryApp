@@ -13,11 +13,13 @@ public class InventoryCostLedger
         CostReplayProduct product,
         IReadOnlyCollection<CostReplayAdjustment> adjustments,
         IReadOnlyCollection<CostReplaySale> sales,
+        IReadOnlyCollection<CostReplayRepair> repairs,
         CostReplayBaseline? baseline)
     {
         Product = product;
         Adjustments = adjustments;
         Sales = sales;
+        Repairs = repairs;
         Baseline = baseline;
     }
 
@@ -27,6 +29,13 @@ public class InventoryCostLedger
 
     /// <summary>The product's completed sales only.</summary>
     public IReadOnlyCollection<CostReplaySale> Sales { get; }
+
+    /// <summary>
+    /// The product's costing-only historical repairs (issue #359). Stated explicitly rather than
+    /// defaulted to empty: a ledger that silently omitted them would under-value the product's
+    /// costing inventory and re-break the sales a repair was applied to unblock.
+    /// </summary>
+    public IReadOnlyCollection<CostReplayRepair> Repairs { get; }
 
     /// <summary>The latest inventory-cost transition baseline in range, if any.</summary>
     public CostReplayBaseline? Baseline { get; }

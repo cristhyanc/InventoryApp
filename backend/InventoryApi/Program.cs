@@ -231,6 +231,9 @@ builder.Services.AddScoped<ISaleCostingStore, EfSaleCostingStore>();
 // EfInventoryCostTransitionStore.
 builder.Services.AddScoped<IInventoryCostTransitionStore, EfInventoryCostTransitionStore>();
 
+// Temporary API-owned adapter for the costing-repair port (issue #359); see EfInventoryCostRepairStore.
+builder.Services.AddScoped<IInventoryCostRepairStore, EfInventoryCostRepairStore>();
+
 // Temporary API-owned adapter for the stock history/restock-cost-suggestion/manual-adjustment
 // persistence port (issue #282); see EfStockAdjustmentStore.
 builder.Services.AddScoped<IStockAdjustmentStore, EfStockAdjustmentStore>();

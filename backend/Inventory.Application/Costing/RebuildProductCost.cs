@@ -13,6 +13,10 @@ namespace Inventory.Application.Costing;
 /// <see cref="InventoryCostDataQualityException"/> (issue #362), so a caller rebuilding several
 /// products can keep the ones that succeeded. A dry run stages nothing and never throws for data
 /// quality. No rounding is applied. Rebuilding twice over the same history yields the same result.
+///
+/// The ledger includes the product's costing repairs (issue #359), so a rebuild after a repair
+/// recosts the completed sales the repaired history now supports and reports the fatal issues it
+/// still does not.
 /// </summary>
 public sealed class RebuildProductCost : IRebuildProductCost
 {
@@ -29,7 +33,8 @@ public sealed class RebuildProductCost : IRebuildProductCost
         var ledger = await _store.LoadAsync(productId, forUpdate: !dryRun, cancellationToken)
             ?? throw new InvalidOperationException($"Product {productId} does not exist.");
 
-        var replay = WeightedAverageCostReplay.Replay(ledger.Product, ledger.Adjustments, ledger.Sales, ledger.Baseline);
+        var replay = WeightedAverageCostReplay.Replay(
+            ledger.Product, ledger.Adjustments, ledger.Sales, ledger.Repairs, ledger.Baseline);
 
         var recostedSaleCount = 0;
         if (!dryRun)
@@ -78,7 +83,7 @@ public sealed class RebuildProductCost : IRebuildProductCost
             return null;
 
         var replay = WeightedAverageCostReplay.Replay(
-            ledger.Product, ledger.Adjustments, ledger.Sales, ledger.Baseline, saleTransactionId, saleTime);
+            ledger.Product, ledger.Adjustments, ledger.Sales, ledger.Repairs, ledger.Baseline, saleTransactionId, saleTime);
         return replay.HasFatalIssue ? null : replay.TargetSaleUnitCost ?? replay.AverageUnitCost;
     }
 }
