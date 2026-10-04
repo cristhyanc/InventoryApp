@@ -18,8 +18,7 @@ backend/InventoryApi/                 ASP.NET Core .NET 10 API
   Adapters/Nayax/                      Nayax catalog-reconciliation adapter (the Nayax Lynx client itself lives in backend/Inventory.Infrastructure/Nayax/)
   Migrations/                         SQLite schema history
   Models/                             Current entities and enums
-  Services/                           Current application/domain logic
-  Services/Interfaces/                Current service contracts
+  Services/                           The last legacy helper (SiteNameResolver); new use-case/domain logic goes to Inventory.Application/Inventory.Domain
 backend/InventoryApi.Tests/           xUnit backend tests
 frontend/inventory-app/               Angular 19 standalone application
 .github/workflows/                    Validation, Claude Code and Copilot agent, and Azure deployment workflows

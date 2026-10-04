@@ -1,12 +1,11 @@
 using Inventory.Application.Machines;
 using Inventory.Application.Products;
 using InventoryApi.Tests.Application.Time;
+using InventoryApi.Adapters.Mapping;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using Inventory.Application.Nayax;
 using InventoryApi.Models;
-using InventoryApi.Services;
-using InventoryApi.Services.Interfaces;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Moq;
@@ -16,7 +15,15 @@ using Inventory.Domain.FinancialConfiguration;
 
 namespace InventoryApi.Tests.Services;
 
-public class MachineServiceTests
+/// <summary>
+/// Regression tests for the migrated machine dashboard and machine-product slices over the real
+/// EF adapters, retargeted from the <c>MachineService</c> delegator tests they replace when issue
+/// #302 deleted it: <see cref="GetMachineDashboard"/>/<see cref="ListMachineDashboard"/> (issue
+/// #241) and <see cref="ListMachineProducts"/> (issue #240) are what the endpoints call now, and
+/// the API-owned responses they serialise come from
+/// <see cref="MachineResponseMapper"/>/<see cref="ProductRecordResponseMapper"/>.
+/// </summary>
+public class MachineUseCaseTests
 {
     /// <summary>
     /// One pinned instant drives both the seeded sale timestamps and the dashboard clock, so a sale
@@ -33,23 +40,31 @@ public class MachineServiceTests
         return TestAppDbContext.Unrestricted(options);
     }
 
-    private static MachineService Service(AppDbContext db, INayaxLynxClient nayax)
-    {
-        var facts = new EfMachineDashboardFactsStore(db, TestFinancialUseCases.ProcessingFees(db, Time.Calendar));
-        var listMachineProducts = new ListMachineProducts(
+    private static ListMachineProducts MachineProducts(AppDbContext db, INayaxLynxClient nayax) =>
+        new(
             nayax,
             new EfProductCatalogStore(db),
             new ResolveMachineProductPricing(new EfSiteFactsStore(db), Time.Calendar));
-        return new MachineService(
-            new GetMachineDashboard(nayax, facts, Time.Clock, Time.Calendar),
-            new ListMachineDashboard(nayax, facts, Time.Clock, Time.Calendar),
-            listMachineProducts);
-    }
+
+    private static GetMachineDashboard MachineDashboard(AppDbContext db, INayaxLynxClient nayax) =>
+        new(
+            nayax,
+            new EfMachineDashboardFactsStore(db, TestFinancialUseCases.ProcessingFees(db, Time.Calendar)),
+            Time.Clock,
+            Time.Calendar);
+
+    private static ListMachineDashboard MachineDashboardListing(AppDbContext db, INayaxLynxClient nayax) =>
+        new(
+            nayax,
+            new EfMachineDashboardFactsStore(db, TestFinancialUseCases.ProcessingFees(db, Time.Calendar)),
+            Time.Clock,
+            Time.Calendar);
 
     /// <summary>
     /// Relational SQLite test: the supplier attached to a machine's product listing must come
     /// from an explicit query rather than lazy loading (issue #52), so it is still populated when
-    /// read from a context separate from the one that seeded it - matching separate requests.
+    /// read from a context separate from the one that seeded it - matching separate requests. It is
+    /// asserted on the serialised response, because that nesting is what the endpoint promises.
     /// </summary>
     [Fact]
     public async Task GetMachineProducts_ReturnsSupplierWithoutLazyLoading()
@@ -77,10 +92,9 @@ public class MachineServiceTests
                 new NayaxMachineProduct { NayaxProductID = 200, ProductName = "px", RetailPrice = 5m }
             });
 
-        IMachineService svc = Service(db, nayaxMock.Object);
-        var products = await svc.GetMachineProducts(1);
+        var rows = await MachineProducts(db, nayaxMock.Object).Handle(1, CancellationToken.None);
 
-        var product = Assert.Single(products);
+        var product = ProductRecordResponseMapper.ToResponse(Assert.Single(rows));
         Assert.NotNull(product.Supplier);
         Assert.Equal("Acme", product.Supplier!.Name);
     }
@@ -109,9 +123,9 @@ public class MachineServiceTests
                 new NayaxLastSalesReport { MachineID = 1, ProductName = "ProdX", SettlementValue = 5m, MachineAuthorizationTime = System.DateTime.UtcNow }
             });
 
-        IMachineService svc = Service(db, nayaxMock.Object);
-        var machine = await svc.GetById(1);
-        Assert.NotNull(machine);
+        var summary = await MachineDashboard(db, nayaxMock.Object).Handle(1, CancellationToken.None);
+        Assert.NotNull(summary);
+        var machine = MachineResponseMapper.ToResponse(summary!);
         Assert.Equal(1, machine.MachineID);
         Assert.True(machine.TodayGrossRevenue >= 0);
     }
@@ -119,7 +133,7 @@ public class MachineServiceTests
     /// <summary>
     /// Issue #187: latest-sales synchronization is an explicit, shared operation
     /// (<c>Inventory.Application.SalesSync.SyncLatestNayaxSales</c>), no longer a hidden side effect of
-    /// <see cref="MachineService.GetAll"/>. Machines must calculate from whatever <c>NayaxSales</c>
+    /// the machine listing. Machines must calculate from whatever <c>NayaxSales</c>
     /// rows are already persisted, never trigger a fresh Nayax import themselves.
     /// </summary>
     [Fact]
@@ -140,8 +154,7 @@ public class MachineServiceTests
         nayaxMock.Setup(m => m.GetMachinesAsync(default))
             .ReturnsAsync(new List<NayaxMachine> { new NayaxMachine { MachineID = 1, MachineName = "M1" } });
 
-        IMachineService svc = Service(db, nayaxMock.Object);
-        var machines = await svc.GetAll();
+        var machines = await MachineDashboardListing(db, nayaxMock.Object).Handle(CancellationToken.None);
 
         nayaxMock.Verify(m => m.GetMachineLastSalesAsync(It.IsAny<long>(), It.IsAny<CancellationToken>()), Times.Never);
         var machine = Assert.Single(machines);

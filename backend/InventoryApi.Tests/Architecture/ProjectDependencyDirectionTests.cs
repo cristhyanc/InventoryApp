@@ -186,19 +186,25 @@ public class ProjectDependencyDirectionTests
     /// Nayax sales import's move to <c>Inventory.Application.Imports.ImportNayaxSales</c>, and
     /// <c>NayaxProductMatcher.cs</c> left with them because its last callers now use the Domain
     /// <c>Inventory.Domain.Reporting.ProductMatching.ProductMatcher</c> directly.
-    /// <c>MachineService.cs</c>/<c>SiteService.cs</c>
-    /// and their interfaces stay for the Sites/Machines delegator removal (issue #302).
+    /// Issue #302, the first child of #153, removed <c>MachineService.cs</c>, <c>SiteService.cs</c>
+    /// and <c>Interfaces/IMachineService.cs</c>/<c>Interfaces/ISiteService.cs</c> in the same change
+    /// that pointed <c>MachinesController</c>/<c>SitesController</c> straight at the Machines and
+    /// Sites use cases and gave the machine endpoints API-owned response DTOs, which also emptied
+    /// the <c>Interfaces</c> folder.
+    ///
+    /// <c>SiteNameResolver.cs</c> is all that is left: the pure site-name-from-machine-names helper
+    /// that <c>Adapters/Persistence/SiteNameResolverAdapter</c> (the
+    /// <c>Inventory.Application.Sites.ISiteNameResolver</c> port's API-owned adapter) and
+    /// <c>EfTransactionSalesReportFactsProvider</c> share. Moving it is tracked with the
+    /// <c>AppDbContext</c>/adapter relocation, not here. The allow-list keeps naming it so that
+    /// adding anything beside it still has to be a conscious, reviewed edit.
     /// </summary>
     [Fact]
     public void Only_the_documented_legacy_services_remain_in_InventoryApi_Services()
     {
         string[] allowedRelativePaths =
         [
-            "Interfaces/IMachineService.cs",
-            "Interfaces/ISiteService.cs",
-            "MachineService.cs",
             "SiteNameResolver.cs",
-            "SiteService.cs",
         ];
 
         var actualRelativePaths = GitTrackedFiles(Path.Combine("InventoryApi", "Services"))

@@ -32,6 +32,7 @@ namespace InventoryApi.Tests.Swagger;
 public class PublishedResponseSchemaContractTests
 {
     private const string SupplierOrdersPath = "/api/SupplierOrders";
+    private const string MachinesPath = "/api/Machines";
 
     [Theory]
     [InlineData("Purchase")]
@@ -172,6 +173,14 @@ public class PublishedResponseSchemaContractTests
     /// before this slice (issues #302/#303) and still do. The compatibility boundary is scoped to
     /// the four purchase/supplier-order schemas and must leave those two contracts alone: no
     /// rename, no cleared requiredness, no repointed nested reference.
+    ///
+    /// Issue #302 made <c>ProductResponse</c> carry a machine slot's price/commission/MDB/capacity
+    /// facts as well, so the machine-product endpoint could stop serialising the EF entity. The
+    /// values became settable, the published description must not have: Swashbuckle marks a
+    /// property with no setter <c>readOnly</c>, so turning one of those six machine-slot fields
+    /// into an <c>init</c> member would have dropped a <c>readOnly</c> flag the document carries
+    /// for the product endpoints. <see cref="Published_product_response_read_only_flags_are_unchanged"/>
+    /// is the regression guard for that.
     /// </summary>
     [Fact]
     public void Api_owned_product_and_supplier_contracts_are_untouched()
@@ -196,6 +205,71 @@ public class PublishedResponseSchemaContractTests
         Assert.Equal(
             "ProductStockAdjustmentResponse",
             productResponse.Properties["stockAdjustments"].Items.Reference?.Id);
+    }
+
+    /// <summary>
+    /// The exact set of <c>ProductResponse</c> properties the document describes as <c>readOnly</c>,
+    /// captured from this pull request's base branch. Twelve of the thirty-four are derived or
+    /// response-only on the API side, and a client generated from the document is told so; which
+    /// ones they are is contract, not an implementation detail of how the DTO happens to store a
+    /// value. Issue #302 added the machine-slot overlay behind the first six of them for the
+    /// machine-product response, and it stays behind them precisely so this list does not move.
+    /// </summary>
+    [Fact]
+    public void Published_product_response_read_only_flags_are_unchanged()
+    {
+        var document = ApiContractTestHost.GetSwaggerDocument();
+
+        var readOnly = document.Components.Schemas["ProductResponse"].Properties
+            .Where(property => property.Value.ReadOnly)
+            .Select(property => property.Key)
+            .ToArray();
+
+        Assert.Equal(
+            new[]
+            {
+                "machinePrice", "commissionValue", "suggestedNetValue", "suggestedPriceValue",
+                "mdbCode", "maxStockInMachine", "projectedStockForReorder", "needToOrder",
+                "lastEatBefore1", "lastEatBefore2", "isLowStock", "isReorderAlert",
+            },
+            readOnly);
+    }
+
+    /// <summary>
+    /// The machine endpoints' published response schemas after issue #302 pointed them at the
+    /// API-owned DTOs. This is the one place the generated document changes: the dashboard
+    /// operations describe <c>MachineResponse</c> where they described the legacy
+    /// <c>InventoryApi.Models.Machine</c> type, and the machine-product operation describes the same
+    /// <c>ProductResponse</c> the catalogue endpoints have described since issue #303, where it
+    /// described the legacy <c>Product</c> entity - the same schema-id derivation issue #303 settled
+    /// for a migrated endpoint's own response DTO. The runtime JSON of all three is byte-identical
+    /// (<c>InventoryApi.Tests.DTOs.MachineJsonContractTests</c>).
+    ///
+    /// The legacy <c>Product</c> component itself stays published, because the pinned
+    /// purchase/supplier-order schemas still reference it; no machine operation points at it any
+    /// more.
+    /// </summary>
+    [Fact]
+    public void Machine_operations_publish_the_api_owned_response_schemas()
+    {
+        var document = ApiContractTestHost.GetSwaggerDocument();
+
+        var referenced = document.Paths
+            .Where(path => path.Key.StartsWith(MachinesPath, StringComparison.OrdinalIgnoreCase))
+            .SelectMany(path => path.Value.Operations.Values)
+            .SelectMany(operation => operation.Responses.Values)
+            .SelectMany(response => response.Content.Values)
+            .Select(media => media.Schema)
+            .SelectMany(schema => ReferencedSchemaIds(schema).Concat(ReferencedSchemaIds(schema?.Items)))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        Assert.Contains("MachineResponse", referenced);
+        Assert.Contains("ProductResponse", referenced);
+        Assert.DoesNotContain("Machine", referenced);
+        Assert.DoesNotContain("Product", referenced);
+        Assert.DoesNotContain("Machine", document.Components.Schemas.Keys);
+        Assert.Contains("Product", document.Components.Schemas.Keys);
     }
 
     /// <summary>

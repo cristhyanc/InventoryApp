@@ -744,8 +744,8 @@ flowchart TD
 
 ## Current pressure points
 
-- HTTP, use cases, domain calculations, EF Core, Nayax, file storage, and export generation live in one project for every feature area still pending migration (purchases, machine services, inventory-cost transition, and the remaining direct-`AppDbContext` controllers/services). Reporting is no longer part of this pressure point: its use cases live in `Inventory.Application.Reporting.<Feature>` and its calculations in `Inventory.Domain.Reporting.<Feature>`; only its temporary EF/Nayax adapters, HTTP controller, and CSV/XLSX byte encoding remain in `InventoryApi`. `Purchases.PurchaseTotalValidationPolicy`/`ComputePurchaseTotalValidation` were the first pieces of the purchase slice to move out (see the [Purchase rename plan](#purchase-rename-plan)); the purchase and supplier-order upload/update/delete orchestration followed in issue #281, and issue #304 removed the last `InventoryApi` services for them, so only their temporary EF adapters, their HTTP controllers, and the API-owned response DTOs remain here.
-- The machine services combine orchestration and persistence, and are large. The purchase and inventory-cost-transition services no longer exist: the transition services moved to `Inventory.Application.Costing` (issue #298) and `PurchaseService`/`SupplierOrderService` were deleted by issue #304, leaving `EfPurchaseStore`/`EfSupplierOrderStore` as the documented temporary API-owned persistence adapters.
+- HTTP, use cases, domain calculations, EF Core, Nayax, file storage, and export generation live in one project for every feature area still pending migration (the remaining direct-`AppDbContext` controllers and the temporary API-owned persistence adapters). Reporting is no longer part of this pressure point: its use cases live in `Inventory.Application.Reporting.<Feature>` and its calculations in `Inventory.Domain.Reporting.<Feature>`; only its temporary EF/Nayax adapters, HTTP controller, and CSV/XLSX byte encoding remain in `InventoryApi`. `Purchases.PurchaseTotalValidationPolicy`/`ComputePurchaseTotalValidation` were the first pieces of the purchase slice to move out (see the [Purchase rename plan](#purchase-rename-plan)); the purchase and supplier-order upload/update/delete orchestration followed in issue #281, and issue #304 removed the last `InventoryApi` services for them, so only their temporary EF adapters, their HTTP controllers, and the API-owned response DTOs remain here.
+- The machine, site, purchase and inventory-cost-transition services no longer exist either: the transition services moved to `Inventory.Application.Costing` (issue #298), `PurchaseService`/`SupplierOrderService` were deleted by issue #304, and `MachineService`/`SiteService` by issue #302, leaving `EfPurchaseStore`/`EfSupplierOrderStore` and `EfMachineDashboardFactsStore`/`EfSiteFactsStore` as the documented temporary API-owned persistence adapters.
 - The site-commission controller still directly accesses `AppDbContext`. Fee-setting, categories/suppliers, and operating expenses no longer do (see the Nayax fee-settings slice above and the Operating expenses slice below), except through each slice's temporary API-owned persistence adapter.
 - `Product` contains persistence state, business calculations, and transient Nayax/UI fields.
 - Several tests use EF Core InMemory where SQLite behavior may be more representative.
@@ -870,9 +870,9 @@ Controllers do not implement accounting, inventory, persistence, or filesystem r
 
 #### Temporary API-owned exception and its enforcement (issue #145)
 
-`InventoryApi/Services` (machine/site orchestration) is
-use-case/domain logic that predates the `Inventory.Domain`/`Inventory.Application` split and has
-not migrated yet; inventory movement recording and the product cost rebuild (issue #296), sale
+`InventoryApi/Services` held the
+use-case/domain logic that predates the `Inventory.Domain`/`Inventory.Application` split; it is now
+down to one file. Inventory movement recording and the product cost rebuild (issue #296), sale
 costing with its backfills (issue #297) and the inventory-cost transition (issue #298) have already
 left it for `Inventory.Application.Costing`, and the pending reimbursement XML import (issue #299),
 the Nayax product catalogue import (issue #300) and the uploaded Nayax sales import (issue #301) for
@@ -888,16 +888,25 @@ supplier-orders delegators followed: issue #304 deleted
 registrations, so `PurchasesController`/`SupplierOrdersController` inject the
 `Inventory.Application.Purchases`/`Inventory.Application.SupplierOrders` use cases directly and
 serialise the API-owned `InventoryApi.DTOs.PurchaseResponse`/`SupplierOrderResponse` instead of the EF
-`Purchase`/`SupplierOrder` entities (item 7 of the same track).
+`Purchase`/`SupplierOrder` entities (item 7 of the same track). The Sites/Machines delegators were
+last: issue #302 deleted `MachineService`/`IMachineService`/`SiteService`/`ISiteService` and their
+registrations, so `MachinesController`/`SitesController` inject the
+`Inventory.Application.Machines`/`Inventory.Application.Sites` use cases directly and the machine
+endpoints serialise the API-owned `InventoryApi.DTOs.MachineResponse` and the shared
+`InventoryApi.DTOs.ProductResponse` instead of the `Machine`/`Product` types (item 9 of the same
+track). Only `Services/SiteNameResolver.cs` is left in the folder - the pure site-name-from-machine-names
+helper shared by `SiteNameResolverAdapter` and `EfTransactionSalesReportFactsProvider`, which moves
+with the adapters - and `Services/Interfaces` no longer exists.
 `InventoryApi/Adapters/{Persistence,Export,Nayax,Mapping}` hold the
 temporary, API-owned adapters (`EfNayaxFeeRateStore`, the `Ef<Feature>ReportFactsProvider` family,
 `EfInventoryMovementStore`/`EfInventoryCostLedgerStore`, `EfSaleCostingStore`,
 `EfInventoryCostTransitionStore`, `EfInventoryCostRepairStore`, `EfNayaxSalesImportStore`,
 `ReportExportFileWriter`,
-`NayaxCatalogSnapshotProvider`, `ProductRecordResponseMapper` (the products DTO projection),
+`NayaxCatalogSnapshotProvider`, `ProductRecordResponseMapper` (the products DTO projection, and
+since issue #302 the machine-slot projection onto the same DTO),
 `PurchaseResponseMapper`/`SupplierOrderResponseMapper` (the purchase and supplier-order DTO
-projections), `ProductResponseMapper` (the machine-product view's entity-shaped mapping, until issue
-#302),
+projections), `MachineResponseMapper`/`SiteResponseMapper` (the machine dashboard and site DTO
+projections, issue #302; the entity-shaped `ProductResponseMapper` they replaced is deleted),
 ...) that implement
 or feed `Inventory.Application`
 ports until `AppDbContext` and its persistence models move into `Inventory.Infrastructure` - see the
@@ -966,9 +975,15 @@ and `Interfaces/IProductService.cs` in the same change that pointed `ProductsCon
 Products use cases and gave the product endpoints their own response DTO, and issue #304 removed
 `PurchaseService.cs`, `SupplierOrderService.cs`, `Interfaces/IPurchaseService.cs` and
 `Interfaces/ISupplierOrderService.cs` in the same change that did the same for
-`PurchasesController`/`SupplierOrdersController`. `MachineService.cs`,
-`SiteService.cs` and their interfaces stay on the list until issue #302 does the same for the
-Sites/Machines delegators.
+`PurchasesController`/`SupplierOrdersController`. Issue #302 removed `MachineService.cs`,
+`SiteService.cs`, `Interfaces/IMachineService.cs` and `Interfaces/ISiteService.cs` in the same
+change that pointed `MachinesController`/`SitesController` at the Machines and Sites use cases and
+gave the machine endpoints API-owned response DTOs, which also emptied the `Interfaces` folder.
+The allow-list is therefore down to one entry, `SiteNameResolver.cs`: the pure
+site-name-from-machine-names helper that `Adapters/Persistence/SiteNameResolverAdapter` (the
+`ISiteNameResolver` port's adapter) and `EfTransactionSalesReportFactsProvider` share, which moves
+with the adapters rather than with a delegator. It is still named there so that adding anything
+beside it stays a conscious, reviewed edit to both the allow-list and this paragraph.
 `NayaxProductMatcher.cs` left the list with the import (issue #301): its last callers - the uploaded
 sales import, `EfLatestNayaxSalesStore` and `EfInventoryCostLedgerStore` - now call the Domain
 `Inventory.Domain.Reporting.ProductMatching.ProductMatcher` on their own candidate projections, so
@@ -1422,7 +1437,7 @@ Site commissions use effective-dated agreements and one of three bases: gross sa
 `Product.UnitPrice` is the catalog default/list selling price, synced one-way from the Nayax product catalog's `RetailPrice` field by `Inventory.Application.Imports.ImportNayaxProductCatalog` (issue #57; the use case was `ImportService.ImportProductsAsync` until issue #300 migrated it — see [Nayax product catalogue import](#nayax-product-catalogue-import-issue-300)). It is a display/default value, not a calculation input: no reporting, profit, or costing calculation in `Inventory.Application`/`Inventory.Domain` reads it. It is distinct from:
 
 - `Product.AverageUnitCost` and the AVCO/historical-cost ledger — purchase cost, not selling price;
-- `Product.MachinePrice` (`[NotMapped]`) — the machine-specific live price, sourced from the per-machine Nayax `RetailPrice` (`NayaxMachineProduct.RetailPrice`) in `MachineService`/`SiteService`;
+- `Product.MachinePrice` (`[NotMapped]` on the entity, and a machine-slot value on `ProductResponse`) — the machine-specific live price, sourced from the per-machine Nayax `RetailPrice` (`NayaxMachineProduct.RetailPrice`) by `ListMachineProducts`/`GetSiteProducts`;
 - the Nayax `ProductCostPrice` field on an imported sale (`NayaxSales.NayaxProductCostPrice`) — a genuine cost value used for historical COGS, never a selling price. The catalogue import previously set `UnitPrice` from this cost field by mistake; it now uses the catalog `RetailPrice` instead.
 
 **The JSON field this value is imported from is unverified (open human decision).** The Nayax developer portal documents `GET /v1/operators/{OperatorID}/products` as returning `ProductDefaultRetailPrice` and documents no `RetailPrice` field on that endpoint; `RetailPrice` is documented only on the machine-product endpoints (`GET /v1/machines/{MachineID}/machineProducts`), which is what `NayaxMachineProduct.RetailPrice` and `Product.MachinePrice` above correctly use. The operator-catalogue DTO `Inventory.Application.Nayax.NayaxProduct.RetailPrice` nevertheless binds the JSON name `RetailPrice`, so if the live operator response matches the published contract this import reads `null` and writes `UnitPrice` as `0`. Confirming the live payload requires an actual operator response, which an agent may not fetch, so under `AGENTS.md` § Nayax contract verification this contract is recorded as **not verified** rather than accepted: issue #300 carried the pre-existing mapping over unchanged, and changing the JSON name is a `Product.UnitPrice` semantics change needing a human decision, its own issue, a live-payload check and a backfill decision. Until that decision is made, treat an imported `UnitPrice` of `0` as possibly a mapping artefact rather than a real Nayax price.
@@ -1751,9 +1766,10 @@ rebuild always replays the product's full history after its transition baseline.
 
 `NayaxSalesSyncController` is a thin adapter that invokes the use case and maps it
 to `POST /api/nayax-sales-sync` (204); a Nayax upstream failure still surfaces as the centralized
-`502` from `NayaxUpstreamExceptionHandler`. `MachineService.GetAll()` no longer imports latest sales
+`502` from `NayaxUpstreamExceptionHandler`. The machine listing (`ListMachineDashboard`, then still
+`MachineService.GetAll()`) no longer imports latest sales
 itself; its only responsibility is calculating machine sales/profit from whatever `NayaxSales` rows
-are already persisted, exactly as `SiteService.GetAll()` already did.
+are already persisted, exactly as the site listing (`GetSiteSummaries`) already did.
 
 `DashboardComponent.refreshSalesDashboard()` (Angular) calls
 `NayaxSalesSyncService.syncLatest()` once and, only after it resolves, loads `MachineService.getAll()`
@@ -2125,8 +2141,10 @@ that holds the published description still. It does three narrowly scoped things
 This boundary is the one place outside the persistence model itself that the API project names
 `InventoryApi.Models` for presentation purposes; the controllers, the use cases and the response
 mappers stay free of it, as issue #304 requires. Nothing global changes: `ProductResponse` and
-`SupplierResponse` keep the contracts the product and supplier endpoints have published since issues
-#302/#303, and if an endpoint ever publishes the EF entity one of the four pinned ids belonged to,
+`SupplierResponse` keep the contracts the product and supplier endpoints already published - since
+issue #302 `ProductResponse` is what the machine-product endpoint publishes too, and the legacy
+`Product` component is registered only by this boundary now, for the pinned schemas that reference
+it - and if an endpoint ever publishes the EF entity one of the four pinned ids belonged to,
 Swashbuckle fails document generation with a duplicate-schema-id error rather than renaming one of
 them silently.
 
@@ -2487,7 +2505,8 @@ permanent conflict.
 
 Products are compared directly (`Product.Id` is the persisted Nayax product identifier; see
 [Nayax product catalogue import](#nayax-product-catalogue-import-issue-300), which already never
-removes a local product Nayax stops returning). Machines have no persisted entity at all - `MachineService` builds machines as a live
+removes a local product Nayax stops returning). Machines have no persisted entity at all - the
+machine dashboard use cases build a machine as a live
 Nayax view - so a machine's local history is derived from its recorded `NayaxSales` rows: the
 `MachineName` on the most recent `MachineAuthorizationTime` is the latest reliable local name, any
 other distinct `MachineName` for the same `MachineID` becomes a historical name, and the current name
@@ -2934,7 +2953,8 @@ Backend and frontend tracks can progress independently when their contracts do n
        the entity-shaped response with a dedicated response DTO, and deleting the two delegators, was
        tracked with the other legacy-delegator removals (#153), not here, because this slice had to keep
        the response contract byte-for-byte identical; the products half of that landed in issue #303
-       below, and the Sites/Machines half is issue #302.
+       below, and the Sites/Machines half in issue #302 (item 9 below), which deleted both delegators
+       and the entity-shaped `ProductResponseMapper` with them.
      - Machine product rows are matched back to their pricing results positionally, not by a
        product-id-keyed lookup, because one machine can list the same catalogue product in more than
        one slot at a different price.
@@ -2958,8 +2978,11 @@ Backend and frontend tracks can progress independently when their contracts do n
        derived `needToOrder`/`isLowStock`/`isReorderAlert`/`projectedStockForReorder` values, which
        the response still computes through `Inventory.Domain.Products.ProductReorderPolicy` rather
        than carrying as data. The machine-slot fields (`machinePrice`, `commissionValue`, `mdbCode`,
-       ...) that the catalogue endpoints have always emitted at their defaults are reproduced as
-       constants so the response stays byte-identical.
+       ...) that the catalogue endpoints have always emitted at their defaults were reproduced as
+       constants so the response stays byte-identical; issue #302 (item 9 below) put a
+       `[JsonIgnore]`d `MachineSlotOverlay` behind them, defaulting to the same values, so the
+       machine-product endpoint could share this response without changing either endpoint's bytes
+       or its published schema.
        `InventoryApi.Tests.DTOs.ProductJsonContractTests` compares the serialised bytes of the new
        response with the entity shape it replaced, for a fully populated and a bare product.
      - **Approved error-path narrowing in `PUT /api/products/{id}`.** The one deliberate status-code
@@ -2975,9 +2998,10 @@ Backend and frontend tracks can progress independently when their contracts do n
        issue #59 gave `StockController` (§ "Domain and application error mapping"). `ProductsControllerTests`
        pins both halves: the unexpected store failure propagates uncaught, and an invalid request
        still answers the unchanged 400 without the store being written to.
-     - **Not in this slice.** `Adapters/Mapping/ProductResponseMapper.cs` is untouched: the
-       machine-product response still uses it, and issue #302 owns that migration together with
-       `SiteService`/`MachineService`. The `price-history` existence check now uses `GetProduct`
+     - **Not in this slice.** `Adapters/Mapping/ProductResponseMapper.cs` was left untouched: the
+       machine-product response still used it, and issue #302 owned that migration together with
+       `SiteService`/`MachineService` - it has since deleted both the mapper and the delegators. The
+       `price-history` existence check now uses `GetProduct`
        directly and keeps its 404. `CreateProduct` is injected but has no route to invoke it - the
        API has never exposed a product-create endpoint, and adding one would be a contract change.
    - **Stock slice done** (issue #282, a child of the #148 umbrella; sibling to the Purchases and
@@ -3251,7 +3275,14 @@ Backend and frontend tracks can progress independently when their contracts do n
    - `Inventory.Application.Sites.GetSiteSummaries`/`GetSiteProducts` and `Inventory.Application.Machines.ListMachineDashboard`/`GetMachineDashboard` are the use cases, calling `INayaxLynxClient` with the same bounded per-site/per-machine fan-out (`Task.WhenAll` over each site's/machine's `GetMachineProductsAsync` calls) the former services used. `Inventory.Application.Sites.ISiteFactsStore`/`ISiteNameResolver` and `Inventory.Application.Machines.IMachineDashboardFactsStore` are their narrow ports. Issue #150 moved commission/fee resolution and payment/status classification to Domain-owned rules and Application use cases/ports; these consumers use those authorities rather than API service wrappers. The ports return already-resolved decimal/boolean facts rather than raw agreements: `ISiteFactsStore.ResolveCardCommissionAsync` takes the distinct candidate retail prices appearing in a site's machine products and returns the commission amount already resolved for each (the exact per-price Domain commission calculation computes each entry, not a re-derived multiplier), and `IMachineDashboardFactsStore.GetFactsAsync` returns each rolling period's already-resolved gross revenue and direct-profit inputs plus the profitability-status inputs, mirroring the former per-sale commission-resolution loop and its exact short-circuiting (an ambiguous or gap-covered agreement, or a missing site mapping with sales present, skips the Nayax fee lookup entirely, exactly as before) fact for fact. `ResolveMachineProductPricing` uses the same Sites financial port, while `EfLatestNayaxSalesStore` uses the Domain transaction-status classifier.
    - **Scoped EF reads serialized (issue #313).** The Nayax fan-out above is unchanged and still concurrent, but no two `ISiteFactsStore` calls are ever in flight together, because the store is scoped and its EF adapter shares one `AppDbContext` (see [Concurrency inside one request: the scoped EF context](#concurrency-inside-one-request-the-scoped-ef-context-issue-313)). `GetSiteProducts` awaits its cost-basis, commission and fee reads one at a time instead of starting all three and joining them with `Task.WhenAll`. `GetSiteSummaries` no longer builds its per-site summaries concurrently: it reads the catalogue activity facts, then loads every site's recent completed sales through one scoped read over the whole fleet's machine ids with the same 16-day lookback each per-site read used, and distributes them per machine in memory, so the per-site aggregation itself is pure. Site-name ordering, machine counts, stock percentages, alert counts, per-site revenue attribution, financial-configuration handling, the API routes and response JSON, and exception behaviour are unchanged; tenancy is unchanged too, since the batched read is still scoped only by the central `AppDbContext` query filters. The focused regression tests live in `backend/InventoryApi.Tests/Application/Sites/` (call-sequence recorders plus the behavioural assertions) and in `EfSiteFactsStoreTenancyTests` (the batched completed-sales read loads no other business's sales).
    - `InventoryApi.Adapters.Persistence.EfSiteFactsStore`/`SiteNameResolverAdapter`/`EfMachineDashboardFactsStore`, `EfSiteCommissionStore`, `EfNayaxProcessingFeeFactsProvider`, and `EfNayaxSalesQueries` are temporary API-owned adapters because they depend on `AppDbContext` and persistence models. Entity-specific EF query expressions remain in these persistence adapters until #153 moves persistence into `Inventory.Infrastructure`; they implement Application-owned ports and apply the authoritative Domain rules. The existing report facts adapters likewise compose the migrated commission and fee use cases and Domain rules.
-   - `InventoryApi.Services.SiteService`/`MachineService` were not deleted: `SitesController`/`MachinesController`, `ISiteService`/`IMachineService`, and their DI registrations are unchanged, and the two classes now only map the migrated use cases' results to the unchanged `SiteSummaryDto`/`SiteProductDto`/`Machine`/`Product` API contracts — the same transitional "legacy service delegates to the new use case" shape the reporting slices used before issue #92's final removal. After issue #240 completed `GetMachineProducts` (item 6 above), `MachineService` holds no `AppDbContext` and no Nayax client at all. Physically deleting these two now-thin delegator classes is left as explicit follow-up work, tracked the same way issue #92 was a separate, later step after every report family had migrated.
+   - `InventoryApi.Services.SiteService`/`MachineService` were not deleted by this slice: it left them as thin delegators that only mapped the migrated use cases' results to the unchanged `SiteSummaryDto`/`SiteProductDto`/`Machine`/`Product` API contracts — the same transitional "legacy service delegates to the new use case" shape the reporting slices used before issue #92's final removal — and physically deleting them was left as explicit follow-up work, tracked the same way issue #92 was a separate, later step after every report family had migrated.
+   - **Sites/Machines delegators removed and the machine responses are API-owned** (issue #302, child 1 of 8 of #153).
+     - **Controllers.** `SitesController` injects `GetSiteSummaries`/`GetSiteProducts` and `MachinesController` injects `GetMachineDashboard`/`ListMachineDashboard`/`ListMachineProducts` directly, alongside the four machine-stock-sync use cases it already held. `SiteService`, `MachineService`, `ISiteService`, `IMachineService` and their two DI registrations in `Program.cs` are deleted; the use cases were already registered by `AddApplicationServices()`. Neither controller names `InventoryApi.Models` any more, and the `Only_the_documented_legacy_services_remain_in_InventoryApi_Services` allow-list shrank by all four files in the same change.
+     - **Response contract.** `InventoryApi.DTOs.MachineResponse` replaced the `InventoryApi.Models.Machine` type the dashboard endpoints serialised, and the machine-product endpoint now serialises the same API-owned `InventoryApi.DTOs.ProductResponse` the catalogue endpoints have served since issue #303 instead of the EF `Product` entity. `InventoryApi.Adapters.Mapping.MachineResponseMapper` projects a `MachineSummary` onto the former; `ProductRecordResponseMapper` gained a `MachineProductRecord` overload that builds the catalogue shape and overlays the slot's price, raw Nayax commission metadata, MDB code, capacity and resolved suggested pricing on it, with the slot's own stock replacing the product's storage stock. The entity-shaped `Adapters/Mapping/ProductResponseMapper.cs` is deleted, so no production code maps a product read model back onto an entity. `SiteResponseMapper` does the site projections the delegator did; the site DTOs were already API-owned, so the site JSON never involved an entity.
+       - One wire shape, not two: the machine-slot values live in a `MachineSlotOverlay` that `ProductResponse` carries as a `[JsonIgnore]` member and exposes through the same six derived properties the catalogue response already published. That is why `/api/products` is byte-identical *and* schema-identical - Swashbuckle describes a property with no setter as `readOnly`, which all six have always been - while a machine slot can fill them. The derived `needToOrder`/`isLowStock`/`isReorderAlert`/`projectedStockForReorder` values still come from `Inventory.Domain.Products.ProductReorderPolicy` over whichever stock the response carries, exactly as the entity computed them.
+       - Routes, status codes and JSON are unchanged: the same keys in the same order (including `machineID`/`actorID`, which a `MachineId`/`ActorId` member would silently have renamed), the same explicit nulls for an unavailable profit or suggestion, and the same 404 for a machine Nayax does not return. `InventoryApi.Tests.DTOs.MachineJsonContractTests` compares the serialised bytes of both responses with the entity shapes they replaced, for a populated and a sparse case each; `MachineAndSiteRouteTests` pins the seven machine and two site routes through the MVC API explorer.
+     - **Published OpenAPI.** The one client-visible change is in the generated document, not the payload: the dashboard operations now describe `MachineResponse` where they described `Machine`, and the machine-product operation describes `ProductResponse` where it described `Product` - the same schema-id derivation issue #303 settled when a migrated endpoint took its own response DTO. The legacy `Product` component stays published for the pinned purchase/supplier-order schemas that reference it (see [OpenAPI documentation](#openapi-documentation)); `Machine` is no longer published at all, since nothing serialises it. `PublishedResponseSchemaContractTests` pins both halves of that, and pins the unchanged `ProductResponse` property list, requiredness and `readOnly` set.
+     - **Not in this slice.** The `Machine` type itself stays in `InventoryApi/Models`, unreferenced by the application and marked as such, because it is the reference value the contract tests compare the new response against and #302's acceptance criteria name the four service files to remove, not it; removing it belongs to item 11's legacy-structure cleanup. The dashboard rules, the Nayax fan-out, the `DateTime.Now` acquisition (issue #310 above), the schema and the API contracts are untouched, and `AppDbContext` and the adapters stay where they are. The actions keep their exact signatures, so the two reads that passed `CancellationToken.None` through the delegator still do; threading a real request token through them would change cancellation behaviour and belongs with the remaining `AppDbContext` migration.
    - **Business-day clock acquisition done** (issue #310). This slice originally left the server-local `DateTime.Now`/`DateTime.Today` acquisition in place and moved only the range *arithmetic* to `MachineDashboardPeriods`; issue #310 removed the host-clock reads. `Inventory.Application.Machines.MachineDashboardWindow` now resolves the six rolling periods once per request from the `Australia/Sydney` business day through `IClock`/`IBusinessCalendar` and expresses their boundaries as UTC instants, the time base `MachineAuthorizationTime` is stored in; `IMachineDashboardFactsStore.GetFactsAsync` takes that window instead of a bare "now". `GetSiteSummaries` resolves one window per request (as it has read one instant per request since #313 batched its sales read), and `ListMachineDashboard` now resolves one per request instead of one per machine, so every machine in a listing shares identical periods. `GetSiteProducts` and `ResolveMachineProductPricing` select their effective-dated commission/fee configuration with `IBusinessCalendar.Today`. Each period also carries the Sydney business dates it covers, which is how the Nayax processing fee it subtracts is charged to exactly the sales its revenue counts. See [Time](#time) above for the complete rule and the architecture test that enforces it.
 
 10. **Imports slices done** (umbrella issue #151, three children; **this completes the #151 imports
@@ -3320,7 +3351,8 @@ Backend and frontend tracks can progress independently when their contracts do n
     - Done for stock (issue #282, item 6 above): `InventoryApi.Services.StockService`, `InventoryApi.Services.Interfaces.IStockService`, their dependency-injection registration, and every production and test caller were removed, and both source files were deleted.
     - Done for imports (issue #301, item 10 above): `InventoryApi.Services.ImportService` (both partials), `InventoryApi.Services.Interfaces.IImportService`, the API-owned `NayaxSalesWorkbook` and `NayaxProductMatcher` helpers, their dependency-injection registration, and every production and test caller were removed, and all five source files were deleted.
     - Done for products (issue #303, item 6 above) and for purchases and supplier orders (issue #304, item 7 above): `ProductService`/`IProductService`, `PurchaseService`/`IPurchaseService` and `SupplierOrderService`/`ISupplierOrderService`, their dependency-injection registrations, and every production and test caller were removed, the source files were deleted, and each slice's endpoints moved to an API-owned response DTO in the same change.
-    - Still pending for the remaining feature areas (the Sites/Machines legacy delegator classes above, and the remaining direct-access controllers/services); only after each is migrated and tests prove equivalent behavior does this step complete overall.
+    - Done for sites and machines (issue #302, item 9 above): `SiteService`/`ISiteService` and `MachineService`/`IMachineService`, their dependency-injection registrations, and every production and test caller were removed, all four source files and the entity-shaped `Adapters/Mapping/ProductResponseMapper.cs` were deleted, and the machine endpoints moved to API-owned response DTOs in the same change. `InventoryApi/Services` is down to the shared `SiteNameResolver` helper and `InventoryApi/Services/Interfaces` no longer exists. The now-unreferenced `InventoryApi.Models.Machine` response type is left in place as the contract tests' reference value, named here as the one piece of legacy structure this step still owns for machines.
+    - Still pending for the remaining feature areas (the `InventoryApi.Models.Machine` leftover above, and the remaining direct-access controllers/services); only after each is migrated and tests prove equivalent behavior does this step complete overall.
 
 ### Frontend migration track
 

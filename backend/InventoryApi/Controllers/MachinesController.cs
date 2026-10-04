@@ -1,6 +1,7 @@
+using Inventory.Application.Machines;
 using Inventory.Application.MachineStockSync;
-using InventoryApi.Models;
-using InventoryApi.Services.Interfaces;
+using InventoryApi.Adapters.Mapping;
+using InventoryApi.DTOs;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Identity.Web.Resource;
@@ -13,20 +14,26 @@ namespace InventoryApi.Controllers;
 [RequiredScope("access_as_user")]
 public class MachinesController : ControllerBase
 {
-    private readonly IMachineService _service;
+    private readonly GetMachineDashboard _getMachineDashboard;
+    private readonly ListMachineDashboard _listMachineDashboard;
+    private readonly ListMachineProducts _listMachineProducts;
     private readonly SyncMachineStockFromNayax _syncMachineStock;
     private readonly ApplyMachineStockSync _applyMachineStockSync;
     private readonly ResolveMachineStockDuplicate _resolveMachineStockDuplicate;
     private readonly ResolveMachineStockEventsAsAlreadyRecorded _resolveMachineStockEventsAsAlreadyRecorded;
 
     public MachinesController(
-        IMachineService service,
+        GetMachineDashboard getMachineDashboard,
+        ListMachineDashboard listMachineDashboard,
+        ListMachineProducts listMachineProducts,
         SyncMachineStockFromNayax syncMachineStock,
         ApplyMachineStockSync applyMachineStockSync,
         ResolveMachineStockDuplicate resolveMachineStockDuplicate,
         ResolveMachineStockEventsAsAlreadyRecorded resolveMachineStockEventsAsAlreadyRecorded)
     {
-        _service = service;
+        _getMachineDashboard = getMachineDashboard;
+        _listMachineDashboard = listMachineDashboard;
+        _listMachineProducts = listMachineProducts;
         _syncMachineStock = syncMachineStock;
         _applyMachineStockSync = applyMachineStockSync;
         _resolveMachineStockDuplicate = resolveMachineStockDuplicate;
@@ -34,24 +41,24 @@ public class MachinesController : ControllerBase
     }
 
     [HttpGet("{id:long}")]
-    public async Task<ActionResult<Machine>> GetById(long id)
+    public async Task<ActionResult<MachineResponse>> GetById(long id)
     {
-        var machine = await _service.GetById(id);
-        return machine is null ? NotFound() : Ok(machine);
+        var machine = await _getMachineDashboard.Handle(id, CancellationToken.None);
+        return machine is null ? NotFound() : Ok(MachineResponseMapper.ToResponse(machine));
     }
 
     [HttpGet]
-    public async Task<ActionResult<List<Machine>>> GetAll()
+    public async Task<ActionResult<List<MachineResponse>>> GetAll()
     {
-        var machines = await _service.GetAll();
-        return Ok(machines);
+        var machines = await _listMachineDashboard.Handle(CancellationToken.None);
+        return Ok(machines.Select(MachineResponseMapper.ToResponse).ToList());
     }
 
     [HttpGet("{id:long}/products")]
-    public async Task<ActionResult<List<Product>>> GetMachineProducts(long id)
+    public async Task<ActionResult<List<ProductResponse>>> GetMachineProducts(long id)
     {
-        var products = await _service.GetMachineProducts(id);
-        return Ok(products);
+        var products = await _listMachineProducts.Handle(id, CancellationToken.None);
+        return Ok(products.Select(ProductRecordResponseMapper.ToResponse).ToList());
     }
 
     // Fetches new Nayax stock-adjustment alerts and returns a reconciliation preview; it never
