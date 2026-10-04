@@ -249,6 +249,28 @@ public class RebuildProductCostTests
         Assert.Null(store.StagedPosition);
     }
 
+    /// <summary>
+    /// Issue #362: a real rebuild must decide before it writes anything. A fatal history leaves the
+    /// caller's unit of work completely untouched - no replayed movement or sale cost and no product
+    /// position - so a batch caller can save the products that rebuilt cleanly after catching this.
+    /// </summary>
+    [Fact]
+    public async Task Fatal_data_quality_issue_stages_neither_the_replay_nor_the_product_position()
+    {
+        var store = new FakeLedgerStore(new InventoryCostLedger(
+            new CostReplayProduct(1, 0, null, null),
+            [new CostReplayAdjustment(1, Day(1), DomainStock.StockAdjustmentReason.Restock, 1, 2m, true)],
+            [new CostReplaySale(9, Day(2)), new CostReplaySale(10, Day(3))],
+            null));
+
+        var exception = await Assert.ThrowsAsync<InventoryCostDataQualityException>(
+            () => new RebuildProductCost(store).RebuildAsync(1, Day(1)));
+
+        Assert.Contains("has no known opening cost", exception.Message);
+        Assert.False(store.ReplayStaged);
+        Assert.Null(store.StagedPosition);
+    }
+
     [Fact]
     public async Task Dry_run_stages_nothing_and_does_not_throw_for_a_fatal_issue()
     {
