@@ -553,6 +553,25 @@ Quality settings are centralised so every backend project gets them:
 
 The complete invariants and change rules are in [AGENTS.md](AGENTS.md).
 
+## Costing repair (Admin page)
+
+The Admin page's **Costing Repair** section is how an operator restores a product's cost history
+when it has a fatal missing-opening or unknown-cost costing issue: select the product, enter the
+quantity, unit cost, reason and effective date/time (entered and shown in Sydney time, converted
+to UTC for the API), and **Preview repair** to see the cost position before and after, the
+resulting average unit cost, the first previously uncostable sale, the projected position once the
+rest of the history replays, and any fatal issues still remaining. **Apply repair** only becomes
+available once that preview is shown, and reapplies exactly the previewed proposal; if the
+product's cost history changed in the meantime, the apply is refused and asks for a fresh preview.
+The product's repair history is shown underneath, newest first.
+
+A costing repair is a human-entered historical correction: it changes the product's historical
+cost of goods sold from the effective time onward, and it is never proof that the recorded history
+is correct, only an auditable explanation for a specific situation. It never changes physical
+stock, machine quantities, or stock adjustments. Use a real purchase or a stock correction instead
+when what is actually wrong is physical stock, not costing history - a repair exists only to record
+costing value that was never recorded in the first place.
+
 ## Delivery workflow
 
 Changes are made on feature branches created from `develop` and validated through pull requests that target `develop`. Every pull request to `develop` or `main` runs the validation workflow. A push to `develop` builds and tests the backend without deploying. Production releases are separate pull requests from `develop` to `main`; a merge to `main` makes the code releasable but deploys nothing. A human deploys production by starting the **Deploy Production** workflow from the Actions tab for an exact `main` commit; it validates that commit, reports the database migrations production startup is expected to apply, deploys the API, checks `/health/ready`, and then deploys the frontend from the same commit (see `docs/automation.md` § Deploy Production). After opening a pull request, an automated engineering agent may update only its feature branch, for at most two permitted repair attempts in response to CI or review failures, and then returns control to a human. It never merges or deploys. An agent may prepare a release pull request only when a human explicitly requests it; a human reviews and merges that pull request, and a human starts Deploy Production.

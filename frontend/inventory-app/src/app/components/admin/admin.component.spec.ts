@@ -8,6 +8,9 @@ import { NayaxSettingsService } from '../../services/nayax-settings.service';
 import { SiteService } from '../../services/site.service';
 import { ProductService } from '../../services/product.service';
 import { InventoryCostBaselineSource, InventoryCostTransitionPreview, InventoryCostTransitionService } from '../../services/inventory-cost-transition.service';
+import { InventoryCostRepairService } from '../../services/inventory-cost-repair.service';
+import { CostingRepairComponent } from './costing-repair/costing-repair.component';
+import { Product } from '../../models/models';
 
 function transitionPreview(overrides: Partial<InventoryCostTransitionPreview> = {}): InventoryCostTransitionPreview {
   return {
@@ -29,7 +32,8 @@ async function render() {
       { provide: NayaxSettingsService, useValue: { getRates: jest.fn(() => of([])) } },
       { provide: SiteService, useValue: { getAll: jest.fn(() => of([])) } },
       { provide: ProductService, useValue: { getAll: jest.fn(() => of([])) } },
-      { provide: InventoryCostTransitionService, useValue: {} }
+      { provide: InventoryCostTransitionService, useValue: {} },
+      { provide: InventoryCostRepairService, useValue: {} }
     ]
   }).compileComponents();
 
@@ -64,5 +68,34 @@ describe('AdminComponent inventory-cost transition cutoff timestamp display (iss
     fixture.detectChanges();
 
     expect(host.textContent).toContain('15/06/2026, 10:00 am');
+  });
+});
+
+describe('AdminComponent Costing Repair composition (issue #361)', () => {
+  it('composes the Costing Repair workflow as its own feature component and passes it the loaded products', async () => {
+    const product = { id: 1, name: 'Coke Zero' } as Product;
+    await TestBed.configureTestingModule({
+      imports: [AdminComponent],
+      providers: [
+        { provide: ImportService, useValue: {} },
+        { provide: ReportingService, useValue: { siteCommissionAgreements: jest.fn(() => of([])) } },
+        { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() } },
+        { provide: NayaxSettingsService, useValue: { getRates: jest.fn(() => of([])) } },
+        { provide: SiteService, useValue: { getAll: jest.fn(() => of([])) } },
+        { provide: ProductService, useValue: { getAll: jest.fn(() => of([product])) } },
+        { provide: InventoryCostTransitionService, useValue: {} },
+        { provide: InventoryCostRepairService, useValue: {} }
+      ]
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(AdminComponent);
+    fixture.detectChanges();
+
+    const repairElement = (fixture.nativeElement as HTMLElement).querySelector('app-costing-repair');
+    expect(repairElement).not.toBeNull();
+    const repairComponent = fixture.debugElement.query(
+      element => element.componentInstance instanceof CostingRepairComponent
+    ).componentInstance as CostingRepairComponent;
+    expect(repairComponent.products).toEqual([product]);
   });
 });

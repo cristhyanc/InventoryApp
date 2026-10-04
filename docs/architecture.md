@@ -1661,8 +1661,26 @@ and it never substitutes for a real purchase, correction or write-off.
   scrutiny. `InventoryCostRepairApiTests` exercises all of this through the real request pipeline on
   relational SQLite: the JSON contracts, the fingerprint round trip, the `400` mappings, the UTC
   timestamps, the unauthenticated and missing-scope refusals, and two businesses proving a
-  cross-business product is indistinguishable from a missing one. The UI remains a separate task
-  (the UI child of #358).
+  cross-business product is indistinguishable from a missing one.
+- **The UI (issue #361)** is `frontend/inventory-app/src/app/components/admin/costing-repair/
+  costing-repair.component.ts`'s standalone `CostingRepairComponent`, composed into `AdminComponent`
+  through `[products]` rather than grown inside the page component, per [Page composition
+  boundary](#page-composition-boundary-issue-191): it owns the whole preview/apply/history
+  workflow's own form, loading and error state, and its own calls to the three endpoints above.
+  The effective date/time is entered and displayed in Sydney time and converted to/from the UTC
+  instant the contract carries through `zonedDateTimeToUtc`/`currentDateTimeInTimeZone`/
+  `toDateTimeLocalValue`/`fromDateTimeLocalValue` (added to `business-time-zone.ts` alongside the
+  existing `startOfDayUtc`, which issue #361 re-expressed as `zonedDateTimeToUtc` called with a
+  midnight time-of-day so the two stay one conversion, not two). Apply always resubmits exactly the
+  previewed proposal object - never the form's current field values - matching the inventory-cost
+  transition UI's own apply call; a stale-preview `400` (or any other apply failure) clears the
+  shown preview so Apply is disabled until a fresh preview is taken, consistent with the use case's
+  own "preview again" message. The product dropdown reuses the product list `AdminComponent`
+  already loads for the inventory-cost transition section; #361 does not add a per-product
+  fatal-issue list of its own - the Dashboard's existing aggregate unknown-cost
+  count/completeness indicator (see [Dashboard "Inventory Value" tile](#dashboard-inventory-value-tile-issue-42))
+  remains the signal that a product may need one, and the preview itself reports whether the
+  selected product still has a fatal issue once the proposed repair is applied.
 
 #### Dashboard "Inventory Value" tile (issue #42)
 
@@ -1790,7 +1808,8 @@ date, a payout date modelled as a date, or a supplier price-history purchase dat
 component that could be shifted and is rendered with the ordinary `date` pipe (e.g. `'dd/MM/yyyy'`/
 `'mediumDate'`) exactly as before; `BusinessDateTimePipe` is never applied to these. Transaction Sales
 (`TransactionSalesReportComponent`), the Admin inventory-cost transition preview/batch-preview cutoff
-timestamps (`AdminComponent`), and the Pick List snapshot (`PickListComponent`) use
+timestamps (`AdminComponent`), the costing-repair preview/history effective and recorded timestamps
+(`CostingRepairComponent`, issue #361), and the Pick List snapshot (`PickListComponent`) use
 `BusinessDateTimePipe` for this reason; `MachineRestockSyncComponent`'s reconciliation table (issue
 #231) and `StockHistoryComponent`'s manual-restock timestamp (issue #230) already did.
 
