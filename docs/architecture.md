@@ -370,7 +370,7 @@ az storage account management-policy show \
   --account-name <storage-account> --resource-group <resource-group>
 ```
 
-Seven properties of that policy are decisions rather than syntax:
+Eight properties of that policy are decisions rather than syntax:
 
 - **A lifecycle `prefixMatch` starts with the container name**, so the prefixes above must be
   edited to match whatever `BackupStorage__ContainerName` is actually set to. The development
@@ -398,12 +398,29 @@ Seven properties of that policy are decisions rather than syntax:
   take up to 24 hours to take effect and the first run after enabling can take up to 48 hours, so
   an object a day or two past its threshold is expected, not a policy failure. Nothing in the
   recovery design depends on prompt deletion.
-- **A lifecycle delete is permanent unless the account says otherwise.** If blob soft delete or
-  versioning is enabled on the account, add the corresponding `snapshot`/`version` delete actions
-  or expired copies accumulate and retention stops being bounded; if neither is enabled, a
-  mis-scoped prefix is unrecoverable. Enabling a short blob soft-delete window as a safety net
-  against a mistyped prefix is a reasonable human decision, and it is a decision, not a
-  requirement.
+- **Blob soft delete needs no extra action, and does not unbound retention.** With soft delete
+  enabled on the account, an object the lifecycle engine deletes becomes a soft-deleted blob and is
+  retained for the account's soft-delete retention period, after which the storage service
+  permanently deletes it by itself. Nothing has to be added to the policy above to purge
+  soft-deleted blobs, and no lifecycle action can target them. Retention therefore stays bounded:
+  the only effects are that the container's billed size trails the policy by the soft-delete window,
+  and that a mis-scoped prefix stays recoverable for that long. Enabling a short soft-delete window
+  purely as that safety net is a reasonable human decision (see [Decisions a human must confirm
+  first](#decisions-a-human-must-confirm-first)), and it is a decision, not a requirement. With soft
+  delete off, a lifecycle delete is immediate and permanent and a mis-scoped prefix is
+  unrecoverable — which is what the disjoint prefixes above exist to prevent.
+- **Blob versioning and snapshots do need their own actions.** This is the case where the policy
+  above would be genuinely incomplete. Previous versions and snapshots are not covered by a
+  `baseBlob` action, so bounded retention requires adding the matching `version` and `snapshot`
+  delete actions; without them those copies accumulate behind the expired current versions. Either
+  feature can also change what happens to the current version — with versioning enabled a
+  `baseBlob` delete turns the current version into a previous version rather than removing the data,
+  and a base blob that still has an active snapshot is not removed by a `baseBlob` delete at all.
+  Neither feature is enabled on the backup container by this design, and leaving both off is the
+  recommendation: a backup object is written once and never modified, so a version or snapshot of it
+  carries nothing the `daily/`/`monthly/` names do not already carry. A human who turns either on
+  owns extending this policy in the same change and confirming with `az storage account
+  management-policy show` that the extra actions are present.
 
 **How a monthly recovery point survives daily expiry.** The 30-day rule and the 12-month rule
 would be in conflict if the month's recovery point were a *reference* to a daily snapshot. It is
@@ -454,12 +471,20 @@ AppServiceConsoleLogs
 | project TimeGenerated, ResultDescription
 ```
 
-Rule settings: evaluation frequency 1 hour, time range 1 hour (frequency equal to the window, so
-every minute is examined exactly once), threshold "number of results greater than 0", severity 2.
-Two caveats a human must close when applying it: confirm which diagnostic category actually carries
-the job's standard output on the deployed plan (on a Linux App Service the container's
-stdout/stderr lands in `AppServiceConsoleLogs`) and, once #333 exists, re-check the query against
-one real failed run, because this alert is specified before the job that feeds it. Where
+Rule settings: evaluation frequency 1 hour, time range **2 hours**, threshold "number of results
+greater than 0", severity 2. The window is deliberately twice the frequency. A rule evaluates only
+over log data that has already been ingested, and both ingestion and evaluation can be delayed, so
+a window equal to the frequency does **not** guarantee that every minute is examined exactly once:
+a failure line that lands after its own hour was evaluated would never be looked at again. The
+overlapping hour means a failure line is normally examined twice and one failed run can notify
+twice, which is accepted for the same reason as Alert 2's 36-hour window — for the business's last
+line of defence a duplicate notification is a far cheaper mistake than a missed one. A human who
+prefers at most one notification per failure sets the time range equal to the frequency instead,
+and accepts that a late-ingested failure line can then be missed entirely. Two further caveats a
+human must close when applying it: confirm which diagnostic category actually carries the job's
+standard output on the deployed plan (on a Linux App Service the container's stdout/stderr lands in
+`AppServiceConsoleLogs`) and, once #333 exists, re-check the query against one real failed run,
+because this alert is specified before the job that feeds it. Where
 `APPLICATIONINSIGHTS_CONNECTION_STRING` is configured (see [Observability and error
 telemetry](#observability-and-error-telemetry-issue-165)), the same `ILogger` output is also
 queryable in Application Insights `traces`; the rule above deliberately does not depend on that,
@@ -651,7 +676,9 @@ complete until they are:
   whether severity 1/2 matches how they are monitored.
 - **Rehearsal cadence**, and who owns running it.
 - **Optional blob soft delete** on the backup container as a safety net against a mis-scoped
-  lifecycle prefix.
+  lifecycle prefix, and whether blob versioning and snapshots stay disabled on the account. Soft
+  delete needs no change to the lifecycle policy; enabling versioning or snapshots does, and the
+  policy must be extended in the same change.
 
 ## Current repository structure
 
