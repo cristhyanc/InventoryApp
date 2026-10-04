@@ -1,3 +1,4 @@
+using Inventory.Application.Machines;
 using Inventory.Application.Products;
 using InventoryApi.DTOs;
 using InventoryApi.Models;
@@ -12,8 +13,10 @@ namespace InventoryApi.Adapters.Mapping;
 /// <c>Inventory.Domain.Products.ProductReorderPolicy</c>, so this mapping cannot introduce a second
 /// copy of a reorder formula.
 ///
-/// The machine-product view keeps the entity-shaped response and its own
-/// <see cref="ProductResponseMapper"/> until issue #302 migrates it; nothing here is shared with it.
+/// Since issue #302 the machine-product view is projected here too, through the
+/// <see cref="ToResponse(MachineProductRecord)"/> overload below, so the two endpoints that serve a
+/// product cannot drift apart: the catalogue shape is built once and the machine slot's own values
+/// are overlaid on it.
 /// </summary>
 public static class ProductRecordResponseMapper
 {
@@ -72,4 +75,25 @@ public static class ProductRecordResponseMapper
         MachineReplenishmentNeed = record.MachineReplenishmentNeed,
         OnOrderQuantity = record.OnOrderQuantity,
     };
+
+    /// <summary>
+    /// One slot in a machine's product listing (issue #302): the catalogue product it dispenses,
+    /// with the machine's own price, raw Nayax commission metadata, MDB code, slot capacity and
+    /// resolved suggested pricing overlaid, and with the slot's stock replacing the product's
+    /// storage stock - the same overlay, in the same order, the retired <c>MachineService</c>
+    /// applied to the entity. The slot stock override is why the derived reorder values the response
+    /// computes describe this machine slot rather than the storage shelf, exactly as before.
+    /// </summary>
+    public static ProductResponse ToResponse(MachineProductRecord record) =>
+        ToResponse(record.Product) with
+        {
+            QuantityInStock = record.QuantityInStock,
+            MachineSlot = new MachineSlotOverlay(
+                record.MachinePrice,
+                record.CommissionValue,
+                record.SuggestedNetValue,
+                record.SuggestedPriceValue,
+                record.MdbCode,
+                record.MaxStockInMachine),
+        };
 }

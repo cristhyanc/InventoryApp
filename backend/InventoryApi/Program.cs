@@ -174,10 +174,6 @@ nayaxLynxOptions.AccessToken = NayaxLynxConfiguration.ResolveAccessToken(
     builder.Configuration["Nayax:Token"]);
 builder.Services.AddNayaxLynxClient(nayaxLynxOptions);
 
-// Business services
-builder.Services.AddScoped<InventoryApi.Services.Interfaces.IMachineService, InventoryApi.Services.MachineService>();
-builder.Services.AddScoped<InventoryApi.Services.Interfaces.ISiteService, InventoryApi.Services.SiteService>();
-
 // Tenancy (issue #64). Claims parsing stays at this boundary: EntraActorIdentityAccessor is the
 // only implementation of the Application's actor port, and the current-business abstraction
 // itself (ICurrentBusinessProvider) is registered by AddApplicationServices().
