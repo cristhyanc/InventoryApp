@@ -1,2 +1,7 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# The scheduled database backup WebJob (issue #333) is executed by bash inside a Linux App Service
+# and is published from whatever checkout built it, so its files must keep LF endings everywhere -
+# a CRLF run.sh fails on its first line. Scoped to the job so no other file's checkout changes.
+backend/InventoryApi/App_Data/jobs/** text eol=lf
