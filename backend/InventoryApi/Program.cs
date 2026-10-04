@@ -177,7 +177,6 @@ builder.Services.AddNayaxLynxClient(nayaxLynxOptions);
 // Business services
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.IMachineService, InventoryApi.Services.MachineService>();
 builder.Services.AddScoped<InventoryApi.Services.Interfaces.ISiteService, InventoryApi.Services.SiteService>();
-builder.Services.AddScoped<InventoryApi.Services.Interfaces.IImportService, InventoryApi.Services.ImportService>();
 
 // Tenancy (issue #64). Claims parsing stays at this boundary: EntraActorIdentityAccessor is the
 // only implementation of the Application's actor port, and the current-business abstraction
@@ -311,6 +310,11 @@ builder.Services.AddScoped<IImportedReimbursementStore, EfImportedReimbursementS
 // Temporary API-owned adapter for the Nayax product catalogue import persistence port (issue
 // #300); see EfNayaxProductCatalogImportStore.
 builder.Services.AddScoped<INayaxProductCatalogImportStore, EfNayaxProductCatalogImportStore>();
+
+// Temporary API-owned adapter for the uploaded Nayax sales import persistence port (issue #301);
+// see EfNayaxSalesImportStore. Its workbook-reading counterpart is a real Infrastructure adapter,
+// registered by AddInfrastructureServices().
+builder.Services.AddScoped<INayaxSalesImportStore, EfNayaxSalesImportStore>();
 
 var app = builder.Build();
 

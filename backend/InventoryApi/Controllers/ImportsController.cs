@@ -1,5 +1,4 @@
 using Inventory.Application.Imports;
-using InventoryApi.Services.Interfaces;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Identity.Web.Resource;
@@ -12,17 +11,17 @@ namespace InventoryApi.Controllers;
 [RequiredScope("access_as_user")]
 public sealed class ImportsController : ControllerBase
 {
-    private readonly IImportService _service;
     private readonly ImportNayaxProductCatalog _importProductCatalog;
+    private readonly ImportNayaxSales _importNayaxSales;
     private readonly ImportPendingReimbursementXmlFiles _importPendingXmlFiles;
 
     public ImportsController(
-        IImportService service,
         ImportNayaxProductCatalog importProductCatalog,
+        ImportNayaxSales importNayaxSales,
         ImportPendingReimbursementXmlFiles importPendingXmlFiles)
     {
-        _service = service;
         _importProductCatalog = importProductCatalog;
+        _importNayaxSales = importNayaxSales;
         _importPendingXmlFiles = importPendingXmlFiles;
     }
 
@@ -49,10 +48,18 @@ public sealed class ImportsController : ControllerBase
 
         try
         {
-            return Ok(await _service.ImportNayaxSalesFromExcelAsync(file, cancellationToken));
+            // The IFormFile stays here, at the HTTP boundary: the use case receives only the
+            // uploaded name and a way to open the bytes, and opens and disposes the stream itself.
+            return Ok(await _importNayaxSales.Handle(
+                new NayaxSalesFileInput(file.FileName, file.OpenReadStream), cancellationToken));
         }
         catch (InvalidOperationException ex)
         {
+            // Unchanged from before the import's migration, including the unsupported-format
+            // message the use case throws. Converting this action to the centralized domain-error
+            // mapping would change its response body from a bare string to ProblemDetails and is
+            // still its own later change (docs/architecture.md § Domain and application error
+            // mapping).
             return BadRequest(ex.Message);
         }
     }

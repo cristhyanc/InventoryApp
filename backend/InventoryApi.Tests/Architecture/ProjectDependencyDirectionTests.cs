@@ -180,9 +180,13 @@ public class ProjectDependencyDirectionTests
     /// that pointed <c>ProductsController</c> straight at the Products use cases and gave it an
     /// API-owned response DTO, and issue #304 removed <c>PurchaseService.cs</c>/<c>SupplierOrderService.cs</c>
     /// and their interfaces in the same change that did the same for
-    /// <c>PurchasesController</c>/<c>SupplierOrdersController</c>.
-    /// <c>Interfaces/IImportService.cs</c> stays on the list for the Nayax
-    /// sales import, which the last child of #151 migrates; <c>MachineService.cs</c>/<c>SiteService.cs</c>
+    /// <c>PurchasesController</c>/<c>SupplierOrdersController</c>. Issue #301, the last child of #151,
+    /// removed the import feature entirely: <c>ImportService.cs</c>, <c>ImportService.NayaxSales.cs</c>,
+    /// <c>Interfaces/IImportService.cs</c> and <c>NayaxSalesWorkbook.cs</c> left with the uploaded
+    /// Nayax sales import's move to <c>Inventory.Application.Imports.ImportNayaxSales</c>, and
+    /// <c>NayaxProductMatcher.cs</c> left with them because its last callers now use the Domain
+    /// <c>Inventory.Domain.Reporting.ProductMatching.ProductMatcher</c> directly.
+    /// <c>MachineService.cs</c>/<c>SiteService.cs</c>
     /// and their interfaces stay for the Sites/Machines delegator removal (issue #302).
     /// </summary>
     [Fact]
@@ -190,14 +194,9 @@ public class ProjectDependencyDirectionTests
     {
         string[] allowedRelativePaths =
         [
-            "ImportService.cs",
-            "ImportService.NayaxSales.cs",
-            "Interfaces/IImportService.cs",
             "Interfaces/IMachineService.cs",
             "Interfaces/ISiteService.cs",
             "MachineService.cs",
-            "NayaxProductMatcher.cs",
-            "NayaxSalesWorkbook.cs",
             "SiteNameResolver.cs",
             "SiteService.cs",
         ];

@@ -2,7 +2,6 @@ using System.Text.Json;
 using Inventory.Application.Imports;
 using Inventory.Application.Time;
 using InventoryApi.Controllers;
-using InventoryApi.Services.Interfaces;
 using InventoryApi.Tests.Swagger;
 using Microsoft.AspNetCore.Mvc;
 using Moq;
@@ -14,7 +13,7 @@ namespace InventoryApi.Tests.Controllers;
 /// Locks the HTTP surface of <c>POST api/imports/pending-xml</c> across its move into
 /// <see cref="ImportPendingReimbursementXmlFiles"/> (issue #299): the same route, the same
 /// <c>200 OK</c> with the same four count keys the Angular client reads, and a controller that
-/// now calls the use case directly instead of <c>IImportService</c>.
+/// calls the use case directly rather than the removed legacy import service.
 /// </summary>
 public class ImportsControllerPendingXmlTests
 {
@@ -39,11 +38,15 @@ public class ImportsControllerPendingXmlTests
         var store = new Mock<IImportedReimbursementStore>();
         store.Setup(x => x.HasFileWithContentHashAsync("HASH-A", It.IsAny<CancellationToken>())).ReturnsAsync(false);
         var controller = new ImportsController(
-            Mock.Of<IImportService>(),
             new ImportNayaxProductCatalog(
                 Mock.Of<Inventory.Application.Nayax.INayaxLynxClient>(),
                 Mock.Of<INayaxProductCatalogImportStore>(),
                 Mock.Of<IClock>()),
+            new ImportNayaxSales(
+                Mock.Of<INayaxSalesWorkbookReader>(),
+                Mock.Of<INayaxSalesImportStore>(),
+                Mock.Of<Inventory.Application.Costing.ICostSale>(),
+                Mock.Of<Inventory.Application.Costing.IRebuildProductCost>()),
             new ImportPendingReimbursementXmlFiles(source.Object, store.Object, Mock.Of<IClock>()));
 
         var result = await controller.ImportPendingXmlFiles(CancellationToken.None);

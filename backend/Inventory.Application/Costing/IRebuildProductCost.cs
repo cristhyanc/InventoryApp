@@ -3,8 +3,8 @@ namespace Inventory.Application.Costing;
 /// <summary>
 /// The authoritative product-cost-rebuild use case's contract (issue #296), replacing the former
 /// <c>InventoryApi.Services.Interfaces.IInventoryCostRebuildService</c>, so the purchase, product,
-/// stock, Take Inventory, machine-stock and sales-sync adapters, the sale-costing and
-/// inventory-cost transition use cases, and the not-yet-migrated import service depend on it rather
+/// stock, Take Inventory, machine-stock and sales-sync adapters and the sale-costing, sales-import
+/// and inventory-cost transition use cases depend on it rather
 /// than on a concrete class.
 /// </summary>
 public interface IRebuildProductCost

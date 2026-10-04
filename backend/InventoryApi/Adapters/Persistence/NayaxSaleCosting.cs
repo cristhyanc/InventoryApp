@@ -6,8 +6,9 @@ namespace InventoryApi.Adapters.Persistence;
 
 /// <summary>
 /// Maps the <see cref="NayaxSales"/> persistence entity to and from the Application sale-costing
-/// contract (issue #297), for the callers that cost a sale they are importing - the Nayax
-/// transaction import in <c>ImportService</c> and <see cref="EfLatestNayaxSalesStore"/>. It decides
+/// contract (issue #297), for the adapters that cost a sale they are importing -
+/// <see cref="EfNayaxSalesImportStore"/> (the uploaded transaction export, issue #301) and
+/// <see cref="EfLatestNayaxSalesStore"/> (the latest-sales synchronization). It decides
 /// nothing: <see cref="ICostSale"/> decides the cost and this only writes it onto the entity.
 /// </summary>
 public static class NayaxSaleCosting

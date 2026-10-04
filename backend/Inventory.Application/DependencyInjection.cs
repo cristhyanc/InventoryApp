@@ -110,6 +110,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<GetInventoryCostRepairHistory>();
         services.AddScoped<ApplyInventoryCount>();
         services.AddScoped<ImportNayaxProductCatalog>();
+        services.AddScoped<ImportNayaxSales>();
         services.AddScoped<ImportPendingReimbursementXmlFiles>();
         services.AddScoped<GetStockHistory>();
         services.AddScoped<GetRestockCostSuggestion>();

@@ -1,12 +1,10 @@
+using Inventory.Application.Imports;
+using Inventory.Infrastructure.Imports;
+using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using InventoryApi.Models;
-using InventoryApi.Services;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Http;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Logging;
-using Moq;
 using Xunit;
 
 using Inventory.Domain.FinancialConfiguration;
@@ -69,7 +67,7 @@ public sealed class NayaxImportTenantIsolationTests : IDisposable
 
         await using (var b = TestAppDbContext.For(_options, BusinessB))
         {
-            var result = await CreateImportService(b).ImportNayaxSalesFromExcelAsync(
+            var result = await CreateSalesImport(b).Handle(
                 SalesCsv(SharedTransactionId, settlementValue: 99m));
 
             Assert.Equal(1, result.Imported);
@@ -100,7 +98,7 @@ public sealed class NayaxImportTenantIsolationTests : IDisposable
 
         await using (var a = TestAppDbContext.For(_options, BusinessA))
         {
-            var result = await CreateImportService(a).ImportNayaxSalesFromExcelAsync(
+            var result = await CreateSalesImport(a).Handle(
                 SalesCsv(SharedTransactionId, settlementValue: 42m));
 
             Assert.Equal(0, result.Imported);
@@ -155,22 +153,25 @@ public sealed class NayaxImportTenantIsolationTests : IDisposable
         await db.SaveChangesAsync();
     }
 
-    private static IFormFile SalesCsv(long transactionId, decimal settlementValue)
+    private static NayaxSalesFileInput SalesCsv(long transactionId, decimal settlementValue)
     {
         var content =
             "TransactionID,TransactionStatusId,MachineID,NayaxProductId,SettlementValue,ProductName,MachineAuthorizationTime\n"
             + $"{transactionId},12,1,999,{settlementValue},Snack,2/9/2026 2:30:00 PM";
-        var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(content));
-        return new FormFile(stream, 0, stream.Length, "file", "sales.csv");
+        return new NayaxSalesFileInput("sales.csv", () => new MemoryStream(System.Text.Encoding.UTF8.GetBytes(content)));
     }
 
-    private static ImportService CreateImportService(AppDbContext db)
+    /// <summary>
+    /// The uploaded Nayax sales import use case (issue #301) over its real workbook reader and the
+    /// real <see cref="EfNayaxSalesImportStore"/>, so the existing-transaction lookup these tests
+    /// are about is the tenant-filtered query production runs.
+    /// </summary>
+    private static ImportNayaxSales CreateSalesImport(AppDbContext db)
     {
         var rebuild = TestCostingUseCases.Rebuild(db);
-        return new ImportService(
-            db,
-            Mock.Of<IWebHostEnvironment>(),
-            Mock.Of<ILogger<ImportService>>(),
+        return new ImportNayaxSales(
+            new ClosedXmlNayaxSalesWorkbookReader(),
+            new EfNayaxSalesImportStore(db),
             TestCostingUseCases.CostSale(db, rebuild),
             rebuild);
     }
