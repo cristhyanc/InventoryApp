@@ -13,11 +13,13 @@ public class InventoryCostLedger
         CostReplayProduct product,
         IReadOnlyCollection<CostReplayAdjustment> adjustments,
         IReadOnlyCollection<CostReplaySale> sales,
+        IReadOnlyCollection<CostReplayRepair> repairs,
         CostReplayBaseline? baseline)
     {
         Product = product;
         Adjustments = adjustments;
         Sales = sales;
+        Repairs = repairs;
         Baseline = baseline;
     }
 
@@ -28,13 +30,25 @@ public class InventoryCostLedger
     /// <summary>The product's completed sales only.</summary>
     public IReadOnlyCollection<CostReplaySale> Sales { get; }
 
+    /// <summary>
+    /// The product's costing-only historical repairs (issue #359). Stated explicitly rather than
+    /// defaulted to empty: a ledger that silently omitted them would under-value the product's
+    /// costing inventory and re-break the sales a repair was applied to unblock.
+    /// </summary>
+    public IReadOnlyCollection<CostReplayRepair> Repairs { get; }
+
     /// <summary>The latest inventory-cost transition baseline in range, if any.</summary>
     public CostReplayBaseline? Baseline { get; }
 }
 
-/// <summary>The product's rebuilt perpetual costing position, as persisted on the product.</summary>
+/// <summary>
+/// The product's rebuilt perpetual costing position, as persisted on the product. A
+/// <see cref="PhysicalQuantity"/> of <c>null</c> leaves the stored physical quantity unchanged, the
+/// way a null assigned movement cost leaves the persisted one unchanged: a costing-only rebuild
+/// (issue #359) has no authority over physical stock.
+/// </summary>
 public sealed record ProductCostPosition(
-    int PhysicalQuantity,
+    int? PhysicalQuantity,
     int CostingQuantity,
     decimal InventoryValue,
     decimal AverageUnitCost);
@@ -72,6 +86,9 @@ public interface IInventoryCostLedgerStore
         IReadOnlyCollection<CostReplayAdjustmentOutcome> adjustments,
         IReadOnlyCollection<CostReplaySaleCost> recostedSales);
 
-    /// <summary>Stages the product's rebuilt physical and costing position.</summary>
+    /// <summary>
+    /// Stages the product's rebuilt costing position, and its physical quantity unless
+    /// <see cref="ProductCostPosition.PhysicalQuantity"/> is <c>null</c>.
+    /// </summary>
     void StageProductPosition(InventoryCostLedger ledger, ProductCostPosition position);
 }

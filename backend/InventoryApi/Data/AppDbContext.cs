@@ -84,6 +84,12 @@ public class AppDbContext : DbContext
     public DbSet<InventoryCostTransitionPreviewDraft> InventoryCostTransitionPreviewDrafts => Set<InventoryCostTransitionPreviewDraft>();
 
     /// <summary>
+    /// Append-only costing-only historical repairs (issue #359). Nothing in the application updates
+    /// or deletes a row in this set; see <see cref="InventoryCostRepair"/>.
+    /// </summary>
+    public DbSet<InventoryCostRepair> InventoryCostRepairs => Set<InventoryCostRepair>();
+
+    /// <summary>
     /// Both save paths funnel through <see cref="BusinessOwnershipEnforcer"/> so tenant
     /// ownership is applied to every write, whichever overload a service happens to call. This
     /// is why services do not, and must not, add their own business filters or stamping.
@@ -137,6 +143,41 @@ public class AppDbContext : DbContext
             .WithMany(x => x.MachineStocks)
             .HasForeignKey(x => x.InventoryCostTransitionBaselineId)
             .OnDelete(DeleteBehavior.Cascade);
+
+        // Costing repairs (issue #359). Deliberately no unique constraint: a product may need more
+        // than one repair, including two at the same instant, and the replay orders them by key.
+        modelBuilder.Entity<InventoryCostRepair>()
+            .Property(x => x.UnitCost)
+            .HasColumnType("decimal(18,6)");
+        modelBuilder.Entity<InventoryCostRepair>()
+            .Property(x => x.TotalValue)
+            .HasColumnType("decimal(18,6)");
+        modelBuilder.Entity<InventoryCostRepair>().Property(x => x.Reason).IsRequired();
+        modelBuilder.Entity<InventoryCostRepair>().Property(x => x.CreatedByDirectoryTenantId).IsRequired();
+        modelBuilder.Entity<InventoryCostRepair>().Property(x => x.CreatedByObjectId).IsRequired();
+        // The replay's load path: one product's repairs, in effective-time order, within a business.
+        modelBuilder.Entity<InventoryCostRepair>()
+            .HasIndex(x => new { x.BusinessId, x.ProductId, x.EffectiveAt });
+        modelBuilder.Entity<InventoryCostRepair>()
+            .HasOne(x => x.Product)
+            .WithMany()
+            .HasForeignKey(x => x.ProductId)
+            .OnDelete(DeleteBehavior.Restrict);
+        // EffectiveAt and CreatedAt are persisted UTC instants, and the SQLite provider does not
+        // round-trip DateTimeKind - see the StockAdjustment.CreatedAt comment below for the complete
+        // explanation. Marking them UTC on every read keeps the instant the API boundary exposes
+        // unambiguous without changing the stored bytes or any comparison semantics, so the replay's
+        // ordering against stock movements and sales is unaffected.
+        modelBuilder.Entity<InventoryCostRepair>()
+            .Property(x => x.EffectiveAt)
+            .HasConversion(
+                toProvider => toProvider,
+                fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+        modelBuilder.Entity<InventoryCostRepair>()
+            .Property(x => x.CreatedAt)
+            .HasConversion(
+                toProvider => toProvider,
+                fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
 
         // Purchase/PurchaseItem are the Purchase-language CLR types; explicitly mapped to
         // their legacy "Receipt"/"ReceiptItem" tables so the rename does not change the schema.

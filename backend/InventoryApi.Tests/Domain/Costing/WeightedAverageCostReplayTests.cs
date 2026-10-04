@@ -18,15 +18,19 @@ public class WeightedAverageCostReplayTests
 
     private static CostReplaySale Sale(long transactionId, int minutes) => new(transactionId, T0.AddMinutes(minutes));
 
+    private static CostReplayRepair Repair(int id, int minutes, int quantity, decimal unitCost) =>
+        new(id, T0.AddMinutes(minutes), quantity, unitCost);
+
     private static WeightedAverageCostReplayResult Replay(
         IReadOnlyCollection<CostReplayAdjustment> adjustments,
         IReadOnlyCollection<CostReplaySale>? sales = null,
+        IReadOnlyCollection<CostReplayRepair>? repairs = null,
         CostReplayProduct? product = null,
         CostReplayBaseline? baseline = null,
         long? targetSaleTransactionId = null,
         DateTime? targetSaleTime = null) =>
         WeightedAverageCostReplay.Replay(
-            product ?? Product(), adjustments, sales ?? [], baseline, targetSaleTransactionId, targetSaleTime);
+            product ?? Product(), adjustments, sales ?? [], repairs ?? [], baseline, targetSaleTransactionId, targetSaleTime);
 
     [Fact]
     public void Restocks_and_sales_produce_weighted_average_cost_and_per_sale_cost()
@@ -384,6 +388,167 @@ public class WeightedAverageCostReplayTests
     {
         Assert.Throws<OverflowException>(() => Replay(
             [Adjustment(1, 0, StockAdjustmentReason.MachineRefill, int.MaxValue), Adjustment(2, 1, StockAdjustmentReason.MachineRefill, 1)]));
+    }
+
+    [Fact]
+    public void Costing_repair_is_a_costing_acquisition_that_never_changes_physical_stock()
+    {
+        var result = Replay(
+            [Adjustment(1, 0, StockAdjustmentReason.MachineRefill, 5)],
+            repairs: [Repair(1, 1, 4, 2.5m)],
+            product: Product(quantityInStock: 5));
+
+        Assert.Equal(5, result.PhysicalQuantity);
+        Assert.Equal(4, result.CostingQuantity);
+        Assert.Equal(10m, result.InventoryValue);
+        Assert.Equal(2.5m, result.AverageUnitCost);
+        var repair = Assert.Single(result.Repairs);
+        Assert.Equal((0, 0m, 4, 10m, 2.5m), (repair.CostingQuantityBefore, repair.InventoryValueBefore,
+            repair.CostingQuantityAfter, repair.InventoryValueAfter, repair.AverageUnitCostAfter));
+        Assert.Empty(result.Issues);
+    }
+
+    [Fact]
+    public void Costing_repair_is_weighted_into_the_average_with_the_rest_of_the_history()
+    {
+        var result = Replay(
+            [Adjustment(1, 0, StockAdjustmentReason.Restock, 2, 5m)],
+            [Sale(100, 3)],
+            [Repair(1, 2, 2, 1m)]);
+
+        // 2 @ 5 = 10; repair adds 2 @ 1 -> 4 units, 12; the sale consumes one at 12/4 = 3.
+        var repair = Assert.Single(result.Repairs);
+        Assert.Equal((2, 10m, 4, 12m, 3m), (repair.CostingQuantityBefore, repair.InventoryValueBefore,
+            repair.CostingQuantityAfter, repair.InventoryValueAfter, repair.AverageUnitCostAfter));
+        Assert.Equal(3m, result.SaleCosts.Single().UnitCost);
+        Assert.Equal(3, result.CostingQuantity);
+        Assert.Equal(9m, result.InventoryValue);
+        Assert.Empty(result.Issues);
+    }
+
+    /// <summary>
+    /// Issue #359: the repair is the opening of the day it repairs, so it must replay before every
+    /// other event at its own timestamp - otherwise a repair placed at exactly the moment of the
+    /// sale it is meant to cover would still leave that sale uncostable.
+    /// </summary>
+    [Fact]
+    public void A_repair_replays_before_restocks_refills_sales_and_other_movements_at_the_same_timestamp()
+    {
+        var result = Replay(
+            [
+                Adjustment(5, 0, StockAdjustmentReason.Damaged, -1),
+                Adjustment(4, 0, StockAdjustmentReason.MachineRefill, -2),
+                Adjustment(3, 0, StockAdjustmentReason.Restock, 4, 1m),
+            ],
+            [Sale(100, 0)],
+            [Repair(1, 0, 2, 4m)]);
+
+        Assert.Equal(2, result.Repairs.Single().CostingQuantityAfter);
+        Assert.Equal(0, result.Repairs.Single().CostingQuantityBefore);
+        // Repair 2 @ 4 = 8; restock 4 @ 1 -> 6 units, 12 (average 2); refill keeps costing quantity;
+        // the sale consumes one at 2; the damaged write-off consumes one at 2.
+        Assert.Equal([3, 4, 5], result.Adjustments.Select(x => x.Adjustment.Id));
+        Assert.Equal([6, 6, 4], result.Adjustments.Select(x => x.CostingQuantityAfter));
+        Assert.Equal(2m, result.SaleCosts.Single().UnitCost);
+        Assert.Equal(4, result.CostingQuantity);
+        Assert.Equal(8m, result.InventoryValue);
+        Assert.Empty(result.Issues);
+    }
+
+    [Fact]
+    public void Repairs_at_the_same_timestamp_replay_in_record_order()
+    {
+        var result = Replay([], repairs: [Repair(9, 0, 1, 7m), Repair(2, 0, 1, 3m)]);
+
+        Assert.Equal([2, 9], result.Repairs.Select(x => x.Repair.Id));
+        Assert.Equal([0m, 3m], result.Repairs.Select(x => x.InventoryValueBefore));
+        Assert.Equal(10m, result.InventoryValue);
+    }
+
+    [Fact]
+    public void A_repair_makes_a_previously_uncostable_sale_costable()
+    {
+        var withoutRepair = Replay([], [Sale(100, 5)]);
+        var withRepair = Replay([], [Sale(100, 5)], [Repair(1, 1, 1, 2m)]);
+
+        Assert.Equal([100L], withoutRepair.UncostableSales.Select(x => x.TransactionId));
+        Assert.Equal(CostDataQualityIssueCodes.MissingOpening, Assert.Single(withoutRepair.Issues).Code);
+        Assert.Empty(withRepair.UncostableSales);
+        Assert.Empty(withRepair.Issues);
+        Assert.Equal(2m, withRepair.SaleCosts.Single().UnitCost);
+        Assert.Equal(0, withRepair.CostingQuantity);
+    }
+
+    [Fact]
+    public void A_repair_after_a_sale_leaves_that_sale_uncostable()
+    {
+        var result = Replay([], [Sale(100, 5), Sale(101, 20)], [Repair(1, 10, 1, 2m)]);
+
+        Assert.Equal([100L], result.UncostableSales.Select(x => x.TransactionId));
+        Assert.Equal([101L], result.SaleCosts.Select(x => x.Sale.TransactionId));
+        Assert.True(result.HasFatalIssue);
+    }
+
+    [Fact]
+    public void Uncostable_sales_are_reported_in_replay_order_and_costed_sales_are_not()
+    {
+        var result = Replay(
+            [Adjustment(1, 0, StockAdjustmentReason.Restock, 1, 2m)],
+            [Sale(103, 9), Sale(101, 1), Sale(102, 9)]);
+
+        Assert.Equal([101L], result.SaleCosts.Select(x => x.Sale.TransactionId));
+        Assert.Equal([102L, 103L], result.UncostableSales.Select(x => x.TransactionId));
+    }
+
+    /// <summary>
+    /// Issue #359: Apply verifies placement through the replay's own ordering rather than through a
+    /// timestamp comparison of its own, because sale times and movement times are not in the same
+    /// time zone (see the issue's known constraints). This pins the two to the same answer.
+    /// </summary>
+    [Fact]
+    public void Repair_placement_against_a_sale_matches_the_order_the_replay_uses()
+    {
+        var sale = Sale(100, 5);
+        var before = Repair(1, 4, 1, 2m);
+        var sameInstant = Repair(1, 5, 1, 2m);
+        var after = Repair(1, 6, 1, 2m);
+
+        Assert.True(WeightedAverageCostReplay.ReplaysBefore(before, sale));
+        Assert.True(WeightedAverageCostReplay.ReplaysBefore(sameInstant, sale));
+        Assert.False(WeightedAverageCostReplay.ReplaysBefore(after, sale));
+
+        Assert.Empty(Replay([], [sale], [before]).UncostableSales);
+        Assert.Empty(Replay([], [sale], [sameInstant]).UncostableSales);
+        Assert.Equal([100L], Replay([], [sale], [after]).UncostableSales.Select(x => x.TransactionId));
+    }
+
+    [Fact]
+    public void Repairs_at_or_before_the_baseline_cutoff_are_ignored_like_every_other_event()
+    {
+        var baseline = new CostReplayBaseline(T0.AddMinutes(10), HomeStockQuantity: 0, OpeningCostingQuantity: 2, InventoryValue: 4m);
+
+        var result = Replay([], [], [Repair(1, 5, 100, 99m), Repair(2, 10, 100, 99m), Repair(3, 11, 2, 1m)], baseline: baseline);
+
+        Assert.Equal([3], result.Repairs.Select(x => x.Repair.Id));
+        Assert.Equal(4, result.CostingQuantity);
+        Assert.Equal(6m, result.InventoryValue);
+    }
+
+    [Fact]
+    public void A_repair_counts_as_a_costed_acquisition_for_issue_classification()
+    {
+        var result = Replay([], [Sale(100, 1), Sale(101, 2)], [Repair(1, 0, 1, 2m)]);
+
+        Assert.Equal(CostDataQualityIssueCodes.UnknownCost, Assert.Single(result.Issues).Code);
+        Assert.Equal([101L], result.UncostableSales.Select(x => x.TransactionId));
+    }
+
+    [Fact]
+    public void Costing_quantity_overflow_from_a_repair_throws()
+    {
+        Assert.Throws<OverflowException>(() => Replay(
+            [Adjustment(1, 0, StockAdjustmentReason.Restock, int.MaxValue, 1m)],
+            repairs: [Repair(1, 1, 1, 1m)]));
     }
 
     [Theory]
