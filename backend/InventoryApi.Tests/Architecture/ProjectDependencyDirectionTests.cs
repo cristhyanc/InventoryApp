@@ -178,7 +178,10 @@ public class ProjectDependencyDirectionTests
     /// catalogue import to <c>Inventory.Application.Imports.ImportNayaxProductCatalog</c>, and issue
     /// #303 removed <c>ProductService.cs</c>/<c>Interfaces/IProductService.cs</c> in the same change
     /// that pointed <c>ProductsController</c> straight at the Products use cases and gave it an
-    /// API-owned response DTO. <c>Interfaces/IImportService.cs</c> stays on the list for the Nayax
+    /// API-owned response DTO, and issue #304 removed <c>PurchaseService.cs</c>/<c>SupplierOrderService.cs</c>
+    /// and their interfaces in the same change that did the same for
+    /// <c>PurchasesController</c>/<c>SupplierOrdersController</c>.
+    /// <c>Interfaces/IImportService.cs</c> stays on the list for the Nayax
     /// sales import, which the last child of #151 migrates; <c>MachineService.cs</c>/<c>SiteService.cs</c>
     /// and their interfaces stay for the Sites/Machines delegator removal (issue #302).
     /// </summary>
@@ -191,16 +194,12 @@ public class ProjectDependencyDirectionTests
             "ImportService.NayaxSales.cs",
             "Interfaces/IImportService.cs",
             "Interfaces/IMachineService.cs",
-            "Interfaces/IPurchaseService.cs",
             "Interfaces/ISiteService.cs",
-            "Interfaces/ISupplierOrderService.cs",
             "MachineService.cs",
             "NayaxProductMatcher.cs",
             "NayaxSalesWorkbook.cs",
-            "PurchaseService.cs",
             "SiteNameResolver.cs",
             "SiteService.cs",
-            "SupplierOrderService.cs",
         ];
 
         var actualRelativePaths = GitTrackedFiles(Path.Combine("InventoryApi", "Services"))

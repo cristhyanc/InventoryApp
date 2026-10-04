@@ -17,6 +17,14 @@ public static class SwaggerServiceCollectionExtensions
                 Version = "v1",
                 Description = "Manage inventory for snacks and drinks, including suppliers, categories, stock adjustments, and purchase uploads."
             });
+
+            // The purchase and supplier-order response bodies are produced by API-owned DTOs since
+            // issue #304, but keep the schema ids, the (absent) requiredness and the nested
+            // product/supplier references the document has always published - see
+            // PublishedResponseSchemaContract. Everything else stays on Swashbuckle's default
+            // derivation, which this selector falls back to.
+            c.CustomSchemaIds(PublishedResponseSchemaContract.SchemaIdSelector(c.SchemaGeneratorOptions.SchemaIdSelector));
+            c.SchemaFilter<PublishedResponseSchemaContract.PublishedShapeFilter>();
         });
 
         return services;

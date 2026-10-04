@@ -6,8 +6,15 @@ namespace InventoryApi.Tests.Swagger;
 
 /// <summary>
 /// Locks the canonical generated OpenAPI document for the Purchase business record (issue
-/// #127): Swashbuckle's default schema ids (derived from CLR type names) and tag (derived from
-/// the controller name) are published as-is, with no legacy Receipt-named schema/tag surviving.
+/// #127): the canonical Purchase schema ids and the tag Swashbuckle derives from the controller
+/// name are published as-is, with no legacy Receipt-named schema/tag surviving.
+///
+/// Issue #304 replaced the serialised EF <c>Purchase</c>/<c>PurchaseItem</c> entities with the
+/// API-owned <c>InventoryApi.DTOs.PurchaseResponse</c>/<c>PurchaseItemResponse</c>. The published
+/// ids below are unaffected by that: <c>InventoryApi.Swagger.PublishedResponseSchemaContract</c>
+/// pins the new types onto them, and
+/// <c>InventoryApi.Tests.Swagger.PublishedResponseSchemaContractTests</c> compares the whole
+/// published schema of each with the contract this pull request's base branch generated.
 /// </summary>
 public class PurchaseOpenApiContractTests
 {

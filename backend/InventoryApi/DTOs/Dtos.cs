@@ -63,8 +63,11 @@ public record PurchaseValidationDto(
     decimal? TotalDifference
 );
 
+// The envelope the purchase endpoints return: the business record under the canonical "purchase"
+// key (issue #127) next to its total-validation block. Issue #304 replaced the EF Purchase entity
+// in that key with the API-owned PurchaseResponse; the serialized envelope is unchanged.
 public record PurchaseResponseDto(
-    Purchase Purchase,
+    PurchaseResponse Purchase,
     PurchaseValidationDto? Validation = null
 );
 
