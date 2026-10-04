@@ -1,5 +1,6 @@
 using Inventory.Application.Machines;
 using Inventory.Application.Products;
+using InventoryApi.Tests.Application.Time;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using Inventory.Application.Nayax;
@@ -15,13 +16,24 @@ namespace InventoryApi.Tests.Services;
 
 public class MachineProfitabilityTests
 {
+    /// <summary>
+    /// One pinned instant drives both the seeded sale timestamps and the dashboard clock, so a sale
+    /// "just now" falls inside the Australia/Sydney business day the use case resolves (issue #310)
+    /// whatever the host's own timezone is.
+    /// </summary>
+    private static readonly FixedSydneyTime Time = FixedSydneyTime.PinnedToNow();
+
     private static MachineService Service(AppDbContext db, INayaxLynxClient nayax)
     {
-        var facts = new EfMachineDashboardFactsStore(db, TestFinancialUseCases.ProcessingFees(db));
+        var facts = new EfMachineDashboardFactsStore(db, TestFinancialUseCases.ProcessingFees(db, Time.Calendar));
         var listMachineProducts = new ListMachineProducts(
-            nayax, new EfProductCatalogStore(db), new ResolveMachineProductPricing(new EfSiteFactsStore(db)));
+            nayax,
+            new EfProductCatalogStore(db),
+            new ResolveMachineProductPricing(new EfSiteFactsStore(db), Time.Calendar));
         return new MachineService(
-            new GetMachineDashboard(nayax, facts), new ListMachineDashboard(nayax, facts), listMachineProducts);
+            new GetMachineDashboard(nayax, facts, Time.Clock, Time.Calendar),
+            new ListMachineDashboard(nayax, facts, Time.Clock, Time.Calendar),
+            listMachineProducts);
     }
 
     [Fact]
@@ -106,7 +118,7 @@ public class MachineProfitabilityTests
             SettlementValue = 5m,
             PaymentMethod = "Credit Card",
             TransactionStatusId = NayaxTransactionStatusIds.Completed,
-            MachineAuthorizationTime = DateTime.Now,
+            MachineAuthorizationTime = Time.NowUtc,
             CostOfGoodsSold = null
         });
         db.NayaxProcessingFeeRates.Add(new NayaxProcessingFeeRate

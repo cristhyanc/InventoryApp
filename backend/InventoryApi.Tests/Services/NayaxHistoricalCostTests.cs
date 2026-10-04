@@ -348,6 +348,80 @@ public class NayaxHistoricalCostTests
     }
 
     /// <summary>
+    /// Issue #362: one product whose cost history cannot be replayed must not discard the rebuilds
+    /// the same sync already produced for the other products. The healthy product's rebuilt costing
+    /// position is saved, the failing product is left untouched, both sales stay persisted, and the
+    /// failure is still raised as a single data-quality error.
+    /// </summary>
+    [Fact]
+    public async Task Latest_sales_sync_saves_other_products_costs_when_one_products_history_is_fatal()
+    {
+        await using var db = CreateDb();
+        db.Products.AddRange(
+            new Product { Id = 10, Name = "Costed Snack", QuantityInStock = 10 },
+            new Product { Id = 20, Name = "Uncosted Water", QuantityInStock = 4 });
+        db.InventoryCostTransitionBaselines.AddRange(
+            Baseline(10, homeStockQuantity: 10, openingCostingQuantity: 10, inventoryValue: 20m),
+            Baseline(20, homeStockQuantity: 4, openingCostingQuantity: 0, inventoryValue: 0m));
+        await db.SaveChangesAsync();
+        var nayax = new Mock<INayaxLynxClient>();
+        nayax.Setup(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<NayaxMachine> { new() { MachineID = 1, MachineName = "Machine" } });
+        nayax.Setup(x => x.GetMachineLastSalesAsync(1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<NayaxLastSalesReport>
+            {
+                // The product that cannot be rebuilt is read first, so a later healthy product only
+                // keeps its rebuild if the batch really continues past the failure.
+                LastSale(2001, 20, "Uncosted Water"),
+                LastSale(1001, 10, "Costed Snack")
+            });
+
+        var exception = await Assert.ThrowsAsync<InventoryCostDataQualityException>(
+            () => LatestSalesSync(db, nayax.Object).Handle());
+
+        Assert.Contains("2001", exception.Message);
+        Assert.Contains("no known opening cost", exception.Message);
+        // Read untracked, so these assert what the sync actually saved rather than what it staged.
+        var costed = await db.Products.AsNoTracking().SingleAsync(product => product.Id == 10);
+        Assert.Equal(9, costed.CostingQuantity);
+        Assert.Equal(18m, costed.InventoryValue);
+        Assert.Equal(2m, costed.AverageUnitCost);
+        var uncosted = await db.Products.AsNoTracking().SingleAsync(product => product.Id == 20);
+        Assert.Null(uncosted.CostingQuantity);
+        Assert.Null(uncosted.InventoryValue);
+        Assert.Equal(0m, uncosted.AverageUnitCost);
+        Assert.Equal(
+            new long[] { 1001, 2001 },
+            await db.NayaxSales.AsNoTracking().OrderBy(sale => sale.TransactionID)
+                .Select(sale => sale.TransactionID).ToArrayAsync());
+    }
+
+    private static NayaxLastSalesReport LastSale(long transactionId, long nayaxProductId, string productName) =>
+        new()
+        {
+            TransactionID = transactionId,
+            MachineID = 1,
+            MachineName = "Machine",
+            NayaxProductId = nayaxProductId,
+            ProductName = productName,
+            SettlementValue = 3m,
+            PaymentMethod = "Card",
+            MachineAuthorizationTime = new DateTime(2026, 10, 3, 19, 30, 0, DateTimeKind.Utc)
+        };
+
+    private static InventoryCostTransitionBaseline Baseline(
+        long productId, int homeStockQuantity, int openingCostingQuantity, decimal inventoryValue) =>
+        new()
+        {
+            ProductId = productId,
+            HomeStockQuantity = homeStockQuantity,
+            OpeningCostingQuantity = openingCostingQuantity,
+            InventoryValue = inventoryValue,
+            AverageUnitCost = openingCostingQuantity > 0 ? inventoryValue / openingCostingQuantity : 0m,
+            CutoffAt = new DateTime(2026, 10, 1, 0, 0, 0, DateTimeKind.Utc)
+        };
+
+    /// <summary>
     /// The latest-sales synchronization use case (issue #187) over the real
     /// <see cref="EfLatestNayaxSalesStore"/> adapter, so the historical-cost behaviour asserted here
     /// is exercised through the same dedup/costing path production uses.
@@ -368,7 +442,6 @@ public class NayaxHistoricalCostTests
             db,
             new Mock<IWebHostEnvironment>().Object,
             new Mock<ILogger<ImportService>>().Object,
-            new Mock<INayaxLynxClient>().Object,
             TestCostingUseCases.CostSale(db),
             new Mock<IRebuildProductCost>().Object);
 

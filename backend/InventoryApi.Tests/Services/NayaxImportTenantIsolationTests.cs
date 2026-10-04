@@ -1,5 +1,4 @@
 using InventoryApi.Data;
-using Inventory.Application.Nayax;
 using InventoryApi.Models;
 using InventoryApi.Services;
 using Microsoft.AspNetCore.Hosting;
@@ -172,7 +171,6 @@ public sealed class NayaxImportTenantIsolationTests : IDisposable
             db,
             Mock.Of<IWebHostEnvironment>(),
             Mock.Of<ILogger<ImportService>>(),
-            Mock.Of<INayaxLynxClient>(),
             TestCostingUseCases.CostSale(db, rebuild),
             rebuild);
     }

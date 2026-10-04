@@ -173,9 +173,14 @@ public class ProjectDependencyDirectionTests
     ///
     /// Shrinking it follows the same rule: issue #299 removed <c>ImportService.Xml.cs</c> in the same
     /// change that migrated the pending reimbursement XML import to
-    /// <c>Inventory.Application.Imports.ImportPendingReimbursementXmlFiles</c>.
-    /// <c>Interfaces/IImportService.cs</c> stays on the list for the product and Nayax sales imports,
-    /// which the remaining children of #151 migrate.
+    /// <c>Inventory.Application.Imports.ImportPendingReimbursementXmlFiles</c>, issue #300
+    /// removed <c>ImportService.Products.cs</c> in the same change that migrated the Nayax product
+    /// catalogue import to <c>Inventory.Application.Imports.ImportNayaxProductCatalog</c>, and issue
+    /// #303 removed <c>ProductService.cs</c>/<c>Interfaces/IProductService.cs</c> in the same change
+    /// that pointed <c>ProductsController</c> straight at the Products use cases and gave it an
+    /// API-owned response DTO. <c>Interfaces/IImportService.cs</c> stays on the list for the Nayax
+    /// sales import, which the last child of #151 migrates; <c>MachineService.cs</c>/<c>SiteService.cs</c>
+    /// and their interfaces stay for the Sites/Machines delegator removal (issue #302).
     /// </summary>
     [Fact]
     public void Only_the_documented_legacy_services_remain_in_InventoryApi_Services()
@@ -184,17 +189,14 @@ public class ProjectDependencyDirectionTests
         [
             "ImportService.cs",
             "ImportService.NayaxSales.cs",
-            "ImportService.Products.cs",
             "Interfaces/IImportService.cs",
             "Interfaces/IMachineService.cs",
-            "Interfaces/IProductService.cs",
             "Interfaces/IPurchaseService.cs",
             "Interfaces/ISiteService.cs",
             "Interfaces/ISupplierOrderService.cs",
             "MachineService.cs",
             "NayaxProductMatcher.cs",
             "NayaxSalesWorkbook.cs",
-            "ProductService.cs",
             "PurchaseService.cs",
             "SiteNameResolver.cs",
             "SiteService.cs",

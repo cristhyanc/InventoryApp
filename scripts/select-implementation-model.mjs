@@ -20,6 +20,7 @@ export function prepareSelection({ provider, label, issue, attempt = 1, fullProv
   if (!Object.hasOwn(MODELS, provider) || !route || route.implementer !== provider) throw new Error('Invalid implementation label/provider.');
   if (route.sameProviderReview && !fullProviderEnabled) throw new Error(`${label} is not enabled yet: single-provider review and repair routes are not connected. Remove ${label}; nothing was started.`);
   if (issue.state !== 'OPEN') throw new Error('Implementation requires an open issue.');
+  if (typeof issue.title !== 'string' || !issue.title.trim() || typeof issue.body !== 'string' || !issue.body.trim()) throw new Error('Task snapshot requires non-empty title and body; implementation was not started.');
   const labels = issue.labels.map(item => typeof item === 'string' ? item : item.name);
   const ready = labels.filter(item => parseReadinessLabel(item));
   const active = labels.filter(item => activeStates.includes(item));
@@ -62,9 +63,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       const issue = JSON.parse(readFileSync(issueFile, 'utf8'));
       const selection = prepareSelection({ provider: process.env.PROVIDER, label: process.env.READY_LABEL, issue, attempt: Number(process.env.RUN_ATTEMPT || 1) });
       writeFileSync(selectionFile, JSON.stringify(selection));
-      // Only this snapshot is exposed to triage, without credentials or instructions from comments.
-      writeFileSync('.git/model-triage.json', JSON.stringify({ title: issue.title, body: issue.body }));
-      output({ triage: selection.triage });
+      // JSON stays on one output line, even for multiline/untrusted issue text. The workflow
+      // supplies it directly as prompt data, never interpolates it into a shell command.
+      output({ triage: selection.triage, ...(selection.triage ? { task: JSON.stringify({ title: issue.title, body: issue.body }) } : {}) });
     } else if (command === 'resolve') {
       const selection = JSON.parse(readFileSync(selectionFile, 'utf8'));
       const result = resolveSelection(selection, selection.triage ? JSON.parse(process.env.TRIAGE_OUTPUT || 'null') : undefined);

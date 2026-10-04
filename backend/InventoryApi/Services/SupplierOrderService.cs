@@ -7,8 +7,8 @@ using InventoryApi.Services.Interfaces;
 namespace InventoryApi.Services;
 
 /// <summary>
-/// A transitional delegator only (issue #281, the same shape #240 left <see cref="ProductService"/>
-/// in): every method maps the <see cref="ISupplierOrderService"/> request onto the migrated
+/// A transitional delegator only (issue #281, the same shape #240 left the <c>ProductService</c>
+/// issue #303 has since deleted): every method maps the <see cref="ISupplierOrderService"/> request onto the migrated
 /// <see cref="Inventory.Application.SupplierOrders"/> use case that owns it, and maps the result
 /// back to the unchanged <see cref="SupplierOrder"/> API response through
 /// <see cref="SupplierOrderResponseMapper"/>. It holds no <c>AppDbContext</c>, no query, and no

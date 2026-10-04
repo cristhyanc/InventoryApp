@@ -1,4 +1,5 @@
 using Inventory.Application.Sites;
+using Inventory.Application.Time;
 using Inventory.Domain.Products;
 using Inventory.Domain.Reporting;
 
@@ -15,10 +16,12 @@ namespace Inventory.Application.Products;
 public sealed class ResolveMachineProductPricing
 {
     private readonly ISiteFactsStore _facts;
+    private readonly IBusinessCalendar _businessCalendar;
 
-    public ResolveMachineProductPricing(ISiteFactsStore facts)
+    public ResolveMachineProductPricing(ISiteFactsStore facts, IBusinessCalendar businessCalendar)
     {
         _facts = facts;
+        _businessCalendar = businessCalendar;
     }
 
     public async Task<IReadOnlyList<MachineProductPricingResult>> Handle(
@@ -27,7 +30,11 @@ public sealed class ResolveMachineProductPricing
         if (siteId is null || facts.Count == 0)
             return facts.Select(fact => new MachineProductPricingResult(fact.ProductId, null, null)).ToList();
 
-        var today = DateTime.Today;
+        // The effective-dated commission and Nayax fee configuration is selected by the Australia/Sydney
+        // business date (issue #310), not the host's local date: on a UTC host the two differ for ten to
+        // eleven hours of every day, which would price a slot with the previous day's configuration on
+        // the day a new rate takes effect.
+        var today = _businessCalendar.Today;
         var candidatePrices = facts.Select(fact => fact.MachinePrice).Append(1m).Distinct().ToList();
 
         // Awaited one at a time, deliberately not with Task.WhenAll: both calls land on the same

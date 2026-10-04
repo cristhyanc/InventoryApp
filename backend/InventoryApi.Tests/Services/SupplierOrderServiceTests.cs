@@ -226,6 +226,26 @@ public class SupplierOrderServiceTests
         Assert.Equal("An order must include at least one positive whole-unit quantity.", exception.Message);
     }
 
+    /// <summary>
+    /// A fractional quantity is rejected by the same whole-unit rule. This case moved here from the
+    /// former <c>ProductServiceTests</c> when issue #303 retargeted that file onto the product use
+    /// cases; the behaviour it covers is unchanged.
+    /// </summary>
+    [Fact]
+    public async Task Create_rejects_a_fractional_quantity_with_a_domain_validation_exception()
+    {
+        using var db = CreateDbContext(Guid.NewGuid().ToString());
+        db.Suppliers.Add(new Supplier { Id = 1, Name = "Costco" });
+        db.Products.Add(new Product { Id = 1, Name = "Coke" });
+        await db.SaveChangesAsync();
+
+        var exception = await Assert.ThrowsAsync<DomainValidationException>(() =>
+            CreateService(db).Create(new SupplierOrderCreateDto(
+                1, new DateTime(2026, 9, 1), null, null, null, [new SupplierOrderLineCreateDto(1, 1.5m)])));
+
+        Assert.Equal("An order must include at least one positive whole-unit quantity.", exception.Message);
+    }
+
     [Fact]
     public async Task Create_rejects_an_unknown_product_with_a_domain_validation_exception()
     {

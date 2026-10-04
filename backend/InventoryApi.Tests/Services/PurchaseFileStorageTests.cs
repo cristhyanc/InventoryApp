@@ -5,6 +5,7 @@ using InventoryApi.Data;
 using InventoryApi.Models;
 using InventoryApi.Services;
 using InventoryApi.Services.Interfaces;
+using InventoryApi.Tests.Application.Time;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Moq;
@@ -93,7 +94,7 @@ public sealed class PurchaseFileStorageTests : IDisposable
             new ListPurchases(store),
             new GetPurchase(store),
             new GetPurchaseFile(store, documents),
-            new UploadPurchase(store, documents),
+            new UploadPurchase(store, documents, new FakeClock(DateTime.UtcNow)),
             new UpdatePurchase(store),
             new DeletePurchase(store, documents),
             new ComputePurchaseTotalValidation());

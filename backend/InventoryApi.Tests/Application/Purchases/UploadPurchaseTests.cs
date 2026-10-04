@@ -2,12 +2,22 @@ using Inventory.Application.Documents;
 using Inventory.Application.Purchases;
 using Inventory.Domain.Purchases;
 using InventoryApi.Tests.Application.Expenses;
+using InventoryApi.Tests.Application.Time;
 using Xunit;
 
 namespace InventoryApi.Tests.Application.Purchases;
 
 public class UploadPurchaseTests
 {
+    /// <summary>
+    /// A fixed UTC instant on a date the Australia/Sydney calendar is already a day ahead of, so a
+    /// defaulted purchase date proves the use case stores the clock's UTC instant (issue #310) rather
+    /// than a business-calendar date.
+    /// </summary>
+    private static readonly DateTime NowUtc = new(2026, 3, 11, 14, 30, 0, DateTimeKind.Utc);
+
+    private static readonly FakeClock Clock = new(NowUtc);
+
     private static PurchaseFields Fields(int? supplierId = null, DateTime? purchaseDate = null) =>
         new("Weekly restock", null, null, null, null, purchaseDate, supplierId);
 
@@ -19,7 +29,7 @@ public class UploadPurchaseTests
     {
         var store = new FakePurchaseStore();
         var documents = new FakeDocumentStorage();
-        var useCase = new UploadPurchase(store, documents);
+        var useCase = new UploadPurchase(store, documents, Clock);
 
         var result = await useCase.Handle(FileInput(length: 0), Fields(), [], CancellationToken.None);
 
@@ -32,7 +42,7 @@ public class UploadPurchaseTests
     {
         var store = new FakePurchaseStore();
         var documents = new FakeDocumentStorage();
-        var useCase = new UploadPurchase(store, documents);
+        var useCase = new UploadPurchase(store, documents, Clock);
 
         var result = await useCase.Handle(FileInput(length: 10 * 1024 * 1024 + 1), Fields(), [], CancellationToken.None);
 
@@ -45,7 +55,7 @@ public class UploadPurchaseTests
     {
         var store = new FakePurchaseStore();
         var documents = new FakeDocumentStorage();
-        var useCase = new UploadPurchase(store, documents);
+        var useCase = new UploadPurchase(store, documents, Clock);
 
         var result = await useCase.Handle(FileInput("receipt.exe"), Fields(), [], CancellationToken.None);
 
@@ -58,7 +68,7 @@ public class UploadPurchaseTests
     {
         var store = new FakePurchaseStore { SupplierExists = false };
         var documents = new FakeDocumentStorage();
-        var useCase = new UploadPurchase(store, documents);
+        var useCase = new UploadPurchase(store, documents, Clock);
 
         var result = await useCase.Handle(
             FileInput(), Fields(supplierId: 99), [new PurchaseItemInput(1, -1, 1)], CancellationToken.None);
@@ -72,7 +82,7 @@ public class UploadPurchaseTests
     {
         var store = new FakePurchaseStore();
         var documents = new FakeDocumentStorage();
-        var useCase = new UploadPurchase(store, documents);
+        var useCase = new UploadPurchase(store, documents, Clock);
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             useCase.Handle(FileInput(), Fields(), [new PurchaseItemInput(1, 0, 1)], CancellationToken.None));
@@ -86,7 +96,7 @@ public class UploadPurchaseTests
     {
         var store = new FakePurchaseStore { AllProductsExist = false };
         var documents = new FakeDocumentStorage();
-        var useCase = new UploadPurchase(store, documents);
+        var useCase = new UploadPurchase(store, documents, Clock);
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             useCase.Handle(FileInput(), Fields(), [new PurchaseItemInput(404, 1, 1)], CancellationToken.None));
@@ -101,7 +111,7 @@ public class UploadPurchaseTests
         var cutoff = new DateTime(2026, 1, 1);
         var store = new FakePurchaseStore { ConflictingBaseline = (1, cutoff) };
         var documents = new FakeDocumentStorage();
-        var useCase = new UploadPurchase(store, documents);
+        var useCase = new UploadPurchase(store, documents, Clock);
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             useCase.Handle(FileInput(), Fields(purchaseDate: cutoff), [new PurchaseItemInput(1, 1, 1)], CancellationToken.None));
@@ -115,7 +125,7 @@ public class UploadPurchaseTests
     {
         var store = new FakePurchaseStore();
         var documents = new FakeDocumentStorage();
-        var useCase = new UploadPurchase(store, documents);
+        var useCase = new UploadPurchase(store, documents, Clock);
 
         var record = await useCase.Handle(FileInput(), Fields(), [new PurchaseItemInput(1, 2m, 1.5m)], CancellationToken.None);
 
@@ -125,12 +135,47 @@ public class UploadPurchaseTests
         Assert.Equal(store.LastCreated, record);
     }
 
+    /// <summary>
+    /// Issue #310: a missing purchase date defaults to the clock port's UTC instant, the same value
+    /// the host clock used to supply directly. The stored value for a given instant is unchanged - it
+    /// is deliberately not reduced to the Sydney business date, because a purchase date omitted by
+    /// the client is recorded as the instant the purchase was uploaded.
+    /// </summary>
+    [Fact]
+    public async Task A_missing_purchase_date_defaults_to_the_clocks_utc_instant()
+    {
+        var store = new FakePurchaseStore();
+        var documents = new FakeDocumentStorage();
+        var useCase = new UploadPurchase(store, documents, Clock);
+
+        var record = await useCase.Handle(
+            FileInput(), Fields(purchaseDate: null), [new PurchaseItemInput(1, 1, 1)], CancellationToken.None);
+
+        Assert.Equal(NowUtc, record!.PurchaseDate);
+        Assert.Equal(NowUtc, store.LastConflictCheckedPurchaseDate);
+    }
+
+    [Fact]
+    public async Task A_supplied_purchase_date_is_preserved_and_the_clock_is_not_consulted()
+    {
+        var suppliedDate = new DateTime(2026, 2, 1);
+        var store = new FakePurchaseStore();
+        var documents = new FakeDocumentStorage();
+        var useCase = new UploadPurchase(store, documents, Clock);
+
+        var record = await useCase.Handle(
+            FileInput(), Fields(purchaseDate: suppliedDate), [new PurchaseItemInput(1, 1, 1)], CancellationToken.None);
+
+        Assert.Equal(suppliedDate, record!.PurchaseDate);
+        Assert.Equal(suppliedDate, store.LastConflictCheckedPurchaseDate);
+    }
+
     [Fact]
     public async Task A_blank_title_falls_back_to_the_uploaded_file_name()
     {
         var store = new FakePurchaseStore();
         var documents = new FakeDocumentStorage();
-        var useCase = new UploadPurchase(store, documents);
+        var useCase = new UploadPurchase(store, documents, Clock);
 
         var record = await useCase.Handle(
             FileInput("scan.jpg"), new PurchaseFields("   ", null, null, null, null, null, null), [], CancellationToken.None);
@@ -143,7 +188,7 @@ public class UploadPurchaseTests
     {
         var store = new FakePurchaseStore { ThrowOnCreate = true };
         var documents = new FakeDocumentStorage();
-        var useCase = new UploadPurchase(store, documents);
+        var useCase = new UploadPurchase(store, documents, Clock);
 
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => useCase.Handle(FileInput(), Fields(), [new PurchaseItemInput(1, 1, 1)], CancellationToken.None));

@@ -1,21 +1,32 @@
 using Inventory.Application.Nayax;
 using Inventory.Application.Sites;
-using Inventory.Domain.Machines;
 using InventoryApi.Adapters.Persistence;
+using InventoryApi.Tests.Application.Time;
 using Xunit;
 
 namespace InventoryApi.Tests.Application.Sites;
 
 /// <summary>
-/// Scoped-EF-context concurrency regression tests for <see cref="GetSiteSummaries"/> (issue #313).
-/// Every <see cref="ISiteFactsStore"/> call in a request lands on one scoped <c>AppDbContext</c>, which
-/// supports a single operation at a time, so the site dashboard must never have two of them in flight -
-/// while the independent Nayax machine-product requests must stay a concurrent fan-out.
+/// Scoped-EF-context concurrency regression tests for <see cref="GetSiteSummaries"/> (issue #313) and
+/// its business-day period resolution (issue #310). Every <see cref="ISiteFactsStore"/> call in a
+/// request lands on one scoped <c>AppDbContext</c>, which supports a single operation at a time, so
+/// the site dashboard must never have two of them in flight - while the independent Nayax
+/// machine-product requests must stay a concurrent fan-out. Every case runs on a fixed clock whose
+/// UTC date differs from its <c>Australia/Sydney</c> business date, so the revenue periods are
+/// pinned to the business day rather than to the host's timezone or to the real wall clock.
 /// </summary>
 public class GetSiteSummariesTests
 {
     private const long AlphaSiteId = 43;
     private const long BravoSiteId = 42;
+
+    /// <summary>
+    /// 14:30 UTC on Wednesday 11 March 2026, which is 01:30 on Thursday 12 March in Sydney: the
+    /// dashboard's business day, and therefore every period boundary, comes from the Sydney date
+    /// (issue #310). The sale fixtures below are placed relative to this instant.
+    /// </summary>
+    private static readonly FixedSydneyTime Time =
+        new(new DateTime(2026, 3, 11, 14, 30, 0, DateTimeKind.Utc));
 
     private static readonly SiteProductActivityFact[] ActiveProducts =
     [
@@ -33,8 +44,8 @@ public class GetSiteSummariesTests
     [Fact]
     public async Task Handle_NeverOverlapsFactsStoreReads_AcrossSites()
     {
-        var facts = new RecordingSiteFactsStore(ActiveProducts, Sales(DateTime.Now));
-        var useCase = new GetSiteSummaries(Fleet(), facts, new SiteNameResolverAdapter());
+        var facts = new RecordingSiteFactsStore(ActiveProducts, Sales());
+        var useCase = UseCase(Fleet(), facts);
 
         await useCase.Handle(CancellationToken.None);
 
@@ -54,9 +65,8 @@ public class GetSiteSummariesTests
     [Fact]
     public async Task Handle_AttributesEachMachinesRevenueToItsOwnSite()
     {
-        var now = DateTime.Now;
-        var facts = new RecordingSiteFactsStore(ActiveProducts, Sales(now));
-        var useCase = new GetSiteSummaries(Fleet(), facts, new SiteNameResolverAdapter());
+        var facts = new RecordingSiteFactsStore(ActiveProducts, Sales());
+        var useCase = UseCase(Fleet(), facts);
 
         var summaries = await useCase.Handle(CancellationToken.None);
 
@@ -98,7 +108,7 @@ public class GetSiteSummariesTests
                 new NayaxMachine { MachineID = 20, CustomerID = AlphaSiteId, MachineName = "Alpha One" },
             ],
             expectedConcurrentMachineProductCalls: 2);
-        var useCase = new GetSiteSummaries(nayax, new RecordingSiteFactsStore(ActiveProducts), new SiteNameResolverAdapter());
+        var useCase = UseCase(nayax, new RecordingSiteFactsStore(ActiveProducts));
 
         var summaries = await useCase.Handle(CancellationToken.None);
 
@@ -111,7 +121,7 @@ public class GetSiteSummariesTests
     {
         var facts = new RecordingSiteFactsStore(
             ActiveProducts, completedSalesFailure: new InvalidOperationException("sales read failed"));
-        var useCase = new GetSiteSummaries(Fleet(), facts, new SiteNameResolverAdapter());
+        var useCase = UseCase(Fleet(), facts);
 
         var failure = await Assert.ThrowsAsync<InvalidOperationException>(
             () => useCase.Handle(CancellationToken.None));
@@ -126,11 +136,57 @@ public class GetSiteSummariesTests
     [Fact]
     public async Task Handle_PropagatesANayaxMachineProductFailure()
     {
-        var useCase = new GetSiteSummaries(
-            Fleet(failingMachineId: 11), new RecordingSiteFactsStore(ActiveProducts), new SiteNameResolverAdapter());
+        var useCase = UseCase(Fleet(failingMachineId: 11), new RecordingSiteFactsStore(ActiveProducts));
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => useCase.Handle(CancellationToken.None));
     }
+
+    /// <summary>
+    /// Issue #310: a sale is attributed to the Sydney business day it happened on, not the host's UTC
+    /// day. At 01:30 on Thursday 12 March Sydney time, the 01:00 sale is today's and the 21:00 sale
+    /// from the evening before is not - even though a UTC host reads both as "11 March, today". Both
+    /// are still inside the Sydney week to date, which started on Monday 9 March.
+    /// </summary>
+    [Fact]
+    public async Task Handle_CountsTodayAsTheSydneyBusinessDay_NotTheHostsUtcDay()
+    {
+        var facts = new RecordingSiteFactsStore(
+            ActiveProducts,
+            [
+                // 01:00 on Thursday 12 March in Sydney: today.
+                new(MachineId: 20, SettlementValue: 5m, MachineAuthorizationTime: Utc(2026, 3, 11, 14, 0)),
+                // 21:00 on Wednesday 11 March in Sydney: yesterday, but still the same UTC date.
+                new(MachineId: 20, SettlementValue: 7m, MachineAuthorizationTime: Utc(2026, 3, 11, 10, 0)),
+            ]);
+        var useCase = UseCase(Fleet(), facts);
+
+        var summaries = await useCase.Handle(CancellationToken.None);
+        var alpha = summaries.Single(summary => summary.SiteId == AlphaSiteId);
+
+        Assert.Equal(5m, alpha.TodayRevenue);
+        Assert.Equal(12m, alpha.CurrentWeekRevenue);
+    }
+
+    /// <summary>
+    /// The 16-day completed-sales lookback counts back from the current UTC instant, the time base
+    /// <c>MachineAuthorizationTime</c> is stored in.
+    /// </summary>
+    [Fact]
+    public async Task Handle_RequestsTheCompletedSalesLookbackInUtc()
+    {
+        var facts = new RecordingSiteFactsStore(ActiveProducts, Sales());
+
+        await UseCase(Fleet(), facts).Handle(CancellationToken.None);
+
+        var request = Assert.Single(facts.CompletedSalesRequests);
+        Assert.Equal(Time.NowUtc.AddDays(-16), request.Since);
+    }
+
+    private static GetSiteSummaries UseCase(INayaxLynxClient nayax, ISiteFactsStore facts) =>
+        new(nayax, facts, new SiteNameResolverAdapter(), Time.Clock, Time.Calendar);
+
+    private static DateTime Utc(int year, int month, int day, int hour, int minute) =>
+        new(year, month, day, hour, minute, 0, DateTimeKind.Utc);
 
     private static RecordingNayaxLynxClient Fleet(long? failingMachineId = null) =>
         new(
@@ -160,15 +216,15 @@ public class GetSiteSummariesTests
 
     /// <summary>
     /// Completed sales for both sites plus one machine outside the fleet, which must never be counted.
-    /// The previous-comparable-week sale uses that period's own start boundary from the shared
-    /// <see cref="MachineDashboardPeriods"/> definition rather than a hand-rolled offset.
+    /// The previous-comparable-week sale uses that period's own resolved start boundary rather than a
+    /// hand-rolled offset, so it stays inside the period across a daylight-saving change.
     /// </summary>
-    private static SiteCompletedSaleFact[] Sales(DateTime now) =>
+    private static SiteCompletedSaleFact[] Sales() =>
     [
-        new(MachineId: 10, SettlementValue: 5m, MachineAuthorizationTime: now),
-        new(MachineId: 11, SettlementValue: 7m, MachineAuthorizationTime: now),
-        new(MachineId: 20, SettlementValue: 9m, MachineAuthorizationTime: now),
-        new(MachineId: 20, SettlementValue: 3m, MachineAuthorizationTime: MachineDashboardPeriods.PreviousComparableWeek(now).Start),
-        new(MachineId: 99, SettlementValue: 1000m, MachineAuthorizationTime: now),
+        new(MachineId: 10, SettlementValue: 5m, MachineAuthorizationTime: Time.NowUtc),
+        new(MachineId: 11, SettlementValue: 7m, MachineAuthorizationTime: Time.NowUtc),
+        new(MachineId: 20, SettlementValue: 9m, MachineAuthorizationTime: Time.NowUtc),
+        new(MachineId: 20, SettlementValue: 3m, MachineAuthorizationTime: Time.Window.PreviousComparableWeek.StartUtc),
+        new(MachineId: 99, SettlementValue: 1000m, MachineAuthorizationTime: Time.NowUtc),
     ];
 }

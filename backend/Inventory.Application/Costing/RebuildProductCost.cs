@@ -6,12 +6,13 @@ namespace Inventory.Application.Costing;
 /// Rebuilds a product's perpetual weighted-average cost (issue #296, child 2 of #149), moved
 /// unchanged from the former <c>InventoryApi.Services.InventoryCostRebuildService</c>. It loads the
 /// ledger through <see cref="IInventoryCostLedgerStore"/>, replays it with
-/// <see cref="WeightedAverageCostReplay"/> (issue #295) and decides what to persist: on a real
-/// rebuild every replayed movement's running position, the cost of each completed sale at or after
-/// the requested recost date, and - only when the history has no fatal data-quality issue - the
-/// product's position, otherwise <see cref="InventoryCostDataQualityException"/>. A dry run stages
-/// nothing and never throws for data quality. No rounding is applied. Rebuilding twice over the
-/// same history yields the same result.
+/// <see cref="WeightedAverageCostReplay"/> (issue #295) and decides what to persist: a real rebuild
+/// stages every replayed movement's running position, the cost of each completed sale at or after
+/// the requested recost date, and the product's position - but only when the history has no fatal
+/// data-quality issue. A fatal issue stages nothing at all and throws
+/// <see cref="InventoryCostDataQualityException"/> (issue #362), so a caller rebuilding several
+/// products can keep the ones that succeeded. A dry run stages nothing and never throws for data
+/// quality. No rounding is applied. Rebuilding twice over the same history yields the same result.
 /// </summary>
 public sealed class RebuildProductCost : IRebuildProductCost
 {
@@ -33,14 +34,27 @@ public sealed class RebuildProductCost : IRebuildProductCost
         var recostedSaleCount = 0;
         if (!dryRun)
         {
+            // Decide before staging anything: a fatal history must leave the caller's unit of work
+            // completely untouched (issue #362), so a caller rebuilding a batch of products can save
+            // the ones that replayed cleanly without carrying this product's partial replay with it.
+            var fatal = replay.Issues.Where(x => x.IsFatal).Select(x => x.Message).Distinct().ToArray();
+            if (fatal.Length > 0)
+                throw new InventoryCostDataQualityException(string.Join(" ", fatal));
+
             var recostedSales = recostCompletedSalesFrom.HasValue
                 ? replay.SaleCosts.Where(x => x.Sale.AuthorizationTime >= recostCompletedSalesFrom.Value).ToList()
                 : [];
             _store.StageReplay(ledger, replay.Adjustments, recostedSales);
             recostedSaleCount = recostedSales.Count;
+
+            _store.StageProductPosition(ledger, new ProductCostPosition(
+                replay.PhysicalQuantity,
+                replay.CostingQuantity,
+                replay.InventoryValue,
+                replay.AverageUnitCost ?? 0m));
         }
 
-        var result = new InventoryCostRebuildResult
+        return new InventoryCostRebuildResult
         {
             ProductId = productId,
             PhysicalQuantity = replay.PhysicalQuantity,
@@ -51,21 +65,6 @@ public sealed class RebuildProductCost : IRebuildProductCost
             DryRun = dryRun,
             Issues = replay.Issues.Select(x => new InventoryCostDataQualityIssue(x.Code, x.Message)).ToList(),
         };
-
-        if (dryRun)
-            return result;
-
-        var fatal = replay.Issues.Where(x => x.IsFatal).Select(x => x.Message).Distinct().ToArray();
-        if (fatal.Length > 0)
-            throw new InventoryCostDataQualityException(string.Join(" ", fatal));
-
-        _store.StageProductPosition(ledger, new ProductCostPosition(
-            replay.PhysicalQuantity,
-            replay.CostingQuantity,
-            replay.InventoryValue,
-            replay.AverageUnitCost ?? 0m));
-
-        return result;
     }
 
     public async Task<decimal?> GetAverageUnitCostAtAsync(

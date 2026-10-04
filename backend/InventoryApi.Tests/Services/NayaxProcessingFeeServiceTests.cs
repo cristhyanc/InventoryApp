@@ -3,6 +3,7 @@ using Inventory.Application.NayaxProcessingFees;
 using Inventory.Domain.FinancialConfiguration;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Models;
+using InventoryApi.Tests.Application.Time;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
 
@@ -224,6 +225,13 @@ public class NayaxProcessingFeeServiceTests
             MachineAuthorizationTime = new DateTime(2026, 9, day)
         };
 
+    /// <summary>
+    /// These cases ask for calendar date ranges, the form every report uses, so the business calendar
+    /// the business-day-bounded dashboard period needs (issue #310) never comes into play here.
+    /// </summary>
     private static GetNayaxProcessingFees Service(AppDbContext db) =>
-        new(new EfNayaxProcessingFeeFactsProvider(db), new EfNayaxFeeRateStore(db));
+        new(
+            new EfNayaxProcessingFeeFactsProvider(db),
+            new EfNayaxFeeRateStore(db),
+            new FakeBusinessCalendar(new DateTime(2026, 9, 1)));
 }

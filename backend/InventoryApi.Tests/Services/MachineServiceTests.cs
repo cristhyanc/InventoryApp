@@ -1,5 +1,6 @@
 using Inventory.Application.Machines;
 using Inventory.Application.Products;
+using InventoryApi.Tests.Application.Time;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using Inventory.Application.Nayax;
@@ -17,6 +18,13 @@ namespace InventoryApi.Tests.Services;
 
 public class MachineServiceTests
 {
+    /// <summary>
+    /// One pinned instant drives both the seeded sale timestamps and the dashboard clock, so a sale
+    /// "just now" falls inside the Australia/Sydney business day the use case resolves (issue #310)
+    /// whatever the host's own timezone is.
+    /// </summary>
+    private static readonly FixedSydneyTime Time = FixedSydneyTime.PinnedToNow();
+
     private static AppDbContext CreateDbContext(string dbName)
     {
         var options = new DbContextOptionsBuilder<AppDbContext>()
@@ -27,11 +35,15 @@ public class MachineServiceTests
 
     private static MachineService Service(AppDbContext db, INayaxLynxClient nayax)
     {
-        var facts = new EfMachineDashboardFactsStore(db, TestFinancialUseCases.ProcessingFees(db));
+        var facts = new EfMachineDashboardFactsStore(db, TestFinancialUseCases.ProcessingFees(db, Time.Calendar));
         var listMachineProducts = new ListMachineProducts(
-            nayax, new EfProductCatalogStore(db), new ResolveMachineProductPricing(new EfSiteFactsStore(db)));
+            nayax,
+            new EfProductCatalogStore(db),
+            new ResolveMachineProductPricing(new EfSiteFactsStore(db), Time.Calendar));
         return new MachineService(
-            new GetMachineDashboard(nayax, facts), new ListMachineDashboard(nayax, facts), listMachineProducts);
+            new GetMachineDashboard(nayax, facts, Time.Clock, Time.Calendar),
+            new ListMachineDashboard(nayax, facts, Time.Clock, Time.Calendar),
+            listMachineProducts);
     }
 
     /// <summary>
@@ -120,7 +132,7 @@ public class MachineServiceTests
             TransactionStatusId = NayaxTransactionStatusIds.Completed,
             MachineID = 1,
             SettlementValue = 4m,
-            MachineAuthorizationTime = DateTime.Now
+            MachineAuthorizationTime = Time.NowUtc
         });
         await db.SaveChangesAsync();
 

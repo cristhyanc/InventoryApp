@@ -1,6 +1,9 @@
+using System.Globalization;
 using Inventory.Application.Nayax;
 using Inventory.Application.Sites;
+using Inventory.Application.Time;
 using Inventory.Domain.Sites;
+using InventoryApi.Tests.Application.Time;
 using Xunit;
 
 namespace InventoryApi.Tests.Application.Sites;
@@ -23,6 +26,13 @@ public class GetSiteProductsTests
     private static readonly Dictionary<decimal, decimal> CommissionByPrice = new() { [5m] = 0.5m };
 
     /// <summary>
+    /// The business date the commission/fee configuration is selected for. These cases are not about
+    /// which date that is - <see cref="Handle_SelectsTheSydneyEffectiveConfiguration_WhenTheUtcDateDiffers"/>
+    /// is - so any fixed business date serves them.
+    /// </summary>
+    private static readonly IBusinessCalendar Calendar = new FakeBusinessCalendar(new DateTime(2026, 3, 12));
+
+    /// <summary>
     /// The three reads used to be started together and awaited with <c>Task.WhenAll</c>. The recorder
     /// yields inside each call, so an overlapping implementation produces an interleaved trace and a
     /// concurrency count above one, which SQLite's synchronous async implementation would otherwise hide
@@ -33,7 +43,7 @@ public class GetSiteProductsTests
     {
         var facts = new RecordingSiteFactsStore(
             costBasis: CostBasis, commissionByPrice: CommissionByPrice, feeExGst: 0.20m);
-        var useCase = new GetSiteProducts(Fleet(), facts);
+        var useCase = new GetSiteProducts(Fleet(), facts, Calendar);
 
         await useCase.Handle(SiteId, CancellationToken.None);
 
@@ -49,7 +59,7 @@ public class GetSiteProductsTests
     {
         var facts = new RecordingSiteFactsStore(
             costBasis: CostBasis, commissionByPrice: CommissionByPrice, feeExGst: 0.20m);
-        var useCase = new GetSiteProducts(Fleet(), facts);
+        var useCase = new GetSiteProducts(Fleet(), facts, Calendar);
 
         var product = Assert.Single(await useCase.Handle(SiteId, CancellationToken.None));
 
@@ -83,13 +93,49 @@ public class GetSiteProductsTests
             expectedConcurrentMachineProductCalls: 2);
         var facts = new RecordingSiteFactsStore(
             costBasis: CostBasis, commissionByPrice: CommissionByPrice, feeExGst: 0.20m);
-        var useCase = new GetSiteProducts(nayax, facts);
+        var useCase = new GetSiteProducts(nayax, facts, Calendar);
 
         var product = Assert.Single(await useCase.Handle(SiteId, CancellationToken.None));
 
         Assert.Equal(2, nayax.MaxConcurrentMachineProductCalls);
         Assert.Equal(5m, product.SitePrice);
         Assert.Equal(8, product.QuantityInStock);
+    }
+
+    /// <summary>
+    /// Issue #310: the site preview's effective-dated commission and Nayax fee configuration is
+    /// selected for the <c>Australia/Sydney</c> business date, not the host's UTC date. Each case is
+    /// an instant where the two differ, including both daylight-saving transition days; the store
+    /// answers with a different configuration per date, so selecting the UTC date would report
+    /// 0.95 estimated card profit instead of 2.28.
+    /// </summary>
+    [Theory]
+    [InlineData("2026-03-11T14:30:00Z", "2026-03-12")]
+    [InlineData("2026-04-04T13:30:00Z", "2026-04-05")]
+    [InlineData("2026-10-03T14:00:00Z", "2026-10-04")]
+    public async Task Handle_SelectsTheSydneyEffectiveConfiguration_WhenTheUtcDateDiffers(
+        string nowUtc, string expectedBusinessDate)
+    {
+        var time = new FixedSydneyTime(DateTime.Parse(
+            nowUtc, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal));
+        var businessDate = DateTime.Parse(expectedBusinessDate, CultureInfo.InvariantCulture);
+        var facts = new EffectiveDatedSiteFactsStore(
+            new Dictionary<DateTime, SiteFinancialConfigurationOnDate>
+            {
+                [businessDate] = new(new Dictionary<decimal, decimal> { [5m] = 0.5m }, 0.20m),
+                [time.NowUtc.Date] = new(new Dictionary<decimal, decimal> { [5m] = 1.5m }, 0.50m),
+            },
+            CostBasis);
+        var useCase = new GetSiteProducts(Fleet(), facts, time.Calendar);
+
+        var product = Assert.Single(await useCase.Handle(SiteId, CancellationToken.None));
+
+        Assert.Equal(businessDate, time.BusinessToday);
+        Assert.NotEqual(businessDate, time.NowUtc.Date);
+        Assert.All(facts.AsOfDates, asOfDate => Assert.Equal(businessDate, asOfDate));
+
+        // 5.00 retail - 0.50 commission - 2.00 cost - 0.22 fee including GST.
+        Assert.Equal(2.28m, product.EstimatedCardProfit);
     }
 
     private static RecordingNayaxLynxClient Fleet() =>
