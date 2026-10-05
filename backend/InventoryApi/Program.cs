@@ -36,7 +36,7 @@ using Inventory.Infrastructure.Nayax;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Bootstrap;
 using InventoryApi.Auth;
-using InventoryApi.Data;
+using Inventory.Infrastructure.Data;
 using InventoryApi.Http;
 using InventoryApi.Http.HealthChecks;
 using InventoryApi.Observability;
@@ -332,7 +332,6 @@ using (var scope = app.Services.CreateScope())
     var loggerFactory = app.Services.GetRequiredService<ILoggerFactory>();
 
     DatabaseSchemaStartup.EnsureSchema(db, app.Environment, app.Configuration, loggerFactory);
-    //DbInitializer.Seed(db);
 
     TenantOwnershipReadiness.Report(db, loggerFactory);
 }

@@ -2,7 +2,7 @@ namespace InventoryApi.DTOs;
 
 /// <summary>
 /// The wire shape of a machine on the "/api/machines" dashboard endpoints (issue #302), replacing
-/// the <c>InventoryApi.Models.Machine</c> type the controller used to serialize through the retired
+/// the <c>Inventory.Infrastructure.Models.Machine</c> type the controller used to serialize through the retired
 /// <c>MachineService</c> delegator. Key names, order and values match that type's serializable
 /// surface exactly, so this is not a contract change;
 /// <c>InventoryApi.Tests.DTOs.MachineJsonContractTests</c> compares the serialized bytes of both.

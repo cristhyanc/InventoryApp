@@ -15,7 +15,7 @@ public readonly record struct TransactionRowInputs(
     long? SiteId,
     decimal? CostOfGoodsSold,
     // Whether a persisted cost is recorded for this sale (independent of completion status),
-    // mirroring InventoryApi.Models.SaleCostingStatus.Costed with a non-null CostOfGoodsSold.
+    // mirroring Inventory.Infrastructure.Models.SaleCostingStatus.Costed with a non-null CostOfGoodsSold.
     bool HasPersistedCost);
 
 public readonly record struct TransactionRowResult(

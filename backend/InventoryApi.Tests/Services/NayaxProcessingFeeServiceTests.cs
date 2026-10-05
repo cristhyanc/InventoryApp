@@ -1,8 +1,8 @@
-using InventoryApi.Data;
+using Inventory.Infrastructure.Data;
 using Inventory.Application.NayaxProcessingFees;
 using Inventory.Domain.FinancialConfiguration;
 using InventoryApi.Adapters.Persistence;
-using InventoryApi.Models;
+using Inventory.Infrastructure.Models;
 using InventoryApi.Tests.Application.Time;
 using Microsoft.EntityFrameworkCore;
 using Xunit;

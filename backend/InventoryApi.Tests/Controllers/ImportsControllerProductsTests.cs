@@ -33,7 +33,7 @@ public class ImportsControllerProductsTests
     {
         var nayax = new Mock<INayaxLynxClient>();
         nayax.Setup(client => client.GetProductsAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync([new NayaxProduct { NayaxProductId = 100, ProductName = "Chips", RetailPrice = 3.50m }]);
+            .ReturnsAsync([new NayaxProduct { NayaxProductId = 100, ProductName = "Chips", ProductDefaultRetailPrice = 3.50m }]);
         nayax.Setup(client => client.GetProductGroupssAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
         var store = new Mock<INayaxProductCatalogImportStore>();
         var controller = Controller(nayax.Object, store.Object);

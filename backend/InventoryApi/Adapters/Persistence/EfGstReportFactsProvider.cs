@@ -1,12 +1,13 @@
 using Inventory.Application.Reporting.Gst;
-using InventoryApi.Data;
+using Inventory.Infrastructure.Data;
 
 namespace InventoryApi.Adapters.Persistence;
 
 /// <summary>
-/// Temporary EF Core implementation of <see cref="IGstReportFactsProvider"/>. It lives in
+/// Temporary EF Core implementation of <see cref="IGstReportFactsProvider"/>. It still lives in
 /// InventoryApi, not Inventory.Infrastructure, for the same reason <see cref="EfBookkeepingReportFactsProvider"/>
-/// does: it depends on <see cref="AppDbContext"/>, which still lives in InventoryApi. It reuses the
+/// does: it depends on <see cref="AppDbContext"/>, which moved to Inventory.Infrastructure in issue
+/// #307 ahead of this adapter family (Persistence 7/8 and 8/8 of #153). It reuses the
 /// imported-summary query already shared by the bookkeeping/daily/reconciliation/profitability
 /// adapters through <see cref="EfReportingSharedQueries"/> rather than duplicating it.
 /// </summary>

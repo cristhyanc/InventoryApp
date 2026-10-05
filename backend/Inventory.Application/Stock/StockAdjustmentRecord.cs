@@ -4,7 +4,7 @@ namespace Inventory.Application.Stock;
 
 /// <summary>
 /// One stock movement as the Application layer sees it, mirroring every scalar field of
-/// <c>InventoryApi.Models.StockAdjustment</c> the API response serializes (issue #282). Never
+/// <c>Inventory.Infrastructure.Models.StockAdjustment</c> the API response serializes (issue #282). Never
 /// carries the <c>Product</c>/<c>ReceiptItem</c> navigations - the former
 /// <c>StockController.History</c>/<c>Adjust</c> responses never serialized them either
 /// (<c>[JsonIgnore]</c>).

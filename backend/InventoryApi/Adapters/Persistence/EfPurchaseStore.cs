@@ -2,18 +2,21 @@ using Inventory.Application.Costing;
 using Inventory.Application.Purchases;
 using Inventory.Domain.Purchases;
 using Inventory.Domain.SupplierOrders;
-using InventoryApi.Data;
-using InventoryApi.Models;
+using Inventory.Infrastructure.Data;
+using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
+// Inventory.Domain.SupplierOrders declares its own SupplierOrderStatus, so the persisted enum the
+// EF query compares against is named explicitly rather than relying on which using wins.
+using PersistenceModels = Inventory.Infrastructure.Models;
 
 namespace InventoryApi.Adapters.Persistence;
 
 /// <summary>
-/// Temporary EF Core implementation of <see cref="IPurchaseStore"/>. It lives in InventoryApi, not
-/// Inventory.Infrastructure, because it depends on <see cref="AppDbContext"/> and persistence
-/// models that still live in InventoryApi, following the same precedent as
-/// <c>EfOperatingExpenseStore</c>/<c>EfProductStore</c>. Move it into Inventory.Infrastructure once
-/// <see cref="AppDbContext"/> and the shared persistence models relocate there.
+/// Temporary EF Core implementation of <see cref="IPurchaseStore"/>. It still lives in
+/// InventoryApi, not Inventory.Infrastructure, following the same precedent as
+/// <c>EfOperatingExpenseStore</c>/<c>EfProductStore</c>: <see cref="AppDbContext"/> and the
+/// persistence models it depends on moved there in issue #307, and moving this adapter family after
+/// them is Persistence 7/8 and 8/8 of #153.
 ///
 /// Its multi-step writes - the purchase/supplier-order-fulfillment/stock-movement transaction in
 /// <see cref="CreateAsync"/>/<see cref="UpdateAsync"/>/<see cref="DeleteAsync"/> - stay here rather
@@ -294,8 +297,8 @@ public sealed class EfPurchaseStore : IPurchaseStore
                 .Where(line => line.ProductId == productId &&
                     line.SupplierOrder.SupplierId == purchase.SupplierId &&
                     line.SupplierOrder.OrderDate < purchaseDayEnd &&
-                    line.SupplierOrder.Status != Models.SupplierOrderStatus.Cancelled &&
-                    line.SupplierOrder.Status != Models.SupplierOrderStatus.Received &&
+                    line.SupplierOrder.Status != PersistenceModels.SupplierOrderStatus.Cancelled &&
+                    line.SupplierOrder.Status != PersistenceModels.SupplierOrderStatus.Received &&
                     line.QuantityReceived < line.QuantityOrdered)
                 .OrderBy(line => line.SupplierOrder.OrderDate)
                 .ThenBy(line => line.SupplierOrder.Id)
@@ -359,8 +362,8 @@ public sealed class EfPurchaseStore : IPurchaseStore
         {
             foreach (var line in order.Lines)
                 line.QuantityReceived = line.ReceiptAllocations.Sum(allocation => allocation.QuantityApplied);
-            if (order.Status != Models.SupplierOrderStatus.Cancelled)
-                order.Status = (Models.SupplierOrderStatus)SupplierOrderStatusPolicy.Resolve(
+            if (order.Status != PersistenceModels.SupplierOrderStatus.Cancelled)
+                order.Status = (PersistenceModels.SupplierOrderStatus)SupplierOrderStatusPolicy.Resolve(
                     order.Lines.Select(line => (line.QuantityOrdered, line.QuantityReceived)));
             order.UpdatedAt = DateTime.UtcNow;
         }

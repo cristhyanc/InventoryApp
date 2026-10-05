@@ -1,6 +1,6 @@
 using Inventory.Application.Stock;
 using InventoryApi.DTOs;
-using InventoryApi.Models;
+using Inventory.Infrastructure.Models;
 
 namespace InventoryApi.Adapters.Mapping;
 

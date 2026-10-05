@@ -1,7 +1,7 @@
 using Inventory.Application.Nayax;
 using Inventory.Application.SalesSync;
 using InventoryApi.Adapters.Persistence;
-using InventoryApi.Data;
+using Inventory.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Moq;
 using Xunit;

@@ -1,14 +1,14 @@
 using Inventory.Application.Machines;
 using Inventory.Application.Products;
 using InventoryApi.DTOs;
-using InventoryApi.Models;
+using Inventory.Infrastructure.Models;
 
 namespace InventoryApi.Adapters.Mapping;
 
 /// <summary>
 /// Projects the Application layer's <see cref="ProductRecord"/> onto the API-owned
 /// <see cref="ProductResponse"/> the product endpoints serialize (issue #303). It replaces the step
-/// that used to rebuild the EF <c>InventoryApi.Models.Product</c> entity for those endpoints, and
+/// that used to rebuild the EF <c>Inventory.Infrastructure.Models.Product</c> entity for those endpoints, and
 /// copies only persisted facts: the derived reorder values are computed by the response itself from
 /// <c>Inventory.Domain.Products.ProductReorderPolicy</c>, so this mapping cannot introduce a second
 /// copy of a reorder formula.

@@ -2,13 +2,16 @@ using Inventory.Application.Expenses;
 using Inventory.Infrastructure.Documents;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Controllers;
-using InventoryApi.Data;
+using Inventory.Infrastructure.Data;
 using InventoryApi.DTOs;
-using InventoryApi.Models;
+using Inventory.Infrastructure.Models;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
+// InventoryApi.DTOs declares the API-owned OperatingExpenseCategory, so the persisted enum is named
+// explicitly rather than relying on which using wins (issue #305, relocated by issue #307).
+using PersistenceModels = Inventory.Infrastructure.Models;
 
 namespace InventoryApi.Tests.Controllers;
 
@@ -173,7 +176,7 @@ public sealed class OperatingExpensesControllerTests : IDisposable
         db.OperatingExpenses.Add(new OperatingExpense
         {
             ExpenseDate = DateTime.UtcNow.Date,
-            Category = Models.OperatingExpenseCategory.Insurance,
+            Category = PersistenceModels.OperatingExpenseCategory.Insurance,
             Description = "Legacy attachment",
             AmountExGst = 10m,
             GstAmount = 1m,
@@ -234,7 +237,7 @@ public sealed class OperatingExpensesControllerTests : IDisposable
         db.OperatingExpenses.Add(new OperatingExpense
         {
             ExpenseDate = DateTime.UtcNow.Date,
-            Category = Models.OperatingExpenseCategory.Insurance,
+            Category = PersistenceModels.OperatingExpenseCategory.Insurance,
             Description = "Legacy attachment",
             AmountExGst = 10m,
             GstAmount = 1m,
@@ -271,7 +274,7 @@ public sealed class OperatingExpensesControllerTests : IDisposable
             seed.OperatingExpenses.Add(new OperatingExpense
             {
                 ExpenseDate = DateTime.UtcNow.Date,
-                Category = Models.OperatingExpenseCategory.Insurance,
+                Category = PersistenceModels.OperatingExpenseCategory.Insurance,
                 Description = "Monthly insurance",
                 AmountExGst = 10m,
                 GstAmount = 1m,

@@ -1,4 +1,4 @@
-using InventoryApi.Data;
+using Inventory.Infrastructure.Data;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
@@ -76,7 +76,7 @@ public class AddNayaxMachineStockEventsMigrationTests
             Assert.Equal(42, preserved.MachineId);
             // Existing rows default to Manual (0): the migration never reinterprets prior history
             // as Nayax-sourced.
-            Assert.Equal(Models.StockAdjustmentSource.Manual, preserved.Source);
+            Assert.Equal(Inventory.Infrastructure.Models.StockAdjustmentSource.Manual, preserved.Source);
 
             // Counted with SQL rather than through the current EF model, whose columns were renamed
             // by the later RenameNayaxMachineStockEventToEventLogContract migration.

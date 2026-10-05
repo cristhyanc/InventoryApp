@@ -239,7 +239,7 @@ public class PublishedResponseSchemaContractTests
     /// The machine endpoints' published response schemas after issue #302 pointed them at the
     /// API-owned DTOs. This is the one place the generated document changes: the dashboard
     /// operations describe <c>MachineResponse</c> where they described the legacy
-    /// <c>InventoryApi.Models.Machine</c> type, and the machine-product operation describes the same
+    /// <c>Inventory.Infrastructure.Models.Machine</c> type, and the machine-product operation describes the same
     /// <c>ProductResponse</c> the catalogue endpoints have described since issue #303, where it
     /// described the legacy <c>Product</c> entity - the same schema-id derivation issue #303 settled
     /// for a migrated endpoint's own response DTO. The runtime JSON of all three is byte-identical
@@ -331,7 +331,7 @@ public class PublishedResponseSchemaContractTests
     {
         var document = ApiContractTestHost.GetSwaggerDocument();
 
-        // The status moved from InventoryApi.Models.SupplierOrderStatus to the Domain enum, which
+        // The status moved from Inventory.Infrastructure.Models.SupplierOrderStatus to the Domain enum, which
         // mirrors it member for member; both derive the same schema id, so a document carrying two
         // of them would not have generated at all.
         var status = document.Components.Schemas["SupplierOrderStatus"];

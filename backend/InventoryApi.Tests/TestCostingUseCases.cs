@@ -4,7 +4,7 @@ using Inventory.Application.Tenancy;
 using Inventory.Application.Time;
 using Inventory.Infrastructure.Clock;
 using InventoryApi.Adapters.Persistence;
-using InventoryApi.Data;
+using Inventory.Infrastructure.Data;
 
 namespace InventoryApi.Tests;
 

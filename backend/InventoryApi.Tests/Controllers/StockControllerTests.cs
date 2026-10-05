@@ -2,7 +2,7 @@ using Inventory.Application.Stock;
 using Inventory.Domain.Exceptions;
 using InventoryApi.Controllers;
 using InventoryApi.DTOs;
-using InventoryApi.Models;
+using Inventory.Infrastructure.Models;
 using InventoryApi.Tests.Application.Stock;
 using Microsoft.AspNetCore.Mvc;
 using Xunit;

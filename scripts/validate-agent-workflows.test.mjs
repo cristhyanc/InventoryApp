@@ -710,11 +710,12 @@ describe('scoped directory creation permissions', () => {
 
 
 describe('agent shell timeout covers full validation', () => {
-  it('requires a 30-minute default and maximum Bash timeout for implementation and architecture Claude steps', () => {
+  it('requires a 30-minute default and maximum Bash timeout for implementation, architecture and repair Claude steps', () => {
     assert.doesNotThrow(() => runContractChecks());
     for (const [path, workflow, source] of [
       [implementPath, implementWorkflow, 'implementation agent'],
       [architecturePath, architectureWorkflow, 'architect'],
+      [repairPath, repairWorkflow, 'repair agent'],
     ]) {
       for (const [from, to] of [
         ['BASH_DEFAULT_TIMEOUT_MS: "1800000"', 'BASH_DEFAULT_TIMEOUT_MS: "120000"'],

@@ -24,7 +24,7 @@ repo_root="$(cd "${script_dir}/.." && pwd)"
 backend_solution="${repo_root}/backend/InventoryApi/InventoryApi.slnx"
 # `dotnet format --exclude` matches paths relative to the working directory, not absolute ones,
 # so the formatting step runs from the repository root with this relative path.
-migrations_dir="backend/InventoryApi/Migrations"
+migrations_dir="backend/Inventory.Infrastructure/Migrations"
 frontend_dir="${repo_root}/frontend/inventory-app"
 configuration="${CONFIGURATION:-Release}"
 

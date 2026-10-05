@@ -120,7 +120,7 @@ public class StockHistoryOpenApiContractTests
         AssertScalar(schema.Properties["createdAt"], "string", "date-time");
 
         // The one published stock-adjustment vocabulary, not a second copy: see
-        // StockAndExpenseSchemaContractTests for why these stay the InventoryApi.Models enums.
+        // StockAndExpenseSchemaContractTests for why these stay the Inventory.Infrastructure.Models enums.
         Assert.Equal("StockAdjustmentReason", schema.Properties["reason"].Reference?.Id);
         Assert.Equal("StockAdjustmentSource", schema.Properties["source"].Reference?.Id);
     }

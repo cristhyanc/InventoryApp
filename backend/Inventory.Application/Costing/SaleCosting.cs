@@ -4,7 +4,7 @@ namespace Inventory.Application.Costing;
 
 /// <summary>
 /// A sale's persisted costing status (issue #297), mirroring the persisted
-/// <c>InventoryApi.Models.SaleCostingStatus</c> member-for-member and ordinal-for-ordinal so the
+/// <c>Inventory.Infrastructure.Models.SaleCostingStatus</c> member-for-member and ordinal-for-ordinal so the
 /// temporary API-owned adapter converts between them by a plain cast.
 /// </summary>
 public enum SaleCostStatus
@@ -17,7 +17,7 @@ public enum SaleCostStatus
 
 /// <summary>
 /// The provenance of a sale's historical cost (issue #297), mirroring the persisted
-/// <c>InventoryApi.Models.SaleCostSource</c> member-for-member and ordinal-for-ordinal.
+/// <c>Inventory.Infrastructure.Models.SaleCostSource</c> member-for-member and ordinal-for-ordinal.
 /// </summary>
 public enum SaleCostOrigin
 {

@@ -1,6 +1,6 @@
 using Inventory.Application.NayaxProcessingFees;
 using Inventory.Domain.FinancialConfiguration;
-using InventoryApi.Data;
+using Inventory.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
 namespace InventoryApi.Adapters.Persistence;

@@ -204,8 +204,9 @@ public class ProjectDependencyDirectionTests
     /// case or domain logic) or <c>Inventory.Infrastructure</c> (an adapter) instead. Reviving the
     /// folder has to be a conscious edit to this list and to the docs/architecture.md exception it
     /// documents. What remains of that exception is the API-owned EF adapter family under
-    /// <c>InventoryApi/Adapters/Persistence</c>, which moves with <c>AppDbContext</c> under
-    /// #153/#154.
+    /// <c>InventoryApi/Adapters/Persistence</c>: <c>AppDbContext</c>, the EF entities and the
+    /// migrations went ahead of it into <c>Inventory.Infrastructure</c> in issue #307, and the
+    /// adapters follow in Persistence 7/8 and 8/8 of #153.
     /// </summary>
     [Fact]
     public void Only_the_documented_legacy_services_remain_in_InventoryApi_Services()
@@ -222,17 +223,19 @@ public class ProjectDependencyDirectionTests
 
     /// <summary>
     /// Issue #305, the last controller slice of #153: no file under <c>InventoryApi/Controllers</c>
-    /// names <c>InventoryApi.Models</c> any more. The HTTP boundary binds and serialises API-owned
+    /// names the EF entity namespace any more. The HTTP boundary binds and serialises API-owned
     /// contracts from <c>InventoryApi.DTOs</c> and calls
     /// <c>Inventory.Application</c>/<c>Inventory.Domain</c>; reaching for a persistence entity there
     /// is what let an EF model become the published wire shape in the first place, and it is exactly
-    /// the coupling that makes moving <c>AppDbContext</c> into <c>Inventory.Infrastructure</c>
-    /// (issues #153/#154) a contract change instead of a relocation.
+    /// the coupling that would have made moving <c>AppDbContext</c> into
+    /// <c>Inventory.Infrastructure</c> a contract change instead of the relocation issue #307 was
+    /// able to make it.
     ///
-    /// Both the <c>using</c> directive and a fully qualified <c>InventoryApi.Models.X</c> reference
-    /// fail here, so the rule cannot be satisfied by qualifying the type instead of importing it.
-    /// The check is over git-tracked files for the same reason the legacy-services freeze is: an
-    /// untracked scratch controller must neither trip it nor satisfy it.
+    /// The namespace searched for is the post-#307 one, <c>Inventory.Infrastructure.Models</c>. Both
+    /// the <c>using</c> directive and a fully qualified <c>Inventory.Infrastructure.Models.X</c>
+    /// reference fail here, so the rule cannot be satisfied by qualifying the type instead of
+    /// importing it. The check is over git-tracked files for the same reason the legacy-services
+    /// freeze is: an untracked scratch controller must neither trip it nor satisfy it.
     /// </summary>
     [Fact]
     public void No_controller_references_the_persistence_models()
@@ -242,7 +245,7 @@ public class ProjectDependencyDirectionTests
         var offendingFiles = GitTrackedFiles(controllersDirectory)
             .Where(path => path.EndsWith(".cs", StringComparison.Ordinal))
             .Where(path => File.ReadAllText(Path.Combine(BackendRoot, "InventoryApi", "Controllers", path))
-                .Contains("InventoryApi.Models", StringComparison.Ordinal))
+                .Contains("Inventory.Infrastructure.Models", StringComparison.Ordinal))
             .OrderBy(path => path, StringComparer.Ordinal)
             .ToArray();
 
@@ -252,6 +255,61 @@ public class ProjectDependencyDirectionTests
                 + "API-owned contracts in InventoryApi.DTOs and call the Application use cases "
                 + "instead (docs/architecture.md § InventoryApi). Offending file(s) under "
                 + $"{controllersDirectory}: {string.Join(", ", offendingFiles)}.");
+    }
+
+    /// <summary>
+    /// Issue #307, Persistence 6/8 of #153: the persistence layer is owned by
+    /// <c>Inventory.Infrastructure</c>, not by the API. <c>AppDbContext</c>, the
+    /// <c>BusinessOwnershipEnforcer</c> that guards every write, the EF entities and the EF
+    /// migrations all left <c>InventoryApi/Data</c>, <c>InventoryApi/Models</c> and
+    /// <c>InventoryApi/Migrations</c>, so those three folders must stay gone: the composition root
+    /// configures the provider and the connection string, and owns no persistence model.
+    ///
+    /// Reviving any of them - a "just one entity" model class, a second context, a migration
+    /// generated with the wrong <c>--project</c> - fails here and must instead go to
+    /// <c>Inventory.Infrastructure</c>, where the migrations path both validation scripts exclude
+    /// from <c>dotnet format</c> also points.
+    /// </summary>
+    [Fact]
+    public void InventoryApi_owns_no_db_context_persistence_model_or_migration()
+    {
+        foreach (var folder in new[] { "Data", "Models", "Migrations" })
+        {
+            var tracked = GitTrackedFiles(Path.Combine("InventoryApi", folder));
+
+            Assert.True(
+                tracked.Length == 0,
+                $"InventoryApi/{folder} must not exist: AppDbContext, the EF entities and the EF "
+                    + "migrations are owned by Inventory.Infrastructure (issue #307, "
+                    + "docs/architecture.md § Inventory.Infrastructure). Tracked file(s) found: "
+                    + $"{string.Join(", ", tracked)}.");
+        }
+    }
+
+    /// <summary>
+    /// The positive half of the rule above: the relocated persistence files really are in
+    /// <c>Inventory.Infrastructure</c>. Without this, deleting them outright would satisfy the
+    /// negative assertion.
+    /// </summary>
+    [Fact]
+    public void Inventory_Infrastructure_owns_the_db_context_the_entities_and_the_migrations()
+    {
+        var dataFiles = GitTrackedFiles(Path.Combine("Inventory.Infrastructure", "Data"));
+        Assert.Contains("AppDbContext.cs", dataFiles);
+        Assert.Contains("BusinessOwnershipEnforcer.cs", dataFiles);
+
+        var modelFiles = GitTrackedFiles(Path.Combine("Inventory.Infrastructure", "Models"));
+        Assert.Contains("IBusinessOwned.cs", modelFiles);
+        Assert.Contains("Product.cs", modelFiles);
+
+        var migrationFiles = GitTrackedFiles(Path.Combine("Inventory.Infrastructure", "Migrations"));
+        Assert.Contains("AppDbContextModelSnapshot.cs", migrationFiles);
+
+        // EF Core is an adapter-layer dependency (AGENTS.md § Architecture rules): the project
+        // that owns the context owns the package reference too.
+        Assert.Contains(
+            "Microsoft.EntityFrameworkCore",
+            PackageReferencesOf("Inventory.Infrastructure", "Inventory.Infrastructure.csproj"));
     }
 
     /// <summary>

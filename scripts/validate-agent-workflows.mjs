@@ -1657,6 +1657,7 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
     requireText(repairAgent, 'github_token: ${{ secrets.GITHUB_TOKEN }}', `${path} repair agent`);
     requireText(repairAgent, 'Do not push, rebase, or rewrite history', `${path} repair agent`);
     requireText(repairAgent, 'Bash(git push *)', `${path} repair agent`);
+    verifyAgentShellTimeout(repairAgent, `${path} repair agent`);
     for (const forbidden of ['AGENT_AUTOMATION_APP_PRIVATE_KEY', 'steps.repair_app_token.outputs.token']) forbidText(repairAgent, forbidden, `${path} repair agent`);
 
     const repairResult = section(producer, '      - name: Verify repair result\n', '      - name: Create GitHub App token for repair publish\n', `${path} repair result`);

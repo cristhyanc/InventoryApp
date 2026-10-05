@@ -4,17 +4,18 @@ using Inventory.Application.Reporting.Transactions;
 using Inventory.Domain.FinancialConfiguration;
 using Inventory.Domain.Reporting.Transactions;
 using Inventory.Infrastructure.Sites;
-using InventoryApi.Data;
-using InventoryApi.Models;
+using Inventory.Infrastructure.Data;
+using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
 
 namespace InventoryApi.Adapters.Persistence;
 
 /// <summary>
-/// Temporary EF Core implementation of <see cref="ITransactionSalesReportFactsProvider"/>. It lives
-/// in InventoryApi, not Inventory.Infrastructure, because it depends on <see cref="AppDbContext"/>,
-/// persistence models, and <see cref="INayaxLynxClient"/>, which still live in InventoryApi. Move it
-/// into Inventory.Infrastructure once the shared AppDbContext and persistence models relocate there.
+/// Temporary EF Core implementation of <see cref="ITransactionSalesReportFactsProvider"/>. It still
+/// lives in InventoryApi, not Inventory.Infrastructure, even though everything it depends on is now
+/// owned there - <see cref="INayaxLynxClient"/> by issue #306, <see cref="AppDbContext"/> and the
+/// persistence models by issue #307. Moving this adapter family after them is Persistence 7/8 and
+/// 8/8 of #153.
 ///
 /// This adapter returns only raw per-transaction facts, the raw catalogue, and raw effective-dated
 /// fee/commission facts (query and external-integration mechanics); it deliberately does not

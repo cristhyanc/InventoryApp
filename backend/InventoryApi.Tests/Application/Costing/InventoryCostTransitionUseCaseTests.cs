@@ -1,8 +1,8 @@
 using Inventory.Application.Nayax;
 using Inventory.Domain.Exceptions;
 using Inventory.Infrastructure.Nayax;
-using InventoryApi.Data;
-using InventoryApi.Models;
+using Inventory.Infrastructure.Data;
+using Inventory.Infrastructure.Models;
 using InventoryApi.Tests.Application.Time;
 using Microsoft.EntityFrameworkCore;
 using Moq;

@@ -1,15 +1,15 @@
 using Inventory.Application.CatalogReconciliation;
 using Inventory.Domain.CatalogReconciliation;
-using InventoryApi.Data;
+using Inventory.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
 namespace InventoryApi.Adapters.Persistence;
 
 /// <summary>
-/// Temporary EF Core implementation of <see cref="ILocalCatalogSnapshotProvider"/>. It lives in
-/// InventoryApi, not Inventory.Infrastructure, because it depends on <see cref="AppDbContext"/>,
-/// which still lives in InventoryApi. Move it into Inventory.Infrastructure once the shared
-/// AppDbContext and persistence models relocate there.
+/// Temporary EF Core implementation of <see cref="ILocalCatalogSnapshotProvider"/>. It still lives
+/// in InventoryApi, not Inventory.Infrastructure: <see cref="AppDbContext"/>, which it depends on,
+/// moved there in issue #307, and moving this adapter family after it is Persistence 7/8 and 8/8
+/// of #153.
 ///
 /// Products are persisted directly, keyed by the Nayax product identifier (see
 /// <c>ImportService.ImportProductsAsync</c>). Machines have no persisted entity at all - the current

@@ -1,6 +1,6 @@
 using Inventory.Application.Costing;
-using InventoryApi.Data;
-using InventoryApi.Models;
+using Inventory.Infrastructure.Data;
+using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 
@@ -8,10 +8,10 @@ namespace InventoryApi.Adapters.Persistence;
 
 /// <summary>
 /// Temporary EF Core implementation of <see cref="IInventoryCostRepairStore"/> (issue #359). It
-/// lives in InventoryApi, not Inventory.Infrastructure, because it depends on
-/// <see cref="AppDbContext"/> and the <see cref="InventoryCostRepair"/> and <see cref="Product"/>
-/// persistence models, which still live in InventoryApi; move it into Inventory.Infrastructure once
-/// they relocate there (issue #153).
+/// still lives in InventoryApi, not Inventory.Infrastructure: <see cref="AppDbContext"/> and the
+/// <see cref="InventoryCostRepair"/> and <see cref="Product"/> persistence models it depends on
+/// moved there in issue #307, and moving this adapter family after them is Persistence 7/8 and 8/8
+/// of #153.
 ///
 /// Everything it reads and writes goes through <see cref="AppDbContext"/>'s business query filter
 /// and its ownership stamp on save, so the adapter adds no business filter of its own and cannot

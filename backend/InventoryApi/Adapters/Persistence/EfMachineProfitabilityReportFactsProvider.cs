@@ -2,19 +2,17 @@ using Inventory.Application.Reporting.MachineProfitability;
 using Inventory.Application.Commissions;
 using Inventory.Application.NayaxProcessingFees;
 using Inventory.Domain.FinancialConfiguration;
-using InventoryApi.Data;
+using Inventory.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
 namespace InventoryApi.Adapters.Persistence;
 
 /// <summary>
 /// Temporary EF Core implementation of <see cref="IMachineProfitabilityReportFactsProvider"/>. It
-/// lives in InventoryApi, not Inventory.Infrastructure, because it depends on
-/// <see cref="AppDbContext"/> and persistence models that still live in InventoryApi, and because
-/// it also composes the Application-owned <see cref="IGetNayaxProcessingFees"/> and
-/// <see cref="IGetSiteCommissionReport"/> use cases.
-/// Move it into Inventory.Infrastructure once the shared AppDbContext and persistence models
-/// relocate there.
+/// still lives in InventoryApi, not Inventory.Infrastructure: <see cref="AppDbContext"/> and the
+/// persistence models it depends on moved there in issue #307, and moving this adapter family after
+/// them is Persistence 7/8 and 8/8 of #153. It also composes the Application-owned
+/// <see cref="IGetNayaxProcessingFees"/> and <see cref="IGetSiteCommissionReport"/> use cases.
 ///
 /// Its completed-sale query and site-commission resolution are shared with
 /// <see cref="EfBookkeepingReportFactsProvider"/> through <see cref="EfReportingSharedQueries"/>.

@@ -2,7 +2,7 @@ using System.Text.Json;
 using Inventory.Application.Stock;
 using InventoryApi.Adapters.Mapping;
 using InventoryApi.DTOs;
-using InventoryApi.Models;
+using Inventory.Infrastructure.Models;
 using Xunit;
 using DomainStock = Inventory.Domain.Stock;
 
@@ -11,7 +11,7 @@ namespace InventoryApi.Tests.DTOs;
 /// <summary>
 /// Locks the wire contract of the "/api/products/{productId}/stock" history and adjust endpoints
 /// now that the API-owned <see cref="ProductStockAdjustmentResponse"/> replaced the
-/// <c>InventoryApi.Models.StockAdjustment</c> entity <c>StockAdjustmentResponseMapper</c> used to
+/// <c>Inventory.Infrastructure.Models.StockAdjustment</c> entity <c>StockAdjustmentResponseMapper</c> used to
 /// rebuild for them (issue #305).
 ///
 /// The reference value is the entity itself: each test builds the <c>StockAdjustment</c> the former

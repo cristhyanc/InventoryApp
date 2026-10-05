@@ -1,7 +1,7 @@
 namespace Inventory.Domain.Stock;
 
 /// <summary>
-/// Mirrors <c>InventoryApi.Models.StockAdjustmentReason</c> member-for-member (issue #282, the
+/// Mirrors <c>Inventory.Infrastructure.Models.StockAdjustmentReason</c> member-for-member (issue #282, the
 /// #240 stock-adjustment vocabulary handoff), so Domain/Application never reference the InventoryApi
 /// persistence enum directly - the same convention <c>Inventory.Domain.Expenses.ExpenseCategory</c>
 /// and <c>Inventory.Domain.SupplierOrders.SupplierOrderStatus</c> already established for their own

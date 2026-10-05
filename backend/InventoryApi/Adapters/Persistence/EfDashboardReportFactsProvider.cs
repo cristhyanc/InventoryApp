@@ -1,15 +1,16 @@
 using Inventory.Application.Reporting.Dashboard;
 using Inventory.Application.Commissions;
-using InventoryApi.Data;
+using Inventory.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
 namespace InventoryApi.Adapters.Persistence;
 
 /// <summary>
-/// Temporary EF Core implementation of <see cref="IDashboardReportFactsProvider"/>. It lives in
-/// InventoryApi, not Inventory.Infrastructure, for the same reason
+/// Temporary EF Core implementation of <see cref="IDashboardReportFactsProvider"/>. It still lives
+/// in InventoryApi, not Inventory.Infrastructure, for the same reason
 /// <see cref="EfBookkeepingReportFactsProvider"/> does: it depends on <see cref="AppDbContext"/>,
-/// which still lives in InventoryApi, and it composes the Application-owned
+/// which moved to Inventory.Infrastructure in issue #307 ahead of this adapter family
+/// (Persistence 7/8 and 8/8 of #153), and it composes the Application-owned
 /// <see cref="IGetSiteCommissionReport"/> use case. Its completed-sale query,
 /// imported-reimbursement summary, and site-commission resolution are shared with the other
 /// migrated report facts providers through <see cref="EfReportingSharedQueries"/> rather than

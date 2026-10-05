@@ -1,15 +1,16 @@
 using Inventory.Application.Imports;
-using InventoryApi.Data;
-using InventoryApi.Models;
+using Inventory.Infrastructure.Data;
+using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
 
 namespace InventoryApi.Adapters.Persistence;
 
 /// <summary>
 /// Temporary EF Core implementation of <see cref="IImportedReimbursementStore"/> (issue #299). It
-/// lives in InventoryApi, not Inventory.Infrastructure, because it depends on
-/// <see cref="AppDbContext"/> and the persistence models, which still live there - the same
-/// pattern as <see cref="EfSaleCostingStore"/>; it must move once #153 relocates persistence.
+/// still lives in InventoryApi, not Inventory.Infrastructure - the same pattern as
+/// <see cref="EfSaleCostingStore"/>: <see cref="AppDbContext"/> and the persistence models it
+/// depends on moved there in issue #307, and moving this adapter family after them is
+/// Persistence 7/8 and 8/8 of #153.
 ///
 /// Both operations keep the behaviour the former <c>ImportService.ImportPendingXmlFilesAsync</c>
 /// had: the duplicate lookup is the same tenant-filtered <c>ImportedFiles</c> query, with no
