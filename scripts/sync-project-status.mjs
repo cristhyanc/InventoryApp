@@ -173,7 +173,7 @@ export class ProjectSync {
   /** Builds the decision input. Batched snapshots use the cached PR list; live ones re-fetch each PR. */
   async snapshot(current, issue, { live = false } = {}) {
     if (!issue?.number) throw new Error('Issue could not be read.');
-    const labels = complete(issue.labels, 'Issue labels').map(label => label.name).sort();
+    const labels = complete(issue.labels, 'Issue labels').map(label => label.name).sort((a, b) => a.localeCompare(b));
     const parent = issue.subIssues.totalCount > 0;
     if (parent || MANUAL_ISSUES.has(issue.number)) return null;
     const linked = complete(issue.closedByPullRequestsReferences, 'Linked pull requests')
@@ -200,7 +200,7 @@ export class ProjectSync {
       }
       prs.push({ number: pr.number, head: pr.head.sha, state: pr.merged_at ? 'MERGED' : pr.state.toUpperCase(),
         mergedAt: pr.merged_at, base: pr.base.ref, sameRepository, agent, draft: pr.draft,
-        statuses: Object.fromEntries(Object.entries(statuses).sort()) });
+        statuses: Object.fromEntries(Object.entries(statuses).sort(([a], [b]) => a.localeCompare(b))) });
     }
     return { current, issue: {
       number: issue.number, state: issue.state, stateReason: issue.stateReason, labels, parent,
