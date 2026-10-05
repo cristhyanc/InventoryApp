@@ -57,7 +57,7 @@ for (const provider of ['claude', 'copilot']) {
     assert.equal(low.tier, 'low');
     assert.equal(high.tier, 'high');
     assert.equal(low.maxTurns, 300);
-    assert.equal(high.maxTurns, 250);
+    assert.equal(high.maxTurns, 400);
     assert.notEqual(low.model, high.model);
   });
   test(`${provider}: default triage selects low, standard or high and stops only for clarification`, () => {
@@ -68,7 +68,7 @@ for (const provider of ['claude', 'copilot']) {
     const high = resolveSelection(selection, { tier: 'high', reason: 'Broad structural change' });
     assert.equal(high.tier, 'high');
     assert.equal(high.model, resolveSelection(prepare(provider, '-high')).model);
-    assert.equal(high.maxTurns, 250);
+    assert.equal(high.maxTurns, 400);
     assert.throws(() => resolveSelection(selection, { tier: 'clarification-required', reason: 'Acceptance criteria contradict' }), /clarification required/i);
     assert.throws(() => resolveSelection(selection, { tier: 'high-required', reason: 'Old tier' }), /Invalid triage/);
     assert.throws(() => resolveSelection(selection, { tier: 'opus', reason: 'Model ID instead of tier' }), /Invalid triage/);
