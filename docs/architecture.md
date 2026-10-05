@@ -993,11 +993,18 @@ the rule cannot be satisfied by qualifying the type instead of importing it.
 
 The persistence model is still reachable from two deliberate, named places in the API project: the
 Swagger compatibility boundary (see [OpenAPI documentation](#openapi-documentation)), and the
-`Reason`/`Source` members of `InventoryApi.DTOs.ProductStockAdjustmentResponse`, whose wire enums
-that boundary keeps published - `InventoryApi.Models.StockAdjustmentReason`/`StockAdjustmentSource`
-are reached by the legacy `Product` component the pinned purchase/supplier-order schemas reference,
-so a same-named API-owned copy makes Swashbuckle fail document generation with a duplicate-schema-id
-error. Those two enums move with the persistence models, not before them.
+stock-adjustment reason/source members of the stock DTOs - `InventoryApi.DTOs.StockAdjustmentDto.Reason`
+on the request side and `InventoryApi.DTOs.ProductStockAdjustmentResponse.Reason`/`Source` on the
+response side. Their wire enums are the ones that boundary keeps published:
+`InventoryApi.Models.StockAdjustmentReason`/`StockAdjustmentSource` are reached from the pinned
+`StockAdjustment` response component and from the legacy `Product` component the pinned
+purchase/supplier-order schemas reference, so a same-named API-owned copy makes Swashbuckle fail
+document generation with a duplicate-schema-id error, and renaming or duplicating the published
+component is an API-contract change issue #305 excludes. This is a **temporary compatibility
+exception**, not a target state: those two enums move with the persistence models under #153/#154,
+not before them, and `InventoryApi.Tests.Swagger.StockAndExpenseSchemaContractTests` fails as soon as
+the pinned components stop publishing them, which is the signal that the stock DTOs can become fully
+API-owned with no document change.
 
 #### Temporary API-owned exception and its enforcement (issue #145)
 
@@ -2260,7 +2267,7 @@ the DTOs' own `ProductResponse`/`SupplierResponse`. All three are API-contract c
 reads the document rather than the payload.
 
 `InventoryApi.Swagger.PublishedResponseSchemaContract` is the **Swagger compatibility boundary**
-that holds the published description still. It does three narrowly scoped things:
+that holds the published description still. It does four narrowly scoped things:
 
 - maps `PurchaseResponse`/`PurchaseItemResponse` and the equivalent
   `SupplierOrderResponse`/`SupplierOrderLineResponse` pair on the supplier-order endpoints back onto
@@ -2273,20 +2280,36 @@ that holds the published description still. It does three narrowly scoped things
   `Supplier` entity, so `product` keeps pointing at `#/components/schemas/Product` and `supplier` at
   `#/components/schemas/Supplier`. Because the replacement runs through the generator rather than
   rewriting a reference string, the referenced component is registered with its complete shape —
-  including its own nested `category`/`supplier`/`stockAdjustments` references — instead of dangling.
+  including its own nested `category`/`supplier`/`stockAdjustments` references — instead of dangling;
+- describes the stock history/adjust operations' response with the schema of the legacy
+  `InventoryApi.Models.StockAdjustment` entity (issue #305), through an operation filter rather than
+  a schema-id redirect. Those two actions return the API-owned
+  `InventoryApi.DTOs.ProductStockAdjustmentResponse`, whose own schema id the product endpoints
+  already publish as the item type of `ProductResponse.stockAdjustments` (issue #303), and one CLR
+  type cannot carry two schema ids — so the *response* is substituted instead of the id, and both
+  operations keep describing `#/components/schemas/StockAdjustment`. The substitution regenerates the
+  schema from the legacy type with the same generator call Swashbuckle makes for a declared response
+  type (substituting the element type inside the declared `IEnumerable<T>` for the history
+  endpoint), so the published media types, status codes, content types and request body come out
+  exactly as the base branch generated them; nothing else about the operation is touched. A pinned
+  response description is only honest while the type that actually serialises is schema-identical to
+  it and its payload byte-identical, which `StockAndExpenseSchemaContractTests` and
+  `InventoryApi.Tests.DTOs.StockAdjustmentResponseJsonContractTests` assert respectively.
 
 This boundary is where the API project names `InventoryApi.Models` for presentation purposes
 deliberately. The controllers and the use cases are free of it - since issue #305 no file under
 `InventoryApi/Controllers` references it at all, enforced by
-`ProjectDependencyDirectionTests.No_controller_references_the_persistence_models` - and the response
-mappers name it for exactly one thing: the `StockAdjustmentReason`/`StockAdjustmentSource` wire
-enums that `ProductStockAdjustmentResponse` carries and that this boundary itself keeps published
-through the legacy `Product` component's `stockAdjustments` reference. An API-owned enum of the same
-simple name cannot coexist with that reference - Swashbuckle fails document generation with
+`ProjectDependencyDirectionTests.No_controller_references_the_persistence_models` - and the DTOs and
+response mappers name it for exactly one thing: the `StockAdjustmentReason`/`StockAdjustmentSource`
+wire enums that the stock request DTO (`InventoryApi.DTOs.StockAdjustmentDto.Reason`) and the stock
+response DTO (`ProductStockAdjustmentResponse.Reason`/`Source`) carry, and that this boundary itself
+keeps published - from the pinned `StockAdjustment` response component and from the legacy `Product`
+component's `stockAdjustments` reference. An API-owned enum of the same simple name cannot coexist
+with those references - Swashbuckle fails document generation with
 `Can't use schemaId "$StockAdjustmentReason" ...` - so those two enums are pinned here until the
 persistence models relocate under #153/#154, and
-`InventoryApi.Tests.Swagger.StockAndExpenseSchemaContractTests` records the reachability that forces
-it. Nothing global changes: `ProductResponse` and
+`InventoryApi.Tests.Swagger.StockAndExpenseSchemaContractTests` reproduces that exact collision and
+records the reachability that forces it. Nothing global changes: `ProductResponse` and
 `SupplierResponse` keep the contracts the product and supplier endpoints already published - since
 issue #302 `ProductResponse` is what the machine-product endpoint publishes too, and the legacy
 `Product` component is registered only by this boundary now, for the pinned schemas that reference
@@ -3242,24 +3265,41 @@ Backend and frontend tracks can progress independently when their contracts do n
        bytes of the response with the entity shape it replaced, for a populated and a sparse case, and
        asserts every reason and source value member by member; `StockControllerRouteTests` pins the
        three effective routes.
-     - **Why the reason/source enums stayed.** `ProductStockAdjustmentResponse.Reason`/`Source` are
-       still the `InventoryApi.Models` enums, the one presentation use of the persistence model left
-       outside the Swagger compatibility boundary. That boundary regenerates the legacy `Product`
-       component for the pinned purchase/supplier-order schemas, `Product` references
-       `StockAdjustment`, and `StockAdjustment` references both enums, so an API-owned enum of the
-       same simple name makes Swashbuckle fail document generation with
-       `Can't use schemaId "$StockAdjustmentReason" for type "$InventoryApi.Models.StockAdjustmentReason"`.
-       Renaming the published component, or publishing a second one, is an API-contract change this
-       issue excludes. `StockAndExpenseSchemaContractTests` pins that reachability - one
-       `StockAdjustmentReason` and one `StockAdjustmentSource` component, referenced by both the
-       response and the legacy entity component - so whoever retires the legacy `Product` pin with the
-       persistence models (#153/#154) is told there that the enums can move with it.
-     - **Published OpenAPI.** The one client-visible change is in the generated document, not the
-       payload: the two stock operations describe `ProductStockAdjustmentResponse` where they
-       described `StockAdjustment` - the same schema-id derivation issues #302/#303 settled when a
-       migrated endpoint took its own response DTO. The legacy `StockAdjustment` component stays
-       published for the pinned `Product` component that references it; no stock operation points at
-       it any more.
+     - **Published OpenAPI: unchanged.** The generated document comes out exactly as `develop`
+       generated it, because the issue requires the published contract to be preserved and a schema
+       reference is client-visible even when the payload is byte-identical. The Swagger compatibility
+       boundary describes both stock operations' response with the legacy `StockAdjustment` schema
+       (see [OpenAPI documentation](#openapi-documentation)): a schema-id redirect was not available,
+       because the product endpoints already publish `ProductStockAdjustmentResponse` under its own id
+       as the item type of `ProductResponse.stockAdjustments` and one CLR type cannot carry two ids,
+       so the response itself is substituted through an operation filter. `StockAndExpenseSchemaContractTests`
+       compares the three stock operations whole - response reference, status codes, content types,
+       path parameters and request body - and the `StockAdjustment`, `StockAdjustmentDto`,
+       `StockAdjustmentReason`, `StockAdjustmentSource` and `RestockCostSuggestionDto` components
+       whole, against the base branch's generated contract, and asserts that the pinned response
+       component and the `ProductStockAdjustmentResponse` the endpoints actually serialise are
+       schema-identical, so the pinned description cannot become a lie.
+     - **Why the reason/source enums stayed: a temporary compatibility exception.** Both stock DTOs
+       still carry the `InventoryApi.Models` enums - `StockAdjustmentDto.Reason` on the request side
+       and `ProductStockAdjustmentResponse.Reason`/`Source` on the response side - the only
+       presentation use of the persistence model left outside the Swagger compatibility boundary.
+       The published document carries one `StockAdjustmentReason` and one `StockAdjustmentSource`
+       component, derived from those CLR enums and reached from the request body, from the pinned
+       `StockAdjustment` response component and from the legacy `Product` component the boundary
+       regenerates for the pinned purchase/supplier-order schemas. An API-owned enum of the same
+       simple name therefore makes Swashbuckle fail document generation with
+       `Can't use schemaId "$StockAdjustmentReason" for type "$InventoryApi.Models.StockAdjustmentReason"`,
+       and renaming the published component or publishing a second one is an API-contract change this
+       issue excludes; changing the entity's own property type is outside the issue's file scope.
+       `StockAndExpenseSchemaContractTests` reproduces that exact collision through the application's
+       own schema generator and pins the reachability that causes it, so whoever retires the pinned
+       legacy components with the persistence models (#153/#154) is told there that the enums can move
+       with them. While the exception stands, both sides of the vocabulary are pinned:
+       `InventoryApi.Tests.DTOs.StockAdjustmentRequestJsonContractTests` asserts the reason each
+       numeric value in a request body binds to and that the persistence and Domain reason/source
+       enums agree member for member and value for value (the controller and the response mapper
+       convert by a plain cast), and `StockAdjustmentResponseJsonContractTests` asserts the serialised
+       values.
      - **The controller guard.** With these two controllers migrated, no file under
        `InventoryApi/Controllers` references `InventoryApi.Models`, and
        `ProjectDependencyDirectionTests.No_controller_references_the_persistence_models` enforces it
@@ -3401,8 +3441,8 @@ Backend and frontend tracks can progress independently when their contracts do n
        `#/components/schemas/Product` and `#/components/schemas/Supplier` with complete, registered
        shapes. That is where the API project names `InventoryApi.Models` for presentation purposes
        deliberately - the controllers and use cases stay free of it, as this issue requires, and the
-       response mappers keep naming only the stock-adjustment wire enums this boundary itself
-       publishes (issue #305) - and nothing global changes, so the
+       stock DTOs and their response mapper keep naming only the stock-adjustment wire enums this
+       boundary itself publishes (issue #305) - and nothing global changes, so the
        `ProductResponse`/`SupplierResponse` contracts the product and supplier endpoints publish are
        untouched. Each of the four schemas therefore comes out equal to the base branch's, which the
        regression tests compare literally. See
@@ -3568,7 +3608,7 @@ Backend and frontend tracks can progress independently when their contracts do n
     - Done for imports (issue #301, item 10 above): `InventoryApi.Services.ImportService` (both partials), `InventoryApi.Services.Interfaces.IImportService`, the API-owned `NayaxSalesWorkbook` and `NayaxProductMatcher` helpers, their dependency-injection registration, and every production and test caller were removed, and all five source files were deleted.
     - Done for products (issue #303, item 6 above) and for purchases and supplier orders (issue #304, item 7 above): `ProductService`/`IProductService`, `PurchaseService`/`IPurchaseService` and `SupplierOrderService`/`ISupplierOrderService`, their dependency-injection registrations, and every production and test caller were removed, the source files were deleted, and each slice's endpoints moved to an API-owned response DTO in the same change.
     - Done for sites and machines (issue #302, item 9 above): `SiteService`/`ISiteService` and `MachineService`/`IMachineService`, their dependency-injection registrations, and every production and test caller were removed, all four source files and the entity-shaped `Adapters/Mapping/ProductResponseMapper.cs` were deleted, and the machine endpoints moved to API-owned response DTOs in the same change. `InventoryApi/Services` is down to the shared `SiteNameResolver` helper and `InventoryApi/Services/Interfaces` no longer exists. The now-unreferenced `InventoryApi.Models.Machine` response type is left in place as the contract tests' reference value, named here as the one piece of legacy structure this step still owns for machines.
-    - Done for the controller boundary as a whole (issue #305, items 5 and 6 above): `StockController` and `OperatingExpensesController` were the last two controllers that named `InventoryApi.Models`, and they now bind and serialise API-owned DTOs (`ProductStockAdjustmentResponse`, `OperatingExpenseCategory`). No file under `InventoryApi/Controllers` references the persistence model, and `ProjectDependencyDirectionTests.No_controller_references_the_persistence_models` fails if one starts to. The legacy structure this step still owns here is the persistence model itself - including the `StockAdjustmentReason`/`StockAdjustmentSource` wire enums the stock-adjustment response keeps naming, which cannot become API-owned while the Swagger compatibility boundary still publishes them (see [InventoryApi](#inventoryapi)).
+    - Done for the controller boundary as a whole (issue #305, items 5 and 6 above): `StockController` and `OperatingExpensesController` were the last two controllers that named `InventoryApi.Models`, and they now bind and serialise API-owned DTOs (`ProductStockAdjustmentResponse`, `OperatingExpenseCategory`). No file under `InventoryApi/Controllers` references the persistence model, and `ProjectDependencyDirectionTests.No_controller_references_the_persistence_models` fails if one starts to. The published OpenAPI document is unchanged: the Swagger compatibility boundary describes the stock responses with the legacy `StockAdjustment` schema they have always published. The legacy structure this step still owns here is the persistence model itself - including the `StockAdjustmentReason`/`StockAdjustmentSource` wire enums both stock DTOs keep naming, on the request side as well as the response side, which cannot become API-owned while the Swagger compatibility boundary still publishes them (see [InventoryApi](#inventoryapi)).
     - Still pending for the remaining feature areas (the `InventoryApi.Models.Machine` leftover above, and the remaining direct-access controllers/services); only after each is migrated and tests prove equivalent behavior does this step complete overall.
 
 ### Frontend migration track

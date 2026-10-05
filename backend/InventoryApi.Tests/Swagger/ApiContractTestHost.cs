@@ -41,6 +41,13 @@ internal static class ApiContractTestHost
     internal static OpenApiDocument GetSwaggerDocument() =>
         LazyProvider.Value.GetRequiredService<ISwaggerProvider>().GetSwagger("v1");
 
+    /// <summary>
+    /// The schema generator the application's own Swagger configuration builds, for the tests that
+    /// assert what a type would publish rather than what an endpoint does publish.
+    /// </summary>
+    internal static ISchemaGenerator GetSchemaGenerator() =>
+        LazyProvider.Value.GetRequiredService<ISchemaGenerator>();
+
     private static ServiceProvider Build()
     {
         var services = new ServiceCollection();

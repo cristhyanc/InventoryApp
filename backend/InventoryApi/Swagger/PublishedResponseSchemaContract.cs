@@ -1,3 +1,4 @@
+using System.Globalization;
 using InventoryApi.DTOs;
 using Microsoft.OpenApi.Models;
 using Swashbuckle.AspNetCore.SwaggerGen;
@@ -20,17 +21,29 @@ namespace InventoryApi.Swagger;
 /// and stricter response validation. This type is the compatibility boundary that holds the
 /// published description still while the code behind it moves.
 ///
-/// This is deliberately narrow. It names four response types explicitly; every other schema stays
-/// on Swashbuckle's default derivation, and the product and supplier endpoints keep publishing
-/// their own <c>ProductResponse</c>/<c>SupplierResponse</c> contracts (issues #302/#303) untouched.
-/// If an endpoint ever publishes the EF entity a pinned id belongs to, Swashbuckle fails document
-/// generation with a duplicate-schema-id error rather than silently renaming one of them, and
+/// Issue #305 added the stock endpoints to the same boundary by the other available mechanism. The
+/// stock history and adjust actions return the API-owned <c>ProductStockAdjustmentResponse</c>,
+/// whose own schema id the product endpoints already publish for a movement in a product's history
+/// (issue #303), so pinning the id was not available here: two published identities for one CLR type
+/// cannot come from one schema-id selector. Their published <em>response</em> is substituted instead
+/// - see <see cref="PublishedResponseFilter"/> - so the two operations keep describing
+/// <c>#/components/schemas/StockAdjustment</c>, exactly as the base branch published them.
+///
+/// This is deliberately narrow. It names four response types and one substituted response
+/// explicitly; every other schema stays on Swashbuckle's default derivation, and the product and
+/// supplier endpoints keep publishing their own <c>ProductResponse</c>/<c>SupplierResponse</c>
+/// contracts (issues #302/#303) untouched. If an endpoint ever publishes the EF entity a pinned id
+/// belongs to, Swashbuckle fails document generation with a duplicate-schema-id error rather than
+/// silently renaming one of them, and
 /// <c>InventoryApi.Tests.Swagger.PublishedResponseSchemaContractTests</c> is where that surfaces.
 ///
-/// This is the only place in the API project outside the persistence model itself that is allowed
-/// to name <c>InventoryApi.Models</c> for presentation purposes: the controllers, the use cases and
-/// the response mappers stay free of it, and the entity types are reached here solely to regenerate
-/// the legacy component shapes the published document references.
+/// This is where the API project names <c>InventoryApi.Models</c> for presentation purposes
+/// deliberately: the controllers and the use cases stay free of it, and the entity types are reached
+/// here solely to regenerate the legacy component shapes the published document references. The one
+/// other presentation use left is the stock-adjustment reason/source vocabulary that this boundary
+/// itself keeps published, which <c>InventoryApi.DTOs.StockAdjustmentDto</c> and
+/// <c>InventoryApi.DTOs.ProductStockAdjustmentResponse</c> carry as a temporary compatibility
+/// exception documented on those types and in docs/architecture.md § InventoryApi.
 /// </summary>
 internal static class PublishedResponseSchemaContract
 {
@@ -64,6 +77,28 @@ internal static class PublishedResponseSchemaContract
     {
         ["ProductResponse"] = typeof(Models.Product),
         ["SupplierResponse"] = typeof(Models.Supplier),
+    };
+
+    /// <summary>
+    /// API-owned response type to the legacy entity whose published schema the document describes
+    /// for an operation that returns it. The stock history and adjust endpoints have always
+    /// described <c>#/components/schemas/StockAdjustment</c>; issue #305 pointed them at the
+    /// API-owned <c>ProductStockAdjustmentResponse</c> so the controller stops naming the
+    /// persistence model, and the published description stays where it was.
+    ///
+    /// Unlike <see cref="PinnedSchemaIds"/> this cannot be a schema-id redirect:
+    /// <c>ProductStockAdjustmentResponse</c> is also published under its own id, as the item type of
+    /// <c>ProductResponse.stockAdjustments</c> (issue #303), and one CLR type cannot carry two
+    /// schema ids. The substitution is therefore scoped to the operation's response, where the
+    /// published shape and the serialised shape are proved equal by
+    /// <c>InventoryApi.Tests.Swagger.StockAndExpenseSchemaContractTests</c> (the two components are
+    /// schema-identical) and by
+    /// <c>InventoryApi.Tests.DTOs.StockAdjustmentResponseJsonContractTests</c> (the payload is
+    /// byte-identical).
+    /// </summary>
+    private static readonly Dictionary<Type, Type> SubstitutedResponseTypes = new()
+    {
+        [typeof(ProductStockAdjustmentResponse)] = typeof(Models.StockAdjustment),
     };
 
     /// <summary>
@@ -101,6 +136,78 @@ internal static class PublishedResponseSchemaContract
                         context.SchemaGenerator.GenerateSchema(legacyType, context.SchemaRepository);
                 }
             }
+        }
+    }
+
+    /// <summary>
+    /// Describes an operation's response with the schema of the legacy type the document published
+    /// for it, for the responses named in <see cref="SubstitutedResponseTypes"/> only.
+    ///
+    /// The schema is regenerated from that legacy type through Swashbuckle's own generator, with the
+    /// same call Swashbuckle makes for a declared response type, so the published media type comes
+    /// out identical to the base branch's - including a collection response, whose element type is
+    /// substituted inside the declared <c>IEnumerable&lt;T&gt;</c> rather than patched afterwards -
+    /// and the referenced component is registered with its complete shape instead of dangling.
+    /// Nothing else about the operation is touched: status codes, content types, parameters and the
+    /// request body stay as MVC described them.
+    /// </summary>
+    internal sealed class PublishedResponseFilter : IOperationFilter
+    {
+        public void Apply(OpenApiOperation operation, OperationFilterContext context)
+        {
+            foreach (var responseType in context.ApiDescription.SupportedResponseTypes)
+            {
+                if (PublishedTypeFor(responseType.Type) is not { } publishedType)
+                {
+                    continue;
+                }
+
+                var statusCode = responseType.StatusCode.ToString(CultureInfo.InvariantCulture);
+                if (!operation.Responses.TryGetValue(statusCode, out var response))
+                {
+                    continue;
+                }
+
+                foreach (var mediaType in response.Content.Values)
+                {
+                    mediaType.Schema =
+                        context.SchemaGenerator.GenerateSchema(publishedType, context.SchemaRepository);
+                }
+            }
+        }
+
+        /// <summary>
+        /// The legacy type whose schema the document publishes for <paramref name="responseType"/>,
+        /// or <c>null</c> when the response is not substituted. A substituted type nested in a
+        /// generic response - <c>IEnumerable&lt;ProductStockAdjustmentResponse&gt;</c> for the
+        /// history endpoint - is replaced inside the same generic type, so the array wrapper the
+        /// document carries is the one MVC's declared type produces.
+        /// </summary>
+        private static Type? PublishedTypeFor(Type? responseType)
+        {
+            if (responseType is null)
+            {
+                return null;
+            }
+
+            if (SubstitutedResponseTypes.TryGetValue(responseType, out var publishedType))
+            {
+                return publishedType;
+            }
+
+            if (!responseType.IsGenericType)
+            {
+                return null;
+            }
+
+            var arguments = responseType.GetGenericArguments();
+            var substituted = arguments
+                .Select(argument => PublishedTypeFor(argument) ?? argument)
+                .ToArray();
+
+            return substituted.SequenceEqual(arguments)
+                ? null
+                : responseType.GetGenericTypeDefinition().MakeGenericType(substituted);
         }
     }
 }

@@ -18,14 +18,21 @@ namespace InventoryApi.Adapters.Mapping;
 /// <c>[JsonIgnore]</c>d on the entity and are simply absent here, which is also the tenancy rule
 /// (AGENTS.md § Tenant ownership and data isolation).
 ///
+/// The published OpenAPI document is unchanged by this: the stock operations still describe
+/// <c>#/components/schemas/StockAdjustment</c>, because
+/// <c>InventoryApi.Swagger.PublishedResponseSchemaContract</c> substitutes that legacy schema for
+/// their response. Issue #305 excludes API-contract changes, and a schema reference is
+/// client-visible even when the payload is byte-identical.
+///
 /// <see cref="ProductStockAdjustmentResponse.Reason"/>/<c>Source</c> are the
-/// <c>InventoryApi.Models</c> enums rather than API-owned copies, because the published document
-/// still reaches those CLR enums through the legacy <c>Product</c> component the pinned
-/// purchase/supplier-order schemas reference (see
-/// <c>InventoryApi.Swagger.PublishedResponseSchemaContract</c>). A second enum of the same simple
-/// name makes Swashbuckle fail document generation with a duplicate-schema-id error, so the shared
-/// wire vocabulary stays where it is until the persistence models relocate; the persisted numeric
-/// values a client switches on are unchanged either way.
+/// <c>InventoryApi.Models</c> enums rather than API-owned copies - a temporary compatibility
+/// exception, shared with the request DTO's <c>StockAdjustmentDto.Reason</c> - because the published
+/// document reaches those CLR enums from the pinned <c>StockAdjustment</c> response component itself
+/// and from the legacy <c>Product</c> component the pinned purchase/supplier-order schemas
+/// reference. A second enum of the same simple name makes Swashbuckle fail document generation with
+/// a duplicate-schema-id error, so the shared wire vocabulary stays where it is until the
+/// persistence models relocate; the persisted numeric values a client switches on are unchanged
+/// either way.
 /// </summary>
 public static class StockAdjustmentResponseMapper
 {
