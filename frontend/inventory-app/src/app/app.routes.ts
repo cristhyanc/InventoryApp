@@ -35,8 +35,12 @@ export const routes: Routes = [
         loadComponent: () => import('./components/products/product-needs-ordering.component').then((m) => m.ProductNeedsOrderingComponent)
       },
       {
+        // The dedicated Supplier Orders page (/purchases/orders, issue #387) replaced this
+        // Products-area listing; this redirect preserves the old bookmark/link instead of
+        // keeping a second, diverging supplier-order listing implementation here.
         path: 'on-order',
-        loadComponent: () => import('./components/products/product-on-order.component').then((m) => m.ProductOnOrderComponent)
+        pathMatch: 'full',
+        redirectTo: '/purchases/orders'
       }
     ]
   },
@@ -56,6 +60,11 @@ export const routes: Routes = [
     loadComponent: () => import('./components/machines/machine-detail.component').then((m) => m.MachineDetailComponent)
   },
   {
+    path: 'sites',
+    canActivate: [MsalGuard],
+    loadComponent: () => import('./components/sites/site-list.component').then((m) => m.SiteListComponent)
+  },
+  {
     path: 'sites/:id/products',
     canActivate: [MsalGuard],
     loadComponent: () => import('./components/sites/site-products.component').then((m) => m.SiteProductsComponent)
@@ -69,6 +78,11 @@ export const routes: Routes = [
     path: 'purchases/new',
     canActivate: [MsalGuard],
     loadComponent: () => import('./components/purchases/purchase-upload.component').then((m) => m.PurchaseUploadComponent)
+  },
+  {
+    path: 'purchases/orders',
+    canActivate: [MsalGuard],
+    loadComponent: () => import('./components/purchases/supplier-orders.component').then((m) => m.SupplierOrdersComponent)
   },
   {
     path: 'reports',
@@ -132,6 +146,20 @@ export const routes: Routes = [
     path: 'admin',
     canActivate: [MsalGuard],
     loadComponent: () => import('./components/admin/admin.component').then((m) => m.AdminComponent)
+  },
+  {
+    path: 'admin/nayax-settings',
+    canActivate: [MsalGuard],
+    loadComponent: () =>
+      import('./components/admin/nayax-settings/nayax-settings.component').then((m) => m.NayaxSettingsComponent)
+  },
+  {
+    path: 'admin/site-commission-agreements',
+    canActivate: [MsalGuard],
+    loadComponent: () =>
+      import('./components/admin/site-commission-agreements/site-commission-agreements.component').then(
+        (m) => m.SiteCommissionAgreementsComponent
+      )
   },
   {
     path: 'expenses',

@@ -120,10 +120,25 @@ public sealed record ProductResponse
 }
 
 /// <summary>
-/// One stock movement in a product's history, as the product endpoints serialize it. Matches the
+/// One stock movement in a product's history, as the product endpoints serialize it and, since
+/// issue #305, as the "/api/products/{productId}/stock" history and adjust endpoints serialize it
+/// too - one wire shape for a stock movement, not two. Matches the
 /// serializable surface of the <c>InventoryApi.Models.StockAdjustment</c> entity it replaced: the owning
 /// business, the product back-reference and the receipt-item navigation stay off the wire, and
 /// <see cref="Reason"/>/<see cref="Source"/> keep the persisted numeric values.
+///
+/// The stock endpoints publish this response under the <c>StockAdjustment</c> schema id they have
+/// always published, which <c>InventoryApi.Swagger.PublishedResponseSchemaContract</c> substitutes
+/// for their response; the product endpoints keep publishing it under its own id as the item type of
+/// <see cref="ProductResponse.StockAdjustments"/>. The two published components are schema-identical,
+/// which <c>InventoryApi.Tests.Swagger.StockAndExpenseSchemaContractTests</c> asserts.
+///
+/// <see cref="Reason"/>/<see cref="Source"/> are, with the request DTO's
+/// <c>StockAdjustmentDto.Reason</c>, the one place an API contract still names the persistence enums
+/// - a temporary compatibility exception - because the published document reaches the same CLR enums
+/// from both of those pinned components; an API-owned copy under the same simple name makes
+/// Swashbuckle fail document generation with a duplicate schema id. See
+/// <c>InventoryApi.Adapters.Mapping.StockAdjustmentResponseMapper</c>.
 /// </summary>
 public sealed record ProductStockAdjustmentResponse(
     int Id,

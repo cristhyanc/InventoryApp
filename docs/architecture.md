@@ -979,6 +979,33 @@ Contains:
 
 Controllers do not implement accounting, inventory, persistence, or filesystem rules.
 
+**No controller names the persistence model (issue #305).** Since the last controller slice of #153,
+no file under `InventoryApi/Controllers` references `InventoryApi.Models` at all: a controller binds
+and validates the API-owned request contracts in `InventoryApi.DTOs`, invokes an
+`Inventory.Application` use case, and serialises an API-owned response DTO that a response mapper in
+`InventoryApi/Adapters/Mapping` projected from the use case's record. An EF entity reached the wire
+on these endpoints only because the controller could name it, which is also what would make moving
+`AppDbContext` into `Inventory.Infrastructure` (issues #153/#154) a client-visible contract change
+rather than a relocation. `ProjectDependencyDirectionTests.No_controller_references_the_persistence_models`
+(`backend/InventoryApi.Tests/Architecture/`) enforces it over the git-tracked controller files and
+fails on a fully qualified `InventoryApi.Models.X` reference as well as on a `using` directive, so
+the rule cannot be satisfied by qualifying the type instead of importing it.
+
+The persistence model is still reachable from two deliberate, named places in the API project: the
+Swagger compatibility boundary (see [OpenAPI documentation](#openapi-documentation)), and the
+stock-adjustment reason/source members of the stock DTOs - `InventoryApi.DTOs.StockAdjustmentDto.Reason`
+on the request side and `InventoryApi.DTOs.ProductStockAdjustmentResponse.Reason`/`Source` on the
+response side. Their wire enums are the ones that boundary keeps published:
+`InventoryApi.Models.StockAdjustmentReason`/`StockAdjustmentSource` are reached from the pinned
+`StockAdjustment` response component and from the legacy `Product` component the pinned
+purchase/supplier-order schemas reference, so a same-named API-owned copy makes Swashbuckle fail
+document generation with a duplicate-schema-id error, and renaming or duplicating the published
+component is an API-contract change issue #305 excludes. This is a **temporary compatibility
+exception**, not a target state: those two enums move with the persistence models under #153/#154,
+not before them, and `InventoryApi.Tests.Swagger.StockAndExpenseSchemaContractTests` fails as soon as
+the pinned components stop publishing them, which is the signal that the stock DTOs can become fully
+API-owned with no document change.
+
 #### Temporary API-owned exception and its enforcement (issue #145)
 
 `InventoryApi/Services` held the
@@ -1007,7 +1034,12 @@ endpoints serialise the API-owned `InventoryApi.DTOs.MachineResponse` and the sh
 `InventoryApi.DTOs.ProductResponse` instead of the `Machine`/`Product` types (item 9 of the same
 track). Only `Services/SiteNameResolver.cs` is left in the folder - the pure site-name-from-machine-names
 helper shared by `SiteNameResolverAdapter` and `EfTransactionSalesReportFactsProvider`, which moves
-with the adapters - and `Services/Interfaces` no longer exists.
+with the adapters - and `Services/Interfaces` no longer exists. The two controllers that had no
+delegator left to remove but still named the persistence model were last: issue #305 pointed
+`StockController` at the API-owned `InventoryApi.DTOs.ProductStockAdjustmentResponse` and gave the
+operating-expense DTOs an API-owned `InventoryApi.DTOs.OperatingExpenseCategory`, which closed the
+`InventoryApi/Controllers` side of this exception entirely (see "No controller names the persistence
+model" above).
 `InventoryApi/Adapters/{Persistence,Export,Nayax,Mapping}` hold the
 temporary, API-owned adapters (`EfNayaxFeeRateStore`, the `Ef<Feature>ReportFactsProvider` family,
 `EfInventoryMovementStore`/`EfInventoryCostLedgerStore`, `EfSaleCostingStore`,
@@ -1018,6 +1050,7 @@ since issue #302 the machine-slot projection onto the same DTO),
 `PurchaseResponseMapper`/`SupplierOrderResponseMapper` (the purchase and supplier-order DTO
 projections), `MachineResponseMapper`/`SiteResponseMapper` (the machine dashboard and site DTO
 projections, issue #302; the entity-shaped `ProductResponseMapper` they replaced is deleted),
+`StockAdjustmentResponseMapper` (the stock-movement DTO projection, entity-shaped until issue #305),
 ...) that implement
 or feed `Inventory.Application`
 ports until `AppDbContext` and its persistence models move into `Inventory.Infrastructure` - see the
@@ -1477,7 +1510,21 @@ partial enforceable rule.
 
 Routes are declared centrally in `app.routes.ts`. Every top-level route loads its component with `loadComponent` (issue #65), except the public `/auth` Entra redirect callback, which stays eagerly imported because it is the landing route for an in-progress authentication redirect, not a migrated feature area. This keeps initial bundles smaller and creates an enforceable feature boundary without introducing NgModules. Preserve route URLs, guards, and parameters when adding or changing a route.
 
+`/sites` (issue #386) is a standalone, authenticated list page that loads every site summary through the existing `SiteService.getAll()` contract, offers client-side search/filter by site name, and drills down into the existing `/sites/:id/products` route when a site is selected. It does not change the `Site` summary contract, the site-products workflow, or wire a sidebar/header entry point; that final navigation link is deferred to the navigation-shell task (#383).
+
 The static host must rewrite unknown application paths to `index.html`; otherwise refreshing a deep link such as `/reports/bookkeeping` or the Entra redirect landing on `/auth` will bypass Angular and return a host-level 404. `frontend/inventory-app/src/staticwebapp.config.json` (copied to the deployed output root by the `assets` build option) declares that Azure Static Web Apps `navigationFallback`, rewriting unmatched paths to `/index.html` while excluding `/assets/*` and static file extensions.
+
+**Admin decomposition (issue #388, Admin split 1/3).** `AdminComponent` is being decomposed into
+dedicated routed pages one workflow at a time; `/admin` keeps hosting every Admin workflow that
+has not yet moved out and links to the ones that have. `/admin/nayax-settings`
+(`NayaxSettingsComponent`) and `/admin/site-commission-agreements`
+(`SiteCommissionAgreementsComponent`) are the first two moves: each owns the form and history/
+table UI for its workflow, but calls `NayaxSettingsService`, `ReportingService`, and
+`SiteService` exactly as `AdminComponent` did, so the Nayax processing-fee and site-commission
+API boundaries, effective-dating, and financial calculations are unchanged. Later Admin-split
+tasks move the remaining workflows (imports, historical cost recovery, AVCO transition, Costing
+Repair) and introduce the final Admin navigation; this issue does not touch the root application
+navigation in `app.component.html`.
 
 ### Runtime configuration and API contracts
 
@@ -2229,6 +2276,31 @@ sticky. Sticky positioning does not participate in table column sizing, so heade
 identical column widths; the header's bottom rule is an inset box shadow on each header cell, because
 the collapsed `divide-y` border between `<thead>` and `<tbody>` scrolls away with the body.
 
+#### Supplier Orders frontend page (issue #387)
+
+Supplier orders moved from a Products-area child view to a dedicated Purchases workflow page,
+`SupplierOrdersComponent` (`frontend/inventory-app/src/app/components/purchases`, routed at
+`/purchases/orders`). It is a thin consumer of the existing `SupplierOrderService` and the
+existing `GET /api/supplierorders` contract: it introduces no new service, DTO, endpoint, or
+supplier-order business rule. `GET /api/supplierorders` already returns only active orders
+(`Ordered`/`PartiallyReceived`; `Received` and `Cancelled` are excluded in `EfSupplierOrderStore`),
+so the page states on screen that it shows open orders only, and its supplier/reference search and
+Ordered/Partially-received status filter are purely client-side presentation filters over that
+already-active set, not new query parameters on the endpoint. Listing received or cancelled orders
+remains out of scope; it needs a new API contract. The page's Receive/Create Purchase and Cancel
+actions are unchanged from the previous Products-area view: Receive navigates to
+`/purchases/new?supplierOrderId=<id>` (the existing `PurchaseUploadComponent` prefill workflow,
+unchanged) and Cancel calls `SupplierOrderService.cancel`.
+
+**Compatibility treatment of the old Products "On Order" entry point.** The Products-area
+`ProductOnOrderComponent` (previously routed at `/products/on-order`) was removed rather than kept
+as a second, diverging listing of the same active orders: `/products/on-order` is now a `redirectTo`
+route alias to `/purchases/orders` in `app.routes.ts`, so an existing bookmark or link still lands on
+the (now single) Supplier Orders implementation instead of a stale duplicate. `ProductsShellComponent`'s
+"On order" tab links directly to `/purchases/orders`. `PurchaseUploadComponent` navigates back to
+`/purchases/orders` (rather than the old `/products/on-order`) after a receipt that started from a
+supplier order, and its "Unable to load supplier order" and Cancel links point at the same new page.
+
 #### Supplier product price history and comparison (issue #63)
 
 The Purchasing/Suppliers vertical slice derives a per-product supplier price comparison from actual,
@@ -2330,7 +2402,7 @@ the DTOs' own `ProductResponse`/`SupplierResponse`. All three are API-contract c
 reads the document rather than the payload.
 
 `InventoryApi.Swagger.PublishedResponseSchemaContract` is the **Swagger compatibility boundary**
-that holds the published description still. It does three narrowly scoped things:
+that holds the published description still. It does four narrowly scoped things:
 
 - maps `PurchaseResponse`/`PurchaseItemResponse` and the equivalent
   `SupplierOrderResponse`/`SupplierOrderLineResponse` pair on the supplier-order endpoints back onto
@@ -2343,11 +2415,36 @@ that holds the published description still. It does three narrowly scoped things
   `Supplier` entity, so `product` keeps pointing at `#/components/schemas/Product` and `supplier` at
   `#/components/schemas/Supplier`. Because the replacement runs through the generator rather than
   rewriting a reference string, the referenced component is registered with its complete shape —
-  including its own nested `category`/`supplier`/`stockAdjustments` references — instead of dangling.
+  including its own nested `category`/`supplier`/`stockAdjustments` references — instead of dangling;
+- describes the stock history/adjust operations' response with the schema of the legacy
+  `InventoryApi.Models.StockAdjustment` entity (issue #305), through an operation filter rather than
+  a schema-id redirect. Those two actions return the API-owned
+  `InventoryApi.DTOs.ProductStockAdjustmentResponse`, whose own schema id the product endpoints
+  already publish as the item type of `ProductResponse.stockAdjustments` (issue #303), and one CLR
+  type cannot carry two schema ids — so the *response* is substituted instead of the id, and both
+  operations keep describing `#/components/schemas/StockAdjustment`. The substitution regenerates the
+  schema from the legacy type with the same generator call Swashbuckle makes for a declared response
+  type (substituting the element type inside the declared `IEnumerable<T>` for the history
+  endpoint), so the published media types, status codes, content types and request body come out
+  exactly as the base branch generated them; nothing else about the operation is touched. A pinned
+  response description is only honest while the type that actually serialises is schema-identical to
+  it and its payload byte-identical, which `StockAndExpenseSchemaContractTests` and
+  `InventoryApi.Tests.DTOs.StockAdjustmentResponseJsonContractTests` assert respectively.
 
-This boundary is the one place outside the persistence model itself that the API project names
-`InventoryApi.Models` for presentation purposes; the controllers, the use cases and the response
-mappers stay free of it, as issue #304 requires. Nothing global changes: `ProductResponse` and
+This boundary is where the API project names `InventoryApi.Models` for presentation purposes
+deliberately. The controllers and the use cases are free of it - since issue #305 no file under
+`InventoryApi/Controllers` references it at all, enforced by
+`ProjectDependencyDirectionTests.No_controller_references_the_persistence_models` - and the DTOs and
+response mappers name it for exactly one thing: the `StockAdjustmentReason`/`StockAdjustmentSource`
+wire enums that the stock request DTO (`InventoryApi.DTOs.StockAdjustmentDto.Reason`) and the stock
+response DTO (`ProductStockAdjustmentResponse.Reason`/`Source`) carry, and that this boundary itself
+keeps published - from the pinned `StockAdjustment` response component and from the legacy `Product`
+component's `stockAdjustments` reference. An API-owned enum of the same simple name cannot coexist
+with those references - Swashbuckle fails document generation with
+`Can't use schemaId "$StockAdjustmentReason" ...` - so those two enums are pinned here until the
+persistence models relocate under #153/#154, and
+`InventoryApi.Tests.Swagger.StockAndExpenseSchemaContractTests` reproduces that exact collision and
+records the reachability that forces it. Nothing global changes: `ProductResponse` and
 `SupplierResponse` keep the contracts the product and supplier endpoints already published - since
 issue #302 `ProductResponse` is what the machine-product endpoint publishes too, and the legacy
 `Product` component is registered only by this boundary now, for the pinned schemas that reference
@@ -2377,7 +2474,7 @@ or tag exists.
 | `InventoryApi.Controllers` | `PurchasesController` (file `PurchasesController.cs`), `[Route("api/purchases")]` | — | The route is now canonical; there is no supported external client left to preserve `api/receipts` for. |
 | `InventoryApi.DTOs` | `PurchaseItemDto`, `PurchaseCreateMetaDto`, `PurchaseValidationDto`, `PurchaseResponseDto` (JSON keys `purchase`/`validation`), and since issue #304 the API-owned `PurchaseResponse`/`PurchaseItemResponse` the `purchase` key carries | — | The `receipt`/`validation` wrapper existed only for old clients; `PurchaseResponseDto`'s property is now named `Purchase`. `PurchaseItemResponse.ReceiptId` keeps the persistence-facing JSON name, as the entity's did. |
 | Frontend `models.ts`/`purchase.service.ts` | `Purchase`, `PurchaseItem`, `PurchaseValidation`, `PurchaseResponse` (`purchase` field), `PurchaseService` (canonical `/purchases` base URL), `PurchaseUploadPayload`/`PurchaseItemPayload`/`PurchaseUpdatePayload` | JSON-bound field `receiptId` on `PurchaseItem` | `receiptId` matches the backend `PurchaseItem.ReceiptId` persistence/JSON contract above, which is out of this issue's scope. |
-| Frontend routing | `/purchases` and `/purchases/new` are the only supported purchase routes | — | The `/receipts` and `/receipts/new` redirect aliases were removed; there is no supported bookmark to preserve. |
+| Frontend routing | `/purchases`, `/purchases/new` and `/purchases/orders` (issue #387) are the supported purchase routes | `/products/on-order` redirects to `/purchases/orders` (issue #387) | The `/receipts` and `/receipts/new` redirect aliases were removed; there is no supported bookmark to preserve. `/products/on-order` keeps its old bookmark working instead of a second supplier-order listing. |
 | Supporting documents | Not renamed: `Purchase.FileName`/`StoredFileName`/`ContentType`/`FileSizeBytes`, the "Receipt or invoice" upload copy, `OperatingExpense` receipt-attachment naming | — | A purchase's attached scan/photo, and an operating expense's attachment, are supporting *documents*, a distinct concept from the Purchase business record. |
 
 Out of scope for the Purchase/Products contract cleanup (per issues #60 and #127): changing purchase
@@ -3074,7 +3171,13 @@ Backend and frontend tracks can progress independently when their contracts do n
      extension and resolves its content type - the two deterministic rules the controller used to
      enforce inline. `Inventory.Domain.Expenses.ExpenseCategory` mirrors
      `InventoryApi.Models.OperatingExpenseCategory` member-for-member so Domain never references the
-     InventoryApi enum; the two convert by a plain cast at the controller boundary.
+     InventoryApi enum; since issue #305 the API-owned `InventoryApi.DTOs.OperatingExpenseCategory`
+     the endpoints bind and serialise mirrors both, so the HTTP boundary never references the
+     persistence enum either. All three convert by a plain cast - the Domain/API pair at the
+     controller boundary, the Domain/persistence pair inside `EfOperatingExpenseStore` - and
+     `InventoryApi.Tests.DTOs.OperatingExpenseJsonContractTests` asserts member for member and value
+     for value that they stay in step, because a category added to or renamed in only one of them
+     would silently remap stored expenses.
    - `Inventory.Application.Expenses` holds the `ListOperatingExpenses`/`GetOperatingExpense`/
      `GetOperatingExpenseAttachment`/`CreateOperatingExpense`/`UpdateOperatingExpense`/
      `DeleteOperatingExpense` use cases, their request/result contracts
@@ -3098,6 +3201,21 @@ Backend and frontend tracks can progress independently when their contracts do n
      to serialize directly for the single-record endpoints, with the same keys, order, and nested
      supplier shape (`OperatingExpenseReportRowDto` already existed for the list endpoint and is
      unchanged). Routes, multipart field names, status codes, and GST amount semantics are unchanged.
+   - **The category is API-owned too** (issue #305, child 4 of 8 of #153). The expense DTOs - the
+     request `OperatingExpenseDto`, the single-record `OperatingExpenseResponse` and the listing
+     `OperatingExpenseReportRowDto` - carry `InventoryApi.DTOs.OperatingExpenseCategory` instead of
+     the identically named persistence enum, so the controller no longer names `InventoryApi.Models`
+     for anything (it was the last reference there apart from the category). The published
+     `OperatingExpenseCategory` component is unchanged, because the API-owned enum derives the same
+     schema id with the same integer values and the persistence enum has left the generated document
+     entirely - nothing publishes the `OperatingExpense` entity, which is why this swap is possible
+     here and is not possible for the stock-adjustment enums (item 6 below). Routes, query-parameter
+     names, status codes, validation messages and JSON are unchanged;
+     `InventoryApi.Tests.DTOs.OperatingExpenseJsonContractTests` pins the serialised keys, the
+     per-member numeric values on both the response and the listing row, the bound request values and
+     the three-way enum parity, `InventoryApi.Tests.Swagger.StockAndExpenseSchemaContractTests` pins
+     the published component and every reference to it, and
+     `OperatingExpensesControllerRouteTests` pins the eight effective routes.
 
 6. **Products and stock slice**
    - Move reorder and inventory-movement rules to Domain.
@@ -3249,11 +3367,13 @@ Backend and frontend tracks can progress independently when their contracts do n
        exactly as the former `StockService.Adjust` did, inside the same begin/save/rebuild/save/commit
        transaction shape, and stamps `StockAdjustmentSource.Manual`, the machine id, and the eat-before date the
        same way the former service did.
-       `InventoryApi.Adapters.Mapping.StockAdjustmentResponseMapper` maps the Application record back
-       onto the `StockAdjustment` entity shape `StockController`'s history/restock-cost-suggestion/adjust
+       `InventoryApi.Adapters.Mapping.StockAdjustmentResponseMapper` mapped the Application record back
+       onto the `StockAdjustment` entity shape `StockController`'s history/adjust
        actions have always serialized, the same response-mapper precedent `ProductResponseMapper` and the
        then entity-shaped `PurchaseResponseMapper` (since issue #304 a DTO projection)
-       established, so the migration changes no response key or status code.
+       established, so the migration changed no response key or status code. Issue #305 then replaced
+       the entity it built with the API-owned `ProductStockAdjustmentResponse` (see the entry below),
+       so no production code maps a stock read model onto a persistence entity any more.
      - **API boundary.** `StockController` binds HTTP input, invokes the use cases, and maps results
        through the response mapper; its routes, request/response JSON shapes, and status codes are
        unchanged. `InventoryApi.Services.StockService`/`Services.Interfaces.IStockService` had no other
@@ -3266,6 +3386,69 @@ Backend and frontend tracks can progress independently when their contracts do n
      - Reused unchanged from issue #281: purchase-linked restock movements still persist through the
        same `StockAdjustment` reason/source vocabulary this slice gives a typed Domain home to; this
        slice did not reopen Purchase/Supplier Order orchestration.
+   - **Stock responses are API-owned and no controller names the persistence model** (issue #305,
+     child 4 of 8 of #153; the operating-expense half is item 5 above).
+     - **Response contract.** `StockController`'s `GET`/`POST api/products/{productId}/stock` actions
+       serialise the API-owned `InventoryApi.DTOs.ProductStockAdjustmentResponse` -
+       the same wire shape the product endpoints have published for a movement in a product's history
+       since issue #303, reused rather than copied, so the two places a client reads a stock movement
+       cannot drift apart. `StockAdjustmentResponseMapper` projects the Application
+       `StockAdjustmentRecord` onto it instead of rebuilding the `InventoryApi.Models.StockAdjustment`
+       entity. Routes, status codes, the centralized `DomainExceptionHandler` responses, the
+       "Product not found"/"Invalid product or resulting quantity" messages, the
+       `restock-cost-suggestion` endpoint and the JSON are unchanged: the same keys in the same order,
+       the same explicit nulls, and the same persisted numeric `reason`/`source` values - the owning
+       business and the `Product`/`ReceiptItem` navigations were `[JsonIgnore]`d on the entity and are
+       simply absent from the response.
+       `InventoryApi.Tests.DTOs.StockAdjustmentResponseJsonContractTests` compares the serialised
+       bytes of the response with the entity shape it replaced, for a populated and a sparse case, and
+       asserts every reason and source value member by member; `StockControllerRouteTests` pins the
+       three effective routes.
+     - **Published OpenAPI: unchanged.** The generated document comes out exactly as `develop`
+       generated it, because the issue requires the published contract to be preserved and a schema
+       reference is client-visible even when the payload is byte-identical. The Swagger compatibility
+       boundary describes both stock operations' response with the legacy `StockAdjustment` schema
+       (see [OpenAPI documentation](#openapi-documentation)): a schema-id redirect was not available,
+       because the product endpoints already publish `ProductStockAdjustmentResponse` under its own id
+       as the item type of `ProductResponse.stockAdjustments` and one CLR type cannot carry two ids,
+       so the response itself is substituted through an operation filter. `StockAndExpenseSchemaContractTests`
+       compares the three stock operations whole - response reference, status codes, content types,
+       path parameters and request body - and the `StockAdjustment`, `StockAdjustmentDto`,
+       `StockAdjustmentReason`, `StockAdjustmentSource` and `RestockCostSuggestionDto` components
+       whole, against the base branch's generated contract, and asserts that the pinned response
+       component and the `ProductStockAdjustmentResponse` the endpoints actually serialise are
+       schema-identical, so the pinned description cannot become a lie.
+     - **Why the reason/source enums stayed: a temporary compatibility exception.** Both stock DTOs
+       still carry the `InventoryApi.Models` enums - `StockAdjustmentDto.Reason` on the request side
+       and `ProductStockAdjustmentResponse.Reason`/`Source` on the response side - the only
+       presentation use of the persistence model left outside the Swagger compatibility boundary.
+       The published document carries one `StockAdjustmentReason` and one `StockAdjustmentSource`
+       component, derived from those CLR enums and reached from the request body, from the pinned
+       `StockAdjustment` response component and from the legacy `Product` component the boundary
+       regenerates for the pinned purchase/supplier-order schemas. An API-owned enum of the same
+       simple name therefore makes Swashbuckle fail document generation with
+       `Can't use schemaId "$StockAdjustmentReason" for type "$InventoryApi.Models.StockAdjustmentReason"`,
+       and renaming the published component or publishing a second one is an API-contract change this
+       issue excludes; changing the entity's own property type is outside the issue's file scope.
+       `StockAndExpenseSchemaContractTests` reproduces that exact collision through the application's
+       own schema generator and pins the reachability that causes it, so whoever retires the pinned
+       legacy components with the persistence models (#153/#154) is told there that the enums can move
+       with them. While the exception stands, both sides of the vocabulary are pinned:
+       `InventoryApi.Tests.DTOs.StockAdjustmentRequestJsonContractTests` asserts the reason each
+       numeric value in a request body binds to and that the persistence and Domain reason/source
+       enums agree member for member and value for value (the controller and the response mapper
+       convert by a plain cast), and `StockAdjustmentResponseJsonContractTests` asserts the serialised
+       values.
+     - **The controller guard.** With these two controllers migrated, no file under
+       `InventoryApi/Controllers` references `InventoryApi.Models`, and
+       `ProjectDependencyDirectionTests.No_controller_references_the_persistence_models` enforces it
+       (see [InventoryApi](#inventoryapi)).
+     - **Not in this slice.** Stock-movement and expense rules, the schema, the entities and
+       `EfStockAdjustmentStore`/`EfOperatingExpenseStore` are untouched, `AppDbContext` and the
+       adapters stay where they are, and the `StockAdjustment`/`OperatingExpense` entities remain the
+       persistence model. `ProductRecordResponseMapper` keeps building the same response for the
+       product endpoints from its own `ProductStockAdjustmentRecord`; the two records are distinct
+       Application contracts and merging them is not this issue's scope.
 
 7. **Purchasing and costing slice**
    - Migrate purchases, supplier orders, stock ledger, AVCO, rebuilding, and sale costing as one coherent area.
@@ -3395,9 +3578,10 @@ Backend and frontend tracks can progress independently when their contracts do n
        `InventoryApi.Models.Product`/`Supplier` schemas for the nested `product`/`supplier`
        properties of those four schemas only, so they keep referencing
        `#/components/schemas/Product` and `#/components/schemas/Supplier` with complete, registered
-       shapes. That is the only place in the API project outside the persistence model itself that
-       names `InventoryApi.Models` for presentation purposes - the controllers, use cases and
-       response mappers stay free of it, as this issue requires - and nothing global changes, so the
+       shapes. That is where the API project names `InventoryApi.Models` for presentation purposes
+       deliberately - the controllers and use cases stay free of it, as this issue requires, and the
+       stock DTOs and their response mapper keep naming only the stock-adjustment wire enums this
+       boundary itself publishes (issue #305) - and nothing global changes, so the
        `ProductResponse`/`SupplierResponse` contracts the product and supplier endpoints publish are
        untouched. Each of the four schemas therefore comes out equal to the base branch's, which the
        regression tests compare literally. See
@@ -3563,6 +3747,7 @@ Backend and frontend tracks can progress independently when their contracts do n
     - Done for imports (issue #301, item 10 above): `InventoryApi.Services.ImportService` (both partials), `InventoryApi.Services.Interfaces.IImportService`, the API-owned `NayaxSalesWorkbook` and `NayaxProductMatcher` helpers, their dependency-injection registration, and every production and test caller were removed, and all five source files were deleted.
     - Done for products (issue #303, item 6 above) and for purchases and supplier orders (issue #304, item 7 above): `ProductService`/`IProductService`, `PurchaseService`/`IPurchaseService` and `SupplierOrderService`/`ISupplierOrderService`, their dependency-injection registrations, and every production and test caller were removed, the source files were deleted, and each slice's endpoints moved to an API-owned response DTO in the same change.
     - Done for sites and machines (issue #302, item 9 above): `SiteService`/`ISiteService` and `MachineService`/`IMachineService`, their dependency-injection registrations, and every production and test caller were removed, all four source files and the entity-shaped `Adapters/Mapping/ProductResponseMapper.cs` were deleted, and the machine endpoints moved to API-owned response DTOs in the same change. `InventoryApi/Services` is down to the shared `SiteNameResolver` helper and `InventoryApi/Services/Interfaces` no longer exists. The now-unreferenced `InventoryApi.Models.Machine` response type is left in place as the contract tests' reference value, named here as the one piece of legacy structure this step still owns for machines.
+    - Done for the controller boundary as a whole (issue #305, items 5 and 6 above): `StockController` and `OperatingExpensesController` were the last two controllers that named `InventoryApi.Models`, and they now bind and serialise API-owned DTOs (`ProductStockAdjustmentResponse`, `OperatingExpenseCategory`). No file under `InventoryApi/Controllers` references the persistence model, and `ProjectDependencyDirectionTests.No_controller_references_the_persistence_models` fails if one starts to. The published OpenAPI document is unchanged: the Swagger compatibility boundary describes the stock responses with the legacy `StockAdjustment` schema they have always published. The legacy structure this step still owns here is the persistence model itself - including the `StockAdjustmentReason`/`StockAdjustmentSource` wire enums both stock DTOs keep naming, on the request side as well as the response side, which cannot become API-owned while the Swagger compatibility boundary still publishes them (see [InventoryApi](#inventoryapi)).
     - Still pending for the remaining feature areas (the `InventoryApi.Models.Machine` leftover above, and the remaining direct-access controllers/services); only after each is migrated and tests prove equivalent behavior does this step complete overall.
 
 ### Frontend migration track
@@ -3608,7 +3793,7 @@ EF Core InMemory tests remain useful for fast service checks but must not be the
 
 **Call-sequence (yielding-recorder) tests.** Some defects are about *when* calls happen rather than what they return; two operations overlapping on one request-scoped `AppDbContext` is the current example (see [Concurrency inside one request: the scoped EF context](#concurrency-inside-one-request-the-scoped-ef-context-issue-313)). Neither an InMemory nor a relational SQLite test can prove that one, because SQLite's synchronous async implementation completes each call before the next one starts. Such behavior is tested instead with an in-memory fake of the port that records a `start:`/`end:` marker per call, tracks how many calls were ever in flight at once, and awaits `Task.Yield()` before completing — so an implementation that starts two calls before awaiting either produces an interleaved trace and a concurrency count above one. `ResolveMachineProductPricingTests`' call-sequence recorder and the Sites equivalents (`backend/InventoryApi.Tests/Application/Sites/RecordingSiteFactsStore.cs`, plus `RecordingNayaxLynxClient`, which gates its machine-product calls so a serialized fan-out fails rather than hangs) are the examples. Pair them with the behavioral assertions the serialization must not change — per-site totals and revenue attribution, ordering, failure propagation, and the relational two-business isolation tests — so a concurrency fix cannot silently drop a site or move revenue between sites.
 
-**Source-scanning architecture tests.** Most architecture rules are checked against the compiled assemblies (`CleanArchitectureDependencyTests`) or the project files (`ProjectDependencyDirectionTests`), but some rules are invisible to both. `TimeAcquisitionTests.Domain_and_Application_acquire_the_current_time_only_through_the_time_ports` (issue #310) fails if any `Inventory.Domain` or `Inventory.Application` source file reads `DateTime.Now`, `DateTime.UtcNow` or `DateTime.Today` instead of injecting `IClock`/`IBusinessCalendar` (see [Time](#time)); it scans the source text because these are property reads on `DateTime` itself, a type the inner layers legitimately depend on everywhere, so a type-level dependency rule cannot distinguish them. `ProjectDependencyDirectionTests.No_other_source_file_references_the_removed_legacy_reporting_service` scans source for the same reason. A new rule of this kind names the offending file and line in its failure message, so the fix is the injection or removal it asks for, never a weakened rule.
+**Source-scanning architecture tests.** Most architecture rules are checked against the compiled assemblies (`CleanArchitectureDependencyTests`) or the project files (`ProjectDependencyDirectionTests`), but some rules are invisible to both. `TimeAcquisitionTests.Domain_and_Application_acquire_the_current_time_only_through_the_time_ports` (issue #310) fails if any `Inventory.Domain` or `Inventory.Application` source file reads `DateTime.Now`, `DateTime.UtcNow` or `DateTime.Today` instead of injecting `IClock`/`IBusinessCalendar` (see [Time](#time)); it scans the source text because these are property reads on `DateTime` itself, a type the inner layers legitimately depend on everywhere, so a type-level dependency rule cannot distinguish them. `ProjectDependencyDirectionTests.No_other_source_file_references_the_removed_legacy_reporting_service` scans source for the same reason, and so does `ProjectDependencyDirectionTests.No_controller_references_the_persistence_models` (issue #305): `InventoryApi` legitimately depends on `InventoryApi.Models` everywhere else in the project, so only a file-scoped source scan can say that the `Controllers` folder does not (see [InventoryApi](#inventoryapi)). A new rule of this kind names the offending file and line in its failure message, so the fix is the injection or removal it asks for, never a weakened rule.
 
 **Composition and committed-configuration tests.** Some decisions live in the composition root or in a settings file rather than in a class with behaviour. `InventoryApi.Tests.Observability.TelemetryCompositionTests` asserts what `AddInventoryApiTelemetry` registers — and, for the missing-connection-string case, that it registers nothing — by inspecting the `IServiceCollection` rather than by building the OpenTelemetry providers, so no test ever constructs an exporter or sends telemetry anywhere; `TelemetryStartupTests` then hosts the real application both with and without a synthetic, non-secret connection string. `LoggingLevelPolicyTests` reads the committed `appsettings.json`/`appsettings.Development.json` instead of a hosted application, because the value that matters is the one that ships to a deployed environment (see [Observability and error telemetry](#observability-and-error-telemetry-issue-165)).
 

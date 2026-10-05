@@ -1,7 +1,6 @@
 using Inventory.Application.Stock;
 using InventoryApi.Adapters.Mapping;
 using InventoryApi.DTOs;
-using InventoryApi.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Identity.Web.Resource;
@@ -28,11 +27,12 @@ public class StockController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<ActionResult<IEnumerable<StockAdjustment>>> History(long productId, CancellationToken cancellationToken)
+    public async Task<ActionResult<IEnumerable<ProductStockAdjustmentResponse>>> History(
+        long productId, CancellationToken cancellationToken)
     {
         var history = await _getStockHistory.Handle(productId, cancellationToken);
         if (history.Count == 0) return NotFound("Product not found");
-        return Ok(history.Select(StockAdjustmentResponseMapper.ToStockAdjustment).ToList());
+        return Ok(history.Select(StockAdjustmentResponseMapper.ToResponse).ToList());
     }
 
     [HttpGet("restock-cost-suggestion")]
@@ -45,7 +45,8 @@ public class StockController : ControllerBase
     }
 
     [HttpPost]
-    public async Task<ActionResult<StockAdjustment>> Adjust(long productId, StockAdjustmentDto dto, CancellationToken cancellationToken)
+    public async Task<ActionResult<ProductStockAdjustmentResponse>> Adjust(
+        long productId, StockAdjustmentDto dto, CancellationToken cancellationToken)
     {
         // InsufficientStockException and DomainValidationException are mapped centrally by
         // DomainExceptionHandler (see Http/DomainExceptionHandler.cs) into a 400 ProblemDetails
@@ -55,6 +56,6 @@ public class StockController : ControllerBase
         var adjustment = await _adjustStock.Handle(productId, input, cancellationToken);
 
         if (adjustment is null) return BadRequest("Invalid product or resulting quantity");
-        return Ok(StockAdjustmentResponseMapper.ToStockAdjustment(adjustment));
+        return Ok(StockAdjustmentResponseMapper.ToResponse(adjustment));
     }
 }

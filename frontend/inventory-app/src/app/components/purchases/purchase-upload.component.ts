@@ -233,7 +233,7 @@ export class PurchaseUploadComponent implements OnInit {
         next: () => {
           if (this.supplierOrderId) {
             this.toastService.success('Purchase created from supplier order.');
-            this.router.navigate(['/products/on-order']);
+            this.router.navigate(['/purchases/orders']);
           } else {
             this.toastService.success('Purchase created.');
             this.router.navigate(['/purchases']);
