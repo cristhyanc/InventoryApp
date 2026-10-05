@@ -1533,9 +1533,10 @@ redirected, so existing links and bookmarks stay valid.
 
 The static host must rewrite unknown application paths to `index.html`; otherwise refreshing a deep link such as `/reports/bookkeeping` or the Entra redirect landing on `/auth` will bypass Angular and return a host-level 404. `frontend/inventory-app/src/staticwebapp.config.json` (copied to the deployed output root by the `assets` build option) declares that Azure Static Web Apps `navigationFallback`, rewriting unmatched paths to `/index.html` while excluding `/assets/*` and static file extensions.
 
-**Admin decomposition (issue #388, Admin split 1/3).** `AdminComponent` is being decomposed into
-dedicated routed pages one workflow at a time; `/admin` keeps hosting every Admin workflow that
-has not yet moved out and links to the ones that have. `/admin/nayax-settings`
+**Admin decomposition (issue #388, Admin split 1/3).** `AdminComponent` was decomposed into
+dedicated routed pages one workflow at a time; while the split was in progress `/admin` kept
+hosting every Admin workflow that had not yet moved out and linked to the ones that had.
+`/admin/nayax-settings`
 (`NayaxSettingsComponent`) and `/admin/site-commission-agreements`
 (`SiteCommissionAgreementsComponent`) are the first two moves: each owns the form and history/
 table UI for its workflow, but calls `NayaxSettingsService`, `ReportingService`, and
@@ -1555,11 +1556,47 @@ semantics, import deduplication, product matching, reimbursement parsing and per
 exactly where they were (see [Uploaded transaction export import (issue
 #301)](#uploaded-transaction-export-import-issue-301), [Reimbursement import and
 reconciliation](#reimbursement-import-and-reconciliation) and [Nayax product catalogue import
-(issue #300)](#nayax-product-catalogue-import-issue-300)). `/admin` keeps the maintenance
-workflows that have not moved yet (historical cost recovery, AVCO transition, Costing Repair) and
-links to the pages that have; the
+(issue #300)](#nayax-product-catalogue-import-issue-300)). The
 final Admin navigation grouping and the root application navigation in `app.component.html` remain
 the separate navigation-shell task (#383).
+
+**Admin costing and maintenance pages (issue #390, Admin split 3/3).** The three remaining
+maintenance workflows now have their own authenticated routes, which completes the decomposition:
+
+| Route | Page component | Authoritative boundary it calls |
+| --- | --- | --- |
+| `/admin/historical-cost-recovery` | `HistoricalCostRecoveryComponent`, composing `HistoricalCostRecoveryWorkflowComponent` | `ReportingService.backfillNayaxSaleCosts(dryRun)` (`POST api/sale-costing/nayax-cost-backfill/dry-run`/`apply`) |
+| `/admin/avco-transition` | `AvcoTransitionComponent`, composing `AvcoTransitionWorkflowComponent` through `[products]`/`(baselinesSaved)` | `InventoryCostTransitionService` `preview`/`apply`/`preview-all`/`apply-all` (the one-time opening-baseline cutover described in [Historical inventory cost](#historical-inventory-cost)) |
+| `/admin/costing-repair` | `CostingRepairPageComponent`, composing the existing `CostingRepairComponent` through `[products]` | `InventoryCostRepairService` preview/apply/history (see [Costing repairs (issue #359)](#costing-repairs-issue-359)) |
+
+All three routed components are composition boundaries, not workflow owners, per [Page
+composition boundary (issue #191)](#page-composition-boundary-issue-191): each page renders its
+heading and the warning about the mutating action, loads the product list its selector needs where
+there is one, and composes a dedicated feature component that owns that workflow's form, preview,
+apply, confirmation, notifications and loading/error state. The workflow components are
+`HistoricalCostRecoveryWorkflowComponent`, `AvcoTransitionWorkflowComponent` and the pre-existing
+`CostingRepairComponent` of issue #361. The parent/child contract is `@Input`/`@Output` only:
+`AvcoTransitionComponent` and `CostingRepairPageComponent` pass `[products]`, and
+`AvcoTransitionWorkflowComponent` raises `(baselinesSaved)` after a saved baseline so the page
+reloads the products whose `averageUnitCost` may have changed, rather than reaching back into the
+page's state or `ProductService` itself.
+
+The workflows call the same service methods with the same request shapes, confirmation prompts,
+result counts and messages the Admin page used, so no eligibility rule, cost-source precedence,
+AVCO policy, costing formula, idempotency guard or persistence step is reimplemented or
+reinterpreted in a page or workflow component: the entry points moved, the contracts and the
+mutating-action safeguards did not. Apply still resubmits exactly the previewed object rather than
+the form's current values, on both the AVCO transition and the costing repair.
+`AvcoTransitionComponent` and `CostingRepairPageComponent` load the product list through
+`ProductService.getAll()` for their workflow's product selector, as `AdminComponent` did for both
+workflows.
+
+With this split `AdminComponent` is a link hub only: it holds no workflow state, no service
+dependency and no second copy of any Admin tool, so it no longer owns duplicate costing, import or
+configuration logic. It deliberately keeps its own `/admin` address rather than redirecting to
+`/admin/nayax-settings`, because the root header and the Dashboard link to `/admin` and it is the
+only entry point to the six dedicated pages until the navigation-shell task (#383) adds them to
+the sidebar.
 
 ### Runtime configuration and API contracts
 
@@ -1871,9 +1908,10 @@ and it never substitutes for a real purchase, correction or write-off.
   timestamps, the unauthenticated and missing-scope refusals, and two businesses proving a
   cross-business product is indistinguishable from a missing one.
 - **The UI (issue #361)** is `frontend/inventory-app/src/app/components/admin/costing-repair/
-  costing-repair.component.ts`'s standalone `CostingRepairComponent`, composed into `AdminComponent`
-  through `[products]` rather than grown inside the page component, per [Page composition
-  boundary](#page-composition-boundary-issue-191): it owns the whole preview/apply/history
+  costing-repair.component.ts`'s standalone `CostingRepairComponent`, composed through `[products]`
+  rather than grown inside the page component, per [Page composition
+  boundary](#page-composition-boundary-issue-191) - by `AdminComponent` until issue #390 moved it to
+  the dedicated `/admin/costing-repair` page (`CostingRepairPageComponent`): it owns the whole preview/apply/history
   workflow's own form, loading and error state, and its own calls to the three endpoints above.
   The effective date/time is entered and displayed in Sydney time and converted to/from the UTC
   instant the contract carries through `zonedDateTimeToUtc`/`currentDateTimeInTimeZone`/
@@ -1892,8 +1930,8 @@ and it never substitutes for a real purchase, correction or write-off.
   `resolveZonedDateTime`, not `zonedDateTimeToUtc`: a wall-clock time in the October daylight-saving
   gap (`nonexistent`) or the April repeated hour (`ambiguous`) is rejected with a form message
   before any preview call, so the effective time is never silently moved or guessed;
-  `zonedDateTimeToUtc`/`startOfDayUtc` keep their normalising behaviour for start-of-day callers. The product dropdown reuses the product list `AdminComponent`
-  already loads for the inventory-cost transition section; #361 does not add a per-product
+  `zonedDateTimeToUtc`/`startOfDayUtc` keep their normalising behaviour for start-of-day callers. The product dropdown reuses the `ProductService.getAll()` product list its
+  host page loads (`AdminComponent` before issue #390, `CostingRepairPageComponent` after it); #361 does not add a per-product
   fatal-issue list of its own - the Dashboard's existing aggregate unknown-cost
   count/completeness indicator (see [Dashboard "Inventory Value" tile](#dashboard-inventory-value-tile-issue-42))
   remains the signal that a product may need one, and the preview itself reports whether the
@@ -2033,7 +2071,7 @@ date, a payout date modelled as a date, or a supplier price-history purchase dat
 component that could be shifted and is rendered with the ordinary `date` pipe (e.g. `'dd/MM/yyyy'`/
 `'mediumDate'`) exactly as before; `BusinessDateTimePipe` is never applied to these. Transaction Sales
 (`TransactionSalesReportComponent`), the Admin inventory-cost transition preview/batch-preview cutoff
-timestamps (`AdminComponent`), the costing-repair preview/history effective and recorded timestamps
+timestamps (`AvcoTransitionWorkflowComponent`, `AdminComponent` before issue #390), the costing-repair preview/history effective and recorded timestamps
 (`CostingRepairComponent`, issue #361), and the Pick List snapshot (`PickListComponent`) use
 `BusinessDateTimePipe` for this reason; `MachineRestockSyncComponent`'s reconciliation table (issue
 #231) and the Stock History movement timestamp (issue #230) already did - the latter now on
