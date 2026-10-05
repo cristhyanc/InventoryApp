@@ -107,6 +107,11 @@ jobs:
       - name: Run Claude Code repair agent
         id: claude
         uses: anthropics/claude-code-action@cfc3eb22bfed5c26ef66e3223c982af27e4524de # v1.0.231
+        env:
+          # validate.sh takes several minutes; Claude Code's 2-minute default Bash timeout
+          # would push the agent toward backgrounding or redirecting it, which the allowlist refuses.
+          BASH_DEFAULT_TIMEOUT_MS: "1800000"
+          BASH_MAX_TIMEOUT_MS: "1800000"
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -131,7 +136,7 @@ jobs:
             2. Identify the concrete CI or review failures the request refers to. If a repair would require weakening, skipping, or deleting a test, changing an established rule in AGENTS.md or docs/architecture.md, or working outside the issue's scope, stop: post one comment with `gh pr comment` explaining exactly which human decision is needed, change nothing, and finish.
             3. Make the smallest coherent fix on the checked-out head branch. Add or adjust tests as AGENTS.md requires.
             3a. Keep documentation accurate: when the repair changes behaviour, contracts, architecture, configuration, automation, deployment, operations or user workflows, or when the review findings identify missing, inaccurate or incomplete documentation, update the affected documentation on the head branch in the same repair, consistent with the issue's Documentation impact decision. You cannot and must not edit the pull request description. If the pull request's "## Documentation impact" declaration (its `Decision:` or `Evidence:` line) is no longer accurate after your repair, state in your closing comment exactly what must be corrected, quoting the exact replacement text, so the human can edit the description; validation reruns when the description is edited.
-            4. Run the complete repository validation with exactly `bash scripts/validate.sh`. Record the real result.
+            4. Run the complete repository validation once in the foreground with exactly `bash scripts/validate.sh`, wait for it to terminate, and record its exit code and actual result. Never use `&`, `nohup`, `run_in_background`, redirected background execution, or any mechanism that returns before validation completes; a started or still-running command is not validation evidence. Invoke it as that exact command with no redirection, pipe, prefix or suffix: the permission allowlist matches the literal command and refuses any variant, and the shell timeout (30 minutes) already covers a full run.
             5. Review the diff for secrets, local databases, generated output, accidental migrations, and unrelated edits.
             6. Commit the repair locally with a focused message. Do not push, rebase, or rewrite history; a deterministic workflow step will mint a fresh GitHub App token and push the verified local head after your invocation.
             7. Post one comment with `gh pr comment` describing what was changed and why, which findings it addresses, the exact validation command and its actual result, and anything you could not resolve. Do not claim the commit was pushed. Do not change labels, do not edit the PR description, do not merge.
