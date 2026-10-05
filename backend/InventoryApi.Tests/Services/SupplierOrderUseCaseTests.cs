@@ -1,7 +1,7 @@
 using Inventory.Application.SupplierOrders;
 using Inventory.Domain.Exceptions;
 using InventoryApi.Adapters.Mapping;
-using InventoryApi.Adapters.Persistence;
+using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Data;
 using InventoryApi.DTOs;
 using Inventory.Infrastructure.Models;

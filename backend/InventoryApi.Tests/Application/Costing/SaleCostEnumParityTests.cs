@@ -7,7 +7,7 @@ namespace InventoryApi.Tests.Application.Costing;
 /// <summary>
 /// The Application <see cref="SaleCostStatus"/>/<see cref="SaleCostOrigin"/> convert to and from the
 /// persisted <see cref="SaleCostingStatus"/>/<see cref="SaleCostSource"/> by a plain cast in the
-/// temporary API-owned sale-costing adapter (issue #297), so they must stay identical
+/// sale-costing adapter (issue #297), so they must stay identical
 /// member-for-member and ordinal-for-ordinal; otherwise a cost's status or provenance would be
 /// silently mislabelled.
 /// </summary>

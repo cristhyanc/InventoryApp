@@ -203,10 +203,12 @@ public class ProjectDependencyDirectionTests
     /// under it fails here and must go to <c>Inventory.Application</c>/<c>Inventory.Domain</c> (use
     /// case or domain logic) or <c>Inventory.Infrastructure</c> (an adapter) instead. Reviving the
     /// folder has to be a conscious edit to this list and to the docs/architecture.md exception it
-    /// documents. What remains of that exception is the API-owned EF adapter family under
-    /// <c>InventoryApi/Adapters/Persistence</c>: <c>AppDbContext</c>, the EF entities and the
-    /// migrations went ahead of it into <c>Inventory.Infrastructure</c> in issue #307, and the
-    /// adapters follow in Persistence 7/8 and 8/8 of #153.
+    /// documents. The API-owned EF adapter family that used to be the rest of that exception is gone
+    /// too: <c>AppDbContext</c>, the EF entities and the migrations went into
+    /// <c>Inventory.Infrastructure</c> in issue #307, the reporting fact providers in issue #308,
+    /// and the remaining feature stores in issue #309, which removed
+    /// <c>InventoryApi/Adapters/Persistence</c> entirely - see
+    /// <see cref="PersistenceAdapterOwnershipTests.InventoryApi_owns_no_persistence_adapter_folder"/>.
     /// </summary>
     [Fact]
     public void Only_the_documented_legacy_services_remain_in_InventoryApi_Services()

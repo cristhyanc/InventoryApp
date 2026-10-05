@@ -3,14 +3,14 @@ using Inventory.Domain.Purchases;
 using Inventory.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
-namespace InventoryApi.Adapters.Persistence;
+namespace Inventory.Infrastructure.Persistence;
 
 /// <summary>
-/// Temporary EF Core implementation of <see cref="IProductPurchaseCostFactsProvider"/>. It still
-/// lives in InventoryApi, not Inventory.Infrastructure, for the same reason the other
+/// The EF Core implementation of <see cref="IProductPurchaseCostFactsProvider"/>. It lives in
+/// Inventory.Infrastructure for the same reason the reporting
 /// <c>Ef&lt;Feature&gt;ReportFactsProvider</c> adapters do: it depends on <see cref="AppDbContext"/>,
-/// which moved to Inventory.Infrastructure in issue #307 ahead of this adapter family
-/// (Persistence 7/8 and 8/8 of #153). The context's global business query filter already scopes this
+/// which moved there in issue #307 ahead of this adapter family (issue #309, Persistence 8/8 of
+/// #153). The context's global business query filter already scopes this
 /// projection to the caller's business, so no per-call filter is needed here.
 ///
 /// Fetches every requested product's actual <c>ReceiptItems</c> (PurchaseItem) rows in one query

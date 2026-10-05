@@ -6,13 +6,13 @@ using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
 
-namespace InventoryApi.Adapters.Persistence;
+namespace Inventory.Infrastructure.Persistence;
 
 /// <summary>
-/// Temporary EF Core implementation of <see cref="IMachineDashboardFactsStore"/>. It still lives in
-/// InventoryApi, not Inventory.Infrastructure: <see cref="AppDbContext"/> and the persistence models
-/// it depends on moved there in issue #307, and moving this adapter family after them is
-/// Persistence 7/8 and 8/8 of #153. It also composes the Application-owned
+/// The EF Core implementation of <see cref="IMachineDashboardFactsStore"/>. It lives in
+/// Inventory.Infrastructure beside the <see cref="AppDbContext"/> and the persistence models it
+/// depends on, which moved there in issue #307; this adapter followed them in issue #309
+/// (Persistence 8/8 of #153). It also composes the Application-owned
 /// <see cref="IGetNayaxProcessingFees"/> use case. Its financial and classification rules are
 /// Domain-owned (see <c>docs/architecture.md</c>).
 /// </summary>

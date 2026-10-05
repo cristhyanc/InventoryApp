@@ -3,13 +3,13 @@ using Inventory.Application.Nayax;
 using Inventory.Application.Tenancy;
 using Inventory.Application.Time;
 using Inventory.Infrastructure.Clock;
-using InventoryApi.Adapters.Persistence;
+using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Data;
 
 namespace InventoryApi.Tests;
 
 /// <summary>
-/// Wires the Application costing use cases (issues #296, #297 and #298) to their temporary API-owned EF adapters
+/// Wires the Application costing use cases (issues #296, #297 and #298) to their EF adapters
 /// over one <see cref="AppDbContext"/>, the way the production DI container does.
 /// </summary>
 internal static class TestCostingUseCases

@@ -1,7 +1,7 @@
 using Inventory.Application.Commissions;
 using Inventory.Domain.FinancialConfiguration;
 using Inventory.Domain.Exceptions;
-using InventoryApi.Adapters.Persistence;
+using Inventory.Infrastructure.Persistence;
 using InventoryApi.Controllers;
 using Inventory.Infrastructure.Data;
 using InventoryApi.DTOs;

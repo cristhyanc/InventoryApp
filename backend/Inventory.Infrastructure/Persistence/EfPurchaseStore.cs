@@ -9,20 +9,20 @@ using Microsoft.EntityFrameworkCore;
 // EF query compares against is named explicitly rather than relying on which using wins.
 using PersistenceModels = Inventory.Infrastructure.Models;
 
-namespace InventoryApi.Adapters.Persistence;
+namespace Inventory.Infrastructure.Persistence;
 
 /// <summary>
-/// Temporary EF Core implementation of <see cref="IPurchaseStore"/>. It still lives in
-/// InventoryApi, not Inventory.Infrastructure, following the same precedent as
-/// <c>EfOperatingExpenseStore</c>/<c>EfProductStore</c>: <see cref="AppDbContext"/> and the
-/// persistence models it depends on moved there in issue #307, and moving this adapter family after
-/// them is Persistence 7/8 and 8/8 of #153.
+/// The EF Core implementation of <see cref="IPurchaseStore"/>. It lives in
+/// Inventory.Infrastructure, following the same precedent as
+/// <see cref="EfOperatingExpenseStore"/>/<see cref="EfProductStore"/>: <see cref="AppDbContext"/>
+/// and the persistence models it depends on moved there in issue #307, and this adapter family
+/// followed them in issue #309 (Persistence 8/8 of #153).
 ///
 /// Its multi-step writes - the purchase/supplier-order-fulfillment/stock-movement transaction in
 /// <see cref="CreateAsync"/>/<see cref="UpdateAsync"/>/<see cref="DeleteAsync"/> - stay here rather
 /// than being decomposed into Application-level orchestration, per the issue's target ownership:
 /// EF queries, transactions, receipt allocations, stock-movement persistence, and costing-rebuild
-/// calls remain Infrastructure/adapter concerns until #153 consolidates persistence. The
+/// calls are Infrastructure/adapter concerns. The
 /// deterministic decisions within them - item format validity
 /// (<see cref="PurchaseItemFormatPolicy"/>), the pre-cutover history guards
 /// (<see cref="PurchaseCostTransitionPolicy"/>), restock movement arithmetic

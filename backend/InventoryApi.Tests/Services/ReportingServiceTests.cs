@@ -22,7 +22,7 @@ using Inventory.Infrastructure;
 using Inventory.Infrastructure.Reporting;
 using Inventory.Infrastructure.Reporting.Persistence;
 using Inventory.Infrastructure.Sites;
-using InventoryApi.Adapters.Persistence;
+using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Data;
 using Inventory.Application.Nayax;
 using Inventory.Infrastructure.Models;

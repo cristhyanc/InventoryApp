@@ -1,31 +1,10 @@
 using Microsoft.EntityFrameworkCore;
 using Inventory.Application;
-using Inventory.Application.CatalogReconciliation;
-using Inventory.Application.Commissions;
-using Inventory.Application.Costing;
-using Inventory.Application.Categories;
-using Inventory.Application.Products;
-using Inventory.Application.Expenses;
-using Inventory.Application.Imports;
-using Inventory.Application.InventoryCounting;
-using Inventory.Application.MachineStockSync;
-using Inventory.Application.Machines;
-using Inventory.Application.NayaxFeeSettings;
-using Inventory.Application.PickList;
-using Inventory.Application.Purchases;
-using Inventory.Application.Reorder;
-using Inventory.Application.Reporting.ProductProfitability;
-using Inventory.Application.SalesSync;
-using Inventory.Application.Sites;
-using Inventory.Application.Stock;
-using Inventory.Application.Suppliers;
-using Inventory.Application.SupplierOrders;
 using Inventory.Application.Tenancy;
 using Inventory.Infrastructure;
 using Inventory.Infrastructure.Documents;
 using Inventory.Infrastructure.Imports;
 using Inventory.Infrastructure.Nayax;
-using InventoryApi.Adapters.Persistence;
 using InventoryApi.Bootstrap;
 using InventoryApi.Auth;
 using Inventory.Infrastructure.Data;
@@ -177,114 +156,12 @@ builder.Services.AddScoped<IAuthenticatedActorAccessor, EntraActorIdentityAccess
 builder.Services.AddScoped<BusinessScope>();
 builder.Services.AddScoped<IBusinessScope>(sp => sp.GetRequiredService<BusinessScope>());
 
-// Temporary API-owned adapter for the business membership port; see EfBusinessMembershipStore.
-builder.Services.AddScoped<IBusinessMembershipStore, EfBusinessMembershipStore>();
-
-// Temporary API-owned adapter for the Nayax fee-settings persistence port; see EfNayaxFeeRateStore.
-builder.Services.AddScoped<INayaxFeeRateStore, EfNayaxFeeRateStore>();
-
-// Temporary API-owned adapter for the site-commission facts port, pending persistence
-// consolidation in issue #153. Its processing-fee counterpart moved to Inventory.Infrastructure
-// with the reporting adapters it feeds (issue #308) and is registered by
-// AddInfrastructureServices().
-builder.Services.AddScoped<ISiteCommissionStore, EfSiteCommissionStore>();
-
-// Temporary API-owned adapters for the categories/suppliers persistence ports; see EfCategoryStore/EfSupplierStore.
-builder.Services.AddScoped<ICategoryStore, EfCategoryStore>();
-builder.Services.AddScoped<ISupplierStore, EfSupplierStore>();
-
-// Temporary API-owned adapter for the operating-expenses persistence port; see EfOperatingExpenseStore.
-builder.Services.AddScoped<IOperatingExpenseStore, EfOperatingExpenseStore>();
-
-// Temporary API-owned adapter for the product create/update/delete persistence port; see EfProductStore.
-builder.Services.AddScoped<IProductStore, EfProductStore>();
-
-// Temporary API-owned adapter for the product catalogue read port; see EfProductCatalogStore.
-builder.Services.AddScoped<IProductCatalogStore, EfProductCatalogStore>();
-
-// Temporary API-owned adapter for the purchase create/read/update/delete persistence port; see EfPurchaseStore.
-builder.Services.AddScoped<IPurchaseStore, EfPurchaseStore>();
-
-// Temporary API-owned adapters for the inventory movement and product cost rebuild persistence
-// ports (issue #296); see EfInventoryMovementStore/EfInventoryCostLedgerStore.
-builder.Services.AddScoped<IInventoryMovementStore, EfInventoryMovementStore>();
-builder.Services.AddScoped<IInventoryCostLedgerStore, EfInventoryCostLedgerStore>();
-
-// Temporary API-owned adapter for the sale-costing port (issue #297); see EfSaleCostingStore.
-builder.Services.AddScoped<ISaleCostingStore, EfSaleCostingStore>();
-
-// Temporary API-owned adapter for the inventory-cost transition port (issue #298); see
-// EfInventoryCostTransitionStore.
-builder.Services.AddScoped<IInventoryCostTransitionStore, EfInventoryCostTransitionStore>();
-
-// Temporary API-owned adapter for the costing-repair port (issue #359); see EfInventoryCostRepairStore.
-builder.Services.AddScoped<IInventoryCostRepairStore, EfInventoryCostRepairStore>();
-
-// Temporary API-owned adapter for the stock history/restock-cost-suggestion/manual-adjustment
-// persistence port (issue #282); see EfStockAdjustmentStore.
-builder.Services.AddScoped<IStockAdjustmentStore, EfStockAdjustmentStore>();
-
-// Temporary API-owned adapter for the supplier-order create/read/cancel persistence port; see EfSupplierOrderStore.
-builder.Services.AddScoped<ISupplierOrderStore, EfSupplierOrderStore>();
-
-// Temporary API-owned adapter for the site dashboard facts port; see EfSiteFactsStore. Its
-// site-name counterpart is a real Infrastructure adapter since issue #306
-// (Inventory.Infrastructure.Sites.SiteNameResolver), registered by AddInfrastructureServices().
-builder.Services.AddScoped<ISiteFactsStore, EfSiteFactsStore>();
-
-// Temporary API-owned adapter for the machine dashboard facts port; see EfMachineDashboardFactsStore.
-builder.Services.AddScoped<IMachineDashboardFactsStore, EfMachineDashboardFactsStore>();
-
-// The bookkeeping, daily, reconciliation, machine/product profitability, GST, dashboard, inventory
-// valuation and transaction sales report facts ports are no longer registered here: issue #308
-// moved their EF adapters into Inventory.Infrastructure.Reporting.Persistence, and
-// AddInfrastructureServices() above registers all ten of them (the processing-fee facts provider
-// included) against the AppDbContext this file still configures.
-
-// Temporary API-owned adapter for the product purchase-price-history port; see EfProductPurchasePriceHistoryProvider.
-builder.Services.AddScoped<IProductPurchasePriceHistoryProvider, EfProductPurchasePriceHistoryProvider>();
-
-// Temporary API-owned adapter for the product profitability report's bulk purchase-cost facts port; see EfProductPurchaseCostFactsProvider.
-builder.Services.AddScoped<IProductPurchaseCostFactsProvider, EfProductPurchaseCostFactsProvider>();
-
-// Temporary API-owned adapter for the local half of the Nayax catalog reconciliation (issue #55);
-// see EfLocalCatalogSnapshotProvider. The remote half needs no AppDbContext, so issue #306 moved it
-// to Inventory.Infrastructure.Nayax.NayaxCatalogSnapshotProvider, registered by
-// AddInfrastructureServices().
-builder.Services.AddScoped<ILocalCatalogSnapshotProvider, EfLocalCatalogSnapshotProvider>();
-
-// Temporary API-owned adapter for the machine Sync Restock persistence port (issue #183); see
-// EfMachineStockEventStore.
-builder.Services.AddScoped<IMachineStockEventStore, EfMachineStockEventStore>();
-
-// Temporary API-owned adapter for the reorder outstanding-supplier-order-quantity port (issue #47);
-// see EfOutstandingSupplierOrderQuantityStore.
-builder.Services.AddScoped<IOutstandingSupplierOrderQuantityStore, EfOutstandingSupplierOrderQuantityStore>();
-
-// Temporary API-owned adapter for the read-only Pick List projection's storage-quantity port
-// (issue #221); see EfPickListStorageStockStore.
-builder.Services.AddScoped<IPickListStorageStockStore, EfPickListStorageStockStore>();
-
-// Temporary API-owned adapter for the coordinated latest-Nayax-sales persistence port (issue #187);
-// see EfLatestNayaxSalesStore.
-builder.Services.AddScoped<ILatestNayaxSalesStore, EfLatestNayaxSalesStore>();
-
-// Temporary API-owned adapter for the Take Inventory apply port (issue #245); see
-// EfInventoryCountAdjustmentStore.
-builder.Services.AddScoped<IInventoryCountAdjustmentStore, EfInventoryCountAdjustmentStore>();
-
-// Temporary API-owned adapter for the imported-reimbursement persistence port (issue #299); see
-// EfImportedReimbursementStore.
-builder.Services.AddScoped<IImportedReimbursementStore, EfImportedReimbursementStore>();
-
-// Temporary API-owned adapter for the Nayax product catalogue import persistence port (issue
-// #300); see EfNayaxProductCatalogImportStore.
-builder.Services.AddScoped<INayaxProductCatalogImportStore, EfNayaxProductCatalogImportStore>();
-
-// Temporary API-owned adapter for the uploaded Nayax sales import persistence port (issue #301);
-// see EfNayaxSalesImportStore. Its workbook-reading counterpart is a real Infrastructure adapter,
-// registered by AddInfrastructureServices().
-builder.Services.AddScoped<INayaxSalesImportStore, EfNayaxSalesImportStore>();
+// No EF persistence adapter is registered here any more. Issue #307 moved AppDbContext, the EF
+// entities and the migrations into Inventory.Infrastructure, issue #308 the ten reporting fact
+// providers, and issue #309 the remaining feature stores, so AddInfrastructureServices() above
+// registers every Application persistence port - each Scoped, exactly as its registration here
+// was - and this file keeps only the provider decision: the AddDbContext/UseSqlite call and the
+// connection string a host that calls AddInfrastructureServices() must still make.
 
 var app = builder.Build();
 

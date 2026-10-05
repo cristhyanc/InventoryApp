@@ -13,10 +13,11 @@ namespace Inventory.Infrastructure.Sites;
 /// Infrastructure resident - the last file to leave <c>InventoryApi/Services</c> - and
 /// <c>AddInfrastructureServices()</c> now registers it. It belongs here rather than in
 /// <c>Inventory.Application</c> because it is an adapter for a remote system's missing field, and
-/// it needed no <c>AppDbContext</c> to move, unlike the EF adapters #153 relocates later.
+/// it needed no <c>AppDbContext</c> to move, unlike the EF adapters #153 relocated later (issues
+/// #308 and #309).
 ///
 /// <see cref="FromMachines"/> stays available as a static entry point for
-/// <c>InventoryApi.Adapters.Persistence.EfTransactionSalesReportFactsProvider</c>, which resolves a
+/// <c>Inventory.Infrastructure.Reporting.Persistence.EfTransactionSalesReportFactsProvider</c>, which resolves a
 /// site name per streamed transaction row inside a static iterator rather than through the
 /// injected port, exactly as it did before the move. Both paths run the same rule, so the site
 /// dashboard, the commission report and the transaction report cannot drift apart.

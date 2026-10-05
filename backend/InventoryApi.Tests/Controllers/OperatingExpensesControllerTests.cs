@@ -1,6 +1,6 @@
 using Inventory.Application.Expenses;
 using Inventory.Infrastructure.Documents;
-using InventoryApi.Adapters.Persistence;
+using Inventory.Infrastructure.Persistence;
 using InventoryApi.Controllers;
 using Inventory.Infrastructure.Data;
 using InventoryApi.DTOs;

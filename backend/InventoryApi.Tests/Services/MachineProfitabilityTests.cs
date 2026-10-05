@@ -1,7 +1,7 @@
 using Inventory.Application.Machines;
 using Inventory.Application.Products;
 using InventoryApi.Tests.Application.Time;
-using InventoryApi.Adapters.Persistence;
+using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Data;
 using Inventory.Application.Nayax;
 using Inventory.Infrastructure.Models;

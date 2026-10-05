@@ -6,13 +6,13 @@ using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
 using DomainStock = Inventory.Domain.Stock;
 
-namespace InventoryApi.Adapters.Persistence;
+namespace Inventory.Infrastructure.Persistence;
 
 /// <summary>
-/// Temporary EF Core implementation of <see cref="IInventoryCostLedgerStore"/> (issue #296). It
-/// still lives in InventoryApi, not Inventory.Infrastructure: <see cref="AppDbContext"/> and the
-/// persistence models it depends on moved there in issue #307, and moving this adapter family after
-/// them is Persistence 7/8 and 8/8 of #153.
+/// The EF Core implementation of <see cref="IInventoryCostLedgerStore"/> (issue #296). It lives in
+/// Inventory.Infrastructure beside the <see cref="AppDbContext"/> and the persistence models it
+/// depends on, which moved there in issue #307; this adapter followed them in issue #309
+/// (Persistence 8/8 of #153).
 ///
 /// The queries are unchanged from the former <c>InventoryCostRebuildService</c>: the product's stock
 /// movements, the business's completed Nayax sales matched to the product through the Domain

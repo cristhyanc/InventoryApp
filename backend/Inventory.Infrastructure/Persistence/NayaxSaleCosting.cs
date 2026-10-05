@@ -2,7 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using Inventory.Application.Costing;
 using Inventory.Infrastructure.Models;
 
-namespace InventoryApi.Adapters.Persistence;
+namespace Inventory.Infrastructure.Persistence;
 
 /// <summary>
 /// Maps the <see cref="NayaxSales"/> persistence entity to and from the Application sale-costing

@@ -15,8 +15,8 @@ namespace InventoryApi.Tests.Application.Costing;
 /// <summary>
 /// Orchestration of the inventory-cost transition use cases (issue #298, child 4 of #149): stored
 /// previews, stale-preview rejection, repeat and expired applies, the preview scope, and a Nayax
-/// upstream failure leaving nothing behind. Run over the temporary API-owned
-/// <c>EfInventoryCostTransitionStore</c> on a fixed clock.
+/// upstream failure leaving nothing behind. Run over the
+/// <c>EfInventoryCostTransitionStore</c> adapter on a fixed clock.
 /// </summary>
 public class InventoryCostTransitionUseCaseTests
 {

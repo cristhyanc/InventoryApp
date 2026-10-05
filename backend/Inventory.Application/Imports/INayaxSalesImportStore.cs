@@ -23,8 +23,8 @@ public sealed record ImportedNayaxSale(
 
 /// <summary>
 /// Narrow persistence port for the uploaded Nayax sales import (issue #301), owned by the
-/// Application layer and implemented by the temporary API-owned
-/// <c>InventoryApi.Adapters.Persistence.EfNayaxSalesImportStore</c>.
+/// Application layer and implemented by
+/// <c>Inventory.Infrastructure.Persistence.EfNayaxSalesImportStore</c>.
 ///
 /// It decides nothing: the import's own rules - which row is importable, which stored row a row
 /// updates, which product a completed sale affected, and when the rebuilt costs are saved - all

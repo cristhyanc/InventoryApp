@@ -1,7 +1,7 @@
 using Inventory.Application.Costing;
 using Inventory.Application.Nayax;
 using Inventory.Domain.Exceptions;
-using InventoryApi.Adapters.Persistence;
+using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using InventoryApi.Tests.Application.Time;
@@ -14,7 +14,7 @@ using DomainBaselineSource = Inventory.Domain.Costing.InventoryCostBaselineSourc
 namespace InventoryApi.Tests.Adapters.Persistence;
 
 /// <summary>
-/// The temporary API-owned <see cref="EfInventoryCostTransitionStore"/> and the transition use cases
+/// The <see cref="EfInventoryCostTransitionStore"/> adapter and the transition use cases
 /// (issue #298) over relational SQLite. The central business query filter and the ownership stamp
 /// on save (issue #64) are what keep a transition from reading another business's products,
 /// movements, baselines or previews, or writing a baseline for them; the adapter adds no business
