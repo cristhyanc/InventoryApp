@@ -51,6 +51,11 @@ export const routes: Routes = [
     loadComponent: () => import('./components/suppliers/supplier-list.component').then((m) => m.SupplierListComponent)
   },
   {
+    path: 'machines',
+    canActivate: [MsalGuard],
+    loadComponent: () => import('./components/machines/machine-list.component').then((m) => m.MachineListComponent)
+  },
+  {
     path: 'machines/:id',
     canActivate: [MsalGuard],
     loadComponent: () => import('./components/machines/machine-detail.component').then((m) => m.MachineDetailComponent)
