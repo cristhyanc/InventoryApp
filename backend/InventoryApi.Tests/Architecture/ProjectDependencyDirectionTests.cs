@@ -216,6 +216,40 @@ public class ProjectDependencyDirectionTests
     }
 
     /// <summary>
+    /// Issue #305, the last controller slice of #153: no file under <c>InventoryApi/Controllers</c>
+    /// names <c>InventoryApi.Models</c> any more. The HTTP boundary binds and serialises API-owned
+    /// contracts from <c>InventoryApi.DTOs</c> and calls
+    /// <c>Inventory.Application</c>/<c>Inventory.Domain</c>; reaching for a persistence entity there
+    /// is what let an EF model become the published wire shape in the first place, and it is exactly
+    /// the coupling that makes moving <c>AppDbContext</c> into <c>Inventory.Infrastructure</c>
+    /// (issues #153/#154) a contract change instead of a relocation.
+    ///
+    /// Both the <c>using</c> directive and a fully qualified <c>InventoryApi.Models.X</c> reference
+    /// fail here, so the rule cannot be satisfied by qualifying the type instead of importing it.
+    /// The check is over git-tracked files for the same reason the legacy-services freeze is: an
+    /// untracked scratch controller must neither trip it nor satisfy it.
+    /// </summary>
+    [Fact]
+    public void No_controller_references_the_persistence_models()
+    {
+        var controllersDirectory = Path.Combine("InventoryApi", "Controllers");
+
+        var offendingFiles = GitTrackedFiles(controllersDirectory)
+            .Where(path => path.EndsWith(".cs", StringComparison.Ordinal))
+            .Where(path => File.ReadAllText(Path.Combine(BackendRoot, "InventoryApi", "Controllers", path))
+                .Contains("InventoryApi.Models", StringComparison.Ordinal))
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.True(
+            offendingFiles.Length == 0,
+            "A controller must not reach for the EF persistence model: bind and serialise the "
+                + "API-owned contracts in InventoryApi.DTOs and call the Application use cases "
+                + "instead (docs/architecture.md § InventoryApi). Offending file(s) under "
+                + $"{controllersDirectory}: {string.Join(", ", offendingFiles)}.");
+    }
+
+    /// <summary>
     /// Lists the git-tracked files under <paramref name="repoRelativeDirectory"/> (relative to
     /// <see cref="BackendRoot"/>'s parent, the repository root), rather than walking the raw
     /// filesystem. This freeze exists to catch a reviewed, committed change - a local build

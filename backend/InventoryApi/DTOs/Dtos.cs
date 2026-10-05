@@ -1,3 +1,5 @@
+// Imported for StockAdjustmentDto.Reason only - the temporary compatibility exception documented on
+// that record (issue #305). No other DTO in this file names the persistence model.
 using InventoryApi.Models;
 
 namespace InventoryApi.DTOs;
@@ -30,6 +32,26 @@ public record ProductUpdateDto(
     bool IsActive
 );
 
+/// <summary>
+/// The stock adjustment a client posts to "/api/products/{productId}/stock".
+///
+/// <see cref="Reason"/> is the persistence enum rather than an API-owned copy, which is why this
+/// file still imports <c>InventoryApi.Models</c>. That is a <b>temporary compatibility exception</b>
+/// (issue #305), not the target state: the published document carries one
+/// <c>StockAdjustmentReason</c> component derived from that CLR enum, reached from this request
+/// body, from the pinned <c>StockAdjustment</c> response component and from the legacy
+/// <c>Product</c> component that <c>InventoryApi.Swagger.PublishedResponseSchemaContract</c>
+/// regenerates, so an API-owned enum of the same simple name makes Swashbuckle fail document
+/// generation with a duplicate-schema-id error, and renaming or duplicating the published component
+/// is an API-contract change issue #305 excludes. The enum moves with the persistence models
+/// (#153/#154), together with the response side's
+/// <c>ProductStockAdjustmentResponse.Reason</c>/<c>Source</c>.
+///
+/// Until then, <c>InventoryApi.Tests.DTOs.StockAdjustmentRequestJsonContractTests</c> pins the
+/// numeric values this body binds from and the member-for-member agreement with the Domain enum the
+/// controller casts to, and <c>InventoryApi.Tests.Swagger.StockAndExpenseSchemaContractTests</c>
+/// pins the published request schema and reproduces the collision that forces the exception.
+/// </summary>
 public record StockAdjustmentDto(
     int QuantityChange,
     StockAdjustmentReason Reason,

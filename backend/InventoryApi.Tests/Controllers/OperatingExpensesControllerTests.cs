@@ -173,7 +173,7 @@ public sealed class OperatingExpensesControllerTests : IDisposable
         db.OperatingExpenses.Add(new OperatingExpense
         {
             ExpenseDate = DateTime.UtcNow.Date,
-            Category = OperatingExpenseCategory.Insurance,
+            Category = Models.OperatingExpenseCategory.Insurance,
             Description = "Legacy attachment",
             AmountExGst = 10m,
             GstAmount = 1m,
@@ -234,7 +234,7 @@ public sealed class OperatingExpensesControllerTests : IDisposable
         db.OperatingExpenses.Add(new OperatingExpense
         {
             ExpenseDate = DateTime.UtcNow.Date,
-            Category = OperatingExpenseCategory.Insurance,
+            Category = Models.OperatingExpenseCategory.Insurance,
             Description = "Legacy attachment",
             AmountExGst = 10m,
             GstAmount = 1m,
@@ -271,7 +271,7 @@ public sealed class OperatingExpensesControllerTests : IDisposable
             seed.OperatingExpenses.Add(new OperatingExpense
             {
                 ExpenseDate = DateTime.UtcNow.Date,
-                Category = OperatingExpenseCategory.Insurance,
+                Category = Models.OperatingExpenseCategory.Insurance,
                 Description = "Monthly insurance",
                 AmountExGst = 10m,
                 GstAmount = 1m,
@@ -334,7 +334,7 @@ public sealed class OperatingExpensesControllerTests : IDisposable
     }
 
     private static OperatingExpenseDto CreateDto(string description = "Monthly insurance") =>
-        new(DateTime.UtcNow.Date, OperatingExpenseCategory.Insurance, description, 10m, 1m, 11m);
+        new(DateTime.UtcNow.Date, InventoryApi.DTOs.OperatingExpenseCategory.Insurance, description, 10m, 1m, 11m);
 
     private static IFormFile CreateFile(string fileName) =>
         new FormFile(new MemoryStream(new byte[] { 1, 2, 3 }), 0, 3, "attachment", fileName);
