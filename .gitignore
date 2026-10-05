@@ -85,3 +85,10 @@ uploads/temp/
 **/wwwroot/receipts/
 **/wwwroot/expenses/
 **/wwwroot/ImportedFiles/
+
+# End-to-end test run output (issue #46): the disposable E2E database, traces, screenshots and
+# reports. The database is also covered by the *.db rules above; it is named here because the
+# whole directory is generated and must never be committed.
+frontend/inventory-app/e2e/.artifacts/
+frontend/inventory-app/e2e/playwright-report/
+frontend/inventory-app/e2e/test-results/
