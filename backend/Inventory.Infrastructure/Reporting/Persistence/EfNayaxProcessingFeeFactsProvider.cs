@@ -3,8 +3,16 @@ using Inventory.Domain.FinancialConfiguration;
 using Inventory.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
-namespace InventoryApi.Adapters.Persistence;
+namespace Inventory.Infrastructure.Reporting.Persistence;
 
+/// <summary>
+/// The EF Core implementation of <see cref="INayaxProcessingFeeFactsProvider"/>, moved here from
+/// <c>InventoryApi</c> with the report facts providers it feeds (issue #308, Persistence 7/8 of
+/// #153): it reads the imported authoritative fee rows and the completed card/cash sales that every
+/// fee-bearing report - bookkeeping, daily, machine profitability and the dashboard - is built from,
+/// through the same <see cref="AppDbContext"/> and the same completed-sale predicate
+/// (<see cref="EfNayaxSalesQueries"/>) they use.
+/// </summary>
 public sealed class EfNayaxProcessingFeeFactsProvider : INayaxProcessingFeeFactsProvider
 {
     private readonly AppDbContext _db;

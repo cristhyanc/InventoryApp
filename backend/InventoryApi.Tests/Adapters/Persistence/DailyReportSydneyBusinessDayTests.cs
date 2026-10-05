@@ -2,7 +2,7 @@ using Inventory.Application.Reporting.Daily;
 using Inventory.Application.Reporting.Transactions;
 using Inventory.Application.Time;
 using Inventory.Domain.FinancialConfiguration;
-using InventoryApi.Adapters.Persistence;
+using Inventory.Infrastructure.Reporting.Persistence;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using InventoryApi.Tests.Application.Time;

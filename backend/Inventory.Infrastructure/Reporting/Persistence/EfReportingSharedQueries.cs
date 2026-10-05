@@ -4,18 +4,18 @@ using Inventory.Domain.FinancialConfiguration;
 using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
 
-namespace InventoryApi.Adapters.Persistence;
+namespace Inventory.Infrastructure.Reporting.Persistence;
 
 /// <summary>
-/// Temporary EF Core query helpers shared by the migrated bookkeeping, daily, reconciliation,
-/// machine/product profitability, GST accounting-aid, and dashboard report facts providers
+/// The EF Core query helpers shared by the bookkeeping, daily, reconciliation, machine/product
+/// profitability, GST accounting-aid, and dashboard report facts providers
 /// (<see cref="EfBookkeepingReportFactsProvider"/>, <see cref="EfDailyReportFactsProvider"/>,
 /// <see cref="EfReconciliationReportFactsProvider"/>, <see cref="EfMachineProfitabilityReportFactsProvider"/>,
 /// <see cref="EfProductProfitabilityReportFactsProvider"/>, <see cref="EfGstReportFactsProvider"/>,
 /// <see cref="EfDashboardReportFactsProvider"/>).
-/// They depend on <see cref="AppDbContext"/> and still live in InventoryApi for the same reason
-/// those adapters do: the context and the EF entities moved to Inventory.Infrastructure in issue
-/// #307, and moving this adapter family after them is Persistence 7/8 and 8/8 of #153.
+/// They depend on <see cref="AppDbContext"/>, which issue #307 moved into this project, and issue
+/// #308 (Persistence 7/8 of #153) moved this adapter family after it, so they are
+/// Infrastructure-owned rather than API-owned.
 ///
 /// <see cref="EfTransactionSalesReportFactsProvider"/>, the last migrated adapter, deliberately does
 /// not reuse these helpers: it needs every transaction status (not only completed sales) and its own
