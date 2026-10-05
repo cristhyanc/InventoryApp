@@ -1,7 +1,7 @@
 using Inventory.Application.Documents;
 using Inventory.Application.Purchases;
 using Inventory.Infrastructure.Documents;
-using InventoryApi.Adapters.Persistence;
+using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using InventoryApi.Tests.Application.Time;

@@ -3,7 +3,7 @@ using Inventory.Application.Nayax;
 using Inventory.Application.Commissions;
 using Inventory.Domain.FinancialConfiguration;
 using Inventory.Infrastructure.Sites;
-using InventoryApi.Adapters.Persistence;
+using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Models;
 using InventoryApi.Tests.Application.Time;
 using Microsoft.EntityFrameworkCore;

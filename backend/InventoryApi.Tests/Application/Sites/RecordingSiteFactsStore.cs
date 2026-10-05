@@ -7,7 +7,7 @@ namespace InventoryApi.Tests.Application.Sites;
 /// Yielding, call-recording fake of <see cref="ISiteFactsStore"/> for the Sites use cases (issue #313).
 /// Every call records when it starts and finishes, how many calls were ever in flight at once, and the
 /// arguments it received, and yields before completing. The real adapter
-/// (<c>InventoryApi.Adapters.Persistence.EfSiteFactsStore</c>) serves every one of these calls from a
+/// (<c>Inventory.Infrastructure.Persistence.EfSiteFactsStore</c>) serves every one of these calls from a
 /// single scoped <c>AppDbContext</c>, which supports only one operation at a time, so a use case that
 /// starts two of them before awaiting either is visible here as an interleaved trace and a concurrency
 /// count above one - a defect SQLite's synchronous async implementation hides in tests while a real

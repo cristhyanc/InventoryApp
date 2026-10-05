@@ -1,7 +1,7 @@
 using System.Reflection;
 using Inventory.Application.Costing;
 using Inventory.Domain.FinancialConfiguration;
-using InventoryApi.Adapters.Persistence;
+using Inventory.Infrastructure.Persistence;
 using InventoryApi.Controllers;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
@@ -13,7 +13,7 @@ using Xunit;
 namespace InventoryApi.Tests.Adapters.Persistence;
 
 /// <summary>
-/// The temporary API-owned <see cref="EfSaleCostingStore"/> adapter and the sale-costing endpoints
+/// The <see cref="EfSaleCostingStore"/> adapter and the sale-costing endpoints
 /// (issue #297) over relational SQLite. The central business query filter and the ownership stamp
 /// on save (issue #64) are what keep a backfill from reading or re-costing another business's
 /// sales; the adapter adds no business filter of its own.

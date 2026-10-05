@@ -6,7 +6,7 @@ using Inventory.Application.Products;
 using Inventory.Application.Purchases;
 using Inventory.Application.Reorder;
 using Inventory.Application.Reporting.Dashboard;
-using InventoryApi.Adapters.Persistence;
+using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Reporting.Persistence;
 using Inventory.Infrastructure.Models;
 using Microsoft.AspNetCore.Mvc;

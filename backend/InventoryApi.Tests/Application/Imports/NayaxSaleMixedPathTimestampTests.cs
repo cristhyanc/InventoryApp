@@ -5,7 +5,7 @@ using Inventory.Application.Imports;
 using Inventory.Application.Nayax;
 using Inventory.Domain.FinancialConfiguration;
 using Inventory.Infrastructure.Imports;
-using InventoryApi.Adapters.Persistence;
+using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Microsoft.Data.Sqlite;

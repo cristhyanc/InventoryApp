@@ -2,12 +2,13 @@ using Inventory.Application.PickList;
 using Inventory.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
-namespace InventoryApi.Adapters.Persistence;
+namespace Inventory.Infrastructure.Persistence;
 
 /// <summary>
-/// Temporary EF Core implementation of <see cref="IPickListStorageStockStore"/> (issue #221). It lives
-/// in InventoryApi, not Inventory.Infrastructure, because it depends on <see cref="AppDbContext"/>,
-/// which still lives there, following the same pattern as <see cref="EfOutstandingSupplierOrderQuantityStore"/>.
+/// The EF Core implementation of <see cref="IPickListStorageStockStore"/> (issue #221). It lives in
+/// Inventory.Infrastructure beside the <see cref="AppDbContext"/> it depends on, following the same
+/// pattern as <see cref="EfOutstandingSupplierOrderQuantityStore"/> (issue #309, Persistence 8/8 of
+/// #153).
 /// <c>AppDbContext</c>'s global tenant query filter scopes this read the same way it scopes every other
 /// <c>_db.Products</c> read; no per-call business filter is added here.
 /// </summary>

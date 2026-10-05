@@ -1,6 +1,6 @@
 using Inventory.Application.SalesSync;
 using Inventory.Domain.Exceptions;
-using InventoryApi.Adapters.Persistence;
+using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Data;
 using Inventory.Application.Nayax;
 using Inventory.Infrastructure.Models;
@@ -15,8 +15,8 @@ namespace InventoryApi.Tests.Application.Costing;
 
 /// <summary>
 /// The inventory-cost transition use cases (issue #298, child 4 of #149), moved from the former
-/// <c>InventoryCostTransitionServiceTests</c> and run over the temporary API-owned
-/// <c>EfInventoryCostTransitionStore</c> exactly as production composes them, together with the
+/// <c>InventoryCostTransitionServiceTests</c> and run over the
+/// <c>EfInventoryCostTransitionStore</c> adapter exactly as production composes them, together with the
 /// live-sale costing behaviour that depends on a transition baseline.
 /// </summary>
 public class InventoryCostTransitionTests

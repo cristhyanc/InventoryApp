@@ -3,12 +3,12 @@ using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
 
-namespace InventoryApi.Adapters.Persistence;
+namespace Inventory.Infrastructure.Persistence;
 
 /// <summary>
-/// Temporary EF Core implementation of <see cref="IOutstandingSupplierOrderQuantityStore"/>. It lives
-/// in InventoryApi, not Inventory.Infrastructure, because it depends on <see cref="AppDbContext"/>,
-/// which still lives there. Query moved unchanged from the legacy
+/// The EF Core implementation of <see cref="IOutstandingSupplierOrderQuantityStore"/>. It lives in
+/// Inventory.Infrastructure beside the <see cref="AppDbContext"/> it depends on (issue #309,
+/// Persistence 8/8 of #153). Query moved unchanged from the legacy
 /// <c>InventoryApi.Services.ProductService.LowStock</c> outstanding-order projection (issue #47).
 /// </summary>
 public sealed class EfOutstandingSupplierOrderQuantityStore : IOutstandingSupplierOrderQuantityStore

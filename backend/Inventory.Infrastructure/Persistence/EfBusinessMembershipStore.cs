@@ -3,13 +3,13 @@ using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
-namespace InventoryApi.Adapters.Persistence;
+namespace Inventory.Infrastructure.Persistence;
 
 /// <summary>
-/// Temporary EF Core implementation of <see cref="IBusinessMembershipStore"/>. Like the other
-/// adapters in this folder it still lives in InventoryApi, not Inventory.Infrastructure:
-/// <see cref="AppDbContext"/> and the persistence models it depends on moved there in issue #307,
-/// and moving this adapter family after them is Persistence 7/8 and 8/8 of #153.
+/// The EF Core implementation of <see cref="IBusinessMembershipStore"/>. Like every other adapter in
+/// this folder it lives in Inventory.Infrastructure beside the <see cref="AppDbContext"/> and the
+/// persistence models it depends on, which moved there in issue #307; the adapters followed them in
+/// issue #309 (Persistence 8/8 of #153).
 /// </summary>
 public sealed class EfBusinessMembershipStore : IBusinessMembershipStore
 {

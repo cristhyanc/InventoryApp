@@ -40,7 +40,8 @@ public class ReportingAdapterOwnershipTests
 
     /// <summary>
     /// The twelve classes issue #308 names: the ten report facts providers plus the two shared EF
-    /// query helpers they and the still-API-owned costing/commission adapters call.
+    /// query helpers they and the costing/commission adapters call (those were still API-owned at
+    /// the time; issue #309 moved them into <c>Inventory.Infrastructure.Persistence</c> too).
     /// </summary>
     private static readonly string[] RelocatedAdapters =
     [

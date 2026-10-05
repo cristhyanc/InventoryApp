@@ -6,14 +6,14 @@ using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
 using DomainStock = Inventory.Domain.Stock;
 
-namespace InventoryApi.Adapters.Persistence;
+namespace Inventory.Infrastructure.Persistence;
 
 /// <summary>
-/// Temporary EF Core implementation of <see cref="IMachineStockEventStore"/> (issue #183). It still
-/// lives in InventoryApi, not Inventory.Infrastructure, following the same pattern as
+/// The EF Core implementation of <see cref="IMachineStockEventStore"/> (issue #183). It lives in
+/// Inventory.Infrastructure, following the same pattern as
 /// <see cref="EfSupplierStore"/>: <see cref="AppDbContext"/> and the persistence models it depends
-/// on moved there in issue #307, and moving this adapter family after them is Persistence 7/8 and
-/// 8/8 of #153.
+/// on moved there in issue #307, and this adapter family followed them in issue #309 (Persistence
+/// 8/8 of #153).
 ///
 /// Applying a refill deliberately reuses the Application <see cref="IRecordInventoryMovement"/> and
 /// <see cref="IRebuildProductCost"/> use cases (issue #296) rather than writing its own movement,

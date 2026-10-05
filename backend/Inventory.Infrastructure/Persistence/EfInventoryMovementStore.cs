@@ -2,13 +2,13 @@ using Inventory.Application.Costing;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 
-namespace InventoryApi.Adapters.Persistence;
+namespace Inventory.Infrastructure.Persistence;
 
 /// <summary>
-/// Temporary EF Core implementation of <see cref="IInventoryMovementStore"/> (issue #296). It still
-/// lives in InventoryApi, not Inventory.Infrastructure: <see cref="AppDbContext"/> and the
-/// persistence models it depends on moved there in issue #307, and moving this adapter family after
-/// them is Persistence 7/8 and 8/8 of #153.
+/// The EF Core implementation of <see cref="IInventoryMovementStore"/> (issue #296). It lives in
+/// Inventory.Infrastructure beside the <see cref="AppDbContext"/> and the persistence models it
+/// depends on, which moved there in issue #307; this adapter followed them in issue #309
+/// (Persistence 8/8 of #153).
 ///
 /// It only reads the product (preferring the instance the caller's unit of work already tracks,
 /// exactly as the former <c>InventoryCostService.ApplyMovement</c> did) and stages the movement the

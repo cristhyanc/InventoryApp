@@ -1,6 +1,6 @@
 using Inventory.Application.Costing;
 using Inventory.Domain.FinancialConfiguration;
-using InventoryApi.Adapters.Persistence;
+using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Microsoft.Data.Sqlite;
@@ -11,7 +11,7 @@ using DomainStock = Inventory.Domain.Stock;
 namespace InventoryApi.Tests.Adapters.Persistence;
 
 /// <summary>
-/// Two-business isolation for the temporary API-owned costing adapters (issue #296):
+/// Two-business isolation for the costing adapters (issue #296):
 /// <see cref="EfInventoryMovementStore"/> and <see cref="EfInventoryCostLedgerStore"/>. Relational
 /// (SQLite) because the central business query filter and the ownership stamp on save (issue #64)
 /// are what keep a movement or a cost rebuild from reading or writing another business's product,

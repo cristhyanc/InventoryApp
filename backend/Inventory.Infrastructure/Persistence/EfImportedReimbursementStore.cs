@@ -3,14 +3,14 @@ using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
 
-namespace InventoryApi.Adapters.Persistence;
+namespace Inventory.Infrastructure.Persistence;
 
 /// <summary>
-/// Temporary EF Core implementation of <see cref="IImportedReimbursementStore"/> (issue #299). It
-/// still lives in InventoryApi, not Inventory.Infrastructure - the same pattern as
+/// The EF Core implementation of <see cref="IImportedReimbursementStore"/> (issue #299). It lives in
+/// Inventory.Infrastructure - the same pattern as
 /// <see cref="EfSaleCostingStore"/>: <see cref="AppDbContext"/> and the persistence models it
-/// depends on moved there in issue #307, and moving this adapter family after them is
-/// Persistence 7/8 and 8/8 of #153.
+/// depends on moved there in issue #307, and this adapter family followed them in issue #309
+/// (Persistence 8/8 of #153).
 ///
 /// Both operations keep the behaviour the former <c>ImportService.ImportPendingXmlFilesAsync</c>
 /// had: the duplicate lookup is the same tenant-filtered <c>ImportedFiles</c> query, with no

@@ -4,14 +4,14 @@ using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
 using DomainStock = Inventory.Domain.Stock;
 
-namespace InventoryApi.Adapters.Persistence;
+namespace Inventory.Infrastructure.Persistence;
 
 /// <summary>
-/// Temporary EF Core implementation of <see cref="IProductCatalogStore"/>. It still lives in
-/// InventoryApi, not Inventory.Infrastructure, following the same precedent as
+/// The EF Core implementation of <see cref="IProductCatalogStore"/>. It lives in
+/// Inventory.Infrastructure, following the same precedent as
 /// <see cref="EfCategoryStore"/>/<see cref="EfProductStore"/>: <see cref="AppDbContext"/> and
-/// <see cref="Product"/> moved there in issue #307, and moving this adapter family after them is
-/// Persistence 7/8 and 8/8 of #153.
+/// <see cref="Product"/> moved there in issue #307, and this adapter family followed them in issue
+/// #309 (Persistence 8/8 of #153).
 ///
 /// Tenant scoping is the central <see cref="AppDbContext"/> global query filter, never a predicate
 /// here (AGENTS.md § Tenant ownership and data isolation). The category/supplier/stock-adjustment

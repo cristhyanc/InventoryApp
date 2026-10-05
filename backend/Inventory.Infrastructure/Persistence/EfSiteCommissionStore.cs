@@ -4,7 +4,7 @@ using Inventory.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using SiteCommissionAgreementEntity = Inventory.Infrastructure.Models.SiteCommissionAgreement;
 
-namespace InventoryApi.Adapters.Persistence;
+namespace Inventory.Infrastructure.Persistence;
 
 public sealed class EfSiteCommissionStore : ISiteCommissionStore
 {
