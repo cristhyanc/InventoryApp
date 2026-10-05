@@ -108,7 +108,7 @@
   @if (error) {
     <p role="alert" data-testid="history-error" class="text-sm text-red-600">{{ error }}</p>
   } @else if (loading) {
-    <p role="status" data-testid="history-loading" class="text-sm text-slate-500">Loading stock history…</p>
+    <output data-testid="history-loading" class="block text-sm text-slate-500">Loading stock history…</output>
   } @else if (history === null || history.items.length === 0) {
     <p data-testid="history-empty" class="text-sm text-slate-500">
       {{ hasFilters ? 'No stock movements match these filters.' : 'No stock adjustments yet.' }}

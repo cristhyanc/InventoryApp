@@ -1,6 +1,27 @@
 using InventoryApi.Models;
+using Microsoft.AspNetCore.Mvc;
 
 namespace InventoryApi.DTOs;
+
+/// <summary>
+/// The query-string filters for <c>GET /api/stock-history</c> (issue #384), bound as one object
+/// instead of individual scalar parameters, the same grouping
+/// <see cref="Inventory.Application.Reporting.Shared.ReportingFilterDto"/> uses for the reporting
+/// endpoints. Property declaration order is the published query-parameter order, and each property
+/// keeps its original camelCase query-string name through <see cref="FromQueryAttribute.Name"/> -
+/// otherwise ASP.NET Core publishes and binds the C# (PascalCase) property name instead (see
+/// <c>StockHistoryOpenApiContractTests</c>); nothing here decides a filter's meaning - that stays
+/// <see cref="Inventory.Application.Stock.ListStockHistory"/>'s job.
+/// </summary>
+public sealed record StockHistoryRequest(
+    [property: FromQuery(Name = "productId")] long? ProductId = null,
+    [property: FromQuery(Name = "from")] DateTime? From = null,
+    [property: FromQuery(Name = "to")] DateTime? To = null,
+    [property: FromQuery(Name = "reason")] StockAdjustmentReason? Reason = null,
+    [property: FromQuery(Name = "machineId")] long? MachineId = null,
+    [property: FromQuery(Name = "source")] StockAdjustmentSource? Source = null,
+    [property: FromQuery(Name = "page")] int? Page = null,
+    [property: FromQuery(Name = "pageSize")] int? PageSize = null);
 
 /// <summary>
 /// One movement on the global Stock History endpoint <c>GET /api/stock-history</c> (issue #384).

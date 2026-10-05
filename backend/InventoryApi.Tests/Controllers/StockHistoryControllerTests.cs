@@ -38,7 +38,7 @@ public class StockHistoryControllerTests
     {
         var store = new FakeStockAdjustmentStore { QueryResult = new StockHistoryResult([Entry()], 1) };
 
-        var result = await CreateController(store).Get(cancellationToken: CancellationToken.None);
+        var result = await CreateController(store).Get(new StockHistoryRequest(), CancellationToken.None);
 
         var page = Assert.IsType<StockHistoryPageResponse>(Assert.IsType<OkObjectResult>(result.Result).Value);
         Assert.Equal(1, page.TotalCount);
@@ -66,15 +66,16 @@ public class StockHistoryControllerTests
         var store = new FakeStockAdjustmentStore();
 
         await CreateController(store).Get(
-            productId: 7,
-            from: new DateTime(2024, 6, 1),
-            to: new DateTime(2024, 6, 30),
-            reason: StockAdjustmentReason.Correction,
-            machineId: 9,
-            source: StockAdjustmentSource.Manual,
-            page: 2,
-            pageSize: 10,
-            cancellationToken: CancellationToken.None);
+            new StockHistoryRequest(
+                ProductId: 7,
+                From: new DateTime(2024, 6, 1),
+                To: new DateTime(2024, 6, 30),
+                Reason: StockAdjustmentReason.Correction,
+                MachineId: 9,
+                Source: StockAdjustmentSource.Manual,
+                Page: 2,
+                PageSize: 10),
+            CancellationToken.None);
 
         var filter = store.LastQueryFilter!;
         Assert.Equal(7, filter.ProductId);
@@ -97,7 +98,8 @@ public class StockHistoryControllerTests
     {
         var store = new FakeStockAdjustmentStore();
 
-        var result = await CreateController(store).Get(productId: 404, cancellationToken: CancellationToken.None);
+        var result = await CreateController(store).Get(
+            new StockHistoryRequest(ProductId: 404), CancellationToken.None);
 
         var page = Assert.IsType<StockHistoryPageResponse>(Assert.IsType<OkObjectResult>(result.Result).Value);
         Assert.Empty(page.Items);

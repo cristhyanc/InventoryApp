@@ -1,7 +1,6 @@
 using Inventory.Application.Stock;
 using InventoryApi.Adapters.Mapping;
 using InventoryApi.DTOs;
-using InventoryApi.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Identity.Web.Resource;
@@ -42,25 +41,18 @@ public sealed class StockHistoryController : ControllerBase
     /// </summary>
     [HttpGet]
     public async Task<ActionResult<StockHistoryPageResponse>> Get(
-        [FromQuery] long? productId = null,
-        [FromQuery] DateTime? from = null,
-        [FromQuery] DateTime? to = null,
-        [FromQuery] StockAdjustmentReason? reason = null,
-        [FromQuery] long? machineId = null,
-        [FromQuery] StockAdjustmentSource? source = null,
-        [FromQuery] int? page = null,
-        [FromQuery] int? pageSize = null,
+        [FromQuery] StockHistoryRequest request,
         CancellationToken cancellationToken = default)
     {
         var query = new StockHistoryQuery(
-            productId,
-            from,
-            to,
-            (DomainStock.StockAdjustmentReason?)reason,
-            machineId,
-            (DomainStock.StockAdjustmentSource?)source,
-            page,
-            pageSize);
+            request.ProductId,
+            request.From,
+            request.To,
+            (DomainStock.StockAdjustmentReason?)request.Reason,
+            request.MachineId,
+            (DomainStock.StockAdjustmentSource?)request.Source,
+            request.Page,
+            request.PageSize);
 
         var result = await _listStockHistory.Handle(query, cancellationToken);
         return Ok(StockHistoryResponseMapper.ToResponse(result));

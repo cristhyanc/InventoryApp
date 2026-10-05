@@ -36,7 +36,7 @@ export class StockAdjustmentFormComponent implements OnChanges {
   /** Raised after the existing adjustment endpoint accepted a movement, so the page can reload. */
   @Output() readonly adjustmentApplied = new EventEmitter<void>();
 
-  StockAdjustmentReason = StockAdjustmentReason;
+  readonly StockAdjustmentReason = StockAdjustmentReason;
   error = '';
   saving = false;
   restockCostSuggestion: RestockCostSuggestion | null = null;

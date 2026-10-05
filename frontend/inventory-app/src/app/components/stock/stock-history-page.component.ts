@@ -44,8 +44,8 @@ export class StockHistoryPageComponent implements OnInit {
   loading = false;
   error = '';
 
-  StockAdjustmentReason = StockAdjustmentReason;
-  StockAdjustmentSource = StockAdjustmentSource;
+  readonly StockAdjustmentReason = StockAdjustmentReason;
+  readonly StockAdjustmentSource = StockAdjustmentSource;
 
   readonly pageSizeOptions = [25, 50, 100, 200];
 
