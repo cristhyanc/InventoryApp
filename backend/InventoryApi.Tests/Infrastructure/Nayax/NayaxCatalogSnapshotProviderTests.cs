@@ -1,10 +1,14 @@
-using InventoryApi.Adapters.Nayax;
 using Inventory.Application.Nayax;
+using Inventory.Infrastructure.Nayax;
 using Moq;
 using Xunit;
 
-namespace InventoryApi.Tests.Adapters.Nayax;
+namespace InventoryApi.Tests.Infrastructure.Nayax;
 
+// Moved here with the adapter itself (issue #306), from InventoryApi.Tests.Adapters.Nayax. The
+// assertions are unchanged: a nullable remote name becomes an empty string, and a duplicate remote
+// identifier is preserved rather than collapsed, because the reconciliation policy is what decides
+// what a duplicate means.
 public class NayaxCatalogSnapshotProviderTests
 {
     [Fact]

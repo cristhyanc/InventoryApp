@@ -19,7 +19,8 @@ using Inventory.Application.Reporting.Transactions;
 using Inventory.Domain.Reporting;
 using Inventory.Domain.FinancialConfiguration;
 using Inventory.Infrastructure;
-using InventoryApi.Adapters.Export;
+using Inventory.Infrastructure.Reporting;
+using Inventory.Infrastructure.Sites;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using Inventory.Application.Nayax;
@@ -73,8 +74,9 @@ public class ReportingRegressionTests
     }
 
     // Composes the same migrated use cases InventoryApi.Controllers.ReportsController calls, plus
-    // GetReportExportRows/ReportExportFileWriter for export, mirroring the removed legacy reporting
-    // service's method surface so the regression tests below did not need to change.
+    // GetReportExportRows and the Infrastructure IReportExportFileWriter for export (relocated by
+    // issue #306), mirroring the removed legacy reporting service's method surface so the
+    // regression tests below did not need to change.
     private sealed class ReportingHarness
     {
         private readonly GetBookkeepingReport _getBookkeepingReport;
@@ -86,6 +88,7 @@ public class ReportingRegressionTests
         private readonly GetDashboardReport _getDashboardReport;
         private readonly GetTransactionSalesReport _getTransactionSalesReport;
         private readonly GetReportExportRows _getReportExportRows;
+        private readonly IReportExportFileWriter _reportExportFileWriter = new ReportExportFileWriter();
 
         public ReportingHarness(GetBookkeepingReport getBookkeepingReport, GetDailyReport getDailyReport,
             GetReconciliationReport getReconciliationReport, GetMachineProfitabilityReport getMachineProfitabilityReport,
@@ -122,9 +125,9 @@ public class ReportingRegressionTests
         public Task<TransactionSalesReportDto> GetTransactionsAsync(TransactionSalesFilterDto filter, CancellationToken cancellationToken = default) =>
             _getTransactionSalesReport.Handle(filter, cancellationToken);
         public async Task<byte[]> ExportCsvAsync(string report, ReportingFilterDto filter, CancellationToken cancellationToken = default) =>
-            ReportExportFileWriter.WriteCsv(await _getReportExportRows.Handle(report, filter, cancellationToken));
+            _reportExportFileWriter.WriteCsv(await _getReportExportRows.Handle(report, filter, cancellationToken));
         public async Task<byte[]> ExportCsvAsync(string report, TransactionSalesFilterDto filter, CancellationToken cancellationToken = default) =>
-            ReportExportFileWriter.WriteCsv(await _getReportExportRows.Handle(report, filter, cancellationToken));
+            _reportExportFileWriter.WriteCsv(await _getReportExportRows.Handle(report, filter, cancellationToken));
     }
 
     [Fact]
@@ -354,7 +357,10 @@ public class ReportingRegressionTests
         services.AddScoped<INayaxFeeRateStore, EfNayaxFeeRateStore>();
         services.AddScoped<INayaxProcessingFeeFactsProvider, EfNayaxProcessingFeeFactsProvider>();
         services.AddScoped<ISiteCommissionStore, EfSiteCommissionStore>();
-        services.AddScoped<ISiteNameResolver, SiteNameResolverAdapter>();
+        // ISiteNameResolver is registered by AddInfrastructureServices() since issue #306; this
+        // explicit registration is kept so the assertion still reads as "every port this use case
+        // graph needs is present", regardless of which extension method supplies it.
+        services.AddScoped<ISiteNameResolver, SiteNameResolver>();
         services.AddScoped<IBusinessCalendar>(_ => new FakeBusinessCalendar(DateTime.UtcNow));
         services.AddScoped<IBookkeepingReportFactsProvider, EfBookkeepingReportFactsProvider>();
         services.AddScoped<IDailyReportFactsProvider, EfDailyReportFactsProvider>();

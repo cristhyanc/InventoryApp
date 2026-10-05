@@ -9,9 +9,12 @@
   <ItemGroup>
     <PackageReference Include="Azure.Identity" Version="1.21.0" />
     <PackageReference Include="Azure.Storage.Blobs" Version="12.29.2" />
-    <!-- Reading an uploaded Nayax transaction export (issue #301). The workbook format stays behind
-         Inventory.Application.Imports.INayaxSalesWorkbookReader; ClosedXML types must never reach
-         Inventory.Application or Inventory.Domain, which CleanArchitectureDependencyTests enforces. -->
+    <!-- Reading an uploaded Nayax transaction export (issue #301) and writing report XLSX exports
+         (issue #306, which removed the last InventoryApi reference). Both stay behind Application
+         ports - Inventory.Application.Imports.INayaxSalesWorkbookReader and
+         Inventory.Application.Reporting.Export.IReportExportFileWriter; ClosedXML types must never
+         reach Inventory.Application or Inventory.Domain, which CleanArchitectureDependencyTests
+         enforces. -->
     <PackageReference Include="ClosedXML" Version="0.104.2" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.3" />
     <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.0" />

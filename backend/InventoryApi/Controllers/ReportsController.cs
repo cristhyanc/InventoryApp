@@ -8,7 +8,6 @@ using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Shared;
 using Inventory.Application.Reporting.Transactions;
-using InventoryApi.Adapters.Export;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Identity.Web.Resource;
@@ -22,6 +21,7 @@ namespace InventoryApi.Controllers;
 public sealed class ReportsController : ControllerBase
 {
     private readonly GetReportExportRows _getReportExportRows;
+    private readonly IReportExportFileWriter _reportExportFileWriter;
     private readonly GetBookkeepingReport _getBookkeepingReport;
     private readonly GetDailyReport _getDailyReport;
     private readonly GetReconciliationReport _getReconciliationReport;
@@ -31,7 +31,8 @@ public sealed class ReportsController : ControllerBase
     private readonly GetDashboardReport _getDashboardReport;
     private readonly GetTransactionSalesReport _getTransactionSalesReport;
 
-    public ReportsController(GetReportExportRows getReportExportRows, GetBookkeepingReport getBookkeepingReport,
+    public ReportsController(GetReportExportRows getReportExportRows,
+        IReportExportFileWriter reportExportFileWriter, GetBookkeepingReport getBookkeepingReport,
         GetDailyReport getDailyReport, GetReconciliationReport getReconciliationReport,
         GetMachineProfitabilityReport getMachineProfitabilityReport,
         GetProductProfitabilityReport getProductProfitabilityReport,
@@ -40,6 +41,7 @@ public sealed class ReportsController : ControllerBase
         GetTransactionSalesReport getTransactionSalesReport)
     {
         _getReportExportRows = getReportExportRows;
+        _reportExportFileWriter = reportExportFileWriter;
         _getBookkeepingReport = getBookkeepingReport;
         _getDailyReport = getDailyReport;
         _getReconciliationReport = getReconciliationReport;
@@ -81,8 +83,8 @@ public sealed class ReportsController : ControllerBase
             ? await _getReportExportRows.Handle(report, transactionFilter ?? new TransactionSalesFilterDto(), ct)
             : await _getReportExportRows.Handle(report, filter ?? new ReportingFilterDto(), ct);
         var bytes = string.Equals(format, "xlsx", StringComparison.OrdinalIgnoreCase)
-            ? ReportExportFileWriter.WriteXlsx(table)
-            : ReportExportFileWriter.WriteCsv(table);
+            ? _reportExportFileWriter.WriteXlsx(table)
+            : _reportExportFileWriter.WriteCsv(table);
         return File(bytes, format.Equals("xlsx", StringComparison.OrdinalIgnoreCase)
             ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : "text/csv",
             $"{report}.{format.ToLowerInvariant()}");

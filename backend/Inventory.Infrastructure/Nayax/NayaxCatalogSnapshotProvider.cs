@@ -2,18 +2,23 @@ using Inventory.Application.CatalogReconciliation;
 using Inventory.Application.Nayax;
 using Inventory.Domain.CatalogReconciliation;
 
-namespace InventoryApi.Adapters.Nayax;
+namespace Inventory.Infrastructure.Nayax;
 
 /// <summary>
 /// Implementation of <see cref="INayaxCatalogSnapshotProvider"/> backed by the Nayax Lynx client
 /// (<see cref="INayaxLynxClient"/>, an Application-owned port implemented by
-/// <c>Inventory.Infrastructure.Nayax.NayaxLynxClient</c> since issue #49). This adapter itself
-/// still lives in InventoryApi rather than Inventory.Infrastructure; relocating it is outside
-/// issue #49's scope.
+/// <see cref="NayaxLynxClient"/> since issue #49). Issue #306 moved this adapter here from
+/// <c>InventoryApi.Adapters.Nayax</c>: it reads the remote catalogue and needs no
+/// <c>AppDbContext</c>, so it is a real <c>Inventory.Infrastructure</c> resident and is registered
+/// by <c>AddInfrastructureServices()</c> rather than directly in <c>Program.cs</c>. Its EF
+/// counterpart, <c>EfLocalCatalogSnapshotProvider</c>, stays API-owned until #153 relocates
+/// persistence.
 ///
-/// A missing product/machine name is reported as an empty string rather than null: the reconciliation
-/// policy always has a remote name to compare or display, and an empty name is itself useful
-/// data-quality information rather than an absent one.
+/// A missing product/machine name is reported as an empty string rather than null: the Nayax
+/// contract documents both <c>ProductName</c> (GET /v1/operators/{OperatorID}/products) and
+/// <c>MachineName</c> (GET /v1/machines) as nullable strings, and the reconciliation policy always
+/// has a remote name to compare or display, where an empty name is itself useful data-quality
+/// information rather than an absent one.
 /// </summary>
 public sealed class NayaxCatalogSnapshotProvider : INayaxCatalogSnapshotProvider
 {

@@ -3,10 +3,10 @@ using Inventory.Application.Nayax;
 namespace Inventory.Application.Sites;
 
 /// <summary>
-/// Narrow port wrapping the still-legacy <c>InventoryApi.Services.SiteNameResolver</c> (shared with
-/// <c>GetSiteCommissionReport</c> and the transaction sales report, so it stays where it is rather than
-/// moving with this slice; see <c>docs/architecture.md</c>). Nayax has no site name of its own, so the
-/// implementation derives a display name from the site's machine names.
+/// Narrow port for a site's display name, shared by <c>GetSiteSummaries</c> and
+/// <c>GetSiteCommissionReport</c>. Nayax has no site name of its own, so the implementation
+/// (<c>Inventory.Infrastructure.Sites.SiteNameResolver</c> since issue #306) derives one from the
+/// site's machine names; see <c>docs/architecture.md</c>.
 /// </summary>
 public interface ISiteNameResolver
 {

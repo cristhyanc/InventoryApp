@@ -15,10 +15,13 @@ backend/InventoryApi/                 ASP.NET Core .NET 10 API
   Controllers/                        HTTP boundary
   DTOs/                               Current API/report contracts
   Data/AppDbContext.cs                EF Core model and mappings
-  Adapters/Nayax/                      Nayax catalog-reconciliation adapter (the Nayax Lynx client itself lives in backend/Inventory.Infrastructure/Nayax/)
+  Adapters/Persistence/               Temporary API-owned EF adapters, API-owned only until AppDbContext moves (issues #153/#154)
+  Adapters/Mapping/                   Response-DTO projections for the controllers
   Migrations/                         SQLite schema history
   Models/                             Current entities and enums
-  Services/                           The last legacy helper (SiteNameResolver); new use-case/domain logic goes to Inventory.Application/Inventory.Domain
+backend/Inventory.Domain/             Deterministic domain rules and calculations
+backend/Inventory.Application/        Use cases and their narrow ports; new use-case/domain logic goes here, never into InventoryApi
+backend/Inventory.Infrastructure/     Adapters behind those ports: Nayax Lynx client and catalog snapshot (Nayax/), report CSV/XLSX export (Reporting/), site names (Sites/), document storage, imported-file readers, clock/calendar, backups
 backend/InventoryApi.Tests/           xUnit backend tests
 frontend/inventory-app/               Angular 19 standalone application
 .github/workflows/                    Validation, Claude Code and Copilot agent, and Azure deployment workflows
