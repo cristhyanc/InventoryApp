@@ -20,7 +20,12 @@ public sealed record NayaxSalesFileInput(string FileName, Func<Stream> OpenReadS
 /// </summary>
 /// <param name="TransactionId">The remote Nayax transaction identifier; <c>0</c> when absent or unparsable.</param>
 /// <param name="MachineId">The remote Nayax machine identifier; <c>0</c> when absent or unparsable.</param>
-/// <param name="MachineAuthorizationTime">The sale instant, or <c>null</c> when absent or unparsable.</param>
+/// <param name="MachineAuthorizationTime">
+/// The export's own <c>MachineAuthorizationTime</c> column, or <c>null</c> when absent or unparsable.
+/// In the Nayax Lynx API this field is machine-local wall-clock time (issue #380); the export file's
+/// own column semantics are undocumented, so this value's timezone is unverified and it is used as a
+/// sale instant only when the export carries no authoritative GMT column.
+/// </param>
 /// <param name="TransactionStatusId">The raw Nayax transaction-status identifier, classified centrally.</param>
 /// <param name="NayaxProductId">The raw remote product identifier, matched against the local catalogue.</param>
 /// <param name="MachineName">The machine name as the export reported it.</param>
@@ -28,6 +33,11 @@ public sealed record NayaxSalesFileInput(string FileName, Func<Stream> OpenReadS
 /// <param name="PaymentMethod">The raw payment method, classified centrally wherever it is read.</param>
 /// <param name="ProductName">The product name as the export reported it; the name half of product matching.</param>
 /// <param name="NayaxProductCostPrice">The raw transaction-level Nayax <c>Product Cost Price</c>.</param>
+/// <param name="AuthorizationDateTimeGmt">
+/// The export's <c>AuthorizationDateTimeGMT</c> column normalized to a true UTC instant, or
+/// <c>null</c> when the export does not carry it (issue #380). This is the authoritative sale instant
+/// wherever it is present, matching the Lynx API field of the same name.
+/// </param>
 public sealed record NayaxSalesImportRow(
     long TransactionId,
     long MachineId,
@@ -38,7 +48,26 @@ public sealed record NayaxSalesImportRow(
     decimal SettlementValue,
     string? PaymentMethod,
     string? ProductName,
-    decimal? NayaxProductCostPrice);
+    decimal? NayaxProductCostPrice,
+    DateTime? AuthorizationDateTimeGmt = null)
+{
+    /// <summary>
+    /// The instant this row is imported at: the authoritative GMT value when the export carries one,
+    /// and otherwise the export's own <c>MachineAuthorizationTime</c> column read exactly as earlier
+    /// imports read it (issue #380).
+    ///
+    /// The fallback is deliberate rather than a guess. Nayax publishes the timezone semantics of its
+    /// Lynx API sales fields but publishes no contract for the downloadable export's columns, so there
+    /// is nothing authoritative to convert an offsetless export value with: converting it would invent
+    /// a timezone, and refusing it would stop importing exports that have always imported. Such an
+    /// import's instants are therefore unverified, which docs/architecture.md § Nayax sale timestamps
+    /// records along with the operator action that removes the ambiguity (export the GMT column).
+    ///
+    /// <c>null</c> means the row carries no usable timestamp at all, which is what makes
+    /// <see cref="ImportNayaxSales"/> skip it.
+    /// </summary>
+    public DateTime? AuthorizationTime => AuthorizationDateTimeGmt ?? MachineAuthorizationTime;
+}
 
 /// <summary>
 /// Reads an uploaded Nayax transaction export into raw rows (issue #301), behind which the

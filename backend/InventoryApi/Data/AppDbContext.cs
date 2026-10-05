@@ -215,7 +215,12 @@ public class AppDbContext : DbContext
             .IsUnique();
 
         // MachineAuthorizationTime is a persisted true UTC instant (see docs/architecture.md
-        // § Timezone and business calendar), and the Transaction Sales report exposes it to the
+        // § Nayax sale timestamps for where that instant is established - the latest-sales
+        // synchronization writes it from the Nayax payload's authoritative AuthorizationDateTimeGMT
+        // field, not from the identically named machine-local one, issue #380 - and
+        // § Timezone and business calendar for what reporting then does with it). This conversion is
+        // about Kind metadata only: it has never been, and must not be read as, evidence of what the
+        // upstream field means. The Transaction Sales report exposes the instant to the
         // frontend as the transaction's instant. Microsoft's SQLite provider does not round-trip
         // DateTimeKind - see the StockAdjustment.CreatedAt comment below for the complete
         // explanation - so without this the report's transactionDate serialises with no "Z"/offset

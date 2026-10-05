@@ -36,6 +36,19 @@ public class NayaxSales : IBusinessOwned
     public decimal SettlementValue { get; set; }
     public string? PaymentMethod { get; set; }
     public string? ProductName { get; set; }
+
+    /// <summary>
+    /// The instant the sale was authorized, as a true UTC instant (issue #380).
+    ///
+    /// The column keeps the Nayax field name it was created from, but it does <em>not</em> hold the
+    /// Nayax <c>MachineAuthorizationTime</c> payload value, which is machine-local wall-clock time:
+    /// the latest-sales synchronization writes this from the authoritative
+    /// <c>AuthorizationDateTimeGMT</c> field instead, and an uploaded export writes it from that
+    /// column when the file carries one. Every report, dashboard period and costing replay compares
+    /// it as a UTC instant and converts it to the <c>Australia/Sydney</c> business date through
+    /// <c>IBusinessCalendar</c>; see docs/architecture.md § Nayax sale timestamps, which also records
+    /// that rows ingested before that fix may still hold a machine-local value.
+    /// </summary>
     public DateTime MachineAuthorizationTime { get; set; }
     public decimal? NayaxProductCostPrice { get; set; }
     public decimal? UnitCostAtSale { get; set; }

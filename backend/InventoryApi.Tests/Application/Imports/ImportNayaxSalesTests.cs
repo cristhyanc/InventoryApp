@@ -92,6 +92,46 @@ public class ImportNayaxSalesTests
     }
 
     /// <summary>
+    /// Issue #380: an export carrying the authoritative <c>AuthorizationDateTimeGMT</c> column is
+    /// imported at that instant, not at the machine-local <c>MachineAuthorizationTime</c> column. The
+    /// row here is the production symptom's own sale - 23:30 on Sunday 4 October 2026 in Sydney, the
+    /// evening daylight saving started, which is 12:30Z - so reading the machine-local column would
+    /// store 23:30Z and move the sale onto Monday 5 October in Sydney.
+    /// </summary>
+    [Fact]
+    public async Task An_export_carrying_the_GMT_column_is_imported_at_that_instant()
+    {
+        await using var db = CreateDb();
+
+        var result = await CreateSalesImport(db).Handle(Csv(
+            "TransactionID,TransactionStatusId,MachineID,SettlementValue,MachineAuthorizationTime,AuthorizationDateTimeGMT\n" +
+            "1001,12,1,3.00,4/10/2026 11:30:00 PM,2026-10-04T12:30:00Z"));
+
+        Assert.Equal(new NayaxSalesImportResult(1, 0, 0), result);
+        var sale = await db.NayaxSales.SingleAsync();
+        Assert.Equal(new DateTime(2026, 10, 4, 12, 30, 0, DateTimeKind.Utc), sale.MachineAuthorizationTime);
+    }
+
+    /// <summary>
+    /// Issue #380: re-uploading the same export must leave the stored instant exactly where it is, so
+    /// an offset-aware timestamp can never be applied a second time.
+    /// </summary>
+    [Fact]
+    public async Task A_replayed_export_does_not_shift_the_stored_instant_a_second_time()
+    {
+        await using var db = CreateDb();
+        var import = CreateSalesImport(db);
+        var file = "TransactionID,TransactionStatusId,MachineID,SettlementValue,AuthorizationDateTimeGMT\n" +
+            "1001,12,1,3.00,2026-10-04T23:30:00+11:00";
+
+        await import.Handle(Csv(file));
+        await import.Handle(Csv(file));
+
+        var sale = await db.NayaxSales.SingleAsync();
+        Assert.Equal(new DateTime(2026, 10, 4, 12, 30, 0, DateTimeKind.Utc), sale.MachineAuthorizationTime);
+    }
+
+    /// <summary>
     /// The export is replayed in practice - an operator re-downloads an overlapping date range -
     /// so a transaction already held must be updated in place with the later file's facts, never
     /// counted a second time (AGENTS.md: "Avoid double counting imported transactions").

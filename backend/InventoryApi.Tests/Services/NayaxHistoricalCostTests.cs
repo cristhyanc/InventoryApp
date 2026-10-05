@@ -404,7 +404,7 @@ public class NayaxHistoricalCostTests
             ProductName = productName,
             SettlementValue = 3m,
             PaymentMethod = "Card",
-            MachineAuthorizationTime = new DateTime(2026, 10, 3, 19, 30, 0, DateTimeKind.Utc)
+            AuthorizationDateTimeGmt = new DateTime(2026, 10, 3, 19, 30, 0, DateTimeKind.Utc)
         };
 
     private static InventoryCostTransitionBaseline Baseline(

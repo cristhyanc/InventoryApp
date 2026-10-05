@@ -26,6 +26,12 @@ public sealed record NayaxSalesImportResult(int Imported, int Updated, int Skipp
 /// <list type="bullet">
 ///   <item>A row without a positive transaction identifier, a positive machine identifier and an
 ///   authorization time is skipped, never guessed at and never imported with a defaulted identity.</item>
+///   <item>The authorization time is the export's authoritative <c>AuthorizationDateTimeGMT</c>
+///   instant wherever it carries one, and otherwise its own <c>MachineAuthorizationTime</c> column
+///   read exactly as earlier imports read it (issue #380). Nayax documents the timezone semantics of
+///   its Lynx API sales fields but not of the downloadable export's columns, so there is nothing
+///   authoritative to convert an offsetless export value with and none is invented; see
+///   <see cref="NayaxSalesImportRow.AuthorizationTime"/>.</item>
 ///   <item>A transaction this business already holds is updated in place rather than double
 ///   counted; a transaction another business holds is a new sale of this one, because a remote
 ///   <c>TransactionID</c> is unique only within the operator account that issued it.</item>
@@ -110,7 +116,7 @@ public sealed class ImportNayaxSales
 
         foreach (var row in rows)
         {
-            if (row.TransactionId <= 0 || row.MachineId <= 0 || row.MachineAuthorizationTime is null)
+            if (row.TransactionId <= 0 || row.MachineId <= 0 || row.AuthorizationTime is null)
             {
                 skipped++;
                 continue;
@@ -119,7 +125,7 @@ public sealed class ImportNayaxSales
             var facts = new ImportedNayaxSale(
                 row.TransactionId,
                 row.MachineId,
-                row.MachineAuthorizationTime.Value,
+                row.AuthorizationTime.Value,
                 row.TransactionStatusId,
                 row.NayaxProductId,
                 row.MachineName,

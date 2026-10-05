@@ -241,7 +241,7 @@ public class InventoryCostTransitionTests
                     MachineID = 1,
                     ProductName = "Snack",
                     SettlementValue = 4m,
-                    MachineAuthorizationTime = cutoff.AddMinutes(30)
+                    AuthorizationDateTimeGmt = cutoff.AddMinutes(30)
                 }
             });
         nayax.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
@@ -326,9 +326,9 @@ public class InventoryCostTransitionTests
         nayax.Setup(x => x.GetMachineLastSalesAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxLastSalesReport>
             {
-                new() { TransactionID = 40, MachineID = 1, MachineAuthorizationTime = DateTime.UtcNow, SettlementValue = 1 },
-                new() { TransactionID = 41, MachineID = 1, MachineAuthorizationTime = DateTime.UtcNow, SettlementValue = 1 },
-                new() { TransactionID = 42, MachineID = 1, MachineAuthorizationTime = DateTime.UtcNow }
+                new() { TransactionID = 40, MachineID = 1, AuthorizationDateTimeGmt = DateTime.UtcNow, SettlementValue = 1 },
+                new() { TransactionID = 41, MachineID = 1, AuthorizationDateTimeGmt = DateTime.UtcNow, SettlementValue = 1 },
+                new() { TransactionID = 42, MachineID = 1, AuthorizationDateTimeGmt = DateTime.UtcNow }
             });
         await LatestSalesSync(db, nayax.Object).Handle();
 
