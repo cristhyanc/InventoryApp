@@ -2,7 +2,6 @@ import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { of } from 'rxjs';
 import { AdminComponent } from './admin.component';
-import { ImportService } from '../../services/import.service';
 import { ReportingService } from '../../services/reporting.service';
 import { ToastService } from '../../services/toast.service';
 import { ProductService } from '../../services/product.service';
@@ -26,7 +25,6 @@ async function render() {
     imports: [AdminComponent],
     providers: [
       provideRouter([]),
-      { provide: ImportService, useValue: {} },
       { provide: ReportingService, useValue: {} },
       { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() } },
       { provide: ProductService, useValue: { getAll: jest.fn(() => of([])) } },
@@ -81,6 +79,19 @@ describe('AdminComponent Admin split (issue #388)', () => {
   });
 });
 
+describe('AdminComponent Admin split (issue #389)', () => {
+  it('links to the dedicated Imports page instead of hosting the import actions', async () => {
+    const { host } = await render();
+
+    expect(host.querySelector('a[routerLink="/admin/imports"]')).not.toBeNull();
+    expect(host.querySelector('input[type="file"]')).toBeNull();
+    const buttonText = Array.from(host.querySelectorAll('button')).map(button => button.textContent ?? '');
+    expect(buttonText.some(text => text.includes('Import products'))).toBe(false);
+    expect(buttonText.some(text => text.includes('Import XML files'))).toBe(false);
+    expect(buttonText.some(text => text.includes('Download template'))).toBe(false);
+  });
+});
+
 describe('AdminComponent Costing Repair composition (issue #361)', () => {
   it('composes the Costing Repair workflow as its own feature component and passes it the loaded products', async () => {
     const product = { id: 1, name: 'Coke Zero' } as Product;
@@ -88,7 +99,6 @@ describe('AdminComponent Costing Repair composition (issue #361)', () => {
       imports: [AdminComponent],
       providers: [
         provideRouter([]),
-        { provide: ImportService, useValue: {} },
         { provide: ReportingService, useValue: {} },
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() } },
         { provide: ProductService, useValue: { getAll: jest.fn(() => of([product])) } },

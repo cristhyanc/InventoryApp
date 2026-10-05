@@ -162,6 +162,11 @@ export const routes: Routes = [
     loadComponent: () => import('./components/admin/admin.component').then((m) => m.AdminComponent)
   },
   {
+    path: 'admin/imports',
+    canActivate: [MsalGuard],
+    loadComponent: () => import('./components/admin/imports/admin-imports.component').then((m) => m.AdminImportsComponent)
+  },
+  {
     path: 'admin/nayax-settings',
     canActivate: [MsalGuard],
     loadComponent: () =>

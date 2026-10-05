@@ -1529,10 +1529,26 @@ has not yet moved out and links to the ones that have. `/admin/nayax-settings`
 (`SiteCommissionAgreementsComponent`) are the first two moves: each owns the form and history/
 table UI for its workflow, but calls `NayaxSettingsService`, `ReportingService`, and
 `SiteService` exactly as `AdminComponent` did, so the Nayax processing-fee and site-commission
-API boundaries, effective-dating, and financial calculations are unchanged. Later Admin-split
-tasks move the remaining workflows (imports, historical cost recovery, AVCO transition, Costing
-Repair) and introduce the final Admin navigation; this issue does not touch the root application
-navigation in `app.component.html`.
+API boundaries, effective-dating, and financial calculations are unchanged.
+
+**Admin Imports (issue #389, Admin split 2/3).** `/admin/imports` (`AdminImportsComponent`) is the
+authenticated UI entry point for the three supported import workflows, moved out of
+`AdminComponent`: the Nayax sales file upload (`.xlsx`, `.xls`, `.csv`) with its CSV template
+download, the product catalogue refresh, and the pending reimbursement XML import. The page is an
+entry point only — it calls the same `ImportService` methods (`POST api/imports/nayax-sales`,
+`POST api/imports/products`, `POST api/imports/pending-xml`) with the same request shapes, keeps
+the same client-side extension validation, template columns/sample row, success and failure
+messages, and the same single `loading` flag that disables every import action while one is in
+flight. No import boundary or contract changed with the move: Nayax sales parsing and timestamp
+semantics, import deduplication, product matching, reimbursement parsing and persistence all stay
+exactly where they were (see [Uploaded transaction export import (issue
+#301)](#uploaded-transaction-export-import-issue-301), [Reimbursement import and
+reconciliation](#reimbursement-import-and-reconciliation) and [Nayax product catalogue import
+(issue #300)](#nayax-product-catalogue-import-issue-300)). `/admin` keeps the maintenance
+workflows that have not moved yet (historical cost recovery, AVCO transition, Costing Repair) and
+links to the pages that have; the
+final Admin navigation grouping and the root application navigation in `app.component.html` remain
+the separate navigation-shell task (#383).
 
 ### Runtime configuration and API contracts
 
