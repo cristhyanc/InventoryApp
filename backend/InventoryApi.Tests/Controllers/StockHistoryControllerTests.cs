@@ -1,7 +1,7 @@
 using Inventory.Application.Stock;
 using InventoryApi.Controllers;
 using InventoryApi.DTOs;
-using InventoryApi.Models;
+using Inventory.Infrastructure.Models;
 using InventoryApi.Tests.Application.Stock;
 using InventoryApi.Tests.Application.Time;
 using InventoryApi.Tests.Swagger;

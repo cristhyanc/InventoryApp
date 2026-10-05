@@ -3,15 +3,17 @@ using Inventory.Application.InventoryCounting;
 using Inventory.Application.Stock;
 using Inventory.Domain.InventoryCounting;
 using Inventory.Domain.Stock;
-using InventoryApi.Data;
+using Inventory.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
 namespace InventoryApi.Adapters.Persistence;
 
 /// <summary>
 /// Temporary EF Core implementation of <see cref="IInventoryCountAdjustmentStore"/> (issue #245). It
-/// lives in InventoryApi, not Inventory.Infrastructure, because it depends on <see cref="AppDbContext"/>
-/// and the persistence models, following the same pattern as <see cref="EfMachineStockEventStore"/>.
+/// still lives in InventoryApi, not Inventory.Infrastructure, following the same pattern as
+/// <see cref="EfMachineStockEventStore"/>: <see cref="AppDbContext"/> and the persistence models it
+/// depends on moved there in issue #307, and moving this adapter family after them is
+/// Persistence 7/8 and 8/8 of #153.
 /// Applying a movement deliberately reuses the Application <see cref="IRecordInventoryMovement"/> and
 /// <see cref="IRebuildProductCost"/> use cases (issue #296) rather than writing its own, so a Take
 /// Inventory increase inherits exactly the established positive-Restock costing/audit behavior and a

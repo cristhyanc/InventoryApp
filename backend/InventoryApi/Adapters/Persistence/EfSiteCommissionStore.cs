@@ -1,8 +1,8 @@
 using Inventory.Application.Commissions;
 using Inventory.Domain.FinancialConfiguration;
-using InventoryApi.Data;
+using Inventory.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
-using SiteCommissionAgreementEntity = InventoryApi.Models.SiteCommissionAgreement;
+using SiteCommissionAgreementEntity = Inventory.Infrastructure.Models.SiteCommissionAgreement;
 
 namespace InventoryApi.Adapters.Persistence;
 
@@ -93,7 +93,7 @@ public sealed class EfSiteCommissionStore : ISiteCommissionStore
         CommissionPayment payment,
         CancellationToken cancellationToken)
     {
-        var entity = new InventoryApi.Models.CommissionPayment
+        var entity = new Inventory.Infrastructure.Models.CommissionPayment
         {
             SiteId = payment.SiteId,
             PeriodStart = payment.PeriodStart,
@@ -120,7 +120,7 @@ public sealed class EfSiteCommissionStore : ISiteCommissionStore
             entity.CreatedAt,
             entity.UpdatedAt);
 
-    private static CommissionPayment ToDomain(InventoryApi.Models.CommissionPayment entity) =>
+    private static CommissionPayment ToDomain(Inventory.Infrastructure.Models.CommissionPayment entity) =>
         new(
             entity.Id,
             entity.SiteId,

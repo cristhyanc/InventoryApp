@@ -1,5 +1,5 @@
 using Inventory.Application.Tenancy;
-using InventoryApi.Data;
+using Inventory.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
 namespace InventoryApi.Bootstrap;

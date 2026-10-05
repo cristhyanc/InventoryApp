@@ -1,18 +1,17 @@
 using Inventory.Application.Imports;
-using InventoryApi.Data;
-using InventoryApi.Models;
+using Inventory.Infrastructure.Data;
+using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
 
 namespace InventoryApi.Adapters.Persistence;
 
 /// <summary>
 /// Temporary EF Core implementation of <see cref="INayaxProductCatalogImportStore"/> (issue #300).
-/// It lives in InventoryApi, not Inventory.Infrastructure, because it depends on
+/// It still lives in InventoryApi, not Inventory.Infrastructure, following the same precedent as
+/// <c>EfProductStore</c>/<c>EfCategoryStore</c>/<c>EfImportedReimbursementStore</c>:
 /// <see cref="AppDbContext"/> and the <see cref="Product"/>/<see cref="Category"/> persistence
-/// models that still live in InventoryApi, following the same precedent as
-/// <c>EfProductStore</c>/<c>EfCategoryStore</c>/<c>EfImportedReimbursementStore</c>. Move it into
-/// Inventory.Infrastructure once <see cref="AppDbContext"/> and the shared persistence models
-/// relocate there.
+/// models it depends on moved there in issue #307, and moving this adapter family after them is
+/// Persistence 7/8 and 8/8 of #153.
 ///
 /// The read-decide-write sequence stays in this adapter, exactly as the former
 /// <c>ImportService.ImportProductsAsync</c> ran it, rather than being decomposed into

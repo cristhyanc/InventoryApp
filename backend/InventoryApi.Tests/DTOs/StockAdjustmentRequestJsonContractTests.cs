@@ -2,7 +2,7 @@ using System.Text.Json;
 using InventoryApi.DTOs;
 using Xunit;
 using DomainStock = Inventory.Domain.Stock;
-using PersistenceStock = InventoryApi.Models;
+using PersistenceStock = Inventory.Infrastructure.Models;
 
 namespace InventoryApi.Tests.DTOs;
 
@@ -10,7 +10,7 @@ namespace InventoryApi.Tests.DTOs;
 /// Locks the request side of the "/api/products/{productId}/stock" adjust endpoint.
 ///
 /// <see cref="StockAdjustmentDto.Reason"/> is still
-/// <c>InventoryApi.Models.StockAdjustmentReason</c>, the one deliberate, temporary compatibility
+/// <c>Inventory.Infrastructure.Models.StockAdjustmentReason</c>, the one deliberate, temporary compatibility
 /// exception issue #305 leaves behind: the published document carries a single
 /// <c>StockAdjustmentReason</c> component derived from that CLR enum, reached from the request body,
 /// from the pinned <c>StockAdjustment</c> response and from the legacy <c>Product</c> component the

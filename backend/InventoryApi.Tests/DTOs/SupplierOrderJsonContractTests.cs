@@ -2,7 +2,7 @@ using System.Text.Json;
 using Inventory.Application.SupplierOrders;
 using InventoryApi.Adapters.Mapping;
 using InventoryApi.DTOs;
-using InventoryApi.Models;
+using Inventory.Infrastructure.Models;
 using Xunit;
 
 namespace InventoryApi.Tests.DTOs;
@@ -193,7 +193,7 @@ public class SupplierOrderJsonContractTests
 
     /// <summary>
     /// The status stays the persisted numeric value clients already switch on, and must keep
-    /// matching <c>InventoryApi.Models.SupplierOrderStatus</c> member for member even though the
+    /// matching <c>Inventory.Infrastructure.Models.SupplierOrderStatus</c> member for member even though the
     /// response now carries the Domain enum.
     /// </summary>
     [Theory]

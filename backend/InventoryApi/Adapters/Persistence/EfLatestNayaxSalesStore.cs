@@ -3,19 +3,18 @@ using Inventory.Application.Nayax;
 using Inventory.Application.SalesSync;
 using Inventory.Domain.FinancialConfiguration;
 using Inventory.Domain.Reporting.ProductMatching;
-using InventoryApi.Data;
-using InventoryApi.Models;
+using Inventory.Infrastructure.Data;
+using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
 
 namespace InventoryApi.Adapters.Persistence;
 
 /// <summary>
-/// Temporary EF Core implementation of <see cref="ILatestNayaxSalesStore"/> (issue #187). It lives in
-/// InventoryApi, not Inventory.Infrastructure, because it depends on <see cref="AppDbContext"/> and
-/// the <see cref="NayaxSales"/> persistence model, both of which
-/// still live in InventoryApi. Move it into Inventory.Infrastructure once the shared AppDbContext and
-/// persistence models relocate there; this follows the same pattern as
-/// <see cref="EfMachineStockEventStore"/>.
+/// Temporary EF Core implementation of <see cref="ILatestNayaxSalesStore"/> (issue #187). It still
+/// lives in InventoryApi, not Inventory.Infrastructure, following the same pattern as
+/// <see cref="EfMachineStockEventStore"/>: <see cref="AppDbContext"/> and the
+/// <see cref="NayaxSales"/> persistence model it depends on moved there in issue #307, and moving
+/// this adapter family after them is Persistence 7/8 and 8/8 of #153.
 ///
 /// The import rules themselves are unchanged from the former private
 /// <c>MachineService.SaveMachinesLastSalesAsync</c>: deduplication by the remote

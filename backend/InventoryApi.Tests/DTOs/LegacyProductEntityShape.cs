@@ -1,6 +1,6 @@
 using Inventory.Application.Machines;
 using Inventory.Application.Products;
-using InventoryApi.Models;
+using Inventory.Infrastructure.Models;
 
 namespace InventoryApi.Tests.DTOs;
 

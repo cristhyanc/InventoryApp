@@ -186,7 +186,7 @@ public class MachinesControllerTests
 
     /// <summary>
     /// Issue #302: the dashboard endpoints answer the API-owned <see cref="MachineResponse"/>, not
-    /// the <c>InventoryApi.Models.Machine</c> type they used to serialise, with the same 200 and the
+    /// the <c>Inventory.Infrastructure.Models.Machine</c> type they used to serialise, with the same 200 and the
     /// same already-resolved values the use case returns.
     /// </summary>
     [Fact]

@@ -11,17 +11,19 @@ The repository is also being prepared for reliable AI-assisted engineering. Ever
 ## Repository map
 
 ```text
-backend/InventoryApi/                 ASP.NET Core .NET 10 API
+backend/InventoryApi/                 ASP.NET Core .NET 10 API and composition root
   Controllers/                        HTTP boundary
   DTOs/                               Current API/report contracts
-  Data/AppDbContext.cs                EF Core model and mappings
-  Adapters/Persistence/               Temporary API-owned EF adapters, API-owned only until AppDbContext moves (issues #153/#154)
+  Bootstrap/                          Startup schema decision and the human-invoked commands
+  Adapters/Persistence/               Temporary API-owned EF adapters, API-owned only until they follow AppDbContext (issues #153/#154)
   Adapters/Mapping/                   Response-DTO projections for the controllers
-  Migrations/                         SQLite schema history
-  Models/                             Current entities and enums
 backend/Inventory.Domain/             Deterministic domain rules and calculations
 backend/Inventory.Application/        Use cases and their narrow ports; new use-case/domain logic goes here, never into InventoryApi
 backend/Inventory.Infrastructure/     Adapters behind those ports: Nayax Lynx client and catalog snapshot (Nayax/), report CSV/XLSX export (Reporting/), site names (Sites/), document storage, imported-file readers, clock/calendar, backups
+  Data/AppDbContext.cs                EF Core model, mappings and tenant query filters (issue #307)
+  Data/BusinessOwnershipEnforcer.cs   The SaveChanges tenant-ownership enforcement
+  Migrations/                         SQLite schema history
+  Models/                             Current EF entities and enums
 backend/InventoryApi.Tests/           xUnit backend tests
 frontend/inventory-app/               Angular 19 standalone application
 .github/workflows/                    Validation, Claude Code and Copilot agent, and Azure deployment workflows
@@ -109,7 +111,7 @@ Backend solution:
 
 ```bash
 dotnet restore backend/InventoryApi/InventoryApi.slnx
-dotnet format backend/InventoryApi/InventoryApi.slnx --verify-no-changes --no-restore --exclude backend/InventoryApi/Migrations
+dotnet format backend/InventoryApi/InventoryApi.slnx --verify-no-changes --no-restore --exclude backend/Inventory.Infrastructure/Migrations
 dotnet build backend/InventoryApi/InventoryApi.slnx --configuration Release --no-restore
 dotnet test backend/InventoryApi/InventoryApi.slnx --configuration Release --no-build --no-restore --collect:"XPlat Code Coverage"
 dotnet package list --project backend/InventoryApi/InventoryApi.slnx --vulnerable --include-transitive
@@ -136,7 +138,7 @@ node --test scripts/run-agent-model-evals.test.mjs
 Both validation scripts run exactly this pipeline; run the script rather than the individual commands. Notes:
 
 - The backend builds with `TreatWarningsAsErrors`, .NET analyzers and `EnforceCodeStyleInBuild` (see `Directory.Build.props`). A new warning in application code fails the build. The only suppressed compiler diagnostic is `CS8981` on EF Core generated migrations, scoped in `.editorconfig` to `[**/Migrations/*.cs]`. Do not widen that scope and do not add a global `<NoWarn>`.
-- `dotnet format` excludes `backend/InventoryApi/Migrations` because an applied migration must not be rewritten.
+- `dotnet format` excludes `backend/Inventory.Infrastructure/Migrations` because an applied migration must not be rewritten. Both validation scripts hold that path in one variable (`migrations_dir` / `$MigrationsRelativePath`); keep them in step if the migrations ever move again.
 - Coverage is collected on every test run but has no minimum threshold yet. Coverage output is git-ignored; never commit it.
 - The frontend has a configured `lint` script (`ng lint`) and a `test` script (`jest`, via `jest-preset-angular`). `npm run lint` must report zero **errors**; warnings are visible but non-blocking. `npm run test` runs the Jest suite once (no watch mode) and must exit zero.
 - `npm audit` is reported, not enforced: the outstanding high/critical advisories are in the Angular 19 build toolchain and clear only with a major Angular upgrade. Never run `npm audit fix --force`.

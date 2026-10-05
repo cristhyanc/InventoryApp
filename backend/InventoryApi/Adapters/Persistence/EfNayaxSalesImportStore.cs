@@ -1,17 +1,17 @@
 using Inventory.Application.Costing;
 using Inventory.Application.Imports;
 using Inventory.Domain.Reporting.ProductMatching;
-using InventoryApi.Data;
-using InventoryApi.Models;
+using Inventory.Infrastructure.Data;
+using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
 
 namespace InventoryApi.Adapters.Persistence;
 
 /// <summary>
-/// Temporary EF Core implementation of <see cref="INayaxSalesImportStore"/> (issue #301). It lives
-/// in InventoryApi, not Inventory.Infrastructure, because it depends on <see cref="AppDbContext"/>
-/// and the <see cref="NayaxSales"/>/<see cref="Product"/> persistence models, which still live in
-/// InventoryApi; move it into Inventory.Infrastructure once they relocate there (issue #153).
+/// Temporary EF Core implementation of <see cref="INayaxSalesImportStore"/> (issue #301). It still
+/// lives in InventoryApi, not Inventory.Infrastructure: <see cref="AppDbContext"/> and the
+/// <see cref="NayaxSales"/>/<see cref="Product"/> persistence models it depends on moved there in
+/// issue #307, and moving this adapter family after them is Persistence 7/8 and 8/8 of #153.
 ///
 /// The queries are unchanged from the former
 /// <c>ImportService.ImportNayaxSalesFromExcelAsync</c>: the untracked product catalogue, the

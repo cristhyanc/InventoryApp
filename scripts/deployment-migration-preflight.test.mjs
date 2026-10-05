@@ -16,10 +16,20 @@ test('migration ids come from migration sources only, wherever the Migrations fo
     'backend/InventoryApi/Migrations/20260101000000_Initial.Designer.cs',
     'backend/InventoryApi/Migrations/AppDbContextModelSnapshot.cs',
     'backend/Inventory.Infrastructure/Persistence/Migrations/20260202000000_Moved.cs',
+    // The path the migrations actually live at since issue #307. Deploy Production derives the
+    // migrations a release will apply from this scan alone, so a pattern that stopped matching the
+    // real directory would report "no new migrations" for a release that has some.
+    'backend/Inventory.Infrastructure/Migrations/20260303000000_Relocated.cs',
+    'backend/Inventory.Infrastructure/Migrations/20260303000000_Relocated.Designer.cs',
+    'backend/Inventory.Infrastructure/Migrations/AppDbContextModelSnapshot.cs',
     'backend/InventoryApi/Services/Migrations.cs',
     'backend/InventoryApi.Tests/Migrations/NotAMigrationTests.cs',
   ]);
-  assert.deepEqual(ids, ['20260101000000_Initial', '20260202000000_Moved']);
+  assert.deepEqual(ids, [
+    '20260101000000_Initial',
+    '20260202000000_Moved',
+    '20260303000000_Relocated',
+  ]);
 });
 
 test('expected pending migrations are the release migrations the baseline lacks', () => {

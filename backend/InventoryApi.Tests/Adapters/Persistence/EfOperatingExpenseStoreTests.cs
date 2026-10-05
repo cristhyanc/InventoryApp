@@ -1,8 +1,8 @@
 using Inventory.Application.Expenses;
 using Inventory.Domain.Expenses;
 using InventoryApi.Adapters.Persistence;
-using InventoryApi.Data;
-using InventoryApi.Models;
+using Inventory.Infrastructure.Data;
+using Inventory.Infrastructure.Models;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Xunit;

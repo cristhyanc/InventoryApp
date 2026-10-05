@@ -1,16 +1,16 @@
 using Inventory.Application.SupplierOrders;
-using InventoryApi.Data;
-using InventoryApi.Models;
+using Inventory.Infrastructure.Data;
+using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
 
 namespace InventoryApi.Adapters.Persistence;
 
 /// <summary>
-/// Temporary EF Core implementation of <see cref="ISupplierOrderStore"/>. It lives in
-/// InventoryApi, not Inventory.Infrastructure, because it depends on <see cref="AppDbContext"/> and
-/// persistence models that still live in InventoryApi, following the same precedent as
-/// <c>EfOperatingExpenseStore</c>/<c>EfProductStore</c>. Move it into Inventory.Infrastructure once
-/// <see cref="AppDbContext"/> and the shared persistence models relocate there.
+/// Temporary EF Core implementation of <see cref="ISupplierOrderStore"/>. It still lives in
+/// InventoryApi, not Inventory.Infrastructure, following the same precedent as
+/// <c>EfOperatingExpenseStore</c>/<c>EfProductStore</c>: <see cref="AppDbContext"/> and the
+/// persistence models it depends on moved there in issue #307, and moving this adapter family after
+/// them is Persistence 7/8 and 8/8 of #153.
 /// </summary>
 public sealed class EfSupplierOrderStore : ISupplierOrderStore
 {

@@ -1,6 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using Inventory.Application.Costing;
-using InventoryApi.Models;
+using Inventory.Infrastructure.Models;
 
 namespace InventoryApi.Adapters.Persistence;
 

@@ -1,5 +1,5 @@
 using InventoryApi.Controllers;
-using InventoryApi.Data;
+using Inventory.Infrastructure.Data;
 using InventoryApi.DTOs;
 using Inventory.Application.Nayax;
 using Inventory.Application.Products;
@@ -7,7 +7,7 @@ using Inventory.Application.Purchases;
 using Inventory.Application.Reorder;
 using Inventory.Application.Reporting.Dashboard;
 using InventoryApi.Adapters.Persistence;
-using InventoryApi.Models;
+using Inventory.Infrastructure.Models;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Moq;

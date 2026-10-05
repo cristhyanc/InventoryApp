@@ -1,10 +1,10 @@
-using InventoryApi.Data;
+using Inventory.Infrastructure.Data;
 using Inventory.Application.Nayax;
 using Inventory.Application.Commissions;
 using Inventory.Domain.FinancialConfiguration;
 using Inventory.Infrastructure.Sites;
 using InventoryApi.Adapters.Persistence;
-using InventoryApi.Models;
+using Inventory.Infrastructure.Models;
 using InventoryApi.Tests.Application.Time;
 using Microsoft.EntityFrameworkCore;
 using Moq;

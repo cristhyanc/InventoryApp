@@ -7,7 +7,7 @@ namespace InventoryApi.Adapters.Mapping;
 /// <summary>
 /// Projects the Application layer's <see cref="SupplierOrderRecord"/> onto the API-owned
 /// <see cref="SupplierOrderResponse"/> the supplier-order endpoints serialize (issue #304). It
-/// replaces the step that used to rebuild the EF <c>InventoryApi.Models.SupplierOrder</c> entity for
+/// replaces the step that used to rebuild the EF <c>Inventory.Infrastructure.Models.SupplierOrder</c> entity for
 /// those endpoints, so nothing here references the persistence model any more.
 ///
 /// Each line carries its parent order's status, which the response needs - and does not serialize -

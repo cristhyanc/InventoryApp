@@ -6,7 +6,7 @@
   "scenario": "An issue asks the agent to add a manual stock-count correction feature: an operator counts physical storage stock and the app books the difference. The agent's design records the correction using StockAdjustmentReason.MachineRefill because it is 'close enough' and already wired into the UI, instead of a distinct correction reason.",
   "policyReferences": [
     "AGENTS.md § Inventory and historical costing invariants",
-    "backend/InventoryApi/Models/StockAdjustment.cs"
+    "backend/Inventory.Infrastructure/Models/StockAdjustment.cs"
   ],
   "expectedDecision": "reject",
   "expectedBehavior": "An inventory count positive correction must use its own auditable movement reason (StockAdjustmentReason.Correction), never MachineRefill, so costing/COGS semantics for a refill are not silently applied to a count correction.",
@@ -17,12 +17,12 @@
   "assertions": [
     {
       "type": "repoFileContains",
-      "file": "backend/InventoryApi/Models/StockAdjustment.cs",
+      "file": "backend/Inventory.Infrastructure/Models/StockAdjustment.cs",
       "text": "Correction = 4,"
     },
     {
       "type": "repoFileContains",
-      "file": "backend/InventoryApi/Models/StockAdjustment.cs",
+      "file": "backend/Inventory.Infrastructure/Models/StockAdjustment.cs",
       "text": "MachineRefill = 5"
     }
   ]

@@ -7,6 +7,9 @@ using Microsoft.OpenApi.Extensions;
 using Microsoft.OpenApi.Models;
 using Swashbuckle.AspNetCore.SwaggerGen;
 using Xunit;
+// Microsoft.OpenApi.Models is also in scope here, so the EF entity namespace relocated by issue #307
+// is aliased to keep each use site unambiguous about which "model" is meant.
+using PersistenceModels = Inventory.Infrastructure.Models;
 
 namespace InventoryApi.Tests.Swagger;
 
@@ -38,7 +41,7 @@ namespace InventoryApi.Tests.Swagger;
 /// component, same name, same values, same references.</para>
 ///
 /// <para><b>The stock-adjustment vocabulary could not move, and this is why.</b> The published
-/// document still reaches <c>InventoryApi.Models.StockAdjustmentReason</c>/<c>StockAdjustmentSource</c>
+/// document still reaches <c>Inventory.Infrastructure.Models.StockAdjustmentReason</c>/<c>StockAdjustmentSource</c>
 /// through the pinned <c>StockAdjustment</c> response component itself and through the legacy
 /// <c>Product</c> component that the same compatibility boundary regenerates for the pinned
 /// purchase/supplier-order schemas. An API-owned enum of the same simple name therefore cannot exist
@@ -201,7 +204,7 @@ public class StockAndExpenseSchemaContractTests
     /// <see cref="InventoryApi.DTOs.StockAdjustmentDto.Reason"/> carries and that the pinned
     /// response components reach, so a second CLR enum of the same simple name - an API-owned
     /// <c>InventoryApi.DTOs.StockAdjustmentReason</c>, which is what removing the request DTO's
-    /// dependency on <c>InventoryApi.Models</c> would need - cannot be registered beside it. The
+    /// dependency on <c>Inventory.Infrastructure.Models</c> would need - cannot be registered beside it. The
     /// stand-in below reproduces the exact failure Swashbuckle raises, through the application's own
     /// schema generator and schema-id selector.
     ///
@@ -222,7 +225,7 @@ public class StockAndExpenseSchemaContractTests
 
         var generator = ApiContractTestHost.GetSchemaGenerator();
         var repository = new SchemaRepository("v1");
-        generator.GenerateSchema(typeof(Models.StockAdjustmentReason), repository);
+        generator.GenerateSchema(typeof(PersistenceModels.StockAdjustmentReason), repository);
 
         var collision = Record.Exception(() =>
             generator.GenerateSchema(typeof(ApiOwned.StockAdjustmentReason), repository));

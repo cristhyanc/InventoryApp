@@ -2,19 +2,19 @@ using Inventory.Application.Machines;
 using Inventory.Application.NayaxProcessingFees;
 using Inventory.Domain.FinancialConfiguration;
 using Inventory.Domain.Machines;
-using InventoryApi.Data;
-using InventoryApi.Models;
+using Inventory.Infrastructure.Data;
+using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
 
 namespace InventoryApi.Adapters.Persistence;
 
 /// <summary>
-/// Temporary EF Core implementation of <see cref="IMachineDashboardFactsStore"/>. It lives in
-/// InventoryApi, not Inventory.Infrastructure, because it depends on <see cref="AppDbContext"/> and
-/// persistence models that still live in InventoryApi, and because it composes the Application-owned
+/// Temporary EF Core implementation of <see cref="IMachineDashboardFactsStore"/>. It still lives in
+/// InventoryApi, not Inventory.Infrastructure: <see cref="AppDbContext"/> and the persistence models
+/// it depends on moved there in issue #307, and moving this adapter family after them is
+/// Persistence 7/8 and 8/8 of #153. It also composes the Application-owned
 /// <see cref="IGetNayaxProcessingFees"/> use case. Its financial and classification rules are
-/// Domain-owned (see <c>docs/architecture.md</c>). Move it into Inventory.Infrastructure once the
-/// shared AppDbContext and persistence models relocate there.
+/// Domain-owned (see <c>docs/architecture.md</c>).
 /// </summary>
 public sealed class EfMachineDashboardFactsStore : IMachineDashboardFactsStore
 {

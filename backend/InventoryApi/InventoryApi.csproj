@@ -16,6 +16,13 @@
     <!-- No ClosedXML here: issue #301 moved the workbook reader and issue #306 the report export
          writer into Inventory.Infrastructure, which owns the only reference now. A spreadsheet
          format is an adapter detail, so new XLSX code belongs there behind an Application port. -->
+    <!-- Issue #307 moved AppDbContext, the EF entities and the migrations into
+         Inventory.Infrastructure, which now owns the EntityFrameworkCore/Relational references. What
+         stays here is the composition root's job: the SQLite provider and the one UseSqlite call
+         that reads ConnectionStrings:DefaultConnection, and the Design package the `dotnet ef`
+         tooling needs when InventoryApi is the startup project. EntityFrameworkCore itself is
+         still a direct reference because Program.cs calls AddDbContext and the temporary
+         Adapters/Persistence family uses the EF query extension methods. -->
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.0" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.0" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.0">

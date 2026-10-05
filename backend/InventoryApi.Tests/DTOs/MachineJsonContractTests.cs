@@ -3,7 +3,7 @@ using Inventory.Application.Machines;
 using Inventory.Application.Products;
 using InventoryApi.Adapters.Mapping;
 using InventoryApi.DTOs;
-using InventoryApi.Models;
+using Inventory.Infrastructure.Models;
 using Xunit;
 
 namespace InventoryApi.Tests.DTOs;

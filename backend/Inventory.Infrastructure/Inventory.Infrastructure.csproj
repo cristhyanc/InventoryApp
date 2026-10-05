@@ -16,6 +16,14 @@
          reach Inventory.Application or Inventory.Domain, which CleanArchitectureDependencyTests
          enforces. -->
     <PackageReference Include="ClosedXML" Version="0.104.2" />
+    <!-- EF Core ownership moved here with AppDbContext, the EF entities and the EF migrations
+         (issue #307). Relational is what the generated migrations and the model snapshot compile
+         against (MigrationBuilder, table/column/index operations). The SQLite provider is
+         deliberately NOT referenced here: choosing a provider and a connection string is a
+         composition-root decision, so Microsoft.EntityFrameworkCore.Sqlite (and the Design package
+         the `dotnet ef` tooling needs) stay in InventoryApi. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.0" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.3" />
     <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.0" />
     <PackageReference Include="Polly.Core" Version="8.6.4" />

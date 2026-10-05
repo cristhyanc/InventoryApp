@@ -1,13 +1,13 @@
 using Inventory.Application.Stock;
 using InventoryApi.DTOs;
-using InventoryApi.Models;
+using Inventory.Infrastructure.Models;
 
 namespace InventoryApi.Adapters.Mapping;
 
 /// <summary>
 /// Projects the Application layer's <see cref="StockAdjustmentRecord"/> onto the API-owned
 /// <see cref="ProductStockAdjustmentResponse"/> the stock endpoints serialise (issue #305). It
-/// replaced the step that rebuilt the <c>InventoryApi.Models.StockAdjustment</c> entity for those
+/// replaced the step that rebuilt the <c>Inventory.Infrastructure.Models.StockAdjustment</c> entity for those
 /// endpoints (issue #282), so no production code maps a stock read model back onto a persistence
 /// entity any more.
 ///
@@ -25,7 +25,7 @@ namespace InventoryApi.Adapters.Mapping;
 /// client-visible even when the payload is byte-identical.
 ///
 /// <see cref="ProductStockAdjustmentResponse.Reason"/>/<c>Source</c> are the
-/// <c>InventoryApi.Models</c> enums rather than API-owned copies - a temporary compatibility
+/// <c>Inventory.Infrastructure.Models</c> enums rather than API-owned copies - a temporary compatibility
 /// exception, shared with the request DTO's <c>StockAdjustmentDto.Reason</c> - because the published
 /// document reaches those CLR enums from the pinned <c>StockAdjustment</c> response component itself
 /// and from the legacy <c>Product</c> component the pinned purchase/supplier-order schemas

@@ -14,14 +14,14 @@ public record SupplierOrderCreateDto(
 
 /// <summary>
 /// The wire shape of a supplier order on the "/api/supplierorders" endpoints (issue #304),
-/// replacing the EF <c>InventoryApi.Models.SupplierOrder</c> entity the retired
+/// replacing the EF <c>Inventory.Infrastructure.Models.SupplierOrder</c> entity the retired
 /// <c>SupplierOrderService</c> rebuilt for them. Key names, order, nesting and values match that
 /// entity's serializable surface exactly, so this is not a contract change;
 /// <c>InventoryApi.Tests.DTOs.SupplierOrderJsonContractTests</c> compares the serialized bytes of
 /// both.
 ///
 /// <see cref="Status"/> carries the Domain enum, which mirrors
-/// <c>InventoryApi.Models.SupplierOrderStatus</c> member for member, so the serialized numeric
+/// <c>Inventory.Infrastructure.Models.SupplierOrderStatus</c> member for member, so the serialized numeric
 /// value clients already switch on is unchanged. The owning business never travels on the wire
 /// (AGENTS.md § Tenant ownership and data isolation).
 /// </summary>
@@ -45,7 +45,7 @@ public sealed record SupplierOrderResponse
 
 /// <summary>
 /// One supplier-order line as the supplier-order endpoints serialize it. Matches the serializable
-/// surface of the <c>InventoryApi.Models.SupplierOrderLine</c> entity it replaced: the owning
+/// surface of the <c>Inventory.Infrastructure.Models.SupplierOrderLine</c> entity it replaced: the owning
 /// business, the parent-order back-reference and the receipt allocations stay off the wire.
 /// </summary>
 public sealed record SupplierOrderLineResponse

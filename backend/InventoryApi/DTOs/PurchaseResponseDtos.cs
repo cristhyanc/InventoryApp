@@ -2,7 +2,7 @@ namespace InventoryApi.DTOs;
 
 /// <summary>
 /// The wire shape of a purchase inside the <see cref="PurchaseResponseDto"/> envelope's
-/// <c>purchase</c> key (issue #304), replacing the EF <c>InventoryApi.Models.Purchase</c> entity the
+/// <c>purchase</c> key (issue #304), replacing the EF <c>Inventory.Infrastructure.Models.Purchase</c> entity the
 /// retired <c>PurchaseService</c> rebuilt for the "/api/purchases" endpoints. Key names, order,
 /// nesting and values match that entity's serializable surface exactly, so this is not a contract
 /// change; <c>InventoryApi.Tests.DTOs.PurchaseResponseJsonContractTests</c> compares the serialized
@@ -39,7 +39,7 @@ public sealed record PurchaseResponse
 
 /// <summary>
 /// One purchase line item as the purchase endpoints serialize it. Matches the serializable surface
-/// of the <c>InventoryApi.Models.PurchaseItem</c> entity it replaced: the owning business, the
+/// of the <c>Inventory.Infrastructure.Models.PurchaseItem</c> entity it replaced: the owning business, the
 /// purchase back-reference and the supplier-order allocations stay off the wire, <c>ReceiptId</c>
 /// keeps its name as part of the established JSON contract (see
 /// <c>docs/architecture.md</c> § Purchase rename plan), and <see cref="Product"/> is null exactly

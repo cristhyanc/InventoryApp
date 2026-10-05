@@ -1,6 +1,6 @@
 // Imported for StockAdjustmentDto.Reason only - the temporary compatibility exception documented on
 // that record (issue #305). No other DTO in this file names the persistence model.
-using InventoryApi.Models;
+using Inventory.Infrastructure.Models;
 
 namespace InventoryApi.DTOs;
 
@@ -36,7 +36,7 @@ public record ProductUpdateDto(
 /// The stock adjustment a client posts to "/api/products/{productId}/stock".
 ///
 /// <see cref="Reason"/> is the persistence enum rather than an API-owned copy, which is why this
-/// file still imports <c>InventoryApi.Models</c>. That is a <b>temporary compatibility exception</b>
+/// file still imports <c>Inventory.Infrastructure.Models</c>. That is a <b>temporary compatibility exception</b>
 /// (issue #305), not the target state: the published document carries one
 /// <c>StockAdjustmentReason</c> component derived from that CLR enum, reached from this request
 /// body, from the pinned <c>StockAdjustment</c> response component and from the legacy

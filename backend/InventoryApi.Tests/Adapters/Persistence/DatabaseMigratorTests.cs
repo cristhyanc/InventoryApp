@@ -1,5 +1,5 @@
 using InventoryApi.Bootstrap;
-using InventoryApi.Data;
+using Inventory.Infrastructure.Data;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;

@@ -7,7 +7,7 @@ namespace InventoryApi.Adapters.Mapping;
 /// Projects the Application layer's <see cref="MachineSummary"/> onto the API-owned
 /// <see cref="MachineResponse"/> the machine dashboard endpoints serialize (issue #302). It replaces
 /// the step the retired <c>MachineService</c> delegator used to take through the
-/// <c>InventoryApi.Models.Machine</c> type, and copies already-resolved values only: every revenue,
+/// <c>Inventory.Infrastructure.Models.Machine</c> type, and copies already-resolved values only: every revenue,
 /// profit and profitability status is decided by
 /// <see cref="GetMachineDashboard"/>/<see cref="ListMachineDashboard"/> and their Domain policies,
 /// so this mapping cannot introduce a second copy of a dashboard rule.

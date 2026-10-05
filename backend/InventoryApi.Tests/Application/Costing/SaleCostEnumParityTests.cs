@@ -1,5 +1,5 @@
 using Inventory.Application.Costing;
-using InventoryApi.Models;
+using Inventory.Infrastructure.Models;
 using Xunit;
 
 namespace InventoryApi.Tests.Application.Costing;

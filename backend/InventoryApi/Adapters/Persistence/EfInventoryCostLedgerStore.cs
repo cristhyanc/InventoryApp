@@ -1,18 +1,18 @@
 using Inventory.Application.Costing;
 using Inventory.Domain.Costing;
 using Inventory.Domain.Reporting.ProductMatching;
-using InventoryApi.Data;
-using InventoryApi.Models;
+using Inventory.Infrastructure.Data;
+using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
 using DomainStock = Inventory.Domain.Stock;
 
 namespace InventoryApi.Adapters.Persistence;
 
 /// <summary>
-/// Temporary EF Core implementation of <see cref="IInventoryCostLedgerStore"/> (issue #296). It lives
-/// in InventoryApi, not Inventory.Infrastructure, because it depends on <see cref="AppDbContext"/>
-/// and the persistence models, which still live in InventoryApi; move it into
-/// Inventory.Infrastructure once they relocate there (issue #153).
+/// Temporary EF Core implementation of <see cref="IInventoryCostLedgerStore"/> (issue #296). It
+/// still lives in InventoryApi, not Inventory.Infrastructure: <see cref="AppDbContext"/> and the
+/// persistence models it depends on moved there in issue #307, and moving this adapter family after
+/// them is Persistence 7/8 and 8/8 of #153.
 ///
 /// The queries are unchanged from the former <c>InventoryCostRebuildService</c>: the product's stock
 /// movements, the business's completed Nayax sales matched to the product through the Domain
