@@ -2,6 +2,7 @@ using Inventory.Application.Commissions;
 using Inventory.Application.Nayax;
 using Inventory.Application.NayaxProcessingFees;
 using Inventory.Application.Time;
+using Inventory.Infrastructure.Sites;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using InventoryApi.Tests.Application.Time;
@@ -36,6 +37,6 @@ internal static class TestFinancialUseCases
         new(
             nayax,
             new EfSiteCommissionStore(db),
-            new SiteNameResolverAdapter(),
+            new SiteNameResolver(),
             businessCalendar);
 }

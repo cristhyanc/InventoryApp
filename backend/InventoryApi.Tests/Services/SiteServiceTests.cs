@@ -1,4 +1,5 @@
 using Inventory.Application.Sites;
+using Inventory.Infrastructure.Sites;
 using InventoryApi.Tests.Application.Time;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
@@ -63,7 +64,7 @@ public class SiteServiceTests
             });
 
         var service = new GetSiteSummaries(
-            nayax.Object, new EfSiteFactsStore(db), new SiteNameResolverAdapter(), Time.Clock, Time.Calendar);
+            nayax.Object, new EfSiteFactsStore(db), new SiteNameResolver(), Time.Clock, Time.Calendar);
         var summary = Assert.Single(await service.Handle(CancellationToken.None));
 
         Assert.Equal(12m, summary.TodayRevenue);

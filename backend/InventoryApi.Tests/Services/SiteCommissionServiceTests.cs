@@ -2,6 +2,7 @@ using InventoryApi.Data;
 using Inventory.Application.Nayax;
 using Inventory.Application.Commissions;
 using Inventory.Domain.FinancialConfiguration;
+using Inventory.Infrastructure.Sites;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Models;
 using InventoryApi.Tests.Application.Time;
@@ -155,7 +156,7 @@ public class SiteCommissionServiceTests
         return new GetSiteCommissionReport(
             nayax.Object,
             new EfSiteCommissionStore(db),
-            new SiteNameResolverAdapter(),
+            new SiteNameResolver(),
             new FakeBusinessCalendar(businessToday));
     }
 

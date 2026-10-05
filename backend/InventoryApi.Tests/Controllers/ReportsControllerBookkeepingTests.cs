@@ -8,6 +8,7 @@ using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Shared;
 using Inventory.Application.Reporting.Transactions;
+using Inventory.Infrastructure.Reporting;
 using InventoryApi.Controllers;
 using InventoryApi.Tests.Application.Reporting.Bookkeeping;
 using InventoryApi.Tests.Application.Reporting.Dashboard;
@@ -42,7 +43,8 @@ public class ReportsControllerBookkeepingTests
             new FakeTransactionSalesReportFactsProvider(FakeTransactionSalesReportFactsProvider.Empty()));
         var getReportExportRows = new GetReportExportRows(useCase, dailyUseCase, reconciliationUseCase,
             machineProfitabilityUseCase, productProfitabilityUseCase, gstUseCase, dashboardUseCase, getTransactionSalesReport);
-        var controller = new ReportsController(getReportExportRows, useCase, dailyUseCase, reconciliationUseCase,
+        var controller = new ReportsController(getReportExportRows, new ReportExportFileWriter(),
+            useCase, dailyUseCase, reconciliationUseCase,
             machineProfitabilityUseCase, productProfitabilityUseCase, gstUseCase, dashboardUseCase, getTransactionSalesReport);
 
         var report = await controller.Bookkeeping(

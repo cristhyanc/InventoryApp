@@ -3,9 +3,9 @@ using Inventory.Application.Nayax;
 using Inventory.Application.Reporting.Transactions;
 using Inventory.Domain.FinancialConfiguration;
 using Inventory.Domain.Reporting.Transactions;
+using Inventory.Infrastructure.Sites;
 using InventoryApi.Data;
 using InventoryApi.Models;
-using InventoryApi.Services;
 using Microsoft.EntityFrameworkCore;
 
 namespace InventoryApi.Adapters.Persistence;
@@ -20,8 +20,11 @@ namespace InventoryApi.Adapters.Persistence;
 /// fee/commission facts (query and external-integration mechanics); it deliberately does not
 /// compute product matches, fee/commission/profit derivation, filtering, sorting, or totals, since
 /// those are Domain/Application concerns applied by <see cref="GetTransactionSalesReport"/>. Site
-/// name resolution from the live Nayax machine directory has no equivalent already-migrated adapter
-/// to share it with; the completed/all-status sale query intentionally does not reuse
+/// name resolution from the live Nayax machine directory runs the one authoritative rule, which
+/// issue #306 moved to <see cref="SiteNameResolver"/> in <c>Inventory.Infrastructure</c>: this
+/// adapter calls its static entry point rather than the injected <c>ISiteNameResolver</c> port
+/// because it resolves a name per streamed row inside a static iterator. The completed/all-status
+/// sale query intentionally does not reuse
 /// <see cref="EfReportingSharedQueries"/> because transactions needs every status, not only
 /// completed sales.
 /// </summary>

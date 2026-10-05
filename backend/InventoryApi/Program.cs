@@ -234,9 +234,10 @@ builder.Services.AddScoped<IStockAdjustmentStore, EfStockAdjustmentStore>();
 // Temporary API-owned adapter for the supplier-order create/read/cancel persistence port; see EfSupplierOrderStore.
 builder.Services.AddScoped<ISupplierOrderStore, EfSupplierOrderStore>();
 
-// Temporary API-owned adapters for the site dashboard ports; see EfSiteFactsStore/SiteNameResolverAdapter.
+// Temporary API-owned adapter for the site dashboard facts port; see EfSiteFactsStore. Its
+// site-name counterpart is a real Infrastructure adapter since issue #306
+// (Inventory.Infrastructure.Sites.SiteNameResolver), registered by AddInfrastructureServices().
 builder.Services.AddScoped<ISiteFactsStore, EfSiteFactsStore>();
-builder.Services.AddScoped<ISiteNameResolver, SiteNameResolverAdapter>();
 
 // Temporary API-owned adapter for the machine dashboard facts port; see EfMachineDashboardFactsStore.
 builder.Services.AddScoped<IMachineDashboardFactsStore, EfMachineDashboardFactsStore>();
@@ -274,10 +275,11 @@ builder.Services.AddScoped<IProductPurchaseCostFactsProvider, EfProductPurchaseC
 // Temporary API-owned adapter for the transaction sales report facts port; see EfTransactionSalesReportFactsProvider.
 builder.Services.AddScoped<ITransactionSalesReportFactsProvider, EfTransactionSalesReportFactsProvider>();
 
-// Temporary API-owned adapters for the Nayax catalog reconciliation ports (issue #55); see
-// EfLocalCatalogSnapshotProvider and NayaxCatalogSnapshotProvider.
+// Temporary API-owned adapter for the local half of the Nayax catalog reconciliation (issue #55);
+// see EfLocalCatalogSnapshotProvider. The remote half needs no AppDbContext, so issue #306 moved it
+// to Inventory.Infrastructure.Nayax.NayaxCatalogSnapshotProvider, registered by
+// AddInfrastructureServices().
 builder.Services.AddScoped<ILocalCatalogSnapshotProvider, EfLocalCatalogSnapshotProvider>();
-builder.Services.AddScoped<INayaxCatalogSnapshotProvider, InventoryApi.Adapters.Nayax.NayaxCatalogSnapshotProvider>();
 
 // Temporary API-owned adapter for the machine Sync Restock persistence port (issue #183); see
 // EfMachineStockEventStore.

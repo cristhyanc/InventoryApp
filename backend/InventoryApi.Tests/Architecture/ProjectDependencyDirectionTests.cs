@@ -192,20 +192,25 @@ public class ProjectDependencyDirectionTests
     /// Sites use cases and gave the machine endpoints API-owned response DTOs, which also emptied
     /// the <c>Interfaces</c> folder.
     ///
-    /// <c>SiteNameResolver.cs</c> is all that is left: the pure site-name-from-machine-names helper
-    /// that <c>Adapters/Persistence/SiteNameResolverAdapter</c> (the
-    /// <c>Inventory.Application.Sites.ISiteNameResolver</c> port's API-owned adapter) and
-    /// <c>EfTransactionSalesReportFactsProvider</c> share. Moving it is tracked with the
-    /// <c>AppDbContext</c>/adapter relocation, not here. The allow-list keeps naming it so that
-    /// adding anything beside it still has to be a conscious, reviewed edit.
+    /// Nothing is left. The last entry, <c>SiteNameResolver.cs</c>, went with the non-EF adapter
+    /// relocation (issue #306): the pure site-name-from-machine-names helper and the
+    /// <c>Adapters/Persistence/SiteNameResolverAdapter</c> wrapper that implemented
+    /// <c>Inventory.Application.Sites.ISiteNameResolver</c> for it merged into
+    /// <c>Inventory.Infrastructure.Sites.SiteNameResolver</c>, which
+    /// <c>AddInfrastructureServices()</c> registers and which
+    /// <c>EfTransactionSalesReportFactsProvider</c> calls. <c>InventoryApi/Services</c> is gone, so
+    /// the allow-list is empty and this test now asserts that the folder stays gone: a new file
+    /// under it fails here and must go to <c>Inventory.Application</c>/<c>Inventory.Domain</c> (use
+    /// case or domain logic) or <c>Inventory.Infrastructure</c> (an adapter) instead. Reviving the
+    /// folder has to be a conscious edit to this list and to the docs/architecture.md exception it
+    /// documents. What remains of that exception is the API-owned EF adapter family under
+    /// <c>InventoryApi/Adapters/Persistence</c>, which moves with <c>AppDbContext</c> under
+    /// #153/#154.
     /// </summary>
     [Fact]
     public void Only_the_documented_legacy_services_remain_in_InventoryApi_Services()
     {
-        string[] allowedRelativePaths =
-        [
-            "SiteNameResolver.cs",
-        ];
+        string[] allowedRelativePaths = [];
 
         var actualRelativePaths = GitTrackedFiles(Path.Combine("InventoryApi", "Services"))
             .Where(path => path.EndsWith(".cs", StringComparison.Ordinal))
