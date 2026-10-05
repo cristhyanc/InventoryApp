@@ -85,9 +85,7 @@ export const test = base.extend<HarnessFixtures>({
       return context.newPage();
     });
 
-    for (const context of contexts) {
-      await context.close();
-    }
+    await Promise.all(contexts.map((context) => context.close()));
   },
 
   apiAs: async ({ playwright }, use) => {
@@ -102,9 +100,7 @@ export const test = base.extend<HarnessFixtures>({
       return context;
     });
 
-    for (const context of contexts) {
-      await context.dispose();
-    }
+    await Promise.all(contexts.map((context) => context.dispose()));
   }
 });
 

@@ -41,7 +41,7 @@ mkdirSync(artifactsDirectory, { recursive: true });
 
 export default defineConfig({
   testDir: './tests',
-  testMatch: /.*\.e2e\.ts/,
+  testMatch: /\.e2e\.ts$/,
   outputDir: join(artifactsDirectory, 'test-results'),
   fullyParallel: false,
   workers: 1,

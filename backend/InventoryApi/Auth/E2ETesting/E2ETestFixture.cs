@@ -200,11 +200,11 @@ public static class E2ETestFixture
         // one alerting product on a fresh database: 2 in stock at a threshold of 10 needs
         // 30 - 2 = 28 ordered, while the other two products need nothing.
         var reorderProduct = NewProduct(ReorderProductName, "E2E-REORDER", category, supplier,
-            quantityInStock: 2, lowStockThreshold: 10, restockTo: 30, unitPrice: 3.50m, openingUnitCost: 1.20m);
+            new ProductStocking(QuantityInStock: 2, LowStockThreshold: 10, RestockTo: 30, UnitPrice: 3.50m, OpeningUnitCost: 1.20m));
         var correctionProduct = NewProduct(CorrectionProductName, "E2E-CORRECTION", category, supplier,
-            quantityInStock: 20, lowStockThreshold: 5, restockTo: 24, unitPrice: 4.00m, openingUnitCost: 2.00m);
+            new ProductStocking(QuantityInStock: 20, LowStockThreshold: 5, RestockTo: 24, UnitPrice: 4.00m, OpeningUnitCost: 2.00m));
         var purchaseProduct = NewProduct(PurchaseProductName, "E2E-PURCHASE", category, supplier,
-            quantityInStock: 0, lowStockThreshold: 0, restockTo: 0, unitPrice: 2.50m, openingUnitCost: null);
+            new ProductStocking(QuantityInStock: 0, LowStockThreshold: 0, RestockTo: 0, UnitPrice: 2.50m, OpeningUnitCost: null));
         db.Products.AddRange(reorderProduct, correctionProduct, purchaseProduct);
         await db.SaveChangesAsync(cancellationToken);
 
@@ -261,7 +261,7 @@ public static class E2ETestFixture
         await db.SaveChangesAsync(cancellationToken);
 
         var product = NewProduct(BusinessBProductName, "E2E-OTHER", category, supplier,
-            quantityInStock: 50, lowStockThreshold: 5, restockTo: 60, unitPrice: 5.00m, openingUnitCost: 2.50m);
+            new ProductStocking(QuantityInStock: 50, LowStockThreshold: 5, RestockTo: 60, UnitPrice: 5.00m, OpeningUnitCost: 2.50m));
         db.Products.Add(product);
         await db.SaveChangesAsync(cancellationToken);
 
@@ -283,22 +283,26 @@ public static class E2ETestFixture
     }
 
     /// <summary>
-    /// One seeded product. <paramref name="openingUnitCost"/> is the cost its opening stock was
-    /// acquired at - the costing position below is exactly that quantity at that cost, and
-    /// <see cref="OpeningStock"/> records the movement it came from. A product with no opening
-    /// stock passes <c>null</c> and starts with nothing: no quantity, no costing quantity, and no
-    /// average cost to be mistaken for one.
+    /// The stock position a seeded product starts at. <see cref="OpeningUnitCost"/> is the cost its
+    /// opening stock was acquired at - the costing position below is exactly that quantity at that
+    /// cost, and <see cref="OpeningStock"/> records the movement it came from. A product with no
+    /// opening stock passes <c>null</c> and starts with nothing: no quantity, no costing quantity,
+    /// and no average cost to be mistaken for one.
     /// </summary>
+    private readonly record struct ProductStocking(
+        int QuantityInStock,
+        int LowStockThreshold,
+        int RestockTo,
+        decimal UnitPrice,
+        decimal? OpeningUnitCost);
+
+    /// <summary>One seeded product, at the stock position <paramref name="stocking"/> describes.</summary>
     private static Product NewProduct(
         string name,
         string sku,
         Category category,
         Supplier supplier,
-        int quantityInStock,
-        int lowStockThreshold,
-        int restockTo,
-        decimal unitPrice,
-        decimal? openingUnitCost = null) =>
+        ProductStocking stocking) =>
         new()
         {
             Name = name,
@@ -306,15 +310,15 @@ public static class E2ETestFixture
             Description = "Seeded E2E product",
             Category = category,
             Supplier = supplier,
-            QuantityInStock = quantityInStock,
-            LowStockThreshold = lowStockThreshold,
-            RestockTo = restockTo,
-            UnitPrice = unitPrice,
+            QuantityInStock = stocking.QuantityInStock,
+            LowStockThreshold = stocking.LowStockThreshold,
+            RestockTo = stocking.RestockTo,
+            UnitPrice = stocking.UnitPrice,
             Unit = "unit",
             IsActive = true,
-            AverageUnitCost = openingUnitCost ?? 0m,
-            CostingQuantity = openingUnitCost is null ? 0 : quantityInStock,
-            InventoryValue = openingUnitCost is null ? 0m : quantityInStock * openingUnitCost.Value,
+            AverageUnitCost = stocking.OpeningUnitCost ?? 0m,
+            CostingQuantity = stocking.OpeningUnitCost is null ? 0 : stocking.QuantityInStock,
+            InventoryValue = stocking.OpeningUnitCost is null ? 0m : stocking.QuantityInStock * stocking.OpeningUnitCost.Value,
             CreatedAt = SeededAtUtc,
             UpdatedAt = SeededAtUtc,
         };

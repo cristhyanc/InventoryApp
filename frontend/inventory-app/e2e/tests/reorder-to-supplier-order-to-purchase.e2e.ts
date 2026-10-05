@@ -46,7 +46,7 @@ test('a reorder alert becomes a supplier order and then a costed purchase', asyn
   // 3. The open supplier order.
   await page.goto('/purchases/orders');
   const orderHeading = page.getByRole('heading', {
-    name: new RegExp(`Order #\\d+ - ${seeded.supplierA}`)
+    name: new RegExp(String.raw`Order #\d+ - ${seeded.supplierA}`)
   });
   await expect(orderHeading).toBeVisible();
   const orderId = Number(/Order #(\d+)/.exec((await orderHeading.textContent()) ?? '')![1]);
@@ -55,7 +55,7 @@ test('a reorder alert becomes a supplier order and then a costed purchase', asyn
 
   // 4. Receive it, which creates the purchase.
   await page.getByRole('button', { name: 'Receive / Create Purchase' }).click();
-  await expect(page).toHaveURL(new RegExp(`/purchases/new\\?supplierOrderId=${orderId}$`));
+  await expect(page).toHaveURL(new RegExp(String.raw`/purchases/new\?supplierOrderId=${orderId}$`));
   await expect(page.getByRole('heading', { name: `Receiving Supplier Order #${orderId}` })).toBeVisible();
 
   await page.locator('input[type=file]').setInputFiles(receiptFile);
@@ -86,6 +86,6 @@ test('a reorder alert becomes a supplier order and then a costed purchase', asyn
   const after = await productByName(api, seeded.reorderProduct);
   expect(after.quantityInStock).toBe(30);
   expect(after.costingQuantity).toBe(30);
-  expect(after.inventoryValue).toBe(44.4);
+  expect(after.inventoryValue).toBeCloseTo(44.4, 2);
   expect(await reorderAlertNames(api), 'the alert has cleared').toEqual([]);
 });
