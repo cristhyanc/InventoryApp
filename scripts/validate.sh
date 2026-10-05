@@ -100,6 +100,9 @@ run_step "Run agent eval corpus" \
 run_step "Test model-decision eval runner" \
     node --test "${repo_root}/scripts/run-agent-model-evals.test.mjs"
 
+run_step "Test Project status sync" \
+    node --test "${repo_root}/scripts/sync-project-status.test.mjs"
+
 run_step "Restore backend" \
     dotnet restore "${backend_solution}"
 

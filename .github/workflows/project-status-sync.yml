@@ -1,0 +1,68 @@
+name: Project status sync
+
+# Status display only. Never check out PR code with the Projects credential.
+# GITHUB_TOKEN-generated label/status events do not reliably start other workflows;
+# completed workflow runs and periodic reconciliation cover those transitions.
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: Apply changes (false previews only)
+        type: boolean
+        default: false
+  schedule:
+    - cron: '7,22,37,52 * * * *'
+  issues:
+    types: [labeled, unlabeled, closed, reopened]
+  pull_request_target:
+    branches: [develop]
+    types: [opened, reopened, closed, synchronize, ready_for_review, converted_to_draft, labeled, unlabeled]
+  # Only workflows that change agent labels or publish agent statuses. Listening to every
+  # workflow would spend the repository token's hourly API allowance shared with the pipeline.
+  workflow_run:
+    workflows:
+      - Agent implementation
+      - Agent Copilot implementation
+      - Agent architecture
+      - Agent Copilot architecture check
+      - Validate pull request
+      - Agent review
+    types: [completed]
+
+permissions: {}
+
+concurrency:
+  group: project-status-sync-4
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    # Activate only after credentials, board rules and a preview have been checked.
+    # A manual run from a feature branch must never execute code with the Project token.
+    if: >-
+      github.repository == 'cristhyanc/InventoryApp' &&
+      (github.event_name == 'workflow_dispatch' || vars.PROJECT_SYNC_ENABLED == 'true') &&
+      (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      statuses: read
+    steps:
+      - name: Check out trusted workflow commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: Reconcile existing Project items
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROJECT_SYNC_TOKEN: ${{ secrets.PROJECT_SYNC_TOKEN }}
+          PROJECT_SYNC_APPLY: ${{ github.event_name != 'workflow_dispatch' || inputs.apply }}
+        run: node scripts/sync-project-status.mjs

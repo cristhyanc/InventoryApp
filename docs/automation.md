@@ -80,6 +80,16 @@ required by change type), or treat the failure as a regression and fix the guard
 
 ## Desired lifecycle
 
+### Project tracking
+
+The optional [Project status sync](project-status-sync.md) mirrors agent labels
+and current-head validation/review results into the Status field of existing
+InventoryApp issue cards in user Project #4. It is one-way display automation:
+moving a card does not grant readiness, request a repair, close an issue, merge
+or deploy. Parent epics remain manual. It requires a dedicated Projects credential
+and explicit activation after the workflow reaches main; see the linked setup,
+precedence, race limitations and board-rule requirements.
+
 The target lifecycle for one automated change is:
 
 1. A human creates or refines an agent task issue using the **Agent task** issue form, including its documentation impact decision and details.
