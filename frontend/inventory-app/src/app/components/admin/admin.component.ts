@@ -5,9 +5,10 @@ import { RouterLink } from '@angular/router';
 /**
  * The Admin landing page. Every Admin workflow now lives on its own routed page (issues #388,
  * #389 and #390), so this component holds no workflow state, no service dependency and no second
- * copy of any tool - it is the link hub the root header and the Dashboard point at, and the only
- * entry point to the dedicated pages until the navigation-shell task (#383) adds them to the
- * sidebar. It therefore keeps its own `/admin` address rather than redirecting.
+ * copy of any tool - it is the link hub the Dashboard's "Open Admin" action and each dedicated
+ * page's "Back to Admin" link point at. The sidebar's Admin group (#391) is now the primary way
+ * into those pages, so this is a second, still valid entry point; it therefore keeps its own
+ * `/admin` address rather than redirecting.
  */
 @Component({
   selector: 'app-admin',

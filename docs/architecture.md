@@ -812,6 +812,7 @@ InventoryApp/
 ├── frontend/inventory-app/
 │   ├── src/app/
 │   │   ├── components/          Feature pages and shared UI
+│   │   ├── layout/              Application shell navigation: sidebar, navigation data, user menu
 │   │   ├── models/              Shared TypeScript contracts
 │   │   ├── services/            API clients and UI services
 │   │   ├── app.config.ts        Angular providers and startup
@@ -1406,7 +1407,8 @@ The frontend is an application boundary in its own right. It owns navigation, in
 
 | Area | Current responsibility |
 | --- | --- |
-| `app.component.*` | Application shell, primary navigation, report menu, router outlet, and toast host |
+| `app.component.*` | Application shell: header with the sidebar collapse control and the signed-in user control, the sidebar, the routed page region, MSAL redirect/account handling, and the toast/loading hosts |
+| `layout/` | Primary navigation: `navigation.ts` (the navigation data and its pure active-route rules), `sidebar-nav.component.*`, `user-menu.component.ts` |
 | `app.routes.ts` | Product, stock, supplier, machine, site, purchase, report, expense, and administration routes |
 | `components/` | Routed feature pages plus a small set of shared components |
 | `services/` | Typed HTTP calls, runtime configuration, toast state, and feature-specific client behavior |
@@ -1426,6 +1428,71 @@ flowchart TD
     Client --> API["Backend API"]
 ```
 
+### Application shell and navigation (issue #391)
+
+The shell is a left sidebar plus a slim header, and it is the only navigation system in the
+application: the former horizontal header menu and its `<details>` report dropdown are gone, and
+`app.component.scss` (which still styled that header) was deleted with them. Three files own it,
+and they are the first realized part of the target `layout/` folder described below:
+
+| File | Responsibility |
+| --- | --- |
+| `layout/navigation.ts` | The navigation data (`primaryNavigation`) and the pure matching rules `navLinks`, `activeNavRoute` and `activeNavGroup` |
+| `layout/sidebar-nav.component.*` | Renders that data, owns which groups are expanded, and resolves the active entry from the router |
+| `layout/user-menu.component.ts` | The top-right signed-in user control: the active account and a sign-out item, or a sign-in button |
+| `app.component.*` | The shell layout, the burger/collapse control, the wide-versus-narrow layout decision, and the MSAL identity it passes to the user menu |
+
+`primaryNavigation` is a `NavItem[]` of direct links (`Dashboard`, `Pick List`, `Machines`,
+`Sites`, `Expenses`) and expandable groups (`Products`, `Purchases`, `Reports`, `Admin`). A group
+heading is a `<button>` that toggles its children and is deliberately not a destination, so no
+group needs an overview page. **Every `route` must be a real page already declared in
+`app.routes.ts`**: `navigation.spec.ts` compares the two and fails on a destination invented ahead
+of the page that serves it, which is how the navigation stays free of placeholder
+Users/Roles/Audit/Settings/Profile entries. The super-admin diagnostics page (#335) has not merged,
+so nothing is wired for it yet; when it does, its link belongs in the `Admin` group behind the
+diagnostics access API exactly as that issue implements it. `/admin` itself keeps its own address
+and its `AdminComponent` link hub — the sidebar is now the primary way into the six dedicated Admin
+pages, and `/admin` remains a valid bookmark that the home Dashboard's "Open Admin" action and each
+dedicated page's "Back to Admin" link still reach.
+
+**Active state.** `activeNavRoute` resolves the current URL to the most specific matching entry,
+rather than relying on `routerLinkActive`, because several destinations are prefixes of each other:
+`/purchases` highlights `Purchases` while `/purchases/orders` highlights `Supplier Orders`, and a
+detail URL such as `/machines/7`, `/sites/3/products` or `/products/12/edit` stays highlighted on
+its list page. The active link carries `aria-current="page"`, and `activeNavGroup` keeps the owning
+group expanded and visibly active. A URL outside the navigation (`/auth`) highlights nothing.
+
+**Collapse and the narrow layout.** One `isSidebarOpen` flag drives both layouts, because the
+control an operator reaches for is the same in each. `AppComponent` reads the same `lg`
+(`min-width: 1024px`) breakpoint the Tailwind classes use through `window.matchMedia` and keeps
+listening for changes:
+
+- **Wide layout:** the sidebar is always part of the page. The burger expands it to labels or
+  collapses it to a compact icon rail, whose labels stay in the accessibility tree (`sr-only` plus
+  a `title`) so the names are never lost. A collapsed rail has no room for a submenu, so a group
+  heading then asks the shell to expand (`expandRequested`) instead of opening one invisibly.
+- **Narrow layout:** the sidebar becomes a dismissible overlay drawer that is not rendered while
+  closed, so it is never left off-screen but focusable. It is dismissed by its own close control,
+  by the backdrop, by `Escape` (which returns focus to the burger), and by choosing a destination.
+  It never falls back to a horizontal menu.
+
+Crossing the breakpoint re-applies that default: a wide layout opens with labels, a narrow one
+starts dismissed so the drawer never covers the page the operator asked for.
+
+**Semantics.** Every control is a native `<button>` or `<a>`, so it is keyboard operable; the
+burger and each group heading expose `aria-expanded` and (while their target is rendered)
+`aria-controls`; the sidebar is a single `nav[aria-label="Primary"]` landmark. The routed page sits
+in a `<main>` beside the sidebar with its own responsive width and padding, so nothing is hidden
+behind the sidebar or the sticky header.
+
+**Authentication is unchanged.** `AppComponent` still owns the MSAL redirect handling, active
+account resolution and `loginRedirect`/`logoutRedirect` calls; `UserMenuComponent` is presentation
+only and reports the two intents the application actually has. It invents no profile or account
+destination. The public `/auth` callback route and `MsalGuard` on every other route are untouched.
+
+Adding a navigation entry is therefore a data change in `layout/navigation.ts` once the page and
+its route exist — not a template change in the shell.
+
 ### Target feature boundaries
 
 Keep Angular standalone and migrate incrementally toward feature-local code:
@@ -1435,7 +1502,7 @@ src/app/
 ├── core/
 │   ├── config/                    Runtime configuration
 │   └── http/                      Cross-cutting HTTP concerns only
-├── layout/                            Application shell and navigation
+├── layout/                            Application shell and navigation (started, issue #391)
 ├── shared/
 │   ├── ui/                        Reusable presentation components
 │   └── formatting/                Presentation-only helpers
@@ -1519,9 +1586,9 @@ partial enforceable rule.
 
 ### Routing and loading
 
-Routes are declared centrally in `app.routes.ts`. Every top-level route loads its component with `loadComponent` (issue #65), except the public `/auth` Entra redirect callback, which stays eagerly imported because it is the landing route for an in-progress authentication redirect, not a migrated feature area. This keeps initial bundles smaller and creates an enforceable feature boundary without introducing NgModules. Preserve route URLs, guards, and parameters when adding or changing a route.
+Routes are declared centrally in `app.routes.ts`. Every top-level route loads its component with `loadComponent` (issue #65), except the public `/auth` Entra redirect callback, which stays eagerly imported because it is the landing route for an in-progress authentication redirect, not a migrated feature area. This keeps initial bundles smaller and creates an enforceable feature boundary without introducing NgModules. Preserve route URLs, guards, and parameters when adding or changing a route. Which of these routes the sidebar offers, and under which group, is navigation data in `layout/navigation.ts` (see [Application shell and navigation](#application-shell-and-navigation-issue-391)); a route always keeps working by direct URL whether or not it appears there.
 
-`/machines` (issue #385) is a dedicated, authenticated list page, `MachineListComponent`, that reads the same `MachineService.getAll()` machine-summary contract the home dashboard already uses, applies a client-side name/number search against the loaded list (there is no server-side filter on that endpoint), and never triggers a Nayax sales sync as a side effect of opening the page — it only reads whatever summary data is already persisted. Selecting a machine on this page navigates to the existing `/machines/:id` detail route (`MachineDetailComponent`), which is unchanged; `/machines` is a drill-down entry point into that existing page, not a replacement for it. The root sidebar/header link to `/machines` is deferred to a separate navigation-shell task.
+`/machines` (issue #385) is a dedicated, authenticated list page, `MachineListComponent`, that reads the same `MachineService.getAll()` machine-summary contract the home dashboard already uses, applies a client-side name/number search against the loaded list (there is no server-side filter on that endpoint), and never triggers a Nayax sales sync as a side effect of opening the page — it only reads whatever summary data is already persisted. Selecting a machine on this page navigates to the existing `/machines/:id` detail route (`MachineDetailComponent`), which is unchanged; `/machines` is a drill-down entry point into that existing page, not a replacement for it. `Machines` is a top-level link in the sidebar (issue #391; see [Application shell and navigation](#application-shell-and-navigation-issue-391)).
 
 Two routes may load one page when an older URL has to keep working: `/stock-history` and the
 preserved product entry point `/products/:id/stock` both load `StockHistoryPageComponent`, which
@@ -1529,7 +1596,7 @@ reads the product to preselect from either the query string or the route paramet
 History](#global-stock-history-issue-384)). The older URL keeps its own address rather than being
 redirected, so existing links and bookmarks stay valid.
 
-`/sites` (issue #386) is a standalone, authenticated list page that loads every site summary through the existing `SiteService.getAll()` contract, offers client-side search/filter by site name, and drills down into the existing `/sites/:id/products` route when a site is selected. It does not change the `Site` summary contract, the site-products workflow, or wire a sidebar/header entry point; that final navigation link is deferred to the navigation-shell task (#383).
+`/sites` (issue #386) is a standalone, authenticated list page that loads every site summary through the existing `SiteService.getAll()` contract, offers client-side search/filter by site name, and drills down into the existing `/sites/:id/products` route when a site is selected. It does not change the `Site` summary contract or the site-products workflow; `Sites` is a top-level link in the sidebar (issue #391).
 
 The static host must rewrite unknown application paths to `index.html`; otherwise refreshing a deep link such as `/reports/bookkeeping` or the Entra redirect landing on `/auth` will bypass Angular and return a host-level 404. `frontend/inventory-app/src/staticwebapp.config.json` (copied to the deployed output root by the `assets` build option) declares that Azure Static Web Apps `navigationFallback`, rewriting unmatched paths to `/index.html` while excluding `/assets/*` and static file extensions.
 
@@ -1556,9 +1623,8 @@ semantics, import deduplication, product matching, reimbursement parsing and per
 exactly where they were (see [Uploaded transaction export import (issue
 #301)](#uploaded-transaction-export-import-issue-301), [Reimbursement import and
 reconciliation](#reimbursement-import-and-reconciliation) and [Nayax product catalogue import
-(issue #300)](#nayax-product-catalogue-import-issue-300)). The
-final Admin navigation grouping and the root application navigation in `app.component.html` remain
-the separate navigation-shell task (#383).
+(issue #300)](#nayax-product-catalogue-import-issue-300)). `Imports` is one entry in the sidebar's
+`Admin` group (issue #391).
 
 **Admin costing and maintenance pages (issue #390, Admin split 3/3).** The three remaining
 maintenance workflows now have their own authenticated routes, which completes the decomposition:
@@ -1594,9 +1660,11 @@ workflows.
 With this split `AdminComponent` is a link hub only: it holds no workflow state, no service
 dependency and no second copy of any Admin tool, so it no longer owns duplicate costing, import or
 configuration logic. It deliberately keeps its own `/admin` address rather than redirecting to
-`/admin/nayax-settings`, because the root header and the Dashboard link to `/admin` and it is the
-only entry point to the six dedicated pages until the navigation-shell task (#383) adds them to
-the sidebar.
+`/admin/nayax-settings`, because the home Dashboard's "Open Admin" action and each
+dedicated page's "Back to Admin" link point at it. The sidebar's `Admin` group (issue #391) is now
+the primary way into the six dedicated pages, so `AdminComponent` is a second, still valid entry
+point rather than the only one; the root shell no longer links to `/admin` itself, because the
+group heading replaced that single header link.
 
 ### Runtime configuration and API contracts
 
