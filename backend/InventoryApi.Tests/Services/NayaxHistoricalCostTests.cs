@@ -270,7 +270,7 @@ public class NayaxHistoricalCostTests
         var nayaxFees = TestFinancialUseCases.ProcessingFees(db);
         var siteCommissions = Mock.Of<IGetSiteCommissionReport>();
         var getBookkeepingReport = new GetBookkeepingReport(new EfBookkeepingReportFactsProvider(db, nayaxFees, siteCommissions));
-        var getDailyReport = new GetDailyReport(new EfDailyReportFactsProvider(db, nayaxFees));
+        var getDailyReport = new GetDailyReport(new EfDailyReportFactsProvider(db, nayaxFees, TestFinancialUseCases.TrivialCalendar));
         var getReconciliationReport = new GetReconciliationReport(new EfReconciliationReportFactsProvider(db));
         var getMachineProfitabilityReport = new GetMachineProfitabilityReport(new EfMachineProfitabilityReportFactsProvider(db, nayaxFees, siteCommissions));
         var getProductProfitabilityReport = new GetProductProfitabilityReport(
@@ -404,7 +404,7 @@ public class NayaxHistoricalCostTests
             ProductName = productName,
             SettlementValue = 3m,
             PaymentMethod = "Card",
-            MachineAuthorizationTime = new DateTime(2026, 10, 3, 19, 30, 0, DateTimeKind.Utc)
+            AuthorizationDateTimeGmt = new DateTime(2026, 10, 3, 19, 30, 0, DateTimeKind.Utc)
         };
 
     private static InventoryCostTransitionBaseline Baseline(

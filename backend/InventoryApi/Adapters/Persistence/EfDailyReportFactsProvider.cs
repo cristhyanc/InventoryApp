@@ -1,6 +1,7 @@
 using Inventory.Application.Reporting.Daily;
 using Inventory.Application.Reporting.Shared;
 using Inventory.Application.NayaxProcessingFees;
+using Inventory.Application.Time;
 using Inventory.Domain.FinancialConfiguration;
 using InventoryApi.Data;
 using Microsoft.EntityFrameworkCore;
@@ -23,25 +24,38 @@ public sealed class EfDailyReportFactsProvider : IDailyReportFactsProvider
 {
     private readonly AppDbContext _db;
     private readonly IGetNayaxProcessingFees _nayaxProcessingFees;
+    private readonly IBusinessCalendar _businessCalendar;
 
-    public EfDailyReportFactsProvider(AppDbContext db, IGetNayaxProcessingFees nayaxProcessingFees)
+    public EfDailyReportFactsProvider(
+        AppDbContext db, IGetNayaxProcessingFees nayaxProcessingFees, IBusinessCalendar businessCalendar)
     {
         _db = db;
         _nayaxProcessingFees = nayaxProcessingFees;
+        _businessCalendar = businessCalendar;
     }
 
     public async Task<DailyReportFacts> GetFactsAsync(DateTime from, DateTime to, long? machineId, CancellationToken cancellationToken)
     {
+        // Two different kinds of boundary (issue #380). Sales are selected by instant, between Sydney
+        // midnight at the start of the first requested business date and, exclusively, Sydney midnight
+        // at the start of the day after the last one - 23, 24 or 25 hours per day. Imported
+        // reimbursement coverage dates are date-only values, so they keep plain calendar-date bounds
+        // and are never shifted by a timezone.
         var endExclusive = to.Date.AddDays(1);
+        var salesStartUtc = _businessCalendar.StartOfBusinessDayUtc(from.Date);
+        var salesEndExclusiveUtc = _businessCalendar.StartOfBusinessDayUtc(endExclusive);
 
-        var sales = await EfReportingSharedQueries.CostQuery(_db, from, endExclusive, machineId).ToListAsync(cancellationToken);
-        var statusSales = await EfReportingSharedQueries.AllSalesQuery(_db, from, endExclusive, machineId).ToListAsync(cancellationToken);
+        var sales = await EfReportingSharedQueries.CostQuery(_db, salesStartUtc, salesEndExclusiveUtc, machineId).ToListAsync(cancellationToken);
+        var statusSales = await EfReportingSharedQueries.AllSalesQuery(_db, salesStartUtc, salesEndExclusiveUtc, machineId).ToListAsync(cancellationToken);
         var importedByDate = await DailyImportedSummaryAsync(from, to, endExclusive, machineId, cancellationToken);
         var importedPeriod = await EfReportingSharedQueries.ImportedSummaryAsync(_db, from, endExclusive, machineId, cancellationToken);
 
+        // Each day's fees are charged to exactly the sales that day's revenue counts: the fee use case
+        // selects them between the same Sydney-midnight instants and buckets them by the same business
+        // date, rather than by the whole UTC date a Sydney day straddles.
         var feeByDate = new Dictionary<DateTime, NayaxProcessingFeeResult>();
         foreach (var date in sales.Select(x => BusinessCalendarDate(x.MachineAuthorizationTime)).Distinct())
-            feeByDate[date] = await _nayaxProcessingFees.Handle(date, date, machineId, cancellationToken);
+            feeByDate[date] = await _nayaxProcessingFees.HandleBusinessPeriod(BusinessPeriod(date, date), machineId, cancellationToken);
 
         var days = sales
             .GroupBy(x => BusinessCalendarDate(x.MachineAuthorizationTime))
@@ -79,7 +93,7 @@ public sealed class EfDailyReportFactsProvider : IDailyReportFactsProvider
             })
             .ToList();
 
-        var totalFees = await _nayaxProcessingFees.Handle(from, to, machineId, cancellationToken);
+        var totalFees = await _nayaxProcessingFees.HandleBusinessPeriod(BusinessPeriod(from.Date, to.Date), machineId, cancellationToken);
         var totals = new DailyReportTotalsFacts(
             PartialCostOfGoods: sales.Sum(x => x.CostOfGoodsSold ?? 0m),
             IsCogsComplete: sales.All(x => x.HasCost),
@@ -104,17 +118,29 @@ public sealed class EfDailyReportFactsProvider : IDailyReportFactsProvider
     }
 
     /// <summary>
-    /// The business-calendar day a sale belongs to, as a true date-only value.
+    /// The <c>Australia/Sydney</c> business date a sale belongs to, as a true date-only value
+    /// (issue #380): the same date the Sites/Machines dashboards and Transaction Sales put the sale's
+    /// instant on, taken from the business calendar port rather than from the instant's UTC date.
     ///
-    /// MachineAuthorizationTime materialises as a UTC instant (see the NayaxSales mapping in
-    /// AppDbContext), and a daily row's Date is a date-only business-calendar value the frontend
-    /// renders with the ordinary <c>date</c> pipe. Dropping the Kind here is what keeps it one:
-    /// carrying DateTimeKind.Utc through would serialise the day as "...T00:00:00Z", which a
-    /// browser west of UTC parses as the previous day (issue #232 explicitly requires date-only
-    /// fields to stay date-only). Only the Kind is dropped - the calendar day itself is unchanged.
+    /// A daily row's Date is a date-only value the frontend renders with the ordinary <c>date</c>
+    /// pipe, so it carries no <see cref="DateTimeKind"/>: carrying DateTimeKind.Utc through would
+    /// serialise the day as "...T00:00:00Z", which a browser west of UTC parses as the previous day
+    /// (issue #232 requires date-only fields to stay date-only).
     /// </summary>
-    private static DateTime BusinessCalendarDate(DateTime instant) =>
-        DateTime.SpecifyKind(instant.Date, DateTimeKind.Unspecified);
+    private DateTime BusinessCalendarDate(DateTime instant) =>
+        DateTime.SpecifyKind(_businessCalendar.ToBusinessDate(instant), DateTimeKind.Unspecified);
+
+    /// <summary>
+    /// The fee period for an inclusive range of business dates: its sales between Sydney midnight at
+    /// the start of the first date and the last instant before Sydney midnight after the last date,
+    /// which is the same set of sales the daily rows and totals select.
+    /// </summary>
+    private NayaxProcessingFeeBusinessPeriod BusinessPeriod(DateTime firstBusinessDate, DateTime lastBusinessDate) =>
+        new(
+            _businessCalendar.StartOfBusinessDayUtc(firstBusinessDate),
+            _businessCalendar.StartOfBusinessDayUtc(lastBusinessDate.AddDays(1)).AddTicks(-1),
+            firstBusinessDate,
+            lastBusinessDate);
 
     private async Task<Dictionary<DateTime, DailyImportedSummary>> DailyImportedSummaryAsync(
         DateTime from, DateTime to, DateTime endExclusive, long? machineId, CancellationToken cancellationToken)

@@ -93,6 +93,30 @@ public class NayaxProductGroup
     public string? ProductGroupCategoryCode { get; set; }
 }
 
+/// <summary>
+/// One item of the Nayax Lynx <c>GET /v1/machines/{MachineID}/lastSales</c> response
+/// ("Get Last Sales for Machine by MachineID",
+/// https://devzone.nayax.com/reference/lynx/machines/get-last-sales-for-machine-by-machineid).
+///
+/// The response carries two authorization timestamps with different meanings, and only one of them is
+/// an instant (issue #380):
+/// <list type="bullet">
+///   <item><see cref="AuthorizationDateTimeGmt"/> (<c>AuthorizationDateTimeGMT</c>) is documented as
+///   "The date and time when the transaction was authorized, in GMT" - the authoritative instant, and
+///   the only timestamp this integration may turn into a persisted UTC value.</item>
+///   <item><see cref="MachineAuthorizationTime"/> is documented as "The local date and time when the
+///   machine authorized the transaction" - machine-local wall-clock time carrying no offset. Its ticks
+///   are not a UTC instant, and the documented sample payload prints it with a trailing <c>Z</c> and
+///   equal to the GMT field anyway, so neither its shape nor our own persistence mapping can be read
+///   as evidence that it is UTC. It is kept as a raw imported fact (it is also one of the three values
+///   the Generate eReceipt request echoes back) and is never used as a sale instant.</item>
+/// </list>
+/// Machine-local time cannot be converted here even in principle: Nayax's only machine timezone
+/// metadata is <c>MachineTimeZoneOffset</c> on the machine basic-info endpoints, a bare
+/// <c>number</c> offset with no daylight-saving rule, and the sales payload carries no timezone
+/// identifier at all. Reading the GMT field is therefore what makes the sale instant correct across a
+/// daylight-saving transition without assuming a fixed <c>+10</c>/<c>+11</c> offset.
+/// </summary>
 public class NayaxLastSalesReport
 {
     public long TransactionID { get; set; }
@@ -114,7 +138,35 @@ public class NayaxLastSalesReport
     [JsonPropertyName("ProductCostPrice")]
     public decimal? ProductCostPrice { get; set; }
 
+    /// <summary>
+    /// The authorization instant in GMT, as a <see cref="DateTimeOffset"/> because the payload carries
+    /// an explicit offset (<c>"2024-10-09T16:53:51.225Z"</c>). Nullable so that a payload item which
+    /// does not carry it stays distinguishable from one authorized at
+    /// <see cref="DateTimeOffset.MinValue"/>: the documented schema declares the field non-nullable, so
+    /// an absent value means the payload did not match its contract, and a sale is then not imported at
+    /// all rather than imported at a defaulted or guessed instant.
+    /// </summary>
+    [JsonPropertyName("AuthorizationDateTimeGMT")]
+    public DateTimeOffset? AuthorizationDateTimeGmt { get; set; }
+
+    /// <summary>
+    /// The machine's local wall-clock authorization time, with no offset. A raw imported fact only; see
+    /// the type remarks. Never read as an instant.
+    /// </summary>
     public DateTime MachineAuthorizationTime { get; set; }
+
+    /// <summary>
+    /// The one normalization of a Nayax sale timestamp into a true UTC instant, at the integration
+    /// boundary and nowhere else, or <c>null</c> when the payload carried no authoritative GMT value.
+    ///
+    /// <see cref="DateTimeOffset.UtcDateTime"/> is offset-aware and idempotent: an instant that already
+    /// arrived as <c>Z</c> is returned unchanged, one that arrived as <c>+11:00</c> becomes the same
+    /// physical instant, and applying the conversion again cannot shift it a second time. That is what
+    /// makes re-encountering a transaction - which the rolling last-sales window does on every refresh,
+    /// and an uploaded export does on every re-upload - safe.
+    /// </summary>
+    [JsonIgnore]
+    public DateTime? AuthorizationInstantUtc => AuthorizationDateTimeGmt?.UtcDateTime;
 }
 
 /// <summary>

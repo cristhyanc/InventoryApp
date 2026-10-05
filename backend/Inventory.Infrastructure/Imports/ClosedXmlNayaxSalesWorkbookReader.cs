@@ -24,6 +24,11 @@ namespace Inventory.Infrastructure.Imports;
 ///   <item>A date cell is taken as a date, a numeric cell as an Excel serial date, and anything
 ///   else only as the export's own <c>d/M/yyyy h:mm:ss tt</c> text; an unrecognised instant stays
 ///   <c>null</c> so the row is skipped rather than imported at a guessed time.</item>
+///   <item>An <c>AuthorizationDateTimeGMT</c> column, the authoritative sale instant wherever the
+///   export carries one (issue #380), is additionally read in the ISO/offset-carrying form a GMT
+///   column is written in, and is normalized to UTC once. The machine-local
+///   <c>MachineAuthorizationTime</c> column's own parsing is unchanged, offsets included: an offset
+///   there would contradict what that field means in the Nayax contract.</item>
 ///   <item>A CSV is converted to a one-worksheet workbook of text cells, honouring quoted fields
 ///   and doubled quotes, which is why a CSV instant must match that exact text format.</item>
 /// </list>
@@ -59,6 +64,8 @@ public sealed class ClosedXmlNayaxSalesWorkbookReader : INayaxSalesWorkbookReade
 
         var parsed = new List<NayaxSalesImportRow>(Math.Max(rows.Count - 1, 0));
         foreach (var row in rows.Skip(1))
+        {
+            var (gmt, gmtInput) = GmtValue(Cell(row, headers, "AuthorizationDateTimeGMT"));
             parsed.Add(new NayaxSalesImportRow(
                 LongValue(Cell(row, headers, "TransactionID")),
                 LongValue(Cell(row, headers, "MachineID")),
@@ -69,7 +76,10 @@ public sealed class ClosedXmlNayaxSalesWorkbookReader : INayaxSalesWorkbookReade
                 DecimalValue(Cell(row, headers, "SettlementValue")) ?? 0m,
                 TextValue(Cell(row, headers, "PaymentMethod")),
                 TextValue(Cell(row, headers, "ProductName")),
-                DecimalValue(Cell(row, headers, "ProductCostPrice", "ProductCost", "CostPrice"))));
+                DecimalValue(Cell(row, headers, "ProductCostPrice", "ProductCost", "CostPrice")),
+                gmt,
+                gmtInput));
+        }
 
         return parsed;
     }
@@ -158,6 +168,55 @@ public sealed class ClosedXmlNayaxSalesWorkbookReader : INayaxSalesWorkbookReade
 
     private static decimal? DecimalValue(IXLCell? cell) =>
         decimal.TryParse(TextValue(cell), NumberStyles.Number, CultureInfo.InvariantCulture, out var value) ? value : null;
+
+    /// <summary>
+    /// A cell under a column the export itself names as GMT, read as a true UTC instant (issue #380).
+    /// The header is what establishes the timezone, so a value carrying no designator is taken as UTC
+    /// and one carrying an explicit offset is converted to the same physical instant rather than being
+    /// shifted a second time.
+    ///
+    /// The export's own <c>d/M/yyyy h:mm:ss tt</c> text form is tried before the ISO/offset form,
+    /// because <see cref="CultureInfo.InvariantCulture"/> would otherwise read
+    /// <c>4/10/2026 11:30:00 PM</c> as 10 April. Offset-aware parsing is deliberately not applied to
+    /// the machine-local <c>MachineAuthorizationTime</c> column, where an offset would contradict what
+    /// the field means; that column keeps <see cref="DateValue"/>'s rules unchanged.
+    /// </summary>
+    private static DateTime? UtcDateValue(IXLCell? cell)
+    {
+        if (cell is null || cell.IsEmpty())
+            return null;
+        if (cell.Value.IsDateTime)
+            return DateTime.SpecifyKind(cell.Value.GetDateTime(), DateTimeKind.Utc);
+        if (cell.Value.IsNumber)
+            return DateTime.SpecifyKind(DateTime.FromOADate(cell.Value.GetNumber()), DateTimeKind.Utc);
+
+        var text = cell.GetString().Trim();
+        if (DateTime.TryParseExact(
+                text, "d/M/yyyy h:mm:ss tt", CultureInfo.InvariantCulture, DateTimeStyles.None, out var exact))
+            return DateTime.SpecifyKind(exact, DateTimeKind.Utc);
+        return DateTimeOffset.TryParse(
+            text,
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+            out var offset)
+            ? offset.UtcDateTime
+            : null;
+    }
+
+    /// <summary>
+    /// The <c>AuthorizationDateTimeGMT</c> cell read as a true UTC instant, together with what the
+    /// export carried there: no such column, a blank cell, a value <see cref="UtcDateValue"/> cannot
+    /// read, or a usable instant (issue #380).
+    /// </summary>
+    private static (DateTime? Value, NayaxSalesGmtInput Input) GmtValue(IXLCell? cell)
+    {
+        if (cell is null)
+            return (null, NayaxSalesGmtInput.NotProvided);
+        if (cell.IsEmpty() || (!cell.Value.IsDateTime && !cell.Value.IsNumber && string.IsNullOrWhiteSpace(cell.GetString())))
+            return (null, NayaxSalesGmtInput.Blank);
+        var value = UtcDateValue(cell);
+        return value is null ? (null, NayaxSalesGmtInput.Malformed) : (value, NayaxSalesGmtInput.Valid);
+    }
 
     private static DateTime? DateValue(IXLCell? cell)
     {

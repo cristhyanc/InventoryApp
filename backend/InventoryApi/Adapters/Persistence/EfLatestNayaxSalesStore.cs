@@ -27,7 +27,14 @@ namespace InventoryApi.Adapters.Persistence;
 /// <see cref="ICostSale"/> use case (issue #297), and the baseline-cutoff-gated
 /// <see cref="IRebuildProductCost"/> replay. An already stored transaction is only enriched
 /// where it is still missing its product match or status, so an imported status or cost is never
-/// overwritten. The rebuild step is per product rather than all-or-nothing (issue #362): the sales
+/// overwritten - and neither is its stored instant, which is what makes re-reading the rolling
+/// last-sales window unable to shift a sale a second time (issue #380).
+///
+/// The one behavioural change issue #380 made here is which payload field the stored instant comes
+/// from: <c>NayaxSales.MachineAuthorizationTime</c> is a persisted true UTC instant, so it is written
+/// from the authoritative <c>AuthorizationDateTimeGMT</c> value through
+/// <see cref="NayaxLastSalesReport.AuthorizationInstantUtc"/>, not from the identically named but
+/// machine-local <c>MachineAuthorizationTime</c> payload field. The rebuild step is per product rather than all-or-nothing (issue #362): the sales
 /// are saved first and never retried, so one product's unreplayable history must not discard the
 /// other products' rebuilds, and the collected failures are raised afterwards instead.
 /// </summary>
@@ -67,6 +74,15 @@ public sealed class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
                 .FirstOrDefaultAsync(x => x.TransactionID == sale.TransactionID, cancellationToken);
             if (existing is null)
             {
+                // The sale instant is the payload's authoritative AuthorizationDateTimeGMT, normalized
+                // once at the integration boundary (NayaxLastSalesReport.AuthorizationInstantUtc,
+                // issue #380) - never the machine-local MachineAuthorizationTime wall clock, whose
+                // ticks are up to eleven hours away from the instant they would be stored as. A payload
+                // item carrying no authoritative instant is not imported at a guessed time; the rolling
+                // last-sales window returns the transaction again on the next refresh.
+                if (sale.AuthorizationInstantUtc is not { } authorizedUtc)
+                    continue;
+
                 var added = new NayaxSales
                 {
                     TransactionID = sale.TransactionID,
@@ -78,7 +94,7 @@ public sealed class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
                     PaymentMethod = sale.PaymentMethod,
                     ProductName = sale.ProductName,
                     NayaxProductCostPrice = sale.ProductCostPrice,
-                    MachineAuthorizationTime = sale.MachineAuthorizationTime
+                    MachineAuthorizationTime = authorizedUtc
                 };
                 _db.NayaxSales.Add(added);
                 await _saleCosting.CostAsync(added, cancellationToken: cancellationToken);

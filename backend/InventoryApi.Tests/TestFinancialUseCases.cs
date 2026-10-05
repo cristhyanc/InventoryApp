@@ -19,7 +19,15 @@ internal static class TestFinancialUseCases
         new GetNayaxProcessingFees(
             new EfNayaxProcessingFeeFactsProvider(db),
             new EfNayaxFeeRateStore(db),
-            businessCalendar ?? new FakeBusinessCalendar(new DateTime(2026, 3, 12)));
+            businessCalendar ?? TrivialCalendar);
+
+    /// <summary>
+    /// The identity business calendar (a UTC date is its own business date) the date-range report
+    /// tests use when they assert grouping or tenancy rather than <c>Australia/Sydney</c> behaviour.
+    /// A test that needs real Sydney days and daylight-saving transitions uses
+    /// <see cref="FixedSydneyTime"/> instead, and passes the same calendar to the fee use case.
+    /// </summary>
+    public static IBusinessCalendar TrivialCalendar => new FakeBusinessCalendar(new DateTime(2026, 3, 12));
 
     public static GetSiteCommissionReport SiteCommissions(
         AppDbContext db,

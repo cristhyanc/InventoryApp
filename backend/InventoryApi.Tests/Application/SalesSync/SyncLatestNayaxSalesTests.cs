@@ -22,6 +22,11 @@ namespace InventoryApi.Tests.Application.SalesSync;
 /// only what a completed sale affected). The transaction dedup/costing/classification rules
 /// themselves stay covered by <c>InventoryCostTransitionTests</c> and
 /// <c>NayaxHistoricalCostTests</c>, which already exercised them before the extraction.
+///
+/// The payload fixtures timestamp a sale with <c>AuthorizationDateTimeGmt</c>, because that is the
+/// field the Nayax contract makes authoritative and the only one the sale is imported at (issue
+/// #380); the machine-local <c>MachineAuthorizationTime</c> field no longer imports a sale at all.
+/// The timestamp contract itself is covered by <see cref="NayaxSaleTimestampContractTests"/>.
 /// </summary>
 public class SyncLatestNayaxSalesTests
 {
@@ -50,12 +55,12 @@ public class SyncLatestNayaxSalesTests
         nayax.Setup(x => x.GetMachineLastSalesAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxLastSalesReport>
             {
-                new() { TransactionID = 100, MachineID = 1, SettlementValue = 3m, MachineAuthorizationTime = DateTime.UtcNow }
+                new() { TransactionID = 100, MachineID = 1, SettlementValue = 3m, AuthorizationDateTimeGmt = DateTime.UtcNow }
             });
         nayax.Setup(x => x.GetMachineLastSalesAsync(2, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxLastSalesReport>
             {
-                new() { TransactionID = 200, MachineID = 2, SettlementValue = 5m, MachineAuthorizationTime = DateTime.UtcNow }
+                new() { TransactionID = 200, MachineID = 2, SettlementValue = 5m, AuthorizationDateTimeGmt = DateTime.UtcNow }
             });
 
         await UseCase(db, nayax.Object).Handle();
@@ -77,7 +82,7 @@ public class SyncLatestNayaxSalesTests
         nayax.Setup(x => x.GetMachineLastSalesAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxLastSalesReport>
             {
-                new() { TransactionID = 100, MachineID = 1, SettlementValue = 3m, MachineAuthorizationTime = DateTime.UtcNow }
+                new() { TransactionID = 100, MachineID = 1, SettlementValue = 3m, AuthorizationDateTimeGmt = DateTime.UtcNow }
             });
         var useCase = UseCase(db, nayax.Object);
 
@@ -105,7 +110,7 @@ public class SyncLatestNayaxSalesTests
         nayax.Setup(x => x.GetMachineLastSalesAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxLastSalesReport>
             {
-                new() { TransactionID = 100, MachineID = 1, SettlementValue = 3m, MachineAuthorizationTime = DateTime.UtcNow }
+                new() { TransactionID = 100, MachineID = 1, SettlementValue = 3m, AuthorizationDateTimeGmt = DateTime.UtcNow }
             });
         nayax.Setup(x => x.GetMachineLastSalesAsync(2, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("Nayax unavailable"));
@@ -158,7 +163,7 @@ public class SyncLatestNayaxSalesTests
         nayax.Setup(x => x.GetMachineLastSalesAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxLastSalesReport>
             {
-                new() { TransactionID = 100, MachineID = 1, SettlementValue = 3m, MachineAuthorizationTime = DateTime.UtcNow }
+                new() { TransactionID = 100, MachineID = 1, SettlementValue = 3m, AuthorizationDateTimeGmt = DateTime.UtcNow }
             });
         return nayax;
     }
