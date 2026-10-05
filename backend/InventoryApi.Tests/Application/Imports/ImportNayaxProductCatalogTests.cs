@@ -16,8 +16,8 @@ namespace InventoryApi.Tests.Application.Imports;
 /// <see cref="INayaxProductCatalogImportStore"/> in one call.
 ///
 /// The projection is where <c>Product.UnitPrice</c>'s Nayax-managed semantics live (AGENTS.md
-/// § Inventory and historical costing invariants): the catalogue <c>RetailPrice</c> is the selling
-/// price, and the Nayax <c>ProductCostPrice</c> must never reach it.
+/// § Inventory and historical costing invariants): the catalogue <c>ProductDefaultRetailPrice</c> is
+/// the selling price, and the Nayax <c>ProductCostPrice</c> must never reach it.
 /// </summary>
 public class ImportNayaxProductCatalogTests
 {
@@ -37,7 +37,7 @@ public class ImportNayaxProductCatalogTests
                     NayaxProductId = 100,
                     ProductName = "Chips",
                     ProductDescription = "Salted",
-                    RetailPrice = 3.50m,
+                    ProductDefaultRetailPrice = 3.50m,
                     ProductGroupId = 10,
                 },
             ],
@@ -52,11 +52,12 @@ public class ImportNayaxProductCatalogTests
     }
 
     /// <summary>
-    /// The selling price comes from the catalogue retail price, never from the Nayax cost field
-    /// (issue #57). A product Nayax prices at nothing imports as 0, exactly as before.
+    /// The selling price comes from the catalogue default retail price (<c>ProductDefaultRetailPrice</c>,
+    /// confirmed per issue #363), never from the Nayax cost field (issue #57). A product Nayax
+    /// prices at nothing imports as 0, exactly as before.
     /// </summary>
     [Fact]
-    public async Task Unit_price_comes_from_retail_price_and_a_missing_retail_price_imports_as_zero()
+    public async Task Unit_price_comes_from_the_default_retail_price_and_a_missing_price_imports_as_zero()
     {
         var store = new RecordingStore();
 
@@ -64,7 +65,7 @@ public class ImportNayaxProductCatalogTests
             store,
             products:
             [
-                new NayaxProduct { NayaxProductId = 100, ProductName = "Priced", ProductCostPrice = 1.10m, RetailPrice = 3.50m },
+                new NayaxProduct { NayaxProductId = 100, ProductName = "Priced", ProductCostPrice = 1.10m, ProductDefaultRetailPrice = 3.50m },
                 new NayaxProduct { NayaxProductId = 101, ProductName = "Unpriced", ProductCostPrice = 2.20m },
             ],
             groups: []);
