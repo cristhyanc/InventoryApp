@@ -60,9 +60,8 @@ describe('Admin costing and maintenance routes (issue #390)', () => {
   });
 
   /**
-   * `/admin` keeps its own address rather than redirecting: the root header and the Dashboard
-   * still link to it, and it is the only entry point to the dedicated Admin pages until the
-   * navigation-shell task (#383) wires them into the sidebar.
+   * `/admin` keeps its own address rather than redirecting: the Dashboard and each dedicated
+   * page's "Back to Admin" link still point at it, alongside the sidebar's Admin group (#391).
    */
   it('keeps /admin as the Admin landing page rather than redirecting it', async () => {
     const admin = route('admin');
