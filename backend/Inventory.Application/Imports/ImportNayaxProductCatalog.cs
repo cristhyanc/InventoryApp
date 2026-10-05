@@ -16,17 +16,14 @@ namespace Inventory.Application.Imports;
 /// Nayax <c>ProductCostPrice</c> is a cost, so the two must never be conflated (AGENTS.md
 /// § Inventory and historical costing invariants; docs/architecture.md § Product selling price).
 ///
-/// The retail-price field this import reads is NOT VERIFIED against the authoritative Nayax
-/// contract, and is deliberately left that way here. The Nayax developer portal documents
-/// <c>GET /v1/operators/{OperatorID}/products</c> as returning <c>ProductDefaultRetailPrice</c> and
-/// documents no <c>RetailPrice</c> on that endpoint (<c>RetailPrice</c> is documented only on the
-/// machine-product endpoints, which <c>NayaxMachineProduct</c> maps and which are unaffected), while
-/// the reused <c>Inventory.Application.Nayax.NayaxProduct.RetailPrice</c> binds the JSON name
-/// <c>RetailPrice</c>. Confirming the live payload needs an actual operator response, which no agent
-/// may fetch, so the mapping stays as issue #300 requires - unchanged - and the contract stays
-/// recorded as unverified rather than accepted (AGENTS.md § Nayax contract verification). Whether to
-/// change the JSON name is a <c>Product.UnitPrice</c> semantics decision for a human, with its own
-/// issue, data check and backfill decision.
+/// The retail-price field this import reads is confirmed against the authoritative Nayax contract
+/// (issue #363). A human confirmed from a live <c>GET /v1/operators/{OperatorID}/products</c>
+/// response that the product selling price field is <c>ProductDefaultRetailPrice</c>, matching the
+/// Nayax developer portal, which documents no bare <c>RetailPrice</c> on that endpoint
+/// (<c>RetailPrice</c> is documented only on the machine-product endpoints, which
+/// <c>NayaxMachineProduct</c> maps and which are unaffected). <c>NayaxProduct.ProductDefaultRetailPrice</c>
+/// binds that confirmed JSON name. Products already imported with <c>UnitPrice</c> 0 under the
+/// previous, unconfirmed mapping are not backfilled by this change (a separate decision).
 /// </summary>
 public sealed class ImportNayaxProductCatalog
 {
@@ -68,18 +65,11 @@ public sealed class ImportNayaxProductCatalog
         var products = new List<ImportedProductCatalogEntry>();
         foreach (var product in await productsTask)
         {
-            // UNVERIFIED Nayax contract, carried over from the legacy import unchanged (see the
-            // class remarks above): NayaxProduct.RetailPrice binds the JSON name "RetailPrice",
-            // which the published contract for GET /v1/operators/{OperatorID}/products does not
-            // document - it documents "ProductDefaultRetailPrice". If the live response matches the
-            // published contract, this reads null and every UnitPrice imports as 0. Preserving this
-            // behaviour is required by issue #300; correcting it is a Product.UnitPrice semantics
-            // change awaiting a human decision. Do not "fix" the ?? 0m here without it.
             products.Add(new ImportedProductCatalogEntry(
                 product.NayaxProductId,
                 product.ProductName!,
                 product.ProductDescription,
-                product.RetailPrice ?? 0m,
+                product.ProductDefaultRetailPrice ?? 0m,
                 product.ProductGroupId));
         }
 
