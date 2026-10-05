@@ -1,0 +1,164 @@
+<div class="mb-6 flex flex-wrap items-center justify-between gap-4">
+  <div>
+    <h1 class="text-2xl font-semibold text-slate-800">Stock History</h1>
+    <p class="mt-1 text-sm text-slate-500">Every recorded stock movement, newest first. Times are shown in business time (Australia/Sydney).</p>
+  </div>
+  <a routerLink="/products" class="inline-flex items-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Back to Products</a>
+</div>
+
+<form class="mb-6 rounded-xl bg-white p-6 shadow-sm" (ngSubmit)="applyFilters()">
+  <div class="grid gap-4 md:grid-cols-3">
+    <div>
+      <label for="filter-product" class="mb-1 block text-sm font-medium text-slate-700">Product</label>
+      <select id="filter-product" name="productId" [(ngModel)]="filters.productId">
+        <option [ngValue]="null">All products</option>
+        @for (product of products; track product.id) {
+          <option [ngValue]="product.id">{{ product.name }}</option>
+        }
+      </select>
+    </div>
+    <div>
+      <label for="filter-from" class="mb-1 block text-sm font-medium text-slate-700">From</label>
+      <input id="filter-from" name="from" type="date" [(ngModel)]="filters.from" />
+    </div>
+    <div>
+      <label for="filter-to" class="mb-1 block text-sm font-medium text-slate-700">To</label>
+      <input id="filter-to" name="to" type="date" [(ngModel)]="filters.to" />
+    </div>
+    <div>
+      <label for="filter-reason" class="mb-1 block text-sm font-medium text-slate-700">Reason</label>
+      <select id="filter-reason" name="reason" [(ngModel)]="filters.reason">
+        <option [ngValue]="null">All reasons</option>
+        @for (option of reasonOptions; track option.value) {
+          <option [ngValue]="option.value">{{ option.label }}</option>
+        }
+      </select>
+    </div>
+    <div>
+      <label for="filter-machine" class="mb-1 block text-sm font-medium text-slate-700">Machine</label>
+      <select id="filter-machine" name="machineId" [(ngModel)]="filters.machineId">
+        <option [ngValue]="null">All machines</option>
+        @for (machine of machines; track machine.machineID) {
+          <option [ngValue]="machine.machineID">{{ machine.machineName || machine.machineID }}</option>
+        }
+      </select>
+    </div>
+    <div>
+      <label for="filter-source" class="mb-1 block text-sm font-medium text-slate-700">Source</label>
+      <select id="filter-source" name="source" [(ngModel)]="filters.source">
+        <option [ngValue]="null">All sources</option>
+        @for (option of sourceOptions; track option.value) {
+          <option [ngValue]="option.value">{{ option.label }}</option>
+        }
+      </select>
+    </div>
+    <div>
+      <label for="filter-page-size" class="mb-1 block text-sm font-medium text-slate-700">Rows per page</label>
+      <select id="filter-page-size" name="pageSize" [(ngModel)]="filters.pageSize">
+        @for (size of pageSizeOptions; track size) {
+          <option [ngValue]="size">{{ size }}</option>
+        }
+      </select>
+    </div>
+  </div>
+  <div class="mt-4 flex flex-wrap gap-3">
+    <button type="submit" data-testid="apply-filters" class="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">Apply filters</button>
+    <button type="button" data-testid="clear-filters" [disabled]="!hasFilters" (click)="clearFilters()" class="inline-flex items-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60">Clear filters</button>
+  </div>
+</form>
+
+@if (selectedProduct) {
+  <div class="mb-6 grid gap-4 md:grid-cols-4" data-testid="selected-product-summary">
+    <div class="rounded-xl bg-white p-6 text-center shadow-sm">
+      <span class="block text-lg font-semibold text-slate-800">{{ selectedProduct.name }}</span>
+      <span class="mt-2 block text-sm text-slate-500">Selected product</span>
+    </div>
+    <div class="rounded-xl bg-white p-6 text-center shadow-sm">
+      <span class="text-3xl font-semibold text-blue-600">{{ selectedProduct.quantityInStock }}</span>
+      <span class="mt-2 block text-sm text-slate-500">Current Stock ({{ selectedProduct.unit }})</span>
+    </div>
+    <div class="rounded-xl bg-white p-6 text-center shadow-sm">
+      <span class="text-3xl font-semibold text-blue-600">{{ selectedProduct.lowStockThreshold }}</span>
+      <span class="mt-2 block text-sm text-slate-500">Low Stock Threshold</span>
+    </div>
+    <div class="rounded-xl bg-white p-6 text-center shadow-sm">
+      <span class="text-3xl font-semibold text-blue-600">${{ selectedProduct.unitPrice.toFixed(2) }}</span>
+      <span class="mt-2 block text-sm text-slate-500">Unit Price</span>
+    </div>
+  </div>
+
+  <app-stock-adjustment-form
+    [productId]="selectedProduct.id"
+    [machines]="machines"
+    (adjustmentApplied)="onAdjustmentApplied()">
+  </app-stock-adjustment-form>
+} @else if (filters.productId !== null) {
+  <p data-testid="unknown-product" class="mb-6 text-sm text-slate-500">
+    This product is not in the current product list, so an adjustment cannot be recorded here. Its movements are still listed below.
+  </p>
+} @else {
+  <p data-testid="select-product-hint" class="mb-6 text-sm text-slate-500">
+    Select a product above to record a stock adjustment for it.
+  </p>
+}
+
+<div class="rounded-xl bg-white p-6 shadow-sm">
+  <h2 class="mb-4 text-lg font-semibold text-slate-800">Adjustment History</h2>
+
+  @if (error) {
+    <p role="alert" data-testid="history-error" class="text-sm text-red-600">{{ error }}</p>
+  } @else if (loading) {
+    <output data-testid="history-loading" class="block text-sm text-slate-500">Loading stock history…</output>
+  } @else if (history === null || history.items.length === 0) {
+    <p data-testid="history-empty" class="text-sm text-slate-500">
+      {{ hasFilters ? 'No stock movements match these filters.' : 'No stock adjustments yet.' }}
+    </p>
+  } @else {
+    <div class="overflow-x-auto">
+      <table class="min-w-full divide-y divide-slate-200 text-sm">
+        <thead class="bg-slate-50">
+          <tr>
+            <th scope="col" class="px-4 py-3 text-left font-semibold text-slate-700">Date</th>
+            <th scope="col" class="px-4 py-3 text-left font-semibold text-slate-700">Product</th>
+            <th scope="col" class="px-4 py-3 text-left font-semibold text-slate-700">Change</th>
+            <th scope="col" class="px-4 py-3 text-left font-semibold text-slate-700">Resulting Qty</th>
+            <th scope="col" class="px-4 py-3 text-left font-semibold text-slate-700">Reason</th>
+            <th scope="col" class="px-4 py-3 text-left font-semibold text-slate-700">Source</th>
+            <th scope="col" class="px-4 py-3 text-left font-semibold text-slate-700">Machine</th>
+            <th scope="col" class="px-4 py-3 text-left font-semibold text-slate-700">Unit Cost</th>
+            <th scope="col" class="px-4 py-3 text-left font-semibold text-slate-700">Eat Before</th>
+            <th scope="col" class="px-4 py-3 text-left font-semibold text-slate-700">Notes</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100 bg-white" data-testid="history-rows">
+          @for (movement of history.items; track movement.id) {
+            <tr>
+              <td class="px-4 py-3 text-slate-600">{{ movement.createdAt | businessDateTime }}</td>
+              <td class="px-4 py-3 text-slate-700">{{ movement.productName }}</td>
+              <td class="px-4 py-3" [style.color]="movement.quantityChange < 0 ? '#b91c1c' : '#15803d'">
+                {{ movement.quantityChange > 0 ? '+' : '' }}{{ movement.quantityChange }}
+              </td>
+              <td class="px-4 py-3 text-slate-600">{{ movement.quantityAfter }}</td>
+              <td class="px-4 py-3 text-slate-600">{{ reasonLabel(movement.reason) }}</td>
+              <td class="px-4 py-3 text-slate-600">{{ sourceLabel(movement.source) }}</td>
+              <td class="px-4 py-3 text-slate-600">{{ machineLabel(movement.machineId) }}</td>
+              <td class="px-4 py-3 text-slate-600">{{ unitCostLabel(movement.unitCost) }}</td>
+              <td class="px-4 py-3 text-slate-600">{{ movement.eatBefore || '—' }}</td>
+              <td class="px-4 py-3 text-slate-600">{{ movement.notes }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+
+    <div class="mt-4 flex flex-wrap items-center justify-between gap-3">
+      <p data-testid="history-paging" class="text-sm text-slate-500">
+        Showing {{ history.items.length }} of {{ history.totalCount }} movements — page {{ history.page }} of {{ totalPages }}
+      </p>
+      <div class="flex gap-3">
+        <button type="button" data-testid="previous-page" [disabled]="history.page <= 1" (click)="previousPage()" class="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60">Previous</button>
+        <button type="button" data-testid="next-page" [disabled]="!history.hasMore" (click)="nextPage()" class="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60">Next</button>
+      </div>
+    </div>
+  }
+</div>
