@@ -19,9 +19,9 @@
 //   node scripts/run-agent-model-evals.mjs --print-prompts
 //   node scripts/run-agent-model-evals.mjs --provider claude-cli [--model <id>] [--json] [--output <file>]
 //   node scripts/run-agent-model-evals.mjs --provider fixture --responses <file> [--json]
-import { spawn, execFileSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -172,24 +172,23 @@ export function validateModelEvalSet(set, casesById, { root = repositoryRoot } =
  * Returns the text of a Markdown section: the heading line through the line before the next
  * heading of the same or a higher level. Throws when the heading is absent.
  */
+function headingLevel(line) {
+  const match = /^(#{1,6})\s/.exec(line);
+  return match ? match[1].length : 0;
+}
+
 export function extractMarkdownSection(text, heading) {
   const lines = text.split('\n');
   const start = lines.findIndex((line) => {
-    const match = /^(#{1,6})\s+(.*?)\s*$/.exec(line);
-    return match !== null && match[2] === heading;
+    const level = headingLevel(line);
+    return level > 0 && line.slice(level).trim() === heading;
   });
   if (start < 0) {
     throw new Error(`heading "${heading}" not found`);
   }
-  const level = /^(#+)/.exec(lines[start])[1].length;
-  let end = lines.length;
-  for (let i = start + 1; i < lines.length; i += 1) {
-    const match = /^(#{1,6})\s/.exec(lines[i]);
-    if (match && match[1].length <= level) {
-      end = i;
-      break;
-    }
-  }
+  const level = headingLevel(lines[start]);
+  const next = lines.findIndex((line, i) => i > start && headingLevel(line) > 0 && headingLevel(line) <= level);
+  const end = next < 0 ? lines.length : next;
   return lines.slice(start, end).join('\n').trimEnd();
 }
 
@@ -275,6 +274,20 @@ export function buildDecisionPrompt(caseObj, policyDocuments) {
 
 // --- Response parsing ----------------------------------------------------------------------
 
+// Removes one surrounding Markdown code fence (``` or ```json), without a regex.
+function stripCodeFence(text) {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith('```') || !trimmed.endsWith('```') || trimmed.length < 6) {
+    return text;
+  }
+  const firstLineEnd = trimmed.indexOf('\n');
+  const opener = firstLineEnd < 0 ? '' : trimmed.slice(3, firstLineEnd).trim();
+  if (firstLineEnd < 0 || (opener !== '' && opener !== 'json')) {
+    return text;
+  }
+  return trimmed.slice(firstLineEnd + 1, -3);
+}
+
 /**
  * Parses and strictly validates a model response. Accepts an already-parsed object (a
  * provider's structured output) or text, optionally inside one Markdown code fence.
@@ -284,10 +297,8 @@ export function buildDecisionPrompt(caseObj, policyDocuments) {
 export function parseDecisionResponse(raw) {
   let value = raw;
   if (typeof raw === 'string') {
-    const fenced = /^\s*```(?:json)?\s*\n([\s\S]*?)\n\s*```\s*$/.exec(raw);
-    const text = fenced ? fenced[1] : raw;
     try {
-      value = JSON.parse(text);
+      value = JSON.parse(stripCodeFence(raw));
     } catch {
       return { ok: false, error: 'response is not valid JSON.' };
     }
@@ -436,7 +447,7 @@ export function createFixtureProvider(responses, { label = 'fixture' } = {}) {
       return { id: 'fixture', label };
     },
     async complete({ caseId }) {
-      if (!Object.prototype.hasOwnProperty.call(responses, caseId)) {
+      if (!Object.hasOwn(responses, caseId)) {
         throw new Error(`no fixture response recorded for ${caseId}`);
       }
       return { raw: responses[caseId], providerMetadata: { provider: 'fixture' } };
@@ -500,6 +511,16 @@ function runProcess(spawnImpl, command, args, { cwd, input, timeoutMs }) {
   });
 }
 
+// Runs `work` with a fresh empty temporary directory that is always deleted afterwards.
+async function inIsolatedDirectory(work) {
+  const dir = mkdtempSync(join(tmpdir(), 'inventoryapp-model-eval-'));
+  try {
+    return await work(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 /**
  * Live provider that reuses the Claude Code CLI already installed and signed in on this
  * machine. It runs each call in a fresh empty temporary directory with every tool disabled, no
@@ -513,18 +534,7 @@ export function createClaudeCliProvider({
   spawnImpl = spawn,
 } = {}) {
   const unavailable = (error) =>
-    error && error.code === 'ENOENT'
-      ? new ProviderUnavailableError(`"${command}" is not installed or not on PATH.`)
-      : error;
-
-  async function inIsolatedDirectory(work) {
-    const dir = mkdtempSync(join(tmpdir(), 'inventoryapp-model-eval-'));
-    try {
-      return await work(dir);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  }
+    error?.code === 'ENOENT' ? new ProviderUnavailableError(`"${command}" is not installed or not on PATH.`) : error;
 
   return {
     id: 'claude-cli',
@@ -574,13 +584,34 @@ export function createClaudeCliProvider({
 
 // --- Run -------------------------------------------------------------------------------------
 
-function gitMetadata(root) {
+// Reads the checked-out commit from .git directly (no child process). Handles a worktree's
+// .git file, loose refs and packed-refs; returns null when it cannot tell. Whether the tree had
+// uncommitted changes is not needed: each result records the SHA-256 of the exact prompt sent.
+export function readGitHead(root) {
   try {
-    const sha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
-    const dirty = execFileSync('git', ['status', '--porcelain'], { cwd: root, encoding: 'utf8' }).trim() !== '';
-    return { sha, dirty };
+    let gitDir = resolve(root, '.git');
+    if (statSync(gitDir).isFile()) {
+      gitDir = resolve(root, readFileSync(gitDir, 'utf8').replace('gitdir:', '').trim());
+    }
+    const head = readFileSync(join(gitDir, 'HEAD'), 'utf8').trim();
+    if (!head.startsWith('ref:')) {
+      return /^[0-9a-f]{40}$/.test(head) ? head : null;
+    }
+    const ref = head.slice(4).trim();
+    const commonPath = join(gitDir, 'commondir');
+    const commonDir = existsSync(commonPath) ? resolve(gitDir, readFileSync(commonPath, 'utf8').trim()) : gitDir;
+    for (const dir of [gitDir, commonDir]) {
+      const loose = join(dir, ref);
+      if (existsSync(loose)) {
+        return readFileSync(loose, 'utf8').trim();
+      }
+    }
+    const packed = readFileSync(join(commonDir, 'packed-refs'), 'utf8')
+      .split('\n')
+      .find((line) => line.endsWith(` ${ref}`));
+    return packed ? packed.split(' ')[0] : null;
   } catch {
-    return { sha: null, dirty: null };
+    return null;
   }
 }
 
@@ -613,7 +644,7 @@ export async function runModelEvals({
     evalVersion: EVAL_VERSION,
     promptVersion: PROMPT_VERSION,
     generatedAt: now().toISOString(),
-    git: gitMetadata(root),
+    git: { sha: readGitHead(root) },
     corpus: { setVersion: set.version, ...corpus },
     provider: null,
     configuration: { minPassRate, timeoutMs, tools: 'none', responseSchema: RESPONSE_SCHEMA },
@@ -659,7 +690,7 @@ export async function runModelEvals({
       }
       outcome = { error: error.message, providerMetadata: error.providerMetadata };
     }
-    results.push(gradeCase(caseObj, entry, outcome));
+    results.push({ ...gradeCase(caseObj, entry, outcome), promptSha256: createHash('sha256').update(prompt).digest('hex') });
   }
 
   const modelsReported = [...new Set(results.flatMap((r) => r.providerMetadata?.modelsReported ?? []))];
@@ -677,112 +708,196 @@ export async function runModelEvals({
 
 // --- Reporting -------------------------------------------------------------------------------
 
-export function formatConsoleReport(report) {
-  const lines = [];
-  const meta = report.metadata;
-  const providerLabel = [meta.provider?.id, meta.provider?.cliVersion, (meta.provider?.modelsReported ?? []).join(', ')]
+function percent(rate) {
+  return `${(rate * 100).toFixed(0)}%`;
+}
+
+function formatHeader(meta) {
+  const provider = meta.provider ?? {};
+  const providerLabel = [provider.id, provider.cliVersion, (provider.modelsReported ?? []).join(', ')]
     .filter(Boolean)
     .join(' | ');
-  lines.push(`InventoryApp model-decision evals (${meta.evalVersion}, ${meta.promptVersion})`);
-  lines.push(`Provider: ${providerLabel || 'unknown'}`);
-  lines.push(`Git: ${meta.git.sha ?? 'unknown'}${meta.git.dirty ? ' (uncommitted changes)' : ''}`);
-  lines.push(`Set version: ${meta.corpus.setVersion}${meta.corpus.sha256 ? ` | corpus sha256 ${meta.corpus.sha256}` : ''}`);
-  lines.push(`Generated: ${meta.generatedAt}`);
-  lines.push('');
+  const corpusHash = meta.corpus.sha256 ? ' | corpus sha256 ' + meta.corpus.sha256 : '';
+  return [
+    `InventoryApp model-decision evals (${meta.evalVersion}, ${meta.promptVersion})`,
+    `Provider: ${providerLabel || 'unknown'}`,
+    `Git: ${meta.git.sha ?? 'unknown'}`,
+    `Set version: ${meta.corpus.setVersion}${corpusHash}`,
+    `Generated: ${meta.generatedAt}`,
+    '',
+  ];
+}
 
+function formatResult(result) {
+  const criticalTag = result.critical ? ' [CRITICAL]' : '';
+  const actual = result.actual ? result.actual.decision : 'no valid response';
+  return [
+    `  [${result.status}] ${result.id} (${result.category})${criticalTag} expected ${result.expectedDecision}, got ${actual}`,
+    ...result.failures.map((failure) => `         - ${failure}`),
+  ];
+}
+
+export function formatConsoleReport(report) {
+  const header = formatHeader(report.metadata);
   if (report.status === 'unavailable') {
-    lines.push(`Provider unavailable: ${report.reason}`);
-    lines.push('No case was graded. This is not a pass.');
-    return lines.join('\n');
+    return [...header, `Provider unavailable: ${report.reason}`, 'No case was graded. This is not a pass.'].join('\n');
   }
-
-  for (const result of report.results) {
-    const criticalTag = result.critical ? ' [CRITICAL]' : '';
-    const actual = result.actual ? result.actual.decision : 'no valid response';
-    lines.push(`  [${result.status}] ${result.id} (${result.category})${criticalTag} expected ${result.expectedDecision}, got ${actual}`);
-    for (const failure of result.failures) {
-      lines.push(`         - ${failure}`);
-    }
-  }
-  lines.push('');
-  lines.push('Category pass rates:');
-  for (const [category, rate] of Object.entries(report.summary.passRateByCategory)) {
-    lines.push(`  ${category}: ${(rate * 100).toFixed(0)}%`);
-  }
-  lines.push('');
-  lines.push(
-    `Total: ${report.summary.total} | Passed: ${report.summary.passed} | Failed: ${report.summary.failed} | ` +
-      `Pass rate: ${(report.summary.passRateOverall * 100).toFixed(0)}% (minimum ${(report.summary.minPassRate * 100).toFixed(0)}%)`,
-  );
-  if (report.summary.criticalFailures.length > 0) {
-    lines.push(`CRITICAL FAILURES: ${report.summary.criticalFailures.join(', ')}`);
-  }
-  lines.push('');
-  lines.push(report.ok ? 'Model-decision evals: PASS' : 'Model-decision evals: FAIL');
-  return lines.join('\n');
+  const { summary } = report;
+  return [
+    ...header,
+    ...report.results.flatMap(formatResult),
+    '',
+    'Category pass rates:',
+    ...Object.entries(summary.passRateByCategory).map(([category, rate]) => `  ${category}: ${percent(rate)}`),
+    '',
+    `Total: ${summary.total} | Passed: ${summary.passed} | Failed: ${summary.failed} | ` +
+      `Pass rate: ${percent(summary.passRateOverall)} (minimum ${percent(summary.minPassRate)})`,
+    ...(summary.criticalFailures.length > 0 ? [`CRITICAL FAILURES: ${summary.criticalFailures.join(', ')}`] : []),
+    '',
+    report.ok ? 'Model-decision evals: PASS' : 'Model-decision evals: FAIL',
+  ].join('\n');
 }
 
 // --- Command line ----------------------------------------------------------------------------
 
-export function parseArgs(argv) {
-  const options = {
-    provider: null,
-    model: null,
-    responses: null,
-    json: false,
-    output: null,
-    printPrompts: false,
-    cases: null,
-    minPassRate: 1,
-    timeoutMs: DEFAULT_TIMEOUT_MS,
-    casesDir: DEFAULT_CASES_DIR,
-    setPath: DEFAULT_SET_PATH,
-    root: repositoryRoot,
-  };
-  const valueFlags = {
-    '--provider': (v) => (options.provider = v),
-    '--model': (v) => (options.model = v),
-    '--responses': (v) => (options.responses = resolve(v)),
-    '--output': (v) => (options.output = resolve(v)),
-    '--cases': (v) => (options.cases = v.split(',').map((id) => id.trim()).filter(Boolean)),
-    '--min-pass-rate': (v) => (options.minPassRate = Number(v)),
-    '--timeout-ms': (v) => (options.timeoutMs = Number(v)),
-    '--cases-dir': (v) => (options.casesDir = resolve(v)),
-    '--set': (v) => (options.setPath = resolve(v)),
-    '--root': (v) => (options.root = resolve(v)),
-  };
+const BOOLEAN_FLAGS = Object.freeze(['--json', '--print-prompts']);
+const VALUE_FLAGS = Object.freeze([
+  '--provider',
+  '--model',
+  '--responses',
+  '--output',
+  '--cases',
+  '--min-pass-rate',
+  '--timeout-ms',
+  '--cases-dir',
+  '--set',
+  '--root',
+]);
+
+function readFlags(argv) {
+  const flags = {};
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
-    if (arg === '--json') {
-      options.json = true;
-    } else if (arg === '--print-prompts') {
-      options.printPrompts = true;
-    } else if (valueFlags[arg]) {
+    if (BOOLEAN_FLAGS.includes(arg)) {
+      flags[arg] = true;
+    } else if (VALUE_FLAGS.includes(arg)) {
       const value = argv[i + 1];
-      if (value === undefined || value.startsWith('--')) {
+      if (typeof value !== 'string' || value.startsWith('--')) {
         return { error: `${arg} needs a value.` };
       }
-      valueFlags[arg](value);
+      flags[arg] = value;
       i += 1;
     } else {
       return { error: `Unknown argument "${arg}".` };
     }
   }
+  return { flags };
+}
+
+function optionError(options) {
   if (!(options.minPassRate >= 0 && options.minPassRate <= 1)) {
-    return { error: '--min-pass-rate must be a number from 0 to 1.' };
+    return '--min-pass-rate must be a number from 0 to 1.';
   }
   if (!(Number.isInteger(options.timeoutMs) && options.timeoutMs > 0)) {
-    return { error: '--timeout-ms must be a positive integer.' };
+    return '--timeout-ms must be a positive integer.';
   }
-  if (!options.printPrompts) {
-    if (!['claude-cli', 'fixture'].includes(options.provider)) {
-      return { error: 'Choose a provider explicitly: --provider claude-cli or --provider fixture (or use --print-prompts).' };
-    }
-    if (options.provider === 'fixture' && !options.responses) {
-      return { error: '--provider fixture needs --responses <file>.' };
-    }
+  if (options.printPrompts) {
+    return null;
   }
-  return { options };
+  if (!['claude-cli', 'fixture'].includes(options.provider)) {
+    return 'Choose a provider explicitly: --provider claude-cli or --provider fixture (or use --print-prompts).';
+  }
+  if (options.provider === 'fixture' && !options.responses) {
+    return '--provider fixture needs --responses <file>.';
+  }
+  return null;
+}
+
+export function parseArgs(argv) {
+  const { flags, error } = readFlags(argv);
+  if (error) {
+    return { error };
+  }
+  const pathFlag = (name, fallback = null) => (flags[name] ? resolve(flags[name]) : fallback);
+  const options = {
+    provider: flags['--provider'] ?? null,
+    model: flags['--model'] ?? null,
+    responses: pathFlag('--responses'),
+    json: flags['--json'] === true,
+    output: pathFlag('--output'),
+    printPrompts: flags['--print-prompts'] === true,
+    cases: flags['--cases'] ? flags['--cases'].split(',').map((id) => id.trim()).filter(Boolean) : null,
+    minPassRate: flags['--min-pass-rate'] === undefined ? 1 : Number(flags['--min-pass-rate']),
+    timeoutMs: flags['--timeout-ms'] === undefined ? DEFAULT_TIMEOUT_MS : Number(flags['--timeout-ms']),
+    casesDir: pathFlag('--cases-dir', DEFAULT_CASES_DIR),
+    setPath: pathFlag('--set', DEFAULT_SET_PATH),
+    root: pathFlag('--root', repositoryRoot),
+  };
+  const invalid = optionError(options);
+  return invalid ? { error: invalid } : { options };
+}
+
+/** Loads and validates the corpus and the model-eval set, narrowed to --cases when given. */
+export function loadModelEvalInputs(options) {
+  const { cases, malformed } = loadCorpus(options.casesDir);
+  const errors = [
+    ...malformed.map((m) => `${m.file}: ${m.error}`),
+    ...cases.flatMap((c) => validateCase(c, { root: options.root, source: c.source })),
+  ];
+  if (errors.length === 0) {
+    errors.push(...validateCorpus(cases));
+  }
+  let setText = null;
+  let set = null;
+  try {
+    setText = readFileSync(options.setPath, 'utf8');
+    set = JSON.parse(setText);
+  } catch (readError) {
+    errors.push(`${options.setPath}: ${readError.message}`);
+  }
+  const casesById = new Map(cases.map((c) => [c.id, c]));
+  if (set !== null && errors.length === 0) {
+    errors.push(...validateModelEvalSet(set, casesById, { root: options.root }));
+  }
+  if (errors.length > 0) {
+    return { errors: ['Model-eval corpus or set is invalid:', ...errors.map((e) => `  - ${e}`)] };
+  }
+  if (options.cases) {
+    const unknown = options.cases.filter((id) => !set.cases.some((entry) => entry.id === id));
+    if (unknown.length > 0) {
+      return { errors: [`Not in the model-eval set: ${unknown.join(', ')}.`] };
+    }
+    set = { ...set, cases: set.cases.filter((entry) => options.cases.includes(entry.id)) };
+  }
+  return { cases, casesById, set, setText };
+}
+
+function printPrompts({ set, casesById }, options, log) {
+  log('Prompts only: no model is called. The hidden rubric fields are not part of any prompt.\n');
+  for (const entry of set.cases) {
+    const caseObj = casesById.get(entry.id);
+    log('---');
+    log(buildDecisionPrompt(caseObj, buildPolicyContext(caseObj, { root: options.root })));
+  }
+  log('---');
+}
+
+function createProvider(options) {
+  if (options.provider !== 'fixture') {
+    return { provider: createClaudeCliProvider({ model: options.model ?? undefined, timeoutMs: options.timeoutMs }) };
+  }
+  try {
+    return { provider: createFixtureProvider(JSON.parse(readFileSync(options.responses, 'utf8'))) };
+  } catch (readError) {
+    return { error: `${options.responses}: ${readError.message}` };
+  }
+}
+
+function exitCodeFor(report) {
+  if (report.status === 'unavailable') {
+    return EXIT_PROVIDER_UNAVAILABLE;
+  }
+  return report.ok ? EXIT_OK : EXIT_FAILED;
 }
 
 /**
@@ -796,80 +911,35 @@ export async function main(argv, { providerFactory, log = console.log, error = c
     error(parsedArgs.error);
     return EXIT_USAGE;
   }
-  const options = parsedArgs.options;
+  const { options } = parsedArgs;
 
-  const { cases, malformed } = loadCorpus(options.casesDir);
-  const corpusErrors = [
-    ...malformed.map((m) => `${m.file}: ${m.error}`),
-    ...cases.flatMap((c) => validateCase(c, { root: options.root, source: c.source })),
-  ];
-  if (corpusErrors.length === 0) {
-    corpusErrors.push(...validateCorpus(cases));
-  }
-  let setText;
-  let set;
-  try {
-    setText = readFileSync(options.setPath, 'utf8');
-    set = JSON.parse(setText);
-  } catch (readError) {
-    corpusErrors.push(`${options.setPath}: ${readError.message}`);
-  }
-  const casesById = new Map(cases.map((c) => [c.id, c]));
-  if (set !== undefined && corpusErrors.length === 0) {
-    corpusErrors.push(...validateModelEvalSet(set, casesById, { root: options.root }));
-  }
-  if (corpusErrors.length > 0) {
-    error('Model-eval corpus or set is invalid:');
-    corpusErrors.forEach((e) => error(`  - ${e}`));
+  const inputs = loadModelEvalInputs(options);
+  if (inputs.errors) {
+    inputs.errors.forEach((line) => error(line));
     return EXIT_USAGE;
   }
 
-  if (options.cases) {
-    const unknown = options.cases.filter((id) => !set.cases.some((entry) => entry.id === id));
-    if (unknown.length > 0) {
-      error(`Not in the model-eval set: ${unknown.join(', ')}.`);
-      return EXIT_USAGE;
-    }
-    set = { ...set, cases: set.cases.filter((entry) => options.cases.includes(entry.id)) };
-  }
-
   if (options.printPrompts) {
-    log('Prompts only: no model is called. The hidden rubric fields are not part of any prompt.\n');
-    for (const entry of set.cases) {
-      const caseObj = casesById.get(entry.id);
-      log('---');
-      log(buildDecisionPrompt(caseObj, buildPolicyContext(caseObj, { root: options.root })));
-    }
-    log('---');
+    printPrompts(inputs, options, log);
     return EXIT_OK;
   }
 
-  let provider;
-  if (providerFactory) {
-    provider = providerFactory(options);
-  } else if (options.provider === 'fixture') {
-    let responses;
-    try {
-      responses = JSON.parse(readFileSync(options.responses, 'utf8'));
-    } catch (readError) {
-      error(`${options.responses}: ${readError.message}`);
-      return EXIT_USAGE;
-    }
-    provider = createFixtureProvider(responses);
-  } else {
-    provider = createClaudeCliProvider({ model: options.model ?? undefined, timeoutMs: options.timeoutMs });
+  const created = providerFactory ? { provider: providerFactory(options) } : createProvider(options);
+  if (created.error) {
+    error(created.error);
+    return EXIT_USAGE;
   }
 
-  const selected = set.cases.map((entry) => casesById.get(entry.id));
+  const selected = inputs.set.cases.map((entry) => inputs.casesById.get(entry.id));
   const report = await runModelEvals({
-    cases,
-    set,
-    provider,
+    cases: inputs.cases,
+    set: inputs.set,
+    provider: created.provider,
     root: options.root,
     minPassRate: options.minPassRate,
     timeoutMs: options.timeoutMs,
     corpus: {
-      sha256: corpusDigest(setText, selected, options.casesDir),
+      sha256: corpusDigest(inputs.setText, selected, options.casesDir),
       caseIds: selected.map((c) => c.id),
     },
   });
@@ -879,11 +949,7 @@ export async function main(argv, { providerFactory, log = console.log, error = c
     writeFileSync(options.output, `${json}\n`);
   }
   log(options.json ? json : formatConsoleReport(report));
-
-  if (report.status === 'unavailable') {
-    return EXIT_PROVIDER_UNAVAILABLE;
-  }
-  return report.ok ? EXIT_OK : EXIT_FAILED;
+  return exitCodeFor(report);
 }
 
 const invokedDirectly = process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url);

@@ -450,7 +450,7 @@ node scripts/run-agent-model-evals.mjs --provider claude-cli --output report.jso
 No `--model` was passed, so the CLI used its own configured default. Recorded metadata:
 
 - Eval version `model-decision-eval-v1`, prompt version `model-decision-prompt-v1`, set version 1.
-- Git SHA `252c4fb6ca65aa324c2dea218c4dbc1f956a24cd` (the first commit of the issue #249 branch; clean tree).
+- Git SHA `252c4fb6ca65aa324c2dea218c4dbc1f956a24cd` (the first commit of the issue #249 branch; the runner version used then also reported no uncommitted changes).
 - Corpus SHA-256 (set file plus the six case files) `b927a27c7f7fc6441c36729355b50b1f2545953341547997715e74101aeae1dd`.
 - Provider `claude-cli`, Claude Code `2.1.289`. Models the CLI reported: `claude-sonnet-5-5` and `claude-haiku-4-5-20251001` (the CLI reports a small helper model alongside the main one).
 - Configuration: no tools, empty temporary working directory, minimum pass rate 1, 300000 ms timeout per case. Reported cost about USD 0.09–0.10 per case.

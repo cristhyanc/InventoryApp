@@ -227,9 +227,10 @@ check; those stay with `node scripts/run-agent-evals.mjs`, which is unchanged.
 The console report shows `PASS`/`FAIL` per case with expected and actual decisions, per-category
 pass rates and critical failures. `--json`/`--output` give the full machine-readable report:
 `status` (`completed` or `unavailable`), per-case results (actual response, failures,
-forbidden-outcome results, provider metadata such as the models the CLI reported and its cost),
-`summary`, `ok`, and `metadata`: eval and prompt versions, timestamp, git SHA and whether the tree
-had uncommitted changes, set version, a SHA-256 of the set file and the graded case files, the
+forbidden-outcome results, provider metadata such as the models the CLI reported and its cost, and
+the SHA-256 of the exact prompt sent, which pins the policy text even on an uncommitted tree),
+`summary`, `ok`, and `metadata`: eval and prompt versions, timestamp, git SHA (read from `.git`
+directly; no child process), set version, a SHA-256 of the set file and the graded case files, the
 provider, CLI version, requested model and every model the CLI reported using (the CLI can report
 a small helper model alongside the main one), and the configuration (pass threshold, timeout, no
 tools, response schema).

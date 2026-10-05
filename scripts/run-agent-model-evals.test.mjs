@@ -3,7 +3,8 @@
 // Run with: node --test scripts/run-agent-model-evals.test.mjs
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { after, before, describe, it } from 'node:test';
@@ -28,6 +29,7 @@ import {
   gradeCase,
   main,
   parseDecisionResponse,
+  readGitHead,
   runModelEvals,
   summarize,
   validateModelEvalSet,
@@ -200,6 +202,17 @@ describe('parseDecisionResponse', () => {
   it('accepts JSON text, with or without a code fence', () => {
     assert.equal(parseDecisionResponse(JSON.stringify(response('stop'))).ok, true);
     assert.equal(parseDecisionResponse('```json\n' + JSON.stringify(response('stop')) + '\n```').ok, true);
+    assert.equal(parseDecisionResponse('  ```\n' + JSON.stringify(response('stop')) + '\n```  ').ok, true);
+  });
+
+  it('does not unwrap a fence in another language', () => {
+    assert.equal(parseDecisionResponse('```yaml\n' + JSON.stringify(response('stop')) + '\n```').ok, false);
+  });
+
+  it('handles a long unterminated fence quickly (no regex backtracking)', () => {
+    const started = Date.now();
+    assert.equal(parseDecisionResponse('```json\n' + ' \n'.repeat(50000)).ok, false);
+    assert.ok(Date.now() - started < 1000);
   });
 
   const invalid = [
@@ -309,6 +322,7 @@ describe('runModelEvals', () => {
     assert.equal(report.metadata.corpus.sha256, 'abc');
     assert.equal(report.metadata.provider.id, 'fixture');
     assert.ok('sha' in report.metadata.git);
+    assert.ok(report.results.every((r) => /^[0-9a-f]{64}$/.test(r.promptSha256)));
     assert.equal(report.metadata.configuration.tools, 'none');
     assert.doesNotThrow(() => JSON.parse(JSON.stringify(report)));
   });
@@ -363,6 +377,50 @@ describe('runModelEvals', () => {
     };
     const report = await runModelEvals({ cases: corpus, set: realSet, provider });
     assert.deepEqual(report.summary.criticalFailures, ['DB-001']);
+  });
+});
+
+// --- readGitHead ------------------------------------------------------------------------------
+
+describe('readGitHead', () => {
+  it('matches git for this checkout', (t) => {
+    let expected;
+    try {
+      expected = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repositoryRoot, encoding: 'utf8' }).trim();
+    } catch {
+      t.skip('git is not available');
+      return;
+    }
+    assert.equal(readGitHead(repositoryRoot), expected);
+  });
+
+  it('reads loose refs, packed refs, a worktree .git file and a detached HEAD', () => {
+    const sha = 'a'.repeat(40);
+    const repo = join(scratch, 'repo');
+    mkdirSync(join(repo, '.git', 'refs', 'heads'), { recursive: true });
+    writeFileSync(join(repo, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+    writeFileSync(join(repo, '.git', 'refs', 'heads', 'main'), `${sha}\n`);
+    assert.equal(readGitHead(repo), sha);
+
+    rmSync(join(repo, '.git', 'refs', 'heads', 'main'));
+    writeFileSync(join(repo, '.git', 'packed-refs'), `# pack-refs\n${'b'.repeat(40)} refs/heads/main\n`);
+    assert.equal(readGitHead(repo), 'b'.repeat(40));
+
+    const worktree = join(scratch, 'worktree');
+    const worktreeGitDir = join(repo, '.git', 'worktrees', 'wt');
+    mkdirSync(worktreeGitDir, { recursive: true });
+    mkdirSync(worktree, { recursive: true });
+    writeFileSync(join(worktree, '.git'), `gitdir: ${worktreeGitDir}\n`);
+    writeFileSync(join(worktreeGitDir, 'HEAD'), 'ref: refs/heads/main\n');
+    writeFileSync(join(worktreeGitDir, 'commondir'), '../..\n');
+    assert.equal(readGitHead(worktree), 'b'.repeat(40));
+
+    writeFileSync(join(repo, '.git', 'HEAD'), `${'c'.repeat(40)}\n`);
+    assert.equal(readGitHead(repo), 'c'.repeat(40));
+  });
+
+  it('returns null outside a repository', () => {
+    assert.equal(readGitHead(join(scratch, 'not-a-repo')), null);
   });
 });
 
