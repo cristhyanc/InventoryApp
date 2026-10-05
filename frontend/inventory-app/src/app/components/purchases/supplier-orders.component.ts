@@ -24,9 +24,9 @@ export class SupplierOrdersComponent implements OnInit {
   statusFilter: SupplierOrderStatusFilter = '';
 
   constructor(
-    private supplierOrderService: SupplierOrderService,
-    private router: Router,
-    private toastService: ToastService
+    private readonly supplierOrderService: SupplierOrderService,
+    private readonly router: Router,
+    private readonly toastService: ToastService
   ) {}
 
   ngOnInit(): void {
