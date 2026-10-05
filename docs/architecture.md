@@ -1913,7 +1913,13 @@ business scoping are unchanged), the settlement-value completed/cancelled defaul
 historical costing through the Application `ICostSale` use case (issue #297), and the `IRebuildProductCost` rebuild for products whose
 transition-baseline cutoff a newly imported completed sale follows - and enriches an already stored
 transaction only where its product match or status is still missing, so an imported status or cost is
-never overwritten.
+never overwritten, and neither is its stored instant.
+
+The one rule here that issue #380 changed is which payload field the stored sale instant comes from:
+the authoritative `AuthorizationDateTimeGMT`, normalized once at the integration boundary, rather
+than the machine-local `MachineAuthorizationTime` payload field it had been read from. A payload item
+carrying no authoritative GMT instant is not imported at all rather than imported at a guessed time.
+See [Nayax sale timestamps](#nayax-sale-timestamps-issue-380).
 
 The persist step and the rebuild step have deliberately different failure boundaries. The sales
 batch is one save, but the rebuild is per product (issue #362): the sales are already persisted and
@@ -1961,11 +1967,11 @@ All report, dashboard, transaction-detail, CSV, and XLSX paths must call the sam
 
 Timezone migration is not part of an incidental feature. Changes require explicit boundary and daylight-saving tests.
 
-Time acquisition and timezone conversion are external boundaries, not pure calculations, so their port lives in `Inventory.Application` and their implementation lives in `Inventory.Infrastructure` (issue #44): `Inventory.Application.Time.IClock` (promoted from the NayaxFeeSettings-scoped port the first Clean Architecture slice introduced) is the narrow port for the current UTC instant, implemented by `Inventory.Infrastructure.Clock.SystemClock`. `Inventory.Application.Time.IBusinessCalendar` converts a UTC instant to its `Australia/Sydney` business calendar date (`ToBusinessDate`) and resolves the UTC instant of the start of a Sydney business day (`StartOfBusinessDayUtc`), so a caller can derive inclusive-date-range UTC boundaries without ever touching `TimeZoneInfo` itself; `Inventory.Infrastructure.Time.SydneyBusinessCalendar` implements it using `TimeZoneInfo.FindSystemTimeZoneById("Australia/Sydney")`, which resolves the platform's IANA timezone database and therefore already accounts for daylight-saving transitions. `Inventory.Domain` still owns only the deterministic, timezone-free date-range/financial-year rules (`AustralianFinancialYear`, `ReportingRangeResolver`) and must not reference `TimeZoneInfo`, server-local time, or an infrastructure clock implementation. `GetSiteCommissionReport`'s commission-due "Overdue" determination uses `IBusinessCalendar` outside the clock's original NayaxFeeSettings feature, replacing a server-local `DateTime.Today` comparison with the injected Sydney business date. Storage keeps true UTC instants (`MachineAuthorizationTime`, `CreatedAt`/`UpdatedAt`, and similar timestamp columns); `IBusinessCalendar` is what turns a stored instant into the Sydney calendar date a report or a due-date comparison actually means, and no historical timestamp is reinterpreted or rewritten by this abstraction.
+Time acquisition and timezone conversion are external boundaries, not pure calculations, so their port lives in `Inventory.Application` and their implementation lives in `Inventory.Infrastructure` (issue #44): `Inventory.Application.Time.IClock` (promoted from the NayaxFeeSettings-scoped port the first Clean Architecture slice introduced) is the narrow port for the current UTC instant, implemented by `Inventory.Infrastructure.Clock.SystemClock`. `Inventory.Application.Time.IBusinessCalendar` converts a UTC instant to its `Australia/Sydney` business calendar date (`ToBusinessDate`) and resolves the UTC instant of the start of a Sydney business day (`StartOfBusinessDayUtc`), so a caller can derive inclusive-date-range UTC boundaries without ever touching `TimeZoneInfo` itself; `Inventory.Infrastructure.Time.SydneyBusinessCalendar` implements it using `TimeZoneInfo.FindSystemTimeZoneById("Australia/Sydney")`, which resolves the platform's IANA timezone database and therefore already accounts for daylight-saving transitions. `Inventory.Domain` still owns only the deterministic, timezone-free date-range/financial-year rules (`AustralianFinancialYear`, `ReportingRangeResolver`) and must not reference `TimeZoneInfo`, server-local time, or an infrastructure clock implementation. `GetSiteCommissionReport`'s commission-due "Overdue" determination uses `IBusinessCalendar` outside the clock's original NayaxFeeSettings feature, replacing a server-local `DateTime.Today` comparison with the injected Sydney business date. Storage keeps true UTC instants (`MachineAuthorizationTime`, `CreatedAt`/`UpdatedAt`, and similar timestamp columns); `IBusinessCalendar` is what turns a stored instant into the Sydney calendar date a report or a due-date comparison actually means, and no historical timestamp is reinterpreted or rewritten by this abstraction. That storage invariant is a rule about what the column must hold, not evidence about what an external payload means, and for `NayaxSales.MachineAuthorizationTime` it is not yet met by every row (rows stored before issue #380, and new sales from an uploaded export without a usable GMT value, are unverified): for a timestamp that arrives from Nayax, the invariant is established by the normalization described in [Nayax sale timestamps](#nayax-sale-timestamps-issue-380) below, and never inferred from the EF Core mapping, from this document, or from the column's name.
 
 **No host clock inside Domain or Application (issue #310).** `Inventory.Domain` and `Inventory.Application` acquire the current time only through those two ports; the architecture test `InventoryApi.Tests.Architecture.TimeAcquisitionTests` fails if either project's source reads `DateTime.Now`, `DateTime.UtcNow` or `DateTime.Today` (see [Testing architecture](#backend-tests)). The last six such reads were removed with the guard:
 
-- **The Sites and Machines dashboards use the Sydney business day.** `Inventory.Application.Machines.MachineDashboardWindow` resolves the dashboards' six rolling comparison periods (today, week-to-date, the previous comparable week, last full week, month-to-date, two weeks ago) once per request: it takes the current instant from `IClock`, converts it to the Sydney business date with `IBusinessCalendar.ToBusinessDate`, feeds *that* date to the unchanged `Inventory.Domain.Machines.MachineDashboardPeriods` arithmetic, and converts each resulting business-day boundary back to a UTC instant with `IBusinessCalendar.StartOfBusinessDayUtc` (a completed week's inclusive end is the following business day's start minus one millisecond, so a week containing a transition still ends when the next Sydney day begins). The period boundaries are UTC instants because the sales facts they select are UTC instants: `NayaxSales.MachineAuthorizationTime` is a persisted true UTC instant (`AppDbContext` re-specifies `DateTimeKind.Utc` on read — see **Serialised instant identity at the persistence boundary** below), so period and sale are compared in one time base with no conversion at the comparison site. `GetSiteSummaries`, `ListMachineDashboard` and `GetMachineDashboard` each resolve one window per request — `ListMachineDashboard` no longer reads the clock once per machine, so every machine in a listing is aggregated over identical periods — and `IMachineDashboardFactsStore.GetFactsAsync` takes that resolved window instead of a bare "now", which keeps the decision of *which* business day the dashboard means in the use case and leaves `EfMachineDashboardFactsStore` to select sales between the instants it is handed. The owner decided (2 October 2026) that these dashboards report the Sydney business day, not server-local time.
+- **The Sites and Machines dashboards use the Sydney business day.** `Inventory.Application.Machines.MachineDashboardWindow` resolves the dashboards' six rolling comparison periods (today, week-to-date, the previous comparable week, last full week, month-to-date, two weeks ago) once per request: it takes the current instant from `IClock`, converts it to the Sydney business date with `IBusinessCalendar.ToBusinessDate`, feeds *that* date to the unchanged `Inventory.Domain.Machines.MachineDashboardPeriods` arithmetic, and converts each resulting business-day boundary back to a UTC instant with `IBusinessCalendar.StartOfBusinessDayUtc` (a completed week's inclusive end is the following business day's start minus one millisecond, so a week containing a transition still ends when the next Sydney day begins). The period boundaries are UTC instants because the sales facts they select are UTC instants: `NayaxSales.MachineAuthorizationTime` is a persisted true UTC instant, normalized from the Nayax payload's authoritative GMT field at ingestion (see [Nayax sale timestamps](#nayax-sale-timestamps-issue-380) below — issue #380 corrected this; the `AppDbContext` `DateTimeKind.Utc` conversion described under **Serialised instant identity at the persistence boundary** restores in-memory `Kind` metadata only and is not what makes the value UTC), so period and sale are compared in one time base with no conversion at the comparison site. `GetSiteSummaries`, `ListMachineDashboard` and `GetMachineDashboard` each resolve one window per request — `ListMachineDashboard` no longer reads the clock once per machine, so every machine in a listing is aggregated over identical periods — and `IMachineDashboardFactsStore.GetFactsAsync` takes that resolved window instead of a bare "now", which keeps the decision of *which* business day the dashboard means in the use case and leaves `EfMachineDashboardFactsStore` to select sales between the instants it is handed. The owner decided (2 October 2026) that these dashboards report the Sydney business day, not server-local time.
   - *Both endpoints of a comparison period are resolved in Sydney time, never by shifting the current UTC instant.* The previous comparable week ends the same elapsed trading time into the previous Sydney business week as now is into the current one, measured from each week's own Monday-midnight instant. Subtracting seven days from the current UTC instant instead would break across a daylight-saving transition, where the two weeks begin an hour apart in UTC: on the Monday after a transition the subtraction lands *before* the previous week began, and the comparison period is empty. The end is also held at the previous week's own last instant, because the week daylight saving ends is 169 hours long and a longer current week would otherwise push the comparable period into the current one.
   - *Each period also carries the Sydney business dates it covers* (`MachineDashboardPeriodUtc.FirstBusinessDate`/`LastBusinessDate`), describing the same period as its instants, because the dashboard's financial inputs are measured in both bases: revenue and commission by instant, Nayax processing fees by business date (see the fee paragraph below).
 - **Effective-dated commission and Nayax fee lookups use `IBusinessCalendar.Today`.** `Inventory.Application.Products.ResolveMachineProductPricing` and `Inventory.Application.Sites.GetSiteProducts` select the site commission agreement and the Nayax processing fee rate for the Sydney business date, consistent with the repository's Australia/Sydney reporting-date rule and with `GetSiteCommissionReport`. On a UTC host the Sydney date is a day ahead for ten to eleven hours of every day, which previously priced a slot with the previous day's configuration whenever a new rate took effect. The pricing formulas and the existing missing/overlapping-configuration handling are unchanged.
@@ -2030,6 +2036,144 @@ API field into a UTC instant a browser west of UTC would render as the previous 
 all three columns run against a real SQLite connection, because EF Core's InMemory provider keeps the
 original CLR object and does not reproduce the `Kind` loss at all: `StockHistoryTimestampContractTests`,
 `TransactionSalesTimestampContractTests`, and `SyncRestockTimestampContractTests`.
+
+#### Nayax sale timestamps (issue #380)
+
+A Nayax sale timestamp crosses four distinct stages, and conflating any two of them moves revenue
+between business days. They are kept separate deliberately.
+
+**1. The external representation is not UTC.** The authoritative contract is Nayax's own published
+one for `GET /v1/machines/{MachineID}/lastSales`
+([Get Last Sales for Machine by MachineID](https://devzone.nayax.com/reference/lynx/machines/get-last-sales-for-machine-by-machineid),
+read through the Nayax documentation MCP server — see AGENTS.md § Nayax contract verification). It
+carries two authorization timestamps:
+
+| Payload field | Documented meaning | Status here |
+| --- | --- | --- |
+| `AuthorizationDateTimeGMT` | "The date and time when the transaction was authorized, in GMT." | **Authoritative instant.** The only sale timestamp this integration may persist. |
+| `MachineAuthorizationTime` | "The local date and time when the machine authorized the transaction." | Machine-local wall clock, no offset. A raw imported fact; never a sale instant. |
+
+Two things follow, and both are load-bearing:
+
+- The upstream field named `MachineAuthorizationTime` is **not** UTC. Nothing about our own storage
+  can establish otherwise: the `AppDbContext` `DateTimeKind.Utc` conversion is `Kind` metadata on
+  read, the column name is a historical artefact, and the documented sample payload even prints the
+  machine-local field with a trailing `Z` and equal to the GMT field — which is exactly why a `Z` on
+  that field proves nothing.
+- Machine-local time cannot be converted to an instant from this payload at all. Nayax's only
+  machine timezone metadata is `MachineTimeZoneOffset` on the machine basic-info endpoints, a bare
+  `number` offset with no daylight-saving rule, and `GET /v1/timeZones` returns DST-aware zone
+  records only by offset, not per machine. Reading `AuthorizationDateTimeGMT` is therefore what makes
+  the sale instant correct across a daylight-saving transition **without** any fixed `+10`/`+11`
+  assumption. A fixed-offset conversion is prohibited.
+
+**2. Normalization happens once, at the integration boundary.**
+`Inventory.Application.Nayax.NayaxLastSalesReport` models `AuthorizationDateTimeGmt` as a nullable
+`DateTimeOffset`, because the payload carries an explicit offset, and exposes the one conversion:
+`AuthorizationInstantUtc => AuthorizationDateTimeGmt?.UtcDateTime`. `DateTimeOffset.UtcDateTime` is
+offset-aware and idempotent — a `Z` value is returned unchanged, a `+11:00` value becomes the same
+physical instant, and applying it again cannot shift anything — so a transaction re-encountered by
+the rolling last-sales window, or re-uploaded in an export, can never be shifted twice.
+`EfLatestNayaxSalesStore` writes that instant and **fails closed**: a payload item carrying no
+authoritative GMT value is not imported at a guessed or defaulted time, and the rolling window
+returns the transaction again on the next refresh. An already stored transaction's instant is never
+rewritten; only its missing product match and status are enriched, exactly as before.
+
+**3. Persistence keeps a true UTC instant.** `NayaxSales.MachineAuthorizationTime` is that instant.
+The column name is unchanged — renaming it is a migration and an API-contract change, not a timezone
+fix — but it holds the GMT-derived instant, not the identically named payload field. Dedup by
+business + `TransactionID`, status enrichment, product matching, sale costing and the
+cost-rebuild cutoff semantics are all unchanged; only which payload field supplies the instant
+changed.
+
+**4. Reporting converts UTC to the Sydney business calendar.** Nothing downstream converts a
+timezone itself: dashboard periods are Sydney business-day boundaries expressed as UTC instants
+([the dashboard rule above](#time)), the Nayax processing fee engine buckets a sale by
+`IBusinessCalendar.ToBusinessDate`, and Transaction Sales hands the instant itself to the frontend's
+`BusinessDateTimePipe`. One instant, one conversion port.
+
+The daily report (`GET api/reports/daily` and its CSV/XLSX export) follows the same rule. Its
+requested `from`/`to` are inclusive Sydney business dates: `EfDailyReportFactsProvider` selects the
+completed and all-status sales from `IBusinessCalendar.StartOfBusinessDayUtc(from)` up to, exclusively,
+`StartOfBusinessDayUtc(to + 1 day)` — 23, 24 or 25 hours per day — and puts each sale on the row of
+its `IBusinessCalendar.ToBusinessDate`, kept `Kind`-free so the row `date` stays date-only. Each
+row's Nayax processing fees, and the period's fee totals, are asked of the fee use case as a
+business-day period (`HandleBusinessPeriod`) over exactly those instants, so a day's revenue, COGS,
+status counts and fee estimate all describe the same Sydney day. Imported reimbursement coverage
+dates are date-only values and keep plain calendar-date bounds: they are not timezone-shifted. The
+shared `EfReportingSharedQueries` helpers are unchanged — only the bounds the daily adapter passes
+them changed — so no other report's selection moved. Before issue #380 the daily report bucketed and
+filtered by the UTC date of the instant, so a sale in the first 10–11 hours of a Sydney day landed on
+the previous day's row; the owner decided on PR #392 that this belongs to #380's acceptance
+criteria. `DailyReportSydneyBusinessDayTests` covers both ends of a normal AEST day, a normal AEDT
+day and the 23- and 25-hour daylight-saving days.
+
+Transaction Sales still filters its `from`/`to` by the UTC date of the instant
+(`EfTransactionSalesReportFactsProvider`); every row it returns carries the true instant and is shown
+on the correct Sydney date, but a sale in the first 10–11 hours of the first requested Sydney day is
+outside the requested range, and one in the same hours of the day after the last requested day is
+inside it. That filter was left unchanged by #380 and is an open follow-up.
+
+**The uploaded export is the one unverified path.** Nayax publishes the timezone semantics of the
+Lynx API's sales fields but publishes no contract for the downloadable transaction export's columns.
+`ClosedXmlNayaxSalesWorkbookReader` reads an `AuthorizationDateTimeGMT` column as an instant,
+including the ISO/offset-carrying form a GMT column is written in, and reports what the column held
+for each row (`NayaxSalesImportRow.AuthorizationDateTimeGmtInput`: no column, blank, malformed or
+valid). It reads the export's own `MachineAuthorizationTime` column exactly as earlier imports read
+it, unconverted. Offset-aware parsing is deliberately scoped to the GMT column: an offset on the
+machine-local column would contradict what that field means. `ImportNayaxSales` then decides the
+instant with a fixed precedence:
+
+1. A **valid** GMT value is the authoritative instant, for a new sale and for a stored one alike, so
+   it may correct an older stored instant through the ordinary update and cost-rebuild path (the
+   affected product is replayed from the earlier of its old and new instants).
+2. Otherwise a **stored** sale keeps the instant it already holds; the row's other facts (status,
+   product, settlement value, cost price under the existing rule) still update it. A later export
+   without a usable GMT value therefore cannot move a sale the latest-sales synchronization stored at
+   its authoritative instant — and since that synchronization never rewrites a stored instant,
+   nothing would ever move it back.
+3. A **new** sale whose GMT value is present but **malformed** is skipped and counted, never imported
+   at the machine-local column: the export claimed an authoritative instant and it could not be read.
+4. A **new** sale from an export **without** the GMT column, or with a **blank** GMT cell, is imported
+   at the export's own `MachineAuthorizationTime` value as earlier imports did. That value's timezone
+   is **unverified**: it is not converted with an invented timezone and is not claimed to satisfy the
+   true-UTC invariant above, so such a sale may sit on the wrong Sydney day. Whether such rows should
+   be refused instead is an open owner decision (refusing them would stop importing exports that have
+   always imported); the operator action that removes the ambiguity is to include the
+   `AuthorizationDateTimeGMT` column in the export.
+
+**Rows ingested before this fix are left exactly as they are.** A persisted instant carries no record
+of which field or which ingestion path produced it, and no stored value can be converted back without
+inventing the machine's daylight-saving-aware zone, so no bulk shift is applied — the repository rule
+that a correction must be explicit, idempotent and observable (AGENTS.md § Database and migrations)
+rules out doing it implicitly. The affected population is identifiable only against authoritative
+evidence: for a transaction Nayax still returns, a stored `MachineAuthorizationTime` that differs
+from that transaction's current `AuthorizationDateTimeGMT` is affected, and the difference is the
+correction. Deploying this fix, and the live last-sales refresh, do **not** repair any existing
+row: the synchronization never rewrites a stored instant. Repairing older rows needs an
+operator-supplied authoritative source — a Nayax transaction export covering the period **with** the
+`AuthorizationDateTimeGMT` column — re-imported through the ordinary uploaded-export path, which
+applies the correction immediately (it is not a dry run and shows no preview), updates the stored
+transaction in place rather than duplicating it, and replays the affected products' costs through the
+existing rebuild rules. A reviewed, previewable remediation that lists each transaction's old and
+proposed instant and Sydney date before applying anything does not exist yet and is follow-up work.
+Until older rows are repaired, dashboards and reports may put them on the wrong Sydney day by the
+machine's UTC offset; sales stored after this fix from the live synchronization or from an export
+carrying a valid GMT value hold verified instants, while new sales from an export without one remain
+unverified as described above.
+
+**Regression coverage.** `NayaxSaleTimestampContractTests` (relational SQLite) pins the persisted
+instant to the GMT field, reproduces the production symptom — a 23:30 Sydney sale on Sunday
+4 October 2026, the evening daylight saving started, staying in Sunday and last week instead of
+moving into Monday/today — and classifies instants either side of that Sydney midnight, across the
+skipped hour, on both passes of the repeated hour when daylight saving ended on 5 April 2026, and on
+an ordinary AEST and AEDT day. `NayaxSalesExportTimestampTests` covers the reader's GMT parsing and
+its no-column/blank/malformed/valid reporting; `NayaxSaleMixedPathTimestampTests` (relational SQLite)
+covers the import precedence across both ingestion paths — live sync, then an export of the same
+transaction without GMT, then live sync again, keeping the authoritative instant with one sale — plus
+blank and malformed GMT on a stored sale, a malformed GMT value on a new sale, a valid GMT value
+correcting an older stored instant with the affected product replayed, and replay idempotency.
+`DailyReportSydneyBusinessDayTests` covers the daily report's Sydney business days.
 
 ## Data flow
 
@@ -2545,7 +2689,12 @@ child 3 of 3 of #151), moved unchanged in behaviour out of
   completed sale affected. It owns the reported counts (`NayaxSalesImportResult`, moved here from
   `InventoryApi.Services.Interfaces` with no JSON change): a row without a positive transaction
   identifier, a positive machine identifier *and* an authorization time is counted as skipped and
-  stays visible, never imported with a guessed identity. A transaction this business already holds
+  stays visible, never imported with a guessed identity. The instant it imports at follows the
+  precedence in [Nayax sale timestamps](#nayax-sale-timestamps-issue-380): a valid
+  `AuthorizationDateTimeGMT` value is authoritative and may correct a stored instant; without one a
+  stored sale keeps its instant, a new sale with a malformed GMT value is skipped, and only a new sale
+  from an export without a usable GMT value is imported at the export's own unverified, unconverted
+  `MachineAuthorizationTime` column. A transaction this business already holds
   is updated in place rather than counted again, and an update never erases a transaction cost price
   the business already has - a row that simply does not carry the column leaves the stored one in
   place, while every other imported fact is overwritten, exactly as the legacy loop did. Statuses
@@ -3779,7 +3928,7 @@ EF Core InMemory tests remain useful for fast service checks but must not be the
 
 **Composition and committed-configuration tests.** Some decisions live in the composition root or in a settings file rather than in a class with behaviour. `InventoryApi.Tests.Observability.TelemetryCompositionTests` asserts what `AddInventoryApiTelemetry` registers — and, for the missing-connection-string case, that it registers nothing — by inspecting the `IServiceCollection` rather than by building the OpenTelemetry providers, so no test ever constructs an exporter or sends telemetry anywhere; `TelemetryStartupTests` then hosts the real application both with and without a synthetic, non-secret connection string. `LoggingLevelPolicyTests` reads the committed `appsettings.json`/`appsettings.Development.json` instead of a hosted application, because the value that matters is the one that ships to a deployed environment (see [Observability and error telemetry](#observability-and-error-telemetry-issue-165)).
 
-Behaviour that depends on the business timezone is tested with a fixed clock and the real `Inventory.Infrastructure.Time.SydneyBusinessCalendar` (`InventoryApi.Tests.Application.Time.FixedSydneyTime`), not with `FakeBusinessCalendar`, whose conversion is deliberately an identity. A timezone change must cover a UTC instant that falls on a different Sydney date (14:30 UTC, for example) and both daylight-saving transitions — `MachineDashboardWindowTests`, `GetSiteSummariesTests`, `GetSiteProductsTests` and `ResolveMachineProductPricingTests` are the examples.
+Behaviour that depends on the business timezone is tested with a fixed clock and the real `Inventory.Infrastructure.Time.SydneyBusinessCalendar` (`InventoryApi.Tests.Application.Time.FixedSydneyTime`), not with `FakeBusinessCalendar`, whose conversion is deliberately an identity. A timezone change must cover a UTC instant that falls on a different Sydney date (14:30 UTC, for example) and both daylight-saving transitions — `MachineDashboardWindowTests`, `GetSiteSummariesTests`, `GetSiteProductsTests` and `ResolveMachineProductPricingTests` are the examples. A change to how an *external* timestamp becomes an instant is covered at the ingestion boundary over a real SQLite connection as well, because the persisted instant is what every report later reads back: `NayaxSaleTimestampContractTests` (issue #380) deserializes documented Nayax payloads, persists them through the real `EfLatestNayaxSalesStore`, and classifies the result through `FixedSydneyTime` on both transitions, the skipped hour, both passes of the repeated hour, and ordinary AEST/AEDT days.
 
 Most controller tests instantiate the controller directly and never exercise ASP.NET Core's middleware pipeline. Proving the `[Authorize]`/`[RequiredScope]` HTTP boundary (issue #38) instead requires a real pipeline: `AuthenticationBoundaryTests` (`backend/InventoryApi.Tests/Controllers/`) hosts the app with `WebApplicationFactory<Program>`, swapping `AppDbContext` for a shared open in-memory SQLite connection so `Program.cs`'s startup schema step (`DatabaseSchemaStartup.EnsureSchema`) succeeds, then asserts that an unauthenticated request to a representative protected endpoint — including the receipt and operating-expense document endpoints — returns `401`, and that a file placed in the web root has no anonymous static URL. `Program.cs` exposes a trailing `public partial class Program;` solely so `WebApplicationFactory<Program>` can reference it from the test assembly.
 

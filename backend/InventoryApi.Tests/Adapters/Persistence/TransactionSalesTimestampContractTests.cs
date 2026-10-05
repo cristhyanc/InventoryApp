@@ -121,7 +121,7 @@ public class TransactionSalesTimestampContractTests
         }
 
         await using var db = Context(connection);
-        var useCase = new GetDailyReport(new EfDailyReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db)));
+        var useCase = new GetDailyReport(new EfDailyReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), TestFinancialUseCases.TrivialCalendar));
 
         var report = await useCase.Handle(
             new ReportingFilterDto(From: AestInstant.Date, To: AestInstant.Date),

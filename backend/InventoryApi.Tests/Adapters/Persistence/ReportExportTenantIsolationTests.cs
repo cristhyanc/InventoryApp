@@ -111,7 +111,7 @@ public sealed class ReportExportTenantIsolationTests : IDisposable
     /// </summary>
     private static GetReportExportRows ExportRowsFor(AppDbContext db)
     {
-        var daily = new GetDailyReport(new EfDailyReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db)));
+        var daily = new GetDailyReport(new EfDailyReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), TestFinancialUseCases.TrivialCalendar));
 
         var bookkeeping = new GetBookkeepingReport(
             new Application.Reporting.Bookkeeping.FakeBookkeepingReportFactsProvider(
