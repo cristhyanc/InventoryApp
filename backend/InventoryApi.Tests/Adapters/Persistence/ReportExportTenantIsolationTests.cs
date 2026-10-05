@@ -4,7 +4,7 @@ using Inventory.Application.Reporting.Export;
 using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Shared;
 using Inventory.Application.Reporting.Transactions;
-using InventoryApi.Adapters.Persistence;
+using Inventory.Infrastructure.Reporting.Persistence;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Microsoft.Data.Sqlite;

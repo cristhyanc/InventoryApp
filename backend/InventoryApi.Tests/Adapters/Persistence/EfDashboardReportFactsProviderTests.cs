@@ -1,4 +1,4 @@
-using InventoryApi.Adapters.Persistence;
+using Inventory.Infrastructure.Reporting.Persistence;
 using Inventory.Application.Commissions;
 using Inventory.Domain.FinancialConfiguration;
 using Inventory.Infrastructure.Data;

@@ -8,24 +8,22 @@ using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
 
-namespace InventoryApi.Adapters.Persistence;
+namespace Inventory.Infrastructure.Reporting.Persistence;
 
 /// <summary>
-/// Temporary EF Core implementation of <see cref="ITransactionSalesReportFactsProvider"/>. It still
-/// lives in InventoryApi, not Inventory.Infrastructure, even though everything it depends on is now
-/// owned there - <see cref="INayaxLynxClient"/> by issue #306, <see cref="AppDbContext"/> and the
-/// persistence models by issue #307. Moving this adapter family after them is Persistence 7/8 and
-/// 8/8 of #153.
+/// The EF Core implementation of <see cref="ITransactionSalesReportFactsProvider"/>. Everything it
+/// depends on is owned by this project - <see cref="INayaxLynxClient"/>'s adapter by issue #306,
+/// <see cref="AppDbContext"/> and the persistence models by issue #307 - and issue #308
+/// (Persistence 7/8 of #153) moved this adapter family after them.
 ///
 /// This adapter returns only raw per-transaction facts, the raw catalogue, and raw effective-dated
 /// fee/commission facts (query and external-integration mechanics); it deliberately does not
 /// compute product matches, fee/commission/profit derivation, filtering, sorting, or totals, since
 /// those are Domain/Application concerns applied by <see cref="GetTransactionSalesReport"/>. Site
 /// name resolution from the live Nayax machine directory runs the one authoritative rule, which
-/// issue #306 moved to <see cref="SiteNameResolver"/> in <c>Inventory.Infrastructure</c>: this
-/// adapter calls its static entry point rather than the injected <c>ISiteNameResolver</c> port
-/// because it resolves a name per streamed row inside a static iterator. The completed/all-status
-/// sale query intentionally does not reuse
+/// issue #306 moved to <see cref="SiteNameResolver"/>: this adapter calls its static entry point
+/// rather than the injected <c>ISiteNameResolver</c> port because it resolves a name per streamed
+/// row inside a static iterator. The completed/all-status sale query intentionally does not reuse
 /// <see cref="EfReportingSharedQueries"/> because transactions needs every status, not only
 /// completed sales.
 /// </summary>

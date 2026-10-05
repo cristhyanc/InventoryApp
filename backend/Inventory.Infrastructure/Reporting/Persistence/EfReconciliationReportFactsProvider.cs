@@ -4,14 +4,14 @@ using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
 
-namespace InventoryApi.Adapters.Persistence;
+namespace Inventory.Infrastructure.Reporting.Persistence;
 
 /// <summary>
-/// Temporary EF Core implementation of <see cref="IReconciliationReportFactsProvider"/>. It still
-/// lives in InventoryApi, not Inventory.Infrastructure, for the same reason as
+/// The EF Core implementation of <see cref="IReconciliationReportFactsProvider"/>. It lives in
+/// Inventory.Infrastructure for the same reason as
 /// <see cref="EfBookkeepingReportFactsProvider"/>/<see cref="EfDailyReportFactsProvider"/>: it
-/// depends on <see cref="AppDbContext"/>, which moved to Inventory.Infrastructure in issue #307
-/// ahead of this adapter family (Persistence 7/8 and 8/8 of #153).
+/// depends on <see cref="AppDbContext"/>, which moved here in issue #307 ahead of this adapter
+/// family (issue #308, Persistence 7/8 of #153).
 ///
 /// Its completed-sale and all-status sales queries are shared with
 /// <see cref="EfBookkeepingReportFactsProvider"/>/<see cref="EfDailyReportFactsProvider"/> through
