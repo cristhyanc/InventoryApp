@@ -64,6 +64,8 @@ public sealed class ClosedXmlNayaxSalesWorkbookReader : INayaxSalesWorkbookReade
 
         var parsed = new List<NayaxSalesImportRow>(Math.Max(rows.Count - 1, 0));
         foreach (var row in rows.Skip(1))
+        {
+            var (gmt, gmtInput) = GmtValue(Cell(row, headers, "AuthorizationDateTimeGMT"));
             parsed.Add(new NayaxSalesImportRow(
                 LongValue(Cell(row, headers, "TransactionID")),
                 LongValue(Cell(row, headers, "MachineID")),
@@ -75,7 +77,9 @@ public sealed class ClosedXmlNayaxSalesWorkbookReader : INayaxSalesWorkbookReade
                 TextValue(Cell(row, headers, "PaymentMethod")),
                 TextValue(Cell(row, headers, "ProductName")),
                 DecimalValue(Cell(row, headers, "ProductCostPrice", "ProductCost", "CostPrice")),
-                UtcDateValue(Cell(row, headers, "AuthorizationDateTimeGMT"))));
+                gmt,
+                gmtInput));
+        }
 
         return parsed;
     }
@@ -197,6 +201,21 @@ public sealed class ClosedXmlNayaxSalesWorkbookReader : INayaxSalesWorkbookReade
             out var offset)
             ? offset.UtcDateTime
             : null;
+    }
+
+    /// <summary>
+    /// The <c>AuthorizationDateTimeGMT</c> cell read as a true UTC instant, together with what the
+    /// export carried there: no such column, a blank cell, a value <see cref="UtcDateValue"/> cannot
+    /// read, or a usable instant (issue #380).
+    /// </summary>
+    private static (DateTime? Value, NayaxSalesGmtInput Input) GmtValue(IXLCell? cell)
+    {
+        if (cell is null)
+            return (null, NayaxSalesGmtInput.NotProvided);
+        if (cell.IsEmpty() || (!cell.Value.IsDateTime && !cell.Value.IsNumber && string.IsNullOrWhiteSpace(cell.GetString())))
+            return (null, NayaxSalesGmtInput.Blank);
+        var value = UtcDateValue(cell);
+        return value is null ? (null, NayaxSalesGmtInput.Malformed) : (value, NayaxSalesGmtInput.Valid);
     }
 
     private static DateTime? DateValue(IXLCell? cell)

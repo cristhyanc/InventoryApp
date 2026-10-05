@@ -24,7 +24,8 @@ public sealed record NayaxSalesFileInput(string FileName, Func<Stream> OpenReadS
 /// The export's own <c>MachineAuthorizationTime</c> column, or <c>null</c> when absent or unparsable.
 /// In the Nayax Lynx API this field is machine-local wall-clock time (issue #380); the export file's
 /// own column semantics are undocumented, so this value's timezone is unverified and it is used as a
-/// sale instant only when the export carries no authoritative GMT column.
+/// sale instant only for a new sale whose export carries no usable GMT value (see
+/// <see cref="ImportNayaxSales"/>).
 /// </param>
 /// <param name="TransactionStatusId">The raw Nayax transaction-status identifier, classified centrally.</param>
 /// <param name="NayaxProductId">The raw remote product identifier, matched against the local catalogue.</param>
@@ -35,8 +36,13 @@ public sealed record NayaxSalesFileInput(string FileName, Func<Stream> OpenReadS
 /// <param name="NayaxProductCostPrice">The raw transaction-level Nayax <c>Product Cost Price</c>.</param>
 /// <param name="AuthorizationDateTimeGmt">
 /// The export's <c>AuthorizationDateTimeGMT</c> column normalized to a true UTC instant, or
-/// <c>null</c> when the export does not carry it (issue #380). This is the authoritative sale instant
-/// wherever it is present, matching the Lynx API field of the same name.
+/// <c>null</c> when the row carries no usable value (issue #380). This is the authoritative sale
+/// instant wherever it is present, matching the Lynx API field of the same name.
+/// </param>
+/// <param name="AuthorizationDateTimeGmtInput">
+/// What the export actually carried in that column - no column, a blank cell, an unparsable value or
+/// a usable instant - so the import can tell a legacy export without the column from an authoritative
+/// value it failed to read, and never treats the latter as permission to fall back.
 /// </param>
 public sealed record NayaxSalesImportRow(
     long TransactionId,
@@ -49,24 +55,25 @@ public sealed record NayaxSalesImportRow(
     string? PaymentMethod,
     string? ProductName,
     decimal? NayaxProductCostPrice,
-    DateTime? AuthorizationDateTimeGmt = null)
+    DateTime? AuthorizationDateTimeGmt = null,
+    NayaxSalesGmtInput AuthorizationDateTimeGmtInput = NayaxSalesGmtInput.NotProvided);
+
+/// <summary>
+/// What an uploaded export row carried in its <c>AuthorizationDateTimeGMT</c> column (issue #380).
+/// </summary>
+public enum NayaxSalesGmtInput
 {
-    /// <summary>
-    /// The instant this row is imported at: the authoritative GMT value when the export carries one,
-    /// and otherwise the export's own <c>MachineAuthorizationTime</c> column read exactly as earlier
-    /// imports read it (issue #380).
-    ///
-    /// The fallback is deliberate rather than a guess. Nayax publishes the timezone semantics of its
-    /// Lynx API sales fields but publishes no contract for the downloadable export's columns, so there
-    /// is nothing authoritative to convert an offsetless export value with: converting it would invent
-    /// a timezone, and refusing it would stop importing exports that have always imported. Such an
-    /// import's instants are therefore unverified, which docs/architecture.md § Nayax sale timestamps
-    /// records along with the operator action that removes the ambiguity (export the GMT column).
-    ///
-    /// <c>null</c> means the row carries no usable timestamp at all, which is what makes
-    /// <see cref="ImportNayaxSales"/> skip it.
-    /// </summary>
-    public DateTime? AuthorizationTime => AuthorizationDateTimeGmt ?? MachineAuthorizationTime;
+    /// <summary>The export has no <c>AuthorizationDateTimeGMT</c> column at all.</summary>
+    NotProvided,
+
+    /// <summary>The column exists but this row's cell is empty.</summary>
+    Blank,
+
+    /// <summary>The cell holds a value that is not a readable instant.</summary>
+    Malformed,
+
+    /// <summary>The cell holds a readable instant, carried in <c>AuthorizationDateTimeGmt</c>.</summary>
+    Valid,
 }
 
 /// <summary>

@@ -11,11 +11,11 @@ namespace InventoryApi.Tests.Infrastructure.Imports;
 /// The Nayax developer portal documents the timezone semantics of the Lynx API's sales fields
 /// (<c>AuthorizationDateTimeGMT</c> is the GMT instant, <c>MachineAuthorizationTime</c> is machine-local
 /// wall-clock time) but publishes no contract at all for the downloadable transaction export's
-/// columns. The import therefore does the only safe thing: when the export carries an
-/// <c>AuthorizationDateTimeGMT</c> column it reads that as the authoritative instant, including the
-/// offset-carrying ISO form a GMT column is written in; when it does not, the export's own
-/// <c>MachineAuthorizationTime</c> column is read exactly as before, because inventing a conversion
-/// for a contract Nayax does not publish would be the guess this issue forbids.
+/// columns. The reader therefore reads an <c>AuthorizationDateTimeGMT</c> column as the authoritative
+/// instant, including the offset-carrying ISO form a GMT column is written in, reports whether that
+/// column was absent, blank, unreadable or usable, and reads the export's own
+/// <c>MachineAuthorizationTime</c> column exactly as before, unconverted, because inventing a
+/// conversion for a contract Nayax does not publish would be the guess this issue forbids.
 ///
 /// The offset-aware parsing is deliberately scoped to the GMT column. An offset on the machine-local
 /// column would contradict what that field means, so it stays unparsable there - the behaviour
@@ -39,8 +39,8 @@ public class NayaxSalesExportTimestampTests
             $"1001,7,{cell}"));
 
         Assert.Equal(SundayEveningUtc, row.AuthorizationDateTimeGmt);
-        Assert.Equal(SundayEveningUtc, row.AuthorizationTime);
-        Assert.Equal(DateTimeKind.Utc, row.AuthorizationTime!.Value.Kind);
+        Assert.Equal(DateTimeKind.Utc, row.AuthorizationDateTimeGmt!.Value.Kind);
+        Assert.Equal(NayaxSalesGmtInput.Valid, row.AuthorizationDateTimeGmtInput);
     }
 
     /// <summary>
@@ -54,7 +54,7 @@ public class NayaxSalesExportTimestampTests
             "TransactionID,MachineID,AuthorizationDateTimeGMT\n" +
             "1001,7,2026-10-04T12:30:00"));
 
-        Assert.Equal(SundayEveningUtc, row.AuthorizationTime);
+        Assert.Equal(SundayEveningUtc, row.AuthorizationDateTimeGmt);
     }
 
     /// <summary>
@@ -71,7 +71,7 @@ public class NayaxSalesExportTimestampTests
             $"TransactionID,MachineID,{header}\n" +
             "1001,7,2026-10-04T12:30:00Z"));
 
-        Assert.Equal(SundayEveningUtc, row.AuthorizationTime);
+        Assert.Equal(SundayEveningUtc, row.AuthorizationDateTimeGmt);
     }
 
     /// <summary>
@@ -86,26 +86,27 @@ public class NayaxSalesExportTimestampTests
             "TransactionID,MachineID,MachineAuthorizationTime,AuthorizationDateTimeGMT\n" +
             "1001,7,4/10/2026 11:30:00 PM,2026-10-04T12:30:00Z"));
 
-        Assert.Equal(SundayEveningUtc, row.AuthorizationTime);
+        Assert.Equal(SundayEveningUtc, row.AuthorizationDateTimeGmt);
         Assert.Equal(new DateTime(2026, 10, 4, 23, 30, 0), row.MachineAuthorizationTime);
     }
 
     /// <summary>
-    /// No GMT column, or one the export left empty or unparsable: the row keeps the export's own
-    /// machine-local value exactly as previous imports read it, because the export's timezone contract
-    /// is undocumented and a conversion would be a guess. Such an import's instants are unverified -
-    /// see docs/architecture.md § Nayax sale timestamps.
+    /// No GMT column, or one the export left empty or unparsable: the row carries no authoritative
+    /// instant, and the export's own machine-local value is still read exactly as previous imports read
+    /// it, as the raw fact it is. Which of the two the import may use, and when, is
+    /// <c>ImportNayaxSales</c>'s decision (<c>NayaxSaleMixedPathTimestampTests</c>); the reader never
+    /// converts the machine-local value, because the export's timezone contract is undocumented.
     /// </summary>
     [Theory]
     [InlineData("TransactionID,MachineID,MachineAuthorizationTime\n1001,7,4/10/2026 11:30:00 PM")]
     [InlineData("TransactionID,MachineID,AuthorizationDateTimeGMT,MachineAuthorizationTime\n1001,7,,4/10/2026 11:30:00 PM")]
     [InlineData("TransactionID,MachineID,AuthorizationDateTimeGMT,MachineAuthorizationTime\n1001,7,not-an-instant,4/10/2026 11:30:00 PM")]
-    public void Without_an_authoritative_GMT_column_the_export_s_own_value_is_read_unchanged(string content)
+    public void Without_an_authoritative_GMT_value_the_export_s_own_value_is_read_unchanged(string content)
     {
         var row = Assert.Single(ReadCsv(content));
 
         Assert.Null(row.AuthorizationDateTimeGmt);
-        Assert.Equal(new DateTime(2026, 10, 4, 23, 30, 0), row.AuthorizationTime);
+        Assert.Equal(new DateTime(2026, 10, 4, 23, 30, 0), row.MachineAuthorizationTime);
     }
 
     /// <summary>
@@ -119,7 +120,29 @@ public class NayaxSalesExportTimestampTests
             "TransactionID,MachineID,AuthorizationDateTimeGMT,MachineAuthorizationTime\n" +
             "1001,7,,"));
 
-        Assert.Null(row.AuthorizationTime);
+        Assert.Null(row.AuthorizationDateTimeGmt);
+        Assert.Null(row.MachineAuthorizationTime);
+    }
+
+    /// <summary>
+    /// The reader reports what the GMT column held, so the import can tell a legacy export without the
+    /// column (or a row the export left blank) from an authoritative value it could not read - the
+    /// latter must never be treated as permission to fall back to the unverified column.
+    /// </summary>
+    [Theory]
+    [InlineData("TransactionID,MachineID,MachineAuthorizationTime\n1001,7,4/10/2026 11:30:00 PM", NayaxSalesGmtInput.NotProvided)]
+    [InlineData("TransactionID,MachineID,AuthorizationDateTimeGMT,MachineAuthorizationTime\n1001,7,,4/10/2026 11:30:00 PM", NayaxSalesGmtInput.Blank)]
+    [InlineData("TransactionID,MachineID,AuthorizationDateTimeGMT,MachineAuthorizationTime\n1001,7,   ,4/10/2026 11:30:00 PM", NayaxSalesGmtInput.Blank)]
+    [InlineData("TransactionID,MachineID,AuthorizationDateTimeGMT,MachineAuthorizationTime\n1001,7,not-an-instant,4/10/2026 11:30:00 PM", NayaxSalesGmtInput.Malformed)]
+    [InlineData("TransactionID,MachineID,AuthorizationDateTimeGMT,MachineAuthorizationTime\n1001,7,31/31/2026 9:00:00 AM,4/10/2026 11:30:00 PM", NayaxSalesGmtInput.Malformed)]
+    [InlineData("TransactionID,MachineID,AuthorizationDateTimeGMT,MachineAuthorizationTime\n1001,7,2026-10-04T12:30:00Z,4/10/2026 11:30:00 PM", NayaxSalesGmtInput.Valid)]
+    public void The_reader_reports_what_the_GMT_column_held(string content, NayaxSalesGmtInput expected)
+    {
+        var row = Assert.Single(ReadCsv(content));
+
+        Assert.Equal(expected, row.AuthorizationDateTimeGmtInput);
+        Assert.Equal(expected == NayaxSalesGmtInput.Valid, row.AuthorizationDateTimeGmt.HasValue);
+        Assert.Equal(new DateTime(2026, 10, 4, 23, 30, 0), row.MachineAuthorizationTime);
     }
 
     private static IReadOnlyList<NayaxSalesImportRow> ReadCsv(string content)
