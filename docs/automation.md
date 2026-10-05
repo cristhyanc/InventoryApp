@@ -275,8 +275,8 @@ These tiers apply only to the initial implementation invocation. Architecture ch
 | Human readiness label | Implementation selection |
 | --- | --- |
 | `agent-ready-claude-low` | Claude `haiku`, at most 300 turns; no triage |
-| `agent-ready-claude` | A short read-only Haiku triage chooses `haiku` (300 turns), `sonnet` (150 turns) or `opus` (250 turns) |
-| `agent-ready-claude-high` | Claude `opus`, at most 250 turns; no triage |
+| `agent-ready-claude` | A short read-only Haiku triage chooses `haiku` (300 turns), `sonnet` (150 turns) or `opus` (400 turns) |
+| `agent-ready-claude-high` | Claude `opus`, at most 400 turns; no triage |
 | `agent-ready-copilot-low` | Copilot cloud agent `claude-haiku-4.5`; no triage |
 | `agent-ready-copilot` | The same Haiku triage chooses `claude-haiku-4.5`, `claude-sonnet-5.5` or `claude-opus-5.5` |
 | `agent-ready-copilot-high` | Copilot cloud agent `claude-opus-5.5`; no triage |

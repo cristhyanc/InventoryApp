@@ -41,7 +41,7 @@ export function resolveSelection(selection, triage) {
   }
   const model = MODELS[selection.provider]?.[tier];
   if (!model) throw new Error('Invalid selected model tier.');
-  return { ...selection, tier, model, maxTurns: { low: 300, standard: 150, high: 250 }[tier], reason };
+  return { ...selection, tier, model, maxTurns: { low: 300, standard: 150, high: 400 }[tier], reason };
 }
 
 export function verifySnapshot(selection, issue) {
