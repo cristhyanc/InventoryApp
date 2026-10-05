@@ -3,7 +3,8 @@ using Inventory.Application.Nayax;
 using Inventory.Application.NayaxProcessingFees;
 using Inventory.Application.Time;
 using Inventory.Infrastructure.Sites;
-using InventoryApi.Adapters.Persistence;
+using Inventory.Infrastructure.Persistence;
+using Inventory.Infrastructure.Reporting.Persistence;
 using Inventory.Infrastructure.Data;
 using InventoryApi.Tests.Application.Time;
 

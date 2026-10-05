@@ -1,17 +1,45 @@
 using Azure.Identity;
 using Azure.Storage.Blobs;
 using Inventory.Application.CatalogReconciliation;
+using Inventory.Application.Categories;
+using Inventory.Application.Commissions;
+using Inventory.Application.Costing;
 using Inventory.Application.Documents;
+using Inventory.Application.Expenses;
 using Inventory.Application.Imports;
+using Inventory.Application.InventoryCounting;
+using Inventory.Application.Machines;
+using Inventory.Application.MachineStockSync;
 using Inventory.Application.Nayax;
+using Inventory.Application.NayaxFeeSettings;
+using Inventory.Application.NayaxProcessingFees;
+using Inventory.Application.PickList;
+using Inventory.Application.Products;
+using Inventory.Application.Purchases;
+using Inventory.Application.Reorder;
+using Inventory.Application.Reporting.Bookkeeping;
+using Inventory.Application.Reporting.Dashboard;
+using Inventory.Application.Reporting.Daily;
 using Inventory.Application.Reporting.Export;
+using Inventory.Application.Reporting.Gst;
+using Inventory.Application.Reporting.MachineProfitability;
+using Inventory.Application.Reporting.ProductProfitability;
+using Inventory.Application.Reporting.Reconciliation;
+using Inventory.Application.Reporting.Transactions;
+using Inventory.Application.SalesSync;
 using Inventory.Application.Sites;
+using Inventory.Application.Stock;
+using Inventory.Application.SupplierOrders;
+using Inventory.Application.Suppliers;
+using Inventory.Application.Tenancy;
 using Inventory.Application.Time;
 using Inventory.Infrastructure.Clock;
 using Inventory.Infrastructure.Documents;
 using Inventory.Infrastructure.Imports;
 using Inventory.Infrastructure.Nayax;
+using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Reporting;
+using Inventory.Infrastructure.Reporting.Persistence;
 using Inventory.Infrastructure.Sites;
 using Inventory.Infrastructure.Time;
 using Microsoft.Extensions.DependencyInjection;
@@ -51,6 +79,76 @@ public static class InfrastructureServiceCollectionExtensions
         // method, because that registration needs the validated options only the composition root
         // can read; a host that calls this method must call that one too.
         services.AddScoped<INayaxCatalogSnapshotProvider, NayaxCatalogSnapshotProvider>();
+
+        // The reporting EF fact providers that issue #308 moved out of InventoryApi
+        // (Inventory.Infrastructure.Reporting.Persistence). Unlike everything above they do need an
+        // AppDbContext, which the composition root still registers together with the provider and
+        // the connection string it chooses (see AddDbContext/UseSqlite in Program.cs): a host that
+        // calls this method must register the context too, the same obligation
+        // NayaxCatalogSnapshotProvider already creates for AddNayaxLynxClient.
+        //
+        // Every one is Scoped, exactly as the Program.cs registration it replaces was, because the
+        // AppDbContext it reads is: relocating these adapters must not change a lifetime a consumer
+        // could notice. EfTransactionSalesReportFactsProvider additionally takes the
+        // INayaxLynxClient from AddNayaxLynxClient for its live site-name lookup.
+        services.AddScoped<IBookkeepingReportFactsProvider, EfBookkeepingReportFactsProvider>();
+        services.AddScoped<IDailyReportFactsProvider, EfDailyReportFactsProvider>();
+        services.AddScoped<IReconciliationReportFactsProvider, EfReconciliationReportFactsProvider>();
+        services.AddScoped<IMachineProfitabilityReportFactsProvider, EfMachineProfitabilityReportFactsProvider>();
+        services.AddScoped<IProductProfitabilityReportFactsProvider, EfProductProfitabilityReportFactsProvider>();
+        services.AddScoped<IGstReportFactsProvider, EfGstReportFactsProvider>();
+        services.AddScoped<IDashboardReportFactsProvider, EfDashboardReportFactsProvider>();
+        services.AddScoped<IInventoryValuationFactsProvider, EfInventoryValuationFactsProvider>();
+        services.AddScoped<ITransactionSalesReportFactsProvider, EfTransactionSalesReportFactsProvider>();
+
+        // The processing-fee facts the fee-bearing reports above are built from, moved with them.
+        services.AddScoped<INayaxProcessingFeeFactsProvider, EfNayaxProcessingFeeFactsProvider>();
+
+        // The remaining EF adapters, which issue #309 moved out of InventoryApi/Adapters/Persistence
+        // (Inventory.Infrastructure.Persistence) and which complete #153's persistence move: the
+        // composition root now owns no persistence implementation at all. Like the reporting
+        // providers above they need the AppDbContext a host that calls this method must register
+        // together with its provider and connection string.
+        //
+        // Every one is Scoped, exactly as the Program.cs registration it replaces was. That is not
+        // cosmetic here: a use case that composes several of these adapters relies on them sharing
+        // one AppDbContext, and therefore one change tracker and one transaction, for the whole
+        // request (docs/architecture.md § Concurrency inside one request). The transaction
+        // boundaries, the AppDbContext tenant query filters and the BusinessOwnershipEnforcer stamp
+        // on SaveChanges are unchanged by the relocation; no adapter scopes a read or a write
+        // itself.
+        //
+        // Grouped by the Application feature whose port each satisfies, in the order Program.cs
+        // registered them.
+        services.AddScoped<IBusinessMembershipStore, EfBusinessMembershipStore>();
+        services.AddScoped<INayaxFeeRateStore, EfNayaxFeeRateStore>();
+        services.AddScoped<ISiteCommissionStore, EfSiteCommissionStore>();
+        services.AddScoped<ICategoryStore, EfCategoryStore>();
+        services.AddScoped<ISupplierStore, EfSupplierStore>();
+        services.AddScoped<IOperatingExpenseStore, EfOperatingExpenseStore>();
+        services.AddScoped<IProductStore, EfProductStore>();
+        services.AddScoped<IProductCatalogStore, EfProductCatalogStore>();
+        services.AddScoped<IPurchaseStore, EfPurchaseStore>();
+        services.AddScoped<IInventoryMovementStore, EfInventoryMovementStore>();
+        services.AddScoped<IInventoryCostLedgerStore, EfInventoryCostLedgerStore>();
+        services.AddScoped<ISaleCostingStore, EfSaleCostingStore>();
+        services.AddScoped<IInventoryCostTransitionStore, EfInventoryCostTransitionStore>();
+        services.AddScoped<IInventoryCostRepairStore, EfInventoryCostRepairStore>();
+        services.AddScoped<IStockAdjustmentStore, EfStockAdjustmentStore>();
+        services.AddScoped<ISupplierOrderStore, EfSupplierOrderStore>();
+        services.AddScoped<ISiteFactsStore, EfSiteFactsStore>();
+        services.AddScoped<IMachineDashboardFactsStore, EfMachineDashboardFactsStore>();
+        services.AddScoped<IProductPurchasePriceHistoryProvider, EfProductPurchasePriceHistoryProvider>();
+        services.AddScoped<IProductPurchaseCostFactsProvider, EfProductPurchaseCostFactsProvider>();
+        services.AddScoped<ILocalCatalogSnapshotProvider, EfLocalCatalogSnapshotProvider>();
+        services.AddScoped<IMachineStockEventStore, EfMachineStockEventStore>();
+        services.AddScoped<IOutstandingSupplierOrderQuantityStore, EfOutstandingSupplierOrderQuantityStore>();
+        services.AddScoped<IPickListStorageStockStore, EfPickListStorageStockStore>();
+        services.AddScoped<ILatestNayaxSalesStore, EfLatestNayaxSalesStore>();
+        services.AddScoped<IInventoryCountAdjustmentStore, EfInventoryCountAdjustmentStore>();
+        services.AddScoped<IImportedReimbursementStore, EfImportedReimbursementStore>();
+        services.AddScoped<INayaxProductCatalogImportStore, EfNayaxProductCatalogImportStore>();
+        services.AddScoped<INayaxSalesImportStore, EfNayaxSalesImportStore>();
 
         return services;
     }

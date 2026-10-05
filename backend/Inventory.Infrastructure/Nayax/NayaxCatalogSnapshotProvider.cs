@@ -11,8 +11,8 @@ namespace Inventory.Infrastructure.Nayax;
 /// <c>InventoryApi.Adapters.Nayax</c>: it reads the remote catalogue and needs no
 /// <c>AppDbContext</c>, so it is a real <c>Inventory.Infrastructure</c> resident and is registered
 /// by <c>AddInfrastructureServices()</c> rather than directly in <c>Program.cs</c>. Its EF
-/// counterpart, <c>EfLocalCatalogSnapshotProvider</c>, stays API-owned until #153 relocates
-/// persistence.
+/// counterpart, <c>EfLocalCatalogSnapshotProvider</c>, joined it here in issue #309
+/// (Persistence 8/8 of #153).
 ///
 /// A missing product/machine name is reported as an empty string rather than null: the Nayax
 /// contract documents both <c>ProductName</c> (GET /v1/operators/{OperatorID}/products) and

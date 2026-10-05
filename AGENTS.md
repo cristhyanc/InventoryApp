@@ -14,16 +14,18 @@ The repository is also being prepared for reliable AI-assisted engineering. Ever
 backend/InventoryApi/                 ASP.NET Core .NET 10 API and composition root
   Controllers/                        HTTP boundary
   DTOs/                               Current API/report contracts
-  Bootstrap/                          Startup schema decision and the human-invoked commands
-  Adapters/Persistence/               Temporary API-owned EF adapters, API-owned only until they follow AppDbContext (issues #153/#154)
+  Bootstrap/                          Startup schema decision and the human-invoked commands; they call Infrastructure services and own no persistence adapter (issue #309)
   Adapters/Mapping/                   Response-DTO projections for the controllers
 backend/Inventory.Domain/             Deterministic domain rules and calculations
 backend/Inventory.Application/        Use cases and their narrow ports; new use-case/domain logic goes here, never into InventoryApi
 backend/Inventory.Infrastructure/     Adapters behind those ports: Nayax Lynx client and catalog snapshot (Nayax/), report CSV/XLSX export (Reporting/), site names (Sites/), document storage, imported-file readers, clock/calendar, backups
   Data/AppDbContext.cs                EF Core model, mappings and tenant query filters (issue #307)
   Data/BusinessOwnershipEnforcer.cs   The SaveChanges tenant-ownership enforcement
+  Data/EfNayaxSalesQueries.cs         The completed-sale query predicate every sales query filters on (issue #308)
   Migrations/                         SQLite schema history
   Models/                             Current EF entities and enums
+  Persistence/                        Every other EF adapter behind an Application persistence port (issue #309); InventoryApi owns none
+  Reporting/Persistence/              The reporting EF fact providers and their shared queries (issue #308)
 backend/InventoryApi.Tests/           xUnit backend tests
 frontend/inventory-app/               Angular 19 standalone application
 .github/workflows/                    Validation, Claude Code and Copilot agent, and Azure deployment workflows

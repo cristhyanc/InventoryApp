@@ -1,7 +1,8 @@
 using Inventory.Infrastructure.Data;
 using Inventory.Application.NayaxProcessingFees;
 using Inventory.Domain.FinancialConfiguration;
-using InventoryApi.Adapters.Persistence;
+using Inventory.Infrastructure.Persistence;
+using Inventory.Infrastructure.Reporting.Persistence;
 using Inventory.Infrastructure.Models;
 using InventoryApi.Tests.Application.Time;
 using Microsoft.EntityFrameworkCore;

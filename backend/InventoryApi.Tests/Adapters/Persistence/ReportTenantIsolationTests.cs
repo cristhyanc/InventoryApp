@@ -1,5 +1,5 @@
 using Inventory.Application.Reporting.Daily;
-using InventoryApi.Adapters.Persistence;
+using Inventory.Infrastructure.Reporting.Persistence;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Microsoft.Data.Sqlite;

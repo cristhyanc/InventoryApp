@@ -1,7 +1,7 @@
 using Inventory.Domain.Exceptions;
 using Inventory.Domain.FinancialConfiguration;
 using Inventory.Domain.Tenancy;
-using InventoryApi.Adapters.Persistence;
+using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using InventoryApi.Tests.Application.Tenancy;
@@ -13,7 +13,7 @@ using Xunit;
 namespace InventoryApi.Tests.Adapters.Persistence;
 
 /// <summary>
-/// The temporary API-owned <see cref="EfInventoryCostRepairStore"/> and the costing-repair use cases
+/// The <see cref="EfInventoryCostRepairStore"/> adapter and the costing-repair use cases
 /// (issue #359) over relational SQLite. The central business query filter and the ownership stamp on
 /// save (issue #64) are what keep a repair from reading or valuing another business's product, and
 /// the adapter adds no business filter of its own.

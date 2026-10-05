@@ -1,5 +1,5 @@
 using Inventory.Application.NayaxFeeSettings;
-using InventoryApi.Adapters.Persistence;
+using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Data;
 using InventoryApi.Tests.Application.Time;
 using Microsoft.Data.Sqlite;
