@@ -1514,6 +1514,18 @@ Routes are declared centrally in `app.routes.ts`. Every top-level route loads it
 
 The static host must rewrite unknown application paths to `index.html`; otherwise refreshing a deep link such as `/reports/bookkeeping` or the Entra redirect landing on `/auth` will bypass Angular and return a host-level 404. `frontend/inventory-app/src/staticwebapp.config.json` (copied to the deployed output root by the `assets` build option) declares that Azure Static Web Apps `navigationFallback`, rewriting unmatched paths to `/index.html` while excluding `/assets/*` and static file extensions.
 
+**Admin decomposition (issue #388, Admin split 1/3).** `AdminComponent` is being decomposed into
+dedicated routed pages one workflow at a time; `/admin` keeps hosting every Admin workflow that
+has not yet moved out and links to the ones that have. `/admin/nayax-settings`
+(`NayaxSettingsComponent`) and `/admin/site-commission-agreements`
+(`SiteCommissionAgreementsComponent`) are the first two moves: each owns the form and history/
+table UI for its workflow, but calls `NayaxSettingsService`, `ReportingService`, and
+`SiteService` exactly as `AdminComponent` did, so the Nayax processing-fee and site-commission
+API boundaries, effective-dating, and financial calculations are unchanged. Later Admin-split
+tasks move the remaining workflows (imports, historical cost recovery, AVCO transition, Costing
+Repair) and introduce the final Admin navigation; this issue does not touch the root application
+navigation in `app.component.html`.
+
 ### Runtime configuration and API contracts
 
 `ConfigService` resolves the API base URL through an application initializer, before feature services issue requests, and is the single source of truth for it. On `localhost`/`127.0.0.1` it resolves to `/api`, which `proxy.conf.json` forwards to `http://localhost:5000/`; on any other origin it uses `apiBaseUrl` from `/assets/config.json`, falling back to `/api` if that load fails or yields nothing usable (`api-base-url.ts` holds that framework-free resolution rule). No one therefore edits the tracked `assets/config.json` to move between local development and deployment. Do not hard-code API hosts in components or feature services.

@@ -1,12 +1,10 @@
 import { Component } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { RouterLink } from '@angular/router';
 import { ImportService } from '../../services/import.service';
-import { NayaxCostBackfillResult, ReportingService, SiteCommissionAgreement } from '../../services/reporting.service';
+import { NayaxCostBackfillResult, ReportingService } from '../../services/reporting.service';
 import { ToastService } from '../../services/toast.service';
-import { NayaxProcessingFeeRate, NayaxSettingsService } from '../../services/nayax-settings.service';
-import { Site } from '../../models/models';
-import { SiteService } from '../../services/site.service';
 import { Product } from '../../models/models';
 import { ProductService } from '../../services/product.service';
 import {
@@ -21,7 +19,7 @@ import { CostingRepairComponent } from './costing-repair/costing-repair.componen
 @Component({
   selector: 'app-admin',
   standalone: true,
-  imports: [CommonModule, FormsModule, BusinessDateTimePipe, CostingRepairComponent],
+  imports: [CommonModule, FormsModule, RouterLink, BusinessDateTimePipe, CostingRepairComponent],
   template: `
     <div class="mb-6">
       <h1 class="text-2xl font-semibold text-slate-800">Admin</h1>
@@ -32,70 +30,14 @@ import { CostingRepairComponent } from './costing-repair/costing-repair.componen
     <div class="grid gap-5 md:grid-cols-2">
       <section class="rounded-xl bg-white p-6 shadow-sm">
         <h2 class="text-lg font-semibold text-slate-800">Nayax Settings</h2>
-        <p class="mt-1 text-sm text-slate-500">Used for current-period reporting when actual Nayax processing fee data has not yet been imported. Imported reimbursement data always takes precedence.</p>
-        <div class="mt-4 grid gap-3 sm:grid-cols-3">
-          <label class="text-sm text-slate-700 sm:col-span-2">Estimated Processing Fee per Card Transaction (ex GST)
-            <input type="number" min="0" step="0.0001" required class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2" [(ngModel)]="feeExGst" />
-          </label>
-          <label class="text-sm text-slate-700">Effective from
-            <input type="date" required class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2" [(ngModel)]="effectiveFrom" />
-          </label>
-        </div>
-        <button type="button" class="mt-3 rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50" [disabled]="loading" (click)="saveFeeRate()">Save rate</button>
-        <div class="mt-5 border-t border-slate-100 pt-4">
-          <h3 class="mb-2 text-sm font-semibold text-slate-700">Configured settings</h3>
-          @if (feeRates.length) {
-            <div class="overflow-x-auto">
-              <table class="min-w-full text-left text-sm">
-                <thead class="bg-slate-50 text-xs text-slate-600">
-                  <tr><th class="px-3 py-2">Effective from</th><th class="px-3 py-2">Fee per card transaction (ex GST)</th><th class="px-3 py-2">Status</th></tr>
-                </thead>
-                <tbody>
-                  @for (rate of feeRates; track rate.id ?? rate.effectiveFrom) {
-                    <tr class="border-t border-slate-100">
-                      <td class="px-3 py-2">{{ rate.effectiveFrom | date:'dd/MM/yyyy' }}</td>
-                      <td class="px-3 py-2">{{ rate.feeExGst | currency:'AUD':'symbol':'1.4-4' }}</td>
-                      <td class="px-3 py-2">
-                        @if (isCurrentFeeRate(rate)) {
-                          <span class="rounded-full bg-emerald-100 px-2 py-1 text-xs font-medium text-emerald-700">Current</span>
-                        } @else if (isFutureFeeRate(rate)) {
-                          <span class="rounded-full bg-blue-100 px-2 py-1 text-xs font-medium text-blue-700">Scheduled</span>
-                        } @else {
-                          <span class="text-xs text-slate-500">Previous</span>
-                        }
-                      </td>
-                    </tr>
-                  }
-                </tbody>
-              </table>
-            </div>
-          } @else {
-            <p class="text-sm text-slate-500">No Nayax processing-fee settings configured.</p>
-          }
-        </div>
+        <p class="mt-1 text-sm text-slate-500">Processing-fee rate configuration and configured-rate history.</p>
+        <a routerLink="/admin/nayax-settings" class="mt-4 inline-block rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white">Open Nayax Settings</a>
       </section>
 
       <section class="rounded-xl bg-white p-6 shadow-sm">
-        <h2 class="text-lg font-semibold text-slate-800">Site Commission Agreement</h2>
-        <p class="mt-1 text-sm text-slate-500">Rates are effective-dated and apply to sales from the selected date onward.</p>
-        <div class="mt-4 grid gap-3 sm:grid-cols-2">
-          <label class="text-sm text-slate-700">Site<select class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2" [(ngModel)]="commissionSiteId"><option [ngValue]="null">Select a site</option>@for (site of sites; track site.siteId) { <option [ngValue]="site.siteId">{{ site.siteName }}</option> }</select></label>
-          <label class="text-sm text-slate-700">Rate (%)<input type="number" min="0" max="100" step="0.01" class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2" [(ngModel)]="commissionRate" /></label>
-          <label class="text-sm text-slate-700">Effective from<input type="date" class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2" [(ngModel)]="commissionEffectiveFrom" /></label>
-          <label class="text-sm text-slate-700">Frequency<select class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2" [(ngModel)]="commissionFrequency"><option [ngValue]="0">None</option><option [ngValue]="1">Monthly</option><option [ngValue]="2">Quarterly</option></select></label>
-          <label class="text-sm text-slate-700">Basis<select class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2" [(ngModel)]="commissionBasis"><option [ngValue]="0">Gross Sales</option><option [ngValue]="1">Card Sales</option><option [ngValue]="2">Sales ex GST</option></select></label>
-          <label class="text-sm text-slate-700">Due days after period end (optional)<input type="number" min="0" class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2" [(ngModel)]="commissionDueDays" /></label>
-        </div>
-        <button type="button" class="mt-3 rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50" [disabled]="loading" (click)="saveCommissionAgreement()">Save agreement</button>
-        @if (commissionAgreements.length) {
-          <div class="mt-5 overflow-x-auto border-t border-slate-100 pt-4">
-            <h3 class="mb-2 text-sm font-semibold text-slate-700">Current agreements</h3>
-            <table class="min-w-full text-left text-xs">
-              <thead class="bg-slate-50 text-slate-600"><tr><th class="px-2 py-2">Site</th><th class="px-2 py-2">Effective</th><th class="px-2 py-2">Rate</th><th class="px-2 py-2">Frequency</th><th class="px-2 py-2">Basis</th><th class="px-2 py-2">Due days</th></tr></thead>
-              <tbody>@for (agreement of commissionAgreements; track agreement.id) { <tr class="border-t"><td class="px-2 py-2">{{ siteName(agreement.siteId) }}</td><td class="px-2 py-2">{{ agreement.effectiveFrom | date:'dd/MM/yyyy' }}@if (agreement.effectiveTo) { - {{ agreement.effectiveTo | date:'dd/MM/yyyy' }}}</td><td class="px-2 py-2">{{ agreement.commissionRate * 100 | number:'1.2-2' }}%</td><td class="px-2 py-2">{{ frequencyLabel(agreement.frequency) }}</td><td class="px-2 py-2">{{ basisLabel(agreement.basis) }}</td><td class="px-2 py-2">{{ agreement.paymentDueDaysAfterPeriodEnd ?? '—' }}</td></tr> }</tbody>
-            </table>
-          </div>
-        } @else { <p class="mt-4 text-sm text-slate-500">No site commission agreements have been configured.</p> }
+        <h2 class="text-lg font-semibold text-slate-800">Site Commission Agreements</h2>
+        <p class="mt-1 text-sm text-slate-500">Site commission agreement form and current agreements.</p>
+        <a routerLink="/admin/site-commission-agreements" class="mt-4 inline-block rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white">Open Site Commission Agreements</a>
       </section>
 
       <section class="rounded-xl bg-white p-6 shadow-sm">
@@ -246,17 +188,6 @@ export class AdminComponent {
   loading = false;
   error = '';
   nayaxBackfillResult: NayaxCostBackfillResult | null = null;
-  feeRates: NayaxProcessingFeeRate[] = [];
-  feeExGst = 0.17;
-  effectiveFrom = new Date().toISOString().slice(0, 10);
-  sites: Site[] = [];
-  commissionSiteId: number | null = null;
-  commissionRate = 0;
-  commissionEffectiveFrom = new Date().toISOString().slice(0, 10);
-  commissionFrequency = 0;
-  commissionBasis = 0;
-  commissionDueDays: number | null = null;
-  commissionAgreements: SiteCommissionAgreement[] = [];
   products: Product[] = [];
   transitionProductId: number | null = null;
   transitionAverageUnitCost = 0;
@@ -270,14 +201,9 @@ export class AdminComponent {
     private importService: ImportService,
     private reportingService: ReportingService,
     private toast: ToastService,
-    private nayaxSettings: NayaxSettingsService,
-    private siteService: SiteService,
     private productService: ProductService,
     private inventoryCostTransition: InventoryCostTransitionService
   ) {
-    this.loadFeeRates();
-    this.loadCommissionAgreements();
-    this.siteService.getAll().subscribe({ next: sites => this.sites = sites, error: () => this.sites = [] });
     this.productService.getAll().subscribe({ next: products => this.products = products, error: () => this.products = [] });
   }
 
@@ -355,34 +281,6 @@ export class AdminComponent {
     });
   }
 
-  saveCommissionAgreement(): void {
-    if (this.commissionSiteId == null || this.commissionRate < 0 || this.commissionRate > 100 || !this.commissionEffectiveFrom || (this.commissionDueDays != null && this.commissionDueDays < 0)) {
-      this.toast.error('Enter a site, valid commission rate, and effective date.');
-      return;
-    }
-    this.loading = true;
-    this.reportingService.saveSiteCommissionAgreement({ siteId: this.commissionSiteId, commissionRate: this.commissionRate / 100, effectiveFrom: this.commissionEffectiveFrom, frequency: this.commissionFrequency, basis: this.commissionBasis, paymentDueDaysAfterPeriodEnd: this.commissionDueDays }).subscribe({
-      next: () => { this.loading = false; this.toast.success('Site commission agreement saved.'); this.loadCommissionAgreements(); },
-      error: err => { this.loading = false; this.toast.error(this.extractErrorMessage(err, 'Unable to save the commission agreement.')); }
-    });
-  }
-
-  loadCommissionAgreements(): void {
-    this.reportingService.siteCommissionAgreements().subscribe({
-      next: agreements => this.commissionAgreements = agreements,
-      error: () => this.toast.error('Unable to load site commission agreements.')
-    });
-  }
-
-  siteName(siteId: number): string { return this.sites.find(site => site.siteId === siteId)?.siteName ?? `Site ${siteId}`; }
-  frequencyLabel(frequency: number): string { return ['None', 'Monthly', 'Quarterly'][frequency] ?? 'Unknown'; }
-  basisLabel(basis: number): string { return ['Gross Sales', 'Card Sales', 'Sales ex GST'][basis] ?? 'Unknown'; }
-  isCurrentFeeRate(rate: NayaxProcessingFeeRate): boolean {
-    return this.currentFeeRate?.effectiveFrom === rate.effectiveFrom;
-  }
-  isFutureFeeRate(rate: NayaxProcessingFeeRate): boolean {
-    return new Date(`${rate.effectiveFrom.slice(0, 10)}T00:00:00`).getTime() > new Date().setHours(0, 0, 0, 0);
-  }
   // Some of these actions moved from returning a plain string body to a ProblemDetails object
   // (issue #59); older endpoints still return a plain string, so both shapes are handled here,
   // matching the same fallback already used in machine-detail.component.ts.
@@ -391,34 +289,6 @@ export class AdminComponent {
     if (typeof body === 'string') return body;
     const problem = body as { message?: string; title?: string } | undefined;
     return problem?.message ?? problem?.title ?? fallback;
-  }
-
-  private get currentFeeRate(): NayaxProcessingFeeRate | undefined {
-    const today = new Date().setHours(23, 59, 59, 999);
-    return this.feeRates.find(rate =>
-      new Date(`${rate.effectiveFrom.slice(0, 10)}T00:00:00`).getTime() <= today);
-  }
-
-  loadFeeRates(): void {
-    this.nayaxSettings.getRates().subscribe({
-      next: rates => {
-        this.feeRates = rates;
-        if (rates[0]) this.feeExGst = rates[0].feeExGst;
-      },
-      error: () => this.toast.error('Failed to load Nayax settings.')
-    });
-  }
-
-  saveFeeRate(): void {
-    if (this.feeExGst === null || this.feeExGst < 0 || !this.effectiveFrom) {
-      this.toast.error('Enter a non-negative fee and effective date.');
-      return;
-    }
-    this.loading = true;
-    this.nayaxSettings.saveRate({ effectiveFrom: this.effectiveFrom, feeExGst: this.feeExGst }).subscribe({
-      next: () => { this.loading = false; this.toast.success('Nayax processing-fee rate saved.'); this.loadFeeRates(); },
-      error: err => { this.loading = false; this.toast.error(err?.error ?? 'Failed to save Nayax settings.'); }
-    });
   }
 
   onSalesSelected(event: Event): void {
