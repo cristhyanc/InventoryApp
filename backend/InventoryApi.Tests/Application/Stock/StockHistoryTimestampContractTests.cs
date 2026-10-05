@@ -91,6 +91,56 @@ public class StockHistoryTimestampContractTests
         Assert.Equal(utcInstant, document.RootElement.GetProperty("createdAt").GetDateTime().ToUniversalTime());
     }
 
+    /// <summary>
+    /// The same boundary for the global stock-history query (issue #384). It reads the same column
+    /// through a different query - no tracking, a projection, and a join for the product name - so
+    /// the <see cref="DateTimeKind"/> the value conversion restores is asserted on this path too
+    /// rather than assumed from the product-specific one.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(KnownInstants))]
+    public async Task The_global_query_preserves_the_UTC_instant_identity_of_CreatedAt(DateTime utcInstant)
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        var options = new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options;
+
+        await using (var setup = TestAppDbContext.Unrestricted(options))
+        {
+            await setup.Database.EnsureCreatedAsync();
+            setup.Products.Add(new Product { Id = 1, Name = "p", QuantityInStock = 5 });
+            setup.StockAdjustments.Add(new StockAdjustment
+            {
+                ProductId = 1,
+                QuantityChange = 5,
+                QuantityAfter = 5,
+                Reason = StockAdjustmentReason.Restock,
+                Source = StockAdjustmentSource.Manual,
+                CreatedAt = utcInstant,
+                EffectiveAt = utcInstant
+            });
+            await setup.SaveChangesAsync();
+        }
+
+        await using var db = TestAppDbContext.Unrestricted(options);
+        var result = await new EfStockAdjustmentStore(db, TestCostingUseCases.RecordMovement(db), TestCostingUseCases.Rebuild(db))
+            .QueryHistoryAsync(new StockHistoryFilter(null, null, null, null, null, null, 0, 50), CancellationToken.None);
+
+        var entry = Assert.Single(result.Entries);
+        Assert.Equal(DateTimeKind.Utc, entry.Movement.CreatedAt.Kind);
+
+        var json = JsonSerializer.Serialize(entry.Movement, WebDefaults);
+        using var document = JsonDocument.Parse(json);
+        var createdAtJson = document.RootElement.GetProperty("createdAt").GetString();
+
+        Assert.NotNull(createdAtJson);
+        Assert.True(
+            createdAtJson!.EndsWith("Z", StringComparison.Ordinal) || createdAtJson.Contains('+', StringComparison.Ordinal),
+            $"Expected an unambiguous UTC instant (trailing 'Z' or an explicit offset) but got '{createdAtJson}', " +
+            "which the frontend would parse as browser-local time instead of the persisted UTC instant.");
+        Assert.Equal(utcInstant, document.RootElement.GetProperty("createdAt").GetDateTime().ToUniversalTime());
+    }
+
     public static IEnumerable<object[]> KnownInstants()
     {
         yield return new object[] { AestInstant };

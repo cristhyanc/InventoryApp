@@ -209,6 +209,65 @@ export interface StockAdjustment {
   createdAt: string;
 }
 
+/**
+ * One movement on the global Stock History endpoint `GET /api/stock-history` (issue #384).
+ *
+ * It is not a {@link StockAdjustment}: the cross-product listing carries the owning product's name
+ * on every row, so the page never has to look a product up per row, and it does not carry
+ * `effectiveAt` - the global history orders and filters on `createdAt` only.
+ *
+ * `createdAt` is a true UTC instant and must be rendered with `BusinessDateTimePipe`, never the
+ * built-in `date` pipe.
+ */
+export interface StockHistoryEntry {
+  id: number;
+  productId: number;
+  productName: string;
+  receiptItemId?: number | null;
+  quantityChange: number;
+  quantityAfter: number;
+  unitCost?: number | null;
+  totalCost?: number | null;
+  costingQuantityAfter?: number | null;
+  averageUnitCostAfter?: number | null;
+  inventoryValueAfter?: number | null;
+  reason: StockAdjustmentReason;
+  source: StockAdjustmentSource;
+  machineId?: number | null;
+  notes?: string | null;
+  eatBefore?: string | null;
+  createdAt: string;
+}
+
+/**
+ * One bounded page of the global Stock History. `page`/`pageSize` are what the server served, which
+ * may be smaller than what was asked for: the maximum page size is the server's decision.
+ * `totalCount` counts every movement matching the filters, not the rows in `items`.
+ */
+export interface StockHistoryPage {
+  items: StockHistoryEntry[];
+  page: number;
+  pageSize: number;
+  totalCount: number;
+  hasMore: boolean;
+}
+
+/**
+ * The global Stock History filters. `from`/`to` are inclusive `Australia/Sydney` calendar days
+ * (`yyyy-MM-dd`), which the backend converts to that business day's UTC boundaries; the browser's
+ * own timezone never takes part.
+ */
+export interface StockHistoryFilters {
+  productId?: number | null;
+  from?: string | null;
+  to?: string | null;
+  reason?: StockAdjustmentReason | null;
+  machineId?: number | null;
+  source?: StockAdjustmentSource | null;
+  page?: number | null;
+  pageSize?: number | null;
+}
+
 export enum NayaxStockEventMatchStatus {
   Matched = 0,
   NeedsReview = 1
