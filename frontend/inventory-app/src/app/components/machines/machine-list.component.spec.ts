@@ -82,7 +82,7 @@ describe('MachineListComponent search/filter', () => {
     component.onSearchChange('does-not-exist');
 
     expect(component.filteredMachines).toEqual([]);
-    expect(component.machines.length).toBe(2);
+    expect(component.machines).toHaveLength(2);
   });
 
   it('clearing the search restores the full list', () => {

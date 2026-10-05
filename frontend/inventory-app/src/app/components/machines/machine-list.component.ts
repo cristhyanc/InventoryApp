@@ -18,7 +18,7 @@ export class MachineListComponent implements OnInit {
   search = '';
   readonly loadState = new ListLoadState();
 
-  constructor(private machineService: MachineService) {}
+  constructor(private readonly machineService: MachineService) {}
 
   ngOnInit(): void {
     this.load();
