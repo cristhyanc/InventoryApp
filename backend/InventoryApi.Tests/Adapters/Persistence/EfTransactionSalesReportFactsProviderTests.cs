@@ -2,7 +2,7 @@ using Inventory.Application.Reporting.Transactions;
 using Inventory.Domain.FinancialConfiguration;
 using TransactionCommissionBasis = Inventory.Domain.FinancialConfiguration.CommissionBasis;
 using TransactionSaleStatus = Inventory.Domain.FinancialConfiguration.NayaxTransactionStatus;
-using InventoryApi.Adapters.Persistence;
+using Inventory.Infrastructure.Reporting.Persistence;
 using Inventory.Infrastructure.Data;
 using Inventory.Application.Nayax;
 using Inventory.Infrastructure.Models;

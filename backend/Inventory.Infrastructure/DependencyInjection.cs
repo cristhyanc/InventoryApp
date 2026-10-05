@@ -4,7 +4,16 @@ using Inventory.Application.CatalogReconciliation;
 using Inventory.Application.Documents;
 using Inventory.Application.Imports;
 using Inventory.Application.Nayax;
+using Inventory.Application.NayaxProcessingFees;
+using Inventory.Application.Reporting.Bookkeeping;
+using Inventory.Application.Reporting.Dashboard;
+using Inventory.Application.Reporting.Daily;
 using Inventory.Application.Reporting.Export;
+using Inventory.Application.Reporting.Gst;
+using Inventory.Application.Reporting.MachineProfitability;
+using Inventory.Application.Reporting.ProductProfitability;
+using Inventory.Application.Reporting.Reconciliation;
+using Inventory.Application.Reporting.Transactions;
 using Inventory.Application.Sites;
 using Inventory.Application.Time;
 using Inventory.Infrastructure.Clock;
@@ -12,6 +21,7 @@ using Inventory.Infrastructure.Documents;
 using Inventory.Infrastructure.Imports;
 using Inventory.Infrastructure.Nayax;
 using Inventory.Infrastructure.Reporting;
+using Inventory.Infrastructure.Reporting.Persistence;
 using Inventory.Infrastructure.Sites;
 using Inventory.Infrastructure.Time;
 using Microsoft.Extensions.DependencyInjection;
@@ -51,6 +61,30 @@ public static class InfrastructureServiceCollectionExtensions
         // method, because that registration needs the validated options only the composition root
         // can read; a host that calls this method must call that one too.
         services.AddScoped<INayaxCatalogSnapshotProvider, NayaxCatalogSnapshotProvider>();
+
+        // The reporting EF fact providers that issue #308 moved out of InventoryApi
+        // (Inventory.Infrastructure.Reporting.Persistence). Unlike everything above they do need an
+        // AppDbContext, which the composition root still registers together with the provider and
+        // the connection string it chooses (see AddDbContext/UseSqlite in Program.cs): a host that
+        // calls this method must register the context too, the same obligation
+        // NayaxCatalogSnapshotProvider already creates for AddNayaxLynxClient.
+        //
+        // Every one is Scoped, exactly as the Program.cs registration it replaces was, because the
+        // AppDbContext it reads is: relocating these adapters must not change a lifetime a consumer
+        // could notice. EfTransactionSalesReportFactsProvider additionally takes the
+        // INayaxLynxClient from AddNayaxLynxClient for its live site-name lookup.
+        services.AddScoped<IBookkeepingReportFactsProvider, EfBookkeepingReportFactsProvider>();
+        services.AddScoped<IDailyReportFactsProvider, EfDailyReportFactsProvider>();
+        services.AddScoped<IReconciliationReportFactsProvider, EfReconciliationReportFactsProvider>();
+        services.AddScoped<IMachineProfitabilityReportFactsProvider, EfMachineProfitabilityReportFactsProvider>();
+        services.AddScoped<IProductProfitabilityReportFactsProvider, EfProductProfitabilityReportFactsProvider>();
+        services.AddScoped<IGstReportFactsProvider, EfGstReportFactsProvider>();
+        services.AddScoped<IDashboardReportFactsProvider, EfDashboardReportFactsProvider>();
+        services.AddScoped<IInventoryValuationFactsProvider, EfInventoryValuationFactsProvider>();
+        services.AddScoped<ITransactionSalesReportFactsProvider, EfTransactionSalesReportFactsProvider>();
+
+        // The processing-fee facts the fee-bearing reports above are built from, moved with them.
+        services.AddScoped<INayaxProcessingFeeFactsProvider, EfNayaxProcessingFeeFactsProvider>();
 
         return services;
     }

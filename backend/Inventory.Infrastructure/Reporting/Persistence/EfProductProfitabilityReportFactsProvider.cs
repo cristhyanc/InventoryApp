@@ -3,13 +3,12 @@ using Inventory.Domain.FinancialConfiguration;
 using Inventory.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
-namespace InventoryApi.Adapters.Persistence;
+namespace Inventory.Infrastructure.Reporting.Persistence;
 
 /// <summary>
-/// Temporary EF Core implementation of <see cref="IProductProfitabilityReportFactsProvider"/>. It
-/// still lives in InventoryApi, not Inventory.Infrastructure: <see cref="AppDbContext"/> and the
-/// persistence models it depends on moved there in issue #307, and moving this adapter family after
-/// them is Persistence 7/8 and 8/8 of #153.
+/// The EF Core implementation of <see cref="IProductProfitabilityReportFactsProvider"/>. It lives in
+/// Inventory.Infrastructure with the <see cref="AppDbContext"/> and persistence models it depends on
+/// (issue #307 moved those, issue #308 this adapter family).
 ///
 /// Its completed-sale query is shared with <see cref="EfBookkeepingReportFactsProvider"/> and
 /// <see cref="EfMachineProfitabilityReportFactsProvider"/> through <see cref="EfReportingSharedQueries"/>.

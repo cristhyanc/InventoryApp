@@ -14,6 +14,7 @@ using Inventory.Application.Commissions;
 using Inventory.Application.Imports;
 using Inventory.Infrastructure.Imports;
 using Inventory.Infrastructure.Reporting;
+using Inventory.Infrastructure.Reporting.Persistence;
 using InventoryApi.Adapters.Persistence;
 using Inventory.Infrastructure.Data;
 using Inventory.Application.Nayax;

@@ -20,6 +20,7 @@ using Inventory.Domain.Reporting;
 using Inventory.Domain.FinancialConfiguration;
 using Inventory.Infrastructure;
 using Inventory.Infrastructure.Reporting;
+using Inventory.Infrastructure.Reporting.Persistence;
 using Inventory.Infrastructure.Sites;
 using InventoryApi.Adapters.Persistence;
 using Inventory.Infrastructure.Data;

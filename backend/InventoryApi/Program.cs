@@ -11,18 +11,10 @@ using Inventory.Application.InventoryCounting;
 using Inventory.Application.MachineStockSync;
 using Inventory.Application.Machines;
 using Inventory.Application.NayaxFeeSettings;
-using Inventory.Application.NayaxProcessingFees;
 using Inventory.Application.PickList;
 using Inventory.Application.Purchases;
 using Inventory.Application.Reorder;
-using Inventory.Application.Reporting.Bookkeeping;
-using Inventory.Application.Reporting.Dashboard;
-using Inventory.Application.Reporting.Daily;
-using Inventory.Application.Reporting.Gst;
-using Inventory.Application.Reporting.MachineProfitability;
 using Inventory.Application.Reporting.ProductProfitability;
-using Inventory.Application.Reporting.Reconciliation;
-using Inventory.Application.Reporting.Transactions;
 using Inventory.Application.SalesSync;
 using Inventory.Application.Sites;
 using Inventory.Application.Stock;
@@ -191,9 +183,10 @@ builder.Services.AddScoped<IBusinessMembershipStore, EfBusinessMembershipStore>(
 // Temporary API-owned adapter for the Nayax fee-settings persistence port; see EfNayaxFeeRateStore.
 builder.Services.AddScoped<INayaxFeeRateStore, EfNayaxFeeRateStore>();
 
-// Temporary API-owned adapters for commission and processing-fee facts, pending persistence
-// consolidation in issue #153.
-builder.Services.AddScoped<INayaxProcessingFeeFactsProvider, EfNayaxProcessingFeeFactsProvider>();
+// Temporary API-owned adapter for the site-commission facts port, pending persistence
+// consolidation in issue #153. Its processing-fee counterpart moved to Inventory.Infrastructure
+// with the reporting adapters it feeds (issue #308) and is registered by
+// AddInfrastructureServices().
 builder.Services.AddScoped<ISiteCommissionStore, EfSiteCommissionStore>();
 
 // Temporary API-owned adapters for the categories/suppliers persistence ports; see EfCategoryStore/EfSupplierStore.
@@ -242,38 +235,17 @@ builder.Services.AddScoped<ISiteFactsStore, EfSiteFactsStore>();
 // Temporary API-owned adapter for the machine dashboard facts port; see EfMachineDashboardFactsStore.
 builder.Services.AddScoped<IMachineDashboardFactsStore, EfMachineDashboardFactsStore>();
 
-// Temporary API-owned adapter for the bookkeeping report facts port; see EfBookkeepingReportFactsProvider.
-builder.Services.AddScoped<IBookkeepingReportFactsProvider, EfBookkeepingReportFactsProvider>();
-
-// Temporary API-owned adapter for the daily report facts port; see EfDailyReportFactsProvider.
-builder.Services.AddScoped<IDailyReportFactsProvider, EfDailyReportFactsProvider>();
-
-// Temporary API-owned adapter for the reconciliation report facts port; see EfReconciliationReportFactsProvider.
-builder.Services.AddScoped<IReconciliationReportFactsProvider, EfReconciliationReportFactsProvider>();
-
-// Temporary API-owned adapter for the machine profitability report facts port; see EfMachineProfitabilityReportFactsProvider.
-builder.Services.AddScoped<IMachineProfitabilityReportFactsProvider, EfMachineProfitabilityReportFactsProvider>();
-
-// Temporary API-owned adapter for the product profitability report facts port; see EfProductProfitabilityReportFactsProvider.
-builder.Services.AddScoped<IProductProfitabilityReportFactsProvider, EfProductProfitabilityReportFactsProvider>();
-
-// Temporary API-owned adapter for the GST accounting-aid report facts port; see EfGstReportFactsProvider.
-builder.Services.AddScoped<IGstReportFactsProvider, EfGstReportFactsProvider>();
-
-// Temporary API-owned adapter for the dashboard report facts port; see EfDashboardReportFactsProvider.
-builder.Services.AddScoped<IDashboardReportFactsProvider, EfDashboardReportFactsProvider>();
-
-// Temporary API-owned adapter for the inventory valuation facts port; see EfInventoryValuationFactsProvider.
-builder.Services.AddScoped<IInventoryValuationFactsProvider, EfInventoryValuationFactsProvider>();
+// The bookkeeping, daily, reconciliation, machine/product profitability, GST, dashboard, inventory
+// valuation and transaction sales report facts ports are no longer registered here: issue #308
+// moved their EF adapters into Inventory.Infrastructure.Reporting.Persistence, and
+// AddInfrastructureServices() above registers all ten of them (the processing-fee facts provider
+// included) against the AppDbContext this file still configures.
 
 // Temporary API-owned adapter for the product purchase-price-history port; see EfProductPurchasePriceHistoryProvider.
 builder.Services.AddScoped<IProductPurchasePriceHistoryProvider, EfProductPurchasePriceHistoryProvider>();
 
 // Temporary API-owned adapter for the product profitability report's bulk purchase-cost facts port; see EfProductPurchaseCostFactsProvider.
 builder.Services.AddScoped<IProductPurchaseCostFactsProvider, EfProductPurchaseCostFactsProvider>();
-
-// Temporary API-owned adapter for the transaction sales report facts port; see EfTransactionSalesReportFactsProvider.
-builder.Services.AddScoped<ITransactionSalesReportFactsProvider, EfTransactionSalesReportFactsProvider>();
 
 // Temporary API-owned adapter for the local half of the Nayax catalog reconciliation (issue #55);
 // see EfLocalCatalogSnapshotProvider. The remote half needs no AppDbContext, so issue #306 moved it
