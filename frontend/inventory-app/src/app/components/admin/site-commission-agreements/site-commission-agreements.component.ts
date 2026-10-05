@@ -59,9 +59,9 @@ export class SiteCommissionAgreementsComponent {
   commissionAgreements: SiteCommissionAgreement[] = [];
 
   constructor(
-    private reportingService: ReportingService,
-    private toast: ToastService,
-    private siteService: SiteService
+    private readonly reportingService: ReportingService,
+    private readonly toast: ToastService,
+    private readonly siteService: SiteService
   ) {
     this.loadCommissionAgreements();
     this.siteService.getAll().subscribe({ next: sites => this.sites = sites, error: () => this.sites = [] });

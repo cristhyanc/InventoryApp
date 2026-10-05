@@ -73,7 +73,7 @@ export class NayaxSettingsComponent {
   feeExGst = 0.17;
   effectiveFrom = new Date().toISOString().slice(0, 10);
 
-  constructor(private nayaxSettings: NayaxSettingsService, private toast: ToastService) {
+  constructor(private readonly nayaxSettings: NayaxSettingsService, private readonly toast: ToastService) {
     this.loadFeeRates();
   }
 
