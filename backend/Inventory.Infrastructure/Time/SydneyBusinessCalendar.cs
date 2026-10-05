@@ -9,7 +9,9 @@ namespace Inventory.Infrastructure.Time;
 /// </summary>
 public sealed class SydneyBusinessCalendar : IBusinessCalendar
 {
-    private static readonly TimeZoneInfo SydneyTimeZone = TimeZoneInfo.FindSystemTimeZoneById("Australia/Sydney");
+    private const string SydneyIanaTimeZoneId = "Australia/Sydney";
+
+    private static readonly TimeZoneInfo SydneyTimeZone = ResolveSydneyTimeZone();
 
     private readonly IClock _clock;
 
@@ -19,6 +21,24 @@ public sealed class SydneyBusinessCalendar : IBusinessCalendar
     }
 
     public DateTime Today => ToBusinessDate(_clock.UtcNow);
+
+    private static TimeZoneInfo ResolveSydneyTimeZone()
+    {
+        try
+        {
+            return TimeZoneInfo.FindSystemTimeZoneById(SydneyIanaTimeZoneId);
+        }
+        catch (TimeZoneNotFoundException)
+        {
+            if (!TimeZoneInfo.TryConvertIanaIdToWindowsId(SydneyIanaTimeZoneId, out var windowsId)
+                || string.IsNullOrWhiteSpace(windowsId))
+            {
+                throw;
+            }
+
+            return TimeZoneInfo.FindSystemTimeZoneById(windowsId);
+        }
+    }
 
     public DateTime ToBusinessDate(DateTime utcInstant)
     {
