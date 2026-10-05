@@ -2,6 +2,7 @@ import { MsalGuard } from '@azure/msal-angular';
 import { Route } from '@angular/router';
 import { routes } from './app.routes';
 import { StockHistoryPageComponent } from './components/stock/stock-history-page.component';
+import { AdminImportsComponent } from './components/admin/imports/admin-imports.component';
 
 function route(path: string): Route {
   const match = routes.find((candidate) => candidate.path === path);
@@ -29,5 +30,12 @@ describe('Stock History routes', () => {
   it('keeps the legacy product entry point and resolves it to the same page', async () => {
     expect(route('products/:id/stock').canActivate).toContain(MsalGuard);
     await expect(loadedComponent('products/:id/stock')).resolves.toBe(StockHistoryPageComponent);
+  });
+});
+
+describe('Admin Imports route (issue #389)', () => {
+  it('serves the dedicated Admin Imports page at /admin/imports, behind authentication', async () => {
+    expect(route('admin/imports').canActivate).toContain(MsalGuard);
+    await expect(loadedComponent('admin/imports')).resolves.toBe(AdminImportsComponent);
   });
 });
