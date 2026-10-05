@@ -1510,6 +1510,8 @@ partial enforceable rule.
 
 Routes are declared centrally in `app.routes.ts`. Every top-level route loads its component with `loadComponent` (issue #65), except the public `/auth` Entra redirect callback, which stays eagerly imported because it is the landing route for an in-progress authentication redirect, not a migrated feature area. This keeps initial bundles smaller and creates an enforceable feature boundary without introducing NgModules. Preserve route URLs, guards, and parameters when adding or changing a route.
 
+`/machines` (issue #385) is a dedicated, authenticated list page, `MachineListComponent`, that reads the same `MachineService.getAll()` machine-summary contract the home dashboard already uses, applies a client-side name/number search against the loaded list (there is no server-side filter on that endpoint), and never triggers a Nayax sales sync as a side effect of opening the page — it only reads whatever summary data is already persisted. Selecting a machine on this page navigates to the existing `/machines/:id` detail route (`MachineDetailComponent`), which is unchanged; `/machines` is a drill-down entry point into that existing page, not a replacement for it. The root sidebar/header link to `/machines` is deferred to a separate navigation-shell task.
+
 Two routes may load one page when an older URL has to keep working: `/stock-history` and the
 preserved product entry point `/products/:id/stock` both load `StockHistoryPageComponent`, which
 reads the product to preselect from either the query string or the route parameter (see [Global Stock
