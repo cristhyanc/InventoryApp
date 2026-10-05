@@ -96,6 +96,13 @@ run_step "Test agent eval runner" \
 run_step "Run agent eval corpus" \
     node "${repo_root}/scripts/run-agent-evals.mjs"
 
+# Unit tests only: the model-decision evals themselves call a model and run on demand.
+run_step "Test model-decision eval runner" \
+    node --test "${repo_root}/scripts/run-agent-model-evals.test.mjs"
+
+run_step "Test Project status sync" \
+    node --test "${repo_root}/scripts/sync-project-status.test.mjs"
+
 run_step "Restore backend" \
     dotnet restore "${backend_solution}"
 

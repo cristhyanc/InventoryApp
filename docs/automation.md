@@ -35,18 +35,39 @@ problem:
 | **Guardrails** | What is an agent allowed to do at all? | `AGENTS.md`, `CLAUDE.md`, this document, the `.github/workflows/agent-*.yml` prompts and tool permissions, `scripts/validate-agent-workflows.mjs`. |
 | **CI validation** | Does this specific change build, test, and lint? | `scripts/validate.sh`/`scripts/validate.ps1`, `validate.yml`. |
 | **Final review** | Did this specific pull request actually honour the guardrails? Independent (the other provider) on the cross routes; same-provider, and so not independent, on a full-provider fallback. | `agent-review.yml`. |
-| **Evals** | Do representative scenarios still resolve the way the guardrails say they should, across changes to the guardrails themselves? | `evals/agent/` (corpus and deterministic runner in `scripts/run-agent-evals.mjs`; see `evals/agent/README.md`). |
+| **Evals** | Do representative scenarios still resolve the way the guardrails say they should, across changes to the guardrails themselves? | `evals/agent/` (corpus and deterministic runner in `scripts/run-agent-evals.mjs`; on-demand model-decision runner in `scripts/run-agent-model-evals.mjs`; see `evals/agent/README.md`). |
 
 Evals are the odd one out: they do not validate a specific pull request's diff, and today's
 deterministic runner does not simulate an agent's decision on a scenario at all. It checks that
 the guardrail text/workflow permission/distinguishing code each eval case cites is still present,
 so a change to a prompt or a policy document that silently weakens an invariant is caught as a
-failing eval case even when no single application pull request happens to exercise it. An optional,
-not-yet-automated model-evaluation mode (`node scripts/run-agent-evals.mjs --mode model`) exists for
-the smaller set of scenarios that genuinely require reasoning about a specific narrative rather than
-checking that a sentence still exists; see `evals/agent/README.md` § AI/model evaluation mode for
-why grading is documented rather than automated today, and why that follow-up does not broaden
-secret access if it is picked up later.
+failing eval case even when no single application pull request happens to exercise it.
+
+**Model-decision evals** (`node scripts/run-agent-model-evals.mjs --provider claude-cli`, issue #249)
+add a second, on-demand layer: six critical synthetic scenarios (direct stock overwrite,
+MachineRefill as COGS, tenant-filter bypass, an unexpected migration, a conflicting high-risk
+requirement, and a safe low-risk change as the `proceed` control) are sent to a model, which must
+answer with a structured `proceed`/`reject`/`stop` decision. The runner grades that answer
+deterministically against each case's hidden expected decision and forbidden-outcome checks; the
+model never sees the rubric and never grades itself, and a failed critical case fails the run.
+Boundaries:
+
+- It runs only when a person types the command. `--provider` has no default; `scripts/validate.sh`
+  and `scripts/validate.ps1` run only its unit tests (fixture responses, no model call), and no
+  workflow runs it.
+- The only live provider reuses the Claude Code CLI already installed and signed in on the machine
+  running it. Each call is tool-less and runs in an empty temporary directory, so the model sees
+  only the prompt: `AGENTS.md`, `CLAUDE.md`, the cited policy sections and the synthetic scenario.
+  No repository files, case answers, credentials or business data reach it.
+- It adds no secret, credential, GitHub permission, workflow or provider. Running it in GitHub
+  Actions, or with a new key or provider, is a separate change that needs human review first.
+- Results are advisory and carry their reproducibility metadata (eval and prompt version, git
+  SHA, corpus hash, CLI version and reported models, timestamp). They never replace the
+  deterministic evals, CI, the final review, or human approval, merge and deployment.
+
+`node scripts/run-agent-evals.mjs --mode model` still prints prompts for the hand-graded
+`requiresModelEvaluation` cases (`AUTH-006`, `INV-005`, `INV-006`), which are not in the
+model-decision set yet. See `evals/agent/README.md` § Model-decision evals.
 
 **When a pull request changes an agent policy or prompt file** — `AGENTS.md`, `CLAUDE.md`, this
 document, or a prompt/instruction block inside `agent-implement.yml`, `agent-architecture.yml`, `agent-review.yml`, or
@@ -58,6 +79,16 @@ request because the guardrail is intentionally changing (and say so, per `AGENTS
 required by change type), or treat the failure as a regression and fix the guardrail file instead.
 
 ## Desired lifecycle
+
+### Project tracking
+
+The optional [Project status sync](project-status-sync.md) mirrors agent labels
+and current-head validation/review results into the Status field of existing
+InventoryApp issue cards in user Project #4. It is one-way display automation:
+moving a card does not grant readiness, request a repair, close an issue, merge
+or deploy. Parent epics remain manual. It requires a dedicated Projects credential
+and explicit activation after the workflow reaches main; see the linked setup,
+precedence, race limitations and board-rule requirements.
 
 The target lifecycle for one automated change is:
 

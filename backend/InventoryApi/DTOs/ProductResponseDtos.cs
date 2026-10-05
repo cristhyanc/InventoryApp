@@ -1,14 +1,43 @@
+using System.Text.Json.Serialization;
+
 using Inventory.Domain.Products;
 using InventoryApi.Models;
 
 namespace InventoryApi.DTOs;
 
 /// <summary>
-/// The wire shape of a product on the "/api/products" endpoints (issue #303), replacing the EF
-/// <c>InventoryApi.Models.Product</c> entity the controller used to serialize directly. Key names, order,
+/// The machine-slot facts a machine's product listing overlays on the catalogue product that slot
+/// dispenses (issue #302): the machine's own live retail price, the raw Nayax commission metadata,
+/// the MDB code, the slot capacity, and the suggested net/retail values
+/// <c>Inventory.Application.Products.ResolveMachineProductPricing</c> resolved for it. The slot's
+/// own stock is not here - it overrides <see cref="ProductResponse.QuantityInStock"/> itself, as it
+/// always has.
+///
+/// <see cref="None"/> is the catalogue view, where the API has always emitted these six fields at
+/// exactly these defaults. Carrying them in one ignored member rather than as six settable members
+/// is what keeps the published <c>ProductResponse</c> schema identical: Swashbuckle describes a
+/// property with no setter as <c>readOnly</c>, and all six have been published that way.
+/// </summary>
+public sealed record MachineSlotOverlay(
+    decimal MachinePrice,
+    decimal CommissionValue,
+    decimal? SuggestedNetValue,
+    decimal? SuggestedPriceValue,
+    int? MdbCode,
+    int? MaxStockInMachine)
+{
+    public static MachineSlotOverlay None { get; } = new(0m, 0m, null, null, null, null);
+}
+
+/// <summary>
+/// The wire shape of a product on the "/api/products" endpoints (issue #303) and, since issue #302,
+/// on "/api/machines/{id}/products", replacing the EF
+/// <c>InventoryApi.Models.Product</c> entity the controllers used to serialize directly. Key names, order,
 /// nesting and values match that entity's serializable surface exactly - including the fields the
 /// catalogue endpoints have always emitted at their defaults - so this is not a contract change;
-/// <c>InventoryApi.Tests.DTOs.ProductJsonContractTests</c> compares the serialized bytes of both.
+/// <c>InventoryApi.Tests.DTOs.ProductJsonContractTests</c> and
+/// <c>InventoryApi.Tests.DTOs.MachineJsonContractTests</c> compare the serialized bytes of both
+/// views against that entity.
 ///
 /// The derived reorder values stay derived here rather than being carried as data, so they can only
 /// ever come from <see cref="ProductReorderPolicy"/> - the same authoritative formulas
@@ -29,17 +58,24 @@ public sealed record ProductResponse
     public int? CostingQuantity { get; init; }
     public decimal? InventoryValue { get; init; }
 
-    // The machine-slot fields of the entity this response replaced. Only the machine-product view
-    // ever overlaid them, so every "/api/products" response has always carried them at these
-    // defaults; they are reproduced as constants to keep that response byte-identical. The
-    // machine-product view keeps the entity shape until issue #302 migrates it, and is not served
-    // from here.
-    public decimal MachinePrice => 0m;
-    public decimal CommissionValue => 0m;
-    public decimal? SuggestedNetValue => null;
-    public decimal? SuggestedPriceValue => null;
-    public int? MdbCode => null;
-    public int? MaxStockInMachine => null;
+    /// <summary>
+    /// The machine slot this response describes, when it describes one (issue #302). Never
+    /// serialized: the six fields below publish it in the entity's own positions and spellings, and
+    /// <see cref="MachineSlotOverlay.None"/> is the catalogue view every "/api/products" response
+    /// has always emitted.
+    /// </summary>
+    [JsonIgnore]
+    public MachineSlotOverlay MachineSlot { get; init; } = MachineSlotOverlay.None;
+
+    // The machine-slot fields of the entity this response replaced, kept derived so a catalogue
+    // response cannot carry a machine's price by accident and the published schema keeps describing
+    // all six as readOnly.
+    public decimal MachinePrice => MachineSlot.MachinePrice;
+    public decimal CommissionValue => MachineSlot.CommissionValue;
+    public decimal? SuggestedNetValue => MachineSlot.SuggestedNetValue;
+    public decimal? SuggestedPriceValue => MachineSlot.SuggestedPriceValue;
+    public int? MdbCode => MachineSlot.MdbCode;
+    public int? MaxStockInMachine => MachineSlot.MaxStockInMachine;
 
     /// <summary>
     /// Units the machines currently need refilled from storage. Zero unless the reorder-alert
@@ -84,10 +120,25 @@ public sealed record ProductResponse
 }
 
 /// <summary>
-/// One stock movement in a product's history, as the product endpoints serialize it. Matches the
+/// One stock movement in a product's history, as the product endpoints serialize it and, since
+/// issue #305, as the "/api/products/{productId}/stock" history and adjust endpoints serialize it
+/// too - one wire shape for a stock movement, not two. Matches the
 /// serializable surface of the <c>InventoryApi.Models.StockAdjustment</c> entity it replaced: the owning
 /// business, the product back-reference and the receipt-item navigation stay off the wire, and
 /// <see cref="Reason"/>/<see cref="Source"/> keep the persisted numeric values.
+///
+/// The stock endpoints publish this response under the <c>StockAdjustment</c> schema id they have
+/// always published, which <c>InventoryApi.Swagger.PublishedResponseSchemaContract</c> substitutes
+/// for their response; the product endpoints keep publishing it under its own id as the item type of
+/// <see cref="ProductResponse.StockAdjustments"/>. The two published components are schema-identical,
+/// which <c>InventoryApi.Tests.Swagger.StockAndExpenseSchemaContractTests</c> asserts.
+///
+/// <see cref="Reason"/>/<see cref="Source"/> are, with the request DTO's
+/// <c>StockAdjustmentDto.Reason</c>, the one place an API contract still names the persistence enums
+/// - a temporary compatibility exception - because the published document reaches the same CLR enums
+/// from both of those pinned components; an API-owned copy under the same simple name makes
+/// Swashbuckle fail document generation with a duplicate schema id. See
+/// <c>InventoryApi.Adapters.Mapping.StockAdjustmentResponseMapper</c>.
 /// </summary>
 public sealed record ProductStockAdjustmentResponse(
     int Id,

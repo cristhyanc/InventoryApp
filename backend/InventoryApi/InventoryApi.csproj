@@ -32,6 +32,18 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Scheduled database backup WebJob (issue #333). App Service reads a triggered WebJob from
+         App_Data/jobs/triggered/<job name>/ under the deployed site root, which is this project's
+         publish output - so the job ships with the API in the artifact Deploy Production already
+         deploys whole, and no workflow change is needed. The Web SDK's default content globs cover
+         wwwroot, *.config and *.json only, so run.sh and settings.job have to be declared here or
+         publish would silently leave the schedule behind.
+         App_Data is not under wwwroot and is never served as static content.
+         BackupWebJobPackagingTests asserts this declaration, the schedule and the invocation. -->
+    <Content Include="App_Data\jobs\**\*" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Inventory.Application\Inventory.Application.csproj" />
     <ProjectReference Include="..\Inventory.Infrastructure\Inventory.Infrastructure.csproj" />
   </ItemGroup>

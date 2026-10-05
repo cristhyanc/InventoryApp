@@ -2,24 +2,27 @@ using Inventory.Application.Machines;
 using Inventory.Application.Products;
 using InventoryApi.Models;
 
-namespace InventoryApi.Adapters.Mapping;
+namespace InventoryApi.Tests.DTOs;
 
 /// <summary>
-/// Maps the Application layer's product read models back onto the <see cref="Product"/> shape the
-/// product and machine-product endpoints have always serialised (issue #240). It exists so the
-/// migration could move the orchestration without changing the public response contract: every key,
-/// nesting level and derived value a client already receives is reproduced here, and the derived
-/// reorder values come from the same <see cref="Inventory.Domain.Products.ProductReorderPolicy"/> the
-/// use cases ranked and filtered with.
+/// The EF <c>Product</c> entity the retired delegators serialised, rebuilt from an Application
+/// record exactly as <c>InventoryApi.Adapters.Mapping.ProductResponseMapper</c> did before issues
+/// #303 and #302 replaced it with the API-owned <see cref="InventoryApi.DTOs.ProductResponse"/>.
 ///
-/// The returned instances are detached response objects, never attached to a
-/// <see cref="Data.AppDbContext"/>. Replacing them with a dedicated response DTO belongs with
-/// deleting the remaining legacy delegators (issue #153), not with this slice, which must keep the
-/// contract byte-for-byte identical.
+/// It is the reference value of the product wire contract, kept in the test project on purpose: the
+/// production code must no longer be able to produce it, and a contract test that compared the new
+/// response with another copy of the new response would prove nothing. Both the catalogue response
+/// (<c>/api/products</c>, issue #303) and the machine-slot response
+/// (<c>/api/machines/{id}/products</c>, issue #302) are compared against it, so the two endpoints
+/// cannot drift from the one shape they have always shared either.
 /// </summary>
-internal static class ProductResponseMapper
+internal static class LegacyProductEntityShape
 {
-    public static Product ToProduct(ProductRecord record) => new()
+    /// <summary>
+    /// The catalogue view. The machine-slot fields stay at their defaults, exactly as they did on
+    /// every <c>/api/products</c> response, because only the machine-product view overlays them.
+    /// </summary>
+    public static Product ForCatalogue(ProductRecord record) => new()
     {
         Id = record.Id,
         Name = record.Name,
@@ -77,21 +80,18 @@ internal static class ProductResponseMapper
             CreatedAt = adjustment.CreatedAt,
             EffectiveAt = adjustment.EffectiveAt,
         }).ToList(),
-
-        // Resolved live by the reorder use case, not persisted; zero on the read paths that do not
-        // resolve them, exactly as before. The derived NeedToOrder/IsReorderAlert/IsLowStock values
-        // follow from these through ProductReorderPolicy.
         MachineReplenishmentNeed = record.MachineReplenishmentNeed,
         OnOrderQuantity = record.OnOrderQuantity,
     };
 
     /// <summary>
     /// The machine-slot view: the catalogue product with the machine's own price, raw Nayax
-    /// commission metadata, MDB code, slot stock, slot capacity and suggested pricing overlaid.
+    /// commission metadata, MDB code, slot stock, slot capacity and suggested pricing overlaid -
+    /// the overlay order and the slot-stock override the retired <c>MachineService</c> applied.
     /// </summary>
-    public static Product ToProduct(MachineProductRecord record)
+    public static Product ForMachineSlot(MachineProductRecord record)
     {
-        var product = ToProduct(record.Product);
+        var product = ForCatalogue(record.Product);
         product.MachinePrice = record.MachinePrice;
         product.CommissionValue = record.CommissionValue;
         product.MdbCode = record.MdbCode;

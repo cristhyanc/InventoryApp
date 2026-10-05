@@ -250,8 +250,8 @@ failure:
 dotnet InventoryApi.dll backup-database --output /home/data/backups/inventory-<timestamp>.db
 ```
 
-This is the same command the scheduled backup job (issue #333) calls; routine backups are
-scheduled, not run by hand.
+This is the same command the scheduled backup WebJob calls; routine backups are scheduled, not run
+by hand.
 
 The same command's `--upload` mode (issue #332) creates, verifies and uploads a snapshot as one
 workflow, so the verified copy ends up off the instance instead of next to the database it
@@ -271,6 +271,21 @@ and `--upload` are mutually exclusive. The required container, least-privilege
 `Storage Blob Data Contributor` assignment and encryption expectations are in
 [docs/architecture.md](docs/architecture.md#sqlite-operating-assumptions-and-scale-strategy-issue-53);
 no production Azure resource or role assignment is created by this repository.
+
+**The schedule (issue #333)** is a triggered Linux App Service WebJob that ships inside the API's
+own `dotnet publish` output, as
+`backend/InventoryApi/App_Data/jobs/triggered/database-backup/` (`run.sh` plus a `settings.job`
+holding the six-field CRON `0 0 15 * * *`, daily at 15:00 UTC). Because **Deploy Production**
+deploys the complete publish directory, the job reaches production with the API and no GitHub
+Actions workflow changed. The script holds no backup logic, no database path and no setting: it
+locates the published application, runs `dotnet InventoryApi.dll backup-database --upload` from
+that directory so the configured connection string resolves exactly as it does for the API, logs
+start, completion or failure with the elapsed duration, and exits with the command's own exit code
+so a failed backup is a failed WebJob run. Activating it is human work — the App Service plan,
+**Always On**, the configured database path and confirming the first run — and the prerequisites
+with their verification steps are in [docs/architecture.md § Scheduling the backup with an App
+Service
+WebJob](docs/architecture.md#scheduling-the-backup-with-an-app-service-webjob-issue-333).
 
 The equivalent manual `sqlite3` CLI sequence remains available where the published `dotnet`
 application is not on hand:
@@ -296,12 +311,15 @@ hashing, and failure reporting (`DatabaseBackupRunnerTests`) and its argument pa
 `DatabaseBackupUploadRunnerTests` drives create-verify-upload-cleanup end to end and
 `AzureBlobBackupUploaderTests` covers the object naming, the monthly recovery point and the
 refusals — both against an in-memory stand-in for the container, so no Azure account, credential
-or network is involved. All of it runs as part of the normal test suite and only ever touches
-throwaway SQLite files under the OS temp directory, never a developer's or production
-`inventory.db`:
+or network is involved. `BackupWebJobPackagingTests` covers the schedule: that both WebJob files are
+published, that the schedule is the daily 15:00 UTC expression, and — by running the real `run.sh`
+against a fake `dotnet` — that it invokes `backup-database --upload` from the application's
+directory, names no database path, and propagates the exit code. All of it runs as part of the
+normal test suite and only ever touches throwaway files under the OS temp directory, never a
+developer's or production `inventory.db`:
 
 ```bash
-dotnet test backend/InventoryApi/InventoryApi.slnx --filter "FullyQualifiedName~SqliteBackupRestoreTests|FullyQualifiedName~DatabaseBackupRunnerTests|FullyQualifiedName~BackupDatabaseArgumentsTests|FullyQualifiedName~DatabaseBackupUploadRunnerTests|FullyQualifiedName~AzureBlobBackupUploaderTests"
+dotnet test backend/InventoryApi/InventoryApi.slnx --filter "FullyQualifiedName~SqliteBackupRestoreTests|FullyQualifiedName~DatabaseBackupRunnerTests|FullyQualifiedName~BackupDatabaseArgumentsTests|FullyQualifiedName~DatabaseBackupUploadRunnerTests|FullyQualifiedName~AzureBlobBackupUploaderTests|FullyQualifiedName~BackupWebJobPackagingTests"
 ```
 
 To rehearse the `sqlite3` CLI sequence above before relying on it in production, run it against a

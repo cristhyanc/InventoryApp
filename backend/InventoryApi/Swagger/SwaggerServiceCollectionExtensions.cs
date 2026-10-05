@@ -25,6 +25,13 @@ public static class SwaggerServiceCollectionExtensions
             // derivation, which this selector falls back to.
             c.CustomSchemaIds(PublishedResponseSchemaContract.SchemaIdSelector(c.SchemaGeneratorOptions.SchemaIdSelector));
             c.SchemaFilter<PublishedResponseSchemaContract.PublishedShapeFilter>();
+
+            // The stock history/adjust responses are produced by the API-owned
+            // ProductStockAdjustmentResponse since issue #305, but keep describing the
+            // StockAdjustment component the endpoints have always published - the product endpoints
+            // publish that DTO under its own id, so a schema-id redirect was not available and the
+            // response itself is substituted. See PublishedResponseSchemaContract.
+            c.OperationFilter<PublishedResponseSchemaContract.PublishedResponseFilter>();
         });
 
         return services;

@@ -120,6 +120,15 @@ Invoke-ExternalCommand -Label 'Run agent eval corpus' -Command {
     & node (Join-Path $RepositoryRoot 'scripts/run-agent-evals.mjs')
 }
 
+# Unit tests only: the model-decision evals themselves call a model and run on demand.
+Invoke-ExternalCommand -Label 'Test model-decision eval runner' -Command {
+    & node --test (Join-Path $RepositoryRoot 'scripts/run-agent-model-evals.test.mjs')
+}
+
+Invoke-ExternalCommand -Label 'Test Project status sync' -Command {
+    & node --test (Join-Path $RepositoryRoot 'scripts/sync-project-status.test.mjs')
+}
+
 Invoke-ExternalCommand -Label 'Restore backend' -Command {
     & dotnet restore $BackendSolution
 }

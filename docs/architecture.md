@@ -151,8 +151,8 @@ exits non-zero on any failure:
 dotnet InventoryApi.dll backup-database --output /home/data/backups/inventory-20260101T000000.db
 ```
 
-This is the command the scheduled backup job (issue #333) also calls; routine backups are
-scheduled, not run by hand. Manual, one-off verification uses the identical command.
+This is the command the scheduled backup WebJob (issue #333, below) also calls; routine backups
+are scheduled, not run by hand. Manual, one-off verification uses the identical command.
 Retention/alerting and automated restore remain out of scope for this command — retention is a
 storage-lifecycle policy and alerting is an Azure Monitor rule, both human-applied (see [Backup
 retention, alerting and restore rehearsal](#backup-retention-alerting-and-restore-rehearsal-issue-334)
@@ -285,6 +285,115 @@ underlying mechanism:
 This procedure, and the non-destructive local check in the README, do not touch any production
 connection string, credential, or data; every example above uses a placeholder path that a human
 operator supplies for their own environment.
+
+#### Scheduling the backup with an App Service WebJob (issue #333)
+
+A backup must happen whether or not anyone signs in, which is the one workload in this application
+that genuinely cannot stay request-driven (see [Azure Functions and background
+workloads](#azure-functions-and-background-workloads-decision-criteria-issue-68)). The schedule is
+a **triggered Linux App Service WebJob** that runs inside the App Service the API already runs in,
+and it ships in the API's own `dotnet publish` output:
+
+```text
+backend/InventoryApi/App_Data/jobs/triggered/database-backup/
+├── run.sh          # invokes the published executable's backup-database --upload
+└── settings.job    # {"schedule": "0 0 15 * * *"} - daily at 15:00 UTC
+```
+
+App Service reads a triggered WebJob from `App_Data/jobs/triggered/<job name>/` under the deployed
+site root, and that site root is the publish directory, so the two files are declared as publish
+content in `InventoryApi.csproj` (`<Content Include="App_Data\jobs\**\*"
+CopyToPublishDirectory="PreserveNewest" />`) and need an explicit declaration because the Web SDK's
+default content globs cover `wwwroot`, `*.config` and `*.json` only. **Deploy Production** already
+publishes that project and deploys the whole output directory, so the job reaches production with
+the API and **no GitHub Actions workflow changed** (`.github/workflows/vm-manager.yml` builds and
+tests only; it has not published or deployed since issue #343 — see [Build and
+delivery](#build-and-delivery)). `App_Data` is not under `wwwroot` and is never served as static
+content.
+
+**The job holds no logic, no path and no setting.** `run.sh` invokes the one supported command,
+from the application's own directory, and propagates its exit code:
+
+```bash
+dotnet InventoryApi.dll backup-database --upload
+```
+
+Five properties of that script are deliberate:
+
+- **It names no database.** The database backed up is whatever
+  `ConnectionStrings:DefaultConnection` resolves to for the API — an absolute path under `/home` if
+  one is configured, or the relative default. The script passes no path and sets no connection
+  string, and because it runs the command **from the published application's directory** a relative
+  default resolves exactly where it resolves for the running API. Moving the database is therefore
+  a configuration change only; nothing in the job has to be edited to follow it.
+- **It finds the application rather than assuming its own working directory is it.** App Service
+  copies a triggered WebJob's files to a temporary directory before running them, so the script
+  looks for `InventoryApi.dll` in `WEBROOT_PATH` (when the platform provides it), then
+  `$HOME/site/wwwroot`, then four levels above itself for a host that runs it in place. Not finding
+  it fails the run; it never falls back to a guessed path.
+- **Exit code is the contract.** `backup-database --upload` exits `0` only when the snapshot
+  verified, the upload verified and the staged copy was removed, and the script exits with exactly
+  that code, so a failed backup is a failed WebJob run in the job's history rather than a green run
+  with a bad log line.
+- **It logs the run and nothing sensitive.** A UTC-stamped `START` line, then either `COMPLETED` or
+  `FAILED (<reason>)`, both with the elapsed duration. The artifact metadata an operator needs —
+  the uploaded `daily/`/`monthly/` object names, the snapshot's SHA-256, its byte count and the
+  integrity result — comes from the command's own output, which the job inherits, so there is one
+  place that decides what a backup run reports and no second parser to keep in step. Neither the
+  script nor the command prints a connection string, a credential, a query or any row of business
+  data. The job's own failures use the same `FAILED (<reason>)` shape as the command's, so the
+  failed-run alert below catches a job-level failure (the application not found, no `dotnet` host)
+  as well as a command-level one.
+- **It needs no monthly logic.** The month's single recovery point is created by the upload itself,
+  on the first successful upload in each UTC calendar month, scheduled or manual (see above).
+
+**Why 15:00 UTC, and why in the artifact.** The schedule lives in `settings.job` in the deployment
+artifact rather than in portal configuration, so it is reviewable in a diff and survives a
+redeploy. `settings.job` CRON has **six** fields starting at seconds, so `0 0 15 * * *` is
+15:00:00 daily — a five-field expression would silently mean something else. 15:00 UTC is 01:00 or
+02:00 in `Australia/Sydney` depending on daylight saving, which is outside trading hours for a
+vending business, and it is the cadence the 36-hour missing-backup alert of issue #334 is specified
+against. A WebJob's CRON is evaluated in UTC unless the app's `WEBSITE_TIME_ZONE` setting changes
+the container's time zone, which is one of the settings a human must confirm below. Changing the
+window means changing this file and re-confirming the alert window with it.
+
+**Prerequisites, and what only a human can confirm.** This repository contains no Azure resource
+configuration and cannot see the deployed App Service, so the rows below are the operating
+assumptions this packaging is built on, each with the human check that confirms it against the live
+app. **No agent and no workflow in this repository applies any of them.**
+
+| # | Prerequisite | Why it matters | How a human confirms it |
+|---|---|---|---|
+| 1 | The app is a **code deployment of the publish output to a Linux App Service** (the mode `deploy-production.yml` performs with `azure/webapps-deploy`), not a custom container | A custom container image does not read `App_Data/jobs`, so the job would never be discovered and this packaging would be the wrong mechanism | The App Service's deployment/publish mode in the portal. If it is ever moved to a container, this job stops working and needs its own issue, not a quiet fix |
+| 2 | **WebJobs are available on the plan and the job is listed after a deployment** | The schedule is inert if the platform never registers the job | After the first deployment carrying it, the WebJobs blade lists `database-backup` as `Triggered` with the `0 0 15 * * *` schedule |
+| 3 | **Always On** is enabled, which requires **Basic or higher** (Free/Shared cannot) | A scheduled WebJob only fires while the app is running; an idle app that has been unloaded runs nothing, and the missed run is then only visible through issue #334's alert | Configuration → General settings → Always On = On, and the plan tier |
+| 4 | The plan stays pinned to **one instance** | The database is a single SQLite file on the App Service's `/home` mount, which is why the whole deployment is single-instance (see above). Scaling out would also multiply the scheduled run | The plan's instance count and any autoscale rule |
+| 5 | `ConnectionStrings__DefaultConnection` points at the **persistent, absolute** `/home` path the API actually uses | The job backs up exactly what the API reads. An absolute configured path removes the relative default's dependence on the working directory for both of them | The App Service application setting, read in the portal — never pasted into this repository, an issue or a pull request |
+| 6 | `WEBSITE_RUN_FROM_PACKAGE`, if set, still exposes `App_Data/jobs` from the mounted package, and the database is **not** inside `wwwroot` | Run-from-package mounts `wwwroot` read-only; a database inside the deployment target is an avoidable risk either way (see the README) | The application setting, plus confirming the job appears and runs (row 2 and row 7) |
+| 7 | The **first scheduled run succeeds end to end** | Everything above is an assumption until one real run has taken a snapshot, uploaded it and exited `0` | The job's run history and its log output, plus the new `daily/` object (and the month's `monthly/` object) in the backup container |
+| 8 | The managed identity and backup container prerequisites of issue #332 are in place | The job authenticates as the application; it adds no credential of its own, and there is no secret in the WebJob | The prerequisite table above (private container, system-assigned identity, least-privilege `Storage Blob Data Contributor`) |
+
+Two further notes a human should know when confirming row 2 and row 7. The platform runs a `.sh`
+WebJob through a shell, so the script does not rely on its Unix executable bit surviving the
+artifact upload, the zip deployment and the extraction — a chain this repository cannot control;
+`.gitattributes` does pin the job's files to LF endings in every checkout, because a CRLF `run.sh`
+would fail on its first line. And the WebJob is a second process reading the same SQLite file as
+the API: that is a reader, not a second writer, and the Online Backup API is what makes it
+consistent (see the top of this section), so it stays inside the single-writer envelope the
+deployment already requires.
+
+**What the repository verifies, and what it cannot.**
+`backend/InventoryApi.Tests/Operations/BackupWebJobPackagingTests.cs` asserts the packaging and the
+invocation: both files exist at the triggered-WebJob path, the project declares them as publish
+content with `CopyToPublishDirectory` (the exact mechanism that puts them in the deployed artifact),
+the schedule is the six-field daily 15:00 UTC expression, the script's executable lines name no
+database path, connection string or `--output` destination, and — by running the real script under
+`bash` against a fake `dotnet` and a throwaway application directory — that it invokes
+`InventoryApi.dll backup-database --upload` from the application's directory, exits with the
+command's own exit code, logs start, completion/failure and duration, and fails without invoking
+anything when the application is not found. No test takes a backup, reaches Azure or runs
+`dotnet publish`. **Nothing about the live plan, Always On, the connection string or the schedule
+actually firing is verified from this repository**; those are rows 1-7 above.
 
 #### Backup retention, alerting and restore rehearsal (issue #334)
 
@@ -457,9 +566,11 @@ demands exactly that: "nothing in the log" and "the job never started" must be d
 | **No backup in 36 hours** | A run that never happened or produced nothing: the WebJob disabled, removed by a deployment, starved by Always On being off, the App Service stopped, or a "successful" run that wrote no object | Log search over `StorageBlobLogs` for successful writes under the `daily/` prefix | It observes the **artifact** rather than the job's own claim about itself. A job that cannot run also cannot report that it did not run, so the absence of a recovery point has to be detected somewhere other than in the job |
 
 *Alert 1 — failed backup run.* Exit code is the contract: `backup-database` exits `0` only when the
-snapshot verified, the upload verified and nothing was left behind, and #333 requires the WebJob to
-propagate a non-zero result. The queryable manifestation of that exit code is the command's own
-output, which the WebJob inherits:
+snapshot verified, the upload verified and nothing was left behind, and the WebJob of #333 exits
+with that code unchanged. The queryable manifestation of that exit code is the command's own
+output, which the WebJob inherits — plus the job's own `FAILED (<reason>)` line, written in the same
+shape for a failure before the command is reached (see [Scheduling the backup with an App Service
+WebJob](#scheduling-the-backup-with-an-app-service-webjob-issue-333)):
 
 ```kusto
 AppServiceConsoleLogs
@@ -483,8 +594,8 @@ prefers at most one notification per failure sets the time range equal to the fr
 and accepts that a late-ingested failure line can then be missed entirely. Two further caveats a
 human must close when applying it: confirm which diagnostic category actually carries the job's
 standard output on the deployed plan (on a Linux App Service the container's stdout/stderr lands in
-`AppServiceConsoleLogs`) and, once #333 exists, re-check the query against one real failed run,
-because this alert is specified before the job that feeds it. Where
+`AppServiceConsoleLogs`) and re-check the query against one real failed run of the job, because
+this alert was specified before the job that feeds it existed. Where
 `APPLICATIONINSIGHTS_CONNECTION_STRING` is configured (see [Observability and error
 telemetry](#observability-and-error-telemetry-issue-165)), the same `ILogger` output is also
 queryable in Application Insights `traces`; the rule above deliberately does not depend on that,
@@ -744,8 +855,8 @@ flowchart TD
 
 ## Current pressure points
 
-- HTTP, use cases, domain calculations, EF Core, Nayax, file storage, and export generation live in one project for every feature area still pending migration (purchases, machine services, inventory-cost transition, and the remaining direct-`AppDbContext` controllers/services). Reporting is no longer part of this pressure point: its use cases live in `Inventory.Application.Reporting.<Feature>` and its calculations in `Inventory.Domain.Reporting.<Feature>`; only its temporary EF/Nayax adapters, HTTP controller, and CSV/XLSX byte encoding remain in `InventoryApi`. `Purchases.PurchaseTotalValidationPolicy`/`ComputePurchaseTotalValidation` were the first pieces of the purchase slice to move out (see the [Purchase rename plan](#purchase-rename-plan)); the purchase and supplier-order upload/update/delete orchestration followed in issue #281, and issue #304 removed the last `InventoryApi` services for them, so only their temporary EF adapters, their HTTP controllers, and the API-owned response DTOs remain here.
-- The machine services combine orchestration and persistence, and are large. The purchase and inventory-cost-transition services no longer exist: the transition services moved to `Inventory.Application.Costing` (issue #298) and `PurchaseService`/`SupplierOrderService` were deleted by issue #304, leaving `EfPurchaseStore`/`EfSupplierOrderStore` as the documented temporary API-owned persistence adapters.
+- HTTP, use cases, domain calculations, EF Core, Nayax, file storage, and export generation live in one project for every feature area still pending migration (the remaining direct-`AppDbContext` controllers and the temporary API-owned persistence adapters). Reporting is no longer part of this pressure point: its use cases live in `Inventory.Application.Reporting.<Feature>` and its calculations in `Inventory.Domain.Reporting.<Feature>`; only its temporary EF/Nayax adapters, HTTP controller, and CSV/XLSX byte encoding remain in `InventoryApi`. `Purchases.PurchaseTotalValidationPolicy`/`ComputePurchaseTotalValidation` were the first pieces of the purchase slice to move out (see the [Purchase rename plan](#purchase-rename-plan)); the purchase and supplier-order upload/update/delete orchestration followed in issue #281, and issue #304 removed the last `InventoryApi` services for them, so only their temporary EF adapters, their HTTP controllers, and the API-owned response DTOs remain here.
+- The machine, site, purchase and inventory-cost-transition services no longer exist either: the transition services moved to `Inventory.Application.Costing` (issue #298), `PurchaseService`/`SupplierOrderService` were deleted by issue #304, and `MachineService`/`SiteService` by issue #302, leaving `EfPurchaseStore`/`EfSupplierOrderStore` and `EfMachineDashboardFactsStore`/`EfSiteFactsStore` as the documented temporary API-owned persistence adapters.
 - The site-commission controller still directly accesses `AppDbContext`. Fee-setting, categories/suppliers, and operating expenses no longer do (see the Nayax fee-settings slice above and the Operating expenses slice below), except through each slice's temporary API-owned persistence adapter.
 - `Product` contains persistence state, business calculations, and transient Nayax/UI fields.
 - Several tests use EF Core InMemory where SQLite behavior may be more representative.
@@ -868,11 +979,38 @@ Contains:
 
 Controllers do not implement accounting, inventory, persistence, or filesystem rules.
 
+**No controller names the persistence model (issue #305).** Since the last controller slice of #153,
+no file under `InventoryApi/Controllers` references `InventoryApi.Models` at all: a controller binds
+and validates the API-owned request contracts in `InventoryApi.DTOs`, invokes an
+`Inventory.Application` use case, and serialises an API-owned response DTO that a response mapper in
+`InventoryApi/Adapters/Mapping` projected from the use case's record. An EF entity reached the wire
+on these endpoints only because the controller could name it, which is also what would make moving
+`AppDbContext` into `Inventory.Infrastructure` (issues #153/#154) a client-visible contract change
+rather than a relocation. `ProjectDependencyDirectionTests.No_controller_references_the_persistence_models`
+(`backend/InventoryApi.Tests/Architecture/`) enforces it over the git-tracked controller files and
+fails on a fully qualified `InventoryApi.Models.X` reference as well as on a `using` directive, so
+the rule cannot be satisfied by qualifying the type instead of importing it.
+
+The persistence model is still reachable from two deliberate, named places in the API project: the
+Swagger compatibility boundary (see [OpenAPI documentation](#openapi-documentation)), and the
+stock-adjustment reason/source members of the stock DTOs - `InventoryApi.DTOs.StockAdjustmentDto.Reason`
+on the request side and `InventoryApi.DTOs.ProductStockAdjustmentResponse.Reason`/`Source` on the
+response side. Their wire enums are the ones that boundary keeps published:
+`InventoryApi.Models.StockAdjustmentReason`/`StockAdjustmentSource` are reached from the pinned
+`StockAdjustment` response component and from the legacy `Product` component the pinned
+purchase/supplier-order schemas reference, so a same-named API-owned copy makes Swashbuckle fail
+document generation with a duplicate-schema-id error, and renaming or duplicating the published
+component is an API-contract change issue #305 excludes. This is a **temporary compatibility
+exception**, not a target state: those two enums move with the persistence models under #153/#154,
+not before them, and `InventoryApi.Tests.Swagger.StockAndExpenseSchemaContractTests` fails as soon as
+the pinned components stop publishing them, which is the signal that the stock DTOs can become fully
+API-owned with no document change.
+
 #### Temporary API-owned exception and its enforcement (issue #145)
 
-`InventoryApi/Services` (machine/site orchestration) is
-use-case/domain logic that predates the `Inventory.Domain`/`Inventory.Application` split and has
-not migrated yet; inventory movement recording and the product cost rebuild (issue #296), sale
+`InventoryApi/Services` held the
+use-case/domain logic that predates the `Inventory.Domain`/`Inventory.Application` split; it is now
+down to one file. Inventory movement recording and the product cost rebuild (issue #296), sale
 costing with its backfills (issue #297) and the inventory-cost transition (issue #298) have already
 left it for `Inventory.Application.Costing`, and the pending reimbursement XML import (issue #299),
 the Nayax product catalogue import (issue #300) and the uploaded Nayax sales import (issue #301) for
@@ -888,16 +1026,31 @@ supplier-orders delegators followed: issue #304 deleted
 registrations, so `PurchasesController`/`SupplierOrdersController` inject the
 `Inventory.Application.Purchases`/`Inventory.Application.SupplierOrders` use cases directly and
 serialise the API-owned `InventoryApi.DTOs.PurchaseResponse`/`SupplierOrderResponse` instead of the EF
-`Purchase`/`SupplierOrder` entities (item 7 of the same track).
+`Purchase`/`SupplierOrder` entities (item 7 of the same track). The Sites/Machines delegators were
+last: issue #302 deleted `MachineService`/`IMachineService`/`SiteService`/`ISiteService` and their
+registrations, so `MachinesController`/`SitesController` inject the
+`Inventory.Application.Machines`/`Inventory.Application.Sites` use cases directly and the machine
+endpoints serialise the API-owned `InventoryApi.DTOs.MachineResponse` and the shared
+`InventoryApi.DTOs.ProductResponse` instead of the `Machine`/`Product` types (item 9 of the same
+track). Only `Services/SiteNameResolver.cs` is left in the folder - the pure site-name-from-machine-names
+helper shared by `SiteNameResolverAdapter` and `EfTransactionSalesReportFactsProvider`, which moves
+with the adapters - and `Services/Interfaces` no longer exists. The two controllers that had no
+delegator left to remove but still named the persistence model were last: issue #305 pointed
+`StockController` at the API-owned `InventoryApi.DTOs.ProductStockAdjustmentResponse` and gave the
+operating-expense DTOs an API-owned `InventoryApi.DTOs.OperatingExpenseCategory`, which closed the
+`InventoryApi/Controllers` side of this exception entirely (see "No controller names the persistence
+model" above).
 `InventoryApi/Adapters/{Persistence,Export,Nayax,Mapping}` hold the
 temporary, API-owned adapters (`EfNayaxFeeRateStore`, the `Ef<Feature>ReportFactsProvider` family,
 `EfInventoryMovementStore`/`EfInventoryCostLedgerStore`, `EfSaleCostingStore`,
 `EfInventoryCostTransitionStore`, `EfInventoryCostRepairStore`, `EfNayaxSalesImportStore`,
 `ReportExportFileWriter`,
-`NayaxCatalogSnapshotProvider`, `ProductRecordResponseMapper` (the products DTO projection),
+`NayaxCatalogSnapshotProvider`, `ProductRecordResponseMapper` (the products DTO projection, and
+since issue #302 the machine-slot projection onto the same DTO),
 `PurchaseResponseMapper`/`SupplierOrderResponseMapper` (the purchase and supplier-order DTO
-projections), `ProductResponseMapper` (the machine-product view's entity-shaped mapping, until issue
-#302),
+projections), `MachineResponseMapper`/`SiteResponseMapper` (the machine dashboard and site DTO
+projections, issue #302; the entity-shaped `ProductResponseMapper` they replaced is deleted),
+`StockAdjustmentResponseMapper` (the stock-movement DTO projection, entity-shaped until issue #305),
 ...) that implement
 or feed `Inventory.Application`
 ports until `AppDbContext` and its persistence models move into `Inventory.Infrastructure` - see the
@@ -966,9 +1119,15 @@ and `Interfaces/IProductService.cs` in the same change that pointed `ProductsCon
 Products use cases and gave the product endpoints their own response DTO, and issue #304 removed
 `PurchaseService.cs`, `SupplierOrderService.cs`, `Interfaces/IPurchaseService.cs` and
 `Interfaces/ISupplierOrderService.cs` in the same change that did the same for
-`PurchasesController`/`SupplierOrdersController`. `MachineService.cs`,
-`SiteService.cs` and their interfaces stay on the list until issue #302 does the same for the
-Sites/Machines delegators.
+`PurchasesController`/`SupplierOrdersController`. Issue #302 removed `MachineService.cs`,
+`SiteService.cs`, `Interfaces/IMachineService.cs` and `Interfaces/ISiteService.cs` in the same
+change that pointed `MachinesController`/`SitesController` at the Machines and Sites use cases and
+gave the machine endpoints API-owned response DTOs, which also emptied the `Interfaces` folder.
+The allow-list is therefore down to one entry, `SiteNameResolver.cs`: the pure
+site-name-from-machine-names helper that `Adapters/Persistence/SiteNameResolverAdapter` (the
+`ISiteNameResolver` port's adapter) and `EfTransactionSalesReportFactsProvider` share, which moves
+with the adapters rather than with a delegator. It is still named there so that adding anything
+beside it stays a conscious, reviewed edit to both the allow-list and this paragraph.
 `NayaxProductMatcher.cs` left the list with the import (issue #301): its last callers - the uploaded
 sales import, `EfLatestNayaxSalesStore` and `EfInventoryCostLedgerStore` - now call the Domain
 `Inventory.Domain.Reporting.ProductMatching.ProductMatcher` on their own candidate projections, so
@@ -1422,7 +1581,7 @@ Site commissions use effective-dated agreements and one of three bases: gross sa
 `Product.UnitPrice` is the catalog default/list selling price, synced one-way from the Nayax product catalog's `RetailPrice` field by `Inventory.Application.Imports.ImportNayaxProductCatalog` (issue #57; the use case was `ImportService.ImportProductsAsync` until issue #300 migrated it — see [Nayax product catalogue import](#nayax-product-catalogue-import-issue-300)). It is a display/default value, not a calculation input: no reporting, profit, or costing calculation in `Inventory.Application`/`Inventory.Domain` reads it. It is distinct from:
 
 - `Product.AverageUnitCost` and the AVCO/historical-cost ledger — purchase cost, not selling price;
-- `Product.MachinePrice` (`[NotMapped]`) — the machine-specific live price, sourced from the per-machine Nayax `RetailPrice` (`NayaxMachineProduct.RetailPrice`) in `MachineService`/`SiteService`;
+- `Product.MachinePrice` (`[NotMapped]` on the entity, and a machine-slot value on `ProductResponse`) — the machine-specific live price, sourced from the per-machine Nayax `RetailPrice` (`NayaxMachineProduct.RetailPrice`) by `ListMachineProducts`/`GetSiteProducts`;
 - the Nayax `ProductCostPrice` field on an imported sale (`NayaxSales.NayaxProductCostPrice`) — a genuine cost value used for historical COGS, never a selling price. The catalogue import previously set `UnitPrice` from this cost field by mistake; it now uses the catalog `RetailPrice` instead.
 
 **The JSON field this value is imported from is unverified (open human decision).** The Nayax developer portal documents `GET /v1/operators/{OperatorID}/products` as returning `ProductDefaultRetailPrice` and documents no `RetailPrice` field on that endpoint; `RetailPrice` is documented only on the machine-product endpoints (`GET /v1/machines/{MachineID}/machineProducts`), which is what `NayaxMachineProduct.RetailPrice` and `Product.MachinePrice` above correctly use. The operator-catalogue DTO `Inventory.Application.Nayax.NayaxProduct.RetailPrice` nevertheless binds the JSON name `RetailPrice`, so if the live operator response matches the published contract this import reads `null` and writes `UnitPrice` as `0`. Confirming the live payload requires an actual operator response, which an agent may not fetch, so under `AGENTS.md` § Nayax contract verification this contract is recorded as **not verified** rather than accepted: issue #300 carried the pre-existing mapping over unchanged, and changing the JSON name is a `Product.UnitPrice` semantics change needing a human decision, its own issue, a live-payload check and a backfill decision. Until that decision is made, treat an imported `UnitPrice` of `0` as possibly a mapping artefact rather than a real Nayax price.
@@ -1751,9 +1910,10 @@ rebuild always replays the product's full history after its transition baseline.
 
 `NayaxSalesSyncController` is a thin adapter that invokes the use case and maps it
 to `POST /api/nayax-sales-sync` (204); a Nayax upstream failure still surfaces as the centralized
-`502` from `NayaxUpstreamExceptionHandler`. `MachineService.GetAll()` no longer imports latest sales
+`502` from `NayaxUpstreamExceptionHandler`. The machine listing (`ListMachineDashboard`, then still
+`MachineService.GetAll()`) no longer imports latest sales
 itself; its only responsibility is calculating machine sales/profit from whatever `NayaxSales` rows
-are already persisted, exactly as `SiteService.GetAll()` already did.
+are already persisted, exactly as the site listing (`GetSiteSummaries`) already did.
 
 `DashboardComponent.refreshSalesDashboard()` (Angular) calls
 `NayaxSalesSyncService.syncLatest()` once and, only after it resolves, loads `MachineService.getAll()`
@@ -2107,7 +2267,7 @@ the DTOs' own `ProductResponse`/`SupplierResponse`. All three are API-contract c
 reads the document rather than the payload.
 
 `InventoryApi.Swagger.PublishedResponseSchemaContract` is the **Swagger compatibility boundary**
-that holds the published description still. It does three narrowly scoped things:
+that holds the published description still. It does four narrowly scoped things:
 
 - maps `PurchaseResponse`/`PurchaseItemResponse` and the equivalent
   `SupplierOrderResponse`/`SupplierOrderLineResponse` pair on the supplier-order endpoints back onto
@@ -2120,13 +2280,40 @@ that holds the published description still. It does three narrowly scoped things
   `Supplier` entity, so `product` keeps pointing at `#/components/schemas/Product` and `supplier` at
   `#/components/schemas/Supplier`. Because the replacement runs through the generator rather than
   rewriting a reference string, the referenced component is registered with its complete shape —
-  including its own nested `category`/`supplier`/`stockAdjustments` references — instead of dangling.
+  including its own nested `category`/`supplier`/`stockAdjustments` references — instead of dangling;
+- describes the stock history/adjust operations' response with the schema of the legacy
+  `InventoryApi.Models.StockAdjustment` entity (issue #305), through an operation filter rather than
+  a schema-id redirect. Those two actions return the API-owned
+  `InventoryApi.DTOs.ProductStockAdjustmentResponse`, whose own schema id the product endpoints
+  already publish as the item type of `ProductResponse.stockAdjustments` (issue #303), and one CLR
+  type cannot carry two schema ids — so the *response* is substituted instead of the id, and both
+  operations keep describing `#/components/schemas/StockAdjustment`. The substitution regenerates the
+  schema from the legacy type with the same generator call Swashbuckle makes for a declared response
+  type (substituting the element type inside the declared `IEnumerable<T>` for the history
+  endpoint), so the published media types, status codes, content types and request body come out
+  exactly as the base branch generated them; nothing else about the operation is touched. A pinned
+  response description is only honest while the type that actually serialises is schema-identical to
+  it and its payload byte-identical, which `StockAndExpenseSchemaContractTests` and
+  `InventoryApi.Tests.DTOs.StockAdjustmentResponseJsonContractTests` assert respectively.
 
-This boundary is the one place outside the persistence model itself that the API project names
-`InventoryApi.Models` for presentation purposes; the controllers, the use cases and the response
-mappers stay free of it, as issue #304 requires. Nothing global changes: `ProductResponse` and
-`SupplierResponse` keep the contracts the product and supplier endpoints have published since issues
-#302/#303, and if an endpoint ever publishes the EF entity one of the four pinned ids belonged to,
+This boundary is where the API project names `InventoryApi.Models` for presentation purposes
+deliberately. The controllers and the use cases are free of it - since issue #305 no file under
+`InventoryApi/Controllers` references it at all, enforced by
+`ProjectDependencyDirectionTests.No_controller_references_the_persistence_models` - and the DTOs and
+response mappers name it for exactly one thing: the `StockAdjustmentReason`/`StockAdjustmentSource`
+wire enums that the stock request DTO (`InventoryApi.DTOs.StockAdjustmentDto.Reason`) and the stock
+response DTO (`ProductStockAdjustmentResponse.Reason`/`Source`) carry, and that this boundary itself
+keeps published - from the pinned `StockAdjustment` response component and from the legacy `Product`
+component's `stockAdjustments` reference. An API-owned enum of the same simple name cannot coexist
+with those references - Swashbuckle fails document generation with
+`Can't use schemaId "$StockAdjustmentReason" ...` - so those two enums are pinned here until the
+persistence models relocate under #153/#154, and
+`InventoryApi.Tests.Swagger.StockAndExpenseSchemaContractTests` reproduces that exact collision and
+records the reachability that forces it. Nothing global changes: `ProductResponse` and
+`SupplierResponse` keep the contracts the product and supplier endpoints already published - since
+issue #302 `ProductResponse` is what the machine-product endpoint publishes too, and the legacy
+`Product` component is registered only by this boundary now, for the pinned schemas that reference
+it - and if an endpoint ever publishes the EF entity one of the four pinned ids belonged to,
 Swashbuckle fails document generation with a duplicate-schema-id error rather than renaming one of
 them silently.
 
@@ -2487,7 +2674,8 @@ permanent conflict.
 
 Products are compared directly (`Product.Id` is the persisted Nayax product identifier; see
 [Nayax product catalogue import](#nayax-product-catalogue-import-issue-300), which already never
-removes a local product Nayax stops returning). Machines have no persisted entity at all - `MachineService` builds machines as a live
+removes a local product Nayax stops returning). Machines have no persisted entity at all - the
+machine dashboard use cases build a machine as a live
 Nayax view - so a machine's local history is derived from its recorded `NayaxSales` rows: the
 `MachineName` on the most recent `MachineAuthorizationTime` is the latest reliable local name, any
 other distinct `MachineName` for the same `MachineID` becomes a historical name, and the current name
@@ -2844,7 +3032,13 @@ Backend and frontend tracks can progress independently when their contracts do n
      extension and resolves its content type - the two deterministic rules the controller used to
      enforce inline. `Inventory.Domain.Expenses.ExpenseCategory` mirrors
      `InventoryApi.Models.OperatingExpenseCategory` member-for-member so Domain never references the
-     InventoryApi enum; the two convert by a plain cast at the controller boundary.
+     InventoryApi enum; since issue #305 the API-owned `InventoryApi.DTOs.OperatingExpenseCategory`
+     the endpoints bind and serialise mirrors both, so the HTTP boundary never references the
+     persistence enum either. All three convert by a plain cast - the Domain/API pair at the
+     controller boundary, the Domain/persistence pair inside `EfOperatingExpenseStore` - and
+     `InventoryApi.Tests.DTOs.OperatingExpenseJsonContractTests` asserts member for member and value
+     for value that they stay in step, because a category added to or renamed in only one of them
+     would silently remap stored expenses.
    - `Inventory.Application.Expenses` holds the `ListOperatingExpenses`/`GetOperatingExpense`/
      `GetOperatingExpenseAttachment`/`CreateOperatingExpense`/`UpdateOperatingExpense`/
      `DeleteOperatingExpense` use cases, their request/result contracts
@@ -2868,6 +3062,21 @@ Backend and frontend tracks can progress independently when their contracts do n
      to serialize directly for the single-record endpoints, with the same keys, order, and nested
      supplier shape (`OperatingExpenseReportRowDto` already existed for the list endpoint and is
      unchanged). Routes, multipart field names, status codes, and GST amount semantics are unchanged.
+   - **The category is API-owned too** (issue #305, child 4 of 8 of #153). The expense DTOs - the
+     request `OperatingExpenseDto`, the single-record `OperatingExpenseResponse` and the listing
+     `OperatingExpenseReportRowDto` - carry `InventoryApi.DTOs.OperatingExpenseCategory` instead of
+     the identically named persistence enum, so the controller no longer names `InventoryApi.Models`
+     for anything (it was the last reference there apart from the category). The published
+     `OperatingExpenseCategory` component is unchanged, because the API-owned enum derives the same
+     schema id with the same integer values and the persistence enum has left the generated document
+     entirely - nothing publishes the `OperatingExpense` entity, which is why this swap is possible
+     here and is not possible for the stock-adjustment enums (item 6 below). Routes, query-parameter
+     names, status codes, validation messages and JSON are unchanged;
+     `InventoryApi.Tests.DTOs.OperatingExpenseJsonContractTests` pins the serialised keys, the
+     per-member numeric values on both the response and the listing row, the bound request values and
+     the three-way enum parity, `InventoryApi.Tests.Swagger.StockAndExpenseSchemaContractTests` pins
+     the published component and every reference to it, and
+     `OperatingExpensesControllerRouteTests` pins the eight effective routes.
 
 6. **Products and stock slice**
    - Move reorder and inventory-movement rules to Domain.
@@ -2934,7 +3143,8 @@ Backend and frontend tracks can progress independently when their contracts do n
        the entity-shaped response with a dedicated response DTO, and deleting the two delegators, was
        tracked with the other legacy-delegator removals (#153), not here, because this slice had to keep
        the response contract byte-for-byte identical; the products half of that landed in issue #303
-       below, and the Sites/Machines half is issue #302.
+       below, and the Sites/Machines half in issue #302 (item 9 below), which deleted both delegators
+       and the entity-shaped `ProductResponseMapper` with them.
      - Machine product rows are matched back to their pricing results positionally, not by a
        product-id-keyed lookup, because one machine can list the same catalogue product in more than
        one slot at a different price.
@@ -2958,8 +3168,11 @@ Backend and frontend tracks can progress independently when their contracts do n
        derived `needToOrder`/`isLowStock`/`isReorderAlert`/`projectedStockForReorder` values, which
        the response still computes through `Inventory.Domain.Products.ProductReorderPolicy` rather
        than carrying as data. The machine-slot fields (`machinePrice`, `commissionValue`, `mdbCode`,
-       ...) that the catalogue endpoints have always emitted at their defaults are reproduced as
-       constants so the response stays byte-identical.
+       ...) that the catalogue endpoints have always emitted at their defaults were reproduced as
+       constants so the response stays byte-identical; issue #302 (item 9 below) put a
+       `[JsonIgnore]`d `MachineSlotOverlay` behind them, defaulting to the same values, so the
+       machine-product endpoint could share this response without changing either endpoint's bytes
+       or its published schema.
        `InventoryApi.Tests.DTOs.ProductJsonContractTests` compares the serialised bytes of the new
        response with the entity shape it replaced, for a fully populated and a bare product.
      - **Approved error-path narrowing in `PUT /api/products/{id}`.** The one deliberate status-code
@@ -2975,9 +3188,10 @@ Backend and frontend tracks can progress independently when their contracts do n
        issue #59 gave `StockController` (§ "Domain and application error mapping"). `ProductsControllerTests`
        pins both halves: the unexpected store failure propagates uncaught, and an invalid request
        still answers the unchanged 400 without the store being written to.
-     - **Not in this slice.** `Adapters/Mapping/ProductResponseMapper.cs` is untouched: the
-       machine-product response still uses it, and issue #302 owns that migration together with
-       `SiteService`/`MachineService`. The `price-history` existence check now uses `GetProduct`
+     - **Not in this slice.** `Adapters/Mapping/ProductResponseMapper.cs` was left untouched: the
+       machine-product response still used it, and issue #302 owned that migration together with
+       `SiteService`/`MachineService` - it has since deleted both the mapper and the delegators. The
+       `price-history` existence check now uses `GetProduct`
        directly and keeps its 404. `CreateProduct` is injected but has no route to invoke it - the
        API has never exposed a product-create endpoint, and adding one would be a contract change.
    - **Stock slice done** (issue #282, a child of the #148 umbrella; sibling to the Purchases and
@@ -3014,11 +3228,13 @@ Backend and frontend tracks can progress independently when their contracts do n
        exactly as the former `StockService.Adjust` did, inside the same begin/save/rebuild/save/commit
        transaction shape, and stamps `StockAdjustmentSource.Manual`, the machine id, and the eat-before date the
        same way the former service did.
-       `InventoryApi.Adapters.Mapping.StockAdjustmentResponseMapper` maps the Application record back
-       onto the `StockAdjustment` entity shape `StockController`'s history/restock-cost-suggestion/adjust
+       `InventoryApi.Adapters.Mapping.StockAdjustmentResponseMapper` mapped the Application record back
+       onto the `StockAdjustment` entity shape `StockController`'s history/adjust
        actions have always serialized, the same response-mapper precedent `ProductResponseMapper` and the
        then entity-shaped `PurchaseResponseMapper` (since issue #304 a DTO projection)
-       established, so the migration changes no response key or status code.
+       established, so the migration changed no response key or status code. Issue #305 then replaced
+       the entity it built with the API-owned `ProductStockAdjustmentResponse` (see the entry below),
+       so no production code maps a stock read model onto a persistence entity any more.
      - **API boundary.** `StockController` binds HTTP input, invokes the use cases, and maps results
        through the response mapper; its routes, request/response JSON shapes, and status codes are
        unchanged. `InventoryApi.Services.StockService`/`Services.Interfaces.IStockService` had no other
@@ -3031,6 +3247,69 @@ Backend and frontend tracks can progress independently when their contracts do n
      - Reused unchanged from issue #281: purchase-linked restock movements still persist through the
        same `StockAdjustment` reason/source vocabulary this slice gives a typed Domain home to; this
        slice did not reopen Purchase/Supplier Order orchestration.
+   - **Stock responses are API-owned and no controller names the persistence model** (issue #305,
+     child 4 of 8 of #153; the operating-expense half is item 5 above).
+     - **Response contract.** `StockController`'s `GET`/`POST api/products/{productId}/stock` actions
+       serialise the API-owned `InventoryApi.DTOs.ProductStockAdjustmentResponse` -
+       the same wire shape the product endpoints have published for a movement in a product's history
+       since issue #303, reused rather than copied, so the two places a client reads a stock movement
+       cannot drift apart. `StockAdjustmentResponseMapper` projects the Application
+       `StockAdjustmentRecord` onto it instead of rebuilding the `InventoryApi.Models.StockAdjustment`
+       entity. Routes, status codes, the centralized `DomainExceptionHandler` responses, the
+       "Product not found"/"Invalid product or resulting quantity" messages, the
+       `restock-cost-suggestion` endpoint and the JSON are unchanged: the same keys in the same order,
+       the same explicit nulls, and the same persisted numeric `reason`/`source` values - the owning
+       business and the `Product`/`ReceiptItem` navigations were `[JsonIgnore]`d on the entity and are
+       simply absent from the response.
+       `InventoryApi.Tests.DTOs.StockAdjustmentResponseJsonContractTests` compares the serialised
+       bytes of the response with the entity shape it replaced, for a populated and a sparse case, and
+       asserts every reason and source value member by member; `StockControllerRouteTests` pins the
+       three effective routes.
+     - **Published OpenAPI: unchanged.** The generated document comes out exactly as `develop`
+       generated it, because the issue requires the published contract to be preserved and a schema
+       reference is client-visible even when the payload is byte-identical. The Swagger compatibility
+       boundary describes both stock operations' response with the legacy `StockAdjustment` schema
+       (see [OpenAPI documentation](#openapi-documentation)): a schema-id redirect was not available,
+       because the product endpoints already publish `ProductStockAdjustmentResponse` under its own id
+       as the item type of `ProductResponse.stockAdjustments` and one CLR type cannot carry two ids,
+       so the response itself is substituted through an operation filter. `StockAndExpenseSchemaContractTests`
+       compares the three stock operations whole - response reference, status codes, content types,
+       path parameters and request body - and the `StockAdjustment`, `StockAdjustmentDto`,
+       `StockAdjustmentReason`, `StockAdjustmentSource` and `RestockCostSuggestionDto` components
+       whole, against the base branch's generated contract, and asserts that the pinned response
+       component and the `ProductStockAdjustmentResponse` the endpoints actually serialise are
+       schema-identical, so the pinned description cannot become a lie.
+     - **Why the reason/source enums stayed: a temporary compatibility exception.** Both stock DTOs
+       still carry the `InventoryApi.Models` enums - `StockAdjustmentDto.Reason` on the request side
+       and `ProductStockAdjustmentResponse.Reason`/`Source` on the response side - the only
+       presentation use of the persistence model left outside the Swagger compatibility boundary.
+       The published document carries one `StockAdjustmentReason` and one `StockAdjustmentSource`
+       component, derived from those CLR enums and reached from the request body, from the pinned
+       `StockAdjustment` response component and from the legacy `Product` component the boundary
+       regenerates for the pinned purchase/supplier-order schemas. An API-owned enum of the same
+       simple name therefore makes Swashbuckle fail document generation with
+       `Can't use schemaId "$StockAdjustmentReason" for type "$InventoryApi.Models.StockAdjustmentReason"`,
+       and renaming the published component or publishing a second one is an API-contract change this
+       issue excludes; changing the entity's own property type is outside the issue's file scope.
+       `StockAndExpenseSchemaContractTests` reproduces that exact collision through the application's
+       own schema generator and pins the reachability that causes it, so whoever retires the pinned
+       legacy components with the persistence models (#153/#154) is told there that the enums can move
+       with them. While the exception stands, both sides of the vocabulary are pinned:
+       `InventoryApi.Tests.DTOs.StockAdjustmentRequestJsonContractTests` asserts the reason each
+       numeric value in a request body binds to and that the persistence and Domain reason/source
+       enums agree member for member and value for value (the controller and the response mapper
+       convert by a plain cast), and `StockAdjustmentResponseJsonContractTests` asserts the serialised
+       values.
+     - **The controller guard.** With these two controllers migrated, no file under
+       `InventoryApi/Controllers` references `InventoryApi.Models`, and
+       `ProjectDependencyDirectionTests.No_controller_references_the_persistence_models` enforces it
+       (see [InventoryApi](#inventoryapi)).
+     - **Not in this slice.** Stock-movement and expense rules, the schema, the entities and
+       `EfStockAdjustmentStore`/`EfOperatingExpenseStore` are untouched, `AppDbContext` and the
+       adapters stay where they are, and the `StockAdjustment`/`OperatingExpense` entities remain the
+       persistence model. `ProductRecordResponseMapper` keeps building the same response for the
+       product endpoints from its own `ProductStockAdjustmentRecord`; the two records are distinct
+       Application contracts and merging them is not this issue's scope.
 
 7. **Purchasing and costing slice**
    - Migrate purchases, supplier orders, stock ledger, AVCO, rebuilding, and sale costing as one coherent area.
@@ -3160,9 +3439,10 @@ Backend and frontend tracks can progress independently when their contracts do n
        `InventoryApi.Models.Product`/`Supplier` schemas for the nested `product`/`supplier`
        properties of those four schemas only, so they keep referencing
        `#/components/schemas/Product` and `#/components/schemas/Supplier` with complete, registered
-       shapes. That is the only place in the API project outside the persistence model itself that
-       names `InventoryApi.Models` for presentation purposes - the controllers, use cases and
-       response mappers stay free of it, as this issue requires - and nothing global changes, so the
+       shapes. That is where the API project names `InventoryApi.Models` for presentation purposes
+       deliberately - the controllers and use cases stay free of it, as this issue requires, and the
+       stock DTOs and their response mapper keep naming only the stock-adjustment wire enums this
+       boundary itself publishes (issue #305) - and nothing global changes, so the
        `ProductResponse`/`SupplierResponse` contracts the product and supplier endpoints publish are
        untouched. Each of the four schemas therefore comes out equal to the base branch's, which the
        regression tests compare literally. See
@@ -3251,7 +3531,14 @@ Backend and frontend tracks can progress independently when their contracts do n
    - `Inventory.Application.Sites.GetSiteSummaries`/`GetSiteProducts` and `Inventory.Application.Machines.ListMachineDashboard`/`GetMachineDashboard` are the use cases, calling `INayaxLynxClient` with the same bounded per-site/per-machine fan-out (`Task.WhenAll` over each site's/machine's `GetMachineProductsAsync` calls) the former services used. `Inventory.Application.Sites.ISiteFactsStore`/`ISiteNameResolver` and `Inventory.Application.Machines.IMachineDashboardFactsStore` are their narrow ports. Issue #150 moved commission/fee resolution and payment/status classification to Domain-owned rules and Application use cases/ports; these consumers use those authorities rather than API service wrappers. The ports return already-resolved decimal/boolean facts rather than raw agreements: `ISiteFactsStore.ResolveCardCommissionAsync` takes the distinct candidate retail prices appearing in a site's machine products and returns the commission amount already resolved for each (the exact per-price Domain commission calculation computes each entry, not a re-derived multiplier), and `IMachineDashboardFactsStore.GetFactsAsync` returns each rolling period's already-resolved gross revenue and direct-profit inputs plus the profitability-status inputs, mirroring the former per-sale commission-resolution loop and its exact short-circuiting (an ambiguous or gap-covered agreement, or a missing site mapping with sales present, skips the Nayax fee lookup entirely, exactly as before) fact for fact. `ResolveMachineProductPricing` uses the same Sites financial port, while `EfLatestNayaxSalesStore` uses the Domain transaction-status classifier.
    - **Scoped EF reads serialized (issue #313).** The Nayax fan-out above is unchanged and still concurrent, but no two `ISiteFactsStore` calls are ever in flight together, because the store is scoped and its EF adapter shares one `AppDbContext` (see [Concurrency inside one request: the scoped EF context](#concurrency-inside-one-request-the-scoped-ef-context-issue-313)). `GetSiteProducts` awaits its cost-basis, commission and fee reads one at a time instead of starting all three and joining them with `Task.WhenAll`. `GetSiteSummaries` no longer builds its per-site summaries concurrently: it reads the catalogue activity facts, then loads every site's recent completed sales through one scoped read over the whole fleet's machine ids with the same 16-day lookback each per-site read used, and distributes them per machine in memory, so the per-site aggregation itself is pure. Site-name ordering, machine counts, stock percentages, alert counts, per-site revenue attribution, financial-configuration handling, the API routes and response JSON, and exception behaviour are unchanged; tenancy is unchanged too, since the batched read is still scoped only by the central `AppDbContext` query filters. The focused regression tests live in `backend/InventoryApi.Tests/Application/Sites/` (call-sequence recorders plus the behavioural assertions) and in `EfSiteFactsStoreTenancyTests` (the batched completed-sales read loads no other business's sales).
    - `InventoryApi.Adapters.Persistence.EfSiteFactsStore`/`SiteNameResolverAdapter`/`EfMachineDashboardFactsStore`, `EfSiteCommissionStore`, `EfNayaxProcessingFeeFactsProvider`, and `EfNayaxSalesQueries` are temporary API-owned adapters because they depend on `AppDbContext` and persistence models. Entity-specific EF query expressions remain in these persistence adapters until #153 moves persistence into `Inventory.Infrastructure`; they implement Application-owned ports and apply the authoritative Domain rules. The existing report facts adapters likewise compose the migrated commission and fee use cases and Domain rules.
-   - `InventoryApi.Services.SiteService`/`MachineService` were not deleted: `SitesController`/`MachinesController`, `ISiteService`/`IMachineService`, and their DI registrations are unchanged, and the two classes now only map the migrated use cases' results to the unchanged `SiteSummaryDto`/`SiteProductDto`/`Machine`/`Product` API contracts — the same transitional "legacy service delegates to the new use case" shape the reporting slices used before issue #92's final removal. After issue #240 completed `GetMachineProducts` (item 6 above), `MachineService` holds no `AppDbContext` and no Nayax client at all. Physically deleting these two now-thin delegator classes is left as explicit follow-up work, tracked the same way issue #92 was a separate, later step after every report family had migrated.
+   - `InventoryApi.Services.SiteService`/`MachineService` were not deleted by this slice: it left them as thin delegators that only mapped the migrated use cases' results to the unchanged `SiteSummaryDto`/`SiteProductDto`/`Machine`/`Product` API contracts — the same transitional "legacy service delegates to the new use case" shape the reporting slices used before issue #92's final removal — and physically deleting them was left as explicit follow-up work, tracked the same way issue #92 was a separate, later step after every report family had migrated.
+   - **Sites/Machines delegators removed and the machine responses are API-owned** (issue #302, child 1 of 8 of #153).
+     - **Controllers.** `SitesController` injects `GetSiteSummaries`/`GetSiteProducts` and `MachinesController` injects `GetMachineDashboard`/`ListMachineDashboard`/`ListMachineProducts` directly, alongside the four machine-stock-sync use cases it already held. `SiteService`, `MachineService`, `ISiteService`, `IMachineService` and their two DI registrations in `Program.cs` are deleted; the use cases were already registered by `AddApplicationServices()`. Neither controller names `InventoryApi.Models` any more, and the `Only_the_documented_legacy_services_remain_in_InventoryApi_Services` allow-list shrank by all four files in the same change.
+     - **Response contract.** `InventoryApi.DTOs.MachineResponse` replaced the `InventoryApi.Models.Machine` type the dashboard endpoints serialised, and the machine-product endpoint now serialises the same API-owned `InventoryApi.DTOs.ProductResponse` the catalogue endpoints have served since issue #303 instead of the EF `Product` entity. `InventoryApi.Adapters.Mapping.MachineResponseMapper` projects a `MachineSummary` onto the former; `ProductRecordResponseMapper` gained a `MachineProductRecord` overload that builds the catalogue shape and overlays the slot's price, raw Nayax commission metadata, MDB code, capacity and resolved suggested pricing on it, with the slot's own stock replacing the product's storage stock. The entity-shaped `Adapters/Mapping/ProductResponseMapper.cs` is deleted, so no production code maps a product read model back onto an entity. `SiteResponseMapper` does the site projections the delegator did; the site DTOs were already API-owned, so the site JSON never involved an entity.
+       - One wire shape, not two: the machine-slot values live in a `MachineSlotOverlay` that `ProductResponse` carries as a `[JsonIgnore]` member and exposes through the same six derived properties the catalogue response already published. That is why `/api/products` is byte-identical *and* schema-identical - Swashbuckle describes a property with no setter as `readOnly`, which all six have always been - while a machine slot can fill them. The derived `needToOrder`/`isLowStock`/`isReorderAlert`/`projectedStockForReorder` values still come from `Inventory.Domain.Products.ProductReorderPolicy` over whichever stock the response carries, exactly as the entity computed them.
+       - Routes, status codes and JSON are unchanged: the same keys in the same order (including `machineID`/`actorID`, which a `MachineId`/`ActorId` member would silently have renamed), the same explicit nulls for an unavailable profit or suggestion, and the same 404 for a machine Nayax does not return. `InventoryApi.Tests.DTOs.MachineJsonContractTests` compares the serialised bytes of both responses with the entity shapes they replaced, for a populated and a sparse case each; `MachineAndSiteRouteTests` pins the seven machine and two site routes through the MVC API explorer.
+     - **Published OpenAPI.** The one client-visible change is in the generated document, not the payload: the dashboard operations now describe `MachineResponse` where they described `Machine`, and the machine-product operation describes `ProductResponse` where it described `Product` - the same schema-id derivation issue #303 settled when a migrated endpoint took its own response DTO. The legacy `Product` component stays published for the pinned purchase/supplier-order schemas that reference it (see [OpenAPI documentation](#openapi-documentation)); `Machine` is no longer published at all, since nothing serialises it. `PublishedResponseSchemaContractTests` pins both halves of that, and pins the unchanged `ProductResponse` property list, requiredness and `readOnly` set.
+     - **Not in this slice.** The `Machine` type itself stays in `InventoryApi/Models`, unreferenced by the application and marked as such, because it is the reference value the contract tests compare the new response against and #302's acceptance criteria name the four service files to remove, not it; removing it belongs to item 11's legacy-structure cleanup. The dashboard rules, the Nayax fan-out, the `DateTime.Now` acquisition (issue #310 above), the schema and the API contracts are untouched, and `AppDbContext` and the adapters stay where they are. The actions keep their exact signatures, so the two reads that passed `CancellationToken.None` through the delegator still do; threading a real request token through them would change cancellation behaviour and belongs with the remaining `AppDbContext` migration.
    - **Business-day clock acquisition done** (issue #310). This slice originally left the server-local `DateTime.Now`/`DateTime.Today` acquisition in place and moved only the range *arithmetic* to `MachineDashboardPeriods`; issue #310 removed the host-clock reads. `Inventory.Application.Machines.MachineDashboardWindow` now resolves the six rolling periods once per request from the `Australia/Sydney` business day through `IClock`/`IBusinessCalendar` and expresses their boundaries as UTC instants, the time base `MachineAuthorizationTime` is stored in; `IMachineDashboardFactsStore.GetFactsAsync` takes that window instead of a bare "now". `GetSiteSummaries` resolves one window per request (as it has read one instant per request since #313 batched its sales read), and `ListMachineDashboard` now resolves one per request instead of one per machine, so every machine in a listing shares identical periods. `GetSiteProducts` and `ResolveMachineProductPricing` select their effective-dated commission/fee configuration with `IBusinessCalendar.Today`. Each period also carries the Sydney business dates it covers, which is how the Nayax processing fee it subtracts is charged to exactly the sales its revenue counts. See [Time](#time) above for the complete rule and the architecture test that enforces it.
 
 10. **Imports slices done** (umbrella issue #151, three children; **this completes the #151 imports
@@ -3320,7 +3607,9 @@ Backend and frontend tracks can progress independently when their contracts do n
     - Done for stock (issue #282, item 6 above): `InventoryApi.Services.StockService`, `InventoryApi.Services.Interfaces.IStockService`, their dependency-injection registration, and every production and test caller were removed, and both source files were deleted.
     - Done for imports (issue #301, item 10 above): `InventoryApi.Services.ImportService` (both partials), `InventoryApi.Services.Interfaces.IImportService`, the API-owned `NayaxSalesWorkbook` and `NayaxProductMatcher` helpers, their dependency-injection registration, and every production and test caller were removed, and all five source files were deleted.
     - Done for products (issue #303, item 6 above) and for purchases and supplier orders (issue #304, item 7 above): `ProductService`/`IProductService`, `PurchaseService`/`IPurchaseService` and `SupplierOrderService`/`ISupplierOrderService`, their dependency-injection registrations, and every production and test caller were removed, the source files were deleted, and each slice's endpoints moved to an API-owned response DTO in the same change.
-    - Still pending for the remaining feature areas (the Sites/Machines legacy delegator classes above, and the remaining direct-access controllers/services); only after each is migrated and tests prove equivalent behavior does this step complete overall.
+    - Done for sites and machines (issue #302, item 9 above): `SiteService`/`ISiteService` and `MachineService`/`IMachineService`, their dependency-injection registrations, and every production and test caller were removed, all four source files and the entity-shaped `Adapters/Mapping/ProductResponseMapper.cs` were deleted, and the machine endpoints moved to API-owned response DTOs in the same change. `InventoryApi/Services` is down to the shared `SiteNameResolver` helper and `InventoryApi/Services/Interfaces` no longer exists. The now-unreferenced `InventoryApi.Models.Machine` response type is left in place as the contract tests' reference value, named here as the one piece of legacy structure this step still owns for machines.
+    - Done for the controller boundary as a whole (issue #305, items 5 and 6 above): `StockController` and `OperatingExpensesController` were the last two controllers that named `InventoryApi.Models`, and they now bind and serialise API-owned DTOs (`ProductStockAdjustmentResponse`, `OperatingExpenseCategory`). No file under `InventoryApi/Controllers` references the persistence model, and `ProjectDependencyDirectionTests.No_controller_references_the_persistence_models` fails if one starts to. The published OpenAPI document is unchanged: the Swagger compatibility boundary describes the stock responses with the legacy `StockAdjustment` schema they have always published. The legacy structure this step still owns here is the persistence model itself - including the `StockAdjustmentReason`/`StockAdjustmentSource` wire enums both stock DTOs keep naming, on the request side as well as the response side, which cannot become API-owned while the Swagger compatibility boundary still publishes them (see [InventoryApi](#inventoryapi)).
+    - Still pending for the remaining feature areas (the `InventoryApi.Models.Machine` leftover above, and the remaining direct-access controllers/services); only after each is migrated and tests prove equivalent behavior does this step complete overall.
 
 ### Frontend migration track
 
@@ -3365,7 +3654,7 @@ EF Core InMemory tests remain useful for fast service checks but must not be the
 
 **Call-sequence (yielding-recorder) tests.** Some defects are about *when* calls happen rather than what they return; two operations overlapping on one request-scoped `AppDbContext` is the current example (see [Concurrency inside one request: the scoped EF context](#concurrency-inside-one-request-the-scoped-ef-context-issue-313)). Neither an InMemory nor a relational SQLite test can prove that one, because SQLite's synchronous async implementation completes each call before the next one starts. Such behavior is tested instead with an in-memory fake of the port that records a `start:`/`end:` marker per call, tracks how many calls were ever in flight at once, and awaits `Task.Yield()` before completing — so an implementation that starts two calls before awaiting either produces an interleaved trace and a concurrency count above one. `ResolveMachineProductPricingTests`' call-sequence recorder and the Sites equivalents (`backend/InventoryApi.Tests/Application/Sites/RecordingSiteFactsStore.cs`, plus `RecordingNayaxLynxClient`, which gates its machine-product calls so a serialized fan-out fails rather than hangs) are the examples. Pair them with the behavioral assertions the serialization must not change — per-site totals and revenue attribution, ordering, failure propagation, and the relational two-business isolation tests — so a concurrency fix cannot silently drop a site or move revenue between sites.
 
-**Source-scanning architecture tests.** Most architecture rules are checked against the compiled assemblies (`CleanArchitectureDependencyTests`) or the project files (`ProjectDependencyDirectionTests`), but some rules are invisible to both. `TimeAcquisitionTests.Domain_and_Application_acquire_the_current_time_only_through_the_time_ports` (issue #310) fails if any `Inventory.Domain` or `Inventory.Application` source file reads `DateTime.Now`, `DateTime.UtcNow` or `DateTime.Today` instead of injecting `IClock`/`IBusinessCalendar` (see [Time](#time)); it scans the source text because these are property reads on `DateTime` itself, a type the inner layers legitimately depend on everywhere, so a type-level dependency rule cannot distinguish them. `ProjectDependencyDirectionTests.No_other_source_file_references_the_removed_legacy_reporting_service` scans source for the same reason. A new rule of this kind names the offending file and line in its failure message, so the fix is the injection or removal it asks for, never a weakened rule.
+**Source-scanning architecture tests.** Most architecture rules are checked against the compiled assemblies (`CleanArchitectureDependencyTests`) or the project files (`ProjectDependencyDirectionTests`), but some rules are invisible to both. `TimeAcquisitionTests.Domain_and_Application_acquire_the_current_time_only_through_the_time_ports` (issue #310) fails if any `Inventory.Domain` or `Inventory.Application` source file reads `DateTime.Now`, `DateTime.UtcNow` or `DateTime.Today` instead of injecting `IClock`/`IBusinessCalendar` (see [Time](#time)); it scans the source text because these are property reads on `DateTime` itself, a type the inner layers legitimately depend on everywhere, so a type-level dependency rule cannot distinguish them. `ProjectDependencyDirectionTests.No_other_source_file_references_the_removed_legacy_reporting_service` scans source for the same reason, and so does `ProjectDependencyDirectionTests.No_controller_references_the_persistence_models` (issue #305): `InventoryApi` legitimately depends on `InventoryApi.Models` everywhere else in the project, so only a file-scoped source scan can say that the `Controllers` folder does not (see [InventoryApi](#inventoryapi)). A new rule of this kind names the offending file and line in its failure message, so the fix is the injection or removal it asks for, never a weakened rule.
 
 **Composition and committed-configuration tests.** Some decisions live in the composition root or in a settings file rather than in a class with behaviour. `InventoryApi.Tests.Observability.TelemetryCompositionTests` asserts what `AddInventoryApiTelemetry` registers — and, for the missing-connection-string case, that it registers nothing — by inspecting the `IServiceCollection` rather than by building the OpenTelemetry providers, so no test ever constructs an exporter or sends telemetry anywhere; `TelemetryStartupTests` then hosts the real application both with and without a synthetic, non-secret connection string. `LoggingLevelPolicyTests` reads the committed `appsettings.json`/`appsettings.Development.json` instead of a hosted application, because the value that matters is the one that ships to a deployed environment (see [Observability and error telemetry](#observability-and-error-telemetry-issue-165)).
 
@@ -3412,6 +3701,7 @@ Frontend build flow is:
 
 - `.github/workflows/vm-manager.yml` builds and tests the API on every push to `develop` and `main`, without deploying.
 - `.github/workflows/deploy-production.yml` (**Deploy Production**) is the only path to production, and only a human starts it, from `main`, for one exact commit. It validates that commit with `scripts/validate.sh`, runs a migration preflight that lists the EF Core migrations production startup is expected to apply (derived from the repository by comparing the release with the last production release recorded after a successful health check, because the runner cannot read the production SQLite database), builds the API package and the Angular bundle once from that commit, deploys the API, waits for `/health/ready`, records that healthy backend as the next baseline, and only then deploys the prebuilt frontend bundle to Azure Static Web Apps. Backend and frontend therefore always come from the same commit, and a failed backend deployment or health check stops the frontend.
+- The API package is the complete `dotnet publish` output of `backend/InventoryApi`, deployed whole, so publish content is how operational assets reach production without a workflow change. The scheduled database backup WebJob (issue #333) ships that way, as `App_Data/jobs/triggered/database-backup/` inside the package; see [Scheduling the backup with an App Service WebJob](#scheduling-the-backup-with-an-app-service-webjob-issue-333). Activating it in the App Service — Always On, the plan, confirming the job is listed and its first run succeeded — stays human work, like every other production setting.
 
 Consequently, automated engineering agents stop at a pull request. Merge and production deployment remain human-controlled. The branch flow, agent authority model, task states, and risk classification for automated changes are defined in [docs/automation.md](automation.md).
 
@@ -3424,7 +3714,7 @@ The separate, human-invoked `migrate-database` command (`InventoryApi/Bootstrap/
 
 ## Azure Functions and background workloads: decision criteria (issue #68)
 
-**Decision: no Azure Functions yet.** No workload this application runs today, and none that is already planned, justifies adding a Function App. Every background or scheduled workload in the inventory below is served by one of three mechanisms that already exist: an operator-triggered HTTP endpoint on the API, a CLI mode of the published `InventoryApi` executable, or the scheduled Linux App Service WebJob planned in issue #333, which invokes that same executable inside the App Service this application already runs in. A Function App would add a second deployment unit, a second managed identity and role assignment to grant, a second configuration and secret surface, a second place a schedule can be defined, and a second telemetry source to wire up — while removing work from none of those three. It would also be unable to do the one thing most of these workloads exist to do: write to the database. The production store is a single SQLite file on the App Service's own persistent `/home` mount, and SQLite's file locking is not supported across concurrently writing processes on that shared storage, which is why the plan must stay pinned to a single instance (see [SQLite operating assumptions and scale strategy](#sqlite-operating-assumptions-and-scale-strategy-issue-53)). An out-of-process Function writing the same file is not a configuration detail to be solved later; it is outside the supported operating envelope of the current store.
+**Decision: no Azure Functions yet.** No workload this application runs today, and none that is already planned, justifies adding a Function App. Every background or scheduled workload in the inventory below is served by one of three mechanisms that already exist: an operator-triggered HTTP endpoint on the API, a CLI mode of the published `InventoryApi` executable, or the scheduled Linux App Service WebJob of issue #333, which invokes that same executable inside the App Service this application already runs in. A Function App would add a second deployment unit, a second managed identity and role assignment to grant, a second configuration and secret surface, a second place a schedule can be defined, and a second telemetry source to wire up — while removing work from none of those three. It would also be unable to do the one thing most of these workloads exist to do: write to the database. The production store is a single SQLite file on the App Service's own persistent `/home` mount, and SQLite's file locking is not supported across concurrently writing processes on that shared storage, which is why the plan must stay pinned to a single instance (see [SQLite operating assumptions and scale strategy](#sqlite-operating-assumptions-and-scale-strategy-issue-53)). An out-of-process Function writing the same file is not a configuration detail to be solved later; it is outside the supported operating envelope of the current store.
 
 This section records the assessment the decision was made against, the criteria any future proposal must answer, the conditions that would reverse the decision, and the boundary rule a Function must obey if one is ever approved.
 
@@ -3440,7 +3730,7 @@ This is the inventory the decision was made against. "Request-driven" means a si
 |---|---|---|---|
 | Verified SQLite snapshot — `backup-database --output` | `InventoryApi` CLI mode dispatched before the web host is built; human-run | Implemented (#331) | No. The published executable already is the job. |
 | Verified snapshot upload to the private backup container — `backup-database --upload` | Same CLI mode, authenticating with `DefaultAzureCredential`: the App Service managed identity when a job runs it, the operator's own Azure sign-in when run by hand | Implemented (#332) | No. |
-| Scheduling that backup and upload | Nothing schedules it yet. Planned as a Linux App Service WebJob packaged into the existing `dotnet publish` output, invoking `backup-database --upload` | Planned (#333) | No. The WebJob runs inside the App Service plan already paid for, ships with the existing deployment artifact, reaches the same `/home` database file, and inherits the same managed identity and application settings. This is the only workload in the table that genuinely cannot stay request-driven — a backup must happen whether or not anyone signs in — and it is the one a Function would most plausibly claim, so it is assessed explicitly under each criterion below. |
+| Scheduling that backup and upload | A triggered Linux App Service WebJob packaged into the existing `dotnet publish` output (`App_Data/jobs/triggered/database-backup/`), invoking `backup-database --upload` daily at 15:00 UTC and exiting with the command's own exit code | Implemented (#333); human App Service activation and verification outstanding — see [Scheduling the backup with an App Service WebJob](#scheduling-the-backup-with-an-app-service-webjob-issue-333) | No. The WebJob runs inside the App Service plan already paid for, ships with the existing deployment artifact, reaches the same `/home` database file, and inherits the same managed identity and application settings. This is the only workload in the table that genuinely cannot stay request-driven — a backup must happen whether or not anyone signs in — and it is the one a Function would most plausibly claim, so it is assessed explicitly under each criterion below. |
 | Backup retention, alerting and restore runbook | No compute at all. Retention is an Azure Blob lifecycle policy executed by the storage service, the two alerts are Azure Monitor log search rules, and restore stays a deliberate, human-run procedure with a non-production rehearsal; all of it is applied by a human, and the uploader's seam (`IBackupBlobContainer`) still exposes no delete and no overwrite, so retention cannot be performed by that code path even accidentally | Designed and documented (#334); human Azure setup outstanding — see [Backup retention, alerting and restore rehearsal](#backup-retention-alerting-and-restore-rehearsal-issue-334) | No, and no compute host either. Retention turned out to be a storage-lifecycle question, which is why it needs neither a WebJob nor a Function. |
 | Latest Nayax sales synchronization — `Inventory.Application.SalesSync.SyncLatestNayaxSales` | Request-driven: `POST /api/nayax-sales-sync`, called once by the home dashboard before it loads Sites and Machines (#187) | Implemented, request-driven | No. Its result is precisely what the operator is waiting to see; moving it onto a schedule would decouple the refresh from the screen that needs it, and would not remove the request-driven path. |
 | Machine stock event import and Sync Restock reconciliation — `Inventory.Application.MachineStockSync` | Request-driven from the machines feature (#183) | Implemented, request-driven | No. |
@@ -3449,7 +3739,7 @@ This is the inventory the decision was made against. "Request-driven" means a si
 | Historical inventory cost rebuild — `Inventory.Application.Costing.IRebuildProductCost` | In-process, invoked by the use case whose write invalidated a product's costs (for example an imported completed sale) | Implemented | No. |
 | Database schema migration | `DatabaseSchemaStartup` at API startup, plus the human-run `migrate-database` command | Implemented (#54, revised by #201) | No. |
 
-Two properties of the existing automation model matter to this assessment. First, no GitHub Actions workflow in this repository runs on a schedule: workflows are triggered by pull requests, pushes, or a human dispatch, and **Deploy Production** is human-started for one exact commit (see [Build and delivery](#build-and-delivery) and `docs/automation.md`). CI is a validation and delivery mechanism, not an operational scheduler; it has no route to the production database and must not acquire one. Second, every workload above except the planned backup schedule is started by a human — an operator in the application, or an operator on the instance. The gap between those two facts is exactly one slot wide, and issue #333 fills it with a WebJob.
+Two properties of the existing automation model matter to this assessment. First, no GitHub Actions workflow in this repository runs on a schedule: workflows are triggered by pull requests, pushes, or a human dispatch, and **Deploy Production** is human-started for one exact commit (see [Build and delivery](#build-and-delivery) and `docs/automation.md`). CI is a validation and delivery mechanism, not an operational scheduler; it has no route to the production database and must not acquire one. Second, every workload above except the backup schedule is started by a human — an operator in the application, or an operator on the instance. The gap between those two facts is exactly one slot wide, and issue #333 fills it with a WebJob.
 
 ### Decision criteria for any future background workload
 
@@ -3457,7 +3747,7 @@ Any proposal to move a workload onto a different host must answer all seven crit
 
 #### Frequency
 
-How often must the work run, and what is the acceptable staleness of its result? Prefer the upstream's own push mechanism over polling, and never poll more often than the source changes. Two constraints bound any answer here: the single App Service instance with a single-writer SQLite file and a 30-second busy timeout, so a heavy write workload effectively runs alone; and overlap, since a workload that takes five minutes must not be scheduled every five minutes — measure end-to-end duration at realistic data volume before choosing an interval. Schedule heavy work in a quiet window (issue #333 proposes 15:00 UTC, early morning in Sydney) so it does not compete with interactive requests for the writer lock.
+How often must the work run, and what is the acceptable staleness of its result? Prefer the upstream's own push mechanism over polling, and never poll more often than the source changes. Two constraints bound any answer here: the single App Service instance with a single-writer SQLite file and a 30-second busy timeout, so a heavy write workload effectively runs alone; and overlap, since a workload that takes five minutes must not be scheduled every five minutes — measure end-to-end duration at realistic data volume before choosing an interval. Schedule heavy work in a quiet window (issue #333's backup runs at 15:00 UTC, early morning in Sydney) so it does not compete with interactive requests for the writer lock.
 
 *What the current model gives:* a WebJob expresses an arbitrary cron schedule in the deployment artifact. A Function's timer trigger expresses the same schedule and is not more capable. Frequency alone never justifies a new host.
 
@@ -3483,7 +3773,7 @@ What credentials does the work need, where do they live, and how many places mus
 
 How does an operator learn that the work ran, that it succeeded, and what it did — and how do they diagnose it when it did not? Log the workload name, a per-run correlation identifier, the tenant/business, key inputs, duration and outcome as structured fields; on failure log the exception, how far the run got, the attempt number and the decision taken; and never log credentials, Nayax tokens, connection strings or imported row content. Silence must never be ambiguous: "nothing in the log" and "the job never started" must be distinguishable.
 
-*What the current model gives:* the API and its CLI commands log through `ILogger` to the App Service log stream, and `backup-database` already reports object names, byte counts, the SHA-256 and the integrity result while never printing a connection string or snapshot content; issue #333 requires the WebJob to log start, completion or failure, and duration, and WebJob run history is visible in the App Service itself. Centralized error telemetry (Azure Monitor OpenTelemetry) is planned in issue #165 and not implemented today — which is an argument against a second host rather than for one, since a Function would be a second emitter to instrument before the first one is even wired up. Alerting on a missed or failed backup is specified by issue #334: two log search rules, one on the
+*What the current model gives:* the API and its CLI commands log through `ILogger` to the App Service log stream, and `backup-database` already reports object names, byte counts, the SHA-256 and the integrity result while never printing a connection string or snapshot content; the WebJob of issue #333 logs start, completion or failure, and duration, and WebJob run history is visible in the App Service itself. Centralized error telemetry (Azure Monitor OpenTelemetry) is planned in issue #165 and not implemented today — which is an argument against a second host rather than for one, since a Function would be a second emitter to instrument before the first one is even wired up. Alerting on a missed or failed backup is specified by issue #334: two log search rules, one on the
 job's non-zero result and one on the absence of a `daily/` object within 36 hours, with the rules
 themselves applied by a human (see [Backup retention, alerting and restore
 rehearsal](#backup-retention-alerting-and-restore-rehearsal-issue-334)).
@@ -3533,7 +3823,7 @@ No candidate is approved today, so there is no function boundary to define yet. 
 
 ### Follow-up work
 
-- Issue #333 — schedule the existing verified backup and upload with an App Service WebJob. This decision endorses that approach and does not reopen it.
+- Issue #333 — scheduling the existing verified backup and upload with an App Service WebJob, now implemented and packaged into the API's publish output; see [Scheduling the backup with an App Service WebJob](#scheduling-the-backup-with-an-app-service-webjob-issue-333). This decision endorsed that approach and does not reopen it; the App Service prerequisites it depends on (Always On, the plan, the first verified run) are human work.
 - Issue #334 — backup retention, alerting and the restore runbook, now designed in [Backup retention, alerting and restore rehearsal](#backup-retention-alerting-and-restore-rehearsal-issue-334); the alerting that makes a missed or failed scheduled run visible, which the failure-recovery criterion above depends on, is specified there and applied in Azure by a human.
 - Issue #165 — Azure Monitor OpenTelemetry error observability; it is the centralized telemetry the observability criterion currently lacks.
 

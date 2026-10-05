@@ -1,7 +1,6 @@
 using Inventory.Application.Expenses;
 using Inventory.Domain.Expenses;
 using InventoryApi.DTOs;
-using InventoryApi.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Identity.Web.Resource;
