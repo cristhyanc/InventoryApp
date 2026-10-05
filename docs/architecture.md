@@ -1846,9 +1846,10 @@ in behaviour:
   keeps calling `RebuildAsync`, which still synchronises the product's physical quantity and every
   movement's running position from the replay.
 - Their ports are implemented by the temporary API-owned adapters
-  `InventoryApi.Adapters.Persistence.EfInventoryMovementStore` and `EfInventoryCostLedgerStore` (same
-  reason as every other `InventoryApi/Adapters/Persistence` adapter: `AppDbContext` and the
-  persistence models still live in `InventoryApi`, until #153). They only run the
+  `InventoryApi.Adapters.Persistence.EfInventoryMovementStore` and `EfInventoryCostLedgerStore` (like
+  every other `InventoryApi/Adapters/Persistence` adapter, they stay API-owned until Persistence 7/8
+  and 8/8 of #153 move them beside `AppDbContext`, which issue #307 relocated to
+  `Inventory.Infrastructure`). They only run the
   unchanged EF queries through `AppDbContext`'s business query filter, map rows to the Domain replay
   inputs, and write the use case's decisions back to exactly those tracked rows; they never save,
   open a transaction or decide a cost.
@@ -1893,7 +1894,7 @@ costing migration). It replaced the removed `InventoryApi.Services.InventoryCost
   replay sums, preview drafts, baselines, save) is implemented by the temporary API-owned
   `InventoryApi.Adapters.Persistence.EfInventoryCostTransitionStore`, which keeps the former EF
   queries and baseline mapping behind `AppDbContext`'s business query filter and ownership stamp; it
-  moves to `Inventory.Infrastructure` with `AppDbContext` (#153). `InventoryCostTransitionsController`
+  moves to `Inventory.Infrastructure`, beside `AppDbContext`, in Persistence 7/8 or 8/8 of #153. `InventoryCostTransitionsController`
   calls the four use cases directly with unchanged routes (`POST api/admin/inventory-cost-transition/
   preview`, `apply`, `preview-all`, `apply-all`), request/response JSON, status codes and messages.
 
@@ -1969,7 +1970,7 @@ and it never substitutes for a real purchase, correction or write-off.
 - **The narrow `IInventoryCostRepairStore` port** (transaction, product lookup, append, history,
   save) is implemented by the temporary API-owned
   `InventoryApi.Adapters.Persistence.EfInventoryCostRepairStore`; it moves to
-  `Inventory.Infrastructure` with `AppDbContext` (#153). The replay inputs themselves come from
+  `Inventory.Infrastructure`, beside `AppDbContext`, in Persistence 7/8 or 8/8 of #153. The replay inputs themselves come from
   `IInventoryCostLedgerStore`, whose `InventoryCostLedger` now carries the product's repairs, so a
   preview, an apply and a rebuild all read one ledger. `GetInventoryCostRepairHistory` returns a
   product's repairs newest effective first (ties by most recently recorded), and reports a product
@@ -2077,8 +2078,9 @@ one coordinated refresh is stored in a single save, and then asks its narrow App
 `ILatestNayaxSalesStore` port to persist the batch and - only when a completed sale actually affected
 a product - to rebuild that product's inventory costs.
 `InventoryApi.Adapters.Persistence.EfLatestNayaxSalesStore` is that port's temporary API-owned EF
-adapter (same reason as every other `InventoryApi/Adapters/Persistence` adapter: `AppDbContext` and
-the `NayaxSales` model still live in `InventoryApi`). It holds the unchanged
+adapter (like every other `InventoryApi/Adapters/Persistence` adapter, it stays API-owned until
+Persistence 7/8 and 8/8 of #153 move it beside `AppDbContext` and the `NayaxSales` model, which
+issue #307 relocated to `Inventory.Infrastructure`). It holds the unchanged
 import rules extracted from the former `MachineService.SaveMachinesLastSalesAsync` - transaction dedup
 by `TransactionID`, Nayax product matching (through the Domain `ProductMatcher` directly since issue
 #301 removed the `NayaxProductMatcher` wrapper; the matching semantics, candidate selection and
@@ -2383,7 +2385,7 @@ configuration), summing `MissingStockByMDB` per product ID exactly as the sequen
 `Inventory.Application.Reorder.IOutstandingSupplierOrderQuantityStore` is the narrow port for the
 outstanding (not cancelled, not fully received) supplier-order quantity per product the use case also
 returns; `InventoryApi.Adapters.Persistence.EfOutstandingSupplierOrderQuantityStore` is its temporary
-API-owned EF adapter, for the same `AppDbContext` reason as the other `Ef*` adapters in this document.
+API-owned EF adapter until Persistence 7/8 and 8/8 of #153, like the other `Ef*` adapters in this document.
 The caller applies both returned dictionaries onto its already-filtered product list unchanged
 (`MachineReplenishmentNeed`, `OnOrderQuantity`, and the `NeedToOrder`/`IsReorderAlert` values they
 feed are untouched), then keeps the search/category/supplier filtering, reorder-alert filtering, and
@@ -3130,7 +3132,7 @@ since issue #49) is a real Infrastructure adapter: issue #306 moved it out of
 `AddInfrastructureServices()` now registers it. Its local counterpart,
 `InventoryApi.Adapters.Persistence.EfLocalCatalogSnapshotProvider` (backed by `AppDbContext`),
 remains a temporary API-owned adapter, following the same pattern as `EfNayaxFeeRateStore`, until
-#153 relocates persistence. `DataQualityController` only binds the request and returns the use
+Persistence 7/8 and 8/8 of #153 relocate the EF adapters. `DataQualityController` only binds the request and returns the use
 case's `CatalogReconciliationReportDto`.
 
 ### Nayax machine-stock event import and Sync Restock reconciliation (issue #183)
@@ -3503,8 +3505,7 @@ code as it is now.
      is implemented by `InventoryApi.Adapters.Persistence.EfOperatingExpenseStore` - a deliberately
      temporary API-owned adapter, registered directly in `Program.cs` rather than through
      `AddInfrastructureServices()`, following the same precedent as `EfNayaxFeeRateStore`/
-     `EfCategoryStore`/`EfSupplierStore`. It must move into `Inventory.Infrastructure` once `AppDbContext`
-     and the shared persistence models relocate there. Its `UpdateAsync` reloads the `Supplier`
+     `EfCategoryStore`/`EfSupplierStore`. It must move into `Inventory.Infrastructure` in Persistence 7/8 or 8/8 of #153 (`AppDbContext` and the shared persistence models relocated there in issue #307). Its `UpdateAsync` reloads the `Supplier`
      navigation explicitly, against the final `SupplierId`, once the update is saved (issue #52).
    - `OperatingExpensesController` only binds HTTP/form/file input, invokes the use cases, and maps
      results/status codes; `InventoryApi.DTOs.OperatingExpenseResponse` replaced the EF entity it used
@@ -3568,8 +3569,7 @@ code as it is now.
        (reads: filtered by-name listing, unordered listing, single lookup) are the narrow persistence
        ports; `InventoryApi.Adapters.Persistence.EfProductStore`/`EfProductCatalogStore` are their
        temporary API-owned EF adapters, following the same precedent as
-       `EfCategoryStore`/`EfOperatingExpenseStore`, and must move into `Inventory.Infrastructure` once
-       `AppDbContext` and the shared persistence models relocate there. `EfProductCatalogStore` keeps
+       `EfCategoryStore`/`EfOperatingExpenseStore`, and must move into `Inventory.Infrastructure` in Persistence 7/8 or 8/8 of #153 (`AppDbContext` and the shared persistence models relocated there in issue #307). `EfProductCatalogStore` keeps
        the former queries' exact shape - the same `Include` graph, the same search/category/supplier
        predicates, the same ordering and change-tracking choices - and is scoped only by the central
        `AppDbContext` tenant query filters, never by a predicate of its own. `ResolveMachineProductPricing`
@@ -3670,8 +3670,7 @@ code as it is now.
        it always has.
      - **Ports and adapters.** `InventoryApi.Adapters.Persistence.EfStockAdjustmentStore` is a
        temporary API-owned EF adapter, following the same precedent as `EfPurchaseStore`/`EfProductStore`,
-       and must move into `Inventory.Infrastructure` once `AppDbContext` and the shared persistence
-       models relocate there. It records the movement and rebuilds the cost through the Application
+       and must move into `Inventory.Infrastructure` in Persistence 7/8 or 8/8 of #153 (`AppDbContext` and the shared persistence models relocated there in issue #307). It records the movement and rebuilds the cost through the Application
        `IRecordInventoryMovement.RecordAsync`/`IRebuildProductCost.RebuildAsync` use cases (issue
        #296; formerly `IInventoryCostService.ApplyMovement`/`IInventoryCostRebuildService.RebuildAsync`)
        exactly as the former `StockService.Adjust` did, inside the same begin/save/rebuild/save/commit
@@ -3817,8 +3816,7 @@ code as it is now.
        record before opening its document.
      - **Ports and adapters.** `InventoryApi.Adapters.Persistence.EfPurchaseStore`/`EfSupplierOrderStore`
        are temporary API-owned EF adapters, following the same precedent as `EfProductStore`/
-       `EfOperatingExpenseStore`, and must move into `Inventory.Infrastructure` once `AppDbContext` and
-       the shared persistence models relocate there. Per this issue's target ownership, their multi-step
+       `EfOperatingExpenseStore`, and must move into `Inventory.Infrastructure` in Persistence 7/8 or 8/8 of #153 (`AppDbContext` and the shared persistence models relocated there in issue #307). Per this issue's target ownership, their multi-step
        writes - `EfPurchaseStore.CreateAsync`/`UpdateAsync`/`DeleteAsync`'s purchase/item/stock-movement
        persistence, supplier-order receipt-allocation insert/removal, and fulfillment-status
        recalculation, all as one transaction - stay in the adapter rather than being decomposed into
