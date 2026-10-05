@@ -113,7 +113,7 @@ describe('AdminImportsComponent Nayax sales upload (issue #389)', () => {
     fixture.detectChanges();
 
     const disabled = Array.from(host.querySelectorAll('button')).filter(button => button.disabled);
-    expect(disabled.length).toBe(3);
+    expect(disabled).toHaveLength(3);
   });
 });
 
