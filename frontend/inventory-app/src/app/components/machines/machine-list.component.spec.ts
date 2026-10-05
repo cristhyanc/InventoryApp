@@ -96,23 +96,6 @@ describe('MachineListComponent search/filter', () => {
   });
 });
 
-describe('MachineListComponent direct margin', () => {
-  it('returns null when direct profit is unavailable', () => {
-    const component = new MachineListComponent({ getAll: () => of([]) } as unknown as MachineService);
-    expect(component.directMargin(null, 100)).toBeNull();
-  });
-
-  it('computes margin as a percentage of sales', () => {
-    const component = new MachineListComponent({ getAll: () => of([]) } as unknown as MachineService);
-    expect(component.directMargin(25, 100)).toBe(25);
-  });
-
-  it('returns zero margin rather than dividing by zero when there are no sales', () => {
-    const component = new MachineListComponent({ getAll: () => of([]) } as unknown as MachineService);
-    expect(component.directMargin(0, 0)).toBe(0);
-  });
-});
-
 describe('MachineListComponent rendering', () => {
   afterEach(() => TestBed.resetTestingModule());
 
@@ -138,6 +121,7 @@ describe('MachineListComponent rendering', () => {
     expect(host.textContent).toContain('A-100');
     expect(host.textContent).toContain('$12.50 sales');
     expect(host.textContent).toContain('$5.00 profit');
+    expect(host.textContent).not.toContain('margin');
   });
 
   it('shows "Profit unavailable" instead of a fabricated figure when direct profit is null', async () => {

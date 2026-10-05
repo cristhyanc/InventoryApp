@@ -45,14 +45,14 @@
               <div class="text-xs uppercase tracking-wide text-slate-400">Today</div>
               <div class="text-slate-700">${{ machine.todayGrossRevenue.toFixed(2) }} sales</div>
               <div class="text-xs text-slate-500">
-                {{ machine.todayDirectProfit == null ? 'Profit unavailable' : ('$' + machine.todayDirectProfit.toFixed(2) + ' profit · ' + directMargin(machine.todayDirectProfit, machine.todayGrossRevenue)!.toFixed(1) + '% margin') }}
+                {{ machine.todayDirectProfit == null ? 'Profit unavailable' : ('$' + machine.todayDirectProfit.toFixed(2) + ' profit') }}
               </div>
             </div>
             <div>
               <div class="text-xs uppercase tracking-wide text-slate-400">This Week</div>
               <div class="text-slate-700">${{ machine.currentWeekGrossRevenue.toFixed(2) }} sales</div>
               <div class="text-xs text-slate-500">
-                {{ machine.currentWeekDirectProfit == null ? 'Profit unavailable' : ('$' + machine.currentWeekDirectProfit.toFixed(2) + ' profit · ' + directMargin(machine.currentWeekDirectProfit, machine.currentWeekGrossRevenue)!.toFixed(1) + '% margin') }}
+                {{ machine.currentWeekDirectProfit == null ? 'Profit unavailable' : ('$' + machine.currentWeekDirectProfit.toFixed(2) + ' profit') }}
               </div>
             </div>
           </div>

@@ -45,11 +45,6 @@ export class MachineListComponent implements OnInit {
     this.applyFilter();
   }
 
-  directMargin(directProfit: number | null, sales: number): number | null {
-    if (directProfit == null) return null;
-    return sales === 0 ? 0 : (directProfit / sales) * 100;
-  }
-
   private applyFilter(): void {
     const term = this.search.trim().toLowerCase();
     this.filteredMachines = !term
