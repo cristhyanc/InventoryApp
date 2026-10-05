@@ -134,6 +134,20 @@ export const routes: Routes = [
     loadComponent: () => import('./components/admin/admin.component').then((m) => m.AdminComponent)
   },
   {
+    path: 'admin/nayax-settings',
+    canActivate: [MsalGuard],
+    loadComponent: () =>
+      import('./components/admin/nayax-settings/nayax-settings.component').then((m) => m.NayaxSettingsComponent)
+  },
+  {
+    path: 'admin/site-commission-agreements',
+    canActivate: [MsalGuard],
+    loadComponent: () =>
+      import('./components/admin/site-commission-agreements/site-commission-agreements.component').then(
+        (m) => m.SiteCommissionAgreementsComponent
+      )
+  },
+  {
     path: 'expenses',
     canActivate: [MsalGuard],
     loadComponent: () => import('./components/expenses/operating-expense.component').then((m) => m.OperatingExpenseComponent)
