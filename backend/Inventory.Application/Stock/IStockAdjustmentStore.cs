@@ -13,6 +13,15 @@ public interface IStockAdjustmentStore
     /// <summary>Every persisted movement for the product, most recent first. Empty when none exist.</summary>
     Task<IReadOnlyList<StockAdjustmentRecord>> ListHistoryAsync(long productId, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// One bounded page of the movement history across products, most recent first, narrowed by
+    /// <paramref name="filter"/> (issue #384). The total is the count of movements the filter
+    /// matches, not the number returned. The filter is already resolved - UTC boundaries and a
+    /// skip/take - so an implementation applies it as given and decides no window, bound or
+    /// ordering instant of its own.
+    /// </summary>
+    Task<StockHistoryResult> QueryHistoryAsync(StockHistoryFilter filter, CancellationToken cancellationToken);
+
     /// <summary><c>null</c> when the product does not exist (or is not owned by the caller's business).</summary>
     Task<RestockCostFacts?> GetRestockCostFactsAsync(long productId, CancellationToken cancellationToken);
 
