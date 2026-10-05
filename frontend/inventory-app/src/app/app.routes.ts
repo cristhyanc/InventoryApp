@@ -16,9 +16,18 @@ export const routes: Routes = [
     loadComponent: () => import('./components/products/product-form.component').then((m) => m.ProductFormComponent)
   },
   {
+    path: 'stock-history',
+    canActivate: [MsalGuard],
+    loadComponent: () => import('./components/stock/stock-history-page.component').then((m) => m.StockHistoryPageComponent)
+  },
+  {
+    // The product entry point every existing "Stock" link uses (issue #384). It opens the global
+    // Stock History page with that product preselected - the same experience as
+    // /stock-history?productId=123 - so the links, bookmarks and deep links that already exist keep
+    // working instead of being redirected to a page that has lost the product.
     path: 'products/:id/stock',
     canActivate: [MsalGuard],
-    loadComponent: () => import('./components/stock/stock-history.component').then((m) => m.StockHistoryComponent)
+    loadComponent: () => import('./components/stock/stock-history-page.component').then((m) => m.StockHistoryPageComponent)
   },
   {
     path: 'products',
