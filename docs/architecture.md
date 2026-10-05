@@ -1510,6 +1510,12 @@ partial enforceable rule.
 
 Routes are declared centrally in `app.routes.ts`. Every top-level route loads its component with `loadComponent` (issue #65), except the public `/auth` Entra redirect callback, which stays eagerly imported because it is the landing route for an in-progress authentication redirect, not a migrated feature area. This keeps initial bundles smaller and creates an enforceable feature boundary without introducing NgModules. Preserve route URLs, guards, and parameters when adding or changing a route.
 
+Two routes may load one page when an older URL has to keep working: `/stock-history` and the
+preserved product entry point `/products/:id/stock` both load `StockHistoryPageComponent`, which
+reads the product to preselect from either the query string or the route parameter (see [Global Stock
+History](#global-stock-history-issue-384)). The older URL keeps its own address rather than being
+redirected, so existing links and bookmarks stay valid.
+
 `/sites` (issue #386) is a standalone, authenticated list page that loads every site summary through the existing `SiteService.getAll()` contract, offers client-side search/filter by site name, and drills down into the existing `/sites/:id/products` route when a site is selected. It does not change the `Site` summary contract, the site-products workflow, or wire a sidebar/header entry point; that final navigation link is deferred to the navigation-shell task (#383).
 
 The static host must rewrite unknown application paths to `index.html`; otherwise refreshing a deep link such as `/reports/bookkeeping` or the Entra redirect landing on `/auth` will bypass Angular and return a host-level 404. `frontend/inventory-app/src/staticwebapp.config.json` (copied to the deployed output root by the `assets` build option) declares that Azure Static Web Apps `navigationFallback`, rewriting unmatched paths to `/index.html` while excluding `/assets/*` and static file extensions.
@@ -2000,7 +2006,9 @@ component that could be shifted and is rendered with the ordinary `date` pipe (e
 timestamps (`AdminComponent`), the costing-repair preview/history effective and recorded timestamps
 (`CostingRepairComponent`, issue #361), and the Pick List snapshot (`PickListComponent`) use
 `BusinessDateTimePipe` for this reason; `MachineRestockSyncComponent`'s reconciliation table (issue
-#231) and `StockHistoryComponent`'s manual-restock timestamp (issue #230) already did.
+#231) and the Stock History movement timestamp (issue #230) already did - the latter now on
+`StockHistoryPageComponent`, the global Stock History page that replaced the product-specific
+`StockHistoryComponent` (issue #384) and renders the same `createdAt` instant the same way.
 
 **Serialised instant identity at the persistence boundary (issues #230, #232, #237).** A frontend
 formatter can only be correct if the instant it is given is unambiguous, so the API must never
@@ -2548,6 +2556,71 @@ change needing its own issue, ideally combined with the rest of the Purchasing a
    is what keeps them distinguishable in the audit trail. Manual restocking remains the supported
    fallback for when Nayax is unavailable or a machine/MDB is not yet mapped; Sync Restock is the
    preferred path when a Nayax stock-adjustment alert already reports the physical event.
+
+### Global Stock History (issue #384)
+
+Stock History is one page over every product's movements, not one page per product. `/stock-history`
+(`StockHistoryPageComponent`) lists the persisted `StockAdjustment` history across the whole
+catalogue, newest first, and narrows it by product, date range, reason, machine and source. It is a
+**read** over the movements the flows above persisted: nothing here recalculates, rewrites or
+synthesises a movement, and no second stock-adjustment implementation exists.
+
+**The API boundary is one bounded, tenant-scoped query.**
+`GET /api/stock-history` (`StockHistoryController`, thin) binds the filter and invokes
+`Inventory.Application.Stock.ListStockHistory`, which answers a `StockHistoryPage` through the
+`IStockAdjustmentStore.QueryHistoryAsync` port (implemented by the temporary API-owned
+`InventoryApi.Adapters.Persistence.EfStockAdjustmentStore`, as the rest of that port already is).
+The response is the API-owned `InventoryApi.DTOs.StockHistoryPageResponse`/`StockHistoryEntryResponse`
+pair - never an EF entity - following the pattern issue #305 established for the product-specific
+stock endpoints, and `InventoryApi.Tests.Swagger.StockHistoryOpenApiContractTests` pins the published
+operation, its parameters and both components. The entry carries the owning product's `productName`,
+read in the same query, because a cross-product listing has to label every row and the alternative is
+the per-product fan-out this endpoint exists to replace. It does not carry `effectiveAt` (see below).
+`reason`/`source` stay the one published `StockAdjustmentReason`/`StockAdjustmentSource` vocabulary,
+for the compatibility reason recorded in [the stock API-owned-response
+entry](#backend-migration-track).
+
+**The result is bounded by the server, not by the client.** A movement history grows without limit,
+so `Inventory.Application.Stock.StockHistoryPaging` resolves the requested page: a missing, zero or
+negative page size becomes the default (50) and anything above the maximum (200) is clamped to it,
+rather than refused. The response echoes the `page`/`pageSize` actually served plus the filtered
+`totalCount` and `hasMore`, so the page can offer paging without a second count request, and
+`EfStockAdjustmentStore` orders by `CreatedAt` descending with the movement id as a tie-break, which
+makes successive pages a stable partition even for movements recorded in the same instant.
+
+**One instant drives ordering, the date filter and the displayed time: `StockAdjustment.CreatedAt`.**
+It is the instant the product-specific history has always ordered by, it is persisted as UTC and
+keeps its UTC identity at the persistence boundary (see [Serialised instant identity at the
+persistence boundary](#time)), and the frontend renders it with `BusinessDateTimePipe`. The date
+filter is a pair of **`Australia/Sydney` calendar days**, not instants: the client sends calendar
+dates and `ListStockHistory` converts them through `IBusinessCalendar.StartOfBusinessDayUtc` into the
+UTC instant the first day begins (inclusive) and the instant the day after the last one begins
+(exclusive), so a 23-hour or 25-hour Sydney day across a daylight-saving transition is still covered
+whole - `ListStockHistoryTests` pins both transitions. `EffectiveAt` drives neither the ordering nor
+the filter and is not published by this query.
+
+**Mutation stays where it was.** The selected-product workflow on the page is
+`StockAdjustmentFormComponent`, a dedicated feature component (see [Page composition
+boundary](#page-composition-boundary-issue-191)) that posts to the existing
+`POST /api/products/{productId}/stock`. That endpoint remains the single authority on costing, the
+required restock unit cost, correction sign handling, insufficient-stock validation and
+reason/source semantics; the global page adds no stock mutation of its own and the product-specific
+`GET`/`POST api/products/{productId}/stock` contracts are unchanged.
+
+**The product entry point maps onto the global page.** Every existing product "Stock" link points at
+`/products/:id/stock`. That route now loads `StockHistoryPageComponent` with the product preselected
+from the `:id` route parameter - the same state as `/stock-history?productId=123`, which is the
+canonical URL - so existing links, bookmarks and deep links keep working and arrive at the global
+experience filtered to that product, with its adjustment form. The former
+`stock-history.component.ts` page it replaced is gone; its adjustment form moved into
+`StockAdjustmentFormComponent` unchanged. A preselected product that is not in the current product
+list still has its movements listed, but no adjustment form, because an adjustment needs a product
+the catalogue can resolve.
+
+Tenant isolation is the central query filter's, as everywhere else: the query adds no `BusinessId`
+predicate of its own, and `EfStockHistoryQueryTests` proves with two synthetic businesses (plus an
+unresolved caller) that neither the rows, the total count, nor an explicit request for another
+business's product id can cross the boundary.
 
 ### Take Inventory (issue #245)
 
@@ -3498,6 +3571,15 @@ Backend and frontend tracks can progress independently when their contracts do n
        persistence model. `ProductRecordResponseMapper` keeps building the same response for the
        product endpoints from its own `ProductStockAdjustmentRecord`; the two records are distinct
        Application contracts and merging them is not this issue's scope.
+   - **Global Stock History read slice done** (issue #384), on top of the two entries above rather
+     than reopening them. `Inventory.Application.Stock.ListStockHistory` is the use case,
+     `IStockAdjustmentStore.QueryHistoryAsync` the port it reads through, `StockHistoryPaging` the
+     server-side page bound, and `StockHistoryController`/`StockHistoryResponseMapper` the thin HTTP
+     boundary onto the API-owned `StockHistoryPageResponse`. No controller gains a persistence-model
+     reference, no stock mutation, costing rule, entity or migration changes, and the existing
+     `api/products/{productId}/stock` contracts are untouched. See [Global Stock
+     History](#global-stock-history-issue-384) for the query, the Sydney-day date boundaries, the
+     bounding contract and the frontend route mapping.
 
 7. **Purchasing and costing slice**
    - Migrate purchases, supplier orders, stock ledger, AVCO, rebuilding, and sale costing as one coherent area.

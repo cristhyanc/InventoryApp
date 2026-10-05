@@ -46,6 +46,51 @@ public sealed class EfStockAdjustmentStore : IStockAdjustmentStore
         return adjustments.Select(ToRecord).ToList();
     }
 
+    /// <summary>
+    /// The global stock-history query (issue #384). Every predicate comes from the already-resolved
+    /// <see cref="StockHistoryFilter"/>; the only thing decided here is the SQL, and deliberately
+    /// not the tenant boundary - the <see cref="AppDbContext"/> global query filter scopes both the
+    /// count and the page, so there is no per-call <c>BusinessId</c> clause to go stale.
+    ///
+    /// <c>CreatedAt</c> descending is the same ordering instant the product-specific
+    /// <see cref="ListHistoryAsync"/> uses, with the movement id as a tie-break so that paging over
+    /// movements recorded in the same instant is a stable partition rather than an arbitrary one.
+    /// The product name is read through the owning product's navigation in the same query, instead
+    /// of leaving the caller to fan out a lookup per row.
+    /// </summary>
+    public async Task<StockHistoryResult> QueryHistoryAsync(StockHistoryFilter filter, CancellationToken cancellationToken)
+    {
+        var filtered = _db.StockAdjustments.AsNoTracking();
+
+        if (filter.ProductId is { } productId)
+            filtered = filtered.Where(sa => sa.ProductId == productId);
+        if (filter.CreatedFromUtc is { } createdFrom)
+            filtered = filtered.Where(sa => sa.CreatedAt >= createdFrom);
+        if (filter.CreatedBeforeUtc is { } createdBefore)
+            filtered = filtered.Where(sa => sa.CreatedAt < createdBefore);
+        if (filter.Reason is { } reason)
+            filtered = filtered.Where(sa => sa.Reason == (StockAdjustmentReason)reason);
+        if (filter.Source is { } source)
+            filtered = filtered.Where(sa => sa.Source == (StockAdjustmentSource)source);
+        if (filter.MachineId is { } machineId)
+            filtered = filtered.Where(sa => sa.MachineId == machineId);
+
+        var totalCount = await filtered.CountAsync(cancellationToken);
+
+        var rows = await filtered
+            .OrderByDescending(sa => sa.CreatedAt)
+            .ThenByDescending(sa => sa.Id)
+            .Skip(filter.Skip)
+            .Take(filter.Take)
+            .Select(sa => new { Adjustment = sa, ProductName = sa.Product!.Name })
+            .ToListAsync(cancellationToken);
+
+        var entries = rows
+            .Select(row => new StockHistoryEntry(ToRecord(row.Adjustment), row.ProductName))
+            .ToList();
+        return new StockHistoryResult(entries, totalCount);
+    }
+
     public async Task<RestockCostFacts?> GetRestockCostFactsAsync(long productId, CancellationToken cancellationToken)
     {
         var product = await _db.Products
