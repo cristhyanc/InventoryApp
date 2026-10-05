@@ -286,6 +286,31 @@ public class NayaxLynxClientTests
         Assert.Empty(logger.Messages);
     }
 
+    /// <summary>
+    /// Proves the documented Get Specific Operator Products response contract
+    /// (https://devzone.nayax.com/reference/lynx/products/get-specific-operator-products): the
+    /// selling price field is <c>ProductDefaultRetailPrice</c>, not the bare <c>RetailPrice</c> that
+    /// endpoint does not document (issue #363).
+    /// </summary>
+    [Fact]
+    public async Task GetProducts_deserializes_the_documented_ProductDefaultRetailPrice_field()
+    {
+        const string body = """
+            [
+              { "NayaxProductID": 100, "ProductName": "Chips", "ProductDefaultRetailPrice": 3.50 },
+              { "NayaxProductID": 101, "ProductName": "Unpriced", "ProductDefaultRetailPrice": null }
+            ]
+            """;
+        var (client, logger) = CreateClient(HttpStatusCode.OK, body);
+
+        var products = await client.GetProductsAsync(CancellationToken.None);
+
+        Assert.Equal(2, products.Count);
+        Assert.Equal(3.50m, products[0].ProductDefaultRetailPrice);
+        Assert.Null(products[1].ProductDefaultRetailPrice);
+        Assert.Empty(logger.Messages);
+    }
+
     [Fact]
     public async Task GetMachineLastAlerts_caller_cancellation_stays_cancellation()
     {

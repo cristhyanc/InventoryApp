@@ -286,8 +286,15 @@ public class NayaxProduct
     [JsonPropertyName("MDBCode")]
     public int? MdbCode { get; set; }
 
-    [JsonPropertyName("RetailPrice")]
-    public decimal? RetailPrice { get; set; }
+    /// <summary>
+    /// The catalogue default/list selling price (issue #363; confirmed against a live
+    /// <c>GET /v1/operators/{OperatorID}/products</c> response), mapped to <c>Product.UnitPrice</c>
+    /// by <c>ImportNayaxProductCatalog</c>. Do not confuse it with the per-machine
+    /// <c>NayaxMachineProduct.RetailPrice</c>, which is a distinct, correctly-named field on a
+    /// different endpoint.
+    /// </summary>
+    [JsonPropertyName("ProductDefaultRetailPrice")]
+    public decimal? ProductDefaultRetailPrice { get; set; }
 
     [JsonPropertyName("CashPrice")]
     public decimal? CashPrice { get; set; }
