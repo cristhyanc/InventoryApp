@@ -1,3 +1,15 @@
+/*
+ * Global styles and the shared Material Dashboard component classes (issue #410).
+ *
+ * Every value here comes from a token in `tailwind.config.js`. Prefer one of the shared classes
+ * below to an ad-hoc pile of utilities in a template; see docs/architecture.md
+ * § Interaction and presentation for when to use which, and for the contrast rules the
+ * `-text` colour variants exist to satisfy.
+ *
+ * `src/styles.css` is generated from this file plus every template by `npm run build:styles`
+ * and is committed. Never hand-edit the generated file.
+ */
+
 /* stylelint-disable at-rule-no-unknown */
 
 *, ::before, ::after {
@@ -108,7 +120,9 @@
   --tw-contain-style:  ;
 }
 
-/* ! tailwindcss v3.4.17 | MIT License | https://tailwindcss.com */
+/*
+ ! tailwindcss v3.4.17 | MIT License | https://tailwindcss.com
+ */
 
 /*
 1. Prevent padding and border from affecting element width. (https://github.com/mozdevs/cssremedy/issues/4)
@@ -154,7 +168,7 @@ html,
   -o-tab-size: 4;
      tab-size: 4;
   /* 3 */
-  font-family: ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+  font-family: Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   /* 4 */
   font-feature-settings: normal;
   /* 5 */
@@ -554,6 +568,566 @@ video {
   display: none;
 }
 
+/* ---- Page layout ------------------------------------------------------------------- */
+
+/*
+   * `--md-muted-text` carries the muted text colour for the current surface, because the
+   * accessible value depends on it: md-gray-500 reaches 4.74:1 on white but only 4.35:1 on
+   * md-gray-100, so a gray surface has to step up to md-gray-600 (7.17:1). `.value-muted`
+   * reads this variable; surface classes set it.
+   */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  padding: 1rem;
+}
+
+@media (min-width: 640px) {
+  .page {
+    padding: 1.5rem;
+  }
+}
+
+.page {
+  --md-muted-text: #525252;
+}
+
+.page-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+@media (min-width: 640px) {
+  .page-header {
+    flex-direction: row;
+    align-items: flex-start;
+    justify-content: space-between;
+  }
+}
+
+.page-title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  --tw-text-opacity: 1;
+  color: rgb(38 38 38 / var(--tw-text-opacity, 1));
+}
+
+.page-subtitle {
+  font-size: 0.875rem;
+  --tw-text-opacity: 1;
+  color: rgb(82 82 82 / var(--tw-text-opacity, 1));
+}
+
+.page-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+/* ---- Cards ------------------------------------------------------------------------- */
+
+.card {
+  border-radius: 0.5rem;
+  border-width: 1px;
+  --tw-border-opacity: 1;
+  border-color: rgb(229 229 229 / var(--tw-border-opacity, 1));
+  --tw-bg-opacity: 1;
+  background-color: rgb(255 255 255 / var(--tw-bg-opacity, 1));
+  --tw-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --tw-shadow-colored: 0 1px 2px 0 var(--tw-shadow-color);
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+  --md-muted-text: #737373;
+}
+
+.card-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border-bottom-width: 1px;
+  --tw-border-opacity: 1;
+  border-color: rgb(229 229 229 / var(--tw-border-opacity, 1));
+  padding-left: 1rem;
+  padding-right: 1rem;
+  padding-top: 0.75rem;
+  padding-bottom: 0.75rem;
+}
+
+.card-title {
+  font-size: 1rem;
+  font-weight: 600;
+  --tw-text-opacity: 1;
+  color: rgb(38 38 38 / var(--tw-text-opacity, 1));
+}
+
+.card-body {
+  padding: 1rem;
+  font-size: 0.875rem;
+  --tw-text-opacity: 1;
+  color: rgb(82 82 82 / var(--tw-text-opacity, 1));
+}
+
+.card-footer {
+  border-top-width: 1px;
+  --tw-border-opacity: 1;
+  border-color: rgb(229 229 229 / var(--tw-border-opacity, 1));
+  padding-left: 1rem;
+  padding-right: 1rem;
+  padding-top: 0.75rem;
+  padding-bottom: 0.75rem;
+  font-size: 0.875rem;
+  --tw-text-opacity: 1;
+  color: rgb(82 82 82 / var(--tw-text-opacity, 1));
+}
+
+/* ---- Stat card --------------------------------------------------------------------- */
+
+/*
+   * The icon tile overlaps the top-left corner by 1rem, so the card reserves 1rem of margin
+   * above itself for the overhang.
+   */
+
+.stat-card {
+  margin-top: 1rem;
+  border-radius: 0.5rem;
+  border-width: 1px;
+  --tw-border-opacity: 1;
+  border-color: rgb(229 229 229 / var(--tw-border-opacity, 1));
+  --tw-bg-opacity: 1;
+  background-color: rgb(255 255 255 / var(--tw-bg-opacity, 1));
+  padding: 1rem;
+  --tw-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --tw-shadow-colored: 0 1px 2px 0 var(--tw-shadow-color);
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+  --md-muted-text: #737373;
+}
+
+.stat-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.stat-card-head .icon-tile {
+  margin-top: -2rem;
+}
+
+.stat-card-label {
+  text-align: right;
+  font-size: 0.875rem;
+  --tw-text-opacity: 1;
+  color: rgb(115 115 115 / var(--tw-text-opacity, 1));
+}
+
+.stat-card-value {
+  text-align: right;
+  font-size: 1.5rem;
+  font-weight: 700;
+  --tw-text-opacity: 1;
+  color: rgb(38 38 38 / var(--tw-text-opacity, 1));
+}
+
+.stat-card-footer {
+  margin-top: 1rem;
+  border-top-width: 1px;
+  --tw-border-opacity: 1;
+  border-color: rgb(229 229 229 / var(--tw-border-opacity, 1));
+  padding-top: 0.75rem;
+  font-size: 0.875rem;
+  --tw-text-opacity: 1;
+  color: rgb(82 82 82 / var(--tw-text-opacity, 1));
+}
+
+/* ---- Icon tile --------------------------------------------------------------------- */
+
+/*
+   * Decorative only. The icon inside is `aria-hidden`; the meaning is carried by the adjacent
+   * text label, which is why the light status gradients are allowed here and nowhere else
+   * behind white content. `.icon-tile` on its own is the default md-dark tile; the variants
+   * below follow it in source order so they win.
+   */
+
+.icon-tile {
+  display: flex;
+  height: 3rem;
+  width: 3rem;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.5rem;
+  background-image: linear-gradient(195deg, #42424a, #191919);
+  --tw-text-opacity: 1;
+  color: rgb(255 255 255 / var(--tw-text-opacity, 1));
+  --tw-shadow: 0 4px 20px 0 rgba(0, 0, 0, 0.14), 0 7px 10px -5px rgba(64, 64, 64, 0.4);
+  --tw-shadow-colored: 0 4px 20px 0 var(--tw-shadow-color), 0 7px 10px -5px var(--tw-shadow-color);
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+}
+
+.icon-tile > svg,
+  .icon-tile > img {
+  height: 1.5rem;
+  width: 1.5rem;
+}
+
+.icon-tile-dark {
+  background-image: linear-gradient(195deg, #42424a, #191919);
+  --tw-shadow: 0 4px 20px 0 rgba(0, 0, 0, 0.14), 0 7px 10px -5px rgba(64, 64, 64, 0.4);
+  --tw-shadow-colored: 0 4px 20px 0 var(--tw-shadow-color), 0 7px 10px -5px var(--tw-shadow-color);
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+}
+
+.icon-tile-info {
+  background-image: linear-gradient(195deg, #49a3f1, #1A73E8);
+  --tw-shadow: 0 4px 20px 0 rgba(0, 0, 0, 0.14), 0 7px 10px -5px rgba(0, 188, 212, 0.4);
+  --tw-shadow-colored: 0 4px 20px 0 var(--tw-shadow-color), 0 7px 10px -5px var(--tw-shadow-color);
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+}
+
+.icon-tile-success {
+  background-image: linear-gradient(195deg, #66BB6A, #43A047);
+  --tw-shadow: 0 4px 20px 0 rgba(0, 0, 0, 0.14), 0 7px 10px -5px rgba(76, 175, 80, 0.4);
+  --tw-shadow-colored: 0 4px 20px 0 var(--tw-shadow-color), 0 7px 10px -5px var(--tw-shadow-color);
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+}
+
+.icon-tile-warning {
+  background-image: linear-gradient(195deg, #FFA726, #FB8C00);
+  --tw-shadow: 0 4px 20px 0 rgba(0, 0, 0, 0.14), 0 7px 10px -5px rgba(255, 152, 0, 0.4);
+  --tw-shadow-colored: 0 4px 20px 0 var(--tw-shadow-color), 0 7px 10px -5px var(--tw-shadow-color);
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+}
+
+.icon-tile-danger {
+  background-image: linear-gradient(195deg, #EF5350, #E53935);
+  --tw-shadow: 0 4px 20px 0 rgba(0, 0, 0, 0.14), 0 7px 10px -5px rgba(244, 67, 54, 0.4);
+  --tw-shadow-colored: 0 4px 20px 0 var(--tw-shadow-color), 0 7px 10px -5px var(--tw-shadow-color);
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+}
+
+/* ---- Buttons ----------------------------------------------------------------------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: 0.375rem;
+  padding-left: 1rem;
+  padding-right: 1rem;
+  padding-top: 0.5rem;
+  padding-bottom: 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  line-height: 1;
+  letter-spacing: 0.025em;
+  transition-property: box-shadow;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 150ms;
+}
+
+.btn:hover {
+  --tw-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  --tw-shadow-colored: 0 4px 6px -1px var(--tw-shadow-color), 0 2px 4px -1px var(--tw-shadow-color);
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+}
+
+.btn-sm {
+  padding-left: 1rem;
+  padding-right: 1rem;
+  padding-top: 0.375rem;
+  padding-bottom: 0.375rem;
+}
+
+.btn-primary {
+  background-image: linear-gradient(195deg, #42424a, #191919);
+  --tw-text-opacity: 1;
+  color: rgb(255 255 255 / var(--tw-text-opacity, 1));
+}
+
+.btn-secondary {
+  border-width: 1px;
+  --tw-border-opacity: 1;
+  border-color: rgb(212 212 212 / var(--tw-border-opacity, 1));
+  --tw-bg-opacity: 1;
+  background-color: rgb(255 255 255 / var(--tw-bg-opacity, 1));
+  --tw-text-opacity: 1;
+  color: rgb(38 38 38 / var(--tw-text-opacity, 1));
+}
+
+.btn-danger {
+  background-image: linear-gradient(195deg, #D32F2F, #B71C1C);
+  --tw-text-opacity: 1;
+  color: rgb(255 255 255 / var(--tw-text-opacity, 1));
+}
+
+.btn-link {
+  background-image: none;
+  padding-left: 0px;
+  padding-right: 0px;
+  padding-top: 0px;
+  padding-bottom: 0px;
+  --tw-text-opacity: 1;
+  color: rgb(21 87 176 / var(--tw-text-opacity, 1));
+  text-underline-offset: 2px;
+}
+
+.btn-link:hover {
+  text-decoration-line: underline;
+  --tw-shadow: 0 0 #0000;
+  --tw-shadow-colored: 0 0 #0000;
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+}
+
+/*
+   * Disabled controls are exempt from the contrast minimum under WCAG 1.4.3, so the disabled
+   * state is a flat 50% with no hover affordance at all.
+   */
+
+.btn:disabled,
+  .btn[aria-disabled='true'] {
+  cursor: not-allowed;
+  opacity: 0.5;
+  --tw-shadow: 0 0 #0000;
+  --tw-shadow-colored: 0 0 #0000;
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+}
+
+.btn:disabled:hover,
+  .btn[aria-disabled='true']:hover {
+  text-decoration-line: none;
+  --tw-shadow: 0 0 #0000;
+  --tw-shadow-colored: 0 0 #0000;
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+}
+
+/* ---- Tables ------------------------------------------------------------------------ */
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 0.875rem;
+}
+
+.table-head {
+  --tw-bg-opacity: 1;
+  background-color: rgb(245 245 245 / var(--tw-bg-opacity, 1));
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.025em;
+  --tw-text-opacity: 1;
+  color: rgb(82 82 82 / var(--tw-text-opacity, 1));
+  --md-muted-text: #525252;
+}
+
+/* A row turns md-gray-100 on hover, so muted text inside one stays at md-gray-600. */
+
+.table-row {
+  border-bottom-width: 1px;
+  --tw-border-opacity: 1;
+  border-color: rgb(229 229 229 / var(--tw-border-opacity, 1));
+  transition-property: color, background-color, border-color, text-decoration-color, fill, stroke;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 150ms;
+  --md-muted-text: #525252;
+}
+
+.table-row:hover {
+  --tw-bg-opacity: 1;
+  background-color: rgb(245 245 245 / var(--tw-bg-opacity, 1));
+}
+
+.table-cell {
+  padding-left: 0.75rem;
+  padding-right: 0.75rem;
+  padding-top: 0.5rem;
+  padding-bottom: 0.5rem;
+  vertical-align: middle;
+  --tw-text-opacity: 1;
+  color: rgb(82 82 82 / var(--tw-text-opacity, 1));
+}
+
+@media (min-width: 640px) {
+  .table-cell {
+    padding-left: 1.5rem;
+    padding-right: 1.5rem;
+    padding-top: 0.75rem;
+    padding-bottom: 0.75rem;
+  }
+}
+
+.table-num {
+  text-align: right;
+  --tw-numeric-spacing: tabular-nums;
+  font-variant-numeric: var(--tw-ordinal) var(--tw-slashed-zero) var(--tw-numeric-figure) var(--tw-numeric-spacing) var(--tw-numeric-fraction);
+}
+
+/* ---- Badges ------------------------------------------------------------------------ */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 0.45rem;
+  padding-left: 0.5rem;
+  padding-right: 0.5rem;
+  padding-top: 0.25rem;
+  padding-bottom: 0.25rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  line-height: 1;
+  letter-spacing: 0.025em;
+}
+
+.badge-success {
+  background-color: rgb(76 175 80 / 0.15);
+  --tw-text-opacity: 1;
+  color: rgb(27 94 32 / var(--tw-text-opacity, 1));
+}
+
+.badge-warning {
+  background-color: rgb(251 140 0 / 0.15);
+  --tw-text-opacity: 1;
+  color: rgb(138 75 0 / var(--tw-text-opacity, 1));
+}
+
+.badge-danger {
+  background-color: rgb(244 67 53 / 0.15);
+  --tw-text-opacity: 1;
+  color: rgb(183 28 28 / var(--tw-text-opacity, 1));
+}
+
+.badge-info {
+  background-color: rgb(26 115 232 / 0.15);
+  --tw-text-opacity: 1;
+  color: rgb(21 87 176 / var(--tw-text-opacity, 1));
+}
+
+/*
+   * #EAEAEA is the neutral badge surface named in the #410 visual specification rather than in
+   * the token table; md-gray-600 on it measures 6.5:1. The contrast spec asserts this literal.
+   */
+
+.badge-neutral {
+  --tw-bg-opacity: 1;
+  background-color: rgb(234 234 234 / var(--tw-bg-opacity, 1));
+  --tw-text-opacity: 1;
+  color: rgb(82 82 82 / var(--tw-text-opacity, 1));
+}
+
+/* ---- Alerts ------------------------------------------------------------------------ */
+
+.alert {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  border-radius: 0.5rem;
+  border-left-width: 4px;
+  padding: 1rem;
+  font-size: 0.875rem;
+  --tw-text-opacity: 1;
+  color: rgb(38 38 38 / var(--tw-text-opacity, 1));
+}
+
+.alert-title {
+  font-weight: 600;
+}
+
+.alert-success {
+  --tw-border-opacity: 1;
+  border-color: rgb(76 175 80 / var(--tw-border-opacity, 1));
+  background-color: rgb(76 175 80 / 0.15);
+}
+
+.alert-success .alert-title {
+  --tw-text-opacity: 1;
+  color: rgb(27 94 32 / var(--tw-text-opacity, 1));
+}
+
+.alert-warning {
+  --tw-border-opacity: 1;
+  border-color: rgb(251 140 0 / var(--tw-border-opacity, 1));
+  background-color: rgb(251 140 0 / 0.15);
+}
+
+.alert-warning .alert-title {
+  --tw-text-opacity: 1;
+  color: rgb(138 75 0 / var(--tw-text-opacity, 1));
+}
+
+.alert-danger {
+  --tw-border-opacity: 1;
+  border-color: rgb(244 67 53 / var(--tw-border-opacity, 1));
+  background-color: rgb(244 67 53 / 0.15);
+}
+
+.alert-danger .alert-title {
+  --tw-text-opacity: 1;
+  color: rgb(183 28 28 / var(--tw-text-opacity, 1));
+}
+
+.alert-info {
+  --tw-border-opacity: 1;
+  border-color: rgb(26 115 232 / var(--tw-border-opacity, 1));
+  background-color: rgb(26 115 232 / 0.15);
+}
+
+.alert-info .alert-title {
+  --tw-text-opacity: 1;
+  color: rgb(21 87 176 / var(--tw-text-opacity, 1));
+}
+
+/* ---- Form fields ------------------------------------------------------------------- */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.field-label {
+  font-size: 0.875rem;
+  font-weight: 500;
+  --tw-text-opacity: 1;
+  color: rgb(82 82 82 / var(--tw-text-opacity, 1));
+}
+
+.field-hint {
+  font-size: 0.875rem;
+  --tw-text-opacity: 1;
+  color: rgb(115 115 115 / var(--tw-text-opacity, 1));
+}
+
+.field-error {
+  font-size: 0.875rem;
+  --tw-text-opacity: 1;
+  color: rgb(183 28 28 / var(--tw-text-opacity, 1));
+}
+
+/* ---- Values ------------------------------------------------------------------------ */
+
+.value-positive {
+  --tw-text-opacity: 1;
+  color: rgb(27 94 32 / var(--tw-text-opacity, 1));
+}
+
+.value-negative {
+  --tw-text-opacity: 1;
+  color: rgb(183 28 28 / var(--tw-text-opacity, 1));
+}
+
+.value-muted {
+  color: var(--md-muted-text, #737373);
+}
+
 .sr-only {
   position: absolute;
   width: 1px;
@@ -751,6 +1325,14 @@ video {
 
 .table {
   display: table;
+}
+
+.table-cell {
+  display: table-cell;
+}
+
+.table-row {
+  display: table-row;
 }
 
 .grid {
@@ -1131,6 +1713,10 @@ video {
   border-radius: 0.375rem;
 }
 
+.rounded-md-control {
+  border-radius: 0.375rem;
+}
+
 .rounded-xl {
   border-radius: 0.75rem;
 }
@@ -1196,6 +1782,11 @@ video {
 .border-green-300 {
   --tw-border-opacity: 1;
   border-color: rgb(134 239 172 / var(--tw-border-opacity, 1));
+}
+
+.border-md-input-border {
+  --tw-border-opacity: 1;
+  border-color: rgb(210 214 218 / var(--tw-border-opacity, 1));
 }
 
 .border-red-300 {
@@ -1273,6 +1864,11 @@ video {
   background-color: rgb(22 163 74 / var(--tw-bg-opacity, 1));
 }
 
+.bg-md-gray-100 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(245 245 245 / var(--tw-bg-opacity, 1));
+}
+
 .bg-orange-100 {
   --tw-bg-opacity: 1;
   background-color: rgb(255 237 213 / var(--tw-bg-opacity, 1));
@@ -1343,6 +1939,10 @@ video {
 .object-cover {
   -o-object-fit: cover;
      object-fit: cover;
+}
+
+.p-0 {
+  padding: 0px;
 }
 
 .p-1 {
@@ -1497,6 +2097,10 @@ video {
 
 .align-top {
   vertical-align: top;
+}
+
+.font-sans {
+  font-family: Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
 }
 
 .text-2xl {
@@ -1702,6 +2306,12 @@ video {
   text-decoration-line: underline;
 }
 
+.shadow {
+  --tw-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+  --tw-shadow-colored: 0 1px 3px 0 var(--tw-shadow-color), 0 1px 2px -1px var(--tw-shadow-color);
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+}
+
 .shadow-\[inset_0_-1px_0_0_\#e2e8f0\] {
   --tw-shadow: inset 0 -1px 0 0 #e2e8f0;
   --tw-shadow-colored: inset 0 -1px 0 0 var(--tw-shadow-color);
@@ -1735,6 +2345,18 @@ video {
   outline-style: solid;
 }
 
+.outline-2 {
+  outline-width: 2px;
+}
+
+.outline-offset-2 {
+  outline-offset: 2px;
+}
+
+.outline-md-info {
+  outline-color: #1A73E8;
+}
+
 .filter {
   filter: var(--tw-blur) var(--tw-brightness) var(--tw-contrast) var(--tw-grayscale) var(--tw-hue-rotate) var(--tw-invert) var(--tw-saturate) var(--tw-sepia) var(--tw-drop-shadow);
 }
@@ -1759,9 +2381,11 @@ video {
 html, body {
   margin: 0;
   padding: 0;
-  font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-  background: #f4f6f8;
-  color: #1f2933;
+  --tw-bg-opacity: 1;
+  background-color: rgb(245 245 245 / var(--tw-bg-opacity, 1));
+  font-family: Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --tw-text-opacity: 1;
+  color: rgb(82 82 82 / var(--tw-text-opacity, 1));
 }
 
 a {
@@ -1774,7 +2398,7 @@ input, select, textarea {
   border-radius: 0.375rem;
   border-width: 1px;
   --tw-border-opacity: 1;
-  border-color: rgb(203 213 225 / var(--tw-border-opacity, 1));
+  border-color: rgb(210 214 218 / var(--tw-border-opacity, 1));
   padding-left: 0.75rem;
   padding-right: 0.75rem;
   padding-top: 0.5rem;
@@ -1797,18 +2421,49 @@ input::placeholder, select::placeholder, textarea::placeholder {
 
 input:focus, select:focus, textarea:focus {
   --tw-border-opacity: 1;
-  border-color: rgb(59 130 246 / var(--tw-border-opacity, 1));
-  outline: 2px solid transparent;
-  outline-offset: 2px;
-  --tw-ring-offset-shadow: var(--tw-ring-inset) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);
-  --tw-ring-shadow: var(--tw-ring-inset) 0 0 0 calc(2px + var(--tw-ring-offset-width)) var(--tw-ring-color);
-  box-shadow: var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow, 0 0 #0000);
-  --tw-ring-opacity: 1;
-  --tw-ring-color: rgb(219 234 254 / var(--tw-ring-opacity, 1));
+  border-color: rgb(26 115 232 / var(--tw-border-opacity, 1));
 }
 
 button {
   cursor: pointer;
+}
+
+/*
+ * Disabled state for every form control (buttons are covered by `.btn:disabled` as well, for
+ * the `<a>`-based variants): opacity 0.5, no pointer affordance, no shadow.
+ */
+
+button:disabled,
+input:disabled,
+select:disabled,
+textarea:disabled,
+fieldset:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+  --tw-shadow: 0 0 #0000;
+  --tw-shadow-colored: 0 0 #0000;
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+}
+
+/*
+ * Keyboard focus, WCAG 2.2 AA: a 2px md-info outline at 2px offset on every interactive
+ * element. md-info measures 4.51:1 against white, above the 3:1 non-text minimum. Never remove
+ * a focus outline anywhere without putting this one in its place.
+ */
+
+a:focus-visible,
+area:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible,
+[tabindex]:focus-visible,
+[contenteditable]:focus-visible {
+  outline-style: solid;
+  outline-width: 2px;
+  outline-offset: 2px;
+  outline-color: #1A73E8;
 }
 
 img {
@@ -1871,9 +2526,14 @@ img {
 }
 
 .hover\:shadow-md:hover {
-  --tw-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
-  --tw-shadow-colored: 0 4px 6px -1px var(--tw-shadow-color), 0 2px 4px -2px var(--tw-shadow-color);
+  --tw-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  --tw-shadow-colored: 0 4px 6px -1px var(--tw-shadow-color), 0 2px 4px -1px var(--tw-shadow-color);
   box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+}
+
+.focus\:border-md-info:focus {
+  --tw-border-opacity: 1;
+  border-color: rgb(26 115 232 / var(--tw-border-opacity, 1));
 }
 
 .focus-visible\:outline-none:focus-visible {
@@ -2000,6 +2660,10 @@ img {
 @media (min-width: 1280px) {
   .xl\:col-span-6 {
     grid-column: span 6 / span 6;
+  }
+
+  .xl\:grid-cols-3 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .xl\:grid-cols-5 {

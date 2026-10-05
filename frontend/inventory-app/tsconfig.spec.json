@@ -4,7 +4,11 @@
     "outDir": "./out-tsc/spec",
     "module": "commonjs",
     "moduleResolution": "node",
+    // The design-token contrast spec reads the real token values out of tailwind.config.js, so
+    // Jest has to be allowed to compile that CommonJS file. Type checking of JavaScript stays
+    // off (`checkJs` is not set); this only lets a spec import one.
+    "allowJs": true,
     "types": ["jest", "node"]
   },
-  "include": ["src/**/*.spec.ts", "src/**/*.d.ts"]
+  "include": ["src/**/*.spec.ts", "src/**/*.d.ts", "tailwind.config.js"]
 }
