@@ -1516,7 +1516,21 @@ reads the product to preselect from either the query string or the route paramet
 History](#global-stock-history-issue-384)). The older URL keeps its own address rather than being
 redirected, so existing links and bookmarks stay valid.
 
+`/sites` (issue #386) is a standalone, authenticated list page that loads every site summary through the existing `SiteService.getAll()` contract, offers client-side search/filter by site name, and drills down into the existing `/sites/:id/products` route when a site is selected. It does not change the `Site` summary contract, the site-products workflow, or wire a sidebar/header entry point; that final navigation link is deferred to the navigation-shell task (#383).
+
 The static host must rewrite unknown application paths to `index.html`; otherwise refreshing a deep link such as `/reports/bookkeeping` or the Entra redirect landing on `/auth` will bypass Angular and return a host-level 404. `frontend/inventory-app/src/staticwebapp.config.json` (copied to the deployed output root by the `assets` build option) declares that Azure Static Web Apps `navigationFallback`, rewriting unmatched paths to `/index.html` while excluding `/assets/*` and static file extensions.
+
+**Admin decomposition (issue #388, Admin split 1/3).** `AdminComponent` is being decomposed into
+dedicated routed pages one workflow at a time; `/admin` keeps hosting every Admin workflow that
+has not yet moved out and links to the ones that have. `/admin/nayax-settings`
+(`NayaxSettingsComponent`) and `/admin/site-commission-agreements`
+(`SiteCommissionAgreementsComponent`) are the first two moves: each owns the form and history/
+table UI for its workflow, but calls `NayaxSettingsService`, `ReportingService`, and
+`SiteService` exactly as `AdminComponent` did, so the Nayax processing-fee and site-commission
+API boundaries, effective-dating, and financial calculations are unchanged. Later Admin-split
+tasks move the remaining workflows (imports, historical cost recovery, AVCO transition, Costing
+Repair) and introduce the final Admin navigation; this issue does not touch the root application
+navigation in `app.component.html`.
 
 ### Runtime configuration and API contracts
 
@@ -2174,6 +2188,31 @@ sticky. Sticky positioning does not participate in table column sizing, so heade
 identical column widths; the header's bottom rule is an inset box shadow on each header cell, because
 the collapsed `divide-y` border between `<thead>` and `<tbody>` scrolls away with the body.
 
+#### Supplier Orders frontend page (issue #387)
+
+Supplier orders moved from a Products-area child view to a dedicated Purchases workflow page,
+`SupplierOrdersComponent` (`frontend/inventory-app/src/app/components/purchases`, routed at
+`/purchases/orders`). It is a thin consumer of the existing `SupplierOrderService` and the
+existing `GET /api/supplierorders` contract: it introduces no new service, DTO, endpoint, or
+supplier-order business rule. `GET /api/supplierorders` already returns only active orders
+(`Ordered`/`PartiallyReceived`; `Received` and `Cancelled` are excluded in `EfSupplierOrderStore`),
+so the page states on screen that it shows open orders only, and its supplier/reference search and
+Ordered/Partially-received status filter are purely client-side presentation filters over that
+already-active set, not new query parameters on the endpoint. Listing received or cancelled orders
+remains out of scope; it needs a new API contract. The page's Receive/Create Purchase and Cancel
+actions are unchanged from the previous Products-area view: Receive navigates to
+`/purchases/new?supplierOrderId=<id>` (the existing `PurchaseUploadComponent` prefill workflow,
+unchanged) and Cancel calls `SupplierOrderService.cancel`.
+
+**Compatibility treatment of the old Products "On Order" entry point.** The Products-area
+`ProductOnOrderComponent` (previously routed at `/products/on-order`) was removed rather than kept
+as a second, diverging listing of the same active orders: `/products/on-order` is now a `redirectTo`
+route alias to `/purchases/orders` in `app.routes.ts`, so an existing bookmark or link still lands on
+the (now single) Supplier Orders implementation instead of a stale duplicate. `ProductsShellComponent`'s
+"On order" tab links directly to `/purchases/orders`. `PurchaseUploadComponent` navigates back to
+`/purchases/orders` (rather than the old `/products/on-order`) after a receipt that started from a
+supplier order, and its "Unable to load supplier order" and Cancel links point at the same new page.
+
 #### Supplier product price history and comparison (issue #63)
 
 The Purchasing/Suppliers vertical slice derives a per-product supplier price comparison from actual,
@@ -2347,7 +2386,7 @@ or tag exists.
 | `InventoryApi.Controllers` | `PurchasesController` (file `PurchasesController.cs`), `[Route("api/purchases")]` | — | The route is now canonical; there is no supported external client left to preserve `api/receipts` for. |
 | `InventoryApi.DTOs` | `PurchaseItemDto`, `PurchaseCreateMetaDto`, `PurchaseValidationDto`, `PurchaseResponseDto` (JSON keys `purchase`/`validation`), and since issue #304 the API-owned `PurchaseResponse`/`PurchaseItemResponse` the `purchase` key carries | — | The `receipt`/`validation` wrapper existed only for old clients; `PurchaseResponseDto`'s property is now named `Purchase`. `PurchaseItemResponse.ReceiptId` keeps the persistence-facing JSON name, as the entity's did. |
 | Frontend `models.ts`/`purchase.service.ts` | `Purchase`, `PurchaseItem`, `PurchaseValidation`, `PurchaseResponse` (`purchase` field), `PurchaseService` (canonical `/purchases` base URL), `PurchaseUploadPayload`/`PurchaseItemPayload`/`PurchaseUpdatePayload` | JSON-bound field `receiptId` on `PurchaseItem` | `receiptId` matches the backend `PurchaseItem.ReceiptId` persistence/JSON contract above, which is out of this issue's scope. |
-| Frontend routing | `/purchases` and `/purchases/new` are the only supported purchase routes | — | The `/receipts` and `/receipts/new` redirect aliases were removed; there is no supported bookmark to preserve. |
+| Frontend routing | `/purchases`, `/purchases/new` and `/purchases/orders` (issue #387) are the supported purchase routes | `/products/on-order` redirects to `/purchases/orders` (issue #387) | The `/receipts` and `/receipts/new` redirect aliases were removed; there is no supported bookmark to preserve. `/products/on-order` keeps its old bookmark working instead of a second supplier-order listing. |
 | Supporting documents | Not renamed: `Purchase.FileName`/`StoredFileName`/`ContentType`/`FileSizeBytes`, the "Receipt or invoice" upload copy, `OperatingExpense` receipt-attachment naming | — | A purchase's attached scan/photo, and an operating expense's attachment, are supporting *documents*, a distinct concept from the Purchase business record. |
 
 Out of scope for the Purchase/Products contract cleanup (per issues #60 and #127): changing purchase

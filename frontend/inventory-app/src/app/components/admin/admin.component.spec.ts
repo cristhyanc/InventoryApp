@@ -1,11 +1,10 @@
 import { TestBed } from '@angular/core/testing';
+import { provideRouter } from '@angular/router';
 import { of } from 'rxjs';
 import { AdminComponent } from './admin.component';
 import { ImportService } from '../../services/import.service';
 import { ReportingService } from '../../services/reporting.service';
 import { ToastService } from '../../services/toast.service';
-import { NayaxSettingsService } from '../../services/nayax-settings.service';
-import { SiteService } from '../../services/site.service';
 import { ProductService } from '../../services/product.service';
 import { InventoryCostBaselineSource, InventoryCostTransitionPreview, InventoryCostTransitionService } from '../../services/inventory-cost-transition.service';
 import { InventoryCostRepairService } from '../../services/inventory-cost-repair.service';
@@ -26,11 +25,10 @@ async function render() {
   await TestBed.configureTestingModule({
     imports: [AdminComponent],
     providers: [
+      provideRouter([]),
       { provide: ImportService, useValue: {} },
-      { provide: ReportingService, useValue: { siteCommissionAgreements: jest.fn(() => of([])) } },
+      { provide: ReportingService, useValue: {} },
       { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() } },
-      { provide: NayaxSettingsService, useValue: { getRates: jest.fn(() => of([])) } },
-      { provide: SiteService, useValue: { getAll: jest.fn(() => of([])) } },
       { provide: ProductService, useValue: { getAll: jest.fn(() => of([])) } },
       { provide: InventoryCostTransitionService, useValue: {} },
       { provide: InventoryCostRepairService, useValue: {} }
@@ -71,17 +69,28 @@ describe('AdminComponent inventory-cost transition cutoff timestamp display (iss
   });
 });
 
+describe('AdminComponent Admin split (issue #388)', () => {
+  it('links to the dedicated Nayax Settings and Site Commission Agreements pages instead of embedding their forms', async () => {
+    const { host } = await render();
+
+    const nayaxLink = host.querySelector('a[routerLink="/admin/nayax-settings"]');
+    const commissionLink = host.querySelector('a[routerLink="/admin/site-commission-agreements"]');
+    expect(nayaxLink).not.toBeNull();
+    expect(commissionLink).not.toBeNull();
+    expect(host.querySelector('input[type="date"]')).toBeNull();
+  });
+});
+
 describe('AdminComponent Costing Repair composition (issue #361)', () => {
   it('composes the Costing Repair workflow as its own feature component and passes it the loaded products', async () => {
     const product = { id: 1, name: 'Coke Zero' } as Product;
     await TestBed.configureTestingModule({
       imports: [AdminComponent],
       providers: [
+        provideRouter([]),
         { provide: ImportService, useValue: {} },
-        { provide: ReportingService, useValue: { siteCommissionAgreements: jest.fn(() => of([])) } },
+        { provide: ReportingService, useValue: {} },
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() } },
-        { provide: NayaxSettingsService, useValue: { getRates: jest.fn(() => of([])) } },
-        { provide: SiteService, useValue: { getAll: jest.fn(() => of([])) } },
         { provide: ProductService, useValue: { getAll: jest.fn(() => of([product])) } },
         { provide: InventoryCostTransitionService, useValue: {} },
         { provide: InventoryCostRepairService, useValue: {} }
