@@ -167,6 +167,26 @@ export const routes: Routes = [
     loadComponent: () => import('./components/admin/imports/admin-imports.component').then((m) => m.AdminImportsComponent)
   },
   {
+    path: 'admin/historical-cost-recovery',
+    canActivate: [MsalGuard],
+    loadComponent: () =>
+      import('./components/admin/historical-cost-recovery/historical-cost-recovery.component').then(
+        (m) => m.HistoricalCostRecoveryComponent
+      )
+  },
+  {
+    path: 'admin/avco-transition',
+    canActivate: [MsalGuard],
+    loadComponent: () =>
+      import('./components/admin/avco-transition/avco-transition.component').then((m) => m.AvcoTransitionComponent)
+  },
+  {
+    path: 'admin/costing-repair',
+    canActivate: [MsalGuard],
+    loadComponent: () =>
+      import('./components/admin/costing-repair/costing-repair-page.component').then((m) => m.CostingRepairPageComponent)
+  },
+  {
     path: 'admin/nayax-settings',
     canActivate: [MsalGuard],
     loadComponent: () =>
