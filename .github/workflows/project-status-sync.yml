@@ -17,8 +17,16 @@ on:
   pull_request_target:
     branches: [develop]
     types: [opened, reopened, closed, synchronize, ready_for_review, converted_to_draft, labeled, unlabeled]
+  # Only workflows that change agent labels or publish agent statuses. Listening to every
+  # workflow would spend the repository token's hourly API allowance shared with the pipeline.
   workflow_run:
-    workflows: ['*']
+    workflows:
+      - Agent implementation
+      - Agent Copilot implementation
+      - Agent architecture
+      - Agent Copilot architecture check
+      - Validate pull request
+      - Agent review
     types: [completed]
 
 permissions: {}
@@ -34,8 +42,7 @@ jobs:
     if: >-
       github.repository == 'cristhyanc/InventoryApp' &&
       (github.event_name == 'workflow_dispatch' || vars.PROJECT_SYNC_ENABLED == 'true') &&
-      (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main') &&
-      (github.event_name != 'workflow_run' || github.event.workflow_run.name != 'Project status sync')
+      (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

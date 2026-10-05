@@ -43,9 +43,12 @@ export function desiredStatus(issue) {
   return null;
 }
 
-/** Re-read before writing; a changed head, label, issue state or board value is deferred. */
-export async function reconcileItem(api, item, { dryRun = true } = {}) {
-  const before = await api.read(item);
+/**
+ * Re-read before writing; a changed head, label, issue state or board value is deferred.
+ * `before` is the snapshot built from the run's batched reads; without it the item is read live.
+ */
+export async function reconcileItem(api, item, { dryRun = true, before } = {}) {
+  if (before === undefined) before = await api.read(item);
   if (!before) return 'skip';
   const desired = desiredStatus(before.issue);
   if (!desired || desired === before.current) return 'unchanged';
@@ -112,15 +115,27 @@ export async function loadProject(client) {
   return { id: project.id, field: field.id, options: Object.fromEntries(field.options.map(option => [option.name, option.id])) };
 }
 
+// Same issue fields for the batched Project read and the live re-read, so snapshots compare equal.
+const ISSUE_FIELDS = `number state stateReason
+  labels(first: 50) { pageInfo { hasNextPage } nodes { name } }
+  subIssues(first: 1) { totalCount }
+  timelineItems(last: 1, itemTypes: [REOPENED_EVENT]) { nodes { ... on ReopenedEvent { createdAt } } }
+  closedByPullRequestsReferences(first: 20, includeClosedPrs: true) {
+    pageInfo { hasNextPage } nodes { number repository { nameWithOwner } }
+  }`;
+const STATUS_CONTEXTS = ['agent-validation', 'merge-validation', 'agent-review-verdict'];
+
 export async function projectItems(client, project) {
   const items = [];
   let cursor = null;
   do {
+    // Issue data comes with the item page, so unchanged cards cost no repository API calls.
     const data = await client.graph(`query($id: ID!, $cursor: String) {
-      node(id: $id) { ... on ProjectV2 { items(first: 100, after: $cursor) {
-        pageInfo { hasNextPage endCursor } nodes { id isArchived content {
-          __typename ... on Issue { id number repository { nameWithOwner } }
-        } }
+      node(id: $id) { ... on ProjectV2 { items(first: 50, after: $cursor) {
+        pageInfo { hasNextPage endCursor } nodes { id isArchived
+          fieldValueByName(name: "Status") { ... on ProjectV2ItemFieldSingleSelectValue { name } }
+          content { __typename ... on Issue { id repository { nameWithOwner } ${ISSUE_FIELDS} } }
+        }
       } } }
     }`, { id: project.id, cursor }, true);
     const connection = data?.node?.items;
@@ -133,7 +148,13 @@ export async function projectItems(client, project) {
 }
 
 export class ProjectSync {
-  constructor(client, project) { this.client = client; this.project = project; }
+  constructor(client, project) { this.client = client; this.project = project; this.pullList = null; }
+  // The repository token allows 1,000 REST requests per hour shared with the agent pipeline,
+  // so the PR list is fetched once per run rather than once per card.
+  async pulls() {
+    this.pullList ??= await this.client.restPages(`repos/${PROJECT.repository}/pulls?state=all`);
+    return this.pullList;
+  }
   async read(itemId) {
     // Check membership live as well as status. Removed/archived/replaced cards are never recreated.
     const data = await this.client.graph(`query($id: ID!) {
@@ -145,16 +166,12 @@ export class ProjectSync {
     const item = data?.node;
     if (!item || item.isArchived || item.project.id !== this.project.id || item.content?.__typename !== 'Issue' || item.content.repository.nameWithOwner !== PROJECT.repository) return null;
     const result = await this.client.graph(`query($id: ID!) {
-      node(id: $id) { ... on Issue { number state stateReason
-        labels(first: 100) { pageInfo { hasNextPage } nodes { name } }
-        subIssues(first: 1) { totalCount }
-        timelineItems(last: 1, itemTypes: [REOPENED_EVENT]) { nodes { ... on ReopenedEvent { createdAt } } }
-        closedByPullRequestsReferences(first: 100, includeClosedPrs: true) {
-          pageInfo { hasNextPage } nodes { number repository { nameWithOwner } }
-        }
-      } }
+      node(id: $id) { ... on Issue { ${ISSUE_FIELDS} } }
     }`, { id: item.content.id });
-    const issue = result?.node;
+    return this.snapshot(item.fieldValueByName?.name ?? null, result?.node, { live: true });
+  }
+  /** Builds the decision input. Batched snapshots use the cached PR list; live ones re-fetch each PR. */
+  async snapshot(current, issue, { live = false } = {}) {
     if (!issue?.number) throw new Error('Issue could not be read.');
     const labels = complete(issue.labels, 'Issue labels').map(label => label.name).sort();
     const parent = issue.subIssues.totalCount > 0;
@@ -163,25 +180,29 @@ export class ProjectSync {
       .filter(pr => pr.repository.nameWithOwner === PROJECT.repository).map(pr => pr.number);
     // Closing-keyword links may be absent while a PR targets non-default develop. The exact
     // Claude branch prefix provides a fallback without trusting comments or parsing PR prose.
-    const allPrs = await this.client.restPages(`repos/${PROJECT.repository}/pulls?state=all`);
-    const candidates = allPrs.filter(pr => linked.includes(pr.number) || pr.head.ref.startsWith(`agent/issue-${issue.number}-`));
+    const cached = new Map((await this.pulls()).map(pr => [pr.number, pr]));
+    const numbers = new Set([...linked, ...[...cached.values()]
+      .filter(pr => pr.head.ref.startsWith(`agent/issue-${issue.number}-`)).map(pr => pr.number)]);
     const prs = [];
-    for (const candidate of candidates) {
-      const live = await this.client.json(`repos/${PROJECT.repository}/pulls/${candidate.number}`, this.client.repositoryToken);
-      const sameRepository = live.head.repo?.full_name === PROJECT.repository && live.base.repo?.full_name === PROJECT.repository;
-      const agent = live.head.ref.startsWith(`agent/issue-${issue.number}-`) || (linked.includes(live.number) && live.head.ref.startsWith('copilot/'));
-      if (!sameRepository || !agent || live.base.ref !== 'develop') continue;
+    for (const number of numbers) {
+      const pr = live || !cached.has(number)
+        ? await this.client.json(`repos/${PROJECT.repository}/pulls/${number}`, this.client.repositoryToken)
+        : cached.get(number);
+      const sameRepository = pr.head.repo?.full_name === PROJECT.repository && pr.base.repo?.full_name === PROJECT.repository;
+      const agent = pr.head.ref.startsWith(`agent/issue-${issue.number}-`) || (linked.includes(pr.number) && pr.head.ref.startsWith('copilot/'));
+      if (!sameRepository || !agent || pr.base.ref !== 'develop') continue;
       const statuses = {};
-      if (live.state === 'open') {
-        // REST /statuses is newest-first and paginated; first occurrence of each context wins.
-        for (const status of await this.client.restPages(`repos/${PROJECT.repository}/commits/${live.head.sha}/statuses`))
-          if (!(status.context in statuses)) statuses[status.context] = status.state;
+      if (pr.state === 'open') {
+        // The combined status holds the latest state of each context in one request.
+        const combined = await this.client.json(`repos/${PROJECT.repository}/commits/${pr.head.sha}/status?per_page=100`, this.client.repositoryToken);
+        for (const status of combined.statuses ?? [])
+          if (STATUS_CONTEXTS.includes(status.context)) statuses[status.context] = status.state;
       }
-      prs.push({ number: live.number, head: live.head.sha, state: live.merged_at ? 'MERGED' : live.state.toUpperCase(),
-        mergedAt: live.merged_at, base: live.base.ref, sameRepository, agent, draft: live.draft,
-        statuses: Object.fromEntries(Object.entries(statuses).filter(([context]) => ['agent-validation', 'merge-validation', 'agent-review-verdict'].includes(context)).sort()) });
+      prs.push({ number: pr.number, head: pr.head.sha, state: pr.merged_at ? 'MERGED' : pr.state.toUpperCase(),
+        mergedAt: pr.merged_at, base: pr.base.ref, sameRepository, agent, draft: pr.draft,
+        statuses: Object.fromEntries(Object.entries(statuses).sort()) });
     }
-    return { current: item.fieldValueByName?.name ?? null, issue: {
+    return { current, issue: {
       number: issue.number, state: issue.state, stateReason: issue.stateReason, labels, parent,
       reopenedAt: issue.timelineItems.nodes[0]?.createdAt ?? null, prs: prs.sort((a, b) => a.number - b.number),
     } };
@@ -206,7 +227,8 @@ async function main() {
   const api = new ProjectSync(client, project);
   const lines = [`Project #4 status sync (${dryRun ? 'preview' : 'apply'})`];
   for (const item of await projectItems(client, project)) {
-    const result = await reconcileItem(api, item.id, { dryRun });
+    const before = await api.snapshot(item.fieldValueByName?.name ?? null, item.content);
+    const result = await reconcileItem(api, item.id, { dryRun, before });
     if (!['skip', 'unchanged'].includes(result)) lines.push(result);
   }
   if (lines.length === 1) lines.push('No status changes.');

@@ -82,11 +82,21 @@ Revoking the dedicated token also removes access.
 
 ## Triggering, races and validation
 
-Issue/PR events and completed workflow runs reconcile the board. A schedule every
-15 minutes catches missed events, new Project membership, and transitions made
-using GITHUB_TOKEN (which normally do not trigger downstream event workflows).
-Scheduling is best-effort, not a 15-minute SLA. The sync ignores its own workflow
-completion to prevent a loop. One concurrency group serializes all its runs.
+Issue/PR events and completed runs of the workflows that change agent labels or
+publish agent statuses (Agent implementation, Agent Copilot implementation, Agent
+architecture, Agent Copilot architecture check, Validate pull request and Agent
+review) reconcile the board. A schedule every 15 minutes catches missed events, new
+Project membership, and transitions made using GITHUB_TOKEN (which normally do not
+trigger downstream event workflows). Scheduling is best-effort, not a 15-minute
+SLA. The sync does not listen to its own completion, so it cannot loop. One
+concurrency group serializes all its runs.
+
+The repository GITHUB_TOKEN allows 1,000 REST requests per hour per repository,
+shared with the agent pipeline, so the sync keeps its use small. Issue labels,
+links and board values arrive with the Project item pages (Projects credential).
+The repository's pull request list is fetched once per run. A card costs further
+repository requests only when it has an open agent PR (one combined-status read)
+or needs a status change (the live re-read below).
 
 It executes only the trusted workflow commit; it never checks out PR heads,
 downloads workflow artifacts or executes issue/PR text with the Project token.
@@ -95,7 +105,8 @@ model calls are used. The only GraphQL mutation updates one item's Status.
 
 Project items and REST collections are paginated. Oversized labels/linked-PR/field
 connections fail rather than silently truncate. Status contexts are read from
-the current head SHA, newest-first, never from the triggering event's SHA.
+the current head SHA's combined status (latest state per context), never from the
+triggering event's SHA.
 Immediately before an update the full decision and current board value are read
 again; any change defers that item. GitHub's mutation has no compare-and-swap
 precondition, so there remains a small race after that re-read; subsequent runs

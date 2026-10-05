@@ -86,29 +86,50 @@ test('missing status options and truncated fields fail without mutation', async 
     { pageInfo: { hasNextPage: true }, nodes: [] },
   ]) await assert.rejects(loadProject({ graph: async () => ({ user: { projectV2: { id: 'project', fields } } }) }));
 });
-test('API read uses live head statuses; no prior SHA or event state is used', async () => {
+const livePr = (changes = {}) => ({ number: 392, head: { sha: 'b'.repeat(40), ref: 'agent/issue-384-test', repo: { full_name: PROJECT.repository } }, base: { ref: 'develop', repo: { full_name: PROJECT.repository } }, state: 'open', merged_at: null, draft: false, ...changes });
+const issueNode = (changes = {}) => ({ number: 384, state: 'OPEN', stateReason: null, labels: { nodes: [{ name: 'agent-review' }], pageInfo: { hasNextPage: false } }, subIssues: { totalCount: 0 }, timelineItems: { nodes: [] }, closedByPullRequestsReferences: { nodes: [], pageInfo: { hasNextPage: false } }, ...changes });
+const combined = { statuses: [{ context: 'agent-review-verdict', state: 'pending' }, { context: 'agent-validation', state: 'success' }, { context: 'merge-validation', state: 'success' }, { context: 'other', state: 'failure' }] };
+const repositoryClient = (pulls, calls) => ({
+  repositoryToken: 'repo-fixture',
+  graph: async (query, vars, project) => {
+    calls.push({ query, vars, project });
+    if (project) return { node: { project: { id: 'project' }, isArchived: false, fieldValueByName: { name: 'In review' }, content: { __typename: 'Issue', id: 'issue', repository: { nameWithOwner: PROJECT.repository } } } };
+    return { node: issueNode() };
+  },
+  json: async (path, token) => {
+    assert.equal(token, 'repo-fixture');
+    calls.push({ path });
+    if (path.includes('/commits/')) { assert.ok(path.includes(`/commits/${'b'.repeat(40)}/status`)); return combined; }
+    return livePr();
+  },
+  restPages: async path => { calls.push({ path }); assert.ok(path.endsWith('/pulls?state=all')); return pulls; },
+});
+test('live read uses current head statuses; no prior SHA or event state is used', async () => {
   const calls = [];
-  const livePr = { number: 392, head: { sha: 'b'.repeat(40), ref: 'agent/issue-384-test', repo: { full_name: PROJECT.repository } }, base: { ref: 'develop', repo: { full_name: PROJECT.repository } }, state: 'open', merged_at: null, draft: false };
-  const client = {
-    repositoryToken: 'repo-fixture',
-    graph: async (query, vars, project) => {
-      calls.push({ query, vars, project });
-      if (project) return { node: { project: { id: 'project' }, isArchived: false, fieldValueByName: { name: 'In review' }, content: { __typename: 'Issue', id: 'issue', repository: { nameWithOwner: PROJECT.repository } } } };
-      return { node: { number: 384, state: 'OPEN', stateReason: null, labels: { nodes: [{ name: 'agent-review' }], pageInfo: { hasNextPage: false } }, subIssues: { totalCount: 0 }, timelineItems: { nodes: [] }, closedByPullRequestsReferences: { nodes: [], pageInfo: { hasNextPage: false } } } };
-    },
-    json: async (path, token) => { assert.equal(token, 'repo-fixture'); assert.ok(path.endsWith('/pulls/392')); return livePr; },
-    restPages: async path => {
-      calls.push({ path });
-      if (path.includes('/pulls?')) return [livePr];
-      assert.ok(path.endsWith(`/commits/${'b'.repeat(40)}/statuses`));
-      return [{ context: 'agent-review-verdict', state: 'pending' }, { context: 'agent-review-verdict', state: 'success' }, { context: 'agent-validation', state: 'success' }, { context: 'merge-validation', state: 'success' }];
-    },
-  };
-  const snapshot = await new ProjectSync(client, { id: 'project' }).read('item');
+  const snapshot = await new ProjectSync(repositoryClient([livePr({ head: { ...livePr().head, sha: 'a'.repeat(40) } })], calls), { id: 'project' }).read('item');
   assert.equal(snapshot.issue.prs[0].head, 'b'.repeat(40));
+  assert.deepEqual(snapshot.issue.prs[0].statuses, { 'agent-review-verdict': 'pending', 'agent-validation': 'success', 'merge-validation': 'success' });
   assert.equal(desiredStatus(snapshot.issue), 'In review');
   assert.equal(calls[0].project, true);
   assert.equal(calls[1].project, undefined);
+  assert.ok(calls.some(call => call.path?.endsWith('/pulls/392')));
+});
+test('batched snapshots list PRs once per run and skip REST calls for cards without agent PRs', async () => {
+  const calls = [];
+  const sync = new ProjectSync(repositoryClient([livePr(), livePr({ number: 10, head: { sha: 'c'.repeat(40), ref: 'feature/x', repo: { full_name: PROJECT.repository } } })], calls), { id: 'project' });
+  for (let number = 1; number <= 20; number++)
+    assert.equal(desiredStatus((await sync.snapshot('Backlog', issueNode({ number, labels: { nodes: [], pageInfo: { hasNextPage: false } } }))).issue), null);
+  const managed = await sync.snapshot('Backlog', issueNode());
+  assert.equal(desiredStatus(managed.issue), 'In review');
+  assert.equal(calls.filter(call => call.path?.includes('/pulls?')).length, 1);
+  assert.equal(calls.filter(call => call.path?.includes('/pulls/')).length, 0);
+  assert.equal(calls.filter(call => call.path?.includes('/commits/')).length, 1);
+  assert.equal(calls.filter(call => call.query).length, 0);
+});
+test('batched and live snapshots of an unchanged item compare equal, so updates are not deferred', async () => {
+  const sync = new ProjectSync(repositoryClient([livePr()], []), { id: 'project' });
+  const batched = await sync.snapshot('In review', issueNode());
+  assert.equal(JSON.stringify(batched), JSON.stringify(await sync.read('item')));
 });
 test('only allowed mutation writes one field and verifies the response', async () => {
   const calls = [];
@@ -137,7 +158,9 @@ test('privileged workflow executes trusted code only and remains opt-in', () => 
   assert.match(workflow, /persist-credentials: false/);
   assert.match(workflow, /vars\.PROJECT_SYNC_ENABLED == 'true'/);
   assert.match(workflow, /github\.ref == 'refs\/heads\/main'/);
-  assert.match(workflow, /workflow_run\.name != 'Project status sync'/);
+  const listened = workflow.match(/workflow_run:\s+workflows:\n((?:\s+- .+\n)+)/)[1];
+  assert.doesNotMatch(listened, /\*|Project status sync/);
+  assert.match(listened, /- Agent review\n/);
   assert.doesNotMatch(workflow, /permissions:[\s\S]*?\b(?:contents|issues|pull-requests|actions): write/);
   assert.doesNotMatch(workflow, /pull_request\.head|download-artifact|npm (?:ci|install)/);
   for (const name of ['validate.sh', 'validate.ps1'])
