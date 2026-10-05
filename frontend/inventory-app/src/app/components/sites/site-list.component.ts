@@ -6,6 +6,8 @@ import { catchError, of, tap } from 'rxjs';
 import { Site } from '../../models/models';
 import { SiteService } from '../../services/site.service';
 import { ListLoadState } from '../shared/list-load-state';
+import { trendLabel, trendClass } from '../../formatting/revenue-trend';
+import { siteStockClass } from '../../formatting/site-stock-status';
 
 @Component({
   selector: 'app-site-list',
@@ -18,7 +20,7 @@ export class SiteListComponent implements OnInit {
   search = '';
   readonly loadState = new ListLoadState();
 
-  constructor(private siteService: SiteService) {}
+  constructor(private readonly siteService: SiteService) {}
 
   ngOnInit(): void {
     this.load();
@@ -50,24 +52,14 @@ export class SiteListComponent implements OnInit {
   }
 
   siteStockClass(site: Site): string {
-    if (site.totalStockPercentage < 30) return 'bg-red-100 text-red-700';
-    if (site.totalStockPercentage < 80) return 'bg-yellow-100 text-yellow-700';
-    return 'bg-green-100 text-green-700';
-  }
-
-  private trend(current: number, previous: number): number | null {
-    return previous === 0 ? null : ((current - previous) / previous) * 100;
+    return siteStockClass(site);
   }
 
   trendLabel(current: number, previous: number): string {
-    const value = this.trend(current, previous);
-    if (value === null) return 'No prior sales';
-    return `${value >= 0 ? '↑' : '↓'} ${Math.abs(value).toFixed(1)}%`;
+    return trendLabel(current, previous);
   }
 
   trendClass(current: number, previous: number): string {
-    const value = this.trend(current, previous);
-    if (value === null) return 'text-slate-500';
-    return value >= 0 ? 'text-emerald-600' : 'text-rose-600';
+    return trendClass(current, previous);
   }
 }

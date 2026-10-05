@@ -40,7 +40,7 @@ describe('SiteListComponent', () => {
     fixture.detectChanges();
 
     expect(host.textContent).not.toContain('No sites available yet.');
-    expect(host.querySelectorAll('table').length).toBe(0);
+    expect(host.querySelectorAll('table')).toHaveLength(0);
   });
 
   it('renders the site summary fields supplied by the Site model', async () => {
@@ -81,7 +81,7 @@ describe('SiteListComponent', () => {
     fixture.detectChanges();
 
     expect(host.textContent).toContain('No sites match');
-    expect(host.querySelectorAll('tbody tr').length).toBe(0);
+    expect(host.querySelectorAll('tbody tr')).toHaveLength(0);
   });
 
   it('shows a clear empty state when there are no sites at all', async () => {
@@ -98,7 +98,7 @@ describe('SiteListComponent', () => {
     fixture.detectChanges();
 
     expect(host.textContent).toContain('Failed to load sites');
-    expect(host.querySelectorAll('table').length).toBe(0);
+    expect(host.querySelectorAll('table')).toHaveLength(0);
   });
 
   it('links each site to its existing site-products route', async () => {
