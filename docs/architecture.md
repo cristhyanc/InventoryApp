@@ -1739,6 +1739,59 @@ New UI must remain keyboard-operable, associate labels with controls, expose mea
 
 Tailwind classes in templates, `src/styles.scss`, and component styles are the styling sources. `npm run build:styles` generates `src/styles.css` before Angular builds, so do not make a manual fix only in the generated CSS. Keep production bundle and component-style budgets in `angular.json` passing.
 
+#### Visual language: Material Dashboard tokens and shared classes (issue #410)
+
+The frontend has one shared visual language, recreated from Material Dashboard 3 v3.2.0 with darker text variants so all text meets WCAG 2.2 AA. It lives in exactly two files:
+
+- `frontend/inventory-app/tailwind.config.js` — the design tokens, and the only place a colour, gradient, shadow, radius or type size is defined;
+- `frontend/inventory-app/src/styles.scss` — the shared component classes, built from those tokens with `@apply`.
+
+`frontend/inventory-app/src/app/design-system/` holds the non-routed `DesignSystemShowcaseComponent` fixture, which renders every shared class in one place. Use it as the reference rendering and as the screenshot target when the visual language changes. It is deliberately absent from `app.routes.ts` and from the sidebar.
+
+**Colour tokens.** Gradients are `linear-gradient(195deg, from, to)` and are exposed as `backgroundImage` entries (`bg-md-dark-gradient`, `bg-md-danger-button-gradient`, and one per status).
+
+| Token | Solid (decorative) | Gradient from → to | `-text` variant | Use |
+|---|---|---|---|---|
+| `md-dark` | `#262626` | `#42424a` → `#191919` | `#262626` | primary buttons, active nav item, default icon tile |
+| `md-info` | `#1A73E8` | `#49a3f1` → `#1A73E8` | `#1557B0` | links, focus outline, info badges/alerts/tiles |
+| `md-success` | `#4CAF50` | `#66BB6A` → `#43A047` | `#1B5E20` | success badges/alerts/tiles, positive values |
+| `md-warning` | `#FB8C00` | `#FFA726` → `#FB8C00` | `#8A4B00` | warning badges/alerts/tiles |
+| `md-danger` | `#F44335` | `#EF5350` → `#E53935` (tiles only); button gradient `#D32F2F` → `#B71C1C` | `#B71C1C` | danger buttons, error badges/alerts/messages, negative values |
+| `md-gray` | 100 `#F5F5F5`, 200 `#E5E5E5`, 300 `#D4D4D4`, 500 `#737373`, 600 `#525252`, 800 `#262626` | | | canvas, borders, text |
+| `md-input-border` | `#D2D6DA` | | | form field borders |
+
+Shadows are `shadow-md-card` (cards, which also carry a `1px solid md-gray-200` border), `shadow-md` (dropdowns, sidebar panel), `shadow-md-lg` (dialogs) and `shadow-md-tile-dark|info|success|warning|danger` (icon tiles). Radii are `rounded-md-control` (0.375rem: buttons, inputs), `rounded-md-card` (0.5rem: cards, icon tiles, dropdowns), `rounded-md-badge` (0.45rem) and `rounded-md-dialog` (0.75rem). Type sizes are `text-md-page-title` (1.25rem/600), `text-md-card-title` (1rem/600), `text-md-stat-value` (1.5rem/700), `text-md-body` (0.875rem), `text-md-badge` (0.75rem/700 uppercase) and `text-md-table-head` (0.65rem/700 uppercase). Spacing: page padding 1.5rem (1rem below 640px), 1.5rem between cards, 1rem card padding (0.75rem 1rem for header and footer), 0.75rem 1.5rem table cells (0.5rem 0.75rem below 640px), 0.5rem 1rem buttons (0.375rem 1rem small).
+
+**Contrast rules.** These are invariants, not preferences, and `design-tokens.contrast.spec.ts` enforces them by recomputing the ratios from the token values:
+
+- The solid status colours and the light status gradients are **decorative only**: icon tiles, the left border of an alert, the 15% tints, and icons that have an adjacent text label. They are never a text colour, and never the background of white text.
+- All coloured text uses the `-text` variant. Headings are `md-gray-800`, body copy `md-gray-600`, muted text on white `md-gray-500`, muted text on a gray surface `md-gray-600` (`md-gray-500` reaches only 4.35:1 on `md-gray-100`, so `.value-muted` resolves through the `--md-muted-text` custom property that each surface class sets).
+- White text appears only on `md-dark` and on the danger *button* gradient `#D32F2F` → `#B71C1C`. The info gradient is never used behind text.
+- Icon tiles are decorative: the glyph inside is `aria-hidden` and the meaning is carried by the adjacent label.
+
+**Shared classes.** Prefer a shared class to a pile of ad-hoc utilities. Reach for utilities only for layout (grid, flex, gap, width, order) and for a one-off that no shared class covers; never to re-invent a surface, control, status or type style the list below already defines, and never with a raw colour, shadow or radius value.
+
+- Layout: `.page`, `.page-header`, `.page-title`, `.page-subtitle`, `.page-actions`
+- Cards: `.card`, `.card-header`, `.card-title`, `.card-body`, `.card-footer`
+- Stat card: `.stat-card` with `.stat-card-head`, `.stat-card-label`, `.stat-card-value`, `.stat-card-footer`; the icon tile overlaps the top-left corner by 1rem
+- Icon tile: `.icon-tile` (48x48, 24px white glyph, md-dark gradient by default) plus `.icon-tile-dark|info|success|warning|danger`
+- Buttons: `.btn` with `.btn-primary`, `.btn-secondary`, `.btn-danger`, `.btn-link` and the `.btn-sm` size
+- Tables: `.table`, `.table-head`, `.table-row`, `.table-cell`, `.table-num`
+- Badges: `.badge` with `.badge-success|warning|danger|info` (the `-text` colour on a 15% tint of the solid colour) and `.badge-neutral` (`md-gray-600` on `#EAEAEA`)
+- Alerts: `.alert` with `.alert-success|warning|danger|info` and `.alert-title`
+- Forms: `.field`, `.field-label`, `.field-hint`, `.field-error`
+- Values: `.value-positive`, `.value-negative`, `.value-muted`
+
+**Focus and disabled states.** Every interactive element — buttons, links, inputs, selects, nav items, table row actions — shows a `focus-visible` 2px `md-info` outline at 2px offset (4.51:1 against white, above the 3:1 non-text minimum). Never remove a focus outline without putting that one in its place. Every button and form control renders its disabled state as opacity 0.5 with `cursor-not-allowed`, no hover change and no shadow; WCAG 1.4.3 exempts disabled controls from the contrast minimum.
+
+**Status colour mapping.** When restyling existing markup, map the old palette onto the status tokens and keep each element's current meaning: emerald/green → success; amber/yellow/orange → warning; red/rose → danger; blue/sky/indigo → info; slate/gray → neutral. Coloured text always maps to the `-text` variant. A page's or form's main action becomes `.btn-primary` whatever colour it is today; only an action that is red today becomes `.btn-danger`.
+
+**Generated CSS.** `src/styles.css` is committed and generated from `styles.scss` plus every template by `npm run build:styles`, which `npm run build` and both validation scripts also run. Commit it exactly as regenerated; never hand-edit it. Tailwind only emits an `@layer components` rule when it finds the class name in a scanned template, which is why the showcase fixture renders all of them. If the generated file conflicts with `develop`, merge `develop` into the branch (no rebase), take either side for `styles.css`, rerun `npm run build:styles` and commit the result. The stale, unreferenced `src/styles.generated.css` is not part of this pipeline; leave it alone.
+
+**Bundled font.** Inter (weights 400/500/600/700) is self-hosted through the `@fontsource/inter` npm package and loaded from the `styles` array in `angular.json`; the Angular build copies the font files into the output. The token stack is `Inter` followed by the previous system fallback `'Segoe UI', Roboto, Helvetica, Arial, sans-serif`. Do not add a Google Fonts, Font Awesome kit or other CDN request for a font or icon set.
+
+**Third-party notices.** `THIRD-PARTY-NOTICES.md` at the repository root records the Material Dashboard MIT notice (the look was recreated, not copied — no Material Dashboard CSS, JavaScript or asset is bundled, and Bootstrap is not a dependency) and the SIL OFL notice for Inter. Add an entry there whenever a change bundles third-party code or assets, or recreates a third-party design.
+
 ## Domain model and financial boundaries
 
 ### Sales and settlement
