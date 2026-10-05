@@ -34,7 +34,7 @@ public class EfDailyReportFactsProviderTests
             new NayaxSales { TransactionID = 2, MachineID = 10, SettlementValue = 5m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed },
             new NayaxSales { TransactionID = 3, MachineID = 10, SettlementValue = 7m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed });
         await db.SaveChangesAsync();
-        var provider = new EfDailyReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db));
+        var provider = new EfDailyReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), TestFinancialUseCases.TrivialCalendar);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 2), null, CancellationToken.None);
 
@@ -54,7 +54,7 @@ public class EfDailyReportFactsProviderTests
             new NayaxSales { TransactionID = 1, MachineID = 10, SettlementValue = 10m, PaymentMethod = "Credit Card", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed, CostOfGoodsSold = 4m },
             new NayaxSales { TransactionID = 2, MachineID = 10, SettlementValue = 5m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed, CostOfGoodsSold = null });
         await db.SaveChangesAsync();
-        var provider = new EfDailyReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db));
+        var provider = new EfDailyReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), TestFinancialUseCases.TrivialCalendar);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), null, CancellationToken.None);
 
@@ -81,7 +81,7 @@ public class EfDailyReportFactsProviderTests
             new NayaxSales { TransactionID = 3, MachineID = 10, SettlementValue = 4m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 2, 0, 0, 0), TransactionStatusId = NayaxTransactionStatusIds.Completed },
             new NayaxSales { TransactionID = 4, MachineID = 10, SettlementValue = 8m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 3, 0, 0, 0), TransactionStatusId = NayaxTransactionStatusIds.Completed });
         await db.SaveChangesAsync();
-        var provider = new EfDailyReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db));
+        var provider = new EfDailyReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), TestFinancialUseCases.TrivialCalendar);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 2), null, CancellationToken.None);
 
@@ -98,7 +98,7 @@ public class EfDailyReportFactsProviderTests
             new NayaxSales { TransactionID = 1, MachineID = 10, SettlementValue = 10m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed },
             new NayaxSales { TransactionID = 2, MachineID = 20, SettlementValue = 30m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed });
         await db.SaveChangesAsync();
-        var provider = new EfDailyReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db));
+        var provider = new EfDailyReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), TestFinancialUseCases.TrivialCalendar);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), 10, CancellationToken.None);
 
@@ -118,7 +118,7 @@ public class EfDailyReportFactsProviderTests
             new NayaxSales { TransactionID = 4, MachineID = 10, SettlementValue = 3m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = 21 },
             new NayaxSales { TransactionID = 5, MachineID = 10, SettlementValue = 7m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = null });
         await db.SaveChangesAsync();
-        var provider = new EfDailyReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db));
+        var provider = new EfDailyReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), TestFinancialUseCases.TrivialCalendar);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), null, CancellationToken.None);
 
@@ -157,7 +157,7 @@ public class EfDailyReportFactsProviderTests
         });
         db.ImportedFiles.Add(file);
         await db.SaveChangesAsync();
-        var provider = new EfDailyReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db));
+        var provider = new EfDailyReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), TestFinancialUseCases.TrivialCalendar);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), null, CancellationToken.None);
 
@@ -191,7 +191,7 @@ public class EfDailyReportFactsProviderTests
         });
         db.ImportedFiles.Add(file);
         await db.SaveChangesAsync();
-        var provider = new EfDailyReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db));
+        var provider = new EfDailyReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), TestFinancialUseCases.TrivialCalendar);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), null, CancellationToken.None);
 
@@ -206,7 +206,7 @@ public class EfDailyReportFactsProviderTests
     {
         await using var connection = await CreateSqliteAsync();
         await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
-        var provider = new EfDailyReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db));
+        var provider = new EfDailyReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), TestFinancialUseCases.TrivialCalendar);
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), null, CancellationToken.None);
 

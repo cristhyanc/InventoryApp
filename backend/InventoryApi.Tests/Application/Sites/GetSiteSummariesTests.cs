@@ -1,6 +1,6 @@
 using Inventory.Application.Nayax;
 using Inventory.Application.Sites;
-using InventoryApi.Adapters.Persistence;
+using Inventory.Infrastructure.Sites;
 using InventoryApi.Tests.Application.Time;
 using Xunit;
 
@@ -183,7 +183,7 @@ public class GetSiteSummariesTests
     }
 
     private static GetSiteSummaries UseCase(INayaxLynxClient nayax, ISiteFactsStore facts) =>
-        new(nayax, facts, new SiteNameResolverAdapter(), Time.Clock, Time.Calendar);
+        new(nayax, facts, new SiteNameResolver(), Time.Clock, Time.Calendar);
 
     private static DateTime Utc(int year, int month, int day, int hour, int minute) =>
         new(year, month, day, hour, minute, 0, DateTimeKind.Utc);

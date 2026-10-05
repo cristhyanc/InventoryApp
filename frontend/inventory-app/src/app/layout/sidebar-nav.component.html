@@ -1,0 +1,86 @@
+<nav
+  aria-label="Primary"
+  class="flex shrink-0 flex-col overflow-y-auto border-r border-slate-200 bg-white p-3 text-sm"
+  [class.fixed]="drawer"
+  [class.inset-y-0]="drawer"
+  [class.left-0]="drawer"
+  [class.z-40]="drawer"
+  [class.w-72]="drawer"
+  [class.shadow-xl]="drawer"
+  [class.w-64]="!drawer && expanded"
+  [class.w-16]="!drawer && !expanded"
+>
+  @if (drawer) {
+    <div class="mb-2 flex items-center justify-between border-b border-slate-200 px-1 pb-3">
+      <span class="font-semibold text-slate-700">Navigation</span>
+      <button
+        type="button"
+        aria-label="Close navigation menu"
+        class="rounded-md px-2 py-1 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+        (click)="dismissed.emit()"
+      >
+        <span aria-hidden="true">&#10005;</span>
+      </button>
+    </div>
+  }
+
+  <ul class="flex flex-col gap-1">
+    @for (item of navigation; track item.label) {
+      <li>
+        @if (item.kind === 'group') {
+          <button
+            type="button"
+            class="flex w-full items-center gap-3 rounded-md px-3 py-2 font-medium transition hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+            [class.bg-blue-50]="isGroupActive(item)"
+            [class.text-blue-700]="isGroupActive(item)"
+            [class.text-slate-600]="!isGroupActive(item)"
+            [attr.aria-expanded]="expanded && isGroupOpen(item)"
+            [attr.aria-controls]="expanded && isGroupOpen(item) ? groupPanelId(item) : null"
+            [attr.title]="expanded ? null : item.label"
+            (click)="toggleGroup(item)"
+          >
+            <span aria-hidden="true" class="w-5 shrink-0 text-center text-base">{{ item.icon }}</span>
+            <span class="truncate" [class.sr-only]="!expanded">{{ item.label }}</span>
+            @if (expanded) {
+              <span aria-hidden="true" class="ml-auto text-xs text-slate-400">{{ isGroupOpen(item) ? '▴' : '▾' }}</span>
+            }
+          </button>
+
+          @if (expanded && isGroupOpen(item)) {
+            <ul [id]="groupPanelId(item)" class="ml-5 mt-1 flex flex-col gap-1 border-l border-slate-200 pl-3">
+              @for (child of item.children; track child.route) {
+                <li>
+                  <a
+                    [routerLink]="child.route"
+                    class="block truncate rounded-md px-3 py-1.5 transition hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                    [class.bg-blue-50]="isLinkActive(child)"
+                    [class.font-semibold]="isLinkActive(child)"
+                    [class.text-blue-700]="isLinkActive(child)"
+                    [class.text-slate-600]="!isLinkActive(child)"
+                    [attr.aria-current]="isLinkActive(child) ? 'page' : null"
+                    (click)="navigated.emit()"
+                    >{{ child.label }}</a
+                  >
+                </li>
+              }
+            </ul>
+          }
+        } @else {
+          <a
+            [routerLink]="item.route"
+            class="flex items-center gap-3 rounded-md px-3 py-2 font-medium transition hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+            [class.bg-blue-50]="isLinkActive(item)"
+            [class.text-blue-700]="isLinkActive(item)"
+            [class.text-slate-600]="!isLinkActive(item)"
+            [attr.aria-current]="isLinkActive(item) ? 'page' : null"
+            [attr.title]="expanded ? null : item.label"
+            (click)="navigated.emit()"
+          >
+            <span aria-hidden="true" class="w-5 shrink-0 text-center text-base">{{ item.icon }}</span>
+            <span class="truncate" [class.sr-only]="!expanded">{{ item.label }}</span>
+          </a>
+        }
+      </li>
+    }
+  </ul>
+</nav>

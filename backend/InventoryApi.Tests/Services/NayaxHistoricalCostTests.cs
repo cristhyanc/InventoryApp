@@ -13,7 +13,7 @@ using Inventory.Application.SalesSync;
 using Inventory.Application.Commissions;
 using Inventory.Application.Imports;
 using Inventory.Infrastructure.Imports;
-using InventoryApi.Adapters.Export;
+using Inventory.Infrastructure.Reporting;
 using InventoryApi.Adapters.Persistence;
 using InventoryApi.Data;
 using Inventory.Application.Nayax;
@@ -270,7 +270,7 @@ public class NayaxHistoricalCostTests
         var nayaxFees = TestFinancialUseCases.ProcessingFees(db);
         var siteCommissions = Mock.Of<IGetSiteCommissionReport>();
         var getBookkeepingReport = new GetBookkeepingReport(new EfBookkeepingReportFactsProvider(db, nayaxFees, siteCommissions));
-        var getDailyReport = new GetDailyReport(new EfDailyReportFactsProvider(db, nayaxFees));
+        var getDailyReport = new GetDailyReport(new EfDailyReportFactsProvider(db, nayaxFees, TestFinancialUseCases.TrivialCalendar));
         var getReconciliationReport = new GetReconciliationReport(new EfReconciliationReportFactsProvider(db));
         var getMachineProfitabilityReport = new GetMachineProfitabilityReport(new EfMachineProfitabilityReportFactsProvider(db, nayaxFees, siteCommissions));
         var getProductProfitabilityReport = new GetProductProfitabilityReport(
@@ -282,7 +282,7 @@ public class NayaxHistoricalCostTests
         var getReportExportRows = new GetReportExportRows(getBookkeepingReport, getDailyReport, getReconciliationReport,
             getMachineProfitabilityReport, getProductProfitabilityReport, getGstAccountingAid, getDashboardReport,
             getTransactionSalesReport);
-        var csv = Encoding.UTF8.GetString(ReportExportFileWriter.WriteCsv(await getReportExportRows.Handle(
+        var csv = Encoding.UTF8.GetString(new ReportExportFileWriter().WriteCsv(await getReportExportRows.Handle(
             "transactions",
             new TransactionSalesFilterDto(
                 From: new DateTime(2026, 9, 2), To: new DateTime(2026, 9, 2)),
@@ -404,7 +404,7 @@ public class NayaxHistoricalCostTests
             ProductName = productName,
             SettlementValue = 3m,
             PaymentMethod = "Card",
-            MachineAuthorizationTime = new DateTime(2026, 10, 3, 19, 30, 0, DateTimeKind.Utc)
+            AuthorizationDateTimeGmt = new DateTime(2026, 10, 3, 19, 30, 0, DateTimeKind.Utc)
         };
 
     private static InventoryCostTransitionBaseline Baseline(

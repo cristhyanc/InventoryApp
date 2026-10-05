@@ -1,13 +1,18 @@
 using Azure.Identity;
 using Azure.Storage.Blobs;
+using Inventory.Application.CatalogReconciliation;
 using Inventory.Application.Documents;
 using Inventory.Application.Imports;
 using Inventory.Application.Nayax;
+using Inventory.Application.Reporting.Export;
+using Inventory.Application.Sites;
 using Inventory.Application.Time;
 using Inventory.Infrastructure.Clock;
 using Inventory.Infrastructure.Documents;
 using Inventory.Infrastructure.Imports;
 using Inventory.Infrastructure.Nayax;
+using Inventory.Infrastructure.Reporting;
+using Inventory.Infrastructure.Sites;
 using Inventory.Infrastructure.Time;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -25,6 +30,27 @@ public static class InfrastructureServiceCollectionExtensions
         // it is registered here rather than through its own extension, and is a singleton because
         // it holds no state between reads.
         services.AddSingleton<INayaxSalesWorkbookReader, ClosedXmlNayaxSalesWorkbookReader>();
+
+        // The non-EF adapters that issue #306 moved out of InventoryApi. All three need no
+        // AppDbContext, no host path and no configuration, so they belong here rather than in the
+        // API composition root or behind their own extension method.
+
+        // Report CSV/XLSX byte encoding (issue #306). Singleton for the same reason as the workbook
+        // reader: the caller hands it a finished ReportExportTable and it keeps nothing.
+        services.AddSingleton<IReportExportFileWriter, ReportExportFileWriter>();
+
+        // The site display name derived from a site's Nayax machine names (issue #306). Scoped, as
+        // the SiteNameResolverAdapter registration in Program.cs that it replaces was: the type is
+        // stateless, so the lifetime is not observable, and keeping it means this relocation
+        // changes no registration a consumer could notice.
+        services.AddScoped<ISiteNameResolver, SiteNameResolver>();
+
+        // The remote half of the Nayax catalog reconciliation (issues #55/#306). Scoped, as the
+        // Program.cs registration it replaces was. It is the one adapter registered here whose own
+        // dependency, INayaxLynxClient, comes from AddNayaxLynxClient below rather than from this
+        // method, because that registration needs the validated options only the composition root
+        // can read; a host that calls this method must call that one too.
+        services.AddScoped<INayaxCatalogSnapshotProvider, NayaxCatalogSnapshotProvider>();
 
         return services;
     }

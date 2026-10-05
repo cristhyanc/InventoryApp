@@ -14,11 +14,15 @@ public sealed class FakeStockAdjustmentStore : IStockAdjustmentStore
 
     public bool ProductExists { get; set; } = true;
     public IReadOnlyList<StockAdjustmentRecord> History { get; set; } = Array.Empty<StockAdjustmentRecord>();
+    public StockHistoryResult QueryResult { get; set; } = new(Array.Empty<StockHistoryEntry>(), 0);
     public RestockCostFacts? RestockCostFacts { get; set; }
     public Exception? ThrowOnApply { get; set; }
     public bool ListHistoryCalled { get; private set; }
     public bool ApplyCalled { get; private set; }
     public ManualStockAdjustmentInput? LastAppliedInput { get; private set; }
+
+    /// <summary>The resolved filter the global stock-history query was last asked for (issue #384).</summary>
+    public StockHistoryFilter? LastQueryFilter { get; private set; }
 
     public Task<bool> ProductExistsAsync(long productId, CancellationToken cancellationToken) => Task.FromResult(ProductExists);
 
@@ -26,6 +30,12 @@ public sealed class FakeStockAdjustmentStore : IStockAdjustmentStore
     {
         ListHistoryCalled = true;
         return Task.FromResult(History);
+    }
+
+    public Task<StockHistoryResult> QueryHistoryAsync(StockHistoryFilter filter, CancellationToken cancellationToken)
+    {
+        LastQueryFilter = filter;
+        return Task.FromResult(QueryResult);
     }
 
     public Task<RestockCostFacts?> GetRestockCostFactsAsync(long productId, CancellationToken cancellationToken) =>

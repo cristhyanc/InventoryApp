@@ -7,6 +7,22 @@ namespace InventoryApi.Tests.Infrastructure.Time;
 public class SydneyBusinessCalendarTests
 {
     [Fact]
+    public void Australia_Sydney_has_a_Windows_time_zone_mapping_for_cross_platform_fallback()
+    {
+        Assert.True(TimeZoneInfo.TryConvertIanaIdToWindowsId("Australia/Sydney", out var windowsId));
+        Assert.False(string.IsNullOrWhiteSpace(windowsId));
+    }
+
+    [Fact]
+    public void Calendar_constructs_with_the_platform_Sydney_time_zone()
+    {
+        var exception = Record.Exception(() =>
+            new SydneyBusinessCalendar(new FakeClock(DateTime.UtcNow)));
+
+        Assert.Null(exception);
+    }
+
+    [Fact]
     public void ToBusinessDate_rolls_over_at_Sydney_midnight_during_standard_time()
     {
         var calendar = new SydneyBusinessCalendar(new FakeClock(DateTime.UtcNow));

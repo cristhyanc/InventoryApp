@@ -26,6 +26,12 @@ public sealed record NayaxSalesImportResult(int Imported, int Updated, int Skipp
 /// <list type="bullet">
 ///   <item>A row without a positive transaction identifier, a positive machine identifier and an
 ///   authorization time is skipped, never guessed at and never imported with a defaulted identity.</item>
+///   <item>The sale instant follows the precedence <see cref="ResolveInstant"/> documents
+///   (issue #380): a usable <c>AuthorizationDateTimeGMT</c> value is authoritative and may correct a
+///   stored instant; without one, a stored sale keeps the instant it already has, and only a new
+///   sale falls back to the export's own <c>MachineAuthorizationTime</c> column, whose timezone is
+///   unverified because Nayax publishes no contract for the export. A GMT value the export carries
+///   but that cannot be read never triggers that fallback.</item>
 ///   <item>A transaction this business already holds is updated in place rather than double
 ///   counted; a transaction another business holds is a new sale of this one, because a remote
 ///   <c>TransactionID</c> is unique only within the operator account that issued it.</item>
@@ -110,7 +116,16 @@ public sealed class ImportNayaxSales
 
         foreach (var row in rows)
         {
-            if (row.TransactionId <= 0 || row.MachineId <= 0 || row.MachineAuthorizationTime is null)
+            if (row.TransactionId <= 0 || row.MachineId <= 0 ||
+                (row.MachineAuthorizationTime is null && row.AuthorizationDateTimeGmtInput != NayaxSalesGmtInput.Valid))
+            {
+                skipped++;
+                continue;
+            }
+
+            var stored = await _store.FindByTransactionIdAsync(row.TransactionId, cancellationToken);
+            var instant = ResolveInstant(row, stored);
+            if (instant is null)
             {
                 skipped++;
                 continue;
@@ -119,7 +134,7 @@ public sealed class ImportNayaxSales
             var facts = new ImportedNayaxSale(
                 row.TransactionId,
                 row.MachineId,
-                row.MachineAuthorizationTime.Value,
+                instant.Value,
                 row.TransactionStatusId,
                 row.NayaxProductId,
                 row.MachineName,
@@ -128,7 +143,6 @@ public sealed class ImportNayaxSales
                 row.ProductName,
                 row.NayaxProductCostPrice);
 
-            var stored = await _store.FindByTransactionIdAsync(row.TransactionId, cancellationToken);
             CostableSale sale;
             if (stored is null)
             {
@@ -166,6 +180,37 @@ public sealed class ImportNayaxSales
         }
 
         return new NayaxSalesImportResult(imported, updated, skipped);
+    }
+
+    /// <summary>
+    /// The instant a row is imported at (issue #380), or <c>null</c> when it has no trustworthy one
+    /// and must be skipped:
+    /// <list type="number">
+    ///   <item>A usable <c>AuthorizationDateTimeGMT</c> value is the authoritative instant, for a new
+    ///   sale and for a stored one alike, so it may correct an older stored instant through the
+    ///   ordinary update and cost-rebuild path.</item>
+    ///   <item>Otherwise a stored sale keeps the instant it already holds. A later export without a
+    ///   usable GMT value must not move a sale the latest-sales synchronization stored at its
+    ///   authoritative instant, and that synchronization never rewrites a stored instant, so nothing
+    ///   would ever move it back. The row's other facts still update the sale.</item>
+    ///   <item>A new sale whose GMT value is present but unreadable is skipped: the export claimed an
+    ///   authoritative instant and it could not be read.</item>
+    ///   <item>A new sale from an export without the GMT column, or with a blank GMT cell, is imported
+    ///   at the export's own <c>MachineAuthorizationTime</c> column, read exactly as earlier imports
+    ///   read it. Nayax publishes no timezone contract for that column, so the value is not converted
+    ///   with an invented timezone and is not claimed to be a verified UTC instant; whether such rows
+    ///   should be refused instead is an open owner decision recorded in docs/architecture.md.</item>
+    /// </list>
+    /// </summary>
+    private static DateTime? ResolveInstant(NayaxSalesImportRow row, CostableSale? stored)
+    {
+        if (row.AuthorizationDateTimeGmtInput == NayaxSalesGmtInput.Valid && row.AuthorizationDateTimeGmt is { } gmt)
+            return gmt;
+        if (stored is not null)
+            return stored.AuthorizationTime;
+        if (row.AuthorizationDateTimeGmtInput == NayaxSalesGmtInput.Malformed)
+            return null;
+        return row.MachineAuthorizationTime;
     }
 
     /// <summary>

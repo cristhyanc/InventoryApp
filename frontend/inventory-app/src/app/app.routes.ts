@@ -16,9 +16,18 @@ export const routes: Routes = [
     loadComponent: () => import('./components/products/product-form.component').then((m) => m.ProductFormComponent)
   },
   {
+    path: 'stock-history',
+    canActivate: [MsalGuard],
+    loadComponent: () => import('./components/stock/stock-history-page.component').then((m) => m.StockHistoryPageComponent)
+  },
+  {
+    // The product entry point every existing "Stock" link uses (issue #384). It opens the global
+    // Stock History page with that product preselected - the same experience as
+    // /stock-history?productId=123 - so the links, bookmarks and deep links that already exist keep
+    // working instead of being redirected to a page that has lost the product.
     path: 'products/:id/stock',
     canActivate: [MsalGuard],
-    loadComponent: () => import('./components/stock/stock-history.component').then((m) => m.StockHistoryComponent)
+    loadComponent: () => import('./components/stock/stock-history-page.component').then((m) => m.StockHistoryPageComponent)
   },
   {
     path: 'products',
@@ -35,8 +44,12 @@ export const routes: Routes = [
         loadComponent: () => import('./components/products/product-needs-ordering.component').then((m) => m.ProductNeedsOrderingComponent)
       },
       {
+        // The dedicated Supplier Orders page (/purchases/orders, issue #387) replaced this
+        // Products-area listing; this redirect preserves the old bookmark/link instead of
+        // keeping a second, diverging supplier-order listing implementation here.
         path: 'on-order',
-        loadComponent: () => import('./components/products/product-on-order.component').then((m) => m.ProductOnOrderComponent)
+        pathMatch: 'full',
+        redirectTo: '/purchases/orders'
       }
     ]
   },
@@ -51,9 +64,19 @@ export const routes: Routes = [
     loadComponent: () => import('./components/suppliers/supplier-list.component').then((m) => m.SupplierListComponent)
   },
   {
+    path: 'machines',
+    canActivate: [MsalGuard],
+    loadComponent: () => import('./components/machines/machine-list.component').then((m) => m.MachineListComponent)
+  },
+  {
     path: 'machines/:id',
     canActivate: [MsalGuard],
     loadComponent: () => import('./components/machines/machine-detail.component').then((m) => m.MachineDetailComponent)
+  },
+  {
+    path: 'sites',
+    canActivate: [MsalGuard],
+    loadComponent: () => import('./components/sites/site-list.component').then((m) => m.SiteListComponent)
   },
   {
     path: 'sites/:id/products',
@@ -69,6 +92,11 @@ export const routes: Routes = [
     path: 'purchases/new',
     canActivate: [MsalGuard],
     loadComponent: () => import('./components/purchases/purchase-upload.component').then((m) => m.PurchaseUploadComponent)
+  },
+  {
+    path: 'purchases/orders',
+    canActivate: [MsalGuard],
+    loadComponent: () => import('./components/purchases/supplier-orders.component').then((m) => m.SupplierOrdersComponent)
   },
   {
     path: 'reports',
@@ -132,6 +160,45 @@ export const routes: Routes = [
     path: 'admin',
     canActivate: [MsalGuard],
     loadComponent: () => import('./components/admin/admin.component').then((m) => m.AdminComponent)
+  },
+  {
+    path: 'admin/imports',
+    canActivate: [MsalGuard],
+    loadComponent: () => import('./components/admin/imports/admin-imports.component').then((m) => m.AdminImportsComponent)
+  },
+  {
+    path: 'admin/historical-cost-recovery',
+    canActivate: [MsalGuard],
+    loadComponent: () =>
+      import('./components/admin/historical-cost-recovery/historical-cost-recovery.component').then(
+        (m) => m.HistoricalCostRecoveryComponent
+      )
+  },
+  {
+    path: 'admin/avco-transition',
+    canActivate: [MsalGuard],
+    loadComponent: () =>
+      import('./components/admin/avco-transition/avco-transition.component').then((m) => m.AvcoTransitionComponent)
+  },
+  {
+    path: 'admin/costing-repair',
+    canActivate: [MsalGuard],
+    loadComponent: () =>
+      import('./components/admin/costing-repair/costing-repair-page.component').then((m) => m.CostingRepairPageComponent)
+  },
+  {
+    path: 'admin/nayax-settings',
+    canActivate: [MsalGuard],
+    loadComponent: () =>
+      import('./components/admin/nayax-settings/nayax-settings.component').then((m) => m.NayaxSettingsComponent)
+  },
+  {
+    path: 'admin/site-commission-agreements',
+    canActivate: [MsalGuard],
+    loadComponent: () =>
+      import('./components/admin/site-commission-agreements/site-commission-agreements.component').then(
+        (m) => m.SiteCommissionAgreementsComponent
+      )
   },
   {
     path: 'expenses',

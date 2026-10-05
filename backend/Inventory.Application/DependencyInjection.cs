@@ -113,6 +113,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<ImportNayaxSales>();
         services.AddScoped<ImportPendingReimbursementXmlFiles>();
         services.AddScoped<GetStockHistory>();
+        services.AddScoped<ListStockHistory>();
         services.AddScoped<GetRestockCostSuggestion>();
         services.AddScoped<IGetRestockCostSuggestion>(sp => sp.GetRequiredService<GetRestockCostSuggestion>());
         services.AddScoped<AdjustStock>();
