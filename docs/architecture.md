@@ -1554,19 +1554,31 @@ maintenance workflows now have their own authenticated routes, which completes t
 
 | Route | Page component | Authoritative boundary it calls |
 | --- | --- | --- |
-| `/admin/historical-cost-recovery` | `HistoricalCostRecoveryComponent` | `ReportingService.backfillNayaxSaleCosts(dryRun)` (`POST api/sale-costing/nayax-cost-backfill/dry-run`/`apply`) |
-| `/admin/avco-transition` | `AvcoTransitionComponent` | `InventoryCostTransitionService` `preview`/`apply`/`preview-all`/`apply-all` (the one-time opening-baseline cutover described in [Historical inventory cost](#historical-inventory-cost)) |
+| `/admin/historical-cost-recovery` | `HistoricalCostRecoveryComponent`, composing `HistoricalCostRecoveryWorkflowComponent` | `ReportingService.backfillNayaxSaleCosts(dryRun)` (`POST api/sale-costing/nayax-cost-backfill/dry-run`/`apply`) |
+| `/admin/avco-transition` | `AvcoTransitionComponent`, composing `AvcoTransitionWorkflowComponent` through `[products]`/`(baselinesSaved)` | `InventoryCostTransitionService` `preview`/`apply`/`preview-all`/`apply-all` (the one-time opening-baseline cutover described in [Historical inventory cost](#historical-inventory-cost)) |
 | `/admin/costing-repair` | `CostingRepairPageComponent`, composing the existing `CostingRepairComponent` through `[products]` | `InventoryCostRepairService` preview/apply/history (see [Costing repairs (issue #359)](#costing-repairs-issue-359)) |
 
-Each page owns only its own form, preview, apply, confirmation and error state and calls the same
-service methods with the same request shapes, confirmation prompts, result counts and messages the
-Admin page used, so no eligibility rule, cost-source precedence, AVCO policy, costing formula,
-idempotency guard or persistence step is reimplemented or reinterpreted in a page component: the
-entry points moved, the contracts and the mutating-action safeguards did not. Apply still
-resubmits exactly the previewed object rather than the form's current values, on both the AVCO
-transition and the costing repair. `AvcoTransitionComponent` and `CostingRepairPageComponent` load
-the product list through `ProductService.getAll()` for their own product selector, as
-`AdminComponent` did for both workflows.
+All three routed components are composition boundaries, not workflow owners, per [Page
+composition boundary (issue #191)](#page-composition-boundary-issue-191): each page renders its
+heading and the warning about the mutating action, loads the product list its selector needs where
+there is one, and composes a dedicated feature component that owns that workflow's form, preview,
+apply, confirmation, notifications and loading/error state. The workflow components are
+`HistoricalCostRecoveryWorkflowComponent`, `AvcoTransitionWorkflowComponent` and the pre-existing
+`CostingRepairComponent` of issue #361. The parent/child contract is `@Input`/`@Output` only:
+`AvcoTransitionComponent` and `CostingRepairPageComponent` pass `[products]`, and
+`AvcoTransitionWorkflowComponent` raises `(baselinesSaved)` after a saved baseline so the page
+reloads the products whose `averageUnitCost` may have changed, rather than reaching back into the
+page's state or `ProductService` itself.
+
+The workflows call the same service methods with the same request shapes, confirmation prompts,
+result counts and messages the Admin page used, so no eligibility rule, cost-source precedence,
+AVCO policy, costing formula, idempotency guard or persistence step is reimplemented or
+reinterpreted in a page or workflow component: the entry points moved, the contracts and the
+mutating-action safeguards did not. Apply still resubmits exactly the previewed object rather than
+the form's current values, on both the AVCO transition and the costing repair.
+`AvcoTransitionComponent` and `CostingRepairPageComponent` load the product list through
+`ProductService.getAll()` for their workflow's product selector, as `AdminComponent` did for both
+workflows.
 
 With this split `AdminComponent` is a link hub only: it holds no workflow state, no service
 dependency and no second copy of any Admin tool, so it no longer owns duplicate costing, import or
@@ -2047,7 +2059,7 @@ date, a payout date modelled as a date, or a supplier price-history purchase dat
 component that could be shifted and is rendered with the ordinary `date` pipe (e.g. `'dd/MM/yyyy'`/
 `'mediumDate'`) exactly as before; `BusinessDateTimePipe` is never applied to these. Transaction Sales
 (`TransactionSalesReportComponent`), the Admin inventory-cost transition preview/batch-preview cutoff
-timestamps (`AvcoTransitionComponent`, `AdminComponent` before issue #390), the costing-repair preview/history effective and recorded timestamps
+timestamps (`AvcoTransitionWorkflowComponent`, `AdminComponent` before issue #390), the costing-repair preview/history effective and recorded timestamps
 (`CostingRepairComponent`, issue #361), and the Pick List snapshot (`PickListComponent`) use
 `BusinessDateTimePipe` for this reason; `MachineRestockSyncComponent`'s reconciliation table (issue
 #231) and the Stock History movement timestamp (issue #230) already did - the latter now on
