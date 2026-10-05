@@ -42,7 +42,7 @@ export class AppComponent implements OnInit, OnDestroy {
 
   readonly sidebarId = 'primary-navigation';
 
-  @ViewChild('sidebarToggle') private sidebarToggle?: ElementRef<HTMLButtonElement>;
+  @ViewChild('sidebarToggle') private readonly sidebarToggle?: ElementRef<HTMLButtonElement>;
 
   private wideLayout?: MediaQueryList;
   private readonly onWideLayoutChange = (event: MediaQueryListEvent): void => this.applyLayoutWidth(event.matches);

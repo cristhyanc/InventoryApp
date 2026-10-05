@@ -80,7 +80,7 @@ export class UserMenuComponent {
 
   isOpen = false;
 
-  @ViewChild('trigger') private trigger?: ElementRef<HTMLButtonElement>;
+  @ViewChild('trigger') private readonly trigger?: ElementRef<HTMLButtonElement>;
 
   constructor(private readonly elementRef: ElementRef<HTMLElement>) {}
 
