@@ -582,16 +582,13 @@ video {
   flex-direction: column;
   gap: 1.5rem;
   padding: 1rem;
+  --md-muted-text: #525252;
 }
 
 @media (min-width: 640px) {
   .page {
     padding: 1.5rem;
   }
-}
-
-.page {
-  --md-muted-text: #525252;
 }
 
 .page-header {

@@ -25,9 +25,15 @@
    * reads this variable; surface classes set it.
    */
   .page {
-    @apply flex flex-col gap-6 p-4 sm:p-6;
+    @apply flex flex-col gap-6 p-4;
 
     --md-muted-text: theme('colors.md-gray.600');
+  }
+
+  @screen sm {
+    .page {
+      @apply p-6;
+    }
   }
 
   .page-header {
