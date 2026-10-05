@@ -4,7 +4,7 @@ using Inventory.Application.NayaxProcessingFees;
 using Inventory.Application.Time;
 using Inventory.Infrastructure.Sites;
 using InventoryApi.Adapters.Persistence;
-using InventoryApi.Data;
+using Inventory.Infrastructure.Data;
 using InventoryApi.Tests.Application.Time;
 
 namespace InventoryApi.Tests;

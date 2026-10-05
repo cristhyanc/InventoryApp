@@ -1,4 +1,4 @@
-using InventoryApi.Models;
+using Inventory.Infrastructure.Models;
 using Microsoft.AspNetCore.Mvc;
 
 namespace InventoryApi.DTOs;
@@ -39,7 +39,7 @@ public sealed record StockHistoryRequest(
 ///   endpoints keep publishing it, unchanged.</item>
 /// </list>
 ///
-/// <see cref="Reason"/>/<see cref="Source"/> are the <c>InventoryApi.Models</c> enums, like the
+/// <see cref="Reason"/>/<see cref="Source"/> are the <c>Inventory.Infrastructure.Models</c> enums, like the
 /// other stock contracts: the published document already reaches those CLR enums from the pinned
 /// legacy components, and a second enum of the same simple name makes Swashbuckle fail document
 /// generation with a duplicate schema id. See <c>InventoryApi.DTOs.ProductStockAdjustmentResponse</c>

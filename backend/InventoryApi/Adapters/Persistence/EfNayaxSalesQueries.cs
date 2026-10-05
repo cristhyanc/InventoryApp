@@ -1,6 +1,6 @@
 using System.Linq.Expressions;
 using Inventory.Domain.FinancialConfiguration;
-using InventoryApi.Models;
+using Inventory.Infrastructure.Models;
 
 namespace InventoryApi.Adapters.Persistence;
 

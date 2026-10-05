@@ -1,4 +1,4 @@
-using InventoryApi.Data;
+using Inventory.Infrastructure.Data;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 
 namespace InventoryApi.Http.HealthChecks;

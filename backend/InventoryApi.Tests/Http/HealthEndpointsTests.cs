@@ -1,5 +1,5 @@
 using System.Net;
-using InventoryApi.Data;
+using Inventory.Infrastructure.Data;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Data.Sqlite;

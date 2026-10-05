@@ -2,7 +2,7 @@ namespace Inventory.Domain.Products;
 
 /// <summary>
 /// The deterministic reorder-alert rules for one product, moved out of the computed properties on
-/// the <c>InventoryApi.Models.Product</c> persistence entity (issue #240). The formulas are
+/// the <c>Inventory.Infrastructure.Models.Product</c> persistence entity (issue #240). The formulas are
 /// unchanged; this is now the one authoritative implementation, called both by
 /// <c>Inventory.Application.Products.ListLowStockProducts</c> (to decide which products alert and in
 /// what order) and by the entity's own computed properties (which the API still serialises), so the

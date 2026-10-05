@@ -2,6 +2,11 @@ using System.Globalization;
 using InventoryApi.DTOs;
 using Microsoft.OpenApi.Models;
 using Swashbuckle.AspNetCore.SwaggerGen;
+// The EF entities whose schemas this file pins moved to Inventory.Infrastructure (issue #307). They
+// are aliased rather than imported because Microsoft.OpenApi.Models is also in scope here, and the
+// alias keeps it obvious at each use site which "model" is meant: the persistence entity, not an
+// OpenAPI document object.
+using PersistenceModels = Inventory.Infrastructure.Models;
 
 namespace InventoryApi.Swagger;
 
@@ -37,7 +42,7 @@ namespace InventoryApi.Swagger;
 /// silently renaming one of them, and
 /// <c>InventoryApi.Tests.Swagger.PublishedResponseSchemaContractTests</c> is where that surfaces.
 ///
-/// This is where the API project names <c>InventoryApi.Models</c> for presentation purposes
+/// This is where the API project names <c>Inventory.Infrastructure.Models</c> for presentation purposes
 /// deliberately: the controllers and the use cases stay free of it, and the entity types are reached
 /// here solely to regenerate the legacy component shapes the published document references. The one
 /// other presentation use left is the stock-adjustment reason/source vocabulary that this boundary
@@ -75,8 +80,8 @@ internal static class PublishedResponseSchemaContract
     /// </summary>
     private static readonly Dictionary<string, Type> LegacyNestedSchemaTypes = new(StringComparer.Ordinal)
     {
-        ["ProductResponse"] = typeof(Models.Product),
-        ["SupplierResponse"] = typeof(Models.Supplier),
+        ["ProductResponse"] = typeof(PersistenceModels.Product),
+        ["SupplierResponse"] = typeof(PersistenceModels.Supplier),
     };
 
     /// <summary>
@@ -98,7 +103,7 @@ internal static class PublishedResponseSchemaContract
     /// </summary>
     private static readonly Dictionary<Type, Type> SubstitutedResponseTypes = new()
     {
-        [typeof(ProductStockAdjustmentResponse)] = typeof(Models.StockAdjustment),
+        [typeof(ProductStockAdjustmentResponse)] = typeof(PersistenceModels.StockAdjustment),
     };
 
     /// <summary>

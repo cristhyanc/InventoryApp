@@ -6,7 +6,7 @@ namespace InventoryApi.Adapters.Mapping;
 /// <summary>
 /// Projects the Application layer's <see cref="PurchaseRecord"/> onto the API-owned
 /// <see cref="PurchaseResponse"/> the purchase endpoints serialize (issue #304). It replaces the
-/// step that used to rebuild the EF <c>InventoryApi.Models.Purchase</c> entity for those endpoints,
+/// step that used to rebuild the EF <c>Inventory.Infrastructure.Models.Purchase</c> entity for those endpoints,
 /// so nothing here references the persistence model any more.
 ///
 /// It copies only facts: every key and nesting level a client already receives is reproduced,

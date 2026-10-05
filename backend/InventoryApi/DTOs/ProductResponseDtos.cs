@@ -1,7 +1,7 @@
 using System.Text.Json.Serialization;
 
 using Inventory.Domain.Products;
-using InventoryApi.Models;
+using Inventory.Infrastructure.Models;
 
 namespace InventoryApi.DTOs;
 
@@ -32,7 +32,7 @@ public sealed record MachineSlotOverlay(
 /// <summary>
 /// The wire shape of a product on the "/api/products" endpoints (issue #303) and, since issue #302,
 /// on "/api/machines/{id}/products", replacing the EF
-/// <c>InventoryApi.Models.Product</c> entity the controllers used to serialize directly. Key names, order,
+/// <c>Inventory.Infrastructure.Models.Product</c> entity the controllers used to serialize directly. Key names, order,
 /// nesting and values match that entity's serializable surface exactly - including the fields the
 /// catalogue endpoints have always emitted at their defaults - so this is not a contract change;
 /// <c>InventoryApi.Tests.DTOs.ProductJsonContractTests</c> and
@@ -123,7 +123,7 @@ public sealed record ProductResponse
 /// One stock movement in a product's history, as the product endpoints serialize it and, since
 /// issue #305, as the "/api/products/{productId}/stock" history and adjust endpoints serialize it
 /// too - one wire shape for a stock movement, not two. Matches the
-/// serializable surface of the <c>InventoryApi.Models.StockAdjustment</c> entity it replaced: the owning
+/// serializable surface of the <c>Inventory.Infrastructure.Models.StockAdjustment</c> entity it replaced: the owning
 /// business, the product back-reference and the receipt-item navigation stay off the wire, and
 /// <see cref="Reason"/>/<see cref="Source"/> keep the persisted numeric values.
 ///

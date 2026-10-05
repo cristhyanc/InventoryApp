@@ -2,9 +2,9 @@ using Inventory.Application.SupplierOrders;
 using Inventory.Domain.Exceptions;
 using InventoryApi.Adapters.Mapping;
 using InventoryApi.Adapters.Persistence;
-using InventoryApi.Data;
+using Inventory.Infrastructure.Data;
 using InventoryApi.DTOs;
-using InventoryApi.Models;
+using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
 

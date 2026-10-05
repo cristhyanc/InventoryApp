@@ -2,7 +2,7 @@ namespace InventoryApi.DTOs;
 
 /// <summary>
 /// The expense category the operating-expense endpoints bind and serialise (issue #305), replacing
-/// the <c>InventoryApi.Models.OperatingExpenseCategory</c> persistence enum these DTOs used to
+/// the <c>Inventory.Infrastructure.Models.OperatingExpenseCategory</c> persistence enum these DTOs used to
 /// carry, so the HTTP boundary no longer names the persistence model at all.
 ///
 /// It mirrors that enum - and <see cref="Inventory.Domain.Expenses.ExpenseCategory"/>, which

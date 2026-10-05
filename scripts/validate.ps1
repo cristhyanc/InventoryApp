@@ -33,7 +33,7 @@ $RepositoryRoot = Split-Path -Parent $ScriptDirectory
 $BackendSolution = Join-Path $RepositoryRoot 'backend/InventoryApi/InventoryApi.slnx'
 # `dotnet format --exclude` matches paths relative to the working directory, not absolute ones,
 # so the formatting step runs from the repository root with this relative path.
-$MigrationsRelativePath = 'backend/InventoryApi/Migrations'
+$MigrationsRelativePath = 'backend/Inventory.Infrastructure/Migrations'
 $FrontendDirectory = Join-Path $RepositoryRoot 'frontend/inventory-app'
 $FrontendLockFile = Join-Path $FrontendDirectory 'package-lock.json'
 

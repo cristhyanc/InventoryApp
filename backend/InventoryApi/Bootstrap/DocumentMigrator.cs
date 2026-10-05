@@ -2,7 +2,7 @@ using Inventory.Application.Documents;
 using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Documents;
 using Inventory.Infrastructure.Documents.Migration;
-using InventoryApi.Data;
+using Inventory.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
 namespace InventoryApi.Bootstrap;

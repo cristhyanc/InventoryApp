@@ -1,7 +1,7 @@
 using Inventory.Domain.Costing;
 using Inventory.Domain.Exceptions;
 using Xunit;
-using PersistedBaselineSource = InventoryApi.Models.InventoryCostBaselineSource;
+using PersistedBaselineSource = Inventory.Infrastructure.Models.InventoryCostBaselineSource;
 
 namespace InventoryApi.Tests.Domain.Costing;
 

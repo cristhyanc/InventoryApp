@@ -224,16 +224,18 @@ public class CleanArchitectureDependencyTests
     /// The types below predate that rule and are pinned here as a deliberate, reviewed exception
     /// rather than removed by this change, exactly like
     /// <see cref="ProjectDependencyDirectionTests.Only_the_documented_legacy_services_remain_in_InventoryApi_Services"/>
-    /// freezes the legacy services folder: <see cref="InventoryApi.Bootstrap.PendingMigrationsException"/>,
-    /// <see cref="InventoryApi.Bootstrap.DatabaseMigrationFailedException"/> (added by issue #201,
-    /// alongside the pending-migrations one, for the same reason) and
-    /// <see cref="InventoryApi.Data.CrossBusinessAccessException"/> are startup/persistence
-    /// guards intimately coupled to <c>AppDbContext</c>, which itself still lives in InventoryApi
-    /// (see docs/architecture.md's temporary API-owned exception); moving them means moving
-    /// AppDbContext first, which is out of this issue's scope. The former fourth entry,
-    /// <c>InventoryCostDataQualityException</c>, moved to
+    /// freezes the legacy services folder: <see cref="InventoryApi.Bootstrap.PendingMigrationsException"/>
+    /// and <see cref="InventoryApi.Bootstrap.DatabaseMigrationFailedException"/> (added by issue
+    /// #201, alongside the pending-migrations one, for the same reason) are startup guards that
+    /// <c>DatabaseSchemaStartup</c> throws from the composition root, which is where the schema
+    /// decision is made (see docs/architecture.md § SQLite operating assumptions).
+    ///
+    /// Two former entries are gone. <c>InventoryCostDataQualityException</c> moved to
     /// <c>Inventory.Application.Costing</c> with the product cost rebuild use case that throws it
-    /// (issue #296) and is no longer allowed here.
+    /// (issue #296). <c>CrossBusinessAccessException</c> left with <c>AppDbContext</c> and the
+    /// <c>BusinessOwnershipEnforcer</c> that raises it when issue #307 moved persistence into
+    /// <c>Inventory.Infrastructure</c>; it is now <c>Inventory.Infrastructure.Data.CrossBusinessAccessException</c>,
+    /// owned by the layer whose boundary it guards, so it must not reappear in this list.
     ///
     /// What this test enforces is that the set does not grow silently: a new exception type landing
     /// in InventoryApi fails here and must be moved to the layer that owns it, or added to the
@@ -246,7 +248,6 @@ public class CleanArchitectureDependencyTests
         [
             "InventoryApi.Bootstrap.PendingMigrationsException",
             "InventoryApi.Bootstrap.DatabaseMigrationFailedException",
-            "InventoryApi.Data.CrossBusinessAccessException",
         ];
 
         var offenders = ApiAssembly

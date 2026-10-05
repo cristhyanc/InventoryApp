@@ -1,9 +1,9 @@
 using Inventory.Application.SalesSync;
 using Inventory.Domain.Exceptions;
 using InventoryApi.Adapters.Persistence;
-using InventoryApi.Data;
+using Inventory.Infrastructure.Data;
 using Inventory.Application.Nayax;
-using InventoryApi.Models;
+using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
 using Moq;
 using Xunit;

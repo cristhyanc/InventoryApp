@@ -1,7 +1,7 @@
-using InventoryApi.Data;
+using Inventory.Infrastructure.Data;
 using Inventory.Application.Commissions;
 using Inventory.Domain.FinancialConfiguration;
-using InventoryApi.Models;
+using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
 
 namespace InventoryApi.Adapters.Persistence;
@@ -13,9 +13,9 @@ namespace InventoryApi.Adapters.Persistence;
 /// <see cref="EfReconciliationReportFactsProvider"/>, <see cref="EfMachineProfitabilityReportFactsProvider"/>,
 /// <see cref="EfProductProfitabilityReportFactsProvider"/>, <see cref="EfGstReportFactsProvider"/>,
 /// <see cref="EfDashboardReportFactsProvider"/>).
-/// They depend on <see cref="AppDbContext"/> and live in InventoryApi for the same reason those
-/// adapters do; move into Inventory.Infrastructure once AppDbContext and the shared persistence
-/// models relocate there.
+/// They depend on <see cref="AppDbContext"/> and still live in InventoryApi for the same reason
+/// those adapters do: the context and the EF entities moved to Inventory.Infrastructure in issue
+/// #307, and moving this adapter family after them is Persistence 7/8 and 8/8 of #153.
 ///
 /// <see cref="EfTransactionSalesReportFactsProvider"/>, the last migrated adapter, deliberately does
 /// not reuse these helpers: it needs every transaction status (not only completed sales) and its own

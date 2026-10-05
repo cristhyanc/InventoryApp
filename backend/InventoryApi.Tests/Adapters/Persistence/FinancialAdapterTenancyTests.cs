@@ -1,7 +1,7 @@
 using Inventory.Domain.FinancialConfiguration;
 using InventoryApi.Adapters.Persistence;
-using InventoryApi.Data;
-using InventoryApi.Models;
+using Inventory.Infrastructure.Data;
+using Inventory.Infrastructure.Models;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
@@ -39,7 +39,7 @@ public sealed class FinancialAdapterTenancyTests : IDisposable
                 CommissionRate = businessId / 10m,
                 Basis = CommissionBasis.GrossSales
             });
-            seed.CommissionPayments.Add(new InventoryApi.Models.CommissionPayment
+            seed.CommissionPayments.Add(new Inventory.Infrastructure.Models.CommissionPayment
             {
                 BusinessId = businessId,
                 SiteId = SiteId,

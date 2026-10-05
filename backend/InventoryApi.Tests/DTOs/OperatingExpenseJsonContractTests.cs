@@ -12,7 +12,7 @@ namespace InventoryApi.Tests.DTOs;
 ///
 /// Since issue #305 the category these DTOs carry is the API-owned
 /// <see cref="OperatingExpenseCategory"/> rather than the identically named persistence enum, so
-/// the HTTP boundary no longer names <c>InventoryApi.Models</c>. That is a wire contract only while
+/// the HTTP boundary no longer names <c>Inventory.Infrastructure.Models</c>. That is a wire contract only while
 /// the three mirrored enums stay in step, which
 /// <see cref="Category_vocabulary_mirrors_the_persistence_and_domain_enums"/> asserts member by
 /// member.
@@ -93,7 +93,7 @@ public class OperatingExpenseJsonContractTests
 
         var api = Members<OperatingExpenseCategory>();
 
-        Assert.Equal(Members<InventoryApi.Models.OperatingExpenseCategory>(), api);
+        Assert.Equal(Members<Inventory.Infrastructure.Models.OperatingExpenseCategory>(), api);
         Assert.Equal(Members<Inventory.Domain.Expenses.ExpenseCategory>(), api);
 
         // The published values themselves, so a coordinated renumbering of all three still fails.

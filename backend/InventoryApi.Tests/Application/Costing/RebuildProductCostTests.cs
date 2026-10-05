@@ -1,7 +1,7 @@
 using Inventory.Application.Costing;
 using Inventory.Domain.Costing;
-using InventoryApi.Data;
-using InventoryApi.Models;
+using Inventory.Infrastructure.Data;
+using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
 using DomainStock = Inventory.Domain.Stock;
