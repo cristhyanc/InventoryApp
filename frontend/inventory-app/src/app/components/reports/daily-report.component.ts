@@ -6,33 +6,50 @@ import { MachineService } from '../../services/machine.service';
 import { ReportingFilter, ReportingService, DailyReport } from '../../services/reporting.service';
 import { ReportPageBase } from './report-page.base';
 import { ReportFiltersComponent } from './report-filters.component';
+import { IconComponent } from '../shared/icon.component';
 
-@Component({ selector: 'app-daily-report', standalone: true, imports: [CommonModule, ReportFiltersComponent], template: `
-<div class="mb-5 flex items-center justify-between"><h1 class="text-2xl font-semibold text-slate-800">Daily Sales / Reimbursement</h1><div class="flex gap-2"><button class="rounded-md border px-3 py-2 text-sm" (click)="export('csv','daily')">Export CSV</button><button class="rounded-md border px-3 py-2 text-sm" (click)="export('xlsx','daily')">Export XLSX</button></div></div>
-<app-report-filters [from]="from" [to]="to" [machineId]="machineId" [machines]="machines" [period]="period" (fromChange)="from=$event" (toChange)="to=$event" (machineChange)="machineId=$event" (periodChange)="selectPeriod($event)" (apply)="load()" />
-@if (loading) { <div class="rounded-xl bg-white p-8 text-center text-slate-500">Loading report...</div> } @else if (error) { <div class="rounded-xl bg-red-50 p-6 text-red-700">{{ error }}</div> } @else if (report) {
-@if (quality().length) { <div class="mb-4 rounded-lg bg-amber-50 p-3 text-xs text-amber-800">@for (note of quality(); track note) { <div>{{ note }}</div> }</div> }
-<div class="overflow-x-auto rounded-xl bg-white shadow-sm"><table class="min-w-full text-sm">
-<thead><tr class="bg-slate-50 text-left"><th class="px-4 py-3">Date</th><th class="px-4 py-3">Transactions</th><th class="px-4 py-3">Gross sales</th><th class="px-4 py-3">COGS</th><th class="px-4 py-3">Gross margin</th><th class="px-4 py-3">Fees / reimbursement</th><th class="px-4 py-3">Status</th></tr></thead>
-<tbody>
-@for (row of report.rows; track row.date) {
-<tr class="border-t align-top">
-  <td class="px-4 py-3">{{ row.date | date:'dd/MM/yyyy' }}</td>
-  <td class="px-4 py-3">{{ row.transactionCount }}<div class="text-xs text-slate-500">Avg {{ money(row.averageSale) }}</div>@if ((row.pendingTransactionCount ?? 0) > 0) {<div class="text-xs text-amber-700">{{ row.pendingTransactionCount }} pending</div>}</td>
-  <td class="px-4 py-3">{{ money(row.grossSales ?? row.sales) }}<div class="text-xs text-slate-500">Card {{ money(row.cardSales) }} · Cash {{ money(row.cashSales) }}</div></td>
-  <td class="px-4 py-3"><span [class.text-amber-700]="row.isCogsComplete === false">{{ row.isCogsComplete === false ? 'Partial ' + money(row.partialCostOfGoods) : money(row.costOfGoods) }}</span>@if (row.isCogsComplete === false) {<div class="text-xs text-amber-700">Cost data incomplete: {{ row.uncostedTransactionCount }} uncosted ({{ money(row.uncostedSalesAmount) }})</div>}</td>
-  <td class="px-4 py-3"><span [class.text-amber-700]="row.isCogsComplete === false">{{ row.isCogsComplete === false ? 'Profit unavailable' : money(row.grossProfit) }}</span>@if (row.isCogsComplete !== false) {<div class="text-xs text-slate-500">{{ percentOrUnavailable(row.grossMarginPercent, ' margin') }}</div>} @else {<div class="text-xs text-amber-700">COGS incomplete</div>}</td>
-  <td class="px-4 py-3"><div>{{ money(row.nayaxFeesIncludingGst) }} fees</div><div class="text-xs text-slate-500">{{ row.nayaxFeeSource || 'None' }}</div></td>
-  <td class="px-4 py-3"><span [class.text-emerald-700]="row.reconciliationStatus === 'Reconciled'" [class.text-amber-700]="row.reconciliationStatus === 'Warning' || row.reconciliationStatus === 'Pending'" [class.text-red-700]="row.reconciliationStatus === 'Mismatch'">{{ row.reconciliationStatus || 'Pending' }}</span></td>
-</tr>
-}
-@if (report.totals) {
-<tr class="border-t-2 bg-slate-50 font-semibold"><td class="px-4 py-3">Total</td><td class="px-4 py-3">{{ report.totals.transactionCount }}<div class="text-xs font-normal text-slate-500">Avg {{ money(report.totals.averageSale) }}</div></td><td class="px-4 py-3">{{ money(report.totals.grossSales) }}<div class="text-xs font-normal text-slate-500">Card {{ money(report.totals.cardSales) }} · Cash {{ money(report.totals.cashSales) }}</div></td><td class="px-4 py-3">{{ report.totals.isCogsComplete ? money(report.totals.costOfGoods) : 'Partial ' + money(report.totals.partialCostOfGoods) }}@if (!report.totals.isCogsComplete) {<div class="text-xs font-normal text-amber-700">Incomplete</div>}</td><td class="px-4 py-3">{{ report.totals.isCogsComplete ? money(report.totals.grossProfit) : 'Profit unavailable' }}@if (report.totals.isCogsComplete) {<div class="text-xs font-normal text-slate-500">{{ percentOrUnavailable(report.totals.grossMarginPercent) }}</div>} @else {<div class="text-xs font-normal text-amber-700">Incomplete</div>}</td><td class="px-4 py-3">{{ money(report.totals.nayaxFeesIncludingGst) }} fees<div class="text-xs font-normal text-slate-500">{{ money(report.totals.importedReimbursement) }} reimbursement · net {{ money(report.totals.netReimbursement) }}</div></td><td class="px-4 py-3">—</td></tr>
-}
-</tbody></table></div>
-}
+@Component({ selector: 'app-daily-report', standalone: true, imports: [CommonModule, ReportFiltersComponent, IconComponent], template: `
+<div class="page">
+  <header class="page-header">
+    <h1 class="page-title">Daily Sales / Reimbursement</h1>
+    <div class="page-actions">
+      <button type="button" class="btn btn-sm btn-secondary" (click)="export('csv','daily')"><app-icon name="download" [size]="18" />Export CSV</button>
+      <button type="button" class="btn btn-sm btn-secondary" (click)="export('xlsx','daily')"><app-icon name="download" [size]="18" />Export XLSX</button>
+    </div>
+  </header>
+  <app-report-filters [from]="from" [to]="to" [machineId]="machineId" [machines]="machines" [period]="period" (fromChange)="from=$event" (toChange)="to=$event" (machineChange)="machineId=$event" (periodChange)="selectPeriod($event)" (apply)="load()" />
+  @if (loading) { <div class="card"><div class="card-body text-center"><span class="value-muted">Loading report...</span></div></div> }
+  @else if (error) { <div class="alert alert-danger">{{ error }}</div> }
+  @else if (report) {
+    @if (quality().length) { <div class="alert alert-warning">@for (note of quality(); track note) { <p>{{ note }}</p> }</div> }
+    <div class="card overflow-x-auto"><table class="table">
+    <thead class="table-head"><tr><th scope="col" class="table-cell">Date</th><th scope="col" class="table-cell">Transactions</th><th scope="col" class="table-cell">Gross sales</th><th scope="col" class="table-cell">COGS</th><th scope="col" class="table-cell">Gross margin</th><th scope="col" class="table-cell">Fees / reimbursement</th><th scope="col" class="table-cell">Status</th></tr></thead>
+    <tbody>
+    @for (row of report.rows; track row.date) {
+    <tr class="table-row">
+      <td class="table-cell">{{ row.date | date:'dd/MM/yyyy' }}</td>
+      <td class="table-cell">{{ row.transactionCount }}<div class="value-muted">Avg {{ money(row.averageSale) }}</div>@if ((row.pendingTransactionCount ?? 0) > 0) {<div class="text-md-warning-text">{{ row.pendingTransactionCount }} pending</div>}</td>
+      <td class="table-cell">{{ money(row.grossSales ?? row.sales) }}<div class="value-muted">Card {{ money(row.cardSales) }} · Cash {{ money(row.cashSales) }}</div></td>
+      <td class="table-cell"><span [class.text-md-warning-text]="row.isCogsComplete === false">{{ row.isCogsComplete === false ? 'Partial ' + money(row.partialCostOfGoods) : money(row.costOfGoods) }}</span>@if (row.isCogsComplete === false) {<div class="text-md-warning-text">Cost data incomplete: {{ row.uncostedTransactionCount }} uncosted ({{ money(row.uncostedSalesAmount) }})</div>}</td>
+      <td class="table-cell"><span [class.text-md-warning-text]="row.isCogsComplete === false">{{ row.isCogsComplete === false ? 'Profit unavailable' : money(row.grossProfit) }}</span>@if (row.isCogsComplete !== false) {<div class="value-muted">{{ percentOrUnavailable(row.grossMarginPercent, ' margin') }}</div>} @else {<div class="text-md-warning-text">COGS incomplete</div>}</td>
+      <td class="table-cell"><div>{{ money(row.nayaxFeesIncludingGst) }} fees</div><div class="value-muted">{{ row.nayaxFeeSource || 'None' }}</div></td>
+      <td class="table-cell"><span class="badge" [ngClass]="reconciliationStatusClass(row.reconciliationStatus)">{{ row.reconciliationStatus || 'Pending' }}</span></td>
+    </tr>
+    }
+    @if (report.totals) {
+    <tr class="table-row bg-md-gray-100 font-semibold"><td class="table-cell">Total</td><td class="table-cell">{{ report.totals.transactionCount }}<div class="font-normal value-muted">Avg {{ money(report.totals.averageSale) }}</div></td><td class="table-cell">{{ money(report.totals.grossSales) }}<div class="font-normal value-muted">Card {{ money(report.totals.cardSales) }} · Cash {{ money(report.totals.cashSales) }}</div></td><td class="table-cell">{{ report.totals.isCogsComplete ? money(report.totals.costOfGoods) : 'Partial ' + money(report.totals.partialCostOfGoods) }}@if (!report.totals.isCogsComplete) {<div class="font-normal text-md-warning-text">Incomplete</div>}</td><td class="table-cell">{{ report.totals.isCogsComplete ? money(report.totals.grossProfit) : 'Profit unavailable' }}@if (report.totals.isCogsComplete) {<div class="font-normal value-muted">{{ percentOrUnavailable(report.totals.grossMarginPercent) }}</div>} @else {<div class="font-normal text-md-warning-text">Incomplete</div>}</td><td class="table-cell">{{ money(report.totals.nayaxFeesIncludingGst) }} fees<div class="font-normal value-muted">{{ money(report.totals.importedReimbursement) }} reimbursement · net {{ money(report.totals.netReimbursement) }}</div></td><td class="table-cell">—</td></tr>
+    }
+    </tbody></table></div>
+  }
+</div>
 ` })
 export class DailyReportComponent extends ReportPageBase<DailyReport> {
   constructor(route: ActivatedRoute, reports: ReportingService, machines: MachineService) { super(route, reports, machines); }
   request(filter: ReportingFilter): Observable<DailyReport> { return this.reports.daily(filter); }
+  reconciliationStatusClass(status?: string): string {
+    if (status === 'Reconciled') return 'badge-success';
+    if (status === 'Warning' || status === 'Pending') return 'badge-warning';
+    if (status === 'Mismatch') return 'badge-danger';
+    return '';
+  }
 }

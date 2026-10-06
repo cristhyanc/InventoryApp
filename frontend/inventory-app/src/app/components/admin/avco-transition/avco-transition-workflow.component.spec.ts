@@ -168,6 +168,21 @@ describe('AvcoTransitionWorkflowComponent single-product preview (issue #390)', 
     expect(component.transitionSourceLabel(InventoryCostBaselineSource.ManualEstimated)).toBe('Estimated');
   });
 
+  // The data-quality note is rendered whenever a single-product preview is shown, with no condition
+  // of its own, so restyling it cannot start hiding it for an empty note.
+  it('renders the data-quality note element even when the note is empty', async () => {
+    const preview = transitionPreview({ dataQualityNote: '' });
+    const { component, fixture, host } = await render({ preview: jest.fn(() => of(preview)) }, [product(1, 'Coke', 1.25)]);
+    component.transitionProductId = 1;
+
+    component.previewTransition();
+    fixture.detectChanges();
+
+    const note = host.querySelector('.alert-warning');
+    expect(note).not.toBeNull();
+    expect(note?.textContent?.trim()).toBe('');
+  });
+
   it('reports the API message and clears loading when the preview fails', async () => {
     const preview = jest.fn(() => throwError(() => ({ error: { message: 'A baseline already exists for this product.' } })));
     const { component, toast } = await render({ preview }, [product(1, 'Coke', 1.25)]);
