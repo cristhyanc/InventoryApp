@@ -313,7 +313,7 @@ This section is derived from the triggers, conditions, and jobs in `.github/work
 
 ### Push to `develop`
 
-`.github/workflows/vm-manager.yml` ("Build and test API") triggers on `push` to `develop` and to `main`. Its only job restores, builds, and tests `backend/InventoryApi.Tests` in Release configuration. It has no publish, Azure login or deploy step, and only `contents: read`.
+`.github/workflows/vm-manager.yml` ("Build and test API") triggers on `push` to `develop` and to `main`. Its only job restores, builds, and tests the backend solution `backend/InventoryApi/InventoryApi.slnx` in Release configuration, so both test projects (`backend/Inventory.UnitTests` and `backend/Inventory.IntegrationTests`, issue #311) run, with coverage collected. It has no publish, Azure login or deploy step, and only `contents: read`.
 
 A push to `develop` therefore runs backend build and tests but **does not deploy** the API or the frontend.
 

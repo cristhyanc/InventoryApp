@@ -174,7 +174,11 @@ public class CalculateReorderNeedsTests
             .Returns<long, CancellationToken>((_, ct) => tracker.GetMachineProductsAsync(ct));
 
         var useCase = new CalculateReorderNeeds(nayax.Object, EmptyOutstandingStore().Object, expectedMaxConcurrency);
-        await useCase.Handle(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+        // The use case runs off xUnit's test synchronization context, as it does under ASP.NET Core.
+        // Its continuations would otherwise queue for one of xUnit's few test threads, and in the
+        // integration test assembly those are often busy with long synchronous SQLite tests, so the
+        // hang guard below timed out after every call had already finished (issue #311).
+        await Task.Run(() => useCase.Handle(CancellationToken.None)).WaitAsync(TimeSpan.FromSeconds(10));
 
         Assert.Equal(expectedMaxConcurrency, tracker.MaxObservedConcurrency);
         Assert.Equal(machineIds.Length, tracker.TotalCalls);
