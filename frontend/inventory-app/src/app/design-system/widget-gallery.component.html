@@ -1,0 +1,102 @@
+<!--
+  Visual-evidence fixture for issue #411. Neutral synthetic content only: no business data, no
+  account names, no credentials, and no API call. The toast stack and the loading indicator are
+  the application shell's own instances (app.component.html); this page only drives the services
+  they listen to, so a screenshot shows the real widget in its real place.
+-->
+<div class="page" data-testid="widget-gallery">
+  <header class="page-header">
+    <div>
+      <h1 class="page-title">Shared widgets and icons</h1>
+      <p class="page-subtitle">Development-only fixture for the issue #411 screenshots.</p>
+    </div>
+  </header>
+
+  <section class="card" data-testid="icon-strip">
+    <div class="card-header">
+      <h2 class="card-title">Bundled icons (Material Icons Rounded, 24px source)</h2>
+    </div>
+    <div class="card-body">
+      <ul class="grid grid-cols-3 gap-4 sm:grid-cols-5 lg:grid-cols-7">
+        @for (iconName of iconNames; track iconName) {
+          <li class="flex flex-col items-center gap-2 text-center text-md-gray-600" [attr.data-icon]="iconName">
+            <span class="icon-tile icon-tile-dark">
+              <app-icon [name]="iconName" [size]="24" />
+            </span>
+            <span class="text-md-table-head">{{ iconName }}</span>
+          </li>
+        }
+      </ul>
+    </div>
+  </section>
+
+  <section class="card" data-testid="toast-triggers">
+    <div class="card-header">
+      <h2 class="card-title">Toasts</h2>
+    </div>
+    <div class="card-body">
+      <div class="page-actions">
+        @for (variant of toastVariants; track variant.type) {
+          <button
+            type="button"
+            class="btn btn-secondary btn-sm"
+            [attr.data-testid]="'show-toast-' + variant.type"
+            (click)="showToast(variant.type)"
+          >
+            {{ variant.title }} toast
+          </button>
+        }
+      </div>
+    </div>
+  </section>
+
+  <section class="card" data-testid="loading-trigger">
+    <div class="card-header">
+      <h2 class="card-title">Loading indicator</h2>
+    </div>
+    <div class="card-body">
+      <div class="page-actions">
+        <button type="button" class="btn btn-secondary btn-sm" data-testid="show-loading" (click)="showLoading()">Show</button>
+        <button type="button" class="btn btn-secondary btn-sm" data-testid="hide-loading" (click)="hideLoading()">Hide</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="card" data-testid="dropdown-section">
+    <div class="card-header">
+      <h2 class="card-title">Multi-select dropdown</h2>
+    </div>
+    <div class="card-body pb-56">
+      <app-multi-select-dropdown
+        label="Sample products"
+        itemLabelSingular="product"
+        itemLabelPlural="products"
+        [options]="sampleOptions"
+        [selectedIds]="selectedOptionIds"
+        (selectedIdsChange)="onSelectionChange($event)"
+      />
+    </div>
+  </section>
+
+  <section class="card" data-testid="dialog-trigger">
+    <div class="card-header">
+      <h2 class="card-title">Confirmation dialog</h2>
+    </div>
+    <div class="card-body">
+      <button type="button" class="btn btn-danger btn-sm" data-testid="open-confirmation" (click)="openConfirmation()">
+        Delete sample item
+      </button>
+    </div>
+  </section>
+</div>
+
+@if (isConfirmationOpen) {
+  <app-confirmation-dialog
+    title="Delete sample item?"
+    message="This sample item and its sample history will be removed. This cannot be undone."
+    confirmLabel="Delete"
+    cancelLabel="Keep"
+    (confirmed)="closeConfirmation()"
+    (canceled)="closeConfirmation()"
+  />
+}

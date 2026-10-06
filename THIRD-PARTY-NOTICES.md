@@ -43,6 +43,37 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+## Material Icons Rounded (bundled icon paths)
+
+`IconComponent` (`frontend/inventory-app/src/app/components/shared/icon.component.ts` and
+`icon-paths.ts`) renders a small, hand-picked set of inline SVG `<path>`s copied verbatim from
+Google's Material Icons **Rounded** icon set — the `round/<name>.svg` files of the official
+`google/material-design-icons` repository, obtained through the generated
+`@material-design-icons/svg` distribution (version 0.14.15) and used unmodified on their native
+`viewBox="0 0 24 24"` canvas. Google's newer Material Symbols Rounded set is the same visual
+style drawn on a `0 -960 960 960` canvas; it is not used here because adopting it would mean
+rewriting the geometry rather than copying it. Only the glyphs the application actually uses are
+included; no icon font file, icon-font stylesheet, CDN script or Font Awesome kit is bundled or
+requested, and the package itself is not a dependency of the application.
+
+Upstream project: <https://github.com/google/material-design-icons>. The complete licence text
+is at
+<https://github.com/google/material-design-icons/blob/master/LICENSE>.
+
+```text
+Copyright Google Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
+in compliance with the License. You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed under the
+License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
+express or implied. See the License for the specific language governing permissions and
+limitations under the License.
+```
+
 ## Inter (bundled font)
 
 The Inter typeface is bundled and self-hosted through the `@fontsource/inter` npm package
