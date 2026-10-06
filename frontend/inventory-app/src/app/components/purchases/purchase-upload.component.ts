@@ -7,16 +7,23 @@ import { switchMap, tap, map, catchError } from 'rxjs/operators';
 import { PurchaseService } from '../../services/purchase.service';
 import { SupplierService } from '../../services/supplier.service';
 import { SupplierOrderService } from '../../services/supplier-order.service';
-import { Product, Supplier, SupplierOrder } from '../../models/models';
+import { GstClassification, Product, Supplier, SupplierOrder } from '../../models/models';
 import { PurchaseItemPayload } from '../../services/purchase.service';
 import { ProductService } from '../../services/product.service';
 import { ToastService } from '../../services/toast.service';
+import { GST_CLASSIFICATION_OPTIONS, isChargePresent } from './gst-classification-options';
 
 // Draft item representation where unitCost may be null
 interface DraftPurchaseItem {
   productId: number;
   quantity: number;
   unitCost: number | null;
+  /**
+   * This line's GST classification (issue #431). A new line starts as `Unknown`/Not classified and
+   * stays that way unless a person picks something: nothing here pre-fills a classification from the
+   * product, the supplier or the amount (parent issue #62, decision D4).
+   */
+  gstClassification: GstClassification;
 }
 
 @Component({
@@ -40,12 +47,17 @@ export class PurchaseUploadComponent implements OnInit {
   noOutstandingItems = false;
   supplierOrderLoadFailed = false;
 
+  /** The GST picker's options, shared with the purchase edit form. */
+  readonly gstOptions = GST_CLASSIFICATION_OPTIONS;
+
   form = {
     title: '',
     notes: '',
     totalAmount: null as number | null,
     deliveryCost: null as number | null,
+    deliveryGstClassification: GstClassification.Unknown,
     packageCost: null as number | null,
+    packageGstClassification: GstClassification.Unknown,
     purchaseDate: PurchaseUploadComponent.localDate(new Date()),
     supplierId: '' as number | ''
   };
@@ -115,7 +127,9 @@ export class PurchaseUploadComponent implements OnInit {
       notes: '',
       totalAmount: null,
       deliveryCost: null,
+      deliveryGstClassification: GstClassification.Unknown,
       packageCost: null,
+      packageGstClassification: GstClassification.Unknown,
       purchaseDate: PurchaseUploadComponent.localDate(new Date()),
       supplierId: ''
     };
@@ -151,11 +165,13 @@ export class PurchaseUploadComponent implements OnInit {
       return;
     }
 
-    // Use draft items with nullable unitCost - do NOT convert null to 0
+    // Use draft items with nullable unitCost - do NOT convert null to 0. The GST classification
+    // stays Not classified: a supplier order says nothing about a line's GST status.
     this.items = outstandingLines.map((line) => ({
       productId: line.productId,
       quantity: line.outstandingQuantity,
-      unitCost: line.unitPrice ?? null
+      unitCost: line.unitPrice ?? null,
+      gstClassification: GstClassification.Unknown
     }));
   }
 
@@ -214,7 +230,8 @@ export class PurchaseUploadComponent implements OnInit {
     const validItems: PurchaseItemPayload[] = this.items.map(item => ({
       productId: item.productId,
       quantity: item.quantity,
-      unitCost: item.unitCost as number  // Safe to cast after validation
+      unitCost: item.unitCost as number,  // Safe to cast after validation
+      gstClassification: PurchaseUploadComponent.submittedClassification(item.gstClassification)
     }));
 
     this.purchaseService
@@ -224,7 +241,11 @@ export class PurchaseUploadComponent implements OnInit {
         notes: this.form.notes || null,
         totalAmount: this.form.totalAmount,
         deliveryCost: this.form.deliveryCost,
+        deliveryGstClassification: this.chargeClassification(
+          this.form.deliveryCost, this.form.deliveryGstClassification),
         packageCost: this.form.packageCost,
+        packageGstClassification: this.chargeClassification(
+          this.form.packageCost, this.form.packageGstClassification),
         purchaseDate: this.purchaseTimestamp(),
         supplierId: this.form.supplierId === '' ? null : this.form.supplierId,
         items: validItems
@@ -246,8 +267,40 @@ export class PurchaseUploadComponent implements OnInit {
       });
   }
 
-  addItem(): void { this.items.push({ productId: this.products[0]?.id ?? 0, quantity: 1, unitCost: null }); }
+  addItem(): void {
+    this.items.push({
+      productId: this.products[0]?.id ?? 0,
+      quantity: 1,
+      unitCost: null,
+      gstClassification: GstClassification.Unknown
+    });
+  }
   removeItem(index: number): void { this.items.splice(index, 1); }
+
+  /**
+   * Whether a delivery or package charge exists, which is what decides whether its GST picker is
+   * shown. An absent charge has no classification and is never unresolved, so offering a picker for
+   * one would invite a choice the server would correctly discard.
+   */
+  hasCharge(amount: number | null): boolean { return isChargePresent(amount); }
+
+  /**
+   * The classification to submit for a delivery or package charge: nothing at all unless the charge
+   * exists and a person actually picked a state for it.
+   */
+  private chargeClassification(
+    amount: number | null, classification: GstClassification): GstClassification | undefined {
+    return isChargePresent(amount) ? PurchaseUploadComponent.submittedClassification(classification) : undefined;
+  }
+
+  /**
+   * What a new purchase submits for one component. `Unknown` is left out of the request rather than
+   * sent: it is already the server's state for a component nobody classified, and omitting it keeps
+   * the request free of choices the person did not make.
+   */
+  private static submittedClassification(classification: GstClassification): GstClassification | undefined {
+    return classification === GstClassification.Unknown ? undefined : classification;
+  }
   itemProduct(item: DraftPurchaseItem): Product | undefined { return this.products.find(p => p.id === Number(item.productId)); }
   lineTotal(item: DraftPurchaseItem): number { return Number(item.quantity || 0) * Number(item.unitCost || 0); }
   get itemsSubtotal(): number { return this.items.reduce((sum, item) => sum + this.lineTotal(item), 0); }

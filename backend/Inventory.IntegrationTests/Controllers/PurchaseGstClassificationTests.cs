@@ -686,7 +686,8 @@ public sealed class PurchaseGstClassificationTests : IDisposable
             new UploadPurchase(store, documents, new FakeClock(new DateTime(2026, 3, 1, 10, 0, 0, DateTimeKind.Utc))),
             new UpdatePurchase(store),
             new DeletePurchase(store, documents),
-            new ComputePurchaseTotalValidation());
+            new ComputePurchaseTotalValidation(),
+            new ComputePurchaseGstSummary());
     }
 
     private static InventoryCostTransitionBaseline Baseline(long productId) => new()

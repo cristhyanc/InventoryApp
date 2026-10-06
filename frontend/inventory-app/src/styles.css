@@ -1252,6 +1252,10 @@ video {
   margin-left: 0.5rem;
 }
 
+.ml-3 {
+  margin-left: 0.75rem;
+}
+
 .ml-5 {
   margin-left: 1.25rem;
 }
@@ -2691,8 +2695,8 @@ img {
     grid-template-columns: repeat(5, minmax(0, 1fr));
   }
 
-  .md\:grid-cols-\[minmax\(0\2c 3fr\)_minmax\(7rem\2c 1fr\)_minmax\(9rem\2c 1fr\)_auto\] {
-    grid-template-columns: minmax(0,3fr) minmax(7rem,1fr) minmax(9rem,1fr) auto;
+  .md\:grid-cols-\[minmax\(0\2c 3fr\)_minmax\(7rem\2c 1fr\)_minmax\(9rem\2c 1fr\)_minmax\(9rem\2c 1fr\)_auto\] {
+    grid-template-columns: minmax(0,3fr) minmax(7rem,1fr) minmax(9rem,1fr) minmax(9rem,1fr) auto;
   }
 }
 

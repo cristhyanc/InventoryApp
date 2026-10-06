@@ -614,9 +614,36 @@ Failure output (screenshots and traces) is written under `frontend/inventory-app
 - Historical sale cost is persisted from internal AVCO when reliable, with transaction-level Nayax product cost as a fallback.
 - Missing COGS or profit remains unknown; it is never silently converted to zero.
 - Australian financial years run from 1 July to 30 June, using `Australia/Sydney` for business reporting.
+- Purchase amounts are GST-inclusive, and purchase input GST comes from an explicit per-line and per-charge classification, never from an amount. Anything unclassified stays visibly unresolved rather than being treated as GST-free.
 - UI reports and CSV/XLSX exports must use the same backend calculations and quality states.
 
 The complete invariants and change rules are in [AGENTS.md](AGENTS.md).
+
+## Purchase entry and GST classification
+
+Purchase amounts are entered **GST-inclusive**. GST is recorded per component, so **Add Purchase** and the
+**Edit Purchase** form on the Purchases page each offer a GST picker with three states — **Taxable**,
+**GST-free** and **Not classified** — for every purchased item line and, separately, for the delivery charge
+and the package charge. A charge never inherits a line's classification, and there is no single
+classification for a whole purchase.
+
+- Everything starts as **Not classified**, including lines prefilled while receiving a supplier order.
+  Nothing is guessed from the product, the supplier or the amount, so a line is classified only when a
+  person chooses. **Not classified** contributes no GST and keeps the purchase visibly unresolved for
+  bookkeeping review; it does not mean GST-free.
+- A charge's picker appears only once that charge has a value. A delivery or package charge left empty (or
+  zero) has no classification at all and is never reported as unresolved.
+- Editing a purchase shows the stored classifications and sends only the ones you change, so a
+  classification that came from a configured product or supplier rule keeps that origin when you edit a
+  quantity, a cost, a date or another line. Choosing **Not classified** again is a deliberate change and is
+  saved as one.
+- Each purchase row then shows the API's **Purchase GST (input tax credit)** figure, each component's
+  classification, and a warning naming how many components and how much money are still unclassified. Those
+  figures are calculated by the API from the saved purchase — the frontend never calculates GST — so while an
+  edit form is open the row says explicitly that the saved figures do not include your unsaved changes.
+
+GST classification is accounting data only. It never changes a purchase's unit cost, the weighted-average
+cost, costing quantity or inventory value.
 
 ## Costing repair (Admin page)
 

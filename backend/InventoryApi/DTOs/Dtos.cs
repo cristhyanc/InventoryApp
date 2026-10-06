@@ -106,12 +106,35 @@ public record PurchaseValidationDto(
     decimal? TotalDifference
 );
 
+/// <summary>
+/// The saved purchase's input GST (issue #431), calculated by
+/// <c>Inventory.Application.Purchases.ComputePurchaseGstSummary</c> over the one authoritative
+/// <c>Inventory.Domain.Purchases.PurchaseGstPolicy</c>. A client displays these figures and never
+/// derives GST from an amount itself.
+///
+/// <see cref="InputGst"/> is the sum of the individually rounded GST amounts of the taxable
+/// components only. Unclassified components contribute nothing to it and are reported separately as
+/// <see cref="UnresolvedComponentCount"/> and <see cref="UnresolvedAmount"/>, so a purchase stays
+/// visibly incomplete instead of looking like a resolved <c>$0</c>. A delivery or package charge
+/// that is null or zero is not a component at all and is never unresolved.
+///
+/// It describes what is stored. It never reflects edits a client has not saved.
+/// </summary>
+public record PurchaseGstSummaryDto(
+    decimal InputGst,
+    int UnresolvedComponentCount,
+    decimal UnresolvedAmount
+);
+
 // The envelope the purchase endpoints return: the business record under the canonical "purchase"
 // key (issue #127) next to its total-validation block. Issue #304 replaced the EF Purchase entity
-// in that key with the API-owned PurchaseResponse; the serialized envelope is unchanged.
+// in that key with the API-owned PurchaseResponse; the serialized envelope is unchanged. Issue #431
+// added the "gst" member after them, additively: "purchase" and "validation" keep their names,
+// order and values.
 public record PurchaseResponseDto(
     PurchaseResponse Purchase,
-    PurchaseValidationDto? Validation = null
+    PurchaseValidationDto? Validation = null,
+    PurchaseGstSummaryDto? Gst = null
 );
 
 public record SiteSummaryDto(

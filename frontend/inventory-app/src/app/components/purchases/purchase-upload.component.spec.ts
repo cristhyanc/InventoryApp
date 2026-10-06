@@ -6,7 +6,8 @@ import { SupplierService } from '../../services/supplier.service';
 import { SupplierOrderService } from '../../services/supplier-order.service';
 import { ProductService } from '../../services/product.service';
 import { ToastService } from '../../services/toast.service';
-import { Purchase, SupplierOrder } from '../../models/models';
+import { PurchaseItemPayload, PurchaseUploadPayload } from '../../services/purchase.service';
+import { GstClassification, Purchase, SupplierOrder } from '../../models/models';
 
 function supplierOrder(): SupplierOrder {
   return {
@@ -36,7 +37,8 @@ function createHarness(supplierOrderId: string | null) {
     queryParamMap: of(convertToParamMap(supplierOrderId ? { supplierOrderId } : {}))
   } as unknown as ActivatedRoute;
   const navigate = jest.fn();
-  const purchaseService = { upload: jest.fn(() => of({} as Purchase)) } as unknown as PurchaseService;
+  const upload = jest.fn(() => of({} as Purchase));
+  const purchaseService = { upload } as unknown as PurchaseService;
   const supplierService = { getAll: jest.fn(() => of([])) } as unknown as SupplierService;
   const supplierOrderService = { getById: jest.fn(() => of(supplierOrder())) } as unknown as SupplierOrderService;
   const productService = { getAll: jest.fn(() => of([])) } as unknown as ProductService;
@@ -53,7 +55,28 @@ function createHarness(supplierOrderId: string | null) {
   );
   component.ngOnInit();
 
-  return { component, navigate, purchaseService, toastService };
+  return { component, navigate, purchaseService, toastService, upload };
+}
+
+/** The payload the component handed to `PurchaseService.upload`. */
+function uploadedPayload(upload: jest.Mock): PurchaseUploadPayload {
+  expect(upload).toHaveBeenCalledTimes(1);
+  return upload.mock.calls[0][0] as PurchaseUploadPayload;
+}
+
+/** The line payloads as the server will actually read them, after JSON drops omitted fields. */
+function uploadedItems(upload: jest.Mock): PurchaseItemPayload[] {
+  return JSON.parse(JSON.stringify(uploadedPayload(upload).items ?? [])) as PurchaseItemPayload[];
+}
+
+/** A ready-to-submit manual purchase form with one line. */
+function readyToUpload(supplierOrderId: string | null = null) {
+  const harness = createHarness(supplierOrderId);
+  harness.component.selectedFile = new File(['content'], 'invoice.pdf', { type: 'application/pdf' });
+  harness.component.form.title = 'Weekly restock';
+  harness.component.addItem();
+  harness.component.items[0] = { ...harness.component.items[0], productId: 5, quantity: 3, unitCost: 2 };
+  return harness;
 }
 
 describe('PurchaseUploadComponent supplier-order receipt navigation (issue #387)', () => {
@@ -75,5 +98,71 @@ describe('PurchaseUploadComponent supplier-order receipt navigation (issue #387)
     component.upload();
 
     expect(navigate).toHaveBeenCalledWith(['/purchases']);
+  });
+});
+
+describe('PurchaseUploadComponent GST classification mapping (issue #431)', () => {
+  it('starts a new line and both charges as Not classified', () => {
+    const { component } = readyToUpload();
+
+    expect(component.items[0].gstClassification).toBe(GstClassification.Unknown);
+    expect(component.form.deliveryGstClassification).toBe(GstClassification.Unknown);
+    expect(component.form.packageGstClassification).toBe(GstClassification.Unknown);
+  });
+
+  it('submits no classification for an unclassified new purchase, so nothing is recorded as a person\'s choice', () => {
+    const { component, upload } = readyToUpload();
+
+    component.upload();
+
+    const payload = uploadedPayload(upload);
+    expect(payload.deliveryGstClassification).toBeUndefined();
+    expect(payload.packageGstClassification).toBeUndefined();
+    expect(uploadedItems(upload)).toEqual([{ productId: 5, quantity: 3, unitCost: 2 }]);
+  });
+
+  it('submits each classification the person picked', () => {
+    const { component, upload } = readyToUpload();
+    component.items[0].gstClassification = GstClassification.Taxable;
+    component.form.deliveryCost = 5;
+    component.form.deliveryGstClassification = GstClassification.Taxable;
+    component.form.packageCost = 2;
+    component.form.packageGstClassification = GstClassification.GstFree;
+
+    component.upload();
+
+    const payload = uploadedPayload(upload);
+    expect(payload.deliveryGstClassification).toBe(GstClassification.Taxable);
+    expect(payload.packageGstClassification).toBe(GstClassification.GstFree);
+    expect(uploadedItems(upload)[0].gstClassification).toBe(GstClassification.Taxable);
+  });
+
+  it('never submits a classification for a charge with no value', () => {
+    const { component, upload } = readyToUpload();
+    component.form.deliveryCost = null;
+    component.form.deliveryGstClassification = GstClassification.Taxable;
+    component.form.packageCost = 0;
+    component.form.packageGstClassification = GstClassification.Taxable;
+
+    component.upload();
+
+    const payload = uploadedPayload(upload);
+    expect(payload.deliveryGstClassification).toBeUndefined();
+    expect(payload.packageGstClassification).toBeUndefined();
+  });
+
+  it('hides a charge picker until the charge has a value', () => {
+    const { component } = readyToUpload();
+
+    expect(component.hasCharge(null)).toBe(false);
+    expect(component.hasCharge(0)).toBe(false);
+    expect(component.hasCharge(5)).toBe(true);
+  });
+
+  it('leaves lines prefilled from a supplier order unclassified rather than inferring a classification', () => {
+    const { component } = createHarness('9');
+
+    expect(component.items).toHaveLength(1);
+    expect(component.items[0].gstClassification).toBe(GstClassification.Unknown);
   });
 });
