@@ -27,14 +27,14 @@ describe('trendLabel', () => {
 
 describe('trendClass', () => {
   it('uses a neutral class when there is no prior period to compare against', () => {
-    expect(trendClass(100, 0)).toBe('text-slate-500');
+    expect(trendClass(100, 0)).toBe('value-muted');
   });
 
   it('uses the positive class for an increase', () => {
-    expect(trendClass(150, 100)).toBe('text-emerald-600');
+    expect(trendClass(150, 100)).toBe('value-positive');
   });
 
   it('uses the negative class for a decrease', () => {
-    expect(trendClass(50, 100)).toBe('text-rose-600');
+    expect(trendClass(50, 100)).toBe('value-negative');
   });
 });

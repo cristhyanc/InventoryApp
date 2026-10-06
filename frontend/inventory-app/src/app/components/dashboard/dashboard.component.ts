@@ -8,11 +8,12 @@ import { NayaxSalesSyncService } from '../../services/nayax-sales-sync.service';
 import { InventoryValuationSummary, Product, Machine, Site } from '../../models/models';
 import { trendLabel, trendClass } from '../../formatting/revenue-trend';
 import { siteStockClass } from '../../formatting/site-stock-status';
+import { IconComponent } from '../shared/icon.component';
 
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [CommonModule, RouterLink],
+  imports: [CommonModule, RouterLink, IconComponent],
   templateUrl: './dashboard.component.html'
 })
 export class DashboardComponent implements OnInit {
@@ -238,6 +239,6 @@ export class DashboardComponent implements OnInit {
   }
 
   stockAfterMachineNeedClass(product: Product): string {
-    return this.stockAfterMachineNeed(product) < 0 ? 'text-red-600 font-semibold' : 'text-slate-600';
+    return this.stockAfterMachineNeed(product) < 0 ? 'value-negative font-semibold' : '';
   }
 }
