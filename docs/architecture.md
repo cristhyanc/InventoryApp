@@ -1045,7 +1045,12 @@ described, and each rule below fails by naming the offending type, file or line:
 - **Every controller delegates.** Each controller is constructed with at least one
   `Inventory.Application` dependency, so a controller that reimplemented a rule inline — taking
   nothing but an `ILogger` and computing the answer itself — fails rather than quietly satisfying
-  every negative rule.
+  every negative rule. Only the constructor parameters answer this question, with generic
+  arguments and element types unwrapped so a use case injected as `IEnumerable<T>` still counts. An
+  `Inventory.Application` type in an action's parameter or return type does *not* satisfy it: a
+  controller applying a rule at the boundary itself would still bind and serialise the records a use
+  case returns, so counting its whole declared surface would answer "yes" for exactly the controller
+  this rule exists to catch. A regression fixture in the test holds that distinction in place.
 - **A `DbContext` only in the composition root and the operator commands.** Checked against the
   compiled assembly, so a doc comment explaining why a type must *not* touch EF (as
   `BusinessScopeMiddleware` does) is not read as the violation it forbids. Exactly four namespaces

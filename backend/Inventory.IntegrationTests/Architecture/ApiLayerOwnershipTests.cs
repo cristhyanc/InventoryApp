@@ -1,4 +1,7 @@
 using System.Reflection;
+using Inventory.Application.Categories;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 using NetArchTest.Rules;
 using Xunit;
 
@@ -41,6 +44,16 @@ public class ApiLayerOwnershipTests
     /// it: these rules must give the same answer with and without coverage collection.
     /// </summary>
     private const string InstrumentationNamespacePrefix = "Coverlet";
+
+    /// <summary>
+    /// The members a type declares itself, public or not, instance or static - never the ones it
+    /// inherits from <c>ControllerBase</c>, whose own surface is MVC's rather than this project's.
+    /// </summary>
+    private const BindingFlags DeclaredMembers = BindingFlags.Public
+        | BindingFlags.NonPublic
+        | BindingFlags.Instance
+        | BindingFlags.Static
+        | BindingFlags.DeclaredOnly;
 
     #region No business service remains in the API (acceptance criterion 1)
 
@@ -156,6 +169,14 @@ public class ApiLayerOwnershipTests
     /// reimplemented a rule inline - taking nothing but an <c>ILogger</c> and computing the answer
     /// itself - would satisfy every negative rule above, which is the same reason each relocation
     /// test in this directory has a positive counterpart.
+    ///
+    /// Only the constructor parameters count, which is what <see cref="ConstructorDependenciesOf"/>
+    /// returns. Asking the question over a controller's whole declared surface would let an
+    /// Application type appearing in an action's parameter or return type satisfy it, and that is
+    /// not a dependency: a controller computing the answer itself can still accept or return an
+    /// Application record, so the broader question answers "yes" for exactly the controller this
+    /// rule exists to catch. <see cref="An_Inventory_Application_type_in_an_action_signature_does_not_satisfy_the_rule"/>
+    /// pins that distinction.
     /// </summary>
     [Fact]
     public void Every_controller_is_constructed_with_an_Inventory_Application_dependency()
@@ -168,7 +189,7 @@ public class ApiLayerOwnershipTests
         Assert.NotEmpty(controllers);
 
         var offenders = controllers
-            .Where(controller => !DeclaredSurfaceOf(controller).Any(used => used.Assembly == ApplicationAssembly))
+            .Where(controller => !IsConstructedWithAnApplicationDependency(controller))
             .Select(FullNameOf)
             .OrderBy(name => name, StringComparer.Ordinal)
             .ToArray();
@@ -180,6 +201,96 @@ public class ApiLayerOwnershipTests
                 + "(docs/architecture.md § InventoryApi). A controller that depends on no use case "
                 + "is either computing the answer itself or reaching past the Application layer. "
                 + $"Offending controller(s): {string.Join(", ", offenders)}.");
+    }
+
+    /// <summary>
+    /// The regression fixture for the rule above. It first asked the question over
+    /// <see cref="DeclaredSurfaceOf"/>, which also holds the base type, interfaces, fields,
+    /// properties and action signatures, so a controller that injected no use case at all passed as
+    /// soon as one action accepted or returned an <c>Inventory.Application</c> type - the inline-rule
+    /// controller the rule exists to catch, since the Application records a use case returns are
+    /// exactly what such an endpoint would still bind and serialise. That contradicted what both the
+    /// rule's name and docs/architecture.md § InventoryApi state, so the question is now asked over
+    /// the constructor parameters alone and this test holds that answer in place.
+    ///
+    /// The three fixtures are private nested types in the test assembly: MVC discovers only public
+    /// controllers, and every rule in this file reads <see cref="ApiAssembly"/>, so they are
+    /// invisible to both.
+    /// </summary>
+    [Fact]
+    public void An_Inventory_Application_type_in_an_action_signature_does_not_satisfy_the_rule()
+    {
+        var actionSignatureOnly = typeof(ApplicationTypeOnlyInItsActionController);
+
+        Assert.False(
+            IsConstructedWithAnApplicationDependency(actionSignatureOnly),
+            "A controller whose only Inventory.Application type is an action parameter or return "
+                + "type is constructed with no use case, so it must not satisfy the rule.");
+
+        Assert.Contains(
+            ApplicationAssembly,
+            DeclaredSurfaceOf(actionSignatureOnly).Select(used => used.Assembly));
+
+        Assert.True(
+            IsConstructedWithAnApplicationDependency(typeof(InjectedUseCaseController)),
+            "An injected use case must satisfy the rule.");
+
+        Assert.True(
+            IsConstructedWithAnApplicationDependency(typeof(GenericallyInjectedUseCaseController)),
+            "A use case injected through a generic wrapper must satisfy the rule: Unwrap() has to "
+                + "see past the wrapper, or the rule would fail a compliant controller.");
+    }
+
+    /// <summary>
+    /// A controller that takes no use case - only an <c>ILogger</c>, like the inline-rule controller
+    /// the rule above describes - and names an <c>Inventory.Application</c> type only in an action
+    /// signature. It must fail the rule.
+    /// </summary>
+    private sealed class ApplicationTypeOnlyInItsActionController : ControllerBase
+    {
+        private readonly ILogger<ApplicationTypeOnlyInItsActionController> _logger;
+
+        public ApplicationTypeOnlyInItsActionController(ILogger<ApplicationTypeOnlyInItsActionController> logger)
+        {
+            _logger = logger;
+        }
+
+        public ActionResult<CategoryRecord> Rename(CategoryRecord category)
+        {
+            _logger.LogInformation("Stands in for a rule applied at the HTTP boundary.");
+            return Ok(category);
+        }
+    }
+
+    /// <summary>The compliant shape: the use case arrives through the constructor.</summary>
+    private sealed class InjectedUseCaseController : ControllerBase
+    {
+        private readonly ListCategories _listCategories;
+
+        public InjectedUseCaseController(ListCategories listCategories)
+        {
+            _listCategories = listCategories;
+        }
+
+        public Task<IReadOnlyList<CategoryRecord>> Get(CancellationToken cancellationToken) =>
+            _listCategories.Handle(cancellationToken);
+    }
+
+    /// <summary>
+    /// Compliant too, through a generic wrapper - the shape dependency injection uses when a
+    /// controller asks for every registration of a type. The rule must see past the wrapper.
+    /// </summary>
+    private sealed class GenericallyInjectedUseCaseController : ControllerBase
+    {
+        private readonly IEnumerable<ListCategories> _listCategories;
+
+        public GenericallyInjectedUseCaseController(IEnumerable<ListCategories> listCategories)
+        {
+            _listCategories = listCategories;
+        }
+
+        public Task<IReadOnlyList<CategoryRecord>> Get(CancellationToken cancellationToken) =>
+            _listCategories.First().Handle(cancellationToken);
     }
 
     #endregion
@@ -539,12 +650,6 @@ public class ApiLayerOwnershipTests
     /// </summary>
     private static IEnumerable<Type> DeclaredSurfaceOf(Type controller)
     {
-        const BindingFlags Declared = BindingFlags.Public
-            | BindingFlags.NonPublic
-            | BindingFlags.Instance
-            | BindingFlags.Static
-            | BindingFlags.DeclaredOnly;
-
         var declared = new List<Type>();
 
         if (controller.BaseType is not null)
@@ -553,22 +658,45 @@ public class ApiLayerOwnershipTests
         }
 
         declared.AddRange(controller.GetInterfaces());
-        declared.AddRange(controller.GetFields(Declared).Select(field => field.FieldType));
-        declared.AddRange(controller.GetProperties(Declared).Select(property => property.PropertyType));
+        declared.AddRange(controller.GetFields(DeclaredMembers).Select(field => field.FieldType));
+        declared.AddRange(controller.GetProperties(DeclaredMembers).Select(property => property.PropertyType));
 
-        foreach (var method in controller.GetMethods(Declared))
+        foreach (var method in controller.GetMethods(DeclaredMembers))
         {
             declared.Add(method.ReturnType);
             declared.AddRange(method.GetParameters().Select(parameter => parameter.ParameterType));
         }
 
-        foreach (var constructor in controller.GetConstructors(Declared))
-        {
-            declared.AddRange(constructor.GetParameters().Select(parameter => parameter.ParameterType));
-        }
+        declared.AddRange(ConstructorParameterTypesOf(controller));
 
         return declared.SelectMany(Unwrap).Distinct();
     }
+
+    /// <summary>
+    /// Whether a controller is constructed with an <c>Inventory.Application</c> dependency: the
+    /// predicate <see cref="Every_controller_is_constructed_with_an_Inventory_Application_dependency"/>
+    /// applies to the API's controllers and
+    /// <see cref="An_Inventory_Application_type_in_an_action_signature_does_not_satisfy_the_rule"/>
+    /// applies to its fixtures, so the rule and its regression test cannot drift apart.
+    /// </summary>
+    private static bool IsConstructedWithAnApplicationDependency(Type controller) =>
+        ConstructorDependenciesOf(controller).Any(dependency => dependency.Assembly == ApplicationAssembly);
+
+    /// <summary>
+    /// What a controller is constructed with: the parameter types of its declared constructors,
+    /// unwrapped the same way as <see cref="DeclaredSurfaceOf"/>, so a dependency injected as
+    /// <c>IEnumerable&lt;T&gt;</c>, <c>Lazy&lt;T&gt;</c> or an array counts as the <c>T</c> it
+    /// carries. Deliberately narrower than the declared surface, which also holds what the
+    /// controller inherits, stores and publishes - see the rule above for why only the constructor
+    /// can answer "does this controller delegate".
+    /// </summary>
+    private static IEnumerable<Type> ConstructorDependenciesOf(Type controller) =>
+        ConstructorParameterTypesOf(controller).SelectMany(Unwrap).Distinct();
+
+    private static IEnumerable<Type> ConstructorParameterTypesOf(Type controller) =>
+        controller.GetConstructors(DeclaredMembers)
+            .SelectMany(constructor => constructor.GetParameters())
+            .Select(parameter => parameter.ParameterType);
 
     private static IEnumerable<Type> Unwrap(Type type)
     {
