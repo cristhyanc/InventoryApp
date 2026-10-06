@@ -17,13 +17,17 @@ import { HistoricalCostRecoveryWorkflowComponent } from './historical-cost-recov
   standalone: true,
   imports: [CommonModule, RouterLink, HistoricalCostRecoveryWorkflowComponent],
   template: `
-    <div class="mb-6">
-      <a routerLink="/admin" class="text-sm text-blue-600 hover:underline">&larr; Back to Admin</a>
-      <h1 class="mt-2 text-2xl font-semibold text-slate-800">Nayax Historical Cost Recovery</h1>
-      <p class="mt-1 text-sm text-slate-500">This action can change historical cost of goods sold. Run the dry run first.</p>
-    </div>
+    <div class="page">
+      <header class="page-header">
+        <div>
+          <a routerLink="/admin" class="btn-link text-sm">&larr; Back to Admin</a>
+          <h1 class="page-title mt-2">Nayax Historical Cost Recovery</h1>
+          <p class="page-subtitle">This action can change historical cost of goods sold. Run the dry run first.</p>
+        </div>
+      </header>
 
-    <app-historical-cost-recovery-workflow></app-historical-cost-recovery-workflow>
+      <app-historical-cost-recovery-workflow></app-historical-cost-recovery-workflow>
+    </div>
   `
 })
 export class HistoricalCostRecoveryComponent {}

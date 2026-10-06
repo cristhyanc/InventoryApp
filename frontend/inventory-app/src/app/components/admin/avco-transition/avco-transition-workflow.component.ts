@@ -31,103 +31,112 @@ import { BusinessDateTimePipe } from '../../../formatting/business-date-time.pip
   standalone: true,
   imports: [CommonModule, FormsModule, BusinessDateTimePipe],
   template: `
-    <section class="rounded-xl bg-white p-6 shadow-sm">
-      <h2 class="text-lg font-semibold text-slate-800">Inventory AVCO Transition Baseline</h2>
-      <p class="mt-1 text-sm text-slate-500">Start reliable perpetual AVCO from a controlled cutover without changing incomplete legacy movements or historical Nayax-costed sales.</p>
-      <label class="mt-4 flex items-center gap-2 text-sm font-medium text-slate-700">
-        <input type="checkbox" [(ngModel)]="transitionAllProducts" (ngModelChange)="changeTransitionScope()" />
-        Create baselines for all products that do not already have one
-      </label>
-      <div class="mt-4 grid gap-3 sm:grid-cols-3">
-        <label class="text-sm text-slate-700">Product
-          <select class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 disabled:bg-slate-100" [disabled]="transitionAllProducts" [(ngModel)]="transitionProductId" (ngModelChange)="selectTransitionProduct()">
-            <option [ngValue]="null">Select a product</option>
-            @for (product of products; track product.id) {
-              <option [ngValue]="product.id">{{ product.name }}</option>
-            }
-          </select>
-        </label>
-        <label class="text-sm text-slate-700">Verified opening average unit cost
-          <input type="number" min="0" step="0.000001" class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 disabled:bg-slate-100" [disabled]="transitionAllProducts" [(ngModel)]="transitionAverageUnitCost" />
-          @if (transitionAllProducts) { <span class="mt-1 block text-xs text-slate-500">Each product's current AverageUnitCost will be shown for confirmation.</span> }
-        </label>
-        <label class="text-sm text-slate-700">Cost reliability
-          <select class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2" [(ngModel)]="transitionCostSource">
-            <option [ngValue]="baselineSources.ManualAuthoritative">Authoritative</option>
-            <option [ngValue]="baselineSources.ManualEstimated">Estimated</option>
-          </select>
-        </label>
+    <section class="card">
+      <div class="card-header">
+        <h2 class="card-title">Inventory AVCO Transition Baseline</h2>
       </div>
-      <button type="button" class="mt-3 rounded-md border border-blue-300 px-3 py-2 text-sm text-blue-700 disabled:opacity-50" [disabled]="loading || (!transitionAllProducts && transitionProductId == null)" (click)="previewTransition()">{{ transitionAllProducts ? 'Preview all product baselines' : 'Preview transition baseline' }}</button>
-
-      @if (transitionBatchPreview) {
-        <div class="mt-5 rounded-lg border border-slate-200 p-4">
-          <div class="grid gap-2 text-sm text-slate-700 sm:grid-cols-4">
-            <div>Products: <strong>{{ transitionBatchPreview.productCount }}</strong></div>
-            <div>Total home stock: <strong>{{ transitionBatchPreview.homeStockQuantity }}</strong></div>
-            <div>Total machine stock: <strong>{{ transitionBatchPreview.machineStockQuantity }}</strong></div>
-            <div>Total CostingQuantity: <strong>{{ transitionBatchPreview.openingCostingQuantity }}</strong></div>
-            <div>Total InventoryValue: <strong>{{ transitionBatchPreview.inventoryValue | currency:'AUD' }}</strong></div>
-            <div>Cutoff timestamp: <strong>{{ transitionBatchPreview.cutoffAt | businessDateTime }}</strong></div>
-            <div>Cost source: <strong>{{ transitionSourceLabel(transitionBatchPreview.costSource) }}</strong></div>
+      <div class="card-body">
+        <p class="text-sm value-muted">Start reliable perpetual AVCO from a controlled cutover without changing incomplete legacy movements or historical Nayax-costed sales.</p>
+        <label class="mt-4 flex items-center gap-2 text-sm font-medium text-md-gray-800">
+          <input type="checkbox" [(ngModel)]="transitionAllProducts" (ngModelChange)="changeTransitionScope()" />
+          Create baselines for all products that do not already have one
+        </label>
+        <div class="mt-4 grid gap-4 sm:grid-cols-3">
+          <div class="field">
+            <label class="field-label" for="avco-transition-product">Product</label>
+            <select id="avco-transition-product" [disabled]="transitionAllProducts" [(ngModel)]="transitionProductId" (ngModelChange)="selectTransitionProduct()">
+              <option [ngValue]="null">Select a product</option>
+              @for (product of products; track product.id) {
+                <option [ngValue]="product.id">{{ product.name }}</option>
+              }
+            </select>
           </div>
-          <div class="mt-4 max-h-96 overflow-auto">
-            <table class="min-w-full text-left text-sm">
-              <thead class="sticky top-0 bg-slate-50 text-xs text-slate-600"><tr><th class="px-3 py-2">Product</th><th class="px-3 py-2">Home</th><th class="px-3 py-2">Machines</th><th class="px-3 py-2">Total</th><th class="px-3 py-2">Average cost</th><th class="px-3 py-2">Value</th><th class="px-3 py-2">Legacy discrepancy</th></tr></thead>
-              <tbody>
-                @for (product of transitionBatchPreview.products; track product.productId) {
-                  <tr class="border-t border-slate-100">
-                    <td class="px-3 py-2">
-                      <details><summary class="cursor-pointer font-medium">{{ product.productName }}</summary>
-                        <div class="mt-2 text-xs text-slate-500">
-                          @for (machine of product.machineStocks; track machine.machineId) {
-                            <div>{{ machine.machineName }}: {{ machine.stockQuantity }}</div>
-                          }
-                        </div>
-                      </details>
-                    </td>
-                    <td class="px-3 py-2">{{ product.homeStockQuantity }}</td>
-                    <td class="px-3 py-2">{{ product.machineStockQuantity }}</td>
-                    <td class="px-3 py-2 font-medium">{{ product.openingCostingQuantity }}</td>
-                    <td class="px-3 py-2">{{ product.averageUnitCost | currency:'AUD':'symbol':'1.2-6' }}</td>
-                    <td class="px-3 py-2">{{ product.inventoryValue | currency:'AUD' }}</td>
-                    <td class="px-3 py-2">{{ product.legacyPhysicalDiscrepancy }}</td>
-                  </tr>
-                }
-              </tbody>
-            </table>
+          <div class="field">
+            <label class="field-label" for="avco-transition-cost">Verified opening average unit cost</label>
+            <input id="avco-transition-cost" type="number" min="0" step="0.000001" [disabled]="transitionAllProducts" [(ngModel)]="transitionAverageUnitCost" />
+            @if (transitionAllProducts) { <p class="field-hint">Each product's current AverageUnitCost will be shown for confirmation.</p> }
           </div>
-          <button type="button" class="mt-4 rounded-md bg-amber-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50" [disabled]="loading" (click)="applyAllTransitions()">Confirm and save all product baselines</button>
+          <div class="field">
+            <label class="field-label" for="avco-transition-source">Cost reliability</label>
+            <select id="avco-transition-source" [(ngModel)]="transitionCostSource">
+              <option [ngValue]="baselineSources.ManualAuthoritative">Authoritative</option>
+              <option [ngValue]="baselineSources.ManualEstimated">Estimated</option>
+            </select>
+          </div>
         </div>
-      }
+        <button type="button" class="btn btn-primary mt-3" [disabled]="loading || (!transitionAllProducts && transitionProductId == null)" (click)="previewTransition()">{{ transitionAllProducts ? 'Preview all product baselines' : 'Preview transition baseline' }}</button>
 
-      @if (transitionPreview && !transitionBatchPreview) {
-        <div class="mt-5 rounded-lg border border-slate-200 p-4">
-          <div class="grid gap-2 text-sm text-slate-700 sm:grid-cols-3">
-            <div>Home stock quantity: <strong>{{ transitionPreview.homeStockQuantity }}</strong></div>
-            <div>Machine stock quantity: <strong>{{ transitionPreview.machineStockQuantity }}</strong></div>
-            <div>Total proposed CostingQuantity: <strong>{{ transitionPreview.openingCostingQuantity }}</strong></div>
-            <div>Proposed AverageUnitCost: <strong>{{ transitionPreview.averageUnitCost | currency:'AUD':'symbol':'1.2-6' }}</strong></div>
-            <div>Proposed InventoryValue: <strong>{{ transitionPreview.inventoryValue | currency:'AUD' }}</strong></div>
-            <div>Cutoff timestamp: <strong>{{ transitionPreview.cutoffAt | businessDateTime }}</strong></div>
-            <div>Cost source: <strong>{{ transitionSourceLabel(transitionPreview.costSource) }}</strong></div>
-            <div>Legacy replayed physical quantity: <strong>{{ transitionPreview.legacyReplayedPhysicalQuantity }}</strong></div>
-            <div>Legacy discrepancy retired: <strong>{{ transitionPreview.legacyPhysicalDiscrepancy }}</strong></div>
+        @if (transitionBatchPreview) {
+          <div class="mt-5 rounded-lg border border-md-gray-200 p-4">
+            <div class="grid gap-2 text-sm text-md-gray-800 sm:grid-cols-4">
+              <div>Products: <strong>{{ transitionBatchPreview.productCount }}</strong></div>
+              <div>Total home stock: <strong>{{ transitionBatchPreview.homeStockQuantity }}</strong></div>
+              <div>Total machine stock: <strong>{{ transitionBatchPreview.machineStockQuantity }}</strong></div>
+              <div>Total CostingQuantity: <strong>{{ transitionBatchPreview.openingCostingQuantity }}</strong></div>
+              <div>Total InventoryValue: <strong>{{ transitionBatchPreview.inventoryValue | currency:'AUD' }}</strong></div>
+              <div>Cutoff timestamp: <strong>{{ transitionBatchPreview.cutoffAt | businessDateTime }}</strong></div>
+              <div>Cost source: <strong>{{ transitionSourceLabel(transitionBatchPreview.costSource) }}</strong></div>
+            </div>
+            <div class="mt-4 max-h-96 overflow-auto">
+              <table class="table">
+                <thead class="table-head sticky top-0"><tr><th scope="col" class="table-cell">Product</th><th scope="col" class="table-cell">Home</th><th scope="col" class="table-cell">Machines</th><th scope="col" class="table-cell">Total</th><th scope="col" class="table-cell">Average cost</th><th scope="col" class="table-cell">Value</th><th scope="col" class="table-cell">Legacy discrepancy</th></tr></thead>
+                <tbody>
+                  @for (product of transitionBatchPreview.products; track product.productId) {
+                    <tr class="table-row">
+                      <td class="table-cell">
+                        <details><summary class="cursor-pointer font-medium">{{ product.productName }}</summary>
+                          <div class="mt-2 text-xs value-muted">
+                            @for (machine of product.machineStocks; track machine.machineId) {
+                              <div>{{ machine.machineName }}: {{ machine.stockQuantity }}</div>
+                            }
+                          </div>
+                        </details>
+                      </td>
+                      <td class="table-cell">{{ product.homeStockQuantity }}</td>
+                      <td class="table-cell">{{ product.machineStockQuantity }}</td>
+                      <td class="table-cell font-medium">{{ product.openingCostingQuantity }}</td>
+                      <td class="table-cell">{{ product.averageUnitCost | currency:'AUD':'symbol':'1.2-6' }}</td>
+                      <td class="table-cell">{{ product.inventoryValue | currency:'AUD' }}</td>
+                      <td class="table-cell">{{ product.legacyPhysicalDiscrepancy }}</td>
+                    </tr>
+                  }
+                </tbody>
+              </table>
+            </div>
+            <button type="button" class="btn btn-primary mt-4" [disabled]="loading" (click)="applyAllTransitions()">Confirm and save all product baselines</button>
           </div>
-          <p class="mt-3 text-sm text-amber-700">{{ transitionPreview.dataQualityNote }}</p>
-          <div class="mt-4 overflow-x-auto">
-            <table class="min-w-full text-left text-sm">
-              <thead class="bg-slate-50 text-xs text-slate-600"><tr><th class="px-3 py-2">Machine</th><th class="px-3 py-2">Stock</th><th class="px-3 py-2">Source</th></tr></thead>
-              <tbody>
-                @for (machine of transitionPreview.machineStocks; track machine.machineId) {
-                  <tr class="border-t border-slate-100"><td class="px-3 py-2">{{ machine.machineName }}</td><td class="px-3 py-2">{{ machine.stockQuantity }}</td><td class="px-3 py-2">{{ machine.source }}</td></tr>
-                }
-              </tbody>
-            </table>
+        }
+
+        @if (transitionPreview && !transitionBatchPreview) {
+          <div class="mt-5 rounded-lg border border-md-gray-200 p-4">
+            <div class="grid gap-2 text-sm text-md-gray-800 sm:grid-cols-3">
+              <div>Home stock quantity: <strong>{{ transitionPreview.homeStockQuantity }}</strong></div>
+              <div>Machine stock quantity: <strong>{{ transitionPreview.machineStockQuantity }}</strong></div>
+              <div>Total proposed CostingQuantity: <strong>{{ transitionPreview.openingCostingQuantity }}</strong></div>
+              <div>Proposed AverageUnitCost: <strong>{{ transitionPreview.averageUnitCost | currency:'AUD':'symbol':'1.2-6' }}</strong></div>
+              <div>Proposed InventoryValue: <strong>{{ transitionPreview.inventoryValue | currency:'AUD' }}</strong></div>
+              <div>Cutoff timestamp: <strong>{{ transitionPreview.cutoffAt | businessDateTime }}</strong></div>
+              <div>Cost source: <strong>{{ transitionSourceLabel(transitionPreview.costSource) }}</strong></div>
+              <div>Legacy replayed physical quantity: <strong>{{ transitionPreview.legacyReplayedPhysicalQuantity }}</strong></div>
+              <div>Legacy discrepancy retired: <strong>{{ transitionPreview.legacyPhysicalDiscrepancy }}</strong></div>
+            </div>
+            @if (transitionPreview.dataQualityNote) {
+              <div class="alert alert-warning mt-3">{{ transitionPreview.dataQualityNote }}</div>
+            }
+            <div class="mt-4 overflow-x-auto">
+              <table class="table">
+                <thead class="table-head"><tr><th scope="col" class="table-cell">Machine</th><th scope="col" class="table-cell">Stock</th><th scope="col" class="table-cell">Source</th></tr></thead>
+                <tbody>
+                  @for (machine of transitionPreview.machineStocks; track machine.machineId) {
+                    <tr class="table-row"><td class="table-cell">{{ machine.machineName }}</td><td class="table-cell">{{ machine.stockQuantity }}</td><td class="table-cell">{{ machine.source }}</td></tr>
+                  }
+                </tbody>
+              </table>
+            </div>
+            <button type="button" class="btn btn-primary mt-4" [disabled]="loading" (click)="applyTransition()">Confirm and save transition baseline</button>
           </div>
-          <button type="button" class="mt-4 rounded-md bg-amber-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50" [disabled]="loading" (click)="applyTransition()">Confirm and save transition baseline</button>
-        </div>
-      }
+        }
+      </div>
     </section>
   `
 })
