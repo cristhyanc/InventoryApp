@@ -37,7 +37,8 @@ public class PurchasesControllerTests
             new UploadPurchase(store, storage, new FakeClock(new DateTime(2026, 3, 1, 10, 0, 0, DateTimeKind.Utc))),
             new UpdatePurchase(store),
             new DeletePurchase(store, storage),
-            new ComputePurchaseTotalValidation());
+            new ComputePurchaseTotalValidation(),
+            new ComputePurchaseGstSummary());
     }
 
     private static Mock<IDocumentStorage> NoDocuments()

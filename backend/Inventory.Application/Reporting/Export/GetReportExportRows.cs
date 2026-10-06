@@ -190,8 +190,8 @@ public sealed class GetReportExportRows
             var value = await _getGstAccountingAid.Handle(filter, cancellationToken);
             var rows = new List<List<string>>
             {
-                new() { "From", "To", "TaxableSales", "GstOnSales", "TaxableFees", "GstOnFees", "NetGst" },
-                new() { value.From.ToString("yyyy-MM-dd"), value.To.ToString("yyyy-MM-dd"), value.TaxableSales.ToString(CultureInfo.InvariantCulture), value.GstOnSales.ToString(CultureInfo.InvariantCulture), value.TaxableFees.ToString(CultureInfo.InvariantCulture), value.GstOnFees.ToString(CultureInfo.InvariantCulture), value.NetGst.ToString(CultureInfo.InvariantCulture) }
+                new() { "From", "To", "TaxableSales", "GstOnSales", "TaxableFees", "GstOnFees", "PurchaseLineGst", "PurchaseChargeGst", "PurchaseInputGst", "PurchaseUnresolvedComponents", "PurchaseUnresolvedAmount", "PurchaseGstIncomplete", "NetGst" },
+                new() { value.From.ToString("yyyy-MM-dd"), value.To.ToString("yyyy-MM-dd"), value.TaxableSales.ToString(CultureInfo.InvariantCulture), value.GstOnSales.ToString(CultureInfo.InvariantCulture), value.TaxableFees.ToString(CultureInfo.InvariantCulture), value.GstOnFees.ToString(CultureInfo.InvariantCulture), value.PurchaseLineGst.ToString(CultureInfo.InvariantCulture), value.PurchaseChargeGst.ToString(CultureInfo.InvariantCulture), value.InventoryPurchaseGst.ToString(CultureInfo.InvariantCulture), value.PurchaseUnresolvedComponentCount.ToString(CultureInfo.InvariantCulture), value.PurchaseUnresolvedAmount.ToString(CultureInfo.InvariantCulture), value.PurchaseGstIncomplete.ToString(), value.NetGst.ToString(CultureInfo.InvariantCulture) }
             };
             return new ReportExportTable(rows, "Report");
         }

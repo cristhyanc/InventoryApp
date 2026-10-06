@@ -411,6 +411,37 @@ export interface RestockCostSuggestion {
   purchaseDate: string | null;
 }
 
+/**
+ * The GST status of one purchase component - a purchase line, or the purchase's delivery or package
+ * charge (issue #429, under the approved GST design of parent issue #62). The numbers are the
+ * contract the API serializes, so they must stay in step with the backend
+ * `Inventory.Domain.Gst.GstClassification`.
+ *
+ * `Unknown` is a real persisted state, not a missing value: it contributes no input GST and stays
+ * visibly unresolved. Never present it as GST-free, and never derive GST from an amount here - the
+ * server returns the calculated figures (`PurchaseGstSummary`).
+ */
+export enum GstClassification {
+  Unknown = 0,
+  Taxable = 1,
+  GstFree = 2
+}
+
+/**
+ * How a `GstClassification` was established, as the API returns it (backend
+ * `Inventory.Domain.Gst.GstClassificationSource`). It is audit provenance, never submitted by the
+ * client: the server records a person's explicit choice as `Manual`. A purchase edit therefore omits
+ * the classifications the person did not change, so a rule-derived provenance survives an unrelated
+ * edit.
+ */
+export enum GstClassificationSource {
+  Unknown = 0,
+  Manual = 1,
+  ProductRule = 2,
+  SupplierDefault = 3,
+  SupplierFeeDefault = 4
+}
+
 // The Purchase business record served under the "/api/purchases" JSON contract
 // (see backend Purchase.cs / PurchaseResponseDto).
 export interface Purchase {
@@ -419,7 +450,11 @@ export interface Purchase {
   notes?: string | null;
   totalAmount?: number | null;
   deliveryCost?: number | null;
+  deliveryGstClassification?: GstClassification;
+  deliveryGstClassificationSource?: GstClassificationSource;
   packageCost?: number | null;
+  packageGstClassification?: GstClassification;
+  packageGstClassificationSource?: GstClassificationSource;
   purchaseDate: string;
   supplierId?: number | null;
   supplier?: Supplier | null;
@@ -438,9 +473,24 @@ export interface PurchaseValidation {
   totalDifference?: number | null;
 }
 
+/**
+ * The saved purchase's input GST as the API calculated it (issue #431). `unresolvedComponentCount`
+ * and `unresolvedAmount` cover the components nobody has classified; they are reported separately so
+ * an incomplete purchase never looks like a resolved $0. Absent delivery/package charges are not
+ * components and are never unresolved.
+ *
+ * These figures describe the saved purchase. They do not reflect unsaved edits.
+ */
+export interface PurchaseGstSummary {
+  inputGst: number;
+  unresolvedComponentCount: number;
+  unresolvedAmount: number;
+}
+
 export interface PurchaseResponse {
   purchase: Purchase;
   validation?: PurchaseValidation | null;
+  gst?: PurchaseGstSummary | null;
 }
 
 export interface PurchaseItem {
@@ -450,6 +500,8 @@ export interface PurchaseItem {
   product?: Product | null;
   quantity: number;
   unitCost: number;
+  gstClassification?: GstClassification;
+  gstClassificationSource?: GstClassificationSource;
   lineTotal?: number;
 }
 

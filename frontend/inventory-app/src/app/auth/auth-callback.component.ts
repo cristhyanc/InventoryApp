@@ -4,8 +4,10 @@ import { Component } from '@angular/core';
   selector: 'app-auth-callback',
   standalone: true,
   template: `
-    <div class="p-6 text-slate-600">
-      Signing you in...
+    <div class="flex min-h-screen items-center justify-center bg-md-gray-100 p-6">
+      <div class="card w-full max-w-sm text-center">
+        <div class="card-body">Signing you in...</div>
+      </div>
     </div>
   `
 })

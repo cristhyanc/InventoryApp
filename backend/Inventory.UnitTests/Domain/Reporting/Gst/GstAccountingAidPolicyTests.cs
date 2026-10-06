@@ -33,6 +33,29 @@ public class GstAccountingAidPolicyTests
     }
 
     [Fact]
+    public void Net_gst_also_subtracts_purchase_input_gst()
+    {
+        var result = GstAccountingAidPolicy.Calculate(new GstAccountingAidInputs(
+            Sales: 110m, GstOnSales: 10m, NayaxFeesExGst: 5m, GstOnFees: 1m, OperatingExpenseGst: 2m,
+            PurchaseInputGst: 3m));
+
+        Assert.Equal(4m, result.NetGst);
+    }
+
+    [Fact]
+    public void Unresolved_purchase_components_do_not_reduce_net_gst()
+    {
+        // The unresolved amount is reported separately; it never contributes an inferred 1/11.
+        var withoutPurchases = GstAccountingAidPolicy.Calculate(new GstAccountingAidInputs(
+            Sales: 110m, GstOnSales: 10m, NayaxFeesExGst: 5m, GstOnFees: 1m, OperatingExpenseGst: 0m));
+        var withUnresolvedOnly = GstAccountingAidPolicy.Calculate(new GstAccountingAidInputs(
+            Sales: 110m, GstOnSales: 10m, NayaxFeesExGst: 5m, GstOnFees: 1m, OperatingExpenseGst: 0m,
+            PurchaseInputGst: 0m));
+
+        Assert.Equal(withoutPurchases.NetGst, withUnresolvedOnly.NetGst);
+    }
+
+    [Fact]
     public void Zero_sales_and_zero_gst_figures_produce_zero_taxable_sales_and_zero_net_gst()
     {
         var result = GstAccountingAidPolicy.Calculate(new GstAccountingAidInputs(

@@ -7,7 +7,10 @@
  * that serves it.
  */
 
-/** A navigable destination. `icon` is decorative and only the top-level rail needs one. */
+/**
+ * A navigable destination. `icon` is decorative and only the top-level rail needs one; it names
+ * an entry in `ICON_PATHS` (issue #411) rendered through `app-icon`.
+ */
 export interface NavLink {
   readonly kind: 'link';
   readonly label: string;
@@ -30,12 +33,12 @@ function link(label: string, route: string): NavLink {
 }
 
 export const primaryNavigation: readonly NavItem[] = [
-  { kind: 'link', label: 'Dashboard', route: '/', icon: '🏠' },
-  { kind: 'link', label: 'Pick List', route: '/pick-list', icon: '📝' },
+  { kind: 'link', label: 'Dashboard', route: '/', icon: 'home' },
+  { kind: 'link', label: 'Pick List', route: '/pick-list', icon: 'assignment' },
   {
     kind: 'group',
     label: 'Products',
-    icon: '📦',
+    icon: 'inventory_2',
     children: [
       link('Products', '/products'),
       link('Take Inventory', '/take-inventory'),
@@ -43,19 +46,19 @@ export const primaryNavigation: readonly NavItem[] = [
       link('Stock History', '/stock-history')
     ]
   },
-  { kind: 'link', label: 'Machines', route: '/machines', icon: '🏭' },
-  { kind: 'link', label: 'Sites', route: '/sites', icon: '📍' },
+  { kind: 'link', label: 'Machines', route: '/machines', icon: 'refresh' },
+  { kind: 'link', label: 'Sites', route: '/sites', icon: 'location_on' },
   {
     kind: 'group',
     label: 'Purchases',
-    icon: '🧾',
+    icon: 'download',
     children: [link('Purchases', '/purchases'), link('Supplier Orders', '/purchases/orders'), link('Suppliers', '/suppliers')]
   },
-  { kind: 'link', label: 'Expenses', route: '/expenses', icon: '💸' },
+  { kind: 'link', label: 'Expenses', route: '/expenses', icon: 'attach_money' },
   {
     kind: 'group',
     label: 'Reports',
-    icon: '📊',
+    icon: 'bar_chart',
     children: [
       link('Dashboard', '/reports'),
       link('Bookkeeping', '/reports/bookkeeping'),
@@ -71,7 +74,7 @@ export const primaryNavigation: readonly NavItem[] = [
   {
     kind: 'group',
     label: 'Admin',
-    icon: '⚙️',
+    icon: 'settings',
     children: [
       link('Nayax Settings', '/admin/nayax-settings'),
       link('Site Commission Agreements', '/admin/site-commission-agreements'),

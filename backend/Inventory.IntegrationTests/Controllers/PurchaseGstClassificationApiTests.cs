@@ -226,6 +226,62 @@ public sealed class PurchaseGstClassificationApiTests : IClassFixture<PurchaseGs
         Assert.Equal((int)GstClassificationSource.Manual, line.GetProperty("gstClassificationSource").GetInt32());
     }
 
+    /// <summary>
+    /// The purchase input-GST summary issue #431 added to the response envelope, over the real
+    /// pipeline and on both the write and the read. The purchase form displays these figures; it
+    /// never calculates them, so the response is where they have to come from.
+    ///
+    /// The amounts pin the component-level rounding: the 2.20 taxable line contributes 0.20 and the
+    /// 5.00 taxable delivery charge contributes 0.45, while the unclassified 2.00 package charge
+    /// contributes no GST at all and is reported separately as one unresolved component.
+    /// </summary>
+    [Fact]
+    public async Task The_response_envelope_carries_the_saved_purchase_input_gst_summary()
+    {
+        var productId = await _factory.ProductIdAsync(E2ETestFixture.PurchaseProductName);
+
+        var created = await _factory.BusinessA().PostAsync(PurchasesUri, Form(
+            items: Items(productId, gstClassification: "1"),
+            deliveryCost: "5.00",
+            deliveryGstClassification: "1",
+            packageCost: "2.00"));
+
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        AssertSummary(await GstSummaryAsync(created), inputGst: 0.65m, unresolvedCount: 1, unresolvedAmount: 2.00m);
+
+        var purchaseId = (await PurchaseAsync(created)).GetProperty("id").GetInt32();
+        var read = await _factory.BusinessA().GetAsync($"{PurchasesUri}/{purchaseId}");
+
+        Assert.Equal(HttpStatusCode.OK, read.StatusCode);
+        AssertSummary(await GstSummaryAsync(read), inputGst: 0.65m, unresolvedCount: 1, unresolvedAmount: 2.00m);
+    }
+
+    /// <summary>
+    /// A delivery or package charge that was never entered has no classification and is never an
+    /// unresolved component (parent issue #62, decision D3), so a purchase whose only component is a
+    /// classified line reports nothing unresolved. Without this, the form would warn about charges
+    /// the person deliberately left empty.
+    /// </summary>
+    [Fact]
+    public async Task An_absent_charge_is_not_an_unresolved_component_of_the_summary()
+    {
+        var productId = await _factory.ProductIdAsync(E2ETestFixture.PurchaseProductName);
+
+        var response = await _factory.BusinessA().PostAsync(PurchasesUri, Form(
+            items: Items(productId, gstClassification: "2")));
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        AssertSummary(await GstSummaryAsync(response), inputGst: 0m, unresolvedCount: 0, unresolvedAmount: 0m);
+    }
+
+    private static void AssertSummary(
+        JsonElement summary, decimal inputGst, int unresolvedCount, decimal unresolvedAmount)
+    {
+        Assert.Equal(inputGst, summary.GetProperty("inputGst").GetDecimal());
+        Assert.Equal(unresolvedCount, summary.GetProperty("unresolvedComponentCount").GetInt32());
+        Assert.Equal(unresolvedAmount, summary.GetProperty("unresolvedAmount").GetDecimal());
+    }
+
     private async Task<int> CreatePurchaseAsync(
         string? gstClassification, HttpClient? client = null, long? productId = null)
     {
@@ -247,10 +303,17 @@ public sealed class PurchaseGstClassificationApiTests : IClassFixture<PurchaseGs
     }
 
     /// <summary>The <c>purchase</c> member of the endpoint's response envelope.</summary>
-    private static async Task<JsonElement> PurchaseAsync(HttpResponseMessage response)
+    private static async Task<JsonElement> PurchaseAsync(HttpResponseMessage response) =>
+        await EnvelopeMemberAsync(response, "purchase");
+
+    /// <summary>The <c>gst</c> member of the endpoint's response envelope (issue #431).</summary>
+    private static async Task<JsonElement> GstSummaryAsync(HttpResponseMessage response) =>
+        await EnvelopeMemberAsync(response, "gst");
+
+    private static async Task<JsonElement> EnvelopeMemberAsync(HttpResponseMessage response, string name)
     {
         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        return document.RootElement.GetProperty("purchase").Clone();
+        return document.RootElement.GetProperty(name).Clone();
     }
 
     /// <summary>

@@ -76,6 +76,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<ResolveMachineStockEventsAsAlreadyRecorded>();
         services.AddScoped<SyncLatestNayaxSales>();
         services.AddScoped<ComputePurchaseTotalValidation>();
+        services.AddScoped<ComputePurchaseGstSummary>();
         services.AddScoped<ListPurchases>();
         services.AddScoped<GetPurchase>();
         services.AddScoped<GetPurchaseFile>();

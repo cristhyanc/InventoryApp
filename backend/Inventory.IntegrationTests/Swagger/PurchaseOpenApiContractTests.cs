@@ -94,18 +94,28 @@ public class PurchaseOpenApiContractTests
         Assert.DoesNotContain(referencedSchemaIds, id => id.StartsWith("Receipt", StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// The published envelope. Issue #431 added the third <c>gst</c> property - the saved purchase's
+    /// input GST and unresolved components - which the purchase pages display instead of calculating
+    /// GST themselves. It is additive: <c>purchase</c> and <c>validation</c> keep their names and
+    /// their schema references, so no existing client reads anything differently.
+    /// </summary>
     [Fact]
-    public void Canonical_response_schema_exposes_the_purchase_and_validation_properties()
+    public void Canonical_response_schema_exposes_the_purchase_validation_and_gst_properties()
     {
         var document = ApiContractTestHost.GetSwaggerDocument();
 
         var response = document.Components.Schemas["PurchaseResponseDto"];
 
         Assert.Equal(
-            new[] { "purchase", "validation" },
+            new[] { "gst", "purchase", "validation" },
             response.Properties.Keys.Order().ToArray());
         Assert.Equal("Purchase", response.Properties["purchase"].Reference?.Id);
         Assert.Equal("PurchaseValidationDto", response.Properties["validation"].Reference?.Id);
+        Assert.Equal("PurchaseGstSummaryDto", response.Properties["gst"].Reference?.Id);
+        Assert.Equal(
+            new[] { "inputGst", "unresolvedAmount", "unresolvedComponentCount" },
+            document.Components.Schemas["PurchaseGstSummaryDto"].Properties.Keys.Order().ToArray());
         Assert.Equal("PurchaseItem", document.Components.Schemas["Purchase"].Properties["items"].Items.Reference?.Id);
 
         // `receiptId` is the persistence-facing field issue #127 deliberately leaves unrenamed
