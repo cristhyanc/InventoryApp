@@ -223,8 +223,10 @@ describe('TakeInventoryComponent current stock control sizing', () => {
     fixture.detectChanges();
     const host = fixture.nativeElement as HTMLElement;
     const buttons = () => Array.from(host.querySelectorAll<HTMLButtonElement>('[data-testid="confirm-current-stock"]'));
+    const applyButtons = () =>
+      Array.from(host.querySelectorAll<HTMLButtonElement>('tbody button:not([data-testid="confirm-current-stock"])'));
 
-    return { fixture, host, buttons, apply };
+    return { fixture, host, buttons, applyButtons, apply };
   }
 
   afterEach(() => TestBed.resetTestingModule());
@@ -254,6 +256,21 @@ describe('TakeInventoryComponent current stock control sizing', () => {
     );
     expect(new Set(sizingClasses).size).toBe(1);
     expect(rendered[2].textContent).toContain('1234');
+  });
+
+  it('gives every Apply button the same 44x44 CSS pixel minimum target', async () => {
+    const { applyButtons } = await render([
+      product({ id: 1, name: 'Coke', quantityInStock: 8 }),
+      product({ id: 2, name: 'Chips', quantityInStock: 12 })
+    ]);
+
+    const rendered = applyButtons();
+    expect(rendered.length).toBe(2);
+
+    for (const button of rendered) {
+      expect(button.textContent).toContain('Apply');
+      expect(Array.from(button.classList)).toEqual(expect.arrayContaining(['min-h-[44px]', 'min-w-[44px]']));
+    }
   });
 
   it('keeps the confirm behaviour and completed appearance when the enlarged button is clicked', async () => {
