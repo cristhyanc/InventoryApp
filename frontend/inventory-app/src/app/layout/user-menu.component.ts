@@ -16,7 +16,7 @@ import { Component, ElementRef, EventEmitter, HostListener, Input, Output, ViewC
         <button
           #trigger
           type="button"
-          class="flex max-w-56 items-center gap-2 rounded-full border border-slate-300 bg-white py-1 pl-1 pr-3 text-sm text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+          class="flex max-w-56 items-center gap-2 rounded-full border border-md-gray-300 bg-white py-1 pl-1 pr-3 text-md-body text-md-gray-800 transition hover:bg-md-gray-100"
           aria-haspopup="true"
           [attr.aria-expanded]="isOpen"
           [attr.aria-controls]="isOpen ? panelId : null"
@@ -26,12 +26,12 @@ import { Component, ElementRef, EventEmitter, HostListener, Input, Output, ViewC
           @if (initials) {
             <span
               aria-hidden="true"
-              class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-blue-600 text-xs font-semibold text-white"
+              class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-md-dark text-xs font-semibold text-white"
               >{{ initials }}</span
             >
           }
           <span class="truncate">{{ displayName }}</span>
-          <span aria-hidden="true" class="text-xs text-slate-400">&#9662;</span>
+          <span aria-hidden="true" class="text-xs text-md-gray-500">&#9662;</span>
         </button>
 
         @if (isOpen) {
@@ -39,16 +39,16 @@ import { Component, ElementRef, EventEmitter, HostListener, Input, Output, ViewC
             [id]="panelId"
             role="group"
             aria-label="Account"
-            class="absolute right-0 z-40 mt-2 w-60 rounded-lg border border-slate-200 bg-white p-2 text-sm shadow-lg"
+            class="absolute right-0 z-40 mt-2 w-60 rounded-md-card border border-md-gray-200 bg-white p-2 text-md-body shadow-md"
           >
-            <p class="px-3 py-2 text-slate-500">
+            <p class="px-3 py-2 text-md-gray-500">
               Signed in as
-              <span class="block truncate font-medium text-slate-700">{{ displayName }}</span>
+              <span class="block truncate font-medium text-md-gray-800">{{ displayName }}</span>
             </p>
-            <div class="my-1 border-t border-slate-100"></div>
+            <div class="my-1 border-t border-md-gray-200"></div>
             <button
               type="button"
-              class="w-full rounded-md px-3 py-2 text-left text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+              class="w-full rounded-md-control px-3 py-2 text-left text-md-gray-800 transition hover:bg-md-gray-100"
               (click)="requestSignOut()"
             >
               Sign out
@@ -57,13 +57,7 @@ import { Component, ElementRef, EventEmitter, HostListener, Input, Output, ViewC
         }
       </div>
     } @else {
-      <button
-        type="button"
-        class="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
-        (click)="signInRequested.emit()"
-      >
-        Sign in
-      </button>
+      <button type="button" class="btn btn-primary btn-sm" (click)="signInRequested.emit()">Sign in</button>
     }
   `
 })
