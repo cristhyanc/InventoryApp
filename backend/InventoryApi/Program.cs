@@ -7,9 +7,14 @@ using Inventory.Infrastructure.Documents;
 using Inventory.Infrastructure.Imports;
 using Inventory.Infrastructure.Nayax;
 using InventoryApi.Adapters.Nayax;
+using InventoryApi.Adapters.PlatformDiagnostics;
 using InventoryApi.Bootstrap;
 using InventoryApi.Auth;
 using InventoryApi.Auth.E2ETesting;
+using InventoryApi.Auth.PlatformAdmin;
+using Inventory.Application.PlatformDiagnostics;
+using Inventory.Infrastructure.PlatformDiagnostics;
+using Microsoft.AspNetCore.Authorization;
 using Inventory.Infrastructure.Data;
 using InventoryApi.Http;
 using InventoryApi.Http.HealthChecks;
@@ -66,7 +71,24 @@ builder.Services.AddInventoryApiTelemetry(builder.Configuration);
 // cannot be influenced by request input - see InventoryApi.Auth.E2ETesting.
 builder.Services.AddInventoryApiAuthentication(builder.Configuration, builder.Environment);
 
-builder.Services.AddAuthorization();
+// Authorization (issue #336). The default policy is unchanged - every business controller keeps
+// [Authorize] plus [RequiredScope("access_as_user")] - and exactly one named policy is added, for
+// the platform diagnostics endpoints. It is satisfied only by the separately configured Entra
+// (tid, oid) pair below, never by a business role, a membership row or anything a request supplies.
+// With nothing configured, which is the shipped state, the policy denies everyone.
+var configuredPlatformAdmin = ConfiguredPlatformAdmin.From(
+    builder.Configuration.GetSection(PlatformAdminOptions.SectionName).Get<PlatformAdminOptions>());
+
+builder.Services.AddSingleton(configuredPlatformAdmin);
+builder.Services.AddScoped<IAuthorizationHandler, PlatformAdminAuthorizationHandler>();
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy(PlatformAdminPolicy.Name, policy =>
+    {
+        policy.RequireAuthenticatedUser();
+        policy.AddRequirements(new PlatformAdminRequirement());
+    });
+});
 
 // Required by EntraActorIdentityAccessor, which reads the current request's ClaimsPrincipal.
 builder.Services.AddHttpContextAccessor();
@@ -120,11 +142,26 @@ builder.Services.AddExceptionHandler<DomainExceptionHandler>();
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 builder.Services.AddInventoryApiSwagger();
 
+var databaseConnectionString = builder.Configuration.GetConnectionString("DefaultConnection")
+    ?? "Data Source=inventory.db";
+
 builder.Services.AddDbContext<AppDbContext>(options =>
 {
-    options.UseSqlite(builder.Configuration.GetConnectionString("DefaultConnection")
-        ?? "Data Source=inventory.db");
+    options.UseSqlite(databaseConnectionString);
 });
+
+// The platform diagnostics read path (issue #336). The composition root hands the adapter the same
+// configured data source AppDbContext uses; the adapter forces the connection open read-only and
+// installs the SQLite protections, so no setting here can widen what it may read. The limits are
+// the hard maxima - PlatformDiagnosticsQueryLimits.Create can only tighten them - and the audit
+// port is satisfied by the ILogger adapter, which is in this layer because the audit event carries
+// the request's correlation id.
+builder.Services.AddPlatformDiagnostics(new SqliteDiagnosticsOptions
+{
+    ConnectionString = databaseConnectionString,
+});
+
+builder.Services.AddScoped<IPlatformDiagnosticsAudit, LoggingPlatformDiagnosticsAudit>();
 
 builder.Services.AddCors(options =>
 {
