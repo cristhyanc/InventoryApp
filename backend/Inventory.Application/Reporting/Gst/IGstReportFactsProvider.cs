@@ -1,9 +1,9 @@
 namespace Inventory.Application.Reporting.Gst;
 
 /// <summary>
-/// Narrow Application-owned port for the imported-summary data-quality facts the GST accounting-aid
-/// report needs. Not a generic repository: it returns one purpose-built fact bundle for one resolved
-/// date range and optional machine filter.
+/// Narrow Application-owned port for the imported-summary data-quality facts and the purchase GST
+/// components the GST accounting-aid report needs. Not a generic repository: it returns one
+/// purpose-built fact bundle for one resolved date range and optional machine filter.
 /// </summary>
 public interface IGstReportFactsProvider
 {

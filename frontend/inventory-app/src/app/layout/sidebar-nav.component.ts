@@ -1,6 +1,7 @@
 import { Component, EventEmitter, Input, OnDestroy, OnInit, Output } from '@angular/core';
 import { NavigationEnd, Router, RouterLink } from '@angular/router';
 import { Subject, filter, takeUntil } from 'rxjs';
+import { IconComponent } from '../components/shared/icon.component';
 import { NavGroup, NavItem, NavLink, activeNavGroup, activeNavRoute, primaryNavigation } from './navigation';
 
 /**
@@ -14,7 +15,7 @@ import { NavGroup, NavItem, NavLink, activeNavGroup, activeNavRoute, primaryNavi
 @Component({
   selector: 'app-sidebar-nav',
   standalone: true,
-  imports: [RouterLink],
+  imports: [RouterLink, IconComponent],
   templateUrl: './sidebar-nav.component.html'
 })
 export class SidebarNavComponent implements OnInit, OnDestroy {

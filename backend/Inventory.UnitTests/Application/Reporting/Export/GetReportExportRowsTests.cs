@@ -16,7 +16,8 @@ namespace InventoryApi.Tests.Application.Reporting.Export;
 public class GetReportExportRowsTests
 {
     private static GetReportExportRows Sut(GetBookkeepingReport? bookkeeping = null, GetTransactionSalesReport? transactions = null,
-        Inventory.Application.Reporting.Daily.GetDailyReport? daily = null)
+        Inventory.Application.Reporting.Daily.GetDailyReport? daily = null,
+        Inventory.Application.Reporting.Gst.GetGstAccountingAid? gstAccountingAid = null)
     {
         bookkeeping ??= new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(FakeBookkeepingReportFactsProvider.Complete()));
         transactions ??= new GetTransactionSalesReport(new FakeTransactionSalesReportFactsProvider(FakeTransactionSalesReportFactsProvider.Empty()));
@@ -33,7 +34,7 @@ public class GetReportExportRowsTests
             new InventoryApi.Tests.Application.Reporting.ProductProfitability.FakeProductProfitabilityReportFactsProvider(
                 InventoryApi.Tests.Application.Reporting.ProductProfitability.FakeProductProfitabilityReportFactsProvider.Empty()),
             InventoryApi.Tests.Application.Reporting.ProductProfitability.FakeProductPurchaseCostFactsProvider.Empty());
-        var gst = new Inventory.Application.Reporting.Gst.GetGstAccountingAid(bookkeeping,
+        var gst = gstAccountingAid ?? new Inventory.Application.Reporting.Gst.GetGstAccountingAid(bookkeeping,
             new InventoryApi.Tests.Application.Reporting.Gst.FakeGstReportFactsProvider(
                 InventoryApi.Tests.Application.Reporting.Gst.FakeGstReportFactsProvider.Complete()));
         var dashboard = new Inventory.Application.Reporting.Dashboard.GetDashboardReport(bookkeeping,
@@ -76,6 +77,57 @@ public class GetReportExportRowsTests
         Assert.Equal(2, table.Rows.Count);
         Assert.Contains("7", table.Rows[1]);
     }
+
+    private static Inventory.Application.Reporting.Gst.GetGstAccountingAid GstWith(
+        GetBookkeepingReport bookkeeping,
+        params Inventory.Domain.Reporting.Gst.PurchaseGstComponents[] purchases) =>
+        new(bookkeeping, new InventoryApi.Tests.Application.Reporting.Gst.FakeGstReportFactsProvider(
+            InventoryApi.Tests.Application.Reporting.Gst.FakeGstReportFactsProvider.Complete(purchases: purchases)));
+
+    [Fact]
+    public async Task Gst_export_carries_the_purchase_input_gst_columns_from_the_same_authoritative_result()
+    {
+        var bookkeeping = new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(FakeBookkeepingReportFactsProvider.Complete()));
+        var gst = GstWith(bookkeeping, new Inventory.Domain.Reporting.Gst.PurchaseGstComponents(
+            [new Inventory.Domain.Purchases.PurchaseGstLine(2m, 5.50m, Inventory.Domain.Gst.GstClassification.Taxable)],
+            new Inventory.Domain.Purchases.PurchaseGstCharge(11m, Inventory.Domain.Gst.GstClassification.Taxable),
+            new Inventory.Domain.Purchases.PurchaseGstCharge(22m, Inventory.Domain.Gst.GstClassification.Unknown)));
+        var filter = new ReportingFilterDto(new DateTime(2025, 7, 1), new DateTime(2025, 7, 31));
+        var apiResult = await gst.Handle(filter, CancellationToken.None);
+
+        var table = await Sut(bookkeeping: bookkeeping, gstAccountingAid: gst).Handle("gst", filter, CancellationToken.None);
+
+        var header = table.Rows[0];
+        var values = table.Rows[1];
+        string Column(string name) => values[header.ToList().IndexOf(name)];
+        Assert.Equal(header.Count, values.Count);
+        Assert.Equal(Invariant(apiResult.PurchaseLineGst), Column("PurchaseLineGst"));
+        Assert.Equal(Invariant(apiResult.PurchaseChargeGst), Column("PurchaseChargeGst"));
+        Assert.Equal(Invariant(apiResult.InventoryPurchaseGst), Column("PurchaseInputGst"));
+        Assert.Equal(apiResult.PurchaseUnresolvedComponentCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            Column("PurchaseUnresolvedComponents"));
+        Assert.Equal(Invariant(apiResult.PurchaseUnresolvedAmount), Column("PurchaseUnresolvedAmount"));
+        Assert.Equal(apiResult.PurchaseGstIncomplete.ToString(), Column("PurchaseGstIncomplete"));
+        Assert.Equal(Invariant(apiResult.NetGst), Column("NetGst"));
+        Assert.Equal("True", Column("PurchaseGstIncomplete"));
+    }
+
+    [Fact]
+    public async Task Gst_export_of_a_period_with_no_purchases_reports_zero_and_a_complete_purchase_status()
+    {
+        var bookkeeping = new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(FakeBookkeepingReportFactsProvider.Complete()));
+        var filter = new ReportingFilterDto(new DateTime(2025, 7, 1), new DateTime(2025, 7, 31));
+
+        var table = await Sut(bookkeeping: bookkeeping, gstAccountingAid: GstWith(bookkeeping)).Handle("gst", filter, CancellationToken.None);
+
+        var header = table.Rows[0].ToList();
+        var values = table.Rows[1];
+        Assert.Equal("0", values[header.IndexOf("PurchaseInputGst")]);
+        Assert.Equal("0", values[header.IndexOf("PurchaseUnresolvedComponents")]);
+        Assert.Equal("False", values[header.IndexOf("PurchaseGstIncomplete")]);
+    }
+
+    private static string Invariant(decimal value) => value.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
     [Fact]
     public async Task Unsupported_transaction_report_name_throws()

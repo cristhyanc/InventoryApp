@@ -1,5 +1,5 @@
 import { Component, ElementRef, HostListener, OnDestroy, OnInit, ViewChild } from '@angular/core';
-import { RouterLink, RouterOutlet } from '@angular/router';
+import { RouterOutlet } from '@angular/router';
 import { MsalBroadcastService, MsalService } from '@azure/msal-angular';
 import { AuthenticationResult, InteractionStatus } from '@azure/msal-browser';
 import { Subject, filter, takeUntil } from 'rxjs';
@@ -25,7 +25,7 @@ import { loginRequest } from './auth-config';
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [RouterLink, RouterOutlet, SidebarNavComponent, UserMenuComponent, ToastContainerComponent, LoadingIndicatorComponent],
+  imports: [RouterOutlet, SidebarNavComponent, UserMenuComponent, ToastContainerComponent, LoadingIndicatorComponent],
   templateUrl: './app.component.html'
 })
 export class AppComponent implements OnInit, OnDestroy {

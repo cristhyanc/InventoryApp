@@ -1,6 +1,9 @@
 using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Reporting.Gst;
 using Inventory.Application.Reporting.Shared;
+using Inventory.Domain.Gst;
+using Inventory.Domain.Purchases;
+using Inventory.Domain.Reporting.Gst;
 using Xunit;
 
 namespace InventoryApi.Tests.Application.Reporting.Gst;
@@ -93,6 +96,125 @@ public class GetGstAccountingAidTests
 
         Assert.Equal(4, report.DataQuality.Notes!.Count);
         Assert.Contains("GST classification is not persisted on sales", string.Join(" ", report.DataQuality.Notes!));
+    }
+
+    private static PurchaseGstComponents Purchase(
+        IReadOnlyList<PurchaseGstLine> lines,
+        PurchaseGstCharge? delivery = null,
+        PurchaseGstCharge? package = null) =>
+        new(lines, delivery ?? new PurchaseGstCharge(null, GstClassification.Unknown),
+            package ?? new PurchaseGstCharge(null, GstClassification.Unknown));
+
+    private static async Task<GstAccountingAidDto> ReportForAsync(IReadOnlyList<PurchaseGstComponents> purchases)
+    {
+        var useCase = new GetGstAccountingAid(
+            new FakeGetBookkeepingReport(CompleteBookkeeping()),
+            new FakeGstReportFactsProvider(FakeGstReportFactsProvider.Complete(purchases: purchases)));
+        return await useCase.Handle(
+            new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31)), CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task A_period_with_no_purchases_reports_no_input_gst_and_nothing_unresolved()
+    {
+        var report = await ReportForAsync([]);
+
+        Assert.Equal(0m, report.PurchaseLineGst);
+        Assert.Equal(0m, report.PurchaseChargeGst);
+        Assert.Equal(0m, report.InventoryPurchaseGst);
+        Assert.Equal(0, report.PurchaseUnresolvedComponentCount);
+        Assert.Equal(0m, report.PurchaseUnresolvedAmount);
+        Assert.False(report.PurchaseGstIncomplete);
+        Assert.Equal(9m, report.NetGst);
+    }
+
+    [Fact]
+    public async Task Purchase_input_gst_is_split_into_lines_and_charges_and_reduces_net_gst()
+    {
+        var report = await ReportForAsync(
+        [
+            Purchase(
+                [new PurchaseGstLine(2m, 5.50m, GstClassification.Taxable)],
+                delivery: new PurchaseGstCharge(11m, GstClassification.Taxable))
+        ]);
+
+        Assert.Equal(1.00m, report.PurchaseLineGst);
+        Assert.Equal(1.00m, report.PurchaseChargeGst);
+        Assert.Equal(2.00m, report.InventoryPurchaseGst);
+        Assert.Equal(7m, report.NetGst);
+        Assert.False(report.PurchaseGstIncomplete);
+    }
+
+    [Fact]
+    public async Task Mixed_taxable_gst_free_and_unknown_purchases_keep_the_known_gst_and_flag_the_result_incomplete()
+    {
+        var report = await ReportForAsync(
+        [
+            Purchase([new PurchaseGstLine(1m, 110m, GstClassification.Taxable)]),
+            Purchase([new PurchaseGstLine(1m, 50m, GstClassification.GstFree)]),
+            Purchase([new PurchaseGstLine(1m, 22m, GstClassification.Unknown)])
+        ]);
+
+        Assert.Equal(10m, report.PurchaseLineGst);
+        Assert.Equal(10m, report.InventoryPurchaseGst);
+        Assert.Equal(1, report.PurchaseUnresolvedComponentCount);
+        Assert.Equal(22m, report.PurchaseUnresolvedAmount);
+        Assert.True(report.PurchaseGstIncomplete);
+        Assert.Equal(-1m, report.NetGst);
+        Assert.Contains("1 purchase component", string.Join(" ", report.DataQuality.Notes!));
+    }
+
+    [Fact]
+    public async Task Unresolved_purchase_components_never_contribute_an_inferred_gst_amount()
+    {
+        var report = await ReportForAsync(
+        [
+            Purchase([new PurchaseGstLine(1m, 110m, GstClassification.Unknown)])
+        ]);
+
+        Assert.Equal(0m, report.InventoryPurchaseGst);
+        Assert.Equal(110m, report.PurchaseUnresolvedAmount);
+        Assert.Equal(9m, report.NetGst);
+    }
+
+    [Fact]
+    public async Task A_null_or_zero_charge_does_not_inflate_the_unresolved_count()
+    {
+        var report = await ReportForAsync(
+        [
+            Purchase(
+                [new PurchaseGstLine(1m, 10m, GstClassification.Taxable)],
+                delivery: new PurchaseGstCharge(null, GstClassification.Unknown),
+                package: new PurchaseGstCharge(0m, GstClassification.Unknown))
+        ]);
+
+        Assert.Equal(0, report.PurchaseUnresolvedComponentCount);
+        Assert.Equal(0m, report.PurchaseUnresolvedAmount);
+        Assert.False(report.PurchaseGstIncomplete);
+    }
+
+    [Fact]
+    public async Task The_existing_imported_rows_gst_flag_is_not_what_marks_purchases_incomplete()
+    {
+        var report = await ReportForAsync([Purchase([new PurchaseGstLine(1m, 22m, GstClassification.Unknown)])]);
+
+        Assert.True(report.PurchaseGstIncomplete);
+        Assert.False(report.DataQuality.GstClassificationMissing);
+    }
+
+    [Fact]
+    public async Task A_machine_filtered_report_excludes_whole_business_purchases_and_says_so()
+    {
+        var useCase = new GetGstAccountingAid(
+            new FakeGetBookkeepingReport(CompleteBookkeeping()),
+            new FakeGstReportFactsProvider(FakeGstReportFactsProvider.Complete()));
+
+        var report = await useCase.Handle(
+            new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31), MachineId: 10), CancellationToken.None);
+
+        Assert.Equal(0m, report.InventoryPurchaseGst);
+        Assert.True(report.PurchaseGstIncomplete);
+        Assert.Contains("not allocated to individual machines", string.Join(" ", report.DataQuality.Notes!));
     }
 
     [Fact]

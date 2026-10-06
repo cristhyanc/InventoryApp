@@ -132,11 +132,23 @@ describe('SidebarNavComponent active route (issue #391)', () => {
     expect(link(host, '/admin/avco-transition')?.getAttribute('aria-current')).toBe('page');
   });
 
+  it('gives the active item the Material dark-gradient styling hook and its parent heading a visible active hook', async () => {
+    const { host } = await render({ url: '/admin/avco-transition' });
+
+    expect(link(host, '/admin/avco-transition')?.classList.contains('bg-md-dark-gradient')).toBe(true);
+    expect(link(host, '/admin/avco-transition')?.classList.contains('text-white')).toBe(true);
+    expect(link(host, '/admin/historical-cost-recovery')?.classList.contains('bg-md-dark-gradient')).toBe(false);
+    expect(groupToggle(host, 'Admin').classList.contains('bg-md-gray-100')).toBe(true);
+    expect(groupToggle(host, 'Reports').classList.contains('bg-md-gray-100')).toBe(false);
+  });
+
   it('marks a top-level link active from a detail URL without activating any group', async () => {
     const { host } = await render({ url: '/machines/7' });
 
     expect(link(host, '/machines')?.getAttribute('aria-current')).toBe('page');
     expect(groupToggle(host, 'Products').getAttribute('aria-expanded')).toBe('false');
+    expect(link(host, '/machines')?.classList.contains('bg-md-dark-gradient')).toBe(true);
+    expect(link(host, '/')?.classList.contains('bg-md-dark-gradient')).toBe(false);
   });
 
   it('follows navigation that happens after the sidebar is rendered', async () => {
