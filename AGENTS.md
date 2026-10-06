@@ -26,7 +26,8 @@ backend/Inventory.Infrastructure/     Adapters behind those ports: Nayax Lynx cl
   Models/                             Current EF entities and enums
   Persistence/                        Every other EF adapter behind an Application persistence port (issue #309); InventoryApi owns none
   Reporting/Persistence/              The reporting EF fact providers and their shared queries (issue #308)
-backend/InventoryApi.Tests/           xUnit backend tests
+backend/Inventory.UnitTests/          xUnit tests of Inventory.Domain/Inventory.Application only (references nothing else)
+backend/Inventory.IntegrationTests/   xUnit database, API, adapter, migration, bootstrap and architecture tests
 frontend/inventory-app/               Angular 19 standalone application
 .github/workflows/                    Validation, Claude Code and Copilot agent, and Azure deployment workflows
 CLAUDE.md                             Claude Code entry point: read and obey this file and the docs
@@ -140,6 +141,7 @@ node --test scripts/run-agent-model-evals.test.mjs
 Both validation scripts run exactly this pipeline; run the script rather than the individual commands. Notes:
 
 - The backend builds with `TreatWarningsAsErrors`, .NET analyzers and `EnforceCodeStyleInBuild` (see `Directory.Build.props`). A new warning in application code fails the build. The only suppressed compiler diagnostic is `CS8981` on EF Core generated migrations, scoped in `.editorconfig` to `[**/Migrations/*.cs]`. Do not widen that scope and do not add a global `<NoWarn>`.
+- The solution holds two test projects (issue #311), and `dotnet test` on it runs both: `backend/Inventory.UnitTests` references only `Inventory.Domain` and `Inventory.Application` and holds the pure Domain/Application tests; `backend/Inventory.IntegrationTests` holds everything that touches Infrastructure, `InventoryApi`, EF Core or a database, including the architecture tests. A test belongs in the unit project only if it and every helper it uses compile against those two projects alone; never add an Infrastructure or API reference to it. Test doubles both projects need live in the unit project and are compiled into the integration project as linked source files, so neither test project references the other. To run one suite: `dotnet test backend/Inventory.UnitTests/Inventory.UnitTests.csproj` or `dotnet test backend/Inventory.IntegrationTests/Inventory.IntegrationTests.csproj`.
 - `dotnet format` excludes `backend/Inventory.Infrastructure/Migrations` because an applied migration must not be rewritten. Both validation scripts hold that path in one variable (`migrations_dir` / `$MigrationsRelativePath`); keep them in step if the migrations ever move again.
 - Coverage is collected on every test run but has no minimum threshold yet. Coverage output is git-ignored; never commit it.
 - The frontend has a configured `lint` script (`ng lint`) and a `test` script (`jest`, via `jest-preset-angular`). `npm run lint` must report zero **errors**; warnings are visible but non-blocking. `npm run test` runs the Jest suite once (no watch mode) and must exit zero.

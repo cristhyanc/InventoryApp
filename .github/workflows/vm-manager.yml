@@ -15,7 +15,9 @@ permissions:
 env:
   CONFIGURATION: Release
   DOTNET_CORE_VERSION: 10.0.x
-  TEST_PROJECT: ./backend/InventoryApi.Tests/InventoryApi.Tests.csproj
+  # The solution holds both backend test projects (Inventory.UnitTests and Inventory.IntegrationTests,
+  # issue #311), so restoring, building and testing it runs every backend test.
+  BACKEND_SOLUTION: ./backend/InventoryApi/InventoryApi.slnx
 
 jobs:
   build:
@@ -31,10 +33,10 @@ jobs:
           dotnet-version: ${{ env.DOTNET_CORE_VERSION }}
 
       - name: Restore
-        run: dotnet restore "$TEST_PROJECT"
+        run: dotnet restore "$BACKEND_SOLUTION"
 
       - name: Build
-        run: dotnet build "$TEST_PROJECT" --configuration "$CONFIGURATION" --no-restore
+        run: dotnet build "$BACKEND_SOLUTION" --configuration "$CONFIGURATION" --no-restore
 
       - name: Test
-        run: dotnet test "$TEST_PROJECT" --configuration "$CONFIGURATION" --no-build
+        run: dotnet test "$BACKEND_SOLUTION" --configuration "$CONFIGURATION" --no-build --no-restore --collect:"XPlat Code Coverage"
