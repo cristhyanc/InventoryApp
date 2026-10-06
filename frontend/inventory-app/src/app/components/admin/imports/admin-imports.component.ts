@@ -17,34 +17,44 @@ import { ToastService } from '../../../services/toast.service';
   standalone: true,
   imports: [CommonModule, RouterLink],
   template: `
-    <div class="mb-6">
-      <a routerLink="/admin" class="text-sm text-blue-600 hover:underline">&larr; Back to Admin</a>
-      <h1 class="mt-2 text-2xl font-semibold text-slate-800">Imports</h1>
-      <p class="mt-1 text-sm text-slate-500">Supported imports. These actions can change application data.</p>
-    </div>
-
-    <div class="grid gap-5 md:grid-cols-2">
-      <section class="rounded-xl bg-white p-6 shadow-sm">
-        <h2 class="text-lg font-semibold text-slate-800">Import Nayax sales</h2>
-        <p class="mt-1 text-sm text-slate-500">Import .xlsx, .xls, or .csv sales data.</p>
-        <input #salesFile type="file" accept=".xlsx,.xls,.csv" class="hidden" (change)="onSalesSelected($event)" />
-        <div class="mt-4 flex flex-wrap gap-2">
-          <button type="button" class="rounded-md border border-slate-300 px-3 py-2 text-sm" (click)="downloadTemplate()">Download template</button>
-          <button type="button" class="rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50" [disabled]="loading" (click)="salesFile.click()">{{ loading ? 'Importing...' : 'Choose sales file' }}</button>
+    <div class="page">
+      <header class="page-header">
+        <div>
+          <a routerLink="/admin" class="btn-link text-sm">&larr; Back to Admin</a>
+          <h1 class="page-title mt-2">Imports</h1>
+          <p class="page-subtitle">Supported imports. These actions can change application data.</p>
         </div>
-      </section>
+      </header>
 
-      <section class="rounded-xl bg-white p-6 shadow-sm">
-        <h2 class="text-lg font-semibold text-slate-800">Import products</h2>
-        <p class="mt-1 text-sm text-slate-500">Refresh the product catalogue from the configured source.</p>
-        <button type="button" class="mt-4 rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50" [disabled]="loading" (click)="importProducts()">Import products</button>
-      </section>
+      <div class="grid gap-5 md:grid-cols-2">
+        <section class="card">
+          <div class="card-body">
+            <h2 class="card-title">Import Nayax sales</h2>
+            <p class="mt-1 text-sm value-muted">Import .xlsx, .xls, or .csv sales data.</p>
+            <input #salesFile type="file" accept=".xlsx,.xls,.csv" class="hidden" (change)="onSalesSelected($event)" />
+            <div class="mt-4 flex flex-wrap gap-2">
+              <button type="button" class="btn btn-secondary" (click)="downloadTemplate()">Download template</button>
+              <button type="button" class="btn btn-primary" [disabled]="loading" (click)="salesFile.click()">{{ loading ? 'Importing...' : 'Choose sales file' }}</button>
+            </div>
+          </div>
+        </section>
 
-      <section class="rounded-xl bg-white p-6 shadow-sm">
-        <h2 class="text-lg font-semibold text-slate-800">Import XML files</h2>
-        <p class="mt-1 text-sm text-slate-500">Process pending reimbursement XML files.</p>
-        <button type="button" class="mt-4 rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50" [disabled]="loading" (click)="importXml()">Import XML files</button>
-      </section>
+        <section class="card">
+          <div class="card-body">
+            <h2 class="card-title">Import products</h2>
+            <p class="mt-1 text-sm value-muted">Refresh the product catalogue from the configured source.</p>
+            <button type="button" class="btn btn-primary mt-4" [disabled]="loading" (click)="importProducts()">Import products</button>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="card-body">
+            <h2 class="card-title">Import XML files</h2>
+            <p class="mt-1 text-sm value-muted">Process pending reimbursement XML files.</p>
+            <button type="button" class="btn btn-primary mt-4" [disabled]="loading" (click)="importXml()">Import XML files</button>
+          </div>
+        </section>
+      </div>
     </div>
   `
 })

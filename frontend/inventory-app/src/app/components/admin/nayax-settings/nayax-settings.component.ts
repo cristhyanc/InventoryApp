@@ -16,55 +16,65 @@ import { ToastService } from '../../../services/toast.service';
   standalone: true,
   imports: [CommonModule, FormsModule, RouterLink],
   template: `
-    <div class="mb-6">
-      <a routerLink="/admin" class="text-sm text-blue-600 hover:underline">&larr; Back to Admin</a>
-      <h1 class="mt-2 text-2xl font-semibold text-slate-800">Nayax Settings</h1>
-      <p class="mt-1 text-sm text-slate-500">Used for current-period reporting when actual Nayax processing fee data has not yet been imported. Imported reimbursement data always takes precedence.</p>
-    </div>
+    <div class="page">
+      <header class="page-header">
+        <div>
+          <a routerLink="/admin" class="btn-link text-sm">&larr; Back to Admin</a>
+          <h1 class="page-title mt-2">Nayax Settings</h1>
+          <p class="page-subtitle">Used for current-period reporting when actual Nayax processing fee data has not yet been imported. Imported reimbursement data always takes precedence.</p>
+        </div>
+      </header>
 
-    <section class="rounded-xl bg-white p-6 shadow-sm">
-      <h2 class="text-lg font-semibold text-slate-800">Estimated processing fee rate</h2>
-      <div class="mt-4 grid gap-3 sm:grid-cols-3">
-        <label class="text-sm text-slate-700 sm:col-span-2">Estimated Processing Fee per Card Transaction (ex GST)
-          <input type="number" min="0" step="0.0001" required class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2" [(ngModel)]="feeExGst" />
-        </label>
-        <label class="text-sm text-slate-700">Effective from
-          <input type="date" required class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2" [(ngModel)]="effectiveFrom" />
-        </label>
-      </div>
-      <button type="button" class="mt-3 rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50" [disabled]="loading" (click)="saveFeeRate()">Save rate</button>
-      <div class="mt-5 border-t border-slate-100 pt-4">
-        <h3 class="mb-2 text-sm font-semibold text-slate-700">Configured settings</h3>
-        @if (feeRates.length) {
-          <div class="overflow-x-auto">
-            <table class="min-w-full text-left text-sm">
-              <thead class="bg-slate-50 text-xs text-slate-600">
-                <tr><th class="px-3 py-2">Effective from</th><th class="px-3 py-2">Fee per card transaction (ex GST)</th><th class="px-3 py-2">Status</th></tr>
-              </thead>
-              <tbody>
-                @for (rate of feeRates; track rate.id ?? rate.effectiveFrom) {
-                  <tr class="border-t border-slate-100">
-                    <td class="px-3 py-2">{{ rate.effectiveFrom | date:'dd/MM/yyyy' }}</td>
-                    <td class="px-3 py-2">{{ rate.feeExGst | currency:'AUD':'symbol':'1.4-4' }}</td>
-                    <td class="px-3 py-2">
-                      @if (isCurrentFeeRate(rate)) {
-                        <span class="rounded-full bg-emerald-100 px-2 py-1 text-xs font-medium text-emerald-700">Current</span>
-                      } @else if (isFutureFeeRate(rate)) {
-                        <span class="rounded-full bg-blue-100 px-2 py-1 text-xs font-medium text-blue-700">Scheduled</span>
-                      } @else {
-                        <span class="text-xs text-slate-500">Previous</span>
-                      }
-                    </td>
-                  </tr>
-                }
-              </tbody>
-            </table>
+      <section class="card">
+        <div class="card-header">
+          <h2 class="card-title">Estimated processing fee rate</h2>
+        </div>
+        <div class="card-body">
+          <div class="grid gap-4 sm:grid-cols-3">
+            <div class="field sm:col-span-2">
+              <label class="field-label" for="nayax-fee-ex-gst">Estimated Processing Fee per Card Transaction (ex GST)</label>
+              <input id="nayax-fee-ex-gst" type="number" min="0" step="0.0001" required [(ngModel)]="feeExGst" />
+            </div>
+            <div class="field">
+              <label class="field-label" for="nayax-effective-from">Effective from</label>
+              <input id="nayax-effective-from" type="date" required [(ngModel)]="effectiveFrom" />
+            </div>
           </div>
-        } @else {
-          <p class="text-sm text-slate-500">No Nayax processing-fee settings configured.</p>
-        }
-      </div>
-    </section>
+          <button type="button" class="btn btn-primary mt-3" [disabled]="loading" (click)="saveFeeRate()">Save rate</button>
+          <div class="mt-5 border-t border-md-gray-200 pt-4">
+            <h3 class="mb-2 text-sm font-semibold text-md-gray-800">Configured settings</h3>
+            @if (feeRates.length) {
+              <div class="overflow-x-auto">
+                <table class="table">
+                  <thead class="table-head">
+                    <tr><th scope="col" class="table-cell">Effective from</th><th scope="col" class="table-cell">Fee per card transaction (ex GST)</th><th scope="col" class="table-cell">Status</th></tr>
+                  </thead>
+                  <tbody>
+                    @for (rate of feeRates; track rate.id ?? rate.effectiveFrom) {
+                      <tr class="table-row">
+                        <td class="table-cell">{{ rate.effectiveFrom | date:'dd/MM/yyyy' }}</td>
+                        <td class="table-cell">{{ rate.feeExGst | currency:'AUD':'symbol':'1.4-4' }}</td>
+                        <td class="table-cell">
+                          @if (isCurrentFeeRate(rate)) {
+                            <span class="badge badge-success">Current</span>
+                          } @else if (isFutureFeeRate(rate)) {
+                            <span class="badge badge-info">Scheduled</span>
+                          } @else {
+                            <span class="text-xs value-muted">Previous</span>
+                          }
+                        </td>
+                      </tr>
+                    }
+                  </tbody>
+                </table>
+              </div>
+            } @else {
+              <p class="text-sm value-muted">No Nayax processing-fee settings configured.</p>
+            }
+          </div>
+        </div>
+      </section>
+    </div>
   `
 })
 export class NayaxSettingsComponent {
