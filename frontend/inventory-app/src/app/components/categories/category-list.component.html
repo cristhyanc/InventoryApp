@@ -1,22 +1,33 @@
-<h1 class="mb-6 text-2xl font-semibold text-slate-800">Categories</h1>
+<div class="page">
+  <header class="page-header">
+    <h1 class="page-title">Categories</h1>
+  </header>
 
-<div class="rounded-xl bg-white p-6 shadow-sm">
-  <p class="mb-4 text-sm text-slate-500">Categories are managed from the product import and are read-only here.</p>
-  @if (categories.length === 0) {
-    <p class="text-sm text-slate-500">No categories yet.</p>
-  } @else {
-    <div class="overflow-x-auto">
-      <table class="min-w-full divide-y divide-slate-200 text-sm">
-        <thead class="bg-slate-50"><tr><th class="px-4 py-3 text-left font-semibold text-slate-700">Name</th><th class="px-4 py-3 text-left font-semibold text-slate-700">Description</th></tr></thead>
-        <tbody class="divide-y divide-slate-100 bg-white">
-          @for (c of categories; track c.id) {
-            <tr>
-              <td class="px-4 py-3 text-slate-700">{{ c.name }}</td>
-              <td class="px-4 py-3 text-slate-600">{{ c.description }}</td>
-            </tr>
-          }
-        </tbody>
-      </table>
+  <div class="card">
+    <div class="card-body p-0">
+      <p class="p-4 text-md-body value-muted">Categories are managed from the product import and are read-only here.</p>
+      @if (categories.length === 0) {
+        <p class="p-4 text-md-body value-muted">No categories yet.</p>
+      } @else {
+        <div class="overflow-x-auto">
+          <table class="table">
+            <thead class="table-head">
+              <tr>
+                <th scope="col" class="table-cell">Name</th>
+                <th scope="col" class="table-cell">Description</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (c of categories; track c.id) {
+                <tr class="table-row">
+                  <td class="table-cell">{{ c.name }}</td>
+                  <td class="table-cell">{{ c.description }}</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      }
     </div>
-  }
+  </div>
 </div>
