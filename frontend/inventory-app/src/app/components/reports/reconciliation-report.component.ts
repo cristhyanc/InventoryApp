@@ -38,6 +38,8 @@ export class ReconciliationReportComponent extends ReportPageBase<Reconciliation
   constructor(route: ActivatedRoute, reports: ReportingService, machines: MachineService) { super(route, reports, machines); }
   request(filter: ReportingFilter): Observable<ReconciliationReport> { return this.reports.reconciliation(filter); }
   statusClass(status: string): string {
-    return status === 'Reconciled' ? 'badge-success' : status === 'Mismatch' ? 'badge-danger' : 'badge-warning';
+    if (status === 'Reconciled') return 'badge-success';
+    if (status === 'Mismatch') return 'badge-danger';
+    return 'badge-warning';
   }
 }
