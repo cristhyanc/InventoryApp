@@ -16,6 +16,7 @@ using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Shared;
 using Inventory.Application.Reporting.Transactions;
+using Inventory.Domain.Gst;
 using Inventory.Domain.Reporting;
 using Inventory.Domain.FinancialConfiguration;
 using Inventory.Infrastructure;
@@ -868,6 +869,79 @@ public class ReportingRegressionTests
         Assert.Equal(report.GstOnSales.ToString(CultureInfo.InvariantCulture), row["GstOnSales"]);
         Assert.Equal(report.TaxableFees.ToString(CultureInfo.InvariantCulture), row["TaxableFees"]);
         Assert.Equal(report.GstOnFees.ToString(CultureInfo.InvariantCulture), row["GstOnFees"]);
+        Assert.Equal(report.NetGst.ToString(CultureInfo.InvariantCulture), row["NetGst"]);
+    }
+
+    [Fact]
+    public async Task Gst_report_and_csv_export_carry_the_same_purchase_input_gst_and_incomplete_status()
+    {
+        using var db = CreateDbContext();
+        db.NayaxSales.Add(new NayaxSales
+        {
+            TransactionID = 9,
+            MachineID = 10,
+            SettlementValue = 110m,
+            TransactionStatusId = NayaxTransactionStatusIds.Completed,
+            MachineAuthorizationTime = new DateTime(2025, 8, 1)
+        });
+        db.Products.Add(new Product { Id = 1, Name = "Coke" });
+        db.Receipts.AddRange(
+            new Purchase
+            {
+                Id = 1,
+                Title = "Taxable order",
+                PurchaseDate = new DateTime(2025, 8, 1),
+                DeliveryCost = 11m,
+                DeliveryGstClassification = GstClassification.Taxable,
+                Items = { new PurchaseItem { Id = 1, ProductId = 1, Quantity = 2m, UnitCost = 5.50m, GstClassification = GstClassification.Taxable } }
+            },
+            new Purchase
+            {
+                Id = 2,
+                Title = "GST-free order",
+                PurchaseDate = new DateTime(2025, 8, 20),
+                Items = { new PurchaseItem { Id = 2, ProductId = 1, Quantity = 1m, UnitCost = 50m, GstClassification = GstClassification.GstFree } }
+            },
+            new Purchase
+            {
+                Id = 3,
+                Title = "Unclassified order",
+                PurchaseDate = new DateTime(2025, 8, 31),
+                Items = { new PurchaseItem { Id = 3, ProductId = 1, Quantity = 1m, UnitCost = 22m, GstClassification = GstClassification.Unknown } }
+            },
+            new Purchase
+            {
+                Id = 4,
+                Title = "Next period, excluded",
+                PurchaseDate = new DateTime(2025, 9, 1),
+                Items = { new PurchaseItem { Id = 4, ProductId = 1, Quantity = 1m, UnitCost = 1100m, GstClassification = GstClassification.Taxable } }
+            });
+        await db.SaveChangesAsync();
+
+        var service = Reporting(db);
+        var filter = new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31));
+
+        var report = await service.GetGstAsync(filter);
+        var csv = Encoding.UTF8.GetString(await service.ExportCsvAsync("gst", filter));
+        var lines = csv.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        var header = lines[0].Trim('"').Split("\",\"");
+        var values = lines[1].Trim('"').Split("\",\"");
+        var row = header.Zip(values, (h, v) => (h, v)).ToDictionary(x => x.h, x => x.v);
+
+        Assert.Equal(1.00m, report.PurchaseLineGst);
+        Assert.Equal(1.00m, report.PurchaseChargeGst);
+        Assert.Equal(2.00m, report.InventoryPurchaseGst);
+        Assert.Equal(1, report.PurchaseUnresolvedComponentCount);
+        Assert.Equal(22m, report.PurchaseUnresolvedAmount);
+        Assert.True(report.PurchaseGstIncomplete);
+        Assert.Equal(report.GstOnSales - report.GstOnFees - report.OperatingExpenseGst - 2.00m, report.NetGst);
+
+        Assert.Equal(report.PurchaseLineGst.ToString(CultureInfo.InvariantCulture), row["PurchaseLineGst"]);
+        Assert.Equal(report.PurchaseChargeGst.ToString(CultureInfo.InvariantCulture), row["PurchaseChargeGst"]);
+        Assert.Equal(report.InventoryPurchaseGst.ToString(CultureInfo.InvariantCulture), row["PurchaseInputGst"]);
+        Assert.Equal(report.PurchaseUnresolvedComponentCount.ToString(CultureInfo.InvariantCulture), row["PurchaseUnresolvedComponents"]);
+        Assert.Equal(report.PurchaseUnresolvedAmount.ToString(CultureInfo.InvariantCulture), row["PurchaseUnresolvedAmount"]);
+        Assert.Equal("True", row["PurchaseGstIncomplete"]);
         Assert.Equal(report.NetGst.ToString(CultureInfo.InvariantCulture), row["NetGst"]);
     }
 
