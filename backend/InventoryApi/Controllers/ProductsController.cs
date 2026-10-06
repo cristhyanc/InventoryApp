@@ -1,3 +1,4 @@
+using Inventory.Application.Gst;
 using Inventory.Application.Products;
 using Inventory.Application.Purchases;
 using Inventory.Application.Reporting.Dashboard;
@@ -30,6 +31,8 @@ public class ProductsController : ControllerBase
     private readonly DeleteProduct _deleteProduct;
     private readonly GetInventoryValuationSummary _getInventoryValuationSummary;
     private readonly GetProductPriceComparison _getProductPriceComparison;
+    private readonly GetProductGstRule _getProductGstRule;
+    private readonly SetProductGstRule _setProductGstRule;
 
     public ProductsController(
         ListProducts listProducts,
@@ -39,8 +42,12 @@ public class ProductsController : ControllerBase
         UpdateProduct updateProduct,
         DeleteProduct deleteProduct,
         GetInventoryValuationSummary getInventoryValuationSummary,
-        GetProductPriceComparison getProductPriceComparison)
+        GetProductPriceComparison getProductPriceComparison,
+        GetProductGstRule getProductGstRule,
+        SetProductGstRule setProductGstRule)
     {
+        _getProductGstRule = getProductGstRule;
+        _setProductGstRule = setProductGstRule;
         _listProducts = listProducts;
         _getProduct = getProduct;
         _listLowStockProducts = listLowStockProducts;
@@ -133,4 +140,36 @@ public class ProductsController : ControllerBase
     [HttpDelete("{id:long}")]
     public async Task<IActionResult> Delete(long id) =>
         await _deleteProduct.Handle(id, CancellationToken.None) ? NoContent() : NotFound();
+
+    /// <summary>
+    /// The product's configured GST rule (issue #430). It is its own resource rather than a field on
+    /// the catalogue response because the product payload - and every nested product snapshot a
+    /// purchase or supplier-order response carries - is a pinned API contract; the reasoning is on
+    /// the persisted <c>GstRule</c> property itself and in docs/architecture.md § Product and
+    /// supplier GST rules.
+    /// </summary>
+    [HttpGet("{id:long}/gst-rule")]
+    public async Task<ActionResult<ProductGstRuleResponse>> GetGstRule(long id, CancellationToken ct)
+    {
+        var rule = await _getProductGstRule.Handle(id, ct);
+        return rule is null ? NotFound() : Ok(new ProductGstRuleResponse(id, rule.Value));
+    }
+
+    /// <summary>
+    /// Sets the product's GST rule. Configuration only: it reclassifies no purchase line or charge,
+    /// and changes no cost, costing quantity, inventory value or stock movement.
+    /// </summary>
+    [HttpPut("{id:long}/gst-rule")]
+    public async Task<IActionResult> SetGstRule(long id, ProductGstRuleDto dto, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(dto);
+
+        var result = await _setProductGstRule.Handle(id, dto.GstRule, ct);
+        return result.Outcome switch
+        {
+            GstRuleUpdateOutcome.Success => NoContent(),
+            GstRuleUpdateOutcome.NotFound => NotFound(),
+            _ => BadRequest(result.ValidationError),
+        };
+    }
 }

@@ -56,6 +56,8 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<CreateSupplier>();
         services.AddScoped<UpdateSupplier>();
         services.AddScoped<DeleteSupplier>();
+        services.AddScoped<GetSupplierGstDefaults>();
+        services.AddScoped<SetSupplierGstDefaults>();
         services.AddScoped<ListOperatingExpenses>();
         services.AddScoped<GetOperatingExpense>();
         services.AddScoped<GetOperatingExpenseAttachment>();
@@ -91,6 +93,8 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<CreateProduct>();
         services.AddScoped<UpdateProduct>();
         services.AddScoped<DeleteProduct>();
+        services.AddScoped<GetProductGstRule>();
+        services.AddScoped<SetProductGstRule>();
         services.AddScoped<ResolveMachineProductPricing>();
         services.AddScoped<GetPickList>();
         services.AddScoped<RecordInventoryMovement>();

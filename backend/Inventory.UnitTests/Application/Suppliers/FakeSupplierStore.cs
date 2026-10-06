@@ -1,6 +1,7 @@
 #nullable enable
 
 using Inventory.Application.Suppliers;
+using Inventory.Domain.Gst;
 
 namespace InventoryApi.Tests.Application.Suppliers;
 
@@ -12,6 +13,9 @@ public sealed class FakeSupplierStore : ISupplierStore
 {
     private readonly List<SupplierRecord> _suppliers = [];
     private int _nextId = 1;
+
+    /// <summary>The GST defaults stored per supplier, absent until something sets them (issue #430).</summary>
+    private readonly Dictionary<int, SupplierGstDefaults> _gstDefaults = [];
 
     public Task<IReadOnlyList<SupplierRecord>> ListOrderedByNameAsync(CancellationToken cancellationToken) =>
         Task.FromResult<IReadOnlyList<SupplierRecord>>(
@@ -43,6 +47,20 @@ public sealed class FakeSupplierStore : ISupplierStore
         if (existing is null) return Task.FromResult(false);
 
         _suppliers.Remove(existing);
+        return Task.FromResult(true);
+    }
+
+    public Task<SupplierGstDefaults?> FindGstDefaultsAsync(int id, CancellationToken cancellationToken) =>
+        Task.FromResult<SupplierGstDefaults?>(
+            _suppliers.Any(x => x.Id == id)
+                ? _gstDefaults.TryGetValue(id, out var defaults) ? defaults : SupplierGstDefaults.None
+                : null);
+
+    public Task<bool> SetGstDefaultsAsync(int id, SupplierGstDefaults defaults, CancellationToken cancellationToken)
+    {
+        if (!_suppliers.Any(x => x.Id == id)) return Task.FromResult(false);
+
+        _gstDefaults[id] = defaults;
         return Task.FromResult(true);
     }
 }

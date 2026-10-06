@@ -32,6 +32,13 @@
   </form>
 </div>
 
+@if (editing) {
+  <app-supplier-gst-defaults
+    [supplierId]="editing.id"
+    [supplierName]="editing.name"
+  ></app-supplier-gst-defaults>
+}
+
 <div class="rounded-xl bg-white p-6 shadow-sm">
   <h2 class="mb-4 text-lg font-semibold text-slate-800">All Suppliers</h2>
   @if (suppliers.length === 0) {

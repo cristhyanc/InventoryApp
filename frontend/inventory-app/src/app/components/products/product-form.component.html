@@ -81,6 +81,7 @@
   </form>
 
   @if (productId) {
+    <app-product-gst-rule [productId]="productId"></app-product-gst-rule>
     <app-product-price-history [productId]="productId"></app-product-price-history>
   }
 </div>

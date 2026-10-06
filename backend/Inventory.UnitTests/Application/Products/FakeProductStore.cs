@@ -1,4 +1,5 @@
 using Inventory.Application.Products;
+using Inventory.Domain.Gst;
 
 namespace InventoryApi.Tests.Application.Products;
 
@@ -10,6 +11,9 @@ public sealed class FakeProductStore : IProductStore
 {
     private long _nextId = 1;
     private readonly HashSet<long> _productIds = [];
+
+    /// <summary>The GST rule stored per product, absent until something sets one (issue #430).</summary>
+    private readonly Dictionary<long, GstClassification> _gstRules = [];
 
     public ProductCreateFields? LastCreated { get; private set; }
     public ProductUpdateFields? LastUpdated { get; private set; }
@@ -56,4 +60,18 @@ public sealed class FakeProductStore : IProductStore
 
     public Task<bool> DeleteAsync(long id, CancellationToken cancellationToken) =>
         Task.FromResult(_productIds.Remove(id));
+
+    public Task<GstClassification?> FindGstRuleAsync(long id, CancellationToken cancellationToken) =>
+        Task.FromResult<GstClassification?>(
+            _productIds.Contains(id)
+                ? _gstRules.TryGetValue(id, out var rule) ? rule : GstRules.None
+                : null);
+
+    public Task<bool> SetGstRuleAsync(long id, GstClassification rule, CancellationToken cancellationToken)
+    {
+        if (!_productIds.Contains(id)) return Task.FromResult(false);
+
+        _gstRules[id] = rule;
+        return Task.FromResult(true);
+    }
 }

@@ -618,6 +618,29 @@ Failure output (screenshots and traces) is written under `frontend/inventory-app
 
 The complete invariants and change rules are in [AGENTS.md](AGENTS.md).
 
+## Product and supplier GST rules
+
+Purchase amounts are GST-inclusive, and GST is recorded per purchase line and per delivery/package
+charge rather than for a whole purchase. Two pages hold the rules that describe what *should* be
+classified:
+
+- **Products → edit a product → GST rule.** Choose **Taxable**, **GST-free**, or **No rule**, then
+  **Save GST rule**. It saves separately from the rest of the product form, because it is
+  bookkeeping configuration rather than a catalogue field.
+- **Suppliers → Edit a supplier → GST defaults.** Choose a default for the supplier's **product
+  lines** and separate defaults for its **delivery charge** and **package charge**, then **Save GST
+  defaults**. The three are independent: a charge never inherits the product-line default.
+
+A supplier default applies only where the purchased product has no GST rule of its own, and a
+product rule applies only where nobody has classified the purchase line by hand. "No rule" and "No
+default" leave a component unclassified, which is not the same as GST-free: an unclassified
+component contributes no input GST and stays visibly unresolved in the GST reporting aid.
+
+These settings are explicit configuration, not inference. A supplier being registered for GST does
+not classify its products, because a supplier may sell both taxable and GST-free goods. Saving a
+rule or a default never changes a purchase that is already recorded; applying rules to historical
+purchases is a separate, explicit Admin maintenance workflow.
+
 ## Costing repair (Admin page)
 
 The Admin page's **Costing Repair** section is how an operator restores a product's cost history

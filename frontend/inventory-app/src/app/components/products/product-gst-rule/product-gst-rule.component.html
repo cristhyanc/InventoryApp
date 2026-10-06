@@ -1,0 +1,43 @@
+<section class="mt-6 border-t border-slate-200 pt-6">
+  <h2 class="mb-1 text-lg font-semibold text-slate-800">GST rule</h2>
+  <p class="mb-4 text-sm text-slate-600">
+    Records whether this product is taxable or GST-free for purchase bookkeeping. A product rule takes
+    precedence over any supplier default. Saving it does not change the GST classification of any
+    purchase that is already recorded.
+  </p>
+
+  @if (error) {
+    <p class="mb-3 text-sm text-red-600">{{ error }}</p>
+  }
+  @if (saved) {
+    <p class="mb-3 text-sm text-green-700">GST rule saved.</p>
+  }
+
+  <div class="space-y-3">
+    <div>
+      <label for="product-gst-rule" class="mb-1 block text-sm font-medium text-slate-700">GST rule</label>
+      <select
+        id="product-gst-rule"
+        name="productGstRule"
+        [(ngModel)]="rule"
+        [disabled]="loading || saving || productId === null"
+      >
+        @for (option of options; track option.value) {
+          <option [ngValue]="option.value">{{ option.label }}</option>
+        }
+      </select>
+      <p class="mt-1 text-xs text-slate-500">
+        "No rule" leaves the product unclassified; it is not the same as GST-free.
+      </p>
+    </div>
+
+    <button
+      type="button"
+      class="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+      [disabled]="loading || saving || productId === null"
+      (click)="save()"
+    >
+      {{ saving ? 'Saving...' : 'Save GST rule' }}
+    </button>
+  </div>
+</section>

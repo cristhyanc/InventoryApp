@@ -150,9 +150,13 @@ public class BusinessOwnershipMigrationTests
 
         await using var scoped = TestAppDbContext.For(options, 1);
 
-        Assert.Empty(await scoped.Products.ToListAsync());
-        Assert.Empty(await scoped.Categories.ToListAsync());
-        Assert.Empty(await scoped.Suppliers.ToListAsync());
+        // Ids only, not whole entities: this database stops at ScopedUniquenessMigration, so a
+        // column a later additive migration adds to Products or Suppliers does not exist here yet
+        // (issue #430's GST rule columns are the current example). What is under test is which rows
+        // a scoped caller can see, which the key alone answers.
+        Assert.Empty(await scoped.Products.Select(product => product.Id).ToListAsync());
+        Assert.Empty(await scoped.Categories.Select(category => category.Id).ToListAsync());
+        Assert.Empty(await scoped.Suppliers.Select(supplier => supplier.Id).ToListAsync());
     }
 
     /// <summary>

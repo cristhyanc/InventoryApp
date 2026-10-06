@@ -6,6 +6,7 @@ using Inventory.Application.Products;
 using Inventory.Application.Purchases;
 using Inventory.Application.Reorder;
 using Inventory.Application.Reporting.Dashboard;
+using Inventory.Domain.Gst;
 using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Reporting.Persistence;
 using Inventory.Infrastructure.Models;
@@ -51,7 +52,9 @@ public class ProductsControllerTests
             new UpdateProduct(store),
             new DeleteProduct(store),
             getInventoryValuationSummary,
-            getProductPriceComparison);
+            getProductPriceComparison,
+            new GetProductGstRule(store),
+            new SetProductGstRule(store));
     }
 
     private static ProductResponse SingleProduct(ActionResult<IEnumerable<ProductResponse>> result) =>
@@ -354,5 +357,102 @@ public class ProductsControllerTests
         Assert.Equal(2.00m, dto.Lowest!.UnitCost);
         Assert.Equal("Acme Supplies", dto.Lowest.SupplierName);
         Assert.Single(dto.HistoryNewestFirst);
+    }
+
+    /// <summary>
+    /// The product GST rule resource (issue #430): a product nobody configured has no rule, a rule
+    /// round-trips through the real EF adapter, and setting it leaves every catalogue and costing
+    /// value on the product alone - a rule is accounting configuration, never a cost (AGENTS.md
+    /// § Purchase GST classification).
+    /// </summary>
+    [Fact]
+    public async Task GstRule_RoundTripsAndLeavesTheProductsCatalogueAndCostingUntouched()
+    {
+        using var db = CreateDbContext();
+        db.Products.Add(new Product
+        {
+            Id = 1,
+            Name = "Coke",
+            UnitPrice = 3.50m,
+            AverageUnitCost = 1.10m,
+            CostingQuantity = 12,
+            InventoryValue = 13.20m,
+            QuantityInStock = 12,
+            UpdatedAt = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        await db.SaveChangesAsync();
+        var controller = CreateController(db);
+
+        var initial = Assert.IsType<ProductGstRuleResponse>(
+            Assert.IsType<OkObjectResult>((await controller.GetGstRule(1, CancellationToken.None)).Result).Value);
+        Assert.Equal((1L, GstRules.None), (initial.ProductId, initial.GstRule));
+
+        var saved = await controller.SetGstRule(
+            1, new ProductGstRuleDto(GstClassification.Taxable), CancellationToken.None);
+
+        Assert.IsType<NoContentResult>(saved);
+        var updated = Assert.IsType<ProductGstRuleResponse>(
+            Assert.IsType<OkObjectResult>((await controller.GetGstRule(1, CancellationToken.None)).Result).Value);
+        Assert.Equal(GstClassification.Taxable, updated.GstRule);
+
+        var product = await db.Products.AsNoTracking().SingleAsync(p => p.Id == 1);
+        Assert.Equal(
+            (3.50m, 1.10m, 12, 13.20m, 12, new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)),
+            (product.UnitPrice, product.AverageUnitCost, product.CostingQuantity, product.InventoryValue,
+                product.QuantityInStock, product.UpdatedAt));
+        Assert.Empty(db.StockAdjustments.AsNoTracking());
+    }
+
+    [Fact]
+    public async Task GstRule_NonExistentProduct_ReturnsNotFound()
+    {
+        using var db = CreateDbContext();
+        var controller = CreateController(db);
+
+        Assert.IsType<NotFoundResult>((await controller.GetGstRule(999, CancellationToken.None)).Result);
+        Assert.IsType<NotFoundResult>(await controller.SetGstRule(
+            999, new ProductGstRuleDto(GstClassification.Taxable), CancellationToken.None));
+    }
+
+    /// <summary>
+    /// An undefined rule value is answered <c>400</c> with the vocabulary's own message and leaves
+    /// the rule the product already had in place.
+    /// </summary>
+    [Fact]
+    public async Task GstRule_UndefinedValue_ReturnsBadRequestAndChangesNothing()
+    {
+        using var db = CreateDbContext();
+        db.Products.Add(new Product { Id = 1, Name = "Coke", GstRule = GstClassification.GstFree });
+        await db.SaveChangesAsync();
+        var controller = CreateController(db);
+
+        var result = await controller.SetGstRule(
+            1, new ProductGstRuleDto((GstClassification)999), CancellationToken.None);
+
+        var badRequest = Assert.IsType<BadRequestObjectResult>(result);
+        Assert.Equal(GstRules.UnsupportedRuleMessage, badRequest.Value);
+        Assert.Equal(
+            GstClassification.GstFree,
+            (await db.Products.AsNoTracking().SingleAsync(p => p.Id == 1)).GstRule);
+    }
+
+    /// <summary>
+    /// The rule is deliberately absent from the catalogue payload: that payload is a pinned API
+    /// contract, so the rule is published on its own resource instead (see
+    /// <c>Inventory.Infrastructure.Models.Product.GstRule</c>). This pins that decision, so adding
+    /// the field to the catalogue response has to be a conscious change with its own contract tests.
+    /// </summary>
+    [Fact]
+    public async Task GstRule_IsNotCarriedOnTheCatalogueResponse()
+    {
+        using var db = CreateDbContext();
+        db.Products.Add(new Product { Id = 1, Name = "Coke", GstRule = GstClassification.Taxable });
+        await db.SaveChangesAsync();
+
+        var json = System.Text.Json.JsonSerializer.Serialize(
+            SingleProduct(await CreateController(db).GetAll(null, null, null, null, CancellationToken.None)),
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+
+        Assert.DoesNotContain("gstRule", json, StringComparison.OrdinalIgnoreCase);
     }
 }
