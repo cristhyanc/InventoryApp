@@ -69,17 +69,20 @@
     <!--
       One bounded scroll area for both axes: long product lists scroll vertically under the sticky
       header row, and many machine columns still scroll horizontally. The header cells are sticky
-      individually (rather than the <thead>) with an opaque background, a z-index above the body
-      cells, and an inset bottom line replacing the border the body would otherwise scroll away.
+      individually (rather than the <thead>) with the opaque md-gray-100 table-head surface and a
+      z-index above the body cells, so rows cannot show through as they scroll under the header. The
+      head surface itself separates the header from the body, as it does in every other #410 table;
+      a collapsed border between <thead> and <tbody> would scroll away with the body, and #410
+      defines no shadow token for that rule.
     -->
     <div data-testid="pick-list-table-scroll" class="max-h-[70vh] overflow-auto">
       <table class="table">
         <thead>
           <tr>
-            <th scope="col" class="table-cell sticky top-0 z-10 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide shadow-[inset_0_-1px_0_0_#e5e5e5]">Product</th>
-            <th scope="col" class="table-cell sticky top-0 z-10 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide shadow-[inset_0_-1px_0_0_#e5e5e5]">Total to Pick</th>
+            <th scope="col" class="table-cell sticky top-0 z-10 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide">Product</th>
+            <th scope="col" class="table-cell sticky top-0 z-10 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide">Total to Pick</th>
             @for (machineId of appliedMachineIds; track machineId) {
-              <th scope="col" class="table-cell sticky top-0 z-10 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide shadow-[inset_0_-1px_0_0_#e5e5e5]">{{ machineLabel(machineId) }}</th>
+              <th scope="col" class="table-cell sticky top-0 z-10 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide">{{ machineLabel(machineId) }}</th>
             }
           </tr>
         </thead>

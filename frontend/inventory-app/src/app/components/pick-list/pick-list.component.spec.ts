@@ -596,6 +596,9 @@ describe('PickListComponent rendered structure', () => {
     for (const th of headers) {
       // Every header cell, not just the first two, is pinned and opaque so rows cannot show through.
       expect(Array.from(th.classList)).toEqual(expect.arrayContaining(['sticky', 'top-0', 'z-10', 'bg-md-gray-100']));
+      // The opaque head surface is the separator: #410 defines no shadow token for a sticky header
+      // rule, so no header cell may carry an arbitrary shadow utility with a raw colour value.
+      expect(Array.from(th.classList).filter((cssClass) => cssClass.startsWith('shadow'))).toEqual([]);
     }
   });
 

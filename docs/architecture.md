@@ -2794,8 +2794,10 @@ column - is individually `sticky top-0` with an opaque background and a z-index 
 so the whole header row stays visible while rows scroll under it without showing through. The
 `<thead>` element itself, the filter panel and the Selected Machines card are deliberately not
 sticky. Sticky positioning does not participate in table column sizing, so header and body keep
-identical column widths; the header's bottom rule is an inset box shadow on each header cell, because
-the collapsed `divide-y` border between `<thead>` and `<tbody>` scrolls away with the body.
+identical column widths. The separator between header and body is the opaque `md-gray-100` table-head
+surface itself, as in every other #410 table: a collapsed border between `<thead>` and `<tbody>`
+scrolls away with the body, and #410 defines no shadow token for a sticky header rule, so the header
+cells carry no shadow (issue #417).
 
 #### Supplier Orders frontend page (issue #387)
 
