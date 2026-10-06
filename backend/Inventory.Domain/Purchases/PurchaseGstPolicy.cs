@@ -41,7 +41,12 @@ public readonly record struct PurchaseGstResult(
 /// rather than the banker's rounding <see cref="Math.Round(decimal, int)"/> defaults to.
 ///
 /// GST-free contributes $0. Unknown contributes nothing at all and is counted and totalled as
-/// unresolved: the app must not infer 1/11 from an amount (AGENTS.md § Nayax processing fees and GST).
+/// unresolved: the app must not infer 1/11 from an amount (AGENTS.md § Purchase GST classification).
+///
+/// Every classification this policy is given must be a declared one
+/// (<see cref="GstClassifications"/>). An undefined value - which a form field or a deserialized
+/// JSON number can carry - is rejected rather than calculated as zero, so an unsupported request
+/// can never look like a resolved $0 component.
 /// </summary>
 public static class PurchaseGstPolicy
 {
@@ -50,6 +55,30 @@ public static class PurchaseGstPolicy
     /// GST-exclusive value, so its GST component is the inclusive amount divided by 11.
     /// </summary>
     public const decimal GstInclusiveDivisor = 11m;
+
+    /// <summary>
+    /// The message a purchase request carrying a classification outside the supported vocabulary is
+    /// rejected with (issue #429).
+    /// </summary>
+    public static string UnsupportedClassificationMessage => GstClassifications.UnsupportedMessage;
+
+    /// <summary>
+    /// Whether anything a caller submitted for a purchase - either charge classification, or any
+    /// line's - is outside the supported vocabulary. An omitted value is not unsupported: it means
+    /// the caller did not submit one. Callers check this before they store anything, so an
+    /// undefined classification changes no purchase, no inventory and no document.
+    /// </summary>
+    public static bool HasUnsupportedClassification(
+        GstClassification? deliveryCharge,
+        GstClassification? packageCharge,
+        IEnumerable<GstClassification?> lines)
+    {
+        ArgumentNullException.ThrowIfNull(lines);
+
+        return !GstClassifications.IsSupportedOrOmitted(deliveryCharge) ||
+            !GstClassifications.IsSupportedOrOmitted(packageCharge) ||
+            lines.Any(line => !GstClassifications.IsSupportedOrOmitted(line));
+    }
 
     /// <summary>A line's GST-inclusive amount, rounded to cents before any GST is derived from it.</summary>
     public static decimal LineAmount(decimal quantity, decimal unitCost) => RoundToCents(quantity * unitCost);
@@ -61,8 +90,9 @@ public static class PurchaseGstPolicy
     /// One component's input GST: its own rounded share of a GST-inclusive amount when it is
     /// taxable, and nothing when it is GST-free or unclassified.
     /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="classification"/> is not a supported value.</exception>
     public static decimal ComponentGst(decimal amount, GstClassification classification) =>
-        classification == GstClassification.Taxable
+        GstClassifications.Require(classification) == GstClassification.Taxable
             ? RoundToCents(amount / GstInclusiveDivisor)
             : 0m;
 
@@ -72,10 +102,13 @@ public static class PurchaseGstPolicy
     /// explicitly unknown stays unclassified. Nothing here infers a classification from a product,
     /// a supplier or an amount; rule-based classification is issues #430 and #433.
     /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="requested"/> is not a supported value.</exception>
     public static GstClassificationState Classify(GstClassification? requested) =>
-        requested is null or GstClassification.Unknown
+        requested is not { } value
             ? GstClassificationState.Unclassified
-            : new GstClassificationState(requested.Value, GstClassificationSource.Manual);
+            : GstClassifications.Require(value) == GstClassification.Unknown
+                ? GstClassificationState.Unclassified
+                : new GstClassificationState(value, GstClassificationSource.Manual);
 
     /// <summary>
     /// The state to persist for a delivery or package charge (decision D3): an absent or zero charge
@@ -88,6 +121,7 @@ public static class PurchaseGstPolicy
     /// A purchase's input GST and its unresolved components, over its lines and its delivery and
     /// package charges.
     /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">A component carries an unsupported classification.</exception>
     public static PurchaseGstResult Calculate(
         IEnumerable<PurchaseGstLine> lines,
         PurchaseGstCharge deliveryCharge,
@@ -99,7 +133,7 @@ public static class PurchaseGstPolicy
 
         foreach (var (amount, classification) in Components(lines, deliveryCharge, packageCharge))
         {
-            if (classification == GstClassification.Unknown)
+            if (GstClassifications.Require(classification) == GstClassification.Unknown)
             {
                 unresolvedCount++;
                 unresolvedAmount += amount;

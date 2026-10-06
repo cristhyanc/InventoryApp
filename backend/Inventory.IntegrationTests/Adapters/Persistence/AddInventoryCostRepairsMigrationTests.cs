@@ -29,7 +29,7 @@ public class AddInventoryCostRepairsMigrationTests
         {
             await before.GetService<IMigrator>().MigrateAsync(PreviousMigration);
 
-            Assert.DoesNotContain("InventoryCostRepairs", await TableNamesAsync(connection));
+            Assert.DoesNotContain("InventoryCostRepairs", await MigrationSchemaProbe.TableNamesAsync(connection));
 
             await using var seed = connection.CreateCommand();
             seed.CommandText = """
@@ -57,13 +57,14 @@ public class AddInventoryCostRepairsMigrationTests
         {
             await after.GetService<IMigrator>().MigrateAsync(TargetMigration);
 
-            Assert.Contains("InventoryCostRepairs", await TableNamesAsync(connection));
+            Assert.Contains("InventoryCostRepairs", await MigrationSchemaProbe.TableNamesAsync(connection));
             Assert.Equal(
                 [
                     "BusinessId", "CreatedAt", "CreatedByDirectoryTenantId", "CreatedByObjectId", "EffectiveAt",
                     "Id", "ProductId", "Quantity", "Reason", "TotalValue", "UnitCost",
                 ],
-                (await ColumnNamesAsync(connection, "InventoryCostRepairs")).Order(StringComparer.Ordinal));
+                (await MigrationSchemaProbe.ColumnNamesAsync(connection, "InventoryCostRepairs"))
+                    .Order(StringComparer.Ordinal));
             Assert.Empty(await after.InventoryCostRepairs.ToListAsync());
 
             var product = await after.Products.SingleAsync();
@@ -73,25 +74,5 @@ public class AddInventoryCostRepairsMigrationTests
             var baseline = await after.InventoryCostTransitionBaselines.SingleAsync();
             Assert.Equal((12, 13.20m), (baseline.OpeningCostingQuantity, baseline.InventoryValue));
         }
-    }
-
-    private static async Task<List<string>> ColumnNamesAsync(SqliteConnection connection, string table)
-    {
-        await using var command = connection.CreateCommand();
-        command.CommandText = $"SELECT name FROM pragma_table_info('{table}');";
-        await using var reader = await command.ExecuteReaderAsync();
-        var values = new List<string>();
-        while (await reader.ReadAsync()) values.Add(reader.GetString(0));
-        return values;
-    }
-
-    private static async Task<List<string>> TableNamesAsync(SqliteConnection connection)
-    {
-        await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name;";
-        await using var reader = await command.ExecuteReaderAsync();
-        var values = new List<string>();
-        while (await reader.ReadAsync()) values.Add(reader.GetString(0));
-        return values;
     }
 }

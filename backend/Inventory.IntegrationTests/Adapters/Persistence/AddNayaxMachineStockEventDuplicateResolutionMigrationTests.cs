@@ -17,16 +17,6 @@ public class AddNayaxMachineStockEventDuplicateResolutionMigrationTests
     private const string PreviousMigration = "20260928012603_RenameNayaxMachineStockEventToEventLogContract";
     private const string TargetMigration = "20260928053917_AddNayaxMachineStockEventDuplicateResolution";
 
-    private static async Task<List<string>> ColumnNamesAsync(SqliteConnection connection, string table)
-    {
-        await using var command = connection.CreateCommand();
-        command.CommandText = $"SELECT name FROM pragma_table_info('{table}');";
-        await using var reader = await command.ExecuteReaderAsync();
-        var values = new List<string>();
-        while (await reader.ReadAsync()) values.Add(reader.GetString(0));
-        return values;
-    }
-
     [Fact]
     public async Task Migration_is_additive_and_preserves_an_already_imported_event()
     {
@@ -38,7 +28,7 @@ public class AddNayaxMachineStockEventDuplicateResolutionMigrationTests
         {
             await before.GetService<IMigrator>().MigrateAsync(PreviousMigration);
 
-            var columnsBefore = await ColumnNamesAsync(connection, "NayaxMachineStockEvents");
+            var columnsBefore = await MigrationSchemaProbe.ColumnNamesAsync(connection, "NayaxMachineStockEvents");
             Assert.DoesNotContain("DuplicateResolution", columnsBefore);
             Assert.DoesNotContain("DuplicateResolvedAt", columnsBefore);
             Assert.DoesNotContain("MatchedManualStockAdjustmentId", columnsBefore);
@@ -58,7 +48,7 @@ public class AddNayaxMachineStockEventDuplicateResolutionMigrationTests
         {
             await after.GetService<IMigrator>().MigrateAsync(TargetMigration);
 
-            var columnsAfter = await ColumnNamesAsync(connection, "NayaxMachineStockEvents");
+            var columnsAfter = await MigrationSchemaProbe.ColumnNamesAsync(connection, "NayaxMachineStockEvents");
             Assert.Contains("DuplicateResolution", columnsAfter);
             Assert.Contains("DuplicateResolvedAt", columnsAfter);
             Assert.Contains("MatchedManualStockAdjustmentId", columnsAfter);

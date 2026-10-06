@@ -33,8 +33,10 @@ public class AddPurchaseGstClassificationMigrationTests
         {
             await before.GetService<IMigrator>().MigrateAsync(PreviousMigration);
 
-            Assert.DoesNotContain("GstClassification", await ColumnNamesAsync(connection, "ReceiptItems"));
-            Assert.DoesNotContain("DeliveryGstClassification", await ColumnNamesAsync(connection, "Receipts"));
+            Assert.DoesNotContain(
+                "GstClassification", await MigrationSchemaProbe.ColumnNamesAsync(connection, "ReceiptItems"));
+            Assert.DoesNotContain(
+                "DeliveryGstClassification", await MigrationSchemaProbe.ColumnNamesAsync(connection, "Receipts"));
 
             await using var seed = connection.CreateCommand();
             seed.CommandText = """
@@ -64,14 +66,14 @@ public class AddPurchaseGstClassificationMigrationTests
 
             Assert.Equal(
                 ["GstClassification", "GstClassificationSource"],
-                (await ColumnNamesAsync(connection, "ReceiptItems"))
+                (await MigrationSchemaProbe.ColumnNamesAsync(connection, "ReceiptItems"))
                     .Where(name => name.Contains("Gst", StringComparison.Ordinal)).Order(StringComparer.Ordinal));
             Assert.Equal(
                 [
                     "DeliveryGstClassification", "DeliveryGstClassificationSource",
                     "PackageGstClassification", "PackageGstClassificationSource",
                 ],
-                (await ColumnNamesAsync(connection, "Receipts"))
+                (await MigrationSchemaProbe.ColumnNamesAsync(connection, "Receipts"))
                     .Where(name => name.Contains("Gst", StringComparison.Ordinal)).Order(StringComparer.Ordinal));
 
             var purchase = await after.Receipts.Include(r => r.Items).SingleAsync();
@@ -94,15 +96,5 @@ public class AddPurchaseGstClassificationMigrationTests
             var movement = await after.StockAdjustments.SingleAsync();
             Assert.Equal((12, 1.10m, 13.20m, 12), (movement.QuantityChange, movement.UnitCost, movement.TotalCost, movement.CostingQuantityAfter));
         }
-    }
-
-    private static async Task<List<string>> ColumnNamesAsync(SqliteConnection connection, string table)
-    {
-        await using var command = connection.CreateCommand();
-        command.CommandText = $"SELECT name FROM pragma_table_info('{table}');";
-        await using var reader = await command.ExecuteReaderAsync();
-        var values = new List<string>();
-        while (await reader.ReadAsync()) values.Add(reader.GetString(0));
-        return values;
     }
 }

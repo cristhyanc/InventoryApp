@@ -158,4 +158,67 @@ public class PurchaseGstPolicyTests
 
         Assert.Equal(requested, PurchaseGstPolicy.ClassifyCharge(4.95m, requested));
     }
+
+    /// <summary>
+    /// An integer outside the vocabulary is not a classification at all. The enum is only a
+    /// compile-time constraint - a form field or a deserialized JSON number binds any value - and
+    /// an undefined one must never be accepted as a state, because it is neither taxable, nor
+    /// GST-free, nor reported as unresolved. Calculating it as zero is the silent inference
+    /// AGENTS.md § Purchase GST classification forbids, so the policy refuses it.
+    /// </summary>
+    [Theory]
+    [InlineData(3)]
+    [InlineData(999)]
+    [InlineData(-1)]
+    public void An_undefined_classification_is_rejected_rather_than_classified(int value)
+    {
+        var undefined = (GstClassification)value;
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => PurchaseGstPolicy.Classify(undefined));
+    }
+
+    [Theory]
+    [InlineData(3)]
+    [InlineData(999)]
+    [InlineData(-1)]
+    public void An_undefined_classification_is_never_calculated_as_zero_gst(int value)
+    {
+        var undefined = (GstClassification)value;
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => PurchaseGstPolicy.ComponentGst(11m, undefined));
+        Assert.Throws<ArgumentOutOfRangeException>(() => PurchaseGstPolicy.Calculate(
+            [new PurchaseGstLine(1m, 11m, undefined)], NoCharge, NoCharge));
+        Assert.Throws<ArgumentOutOfRangeException>(() => PurchaseGstPolicy.Calculate(
+            [], new PurchaseGstCharge(11m, undefined), NoCharge));
+        Assert.Throws<ArgumentOutOfRangeException>(() => PurchaseGstPolicy.Calculate(
+            [], NoCharge, new PurchaseGstCharge(11m, undefined)));
+    }
+
+    /// <summary>
+    /// The boundary check callers run before they store anything. It answers for the two charges
+    /// and every line, and an omitted value is not unsupported: it means the caller did not submit
+    /// one, which keeps a stored classification on an edit.
+    /// </summary>
+    [Fact]
+    public void An_unsupported_submission_is_detected_for_either_charge_and_for_any_line()
+    {
+        var undefined = (GstClassification)999;
+
+        Assert.True(PurchaseGstPolicy.HasUnsupportedClassification(undefined, null, []));
+        Assert.True(PurchaseGstPolicy.HasUnsupportedClassification(null, undefined, []));
+        Assert.True(PurchaseGstPolicy.HasUnsupportedClassification(
+            null, null, [GstClassification.Taxable, undefined]));
+        Assert.True(PurchaseGstPolicy.HasUnsupportedClassification(
+            null, null, [(GstClassification)(-1)]));
+    }
+
+    [Fact]
+    public void An_omitted_or_supported_submission_is_accepted()
+    {
+        Assert.False(PurchaseGstPolicy.HasUnsupportedClassification(null, null, []));
+        Assert.False(PurchaseGstPolicy.HasUnsupportedClassification(
+            GstClassification.Unknown,
+            GstClassification.GstFree,
+            [GstClassification.Taxable, GstClassification.Unknown, null]));
+    }
 }

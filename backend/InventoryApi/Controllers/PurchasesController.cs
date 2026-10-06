@@ -200,5 +200,5 @@ public class PurchasesController : ControllerBase
             });
 
     private static PurchaseItemInput ToItemInput(PurchaseItemDto dto) =>
-        new(dto.ProductId, dto.Quantity, dto.UnitCost, dto.GstClassification);
+        new(dto.ProductId, dto.Quantity, dto.UnitCost, dto.GstClassification, dto.Id);
 }

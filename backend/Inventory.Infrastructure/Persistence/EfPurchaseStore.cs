@@ -146,6 +146,12 @@ public sealed class EfPurchaseStore : IPurchaseStore
         var originalPurchaseDate = purchase.PurchaseDate;
         var originalSupplierId = purchase.SupplierId;
         var originalItems = purchase.Items.ToList();
+
+        // Decided before anything is written, and before the transaction even opens: a submission
+        // whose lines cannot be identified safely must leave every persisted row untouched.
+        var lineMatch = items is null ? default : MatchSubmittedLines(originalItems, items);
+        if (lineMatch.Error is { } identityError) throw new InvalidOperationException(identityError);
+
         var storedDeliveryGst = new GstClassificationState(
             purchase.DeliveryGstClassification, purchase.DeliveryGstClassificationSource);
         var storedPackageGst = new GstClassificationState(
@@ -187,18 +193,21 @@ public sealed class EfPurchaseStore : IPurchaseStore
             var movementByPurchaseItem = existingMovements
                 .GroupBy(movement => movement.ReceiptItemId!.Value)
                 .ToDictionary(group => group.Key, group => group.Single());
-            var availableByProduct = existingItems
-                .GroupBy(item => item.ProductId)
-                .ToDictionary(group => group.Key, group => new Queue<PurchaseItem>(group));
+            var existingById = existingItems.ToDictionary(item => item.Id);
+            var matchedItemIds = new HashSet<int>();
             var newItems = new List<PurchaseItem>();
 
-            foreach (var requested in items)
+            // The pairing of submitted line to stored line is the Domain policy's decision, taken
+            // above over the lines as they were loaded; this only applies it.
+            for (var index = 0; index < items.Count; index++)
             {
-                if (availableByProduct.TryGetValue(requested.ProductId, out var matches) && matches.Count > 0)
+                var requested = items[index];
+                if (lineMatch.StoredLineIds[index] is { } matchedId)
                 {
-                    var item = matches.Dequeue();
-                    AddAffected(affected, item.ProductId, movementByPurchaseItem.TryGetValue(item.Id, out var movement)
-                        ? movement.EffectiveAt : originalPurchaseDate);
+                    var item = existingById[matchedId];
+                    matchedItemIds.Add(matchedId);
+                    movementByPurchaseItem.TryGetValue(item.Id, out var movement);
+                    AddAffected(affected, item.ProductId, movement?.EffectiveAt ?? originalPurchaseDate);
                     AddAffected(affected, item.ProductId, purchase.PurchaseDate);
                     item.Quantity = requested.Quantity;
                     item.UnitCost = requested.UnitCost;
@@ -232,7 +241,7 @@ public sealed class EfPurchaseStore : IPurchaseStore
                 }
             }
 
-            foreach (var remaining in availableByProduct.Values.SelectMany(queue => queue))
+            foreach (var remaining in existingItems.Where(item => !matchedItemIds.Contains(item.Id)))
             {
                 AddAffected(affected, remaining.ProductId,
                     movementByPurchaseItem.TryGetValue(remaining.Id, out var movement) ? movement.EffectiveAt : originalPurchaseDate);
@@ -450,6 +459,23 @@ public sealed class EfPurchaseStore : IPurchaseStore
     }
 
     private static PurchaseItemCandidate ToCandidate(PurchaseItemInput item) => new(item.ProductId, item.Quantity, item.UnitCost);
+
+    /// <summary>
+    /// Pairs each submitted line with the stored line it updates (issue #429), through
+    /// <see cref="PurchaseLineIdentityPolicy"/>. The stored lines come from the purchase the tenant
+    /// query filters already resolved, so a line id belonging to another purchase or another
+    /// business is simply not among them and is reported as unknown.
+    /// </summary>
+    private static PurchaseLineMatch MatchSubmittedLines(
+        IReadOnlyCollection<PurchaseItem> stored, IReadOnlyList<PurchaseItemInput> submitted) =>
+        PurchaseLineIdentityPolicy.Match(
+            stored
+                .Select(item => new StoredPurchaseLine(
+                    item.Id,
+                    item.ProductId,
+                    new GstClassificationState(item.GstClassification, item.GstClassificationSource)))
+                .ToList(),
+            submitted.Select(item => new SubmittedPurchaseLine(item.Id, item.ProductId)).ToList());
 
     /// <summary>
     /// Applies a submitted line GST classification (issue #429). A <c>null</c> submission keeps the
