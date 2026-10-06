@@ -1882,8 +1882,8 @@ video {
   background-color: rgb(229 229 229 / var(--tw-bg-opacity, 1));
 }
 
-.bg-md-warning\/10 {
-  background-color: rgb(251 140 0 / 0.1);
+.bg-md-warning\/15 {
+  background-color: rgb(251 140 0 / 0.15);
 }
 
 .bg-orange-100 {
