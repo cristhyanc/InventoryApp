@@ -15,6 +15,7 @@ import {
 import { ProductService } from '../../services/product.service';
 import { PurchaseItemPayload } from '../../services/purchase.service';
 import { ObjectUrlCache } from '../shared/object-url-cache';
+import { IconComponent } from '../shared/icon.component';
 import { GST_CLASSIFICATION_OPTIONS, gstClassificationLabel, isChargePresent } from './gst-classification-options';
 
 /**
@@ -38,7 +39,7 @@ interface EditPurchaseItem {
 @Component({
   selector: 'app-purchase-list',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterLink],
+  imports: [CommonModule, FormsModule, RouterLink, IconComponent],
   templateUrl: './purchase-list.component.html'
 })
 export class PurchaseListComponent implements OnInit, OnDestroy {

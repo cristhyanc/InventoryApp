@@ -11,6 +11,7 @@ import { GstClassification, Product, Supplier, SupplierOrder } from '../../model
 import { PurchaseItemPayload } from '../../services/purchase.service';
 import { ProductService } from '../../services/product.service';
 import { ToastService } from '../../services/toast.service';
+import { IconComponent } from '../shared/icon.component';
 import { GST_CLASSIFICATION_OPTIONS, isChargePresent } from './gst-classification-options';
 
 // Draft item representation where unitCost may be null
@@ -29,7 +30,7 @@ interface DraftPurchaseItem {
 @Component({
   selector: 'app-purchase-upload',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterLink],
+  imports: [CommonModule, FormsModule, RouterLink, IconComponent],
   templateUrl: './purchase-upload.component.html'
 })
 export class PurchaseUploadComponent implements OnInit {

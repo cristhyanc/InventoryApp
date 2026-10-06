@@ -222,9 +222,9 @@ public class CleanArchitectureDependencyTests
     /// docs/architecture.md § Domain and application error mapping for the ownership table.
     ///
     /// The types below predate that rule and are pinned here as a deliberate, reviewed exception
-    /// rather than removed by this change, exactly like
-    /// <see cref="ProjectDependencyDirectionTests.Only_the_documented_legacy_services_remain_in_InventoryApi_Services"/>
-    /// freezes the legacy services folder: <see cref="InventoryApi.Bootstrap.PendingMigrationsException"/>
+    /// rather than removed by this change, for the same reason
+    /// <see cref="ApiLayerOwnershipTests.InventoryApi_uses_a_DbContext_only_in_the_composition_root_and_the_operator_commands"/>
+    /// names <c>InventoryApi.Bootstrap</c>: <see cref="InventoryApi.Bootstrap.PendingMigrationsException"/>
     /// and <see cref="InventoryApi.Bootstrap.DatabaseMigrationFailedException"/> (added by issue
     /// #201, alongside the pending-migrations one, for the same reason) are startup guards that
     /// <c>DatabaseSchemaStartup</c> throws from the composition root, which is where the schema
