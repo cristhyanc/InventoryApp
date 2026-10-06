@@ -3,6 +3,7 @@ using Inventory.Application.Categories;
 using Inventory.Application.Commissions;
 using Inventory.Application.Costing;
 using Inventory.Application.Expenses;
+using Inventory.Application.Gst;
 using Inventory.Application.Imports;
 using Inventory.Application.InventoryCounting;
 using Inventory.Application.MachineStockSync;
@@ -114,6 +115,8 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<PreviewInventoryCostRepair>();
         services.AddScoped<ApplyInventoryCostRepair>();
         services.AddScoped<GetInventoryCostRepairHistory>();
+        services.AddScoped<PreviewHistoricalGstClassification>();
+        services.AddScoped<ApplyHistoricalGstClassification>();
         services.AddScoped<ApplyInventoryCount>();
         services.AddScoped<ImportNayaxProductCatalog>();
         services.AddScoped<ImportNayaxSales>();
