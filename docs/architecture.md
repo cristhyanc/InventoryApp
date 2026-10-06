@@ -928,6 +928,7 @@ Contains stable business language and deterministic rules:
 - Commission agreement semantics and calculations.
 - Financial-year/date-range value types where appropriate.
 - Pure reporting calculations such as GST extraction, gross profit, and margins.
+- Purchase GST classification vocabulary and the purchase input-GST rule (`Inventory.Domain.Gst`, `Purchases.PurchaseGstPolicy`; see [Purchase GST classification](#purchase-gst-classification-issue-429)).
 
 It must not reference ASP.NET Core, EF Core, HTTP, filesystem APIs, ClosedXML, configuration, or concrete Nayax clients.
 
@@ -1887,6 +1888,30 @@ Site commissions use effective-dated agreements and one of three bases: gross sa
 
 The public property name `UnitPrice` is retained for API/contract compatibility. Only the Nayax catalog import may change its value; `Inventory.Application.Products.UpdateProduct` (whose `ProductUpdateFields` carries no price at all) and the product edit UI treat it as Nayax-managed and read-only. It is never an inventory-valuation input: the home Dashboard's "Inventory Value" tile is a backend-authoritative cost valuation (see [Dashboard "Inventory Value" tile](#dashboard-inventory-value-tile-issue-42) below, issue #42), and a `quantityInStock * unitPrice` selling-price valuation must not be introduced anywhere.
 
+### Purchase GST classification (issue #429)
+
+Purchase amounts are GST-inclusive, and input GST is derived from an explicit classification rather than from an amount. Issue #429 added the data model, the Domain rule and the purchase API surface for the approved GST design of parent issue #62; the purchase form (#431), the GST accounting aid's input-GST figures (#432), product/supplier rule configuration (#430) and the historical Preview/Apply maintenance workflow (#433) build on it and are not part of it.
+
+**Where each piece lives**, following the Purchasing and costing slice's ownership:
+
+- `Inventory.Domain.Gst` holds the vocabulary: `GstClassification` (`Unknown`, `Taxable`, `GstFree`), `GstClassificationSource` (`Unknown`, `Manual`, `ProductRule`, `SupplierDefault`, `SupplierFeeDefault`) and the `GstClassificationState` pair they always travel as. It is its own namespace rather than `Inventory.Domain.Purchases`, because product GST rules and supplier defaults (#430) classify the same way without depending on purchasing.
+- `Inventory.Domain.Purchases.PurchaseGstPolicy` is the one authoritative calculation and the only place the rounding rules exist: `Calculate` returns a purchase's input GST plus its unresolved component count and amount; `Classify` resolves a submitted classification to the state to persist; `ClassifyCharge` applies the absent-charge rule. It is deterministic and has no EF Core, HTTP or configuration dependency, like every other Domain policy.
+- `Inventory.Infrastructure.Models.PurchaseItem` stores `GstClassification`/`GstClassificationSource` per line, and `Purchase` stores `DeliveryGstClassification`/`DeliveryGstClassificationSource` and `PackageGstClassification`/`PackageGstClassificationSource` for its two charges (the only fee types that exist). They are plain `INTEGER` enum columns on the legacy `ReceiptItems`/`Receipts` tables, added by the additive `AddPurchaseGstClassification` migration.
+- `Inventory.Application.Purchases` carries them on its contracts: nullable on the way in (`PurchaseFields`, `PurchaseItemInput`), always resolved on the way out (`PurchaseRecord`, `PurchaseItemRecord`).
+- `EfPurchaseStore` is the only writer. It calls the Domain policy to decide what to persist and never applies a classification rule of its own, the same carve-out its restock movements and cost-transition guards already use.
+- `PurchasesController`/`PurchaseResponseMapper` bind and project them; each classification is serialized next to the amount it describes (`deliveryGstClassification` after `deliveryCost`, `gstClassification` after a line's `unitCost`). This is an additive change to the `/api/purchases` contract; every existing key keeps its name, position and value.
+
+**The rules themselves**, pinned by `PurchaseGstPolicyTests`:
+
+- A line's GST-inclusive amount is `round(Quantity * UnitCost, 2)`, and a taxable component's GST is `round(amount / 11, 2)`. Both roundings use `MidpointRounding.AwayFromZero`, not the banker's rounding `Math.Round` defaults to.
+- A purchase's GST is the sum of the individually rounded component amounts. It is never `invoiceTotal / 11`: a real supplier invoice can make the two differ by a cent, so the component-level rounding is the authoritative one.
+- `GstFree` contributes `$0`. `Unknown` contributes no GST and is returned separately as an unresolved count and amount, so a report can show the known GST beside a clear incomplete status instead of inferring `1/11`.
+- A delivery or package charge that is null or zero has no classification and never counts as unresolved; clearing a charge clears its classification with it.
+- A classification a person submits is persisted with provenance `Manual`. Nothing is pre-filled from a product, a supplier or an amount — rule-based classification arrives with #430 and #433, and a manual classification is never overwritten by a rule.
+- Updating a purchase keeps the classifications the caller did not resubmit, so editing quantities, costs or dates never silently reclassifies anything.
+- Existing rows migrate as `Unknown`/`Unknown`, with no backfill. The migration adds six columns and changes no data.
+- Classification is accounting data only: it does not touch unit cost, AVCO, costing quantity, inventory value or the restock movement a purchase line creates. Moving inventory costing to GST-exclusive would be a separate, explicit decision.
+
 ### Historical inventory cost
 
 Physical storage stock and costing inventory answer different questions:
@@ -2729,6 +2754,15 @@ derivation — there is no `LegacyOpenApiCompatibility`/`UseLegacyReceiptNames` 
 `SwaggerServiceCollectionExtensions.AddInventoryApiSwagger` any more. The published document carries
 the `Purchase`/`PurchaseItem`/`PurchaseResponseDto`/`PurchaseValidationDto` schema ids and the
 `Purchases` tag, with no remaining `Receipt*` schema id or `Receipts` tag.
+
+Issue #429 added the per-line and per-charge GST classification keys to both published schemas
+(`deliveryGstClassification`/`deliveryGstClassificationSource`,
+`packageGstClassification`/`packageGstClassificationSource` on `Purchase`, and
+`gstClassification`/`gstClassificationSource` on `PurchaseItem`), each referencing a new
+`GstClassification`/`GstClassificationSource` integer-enum component. That is the one deliberate,
+additive move of the pinned baselines in
+`InventoryApi.Tests.Swagger.PublishedResponseSchemaContractTests`: no existing key was renamed,
+retyped, reordered relative to the others or dropped.
 
 The `Purchase`/`PurchaseItem` ids are **public contract, not a reflection of the current CLR
 names**. Issue #304 replaced the serialised EF `Purchase`/`PurchaseItem` entities with the API-owned
