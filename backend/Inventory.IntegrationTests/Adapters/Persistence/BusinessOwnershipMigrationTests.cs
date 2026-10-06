@@ -28,26 +28,11 @@ public class BusinessOwnershipMigrationTests
     private static async Task MigrateToAsync(AppDbContext db, string targetMigration) =>
         await db.GetService<IMigrator>().MigrateAsync(targetMigration);
 
-    private static async Task<List<string>> TableNamesAsync(SqliteConnection connection) =>
-        await QueryStringsAsync(connection, "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name;");
+    private static Task<List<string>> TableNamesAsync(SqliteConnection connection) =>
+        MigrationSchemaProbe.TableNamesAsync(connection);
 
-    private static async Task<List<string>> ColumnNamesAsync(SqliteConnection connection, string table) =>
-        await QueryStringsAsync(connection, $"SELECT name FROM pragma_table_info('{table}');");
-
-    private static async Task<List<string>> QueryStringsAsync(SqliteConnection connection, string sql)
-    {
-        await using var command = connection.CreateCommand();
-        command.CommandText = sql;
-        await using var reader = await command.ExecuteReaderAsync();
-
-        var values = new List<string>();
-        while (await reader.ReadAsync())
-        {
-            values.Add(reader.GetString(0));
-        }
-
-        return values;
-    }
+    private static Task<List<string>> ColumnNamesAsync(SqliteConnection connection, string table) =>
+        MigrationSchemaProbe.ColumnNamesAsync(connection, table);
 
     private static async Task<long> ScalarAsync(SqliteConnection connection, string sql)
     {

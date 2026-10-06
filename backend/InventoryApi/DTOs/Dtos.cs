@@ -1,6 +1,8 @@
 // Imported for StockAdjustmentDto.Reason only - the temporary compatibility exception documented on
 // that record (issue #305). No other DTO in this file names the persistence model.
 using Inventory.Infrastructure.Models;
+// The GST classification a purchase line carries is a Domain vocabulary type, not a persistence one.
+using Inventory.Domain.Gst;
 
 namespace InventoryApi.DTOs;
 
@@ -75,7 +77,26 @@ public record SupplierDto(string Name, string? ContactName, string? Phone, strin
 
 public record SupplierResponse(int Id, string Name, string? ContactName, string? Phone, string? Email, string? Address);
 
-public record PurchaseItemDto(long ProductId, decimal Quantity, decimal UnitCost);
+/// <summary>
+/// One purchase line in the JSON <c>items</c> field of a purchase create/update form (issue #429).
+/// <c>gstClassification</c> is optional: omitting it leaves a new line unclassified and an edited
+/// line's stored classification untouched. The classification's provenance is never submitted -
+/// the server records a person's explicit choice as <c>Manual</c>. A value outside the published
+/// <c>GstClassification</c> enum is rejected with <c>400</c>, because the JSON number would
+/// otherwise bind to an undefined state no GST rule describes.
+///
+/// <c>id</c> is the stored line's own id, as a purchase read returns it. It is optional: a create
+/// ignores it, and an update that omits it matches lines by product exactly as before. Sending it
+/// is what lets an update of a purchase that holds several lines for one product keep each line's
+/// classification on the right line; when those lines disagree about their classification and no
+/// id is sent, the update is refused rather than guessing.
+/// </summary>
+public record PurchaseItemDto(
+    long ProductId,
+    decimal Quantity,
+    decimal UnitCost,
+    GstClassification? GstClassification = null,
+    int? Id = null);
 public record PurchaseCreateMetaDto(string Title, string? Notes, decimal? TotalAmount, decimal? DeliveryCost, decimal? PackageCost, DateTime? PurchaseDate, int? SupplierId, IReadOnlyList<PurchaseItemDto>? Items = null);
 
 public record PurchaseValidationDto(

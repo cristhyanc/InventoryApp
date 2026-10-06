@@ -17,7 +17,16 @@ public sealed class UpdatePurchase
         _store = store;
     }
 
+    /// <exception cref="InvalidOperationException">
+    /// A submitted GST classification is unsupported, or the store rejects the edit.
+    /// </exception>
     public Task<PurchaseRecord?> Handle(
-        int id, PurchaseFields fields, IReadOnlyList<PurchaseItemInput>? items, CancellationToken cancellationToken) =>
-        _store.UpdateAsync(id, fields, items, cancellationToken);
+        int id, PurchaseFields fields, IReadOnlyList<PurchaseItemInput>? items, CancellationToken cancellationToken)
+    {
+        // Checked here rather than in the store, so an unsupported classification is refused before
+        // the edit's transaction opens and nothing is written (issue #429).
+        PurchaseGstSubmission.EnsureClassificationsAreSupported(fields, items);
+
+        return _store.UpdateAsync(id, fields, items, cancellationToken);
+    }
 }

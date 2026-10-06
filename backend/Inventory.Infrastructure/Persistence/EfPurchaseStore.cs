@@ -1,5 +1,6 @@
 using Inventory.Application.Costing;
 using Inventory.Application.Purchases;
+using Inventory.Domain.Gst;
 using Inventory.Domain.Purchases;
 using Inventory.Domain.SupplierOrders;
 using Inventory.Infrastructure.Data;
@@ -105,11 +106,17 @@ public sealed class EfPurchaseStore : IPurchaseStore
             ContentType = file.ContentType,
             FileSizeBytes = file.FileSizeBytes,
         };
-        purchase.Items = items.Select(x => new PurchaseItem
+        ApplyChargeClassifications(purchase, fields, GstClassificationState.Unclassified, GstClassificationState.Unclassified);
+        purchase.Items = items.Select(x =>
         {
-            ProductId = x.ProductId,
-            Quantity = x.Quantity,
-            UnitCost = x.UnitCost,
+            var item = new PurchaseItem
+            {
+                ProductId = x.ProductId,
+                Quantity = x.Quantity,
+                UnitCost = x.UnitCost,
+            };
+            ApplyItemClassification(item, x.GstClassification);
+            return item;
         }).ToList();
 
         await using var transaction = await BeginTransactionAsync();
@@ -139,11 +146,22 @@ public sealed class EfPurchaseStore : IPurchaseStore
         var originalPurchaseDate = purchase.PurchaseDate;
         var originalSupplierId = purchase.SupplierId;
         var originalItems = purchase.Items.ToList();
+
+        // Decided before anything is written, and before the transaction even opens: a submission
+        // whose lines cannot be identified safely must leave every persisted row untouched.
+        var lineMatch = items is null ? default : MatchSubmittedLines(originalItems, items);
+        if (lineMatch.Error is { } identityError) throw new InvalidOperationException(identityError);
+
+        var storedDeliveryGst = new GstClassificationState(
+            purchase.DeliveryGstClassification, purchase.DeliveryGstClassificationSource);
+        var storedPackageGst = new GstClassificationState(
+            purchase.PackageGstClassification, purchase.PackageGstClassificationSource);
         purchase.Title = string.IsNullOrWhiteSpace(fields.Title) ? purchase.Title : fields.Title;
         purchase.Notes = fields.Notes;
         purchase.TotalAmount = fields.TotalAmount;
         purchase.DeliveryCost = fields.DeliveryCost;
         purchase.PackageCost = fields.PackageCost;
+        ApplyChargeClassifications(purchase, fields, storedDeliveryGst, storedPackageGst);
         purchase.PurchaseDate = fields.PurchaseDate ?? purchase.PurchaseDate;
         purchase.SupplierId = fields.SupplierId;
         var requiresFulfillmentReconciliation = items is not null ||
@@ -175,21 +193,25 @@ public sealed class EfPurchaseStore : IPurchaseStore
             var movementByPurchaseItem = existingMovements
                 .GroupBy(movement => movement.ReceiptItemId!.Value)
                 .ToDictionary(group => group.Key, group => group.Single());
-            var availableByProduct = existingItems
-                .GroupBy(item => item.ProductId)
-                .ToDictionary(group => group.Key, group => new Queue<PurchaseItem>(group));
+            var existingById = existingItems.ToDictionary(item => item.Id);
+            var matchedItemIds = new HashSet<int>();
             var newItems = new List<PurchaseItem>();
 
-            foreach (var requested in items)
+            // The pairing of submitted line to stored line is the Domain policy's decision, taken
+            // above over the lines as they were loaded; this only applies it.
+            for (var index = 0; index < items.Count; index++)
             {
-                if (availableByProduct.TryGetValue(requested.ProductId, out var matches) && matches.Count > 0)
+                var requested = items[index];
+                if (lineMatch.StoredLineIds[index] is { } matchedId)
                 {
-                    var item = matches.Dequeue();
-                    AddAffected(affected, item.ProductId, movementByPurchaseItem.TryGetValue(item.Id, out var movement)
-                        ? movement.EffectiveAt : originalPurchaseDate);
+                    var item = existingById[matchedId];
+                    matchedItemIds.Add(matchedId);
+                    movementByPurchaseItem.TryGetValue(item.Id, out var movement);
+                    AddAffected(affected, item.ProductId, movement?.EffectiveAt ?? originalPurchaseDate);
                     AddAffected(affected, item.ProductId, purchase.PurchaseDate);
                     item.Quantity = requested.Quantity;
                     item.UnitCost = requested.UnitCost;
+                    ApplyItemClassification(item, requested.GstClassification);
                     if (movement is not null)
                     {
                         movement.QuantityChange = PurchaseStockMovementPolicy.ToStockQuantity(requested.Quantity);
@@ -212,13 +234,14 @@ public sealed class EfPurchaseStore : IPurchaseStore
                         Quantity = requested.Quantity,
                         UnitCost = requested.UnitCost,
                     };
+                    ApplyItemClassification(item, requested.GstClassification);
                     purchase.Items.Add(item);
                     newItems.Add(item);
                     AddAffected(affected, item.ProductId, purchase.PurchaseDate);
                 }
             }
 
-            foreach (var remaining in availableByProduct.Values.SelectMany(queue => queue))
+            foreach (var remaining in existingItems.Where(item => !matchedItemIds.Contains(item.Id)))
             {
                 AddAffected(affected, remaining.ProductId,
                     movementByPurchaseItem.TryGetValue(remaining.Id, out var movement) ? movement.EffectiveAt : originalPurchaseDate);
@@ -437,6 +460,66 @@ public sealed class EfPurchaseStore : IPurchaseStore
 
     private static PurchaseItemCandidate ToCandidate(PurchaseItemInput item) => new(item.ProductId, item.Quantity, item.UnitCost);
 
+    /// <summary>
+    /// Pairs each submitted line with the stored line it updates (issue #429), through
+    /// <see cref="PurchaseLineIdentityPolicy"/>. The stored lines come from the purchase the tenant
+    /// query filters already resolved, so a line id belonging to another purchase or another
+    /// business is simply not among them and is reported as unknown.
+    /// </summary>
+    private static PurchaseLineMatch MatchSubmittedLines(
+        IReadOnlyCollection<PurchaseItem> stored, IReadOnlyList<PurchaseItemInput> submitted) =>
+        PurchaseLineIdentityPolicy.Match(
+            stored
+                .Select(item => new StoredPurchaseLine(
+                    item.Id,
+                    item.ProductId,
+                    new GstClassificationState(item.GstClassification, item.GstClassificationSource)))
+                .ToList(),
+            submitted.Select(item => new SubmittedPurchaseLine(item.Id, item.ProductId)).ToList());
+
+    /// <summary>
+    /// Applies a submitted line GST classification (issue #429). A <c>null</c> submission keeps the
+    /// classification the line already carries, so editing a purchase's quantities, costs or dates
+    /// never silently reclassifies it; anything else goes through
+    /// <see cref="PurchaseGstPolicy.Classify"/>, which records an explicit choice as
+    /// <see cref="GstClassificationSource.Manual"/> and leaves an explicit unknown unclassified.
+    /// </summary>
+    private static void ApplyItemClassification(PurchaseItem item, GstClassification? requested)
+    {
+        if (requested is null) return;
+
+        var state = PurchaseGstPolicy.Classify(requested);
+        item.GstClassification = state.Classification;
+        item.GstClassificationSource = state.Source;
+    }
+
+    /// <summary>
+    /// Applies the submitted delivery and package GST classifications to <paramref name="purchase"/>,
+    /// whose charge amounts have already been set. A <c>null</c> submission keeps the stored state
+    /// (<paramref name="storedDelivery"/>/<paramref name="storedPackage"/>), and a charge that ends
+    /// up absent or zero carries no classification at all, whatever was submitted or stored
+    /// (parent issue #62, decision D3).
+    /// </summary>
+    private static void ApplyChargeClassifications(
+        Purchase purchase,
+        PurchaseFields fields,
+        GstClassificationState storedDelivery,
+        GstClassificationState storedPackage)
+    {
+        var delivery = PurchaseGstPolicy.ClassifyCharge(
+            purchase.DeliveryCost, Requested(fields.DeliveryGstClassification, storedDelivery));
+        purchase.DeliveryGstClassification = delivery.Classification;
+        purchase.DeliveryGstClassificationSource = delivery.Source;
+
+        var package = PurchaseGstPolicy.ClassifyCharge(
+            purchase.PackageCost, Requested(fields.PackageGstClassification, storedPackage));
+        purchase.PackageGstClassification = package.Classification;
+        purchase.PackageGstClassificationSource = package.Source;
+
+        static GstClassificationState Requested(GstClassification? submitted, GstClassificationState stored) =>
+            submitted is null ? stored : PurchaseGstPolicy.Classify(submitted);
+    }
+
     private static void AddAffected(IDictionary<long, DateTime> affected, long productId, DateTime changedAt)
     {
         if (!affected.TryGetValue(productId, out var existing) || changedAt < existing)
@@ -462,7 +545,11 @@ public sealed class EfPurchaseStore : IPurchaseStore
         purchase.Notes,
         purchase.TotalAmount,
         purchase.DeliveryCost,
+        purchase.DeliveryGstClassification,
+        purchase.DeliveryGstClassificationSource,
         purchase.PackageCost,
+        purchase.PackageGstClassification,
+        purchase.PackageGstClassificationSource,
         purchase.PurchaseDate,
         purchase.SupplierId,
         purchase.Supplier is null ? null : ToSupplierRecord(purchase.Supplier),
@@ -478,6 +565,7 @@ public sealed class EfPurchaseStore : IPurchaseStore
 
     private static PurchaseItemRecord ToItemRecord(PurchaseItem item) => new(
         item.Id, item.ReceiptId, item.ProductId, item.Quantity, item.UnitCost,
+        item.GstClassification, item.GstClassificationSource,
         item.Product is null ? null : ToProductSummary(item.Product));
 
     private static PurchaseProductSummaryRecord ToProductSummary(Product product) => new(

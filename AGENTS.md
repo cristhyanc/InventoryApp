@@ -228,7 +228,20 @@ These rules come from the application's established bookkeeping design. Changing
 - Never double count actual and estimated fees for the same covered date.
 - If no effective rate exists, report missing-rate transactions and make affected profit results provisional/unavailable as appropriate. Do not assume zero.
 - GST-inclusive sales GST is `inclusive amount / 11` under the current Australian GST assumption. GST on an exclusive fee is `exclusive amount * 10%`. Reuse the central calculation functions.
-- Do not infer unsupported purchase GST. Missing GST classification remains a data-quality limitation.
+
+### Purchase GST classification
+
+Purchase amounts are GST-inclusive. Input GST comes from an explicit per-component classification, never from an amount (issue #429, under the approved GST design of parent issue #62).
+
+- GST is classified **per component**: per purchase line, and separately for the purchase's delivery and package charges. A charge never inherits a product line's classification, and there is no purchase-wide classification.
+- The states are `Taxable`, `GstFree` and `Unknown` (`Inventory.Domain.Gst.GstClassification`), each stored with its provenance `Manual`, `ProductRule`, `SupplierDefault`, `SupplierFeeDefault` or `Unknown` (`GstClassificationSource`). A manual classification always wins and is never overwritten by a rule.
+- `Inventory.Domain.Purchases.PurchaseGstPolicy` is the one authoritative calculation. A line's GST-inclusive amount is `round(Quantity * UnitCost, 2)`; a taxable component's GST is `round(amount / 11, 2)`; both roundings use `MidpointRounding.AwayFromZero`. A purchase's GST is the **sum of the individually rounded component amounts**, never `invoiceTotal / 11` - the two can differ by a cent. Do not reimplement these formulas in a controller, an export or an Angular component.
+- `GstFree` contributes `$0`. `Unknown` contributes no GST at all and is returned separately as an unresolved count and amount. Never infer `1/11` from an amount, and never collapse `Unknown` into `GstFree`: a report must stay visibly incomplete while any relevant component is unresolved.
+- Only a declared classification is a classification. An enum is a compile-time constraint, not a validation: a form field and a deserialized JSON number both bind an arbitrary integer. Every submitted line and charge classification is checked against `Inventory.Domain.Gst.GstClassifications` before anything is stored, and an unsupported value is rejected with `400` leaving the purchase, the inventory and the stored document untouched. The Domain policy refuses one too, rather than calculating it as zero — an undefined state must never look like a resolved `$0` component.
+- A delivery or package charge that is null or zero has no classification and is never unresolved.
+- A classification belongs to one identified line. An edit may submit each line's stable purchase-item id, and `Inventory.Domain.Purchases.PurchaseLineIdentityPolicy` matches identified lines by it; a line id must belong to that purchase (and so, through the tenant query filters, to the caller's business) and appear once. An edit that omits ids still matches by product, but never when a purchase holds several lines for one product whose classifications differ: that is refused with `400` rather than carrying one line's classification and provenance onto another.
+- Historical purchases migrate as `Unknown`/`Unknown`. A migration, a deployment, a startup step or a normal purchase read must never guess or backfill a classification; historical classification is only the explicit Admin Preview then Apply maintenance workflow.
+- GST classification is accounting data only. It must never change purchase unit cost, AVCO, costing quantity, inventory value or a stock movement. Changing inventory costing to GST-exclusive needs its own explicit decision.
 
 ### Site commissions
 

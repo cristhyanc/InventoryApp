@@ -18,16 +18,6 @@ public class RenameNayaxMachineStockEventToEventLogContractMigrationTests
     private const string PreviousMigration = "20260927140121_AddNayaxMachineStockEvents";
     private const string TargetMigration = "20260928012603_RenameNayaxMachineStockEventToEventLogContract";
 
-    private static async Task<List<string>> ColumnNamesAsync(SqliteConnection connection, string table)
-    {
-        await using var command = connection.CreateCommand();
-        command.CommandText = $"SELECT name FROM pragma_table_info('{table}');";
-        await using var reader = await command.ExecuteReaderAsync();
-        var values = new List<string>();
-        while (await reader.ReadAsync()) values.Add(reader.GetString(0));
-        return values;
-    }
-
     [Fact]
     public async Task Migration_renames_to_event_log_contract_and_preserves_imported_events_and_idempotency()
     {
@@ -53,7 +43,7 @@ public class RenameNayaxMachineStockEventToEventLogContractMigrationTests
         {
             await after.GetService<IMigrator>().MigrateAsync(TargetMigration);
 
-            var columns = await ColumnNamesAsync(connection, "NayaxMachineStockEvents");
+            var columns = await MigrationSchemaProbe.ColumnNamesAsync(connection, "NayaxMachineStockEvents");
             Assert.Contains("NayaxEventLogId", columns);
             Assert.Contains("EventDateTimeGmt", columns);
             Assert.Contains("EventDateTimeVmc", columns);

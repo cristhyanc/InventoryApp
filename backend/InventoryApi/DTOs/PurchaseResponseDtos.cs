@@ -1,3 +1,5 @@
+using Inventory.Domain.Gst;
+
 namespace InventoryApi.DTOs;
 
 /// <summary>
@@ -19,7 +21,21 @@ public sealed record PurchaseResponse
     public string? Notes { get; init; }
     public decimal? TotalAmount { get; init; }
     public decimal? DeliveryCost { get; init; }
+
+    /// <summary>
+    /// The delivery charge's own GST classification and provenance (issue #429), emitted next to
+    /// the amount they describe. Both are <c>Unknown</c> for a charge nobody has classified and for
+    /// a charge that is absent or zero.
+    /// </summary>
+    public GstClassification DeliveryGstClassification { get; init; }
+    public GstClassificationSource DeliveryGstClassificationSource { get; init; }
+
     public decimal? PackageCost { get; init; }
+
+    /// <summary>The package charge's own GST classification and provenance; see <see cref="DeliveryGstClassification"/>.</summary>
+    public GstClassification PackageGstClassification { get; init; }
+    public GstClassificationSource PackageGstClassificationSource { get; init; }
+
     public required DateTime PurchaseDate { get; init; }
 
     public int? SupplierId { get; init; }
@@ -53,6 +69,14 @@ public sealed record PurchaseItemResponse
     public ProductResponse? Product { get; init; }
     public required decimal Quantity { get; init; }
     public required decimal UnitCost { get; init; }
+
+    /// <summary>
+    /// This line's own GST classification and provenance (issue #429). GST is classified per line,
+    /// so the value here never describes the purchase as a whole, and it is accounting data only:
+    /// it does not affect <see cref="UnitCost"/> or <see cref="LineTotal"/>.
+    /// </summary>
+    public GstClassification GstClassification { get; init; }
+    public GstClassificationSource GstClassificationSource { get; init; }
 
     /// <summary>
     /// This line's extended cost, derived here rather than carried as data, exactly as the entity's

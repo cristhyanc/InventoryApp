@@ -17,26 +17,6 @@ public class AddNayaxMachineStockEventsMigrationTests
     private const string PreviousMigration = "20260923120151_AddBusinessBackfillAudit";
     private const string TargetMigration = "20260927140121_AddNayaxMachineStockEvents";
 
-    private static async Task<List<string>> ColumnNamesAsync(SqliteConnection connection, string table)
-    {
-        await using var command = connection.CreateCommand();
-        command.CommandText = $"SELECT name FROM pragma_table_info('{table}');";
-        await using var reader = await command.ExecuteReaderAsync();
-        var values = new List<string>();
-        while (await reader.ReadAsync()) values.Add(reader.GetString(0));
-        return values;
-    }
-
-    private static async Task<List<string>> TableNamesAsync(SqliteConnection connection)
-    {
-        await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name;";
-        await using var reader = await command.ExecuteReaderAsync();
-        var values = new List<string>();
-        while (await reader.ReadAsync()) values.Add(reader.GetString(0));
-        return values;
-    }
-
     [Fact]
     public async Task Migration_is_additive_and_preserves_existing_stock_adjustment_history()
     {
@@ -48,8 +28,10 @@ public class AddNayaxMachineStockEventsMigrationTests
         {
             await before.GetService<IMigrator>().MigrateAsync(PreviousMigration);
 
-            Assert.DoesNotContain("Source", await ColumnNamesAsync(connection, "StockAdjustments"));
-            Assert.DoesNotContain("NayaxMachineStockEvents", await TableNamesAsync(connection));
+            Assert.DoesNotContain(
+                "Source", await MigrationSchemaProbe.ColumnNamesAsync(connection, "StockAdjustments"));
+            Assert.DoesNotContain(
+                "NayaxMachineStockEvents", await MigrationSchemaProbe.TableNamesAsync(connection));
 
             await using var seed = connection.CreateCommand();
             seed.CommandText = """
@@ -68,8 +50,8 @@ public class AddNayaxMachineStockEventsMigrationTests
         {
             await after.GetService<IMigrator>().MigrateAsync(TargetMigration);
 
-            Assert.Contains("Source", await ColumnNamesAsync(connection, "StockAdjustments"));
-            Assert.Contains("NayaxMachineStockEvents", await TableNamesAsync(connection));
+            Assert.Contains("Source", await MigrationSchemaProbe.ColumnNamesAsync(connection, "StockAdjustments"));
+            Assert.Contains("NayaxMachineStockEvents", await MigrationSchemaProbe.TableNamesAsync(connection));
 
             var preserved = await after.StockAdjustments.SingleAsync();
             Assert.Equal(-3, preserved.QuantityChange);
