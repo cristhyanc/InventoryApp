@@ -67,7 +67,19 @@ public class AddInventoryCostRepairsMigrationTests
                     .Order(StringComparer.Ordinal));
             Assert.Empty(await after.InventoryCostRepairs.ToListAsync());
 
-            var product = await after.Products.SingleAsync();
+            // Projected rather than materialised as an entity: this database stops at
+            // TargetMigration, so a column a later additive migration adds to Products does not
+            // exist here yet (issue #430's GstRule is the current example). The preserved values
+            // asserted are unchanged.
+            var product = await after.Products
+                .Select(candidate => new
+                {
+                    candidate.QuantityInStock,
+                    candidate.CostingQuantity,
+                    candidate.InventoryValue,
+                    candidate.AverageUnitCost,
+                })
+                .SingleAsync();
             Assert.Equal((12, 12, 13.20m, 1.10m), (product.QuantityInStock, product.CostingQuantity, product.InventoryValue, product.AverageUnitCost));
             var movement = await after.StockAdjustments.SingleAsync();
             Assert.Equal((12, 1.10m, 13.20m, 12), (movement.QuantityChange, movement.UnitCost, movement.TotalCost, movement.CostingQuantityAfter));

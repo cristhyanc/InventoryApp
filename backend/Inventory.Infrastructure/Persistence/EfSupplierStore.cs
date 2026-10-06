@@ -1,4 +1,5 @@
 using Inventory.Application.Suppliers;
+using Inventory.Domain.Gst;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
@@ -60,6 +61,38 @@ public sealed class EfSupplierStore : ISupplierStore
         if (entity is null) return false;
 
         _db.Suppliers.Remove(entity);
+        await _db.SaveChangesAsync(cancellationToken);
+        return true;
+    }
+
+    public async Task<SupplierGstDefaults?> FindGstDefaultsAsync(int id, CancellationToken cancellationToken)
+    {
+        var row = await _db.Suppliers
+            .AsNoTracking()
+            .Where(supplier => supplier.Id == id)
+            .Select(supplier => new
+            {
+                supplier.ProductLineGstDefault,
+                supplier.DeliveryGstDefault,
+                supplier.PackageGstDefault,
+            })
+            .SingleOrDefaultAsync(cancellationToken);
+
+        return row is null
+            ? null
+            : new SupplierGstDefaults(row.ProductLineGstDefault, row.DeliveryGstDefault, row.PackageGstDefault);
+    }
+
+    /// <summary>Writes the three default columns only; no other supplier field is touched.</summary>
+    public async Task<bool> SetGstDefaultsAsync(
+        int id, SupplierGstDefaults defaults, CancellationToken cancellationToken)
+    {
+        var entity = await _db.Suppliers.FindAsync([id], cancellationToken);
+        if (entity is null) return false;
+
+        entity.ProductLineGstDefault = defaults.ProductLines;
+        entity.DeliveryGstDefault = defaults.Delivery;
+        entity.PackageGstDefault = defaults.Package;
         await _db.SaveChangesAsync(cancellationToken);
         return true;
     }

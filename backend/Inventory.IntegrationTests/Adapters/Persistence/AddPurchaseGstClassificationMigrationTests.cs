@@ -89,7 +89,19 @@ public class AddPurchaseGstClassificationMigrationTests
             // Nothing else moved: the purchase's own amounts, the line, and the costing history.
             Assert.Equal((20.90m, 5.00m, 2.70m), (purchase.TotalAmount, purchase.DeliveryCost, purchase.PackageCost));
             Assert.Equal((12m, 1.10m), (item.Quantity, item.UnitCost));
-            var product = await after.Products.SingleAsync();
+            // Projected rather than materialised as an entity: this database stops at
+            // TargetMigration, so a column a later additive migration adds to Products does not
+            // exist here yet (issue #430's GstRule is the current example). The preserved values
+            // asserted are unchanged.
+            var product = await after.Products
+                .Select(candidate => new
+                {
+                    candidate.QuantityInStock,
+                    candidate.CostingQuantity,
+                    candidate.InventoryValue,
+                    candidate.AverageUnitCost,
+                })
+                .SingleAsync();
             Assert.Equal(
                 (12, 12, 13.20m, 1.10m),
                 (product.QuantityInStock, product.CostingQuantity, product.InventoryValue, product.AverageUnitCost));

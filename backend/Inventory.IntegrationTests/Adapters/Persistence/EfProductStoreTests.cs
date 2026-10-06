@@ -1,4 +1,5 @@
 using Inventory.Application.Products;
+using Inventory.Domain.Gst;
 using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
@@ -129,5 +130,11 @@ public class EfProductStoreTests : IDisposable
 
         public Task<bool> DeleteAsync(long id, CancellationToken cancellationToken) =>
             _inner.DeleteAsync(id, cancellationToken);
+
+        public Task<GstClassification?> FindGstRuleAsync(long id, CancellationToken cancellationToken) =>
+            _inner.FindGstRuleAsync(id, cancellationToken);
+
+        public Task<bool> SetGstRuleAsync(long id, GstClassification rule, CancellationToken cancellationToken) =>
+            _inner.SetGstRuleAsync(id, rule, cancellationToken);
     }
 }

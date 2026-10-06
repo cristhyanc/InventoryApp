@@ -1,5 +1,6 @@
 using Inventory.Application.Costing;
 using Inventory.Application.Products;
+using Inventory.Domain.Gst;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
@@ -98,6 +99,32 @@ public sealed class EfProductStore : IProductStore
         if (product is null) return false;
 
         _db.Products.Remove(product);
+        await _db.SaveChangesAsync(cancellationToken);
+        return true;
+    }
+
+    public async Task<GstClassification?> FindGstRuleAsync(long id, CancellationToken cancellationToken)
+    {
+        var product = await _db.Products
+            .AsNoTracking()
+            .Where(product => product.Id == id)
+            .Select(product => new { product.GstRule })
+            .SingleOrDefaultAsync(cancellationToken);
+
+        return product?.GstRule;
+    }
+
+    /// <summary>
+    /// Writes the rule column only. <c>UpdatedAt</c> is deliberately left alone as well, because it
+    /// describes the catalogue record the Nayax import and the product edit maintain; a GST rule is
+    /// separate bookkeeping configuration and must not look like a catalogue change.
+    /// </summary>
+    public async Task<bool> SetGstRuleAsync(long id, GstClassification rule, CancellationToken cancellationToken)
+    {
+        var product = await _db.Products.FindAsync([id], cancellationToken);
+        if (product is null) return false;
+
+        product.GstRule = rule;
         await _db.SaveChangesAsync(cancellationToken);
         return true;
     }

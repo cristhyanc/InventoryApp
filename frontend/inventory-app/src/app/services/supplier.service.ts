@@ -1,7 +1,7 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
-import { Supplier } from '../models/models';
+import { GstClassification, Supplier, SupplierGstDefaults } from '../models/models';
 import { ConfigService } from './config.service';
 
 export interface SupplierDto {
@@ -10,6 +10,16 @@ export interface SupplierDto {
   phone?: string | null;
   email?: string | null;
   address?: string | null;
+}
+
+/**
+ * The body of `PUT /api/suppliers/{id}/gst-defaults` (issue #430): all three defaults are replaced
+ * together, so the caller sends the values it last read plus whatever it changed.
+ */
+export interface SupplierGstDefaultsDto {
+  productLineGstDefault: GstClassification;
+  deliveryGstDefault: GstClassification;
+  packageGstDefault: GstClassification;
 }
 
 @Injectable({ providedIn: 'root' })
@@ -38,5 +48,14 @@ export class SupplierService {
 
   delete(id: number): Observable<void> {
     return this.http.delete<void>(`${this.baseUrl}/${id}`);
+  }
+
+  /** The supplier's explicitly configured GST defaults (issue #430); their own resource. */
+  getGstDefaults(id: number): Observable<SupplierGstDefaults> {
+    return this.http.get<SupplierGstDefaults>(`${this.baseUrl}/${id}/gst-defaults`);
+  }
+
+  setGstDefaults(id: number, payload: SupplierGstDefaultsDto): Observable<void> {
+    return this.http.put<void>(`${this.baseUrl}/${id}/gst-defaults`, payload);
   }
 }

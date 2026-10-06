@@ -1,0 +1,76 @@
+<section class="mb-6 rounded-xl bg-white p-6 shadow-sm">
+  <h2 class="mb-1 text-lg font-semibold text-slate-800">
+    GST defaults{{ supplierName ? ' - ' + supplierName : '' }}
+  </h2>
+  <p class="mb-4 text-sm text-slate-600">
+    A supplier default applies only where the purchased product has no GST rule of its own. Delivery
+    and package charges use their own defaults and never inherit the product-line default. These are
+    explicit settings: a supplier being registered for GST is not enough to classify its products.
+    Saving them does not change the GST classification of any purchase that is already recorded.
+  </p>
+
+  @if (loading) {
+    <p class="mb-3 text-sm text-slate-600">Loading the GST defaults...</p>
+  }
+  @if (error) {
+    <p class="mb-3 text-sm text-red-600">{{ error }}</p>
+  }
+  @if (saved) {
+    <p class="mb-3 text-sm text-green-700">GST defaults saved.</p>
+  }
+
+  <div class="grid gap-4 sm:grid-cols-3">
+    <div>
+      <label for="supplier-gst-product-lines" class="mb-1 block text-sm font-medium text-slate-700">Product lines</label>
+      <select
+        id="supplier-gst-product-lines"
+        name="productLineGstDefault"
+        [(ngModel)]="form.productLineGstDefault"
+        [disabled]="!loaded || saving"
+      >
+        @for (option of options; track option.value) {
+          <option [ngValue]="option.value">{{ option.label }}</option>
+        }
+      </select>
+    </div>
+    <div>
+      <label for="supplier-gst-delivery" class="mb-1 block text-sm font-medium text-slate-700">Delivery charge</label>
+      <select
+        id="supplier-gst-delivery"
+        name="deliveryGstDefault"
+        [(ngModel)]="form.deliveryGstDefault"
+        [disabled]="!loaded || saving"
+      >
+        @for (option of options; track option.value) {
+          <option [ngValue]="option.value">{{ option.label }}</option>
+        }
+      </select>
+    </div>
+    <div>
+      <label for="supplier-gst-package" class="mb-1 block text-sm font-medium text-slate-700">Package charge</label>
+      <select
+        id="supplier-gst-package"
+        name="packageGstDefault"
+        [(ngModel)]="form.packageGstDefault"
+        [disabled]="!loaded || saving"
+      >
+        @for (option of options; track option.value) {
+          <option [ngValue]="option.value">{{ option.label }}</option>
+        }
+      </select>
+    </div>
+  </div>
+
+  <p class="mt-1 text-xs text-slate-500">
+    "No default" leaves purchases from this supplier unclassified; it is not the same as GST-free.
+  </p>
+
+  <button
+    type="button"
+    class="mt-4 inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+    [disabled]="!loaded || saving"
+    (click)="save()"
+  >
+    {{ saving ? 'Saving...' : 'Save GST defaults' }}
+  </button>
+</section>

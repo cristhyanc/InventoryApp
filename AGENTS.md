@@ -245,6 +245,16 @@ Purchase amounts are GST-inclusive. Input GST comes from an explicit per-compone
 - Historical purchases migrate as `Unknown`/`Unknown`. A migration, a deployment, a startup step or a normal purchase read must never guess or backfill a classification; historical classification is only the explicit Admin Preview then Apply maintenance workflow.
 - GST classification is accounting data only. It must never change purchase unit cost, AVCO, costing quantity, inventory value or a stock movement. Changing inventory costing to GST-exclusive needs its own explicit decision.
 
+#### Product GST rules and supplier defaults
+
+Rules are configuration that *could* classify a component; they are not themselves a classification (issue #430).
+
+- A product carries one GST rule (`Product.GstRule`), and a supplier carries three explicit defaults: one for its product lines and separate ones for the purchase's delivery and package charges (`Supplier.ProductLineGstDefault`/`DeliveryGstDefault`/`PackageGstDefault`). All four reuse `Inventory.Domain.Gst.GstClassification`, and `Inventory.Domain.Gst.GstRules.None` (`Unknown`) is **no rule** - a real state that must stay distinct from an explicit `GstFree` rule. Every existing product and supplier starts there; the migration that added the columns infers nothing.
+- **Precedence**, when a rule is read: an explicit/manual classification always wins and is never overwritten; then the product's own rule; then the supplier's product-line default for a purchase line, and the supplier's matching fee default for a delivery or package charge. A component no rule deterministically covers stays `Unknown`. A charge never falls back to the product-line default.
+- **A supplier default is explicit configuration, never inference.** A supplier being registered for GST, or GST appearing elsewhere on its invoice, does not classify its products: a supplier may legitimately sell both taxable and GST-free goods. Never derive a default from registration, from an invoice total, from a product's price, or from anything else.
+- Configuring a rule or a default must leave every already-recorded purchase exactly as it is - classification, provenance, amounts, costing and stock movements alike. The only place a rule is applied to purchase data is the explicit Admin Preview then Apply maintenance workflow (issue #433), where a manual classification is still never overwritten.
+- A submitted rule value is checked against the declared vocabulary before anything is stored (`GstRules`/`SupplierGstDefaults.HasUnsupportedRule`); an unsupported value is rejected with `400` and persists nothing. Rules are read and written on their own tenant-scoped resources, `/api/products/{id}/gst-rule` and `/api/suppliers/{id}/gst-defaults`, which never accept a business or supplier owner from the request.
+
 ### Site commissions
 
 - Commissions are based on effective-dated `SiteCommissionAgreement` records.

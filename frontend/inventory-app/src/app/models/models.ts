@@ -7,6 +7,28 @@ export enum StockAdjustmentReason {
   MachineRefill = 5
 }
 
+/**
+ * A product's configured GST rule (issue #430), from `/api/products/{id}/gst-rule`. It is rule
+ * configuration only: it never reclassifies an existing purchase and never affects cost.
+ */
+export interface ProductGstRule {
+  productId: number;
+  gstRule: GstClassification;
+}
+
+/**
+ * A supplier's explicitly configured GST defaults (issue #430), from
+ * `/api/suppliers/{id}/gst-defaults`. The delivery and package defaults are separate from the
+ * product-line default because a charge never inherits a product line's classification, and a
+ * default only applies where the purchased product has no rule of its own.
+ */
+export interface SupplierGstDefaults {
+  supplierId: number;
+  productLineGstDefault: GstClassification;
+  deliveryGstDefault: GstClassification;
+  packageGstDefault: GstClassification;
+}
+
 export interface Category {
   id: number;
   name: string;
@@ -385,6 +407,10 @@ export interface RestockCostSuggestion {
  * `Unknown` is a real persisted state, not a missing value: it contributes no input GST and stays
  * visibly unresolved. Never present it as GST-free, and never derive GST from an amount here - the
  * server returns the calculated figures (`PurchaseGstSummary`).
+ *
+ * The same vocabulary describes a product's GST rule and a supplier's GST defaults (issue #430);
+ * there `Unknown` means "no rule configured", which must stay distinct from an explicit `GstFree`
+ * rule.
  */
 export enum GstClassification {
   Unknown = 0,
