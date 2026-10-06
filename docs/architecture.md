@@ -817,11 +817,19 @@ complete until they are:
 ```text
 InventoryApp/
 ├── backend/
-│   ├── InventoryApi/
-│   │   ├── Adapters/Mapping/       Response-DTO projections only; no persistence adapter since issue #309
+│   ├── InventoryApi/                HTTP boundary and composition root only; the folder set is frozen by ApiLayerOwnershipTests (issue #154)
+│   │   ├── Adapters/Mapping/        Response-DTO projections only; no persistence adapter since issue #309
+│   │   ├── Adapters/Nayax/          E2ETestNayaxLynxClient, the test double the E2ETest host registers (issue #46)
+│   │   ├── Adapters/PlatformDiagnostics/  The ILogger audit adapter, here because the event carries the request correlation id (issue #336)
+│   │   ├── App_Data/jobs/           The App Service WebJob that triggers the backup command (issue #333)
+│   │   ├── Auth/                    Authentication, authorization, BusinessScopeMiddleware, the E2E test host's scheme and fixture
 │   │   ├── Bootstrap/               DatabaseSchemaStartup and the human-invoked commands (host-owned, calling Infrastructure services)
 │   │   ├── Controllers/
-│   │   ├── DTOs/
+│   │   ├── DTOs/                    API-owned transport contracts
+│   │   ├── Http/                    Exception handlers (ProblemDetails mapping) and the liveness/readiness health checks
+│   │   ├── Observability/           Application Insights telemetry registration (issue #165)
+│   │   ├── Properties/              Launch and service-dependency settings
+│   │   ├── Swagger/                 OpenAPI configuration and the published-schema compatibility boundary
 │   │   ├── Program.cs               Composition root; chooses the SQLite provider
 │   │   └── InventoryApi.csproj
 │   ├── Inventory.Domain/            NayaxFeeSettings rule, reporting policies/calculations (Inventory.Domain.Reporting.<Feature>), Purchases.PurchaseTotalValidationPolicy; other features not yet migrated
@@ -882,9 +890,9 @@ flowchart TD
 
 ## Current pressure points
 
-- HTTP, use cases and domain calculations still live in one project for every feature area pending migration (the remaining direct-`AppDbContext` controllers). EF Core, Nayax, file storage and export generation no longer do: issue #306 moved the non-EF adapters, issue #307 `AppDbContext`, the EF entities and the migrations, and issues #308/#309 the whole EF adapter family, so `InventoryApi` holds no persistence implementation. Reporting is no longer part of this pressure point at all: its use cases live in `Inventory.Application.Reporting.<Feature>`, its calculations in `Inventory.Domain.Reporting.<Feature>`, its CSV/XLSX byte encoding in `Inventory.Infrastructure.Reporting` (issue #306) and, since issue #308, its EF/Nayax fact providers in `Inventory.Infrastructure.Reporting.Persistence`; only its HTTP controller remains in `InventoryApi`. `Purchases.PurchaseTotalValidationPolicy`/`ComputePurchaseTotalValidation` were the first pieces of the purchase slice to move out (see the [Purchase rename plan](#purchase-rename-plan)); the purchase and supplier-order upload/update/delete orchestration followed in issue #281, and issue #304 removed the last `InventoryApi` services for them, so only their HTTP controllers and the API-owned response DTOs remain here.
+- ~~HTTP, use cases and domain calculations still live in one project.~~ **Resolved (issue #154).** `InventoryApi` is the HTTP boundary and composition root only; no business service, use-case orchestration, financial/classification rule or persistence implementation remains in it, and `ApiLayerOwnershipTests` fails if one returns — see [InventoryApi](#inventoryapi). EF Core, Nayax, file storage and export generation left first: issue #306 moved the non-EF adapters, issue #307 `AppDbContext`, the EF entities and the migrations, and issues #308/#309 the whole EF adapter family. Reporting had already left: its use cases live in `Inventory.Application.Reporting.<Feature>`, its calculations in `Inventory.Domain.Reporting.<Feature>`, its CSV/XLSX byte encoding in `Inventory.Infrastructure.Reporting` (issue #306) and, since issue #308, its EF/Nayax fact providers in `Inventory.Infrastructure.Reporting.Persistence`; only its HTTP controller remains in `InventoryApi`. `Purchases.PurchaseTotalValidationPolicy`/`ComputePurchaseTotalValidation` were the first pieces of the purchase slice to move out (see the [Purchase rename plan](#purchase-rename-plan)); the purchase and supplier-order upload/update/delete orchestration followed in issue #281, and issue #304 removed the last `InventoryApi` services for them, so only their HTTP controllers and the API-owned response DTOs remain here.
 - The machine, site, purchase and inventory-cost-transition services no longer exist either: the transition services moved to `Inventory.Application.Costing` (issue #298), `PurchaseService`/`SupplierOrderService` were deleted by issue #304, and `MachineService`/`SiteService` by issue #302; their EF adapters (`EfPurchaseStore`/`EfSupplierOrderStore` and `EfMachineDashboardFactsStore`/`EfSiteFactsStore`) were the documented temporary API-owned persistence adapters until issue #309 relocated them to `Inventory.Infrastructure.Persistence`.
-- The site-commission controller still directly accesses `AppDbContext`. Fee-setting, categories/suppliers, and operating expenses no longer do (see the Nayax fee-settings slice above and the Operating expenses slice below); each goes through its slice's narrow persistence port, whose EF adapter is Infrastructure-owned since issue #309.
+- ~~The site-commission controller still directly accesses `AppDbContext`.~~ **Resolved.** No controller accesses a `DbContext`: the commission endpoints go through `Inventory.Application.Commissions` and `ISiteCommissionStore`, whose EF adapter is Infrastructure-owned since issue #309, exactly as fee settings, categories/suppliers and operating expenses do. Issue #154's `DbContext` rule pins it for every controller at once rather than per slice.
 - `Product` contains persistence state, business calculations, and transient Nayax/UI fields.
 - Several tests use EF Core InMemory where SQLite behavior may be more representative.
 - Frontend contracts are split between a broad `models.ts` file and service-local report interfaces. `reporting.service.ts` is already a large multi-report API client.
@@ -897,7 +905,11 @@ These are reasons to improve boundaries, not reasons for a wholesale rewrite.
 
 ## Backend target: pragmatic Clean Architecture with vertical slices
 
-The application remains a single deployable modular monolith. The intended projects are:
+The application remains a single deployable modular monolith. This is the structure the backend now
+has, not only the one it is heading for: the migration track below is complete through its final
+enforcement step (issue #154), and the only items still open are the two persistence-model and
+published-contract leftovers named in [Remove legacy structure](#backend-migration-track) item 11.
+The projects are:
 
 ```text
 backend/
@@ -1012,6 +1024,67 @@ Contains:
 
 Controllers do not implement accounting, inventory, persistence, or filesystem rules.
 
+**That list is now the complete and enforced ownership of this project (issue #154).** With every
+slice of #145-#153 migrated, `InventoryApi` is the HTTP boundary and the composition root and holds
+nothing else: no business service, no use-case orchestration, no financial or classification rule,
+and no persistence implementation. `ApiLayerOwnershipTests`
+(`backend/Inventory.IntegrationTests/Architecture/`) is where that is enforced rather than merely
+described, and each rule below fails by naming the offending type, file or line:
+
+- **No business service.** No type in the assembly has a name ending in `Service`. The composition
+  root's own `...ServiceCollectionExtensions`/`...Extensions` helpers are deliberately not matched:
+  registering a service is composition, implementing one is not.
+- **Neither retired layer folder.** No git-tracked file under `InventoryApi/Services` or
+  `InventoryApi/Adapters/Persistence`. Use-case and domain logic belongs in
+  `Inventory.Application`/`Inventory.Domain`, an EF adapter in `Inventory.Infrastructure`.
+- **Only the folders listed above.** The project's top-level git-tracked folders are frozen as an
+  exact set, each mapped to one of these responsibilities — `Adapters`, `App_Data`, `Auth`,
+  `Bootstrap`, `Controllers`, `DTOs`, `Http`, `Observability`, `Properties`, `Swagger`. Adding or
+  removing one is a decision about what the HTTP boundary is for, made here and in that test
+  together.
+- **Every controller delegates.** Each controller is constructed with at least one
+  `Inventory.Application` dependency, so a controller that reimplemented a rule inline — taking
+  nothing but an `ILogger` and computing the answer itself — fails rather than quietly satisfying
+  every negative rule.
+- **A `DbContext` only in the composition root and the operator commands.** Checked against the
+  compiled assembly, so a doc comment explaining why a type must *not* touch EF (as
+  `BusinessScopeMiddleware` does) is not read as the violation it forbids. Exactly four namespaces
+  may depend on `Microsoft.EntityFrameworkCore` or `Inventory.Infrastructure.Data`: the global
+  namespace `Program.cs` compiles into (the `AddDbContext`/`UseSqlite` provider decision and the one
+  scope that runs the startup schema step), `InventoryApi.Bootstrap` (the operator-only boundary
+  below), `InventoryApi.Http.HealthChecks` (the readiness probe, which exists to prove database
+  connectivity) and `InventoryApi.Auth.E2ETesting` (the disposable E2E host's fixture). Widening
+  that set is a decision about where unmediated or unrestricted data access may live, and therefore
+  a human one.
+- **No `DbSet` at all.** Enforced as an absolute over the git-tracked sources, in code and in
+  comments alike: the mapped model's query surface belongs to `Inventory.Infrastructure.Data.AppDbContext`.
+- **No persistence type in a controller's declared surface** — not a constructor parameter, injected
+  field, property, action parameter or return type, including the ones wrapped in
+  `Task<>`/`ActionResult<>`/`IEnumerable<>`. This is the metadata counterpart of the source scan
+  under "No controller names the persistence model" below, and neither subsumes the other: a source
+  scan cannot see an entity arriving through an aliased or generic type, and a declared-surface scan
+  cannot see a local variable.
+- **The financial and classification rules stay Domain-owned.** `EffectiveFinancialConfiguration`,
+  `SiteCommissionCalculator`, `PaymentMethodClassifier` and `NayaxTransactionStatusClassifier` are
+  declared exactly once each, in `Inventory.Domain.FinancialConfiguration`, in no other production
+  assembly, and no file under `InventoryApi` even names one — the endpoints call the migrated
+  `Inventory.Application` use cases, which apply them. See
+  [Financial and classification ownership](#temporary-api-owned-exception-and-its-enforcement-issue-145)
+  below.
+- **No entity query expression in the inner layers.** `Inventory.Domain` and
+  `Inventory.Application` declare no `IQueryable` and no `Expression<Func<...>>`: a port returns
+  already-materialised facts, which is what lets a use case be tested with a fake and a Domain rule
+  with plain values.
+- **No reference to the retired `InventoryApi.Services` namespace** anywhere in the project, so no
+  stale dependency-injection registration or `using` directive can point at code that no longer
+  exists. The inner layers keep naming it in their own doc comments on purpose, recording which
+  legacy implementation each migrated use case replaced.
+
+These complement rather than restate the per-slice ownership tests: `ProjectDependencyDirectionTests`
+reads the `.csproj` files and the git-tracked controller sources, `CleanArchitectureDependencyTests`
+checks the compiled layer-to-layer direction, and `PersistenceAdapterOwnershipTests`/
+`ReportingAdapterOwnershipTests` pin where each relocated adapter ended up.
+
 **InventoryApi owns no persistence model (issue #307) and no persistence adapter (issue #309).**
 `InventoryApi/Data`, `InventoryApi/Models` and `InventoryApi/Migrations` no longer exist;
 `ProjectDependencyDirectionTests.InventoryApi_owns_no_db_context_persistence_model_or_migration`
@@ -1071,12 +1144,32 @@ response side. Their wire enums are the ones that boundary keeps published:
 purchase/supplier-order schemas reference, so a same-named API-owned copy makes Swashbuckle fail
 document generation with a duplicate-schema-id error, and renaming or duplicating the published
 component is an API-contract change issue #305 excludes. This is a **temporary compatibility
-exception**, not a target state: those two enums move with the persistence models under #153/#154,
-not before them, and `InventoryApi.Tests.Swagger.StockAndExpenseSchemaContractTests` fails as soon as
-the pinned components stop publishing them, which is the signal that the stock DTOs can become fully
-API-owned with no document change.
+exception**, not a target state, and `InventoryApi.Tests.Swagger.StockAndExpenseSchemaContractTests`
+fails as soon as the pinned components stop publishing them, which is the signal that the stock DTOs
+can become fully API-owned with no document change.
+
+**Issue #154 deliberately did not retire it.** Earlier text said these two enums would move with the
+persistence models under #153/#154; that was wrong about #154, whose explicit exclusions forbid an
+API contract change. Retiring the exception means either renaming the published
+`StockAdjustmentReason`/`StockAdjustmentSource` components or duplicating them under a second schema
+id, because a same-named API-owned copy makes Swashbuckle fail document generation with a
+duplicate-schema-id error — a client-visible change to the published document, not a refactor. It is
+also the narrowest form the exception can take: both are wire enums on API-owned DTOs, reached only
+inside a controller method body through a DTO member, and the enforcement above forbids an entity in
+a controller's own signature precisely so this one case cannot grow into the general one. Retiring it
+needs its own issue, with the contract decision made explicitly — a deliberate component rename with
+its own contract tests, or the whole stock-adjustment reason/source vocabulary becoming API-owned at
+the same time the published document changes.
 
 #### Temporary API-owned exception and its enforcement (issue #145)
+
+**This exception is closed (issue #154).** The section below is the record of how it was opened,
+shrunk slice by slice and finally removed; it is history, not a live deviation. Nothing in
+`InventoryApi` is now permitted to be a temporary resident, and what enforces that is the rule set
+under [InventoryApi](#inventoryapi) above rather than the allow-list described here. One documented
+compatibility exception survives it, deliberately and with its own reasoning: the Swagger published-schema
+boundary and the two stock-DTO wire enums it keeps publishing, which cannot be retired without the API
+contract change #154 excludes.
 
 `InventoryApi/Services` held the
 use-case/domain logic that predates the `Inventory.Domain`/`Inventory.Application` split; the folder
@@ -1112,7 +1205,15 @@ delegator left to remove but still named the persistence model were last: issue 
 operating-expense DTOs an API-owned `InventoryApi.DTOs.OperatingExpenseCategory`, which closed the
 `InventoryApi/Controllers` side of this exception entirely (see "No controller names the persistence
 model" above).
-`InventoryApi/Adapters` now holds `Mapping` only: the response-DTO projections
+`InventoryApi/Adapters` now holds no adapter the migration left behind. Its `Mapping` folder is the
+HTTP boundary's own response-DTO projection work, and the two other folders beside it are API-owned
+by nature rather than by deferral: `Adapters/Nayax` holds `E2ETestNayaxLynxClient`, the test double
+the dedicated `E2ETest` host registers in place of the real Nayax client so an end-to-end run has
+nothing configured that could reach the live operator account (see
+[End-to-end testing authentication](#end-to-end-testing-authentication-issue-46)), and
+`Adapters/PlatformDiagnostics` holds `LoggingPlatformDiagnosticsAudit`, which is in this layer
+because the audit event it emits carries the request's correlation id (see
+[Platform diagnostics](#platform-diagnostics-issue-336)). `Mapping` holds the response-DTO projections
 `ProductRecordResponseMapper` (the products DTO projection, and
 since issue #302 the machine-slot projection onto the same DTO),
 `PurchaseResponseMapper`/`SupplierOrderResponseMapper` (the purchase and supplier-order DTO
@@ -1138,7 +1239,8 @@ moved the remaining 29 feature stores and `NayaxSaleCosting` into
 registers none of them; `AddInfrastructureServices()` does. What remains of the whole exception is
 `Adapters/Mapping` above, which is not a temporary deviation but the HTTP boundary's own work, plus
 the Swagger compatibility boundary and the two stock-DTO wire enums named under
-[InventoryApi](#inventoryapi), which #154 retires. Neither is a place for new business logic to land.
+[InventoryApi](#inventoryapi), which #154 kept for the contract reason recorded there and bounded
+rather than retired. Neither is a place for new business logic to land.
 
 **Financial and classification ownership (issues #150/#153/#154).**
 `EffectiveFinancialConfiguration`, `SiteCommissionCalculator`, `PaymentMethodClassifier`, and
@@ -1162,11 +1264,22 @@ commission, costing and import consumers now use the authoritative migrated rule
 #151 can classify transaction statuses without depending on the legacy API service,
 `EfLatestNayaxSalesStore` uses the same status rule, and Products'
 `ResolveMachineProductPricing` resolves commission/fee through the shared Sites financial port.
-`EfSiteCommissionStore` and the Sites/Machines adapters remain API-owned only until #153 relocates
-the rest of persistence; `EfNayaxProcessingFeeFactsProvider` and `EfNayaxSalesQueries` no longer do
-(issue #308). Row-level and aggregate-report coverage policies remain distinct.
+None of those adapters is API-owned any more: `EfNayaxProcessingFeeFactsProvider` and
+`EfNayaxSalesQueries` left with the reporting half in issue #308, and `EfSiteCommissionStore` with
+the Sites/Machines fact stores in Persistence 8/8 of #153 (issue #309), which completed the
+relocation this paragraph used to describe as outstanding — see item 9 of the
+[Backend migration track](#backend-migration-track). Row-level and aggregate-report coverage
+policies remain distinct.
 The obsolete API implementations and their exact legacy-services allow-list entries were removed
 after migrating their callers.
+
+Issue #154 narrowed `EfNayaxSalesQueries` back to `internal`. Issue #308 had to make it `public`
+while the sale-costing, inventory-cost-ledger and site-commission stores calling its predicate were
+still API-owned; with all three in the same assembly since #309, the completed-sale expression can no
+longer be taken out of the layer that can translate it — a caller outside `Inventory.Infrastructure`
+now fails to compile rather than failing a review. `ApiLayerOwnershipTests` asserts both that the type
+is not externally visible and that `Inventory.Domain`/`Inventory.Application` declare no `IQueryable`
+or expression tree of their own, which is the general form of the same rule.
 
 `Inventory.Application.Commissions.GetSiteCommissionReport` and the agreement/payment use cases
 orchestrate the commission endpoints through `ISiteCommissionStore`.
@@ -1177,19 +1290,27 @@ fee and GST calculations. The controller routes and DTO contracts are unchanged,
 transaction-row fee/commission policy remains distinct from aggregate report coverage and
 completeness rules.
 
-Issue #154 runs after these migrations and #153, removes the temporary exceptions, and proves
-that no financial/classification business logic remains in the API. The API retains the HTTP
-boundary responsibilities listed above (including authentication, middleware, error mapping and
-startup/composition); these do not permit legacy business services to remain indefinitely.
+Issue #154 ran after these migrations and #153 and proved the outcome rather than asserting it:
+`EffectiveFinancialConfiguration`, `SiteCommissionCalculator`, `PaymentMethodClassifier` and
+`NayaxTransactionStatusClassifier` are each declared exactly once, in
+`Inventory.Domain.FinancialConfiguration`, in no other production assembly, and no file under
+`InventoryApi` names any of them — so there is no second answer to what a sale earned, or to whether
+it was card, cash or completed, reachable from an endpoint. #241's transitional use of these helpers
+through the API services was never a permanent exception, and the rules above make reintroducing one
+a test failure. The API retains the HTTP boundary responsibilities listed under
+[InventoryApi](#inventoryapi) — authentication, authorization, middleware, HTTP error/result mapping,
+OpenAPI, the persistence *provider* decision, the startup schema decision and the human-invoked
+operator commands — and nothing in this enforcement narrows them; what it removes is any room for a
+legacy business service beside them.
 
-What issue #145 adds is enforcement that the `InventoryApi/Services` side of the exception stops
+What issue #145 added was enforcement that the `InventoryApi/Services` side of the exception stopped
 growing silently. `ProjectDependencyDirectionTests.Only_the_documented_legacy_services_remain_in_InventoryApi_Services`
-(`backend/Inventory.IntegrationTests/Architecture/`) freezes the exact, named set of git-tracked files in
-that folder; the moment a file is added, removed, or renamed there, the
-test fails and names the mismatch. A new slice's use-case or domain logic must go into
+(`backend/Inventory.IntegrationTests/Architecture/`) froze the exact, named set of git-tracked files in
+that folder; the moment a file was added, removed, or renamed there, the
+test failed and named the mismatch. A new slice's use-case or domain logic had to go into
 `Inventory.Application`/`Inventory.Domain` instead of extending the legacy folder; growing the
-exception is still possible, but only as a conscious, reviewed edit to both that allow-list and this
-paragraph, never as a silent side effect of an unrelated change. Shrinking it follows the same rule:
+exception stayed possible, but only as a conscious, reviewed edit to both that allow-list and this
+paragraph, never as a silent side effect of an unrelated change. Shrinking it followed the same rule:
 issue #296 removed `InventoryCostService.cs`, `InventoryCostRebuildService.cs`,
 `InventoryCostRebuildResult.cs`, `Interfaces/IInventoryCostService.cs` and
 `Interfaces/IInventoryCostRebuildService.cs` from the allow-list in the same change that deleted them,
@@ -1214,20 +1335,33 @@ adapter relocation rather than with a delegator (issue #306): the pure site-name
 helper and the `Adapters/Persistence/SiteNameResolverAdapter` wrapper that implemented
 `ISiteNameResolver` for it merged into `Inventory.Infrastructure.Sites.SiteNameResolver`, which
 `AddInfrastructureServices()` registers and which `EfTransactionSalesReportFactsProvider` calls
-through the same static entry point it used before. With nothing left, the test now asserts that
-`InventoryApi/Services` stays gone: a file appearing under it fails here and must go to
-`Inventory.Application`/`Inventory.Domain` (use-case or domain logic) or `Inventory.Infrastructure`
-(an adapter) instead, and reviving the folder stays a conscious, reviewed edit to both the
-allow-list and this paragraph.
+through the same static entry point it used before.
 `NayaxProductMatcher.cs` left the list with the import (issue #301): its last callers - the uploaded
 sales import, `EfLatestNayaxSalesStore` and `EfInventoryCostLedgerStore` - now call the Domain
 `Inventory.Domain.Reporting.ProductMatching.ProductMatcher` on their own candidate projections, so
 the wrapper over the persistence `Product` entity had no reason to exist.
-`InventoryApi/Adapters/*` is not
-frozen the same way: unlike `Services`, adding a new temporary EF/Nayax/export adapter there for a
-migrating slice (mirroring `EfNayaxFeeRateStore`) is the established, expected pattern for this
-migration track, not scope creep - it implements an `Inventory.Application`-owned port rather than
-containing use-case logic itself.
+While the migration ran, `InventoryApi/Adapters/*` was deliberately not frozen the same way: unlike
+`Services`, adding a temporary EF/Nayax/export adapter there for a migrating slice (mirroring
+`EfNayaxFeeRateStore`) was the established, expected pattern for the track, not scope creep - it
+implemented an `Inventory.Application`-owned port rather than containing use-case logic itself. That
+latitude ended with the track: a new adapter now belongs in `Inventory.Infrastructure`, beside
+`AppDbContext`, and `Adapters/Persistence` is one of the two folders #154 forbids outright.
+
+**Issue #154 replaced that allow-list with enforcement.** An empty allow-list can only prove that
+one folder name stays unused; it says nothing about a business service landing somewhere else in the
+project under a different path, which is exactly what a closed exception needs to rule out. The
+test above is therefore gone, and `ApiLayerOwnershipTests` states the rule positively instead - no
+type named `*Service` anywhere in the assembly, neither retired folder, only the documented
+top-level folders, every controller constructed with a use case, a `DbContext` only in the four named
+namespaces, no `DbSet`, no persistence type in a controller's surface, the four financial rules
+Domain-only and unnamed at the boundary, no entity query expression in Domain or Application, and no
+reference to the retired namespace. See [InventoryApi](#inventoryapi) for the full rule set and what
+each one is for. Acceptance criterion 7 of that issue was verified by introducing a deliberate
+violation of every rule - a legacy service with a `DbSet` and an `AppDbContext` dependency under
+`InventoryApi/Services`, a duplicate `SiteCommissionCalculator`, a controller taking no use case and
+publishing the EF `Product` entity, an `IQueryable` in `Inventory.Domain`, and a publicly visible
+completed-sale predicate - confirming all eleven rules failed and named the offender, then removing
+it.
 
 `CleanArchitectureDependencyTests` (same directory) is the complementary, compiled-assembly side of
 the boundary: `Domain_must_not_depend_on_Application_Infrastructure_or_Api`,
@@ -3732,6 +3866,13 @@ the EF entities from `InventoryApi.Models` to `Inventory.Infrastructure.Models`,
 behaviour are the same, only the owning project changed. Sections outside this track describe the
 code as it is now.
 
+One test these notes mention repeatedly no longer exists either.
+`ProjectDependencyDirectionTests.Only_the_documented_legacy_services_remain_in_InventoryApi_Services`
+was the #145 allow-list of legacy service files, and most slices below record shrinking it as they
+migrated. Issue #154 removed it once the list was empty and replaced it with
+`ApiLayerOwnershipTests` - see [InventoryApi](#inventoryapi). Read "the allow-list shrank by these
+files" as the historical record of that slice, not as a test to look for today.
+
 1. **Safety baseline**
    - Add repository instructions, architecture documentation, and cross-platform validation scripts.
    - Correct documentation/CI drift in focused follow-up changes.
@@ -4289,7 +4430,7 @@ code as it is now.
    - `Inventory.Domain.Sites.SiteStockPolicy` computes a site's overall stock percentage and its low/empty product alert counts from already-fetched machine-product facts; `Inventory.Domain.Sites.SiteProductPricingPolicy` computes the site product preview's average retail price and estimated card-sale profit, given an already-resolved per-item commission amount and fee rate. `Inventory.Domain.Machines.MachineDashboardPeriods` is the pure today/week-to-date/previous-comparable-week/last-week/month-to-date/two-weeks-ago range arithmetic, moved out of the former `MachineService` statics unchanged; `Inventory.Domain.Machines.MachineDashboardDirectProfitPolicy` and `MachineProfitabilityStatusPolicy` are the machine dashboard's period direct-profit and status-message rules, given already-resolved facts. Both direct-profit policies are deliberately kept separate from `Inventory.Domain.Reporting.Profitability.MachineDirectProfitPolicy`, which answers the same question at report-row (aggregate period) granularity rather than the dashboard's fixed rolling periods, matching the precedent the reporting slice already documented for row-level versus aggregate rules.
    - `Inventory.Application.Sites.GetSiteSummaries`/`GetSiteProducts` and `Inventory.Application.Machines.ListMachineDashboard`/`GetMachineDashboard` are the use cases, calling `INayaxLynxClient` with the same bounded per-site/per-machine fan-out (`Task.WhenAll` over each site's/machine's `GetMachineProductsAsync` calls) the former services used. `Inventory.Application.Sites.ISiteFactsStore`/`ISiteNameResolver` and `Inventory.Application.Machines.IMachineDashboardFactsStore` are their narrow ports. Issue #150 moved commission/fee resolution and payment/status classification to Domain-owned rules and Application use cases/ports; these consumers use those authorities rather than API service wrappers. The ports return already-resolved decimal/boolean facts rather than raw agreements: `ISiteFactsStore.ResolveCardCommissionAsync` takes the distinct candidate retail prices appearing in a site's machine products and returns the commission amount already resolved for each (the exact per-price Domain commission calculation computes each entry, not a re-derived multiplier), and `IMachineDashboardFactsStore.GetFactsAsync` returns each rolling period's already-resolved gross revenue and direct-profit inputs plus the profitability-status inputs, mirroring the former per-sale commission-resolution loop and its exact short-circuiting (an ambiguous or gap-covered agreement, or a missing site mapping with sales present, skips the Nayax fee lookup entirely, exactly as before) fact for fact. `ResolveMachineProductPricing` uses the same Sites financial port, while `EfLatestNayaxSalesStore` uses the Domain transaction-status classifier.
    - **Scoped EF reads serialized (issue #313).** The Nayax fan-out above is unchanged and still concurrent, but no two `ISiteFactsStore` calls are ever in flight together, because the store is scoped and its EF adapter shares one `AppDbContext` (see [Concurrency inside one request: the scoped EF context](#concurrency-inside-one-request-the-scoped-ef-context-issue-313)). `GetSiteProducts` awaits its cost-basis, commission and fee reads one at a time instead of starting all three and joining them with `Task.WhenAll`. `GetSiteSummaries` no longer builds its per-site summaries concurrently: it reads the catalogue activity facts, then loads every site's recent completed sales through one scoped read over the whole fleet's machine ids with the same 16-day lookback each per-site read used, and distributes them per machine in memory, so the per-site aggregation itself is pure. Site-name ordering, machine counts, stock percentages, alert counts, per-site revenue attribution, financial-configuration handling, the API routes and response JSON, and exception behaviour are unchanged; tenancy is unchanged too, since the batched read is still scoped only by the central `AppDbContext` query filters. The focused regression tests live in `backend/Inventory.IntegrationTests/Application/Sites/` (call-sequence recorders plus the behavioural assertions) and in `EfSiteFactsStoreTenancyTests` (the batched completed-sales read loads no other business's sales).
-   - `EfSiteFactsStore`/`EfMachineDashboardFactsStore`, `EfSiteCommissionStore`, `EfNayaxProcessingFeeFactsProvider`, and `EfNayaxSalesQueries` were temporary API-owned adapters because they depend on `AppDbContext` and persistence models. `SiteNameResolverAdapter` was one of them until issue #306, which found it had no `AppDbContext` dependency at all and merged it into `Inventory.Infrastructure.Sites.SiteNameResolver`; `EfNayaxProcessingFeeFactsProvider` and `EfNayaxSalesQueries` left with the reporting adapters in issue #308 (Persistence 7/8) for `Inventory.Infrastructure.Reporting.Persistence` and `Inventory.Infrastructure.Data`; the first three followed in issue #309 (Persistence 8/8) for `Inventory.Infrastructure.Persistence`, beside the `AppDbContext`, the entities and the migrations issue #307 had already moved. Entity-specific EF query expressions stay in those persistence adapters; they implement Application-owned ports and apply the authoritative Domain rules. The existing report facts adapters likewise compose the migrated commission and fee use cases and Domain rules.
+   - `EfSiteFactsStore`/`EfMachineDashboardFactsStore`, `EfSiteCommissionStore`, `EfNayaxProcessingFeeFactsProvider`, and `EfNayaxSalesQueries` were temporary API-owned adapters because they depend on `AppDbContext` and persistence models. `SiteNameResolverAdapter` was one of them until issue #306, which found it had no `AppDbContext` dependency at all and merged it into `Inventory.Infrastructure.Sites.SiteNameResolver`; `EfNayaxProcessingFeeFactsProvider` and `EfNayaxSalesQueries` left with the reporting adapters in issue #308 (Persistence 7/8) for `Inventory.Infrastructure.Reporting.Persistence` and `Inventory.Infrastructure.Data`; the first three followed in issue #309 (Persistence 8/8) for `Inventory.Infrastructure.Persistence`, beside the `AppDbContext`, the entities and the migrations issue #307 had already moved. Entity-specific EF query expressions stay in those persistence adapters; they implement Application-owned ports and apply the authoritative Domain rules. The existing report facts adapters likewise compose the migrated commission and fee use cases and Domain rules. Issue #154 closed this item's remaining architectural debt rather than relocating anything further: the commission, fee, payment-method and transaction-status rules issue #150 moved into `Inventory.Domain` are now asserted to be declared there and nowhere else, no file under `InventoryApi` names one, `Inventory.Domain`/`Inventory.Application` are asserted to declare no `IQueryable` or expression tree at all, and `EfNayaxSalesQueries` is `internal` so the completed-sale predicate cannot be called from outside `Inventory.Infrastructure` - see [InventoryApi](#inventoryapi).
    - `InventoryApi.Services.SiteService`/`MachineService` were not deleted by this slice: it left them as thin delegators that only mapped the migrated use cases' results to the unchanged `SiteSummaryDto`/`SiteProductDto`/`Machine`/`Product` API contracts — the same transitional "legacy service delegates to the new use case" shape the reporting slices used before issue #92's final removal — and physically deleting them was left as explicit follow-up work, tracked the same way issue #92 was a separate, later step after every report family had migrated.
    - **Sites/Machines delegators removed and the machine responses are API-owned** (issue #302, child 1 of 8 of #153).
      - **Controllers.** `SitesController` injects `GetSiteSummaries`/`GetSiteProducts` and `MachinesController` injects `GetMachineDashboard`/`ListMachineDashboard`/`ListMachineProducts` directly, alongside the four machine-stock-sync use cases it already held. `SiteService`, `MachineService`, `ISiteService`, `IMachineService` and their two DI registrations in `Program.cs` are deleted; the use cases were already registered by `AddApplicationServices()`. Neither controller names `InventoryApi.Models` any more, and the `Only_the_documented_legacy_services_remain_in_InventoryApi_Services` allow-list shrank by all four files in the same change.
@@ -4371,7 +4512,7 @@ code as it is now.
     - **Non-EF adapters relocated and `InventoryApi/Services` removed** (issue #306, child 5 of 8 of #153). The three API-owned adapters that never needed `AppDbContext` are now real `Inventory.Infrastructure` residents, registered by `AddInfrastructureServices()` instead of directly in `Program.cs`:
       - **Report export.** CSV/XLSX byte encoding sits behind the new Application-owned `Inventory.Application.Reporting.Export.IReportExportFileWriter` port, implemented by `Inventory.Infrastructure.Reporting.ReportExportFileWriter`; `ReportsController` injects the port instead of calling the former static `InventoryApi.Adapters.Export.ReportExportFileWriter`. The encoding is unchanged line for line, so the downloaded bytes, the two content types (`text/csv`, `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`) and the `{report}.{format}` file names are identical; `InventoryApi.Tests.Infrastructure.Reporting.ReportExportFileWriterTests` pins the exact CSV payload and compares it cell by cell with the XLSX, and `ReportsControllerExportTests` pins the transport contract. With the writer gone, `InventoryApi` dropped its ClosedXML package reference - `Inventory.Infrastructure` holds the only one, alongside `ClosedXmlNayaxSalesWorkbookReader` from issue #301 - so an accidental ClosedXML reference in the API project now fails to compile.
       - **Nayax catalog snapshot.** `NayaxCatalogSnapshotProvider` moved to `Inventory.Infrastructure.Nayax`, beside the `NayaxLynxClient` it reads through, with its mapping and its empty-string-for-a-missing-name rule untouched (both fields are documented as nullable in the Nayax contract for `GET /v1/operators/{OperatorID}/products` and `GET /v1/machines`). The EF half, `EfLocalCatalogSnapshotProvider`, stayed API-owned until the rest of the adapter family moved in Persistence 8/8 of #153 (issue #307 having moved `AppDbContext` itself, issue #308 the reporting adapters, and issue #309 this one).
-      - **Site names.** `Services/SiteNameResolver.cs` and the `Adapters/Persistence/SiteNameResolverAdapter` wrapper merged into one `Inventory.Infrastructure.Sites.SiteNameResolver` implementing `ISiteNameResolver`, keeping the static `FromMachines` entry point that `EfTransactionSalesReportFactsProvider` calls from inside its static row iterator, so the site dashboard, the commission report and the transaction report still share one rule. `InventoryApi/Services` and `InventoryApi/Adapters/{Export,Nayax}` no longer exist, and the `Only_the_documented_legacy_services_remain_in_InventoryApi_Services` allow-list is empty in the same change, which turns that test into a guard that the folder stays gone (see [Temporary API-owned exception](#temporary-api-owned-exception-and-its-enforcement-issue-145)).
+      - **Site names.** `Services/SiteNameResolver.cs` and the `Adapters/Persistence/SiteNameResolverAdapter` wrapper merged into one `Inventory.Infrastructure.Sites.SiteNameResolver` implementing `ISiteNameResolver`, keeping the static `FromMachines` entry point that `EfTransactionSalesReportFactsProvider` calls from inside its static row iterator, so the site dashboard, the commission report and the transaction report still share one rule. `InventoryApi/Services` was gone with that change, as were `InventoryApi/Adapters/Export` and the `Adapters/Nayax` folder as this slice knew it - the real Nayax client left for `Inventory.Infrastructure.Nayax`, and the `Adapters/Nayax` folder that exists today holds only the `E2ETestNayaxLynxClient` test double the dedicated `E2ETest` host registers (issue #46). The `Only_the_documented_legacy_services_remain_in_InventoryApi_Services` allow-list became empty in the same change, which turned that test into a guard that the folder stayed gone, until issue #154 replaced it with the rule set described under [InventoryApi](#inventoryapi) (see [Temporary API-owned exception](#temporary-api-owned-exception-and-its-enforcement-issue-145)).
 
       Nothing about Nayax HTTP behaviour, report contents, the schema or the API contracts changed, and no EF adapter or `AppDbContext` moved - those are #153's remaining persistence children.
     - **`AppDbContext`, the EF entities and the migrations relocated** (issue #307, child 6 of 8 of #153). `InventoryApi/Data`, `InventoryApi/Models` and `InventoryApi/Migrations` are gone; they are now `Inventory.Infrastructure/Data` (`AppDbContext` with its tenant query filters, `BusinessOwnershipEnforcer`, `CrossBusinessAccessException`), `Inventory.Infrastructure/Models` and `Inventory.Infrastructure/Migrations`, with the namespaces renamed to match. `Inventory.Infrastructure` took the `Microsoft.EntityFrameworkCore`/`Microsoft.EntityFrameworkCore.Relational` package references; `InventoryApi` kept the SQLite provider, the `Design` package and the one `UseSqlite` call, because choosing a provider and a connection string is a composition-root decision.
@@ -4385,8 +4526,9 @@ code as it is now.
       - **Nothing about behaviour changed.** Per relocated file the diff is the `namespace` directive, the `using` directives and the placement sentences in its doc comment: no query, predicate, projection, ordering, materialisation point, transaction boundary, `SaveChanges` call or `IsRelational()` branch moved with the files, and no schema, migration or API contract is touched. Tenant isolation moved as files, not as behaviour: reads are still scoped only by the `AppDbContext` global query filters and writes still stamped and enforced centrally by `BusinessOwnershipEnforcer` on `SaveChanges`, with no per-caller `BusinessId` predicate added or removed. `NayaxCostableSale` stayed `internal` - its only users are the two sale-importing adapters and `EfSaleCostingStore`, which moved with it.
       - **The `Bootstrap` commands stay thin host commands**, calling Infrastructure services rather than moving their persistence logic into one; see [InventoryApi](#inventoryapi) for the reasoning, including why the three commands that may pass `UnscopedBusinessScope.Instance` are better off outside the injectable adapter layer.
       - **What pins it.** The existing relational SQLite adapter tests, the two-business isolation tests (`BusinessDataIsolationTests`, `FinancialAdapterTenancyTests`, `EfInventoryCostingAdaptersTenancyTests`, `EfSiteFactsStoreTenancyTests`, `EfProductCatalogStoreTenancyTests`, `EfProductStoreTenancyTests`, `EfNayaxProductCatalogImportStoreTenancyTests`, `NayaxImportTenantIsolationTests`, `ProtectedDocumentTenantIsolationTests`) and the Application/controller suites all cover the relocated adapters unchanged apart from the namespace they import - which is what shows queries, transactions and isolation are identical. The new `PersistenceAdapterOwnershipTests` pins the ownership itself: each of the 31 relocated types is declared in `Inventory.Infrastructure` and in no `InventoryApi` type, `AddInfrastructureServices()` registers each of the 29 ports once against the expected Infrastructure implementation and `Scoped` lifetime, `Program.cs` names none of them, `InventoryApi/Adapters/Persistence` holds no git-tracked file, and `Inventory.Infrastructure/Persistence` holds one file per adapter.
-      - **Not in this slice.** The adapters' tests keep their `InventoryApi.Tests/Adapters/Persistence` location, for the same reason issues #307 and #308 left `MigrationRelocationTests` and the reporting adapter tests where they were. `EfNayaxSalesQueries` keeps the `public` modifier issue #308 gave it even though its callers are now in the same assembly, and the final architecture rules stay as they are - both belong to #154.
-    - Still pending for the remaining feature areas (the unreferenced `Machine` entity leftover above, and the remaining direct-access controllers/services); only after each is migrated and tests prove equivalent behavior does this step complete overall.
+      - **Not in this slice.** The adapters' tests keep their `InventoryApi.Tests/Adapters/Persistence` location, for the same reason issues #307 and #308 left `MigrationRelocationTests` and the reporting adapter tests where they were. `EfNayaxSalesQueries` kept the `public` modifier issue #308 gave it even though its callers were by then in the same assembly, and the final architecture rules stayed as they were - both belonged to #154, which has since done both (see the final enforcement bullet below).
+    - **Final enforcement done** (issue #154, after every slice of #145-#153). No business service, use-case orchestration, financial/classification rule or persistence implementation is left in `InventoryApi`, and that is now enforced rather than documented: `ApiLayerOwnershipTests` replaced #145's legacy-services allow-list with eleven rules over the API project, the inner layers and the completed-sale predicate - see [InventoryApi](#inventoryapi) for the list and [Temporary API-owned exception](#temporary-api-owned-exception-and-its-enforcement-issue-145) for why an empty allow-list was not enough. `EfNayaxSalesQueries` is `internal` again, so an expression over the EF model cannot leave the layer that can translate it; nothing else about behaviour, routes, response shapes, the schema or financial semantics changed. Each rule was verified by introducing a deliberate violation of it, confirming the failure, and removing it.
+    - Still pending for the remaining feature areas, now only on the persistence-model and published-contract side: the unreferenced `Machine` entity leftover above, and the `StockAdjustmentReason`/`StockAdjustmentSource` wire enums the stock DTOs still name because the Swagger compatibility boundary publishes those components (see [InventoryApi](#inventoryapi); retiring them is an API contract change #154 excluded and needs its own issue). No direct-access controller or service remains: every endpoint goes through an `Inventory.Application` use case, which `ApiLayerOwnershipTests` asserts per controller. Only after the two leftovers above are resolved and tests prove equivalent behavior does this step complete overall.
 
 ### Frontend migration track
 
@@ -4439,7 +4581,7 @@ EF Core InMemory tests remain useful for fast service checks but must not be the
 
 **Call-sequence (yielding-recorder) tests.** Some defects are about *when* calls happen rather than what they return; two operations overlapping on one request-scoped `AppDbContext` is the current example (see [Concurrency inside one request: the scoped EF context](#concurrency-inside-one-request-the-scoped-ef-context-issue-313)). Neither an InMemory nor a relational SQLite test can prove that one, because SQLite's synchronous async implementation completes each call before the next one starts. Such behavior is tested instead with an in-memory fake of the port that records a `start:`/`end:` marker per call, tracks how many calls were ever in flight at once, and awaits `Task.Yield()` before completing — so an implementation that starts two calls before awaiting either produces an interleaved trace and a concurrency count above one. `ResolveMachineProductPricingTests`' call-sequence recorder and the Sites equivalents (`backend/Inventory.IntegrationTests/Application/Sites/RecordingSiteFactsStore.cs`, plus `RecordingNayaxLynxClient`, which gates its machine-product calls so a serialized fan-out fails rather than hangs) are the examples. Pair them with the behavioral assertions the serialization must not change — per-site totals and revenue attribution, ordering, failure propagation, and the relational two-business isolation tests — so a concurrency fix cannot silently drop a site or move revenue between sites.
 
-**Source-scanning architecture tests.** Most architecture rules are checked against the compiled assemblies (`CleanArchitectureDependencyTests`) or the project files (`ProjectDependencyDirectionTests`), but some rules are invisible to both. `TimeAcquisitionTests.Domain_and_Application_acquire_the_current_time_only_through_the_time_ports` (issue #310) fails if any `Inventory.Domain` or `Inventory.Application` source file reads `DateTime.Now`, `DateTime.UtcNow` or `DateTime.Today` instead of injecting `IClock`/`IBusinessCalendar` (see [Time](#time)); it scans the source text because these are property reads on `DateTime` itself, a type the inner layers legitimately depend on everywhere, so a type-level dependency rule cannot distinguish them. `ProjectDependencyDirectionTests.No_other_source_file_references_the_removed_legacy_reporting_service` scans source for the same reason, and so does `ProjectDependencyDirectionTests.No_controller_references_the_persistence_models` (issue #305): `InventoryApi` legitimately depends on the EF entity namespace (`Inventory.Infrastructure.Models` since issue #307) everywhere else in the project, so only a file-scoped source scan can say that the `Controllers` folder does not (see [InventoryApi](#inventoryapi)). `ProjectDependencyDirectionTests.InventoryApi_owns_no_db_context_persistence_model_or_migration` and its positive counterpart (issue #307) read `git ls-files` for a related reason: a project no longer *containing* a folder is a fact about the committed tree, not about either assembly. A new rule of this kind names the offending file and line in its failure message, so the fix is the injection or removal it asks for, never a weakened rule.
+**Source-scanning architecture tests.** Most architecture rules are checked against the compiled assemblies (`CleanArchitectureDependencyTests`) or the project files (`ProjectDependencyDirectionTests`), but some rules are invisible to both. `TimeAcquisitionTests.Domain_and_Application_acquire_the_current_time_only_through_the_time_ports` (issue #310) fails if any `Inventory.Domain` or `Inventory.Application` source file reads `DateTime.Now`, `DateTime.UtcNow` or `DateTime.Today` instead of injecting `IClock`/`IBusinessCalendar` (see [Time](#time)); it scans the source text because these are property reads on `DateTime` itself, a type the inner layers legitimately depend on everywhere, so a type-level dependency rule cannot distinguish them. `ProjectDependencyDirectionTests.No_other_source_file_references_the_removed_legacy_reporting_service` scans source for the same reason, and so does `ProjectDependencyDirectionTests.No_controller_references_the_persistence_models` (issue #305): `InventoryApi` legitimately depends on the EF entity namespace (`Inventory.Infrastructure.Models` since issue #307) everywhere else in the project, so only a file-scoped source scan can say that the `Controllers` folder does not (see [InventoryApi](#inventoryapi)). `ProjectDependencyDirectionTests.InventoryApi_owns_no_db_context_persistence_model_or_migration` and its positive counterpart (issue #307) read `git ls-files` for a related reason: a project no longer *containing* a folder is a fact about the committed tree, not about either assembly. `ApiLayerOwnershipTests` (issue #154) uses all three techniques in one place, deliberately picking the one each rule needs: `git ls-files` for the retired folders, the frozen top-level folder set and the "no `DbSet`"/"no retired namespace"/"no financial rule named" text rules; the compiled assembly for the `DbContext`, business-service, controller-surface and predicate-visibility rules, because a doc comment that explains why a type must *not* touch EF would otherwise read as the violation it forbids; and a source scan for the `IQueryable`/`Expression<Func<...>>` rule, which is about a declaration rather than a dependency. A new rule of this kind names the offending file and line in its failure message, so the fix is the injection or removal it asks for, never a weakened rule.
 
 **Composition and committed-configuration tests.** Some decisions live in the composition root or in a settings file rather than in a class with behaviour. `InventoryApi.Tests.Observability.TelemetryCompositionTests` asserts what `AddInventoryApiTelemetry` registers — and, for the missing-connection-string case, that it registers nothing — by inspecting the `IServiceCollection` rather than by building the OpenTelemetry providers, so no test ever constructs an exporter or sends telemetry anywhere; `TelemetryStartupTests` then hosts the real application both with and without a synthetic, non-secret connection string. `LoggingLevelPolicyTests` reads the committed `appsettings.json`/`appsettings.Development.json` instead of a hosted application, because the value that matters is the one that ships to a deployed environment (see [Observability and error telemetry](#observability-and-error-telemetry-issue-165)).
 
