@@ -6,6 +6,7 @@ using Inventory.Application.Commissions;
 using Inventory.Application.Costing;
 using Inventory.Application.Documents;
 using Inventory.Application.Expenses;
+using Inventory.Application.Gst;
 using Inventory.Application.Imports;
 using Inventory.Application.InventoryCounting;
 using Inventory.Application.Machines;
@@ -134,6 +135,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<ISaleCostingStore, EfSaleCostingStore>();
         services.AddScoped<IInventoryCostTransitionStore, EfInventoryCostTransitionStore>();
         services.AddScoped<IInventoryCostRepairStore, EfInventoryCostRepairStore>();
+        services.AddScoped<IHistoricalGstClassificationStore, EfHistoricalGstClassificationStore>();
         services.AddScoped<IStockAdjustmentStore, EfStockAdjustmentStore>();
         services.AddScoped<ISupplierOrderStore, EfSupplierOrderStore>();
         services.AddScoped<ISiteFactsStore, EfSiteFactsStore>();
