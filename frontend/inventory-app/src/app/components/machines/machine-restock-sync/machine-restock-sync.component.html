@@ -51,7 +51,7 @@
         <p class="alert-title">{{ applyError }}</p>
       </div>
 
-      <p *ngIf="(syncing$ | async) && (syncPreview$ | async) === null" role="status" class="text-md-body value-muted">Loading Nayax stock-adjustment alerts…</p>
+      <output *ngIf="(syncing$ | async) && (syncPreview$ | async) === null" class="block text-md-body value-muted">Loading Nayax stock-adjustment alerts…</output>
 
       <ng-container *ngIf="syncPreview$ | async as preview">
         <div class="mb-4 flex flex-wrap items-end gap-4 rounded-md-card bg-md-gray-100 p-3">
@@ -85,7 +85,7 @@
           </label>
         </div>
 
-        <p *ngIf="syncing$ | async" role="status" class="mb-4 text-md-body value-muted">Refreshing…</p>
+        <output *ngIf="syncing$ | async" class="mb-4 block text-md-body value-muted">Refreshing…</output>
 
         <p data-testid="sync-restock-status" class="mb-4 text-md-badge value-muted">
           {{ preview.events.length }} shown
@@ -117,7 +117,7 @@
               </tr>
             </thead>
             <tbody>
-              <tr class="table-row" *ngFor="let event of preview.events" [ngClass]="isUnresolvedDuplicate(event) ? 'bg-md-warning/10' : ''">
+              <tr class="table-row" *ngFor="let event of preview.events" [ngClass]="isUnresolvedDuplicate(event) ? 'bg-md-warning/15' : ''">
                 <td class="table-cell">
                   <input
                     type="checkbox"
