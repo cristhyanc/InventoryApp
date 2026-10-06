@@ -188,6 +188,14 @@ export const routes: Routes = [
       import('./components/admin/costing-repair/costing-repair-page.component').then((m) => m.CostingRepairPageComponent)
   },
   {
+    path: 'admin/historical-gst-classification',
+    canActivate: [MsalGuard],
+    loadComponent: () =>
+      import('./components/admin/historical-gst-classification/historical-gst-classification.component').then(
+        (m) => m.HistoricalGstClassificationComponent
+      )
+  },
+  {
     path: 'admin/nayax-settings',
     canActivate: [MsalGuard],
     loadComponent: () =>

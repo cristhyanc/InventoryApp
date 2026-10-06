@@ -38,6 +38,14 @@ describe('AdminComponent Admin split (issue #389)', () => {
   });
 });
 
+describe('AdminComponent Historical GST Classification (issue #433)', () => {
+  it('links to the dedicated Historical GST Classification page', async () => {
+    const { host } = await render();
+
+    expect(host.querySelector('a[routerLink="/admin/historical-gst-classification"]')).not.toBeNull();
+  });
+});
+
 describe('AdminComponent Admin split (issue #390)', () => {
   it('links to the dedicated Historical Cost Recovery, AVCO Transition and Costing Repair pages', async () => {
     const { host } = await render();

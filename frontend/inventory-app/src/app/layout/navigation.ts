@@ -81,7 +81,8 @@ export const primaryNavigation: readonly NavItem[] = [
       link('Imports', '/admin/imports'),
       link('Historical Cost Recovery', '/admin/historical-cost-recovery'),
       link('AVCO Transition', '/admin/avco-transition'),
-      link('Costing Repair', '/admin/costing-repair')
+      link('Costing Repair', '/admin/costing-repair'),
+      link('Historical GST Classification', '/admin/historical-gst-classification')
     ]
   }
 ];

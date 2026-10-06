@@ -6,6 +6,7 @@ import { AdminImportsComponent } from './components/admin/imports/admin-imports.
 import { HistoricalCostRecoveryComponent } from './components/admin/historical-cost-recovery/historical-cost-recovery.component';
 import { AvcoTransitionComponent } from './components/admin/avco-transition/avco-transition.component';
 import { CostingRepairPageComponent } from './components/admin/costing-repair/costing-repair-page.component';
+import { HistoricalGstClassificationComponent } from './components/admin/historical-gst-classification/historical-gst-classification.component';
 
 function route(path: string): Route {
   const match = routes.find((candidate) => candidate.path === path);
@@ -57,6 +58,13 @@ describe('Admin costing and maintenance routes (issue #390)', () => {
   it('serves the dedicated Costing Repair page, behind authentication', async () => {
     expect(route('admin/costing-repair').canActivate).toContain(MsalGuard);
     await expect(loadedComponent('admin/costing-repair')).resolves.toBe(CostingRepairPageComponent);
+  });
+
+  it('serves the dedicated Historical GST Classification page, behind authentication (issue #433)', async () => {
+    expect(route('admin/historical-gst-classification').canActivate).toContain(MsalGuard);
+    await expect(loadedComponent('admin/historical-gst-classification')).resolves.toBe(
+      HistoricalGstClassificationComponent
+    );
   });
 
   /**
