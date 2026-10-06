@@ -77,12 +77,16 @@ public class ReportingContractJsonSerializationTests
             {
                 "from", "to", "taxableSales", "gstOnSales", "taxableFees", "gstOnFees", "netGst",
                 "dataQuality", "gstFreeSales", "inventoryPurchaseGst", "operatingExpenseGst",
+                "purchaseLineGst", "purchaseChargeGst", "purchaseUnresolvedComponentCount",
+                "purchaseUnresolvedAmount", "purchaseGstIncomplete",
             },
             PropertyNames(json));
 
         using var document = JsonDocument.Parse(json);
         Assert.Equal(909.09m, document.RootElement.GetProperty("taxableSales").GetDecimal());
         Assert.Equal(88.91m, document.RootElement.GetProperty("netGst").GetDecimal());
+        Assert.Equal(0m, document.RootElement.GetProperty("inventoryPurchaseGst").GetDecimal());
+        Assert.False(document.RootElement.GetProperty("purchaseGstIncomplete").GetBoolean());
     }
 
     [Fact]

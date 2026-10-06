@@ -1,4 +1,5 @@
 using Inventory.Application.Reporting.Gst;
+using Inventory.Domain.Reporting.Gst;
 
 namespace InventoryApi.Tests.Application.Reporting.Gst;
 
@@ -20,6 +21,9 @@ public sealed class FakeGstReportFactsProvider : IGstReportFactsProvider
         return Task.FromResult(_facts);
     }
 
-    public static GstReportFacts Complete(bool importedContainsRows = true, bool importedContainsGstClassification = true) =>
-        new(importedContainsRows, importedContainsGstClassification);
+    public static GstReportFacts Complete(
+        bool importedContainsRows = true,
+        bool importedContainsGstClassification = true,
+        IReadOnlyList<PurchaseGstComponents>? purchases = null) =>
+        new(importedContainsRows, importedContainsGstClassification, purchases ?? []);
 }
