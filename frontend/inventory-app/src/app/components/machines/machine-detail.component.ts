@@ -94,9 +94,9 @@ export class MachineDetailComponent implements OnInit {
       ? ((product.quantityInStock ?? 0) / maxStock) * 100
       : 100;
 
-    if (stockPercentage < 30) return 'bg-red-100 text-red-700';
-    if (stockPercentage < 80) return 'bg-yellow-100 text-yellow-700';
-    return 'bg-green-100 text-green-700';
+    if (stockPercentage < 30) return 'badge-danger';
+    if (stockPercentage < 80) return 'badge-warning';
+    return 'badge-success';
   }
 
   restockProduct(product: Product, machine: Machine | null, qty?: string | number, qtyInput?: HTMLInputElement): void {

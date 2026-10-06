@@ -152,12 +152,12 @@ Both validation scripts run exactly this pipeline; run the script rather than th
 
 ## Architecture rules
 
-The current backend is one project with a service layer. Its target is an incremental, pragmatic Clean Architecture described in `docs/architecture.md`.
+The backend is the incremental, pragmatic Clean Architecture described in `docs/architecture.md`: `InventoryApi` is the HTTP boundary and the composition root, `Inventory.Application` holds the use cases and their narrow ports, `Inventory.Domain` the deterministic rules, and `Inventory.Infrastructure` the adapters. The migration that got there (issues #145-#154) is complete, and `ApiLayerOwnershipTests` (`backend/Inventory.IntegrationTests/Architecture/`) enforces the outcome: no business service, use-case orchestration, financial/classification rule or persistence implementation may return to `InventoryApi`.
 
 - Keep the application a modular monolith; do not introduce microservices.
-- New controllers must be thin: bind/validate transport input, invoke a use case, and map its result to HTTP.
-- Do not inject `AppDbContext`, `IWebHostEnvironment`, filesystem APIs, or Nayax HTTP clients into new controllers.
-- Existing direct-access controllers should be migrated feature by feature, not rewritten together.
+- Controllers must be thin: bind/validate transport input, invoke a use case, and map its result to HTTP. Every controller is constructed with at least one `Inventory.Application` dependency, and an architecture test fails if one is not.
+- Do not inject `AppDbContext`, `IWebHostEnvironment`, filesystem APIs, or Nayax HTTP clients into a controller. Inside `InventoryApi`, a `DbContext` is reachable only from the composition root's startup registration and from `InventoryApi.Bootstrap` (the human-invoked operator commands), `InventoryApi.Http.HealthChecks` (the readiness probe) and `InventoryApi.Auth.E2ETesting` (the disposable E2E host fixture); widening that set is a human decision, made in `docs/architecture.md` § InventoryApi and the test together.
+- New use-case or domain logic goes to `Inventory.Application`/`Inventory.Domain` and a new adapter to `Inventory.Infrastructure`. `InventoryApi/Services` and `InventoryApi/Adapters/Persistence` are retired folders and must not come back, and no type in `InventoryApi` may be named `*Service`.
 - Organize new application code by business feature/use case, not only by technical type.
 - Keep domain calculations deterministic and free of EF Core, ASP.NET Core, HTTP, filesystem, ClosedXML, and configuration dependencies.
 - Define narrow ports for external behavior such as `INayaxClient`, document storage, or report export. Avoid a generic `IRepository<T>` abstraction.
