@@ -53,6 +53,17 @@
               "optimization": false,
               "extractLicenses": false,
               "sourceMap": true
+            },
+            "e2e": {
+              "optimization": false,
+              "extractLicenses": false,
+              "sourceMap": true,
+              "fileReplacements": [
+                {
+                  "replace": "src/app/auth/browser-auth-providers.ts",
+                  "with": "src/app/auth/browser-auth-providers.e2e.ts"
+                }
+              ]
             }
           },
           "defaultConfiguration": "production"
@@ -65,6 +76,12 @@
             },
             "development": {
               "buildTarget": "inventory-app:build:development"
+            },
+            "e2e": {
+              "buildTarget": "inventory-app:build:e2e",
+              "port": 4300,
+              "host": "127.0.0.1",
+              "proxyConfig": "e2e/proxy.conf.json"
             }
           },
           "defaultConfiguration": "development",

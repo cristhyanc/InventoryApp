@@ -1,20 +1,21 @@
 using Microsoft.EntityFrameworkCore;
 using Inventory.Application;
+using Inventory.Application.Nayax;
 using Inventory.Application.Tenancy;
 using Inventory.Infrastructure;
 using Inventory.Infrastructure.Documents;
 using Inventory.Infrastructure.Imports;
 using Inventory.Infrastructure.Nayax;
+using InventoryApi.Adapters.Nayax;
 using InventoryApi.Bootstrap;
 using InventoryApi.Auth;
+using InventoryApi.Auth.E2ETesting;
 using Inventory.Infrastructure.Data;
 using InventoryApi.Http;
 using InventoryApi.Http.HealthChecks;
 using InventoryApi.Observability;
 using InventoryApi.Swagger;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
-using Microsoft.Identity.Web;
 
 // The business bootstrap is a separate, human-invoked path (issue #64, checkpoint 3). It is
 // checked before the web host is built so that starting the API and backfilling ownership can
@@ -58,8 +59,12 @@ var builder = WebApplication.CreateBuilder(args);
 // README.md § Observability and error diagnostics.
 builder.Services.AddInventoryApiTelemetry(builder.Configuration);
 
-builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddMicrosoftIdentityWebApi(builder.Configuration.GetSection("AzureAd"));
+// Authentication (issue #38, extended by issue #46). Every environment except the dedicated
+// end-to-end testing host registers exactly the real Microsoft Entra JwtBearer scheme this line
+// always registered; that host, and only that host, registers the synthetic E2E test scheme
+// instead. The decision is made from the hosting environment before any request exists and
+// cannot be influenced by request input - see InventoryApi.Auth.E2ETesting.
+builder.Services.AddInventoryApiAuthentication(builder.Configuration, builder.Environment);
 
 builder.Services.AddAuthorization();
 
@@ -138,12 +143,23 @@ builder.Services.AddCors(options =>
 // An incomplete BaseUrl/OperatorId fails registration here, at startup, rather than the first
 // Nayax call. See Inventory.Infrastructure.Nayax.NayaxLynxConfiguration and
 // README.md § Configuration and secrets.
-var nayaxLynxOptions = builder.Configuration.GetSection(NayaxLynxOptions.SectionName).Get<NayaxLynxOptions>()
-    ?? new NayaxLynxOptions();
-nayaxLynxOptions.AccessToken = NayaxLynxConfiguration.ResolveAccessToken(
-    builder.Configuration["NayaxLynx:AccessToken"],
-    builder.Configuration["Nayax:Token"]);
-builder.Services.AddNayaxLynxClient(nayaxLynxOptions);
+//
+// The dedicated end-to-end testing host is the one exception (issue #46): it registers no Nayax
+// HTTP client at all, so an E2E run has nothing configured that could reach the live operator
+// account, and the workflows that legitimately read the fleet see a business with no machines.
+if (E2ETestEnvironment.IsEnabled(builder.Environment))
+{
+    builder.Services.AddScoped<INayaxLynxClient, E2ETestNayaxLynxClient>();
+}
+else
+{
+    var nayaxLynxOptions = builder.Configuration.GetSection(NayaxLynxOptions.SectionName).Get<NayaxLynxOptions>()
+        ?? new NayaxLynxOptions();
+    nayaxLynxOptions.AccessToken = NayaxLynxConfiguration.ResolveAccessToken(
+        builder.Configuration["NayaxLynx:AccessToken"],
+        builder.Configuration["Nayax:Token"]);
+    builder.Services.AddNayaxLynxClient(nayaxLynxOptions);
+}
 
 // Tenancy (issue #64). Claims parsing stays at this boundary: EntraActorIdentityAccessor is the
 // only implementation of the Application's actor port, and the current-business abstraction
@@ -184,6 +200,16 @@ using (var scope = app.Services.CreateScope())
 
     TenantOwnershipReadiness.Report(db, loggerFactory);
 }
+
+// Isolated end-to-end test data (issue #46). This does nothing at all unless the process was
+// started as the dedicated E2E host, and it writes only its own two synthetic businesses and
+// their catalogue into whatever disposable database that host was pointed at. No other
+// environment reaches it, and it never performs a backfill or touches an existing row.
+await E2ETestFixture.SeedAsync(
+    app.Services,
+    app.Environment,
+    app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("InventoryApi.E2ETestFixture"),
+    CancellationToken.None);
 
 // First in the pipeline so exceptions from controllers, services, and the Nayax
 // client are all caught.
