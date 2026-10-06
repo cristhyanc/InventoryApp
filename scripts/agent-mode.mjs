@@ -1,13 +1,15 @@
 // Trusted provider-mode policy for the agent pipeline (#337, #338, #339).
 //
-// Readiness labels choose one of four routes. The route of an agent pull request is never taken
+// Readiness labels choose one of two routes. Claude is the only implementer: on the default route
+// the Copilot CLI checks and reviews its work, and on the full-claude fallback separate read-only
+// Claude invocations do. The route of an agent pull request is never taken
 // from a comment, a label that is still on the issue, or PR text. It is derived from the issue's
 // own label history, which GitHub records and nobody can edit or delete: the newest *claim* (the
 // claiming workflow step replacing the readiness label with `agent-working`, as
 // github-actions[bot]) names the label that was consumed, and the label must have been applied by
 // a person (GitHub actor type User, never any bot) before that. Agents cannot change issue labels (their tool lists deny `gh issue edit`
-// and `gh api`), so they cannot fake a claim. Every boundary (architecture dispatch, Copilot
-// handoff, validation, review, publication and repair) re-derives the route from that history and
+// and `gh api`), so they cannot fake a claim. Every boundary (architecture dispatch,
+// validation, review, publication and repair) re-derives the route from that history and
 // checks that the pull request was opened after the newest claim, so a pull request left over
 // from an earlier claim is refused instead of re-routed.
 //
@@ -16,24 +18,24 @@
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
-export const PROVIDERS = Object.freeze(['claude', 'copilot']);
-export const STANDARD_READY_LABELS = Object.freeze(PROVIDERS.flatMap(provider => [`agent-ready-${provider}`, `agent-ready-${provider}-low`, `agent-ready-${provider}-high`]));
-// Single-provider fallbacks: one provider implements, architecture-checks, repairs and reviews.
-export const FULL_READY_LABELS = Object.freeze(PROVIDERS.map(provider => `agent-ready-full-${provider}`));
+// Claude is the only implementer. Copilot only checks and reviews (the cross-claude route); it no
+// longer implements, so there is no copilot readiness label, route or `copilot/*` branch.
+export const PROVIDERS = Object.freeze(['claude']);
+export const STANDARD_READY_LABELS = Object.freeze(['agent-ready-claude', 'agent-ready-claude-low', 'agent-ready-claude-high']);
+// Single-provider fallback: Claude implements, architecture-checks, repairs and reviews.
+export const FULL_READY_LABELS = Object.freeze(['agent-ready-full-claude']);
 export const READINESS_LABELS = Object.freeze([...STANDARD_READY_LABELS, ...FULL_READY_LABELS]);
 // Workflow shell checks must use exactly this pattern (enforced by validate-agent-workflows.mjs).
-export const READINESS_LABEL_PATTERN = /^agent-ready-(?:(?:claude|copilot)(?:-low|-high)?|full-(?:claude|copilot))$/;
-// Claude-primary is the documented default when both providers are available.
+export const READINESS_LABEL_PATTERN = /^agent-ready-(?:claude(?:-low|-high)?|full-claude)$/;
+// The documented default.
 export const DEFAULT_READY_LABEL = 'agent-ready-claude';
 // Trusted routing policy. Provider names come from this table, never from model output.
 export const ROUTES = Object.freeze({
   'cross-claude': Object.freeze({ implementer: 'claude', reviewer: 'copilot', sameProviderReview: false }),
-  'cross-copilot': Object.freeze({ implementer: 'copilot', reviewer: 'claude', sameProviderReview: false }),
   'full-claude': Object.freeze({ implementer: 'claude', reviewer: 'claude', sameProviderReview: true }),
-  'full-copilot': Object.freeze({ implementer: 'copilot', reviewer: 'copilot', sameProviderReview: true }),
 });
-// Kill switch for the single-provider fallbacks. #340 connected their same-provider architecture
-// check, repair and final review, so the full labels may start work. Setting this to false makes
+// Kill switch for the single-provider fallback. #340 connected its same-provider architecture
+// check, repair and final review, so the full label may start work. Setting this to false makes
 // every full-provider claim fail closed again at every boundary.
 export const FULL_PROVIDER_EXECUTION_ENABLED = true;
 
@@ -47,9 +49,9 @@ const CLAIM_PAIR_WINDOW_MS = 10_000;
 /** Parses one readiness label into its trusted route, or returns null for any other label. */
 export function parseReadinessLabel(label) {
   if (typeof label !== 'string' || !READINESS_LABEL_PATTERN.test(label) || !READINESS_LABELS.includes(label)) return null;
-  const full = /^agent-ready-full-(claude|copilot)$/.exec(label);
+  const full = /^agent-ready-full-(claude)$/.exec(label);
   if (full) return { label, mode: `full-${full[1]}`, ...ROUTES[`full-${full[1]}`], tier: 'default' };
-  const [, provider, suffix = ''] = /^agent-ready-(claude|copilot)(-low|-high)?$/.exec(label);
+  const [, provider, suffix = ''] = /^agent-ready-(claude)(-low|-high)?$/.exec(label);
   return { label, mode: `cross-${provider}`, ...ROUTES[`cross-${provider}`], tier: suffix ? suffix.slice(1) : 'default' };
 }
 
@@ -57,7 +59,6 @@ export function parseReadinessLabel(label) {
 export function implementerForBranch(headRef) {
   if (typeof headRef !== 'string') return null;
   if (headRef.startsWith('agent/issue-')) return 'claude';
-  if (headRef.startsWith('copilot/')) return 'copilot';
   return null;
 }
 
@@ -119,7 +120,7 @@ const isClaimActor = (event) => event.actor === CLAIM_ACTOR && event.actorType =
 function verifyBranchIdentity({ issue, headRef, expectedImplementer }) {
   if (!Number.isInteger(issue) || issue < 1) throw new Error('Provider mode needs the pull request\'s issue number.');
   const implementer = implementerForBranch(headRef);
-  if (!implementer) throw new Error(`Branch '${headRef}' is not an agent/issue-* or copilot/* branch.`);
+  if (!implementer) throw new Error(`Branch '${headRef}' is not an agent/issue-* branch.`);
   if (expectedImplementer !== implementer) throw new Error(`Branch '${headRef}' belongs to ${implementer}, not ${expectedImplementer}.`);
   if (implementer === 'claude' && !headRef.startsWith(`agent/issue-${issue}-`)) throw new Error(`Branch '${headRef}' does not belong to issue #${issue}.`);
   return implementer;
@@ -134,7 +135,7 @@ const gh = (args) => execFileSync(GH_PATH, args, { encoding: 'utf8', stdio: ['ig
 export function verifyPullRequest({ repository, pr, expectedImplementer }) {
   if (!/^[1-9]\d*$/.test(String(pr))) throw new Error('A valid pull request number is required.');
   if (!/^[\w.-]+\/[\w.-]+$/.test(String(repository))) throw new Error('A valid owner/repository is required.');
-  if (!PROVIDERS.includes(expectedImplementer)) throw new Error('The expected implementer must be claude or copilot.');
+  if (!PROVIDERS.includes(expectedImplementer)) throw new Error('The expected implementer must be claude.');
   const live = JSON.parse(gh(['pr', 'view', String(pr), '--repo', repository, '--json', 'headRefName,closingIssuesReferences,createdAt']));
   const closing = (live.closingIssuesReferences ?? []).map(item => item.number);
   const branchIssue = /^agent\/issue-([1-9]\d*)-/.exec(live.headRefName ?? '')?.[1];

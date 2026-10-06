@@ -1,9 +1,8 @@
 name: Agent head update
 
 # Schedules exact-SHA validation, and after it succeeds a fresh independent review, when a new commit
-# lands on an eligible agent pull request that already carries `agent-review`, or on a Copilot pull
-# request that carries `agent-architecture-fix` (Copilot's push fixing Claude's architecture findings;
-# validate.yml moves it to `agent-review` once that push passes validation).
+# lands on an eligible agent pull request (Claude's `agent/issue-*` branch) that already carries
+# `agent-review`.
 #
 # Authority and lifecycle: AGENTS.md ("Automated task contract") and docs/automation.md
 # ("Updated-head scheduling").
@@ -39,11 +38,8 @@ jobs:
       github.event.pull_request.draft == false &&
       github.event.pull_request.base.ref == 'develop' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
-      (startsWith(github.event.pull_request.head.ref, 'agent/issue-') || startsWith(github.event.pull_request.head.ref, 'copilot/')) &&
-      (
-        contains(github.event.pull_request.labels.*.name, 'agent-review') ||
-        (startsWith(github.event.pull_request.head.ref, 'copilot/') && contains(github.event.pull_request.labels.*.name, 'agent-architecture-fix'))
-      )
+      startsWith(github.event.pull_request.head.ref, 'agent/issue-') &&
+      contains(github.event.pull_request.labels.*.name, 'agent-review')
     runs-on: ubuntu-latest
     permissions:
       actions: write
@@ -57,7 +53,6 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}
-          EXPECTED_COPILOT_AUTHOR: ${{ vars.COPILOT_AGENT_BOT_LOGIN || 'Copilot' }}
         run: |
           set -euo pipefail
           fail() { echo "::error::$1"; exit 1; }
@@ -84,20 +79,12 @@ jobs:
           if [[ "$head_ref" == agent/issue-* ]]; then
             [ -n "$EXPECTED_AGENT_AUTHOR" ] || fail "AGENT_AUTOMATION_APP_BOT_LOGIN is not configured."
             [ "$author" = "$EXPECTED_AGENT_AUTHOR" ] || skip "pull request #$PR_NUMBER is not authored by $EXPECTED_AGENT_AUTHOR."
-            implementer="claude"
-          elif [[ "$head_ref" == copilot/* ]]; then
-            [ "$author" = "$EXPECTED_COPILOT_AUTHOR" ] || skip "pull request #$PR_NUMBER is not authored by $EXPECTED_COPILOT_AUTHOR."
-            implementer="copilot"
           else
-            skip "pull request #$PR_NUMBER does not use an agent/issue-* or copilot/* branch."
+            skip "pull request #$PR_NUMBER does not use an agent/issue-* branch."
           fi
-          echo "::notice::Pull request #$PR_NUMBER was implemented by $implementer."
           [ "$current_sha" = "$HEAD_SHA" ] || skip "Refusing stale scheduled validation: head is now $current_sha; the newer push schedules its own."
-          if ! jq -e 'any(.labels[]?; .name == "agent-review")' <<<"$pr_json" >/dev/null; then
-            [ "$implementer" = "copilot" ] || skip "the agent-review label is absent."
-            jq -e 'any(.labels[]?; .name == "agent-architecture-fix")' <<<"$pr_json" >/dev/null \
-              || skip "neither the agent-review nor the agent-architecture-fix label is present."
-          fi
+          jq -e 'any(.labels[]?; .name == "agent-review")' <<<"$pr_json" >/dev/null \
+            || skip "the agent-review label is absent."
 
           changed_files="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" --jq '.[].filename')"
           if grep -Eq '^\.github/workflows/' <<<"$changed_files"; then

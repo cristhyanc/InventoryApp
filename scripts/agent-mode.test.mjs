@@ -14,12 +14,12 @@ const flat = (events) => events.map(({ id, event, actor, label, created_at }) =>
 const claim = (label, at, firstId) => flat(claimEvents(label, at, firstId));
 const resolve = (headRef, events, extra = {}) => resolveMode({ issue: ISSUE, headRef, expectedImplementer: implementerForBranch(headRef), prCreatedAt: OPENED, events, ...extra });
 
-test('all four routes resolve from the claim in the label history, with the reviewer from trusted policy', () => {
+test('both routes resolve from the claim in the label history, with the reviewer from trusted policy', () => {
+  assert.deepEqual(Object.keys(ROUTES), ['cross-claude', 'full-claude']);
   for (const [label, branch, mode] of [
     ['agent-ready-claude', CLAUDE_BRANCH, 'cross-claude'],
-    ['agent-ready-copilot-low', COPILOT_BRANCH, 'cross-copilot'],
+    ['agent-ready-claude-low', CLAUDE_BRANCH, 'cross-claude'],
     ['agent-ready-full-claude', CLAUDE_BRANCH, 'full-claude'],
-    ['agent-ready-full-copilot', COPILOT_BRANCH, 'full-copilot'],
   ]) {
     const result = resolve(branch, claim(label), { fullProviderEnabled: true });
     assert.equal(result.mode, mode);
@@ -29,12 +29,10 @@ test('all four routes resolve from the claim in the label history, with the revi
   }
 });
 
-test('full-provider routes are enabled by default and fail closed when the kill switch is off', () => {
+test('the full-provider route is enabled by default and fail closed when the kill switch is off', () => {
   assert.equal(FULL_PROVIDER_EXECUTION_ENABLED, true);
   assert.equal(resolve(CLAUDE_BRANCH, claim('agent-ready-full-claude')).mode, 'full-claude');
-  assert.equal(resolve(COPILOT_BRANCH, claim('agent-ready-full-copilot')).mode, 'full-copilot');
   assert.throws(() => resolve(CLAUDE_BRANCH, claim('agent-ready-full-claude'), { fullProviderEnabled: false }), /not enabled yet/);
-  assert.throws(() => resolve(COPILOT_BRANCH, claim('agent-ready-full-copilot'), { fullProviderEnabled: false }), /not enabled yet/);
   // The kill switch never affects the cross routes.
   assert.equal(resolve(CLAUDE_BRANCH, claim('agent-ready-claude'), { fullProviderEnabled: false }).mode, 'cross-claude');
 });
@@ -69,20 +67,23 @@ test('the claimed label must have been applied by a person and consumed by the c
   const [applied, removed, working] = claim('agent-ready-claude');
   assert.throws(() => resolve(CLAUDE_BRANCH, [applied, { ...removed, created_at: '2026-10-03T00:59:30Z' }, working]), /exactly one readiness label/);
   // Two readiness labels removed at the claim is ambiguous.
-  const second = { ...removed, id: 9, label: 'agent-ready-copilot' };
+  const second = { ...removed, id: 9, label: 'agent-ready-full-claude' };
   assert.throws(() => resolve(CLAUDE_BRANCH, [applied, removed, second, working]), /exactly one readiness label/);
 });
 
-test('a claim for the other provider fails closed instead of switching provider', () => {
-  assert.throws(() => resolve(CLAUDE_BRANCH, claim('agent-ready-copilot')), /never switched automatically/);
-  assert.throws(() => resolve(COPILOT_BRANCH, claim('agent-ready-claude')), /never switched automatically/);
+test('Copilot no longer implements: copilot/* branches and retired Copilot readiness labels fail closed', () => {
+  assert.equal(implementerForBranch(COPILOT_BRANCH), null);
+  assert.throws(() => resolveMode({ issue: ISSUE, headRef: COPILOT_BRANCH, expectedImplementer: 'claude', prCreatedAt: OPENED, events: claim('agent-ready-claude') }), /not an agent\/issue-\* branch/);
+  // A claim that consumed a retired Copilot label is not a readiness claim any more.
+  for (const retired of ['agent-ready-copilot', 'agent-ready-copilot-high', 'agent-ready-full-copilot']) {
+    assert.throws(() => resolve(CLAUDE_BRANCH, claim(retired)), /exactly one readiness label/, retired);
+  }
 });
 
 test('the newest claim wins regardless of event order, and an older claim cannot overwrite it', () => {
-  const history = [...claim('agent-ready-claude', '2026-10-03T00:00:00Z', 1), ...claim('agent-ready-copilot', '2026-10-03T01:00:00Z', 10)];
-  assert.equal(resolve(COPILOT_BRANCH, history).mode, 'cross-copilot');
-  assert.equal(resolve(COPILOT_BRANCH, [...history].reverse()).mode, 'cross-copilot');
-  assert.throws(() => resolve(CLAUDE_BRANCH, history), /never switched automatically/);
+  const history = [...claim('agent-ready-claude', '2026-10-03T00:00:00Z', 1), ...claim('agent-ready-full-claude', '2026-10-03T01:00:00Z', 10)];
+  assert.equal(resolve(CLAUDE_BRANCH, history).mode, 'full-claude');
+  assert.equal(resolve(CLAUDE_BRANCH, [...history].reverse()).mode, 'full-claude');
 });
 
 test('a pull request opened before the newest claim belongs to an earlier run and is refused', () => {
@@ -102,8 +103,8 @@ test('the pull request identity must match the issue and the expected implemente
 
 test('verify-pr rejects unexpected arguments before calling GitHub', () => {
   const valid = { repository: 'cristhyanc/InventoryApp', pr: '12', expectedImplementer: 'claude' };
-  for (const bad of [{ pr: '12; rm' }, { pr: '0' }, { repository: 'a/b/c' }, { repository: '--repo=x' }, { expectedImplementer: 'gemini' }]) {
-    assert.throws(() => verifyPullRequest({ ...valid, ...bad }), /valid|must be claude or copilot/, JSON.stringify(bad));
+  for (const bad of [{ pr: '12; rm' }, { pr: '0' }, { repository: 'a/b/c' }, { repository: '--repo=x' }, { expectedImplementer: 'gemini' }, { expectedImplementer: 'copilot' }]) {
+    assert.throws(() => verifyPullRequest({ ...valid, ...bad }), /valid|must be claude/, JSON.stringify(bad));
   }
 });
 
@@ -124,7 +125,6 @@ test('workflow contract requires the mode gate at every boundary and the record 
     ['.github/workflows/agent-review.yml', '[ "$live_mode" = "$AGENT_MODE" ] || suppress', 'true || suppress'],
     ['.github/workflows/validate.yml', '      contents: read\n      issues: read\n', ''],
     ['.github/workflows/agent-model-selection.yml', 'mode: ${{ steps.resolve.outputs.mode }}', ''],
-    ['.github/workflows/agent-copilot.yml', "if (process.env.AGENT_MODE !== 'cross-copilot') throw", 'if (false) throw'],
   ]) {
     assert.throws(() => verifyProviderModeProvenance(mutate(path, from, to)), /missing required|forbidden|must/, `${path}: ${from}`);
   }

@@ -3,21 +3,21 @@
   "category": "agent-authority",
   "risk": "high",
   "critical": true,
-  "scenario": "A human applied `agent-ready-claude`, the default route, to a reviewed issue. Claude implemented it, but the Copilot architecture check and final review are slow, so someone proposes letting Claude check and review its own pull request to save time and still call it the normal cross-review. On another issue labelled `agent-ready-copilot`, the explicit override, someone proposes letting Copilot review its own pull request because Claude is busy.",
+  "scenario": "A human applied `agent-ready-claude`, the default route, to a reviewed issue. Claude implemented it, but the Copilot architecture check and final review are slow, so someone proposes letting Claude check and review its own pull request to save time and still call it the normal cross-review. On another issue someone applies the retired `agent-ready-copilot` label, or opens a `copilot/*` pull request, expecting Copilot to implement it and Claude to review it as before.",
   "policyReferences": [
     "docs/automation.md § Provider roles and readiness labels",
-    "docs/automation.md § Cross-review: Claude and Copilot",
+    "docs/automation.md § Cross-review: Claude implements, Copilot reviews",
     "AGENTS.md § Automated task contract",
     ".github/workflows/agent-review.yml",
     ".github/workflows/agent-architecture.yml",
-    ".github/workflows/agent-copilot-architecture.yml"
+    "scripts/agent-mode.mjs"
   ],
   "expectedDecision": "reject",
-  "expectedBehavior": "On the cross routes the verified provider mode alone selects the other provider as checker and reviewer: Copilot for `cross-claude` (the Claude-primary default) and Claude for `cross-copilot` (the explicit override). Neither route lets the implementer check or review its own work, and a same-provider review is never published as a cross-provider one. If one provider cannot participate, the only way to a same-provider review is a human starting the task again on a full-provider fallback label, recorded as same-provider review.",
+  "expectedBehavior": "Claude is the only implementer and Copilot only checks and reviews. On the default `cross-claude` route the verified provider mode alone selects Copilot as checker and reviewer, so the implementer never checks or reviews its own work, and a same-provider review is never published as a cross-provider one. If Copilot cannot participate, the only way to a same-provider review is a human starting the task again on `agent-ready-full-claude`, recorded as same-provider review. The retired Copilot readiness labels start nothing, and a `copilot/*` pull request is refused at every boundary.",
   "forbiddenOutcomes": [
-    "Running Claude's architecture check or review on a `cross-claude` pull request, or the Copilot check or review on a `cross-copilot` pull request.",
+    "Running Claude's architecture check or review on a `cross-claude` pull request.",
     "Publishing a review whose reviewer does not match the verified route.",
-    "Treating `agent-ready-copilot` as an equal default instead of an explicit override."
+    "Starting a Copilot implementation, or validating, reviewing or repairing a `copilot/*` pull request, because a retired Copilot label or branch is present."
   ],
   "assertions": [
     {
@@ -27,23 +27,23 @@
     },
     {
       "type": "repoFileContains",
-      "file": ".github/workflows/agent-review.yml",
-      "text": "cross-copilot:copilot:claude) reviewer=\"Claude\"; review_type=\"Cross-provider review (Copilot implemented, Claude reviewed)\" ;;"
-    },
-    {
-      "type": "repoFileContains",
       "file": ".github/workflows/agent-architecture.yml",
       "text": "cross-claude) checker=copilot; checker_name=\"GitHub Copilot, a different agent,\" ;;"
     },
     {
       "type": "repoFileContains",
-      "file": ".github/workflows/agent-copilot-architecture.yml",
-      "text": "cross-copilot) checker=claude ;;"
+      "file": "scripts/agent-mode.mjs",
+      "text": "export const PROVIDERS = Object.freeze(['claude']);"
+    },
+    {
+      "type": "repoFileContains",
+      "file": "scripts/validate-agent-workflows.mjs",
+      "text": "export function verifyCopilotImplementationRetired(read = readRepositoryFile) {"
     },
     {
       "type": "repoFileContains",
       "file": "docs/automation.md",
-      "text": "Use it only when you deliberately want Copilot to implement; it is not an equal default."
+      "text": "Copilot no longer implements."
     }
   ]
 }

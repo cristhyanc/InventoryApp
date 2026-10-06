@@ -5,16 +5,15 @@ name: Agent review
 # Authority and lifecycle: AGENTS.md ("Automated task contract") and docs/automation.md ("Review agent").
 # - The verified provider mode picks the reviewer; the other review job is skipped, so its provider and
 #   secret are never touched (docs/automation.md "Provider roles and readiness labels"):
-#   - cross-claude (default, Claude-primary): the Copilot CLI reviews Claude's `agent/issue-*` pull
-#     request in the `copilot-review` job;
-#   - cross-copilot (explicit override): Claude reviews Copilot's `copilot/*` pull request in the
-#     `review` job;
-#   - full-claude / full-copilot (single-provider fallbacks): a separate, fresh read-only invocation of
-#     the implementing provider reviews it in the same job, and the prompt and published review state
-#     that it is a same-provider review, not an independent one.
+#   - cross-claude (default): the Copilot CLI reviews Claude's `agent/issue-*` pull request in the
+#     `copilot-review` job;
+#   - full-claude (single-provider fallback): a separate, fresh read-only Claude invocation reviews it
+#     in the `review` job, and the prompt and published review state that it is a same-provider
+#     review, not an independent one.
+#   Claude is the only implementer; Copilot no longer implements, so `copilot/*` branches are refused.
 #   Both jobs return the same structured review, and the same deterministic publish job turns it into a
 #   comment-only review and the `agent-review-verdict` status.
-# - agent-architecture.yml and agent-copilot-architecture.yml apply `agent-review` after the read-only
+# - agent-architecture.yml applies `agent-review` after the read-only
 #   architecture check; exact-SHA validation then dispatches the initial review automatically. A human
 #   may remove/re-apply the label to request another review of an already validated head; the label
 #   event starts agent-review-request.yml, which dispatches this workflow from main. Repair
@@ -71,7 +70,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}
-          EXPECTED_COPILOT_AUTHOR: ${{ vars.COPILOT_AGENT_BOT_LOGIN || 'Copilot' }}
           INPUT_PR_NUMBER: ${{ inputs.pr_number }}
           INPUT_HEAD_SHA: ${{ inputs.head_sha }}
         run: |
@@ -108,11 +106,8 @@ jobs:
             [ -n "$EXPECTED_AGENT_AUTHOR" ] || fail "AGENT_AUTOMATION_APP_BOT_LOGIN is not configured."
             [ "$author" = "$EXPECTED_AGENT_AUTHOR" ] || fail "Automated review of an agent/issue-* branch requires $EXPECTED_AGENT_AUTHOR as the pull request author."
             implementer="claude"
-          elif [[ "$head_ref" == copilot/* ]]; then
-            [ "$author" = "$EXPECTED_COPILOT_AUTHOR" ] || fail "Automated review of a copilot/* branch requires $EXPECTED_COPILOT_AUTHOR as the pull request author."
-            implementer="copilot"
           else
-            fail "Automated review requires an agent/issue-* (Claude) or copilot/* (Copilot) head branch."
+            fail "Automated review requires an agent/issue-* (Claude) head branch."
           fi
           [ "$current_sha" = "$head_sha" ] || fail "Refusing stale review: pull request head is $current_sha, requested SHA is $head_sha."
           # Provider mode (#339): verify the route claimed in the issue's label history against this pull request, using the
@@ -124,15 +119,9 @@ jobs:
             cross-claude:claude)
               reviewer=copilot
               review_relation="This pull request was implemented by Claude, a different agent: do not rely on anything it claimed; verify it." ;;
-            cross-copilot:copilot)
-              reviewer=claude
-              review_relation="This pull request was implemented by GitHub Copilot, a different agent: do not rely on anything it may have claimed; verify it." ;;
             full-claude:claude)
               reviewer=claude
               review_relation="This pull request was implemented by another Claude invocation under the full-claude single-provider fallback route. This is a same-provider review, not an independent one: you are a fresh invocation with no implementation conversation state, so do not rely on anything the implementation claimed; verify it." ;;
-            full-copilot:copilot)
-              reviewer=copilot
-              review_relation="This pull request was implemented by the GitHub Copilot coding agent in its own session under the full-copilot single-provider fallback route. This is a same-provider review, not an independent one: you are a fresh invocation with no implementation session state, so do not rely on anything the implementation claimed; verify it." ;;
             *) fail "Provider mode '$agent_mode' does not match implementer $implementer." ;;
           esac
           jq -e 'any(.labels[]?; .name == "agent-review")' <<<"$pr_json" >/dev/null \
@@ -162,7 +151,7 @@ jobs:
   review:
     name: Claude review of current head
     needs: context
-    # Claude reviews on the cross-copilot route and, as a separate same-provider invocation, on full-claude.
+    # Claude reviews only as a separate same-provider invocation, on the full-claude fallback.
     if: needs.context.outputs.reviewer == 'claude'
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -262,7 +251,7 @@ jobs:
   copilot-review:
     name: Copilot review of current head
     needs: context
-    # Copilot reviews on the default cross-claude route and, as a separate same-provider invocation, on full-copilot.
+    # Copilot reviews on the default cross-claude route.
     if: needs.context.outputs.reviewer == 'copilot'
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -490,7 +479,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}
-          EXPECTED_COPILOT_AUTHOR: ${{ vars.COPILOT_AGENT_BOT_LOGIN || 'Copilot' }}
           PR_NUMBER: ${{ needs.context.outputs.pr_number }}
           HEAD_SHA: ${{ needs.context.outputs.head_sha }}
           IMPLEMENTER: ${{ needs.context.outputs.implementer }}
@@ -526,9 +514,7 @@ jobs:
           # The trusted route table decides who reviewed and whether the review was independent.
           case "$AGENT_MODE:$IMPLEMENTER:$REVIEWER" in
             cross-claude:claude:copilot) reviewer="GitHub Copilot (Copilot CLI)"; review_type="Cross-provider review (Claude implemented, Copilot reviewed)" ;;
-            cross-copilot:copilot:claude) reviewer="Claude"; review_type="Cross-provider review (Copilot implemented, Claude reviewed)" ;;
             full-claude:claude:claude) reviewer="Claude (separate read-only invocation)"; review_type="Same-provider review (full-claude fallback): not independent" ;;
-            full-copilot:copilot:copilot) reviewer="GitHub Copilot (Copilot CLI, separate read-only invocation)"; review_type="Same-provider review (full-copilot fallback): not independent" ;;
             *) suppress "unknown review route '$AGENT_MODE' (implementer '$IMPLEMENTER', reviewer '$REVIEWER')." ;;
           esac
           [ "$REVIEW_RESULT" = "success" ] || suppress "the review job ended with '$REVIEW_RESULT' (failed, cancelled or superseded)."
@@ -575,11 +561,8 @@ jobs:
             [ -n "$EXPECTED_AGENT_AUTHOR" ] || suppress "AGENT_AUTOMATION_APP_BOT_LOGIN is not configured."
             [ "$author" = "$EXPECTED_AGENT_AUTHOR" ] || suppress "pull request #$PR_NUMBER is not authored by $EXPECTED_AGENT_AUTHOR."
             live_implementer="claude"
-          elif [[ "$head_ref" == copilot/* ]]; then
-            [ "$author" = "$EXPECTED_COPILOT_AUTHOR" ] || suppress "pull request #$PR_NUMBER is not authored by $EXPECTED_COPILOT_AUTHOR."
-            live_implementer="copilot"
           else
-            suppress "pull request #$PR_NUMBER no longer uses an agent/issue-* or copilot/* branch."
+            suppress "pull request #$PR_NUMBER no longer uses an agent/issue-* branch."
           fi
           # The implementer and route must still be the ones the review ran under.
           [ "$live_implementer" = "$IMPLEMENTER" ] || suppress "pull request #$PR_NUMBER is now implemented by $live_implementer, not $IMPLEMENTER."

@@ -13,11 +13,12 @@ test('manual planning and parent epics are preserved', () => {
   assert.equal(desiredStatus(issue({ parent: true, labels: ['agent-working'] })), null);
 });
 test('readiness routes and active labels map without starting agents', () => {
-  for (const label of ['agent-ready-claude', 'agent-ready-copilot-high', 'agent-ready-full-claude'])
+  for (const label of ['agent-ready-claude', 'agent-ready-claude-high', 'agent-ready-full-claude'])
     assert.equal(desiredStatus(issue({ labels: [label] })), 'Ready');
-  for (const label of ['agent-working', 'agent-architecture-fix'])
-    assert.equal(desiredStatus(issue({ labels: [label] })), 'In progress');
-  assert.equal(desiredStatus(issue({ labels: ['agent-ready-claude', 'agent-ready-copilot'] })), 'Blocked');
+  assert.equal(desiredStatus(issue({ labels: ['agent-working'] })), 'In progress');
+  // Copilot no longer implements: its retired readiness label does not make an issue agent-managed.
+  assert.equal(desiredStatus(issue({ labels: ['agent-ready-copilot'] })), null);
+  assert.equal(desiredStatus(issue({ labels: ['agent-ready-claude', 'agent-ready-full-claude'] })), 'Blocked');
   assert.equal(desiredStatus(issue({ labels: ['agent-blocked', 'agent-review'] })), 'Blocked');
 });
 test('review is exact-head and requires both validation gates', () => {

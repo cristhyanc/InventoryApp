@@ -13,7 +13,7 @@ issues and checklist epic #383 remain manual even if they acquire agent labels.
 | Live state | Project Status |
 | --- | --- |
 | One readiness label, without conflicting active labels | Ready |
-| `agent-working` or `agent-architecture-fix` | In progress |
+| `agent-working` | In progress |
 | Open agent PR, validation/review pending | In review |
 | Current-head `agent-review-verdict` failure/error | Changes requested |
 | `agent-blocked`, invalid label combination, multiple open implementation PRs, or validation failure | Blocked |
@@ -29,8 +29,7 @@ Done means implementation completed, **not production deployment**.
 
 Linked PRs must be same-repository agent branches targeting develop. The exact
 `agent/issue-N-` branch prefix also identifies Claude PRs when closing-keyword
-links are absent on a non-default base. Copilot PRs require GitHub's explicit
-closing-issue association. Human PRs are left to human planning. This display
+links are absent on a non-default base. Human PRs are left to human planning. This display
 mapping does not replace the pipeline's provider-mode verification or authorize
 any action. Label history remains the authority for starting agents.
 
@@ -83,9 +82,8 @@ Revoking the dedicated token also removes access.
 ## Triggering, races and validation
 
 Issue/PR events and completed runs of the workflows that change agent labels or
-publish agent statuses (Agent implementation, Agent Copilot implementation, Agent
-architecture, Agent Copilot architecture check, Validate pull request and Agent
-review) reconcile the board. A schedule every 15 minutes catches missed events, new
+publish agent statuses (Agent implementation, Agent architecture, Validate pull
+request and Agent review) reconcile the board. A schedule every 15 minutes catches missed events, new
 Project membership, and transitions made using GITHUB_TOKEN (which normally do not
 trigger downstream event workflows). Scheduling is best-effort, not a 15-minute
 SLA. The sync does not listen to its own completion, so it cannot loop. One
