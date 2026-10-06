@@ -14,8 +14,14 @@ namespace Inventory.Infrastructure.Data;
 /// the reporting fact providers, the sale-costing/inventory-cost-ledger stores and the
 /// site-commission store all select completed sales through one predicate rather than repeating a
 /// status comparison per query.
+///
+/// It is <c>internal</c> because every one of those callers is an Infrastructure persistence
+/// adapter. Issue #308 had to make it <c>public</c> while the sale-costing, inventory-cost-ledger
+/// and site-commission stores were still API-owned and called it across the assembly boundary;
+/// issue #309 brought them into this assembly, and issue #154 narrowed the modifier back, so an
+/// expression over the EF model cannot be taken out of the layer that can translate it.
 /// </summary>
-public static class EfNayaxSalesQueries
+internal static class EfNayaxSalesQueries
 {
     public static Expression<Func<NayaxSales, bool>> CompletedSalePredicate =>
         sale => sale.TransactionStatusId == NayaxTransactionStatusIds.Completed;
