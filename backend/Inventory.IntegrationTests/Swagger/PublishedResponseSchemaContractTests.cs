@@ -349,6 +349,28 @@ public class PublishedResponseSchemaContractTests
             document.Components.Schemas["SupplierOrder"].Properties["lines"].Items.Reference?.Id);
     }
 
+    /// <summary>
+    /// The GST classification enums issue #429 added to the purchase contract are published once
+    /// each, as integer enums carrying their persisted numeric values - the same shape
+    /// <c>SupplierOrderStatus</c> has. A client reads these numbers, so a reordered or renumbered
+    /// member is a breaking contract change, not a refactor.
+    /// </summary>
+    [Theory]
+    [InlineData("GstClassification", 3)]
+    [InlineData("GstClassificationSource", 5)]
+    public void Gst_classification_enums_are_published_with_their_persisted_values(string schemaId, int memberCount)
+    {
+        var document = ApiContractTestHost.GetSwaggerDocument();
+
+        var schema = document.Components.Schemas[schemaId];
+
+        Assert.Equal("integer", schema.Type);
+        Assert.Equal("int32", schema.Format);
+        Assert.Equal(
+            Enumerable.Range(0, memberCount).ToArray(),
+            schema.Enum.OfType<Microsoft.OpenApi.Any.OpenApiInteger>().Select(value => value.Value).ToArray());
+    }
+
     /// <summary>Schema ids a schema points at, directly or through an array item.</summary>
     private static IEnumerable<string> ReferencedSchemaIds(OpenApiSchema? schema)
     {
@@ -407,6 +429,12 @@ public class PublishedResponseSchemaContractTests
     /// The generated schemas of this pull request's base branch, captured from the real document
     /// generation. Keep these literal: they are the client-visible contract, not a restatement of
     /// whatever the current CLR types happen to produce.
+    ///
+    /// They have moved exactly once since issue #304 pinned them: issue #429 added the per-line and
+    /// per-charge GST classification keys, which that issue's acceptance criteria require the
+    /// purchase API to return. That is an additive contract change - no existing key was renamed,
+    /// reordered relative to the others, retyped or dropped - and each classification sits next to
+    /// the amount it describes. Nothing else may move these baselines without its own issue.
     /// </summary>
     private static readonly Dictionary<string, string> BaseContractSchemas = new(StringComparer.Ordinal)
     {
@@ -419,7 +447,11 @@ public class PublishedResponseSchemaContractTests
             "notes": { "type": "string", "nullable": true },
             "totalAmount": { "type": "number", "format": "double", "nullable": true },
             "deliveryCost": { "type": "number", "format": "double", "nullable": true },
+            "deliveryGstClassification": { "$ref": "#/components/schemas/GstClassification" },
+            "deliveryGstClassificationSource": { "$ref": "#/components/schemas/GstClassificationSource" },
             "packageCost": { "type": "number", "format": "double", "nullable": true },
+            "packageGstClassification": { "$ref": "#/components/schemas/GstClassification" },
+            "packageGstClassificationSource": { "$ref": "#/components/schemas/GstClassificationSource" },
             "purchaseDate": { "type": "string", "format": "date-time" },
             "supplierId": { "type": "integer", "format": "int32", "nullable": true },
             "supplier": { "$ref": "#/components/schemas/Supplier" },
@@ -447,6 +479,8 @@ public class PublishedResponseSchemaContractTests
             "product": { "$ref": "#/components/schemas/Product" },
             "quantity": { "type": "number", "format": "double" },
             "unitCost": { "type": "number", "format": "double" },
+            "gstClassification": { "$ref": "#/components/schemas/GstClassification" },
+            "gstClassificationSource": { "$ref": "#/components/schemas/GstClassificationSource" },
             "lineTotal": { "type": "number", "format": "double", "readOnly": true }
           },
           "additionalProperties": false

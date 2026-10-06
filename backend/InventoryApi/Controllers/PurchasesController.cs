@@ -1,4 +1,5 @@
 using Inventory.Application.Purchases;
+using Inventory.Domain.Gst;
 using Inventory.Domain.Purchases;
 using InventoryApi.Adapters.Mapping;
 using InventoryApi.DTOs;
@@ -71,7 +72,8 @@ public class PurchasesController : ControllerBase
         return File(file.Content, file.ContentType, file.FileName);
     }
 
-    // multipart/form-data: file + title + notes + totalAmount + deliveryCost + packageCost + purchaseDate + supplierId
+    // multipart/form-data: file + title + notes + totalAmount + deliveryCost + deliveryGstClassification
+    // + packageCost + packageGstClassification + purchaseDate + supplierId + items
     [HttpPost]
     [Consumes("multipart/form-data")]
     [RequestSizeLimit(10485760)]
@@ -81,7 +83,9 @@ public class PurchasesController : ControllerBase
         [FromForm] string? notes,
         [FromForm] decimal? totalAmount,
         [FromForm] decimal? deliveryCost,
+        [FromForm] GstClassification? deliveryGstClassification,
         [FromForm] decimal? packageCost,
+        [FromForm] GstClassification? packageGstClassification,
         [FromForm] DateTime? purchaseDate,
         [FromForm] int? supplierId,
         [FromForm] string? items)
@@ -95,7 +99,9 @@ public class PurchasesController : ControllerBase
         {
             purchase = await _uploadPurchase.Handle(
                 new PurchaseFileInput(file.FileName, file.ContentType, file.Length, file.OpenReadStream),
-                new PurchaseFields(title, notes, totalAmount, deliveryCost, packageCost, purchaseDate, supplierId),
+                new PurchaseFields(
+                    title, notes, totalAmount, deliveryCost, packageCost, purchaseDate, supplierId,
+                    deliveryGstClassification, packageGstClassification),
                 (ParseItems(items) ?? []).Select(ToItemInput).ToList(),
                 CancellationToken.None);
         }
@@ -114,7 +120,9 @@ public class PurchasesController : ControllerBase
         [FromForm] string? notes,
         [FromForm] decimal? totalAmount,
         [FromForm] decimal? deliveryCost,
+        [FromForm] GstClassification? deliveryGstClassification,
         [FromForm] decimal? packageCost,
+        [FromForm] GstClassification? packageGstClassification,
         [FromForm] DateTime? purchaseDate,
         [FromForm] int? supplierId,
         [FromForm] string? items)
@@ -124,7 +132,9 @@ public class PurchasesController : ControllerBase
         {
             purchase = await _updatePurchase.Handle(
                 id,
-                new PurchaseFields(title, notes, totalAmount, deliveryCost, packageCost, purchaseDate, supplierId),
+                new PurchaseFields(
+                    title, notes, totalAmount, deliveryCost, packageCost, purchaseDate, supplierId,
+                    deliveryGstClassification, packageGstClassification),
                 ParseItems(items)?.Select(ToItemInput).ToList(),
                 CancellationToken.None);
         }
@@ -189,5 +199,6 @@ public class PurchasesController : ControllerBase
                 PropertyNameCaseInsensitive = true
             });
 
-    private static PurchaseItemInput ToItemInput(PurchaseItemDto dto) => new(dto.ProductId, dto.Quantity, dto.UnitCost);
+    private static PurchaseItemInput ToItemInput(PurchaseItemDto dto) =>
+        new(dto.ProductId, dto.Quantity, dto.UnitCost, dto.GstClassification);
 }

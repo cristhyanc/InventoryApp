@@ -1,5 +1,6 @@
 using Inventory.Application.Documents;
 using Inventory.Application.Purchases;
+using Inventory.Domain.Gst;
 using InventoryApi.Controllers;
 using InventoryApi.DTOs;
 using InventoryApi.Tests.Application.Time;
@@ -242,7 +243,7 @@ public class PurchasesControllerTests
             .ReturnsAsync((PurchaseRecord?)null);
 
         var result = await CreateController(store.Object)
-            .Update(404, "Updated", null, null, null, null, null, null, null);
+            .Update(404, "Updated", null, null, null, null, null, null, null, null, null);
 
         Assert.IsType<NotFoundResult>(result.Result);
     }
@@ -255,7 +256,7 @@ public class PurchasesControllerTests
             .ThrowsAsync(new InvalidOperationException("One or more purchase products do not exist."));
 
         var result = await CreateController(store.Object)
-            .Update(7, "Updated", null, null, null, null, null, null, null);
+            .Update(7, "Updated", null, null, null, null, null, null, null, null, null);
 
         Assert.Equal(
             "One or more purchase products do not exist.",
@@ -279,7 +280,7 @@ public class PurchasesControllerTests
             .Callback((int _, PurchaseFields _, IReadOnlyList<PurchaseItemInput>? supplied, CancellationToken _) => captured = supplied)
             .ReturnsAsync(Record());
 
-        await CreateController(store.Object).Update(7, "Updated", null, null, null, null, null, null, items);
+        await CreateController(store.Object).Update(7, "Updated", null, null, null, null, null, null, null, null, items);
 
         Assert.NotNull(captured);
         Assert.Empty(captured);
@@ -294,7 +295,7 @@ public class PurchasesControllerTests
             .Callback((int _, PurchaseFields _, IReadOnlyList<PurchaseItemInput>? supplied, CancellationToken _) => captured.Add(supplied))
             .ReturnsAsync(Record());
 
-        await CreateController(store.Object).Update(7, "Updated", null, null, null, null, null, null, "null");
+        await CreateController(store.Object).Update(7, "Updated", null, null, null, null, null, null, null, null, "null");
 
         Assert.Null(Assert.Single(captured));
     }
@@ -337,7 +338,7 @@ public class PurchasesControllerTests
 
     private static Task<ActionResult<PurchaseResponseDto>> UploadThrough(
         PurchasesController controller, IFormFile file, string? items = null) =>
-        controller.Upload(file, "Weekly restock", null, 30m, 5m, 2m, null, 4, items);
+        controller.Upload(file, "Weekly restock", null, 30m, 5m, null, 2m, null, null, 4, items);
 
     private static IFormFile CreateFile(string fileName, byte[]? bytes = null)
     {
@@ -357,11 +358,15 @@ public class PurchasesControllerTests
         null,
         totalAmount,
         5m,
+        GstClassification.Unknown,
+        GstClassificationSource.Unknown,
         2m,
+        GstClassification.Unknown,
+        GstClassificationSource.Unknown,
         new DateTime(2026, 3, 1, 10, 0, 0, DateTimeKind.Utc),
         4,
         new PurchaseSupplierRecord(4, "Acme", null, null, null, null),
-        [new PurchaseItemRecord(11, 7, 3, 24m, 1.15m, Product: null)],
+        [new PurchaseItemRecord(11, 7, 3, 24m, 1.15m, GstClassification.Unknown, GstClassificationSource.Unknown, Product: null)],
         "scan.jpg",
         "abc-def.jpg",
         "image/jpeg",

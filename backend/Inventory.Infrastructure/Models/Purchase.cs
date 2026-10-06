@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Inventory.Domain.Gst;
 
 namespace Inventory.Infrastructure.Models;
 
@@ -21,7 +22,23 @@ public class Purchase : IBusinessOwned
     public string? Notes { get; set; }
     public decimal? TotalAmount { get; set; }
     public decimal? DeliveryCost { get; set; }
+
+    /// <summary>
+    /// The delivery charge's own GST classification and its provenance (issue #429). A
+    /// purchase-level charge never inherits a classification from the product lines. Both default
+    /// to <c>Unknown</c>, which is what the additive migration leaves on every existing row and
+    /// what an absent (null or zero) delivery charge always carries
+    /// (<c>Inventory.Domain.Purchases.PurchaseGstPolicy.ClassifyCharge</c>).
+    /// </summary>
+    public GstClassification DeliveryGstClassification { get; set; }
+    public GstClassificationSource DeliveryGstClassificationSource { get; set; }
+
     public decimal? PackageCost { get; set; }
+
+    /// <summary>The package charge's own GST classification and provenance; see <see cref="DeliveryGstClassification"/>.</summary>
+    public GstClassification PackageGstClassification { get; set; }
+    public GstClassificationSource PackageGstClassificationSource { get; set; }
+
     public DateTime PurchaseDate { get; set; } = DateTime.UtcNow;
 
     public int? SupplierId { get; set; }

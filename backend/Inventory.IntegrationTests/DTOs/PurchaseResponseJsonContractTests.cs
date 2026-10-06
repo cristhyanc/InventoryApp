@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Inventory.Application.Purchases;
+using Inventory.Domain.Gst;
 using InventoryApi.Adapters.Mapping;
 using InventoryApi.DTOs;
 using Inventory.Infrastructure.Models;
@@ -51,11 +52,18 @@ public class PurchaseResponseJsonContractTests
         "Supplier note",
         65.40m,
         5m,
+        GstClassification.Taxable,
+        GstClassificationSource.Manual,
         2m,
+        GstClassification.GstFree,
+        GstClassificationSource.SupplierFeeDefault,
         new DateTime(2026, 3, 1, 10, 0, 0, DateTimeKind.Utc),
         4,
         new PurchaseSupplierRecord(4, "Acme", "Pat", "123", "a@b.c", "1 Road"),
-        [new PurchaseItemRecord(11, 7, 3, 24m, 1.15m, ProductRecord())],
+        [
+            new PurchaseItemRecord(
+                11, 7, 3, 24m, 1.15m, GstClassification.Taxable, GstClassificationSource.Manual, ProductRecord())
+        ],
         "scan.jpg",
         "abc-def.jpg",
         "image/jpeg",
@@ -76,7 +84,11 @@ public class PurchaseResponseJsonContractTests
         Notes = record.Notes,
         TotalAmount = record.TotalAmount,
         DeliveryCost = record.DeliveryCost,
+        DeliveryGstClassification = record.DeliveryGstClassification,
+        DeliveryGstClassificationSource = record.DeliveryGstClassificationSource,
         PackageCost = record.PackageCost,
+        PackageGstClassification = record.PackageGstClassification,
+        PackageGstClassificationSource = record.PackageGstClassificationSource,
         PurchaseDate = record.PurchaseDate,
         SupplierId = record.SupplierId,
         Supplier = record.Supplier is null
@@ -97,6 +109,8 @@ public class PurchaseResponseJsonContractTests
             ProductId = item.ProductId,
             Quantity = item.Quantity,
             UnitCost = item.UnitCost,
+            GstClassification = item.GstClassification,
+            GstClassificationSource = item.GstClassificationSource,
             Product = item.Product is null
                 ? null
                 : new Product
@@ -149,7 +163,11 @@ public class PurchaseResponseJsonContractTests
         {
             SupplierId = null,
             Supplier = null,
-            Items = [new PurchaseItemRecord(11, 7, 3, 24m, 1.15m, Product: null)],
+            Items =
+            [
+                new PurchaseItemRecord(
+                    11, 7, 3, 24m, 1.15m, GstClassification.Taxable, GstClassificationSource.Manual, Product: null)
+            ],
         };
 
         var response = JsonSerializer.Serialize(PurchaseResponseMapper.ToResponse(record), WebDefaults);
@@ -170,6 +188,11 @@ public class PurchaseResponseJsonContractTests
         Assert.Contains("\"items\":[]", response, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Issue #429 added the per-line and per-charge GST classification keys. They are the only
+    /// deliberate additions to this contract: every other key keeps its name, position and value,
+    /// and each classification sits next to the amount it describes.
+    /// </summary>
     [Fact]
     public void Response_exposes_the_same_keys_in_the_same_order_the_entity_did()
     {
@@ -180,7 +203,9 @@ public class PurchaseResponseJsonContractTests
         Assert.Equal(
             new[]
             {
-                "id", "title", "notes", "totalAmount", "deliveryCost", "packageCost", "purchaseDate",
+                "id", "title", "notes", "totalAmount", "deliveryCost", "deliveryGstClassification",
+                "deliveryGstClassificationSource", "packageCost", "packageGstClassification",
+                "packageGstClassificationSource", "purchaseDate",
                 "supplierId", "supplier", "items", "fileName", "storedFileName", "contentType",
                 "fileSizeBytes", "createdAt",
             },
@@ -191,8 +216,37 @@ public class PurchaseResponseJsonContractTests
             document.RootElement.GetProperty("supplier").EnumerateObject().Select(property => property.Name));
 
         Assert.Equal(
-            new[] { "id", "receiptId", "productId", "product", "quantity", "unitCost", "lineTotal" },
+            new[]
+            {
+                "id", "receiptId", "productId", "product", "quantity", "unitCost",
+                "gstClassification", "gstClassificationSource", "lineTotal",
+            },
             document.RootElement.GetProperty("items")[0].EnumerateObject().Select(property => property.Name));
+    }
+
+    /// <summary>
+    /// The classifications travel as their persisted enum values, each next to the amount it
+    /// describes: a taxable delivery charge classified by a person, a GST-free package charge from
+    /// a supplier fee default, and a taxable line.
+    /// </summary>
+    [Fact]
+    public void Response_carries_each_components_gst_classification_and_provenance()
+    {
+        var json = JsonSerializer.Serialize(
+            PurchaseResponseMapper.ToResponse(FullyPopulatedRecord()), WebDefaults);
+
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        Assert.Equal((int)GstClassification.Taxable, root.GetProperty("deliveryGstClassification").GetInt32());
+        Assert.Equal((int)GstClassificationSource.Manual, root.GetProperty("deliveryGstClassificationSource").GetInt32());
+        Assert.Equal((int)GstClassification.GstFree, root.GetProperty("packageGstClassification").GetInt32());
+        Assert.Equal(
+            (int)GstClassificationSource.SupplierFeeDefault,
+            root.GetProperty("packageGstClassificationSource").GetInt32());
+
+        var item = root.GetProperty("items")[0];
+        Assert.Equal((int)GstClassification.Taxable, item.GetProperty("gstClassification").GetInt32());
+        Assert.Equal((int)GstClassificationSource.Manual, item.GetProperty("gstClassificationSource").GetInt32());
     }
 
     /// <summary>

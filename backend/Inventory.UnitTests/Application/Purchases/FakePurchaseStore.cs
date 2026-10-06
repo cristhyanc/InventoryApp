@@ -1,4 +1,5 @@
 using Inventory.Application.Purchases;
+using Inventory.Domain.Purchases;
 
 namespace InventoryApi.Tests.Application.Purchases;
 
@@ -57,10 +58,23 @@ public sealed class FakePurchaseStore : IPurchaseStore
         if (ThrowOnCreate) throw new InvalidOperationException("store failure");
 
         var id = _nextId++;
+        // The GST classifications are resolved by the same Domain rules the EF store uses, so a use-case
+        // test sees the states a real create would persist (issue #429).
+        var delivery = PurchaseGstPolicy.ClassifyCharge(
+            fields.DeliveryCost, PurchaseGstPolicy.Classify(fields.DeliveryGstClassification));
+        var package = PurchaseGstPolicy.ClassifyCharge(
+            fields.PackageCost, PurchaseGstPolicy.Classify(fields.PackageGstClassification));
         var record = new PurchaseRecord(
-            id, 1, fields.Title ?? string.Empty, fields.Notes, fields.TotalAmount, fields.DeliveryCost, fields.PackageCost,
+            id, 1, fields.Title ?? string.Empty, fields.Notes, fields.TotalAmount,
+            fields.DeliveryCost, delivery.Classification, delivery.Source,
+            fields.PackageCost, package.Classification, package.Source,
             fields.PurchaseDate ?? DateTime.UtcNow, fields.SupplierId, null,
-            items.Select(item => new PurchaseItemRecord(0, id, item.ProductId, item.Quantity, item.UnitCost, null)).ToList(),
+            items.Select(item =>
+            {
+                var state = PurchaseGstPolicy.Classify(item.GstClassification);
+                return new PurchaseItemRecord(
+                    0, id, item.ProductId, item.Quantity, item.UnitCost, state.Classification, state.Source, null);
+            }).ToList(),
             file.FileName, file.StoredFileName, file.ContentType, file.FileSizeBytes, DateTime.UtcNow);
         _records[id] = record;
         LastCreated = record;

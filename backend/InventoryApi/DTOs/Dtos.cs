@@ -1,6 +1,8 @@
 // Imported for StockAdjustmentDto.Reason only - the temporary compatibility exception documented on
 // that record (issue #305). No other DTO in this file names the persistence model.
 using Inventory.Infrastructure.Models;
+// The GST classification a purchase line carries is a Domain vocabulary type, not a persistence one.
+using Inventory.Domain.Gst;
 
 namespace InventoryApi.DTOs;
 
@@ -75,7 +77,17 @@ public record SupplierDto(string Name, string? ContactName, string? Phone, strin
 
 public record SupplierResponse(int Id, string Name, string? ContactName, string? Phone, string? Email, string? Address);
 
-public record PurchaseItemDto(long ProductId, decimal Quantity, decimal UnitCost);
+/// <summary>
+/// One purchase line in the JSON <c>items</c> field of a purchase create/update form (issue #429).
+/// <c>gstClassification</c> is optional: omitting it leaves a new line unclassified and an edited
+/// line's stored classification untouched. The classification's provenance is never submitted -
+/// the server records a person's explicit choice as <c>Manual</c>.
+/// </summary>
+public record PurchaseItemDto(
+    long ProductId,
+    decimal Quantity,
+    decimal UnitCost,
+    GstClassification? GstClassification = null);
 public record PurchaseCreateMetaDto(string Title, string? Notes, decimal? TotalAmount, decimal? DeliveryCost, decimal? PackageCost, DateTime? PurchaseDate, int? SupplierId, IReadOnlyList<PurchaseItemDto>? Items = null);
 
 public record PurchaseValidationDto(
