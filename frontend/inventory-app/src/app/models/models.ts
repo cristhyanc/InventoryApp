@@ -8,19 +8,6 @@ export enum StockAdjustmentReason {
 }
 
 /**
- * The GST classification vocabulary the API publishes (`Inventory.Domain.Gst.GstClassification`).
- * The numbers are the persisted values a client reads and sends, so they must not be reordered.
- *
- * `Unknown` is a real state, not a missing value: for a product or supplier rule it means "no rule
- * configured", which must stay distinct from an explicit `GstFree` rule.
- */
-export enum GstClassification {
-  Unknown = 0,
-  Taxable = 1,
-  GstFree = 2
-}
-
-/**
  * A product's configured GST rule (issue #430), from `/api/products/{id}/gst-rule`. It is rule
  * configuration only: it never reclassifies an existing purchase and never affects cost.
  */
@@ -420,6 +407,10 @@ export interface RestockCostSuggestion {
  * `Unknown` is a real persisted state, not a missing value: it contributes no input GST and stays
  * visibly unresolved. Never present it as GST-free, and never derive GST from an amount here - the
  * server returns the calculated figures (`PurchaseGstSummary`).
+ *
+ * The same vocabulary describes a product's GST rule and a supplier's GST defaults (issue #430);
+ * there `Unknown` means "no rule configured", which must stay distinct from an explicit `GstFree`
+ * rule.
  */
 export enum GstClassification {
   Unknown = 0,
