@@ -1,5 +1,7 @@
 using Inventory.Application.Tenancy;
 using Inventory.Domain.Tenancy;
+using InventoryApi.Auth.PlatformAdmin;
+using Microsoft.AspNetCore.Authorization;
 
 namespace InventoryApi.Auth;
 
@@ -15,6 +17,24 @@ namespace InventoryApi.Auth;
 /// answers it with 401, and turning that into a 403 here would hide the difference between "you
 /// are not signed in" and "you are signed in but not a member of any business". The scope simply
 /// stays denied, so even if such a request did reach persistence it would read and write nothing.
+///
+/// <para><strong>One endpoint-specific exception (issue #336).</strong> The platform diagnostics
+/// endpoints are marked with <see cref="PlatformDiagnosticsEndpointAttribute"/> and may proceed
+/// without a business membership - but only after this middleware re-evaluates
+/// <see cref="PlatformAdminPolicy"/> and it succeeds. The check is made here, on this request,
+/// rather than inferred from the fact that the authorization middleware ran earlier in the
+/// pipeline: a membership bypass that depended on middleware ordering would be one pipeline edit
+/// away from applying to a caller nobody authorised. Anything else - an unmarked endpoint, a
+/// marked endpoint reached by a caller the policy refuses - takes the ordinary membership path, and
+/// a business member therefore reaches the diagnostics endpoints no differently than they reach any
+/// other endpoint they are not authorised for: refused.</para>
+///
+/// <para>A bypassed request carries a <em>denied</em> <c>BusinessScope</c>, not an unscoped one.
+/// The tenant query filters and <c>BusinessOwnershipEnforcer</c> stay fully in force for it, so a
+/// diagnostics request reads nothing at all through <c>AppDbContext</c> and writes nothing
+/// anywhere; its cross-business read happens on the separate read-only SQLite connection the
+/// diagnostics adapter owns. "Unrestricted request-scoped context" remains something no request
+/// path can obtain.</para>
 /// </summary>
 public sealed class BusinessScopeMiddleware
 {
@@ -30,11 +50,34 @@ public sealed class BusinessScopeMiddleware
     public async Task InvokeAsync(
         HttpContext context,
         ICurrentBusinessProvider currentBusinessProvider,
-        BusinessScope businessScope)
+        BusinessScope businessScope,
+        IAuthorizationService authorizationService)
     {
         if (context.User.Identity is not { IsAuthenticated: true })
         {
             await _next(context);
+            return;
+        }
+
+        if (context.GetEndpoint()?.Metadata.GetMetadata<PlatformDiagnosticsEndpointAttribute>() is not null)
+        {
+            var platformAdmin = await authorizationService.AuthorizeAsync(
+                context.User,
+                resource: null,
+                PlatformAdminPolicy.Name);
+
+            if (platformAdmin.Succeeded)
+            {
+                // The scope stays denied on purpose; see the class remarks.
+                await _next(context);
+                return;
+            }
+
+            _logger.LogWarning(
+                "Platform diagnostics access denied by the business-scope middleware: the "
+                    + "platform-admin policy did not succeed for this request.");
+
+            await WriteForbiddenAsync(context, BusinessAccessDenialReason.MembershipMissing);
             return;
         }
 

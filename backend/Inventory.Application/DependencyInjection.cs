@@ -10,6 +10,7 @@ using Inventory.Application.Machines;
 using Inventory.Application.NayaxFeeSettings;
 using Inventory.Application.NayaxProcessingFees;
 using Inventory.Application.PickList;
+using Inventory.Application.PlatformDiagnostics;
 using Inventory.Application.Products;
 using Inventory.Application.Purchases;
 using Inventory.Application.Reorder;
@@ -130,6 +131,13 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<GetInventoryValuationSummary>();
         services.AddScoped<GetTransactionSalesReport>();
         services.AddScoped<GetReportExportRows>();
+
+        // The platform-admin diagnostics read (issue #336). The use case is registered here with
+        // every other use case; its IDiagnosticsQueryExecutor port is satisfied by
+        // AddPlatformDiagnostics() in Inventory.Infrastructure, and its IPlatformDiagnosticsAudit
+        // port by the ILogger adapter in InventoryApi, because the audit event carries the
+        // request's correlation id.
+        services.AddScoped<RunDiagnosticsQuery>();
 
         return services;
     }

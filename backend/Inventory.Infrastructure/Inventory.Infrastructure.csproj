@@ -24,6 +24,17 @@
          the `dotnet ef` tooling needs) stay in InventoryApi. -->
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.0" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.0" />
+    <!-- The platform diagnostics read path (issue #336) enforces its boundary inside SQLite
+         itself - a read-only connection, PRAGMA query_only, a zero SQLITE_LIMIT_ATTACHED and an
+         authorizer callback consulted during statement preparation - so it needs the ADO.NET
+         driver (Microsoft.Data.Sqlite.Core) and the raw API that exposes the authorizer, the
+         progress handler and sqlite3_interrupt (SQLitePCLRaw.core). This is deliberately NOT the
+         EF Core SQLite provider: choosing an EF provider and a connection string remains the
+         composition root's decision, and InventoryApi still owns
+         Microsoft.EntityFrameworkCore.Sqlite and the native SQLitePCLRaw.lib.e_sqlite3 bundle.
+         Both packages here are .Core variants, so no second native library is bundled. -->
+    <PackageReference Include="Microsoft.Data.Sqlite.Core" Version="10.0.0" />
+    <PackageReference Include="SQLitePCLRaw.core" Version="2.1.11" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.3" />
     <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.0" />
     <PackageReference Include="Polly.Core" Version="8.6.4" />
