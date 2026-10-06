@@ -53,7 +53,7 @@
           <tbody>
             @for (p of products; track p.id) {
               <tr class="table-row">
-                <td class="table-cell"><input type="checkbox" [checked]="selectedProductIds.has(p.id)" (change)="toggleSelection(p.id, $any($event.target).checked)" /></td>
+                <td class="table-cell"><input type="checkbox" [attr.aria-label]="'Select ' + p.name" [checked]="selectedProductIds.has(p.id)" (change)="toggleSelection(p.id, $any($event.target).checked)" /></td>
                 <td class="table-cell">{{ p.name }}</td>
                 <td class="table-cell">{{ p.category?.name }}</td>
                 <td class="table-cell">{{ p.supplier?.name }}</td>
@@ -136,7 +136,7 @@
                 <td class="table-cell">{{ product.name }}</td>
                 <td class="table-cell table-num">{{ product.quantityInStock }}</td>
                 <td class="table-cell table-num">{{ product.onOrderQuantity }}</td>
-                <td class="table-cell table-num"><input class="max-w-24" type="number" min="1" step="1" [name]="'quantity-' + product.id" [(ngModel)]="orderQuantities[product.id]" /></td>
+                <td class="table-cell table-num"><input class="max-w-24" type="number" min="1" step="1" [name]="'quantity-' + product.id" [attr.aria-label]="'Order quantity for ' + product.name" [(ngModel)]="orderQuantities[product.id]" /></td>
               </tr>
             }
           </tbody>
