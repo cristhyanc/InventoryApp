@@ -1801,7 +1801,12 @@ The frontend has one shared visual language, recreated from Material Dashboard 3
 - `frontend/inventory-app/tailwind.config.js` — the design tokens, and the only place a colour, gradient, shadow, radius or type size is defined;
 - `frontend/inventory-app/src/styles.scss` — the shared component classes, built from those tokens with `@apply`.
 
-`frontend/inventory-app/src/app/design-system/` holds the non-routed `DesignSystemShowcaseComponent` fixture, which renders every shared class in one place. Use it as the reference rendering and as the screenshot target when the visual language changes. It is deliberately absent from `app.routes.ts` and from the sidebar.
+`frontend/inventory-app/src/app/design-system/` holds two rendering fixtures, both neutral sample content and neither linked from the sidebar:
+
+- `DesignSystemShowcaseComponent` renders every shared class in one place. It is the reference rendering when the visual language changes, and it is what puts the shared classes into the generated `styles.css`. It is deliberately absent from `app.routes.ts` entirely.
+- `WidgetGalleryComponent` (issue #411) renders the shared widgets and the whole bundled icon set so the series' required screenshots can be taken from the real components inside the real shell. It reaches the router through `designSystemRoutes` in `design-system.routes.ts`, which returns **an empty route list in every optimized build** and the single `__design-system/widgets` path only on the unoptimized dev and `e2e` servers; `design-system.routes.spec.ts` asserts both branches. It calls no API and holds no business logic.
+
+**Visual evidence.** `frontend/inventory-app/e2e/playwright.visual.config.ts` plus `e2e/visual/` screenshot that fixture at 1440px and 390px — the confirmation dialog, the loading indicator, each toast variant, the open multi-select dropdown and the icon strip — and write the PNGs to the version-controlled `docs/screenshots/issue-411/`. The run starts the Angular dev server alone: no API, no database, no external service. Regenerate it with `npm run e2e:install` (once) then `npm run e2e:visual` from `frontend/inventory-app`. It is a human-invoked evidence run, not part of `scripts/validate.sh`, because it needs a browser download that normal validation deliberately avoids.
 
 **Colour tokens.** Gradients are `linear-gradient(195deg, from, to)` and are exposed as `backgroundImage` entries (`bg-md-dark-gradient`, `bg-md-danger-button-gradient`, and one per status).
 
@@ -1845,7 +1850,7 @@ Shadows are `shadow-md-card` (cards, which also carry a `1px solid md-gray-200` 
 
 **Bundled font.** Inter (weights 400/500/600/700) is self-hosted through the `@fontsource/inter` npm package and loaded from the `styles` array in `angular.json`; the Angular build copies the font files into the output. The token stack is `Inter` followed by the previous system fallback `'Segoe UI', Roboto, Helvetica, Arial, sans-serif`. Do not add a Google Fonts, Font Awesome kit or other CDN request for a font or icon set.
 
-**Third-party notices.** `THIRD-PARTY-NOTICES.md` at the repository root records the Material Dashboard MIT notice (the look was recreated, not copied — no Material Dashboard CSS, JavaScript or asset is bundled, and Bootstrap is not a dependency), the SIL OFL notice for Inter, and the Apache-2.0 notice for the bundled Material Symbols Rounded icon paths (see below). Add an entry there whenever a change bundles third-party code or assets, or recreates a third-party design.
+**Third-party notices.** `THIRD-PARTY-NOTICES.md` at the repository root records the Material Dashboard MIT notice (the look was recreated, not copied — no Material Dashboard CSS, JavaScript or asset is bundled, and Bootstrap is not a dependency), the SIL OFL notice for Inter, and the Apache-2.0 notice for the bundled Material Icons Rounded icon paths (see below). Add an entry there whenever a change bundles third-party code or assets, or recreates a third-party design.
 
 #### Icon component (issue #411)
 
@@ -1853,10 +1858,10 @@ Shadows are `shadow-md-card` (cards, which also carry a `1px solid md-gray-200` 
 `app-icon` component for rendering a glyph, backed by the inline SVG path lookup in the
 co-located `icon-paths.ts`. Later #409 sub-issues wire it into restyled pages and widgets.
 
-- **Adding an icon.** Add a `name → d` entry to the `ICON_PATHS` map in `icon-paths.ts`, reproduced from Google's Material Symbols Rounded icon set (`currentColor` fill, `viewBox="0 0 24 24"`). Reference it from a template as `<app-icon name="...">`; an unmapped `name` renders nothing and never throws, so a typo fails silently rather than breaking the page.
+- **Adding an icon.** Add a `name → d` entry to the `ICON_PATHS` map in `icon-paths.ts`, **copied verbatim** from the matching `round/<name>.svg` of Google's official Material Icons Rounded set (`currentColor` fill, `viewBox="0 0 24 24"`). Never reconstruct, approximate or hand-tune a path from memory: the first implementation did, and shipped square-cornered baseline glyphs under a Rounded label. Google's newer Material Symbols Rounded set draws the same style on a `0 -960 960 960` canvas and is not interchangeable with this one. `icon-paths.spec.ts` guards the map — it fails if a path leaves the 24px canvas, if a glyph loses its rounded curve commands, or if the `add`/`delete` paths drift from their pinned upstream strings. Reference an icon from a template as `<app-icon name="...">`; an unmapped `name` renders nothing and never throws, so a typo fails silently rather than breaking the page.
 - **Inputs.** `name` (required) selects the glyph; `size` (default `24`, pixels) sets the SVG's width and height; the optional `label` controls the accessibility mode below.
 - **Decorative vs labelled accessibility.** Without `label`, the icon is decorative: the SVG has `aria-hidden="true"` and no `role` or accessible name — use this whenever adjacent visible text already carries the meaning (an icon tile, a labelled button). With `label` set, `aria-hidden` is removed (never set to `"false"`), the SVG gets `role="img"` and an accessible name equal to `label` — use this for an icon that is the only content of its control (for example an icon-only button). Either way the SVG is never focusable.
-- **Licence.** The bundled `d` path data is reproduced from Google's Material Symbols Rounded icon set (Apache License 2.0); see `THIRD-PARTY-NOTICES.md`. No icon font, icon-font stylesheet, CDN script or Font Awesome kit is added.
+- **Licence.** The bundled `d` path data is copied from Google's Material Icons Rounded set (Apache License 2.0), obtained from the generated `@material-design-icons/svg` distribution of the official `google/material-design-icons` repository; see `THIRD-PARTY-NOTICES.md`. That package is not a dependency — nothing but the path strings enters the repository. No icon font, icon-font stylesheet, CDN script or Font Awesome kit is added.
 
 ## Domain model and financial boundaries
 

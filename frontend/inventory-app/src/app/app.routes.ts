@@ -1,6 +1,7 @@
 import { Routes } from '@angular/router';
 import { MsalGuard } from '@azure/msal-angular';
 import { AuthCallbackComponent } from './auth/auth-callback.component';
+import { designSystemRoutes } from './design-system/design-system.routes';
 
 export const routes: Routes = [
   // Public: the Entra redirect callback must be reachable without authentication.
@@ -205,5 +206,8 @@ export const routes: Routes = [
     canActivate: [MsalGuard],
     loadComponent: () => import('./components/expenses/operating-expense.component').then((m) => m.OperatingExpenseComponent)
   },
+  // Empty in every optimized build; the unoptimized dev/e2e servers add the #411 screenshot
+  // fixture. Must stay above the wildcard, which would otherwise swallow it.
+  ...designSystemRoutes,
   { path: '**', redirectTo: '' }
 ];

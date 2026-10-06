@@ -2,7 +2,7 @@ import { Component, Input } from '@angular/core';
 import { ICON_PATHS } from './icon-paths';
 
 /**
- * Renders one inline SVG icon from the bundled Material Symbols Rounded path set (issue #411,
+ * Renders one inline SVG icon from the bundled Material Icons Rounded path set (issue #411,
  * licence in `THIRD-PARTY-NOTICES.md`). An unknown `name` renders nothing and never throws, so a
  * typo or a not-yet-added icon fails silently rather than breaking the page.
  *

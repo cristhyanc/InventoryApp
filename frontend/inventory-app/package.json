@@ -12,7 +12,8 @@
     "start:e2e": "npm run build:styles && ng serve --configuration e2e",
     "e2e:install": "npm --prefix e2e ci && npm --prefix e2e run browsers",
     "e2e": "npm --prefix e2e run test",
-    "e2e:headed": "npm --prefix e2e run test:headed"
+    "e2e:headed": "npm --prefix e2e run test:headed",
+    "e2e:visual": "npm --prefix e2e run visual"
   },
   "private": true,
   "dependencies": {

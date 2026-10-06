@@ -7,7 +7,8 @@
     "browsers": "playwright install chromium",
     "browsers:with-deps": "playwright install --with-deps chromium",
     "test": "playwright test",
-    "test:headed": "playwright test --headed"
+    "test:headed": "playwright test --headed",
+    "visual": "playwright test --config playwright.visual.config.ts"
   },
   "devDependencies": {
     "@playwright/test": "1.63.0",
