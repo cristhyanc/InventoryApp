@@ -57,8 +57,8 @@ public sealed class EfHistoricalGstClassificationStore : IHistoricalGstClassific
                 purchase.PackageGstClassification,
                 purchase.PackageGstClassificationSource,
                 SupplierProductLines = (GstClassification?)purchase.Supplier!.ProductLineGstDefault,
-                SupplierDelivery = (GstClassification?)purchase.Supplier!.DeliveryGstDefault,
-                SupplierPackage = (GstClassification?)purchase.Supplier!.PackageGstDefault,
+                SupplierDelivery = (GstClassification?)purchase.Supplier.DeliveryGstDefault,
+                SupplierPackage = (GstClassification?)purchase.Supplier.PackageGstDefault,
                 Lines = purchase.Items
                     .Select(item => new
                     {
