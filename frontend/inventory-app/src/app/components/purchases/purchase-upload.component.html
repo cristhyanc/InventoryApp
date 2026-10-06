@@ -121,7 +121,7 @@
                   <select data-testid="purchase-item-product" [(ngModel)]="item.productId" [name]="'product' + $index"><option [ngValue]="0">Select product</option>@for (p of products; track p.id) {<option [ngValue]="p.id">{{ p.name }}</option>}</select>
                   <input data-testid="purchase-item-quantity" type="number" min="1" step="1" [(ngModel)]="item.quantity" [name]="'quantity' + $index" placeholder="Quantity" />
                   <div>
-                    <input data-testid="purchase-item-cost" type="number" min="0" step="0.0001" [(ngModel)]="item.unitCost" [name]="'unitCost' + $index" placeholder="Unit cost" [class.border-md-danger]="item.unitCost === null || item.unitCost === undefined" />
+                    <input data-testid="purchase-item-cost" type="number" min="0" step="0.0001" [(ngModel)]="item.unitCost" [name]="'unitCost' + $index" placeholder="Unit cost" [class.border-md-danger]="item.unitCost === null || item.unitCost === undefined" [attr.aria-label]="'Unit cost for item ' + ($index + 1)" />
                     <div class="field-hint">{{ lineTotal(item) | currency }}</div>
                     @if (item.unitCost === null || item.unitCost === undefined) {
                       <div class="field-error">Cost required</div>

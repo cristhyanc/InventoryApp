@@ -182,7 +182,7 @@
                                 <select data-testid="edit-purchase-item-product" [(ngModel)]="item.productId" [name]="'editProduct' + $index"><option [ngValue]="0">Select product</option>@for (p of products; track p.id) {<option [ngValue]="p.id">{{ p.name }}</option>}</select>
                               }
                               <input data-testid="edit-purchase-item-quantity" type="number" min="1" step="1" [(ngModel)]="item.quantity" [name]="'editQuantity' + $index" />
-                              <div><input data-testid="edit-purchase-item-cost" type="number" min="0" step="0.0001" [(ngModel)]="item.unitCost" [name]="'editCost' + $index" /><div class="field-hint">{{ editLineTotal(item) | currency }}</div></div>
+                              <div><input data-testid="edit-purchase-item-cost" type="number" min="0" step="0.0001" [(ngModel)]="item.unitCost" [name]="'editCost' + $index" [attr.aria-label]="'Unit cost for item ' + ($index + 1)" /><div class="field-hint">{{ editLineTotal(item) | currency }}</div></div>
                               <div>
                                 <select data-testid="edit-purchase-item-gst" [(ngModel)]="item.gstClassification" [name]="'editGstClassification' + $index" [attr.aria-label]="'GST classification for item ' + ($index + 1)">
                                   @for (option of gstOptions; track option.value) {
