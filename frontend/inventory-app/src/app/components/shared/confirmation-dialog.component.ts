@@ -7,9 +7,9 @@ import { CommonModule } from '@angular/common';
   imports: [CommonModule],
   template: `
     <div class="modal-backdrop" (click)="cancelChoice()">
-      <div class="confirm-modal" (click)="$event.stopPropagation()">
-        <h2>{{ title }}</h2>
-        <p>{{ message }}</p>
+      <div class="confirm-modal rounded-md-dialog bg-white p-6 text-left shadow-md-lg" (click)="$event.stopPropagation()">
+        <h2 class="mb-3 text-md-card-title font-semibold text-md-gray-800">{{ title }}</h2>
+        <p class="mb-5 text-md-body text-md-gray-600">{{ message }}</p>
         <div class="confirm-actions">
           <button class="btn btn-secondary btn-sm" type="button" (click)="cancelChoice()">{{ cancelLabel }}</button>
           <button class="btn btn-danger btn-sm" type="button" (click)="confirmChoice()">{{ confirmLabel }}</button>
@@ -31,24 +31,8 @@ import { CommonModule } from '@angular/common';
       }
 
       .confirm-modal {
-        background: #fff;
-        border-radius: 12px;
-        padding: 1.5rem;
         max-width: 420px;
         width: 100%;
-        box-shadow: 0 18px 60px rgba(15, 23, 42, 0.18);
-        text-align: left;
-      }
-
-      .confirm-modal h2 {
-        margin-top: 0;
-        margin-bottom: 0.75rem;
-        font-size: 1.15rem;
-      }
-
-      .confirm-modal p {
-        margin-bottom: 1.25rem;
-        color: #374151;
       }
 
       .confirm-actions {

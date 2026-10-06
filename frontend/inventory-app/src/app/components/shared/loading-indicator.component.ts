@@ -7,7 +7,12 @@ import { LoadingService } from '../../services/loading.service';
   standalone: true,
   imports: [NgIf, AsyncPipe],
   template: `
-    <div class="loading-bar" role="status" aria-live="polite" *ngIf="loadingService.loading$ | async">
+    <div
+      class="loading-bar rounded-full bg-md-dark-gradient px-4 py-2 text-md-body text-white shadow-md"
+      role="status"
+      aria-live="polite"
+      *ngIf="loadingService.loading$ | async"
+    >
       <span class="spinner" aria-hidden="true"></span>
       <span>Loading...</span>
     </div>
@@ -22,12 +27,6 @@ import { LoadingService } from '../../services/loading.service';
         display: flex;
         align-items: center;
         gap: 0.6rem;
-        background: #1e293b;
-        color: #fff;
-        padding: 0.5rem 1rem;
-        border-radius: 9999px;
-        box-shadow: 0 14px 40px rgba(15, 23, 42, 0.25);
-        font-size: 0.85rem;
         z-index: 200;
       }
 

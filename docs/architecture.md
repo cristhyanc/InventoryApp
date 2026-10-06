@@ -1828,7 +1828,18 @@ Shadows are `shadow-md-card` (cards, which also carry a `1px solid md-gray-200` 
 
 **Bundled font.** Inter (weights 400/500/600/700) is self-hosted through the `@fontsource/inter` npm package and loaded from the `styles` array in `angular.json`; the Angular build copies the font files into the output. The token stack is `Inter` followed by the previous system fallback `'Segoe UI', Roboto, Helvetica, Arial, sans-serif`. Do not add a Google Fonts, Font Awesome kit or other CDN request for a font or icon set.
 
-**Third-party notices.** `THIRD-PARTY-NOTICES.md` at the repository root records the Material Dashboard MIT notice (the look was recreated, not copied — no Material Dashboard CSS, JavaScript or asset is bundled, and Bootstrap is not a dependency) and the SIL OFL notice for Inter. Add an entry there whenever a change bundles third-party code or assets, or recreates a third-party design.
+**Third-party notices.** `THIRD-PARTY-NOTICES.md` at the repository root records the Material Dashboard MIT notice (the look was recreated, not copied — no Material Dashboard CSS, JavaScript or asset is bundled, and Bootstrap is not a dependency), the SIL OFL notice for Inter, and the Apache-2.0 notice for the bundled Material Symbols Rounded icon paths (see below). Add an entry there whenever a change bundles third-party code or assets, or recreates a third-party design.
+
+#### Icon component (issue #411)
+
+`frontend/inventory-app/src/app/components/shared/icon.component.ts` is the one standalone
+`app-icon` component for rendering a glyph, backed by the inline SVG path lookup in the
+co-located `icon-paths.ts`. Later #409 sub-issues wire it into restyled pages and widgets.
+
+- **Adding an icon.** Add a `name → d` entry to the `ICON_PATHS` map in `icon-paths.ts`, reproduced from Google's Material Symbols Rounded icon set (`currentColor` fill, `viewBox="0 0 24 24"`). Reference it from a template as `<app-icon name="...">`; an unmapped `name` renders nothing and never throws, so a typo fails silently rather than breaking the page.
+- **Inputs.** `name` (required) selects the glyph; `size` (default `24`, pixels) sets the SVG's width and height; the optional `label` controls the accessibility mode below.
+- **Decorative vs labelled accessibility.** Without `label`, the icon is decorative: the SVG has `aria-hidden="true"` and no `role` or accessible name — use this whenever adjacent visible text already carries the meaning (an icon tile, a labelled button). With `label` set, `aria-hidden` is removed (never set to `"false"`), the SVG gets `role="img"` and an accessible name equal to `label` — use this for an icon that is the only content of its control (for example an icon-only button). Either way the SVG is never focusable.
+- **Licence.** The bundled `d` path data is reproduced from Google's Material Symbols Rounded icon set (Apache License 2.0); see `THIRD-PARTY-NOTICES.md`. No icon font, icon-font stylesheet, CDN script or Font Awesome kit is added.
 
 ## Domain model and financial boundaries
 
