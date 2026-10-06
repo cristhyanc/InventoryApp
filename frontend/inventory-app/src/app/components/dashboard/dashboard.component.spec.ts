@@ -162,7 +162,7 @@ describe('DashboardComponent reorder alerts - stock after machine need', () => {
     const p = product({ quantityInStock: 46, machineReplenishmentNeed: 16 });
 
     expect(component.stockAfterMachineNeed(p)).toBe(30);
-    expect(component.stockAfterMachineNeedClass(p)).not.toContain('text-red');
+    expect(component.stockAfterMachineNeedClass(p)).not.toContain('value-negative');
   });
 
   it('is zero when stock exactly covers machine need', () => {
@@ -170,15 +170,15 @@ describe('DashboardComponent reorder alerts - stock after machine need', () => {
     const p = product({ quantityInStock: 16, machineReplenishmentNeed: 16 });
 
     expect(component.stockAfterMachineNeed(p)).toBe(0);
-    expect(component.stockAfterMachineNeedClass(p)).not.toContain('text-red');
+    expect(component.stockAfterMachineNeedClass(p)).not.toContain('value-negative');
   });
 
-  it('keeps the signed negative value and flags it red when machine need exceeds stock', () => {
+  it('keeps the signed negative value and flags it with the negative value class when machine need exceeds stock', () => {
     const component = createComponent(of(SUMMARY));
     const p = product({ quantityInStock: 10, machineReplenishmentNeed: 16 });
 
     expect(component.stockAfterMachineNeed(p)).toBe(-6);
-    expect(component.stockAfterMachineNeedClass(p)).toContain('text-red');
+    expect(component.stockAfterMachineNeedClass(p)).toContain('value-negative');
   });
 });
 
@@ -220,12 +220,12 @@ describe('DashboardComponent reorder alerts table rendering', () => {
     expect(stockAfterIndex).toBeLessThan(needToOrderIndex);
   });
 
-  it('renders a negative Stock after machine need in red', async () => {
+  it('renders a negative Stock after machine need with the negative value class', async () => {
     const host = await renderTable([product({ quantityInStock: 10, machineReplenishmentNeed: 16 })]);
 
     const cell = Array.from(host.querySelectorAll('td')).find((td) => td.textContent?.trim() === '-6');
     expect(cell).toBeDefined();
-    expect(cell?.className).toContain('text-red');
+    expect(cell?.className).toContain('value-negative');
   });
 });
 
