@@ -61,13 +61,22 @@ public sealed class RunDiagnosticsQuery
             // must still be audited before the cancellation propagates.
             stopwatch.Stop();
             Audited(
-                new DiagnosticsQueryExecution(
-                    DiagnosticsQueryOutcome.Cancelled,
-                    DiagnosticsQueryDenialReason.None,
-                    "The request was cancelled.",
-                    [],
-                    [],
-                    null),
+                Unreturned(DiagnosticsQueryOutcome.Cancelled, "The request was cancelled."),
+                stopwatch,
+                fingerprint);
+            throw;
+        }
+        catch (Exception)
+        {
+            // Anything else the adapter throws instead of reporting - a provider error, a native
+            // SQLite handle that could not be acquired, a failure while reading - is still a
+            // diagnostics read that was attempted on a cross-business connection. The event is
+            // recorded as a failure before the exception continues to the API's error handling,
+            // because "one structured audit event per query" has to hold for the queries that go
+            // wrong unexpectedly, not only for the ones the adapter had an answer for.
+            stopwatch.Stop();
+            Audited(
+                Unreturned(DiagnosticsQueryOutcome.Failed, "The diagnostics query failed unexpectedly."),
                 stopwatch,
                 fingerprint);
             throw;
@@ -76,6 +85,13 @@ public sealed class RunDiagnosticsQuery
         stopwatch.Stop();
         return Audited(execution, stopwatch, fingerprint);
     }
+
+    /// <summary>
+    /// The execution the adapter never got to report, built so the audit path is the same one every
+    /// returned outcome takes. It carries no columns and no rows because nothing was read.
+    /// </summary>
+    private static DiagnosticsQueryExecution Unreturned(DiagnosticsQueryOutcome outcome, string message) =>
+        new(outcome, DiagnosticsQueryDenialReason.None, message, [], [], null);
 
     private DiagnosticsQueryResult Audited(
         DiagnosticsQueryExecution execution,

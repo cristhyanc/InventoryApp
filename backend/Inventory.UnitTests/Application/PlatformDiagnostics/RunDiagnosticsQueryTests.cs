@@ -173,6 +173,40 @@ public class RunDiagnosticsQueryTests
     }
 
     /// <summary>
+    /// An adapter failure the adapter did not turn into a result - a provider error, or the SQLite
+    /// native handle being unavailable, both of which surface as an exception rather than a
+    /// <see cref="DiagnosticsQueryExecution"/> - is still a cross-business diagnostics read that
+    /// was attempted. "One structured audit event per query, including failure status" has to hold
+    /// for it too, so the event is recorded as <c>Failed</c> before the exception propagates.
+    /// </summary>
+    [Theory]
+    [InlineData(typeof(InvalidOperationException))]
+    [InlineData(typeof(TimeoutException))]
+    public async Task An_unexpected_executor_failure_is_audited_before_it_propagates(Type exceptionType)
+    {
+        var audit = new RecordingAudit();
+        var thrown = (Exception)Activator.CreateInstance(exceptionType)!;
+        var executor = FakeExecutor.Throwing(thrown);
+
+        var escaped = await Assert.ThrowsAnyAsync<Exception>(
+            () => Build(executor, audit).Handle("SELECT Id FROM Products", CancellationToken.None));
+
+        // The exception is propagated unchanged: the use case audits, it does not swallow or
+        // translate a failure it cannot explain.
+        Assert.Same(thrown, escaped);
+
+        var entry = Assert.Single(audit.Entries);
+        Assert.Equal(DiagnosticsQueryOutcome.Failed, entry.Outcome);
+        Assert.Equal(DiagnosticsQueryDenialReason.None, entry.DenialReason);
+        Assert.Equal(0, entry.RowCount);
+        Assert.Equal(PlatformAdmin.DirectoryTenantId, entry.ActorDirectoryTenantId);
+        Assert.Equal(PlatformAdmin.ObjectId, entry.ActorObjectId);
+        Assert.Equal(
+            DiagnosticsSqlShape.Fingerprint("SELECT Id FROM Products"),
+            entry.QueryFingerprint);
+    }
+
+    /// <summary>
     /// The use case does not authorise, so it must not be the thing that notices an unidentifiable
     /// caller - the policy already refused one. What it must not do is skip the audit event.
     /// </summary>

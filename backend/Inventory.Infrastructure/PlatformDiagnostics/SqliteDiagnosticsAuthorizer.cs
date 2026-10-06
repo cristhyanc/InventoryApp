@@ -44,14 +44,6 @@ internal sealed class SqliteDiagnosticsAuthorizer
     private const string RowIdPrimaryKeyColumnName = "Id";
 
     /// <summary>
-    /// The explicit spellings a statement can use for that same rowid. SQLite may report a rowid
-    /// read either with no column name at all or under one of these names, depending on the plan,
-    /// so both forms are handled identically.
-    /// </summary>
-    private static readonly HashSet<string> RowIdColumnNames =
-        new(StringComparer.OrdinalIgnoreCase) { "rowid", "oid", "_rowid_" };
-
-    /// <summary>
     /// The SQL functions a diagnostics query may call: counting and aggregating rows, comparing
     /// them, and handling nulls. That is what an orphan or cross-business ownership investigation
     /// over seven tables of identity and foreign-key columns needs.
@@ -150,17 +142,27 @@ internal sealed class SqliteDiagnosticsAuthorizer
                 schemaAccess: true);
         }
 
-        // SQLite reports a read with no column name when the plan touches the table through its
-        // rowid rather than through a named column - a count, an existence test, or a select list
-        // that asks only for the INTEGER PRIMARY KEY, since on this schema that column *is* the
-        // rowid. It reports no schema name for these either, which is why the schema check below
-        // comes after this branch rather than before it.
+        // SQLite reports a read with no column name when the plan touches the table without
+        // naming a column at all - an existence test or a bare row count. It reports no schema
+        // name for these either, which is why the schema check below comes after this branch
+        // rather than before it.
         //
         // What such a read can yield is the row's rowid, so it is permitted only when the table's
         // Id column is itself on the surface. That keeps the branch honest if a future allow-list
         // entry ever lists a table without its Id: a bare table reference must not become a way to
         // read a key the surface withheld.
-        if (string.IsNullOrEmpty(column) || RowIdColumnNames.Contains(column))
+        //
+        // The explicit spellings "rowid", "oid" and "_rowid_" are deliberately *not* treated as
+        // this case. SQLite resolves them against the table's declared columns first: they mean the
+        // internal row id only while no real column carries that name, and the moment a migration
+        // adds one (ALTER TABLE Products ADD COLUMN oid TEXT) the same spelling becomes that
+        // column. Permitting the names would therefore hand out a future unlisted column, which is
+        // exactly what "a new column is denied until a reviewed allow-list change" forbids. Nothing
+        // legitimate is lost: when a rowid reference does resolve to the internal row id, SQLite
+        // reports it to this callback under the name of the table's INTEGER PRIMARY KEY - "Id" on
+        // every table of this surface - so "SELECT rowid FROM Products" arrives here as
+        // "Products.Id" and is allowed on its own merits.
+        if (string.IsNullOrEmpty(column))
         {
             return PlatformDiagnosticsDataSurface.Permits(table, RowIdPrimaryKeyColumnName)
                 ? raw.SQLITE_OK

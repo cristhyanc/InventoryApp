@@ -123,14 +123,20 @@ public sealed class SqliteDiagnosticsQueryExecutorTests : IDisposable
     }
 
     /// <summary>
-    /// <c>rowid</c> is the same integer as <c>Id</c> on these tables, because <c>Id</c> is their
-    /// <c>INTEGER PRIMARY KEY</c>. Permitting the spelling exposes no value the surface does not
-    /// already expose, and denying it would refuse an ordinary row count.
+    /// A rowid reference that really is the internal row id is the same integer as <c>Id</c> on
+    /// these tables, because <c>Id</c> is their <c>INTEGER PRIMARY KEY</c> - and SQLite reports it
+    /// to the authorizer under that column's name, which is why all three spellings read as
+    /// <c>Products.Id</c> and are allowed on the surface's own terms. No spelling is permitted by
+    /// name; see
+    /// <see cref="A_column_that_shadows_a_rowid_spelling_is_refused_like_any_other_new_column"/>.
     /// </summary>
-    [Fact]
-    public async Task The_rowid_spellings_of_a_permitted_integer_key_are_the_same_value_as_Id()
+    [Theory]
+    [InlineData("rowid")]
+    [InlineData("oid")]
+    [InlineData("_rowid_")]
+    public async Task The_rowid_spellings_of_a_permitted_integer_key_are_the_same_value_as_Id(string spelling)
     {
-        var result = await ExecuteAsync("SELECT rowid, Id FROM Products ORDER BY Id");
+        var result = await ExecuteAsync($"SELECT {spelling}, Id FROM Products ORDER BY Id");
 
         AssertSucceeded(result);
         Assert.All(result.Rows, row => Assert.Equal(row[0], row[1]));
@@ -208,13 +214,7 @@ public sealed class SqliteDiagnosticsQueryExecutorTests : IDisposable
     [Fact]
     public async Task A_column_added_to_a_permitted_table_after_the_fact_stays_inaccessible()
     {
-        await using (var writable = new SqliteConnection(_connectionString))
-        {
-            await writable.OpenAsync();
-            await using var command = writable.CreateCommand();
-            command.CommandText = "ALTER TABLE Products ADD COLUMN DiagnosticsProbe TEXT";
-            await command.ExecuteNonQueryAsync();
-        }
+        await AlterSchemaAsync("ALTER TABLE Products ADD COLUMN DiagnosticsProbe TEXT");
 
         var refused = await ExecuteAsync("SELECT DiagnosticsProbe FROM Products");
         var stillWorks = await ExecuteAsync("SELECT Id FROM Products");
@@ -222,6 +222,35 @@ public sealed class SqliteDiagnosticsQueryExecutorTests : IDisposable
         Assert.Equal(DiagnosticsQueryOutcome.Rejected, refused.Outcome);
         Assert.Equal(DiagnosticsQueryDenialReason.ForbiddenSchemaAccess, refused.DenialReason);
         Assert.Contains("DiagnosticsProbe", refused.Message, StringComparison.Ordinal);
+        AssertSucceeded(stillWorks);
+    }
+
+    /// <summary>
+    /// The same fail-closed guarantee for the three names that are not ordinary column names.
+    /// SQLite treats <c>rowid</c>, <c>oid</c> and <c>_rowid_</c> as the internal row identifier
+    /// only while no declared column carries that name; the moment a migration adds one, the same
+    /// spelling means that column instead. An authorizer that permitted the names rather than the
+    /// resolved access would therefore hand out a brand-new unlisted column - a real, reachable
+    /// hole, because <c>ALTER TABLE Products ADD COLUMN oid TEXT</c> is an ordinary migration. Each
+    /// name is added exactly as a migration would add it and must then be refused like any other
+    /// new column.
+    /// </summary>
+    [Theory]
+    [InlineData("rowid")]
+    [InlineData("oid")]
+    [InlineData("_rowid_")]
+    public async Task A_column_that_shadows_a_rowid_spelling_is_refused_like_any_other_new_column(
+        string columnName)
+    {
+        await AlterSchemaAsync($"ALTER TABLE Products ADD COLUMN {columnName} TEXT");
+
+        var refused = await ExecuteAsync($"SELECT {columnName} FROM Products");
+        var stillWorks = await ExecuteAsync("SELECT Id, BusinessId FROM Products");
+
+        Assert.Equal(DiagnosticsQueryOutcome.Rejected, refused.Outcome);
+        Assert.Equal(DiagnosticsQueryDenialReason.ForbiddenSchemaAccess, refused.DenialReason);
+        Assert.Contains(columnName, refused.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(refused.Rows);
         AssertSucceeded(stillWorks);
     }
 
@@ -490,6 +519,19 @@ public sealed class SqliteDiagnosticsQueryExecutorTests : IDisposable
         counts.Add($"productColumns={await ScalarAsync("SELECT count(*) FROM pragma_table_info('Products')")}");
 
         return string.Join(", ", counts);
+    }
+
+    /// <summary>
+    /// Changes the schema on a separate writable connection, the way a migration would, so a test
+    /// can prove the enforcement reacts to a schema it was not written against.
+    /// </summary>
+    private async Task AlterSchemaAsync(string sql)
+    {
+        await using var writable = new SqliteConnection(_connectionString);
+        await writable.OpenAsync();
+        await using var command = writable.CreateCommand();
+        command.CommandText = sql;
+        await command.ExecuteNonQueryAsync();
     }
 
     private async Task<long> ScalarAsync(string sql)
