@@ -1,79 +1,87 @@
-<div class="mb-6">
-  <h1 class="text-2xl font-semibold text-slate-800">Take Inventory</h1>
-  <p class="text-sm text-slate-500">
-    Count physical storage stock. Click Current Stock to confirm an unchanged count, or enter Counted Stock and Apply to
-    record the difference.
-  </p>
-</div>
-
-<div class="rounded-xl bg-white p-6 shadow-sm">
-  @if (loadState.loadFailed) {
-    <p class="text-sm text-red-600">Failed to load products.</p>
-  } @else if (!loadState.loaded) {
-    <p class="text-sm text-slate-500">Loading products&hellip;</p>
-  } @else if (rows.length === 0) {
-    <p class="text-sm text-slate-500">No products to count.</p>
-  } @else {
-    <div data-testid="take-inventory-table-scroll" class="max-h-[70vh] overflow-auto">
-      <table class="min-w-full divide-y divide-slate-200 text-sm">
-        <thead class="bg-slate-50">
-          <tr>
-            <th class="sticky top-0 z-10 bg-slate-50 px-4 py-3 text-left font-semibold text-slate-700 shadow-[inset_0_-1px_0_0_#e2e8f0]">Product</th>
-            <th class="sticky top-0 z-10 bg-slate-50 px-4 py-3 text-left font-semibold text-slate-700 shadow-[inset_0_-1px_0_0_#e2e8f0]">Current Stock</th>
-            <th class="sticky top-0 z-10 bg-slate-50 px-4 py-3 text-left font-semibold text-slate-700 shadow-[inset_0_-1px_0_0_#e2e8f0]">Counted Stock</th>
-            <th class="sticky top-0 z-10 bg-slate-50 px-4 py-3 text-left font-semibold text-slate-700 shadow-[inset_0_-1px_0_0_#e2e8f0]">Difference</th>
-            <th class="sticky top-0 z-10 bg-slate-50 px-4 py-3 text-left font-semibold text-slate-700 shadow-[inset_0_-1px_0_0_#e2e8f0]">Apply</th>
-          </tr>
-        </thead>
-        <tbody class="divide-y divide-slate-100 bg-white">
-          @for (row of rows; track row.product.id) {
-            <tr [class.bg-green-50]="row.complete">
-              <td class="px-4 py-3 text-slate-700">{{ row.product.name }}</td>
-              <td class="px-4 py-3">
-                <button
-                  type="button"
-                  data-testid="confirm-current-stock"
-                  class="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap rounded-md border px-3 py-2 font-medium"
-                  [ngClass]="row.complete ? 'border-green-300 bg-green-100 text-green-800' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'"
-                  [attr.aria-label]="'Confirm current stock of ' + row.product.quantityInStock + ' for ' + row.product.name"
-                  (click)="confirmCurrentStock(row)">
-                  @if (row.complete) { &#10003; }
-                  {{ row.product.quantityInStock }}
-                </button>
-              </td>
-              <td class="px-4 py-3">
-                <input
-                  type="number"
-                  min="0"
-                  step="1"
-                  class="w-24 rounded-md border border-slate-300 px-2 py-1"
-                  [attr.aria-label]="'Counted stock for ' + row.product.name"
-                  [(ngModel)]="row.countedStock"
-                  (ngModelChange)="onCountedStockChange(row)" />
-              </td>
-              <td class="px-4 py-3 font-semibold" [ngClass]="{
-                'text-red-600': (difference(row) ?? 0) < 0,
-                'text-green-700': (difference(row) ?? 0) > 0,
-                'text-slate-400': difference(row) === null
-              }">
-                {{ difference(row) === null ? '—' : (difference(row)! > 0 ? '+' + difference(row) : difference(row)) }}
-              </td>
-              <td class="px-4 py-3">
-                <button
-                  type="button"
-                  class="rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
-                  [disabled]="row.applying"
-                  (click)="apply(row)">
-                  {{ row.applying ? 'Applying…' : 'Apply' }}
-                </button>
-                @if (row.error) {
-                  <p class="mt-1 text-xs text-red-600">{{ row.error }}</p>
-                }
-              </td>
-            </tr>
-          }
-        </tbody>
-      </table>
+<div class="page">
+  <header class="page-header">
+    <div>
+      <h1 class="page-title">Take Inventory</h1>
+      <p class="page-subtitle">
+        Count physical storage stock. Click Current Stock to confirm an unchanged count, or enter Counted Stock and Apply to
+        record the difference.
+      </p>
     </div>
-  }
+  </header>
+
+  <div class="card">
+    <div class="card-body p-0">
+      @if (loadState.loadFailed) {
+        <div class="alert alert-danger m-4">
+          <p class="alert-title">Failed to load products.</p>
+        </div>
+      } @else if (!loadState.loaded) {
+        <p class="p-4 text-md-body value-muted">Loading products&hellip;</p>
+      } @else if (rows.length === 0) {
+        <p class="p-4 text-md-body value-muted">No products to count.</p>
+      } @else {
+        <div data-testid="take-inventory-table-scroll" class="max-h-[70vh] overflow-auto">
+          <table class="table">
+            <thead class="table-head sticky top-0 z-10">
+              <tr>
+                <th scope="col" class="table-cell">Product</th>
+                <th scope="col" class="table-cell">Current Stock</th>
+                <th scope="col" class="table-cell">Counted Stock</th>
+                <th scope="col" class="table-cell">Difference</th>
+                <th scope="col" class="table-cell">Apply</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (row of rows; track row.product.id) {
+                <tr class="table-row" [ngClass]="{ 'bg-md-success/15': row.complete }">
+                  <td class="table-cell">{{ row.product.name }}</td>
+                  <td class="table-cell">
+                    <button
+                      type="button"
+                      data-testid="confirm-current-stock"
+                      class="inline-flex min-h-[44px] min-w-[44px] items-center justify-center whitespace-nowrap rounded-md-control border px-3 py-2 font-medium"
+                      [ngClass]="row.complete ? 'border-md-success bg-md-success/15 text-md-success-text' : 'border-md-gray-300 bg-white text-md-gray-600 hover:bg-md-gray-100'"
+                      [attr.aria-label]="'Confirm current stock of ' + row.product.quantityInStock + ' for ' + row.product.name"
+                      (click)="confirmCurrentStock(row)">
+                      @if (row.complete) { &#10003; }
+                      {{ row.product.quantityInStock }}
+                    </button>
+                  </td>
+                  <td class="table-cell">
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      class="w-24"
+                      [attr.aria-label]="'Counted stock for ' + row.product.name"
+                      [(ngModel)]="row.countedStock"
+                      (ngModelChange)="onCountedStockChange(row)" />
+                  </td>
+                  <td class="table-cell font-semibold" [ngClass]="{
+                    'text-md-danger-text': (difference(row) ?? 0) < 0,
+                    'text-md-success-text': (difference(row) ?? 0) > 0,
+                    'value-muted': difference(row) === null
+                  }">
+                    {{ difference(row) === null ? '—' : (difference(row)! > 0 ? '+' + difference(row) : difference(row)) }}
+                  </td>
+                  <td class="table-cell">
+                    <button
+                      type="button"
+                      class="btn btn-sm btn-primary"
+                      [disabled]="row.applying"
+                      (click)="apply(row)">
+                      {{ row.applying ? 'Applying…' : 'Apply' }}
+                    </button>
+                    @if (row.error) {
+                      <p class="mt-1 text-xs text-md-danger-text">{{ row.error }}</p>
+                    }
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      }
+    </div>
+  </div>
 </div>

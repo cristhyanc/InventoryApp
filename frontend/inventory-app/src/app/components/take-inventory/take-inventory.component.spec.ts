@@ -266,6 +266,6 @@ describe('TakeInventoryComponent current stock control sizing', () => {
     expect(apply).not.toHaveBeenCalled();
     expect(fixture.componentInstance.rows[0].complete).toBe(true);
     expect(button.textContent).toContain('\u2713');
-    expect(Array.from(button.classList)).toEqual(expect.arrayContaining(['bg-green-100', 'min-h-[44px]', 'min-w-[44px]']));
+    expect(Array.from(button.classList)).toEqual(expect.arrayContaining(['bg-md-success/15', 'min-h-[44px]', 'min-w-[44px]']));
   });
 });
