@@ -1640,6 +1640,28 @@ destination. The public `/auth` callback route and `MsalGuard` on every other ro
 Adding a navigation entry is therefore a data change in `layout/navigation.ts` once the page and
 its route exist — not a template change in the shell.
 
+**Material styling (issue #413).** The shell's look follows the #410 tokens and the #411
+`app-icon` component; none of the behaviour described above changed.
+
+- **Sidebar.** `sidebar-nav.component.html` renders a white panel (`rounded-md-card`, `shadow-md`)
+  that floats with a `1rem` margin from the viewport edge on a wide layout; the narrow drawer keeps
+  the same panel without the margin. Its own top section shows the app name above a
+  `border-md-gray-200` divider. Each top-level link and group heading declares a decorative icon
+  name in `NavItem.icon` (`layout/navigation.ts`) — presentation data only, rendered through
+  `<app-icon [name]="item.icon">` — and items are `text-md-body text-md-gray-800` with a
+  `hover:bg-md-gray-100` state. The active link gets the `bg-md-dark-gradient` background with
+  white text and (because `app-icon` fills with `currentColor`) a white icon; its parent group
+  heading stays expanded and keeps a `bg-md-gray-100` highlight while one of its pages is open.
+  Collapsed to the icon-only rail, each label keeps its accessible name as `sr-only` text (the
+  behaviour above), not a styling change.
+- **Top bar and user menu.** `app.component.html`'s header has no background of its own, so it
+  shows the `bg-md-gray-100` canvas the shell's root element sets; `user-menu.component.ts` renders
+  its open panel as a compact dropdown (`rounded-md-card`, `shadow-md`). The main content wrapper
+  carries the same canvas colour and the #410 page padding (`p-4 sm:p-6`) so a restyled page's cards
+  sit on the light grey canvas.
+- **Sign-in callback.** `auth-callback.component.ts` centres a `.card` on the canvas background
+  instead of a bare paragraph; its logic is still just the static "Signing you in..." message.
+
 ### Target feature boundaries
 
 Keep Angular standalone and migrate incrementally toward feature-local code:
