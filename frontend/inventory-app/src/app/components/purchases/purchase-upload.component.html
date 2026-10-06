@@ -1,174 +1,191 @@
-<div class="mb-6">
-  @if (supplierOrder) {
-    <h1 class="text-2xl font-semibold text-slate-800">Receiving Supplier Order #{{ supplierOrder.id }}</h1>
-    <p class="mt-1 text-sm text-slate-500">{{ supplierOrder.supplier?.name }}</p>
-  } @else {
-    <h1 class="text-2xl font-semibold text-slate-800">Add Purchase</h1>
-    <p class="mt-1 text-sm text-slate-500">Record stock purchased from a supplier and attach the receipt or invoice.</p>
-  }
-</div>
+<div class="page">
+  <header class="page-header">
+    <div>
+      @if (supplierOrder) {
+        <h1 class="page-title">Receiving Supplier Order #{{ supplierOrder.id }}</h1>
+        <p class="page-subtitle">{{ supplierOrder.supplier?.name }}</p>
+      } @else {
+        <h1 class="page-title">Add Purchase</h1>
+        <p class="page-subtitle">Record stock purchased from a supplier and attach the receipt or invoice.</p>
+      }
+    </div>
+  </header>
 
-<div class="mx-auto w-full max-w-5xl rounded-xl bg-white p-6 shadow-sm">
-  @if (loadingSupplierOrder) {
-    <div class="rounded-lg bg-blue-50 p-4 text-sm text-blue-900">
-      <strong>Loading supplier order...</strong>
-      <p class="mt-1">Please wait while we load the order details before you can proceed.</p>
-    </div>
-  } @else if (supplierOrderLoadFailed) {
-    <div class="rounded-lg bg-red-50 p-4 text-sm text-red-900">
-      <strong>Unable to load supplier order</strong>
-      <p class="mt-2">
-        <a routerLink="/purchases/orders" class="inline-flex items-center rounded-md border border-red-300 bg-white px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50">Back to Supplier Orders</a>
-      </p>
-    </div>
-  } @else if (noOutstandingItems) {
-    <div class="rounded-lg bg-amber-50 p-4 text-sm text-amber-900">
-      <strong>This supplier order has no outstanding items to receive.</strong>
-    </div>
-  } @else if (supplierOrder) {
-    <div class="mb-6 rounded-lg border border-slate-200 bg-slate-50 p-4">
-      <div class="grid grid-cols-5 gap-4 text-sm">
-        <div>
-          <div class="text-xs font-medium text-slate-600">Product</div>
+  <div class="card mx-auto w-full max-w-5xl">
+    <div class="card-body">
+      @if (loadingSupplierOrder) {
+        <div class="alert alert-info">
+          <p class="alert-title">Loading supplier order...</p>
+          <p>Please wait while we load the order details before you can proceed.</p>
         </div>
-        <div class="text-right">
-          <div class="text-xs font-medium text-slate-600">Ordered</div>
+      } @else if (supplierOrderLoadFailed) {
+        <div class="alert alert-danger">
+          <p class="alert-title">Unable to load supplier order</p>
+          <p>
+            <a routerLink="/purchases/orders" class="btn btn-secondary btn-sm">Back to Supplier Orders</a>
+          </p>
         </div>
-        <div class="text-right">
-          <div class="text-xs font-medium text-slate-600">Already Received</div>
+      } @else if (noOutstandingItems) {
+        <div class="alert alert-warning">
+          <p class="alert-title">This supplier order has no outstanding items to receive.</p>
         </div>
-        <div class="text-right">
-          <div class="text-xs font-medium text-slate-600">Outstanding</div>
-        </div>
-        <div class="text-right">
-          <div class="text-xs font-medium text-slate-600">Unit Price</div>
-        </div>
-      </div>
-      <div class="mt-2 border-t border-slate-200 pt-2">
-        @for (line of supplierOrder.lines; track line.id) {
-          <div class="grid grid-cols-5 gap-4 py-2 text-sm text-slate-700">
-            <div>{{ line.product?.name ?? ('Product ' + line.productId) }}</div>
-            <div class="text-right">{{ line.quantityOrdered }}</div>
-            <div class="text-right">{{ line.quantityReceived }}</div>
-            <div class="text-right font-medium">{{ line.outstandingQuantity }}</div>
-            <div class="text-right">{{ line.unitPrice != null ? ('$' + line.unitPrice.toFixed(4)) : '—' }}</div>
+      } @else if (supplierOrder) {
+        <div class="mb-6 rounded-md-card border border-md-gray-200 bg-md-gray-100 p-4">
+          <div class="grid grid-cols-5 gap-4 text-md-body">
+            <div>
+              <div class="text-md-table-head uppercase tracking-wide text-md-gray-600">Product</div>
+            </div>
+            <div class="text-right">
+              <div class="text-md-table-head uppercase tracking-wide text-md-gray-600">Ordered</div>
+            </div>
+            <div class="text-right">
+              <div class="text-md-table-head uppercase tracking-wide text-md-gray-600">Already Received</div>
+            </div>
+            <div class="text-right">
+              <div class="text-md-table-head uppercase tracking-wide text-md-gray-600">Outstanding</div>
+            </div>
+            <div class="text-right">
+              <div class="text-md-table-head uppercase tracking-wide text-md-gray-600">Unit Price</div>
+            </div>
           </div>
-        }
-      </div>
-    </div>
-  }
-
-  @if (error) {
-    <p class="mb-4 text-sm text-red-600">{{ error }}</p>
-  }
-
-  @if (!loadingSupplierOrder && !supplierOrderLoadFailed && !noOutstandingItems) {
-    <form class="space-y-4" (ngSubmit)="upload()">
-      <div>
-        <label class="mb-1 block text-sm font-medium text-slate-700">Supporting Document *</label>
-        <p class="mb-1 text-xs text-slate-500">Receipt or invoice (PDF/image)</p>
-        <input type="file" accept="image/*,.pdf" (change)="onFileSelected($event)" />
-      </div>
-
-      @if (previewUrl) {
-        <div>
-          <img [src]="previewUrl" alt="Supporting document preview" class="max-h-72 rounded-lg object-contain" />
+          <div class="mt-2 border-t border-md-gray-200 pt-2">
+            @for (line of supplierOrder.lines; track line.id) {
+              <div class="grid grid-cols-5 gap-4 py-2 text-md-body text-md-gray-600">
+                <div>{{ line.product?.name ?? ('Product ' + line.productId) }}</div>
+                <div class="text-right">{{ line.quantityOrdered }}</div>
+                <div class="text-right">{{ line.quantityReceived }}</div>
+                <div class="text-right font-medium">{{ line.outstandingQuantity }}</div>
+                <div class="text-right">{{ line.unitPrice != null ? ('$' + line.unitPrice.toFixed(4)) : '—' }}</div>
+              </div>
+            }
+          </div>
         </div>
       }
 
-      <div>
-        <label class="mb-1 block text-sm font-medium text-slate-700">Purchase Title *</label>
-        <input [(ngModel)]="form.title" name="title" required placeholder="e.g. Weekly snack restock" />
-      </div>
-
-      <div>
-        <label class="mb-1 block text-sm font-medium text-slate-700">Supplier</label>
-        <select [(ngModel)]="form.supplierId" name="supplierId">
-          <option value="">None</option>
-          @for (s of suppliers; track s.id) {
-            <option [ngValue]="s.id">{{ s.name }}</option>
-          }
-        </select>
-      </div>
-
-      <div>
-        <label class="mb-1 block text-sm font-medium text-slate-700">Purchase Date</label>
-        <input type="date" [(ngModel)]="form.purchaseDate" name="purchaseDate" />
-      </div>
-
-      <div class="grid gap-4 md:grid-cols-2">
-        <div>
-          <label class="mb-1 block text-sm font-medium text-slate-700">Total Amount ($)</label>
-          <input type="number" step="0.01" min="0" [(ngModel)]="form.totalAmount" name="totalAmount" placeholder="Optional" />
+      @if (error) {
+        <div class="alert alert-danger mb-4">
+          <p class="alert-title">{{ error }}</p>
         </div>
+      }
 
-        <div class="border-t border-slate-200 pt-4 md:col-span-2">
-          <div class="mb-2 flex items-center justify-between"><h2 class="font-medium text-slate-800">Purchased Items</h2><button type="button" class="rounded border px-2 py-1 text-sm" (click)="addItem()">Add Product</button></div>
-          @for (item of items; track $index) {
-            <div data-testid="purchase-item" class="mb-2 grid gap-2 md:grid-cols-[minmax(0,3fr)_minmax(7rem,1fr)_minmax(9rem,1fr)_minmax(9rem,1fr)_auto]">
-              <select data-testid="purchase-item-product" [(ngModel)]="item.productId" [name]="'product' + $index"><option [ngValue]="0">Select product</option>@for (p of products; track p.id) {<option [ngValue]="p.id">{{ p.name }}</option>}</select>
-              <input data-testid="purchase-item-quantity" type="number" min="1" step="1" [(ngModel)]="item.quantity" [name]="'quantity' + $index" placeholder="Quantity" />
-              <div>
-                <input data-testid="purchase-item-cost" type="number" min="0" step="0.0001" [(ngModel)]="item.unitCost" [name]="'unitCost' + $index" placeholder="Unit cost" [class.border-red-300]="item.unitCost === null || item.unitCost === undefined" />
-                <div class="text-xs text-slate-500">{{ lineTotal(item) | currency }}</div>
-                @if (item.unitCost === null || item.unitCost === undefined) {
-                  <div class="text-xs text-red-600">Cost required</div>
-                }
+      @if (!loadingSupplierOrder && !supplierOrderLoadFailed && !noOutstandingItems) {
+        <form class="flex flex-col gap-4" (ngSubmit)="upload()">
+          <div class="field">
+            <label class="field-label" for="supportingDocument">Supporting Document *</label>
+            <p class="field-hint">Receipt or invoice (PDF/image)</p>
+            <input id="supportingDocument" type="file" accept="image/*,.pdf" (change)="onFileSelected($event)" />
+          </div>
+
+          @if (previewUrl) {
+            <div>
+              <img [src]="previewUrl" alt="Supporting document preview" class="max-h-72 rounded-md-card object-contain" />
+            </div>
+          }
+
+          <div class="field">
+            <label class="field-label" for="title">Purchase Title *</label>
+            <input id="title" [(ngModel)]="form.title" name="title" required placeholder="e.g. Weekly snack restock" />
+          </div>
+
+          <div class="field">
+            <label class="field-label" for="supplierId">Supplier</label>
+            <select id="supplierId" [(ngModel)]="form.supplierId" name="supplierId">
+              <option value="">None</option>
+              @for (s of suppliers; track s.id) {
+                <option [ngValue]="s.id">{{ s.name }}</option>
+              }
+            </select>
+          </div>
+
+          <div class="field">
+            <label class="field-label" for="purchaseDate">Purchase Date</label>
+            <input id="purchaseDate" type="date" [(ngModel)]="form.purchaseDate" name="purchaseDate" />
+          </div>
+
+          <div class="grid gap-4 md:grid-cols-2">
+            <div class="field">
+              <label class="field-label" for="totalAmount">Total Amount ($)</label>
+              <input id="totalAmount" type="number" step="0.01" min="0" [(ngModel)]="form.totalAmount" name="totalAmount" placeholder="Optional" />
+            </div>
+
+            <div class="border-t border-md-gray-200 pt-4 md:col-span-2">
+              <div class="mb-2 flex items-center justify-between">
+                <h2 class="text-md-body font-medium text-md-gray-800">Purchased Items</h2>
+                <button type="button" class="btn btn-secondary btn-sm" (click)="addItem()">
+                  <app-icon name="add" [size]="16" />
+                  Add Product
+                </button>
               </div>
-              <div>
-                <select data-testid="purchase-item-gst" [(ngModel)]="item.gstClassification" [name]="'gstClassification' + $index" [attr.aria-label]="'GST classification for item ' + ($index + 1)">
+              @for (item of items; track $index) {
+                <div data-testid="purchase-item" class="mb-2 grid gap-2 md:grid-cols-[minmax(0,3fr)_minmax(7rem,1fr)_minmax(9rem,1fr)_minmax(9rem,1fr)_auto]">
+                  <select data-testid="purchase-item-product" [(ngModel)]="item.productId" [name]="'product' + $index"><option [ngValue]="0">Select product</option>@for (p of products; track p.id) {<option [ngValue]="p.id">{{ p.name }}</option>}</select>
+                  <input data-testid="purchase-item-quantity" type="number" min="1" step="1" [(ngModel)]="item.quantity" [name]="'quantity' + $index" placeholder="Quantity" />
+                  <div>
+                    <input data-testid="purchase-item-cost" type="number" min="0" step="0.0001" [(ngModel)]="item.unitCost" [name]="'unitCost' + $index" placeholder="Unit cost" [class.border-md-danger]="item.unitCost === null || item.unitCost === undefined" />
+                    <div class="field-hint">{{ lineTotal(item) | currency }}</div>
+                    @if (item.unitCost === null || item.unitCost === undefined) {
+                      <div class="field-error">Cost required</div>
+                    }
+                  </div>
+                  <div>
+                    <select data-testid="purchase-item-gst" [(ngModel)]="item.gstClassification" [name]="'gstClassification' + $index" [attr.aria-label]="'GST classification for item ' + ($index + 1)">
+                      @for (option of gstOptions; track option.value) {
+                        <option [ngValue]="option.value">{{ option.label }}</option>
+                      }
+                    </select>
+                    <div class="field-hint">GST</div>
+                  </div>
+                  <button type="button" class="btn btn-link btn-sm" (click)="removeItem($index)">
+                    <app-icon name="delete" [size]="16" />
+                    Remove
+                  </button>
+                </div>
+              }
+              <div class="mt-3 text-right text-md-body text-md-gray-600">Items subtotal: <strong>{{ itemsSubtotal | currency }}</strong></div>
+            </div>
+            <div class="field">
+              <label class="field-label" for="deliveryCost">Delivery Cost ($)</label>
+              <input id="deliveryCost" type="number" step="0.01" min="0" [(ngModel)]="form.deliveryCost" name="deliveryCost" placeholder="Optional" />
+              @if (hasCharge(form.deliveryCost)) {
+                <label class="field-label mt-2" for="deliveryGstClassification">Delivery GST</label>
+                <select id="deliveryGstClassification" data-testid="delivery-gst" [(ngModel)]="form.deliveryGstClassification" name="deliveryGstClassification">
                   @for (option of gstOptions; track option.value) {
                     <option [ngValue]="option.value">{{ option.label }}</option>
                   }
                 </select>
-                <div class="text-xs text-slate-500">GST</div>
-              </div>
-              <button type="button" class="text-sm text-red-600" (click)="removeItem($index)">Remove</button>
+              }
             </div>
-          }
-          <div class="mt-3 text-right text-sm text-slate-600">Items subtotal: <strong>{{ itemsSubtotal | currency }}</strong></div>
-        </div>
-        <div>
-          <label class="mb-1 block text-sm font-medium text-slate-700" for="deliveryCost">Delivery Cost ($)</label>
-          <input id="deliveryCost" type="number" step="0.01" min="0" [(ngModel)]="form.deliveryCost" name="deliveryCost" placeholder="Optional" />
-          @if (hasCharge(form.deliveryCost)) {
-            <label class="mb-1 mt-2 block text-sm font-medium text-slate-700" for="deliveryGstClassification">Delivery GST</label>
-            <select id="deliveryGstClassification" data-testid="delivery-gst" [(ngModel)]="form.deliveryGstClassification" name="deliveryGstClassification">
-              @for (option of gstOptions; track option.value) {
-                <option [ngValue]="option.value">{{ option.label }}</option>
+            <div class="field">
+              <label class="field-label" for="packageCost">Package Cost ($)</label>
+              <input id="packageCost" type="number" step="0.01" min="0" [(ngModel)]="form.packageCost" name="packageCost" placeholder="Optional" />
+              @if (hasCharge(form.packageCost)) {
+                <label class="field-label mt-2" for="packageGstClassification">Package GST</label>
+                <select id="packageGstClassification" data-testid="package-gst" [(ngModel)]="form.packageGstClassification" name="packageGstClassification">
+                  @for (option of gstOptions; track option.value) {
+                    <option [ngValue]="option.value">{{ option.label }}</option>
+                  }
+                </select>
               }
-            </select>
-          }
-        </div>
-        <div>
-          <label class="mb-1 block text-sm font-medium text-slate-700" for="packageCost">Package Cost ($)</label>
-          <input id="packageCost" type="number" step="0.01" min="0" [(ngModel)]="form.packageCost" name="packageCost" placeholder="Optional" />
-          @if (hasCharge(form.packageCost)) {
-            <label class="mb-1 mt-2 block text-sm font-medium text-slate-700" for="packageGstClassification">Package GST</label>
-            <select id="packageGstClassification" data-testid="package-gst" [(ngModel)]="form.packageGstClassification" name="packageGstClassification">
-              @for (option of gstOptions; track option.value) {
-                <option [ngValue]="option.value">{{ option.label }}</option>
-              }
-            </select>
-          }
-        </div>
-      </div>
+            </div>
+          </div>
 
-      <p class="text-xs text-slate-500">
-        Purchase amounts are GST-inclusive. Classify each line and each charge as Taxable or GST-free so the
-        purchase GST can be reported; anything left as <strong>Not classified</strong> stays visibly unresolved and
-        contributes no GST. The GST amounts themselves are calculated and shown by the API after saving.
-      </p>
+          <p class="field-hint">
+            Purchase amounts are GST-inclusive. Classify each line and each charge as Taxable or GST-free so the
+            purchase GST can be reported; anything left as <strong>Not classified</strong> stays visibly unresolved and
+            contributes no GST. The GST amounts themselves are calculated and shown by the API after saving.
+          </p>
 
-      <div>
-        <label class="mb-1 block text-sm font-medium text-slate-700">Notes</label>
-        <textarea [(ngModel)]="form.notes" name="notes" rows="2" placeholder="Optional"></textarea>
-      </div>
+          <div class="field">
+            <label class="field-label" for="notes">Notes</label>
+            <textarea id="notes" [(ngModel)]="form.notes" name="notes" rows="2" placeholder="Optional"></textarea>
+          </div>
 
-      <div class="flex flex-wrap gap-3">
-        <button type="submit" class="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60" [disabled]="saving">Add Purchase</button>
-        <a [routerLink]="supplierOrderId ? '/purchases/orders' : '/purchases'" class="inline-flex items-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Cancel</a>
-      </div>
-    </form>
-  }
+          <div class="page-actions">
+            <button type="submit" class="btn btn-primary" [disabled]="saving">Add Purchase</button>
+            <a [routerLink]="supplierOrderId ? '/purchases/orders' : '/purchases'" class="btn btn-secondary">Cancel</a>
+          </div>
+        </form>
+      }
+    </div>
+  </div>
 </div>

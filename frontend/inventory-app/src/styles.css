@@ -1276,10 +1276,6 @@ video {
   margin-right: 0.5rem;
 }
 
-.mt-0\.5 {
-  margin-top: 0.125rem;
-}
-
 .mt-1 {
   margin-top: 0.25rem;
 }
@@ -1772,11 +1768,6 @@ video {
   border-color: rgb(252 211 77 / var(--tw-border-opacity, 1));
 }
 
-.border-blue-200 {
-  --tw-border-opacity: 1;
-  border-color: rgb(191 219 254 / var(--tw-border-opacity, 1));
-}
-
 .border-blue-300 {
   --tw-border-opacity: 1;
   border-color: rgb(147 197 253 / var(--tw-border-opacity, 1));
@@ -1792,6 +1783,11 @@ video {
   border-color: rgb(134 239 172 / var(--tw-border-opacity, 1));
 }
 
+.border-md-danger {
+  --tw-border-opacity: 1;
+  border-color: rgb(244 67 53 / var(--tw-border-opacity, 1));
+}
+
 .border-md-gray-200 {
   --tw-border-opacity: 1;
   border-color: rgb(229 229 229 / var(--tw-border-opacity, 1));
@@ -1805,11 +1801,6 @@ video {
 .border-md-input-border {
   --tw-border-opacity: 1;
   border-color: rgb(210 214 218 / var(--tw-border-opacity, 1));
-}
-
-.border-red-300 {
-  --tw-border-opacity: 1;
-  border-color: rgb(252 165 165 / var(--tw-border-opacity, 1));
 }
 
 .border-slate-100 {
@@ -2209,11 +2200,6 @@ video {
   letter-spacing: 0.025em;
 }
 
-.text-amber-600 {
-  --tw-text-opacity: 1;
-  color: rgb(217 119 6 / var(--tw-text-opacity, 1));
-}
-
 .text-amber-700 {
   --tw-text-opacity: 1;
   color: rgb(180 83 9 / var(--tw-text-opacity, 1));
@@ -2274,6 +2260,11 @@ video {
   color: rgb(22 101 52 / var(--tw-text-opacity, 1));
 }
 
+.text-md-danger-text {
+  --tw-text-opacity: 1;
+  color: rgb(183 28 28 / var(--tw-text-opacity, 1));
+}
+
 .text-md-gray-500 {
   --tw-text-opacity: 1;
   color: rgb(115 115 115 / var(--tw-text-opacity, 1));
@@ -2287,6 +2278,11 @@ video {
 .text-md-gray-800 {
   --tw-text-opacity: 1;
   color: rgb(38 38 38 / var(--tw-text-opacity, 1));
+}
+
+.text-md-warning-text {
+  --tw-text-opacity: 1;
+  color: rgb(138 75 0 / var(--tw-text-opacity, 1));
 }
 
 .text-orange-700 {
@@ -2352,10 +2348,6 @@ video {
 .text-yellow-700 {
   --tw-text-opacity: 1;
   color: rgb(161 98 7 / var(--tw-text-opacity, 1));
-}
-
-.underline {
-  text-decoration-line: underline;
 }
 
 .shadow {
@@ -2542,11 +2534,6 @@ img {
 .hover\:bg-md-gray-100:hover {
   --tw-bg-opacity: 1;
   background-color: rgb(245 245 245 / var(--tw-bg-opacity, 1));
-}
-
-.hover\:bg-red-50:hover {
-  --tw-bg-opacity: 1;
-  background-color: rgb(254 242 242 / var(--tw-bg-opacity, 1));
 }
 
 .hover\:bg-red-700:hover {
