@@ -40,7 +40,7 @@ public class RunDiagnosticsQueryTests
         Assert.Equal(DiagnosticsQueryOutcome.Succeeded, result.Outcome);
         Assert.Equal(2, result.RowCount);
         Assert.False(result.Truncated);
-        Assert.True(result.CrossBusinessScope);
+        Assert.True(DiagnosticsQueryResult.CrossBusinessScope);
 
         var entry = Assert.Single(audit.Entries);
         Assert.Equal(PlatformAdmin.DirectoryTenantId, entry.ActorDirectoryTenantId);

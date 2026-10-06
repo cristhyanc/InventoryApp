@@ -113,147 +113,271 @@ public static class DiagnosticsSqlShape
     /// <summary>What one walk of the statement found.</summary>
     private sealed record ScanResult(string? FirstKeyword, bool SawStatementSeparator, string Normalized);
 
+    /// <summary>Walks the statement once; see <see cref="Scanner"/> for the walk itself.</summary>
+    private static ScanResult Scan(string sql) => Scanner.Run(sql);
+
     /// <summary>
-    /// Walks the statement once, tracking the four contexts in which a character means something
+    /// Walks a statement once, tracking the four contexts in which a character means something
     /// other than itself - line comment, block comment, string literal, quoted identifier - and
-    /// produces all three answers from that single pass.
+    /// produces all three <see cref="ScanResult"/> answers from that single pass.
+    ///
+    /// Each context is its own method so the walk itself (<see cref="Walk"/>) stays a flat
+    /// dispatch: every character is offered to each recogniser in turn, and the first one that
+    /// claims it advances <see cref="_index"/> and returns <c>true</c>.
     ///
     /// A trailing semicolon with only whitespace or comments after it is one statement, not two:
-    /// <see cref="ScanResult.SawStatementSeparator"/> is set only when real content follows the
-    /// separator, because refusing the terminator people habitually type would be a usability tax
-    /// that buys no safety.
+    /// <see cref="_contentAfterSeparator"/> is set only when real content follows the separator,
+    /// because refusing the terminator people habitually type would be a usability tax that buys
+    /// no safety.
     /// </summary>
-    private static ScanResult Scan(string sql)
+    private sealed class Scanner
     {
-        var normalized = new StringBuilder(sql.Length);
-        string? firstKeyword = null;
-        var contentAfterSeparator = false;
-        var separatorSeen = false;
+        private readonly string _sql;
+        private readonly StringBuilder _normalized;
+        private string? _firstKeyword;
+        private bool _separatorSeen;
+        private bool _contentAfterSeparator;
+        private int _index;
 
-        var index = 0;
-        while (index < sql.Length)
+        private Scanner(string sql)
         {
-            var current = sql[index];
-
-            // Comments carry no shape and no content: they collapse to one space.
-            if (current == '-' && index + 1 < sql.Length && sql[index + 1] == '-')
-            {
-                while (index < sql.Length && sql[index] != '\n')
-                {
-                    index++;
-                }
-
-                AppendSpace(normalized);
-                continue;
-            }
-
-            if (current == '/' && index + 1 < sql.Length && sql[index + 1] == '*')
-            {
-                index += 2;
-                while (index + 1 < sql.Length && !(sql[index] == '*' && sql[index + 1] == '/'))
-                {
-                    index++;
-                }
-
-                index = Math.Min(sql.Length, index + 2);
-                AppendSpace(normalized);
-                continue;
-            }
-
-            if (char.IsWhiteSpace(current))
-            {
-                index++;
-                AppendSpace(normalized);
-                continue;
-            }
-
-            if (current == ';')
-            {
-                index++;
-                separatorSeen = true;
-                continue;
-            }
-
-            if (separatorSeen)
-            {
-                contentAfterSeparator = true;
-            }
-
-            // A string literal is a value, so its shape is "?" - and its contents, semicolons and
-            // keywords included, are not part of the statement's structure.
-            if (current == '\'')
-            {
-                index = SkipQuoted(sql, index, '\'');
-                normalized.Append('?');
-                continue;
-            }
-
-            // Quoted identifiers are names, so they are kept (lower-cased) rather than masked, but
-            // everything inside them is literal text and must not be read as structure.
-            if (current is '"' or '`')
-            {
-                var closing = current;
-                var start = index;
-                index = SkipQuoted(sql, index, closing);
-                AppendLowered(normalized, sql.AsSpan(start, index - start));
-                continue;
-            }
-
-            if (current == '[')
-            {
-                var start = index;
-                index++;
-                while (index < sql.Length && sql[index] != ']')
-                {
-                    index++;
-                }
-
-                index = Math.Min(sql.Length, index + 1);
-                AppendLowered(normalized, sql.AsSpan(start, index - start));
-                continue;
-            }
-
-            if (char.IsAsciiDigit(current)
-                || (current == '.' && index + 1 < sql.Length && char.IsAsciiDigit(sql[index + 1])))
-            {
-                while (index < sql.Length
-                    && (char.IsAsciiLetterOrDigit(sql[index]) || sql[index] is '.' or '+' or '-'))
-                {
-                    // A sign only continues a number straight after an exponent marker.
-                    if (sql[index] is '+' or '-' && !(sql[index - 1] is 'e' or 'E'))
-                    {
-                        break;
-                    }
-
-                    index++;
-                }
-
-                normalized.Append('?');
-                continue;
-            }
-
-            if (char.IsLetter(current) || current == '_')
-            {
-                var start = index;
-                while (index < sql.Length && (char.IsLetterOrDigit(sql[index]) || sql[index] is '_' or '$'))
-                {
-                    index++;
-                }
-
-                var word = sql.AsSpan(start, index - start);
-                firstKeyword ??= word.ToString();
-                AppendLowered(normalized, word);
-                continue;
-            }
-
-            normalized.Append(current);
-            index++;
+            _sql = sql;
+            _normalized = new StringBuilder(sql.Length);
         }
 
-        return new ScanResult(
-            firstKeyword,
-            separatorSeen && contentAfterSeparator,
-            normalized.ToString().Trim());
+        public static ScanResult Run(string sql)
+        {
+            var scanner = new Scanner(sql);
+            scanner.Walk();
+
+            return new ScanResult(
+                scanner._firstKeyword,
+                scanner._separatorSeen && scanner._contentAfterSeparator,
+                scanner._normalized.ToString().Trim());
+        }
+
+        private void Walk()
+        {
+            while (_index < _sql.Length)
+            {
+                if (TryConsumeLineComment())
+                {
+                    continue;
+                }
+
+                if (TryConsumeBlockComment())
+                {
+                    continue;
+                }
+
+                if (TryConsumeWhitespace())
+                {
+                    continue;
+                }
+
+                if (TryConsumeSeparator())
+                {
+                    continue;
+                }
+
+                MarkContentIfAfterSeparator();
+
+                if (TryConsumeStringLiteral())
+                {
+                    continue;
+                }
+
+                if (TryConsumeQuotedIdentifier())
+                {
+                    continue;
+                }
+
+                if (TryConsumeBracketIdentifier())
+                {
+                    continue;
+                }
+
+                if (TryConsumeNumber())
+                {
+                    continue;
+                }
+
+                if (TryConsumeWord())
+                {
+                    continue;
+                }
+
+                ConsumeOtherCharacter();
+            }
+        }
+
+        // Comments carry no shape and no content: they collapse to one space.
+        private bool TryConsumeLineComment()
+        {
+            if (_sql[_index] != '-' || _index + 1 >= _sql.Length || _sql[_index + 1] != '-')
+            {
+                return false;
+            }
+
+            while (_index < _sql.Length && _sql[_index] != '\n')
+            {
+                _index++;
+            }
+
+            AppendSpace(_normalized);
+            return true;
+        }
+
+        private bool TryConsumeBlockComment()
+        {
+            if (_sql[_index] != '/' || _index + 1 >= _sql.Length || _sql[_index + 1] != '*')
+            {
+                return false;
+            }
+
+            _index += 2;
+            while (_index + 1 < _sql.Length && !(_sql[_index] == '*' && _sql[_index + 1] == '/'))
+            {
+                _index++;
+            }
+
+            _index = Math.Min(_sql.Length, _index + 2);
+            AppendSpace(_normalized);
+            return true;
+        }
+
+        private bool TryConsumeWhitespace()
+        {
+            if (!char.IsWhiteSpace(_sql[_index]))
+            {
+                return false;
+            }
+
+            _index++;
+            AppendSpace(_normalized);
+            return true;
+        }
+
+        private bool TryConsumeSeparator()
+        {
+            if (_sql[_index] != ';')
+            {
+                return false;
+            }
+
+            _index++;
+            _separatorSeen = true;
+            return true;
+        }
+
+        private void MarkContentIfAfterSeparator()
+        {
+            if (_separatorSeen)
+            {
+                _contentAfterSeparator = true;
+            }
+        }
+
+        // A string literal is a value, so its shape is "?" - and its contents, semicolons and
+        // keywords included, are not part of the statement's structure.
+        private bool TryConsumeStringLiteral()
+        {
+            if (_sql[_index] != '\'')
+            {
+                return false;
+            }
+
+            _index = SkipQuoted(_sql, _index, '\'');
+            _normalized.Append('?');
+            return true;
+        }
+
+        // Quoted identifiers are names, so they are kept (lower-cased) rather than masked, but
+        // everything inside them is literal text and must not be read as structure.
+        private bool TryConsumeQuotedIdentifier()
+        {
+            var current = _sql[_index];
+            if (current is not ('"' or '`'))
+            {
+                return false;
+            }
+
+            var start = _index;
+            _index = SkipQuoted(_sql, _index, current);
+            AppendLowered(_normalized, _sql.AsSpan(start, _index - start));
+            return true;
+        }
+
+        private bool TryConsumeBracketIdentifier()
+        {
+            if (_sql[_index] != '[')
+            {
+                return false;
+            }
+
+            var start = _index;
+            _index++;
+            while (_index < _sql.Length && _sql[_index] != ']')
+            {
+                _index++;
+            }
+
+            _index = Math.Min(_sql.Length, _index + 1);
+            AppendLowered(_normalized, _sql.AsSpan(start, _index - start));
+            return true;
+        }
+
+        private bool TryConsumeNumber()
+        {
+            var current = _sql[_index];
+            var isNumberStart = char.IsAsciiDigit(current)
+                || (current == '.' && _index + 1 < _sql.Length && char.IsAsciiDigit(_sql[_index + 1]));
+            if (!isNumberStart)
+            {
+                return false;
+            }
+
+            while (_index < _sql.Length
+                && (char.IsAsciiLetterOrDigit(_sql[_index]) || _sql[_index] is '.' or '+' or '-'))
+            {
+                // A sign only continues a number straight after an exponent marker.
+                if (_sql[_index] is '+' or '-' && !(_sql[_index - 1] is 'e' or 'E'))
+                {
+                    break;
+                }
+
+                _index++;
+            }
+
+            _normalized.Append('?');
+            return true;
+        }
+
+        private bool TryConsumeWord()
+        {
+            var current = _sql[_index];
+            if (!char.IsLetter(current) && current != '_')
+            {
+                return false;
+            }
+
+            var start = _index;
+            while (_index < _sql.Length && (char.IsLetterOrDigit(_sql[_index]) || _sql[_index] is '_' or '$'))
+            {
+                _index++;
+            }
+
+            var word = _sql.AsSpan(start, _index - start);
+            _firstKeyword ??= word.ToString();
+            AppendLowered(_normalized, word);
+            return true;
+        }
+
+        private void ConsumeOtherCharacter()
+        {
+            _normalized.Append(_sql[_index]);
+            _index++;
+        }
     }
 
     /// <summary>

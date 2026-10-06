@@ -110,5 +110,5 @@ public sealed record DiagnosticsQueryResult(
 
     public bool Truncated => Outcome == DiagnosticsQueryOutcome.Truncated;
 
-    public bool CrossBusinessScope => true;
+    public static bool CrossBusinessScope => true;
 }

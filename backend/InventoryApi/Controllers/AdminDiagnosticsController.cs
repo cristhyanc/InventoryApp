@@ -89,7 +89,7 @@ public sealed class AdminDiagnosticsController : ControllerBase
             result.Outcome.ToString(),
             result.DenialReason == DiagnosticsQueryDenialReason.None ? null : result.DenialReason.ToString(),
             result.Message,
-            result.CrossBusinessScope,
+            DiagnosticsQueryResult.CrossBusinessScope,
             result.Columns,
             result.Rows,
             result.RowCount,

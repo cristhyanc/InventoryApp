@@ -31,6 +31,8 @@ public sealed record PlatformDiagnosticsTable(string Table, IReadOnlyList<string
 /// </summary>
 public static class PlatformDiagnosticsDataSurface
 {
+    private const string BusinessIdColumn = "BusinessId";
+
     /// <summary>
     /// The permitted pairs, verified against the physical mappings on <c>develop</c>:
     /// <c>Purchase</c> is mapped to <c>Receipts</c> and <c>PurchaseItem</c> to <c>ReceiptItems</c>
@@ -41,12 +43,12 @@ public static class PlatformDiagnosticsDataSurface
     public static IReadOnlyList<PlatformDiagnosticsTable> Tables { get; } =
     [
         new("Businesses", ["Id"]),
-        new("Categories", ["Id", "BusinessId"]),
-        new("Suppliers", ["Id", "BusinessId"]),
-        new("Products", ["Id", "BusinessId", "CategoryId", "SupplierId"]),
-        new("Receipts", ["Id", "BusinessId", "SupplierId"]),
-        new("ReceiptItems", ["Id", "BusinessId", "ReceiptId", "ProductId"]),
-        new("StockAdjustments", ["Id", "BusinessId", "ProductId", "ReceiptItemId"]),
+        new("Categories", ["Id", BusinessIdColumn]),
+        new("Suppliers", ["Id", BusinessIdColumn]),
+        new("Products", ["Id", BusinessIdColumn, "CategoryId", "SupplierId"]),
+        new("Receipts", ["Id", BusinessIdColumn, "SupplierId"]),
+        new("ReceiptItems", ["Id", BusinessIdColumn, "ReceiptId", "ProductId"]),
+        new("StockAdjustments", ["Id", BusinessIdColumn, "ProductId", "ReceiptItemId"]),
     ];
 
     /// <summary>
