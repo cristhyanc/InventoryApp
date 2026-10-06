@@ -120,9 +120,7 @@ import { BusinessDateTimePipe } from '../../../formatting/business-date-time.pip
               <div>Legacy replayed physical quantity: <strong>{{ transitionPreview.legacyReplayedPhysicalQuantity }}</strong></div>
               <div>Legacy discrepancy retired: <strong>{{ transitionPreview.legacyPhysicalDiscrepancy }}</strong></div>
             </div>
-            @if (transitionPreview.dataQualityNote) {
-              <div class="alert alert-warning mt-3">{{ transitionPreview.dataQualityNote }}</div>
-            }
+            <p class="alert alert-warning mt-3">{{ transitionPreview.dataQualityNote }}</p>
             <div class="mt-4 overflow-x-auto">
               <table class="table">
                 <thead class="table-head"><tr><th scope="col" class="table-cell">Machine</th><th scope="col" class="table-cell">Stock</th><th scope="col" class="table-cell">Source</th></tr></thead>
