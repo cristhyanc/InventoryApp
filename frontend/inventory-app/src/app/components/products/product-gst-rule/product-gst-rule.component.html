@@ -6,6 +6,9 @@
     purchase that is already recorded.
   </p>
 
+  @if (loading) {
+    <p class="mb-3 text-sm text-slate-600">Loading the GST rule...</p>
+  }
   @if (error) {
     <p class="mb-3 text-sm text-red-600">{{ error }}</p>
   }
@@ -20,7 +23,7 @@
         id="product-gst-rule"
         name="productGstRule"
         [(ngModel)]="rule"
-        [disabled]="loading || saving || productId === null"
+        [disabled]="!loaded || saving"
       >
         @for (option of options; track option.value) {
           <option [ngValue]="option.value">{{ option.label }}</option>
@@ -34,7 +37,7 @@
     <button
       type="button"
       class="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-      [disabled]="loading || saving || productId === null"
+      [disabled]="!loaded || saving"
       (click)="save()"
     >
       {{ saving ? 'Saving...' : 'Save GST rule' }}

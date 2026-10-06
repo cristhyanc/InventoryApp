@@ -631,6 +631,13 @@ classified:
   lines** and separate defaults for its **delivery charge** and **package charge**, then **Save GST
   defaults**. The three are independent: a charge never inherits the product-line default.
 
+Both panels read the stored setting first, and the save button stays disabled until it is on screen,
+so you are always editing what is actually configured. If that read fails the panel says so and
+saving stays disabled: the pickers open on "No rule"/"No default", which are real values that would
+replace whatever is stored, so reload the page instead of saving. Opening one product or supplier
+and then another also discards the first one's answer, so a slow response can never put one
+record's settings on another record's form.
+
 A supplier default applies only where the purchased product has no GST rule of its own, and a
 product rule applies only where nobody has classified the purchase line by hand. "No rule" and "No
 default" leave a component unclassified, which is not the same as GST-free: an unclassified

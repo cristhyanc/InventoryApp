@@ -9,6 +9,9 @@
     Saving them does not change the GST classification of any purchase that is already recorded.
   </p>
 
+  @if (loading) {
+    <p class="mb-3 text-sm text-slate-600">Loading the GST defaults...</p>
+  }
   @if (error) {
     <p class="mb-3 text-sm text-red-600">{{ error }}</p>
   }
@@ -23,7 +26,7 @@
         id="supplier-gst-product-lines"
         name="productLineGstDefault"
         [(ngModel)]="form.productLineGstDefault"
-        [disabled]="loading || saving || supplierId === null"
+        [disabled]="!loaded || saving"
       >
         @for (option of options; track option.value) {
           <option [ngValue]="option.value">{{ option.label }}</option>
@@ -36,7 +39,7 @@
         id="supplier-gst-delivery"
         name="deliveryGstDefault"
         [(ngModel)]="form.deliveryGstDefault"
-        [disabled]="loading || saving || supplierId === null"
+        [disabled]="!loaded || saving"
       >
         @for (option of options; track option.value) {
           <option [ngValue]="option.value">{{ option.label }}</option>
@@ -49,7 +52,7 @@
         id="supplier-gst-package"
         name="packageGstDefault"
         [(ngModel)]="form.packageGstDefault"
-        [disabled]="loading || saving || supplierId === null"
+        [disabled]="!loaded || saving"
       >
         @for (option of options; track option.value) {
           <option [ngValue]="option.value">{{ option.label }}</option>
@@ -65,7 +68,7 @@
   <button
     type="button"
     class="mt-4 inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-    [disabled]="loading || saving || supplierId === null"
+    [disabled]="!loaded || saving"
     (click)="save()"
   >
     {{ saving ? 'Saving...' : 'Save GST defaults' }}

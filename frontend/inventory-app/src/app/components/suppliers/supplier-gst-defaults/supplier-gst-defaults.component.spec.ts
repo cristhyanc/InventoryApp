@@ -1,8 +1,8 @@
 import { TestBed } from '@angular/core/testing';
-import { of, throwError } from 'rxjs';
+import { of, Subject, throwError } from 'rxjs';
 import { SupplierGstDefaultsComponent } from './supplier-gst-defaults.component';
 import { SupplierService } from '../../../services/supplier.service';
-import { GstClassification } from '../../../models/models';
+import { GstClassification, SupplierGstDefaults } from '../../../models/models';
 
 const noDefaults = {
   supplierId: 7,
@@ -10,6 +10,18 @@ const noDefaults = {
   deliveryGstDefault: GstClassification.Unknown,
   packageGstDefault: GstClassification.Unknown
 };
+
+const defaultsFor = (
+  supplierId: number,
+  productLineGstDefault: GstClassification,
+  deliveryGstDefault: GstClassification,
+  packageGstDefault: GstClassification
+): SupplierGstDefaults => ({
+  supplierId,
+  productLineGstDefault,
+  deliveryGstDefault,
+  packageGstDefault
+});
 
 async function render(
   getGstDefaults: jest.Mock = jest.fn(() => of(noDefaults)),
@@ -26,14 +38,21 @@ async function render(
   fixture.detectChanges();
 
   const host = fixture.nativeElement as HTMLElement;
+  const saveButton = () =>
+    Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find((button) =>
+      button.textContent?.trim().startsWith('Save')
+    )!;
   const save = () => {
-    Array.from(host.querySelectorAll<HTMLButtonElement>('button'))
-      .find((button) => button.textContent?.trim().startsWith('Save'))!
-      .click();
+    saveButton().click();
+    fixture.detectChanges();
+  };
+  const openSupplier = (supplierId: number, supplierName: string) => {
+    fixture.componentRef.setInput('supplierId', supplierId);
+    fixture.componentRef.setInput('supplierName', supplierName);
     fixture.detectChanges();
   };
 
-  return { fixture, host, save, getGstDefaults, setGstDefaults };
+  return { fixture, host, saveButton, save, openSupplier, getGstDefaults, setGstDefaults };
 }
 
 describe('SupplierGstDefaultsComponent', () => {
@@ -114,6 +133,121 @@ describe('SupplierGstDefaultsComponent', () => {
     const { host } = await render(jest.fn(() => throwError(() => new Error('unavailable'))));
 
     expect(host.textContent).toContain('Failed to load the GST defaults.');
+  });
+
+  /**
+   * A failed read leaves the form on its "no default" placeholders, which are a real value the API
+   * would store. Saving them would erase whatever defaults the supplier already has, so saving must
+   * stay impossible until the stored defaults have actually been read back.
+   */
+  it('keeps saving disabled after a failed load, so a failed GET cannot lead to a PUT', async () => {
+    const { fixture, saveButton, save, setGstDefaults } = await render(
+      jest.fn(() => throwError(() => new Error('unavailable')))
+    );
+
+    expect(fixture.componentInstance.loaded).toBe(false);
+    expect(saveButton().disabled).toBe(true);
+    save();
+    fixture.componentInstance.save();
+
+    expect(setGstDefaults).not.toHaveBeenCalled();
+  });
+
+  it('keeps saving disabled while the defaults are still loading', async () => {
+    const { saveButton, fixture, setGstDefaults } = await render(jest.fn(() => new Subject<SupplierGstDefaults>()));
+
+    expect(saveButton().disabled).toBe(true);
+    fixture.componentInstance.save();
+
+    expect(setGstDefaults).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Opening supplier A and then B leaves A's read in flight. If A's slower response populated the
+   * form, the next save would write A's defaults onto B. The read for the supplier no longer on
+   * screen must be abandoned, whenever it finishes.
+   */
+  it('ignores a slower read for a supplier that is no longer on screen', async () => {
+    const reads = new Map<number, Subject<SupplierGstDefaults>>();
+    const getGstDefaults = jest.fn((id: number) => {
+      const read = new Subject<SupplierGstDefaults>();
+      reads.set(id, read);
+      return read;
+    });
+    const { fixture, host, save, openSupplier, setGstDefaults } = await render(getGstDefaults);
+
+    openSupplier(8, 'Bulk Supplies');
+    reads.get(8)!.next(defaultsFor(8, GstClassification.Taxable, GstClassification.Unknown, GstClassification.GstFree));
+    fixture.detectChanges();
+
+    // Supplier 7's response arrives out of order, after supplier 8 is already on screen.
+    reads.get(7)!.next(defaultsFor(7, GstClassification.GstFree, GstClassification.GstFree, GstClassification.GstFree));
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.form).toEqual({
+      productLineGstDefault: GstClassification.Taxable,
+      deliveryGstDefault: GstClassification.Unknown,
+      packageGstDefault: GstClassification.GstFree
+    });
+    expect(host.textContent).toContain('Bulk Supplies');
+
+    save();
+
+    expect(setGstDefaults).toHaveBeenCalledTimes(1);
+    expect(setGstDefaults).toHaveBeenCalledWith(8, {
+      productLineGstDefault: GstClassification.Taxable,
+      deliveryGstDefault: GstClassification.Unknown,
+      packageGstDefault: GstClassification.GstFree
+    });
+  });
+
+  /**
+   * The same ordering problem applies to a save: its outcome belongs to the supplier it was issued
+   * for, so it must not be reported on - or re-enable - the form of a supplier opened since.
+   */
+  it('does not report a save for one supplier on the form of another', async () => {
+    const saves = new Map<number, Subject<void>>();
+    const setGstDefaults = jest.fn((id: number) => {
+      const pending = new Subject<void>();
+      saves.set(id, pending);
+      return pending;
+    });
+    const { fixture, host, save, openSupplier } = await render(
+      jest.fn((id: number) => of(defaultsFor(id, GstClassification.Taxable, GstClassification.Unknown, GstClassification.Unknown))),
+      setGstDefaults
+    );
+
+    save();
+    openSupplier(8, 'Bulk Supplies');
+
+    saves.get(7)!.next();
+    saves.get(7)!.complete();
+    fixture.detectChanges();
+
+    expect(host.textContent).not.toContain('GST defaults saved.');
+    expect(fixture.componentInstance.saved).toBe(false);
+  });
+
+  it('does not report a failed save for one supplier on the form of another', async () => {
+    const saves = new Map<number, Subject<void>>();
+    const setGstDefaults = jest.fn((id: number) => {
+      const pending = new Subject<void>();
+      saves.set(id, pending);
+      return pending;
+    });
+    const { fixture, host, save, openSupplier } = await render(
+      jest.fn((id: number) => of(defaultsFor(id, GstClassification.Taxable, GstClassification.Unknown, GstClassification.Unknown))),
+      setGstDefaults
+    );
+
+    save();
+    openSupplier(8, 'Bulk Supplies');
+
+    saves.get(7)!.error(new Error('rejected'));
+    fixture.detectChanges();
+
+    expect(host.textContent).not.toContain('Failed to save the GST defaults.');
+    expect(fixture.componentInstance.error).toBe('');
   });
 
   /**
