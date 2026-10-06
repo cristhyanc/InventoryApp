@@ -1,63 +1,69 @@
-<div class="mb-6 rounded-xl bg-white p-4 shadow-sm sm:p-6">
-  <h1 class="mb-4 text-lg font-semibold text-slate-800">Machines</h1>
-  <input
-    class="w-full max-w-xs"
-    [ngModel]="search"
-    (ngModelChange)="onSearchChange($event)"
-    placeholder="Search by name or number"
-    aria-label="Search machines by name or number" />
-</div>
-
-<div class="rounded-xl bg-white p-4 shadow-sm sm:p-6">
-  @if (loadState.loadFailed) {
-    <p class="text-sm text-red-600">Failed to load machines. Reload the page to try again.</p>
-  } @else if (!loadState.loaded) {
-    <div class="space-y-3">
-      <p class="text-sm text-slate-500">Loading machines&hellip;</p>
-      <div class="h-16 w-full animate-pulse rounded bg-slate-100"></div>
-      <div class="h-16 w-full animate-pulse rounded bg-slate-100"></div>
-      <div class="h-16 w-full animate-pulse rounded bg-slate-100"></div>
+<div class="page">
+  <header class="page-header">
+    <h1 class="page-title">Machines</h1>
+    <div class="page-actions">
+      <input
+        class="w-full max-w-xs"
+        [ngModel]="search"
+        (ngModelChange)="onSearchChange($event)"
+        placeholder="Search by name or number"
+        aria-label="Search machines by name or number" />
     </div>
-  } @else if (machines.length === 0) {
-    <p class="text-sm text-slate-500">No machines available yet.</p>
-  } @else if (filteredMachines.length === 0) {
-    <p class="text-sm text-slate-500">No machines match your search.</p>
-  } @else {
-    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-      @for (machine of filteredMachines; track machine.machineID) {
-        <a
-          [routerLink]="['/machines', machine.machineID]"
-          class="block rounded-lg border border-slate-200 p-4 transition hover:border-blue-400 hover:shadow-md">
-          <div class="mb-2 flex items-start justify-between gap-2">
-            <div>
-              <div class="font-semibold text-slate-800">{{ machine.machineName || 'Unnamed machine' }}</div>
-              @if (machine.machineNumber) {
-                <div class="text-xs text-slate-500">#{{ machine.machineNumber }}</div>
-              }
-            </div>
-            @if (machine.profitabilityStatus) {
-              <span class="inline-flex shrink-0 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">{{ machine.profitabilityStatus }}</span>
-            }
-          </div>
+  </header>
 
-          <div class="grid grid-cols-2 gap-3 text-sm">
-            <div>
-              <div class="text-xs uppercase tracking-wide text-slate-400">Today</div>
-              <div class="text-slate-700">${{ machine.todayGrossRevenue.toFixed(2) }} sales</div>
-              <div class="text-xs text-slate-500">
-                {{ machine.todayDirectProfit == null ? 'Profit unavailable' : ('$' + machine.todayDirectProfit.toFixed(2) + ' profit') }}
+  <section class="card">
+    <div class="card-body">
+      @if (loadState.loadFailed) {
+        <p class="text-md-body text-md-danger-text">Failed to load machines. Reload the page to try again.</p>
+      } @else if (!loadState.loaded) {
+        <div class="space-y-3">
+          <p class="text-md-body value-muted">Loading machines&hellip;</p>
+          <div class="h-16 w-full animate-pulse rounded bg-md-gray-100"></div>
+          <div class="h-16 w-full animate-pulse rounded bg-md-gray-100"></div>
+          <div class="h-16 w-full animate-pulse rounded bg-md-gray-100"></div>
+        </div>
+      } @else if (machines.length === 0) {
+        <p class="text-md-body value-muted">No machines available yet.</p>
+      } @else if (filteredMachines.length === 0) {
+        <p class="text-md-body value-muted">No machines match your search.</p>
+      } @else {
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          @for (machine of filteredMachines; track machine.machineID) {
+            <a
+              [routerLink]="['/machines', machine.machineID]"
+              class="block rounded-md-card border border-md-gray-200 p-4 transition hover:border-md-info hover:shadow-md">
+              <div class="mb-2 flex items-start justify-between gap-2">
+                <div>
+                  <div class="font-semibold text-md-gray-800">{{ machine.machineName || 'Unnamed machine' }}</div>
+                  @if (machine.machineNumber) {
+                    <div class="text-md-badge value-muted">#{{ machine.machineNumber }}</div>
+                  }
+                </div>
+                @if (machine.profitabilityStatus) {
+                  <span class="badge badge-neutral shrink-0">{{ machine.profitabilityStatus }}</span>
+                }
               </div>
-            </div>
-            <div>
-              <div class="text-xs uppercase tracking-wide text-slate-400">This Week</div>
-              <div class="text-slate-700">${{ machine.currentWeekGrossRevenue.toFixed(2) }} sales</div>
-              <div class="text-xs text-slate-500">
-                {{ machine.currentWeekDirectProfit == null ? 'Profit unavailable' : ('$' + machine.currentWeekDirectProfit.toFixed(2) + ' profit') }}
+
+              <div class="grid grid-cols-2 gap-3 text-md-body">
+                <div>
+                  <div class="text-md-badge uppercase tracking-wide value-muted">Today</div>
+                  <div class="text-md-gray-600">${{ machine.todayGrossRevenue.toFixed(2) }} sales</div>
+                  <div class="text-md-badge value-muted">
+                    {{ machine.todayDirectProfit == null ? 'Profit unavailable' : ('$' + machine.todayDirectProfit.toFixed(2) + ' profit') }}
+                  </div>
+                </div>
+                <div>
+                  <div class="text-md-badge uppercase tracking-wide value-muted">This Week</div>
+                  <div class="text-md-gray-600">${{ machine.currentWeekGrossRevenue.toFixed(2) }} sales</div>
+                  <div class="text-md-badge value-muted">
+                    {{ machine.currentWeekDirectProfit == null ? 'Profit unavailable' : ('$' + machine.currentWeekDirectProfit.toFixed(2) + ' profit') }}
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
-        </a>
+            </a>
+          }
+        </div>
       }
     </div>
-  }
+  </section>
 </div>

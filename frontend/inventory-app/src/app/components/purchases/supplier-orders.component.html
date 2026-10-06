@@ -1,108 +1,116 @@
-<div class="mb-6">
-  <h1 class="text-2xl font-semibold text-slate-800">Supplier Orders</h1>
-  <p class="mt-1 text-sm text-slate-500">
-    Showing open orders only (Ordered and Partially received). Received and cancelled orders are not listed here.
-  </p>
-</div>
+<div class="page">
+  <header class="page-header">
+    <div>
+      <h1 class="page-title">Supplier Orders</h1>
+      <p class="page-subtitle">
+        Showing open orders only (Ordered and Partially received). Received and cancelled orders are not listed here.
+      </p>
+    </div>
+  </header>
 
-<div class="mb-6 rounded-xl bg-white p-6 shadow-sm">
-  <div class="flex flex-wrap gap-4">
-    <input
-      class="max-w-[220px]"
-      [(ngModel)]="search"
-      placeholder="Search supplier or reference"
-      aria-label="Search supplier or reference"
-    />
+  <section class="card">
+    <div class="card-body">
+      <div class="flex flex-wrap gap-4">
+        <input
+          class="max-w-[220px]"
+          [(ngModel)]="search"
+          placeholder="Search supplier or reference"
+          aria-label="Search supplier or reference"
+        />
 
-    <select class="max-w-[200px]" [(ngModel)]="statusFilter" aria-label="Status">
-      <option [ngValue]="''">All open statuses</option>
-      <option [ngValue]="0">Ordered</option>
-      <option [ngValue]="1">Partially received</option>
-    </select>
+        <select class="max-w-[200px]" [(ngModel)]="statusFilter" aria-label="Status">
+          <option [ngValue]="''">All open statuses</option>
+          <option [ngValue]="0">Ordered</option>
+          <option [ngValue]="1">Partially received</option>
+        </select>
 
-    <button
-      type="button"
-      class="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-      [disabled]="!hasActiveFilters"
-      (click)="resetFilters()"
-    >
-      Reset
-    </button>
-  </div>
-</div>
+        <button
+          type="button"
+          class="btn btn-secondary"
+          [disabled]="!hasActiveFilters"
+          (click)="resetFilters()"
+        >
+          Reset
+        </button>
+      </div>
+    </div>
+  </section>
 
-<div class="rounded-xl bg-white p-6 shadow-sm">
-  @if (!loadState.loaded && !loadState.loadFailed) {
-    <p class="text-sm text-slate-500">Loading supplier orders…</p>
-  } @else if (loadState.loadFailed) {
-    <p class="text-sm text-red-600">Failed to load supplier orders. Reload the page to try again.</p>
-  } @else if (orders.length === 0) {
-    <p class="text-sm text-slate-500">No active supplier orders.</p>
-  } @else if (filteredOrders.length === 0) {
-    <p class="text-sm text-slate-500">No supplier orders match your filters.</p>
-  } @else {
-    <div class="space-y-4">
-      @for (order of filteredOrders; track order.id) {
-        <div class="border border-slate-200 rounded-lg p-4">
-          <div class="mb-3 flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <h3 class="font-semibold text-slate-800">
-                Order #{{ order.id }} - {{ order.supplier?.name || 'Unknown' }}
-                <span class="ml-2 inline-flex rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">
-                  {{ orderStatus(order.status) }}
-                </span>
-              </h3>
-              <p class="text-sm text-slate-500">
-                {{ order.orderDate | date:'mediumDate' }}@if (order.expectedDate) { · Expected {{ order.expectedDate | date:'mediumDate' }} }@if (order.reference) { · {{ order.reference }} }
-              </p>
+  <section class="card">
+    <div class="card-body">
+      @if (!loadState.loaded && !loadState.loadFailed) {
+        <p class="text-md-body value-muted">Loading supplier orders…</p>
+      } @else if (loadState.loadFailed) {
+        <p class="text-md-body text-md-danger-text">Failed to load supplier orders. Reload the page to try again.</p>
+      } @else if (orders.length === 0) {
+        <p class="text-md-body value-muted">No active supplier orders.</p>
+      } @else if (filteredOrders.length === 0) {
+        <p class="text-md-body value-muted">No supplier orders match your filters.</p>
+      } @else {
+        <div class="flex flex-col gap-4">
+          @for (order of filteredOrders; track order.id) {
+            <div class="rounded-md-card border border-md-gray-200 p-4">
+              <div class="mb-3 flex flex-wrap items-center justify-between gap-4">
+                <div>
+                  <h3 class="font-semibold text-md-gray-800">
+                    Order #{{ order.id }} - {{ order.supplier?.name || 'Unknown' }}
+                    <span class="badge badge-neutral">
+                      {{ orderStatus(order.status) }}
+                    </span>
+                  </h3>
+                  <p class="text-md-body value-muted">
+                    {{ order.orderDate | date:'mediumDate' }}@if (order.expectedDate) { · Expected {{ order.expectedDate | date:'mediumDate' }} }@if (order.reference) { · {{ order.reference }} }
+                  </p>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                  @if (order.status !== 3 && order.status !== 2) {
+                    <button
+                      type="button"
+                      class="btn btn-primary"
+                      (click)="receiveOrder(order)"
+                    >
+                      Receive / Create Purchase
+                    </button>
+                  }
+                  @if (order.status < 2) {
+                    <button
+                      type="button"
+                      class="btn btn-secondary"
+                      (click)="cancelOrder(order)"
+                    >
+                      Cancel
+                    </button>
+                  }
+                </div>
+              </div>
+              <div class="overflow-x-auto">
+                <table class="table">
+                  <thead class="table-head">
+                    <tr>
+                      <th scope="col" class="table-cell">Product</th>
+                      <th scope="col" class="table-cell table-num">Ordered</th>
+                      <th scope="col" class="table-cell table-num">Received</th>
+                      <th scope="col" class="table-cell table-num">Outstanding</th>
+                      <th scope="col" class="table-cell">Unit Price</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    @for (line of order.lines; track line.id) {
+                      <tr class="table-row">
+                        <td class="table-cell">{{ line.product?.name }}</td>
+                        <td class="table-cell table-num">{{ line.quantityOrdered }}</td>
+                        <td class="table-cell table-num">{{ line.quantityReceived }}</td>
+                        <td class="table-cell table-num font-semibold">{{ line.outstandingQuantity }}</td>
+                        <td class="table-cell">{{ line.unitPrice != null ? ('$' + line.unitPrice.toFixed(4)) : '—' }}</td>
+                      </tr>
+                    }
+                  </tbody>
+                </table>
+              </div>
             </div>
-            <div class="flex flex-wrap gap-2">
-              @if (order.status !== 3 && order.status !== 2) {
-                <button
-                  type="button"
-                  class="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-                  (click)="receiveOrder(order)"
-                >
-                  Receive / Create Purchase
-                </button>
-              }
-              @if (order.status < 2) {
-                <button
-                  type="button"
-                  class="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                  (click)="cancelOrder(order)"
-                >
-                  Cancel
-                </button>
-              }
-            </div>
-          </div>
-          <div class="overflow-x-auto">
-            <table class="min-w-full text-sm">
-              <thead class="bg-slate-50">
-                <tr>
-                  <th class="px-4 py-2 text-left font-medium text-slate-700">Product</th>
-                  <th class="px-4 py-2 text-right font-medium text-slate-700">Ordered</th>
-                  <th class="px-4 py-2 text-right font-medium text-slate-700">Received</th>
-                  <th class="px-4 py-2 text-right font-medium text-slate-700">Outstanding</th>
-                  <th class="px-4 py-2 text-left font-medium text-slate-700">Unit Price</th>
-                </tr>
-              </thead>
-              <tbody class="divide-y divide-slate-100">
-                @for (line of order.lines; track line.id) {
-                  <tr>
-                    <td class="px-4 py-2 text-slate-700">{{ line.product?.name }}</td>
-                    <td class="px-4 py-2 text-right">{{ line.quantityOrdered }}</td>
-                    <td class="px-4 py-2 text-right">{{ line.quantityReceived }}</td>
-                    <td class="px-4 py-2 text-right font-semibold">{{ line.outstandingQuantity }}</td>
-                    <td class="px-4 py-2">{{ line.unitPrice != null ? ('$' + line.unitPrice.toFixed(4)) : '—' }}</td>
-                  </tr>
-                }
-              </tbody>
-            </table>
-          </div>
+          }
         </div>
       }
     </div>
-  }
+  </section>
 </div>
