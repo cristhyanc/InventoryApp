@@ -1480,7 +1480,7 @@ The authorizer is why the acceptance criterion "do not rely on regex rejection a
 
 **Audit: one structured log event per query, and no table.** `LoggingPlatformDiagnosticsAudit` writes one `ILogger` `Information` event for every query — including a refused one, which is precisely what an investigation into misuse would look for, and including one whose execution threw instead of returning an outcome, which `RunDiagnosticsQuery` audits as `Failed` before letting the exception propagate — carrying the actor's `(tid, oid)`, the timestamp, the request/correlation id, a SHA-256 fingerprint of the *normalized query shape*, the duration, the row count, the cross-business scope flag and the outcome. It never carries the raw SQL, a result row, a column value, a business name or any credential. There is deliberately **no audit table and no migration**: an audit row written into the same database the query reads would be evidence kept inside the thing it is evidence about, would need an owner for a non-tenant-owned table, and would make a read-only request a write. **The log destination and retention period are platform configuration — Application Insights when `APPLICATIONINSIGHTS_CONNECTION_STRING` is set, the App Service log stream otherwise — and they are set on that resource, not in this repository. The application therefore cannot assert that its audit trail is durable, and does not: a human must verify the destination and retention before relying on this API's audit trail.**
 
-**Repair is out of scope, and must stay a separate, named operation.** This API is read-only and is not an execution path for anything else. Any future data repair must be a separately reviewed, named maintenance operation with a preview/dry-run step and explicit verification — the shape [`bootstrap-business`](#tenant-ownership-issue-64), [`migrate-documents`](#document-storage) and `InventoryCostRepair` already use: explicit, auditable, idempotent or safely restartable, and covered by regression tests. A repair must never be reachable by submitting SQL. Issue #62's Historical GST Preview/Apply is a separate, business-scoped maintenance workflow and does not depend on this API.
+**Repair is out of scope, and must stay a separate, named operation.** This API is read-only and is not an execution path for anything else. Any future data repair must be a separately reviewed, named maintenance operation with a preview/dry-run step and explicit verification — the shape [`bootstrap-business`](#tenant-ownership-issue-64), [`migrate-documents`](#document-storage) and `InventoryCostRepair` already use: explicit, auditable, idempotent or safely restartable, and covered by regression tests. A repair must never be reachable by submitting SQL. Issue #62's [Historical GST Preview/Apply](#historical-gst-classification-preview-and-apply-issue-433) is a separate, business-scoped maintenance workflow and does not depend on this API.
 
 **What proves it.** `Inventory.UnitTests/Application/PlatformDiagnostics` covers the surface contract, the shape check, the limits and their clamping, and the use case's audit behaviour. `Inventory.IntegrationTests/Infrastructure/PlatformDiagnostics/SqliteDiagnosticsQueryExecutorTests` runs against a real migrated SQLite file: permitted reads across two businesses, forbidden columns and tables through joins, subqueries, aliases and expressions, forbidden functions, every write and DDL shape refused with the row counts proving nothing changed, `PRAGMA`/`ATTACH`/transaction control refused, the row and byte caps, a costly permitted query interrupted at its deadline with the next query still working, request cancellation, and a column added to a permitted table after the fact staying inaccessible — including one named `rowid`, `oid` or `_rowid_`, which must be refused rather than mistaken for the internal row identifier. `Inventory.IntegrationTests/Auth/PlatformAdminAuthorizationTests`, `PlatformAdminCompositionTests`, `PlatformDiagnosticsResponseSizeTests` and `BusinessScopeMiddlewarePlatformDiagnosticsTests` cover the HTTP boundary, the shipped unconfigured state, the serialized-byte cap, and the middleware's independent policy re-check.
 
@@ -1737,9 +1737,10 @@ of the page that serves it, which is how the navigation stays free of placeholde
 Users/Roles/Audit/Settings/Profile entries. The super-admin diagnostics page (#335) has not merged,
 so nothing is wired for it yet; when it does, its link belongs in the `Admin` group behind the
 diagnostics access API exactly as that issue implements it. `/admin` itself keeps its own address
-and its `AdminComponent` link hub — the sidebar is now the primary way into the six dedicated Admin
-pages, and `/admin` remains a valid bookmark that the home Dashboard's "Open Admin" action and each
-dedicated page's "Back to Admin" link still reach.
+and its `AdminComponent` link hub — the sidebar is now the primary way into the dedicated Admin
+pages (six at issue #391, joined by `Historical GST Classification` in issue #433), and `/admin`
+remains a valid bookmark that the home Dashboard's "Open Admin" action and each dedicated page's
+"Back to Admin" link still reach.
 
 **Active state.** `activeNavRoute` resolves the current URL to the most specific matching entry,
 rather than relying on `routerLinkActive`, because several destinations are prefixes of each other:
@@ -1965,12 +1966,27 @@ the form's current values, on both the AVCO transition and the costing repair.
 `ProductService.getAll()` for their workflow's product selector, as `AdminComponent` did for both
 workflows.
 
+**Historical GST Classification (issue #433)** joined the same group afterwards and follows the same
+shape:
+
+| Route | Page component | Authoritative boundary it calls |
+| --- | --- | --- |
+| `/admin/historical-gst-classification` | `HistoricalGstClassificationComponent`, composing `HistoricalGstClassificationWorkflowComponent` | `HistoricalGstClassificationService` `preview`/`apply` (`POST api/admin/historical-gst-classification/preview`/`apply`, see [Historical GST classification](#historical-gst-classification-preview-and-apply-issue-433)) |
+
+Its page needs no `@Input` at all, because the action is whole-business rather than per product: the
+workflow component owns the Preview/Apply actions, the confirmation, the reported counts and the
+loading/error lifecycle, and the page renders only the heading and the warning. The workflow
+calculates nothing - no eligibility rule, precedence, GST divisor, rounding rule or stale-preview
+rule exists in the frontend - and carries the preview's `fingerprint` back unchanged. It previews
+nothing on arrival: this maintenance action runs only because a person pressed Preview and then
+Apply.
+
 With this split `AdminComponent` is a link hub only: it holds no workflow state, no service
 dependency and no second copy of any Admin tool, so it no longer owns duplicate costing, import or
 configuration logic. It deliberately keeps its own `/admin` address rather than redirecting to
 `/admin/nayax-settings`, because the home Dashboard's "Open Admin" action and each
 dedicated page's "Back to Admin" link point at it. The sidebar's `Admin` group (issue #391) is now
-the primary way into the six dedicated pages, so `AdminComponent` is a second, still valid entry
+the primary way into the seven dedicated pages, so `AdminComponent` is a second, still valid entry
 point rather than the only one; the root shell no longer links to `/admin` itself, because the
 group heading replaced that single header link.
 
@@ -2121,7 +2137,7 @@ The public property name `UnitPrice` is retained for API/contract compatibility.
 
 ### Purchase GST classification (issue #429)
 
-Purchase amounts are GST-inclusive, and input GST is derived from an explicit classification rather than from an amount. Issue #429 added the data model, the Domain rule and the purchase API surface for the approved GST design of parent issue #62. Issue #431 added the purchase form's pickers and the purchase response's input-GST summary (see [Purchase GST on the purchase pages](#purchase-gst-on-the-purchase-pages-issue-431) below). Issue #430 added product/supplier rule configuration (see [Product and supplier GST rules](#product-and-supplier-gst-rules-issue-430) below). Issue #432 added the reporting consumer, described in [Purchase input GST in the GST accounting aid](#purchase-input-gst-in-the-gst-accounting-aid-issue-432) below. The historical Preview/Apply maintenance workflow (#433) builds on them and is not part of any of these.
+Purchase amounts are GST-inclusive, and input GST is derived from an explicit classification rather than from an amount. Issue #429 added the data model, the Domain rule and the purchase API surface for the approved GST design of parent issue #62. Issue #431 added the purchase form's pickers and the purchase response's input-GST summary (see [Purchase GST on the purchase pages](#purchase-gst-on-the-purchase-pages-issue-431) below). Issue #430 added product/supplier rule configuration (see [Product and supplier GST rules](#product-and-supplier-gst-rules-issue-430) below). Issue #432 added the reporting consumer, described in [Purchase input GST in the GST accounting aid](#purchase-input-gst-in-the-gst-accounting-aid-issue-432) below. Issue #433 added the historical Preview/Apply maintenance workflow, the one place a rule is applied to purchase data that already exists; see [Historical GST classification](#historical-gst-classification-preview-and-apply-issue-433) below. It is not part of any of the earlier four.
 
 **Where each piece lives**, following the Purchasing and costing slice's ownership:
 
@@ -2184,7 +2200,7 @@ A classification says what a recorded purchase component *is*. A **rule** says w
 
 **The rules themselves:**
 
-- Precedence, for whoever reads a rule (today only #433): manual always wins and is never overwritten; then the product's rule; then the supplier's product-line default for a line, or its matching fee default for a delivery or package charge; otherwise the component stays `Unknown`.
+- Precedence, for whoever reads a rule (today only the [historical Preview/Apply workflow](#historical-gst-classification-preview-and-apply-issue-433), which applies it through `HistoricalGstClassificationPolicy`): manual always wins and is never overwritten; then the product's rule; then the supplier's product-line default for a line, or its matching fee default for a delivery or package charge; otherwise the component stays `Unknown`.
 - A supplier default is explicit configuration. GST registration, GST elsewhere on an invoice, a product's price - none of them configure a default, and nothing in the code derives one.
 - Saving a rule or a default changes no recorded purchase: not its classification, provenance, amounts, costing or stock movements. `ProductAndSupplierGstRuleApiTests` compares every purchase and purchase line of both synthetic businesses across each request, and the migration upgrade test asserts the same across the schema change.
 - Only a declared value is a rule. `{"gstRule": 999}` binds to a `GstClassification` no policy describes, so it is refused with `400` and nothing is written - including the rule the row already had.
@@ -2207,6 +2223,30 @@ The GST accounting aid (`GET api/reports/gst` and its CSV/XLSX export) reports p
 - A machine-filtered report excludes purchases altogether, because a purchase is a whole-business record with no machine — the same exclusion bookkeeping applies to its delivery/package totals, and the same reason whole-business net profit is unavailable for a machine-filtered report.
 - The CSV/XLSX export carries `PurchaseLineGst`, `PurchaseChargeGst`, `PurchaseInputGst`, `PurchaseUnresolvedComponents`, `PurchaseUnresolvedAmount` and `PurchaseGstIncomplete` beside the existing columns, from the same result object the API returns. The Angular GST report displays those values and the incomplete warning and calculates nothing.
 - Delivery and package costs remain GST-inclusive wherever bookkeeping presents them as expenses (decision D5); this issue added no GST-exclusive expense figure.
+
+### Historical GST classification: Preview and Apply (issue #433)
+
+Issue #430 added rules that *could* classify a component; this is the one place a rule is ever applied to purchase data that already exists. It is an explicit, human-triggered maintenance action with a read-only preview and an all-or-nothing apply - the same shape `bootstrap-business`, `migrate-documents` and the costing repair already use (AGENTS.md § Architecture rules, "any future data repair must be a separately reviewed, named maintenance operation with a preview/dry-run step and explicit verification"). It never runs on a migration, a deployment, a startup step, a purchase read, a report, an import, or when a rule is configured.
+
+**Where each piece lives:**
+
+- `Inventory.Domain.Gst.HistoricalGstClassificationPolicy` is the one authoritative rule. `IsReclassifiable` answers "may a rule touch this component at all?" - only one carrying no classification yet (`Unknown`/`Unknown`), so a `Manual` classification and an earlier rule-based one are both left alone. `Resolve` applies the precedence, selecting the supplier's fee default by component kind itself so "a charge never inherits the product-line default" is decided in one place. `Plan` turns a business's stored purchases into both the summary a person approves and the exact component writes it stands for. It owns no amount and no rounding: the GST comes from `Inventory.Domain.Reporting.Gst.PurchaseInputGstPolicy` over the newly classified components only, which delegates to `PurchaseGstPolicy`, so the figure an operator approves is produced by the calculation the GST accounting aid reports with.
+- `Inventory.Domain.Gst.GstComponentKind` names the three kinds (product line, delivery charge, package charge), because the kind is what decides which rule may classify a component.
+- `Inventory.Domain.Gst.HistoricalGstPurchase`/`HistoricalGstPurchaseLine` are the input shape: every component of a purchase with its stored classification state and the configured rules that could classify it. They deliberately carry the already-classified components too, which is what lets the fingerprint notice relevant data changing.
+- `Inventory.Domain.Gst.HistoricalGstClassificationFingerprint` is the stale- and foreign-preview guard, built the same way `Inventory.Domain.Costing.CostLedgerFingerprint` is: a canonical rendering (fixed field order, collections sorted by key, decimals without insignificant trailing zeros) hashed to SHA-256. It renders the owning business id, every purchase component's amounts, classification and provenance, and every applicable product rule and supplier default.
+- `Inventory.Application.Gst.PreviewHistoricalGstClassification` and `ApplyHistoricalGstClassification` are the use cases, over the shared internal `HistoricalGstClassificationProjection` so the numbers an operator approves and the numbers the apply validates come from one calculation. `IHistoricalGstClassificationStore` is their narrow port.
+- `Inventory.Infrastructure.Persistence.EfHistoricalGstClassificationStore` is the adapter. Its load projects raw stored values and calculates nothing, exactly as `EfGstReportFactsProvider` does, and returns the whole purchase history rather than the eligible components alone: eligibility is a Domain decision. Its apply sets only the two classification columns per named component. Reads and writes go through the `AppDbContext` tenant query filters and the ownership stamp, so there is no business predicate in the adapter.
+- `HistoricalGstClassificationController` publishes `POST /api/admin/historical-gst-classification/preview` and `.../apply`. Both are POST: the preview writes nothing, but its response carries a fingerprint that is only valid for the exact state it was computed from, and a cached `GET` would hand a caller a fingerprint for data it never read.
+- `components/admin/historical-gst-classification` holds the routed page and the `HistoricalGstClassificationWorkflowComponent` it composes through the page composition boundary. Angular performs no GST arithmetic and no eligibility decision: it renders the API's own counts and totals and carries the fingerprint back unchanged.
+
+**The maintenance boundaries, which are the reason this is a separate named operation:**
+
+- **Preview is read-only by construction**, not by convention: the use case holds no transaction and no write path, and the only store method it can reach is the load.
+- **The apply's authoritative read, its recomputation and its write are one operation.** The apply opens its transaction, re-reads the purchase history and the configured rules, recomputes the plan from that read, compares the fingerprint, and only then writes. A purchase added, edited or deleted, a component classified by hand, or a product rule or supplier default saved in between therefore produces a `400` that writes nothing and asks for a fresh preview. Moving the read outside the transaction, or letting the apply trust the summary it is handed, would silently reintroduce the race.
+- **Nothing a caller submits is written.** `ApplyHistoricalGstClassificationRequest` carries one fingerprint and no classification, provenance, component list, count or GST total. A tampered body can only fail the fingerprint comparison, which is why a request that also claims its own counts, totals or owner changes nothing at all.
+- **The preview is bound to its business.** The `BusinessId` is resolved from the authenticated actor's membership (`ICurrentBusinessProvider.RequireBusinessIdAsync`, fail-closed) and is part of the fingerprint, so one business cannot apply another's preview even in the one case two histories would otherwise render identically - two empty histories. This is an ordinary tenant-scoped endpoint family, and deliberately not the [platform diagnostics](#platform-diagnostics-issue-336) cross-business exception: no diagnostics SQL path is involved.
+- **Idempotence is a Domain property, not a database one.** Because only an unclassified component is eligible, the plan over an applied history is empty; re-running Preview and Apply changes nothing, and a later rule change never silently restates recorded bookkeeping.
+- **Accounting data only.** The apply writes the two classification columns of each named component and nothing else: no purchase amount, unit cost, `AverageUnitCost`, `CostingQuantity`, `InventoryValue`, `QuantityInStock`, stock movement or stored document. `HistoricalGstClassificationApiTests` compares the purchase amounts and the whole costing/stock snapshot of both synthetic businesses across an apply.
 
 ### Historical inventory cost
 
