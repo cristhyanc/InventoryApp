@@ -11,5 +11,7 @@ module.exports = {
       }
     ]
   },
-  testPathIgnorePatterns: ['<rootDir>/node_modules/', '<rootDir>/dist/']
+  // e2e/ is the separate Playwright project (issue #46) with its own runner and its own
+  // dependencies; Jest must never try to run or transform it.
+  testPathIgnorePatterns: ['<rootDir>/node_modules/', '<rootDir>/dist/', '<rootDir>/e2e/']
 };

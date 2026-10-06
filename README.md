@@ -553,6 +553,32 @@ Quality settings are centralised so every backend project gets them:
 - Coverage is collected on every run (`--collect:"XPlat Code Coverage"`) and written to `backend/InventoryApi.Tests/TestResults/<run-id>/coverage.cobertura.xml`, which is git-ignored. There is deliberately **no** minimum-coverage threshold yet; this establishes the baseline.
 - Architecture tests in `backend/InventoryApi.Tests/Architecture/` enforce the Clean Architecture dependency direction (Domain ← Application ← Infrastructure ← InventoryApi) and keep ASP.NET/EF Core/HTTP types out of Domain and Application. `ProjectDependencyDirectionTests` reads the project files; `CleanArchitectureDependencyTests` (NetArchTest) checks the compiled assemblies.
 
+### End-to-end workflow tests
+
+The browser-level end-to-end suite (issue #46) is **not** part of `scripts/validate.sh`: it drives a real Chromium against a real API, so it is an opt-in command with its own npm project (`frontend/inventory-app/e2e`) and its own dependencies. Keeping Playwright out of `frontend/inventory-app`'s dependency graph is deliberate — `npm ci` runs during repository validation and during the production deployment, and neither may start downloading a browser.
+
+```bash
+# once per machine (installs the suite's dependencies and the Chromium build it pins)
+npm --prefix frontend/inventory-app run e2e:install
+
+# run the suite headlessly
+npm --prefix frontend/inventory-app run e2e
+
+# watch it in a visible browser
+npm --prefix frontend/inventory-app run e2e:headed
+```
+
+Prerequisites: the .NET SDK and Node/npm you already need to build the repository, plus the shared libraries Chromium needs. On a bare Linux machine install those once with `npm --prefix frontend/inventory-app/e2e run browsers:with-deps` (it uses `sudo apt-get`), or install the distribution's Chromium dependencies by hand. No secret, token, Entra account or Nayax credential is involved, and nothing has to be running before you start: Playwright starts the API and the Angular dev server itself and stops both afterwards.
+
+What a run does, and why it is safe to repeat:
+
+- It starts the API as the dedicated **E2ETest** host on `http://127.0.0.1:5199` against a throwaway SQLite database under `frontend/inventory-app/e2e/.artifacts/` (git-ignored, deleted at the start of every run), and the Angular application on `http://127.0.0.1:4300`. Your own `inventory.db` is never opened.
+- That host, and only that host, authenticates the suite's synthetic test actors instead of real Microsoft Entra sign-in, and seeds two synthetic businesses with a small catalogue. See [docs/architecture.md § End-to-end testing authentication](docs/architecture.md#end-to-end-testing-authentication-issue-46) for the scheme and its fail-closed safeguards; the backend suite in `backend/InventoryApi.Tests/Auth/` proves it cannot be reached in any other environment, and those tests *are* part of `scripts/validate.sh`.
+- It registers no Nayax HTTP client at all, so no run can reach the live Nayax operator account.
+- Tests run serially against that one host, each on its own seeded product, and the covered workflows are the reorder → supplier order → receive-as-purchase chain, the positive-magnitude stock correction, purchase create/edit/delete inventory effects, the COGS/profit-unavailable report state, and two-business isolation.
+
+Failure output (screenshots and traces) is written under `frontend/inventory-app/e2e/.artifacts/test-results/`; open a trace with `npm --prefix frontend/inventory-app/e2e exec -- playwright show-trace <path>`.
+
 ### Frontend code quality
 
 - `npm run lint` runs `ng lint`, configured through `frontend/inventory-app/eslint.config.js` (ESLint 9 flat config with `angular-eslint` and `typescript-eslint`).
