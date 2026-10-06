@@ -637,6 +637,11 @@ classification for a whole purchase.
   classification that came from a configured product or supplier rule keeps that origin when you edit a
   quantity, a cost, a date or another line. Choosing **Not classified** again is a deliberate change and is
   saved as one.
+- A line already on the purchase keeps its product: the edit form shows the product name rather than a
+  picker, because a stored line's GST classification, its origin and its restock movement belong to that
+  product. To record a different product, **Remove** that line and add the new product as its own line; the
+  new line starts **Not classified** and carries none of the removed line's classification or history. You can
+  still change a stored line's quantity, unit cost and classification.
 - Each purchase row then shows the API's **Purchase GST (input tax credit)** figure, each component's
   classification, and a warning naming how many components and how much money are still unclassified. Those
   figures are calculated by the API from the saved purchase — the frontend never calculates GST — so while an

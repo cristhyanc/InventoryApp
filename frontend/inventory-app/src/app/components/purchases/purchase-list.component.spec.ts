@@ -256,6 +256,37 @@ describe('PurchaseListComponent GST edit mapping (issue #431)', () => {
     expect(savedItems(update)[1].gstClassification).toBe(GstClassification.Taxable);
   });
 
+  it('changes a stored line\'s product as a removal and a genuinely new line, with no id and no inherited classification', () => {
+    const stored = purchase({
+      items: [item({ id: 11, productId: 10, gstClassification: GstClassification.Taxable, gstClassificationSource: GstClassificationSource.ProductRule })]
+    });
+    const { component, update } = createHarness([stored]);
+
+    component.startEdit(stored);
+    // The only way to record a different product: the stored line goes, the new product arrives as
+    // its own line. Re-pointing line 11 at product 20 is what the server refuses.
+    component.removeEditItem(0);
+    component.addEditItem();
+    component.editItems[0].productId = 20;
+    component.editItems[0].quantity = 3;
+    component.editItems[0].unitCost = 2.5;
+    component.saveEdit(stored);
+
+    expect(savedItems(update)).toEqual([{ productId: 20, quantity: 3, unitCost: 2.5 }]);
+    expect(component.editItems[0].gstClassification).toBe(GstClassification.Unknown);
+  });
+
+  it('treats a stored line as identified and a line added during the edit as new', () => {
+    const stored = purchase({ items: [item({ id: 11 })] });
+    const { component } = createHarness([stored]);
+
+    component.startEdit(stored);
+    component.addEditItem();
+
+    expect(component.isStoredLine(component.editItems[0])).toBe(true);
+    expect(component.isStoredLine(component.editItems[1])).toBe(false);
+  });
+
   it('never submits a classification for a charge the person cleared', () => {
     const stored = purchase({
       deliveryCost: 5,
@@ -378,6 +409,33 @@ describe('PurchaseListComponent GST display (issue #431)', () => {
     expect(summary?.textContent).not.toContain('Delivery:');
     expect(summary?.textContent).not.toContain('Package:');
     expect(host.querySelector('[data-testid="purchase-gst-unresolved"]')).toBeNull();
+  });
+
+  it('offers no product picker for a stored line and explains the remove/add workflow instead', async () => {
+    const stored = purchase({ items: [item({ id: 11, productId: 10 })] });
+    const { fixture, host } = await render([stored], null);
+
+    fixture.componentInstance.startEdit(fixture.componentInstance.purchases[0]);
+    fixture.detectChanges();
+
+    expect(host.querySelectorAll('[data-testid="edit-purchase-item-product"]')).toHaveLength(0);
+    const fixedProduct = host.querySelector('[data-testid="edit-purchase-item-product-fixed"]');
+    expect(fixedProduct?.textContent).toContain('Coke');
+    expect(fixedProduct?.textContent).toContain('Product cannot be changed');
+    expect(fixedProduct?.textContent).toContain('Remove this line and add the new product as its own line');
+  });
+
+  it('offers a product picker for a line added during the edit', async () => {
+    const stored = purchase({ items: [item({ id: 11, productId: 10 })] });
+    const { fixture, host } = await render([stored], null);
+
+    fixture.componentInstance.startEdit(fixture.componentInstance.purchases[0]);
+    fixture.componentInstance.addEditItem();
+    fixture.detectChanges();
+
+    const pickers = host.querySelectorAll('[data-testid="edit-purchase-item-product"]');
+    expect(pickers).toHaveLength(1);
+    expect(host.querySelectorAll('[data-testid="edit-purchase-item"]')).toHaveLength(2);
   });
 
   it('marks the saved figures as not covering unsaved edits while the edit form is open', async () => {

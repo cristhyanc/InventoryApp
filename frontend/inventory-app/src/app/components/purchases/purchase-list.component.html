@@ -153,7 +153,14 @@
                 <div class="mb-2 flex items-center justify-between"><strong class="text-sm">Purchased Items</strong><button type="button" class="rounded border px-2 py-1 text-xs" (click)="addEditItem()">Add Product</button></div>
                 @for (item of editItems; track $index) {
                   <div data-testid="edit-purchase-item" class="mb-2 grid gap-2 md:grid-cols-[minmax(0,3fr)_minmax(7rem,1fr)_minmax(9rem,1fr)_minmax(9rem,1fr)_auto]">
-                    <select data-testid="edit-purchase-item-product" [(ngModel)]="item.productId" [name]="'editProduct' + $index"><option [ngValue]="0">Select product</option>@for (p of products; track p.id) {<option [ngValue]="p.id">{{ p.name }}</option>}</select>
+                    @if (isStoredLine(item)) {
+                      <div data-testid="edit-purchase-item-product-fixed">
+                        <span class="block text-sm text-slate-700">{{ productName(item.productId) }}</span>
+                        <div class="text-xs text-slate-500">Product cannot be changed. Remove this line and add the new product as its own line.</div>
+                      </div>
+                    } @else {
+                      <select data-testid="edit-purchase-item-product" [(ngModel)]="item.productId" [name]="'editProduct' + $index"><option [ngValue]="0">Select product</option>@for (p of products; track p.id) {<option [ngValue]="p.id">{{ p.name }}</option>}</select>
+                    }
                     <input data-testid="edit-purchase-item-quantity" type="number" min="1" step="1" [(ngModel)]="item.quantity" [name]="'editQuantity' + $index" />
                     <div><input data-testid="edit-purchase-item-cost" type="number" min="0" step="0.0001" [(ngModel)]="item.unitCost" [name]="'editCost' + $index" /><div class="text-xs text-slate-500">{{ editLineTotal(item) | currency }}</div></div>
                     <div>
@@ -198,6 +205,8 @@
               Purchase amounts are GST-inclusive. A classification you do not change is left untouched, so an
               automatically derived classification keeps its origin. <strong>Not classified</strong> contributes no GST and
               stays visibly unresolved. The GST amounts are calculated by the API and shown above once you save.
+              A line already on the purchase keeps its product: to record a different product, remove that line and
+              add the new product as its own line, which starts <strong>Not classified</strong>.
             </p>
             <div>
               <label class="mb-1 block text-sm font-medium text-slate-700">Notes</label>

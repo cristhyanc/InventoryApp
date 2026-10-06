@@ -134,6 +134,25 @@ export class PurchaseListComponent implements OnInit, OnDestroy {
     return isChargePresent(amount);
   }
 
+  /**
+   * Whether this edit line is one the purchase already holds, rather than one added in the form.
+   *
+   * A stored line is submitted with its own id, and the server refuses to re-point an identified
+   * line at a different product (`PurchaseLineIdentityPolicy.ProductChangedMessage`): that would move
+   * the line's GST classification, its provenance and its restock movement onto another product's
+   * costing history. So the form does not offer to change it; replacing a product is removing the
+   * line and adding the new product as a line of its own, which is a new line with no id and no
+   * inherited classification.
+   */
+  isStoredLine(item: EditPurchaseItem): boolean {
+    return item.id !== undefined && item.id !== null;
+  }
+
+  /** How a stored edit line names its product, which the form shows instead of a picker. */
+  productName(productId: number): string {
+    return this.products.find((p) => p.id === productId)?.name ?? `Product ${productId}`;
+  }
+
   thumbnailUrl(purchase: Purchase): string | null {
     return this.thumbnailUrls.get(purchase.id) ?? null;
   }
