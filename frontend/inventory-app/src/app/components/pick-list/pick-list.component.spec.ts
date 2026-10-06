@@ -595,7 +595,7 @@ describe('PickListComponent rendered structure', () => {
     expect(headers.map((th) => th.textContent?.trim())).toEqual(['Product', 'Total to Pick', 'Machine A', 'Machine B']);
     for (const th of headers) {
       // Every header cell, not just the first two, is pinned and opaque so rows cannot show through.
-      expect(Array.from(th.classList)).toEqual(expect.arrayContaining(['sticky', 'top-0', 'z-10', 'bg-slate-50']));
+      expect(Array.from(th.classList)).toEqual(expect.arrayContaining(['sticky', 'top-0', 'z-10', 'bg-md-gray-100']));
     }
   });
 
@@ -649,7 +649,7 @@ describe('PickListComponent rendered structure', () => {
 
     click(cokeCell);
 
-    expect(cokeCell.className).toContain('bg-green-100');
+    expect(cokeCell.className).toContain('bg-md-success/15');
     expect(cokeCell.textContent).toContain('✓');
 
     click(cokeCell);
