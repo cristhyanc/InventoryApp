@@ -106,22 +106,7 @@ export class PurchaseService {
   upload(payload: PurchaseUploadPayload): Observable<Purchase> {
     const formData = new FormData();
     formData.append('file', payload.file);
-    formData.append('title', payload.title);
-    if (payload.notes !== undefined && payload.notes !== null)
-      formData.append('notes', payload.notes);
-    if (payload.totalAmount !== undefined && payload.totalAmount !== null)
-      formData.append('totalAmount', String(payload.totalAmount));
-    if (payload.deliveryCost !== undefined && payload.deliveryCost !== null)
-      formData.append('deliveryCost', String(payload.deliveryCost));
-    if (payload.deliveryGstClassification !== undefined && payload.deliveryGstClassification !== null)
-      formData.append('deliveryGstClassification', String(payload.deliveryGstClassification));
-    if (payload.packageCost !== undefined && payload.packageCost !== null)
-      formData.append('packageCost', String(payload.packageCost));
-    if (payload.packageGstClassification !== undefined && payload.packageGstClassification !== null)
-      formData.append('packageGstClassification', String(payload.packageGstClassification));
-    if (payload.purchaseDate) formData.append('purchaseDate', payload.purchaseDate);
-    if (payload.supplierId !== undefined && payload.supplierId !== null)
-      formData.append('supplierId', String(payload.supplierId));
+    this.appendPurchaseFormFields(formData, payload);
     formData.append('items', JSON.stringify(payload.items ?? []));
 
     return this.http.post<PurchaseResponse>(this.baseUrl, formData).pipe(
@@ -135,6 +120,22 @@ export class PurchaseService {
 
   update(id: number, payload: PurchaseUpdatePayload): Observable<Purchase> {
     const formData = new FormData();
+    this.appendPurchaseFormFields(formData, payload);
+    // JSON.stringify drops a line's undefined `id`/`gstClassification`, which is exactly the
+    // omission the server reads as "not submitted".
+    if (payload.items !== undefined) formData.append('items', JSON.stringify(payload.items));
+
+    return this.http.put<PurchaseResponse>(`${this.baseUrl}/${id}`, formData).pipe(
+      map(response => {
+        this.lastValidation = response.validation ?? null;
+        this.rememberEnvelope(response);
+        return response.purchase;
+      })
+    );
+  }
+
+  /** The title/notes/amount/charge/GST/date/supplier fields shared by a create and an update multipart request. */
+  private appendPurchaseFormFields(formData: FormData, payload: Omit<PurchaseUploadPayload, 'file' | 'items'>): void {
     formData.append('title', payload.title);
     if (payload.notes !== undefined && payload.notes !== null)
       formData.append('notes', payload.notes);
@@ -151,17 +152,6 @@ export class PurchaseService {
     if (payload.purchaseDate) formData.append('purchaseDate', payload.purchaseDate);
     if (payload.supplierId !== undefined && payload.supplierId !== null)
       formData.append('supplierId', String(payload.supplierId));
-    // JSON.stringify drops a line's undefined `id`/`gstClassification`, which is exactly the
-    // omission the server reads as "not submitted".
-    if (payload.items !== undefined) formData.append('items', JSON.stringify(payload.items));
-
-    return this.http.put<PurchaseResponse>(`${this.baseUrl}/${id}`, formData).pipe(
-      map(response => {
-        this.lastValidation = response.validation ?? null;
-        this.rememberEnvelope(response);
-        return response.purchase;
-      })
-    );
   }
 
   delete(id: number): Observable<void> {
