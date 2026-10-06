@@ -6,18 +6,198 @@ import { SupplierService } from '../../services/supplier.service';
 import { MachineService } from '../../services/machine.service';
 import { Supplier, Machine } from '../../models/models';
 import { ObjectUrlCache } from '../shared/object-url-cache';
+import { IconComponent } from '../shared/icon.component';
 
 @Component({
   selector: 'app-operating-expense',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, IconComponent],
   template: `
-    <div class="mb-5 flex items-center justify-between"><div><h1 class="text-2xl font-semibold text-slate-800">Operating Expenses</h1><p class="mt-1 text-sm text-slate-500">Manual expenses only. Nayax processing, commissions, delivery and packaging remain separately sourced.</p></div><button class="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white" (click)="startCreate()">Add Expense</button></div>
-    <section class="mb-5 rounded-xl bg-white p-5 shadow-sm">
-      <div class="grid gap-3 md:grid-cols-4"><label class="text-sm">From<input type="date" [(ngModel)]="filters.from" class="mt-1 w-full rounded border p-2"></label><label class="text-sm">To<input type="date" [(ngModel)]="filters.to" class="mt-1 w-full rounded border p-2"></label><label class="text-sm">Category<select [(ngModel)]="filters.category" class="mt-1 w-full rounded border p-2"><option [ngValue]="undefined">All</option>@for (category of categories; track category) {<option [ngValue]="category">{{ categoryLabel(category) }}</option>}</select></label><label class="text-sm">Supplier<select [(ngModel)]="filters.supplierId" class="mt-1 w-full rounded border p-2"><option [ngValue]="undefined">All</option>@for (supplier of suppliers; track supplier.id) {<option [ngValue]="supplier.id">{{ supplier.name }}</option>}</select></label></div><button class="mt-3 rounded border px-3 py-2 text-sm" (click)="load()">Apply filters</button>
-    </section>
-    @if (editing) { <section class="mb-5 rounded-xl border border-blue-200 bg-blue-50 p-5"><h2 class="mb-4 text-lg font-semibold">{{ editing.id ? 'Edit Expense' : 'Add Expense' }}</h2><div class="grid gap-3 md:grid-cols-3"><label class="text-sm">Date<input type="date" [(ngModel)]="form.expenseDate" class="mt-1 w-full rounded border p-2"></label><label class="text-sm">Category<select [(ngModel)]="form.category" class="mt-1 w-full rounded border p-2">@for (category of categories; track category) {<option [ngValue]="category">{{ categoryLabel(category) }}</option>}</select></label><label class="text-sm">Description<input [(ngModel)]="form.description" class="mt-1 w-full rounded border p-2"></label><label class="text-sm">Amount ex GST<input type="number" step="0.01" [(ngModel)]="form.amountExGst" class="mt-1 w-full rounded border p-2"></label><label class="text-sm">GST<input type="number" step="0.01" [(ngModel)]="form.gstAmount" class="mt-1 w-full rounded border p-2"></label><label class="text-sm">Total<input type="number" step="0.01" [(ngModel)]="form.totalAmount" class="mt-1 w-full rounded border p-2"></label><label class="text-sm">Supplier<select [(ngModel)]="form.supplierId" class="mt-1 w-full rounded border p-2"><option [ngValue]="null">Whole business</option>@for (supplier of suppliers; track supplier.id) {<option [ngValue]="supplier.id">{{ supplier.name }}</option>}</select></label><label class="text-sm">Machine (optional)<select [(ngModel)]="form.machineId" class="mt-1 w-full rounded border p-2"><option [ngValue]="null">None</option>@for (machine of machines; track machine.machineID) {<option [ngValue]="machine.machineID">{{ machine.machineName || machine.machineNumber || machine.machineID }}</option>}</select></label><label class="text-sm">Supporting Document<span class="block text-xs text-slate-500">Receipt, invoice or other supporting document</span><input type="file" accept=".jpg,.jpeg,.png,.pdf,.webp,.heic,image/*,application/pdf" (change)="onAttachmentSelected($event)" class="mt-1 w-full rounded border p-2"></label><label class="text-sm">Notes<input [(ngModel)]="form.notes" class="mt-1 w-full rounded border p-2"></label></div>@if (editing.attachmentFileName) {<button type="button" class="mt-3 inline-block text-sm text-blue-600 underline" (click)="viewAttachment(editing)">View document</button>}<div class="mt-4 flex gap-2"><button class="rounded bg-blue-600 px-4 py-2 text-white" (click)="save()">Save</button><button class="rounded border px-4 py-2" (click)="cancel()">Cancel</button></div></section> }
-    <div class="overflow-x-auto rounded-xl bg-white shadow-sm"><table class="min-w-full text-sm"><thead><tr class="bg-slate-50 text-left"><th class="px-4 py-3">Date</th><th class="px-4 py-3">Category</th><th class="px-4 py-3">Description</th><th class="px-4 py-3">Supplier</th><th class="px-4 py-3">Document</th><th class="px-4 py-3">Ex GST</th><th class="px-4 py-3">GST</th><th class="px-4 py-3">Total</th><th class="px-4 py-3"></th></tr></thead><tbody>@for (expense of expenses; track expense.id) {<tr class="border-t"><td class="px-4 py-3">{{ expense.expenseDate | date:'yyyy-MM-dd' }}</td><td class="px-4 py-3">{{ categoryLabel(expense.category) }}</td><td class="px-4 py-3">{{ expense.description }}</td><td class="px-4 py-3">{{ expense.supplierName || '—' }}</td><td class="px-4 py-3">@if (expense.attachmentFileName) {<button type="button" class="text-blue-600 underline" (click)="viewAttachment(expense)">View</button>} @else {—}</td><td class="px-4 py-3">{{ expense.amountExGst | currency }}</td><td class="px-4 py-3">{{ expense.gstAmount | currency }}</td><td class="px-4 py-3">{{ expense.totalAmount | currency }}</td><td class="px-4 py-3"><button class="mr-2 text-blue-600" (click)="startEdit(expense)">Edit</button><button class="text-red-600" (click)="remove(expense)">Delete</button></td></tr>}</tbody><tfoot><tr class="border-t font-semibold"><td colspan="5" class="px-4 py-3">Totals</td><td class="px-4 py-3">{{ total('amountExGst') | currency }}</td><td class="px-4 py-3">{{ total('gstAmount') | currency }}</td><td class="px-4 py-3">{{ total('totalAmount') | currency }}</td><td></td></tr></tfoot></table></div>
+    <div class="page">
+      <header class="page-header">
+        <div>
+          <h1 class="page-title">Operating Expenses</h1>
+          <p class="page-subtitle">Manual expenses only. Nayax processing, commissions, delivery and packaging remain separately sourced.</p>
+        </div>
+        <div class="page-actions">
+          <button type="button" class="btn btn-primary" (click)="startCreate()">
+            <app-icon name="add" [size]="16" />
+            Add Expense
+          </button>
+        </div>
+      </header>
+
+      <section class="card">
+        <div class="card-body">
+          <div class="grid gap-3 md:grid-cols-4">
+            <label class="field">
+              <span class="field-label">From</span>
+              <input type="date" [(ngModel)]="filters.from">
+            </label>
+            <label class="field">
+              <span class="field-label">To</span>
+              <input type="date" [(ngModel)]="filters.to">
+            </label>
+            <label class="field">
+              <span class="field-label">Category</span>
+              <select [(ngModel)]="filters.category">
+                <option [ngValue]="undefined">All</option>
+                @for (category of categories; track category) {
+                  <option [ngValue]="category">{{ categoryLabel(category) }}</option>
+                }
+              </select>
+            </label>
+            <label class="field">
+              <span class="field-label">Supplier</span>
+              <select [(ngModel)]="filters.supplierId">
+                <option [ngValue]="undefined">All</option>
+                @for (supplier of suppliers; track supplier.id) {
+                  <option [ngValue]="supplier.id">{{ supplier.name }}</option>
+                }
+              </select>
+            </label>
+          </div>
+          <button type="button" class="btn btn-secondary btn-sm mt-3" (click)="load()">Apply filters</button>
+        </div>
+      </section>
+
+      @if (editing) {
+        <section class="card">
+          <div class="card-header">
+            <h2 class="card-title">{{ editing.id ? 'Edit Expense' : 'Add Expense' }}</h2>
+          </div>
+          <div class="card-body">
+            <div class="grid gap-3 md:grid-cols-3">
+              <label class="field">
+                <span class="field-label">Date</span>
+                <input type="date" [(ngModel)]="form.expenseDate">
+              </label>
+              <label class="field">
+                <span class="field-label">Category</span>
+                <select [(ngModel)]="form.category">
+                  @for (category of categories; track category) {
+                    <option [ngValue]="category">{{ categoryLabel(category) }}</option>
+                  }
+                </select>
+              </label>
+              <label class="field">
+                <span class="field-label">Description</span>
+                <input [(ngModel)]="form.description">
+              </label>
+              <label class="field">
+                <span class="field-label">Amount ex GST</span>
+                <input type="number" step="0.01" [(ngModel)]="form.amountExGst">
+              </label>
+              <label class="field">
+                <span class="field-label">GST</span>
+                <input type="number" step="0.01" [(ngModel)]="form.gstAmount">
+              </label>
+              <label class="field">
+                <span class="field-label">Total</span>
+                <input type="number" step="0.01" [(ngModel)]="form.totalAmount">
+              </label>
+              <label class="field">
+                <span class="field-label">Supplier</span>
+                <select [(ngModel)]="form.supplierId">
+                  <option [ngValue]="null">Whole business</option>
+                  @for (supplier of suppliers; track supplier.id) {
+                    <option [ngValue]="supplier.id">{{ supplier.name }}</option>
+                  }
+                </select>
+              </label>
+              <label class="field">
+                <span class="field-label">Machine (optional)</span>
+                <select [(ngModel)]="form.machineId">
+                  <option [ngValue]="null">None</option>
+                  @for (machine of machines; track machine.machineID) {
+                    <option [ngValue]="machine.machineID">{{ machine.machineName || machine.machineNumber || machine.machineID }}</option>
+                  }
+                </select>
+              </label>
+              <label class="field">
+                <span class="field-label">Supporting Document</span>
+                <span class="field-hint">Receipt, invoice or other supporting document</span>
+                <input type="file" accept=".jpg,.jpeg,.png,.pdf,.webp,.heic,image/*,application/pdf" (change)="onAttachmentSelected($event)">
+              </label>
+              <label class="field">
+                <span class="field-label">Notes</span>
+                <input [(ngModel)]="form.notes">
+              </label>
+            </div>
+            @if (editing.attachmentFileName) {
+              <button type="button" class="btn btn-link btn-sm mt-3" (click)="viewAttachment(editing)">View document</button>
+            }
+            <div class="page-actions mt-4">
+              <button type="button" class="btn btn-primary" (click)="save()">Save</button>
+              <button type="button" class="btn btn-secondary" (click)="cancel()">Cancel</button>
+            </div>
+          </div>
+        </section>
+      }
+
+      <section class="card">
+        <div class="card-body p-0">
+          <div class="overflow-x-auto">
+            <table class="table">
+              <thead class="table-head">
+                <tr>
+                  <th scope="col" class="table-cell">Date</th>
+                  <th scope="col" class="table-cell">Category</th>
+                  <th scope="col" class="table-cell">Description</th>
+                  <th scope="col" class="table-cell">Supplier</th>
+                  <th scope="col" class="table-cell">Document</th>
+                  <th scope="col" class="table-cell table-num">Ex GST</th>
+                  <th scope="col" class="table-cell table-num">GST</th>
+                  <th scope="col" class="table-cell table-num">Total</th>
+                  <th scope="col" class="table-cell"></th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (expense of expenses; track expense.id) {
+                  <tr class="table-row">
+                    <td class="table-cell">{{ expense.expenseDate | date:'yyyy-MM-dd' }}</td>
+                    <td class="table-cell">{{ categoryLabel(expense.category) }}</td>
+                    <td class="table-cell">{{ expense.description }}</td>
+                    <td class="table-cell">{{ expense.supplierName || '—' }}</td>
+                    <td class="table-cell">
+                      @if (expense.attachmentFileName) {
+                        <button type="button" class="btn btn-link btn-sm" (click)="viewAttachment(expense)">View</button>
+                      } @else {
+                        —
+                      }
+                    </td>
+                    <td class="table-cell table-num">{{ expense.amountExGst | currency }}</td>
+                    <td class="table-cell table-num">{{ expense.gstAmount | currency }}</td>
+                    <td class="table-cell table-num">{{ expense.totalAmount | currency }}</td>
+                    <td class="table-cell">
+                      <div class="flex gap-2">
+                        <button type="button" class="btn btn-sm btn-secondary" (click)="startEdit(expense)">
+                          <app-icon name="edit" [size]="16" />
+                          Edit
+                        </button>
+                        <button type="button" class="btn btn-sm btn-danger" (click)="remove(expense)">
+                          <app-icon name="delete" [size]="16" />
+                          Delete
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                }
+              </tbody>
+              <tfoot class="bg-md-gray-100 font-semibold">
+                <tr>
+                  <td colspan="5" class="table-cell">Totals</td>
+                  <td class="table-cell table-num">{{ total('amountExGst') | currency }}</td>
+                  <td class="table-cell table-num">{{ total('gstAmount') | currency }}</td>
+                  <td class="table-cell table-num">{{ total('totalAmount') | currency }}</td>
+                  <td class="table-cell"></td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+      </section>
+    </div>
   `
 })
 export class OperatingExpenseComponent implements OnInit, OnDestroy {
