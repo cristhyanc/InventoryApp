@@ -126,7 +126,7 @@ public class ProjectDependencyDirectionTests
         {
             Path.GetFullPath(Path.Combine(BackendRoot, "InventoryApi", "Services", "ReportingService.cs")),
             Path.GetFullPath(Path.Combine(BackendRoot, "InventoryApi", "Services", "Interfaces", "IReportingService.cs")),
-            Path.GetFullPath(Path.Combine(BackendRoot, "InventoryApi.Tests", "Architecture", "ProjectDependencyDirectionTests.cs")),
+            Path.GetFullPath(Path.Combine(BackendRoot, "Inventory.IntegrationTests", "Architecture", "ProjectDependencyDirectionTests.cs")),
         };
 
         var offendingFiles = Directory.EnumerateFiles(BackendRoot, "*.cs", SearchOption.AllDirectories)

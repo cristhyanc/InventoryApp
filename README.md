@@ -50,7 +50,8 @@ See [docs/architecture.md](docs/architecture.md) for the current system, target 
 ```text
 Inventory App/
 ├── backend/InventoryApi/          ASP.NET Core API, EF migrations, and solution
-├── backend/InventoryApi.Tests/    Backend test suite
+├── backend/Inventory.UnitTests/   Pure Domain/Application backend tests
+├── backend/Inventory.IntegrationTests/ Database, API, adapter and architecture backend tests
 ├── frontend/inventory-app/        Angular application
 ├── docs/architecture.md           Current and target architecture
 ├── docs/automation.md             Automated development lifecycle and authority model
@@ -304,7 +305,7 @@ step-by-step procedure, including why a plain filesystem copy is unsafe on a liv
 [docs/architecture.md](docs/architecture.md#sqlite-operating-assumptions-and-scale-strategy-issue-53).
 
 **Non-destructive local validation.**
-`backend/InventoryApi.Tests/Operations/SqliteBackupRestoreTests.cs` proves the backup mechanism
+`backend/Inventory.IntegrationTests/Operations/SqliteBackupRestoreTests.cs` proves the backup mechanism
 itself and, built on top of it, the `backup-database` command's path validation, verification,
 hashing, and failure reporting (`DatabaseBackupRunnerTests`) and its argument parsing
 (`BackupDatabaseArgumentsTests`). The upload workflow is covered the same way:
@@ -445,7 +446,7 @@ is "every application warning and error, and nothing a framework emits per reque
 No category may be set below `Warning`: that would hide a real failure from the only place an
 operator can look afterwards. `appsettings.Development.json` raises the framework, EF command and
 Identity.Web categories back to `Information` for local debugging, where nothing is exported.
-`backend/InventoryApi.Tests/Observability/LoggingLevelPolicyTests.cs` enforces all of this.
+`backend/Inventory.IntegrationTests/Observability/LoggingLevelPolicyTests.cs` enforces all of this.
 
 ### KQL troubleshooting queries
 
@@ -550,8 +551,8 @@ Quality settings are centralised so every backend project gets them:
 - **`Directory.Build.props`** (repository root) enables nullable reference types, .NET analyzers at the latest analysis level, `EnforceCodeStyleInBuild`, and `TreatWarningsAsErrors`. A new warning in application code fails the build.
 - **`.editorconfig`** (repository root) holds formatting, naming and diagnostic severities for the whole repository, and is what `dotnet format` enforces. Rules set to `suggestion` are IDE guidance only; only `warning`/`error` rules can fail validation.
 - EF Core generated migrations are the one scoped exception. Their all-lowercase generated class names raise `CS8981`, which `.editorconfig` switches off under `[**/Migrations/*.cs]` only — never globally and never through `<NoWarn>` — because an applied migration must not be renamed. `dotnet format` skips the `Migrations` folder for the same reason.
-- Coverage is collected on every run (`--collect:"XPlat Code Coverage"`) and written to `backend/InventoryApi.Tests/TestResults/<run-id>/coverage.cobertura.xml`, which is git-ignored. There is deliberately **no** minimum-coverage threshold yet; this establishes the baseline.
-- Architecture tests in `backend/InventoryApi.Tests/Architecture/` enforce the Clean Architecture dependency direction (Domain ← Application ← Infrastructure ← InventoryApi) and keep ASP.NET/EF Core/HTTP types out of Domain and Application. `ProjectDependencyDirectionTests` reads the project files; `CleanArchitectureDependencyTests` (NetArchTest) checks the compiled assemblies.
+- Coverage is collected on every run (`--collect:"XPlat Code Coverage"`) and written per test project to `backend/Inventory.UnitTests/TestResults/<run-id>/coverage.cobertura.xml` and `backend/Inventory.IntegrationTests/TestResults/<run-id>/coverage.cobertura.xml`, which are git-ignored. There is deliberately **no** minimum-coverage threshold yet; this establishes the baseline.
+- Architecture tests in `backend/Inventory.IntegrationTests/Architecture/` enforce the Clean Architecture dependency direction (Domain ← Application ← Infrastructure ← InventoryApi) and keep ASP.NET/EF Core/HTTP types out of Domain and Application. `ProjectDependencyDirectionTests` reads the project files; `CleanArchitectureDependencyTests` (NetArchTest) checks the compiled assemblies.
 
 ### Frontend code quality
 

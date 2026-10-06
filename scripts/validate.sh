@@ -7,7 +7,7 @@
 #   2. Restore backend
 #   3. Verify C# formatting          (dotnet format --verify-no-changes)
 #   4. Build backend                 (analyzers + warnings-as-errors, see Directory.Build.props)
-#   5. Test backend with coverage    (includes the architecture tests)
+#   5. Test backend with coverage    (Inventory.UnitTests and Inventory.IntegrationTests; the latter includes the architecture tests)
 #   6. Check vulnerable NuGet packages
 #   7. Install frontend dependencies (npm ci)
 #   8. Angular ESLint                (npm run lint)
