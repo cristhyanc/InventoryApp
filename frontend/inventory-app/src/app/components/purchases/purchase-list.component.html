@@ -27,7 +27,13 @@
               <th scope="col" class="table-cell">Items</th>
               <th scope="col" class="table-cell table-num">Total</th>
               <th scope="col" class="table-cell">Document</th>
-              <th scope="col" class="table-cell text-right">Actions</th>
+              <th
+                scope="col"
+                data-testid="purchases-actions-header"
+                class="table-cell sticky right-0 z-20 border-l border-md-gray-200 bg-md-gray-100 text-right"
+              >
+                Actions
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -62,7 +68,7 @@
                   {{ r.totalAmount !== null && r.totalAmount !== undefined ? (r.totalAmount | currency) : '—' }}
                 </td>
                 <td class="table-cell text-xs value-muted">{{ r.fileName }} · {{ formatSize(r.fileSizeBytes) }}</td>
-                <td class="table-cell">
+                <td data-testid="purchases-actions-cell" class="table-cell sticky right-0 z-10 border-l border-md-gray-200 bg-white">
                   <div class="flex justify-end gap-2">
                     <button type="button" class="btn btn-sm btn-secondary" (click)="startEdit(r)">
                       <app-icon name="edit" [size]="16" />
