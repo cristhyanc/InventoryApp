@@ -52,7 +52,7 @@ export type PlatformDiagnosticsTruncationReason = 'RowLimit' | 'ResponseByteLimi
  * inferred from the status code.
  */
 export interface PlatformDiagnosticsQueryResult {
-  outcome: PlatformDiagnosticsOutcome | string;
+  outcome: PlatformDiagnosticsOutcome;
   denialReason: string | null;
   message: string | null;
   crossBusinessScope: boolean;
@@ -60,7 +60,7 @@ export interface PlatformDiagnosticsQueryResult {
   rows: (string | null)[][];
   rowCount: number;
   truncated: boolean;
-  truncationReason: PlatformDiagnosticsTruncationReason | string | null;
+  truncationReason: PlatformDiagnosticsTruncationReason | null;
   durationMilliseconds: number;
   queryFingerprint: string;
 }

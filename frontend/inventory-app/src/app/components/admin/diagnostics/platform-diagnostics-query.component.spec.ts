@@ -394,8 +394,8 @@ describe('PlatformDiagnosticsQueryComponent persistence and disclosure (issue #3
 
     expect(local).not.toHaveBeenCalled();
     expect(session).not.toHaveBeenCalled();
-    expect(window.localStorage.length).toBe(0);
-    expect(window.sessionStorage.length).toBe(0);
+    expect(window.localStorage).toHaveLength(0);
+    expect(window.sessionStorage).toHaveLength(0);
   });
 
   it('logs neither the statement nor the results', async () => {
