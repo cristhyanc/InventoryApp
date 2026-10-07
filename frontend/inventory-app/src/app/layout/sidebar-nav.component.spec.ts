@@ -1,6 +1,8 @@
 import { Component } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
+import { NEVER, Observable, of, throwError } from 'rxjs';
+import { PlatformDiagnosticsAccessService } from '../services/platform-diagnostics-access.service';
 import { SidebarNavComponent } from './sidebar-nav.component';
 import { NavGroup, navLinks, primaryNavigation } from './navigation';
 
@@ -13,10 +15,22 @@ interface Rendered {
   host: HTMLElement;
 }
 
-async function render(options: { expanded?: boolean; drawer?: boolean; url?: string } = {}): Promise<Rendered> {
+/**
+ * The diagnostics access probe is stubbed, because the sidebar must never be the thing that
+ * decides platform-admin access: it renders whatever the API's answer was (issue #335).
+ */
+async function render(
+  options: { expanded?: boolean; drawer?: boolean; url?: string; diagnosticsAccess?: Observable<boolean> } = {}
+): Promise<Rendered> {
   await TestBed.configureTestingModule({
     imports: [SidebarNavComponent],
-    providers: [provideRouter([{ path: '**', component: BlankPageComponent }])]
+    providers: [
+      provideRouter([{ path: '**', component: BlankPageComponent }]),
+      {
+        provide: PlatformDiagnosticsAccessService,
+        useValue: { isGranted: () => options.diagnosticsAccess ?? of(false) }
+      }
+    ]
   }).compileComponents();
 
   if (options.url) {
@@ -198,6 +212,70 @@ describe('SidebarNavComponent collapsed state (issue #391)', () => {
     fixture.detectChanges();
 
     expect(link(host, '/reports/gst')).not.toBeNull();
+  });
+});
+
+/**
+ * The conditional super-admin diagnostics link (issue #335). The sidebar renders the API's
+ * answer; it never decides it, and a hidden link protects nothing - `/admin/diagnostics` and both
+ * diagnostics endpoints are independently authorized by the API.
+ */
+describe('SidebarNavComponent super-admin diagnostics link (issue #335)', () => {
+  it('offers no diagnostics link when the API does not confirm platform-admin access', async () => {
+    const { fixture, host } = await render({ diagnosticsAccess: of(false) });
+    groupToggle(host, 'Admin').click();
+    fixture.detectChanges();
+
+    expect(link(host, '/admin/diagnostics')).toBeNull();
+    expect(host.textContent).not.toContain('Platform Diagnostics');
+  });
+
+  it('offers no diagnostics link while the access probe has not answered', async () => {
+    const { fixture, host } = await render({ diagnosticsAccess: NEVER });
+    groupToggle(host, 'Admin').click();
+    fixture.detectChanges();
+
+    expect(link(host, '/admin/diagnostics')).toBeNull();
+  });
+
+  it('offers no diagnostics link when the access probe fails', async () => {
+    const { fixture, host } = await render({ diagnosticsAccess: throwError(() => new Error('probe failed')) });
+    groupToggle(host, 'Admin').click();
+    fixture.detectChanges();
+
+    expect(link(host, '/admin/diagnostics')).toBeNull();
+  });
+
+  it('renders it inside the Admin group once the API confirms access', async () => {
+    const { fixture, host } = await render({ diagnosticsAccess: of(true) });
+    expect(link(host, '/admin/diagnostics')).toBeNull();
+
+    groupToggle(host, 'Admin').click();
+    fixture.detectChanges();
+
+    const diagnostics = link(host, '/admin/diagnostics');
+    expect(diagnostics).not.toBeNull();
+    expect(diagnostics?.textContent?.trim()).toBe('Platform Diagnostics');
+    for (const route of adminChildRoutes) {
+      expect(link(host, route)).not.toBeNull();
+    }
+  });
+
+  it('marks the diagnostics page active and opens the Admin group for it', async () => {
+    const { host } = await render({ url: '/admin/diagnostics', diagnosticsAccess: of(true) });
+
+    expect(groupToggle(host, 'Admin').getAttribute('aria-expanded')).toBe('true');
+    expect(link(host, '/admin/diagnostics')?.getAttribute('aria-current')).toBe('page');
+  });
+
+  it('adds no other destination when access is confirmed', async () => {
+    const { component } = await render({ diagnosticsAccess: of(true) });
+
+    expect(component.navigation.map((entry) => entry.label)).toEqual(primaryNavigation.map((entry) => entry.label));
+    expect(navLinks(component.navigation).map((entry) => entry.route)).toEqual([
+      ...navLinks(primaryNavigation).map((entry) => entry.route),
+      '/admin/diagnostics'
+    ]);
   });
 });
 

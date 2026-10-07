@@ -5,6 +5,7 @@ import { MsalBroadcastService, MsalService } from '@azure/msal-angular';
 import { AccountInfo, InteractionStatus } from '@azure/msal-browser';
 import { BehaviorSubject, of } from 'rxjs';
 import { AppComponent } from './app.component';
+import { PlatformDiagnosticsAccessService } from './services/platform-diagnostics-access.service';
 
 @Component({ standalone: true, template: 'page body' })
 class BlankPageComponent {}
@@ -65,7 +66,11 @@ async function render(options: { signedIn?: boolean } = {}): Promise<Rendered> {
     providers: [
       provideRouter([{ path: '**', component: BlankPageComponent }]),
       { provide: MsalService, useValue: msalService },
-      { provide: MsalBroadcastService, useValue: { inProgress$: new BehaviorSubject(InteractionStatus.None) } }
+      { provide: MsalBroadcastService, useValue: { inProgress$: new BehaviorSubject(InteractionStatus.None) } },
+      // The shell renders the sidebar, which asks the diagnostics API whether to offer the
+      // super-admin link (issue #335). The shell itself owns no part of that decision, so the
+      // probe is stubbed as refused here and tested where it belongs.
+      { provide: PlatformDiagnosticsAccessService, useValue: { isGranted: () => of(false) } }
     ]
   }).compileComponents();
 

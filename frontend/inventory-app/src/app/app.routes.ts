@@ -196,6 +196,16 @@ export const routes: Routes = [
       )
   },
   {
+    // The super-admin diagnostics page (issue #335). `MsalGuard` only requires a signed-in
+    // actor, exactly as every other route does: platform-admin access is decided by the
+    // diagnostics API on every request, so entering this URL directly is safe and the page shows
+    // a refusal rather than a query form.
+    path: 'admin/diagnostics',
+    canActivate: [MsalGuard],
+    loadComponent: () =>
+      import('./components/admin/diagnostics/platform-diagnostics.component').then((m) => m.PlatformDiagnosticsComponent)
+  },
+  {
     path: 'admin/nayax-settings',
     canActivate: [MsalGuard],
     loadComponent: () =>
