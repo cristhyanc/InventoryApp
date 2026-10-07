@@ -104,6 +104,62 @@ public class CalculateReorderNeedsTests
         Assert.Equal(2, result.MachineReplenishmentNeedByProductId[100]);
     }
 
+    /// <summary>
+    /// Issue #459: the same fleet read also keeps the individual selections and the machines it
+    /// covered, so the home Dashboard's refill card needs no second fan-out. The machine a selection
+    /// is attributed to is the machine the request was made for, not the payload's own nullable
+    /// <c>MachineID</c> field, and an unmapped selection is retained (it is the caller's catalogue
+    /// that decides whether it is evaluated) even though it still contributes no replenishment need.
+    /// </summary>
+    [Fact]
+    public async Task Handle_KeepsTheIndividualMachineSelectionsFromTheSameFleetRead()
+    {
+        var nayax = NayaxWithMachines(2, 1);
+        nayax.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<NayaxMachineProduct>
+            {
+                new() { NayaxProductID = 100, PAR = 10, MissingStockByMDB = 4, VendOutAlertThreshold = 2 },
+            });
+        nayax.Setup(x => x.GetMachineProductsAsync(2, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<NayaxMachineProduct>
+            {
+                new() { NayaxProductID = null, MachineID = 999, PAR = 5, MissingStockByMDB = 5 },
+            });
+
+        var result = await new CalculateReorderNeeds(nayax.Object, EmptyOutstandingStore().Object)
+            .Handle(CancellationToken.None);
+
+        Assert.Equal([1L, 2L], result.MachineIds);
+        Assert.Equal(2, result.MachineSelections.Count);
+
+        var first = result.MachineSelections[0];
+        Assert.Equal(1, first.MachineId);
+        Assert.Equal(100, first.ProductId);
+        Assert.Equal(10, first.Par);
+        Assert.Equal(4, first.MissingStockByMdb);
+        Assert.Equal(2, first.VendOutAlertThreshold);
+
+        var second = result.MachineSelections[1];
+        Assert.Equal(2, second.MachineId);
+        Assert.Null(second.ProductId);
+        Assert.Equal(5, second.Par);
+        Assert.Equal(0, second.VendOutAlertThreshold);
+    }
+
+    [Fact]
+    public async Task Handle_ReportsEveryMachineItCovered_IncludingOnesWithNoSelections()
+    {
+        var nayax = NayaxWithMachines(1, 2);
+        nayax.Setup(x => x.GetMachineProductsAsync(It.IsAny<long>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<NayaxMachineProduct>());
+
+        var result = await new CalculateReorderNeeds(nayax.Object, EmptyOutstandingStore().Object)
+            .Handle(CancellationToken.None);
+
+        Assert.Equal([1L, 2L], result.MachineIds);
+        Assert.Empty(result.MachineSelections);
+    }
+
     [Fact]
     public async Task Handle_ReturnsOutstandingOrderQuantitiesFromTheStorePort()
     {
