@@ -72,12 +72,17 @@ public static class MachineRefillAlertPolicy
     /// comparison is inclusive, matching the existing site alert rule exactly (a selection sitting
     /// on its vend-out alert threshold is already low).
     /// </summary>
-    public static MachineSelectionStockLevel Classify(int quantity, int vendOutAlertThreshold) =>
-        quantity <= 0
-            ? MachineSelectionStockLevel.Empty
-            : quantity <= vendOutAlertThreshold
-                ? MachineSelectionStockLevel.Low
-                : MachineSelectionStockLevel.Stocked;
+    public static MachineSelectionStockLevel Classify(int quantity, int vendOutAlertThreshold)
+    {
+        if (quantity <= 0)
+        {
+            return MachineSelectionStockLevel.Empty;
+        }
+
+        return quantity <= vendOutAlertThreshold
+            ? MachineSelectionStockLevel.Low
+            : MachineSelectionStockLevel.Stocked;
+    }
 
     /// <summary>
     /// Summarizes the fleet's selections. A selection with no mapped catalogue product, or one whose
