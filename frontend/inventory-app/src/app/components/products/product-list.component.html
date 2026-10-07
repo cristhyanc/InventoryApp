@@ -27,6 +27,13 @@
     } @else if (loadState.loaded && products.length === 0) {
       <p class="p-4 text-md-body value-muted">No products match your filters.</p>
     } @else if (loadState.loaded) {
+      <!--
+        The Actions column is pinned to the right edge of this scroll area (rather than the whole
+        table) so Edit/Stock/Delete stay visible and usable without scrolling to discover them when
+        long product names or a populated Category/Supplier/Price/Stock/Status set of columns push
+        the table wider than the viewport. Each sticky cell carries its own opaque #410 token
+        background, because a transparent cell would let scrolled columns show through underneath it.
+      -->
       <div class="overflow-x-auto">
         <table class="table">
           <thead class="table-head">
@@ -37,7 +44,7 @@
               <th scope="col" class="table-cell table-num">Price</th>
               <th scope="col" class="table-cell">Stock</th>
               <th scope="col" class="table-cell">Status</th>
-              <th scope="col" class="table-cell"></th>
+              <th scope="col" class="table-cell sticky right-0 z-10 bg-md-gray-100"></th>
             </tr>
           </thead>
           <tbody>
@@ -57,8 +64,8 @@
                     {{ p.isActive ? 'Active' : 'Inactive' }}
                   </button>
                 </td>
-                <td class="table-cell">
-                  <div class="flex flex-wrap gap-2">
+                <td class="table-cell sticky right-0 z-10 bg-white">
+                  <div class="flex flex-wrap gap-2 max-w-[140px] sm:max-w-none">
                     <a [routerLink]="['/products', p.id, 'edit']" class="btn btn-sm btn-secondary">Edit</a>
                     <a [routerLink]="['/products', p.id, 'stock']" class="btn btn-sm btn-primary">Stock</a>
                     <button type="button" class="btn btn-sm btn-danger" (click)="confirmDelete(p)">Delete</button>
