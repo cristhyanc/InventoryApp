@@ -1814,6 +1814,15 @@ its route exist — not a template change in the shell.
   its open panel as a compact dropdown (`rounded-md-card`, `shadow-md`). The main content wrapper
   carries the same canvas colour and the #410 page padding (`p-4 sm:p-6`) so a restyled page's cards
   sit on the light grey canvas.
+- **Main content width (issue #454).** The main content wrapper has no `max-width` or centering of
+  its own: it fills whatever space the flex row beside the sidebar leaves it, at any sidebar state
+  (expanded, collapsed, or the narrow drawer) and at any desktop width, with only the #410 page
+  padding as a gutter. A data-heavy page (Products, Dashboard, Purchases, Reconciliation,
+  Transaction Sales) therefore uses the full main-area width; it does not reintroduce a capped,
+  centered column. A page or a component inside it may still choose its own narrower `max-w-*` for
+  a reading or edit form where a full-width line length would hurt usability (for example
+  `product-form.component.html`'s `.card`) — that is a page-level content choice, not something the
+  shell imposes on every page.
 - **Sign-in callback.** `auth-callback.component.ts` centres a `.card` on the canvas background
   instead of a bare paragraph; its logic is still just the static "Signing you in..." message.
 

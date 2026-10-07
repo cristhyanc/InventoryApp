@@ -285,6 +285,22 @@ describe('AppComponent authenticated user control (issue #391)', () => {
   });
 });
 
+describe('AppComponent main content width (issue #454)', () => {
+  beforeEach(() => stubMatchMedia(true));
+
+  it('does not cap or center the main content area, so a page can use the full available width', async () => {
+    const { host } = await render();
+
+    const main = host.querySelector('main');
+    const wrapper = main?.firstElementChild;
+    expect(wrapper).not.toBeNull();
+
+    const classList = Array.from(wrapper?.classList ?? []);
+    expect(classList).not.toContain('mx-auto');
+    expect(classList.some((className) => className.startsWith('max-w-'))).toBe(false);
+  });
+});
+
 describe('AppComponent routing (issue #391)', () => {
   beforeEach(() => stubMatchMedia(true));
 
