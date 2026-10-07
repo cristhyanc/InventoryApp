@@ -2,15 +2,21 @@ import { Component, EventEmitter, Input, OnDestroy, OnInit, Output } from '@angu
 import { NavigationEnd, Router, RouterLink } from '@angular/router';
 import { Subject, filter, takeUntil } from 'rxjs';
 import { IconComponent } from '../components/shared/icon.component';
-import { NavGroup, NavItem, NavLink, activeNavGroup, activeNavRoute, primaryNavigation } from './navigation';
+import { PlatformDiagnosticsAccessService } from '../services/platform-diagnostics-access.service';
+import { NavGroup, NavItem, NavLink, activeNavGroup, activeNavRoute, navigationFor } from './navigation';
 
 /**
- * The application shell's left sidebar (issue #391). It renders `primaryNavigation`, owns which
+ * The application shell's left sidebar (issue #391). It renders the primary navigation, owns which
  * groups are expanded, and resolves which entry the current URL belongs to.
  *
  * It owns no layout decision: the shell says whether the labels are visible (`expanded`) and
  * whether this is a narrow-screen drawer (`drawer`), and the sidebar reports what the operator did
  * (`navigated`, `dismissed`, `expandRequested`) instead of reaching back into the shell.
+ *
+ * It owns no access decision either (issue #335). It starts with the navigation every operator
+ * gets and adds the super-admin diagnostics link only when the diagnostics API itself confirms
+ * platform-admin access, which is why the link is composed from `navigationFor` rather than
+ * conditioned in this template.
  */
 @Component({
   selector: 'app-sidebar-nav',
@@ -34,17 +40,37 @@ export class SidebarNavComponent implements OnInit, OnDestroy {
   /** A group heading was used while collapsed, which has no room for a submenu. */
   @Output() readonly expandRequested = new EventEmitter<void>();
 
-  readonly navigation: readonly NavItem[] = primaryNavigation;
+  /** Starts without the diagnostics link: an unanswered probe must never show it. */
+  navigation: readonly NavItem[] = navigationFor(false);
 
   activeRoute?: string;
 
   private readonly openGroups = new Set<string>();
   private readonly destroying$ = new Subject<void>();
 
-  constructor(private readonly router: Router) {}
+  constructor(
+    private readonly router: Router,
+    private readonly diagnosticsAccess: PlatformDiagnosticsAccessService
+  ) {}
 
   ngOnInit(): void {
     this.applyActiveRoute(this.router.url);
+
+    this.diagnosticsAccess
+      .isGranted()
+      .pipe(takeUntil(this.destroying$))
+      .subscribe({
+        next: (granted) => {
+          this.navigation = navigationFor(granted);
+          // A diagnostics page opened by URL before the probe answered becomes the active entry
+          // once the link exists, so the Admin group reflects where the operator actually is.
+          this.applyActiveRoute(this.router.url);
+        },
+        // Fail closed and silently: an unanswerable probe leaves the navigation everyone gets,
+        // and a navigation menu is not the place to report that one capability could not be
+        // checked.
+        error: () => undefined
+      });
 
     this.router.events
       .pipe(
