@@ -4,6 +4,7 @@ using Inventory.Application.CatalogReconciliation;
 using Inventory.Application.Categories;
 using Inventory.Application.Commissions;
 using Inventory.Application.Costing;
+using Inventory.Application.Dashboard;
 using Inventory.Application.Documents;
 using Inventory.Application.Expenses;
 using Inventory.Application.Gst;
@@ -151,6 +152,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IImportedReimbursementStore, EfImportedReimbursementStore>();
         services.AddScoped<INayaxProductCatalogImportStore, EfNayaxProductCatalogImportStore>();
         services.AddScoped<INayaxSalesImportStore, EfNayaxSalesImportStore>();
+        services.AddScoped<IDashboardSummarySalesFactsProvider, EfDashboardSummarySalesFactsProvider>();
 
         return services;
     }

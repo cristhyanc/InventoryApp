@@ -2579,6 +2579,105 @@ product's cost is unknown, rather than silently summing only the known ones. Ang
 calculation of its own - showing "Unavailable" plus how many of how many products are missing cost
 data instead of a real `$0.00` when costing is incomplete.
 
+The same valuation, with the same completeness rule, is also part of the combined Dashboard summary
+contract described in [Home Dashboard summary API](#home-dashboard-summary-api-issue-459) below. That
+endpoint reuses the Domain `InventoryValuationPolicy` directly rather than calling this use case, so
+its valuation, product count and storage units all describe one catalogue read; this tile's endpoint
+is unchanged and remains the authority for the tile itself.
+
+#### Home Dashboard summary API (issue #459)
+
+`GET /api/dashboard/summary` (`InventoryApi.Controllers.DashboardController`, thin: it binds no
+input and only invokes the use case) is the authoritative contract behind the home Dashboard's
+sales, refill, ordering and inventory cards. It is **additive and read-only**: no existing endpoint,
+response or figure changed with it, and it creates no inventory movement, refill or persisted state.
+It carries no business, machine or site identifier - the business is resolved from the authenticated
+actor's membership, and every read it makes is scoped by the central `AppDbContext` query filters.
+Issue #460 renders it; before it existed, `DashboardComponent` aggregated machine rows and totalled
+product quantities in TypeScript, which is exactly the duplication this endpoint removes.
+
+`Inventory.Application.Dashboard.GetDashboardSummary` is the use case. It owns no formula of its
+own: every figure comes from an authority that already existed.
+
+- **Sales this week.** Week-to-date gross vending revenue - the sum of `SettlementValue` over
+  approved (status `12`) sales, the same definition the bookkeeping, daily and reporting-dashboard
+  reports use - over the `Australia/Sydney` business week. The period boundaries are
+  `MachineDashboardWindow.CurrentWeek`/`PreviousComparableWeek`, the very same window the Sites and
+  Machines dashboards resolve (see [Time](#time)), so the week starts at Sydney midnight rather than
+  UTC midnight and the comparison is the **same elapsed trading time into the previous business
+  week**, never the whole of it. Across a daylight-saving transition the two weeks start 167 or 169
+  hours apart, and each period is measured from its own week's Sydney Monday midnight; the
+  comparable period is held at the previous week's own end so it can never reach into the current
+  week and count one sale on both sides. `IDashboardSummarySalesFactsProvider` is the narrow port
+  and `Inventory.Infrastructure.Persistence.EfDashboardSummarySalesFactsProvider` its EF adapter,
+  which totals both periods in one grouped read filtered by
+  `EfNayaxSalesQueries.CompletedSalePredicate`.
+- **The comparison's availability and its zero-prior rule** belong to
+  `Inventory.Domain.Reporting.Dashboard.PeriodRevenueComparisonPolicy`. The percentage is
+  `(current − prior) / prior × 100`, and it is `null` when the prior period's revenue is zero: there
+  is no honest percentage change from nothing, and an infinite or 100% rise would misstate a
+  financial figure. The comparison is available only when the business's earliest recorded completed
+  sale is at or before the comparable period's start; a prior period the recorded data never reached
+  back to returns `isComparisonAvailable: false` with every comparison field `null`, because its
+  zero or part-week total would read as a collapse in trade rather than as missing data. Each case
+  carries the note the UI shows instead.
+- **Needs refill** counts the **distinct machines** with at least one low or empty selection, using
+  `Inventory.Domain.Machines.MachineRefillAlertPolicy`. Its per-selection
+  `Classify(quantity, vendOutAlertThreshold)` - empty at or below zero, otherwise low up to and
+  including the threshold - is now the one authoritative low/empty test, and
+  `Inventory.Domain.Sites.SiteStockPolicy.CalculateAlertCounts` calls it too, so the site rows and
+  this card cannot come to mean different things. The quantity is `PAR − MissingStockByMDB`, the
+  arithmetic the Pick List and the machine product list already use, summed first across however
+  many MDB slots carry one product on one machine. **Overlap semantics:** the low and empty
+  *selection* counts are disjoint; the low and empty *machine* counts overlap (a machine with both
+  appears in both); and `machinesNeedingRefill` is the distinct union, never the sum. Aggregating
+  the site counts instead would double count, because one product low on two machines at a site is
+  one site alert and two machine alerts. `machinesEvaluated`/`selectionsEvaluated` are what make a
+  zero honest: zero of zero is "nothing to look at", zero of many is "everything is stocked".
+- **Needs ordering** counts the distinct products the authoritative reorder policy says must be
+  purchased - exactly the set `GET /api/products/alerts/low-stock` lists for the unnarrowed
+  catalogue, including its treatment of outstanding supplier-order quantity. Both come from
+  `ListLowStockProducts.SelectReorderAlerts`, which issue #459 extracted from that use case's
+  `Handle` so the count and the list are one implementation; `ProductReorderPolicy` still owns the
+  formulas and no threshold changed.
+- **Inventory** reports three figures with deliberately different scopes, and they are not
+  interchangeable. `inventoryValueAtCost` is the business-owned perpetual AVCO valuation from
+  `InventoryValuationPolicy` over the same catalogue snapshot - never a selling-price valuation -
+  and is `null` with `isInventoryValueComplete: false` and an unknown-cost count whenever any
+  product's cost is unknown, the same rule as the
+  [Inventory Value tile](#dashboard-inventory-value-tile-issue-42) above. `unitsInStorage` is the sum
+  of `Product.QuantityInStock`: physical storage/home stock, which **excludes** units already loaded
+  into a machine, and is never a valuation input. `productCount` is every product in the caller's
+  catalogue, active and inactive, which is the population the other two are taken over.
+
+**Aggregation strategy.** The summary makes exactly three reads: one grouped sales read, one
+unnarrowed `IProductCatalogStore.ListUnorderedAsync` catalogue read, and one
+`CalculateReorderNeeds` fleet read. The two persistence reads are awaited one at a time, because the
+scoped EF adapters share a single `AppDbContext`, which supports one operation at a time - the same
+constraint `GetSiteSummaries` documents. The ordering count, product count, storage units and
+valuation all come from that one catalogue snapshot, so they cannot disagree with one another.
+
+**No new Nayax fan-out.** The refill and ordering cards are both answered from one
+`CalculateReorderNeeds` call: one `GetMachinesAsync` plus one `GetMachineProductsAsync` per machine,
+bounded by the existing `CalculateReorderNeeds.MaxConcurrentMachineRequests`. Issue #459 made that
+use case additionally keep the individual selections it already read
+(`ReorderNeedsResult.MachineSelections`) and the machines it covered (`MachineIds`), rather than
+adding a second fan-out for the cards; its reorder aggregation is unchanged, and existing callers
+ignore the new members. A failing machine request or a cancelled request propagates out unchanged,
+surfacing as the usual `502` from `NayaxUpstreamExceptionHandler`, so a partial aggregate is never
+presented as a complete summary - the behaviour the reorder-alert list and the Pick List already
+have. The `PAR`, `MissingStockByMDB` and `VendOutAlertThreshold` fields the refill rules read are
+confirmed against the published Nayax `GET /machines/{id}/machineProducts` contract; a selection is
+attributed to the machine the request was made for, not to the payload's own nullable `MachineID`.
+
+**Placement.** The slice is `Inventory.Application.Dashboard`, not
+`Inventory.Application.Reporting.Dashboard`: it is the home Dashboard's own summary across
+reporting, stock and ordering, not a report with a date filter and an export, and the reporting
+namespace is reserved for the `/reports/*` slices (`GetDashboardReport` is the reporting dashboard at
+`/reports/dashboard`, a different feature). `GetInventoryValuationSummary` stays where it is; this
+use case reuses the Domain `InventoryValuationPolicy` it is built on rather than calling it, so the
+valuation and the product count describe one catalogue read instead of two.
+
 #### Home dashboard coordinated Sites/Machines sales sync (issue #187)
 
 The home Dashboard's Sites and Machines sections both display sales figures derived from
@@ -2664,6 +2763,7 @@ Time acquisition and timezone conversion are external boundaries, not pure calcu
 - **The Sites and Machines dashboards use the Sydney business day.** `Inventory.Application.Machines.MachineDashboardWindow` resolves the dashboards' six rolling comparison periods (today, week-to-date, the previous comparable week, last full week, month-to-date, two weeks ago) once per request: it takes the current instant from `IClock`, converts it to the Sydney business date with `IBusinessCalendar.ToBusinessDate`, feeds *that* date to the unchanged `Inventory.Domain.Machines.MachineDashboardPeriods` arithmetic, and converts each resulting business-day boundary back to a UTC instant with `IBusinessCalendar.StartOfBusinessDayUtc` (a completed week's inclusive end is the following business day's start minus one millisecond, so a week containing a transition still ends when the next Sydney day begins). The period boundaries are UTC instants because the sales facts they select are UTC instants: `NayaxSales.MachineAuthorizationTime` is a persisted true UTC instant, normalized from the Nayax payload's authoritative GMT field at ingestion (see [Nayax sale timestamps](#nayax-sale-timestamps-issue-380) below — issue #380 corrected this; the `AppDbContext` `DateTimeKind.Utc` conversion described under **Serialised instant identity at the persistence boundary** restores in-memory `Kind` metadata only and is not what makes the value UTC), so period and sale are compared in one time base with no conversion at the comparison site. `GetSiteSummaries`, `ListMachineDashboard` and `GetMachineDashboard` each resolve one window per request — `ListMachineDashboard` no longer reads the clock once per machine, so every machine in a listing is aggregated over identical periods — and `IMachineDashboardFactsStore.GetFactsAsync` takes that resolved window instead of a bare "now", which keeps the decision of *which* business day the dashboard means in the use case and leaves `EfMachineDashboardFactsStore` to select sales between the instants it is handed. The owner decided (2 October 2026) that these dashboards report the Sydney business day, not server-local time.
   - *Both endpoints of a comparison period are resolved in Sydney time, never by shifting the current UTC instant.* The previous comparable week ends the same elapsed trading time into the previous Sydney business week as now is into the current one, measured from each week's own Monday-midnight instant. Subtracting seven days from the current UTC instant instead would break across a daylight-saving transition, where the two weeks begin an hour apart in UTC: on the Monday after a transition the subtraction lands *before* the previous week began, and the comparison period is empty. The end is also held at the previous week's own last instant, because the week daylight saving ends is 169 hours long and a longer current week would otherwise push the comparable period into the current one.
   - *Each period also carries the Sydney business dates it covers* (`MachineDashboardPeriodUtc.FirstBusinessDate`/`LastBusinessDate`), describing the same period as its instants, because the dashboard's financial inputs are measured in both bases: revenue and commission by instant, Nayax processing fees by business date (see the fee paragraph below).
+  - *The home Dashboard summary shares the same window* (issue #459). `Inventory.Application.Dashboard.GetDashboardSummary` resolves one `MachineDashboardWindow` per request and takes its week-to-date and previous-comparable-week periods from it unchanged, so the "Sales this week" card, a site row and a machine row all mean the same Sydney business week. See [Home Dashboard summary API](#home-dashboard-summary-api-issue-459).
 - **Effective-dated commission and Nayax fee lookups use `IBusinessCalendar.Today`.** `Inventory.Application.Products.ResolveMachineProductPricing` and `Inventory.Application.Sites.GetSiteProducts` select the site commission agreement and the Nayax processing fee rate for the Sydney business date, consistent with the repository's Australia/Sydney reporting-date rule and with `GetSiteCommissionReport`. On a UTC host the Sydney date is a day ahead for ten to eleven hours of every day, which previously priced a slot with the previous day's configuration whenever a new rate took effect. The pricing formulas and the existing missing/overlapping-configuration handling are unchanged.
 - **`UploadPurchase` defaults a missing purchase date to `IClock.UtcNow`.** The stored value for a given instant is unchanged: a purchase date the client omitted is still recorded as the upload instant, deliberately not reduced to a business-calendar date.
 

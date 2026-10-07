@@ -2,6 +2,7 @@ using Inventory.Application.CatalogReconciliation;
 using Inventory.Application.Categories;
 using Inventory.Application.Commissions;
 using Inventory.Application.Costing;
+using Inventory.Application.Dashboard;
 using Inventory.Application.Expenses;
 using Inventory.Application.Gst;
 using Inventory.Application.Imports;
@@ -137,6 +138,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<GetGstAccountingAid>();
         services.AddScoped<GetDashboardReport>();
         services.AddScoped<GetInventoryValuationSummary>();
+        services.AddScoped<GetDashboardSummary>();
         services.AddScoped<GetTransactionSalesReport>();
         services.AddScoped<GetReportExportRows>();
 

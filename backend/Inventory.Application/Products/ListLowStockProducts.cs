@@ -33,7 +33,19 @@ public sealed class ListLowStockProducts
 
         var reorderNeeds = await _calculateReorderNeeds.Handle(cancellationToken);
 
-        return products
+        return SelectReorderAlerts(products, reorderNeeds);
+    }
+
+    /// <summary>
+    /// The reorder-alert selection and ranking itself, over an already-read catalogue and an
+    /// already-resolved <see cref="ReorderNeedsResult"/>. Exposed (issue #459) so the home Dashboard
+    /// summary can count exactly this set from the catalogue and fleet read it has already made,
+    /// instead of repeating the selection and fanning out to Nayax a second time: the count on the
+    /// card and the rows on the reorder-alert list come from one implementation and cannot diverge.
+    /// </summary>
+    public static IReadOnlyList<ProductRecord> SelectReorderAlerts(
+        IEnumerable<ProductRecord> products, ReorderNeedsResult reorderNeeds) =>
+        products
             .Select(product => product with
             {
                 MachineReplenishmentNeed =
@@ -45,5 +57,4 @@ public sealed class ListLowStockProducts
             .OrderByDescending(product => product.NeedToOrder)
             .ThenBy(product => product.Name)
             .ToList();
-    }
 }
