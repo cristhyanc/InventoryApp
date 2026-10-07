@@ -450,3 +450,89 @@ describe('PurchaseListComponent GST display (issue #431)', () => {
     expect(host.querySelector('[data-testid="purchase-gst-stale"]')).not.toBeNull();
   });
 });
+
+describe('PurchaseListComponent Actions column layout (issue #449)', () => {
+  const render = async (purchases: Purchase[]) => {
+    await TestBed.configureTestingModule({
+      imports: [PurchaseListComponent],
+      providers: [
+        provideRouter([]),
+        {
+          provide: PurchaseService,
+          useValue: {
+            getAll: jest.fn(() => of(purchases)),
+            update: jest.fn(),
+            delete: jest.fn(),
+            getFile: jest.fn(() => of(new Blob())),
+            getValidationFor: jest.fn(() => null),
+            getGstSummaryFor: jest.fn(() => null)
+          }
+        },
+        { provide: SupplierService, useValue: { getAll: jest.fn(() => of([])) } },
+        { provide: ProductService, useValue: { getAll: jest.fn(() => of([product(10, 'Coke'), product(20, 'Chips')])) } }
+      ]
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(PurchaseListComponent);
+    fixture.detectChanges();
+    return { fixture, host: fixture.nativeElement as HTMLElement };
+  };
+
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('keeps the Actions header pinned to the right edge of the horizontally scrollable table', async () => {
+    const wide = purchase({
+      items: [
+        item({ id: 11, productId: 10 }),
+        item({ id: 12, productId: 20 }),
+        item({ id: 13, productId: 10 })
+      ]
+    });
+    const { host } = await render([wide]);
+
+    const header = host.querySelector('[data-testid="purchases-actions-header"]');
+    expect(header).not.toBeNull();
+    expect(header?.classList.contains('sticky')).toBe(true);
+    expect(header?.classList.contains('right-0')).toBe(true);
+  });
+
+  it('keeps both Edit and Delete reachable in a sticky Actions cell, independent of how wide the Items column grows', async () => {
+    const wide = purchase({
+      items: [
+        item({ id: 11, productId: 10 }),
+        item({ id: 12, productId: 20 }),
+        item({ id: 13, productId: 10 })
+      ]
+    });
+    const { host } = await render([wide]);
+
+    const actionsCell = host.querySelector('[data-testid="purchases-actions-cell"]');
+    expect(actionsCell).not.toBeNull();
+    expect(actionsCell?.classList.contains('sticky')).toBe(true);
+    expect(actionsCell?.classList.contains('right-0')).toBe(true);
+
+    const editButton = Array.from(actionsCell?.querySelectorAll('button') ?? []).find((b) => b.textContent?.includes('Edit'));
+    const deleteButton = Array.from(actionsCell?.querySelectorAll('button') ?? []).find((b) => b.textContent?.includes('Delete'));
+    expect(editButton).toBeDefined();
+    expect(deleteButton).toBeDefined();
+  });
+
+  it('leaves startEdit and remove wired to the Edit and Delete buttons unchanged', async () => {
+    const stored = purchase({ items: [item({ id: 11, productId: 10 })] });
+    const { fixture, host } = await render([stored]);
+
+    const startEditSpy = jest.spyOn(fixture.componentInstance, 'startEdit');
+    const removeSpy = jest.spyOn(fixture.componentInstance, 'remove').mockImplementation(() => undefined);
+
+    const actionsCell = host.querySelector('[data-testid="purchases-actions-cell"]');
+    const buttons = Array.from(actionsCell?.querySelectorAll('button') ?? []);
+    const editButton = buttons.find((b) => b.textContent?.includes('Edit')) as HTMLButtonElement;
+    const deleteButton = buttons.find((b) => b.textContent?.includes('Delete')) as HTMLButtonElement;
+
+    editButton.click();
+    expect(startEditSpy).toHaveBeenCalledWith(stored);
+
+    deleteButton.click();
+    expect(removeSpy).toHaveBeenCalledWith(stored);
+  });
+});

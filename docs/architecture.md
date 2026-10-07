@@ -2141,6 +2141,10 @@ co-located `icon-paths.ts`. Later #409 sub-issues wire it into restyled pages an
 - **Decorative vs labelled accessibility.** Without `label`, the icon is decorative: the SVG has `aria-hidden="true"` and no `role` or accessible name — use this whenever adjacent visible text already carries the meaning (an icon tile, a labelled button). With `label` set, `aria-hidden` is removed (never set to `"false"`), the SVG gets `role="img"` and an accessible name equal to `label` — use this for an icon that is the only content of its control (for example an icon-only button). Either way the SVG is never focusable.
 - **Licence.** The bundled `d` path data is copied from Google's Material Icons Rounded set (Apache License 2.0), obtained from the generated `@material-design-icons/svg` distribution of the official `google/material-design-icons` repository; see `THIRD-PARTY-NOTICES.md`. That package is not a dependency — nothing but the path strings enters the repository. No icon font, icon-font stylesheet, CDN script or Font Awesome kit is added.
 
+#### Purchases table row actions (issue #449)
+
+The Purchases list (`purchase-list.component.html`) keeps its `table-cell` column widths — the `Items` column in particular can grow wide with several product lines — inside a horizontally scrolling `<table class="table min-w-[900px]">` within `overflow-x-auto`. The restyled #410 table widened enough that, without a pinned Actions column, the Edit/Delete buttons could scroll out of view and appear missing. The Actions header `<th>` and each row's Actions `<td>` are `sticky right-0` with their own opaque background (`bg-md-gray-100` on the header, matching `.table-head`; `bg-white` on each row cell) and a `border-md-gray-200` left divider, so both actions stay visible and reachable at the right edge while the rest of the row scrolls underneath, at 1440px and down to the 390px minimum width where horizontal scrolling remains expected. Sticky positioning here only changes where the cell paints; it does not change column sizing, and `startEdit(r)`/`remove(r)` keep their existing behaviour.
+
 ## Domain model and financial boundaries
 
 ### Sales and settlement
