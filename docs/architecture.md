@@ -1449,6 +1449,10 @@ POST /api/admin/diagnostics/query    { sql } -> a bounded, truncation-flagged re
 
 `access` exists for the UI in issue #335 and exposes no tenant data at all — reaching it *is* the signal, and the body carries only the server's limits. `query` takes one statement and nothing else: no page size, no row count, no timeout and no business identifier, so there is no request input that could widen or loosen anything. `crossBusinessScope` is `true` in both contracts because this path reads across every business by design, and saying so in the contract is what keeps it from being a surprise.
 
+**The super-admin page (issue #335).** `/admin/diagnostics` is the Angular page in front of those two endpoints, and it is presentation only: it adds no authority, no limit and no second access rule. The sidebar's `Admin` group offers its link only while `GET /api/admin/diagnostics/access` has confirmed the signed-in actor, and the page itself asks the same endpoint on arrival and renders a refusal instead of the query form when it is refused — but **neither is the boundary, and the design depends on that rather than on hiding the link**. Entering the URL directly reaches the page, and reaches nothing else: `MsalGuard` requires only a signed-in actor, exactly as on every other route, and the policy on `POST /api/admin/diagnostics/query` re-decides authority on every single request. There is deliberately no frontend role, claim, flag or cached verdict that could grant access and then diverge from the configured Entra `(tid, oid)` identity: `PlatformDiagnosticsAccessService` asks the API, treats a refusal, a failure, an unanswered probe and a body that does not confirm access all as "no", and never reports a capability the API did not confirm.
+
+The page says what it is before it knows who is asking: cross-business scope, read-only, repair out of scope, every query audited. It publishes the server's own limits — the 5-second ceiling, the 500-row cap, the 1 MiB response cap and the 16 KiB SQL cap — from the `access` body rather than restating them, lists the permitted table/column surface as help text while saying the server is what decides, and offers only read-only examples. Every outcome the contract can report has its own visible state: a complete result, a timeout, a refusal with its denial reason, a provider failure, and a truncated read labelled **incomplete** with the cap that stopped it — the row cap and the response-byte cap separately, because a byte cap reached before 500 rows is exactly the case a row count alone would misrepresent. Result values and server messages are rendered through Angular interpolation only, never as markup. The statement and its results live in component state while the page is open and nowhere else: no `localStorage`, `sessionStorage`, cookie, URL, toast or console, because they describe data across every business. The query-shape fingerprint the response carries is shown so a result on screen can be matched to its audit entry without the statement appearing in either. Per [Page composition boundary](#page-composition-boundary-issue-191) the routed `PlatformDiagnosticsComponent` resolves the capability and composes `PlatformDiagnosticsQueryComponent`, which owns the statement, the submission and every outcome.
+
 **The permitted data surface.** `Inventory.Application.PlatformDiagnostics.PlatformDiagnosticsDataSurface` is an allowlist of table *and column* pairs, with no wildcard over current or future columns. The physical names are verified against the mappings on `develop` — `Purchase` is mapped to `Receipts` and `PurchaseItem` to `ReceiptItems`, and `PurchaseItem.ReceiptId` / `StockAdjustment.ReceiptItemId` keep their legacy names:
 
 ```text
@@ -1734,13 +1738,24 @@ heading is a `<button>` that toggles its children and is deliberately not a dest
 group needs an overview page. **Every `route` must be a real page already declared in
 `app.routes.ts`**: `navigation.spec.ts` compares the two and fails on a destination invented ahead
 of the page that serves it, which is how the navigation stays free of placeholder
-Users/Roles/Audit/Settings/Profile entries. The super-admin diagnostics page (#335) has not merged,
-so nothing is wired for it yet; when it does, its link belongs in the `Admin` group behind the
-diagnostics access API exactly as that issue implements it. `/admin` itself keeps its own address
+Users/Roles/Audit/Settings/Profile entries. `/admin` itself keeps its own address
 and its `AdminComponent` link hub — the sidebar is now the primary way into the dedicated Admin
 pages (six at issue #391, joined by `Historical GST Classification` in issue #433), and `/admin`
 remains a valid bookmark that the home Dashboard's "Open Admin" action and each dedicated page's
 "Back to Admin" link still reach.
+
+**One conditional destination (issue #335).** `Platform Diagnostics` (`/admin/diagnostics`) is the
+only entry that is not in `primaryNavigation`: `navigationFor(hasPlatformDiagnosticsAccess)`
+appends it to the end of the `Admin` group, and only `GET /api/admin/diagnostics/access` can say
+yes. `SidebarNavComponent` starts from `navigationFor(false)`, asks
+`PlatformDiagnosticsAccessService` once, and re-resolves the active entry when the answer arrives;
+a refusal, a failure and an unanswered probe all leave the navigation everyone else gets, silently,
+because a navigation menu is not the place to report that one capability could not be checked. The
+link is presentation and never a boundary — the route and both endpoints are independently
+authorized, so a hidden link hides a page rather than protecting one (see [Platform
+diagnostics](#platform-diagnostics-issue-336)). Everything else about the shell is unchanged: the
+groups, their order, the matching rules and the active-state behaviour below all stay as issue #391
+left them.
 
 **Active state.** `activeNavRoute` resolves the current URL to the most specific matching entry,
 rather than relying on `routerLinkActive`, because several destinations are prefixes of each other:
@@ -1981,6 +1996,24 @@ rule exists in the frontend - and carries the preview's `fingerprint` back uncha
 nothing on arrival: this maintenance action runs only because a person pressed Preview and then
 Apply.
 
+**Platform Diagnostics (issue #335)** adds the one Admin route that is not offered to every
+operator:
+
+| Route | Page component | Authoritative boundary it calls |
+| --- | --- | --- |
+| `/admin/diagnostics` | `PlatformDiagnosticsComponent`, composing `PlatformDiagnosticsQueryComponent` through `[limits]` | `PlatformDiagnosticsService` `access`/`query` (`GET api/admin/diagnostics/access`, `POST api/admin/diagnostics/query`, see [Platform diagnostics](#platform-diagnostics-issue-336)) |
+
+Its guard is the ordinary `MsalGuard`, because platform-admin authority is not a frontend
+concern: the API decides it per request, so the route is reachable by URL and simply shows a
+refusal instead of the query form. The page resolves the capability and the server's limits from
+`access`, states the cross-business, read-only scope before it knows who is asking, and composes
+the workflow component that owns the statement and every reported outcome. The sidebar link exists
+only while that same endpoint confirms access (see [Application shell and
+navigation](#application-shell-and-navigation-issue-391)), and `PlatformDiagnosticsAccessService`
+is the only thing that answers that question — there is no frontend role source. Nothing here
+calculates, caches or persists anything: no limit is restated, no result is written to browser
+storage or a log, and no value is rendered as markup.
+
 With this split `AdminComponent` is a link hub only: it holds no workflow state, no service
 dependency and no second copy of any Admin tool, so it no longer owns duplicate costing, import or
 configuration logic. It deliberately keeps its own `/admin` address rather than redirecting to
@@ -1988,7 +2021,11 @@ configuration logic. It deliberately keeps its own `/admin` address rather than 
 dedicated page's "Back to Admin" link point at it. The sidebar's `Admin` group (issue #391) is now
 the primary way into the seven dedicated pages, so `AdminComponent` is a second, still valid entry
 point rather than the only one; the root shell no longer links to `/admin` itself, because the
-group heading replaced that single header link.
+group heading replaced that single header link. `/admin/diagnostics` is the exception in the other
+direction: the hub links to the seven pages every operator has and not to it, because that page is
+offered only to the configured platform administrator and only the diagnostics API can say who
+that is. It is reached from the sidebar group, or by URL, and links back to the hub like every
+other dedicated page.
 
 ### Runtime configuration and API contracts
 
