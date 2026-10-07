@@ -73,14 +73,15 @@ describe('primary navigation (issue #391)', () => {
     ]);
   });
 
-  it('groups the six dedicated Admin pages', () => {
+  it('groups the dedicated Admin pages', () => {
     expect(childRoutes('Admin')).toEqual([
       { label: 'Nayax Settings', route: '/admin/nayax-settings' },
       { label: 'Site Commission Agreements', route: '/admin/site-commission-agreements' },
       { label: 'Imports', route: '/admin/imports' },
       { label: 'Historical Cost Recovery', route: '/admin/historical-cost-recovery' },
       { label: 'AVCO Transition', route: '/admin/avco-transition' },
-      { label: 'Costing Repair', route: '/admin/costing-repair' }
+      { label: 'Costing Repair', route: '/admin/costing-repair' },
+      { label: 'Historical GST Classification', route: '/admin/historical-gst-classification' }
     ]);
   });
 

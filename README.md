@@ -677,8 +677,49 @@ component contributes no input GST and stays visibly unresolved in the GST repor
 
 These settings are explicit configuration, not inference. A supplier being registered for GST does
 not classify its products, because a supplier may sell both taxable and GST-free goods. Saving a
-rule or a default never changes a purchase that is already recorded; applying rules to historical
-purchases is a separate, explicit Admin maintenance workflow.
+rule or a default never changes a purchase that is already recorded; applying rules to purchases
+already recorded is the separate, explicit
+[Historical GST classification](#historical-gst-classification-admin-page) maintenance action below.
+
+## Historical GST classification (Admin page)
+
+Purchases recorded before GST classification existed are **Not classified**, and so is anything
+nobody has classified since. **Admin → Historical GST Classification** (also in the sidebar's Admin
+group) is the only way to classify them from the product and supplier rules above. It is a two-step
+action, and nothing is written until the second step.
+
+1. **Preview classification.** This reads only; it writes nothing at all, not even a draft. It
+   reports how many purchases and components it examined, how many would become **Taxable**, how
+   many **GST-free** and how many stay **Not classified**, the same counts separately for purchased
+   items, delivery charges and package charges, the unresolved amount left behind, and the input GST
+   the change would make available. Review those numbers: they are the whole point of the step.
+2. **Apply classification.** After a confirmation, this writes exactly what the preview showed, as
+   one all-or-nothing change.
+
+What it will and will not do:
+
+- It examines only components that are still **Not classified**. A classification you chose by hand
+  is never changed, and neither is one an earlier run applied — so running Preview and Apply again
+  after an Apply changes nothing.
+- A component carries the product's own GST rule when it has one, otherwise the supplier's
+  product-line default. A delivery or package charge takes the supplier's matching **delivery** or
+  **package** default only; it never inherits a product rule or the product-line default. A
+  component no rule covers stays **Not classified**, contributes no input GST, and keeps its purchase
+  visibly unresolved in the GST reporting aid — the preview says how many and how much, so you can
+  configure the missing rule instead.
+- A delivery or package charge that is empty or zero has no classification and is left alone.
+- If any relevant purchase or rule changed between your preview and your apply — a purchase added,
+  edited or deleted, a component classified, a product rule or supplier default saved — the apply is
+  refused, **nothing** is written, and it asks you to preview again. That is deliberate: the figures
+  you approved would no longer describe what would be written. Preview again and review the new
+  numbers.
+- It changes accounting data only. Purchase amounts, unit costs, the weighted-average cost, costing
+  quantity, inventory value, physical stock and stock movements are untouched.
+- It only ever runs because you pressed Apply. It never runs on startup, on a deployment, during a
+  database migration, when a purchase is read, or when you save a rule.
+
+It applies to your own business's purchases only, and only to the purchases of the business you are
+signed in to.
 
 ## Costing repair (Admin page)
 

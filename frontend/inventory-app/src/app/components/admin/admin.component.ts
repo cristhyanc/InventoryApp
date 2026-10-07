@@ -4,11 +4,11 @@ import { RouterLink } from '@angular/router';
 
 /**
  * The Admin landing page. Every Admin workflow now lives on its own routed page (issues #388,
- * #389 and #390), so this component holds no workflow state, no service dependency and no second
- * copy of any tool - it is the link hub the Dashboard's "Open Admin" action and each dedicated
- * page's "Back to Admin" link point at. The sidebar's Admin group (#391) is now the primary way
- * into those pages, so this is a second, still valid entry point; it therefore keeps its own
- * `/admin` address rather than redirecting.
+ * #389, #390 and #433), so this component holds no workflow state, no service dependency and no
+ * second copy of any tool - it is the link hub the Dashboard's "Open Admin" action and each
+ * dedicated page's "Back to Admin" link point at. The sidebar's Admin group (#391) is now the
+ * primary way into those pages, so this is a second, still valid entry point; it therefore keeps
+ * its own `/admin` address rather than redirecting.
  */
 @Component({
   selector: 'app-admin',
@@ -69,6 +69,14 @@ import { RouterLink } from '@angular/router';
             <h2 class="card-title">Costing Repair</h2>
             <p class="mt-1 text-sm value-muted">A human-entered historical costing repair for a product whose cost history has a fatal missing-opening or unknown-cost issue.</p>
             <a routerLink="/admin/costing-repair" class="btn btn-primary mt-4 inline-flex">Open Costing Repair</a>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="card-body">
+            <h2 class="card-title">Historical GST Classification</h2>
+            <p class="mt-1 text-sm value-muted">Classify purchase components that are still not classified from the GST rules configured on your products and suppliers, after previewing exactly what would change.</p>
+            <a routerLink="/admin/historical-gst-classification" class="btn btn-primary mt-4 inline-flex">Open Historical GST Classification</a>
           </div>
         </section>
       </div>
