@@ -7,6 +7,7 @@ import { HistoricalCostRecoveryComponent } from './components/admin/historical-c
 import { AvcoTransitionComponent } from './components/admin/avco-transition/avco-transition.component';
 import { CostingRepairPageComponent } from './components/admin/costing-repair/costing-repair-page.component';
 import { HistoricalGstClassificationComponent } from './components/admin/historical-gst-classification/historical-gst-classification.component';
+import { PlatformDiagnosticsComponent } from './components/admin/diagnostics/platform-diagnostics.component';
 
 function route(path: string): Route {
   const match = routes.find((candidate) => candidate.path === path);
@@ -65,6 +66,17 @@ describe('Admin costing and maintenance routes (issue #390)', () => {
     await expect(loadedComponent('admin/historical-gst-classification')).resolves.toBe(
       HistoricalGstClassificationComponent
     );
+  });
+
+  /**
+   * The super-admin diagnostics page (#335) is routed like any other authenticated page: the
+   * guard only requires a signed-in actor, because platform-admin access is decided by the
+   * diagnostics API on every request rather than by the router. Entering the URL directly
+   * therefore reaches a page that shows a refusal, not data.
+   */
+  it('serves the Platform Diagnostics page behind ordinary authentication, not a frontend role (issue #335)', async () => {
+    expect(route('admin/diagnostics').canActivate).toContain(MsalGuard);
+    await expect(loadedComponent('admin/diagnostics')).resolves.toBe(PlatformDiagnosticsComponent);
   });
 
   /**
