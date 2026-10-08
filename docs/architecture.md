@@ -2686,31 +2686,31 @@ and it never substitutes for a real purchase, correction or write-off.
 
 #### Dashboard "Inventory Value" tile (issue #42)
 
-The home Dashboard's "Inventory Value" tile (`DashboardComponent`, distinct from the reporting
-dashboard at `/reports/dashboard`, `GetDashboardReport`) represents the business-owned perpetual
-inventory value described above - the sum of every product's persisted `InventoryValue` (the AVCO
-valuation the `RebuildProductCost` use case maintains) - not `QuantityInStock * UnitPrice` retail value
-and not home/storage stock quantity on its own.
+The business-owned perpetual inventory value - the sum of every product's persisted
+`InventoryValue` (the AVCO valuation the `RebuildProductCost` use case maintains), never
+`QuantityInStock * UnitPrice` retail value and never home/storage stock quantity on its own - is
+the figure behind the home Dashboard's "Inventory" card (see
+[Home dashboard: four headline cards](#home-dashboard-four-headline-cards-issue-460) below).
 
 The backend is authoritative: `Inventory.Domain.Reporting.Dashboard.InventoryValuationPolicy`
-aggregates the per-product values, `Inventory.Application.Reporting.Dashboard.GetInventoryValuationSummary`
-is the use case (retrieving them through the narrow `IInventoryValuationFactsProvider` port, whose
-EF adapter is `Inventory.Infrastructure.Reporting.Persistence.EfInventoryValuationFactsProvider`
-since issue #308), and
-`ProductsController` exposes it as `GET /api/products/inventory-value-summary`. A product's
+aggregates the per-product values. `Inventory.Application.Reporting.Dashboard.GetInventoryValuationSummary`
+is the dedicated use case for this figure alone (retrieving it through the narrow
+`IInventoryValuationFactsProvider` port, whose EF adapter is
+`Inventory.Infrastructure.Reporting.Persistence.EfInventoryValuationFactsProvider` since issue
+#308), exposed by `ProductsController` as `GET /api/products/inventory-value-summary`. A product's
 `InventoryValue` is `null` only when it has never had a cost rebuild run for it - a genuinely
 unknown cost, not a zero one - so the policy makes the whole total unavailable
 (`InventoryValuationSummaryDto.IsComplete = false`, `TotalInventoryValue = null`) whenever any
-product's cost is unknown, rather than silently summing only the known ones. Angular
-(`DashboardComponent`) only displays the returned total and status - it performs no valuation
-calculation of its own - showing "Unavailable" plus how many of how many products are missing cost
-data instead of a real `$0.00` when costing is incomplete.
+product's cost is unknown, rather than silently summing only the known ones.
 
 The same valuation, with the same completeness rule, is also part of the combined Dashboard summary
 contract described in [Home Dashboard summary API](#home-dashboard-summary-api-issue-459) below. That
 endpoint reuses the Domain `InventoryValuationPolicy` directly rather than calling this use case, so
-its valuation, product count and storage units all describe one catalogue read; this tile's endpoint
-is unchanged and remains the authority for the tile itself.
+its valuation, product count and storage units all describe one catalogue read. Issue #460 moved
+`DashboardComponent`'s own display from this dedicated endpoint to that combined summary's
+`inventory` card, so the home Dashboard no longer calls `GET /api/products/inventory-value-summary`
+directly; the endpoint itself is unchanged and stays available for any other caller that needs the
+valuation alone.
 
 #### Home Dashboard summary API (issue #459)
 
@@ -2804,6 +2804,59 @@ namespace is reserved for the `/reports/*` slices (`GetDashboardReport` is the r
 `/reports/dashboard`, a different feature). `GetInventoryValuationSummary` stays where it is; this
 use case reuses the Domain `InventoryValuationPolicy` it is built on rather than calling it, so the
 valuation and the product count describe one catalogue read instead of two.
+
+#### Home dashboard: four headline cards (issue #460)
+
+`DashboardComponent` renders the [Home Dashboard summary API](#home-dashboard-summary-api-issue-459)
+contract as four headline stat cards, in this order, replacing the former separate Total
+Products/Units In Stock/Inventory Value tiles and the permanent Admin tools banner (Admin remains
+reachable from the existing sidebar `Admin` group; issue #460 added no replacement alert system).
+`DashboardService.getSummary()` is the one HTTP call behind all four; a request failure clears the
+summary, so every card shows "Unavailable" rather than a fabricated zero, and the page shows a
+warning banner alongside the existing sales-sync-failure one. Angular performs no revenue,
+percentage, refill, reorder or valuation calculation anywhere in this card section - every value
+and completeness flag is the backend's, read and displayed as returned (`DashboardComponent.money`
+is the one exception, formatting an already-known amount via `components/reports/report-formatting`'s
+shared `money`).
+
+1. **Sales this week** (`summary.salesThisWeek`) shows the week-to-date gross revenue and, in the
+   card footer, the week-on-week comparison exactly as the backend decided: the arrow/percentage
+   when `changePercent` is not `null`, and `comparisonNote` verbatim - never a frontend-computed
+   percentage - when `isComparisonAvailable` is `false` or the prior period's revenue was zero, so a
+   missing-data or zero-baseline period is never misread as a collapse or a 100% rise. Links to
+   `/reports` (`DashboardReportComponent`, the "Dashboard" entry under the Reports navigation group),
+   the general sales report; no query parameter is added because that report has no week-to-date
+   filter to target, and inventing one would duplicate a filter the page does not have.
+2. **Needs refill** (`summary.needsRefill`) shows the distinct machine count
+   (`machinesNeedingRefill`) as the primary value, with the low/empty selection counts and
+   `machinesEvaluated` as supporting footer detail - distinguishing "no machines to evaluate yet"
+   (`machinesEvaluated === 0`) from "every evaluated machine is adequately stocked"
+   (`machinesNeedingRefill === 0` with machines evaluated). Links to `/pick-list`
+   (`PickListComponent`), the existing Pick List workflow.
+3. **Needs ordering** (`summary.needsOrdering`) shows `productsNeedingOrdering` as the primary
+   value, with `productsEvaluated` (the whole catalogue) as supporting footer detail, distinguishing
+   an empty catalogue from every product being adequately stocked. Links to
+   `/products/needs-ordering` (`ProductNeedsOrderingComponent`), the existing Needs ordering
+   workflow.
+4. **Inventory** (`summary.inventory`) shows `inventoryValueAtCost` as the primary value -
+   "Unavailable", never a real `$0.00`, whenever `isInventoryValueComplete` is `false` - with
+   `productCount` and `unitsInStorage` as explicitly scoped footer detail ("excludes machines"), so
+   storage/home stock is never read as a whole-business count. This card replaces the former
+   dedicated "Inventory Value" tile described above. Links to `/products`
+   (`ProductListComponent`), the existing Products/inventory list.
+
+Every card is a single `<a class="stat-card">` using the existing #453 icon-top-right stat-card
+layout and an explicit `aria-label` naming the card and its destination (e.g. "Sales this week. View
+the Reporting Dashboard."), so its accessible name stays stable and descriptive regardless of the
+currently displayed figures; the icon inside is decorative (`app-icon` without a `label`, so it
+renders `aria-hidden`) because the label text already carries the meaning. The cards lay out
+`sm:grid-cols-2 lg:grid-cols-4` - four columns where width permits, stacking without horizontal
+scroll below that - and rely on the existing global `a:focus-visible` outline for keyboard focus;
+no new interaction styling was added.
+
+The existing Sites/Machines detail sections, their report meanings, the Reorder Alerts product
+table and the available profit detail are unchanged by this issue; no profit headline was added, and
+no unknown profit/cost figure was turned into a zero.
 
 #### Home dashboard coordinated Sites/Machines sales sync (issue #187)
 

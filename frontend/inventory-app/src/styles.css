@@ -1406,6 +1406,10 @@ video {
   height: 1.75rem;
 }
 
+.h-8 {
+  height: 2rem;
+}
+
 .max-h-56 {
   max-height: 14rem;
 }
@@ -1456,6 +1460,10 @@ video {
 
 .w-24 {
   width: 6rem;
+}
+
+.w-28 {
+  width: 7rem;
 }
 
 .w-32 {
@@ -2238,6 +2246,12 @@ video {
   transition-duration: 150ms;
 }
 
+.transition-colors {
+  transition-property: color, background-color, border-color, text-decoration-color, fill, stroke;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 150ms;
+}
+
 /* stylelint-enable at-rule-no-unknown */
 
 * {
@@ -2335,6 +2349,11 @@ summary:focus-visible,
 img {
   display: block;
   max-width: 100%;
+}
+
+.hover\:border-md-gray-300:hover {
+  --tw-border-opacity: 1;
+  border-color: rgb(212 212 212 / var(--tw-border-opacity, 1));
 }
 
 .hover\:border-md-info:hover {
