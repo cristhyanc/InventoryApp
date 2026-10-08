@@ -344,7 +344,7 @@ describe('SidebarNavComponent outlined icons (issue #456)', () => {
     fixture.detectChanges();
 
     const declaredIcons = primaryNavigation.flatMap((item) => (item.icon === undefined ? [] : [item.icon]));
-    expect(declaredIcons.length).toBe(primaryNavigation.length);
+    expect(declaredIcons).toHaveLength(primaryNavigation.length);
 
     for (const icon of declaredIcons) {
       for (const expected of OUTLINED_ICON_SHAPES[icon].paths) {
