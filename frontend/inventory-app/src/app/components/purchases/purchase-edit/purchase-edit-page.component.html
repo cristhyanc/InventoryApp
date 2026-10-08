@@ -9,10 +9,10 @@
   <div class="card mx-auto w-full max-w-5xl">
     <div class="card-body">
       @if (loading) {
-        <div class="alert alert-info" role="status" aria-live="polite" data-testid="purchase-edit-loading">
+        <output class="alert alert-info block" data-testid="purchase-edit-loading">
           <p class="alert-title">Loading purchase...</p>
           <p>Please wait while the purchase details are loaded.</p>
-        </div>
+        </output>
       } @else if (unavailable) {
         <div class="alert alert-danger" role="alert" data-testid="purchase-edit-unavailable">
           <p class="alert-title">{{ unavailable }}</p>

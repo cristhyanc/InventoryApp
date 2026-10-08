@@ -49,11 +49,11 @@ export class PurchaseEditPageComponent implements OnInit, OnDestroy {
   private readonly subscriptions = new Subscription();
 
   constructor(
-    private purchaseService: PurchaseService,
-    private supplierService: SupplierService,
-    private productService: ProductService,
-    private router: Router,
-    private route: ActivatedRoute
+    private readonly purchaseService: PurchaseService,
+    private readonly supplierService: SupplierService,
+    private readonly productService: ProductService,
+    private readonly router: Router,
+    private readonly route: ActivatedRoute
   ) {}
 
   ngOnInit(): void {
