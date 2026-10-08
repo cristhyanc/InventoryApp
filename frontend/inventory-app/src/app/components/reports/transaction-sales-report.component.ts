@@ -43,19 +43,19 @@ import { IconComponent } from '../shared/icon.component';
       <div class="card card-body"><p class="stat-card-label">Direct Profit</p><p class="font-semibold" [class.text-md-warning-text]="report.totals.directProfit == null" [class.text-md-gray-800]="report.totals.directProfit != null">{{ moneyOrDash(report.totals.directProfit) }}</p></div>
       <div class="card card-body"><p class="stat-card-label">Estimated fees (inc GST)</p><p class="font-semibold text-md-gray-800">{{ money(report.totals.estimatedFeeIncGst) }}</p></div>
     </section>
-    <div class="card overflow-x-auto"><table class="table">
-      <thead class="table-head"><tr>@for (column of columns; track column.key) {<th scope="col" class="table-cell whitespace-nowrap">@if (column.sortable) {<button type="button" class="font-bold uppercase hover:underline" (click)="sort(column.key)">{{ column.label }} @if (filter.sortBy === column.key) {<span>{{ filter.sortDescending ? '↓' : '↑' }}</span>}</button>} @else {<span>{{ column.label }}</span>}</th>}<th scope="col" class="table-cell">Fees / commission</th></tr></thead>
+    <div class="card overflow-x-auto sm:-mx-6"><table class="table min-w-[900px]">
+      <thead class="table-head"><tr>@for (column of columns; track column.key) {<th scope="col" class="table-cell px-2">@if (column.sortable) {<button type="button" class="font-bold uppercase hover:underline" (click)="sort(column.key)">{{ column.label }} @if (filter.sortBy === column.key) {<span>{{ filter.sortDescending ? '↓' : '↑' }}</span>}</button>} @else {<span>{{ column.label }}</span>}</th>}<th scope="col" class="table-cell px-2">Fees / commission</th></tr></thead>
       <tbody>@for (row of report.rows; track row.transactionId) {<tr class="table-row">
-        <td class="table-cell whitespace-nowrap">{{ row.transactionDate | businessDateTime }}<div class="value-muted">#{{ row.transactionId }}</div></td>
-        <td class="table-cell">{{ row.machineName }}<div class="value-muted">{{ row.siteName || 'Site unavailable' }}</div></td>
-        <td class="table-cell">{{ row.productName }}</td>
-        <td class="table-cell">{{ row.paymentType }}<div class="value-muted">{{ row.rawPaymentMethod || '—' }}</div></td>
-        <td class="table-cell">{{ money(row.sale) }}</td>
-        <td class="table-cell" [class.text-md-warning-text]="row.costOfGoods == null">{{ moneyOrDash(row.costOfGoods) }}<div class="value-muted">{{ cogsSource(row) }}</div></td>
-        <td class="table-cell" [class.text-md-warning-text]="row.grossProfit == null">{{ moneyOrDash(row.grossProfit) }} @if (row.grossMarginPercent != null) {<div class="value-muted">{{ row.grossMarginPercent | number:'1.1-1' }}%</div>}</td>
-        <td class="table-cell" [class.text-md-warning-text]="row.directProfit == null">{{ moneyOrDash(row.directProfit) }} @if (row.directMarginPercent != null) {<div class="value-muted">{{ row.directMarginPercent | number:'1.1-1' }}%</div>}</td>
-        <td class="table-cell">{{ row.transactionStatus }}</td>
-        <td class="table-cell">{{ row.feeSource }}@if (row.feeIncGst != null) {<div class="value-muted">{{ money(row.feeIncGst) }} inc GST</div>}@if (row.commissionAmount != null) {<div class="value-muted">Commission {{ money(row.commissionAmount) }}{{ row.commissionBasis ? ' · ' + row.commissionBasis : '' }}</div>}</td>
+        <td class="table-cell px-2">{{ row.transactionDate | businessDateTime }}<div class="value-muted break-words">#{{ row.transactionId }}</div></td>
+        <td class="table-cell px-2 break-words">{{ row.machineName }}<div class="value-muted break-words">{{ row.siteName || 'Site unavailable' }}</div></td>
+        <td class="table-cell px-2 break-words">{{ row.productName }}</td>
+        <td class="table-cell px-2 break-words">{{ row.paymentType }}<div class="value-muted break-words">{{ row.rawPaymentMethod || '—' }}</div></td>
+        <td class="table-cell px-2">{{ money(row.sale) }}</td>
+        <td class="table-cell px-2" [class.text-md-warning-text]="row.costOfGoods == null">{{ moneyOrDash(row.costOfGoods) }}<div class="value-muted break-words">{{ cogsSource(row) }}</div></td>
+        <td class="table-cell px-2" [class.text-md-warning-text]="row.grossProfit == null">{{ moneyOrDash(row.grossProfit) }} @if (row.grossMarginPercent != null) {<div class="value-muted break-words">{{ row.grossMarginPercent | number:'1.1-1' }}%</div>}</td>
+        <td class="table-cell px-2" [class.text-md-warning-text]="row.directProfit == null">{{ moneyOrDash(row.directProfit) }} @if (row.directMarginPercent != null) {<div class="value-muted break-words">{{ row.directMarginPercent | number:'1.1-1' }}%</div>}</td>
+        <td class="table-cell px-2 break-words">{{ row.transactionStatus }}</td>
+        <td class="table-cell px-2">{{ row.feeSource }}@if (row.feeIncGst != null) {<div class="value-muted break-words">{{ money(row.feeIncGst) }} inc GST</div>}@if (row.commissionAmount != null) {<div class="value-muted break-words">Commission {{ money(row.commissionAmount) }}{{ row.commissionBasis ? ' · ' + row.commissionBasis : '' }}</div>}</td>
       </tr>}</tbody>
     </table></div>
     <div class="flex flex-wrap items-center justify-between gap-3">
