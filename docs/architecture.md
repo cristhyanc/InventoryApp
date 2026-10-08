@@ -2098,7 +2098,7 @@ The frontend has one shared visual language, recreated from Material Dashboard 3
 | `md-gray` | 100 `#F5F5F5`, 200 `#E5E5E5`, 300 `#D4D4D4`, 500 `#737373`, 600 `#525252`, 800 `#262626` | | | canvas, borders, text |
 | `md-input-border` | `#D2D6DA` | | | form field borders |
 
-Shadows are `shadow-md-card` (cards, which also carry a `1px solid md-gray-200` border), `shadow-md` (dropdowns, sidebar panel), `shadow-md-lg` (dialogs) and `shadow-md-tile-dark|info|success|warning|danger` (icon tiles). Radii are `rounded-md-control` (0.375rem: buttons, inputs), `rounded-md-card` (0.5rem: cards, icon tiles, dropdowns), `rounded-md-badge` (0.45rem) and `rounded-md-dialog` (0.75rem). Type sizes are `text-md-page-title` (1.25rem/600), `text-md-card-title` (1rem/600), `text-md-stat-value` (1.5rem/700), `text-md-body` (0.875rem), `text-md-badge` (0.75rem/700 uppercase) and `text-md-table-head` (0.65rem/700 uppercase). Spacing: page padding 1.5rem (1rem below 640px), 1.5rem between cards, 1rem card padding (0.75rem 1rem for header and footer), 0.75rem 1.5rem table cells (0.5rem 0.75rem below 640px), 0.5rem 1rem buttons (0.375rem 1rem small).
+Shadows are `shadow-md-card` (cards, which also carry a `1px solid md-gray-200` border), `shadow-md` (dropdowns, sidebar panel), `shadow-md-lg` (dialogs) and `shadow-md-tile-dark|info|success|warning|danger` (icon tiles). Radii are `rounded-md-control` (0.375rem: buttons, inputs), `rounded-md-card` (0.5rem: cards, icon tiles, dropdowns), `rounded-md-badge` (0.45rem) and `rounded-md-dialog` (0.75rem). Type sizes are `text-md-page-title` (1.25rem/600), `text-md-card-title` (1rem/600), `text-md-stat-value` (1.5rem/700), `text-md-body` (0.875rem), `text-md-badge` (0.75rem/700 uppercase) and `text-md-table-head` (0.65rem/700 uppercase). Spacing: page padding 1.5rem (1rem below 640px), 1.5rem between cards, 1rem card padding (0.75rem 1rem for header and footer), 0.75rem 1.5rem table cells (0.5rem 0.75rem below 640px), 0.5rem 1rem buttons (0.375rem 1rem small). The Reconciliation and Transaction Sales tables narrow their own horizontal cell padding to 0.5rem per cell in their templates, which is the one deliberate exception; see [Reconciliation and Transaction Sales table width](#reconciliation-and-transaction-sales-table-width-issue-452).
 
 **Contrast rules.** These are invariants, not preferences, and `design-tokens.contrast.spec.ts` enforces them by recomputing the ratios from the token values:
 
@@ -2144,6 +2144,44 @@ co-located `icon-paths.ts`. Later #409 sub-issues wire it into restyled pages an
 #### Purchases table row actions (issue #449)
 
 The Purchases list (`purchase-list.component.html`) keeps its `table-cell` column widths — the `Items` column in particular can grow wide with several product lines — inside a horizontally scrolling `<table class="table min-w-[900px]">` within `overflow-x-auto`. The restyled #410 table widened enough that, without a pinned Actions column, the Edit/Delete buttons could scroll out of view and appear missing. The Actions header `<th>` and each row's Actions `<td>` are `sticky right-0` with their own opaque background (`bg-md-gray-100` on the header, matching `.table-head`; `bg-white` on each row cell) and a `border-md-gray-200` left divider, so both actions stay visible and reachable at the right edge while the rest of the row scrolls underneath, at 1440px and down to the 390px minimum width where horizontal scrolling remains expected. Sticky positioning here only changes where the cell paints; it does not change column sizing, and `startEdit(r)`/`remove(r)` keep their existing behaviour.
+
+#### Reconciliation and Transaction Sales table width (issue #452)
+
+These two reports carry the widest tables in the application — twelve financial columns on
+`reconciliation-report.component.ts` and ten on `transaction-sales-report.component.ts` — and both
+overflowed the desktop content area even after #454 removed the shell's `max-w-7xl` cap. The fix is
+page-local and lives entirely in those two templates; nothing in `styles.scss`, the shared
+`.table*` classes or the shell changed. Three decisions make up the width budget, in the order the
+issue required them:
+
+- **Reclaim the duplicated page gutter.** The shell's main content wrapper already applies the #410
+  page padding (`p-4 sm:p-6`, see § Application shell and navigation), and the shared `.page` class
+  applies it a second time, so a routed page's content box is inset twice. Each wide table card
+  cancels the inner gutter with `sm:-mx-6`, which gives the table the wrapper's full content width
+  (about 48px more at every desktop size) while the page header, filters and summary cards keep the
+  normal page inset. Below `sm` the card keeps the page gutter, so the 390px layout is unchanged.
+- **Compact horizontal cell padding.** Every `th`/`td` in these two tables adds `px-2` on top of
+  `.table-cell`, replacing the shared 1.5rem desktop padding with the 0.5rem value the shared class
+  already uses below 640px. This is the only place that deviates from the `.table-cell` spacing
+  recorded under § Visual language; it is per-cell in the template, so the shared class keeps its
+  documented 0.75rem 1.5rem for every other table. Vertical padding, type sizes, colours and the
+  shared classes themselves are untouched — no text is made smaller to force a fit.
+- **Wrap and break the secondary text, never the amounts.** Column headers no longer force
+  `whitespace-nowrap`, the Transaction Sales timestamp cell may wrap between its date and its time,
+  the free-text Machine/site, Product, Payment and Status cells carry `break-words`, and every
+  `.value-muted` secondary line inside both tables does too. Currency amounts and dates are left
+  with no `break-words` of their own, so a money value or a `dd/MM/yyyy` date is never split.
+
+The `overflow-x-auto` card stays the contained fallback: exceptional unbroken content scrolls
+inside the card and can never produce page-level horizontal overflow. A `min-w-*` on each table is
+the readable floor for that fallback — `min-w-[900px]` on Transaction Sales, and
+`min-w-[1120px] xl:min-w-0` on Reconciliation, which keeps all twelve columns unbroken while the
+table is scrolling at narrow and mid widths and then lets it shrink onto the available content
+width from the `xl` breakpoint up, where the full desktop layout is in use.
+
+Bindings, pipes, formatting, the `Australia/Sydney` timestamp semantics, totals, status badges,
+data-quality notes, filter defaults, sorting, pagination, exports and every service call are
+unchanged; so is the set of columns and the completeness of every value in them.
 
 ## Domain model and financial boundaries
 
