@@ -26,6 +26,7 @@ using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Transactions;
 using Inventory.Application.SalesSync;
+using Inventory.Application.SaleTimestampRepair;
 using Inventory.Application.Sites;
 using Inventory.Application.Stock;
 using Inventory.Application.Suppliers;
@@ -116,6 +117,8 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<PreviewInventoryCostRepair>();
         services.AddScoped<ApplyInventoryCostRepair>();
         services.AddScoped<GetInventoryCostRepairHistory>();
+        services.AddScoped<PreviewNayaxSaleTimestampRepair>();
+        services.AddScoped<ApplyNayaxSaleTimestampRepair>();
         services.AddScoped<PreviewHistoricalGstClassification>();
         services.AddScoped<ApplyHistoricalGstClassification>();
         services.AddScoped<ApplyInventoryCount>();
