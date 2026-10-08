@@ -64,7 +64,7 @@ describe('DashboardReportComponent stat-card icon tile position (issue #453)', (
     const host = fixture.nativeElement as HTMLElement;
 
     const heads = Array.from(host.querySelectorAll('.stat-card-head'));
-    expect(heads.length).toBe(4);
+    expect(heads).toHaveLength(4);
     for (const head of heads) {
       const children = Array.from(head.children);
       expect(children[0].classList.contains('stat-card-content')).toBe(true);

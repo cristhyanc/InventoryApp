@@ -253,7 +253,7 @@ describe('DashboardComponent stat-card icon tile position (issue #453)', () => {
     const host = await renderDashboard();
     const heads = Array.from(host.querySelectorAll('.stat-card-head'));
 
-    expect(heads.length).toBe(3);
+    expect(heads).toHaveLength(3);
     for (const head of heads) {
       const children = Array.from(head.children);
       expect(children[0].classList.contains('stat-card-content')).toBe(true);
