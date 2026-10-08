@@ -48,6 +48,7 @@ describe('breadcrumbRoutes (issue #457 route inventory)', () => {
       '/machines/:id',
       '/sites/:id/products',
       '/purchases/new',
+      '/purchases/:id/edit',
       '/reports/bookkeeping',
       '/reports/daily',
       '/reports/transactions',
@@ -73,6 +74,13 @@ describe('buildBreadcrumbTrail', () => {
     expect(buildBreadcrumbTrail('/products/42/edit', null)).toEqual([
       { label: 'Products', path: '/products', current: false },
       { label: 'Edit product', current: true }
+    ]);
+  });
+
+  it('builds Purchases > Edit purchase for the dedicated purchase edit page (issue #475)', () => {
+    expect(buildBreadcrumbTrail('/purchases/42/edit', null)).toEqual([
+      { label: 'Purchases', path: '/purchases', current: false },
+      { label: 'Edit purchase', current: true }
     ]);
   });
 
