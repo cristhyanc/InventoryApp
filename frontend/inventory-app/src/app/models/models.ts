@@ -92,6 +92,97 @@ export interface InventoryValuationSummary {
 }
 
 /**
+ * One summary period, in both time bases the home Dashboard summary measures in (issue #459): the
+ * UTC instants its sales are selected between (inclusive at both ends) and the Sydney business
+ * dates those instants cover.
+ */
+export interface DashboardSummaryPeriod {
+  startUtc: string;
+  endUtc: string;
+  firstBusinessDate: string;
+  lastBusinessDate: string;
+}
+
+/**
+ * The "Sales this week" card (issue #459, rendered by issue #460). `sales`/`transactionCount` are
+ * known figures over `period` - zero means no completed sale was recorded, not missing data. Every
+ * comparison field is `null` when `isComparisonAvailable` is `false`, and `changePercent` is also
+ * `null` for a zero prior period, because there is no honest percentage change from nothing;
+ * `comparisonNote` carries the reason to show instead. Angular never recomputes any of this.
+ */
+export interface DashboardSalesThisWeek {
+  sales: number;
+  transactionCount: number;
+  period: DashboardSummaryPeriod;
+  comparisonPeriod: DashboardSummaryPeriod;
+  isComparisonAvailable: boolean;
+  comparisonSales: number | null;
+  comparisonTransactionCount: number | null;
+  changeAmount: number | null;
+  changePercent: number | null;
+  comparisonNote: string | null;
+}
+
+/**
+ * The "Needs refill" card. `machinesNeedingRefill` is the distinct machine count with at least one
+ * low or empty selection; the low/empty selection and machine counts are supporting detail only -
+ * see `Inventory.Domain.Machines.MachineRefillAlertPolicy` for the overlap semantics this mirrors.
+ * `machinesEvaluated`/`selectionsEvaluated` are what make a zero honest: zero of zero is nothing to
+ * evaluate, zero of many is everything adequately stocked.
+ */
+export interface DashboardRefillSummary {
+  machinesNeedingRefill: number;
+  machinesWithEmptySelections: number;
+  machinesWithLowSelections: number;
+  emptySelectionCount: number;
+  lowSelectionCount: number;
+  machinesEvaluated: number;
+  selectionsEvaluated: number;
+}
+
+/**
+ * The "Needs ordering" card: the distinct catalogue products the authoritative reorder policy says
+ * must be purchased - the same set `GET /api/products/alerts/low-stock` lists for the unnarrowed
+ * catalogue. `productsEvaluated` is the whole business-owned catalogue the count was taken over.
+ */
+export interface DashboardOrderingSummary {
+  productsNeedingOrdering: number;
+  productsEvaluated: number;
+}
+
+/**
+ * The "Inventory" card. The three figures have deliberately different scopes and are not
+ * interchangeable: `inventoryValueAtCost` is the business-owned perpetual AVCO valuation, `null`
+ * whenever `isInventoryValueComplete` is `false` (an unknown cost, never a real `$0.00`);
+ * `unitsInStorage` is physical storage/home stock only - it excludes units already loaded into a
+ * machine and is never a valuation input; `productCount` is the whole catalogue, active and
+ * inactive, that the other two figures are taken over.
+ */
+export interface DashboardInventorySummary {
+  inventoryValueAtCost: number | null;
+  isInventoryValueComplete: boolean;
+  productsWithUnknownCost: number;
+  productCount: number;
+  unitsInStorage: number;
+}
+
+/**
+ * The authoritative home Dashboard summary contract, from `GET /api/dashboard/summary`
+ * (`Inventory.Application.Dashboard.GetDashboardSummary`, issue #459) and rendered by
+ * `DashboardComponent` (issue #460). The backend owns every sales, refill, ordering and valuation
+ * decision behind the four headline cards; Angular displays the figures and completeness flags
+ * exactly as returned, with no revenue, percentage, refill, reorder or valuation formula of its own.
+ */
+export interface DashboardSummary {
+  asOfUtc: string;
+  businessDate: string;
+  salesThisWeek: DashboardSalesThisWeek;
+  needsRefill: DashboardRefillSummary;
+  needsOrdering: DashboardOrderingSummary;
+  inventory: DashboardInventorySummary;
+}
+
+/**
  * One recorded actual Purchase-item cost for a product. `supplierName` is `null` exactly when the
  * source Purchase has no supplier recorded and must be presented explicitly (e.g. "None"), never
  * omitted from the history.

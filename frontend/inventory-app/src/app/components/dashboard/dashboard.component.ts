@@ -5,9 +5,20 @@ import { ProductService } from '../../services/product.service';
 import { MachineService } from '../../services/machine.service';
 import { SiteService } from '../../services/site.service';
 import { NayaxSalesSyncService } from '../../services/nayax-sales-sync.service';
-import { InventoryValuationSummary, Product, Machine, Site } from '../../models/models';
+import { DashboardService } from '../../services/dashboard.service';
+import {
+  DashboardInventorySummary,
+  DashboardOrderingSummary,
+  DashboardRefillSummary,
+  DashboardSalesThisWeek,
+  DashboardSummary,
+  Product,
+  Machine,
+  Site
+} from '../../models/models';
 import { trendLabel, trendClass } from '../../formatting/revenue-trend';
 import { siteStockClass } from '../../formatting/site-stock-status';
+import { money } from '../reports/report-formatting';
 import { IconComponent } from '../shared/icon.component';
 
 @Component({
@@ -17,7 +28,6 @@ import { IconComponent } from '../shared/icon.component';
   templateUrl: './dashboard.component.html'
 })
 export class DashboardComponent implements OnInit {
-  products: Product[] = [];
   lowStock: Product[] = [];
   machines: Machine[] = [];
   sites: Site[] = [];
@@ -25,20 +35,44 @@ export class DashboardComponent implements OnInit {
   isLoadingMachines = false;
   isLoadingLowStock = false;
   isSalesSyncFailed = false;
-  inventoryValuation: InventoryValuationSummary | null = null;
-  isLoadingInventoryValuation = false;
+  summary: DashboardSummary | null = null;
+  isLoadingSummary = false;
+  isSummaryFailed = false;
 
   constructor(
     private productService: ProductService,
     private machineService: MachineService,
     private siteService: SiteService,
-    private nayaxSalesSyncService: NayaxSalesSyncService
+    private nayaxSalesSyncService: NayaxSalesSyncService,
+    private dashboardService: DashboardService
   ) {}
 
   ngOnInit(): void {
-    this.refreshProducts();
+    this.refreshLowStock();
     this.refreshSalesDashboard();
-    this.refreshInventoryValuation();
+    this.refreshSummary();
+  }
+
+  /**
+   * The four headline cards' authoritative source (issue #459/#460): one request, so "Sales this
+   * week", "Needs refill", "Needs ordering" and "Inventory" always describe the same backend read.
+   * A request failure clears `summary` rather than leaving a stale one, so a failed metric is never
+   * presented as a real zero.
+   */
+  refreshSummary(): void {
+    this.isLoadingSummary = true;
+    this.isSummaryFailed = false;
+    this.dashboardService.getSummary().subscribe({
+      next: (summary) => {
+        this.summary = summary;
+        this.isLoadingSummary = false;
+      },
+      error: () => {
+        this.summary = null;
+        this.isSummaryFailed = true;
+        this.isLoadingSummary = false;
+      }
+    });
   }
 
   /**
@@ -65,21 +99,6 @@ export class DashboardComponent implements OnInit {
     });
   }
 
-  refreshInventoryValuation(): void {
-    this.isLoadingInventoryValuation = true;
-    this.productService.getInventoryValuationSummary().subscribe({
-      next: (summary) => {
-        this.inventoryValuation = summary;
-      },
-      error: () => {
-        this.inventoryValuation = null;
-      },
-      complete: () => {
-        this.isLoadingInventoryValuation = false;
-      }
-    });
-  }
-
   refreshSites(): void {
     this.isLoadingSites = true;
     this.siteService.getAll().subscribe({
@@ -95,9 +114,8 @@ export class DashboardComponent implements OnInit {
     });
   }
 
-  refreshProducts(): void {
+  refreshLowStock(): void {
     this.isLoadingLowStock = true;
-    this.productService.getAll().subscribe((p) => (this.products = p));
     this.productService.getLowStock().subscribe({
       next: (p) => {
         this.lowStock = p.filter((product) => product.isActive !== false);
@@ -126,30 +144,89 @@ export class DashboardComponent implements OnInit {
     });
   }
 
-  get totalProducts(): number {
-    return this.products.length;
-  }
-
-  get totalUnitsInStock(): number {
-    return this.products.reduce((sum, p) => sum + p.quantityInStock, 0);
+  money(value: number): string {
+    return money(value);
   }
 
   /**
-   * The authoritative cost-basis inventory value from `GetInventoryValuationSummary`, never
-   * calculated from `Product.unitPrice`/`quantityInStock` on the frontend. `null`/incomplete
-   * costing is shown as unavailable, never as a real `$0.00`.
+   * The "Sales this week" comparison line. The percentage/amount is never recomputed here - only
+   * `week.changePercent`/`week.comparisonNote`, already decided by
+   * `Inventory.Domain.Reporting.Dashboard.PeriodRevenueComparisonPolicy`, choose what is shown.
    */
-  get inventoryValueDisplay(): string {
-    if (!this.inventoryValuation || !this.inventoryValuation.isComplete || this.inventoryValuation.totalInventoryValue == null) {
-      return 'Unavailable';
+  salesComparisonText(week: DashboardSalesThisWeek): string {
+    if (!week.isComparisonAvailable) {
+      return week.comparisonNote ?? 'Comparison with last week is unavailable';
     }
-    return `$${this.inventoryValuation.totalInventoryValue.toFixed(2)}`;
+    if (week.changePercent == null) {
+      return week.comparisonNote ?? 'No prior-period sales to compare';
+    }
+    const arrow = week.changePercent >= 0 ? '↑' : '↓';
+    return `${arrow} ${Math.abs(week.changePercent).toFixed(1)}% vs same time last week`;
   }
 
-  get inventoryValueHelpText(): string {
-    if (!this.inventoryValuation) return 'Business-owned inventory at cost';
-    if (this.inventoryValuation.isComplete) return 'Business-owned inventory at cost';
-    return `${this.inventoryValuation.productsWithUnknownCost} of ${this.inventoryValuation.totalProducts} products missing cost data`;
+  salesComparisonClass(week: DashboardSalesThisWeek): string {
+    if (!week.isComparisonAvailable || week.changePercent == null) return 'value-muted';
+    return week.changePercent >= 0 ? 'value-positive' : 'value-negative';
+  }
+
+  /**
+   * The "Needs refill" supporting detail. `machinesEvaluated` is what makes a zero honest: zero of
+   * zero machines is nothing to evaluate yet, zero of many is every evaluated machine adequately
+   * stocked.
+   */
+  refillFooterText(refill: DashboardRefillSummary): string {
+    if (refill.machinesEvaluated === 0) return 'No machines to evaluate yet';
+    if (refill.machinesNeedingRefill === 0) return `All ${refill.machinesEvaluated} machines adequately stocked`;
+    return `${refill.lowSelectionCount} low · ${refill.emptySelectionCount} empty selections across ${refill.machinesEvaluated} machines evaluated`;
+  }
+
+  refillFooterClass(refill: DashboardRefillSummary): string {
+    if (refill.machinesEvaluated === 0) return 'value-muted';
+    return refill.machinesNeedingRefill === 0 ? 'value-positive' : 'value-muted';
+  }
+
+  /** The "Needs ordering" supporting detail, over the same catalogue the count was taken over. */
+  orderingFooterText(ordering: DashboardOrderingSummary): string {
+    if (ordering.productsEvaluated === 0) return 'No products in the catalogue yet';
+    if (ordering.productsNeedingOrdering === 0) return `All ${ordering.productsEvaluated} products adequately stocked`;
+    return `of ${ordering.productsEvaluated} products in the catalogue`;
+  }
+
+  orderingFooterClass(ordering: DashboardOrderingSummary): string {
+    if (ordering.productsEvaluated === 0) return 'value-muted';
+    return ordering.productsNeedingOrdering === 0 ? 'value-positive' : 'value-muted';
+  }
+
+  /**
+   * The "Inventory" card's primary value: the authoritative cost-basis inventory value from the
+   * Dashboard summary, never calculated from `Product.unitPrice`/`quantityInStock` on the frontend.
+   * Incomplete costing is shown as unavailable, never as a real `$0.00`.
+   */
+  inventoryValueDisplay(inventory: DashboardInventorySummary): string {
+    if (!inventory.isInventoryValueComplete || inventory.inventoryValueAtCost == null) return 'Unavailable';
+    return money(inventory.inventoryValueAtCost);
+  }
+
+  inventoryValueHelpText(inventory: DashboardInventorySummary): string {
+    if (inventory.isInventoryValueComplete) return 'Business-owned inventory at cost';
+    return `${inventory.productsWithUnknownCost} of ${inventory.productCount} products missing cost data`;
+  }
+
+  /** Makes explicit that storage quantity is home/storage stock only, not a whole-business count. */
+  inventoryScopeText(inventory: DashboardInventorySummary): string {
+    return `${inventory.productCount} products · ${inventory.unitsInStorage} units in storage (excludes machines)`;
+  }
+
+  trendLabel(current: number, previous: number): string {
+    return trendLabel(current, previous);
+  }
+
+  trendClass(current: number, previous: number): string {
+    return trendClass(current, previous);
+  }
+
+  directMargin(directProfit: number, sales: number): number {
+    return this.margin(directProfit, sales);
   }
 
   get totalTodaySales(): number {
@@ -206,18 +283,6 @@ export class DashboardComponent implements OnInit {
 
   get totalDirectMargin(): number {
     return this.margin(this.totalCurrentWeekDirectProfit, this.totalCurrentWeekSales);
-  }
-
-  directMargin(directProfit: number, sales: number): number {
-    return this.margin(directProfit, sales);
-  }
-
-  trendLabel(current: number, previous: number): string {
-    return trendLabel(current, previous);
-  }
-
-  trendClass(current: number, previous: number): string {
-    return trendClass(current, previous);
   }
 
   private margin(profit: number, sales: number): number {
