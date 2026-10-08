@@ -1809,6 +1809,17 @@ its route exist — not a template change in the shell.
   heading stays expanded and keeps a `bg-md-gray-100` highlight while one of its pages is open.
   Collapsed to the icon-only rail, each label keeps its accessible name as `sr-only` text (the
   behaviour above), not a styling change.
+- **Sidebar height fills the available viewport (issue #455).** The white panel's height is not
+  driven by its menu content: `app.component.html`'s shell row (`flex flex-1 items-stretch`)
+  stretches the sidebar to the full height of that row, which the surrounding `min-h-screen`
+  flex column already sizes to the viewport height minus the header, so no component adds a
+  second, unconditional `100vh`. `SidebarNavComponent`'s host renders as `display: contents`
+  (`host: { class: 'contents' }`) so it contributes no box of its own between the shell and the
+  visible `<nav>` panel — without that, the host's own block box would absorb the stretched
+  height and leave the white panel sized to its content, which is the bug this fixed. The panel's
+  own `overflow-y-auto` then scrolls the navigation list internally, inside the stretched height,
+  whenever expanded groups or a short browser window make it taller than the available space, so
+  every entry (including nested `Admin` children) stays reachable without growing the page.
 - **Top bar and user menu.** `app.component.html`'s header has no background of its own, so it
   shows the `bg-md-gray-100` canvas the shell's root element sets; `user-menu.component.ts` renders
   its open panel as a compact dropdown (`rounded-md-card`, `shadow-md`). The main content wrapper

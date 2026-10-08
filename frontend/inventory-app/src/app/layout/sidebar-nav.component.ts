@@ -17,11 +17,17 @@ import { NavGroup, NavItem, NavLink, activeNavGroup, activeNavRoute, navigationF
  * gets and adds the super-admin diagnostics link only when the diagnostics API itself confirms
  * platform-admin access, which is why the link is composed from `navigationFor` rather than
  * conditioned in this template.
+ *
+ * The host renders as `display: contents` (issue #455) so it contributes no box of its own: the
+ * shell's `items-stretch` row needs to stretch the actual white `<nav>` panel to the row's full
+ * height, and a host element rendering as an ordinary block would absorb that stretched height
+ * instead of passing it to its single child, leaving the visible panel sized to its content.
  */
 @Component({
   selector: 'app-sidebar-nav',
   standalone: true,
   imports: [RouterLink, IconComponent],
+  host: { class: 'contents' },
   templateUrl: './sidebar-nav.component.html'
 })
 export class SidebarNavComponent implements OnInit, OnDestroy {
