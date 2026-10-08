@@ -685,12 +685,15 @@ video {
 /* ---- Stat card --------------------------------------------------------------------- */
 
 /*
-   * The icon tile overlaps the top-left corner by 1rem, so the card reserves 1rem of margin
-   * above itself for the overhang.
+   * The icon tile sits inside the card body at the upper right (issue #453): `.stat-card-head`
+   * is a flex row with the content first and the icon tile last, so the card's own `p-4` padding
+   * alone insets the tile from the top and right edges, with no negative margin or offset
+   * pulling it outside the border. The content wrapper takes the remaining row width
+   * (`.stat-card-content`) so a long label or large value wraps instead of pushing the tile out
+   * or overflowing the card.
    */
 
 .stat-card {
-  margin-top: 1rem;
   border-radius: 0.5rem;
   border-width: 1px;
   --tw-border-opacity: 1;
@@ -711,9 +714,18 @@ video {
   gap: 1rem;
 }
 
-.stat-card-head .icon-tile {
-  margin-top: -2rem;
+.stat-card-content {
+  min-width: 0px;
+  flex: 1 1 0%;
+  overflow-wrap: break-word;
 }
+
+/*
+   * `.stat-card-label`/`.stat-card-value` default to right-aligned text because several report
+   * summary tiles (bookkeeping/dashboard/transaction-sales/reconciliation/GST reports) use them
+   * directly inside a plain `.card card-body`, without an icon tile, and keep their existing
+   * alignment. Only the icon-tile stat-card head flips to left-aligned, opposite the icon.
+   */
 
 .stat-card-label {
   text-align: right;
@@ -728,6 +740,11 @@ video {
   font-weight: 700;
   --tw-text-opacity: 1;
   color: rgb(38 38 38 / var(--tw-text-opacity, 1));
+}
+
+.stat-card-head .stat-card-label,
+  .stat-card-head .stat-card-value {
+  text-align: left;
 }
 
 .stat-card-footer {
@@ -1228,6 +1245,10 @@ video {
   margin-bottom: 0.25rem;
 }
 
+.-mt-8 {
+  margin-top: -2rem;
+}
+
 .mb-1 {
   margin-bottom: 0.25rem;
 }
@@ -1549,6 +1570,10 @@ video {
 }
 
 .flex-shrink {
+  flex-shrink: 1;
+}
+
+.shrink {
   flex-shrink: 1;
 }
 

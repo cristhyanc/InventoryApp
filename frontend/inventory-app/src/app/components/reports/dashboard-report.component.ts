@@ -18,29 +18,29 @@ import { IconComponent } from '../shared/icon.component';
     <section class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
       <article class="stat-card">
         <div class="stat-card-head">
+          <div class="stat-card-content"><p class="stat-card-label">Total Sales</p><p data-testid="dashboard-total-sales" class="stat-card-value">{{ money(report.totalSales ?? report.sales) }}</p></div>
           <span class="icon-tile icon-tile-dark"><app-icon name="attach_money" /></span>
-          <div><p class="stat-card-label">Total Sales</p><p data-testid="dashboard-total-sales" class="stat-card-value">{{ money(report.totalSales ?? report.sales) }}</p></div>
         </div>
         <p class="stat-card-footer"><span class="value-muted">{{ money(report.cardSales) }} Card · {{ money(report.cashSales) }} Cash</span></p>
       </article>
       <article class="stat-card">
         <div class="stat-card-head">
+          <div class="stat-card-content"><p class="stat-card-label">Gross Profit</p><p data-testid="dashboard-gross-profit" class="stat-card-value">{{ moneyOrUnavailable(report.grossProfit) }}</p></div>
           <span class="icon-tile icon-tile-dark"><app-icon name="bar_chart" /></span>
-          <div><p class="stat-card-label">Gross Profit</p><p data-testid="dashboard-gross-profit" class="stat-card-value">{{ moneyOrUnavailable(report.grossProfit) }}</p></div>
         </div>
         <p class="stat-card-footer"><span data-testid="dashboard-gross-margin" class="value-muted">{{ report.grossMarginPercent == null ? 'COGS incomplete' : (report.grossMarginPercent | number:'1.1-1') + '% margin' }}</span></p>
       </article>
       <article class="stat-card">
         <div class="stat-card-head">
+          <div class="stat-card-content"><p class="stat-card-label">{{ machineId ? 'Direct Profit' : 'Net Profit' }}</p><p data-testid="dashboard-net-profit" class="stat-card-value">{{ moneyOrUnavailable(machineId ? report.directProfit : report.netProfit) }}</p></div>
           <span class="icon-tile icon-tile-success"><app-icon name="trending_up" /></span>
-          <div><p class="stat-card-label">{{ machineId ? 'Direct Profit' : 'Net Profit' }}</p><p data-testid="dashboard-net-profit" class="stat-card-value">{{ moneyOrUnavailable(machineId ? report.directProfit : report.netProfit) }}</p></div>
         </div>
         <p class="stat-card-footer"><span class="value-muted">{{ (machineId ? report.directMarginPercent : report.netMarginPercent) == null ? 'Profit unavailable' : ((machineId ? report.directMarginPercent : report.netMarginPercent) | number:'1.1-1') + '% margin' }}@if (report.nayaxProcessingFees?.hasEstimatedFees) { · Includes estimated fees}</span></p>
       </article>
       <article class="stat-card">
         <div class="stat-card-head">
+          <div class="stat-card-content"><p class="stat-card-label">Transactions</p><p class="stat-card-value">{{ report.transactions }}</p></div>
           <span class="icon-tile icon-tile-dark"><app-icon name="assignment" /></span>
-          <div><p class="stat-card-label">Transactions</p><p class="stat-card-value">{{ report.transactions }}</p></div>
         </div>
         <p class="stat-card-footer"><span class="value-muted">{{ money(report.averageSale) }} average sale</span></p>
       </article>
