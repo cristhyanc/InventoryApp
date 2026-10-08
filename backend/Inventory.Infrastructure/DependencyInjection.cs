@@ -29,6 +29,7 @@ using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Transactions;
 using Inventory.Application.SalesSync;
+using Inventory.Application.SaleTimestampRepair;
 using Inventory.Application.Sites;
 using Inventory.Application.Stock;
 using Inventory.Application.SupplierOrders;
@@ -137,6 +138,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IInventoryCostTransitionStore, EfInventoryCostTransitionStore>();
         services.AddScoped<IInventoryCostRepairStore, EfInventoryCostRepairStore>();
         services.AddScoped<IHistoricalGstClassificationStore, EfHistoricalGstClassificationStore>();
+        services.AddScoped<INayaxSaleTimestampRepairStore, EfNayaxSaleTimestampRepairStore>();
         services.AddScoped<IStockAdjustmentStore, EfStockAdjustmentStore>();
         services.AddScoped<ISupplierOrderStore, EfSupplierOrderStore>();
         services.AddScoped<ISiteFactsStore, EfSiteFactsStore>();
