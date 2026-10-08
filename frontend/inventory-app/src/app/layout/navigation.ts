@@ -8,8 +8,9 @@
  */
 
 /**
- * A navigable destination. `icon` is decorative and only the top-level rail needs one; it names
- * an entry in `ICON_PATHS` (issue #411) rendered through `app-icon`.
+ * A navigable destination. `icon` is decorative and only the top-level rail needs one; it names a
+ * glyph the sidebar renders through `app-icon` in its outlined variant, so the name must have an
+ * entry in `OUTLINED_ICON_SHAPES` (issues #411 and #456) and not only in the Rounded `ICON_PATHS`.
  */
 export interface NavLink {
   readonly kind: 'link';

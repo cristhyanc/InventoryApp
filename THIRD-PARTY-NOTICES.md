@@ -43,18 +43,22 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## Material Icons Rounded (bundled icon paths)
+## Material Icons Rounded and Outlined (bundled icon geometry)
 
 `IconComponent` (`frontend/inventory-app/src/app/components/shared/icon.component.ts` and
-`icon-paths.ts`) renders a small, hand-picked set of inline SVG `<path>`s copied verbatim from
-Google's Material Icons **Rounded** icon set — the `round/<name>.svg` files of the official
+`icon-paths.ts`) renders a small, hand-picked set of inline SVG shapes copied verbatim from two of
+Google's Material Icons sets — the `round/<name>.svg` files for the **Rounded** set used
+everywhere by default (`ICON_PATHS`), and the `outlined/<name>.svg` files for the **Outlined** set
+the sidebar navigation uses (`OUTLINED_ICON_SHAPES`). Both come from the official
 `google/material-design-icons` repository, obtained through the generated
 `@material-design-icons/svg` distribution (version 0.14.15) and used unmodified on their native
-`viewBox="0 0 24 24"` canvas. Google's newer Material Symbols Rounded set is the same visual
-style drawn on a `0 -960 960 960` canvas; it is not used here because adopting it would mean
-rewriting the geometry rather than copying it. Only the glyphs the application actually uses are
-included; no icon font file, icon-font stylesheet, CDN script or Font Awesome kit is bundled or
-requested, and the package itself is not a dependency of the application.
+`viewBox="0 0 24 24"` canvas; an outlined glyph published as several `<path>` elements, or as a
+`<path>` plus a `<circle>`, is carried across with all of its shapes rather than being merged or
+redrawn. Google's newer Material Symbols sets are the same visual styles drawn on a
+`0 -960 960 960` canvas; they are not used here because adopting them would mean rewriting the
+geometry rather than copying it. Only the glyphs the application actually uses are included; no
+icon font file, icon-font stylesheet, CDN script or Font Awesome kit is bundled or requested, and
+the package itself is not a dependency of the application.
 
 Upstream project: <https://github.com/google/material-design-icons>. The complete licence text
 is at

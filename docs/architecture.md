@@ -1730,7 +1730,7 @@ and they are the first realized part of the target `layout/` folder described be
 | `layout/navigation.ts` | The navigation data (`primaryNavigation`) and the pure matching rules `navLinks`, `activeNavRoute` and `activeNavGroup` |
 | `layout/sidebar-nav.component.*` | Renders that data, owns which groups are expanded, and resolves the active entry from the router |
 | `layout/user-menu.component.ts` | The top-right signed-in user control: the active account and a sign-out item, or a sign-in button |
-| `app.component.*` | The shell layout, the burger/collapse control, the wide-versus-narrow layout decision, and the MSAL identity it passes to the user menu |
+| `app.component.*` | The shell layout, the sidebar open/collapsed state and its handlers, the narrow layout's top-bar opener, the wide-versus-narrow layout decision, and the MSAL identity it passes to the user menu |
 
 `primaryNavigation` is a `NavItem[]` of direct links (`Dashboard`, `Pick List`, `Machines`,
 `Sites`, `Expenses`) and expandable groups (`Products`, `Purchases`, `Reports`, `Admin`). A group
@@ -1769,23 +1769,42 @@ control an operator reaches for is the same in each. `AppComponent` reads the sa
 (`min-width: 1024px`) breakpoint the Tailwind classes use through `window.matchMedia` and keeps
 listening for changes:
 
-- **Wide layout:** the sidebar is always part of the page. The burger expands it to labels or
+- **Wide layout:** the sidebar is always part of the page. The toggle expands it to labels or
   collapses it to a compact icon rail, whose labels stay in the accessibility tree (`sr-only` plus
   a `title`) so the names are never lost. A collapsed rail has no room for a submenu, so a group
   heading then asks the shell to expand (`expandRequested`) instead of opening one invisibly.
 - **Narrow layout:** the sidebar becomes a dismissible overlay drawer that is not rendered while
   closed, so it is never left off-screen but focusable. It is dismissed by its own close control,
-  by the backdrop, by `Escape` (which returns focus to the burger), and by choosing a destination.
-  It never falls back to a horizontal menu.
+  by the backdrop, by `Escape` (which returns focus to the top bar's opener), and by choosing a
+  destination. It never falls back to a horizontal menu.
 
 Crossing the breakpoint re-applies that default: a wide layout opens with labels, a narrow one
 starts dismissed so the drawer never covers the page the operator asked for.
 
-**Semantics.** Every control is a native `<button>` or `<a>`, so it is keyboard operable; the
-burger and each group heading expose `aria-expanded` and (while their target is rendered)
-`aria-controls`; the sidebar is a single `nav[aria-label="Primary"]` landmark. The routed page sits
-in a `<main>` beside the sidebar with its own responsive width and padding, so nothing is hidden
-behind the sidebar or the sticky header.
+**Where the toggle is rendered (issue #456).** There is exactly one toggle at a time, and the
+layout alone decides where it is. On a **wide** layout it is in the sidebar's own header row,
+beside the app title, and reports back through `collapseToggled`; the shell's top bar renders no
+toggle at all, so nothing floats detached above the menu. Collapsed to the rail that header row
+drops the title and centres the control alone, with a negative horizontal margin that lets it reach
+the 44x44 CSS-pixel minimum touch target inside a `w-16` rail whose padding would otherwise leave
+40px — the sidebar can therefore always be reopened, by pointer or by keyboard. On a **narrow**
+layout the sidebar is a drawer that is not on the page, so there is no header row to hold a
+control and the opener stays in the shell's top bar; that is also the element `closeSidebar()`
+returns focus to. The drawer's own close control is unchanged in behaviour and sized to the same
+44x44 target. None of this moved state: `AppComponent` keeps the one `isSidebarOpen` flag,
+`toggleSidebar`/`expandSidebar`/`closeSidebar`/`onSidebarNavigated` and the `Escape` handler, and
+`SidebarNavComponent` still decides nothing about layout.
+
+**Semantics.** Every control is a native `<button>` or `<a>`, so it is keyboard operable and picks
+up the global `:focus-visible` outline defined in `styles.scss`; the sidebar toggle, the top-bar
+opener and each group heading expose `aria-expanded` and (while their target is rendered)
+`aria-controls`. The sidebar is a single `nav[aria-label="Primary"]` landmark, and that `<nav>`
+carries the `primary-navigation` id both toggles point `aria-controls` at — the id is on the
+navigation container itself rather than on the component's `display: contents` host. Each toggle's
+accessible name states the action rather than the state (`Collapse navigation` / `Expand
+navigation`, `Open navigation menu` / `Close navigation menu`). The routed page sits in a `<main>`
+beside the sidebar with its own responsive width and padding, so nothing is hidden behind the
+sidebar or the sticky header.
 
 **Authentication is unchanged.** `AppComponent` still owns the MSAL redirect handling, active
 account resolution and `loginRedirect`/`logoutRedirect` calls; `UserMenuComponent` is presentation
@@ -1800,15 +1819,24 @@ its route exist — not a template change in the shell.
 
 - **Sidebar.** `sidebar-nav.component.html` renders a white panel (`rounded-md-card`, `shadow-md`)
   that floats with a `1rem` margin from the viewport edge on a wide layout; the narrow drawer keeps
-  the same panel without the margin. Its own top section shows the app name above a
-  `border-md-gray-200` divider. Each top-level link and group heading declares a decorative icon
-  name in `NavItem.icon` (`layout/navigation.ts`) — presentation data only, rendered through
-  `<app-icon [name]="item.icon">` — and items are `text-md-body text-md-gray-800` with a
-  `hover:bg-md-gray-100` state. The active link gets the `bg-md-dark-gradient` background with
-  white text and (because `app-icon` fills with `currentColor`) a white icon; its parent group
-  heading stays expanded and keeps a `bg-md-gray-100` highlight while one of its pages is open.
-  Collapsed to the icon-only rail, each label keeps its accessible name as `sr-only` text (the
-  behaviour above), not a styling change.
+  the same panel without the margin. Its own top section shows the app name, and the collapse
+  control beside it (issue #456), above a `border-md-gray-200` divider. Each top-level link and
+  group heading declares a decorative icon name in `NavItem.icon` (`layout/navigation.ts`) —
+  presentation data only, rendered through `<app-icon [name]="item.icon" variant="outlined">` — and
+  items are `text-md-body text-md-gray-800` with a `hover:bg-md-gray-100` state. The active link
+  gets the `bg-md-dark-gradient` background with white text and (because `app-icon` fills with
+  `currentColor`) a white icon; its parent group heading stays expanded and keeps a
+  `bg-md-gray-100` highlight while one of its pages is open. Collapsed to the icon-only rail, each
+  label keeps its accessible name as `sr-only` text (the behaviour above), not a styling change.
+- **Outlined navigation glyphs (issue #456).** The sidebar is the one caller that asks `app-icon`
+  for the `outlined` variant, and it asks for it everywhere a glyph appears — each destination,
+  each group heading, the collapse/expand control and the drawer's close control — so the expanded
+  desktop sidebar, the collapsed rail and the mobile drawer all draw the same unfilled geometry.
+  The glyphs are the official Material Icons Outlined files, not filled paths thinned with a CSS
+  stroke (see [Icon component](#icon-component-issues-411-and-456)). Nothing outside the sidebar
+  changed: a Dashboard stat card, a report control and an action button all still render the
+  default Rounded set. The group disclosure markers stay the existing `▴`/`▾` text characters —
+  they are not Material glyphs and are not part of this icon set.
 - **Sidebar height fills the available viewport (issue #455).** The white panel's height is not
   driven by its menu content: `app.component.html`'s shell row (`flex flex-1 items-stretch`)
   stretches the sidebar to the full height of that row, which the surrounding `min-h-screen`
@@ -2095,7 +2123,7 @@ The frontend has one shared visual language, recreated from Material Dashboard 3
 - `DesignSystemShowcaseComponent` renders every shared class in one place. It is the reference rendering when the visual language changes, and it is what puts the shared classes into the generated `styles.css`. It is deliberately absent from `app.routes.ts` entirely.
 - `WidgetGalleryComponent` (issue #411) renders the shared widgets and the whole bundled icon set so the series' required screenshots can be taken from the real components inside the real shell. It reaches the router through `designSystemRoutes` in `design-system.routes.ts`, which returns **an empty route list in every optimized build** and the single `__design-system/widgets` path only on the unoptimized dev and `e2e` servers; `design-system.routes.spec.ts` asserts both branches. It calls no API and holds no business logic.
 
-**Visual evidence.** `frontend/inventory-app/e2e/playwright.visual.config.ts` plus `e2e/visual/` screenshot that fixture at 1440px and 390px — the confirmation dialog, the loading indicator, each toast variant, the open multi-select dropdown and the icon strip — and write the PNGs to the version-controlled `docs/screenshots/issue-411/`. The run starts the Angular dev server alone: no API, no database, no external service. Regenerate it with `npm run e2e:install` (once) then `npm run e2e:visual` from `frontend/inventory-app`. It is a human-invoked evidence run, not part of `scripts/validate.sh`, because it needs a browser download that normal validation deliberately avoids.
+**Visual evidence.** `frontend/inventory-app/e2e/playwright.visual.config.ts` plus `e2e/visual/` screenshot at 1440px and 390px and write the PNGs to version-controlled directories under `docs/screenshots/`. `shared-widgets.visual.ts` captures the design-system fixture — the confirmation dialog, the loading indicator, each toast variant, the open multi-select dropdown and the icon strip — into `docs/screenshots/issue-411/`. `sidebar-navigation.visual.ts` (issue #456) captures the shell's own navigation into `docs/screenshots/issue-456/`: the expanded sidebar, the sidebar with its groups open, the active item beside inactive ones, the collapsed desktop rail (skipped at 390px, which has a drawer and no rail) and the top bar beside it. The run starts the Angular dev server alone: no API, no database, no external service; the one real route it opens, `/machines`, is opened only so a navigation item is the active one, and its unanswerable data request is never what is captured. Regenerate with `npm run e2e:install` (once) then `npm run e2e:visual` from `frontend/inventory-app`. It is a human-invoked evidence run, not part of `scripts/validate.sh`, because it needs a browser download that normal validation deliberately avoids — and it rewrites **every** screenshot in both directories, so a run for one issue re-renders the other's evidence too, and text rasterization differences between hosts can change those PNGs without anything in the application changing.
 
 **Colour tokens.** Gradients are `linear-gradient(195deg, from, to)` and are exposed as `backgroundImage` entries (`bg-md-dark-gradient`, `bg-md-danger-button-gradient`, and one per status).
 
@@ -2139,7 +2167,7 @@ Shadows are `shadow-md-card` (cards, which also carry a `1px solid md-gray-200` 
 
 **Bundled font.** Inter (weights 400/500/600/700) is self-hosted through the `@fontsource/inter` npm package and loaded from the `styles` array in `angular.json`; the Angular build copies the font files into the output. The token stack is `Inter` followed by the previous system fallback `'Segoe UI', Roboto, Helvetica, Arial, sans-serif`. Do not add a Google Fonts, Font Awesome kit or other CDN request for a font or icon set.
 
-**Third-party notices.** `THIRD-PARTY-NOTICES.md` at the repository root records the Material Dashboard MIT notice (the look was recreated, not copied — no Material Dashboard CSS, JavaScript or asset is bundled, and Bootstrap is not a dependency), the SIL OFL notice for Inter, and the Apache-2.0 notice for the bundled Material Icons Rounded icon paths (see below). Add an entry there whenever a change bundles third-party code or assets, or recreates a third-party design.
+**Third-party notices.** `THIRD-PARTY-NOTICES.md` at the repository root records the Material Dashboard MIT notice (the look was recreated, not copied — no Material Dashboard CSS, JavaScript or asset is bundled, and Bootstrap is not a dependency), the SIL OFL notice for Inter, and the Apache-2.0 notice for the bundled Material Icons Rounded and Outlined icon geometry (see below). Add an entry there whenever a change bundles third-party code or assets, or recreates a third-party design.
 
 #### Stat-card icon tile arrangement (issue #453)
 
@@ -2184,16 +2212,19 @@ carrying extra empty space.
   on-screen check against the reference are deferred to Cristhyan's recorded visual check before
   merge, per the issue's documented fallback.
 
-#### Icon component (issue #411)
+#### Icon component (issues #411 and #456)
 
 `frontend/inventory-app/src/app/components/shared/icon.component.ts` is the one standalone
-`app-icon` component for rendering a glyph, backed by the inline SVG path lookup in the
+`app-icon` component for rendering a glyph, backed by the inline SVG geometry in the
 co-located `icon-paths.ts`. Later #409 sub-issues wire it into restyled pages and widgets.
 
-- **Adding an icon.** Add a `name → d` entry to the `ICON_PATHS` map in `icon-paths.ts`, **copied verbatim** from the matching `round/<name>.svg` of Google's official Material Icons Rounded set (`currentColor` fill, `viewBox="0 0 24 24"`). Never reconstruct, approximate or hand-tune a path from memory: the first implementation did, and shipped square-cornered baseline glyphs under a Rounded label. Google's newer Material Symbols Rounded set draws the same style on a `0 -960 960 960` canvas and is not interchangeable with this one. `icon-paths.spec.ts` guards the map — it fails if a path leaves the 24px canvas, if a glyph loses its rounded curve commands, or if the `add`/`delete` paths drift from their pinned upstream strings. Reference an icon from a template as `<app-icon name="...">`; an unmapped `name` renders nothing and never throws, so a typo fails silently rather than breaking the page.
-- **Inputs.** `name` (required) selects the glyph; `size` (default `24`, pixels) sets the SVG's width and height; the optional `label` controls the accessibility mode below.
-- **Decorative vs labelled accessibility.** Without `label`, the icon is decorative: the SVG has `aria-hidden="true"` and no `role` or accessible name — use this whenever adjacent visible text already carries the meaning (an icon tile, a labelled button). With `label` set, `aria-hidden` is removed (never set to `"false"`), the SVG gets `role="img"` and an accessible name equal to `label` — use this for an icon that is the only content of its control (for example an icon-only button). Either way the SVG is never focusable.
-- **Licence.** The bundled `d` path data is copied from Google's Material Icons Rounded set (Apache License 2.0), obtained from the generated `@material-design-icons/svg` distribution of the official `google/material-design-icons` repository; see `THIRD-PARTY-NOTICES.md`. That package is not a dependency — nothing but the path strings enters the repository. No icon font, icon-font stylesheet, CDN script or Font Awesome kit is added.
+- **Two variants, chosen explicitly (issue #456).** `variant` is `rounded` by default — the filled Material Icons **Rounded** set in `ICON_PATHS`, which every stat card, icon tile, action button and report control uses and which this issue did not touch. `outlined` selects the unfilled Material Icons **Outlined** set in `OUTLINED_ICON_SHAPES`, and the sidebar navigation is its only caller. Asking for the variant explicitly is the whole point: a shared map silently restyled would have changed every Dashboard and report glyph along with the navigation. `OUTLINED_ICON_SHAPES` deliberately holds **only** the glyphs the sidebar renders, and `iconShapes(name, variant)` returns `undefined` for anything else, so a navigation icon that is missing from it renders nothing rather than falling back to the filled geometry the variant exists to avoid. Never approximate an outlined glyph by stroking a filled one in CSS, and never derive one from its Rounded path.
+- **Adding an icon.** Add a `name → d` entry to the `ICON_PATHS` map in `icon-paths.ts`, **copied verbatim** from the matching `round/<name>.svg` of Google's official Material Icons Rounded set (`currentColor` fill, `viewBox="0 0 24 24"`); for the outlined variant add a `name → shapes` entry to `OUTLINED_ICON_SHAPES`, copied just as verbatim from the matching `outlined/<name>.svg`. Never reconstruct, approximate or hand-tune a path from memory: the first implementation did, and shipped square-cornered baseline glyphs under a Rounded label. Google's newer Material Symbols set draws the same styles on a `0 -960 960 960` canvas and is not interchangeable with these. `icon-paths.spec.ts` guards both maps — it fails if a path leaves the 24px canvas, if a Rounded glyph loses its curve commands, if the `add`/`delete` paths drift from their pinned upstream strings, if the outlined map stops covering exactly the sidebar's icons, or if an outlined glyph is the filled Rounded path under a new label. Reference an icon from a template as `<app-icon name="...">` (or `<app-icon name="..." variant="outlined">`); an unmapped `name` renders nothing and never throws, so a typo fails silently rather than breaking the page.
+- **A glyph is a shape list, not one path.** Several Outlined glyphs are published as more than one shape — `inventory_2` as two `<path>` elements, `location_on` as a `<path>` plus a `<circle>` — so `IconShapes` carries `paths` and optional `circles`, each value exactly as published, and the component renders them all inside the one `viewBox="0 0 24 24"` SVG. Merging or dropping a shape would mean rewriting geometry, which is what this file forbids.
+- **Inputs.** `name` (required) selects the glyph; `size` (default `24`, pixels) sets the SVG's width and height; `variant` (default `rounded`) selects the icon set; the optional `label` controls the accessibility mode below.
+- **Decorative vs labelled accessibility.** Without `label`, the icon is decorative: the SVG has `aria-hidden="true"` and no `role` or accessible name — use this whenever adjacent visible text already carries the meaning (an icon tile, a labelled button, a sidebar destination whose label names it). With `label` set, `aria-hidden` is removed (never set to `"false"`), the SVG gets `role="img"` and an accessible name equal to `label` — use this for an icon that is the only content of its control (for example an icon-only button). Either way the SVG is never focusable, and the rule is the same in both variants.
+- **Colour and contrast.** Every shape fills with `currentColor` in both variants, so a glyph inherits its control's text colour and keeps whatever contrast that colour already has — `text-md-gray-800` on the white sidebar panel, white on the active item's `bg-md-dark-gradient`, unchanged on hover and focus. An outlined glyph therefore needs no colour of its own, and none is defined for one.
+- **Licence.** Both maps' geometry is copied from Google's Material Icons sets (Apache License 2.0) — `round/<name>.svg` for `ICON_PATHS` and `outlined/<name>.svg` for `OUTLINED_ICON_SHAPES` — obtained from the generated `@material-design-icons/svg` distribution (version 0.14.15) of the official `google/material-design-icons` repository; see `THIRD-PARTY-NOTICES.md`. That package is not a dependency — nothing but the geometry enters the repository. No icon font, icon-font stylesheet, CDN script or Font Awesome kit is added.
 
 #### Purchases table row actions (issue #449)
 

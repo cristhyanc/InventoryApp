@@ -1235,6 +1235,11 @@ video {
   margin: 1rem;
 }
 
+.-mx-2 {
+  margin-left: -0.5rem;
+  margin-right: -0.5rem;
+}
+
 .mx-auto {
   margin-left: auto;
   margin-right: auto;
@@ -1377,6 +1382,10 @@ video {
   height: 2.5rem;
 }
 
+.h-11 {
+  height: 2.75rem;
+}
+
 .h-14 {
   height: 3.5rem;
 }
@@ -1427,6 +1436,10 @@ video {
 
 .min-h-screen {
   min-height: 100vh;
+}
+
+.w-11 {
+  width: 2.75rem;
 }
 
 .w-14 {
@@ -2342,6 +2355,11 @@ img {
 .hover\:text-md-danger-text:hover {
   --tw-text-opacity: 1;
   color: rgb(183 28 28 / var(--tw-text-opacity, 1));
+}
+
+.hover\:text-md-gray-800:hover {
+  --tw-text-opacity: 1;
+  color: rgb(38 38 38 / var(--tw-text-opacity, 1));
 }
 
 .hover\:underline:hover {

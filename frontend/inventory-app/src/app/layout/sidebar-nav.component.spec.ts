@@ -2,8 +2,9 @@ import { Component } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
 import { NEVER, Observable, of, throwError } from 'rxjs';
+import { ICON_PATHS, OUTLINED_ICON_SHAPES } from '../components/shared/icon-paths';
 import { PlatformDiagnosticsAccessService } from '../services/platform-diagnostics-access.service';
-import { SidebarNavComponent } from './sidebar-nav.component';
+import { PRIMARY_NAVIGATION_ID, SidebarNavComponent } from './sidebar-nav.component';
 import { NavGroup, navLinks, primaryNavigation } from './navigation';
 
 @Component({ standalone: true, template: '' })
@@ -20,7 +21,13 @@ interface Rendered {
  * decides platform-admin access: it renders whatever the API's answer was (issue #335).
  */
 async function render(
-  options: { expanded?: boolean; drawer?: boolean; url?: string; diagnosticsAccess?: Observable<boolean> } = {}
+  options: {
+    expanded?: boolean;
+    drawer?: boolean;
+    url?: string;
+    navId?: string;
+    diagnosticsAccess?: Observable<boolean>;
+  } = {}
 ): Promise<Rendered> {
   await TestBed.configureTestingModule({
     imports: [SidebarNavComponent],
@@ -40,6 +47,9 @@ async function render(
   const fixture = TestBed.createComponent(SidebarNavComponent);
   fixture.componentRef.setInput('expanded', options.expanded ?? true);
   fixture.componentRef.setInput('drawer', options.drawer ?? false);
+  if (options.navId !== undefined) {
+    fixture.componentRef.setInput('navId', options.navId);
+  }
   fixture.detectChanges();
 
   return { fixture, component: fixture.componentInstance, host: fixture.nativeElement as HTMLElement };
@@ -291,6 +301,183 @@ describe('SidebarNavComponent host element (issue #455)', () => {
     const { host } = await render();
 
     expect(host.classList.contains('contents')).toBe(true);
+  });
+});
+
+/**
+ * Outlined navigation glyphs (issue #456). The sidebar is the only caller that asks `app-icon` for
+ * the Outlined set, and it must ask for it in every state the icons appear in, because an
+ * expanded, collapsed and drawer sidebar render the same items through the same template.
+ */
+describe('SidebarNavComponent outlined icons (issue #456)', () => {
+  const states: readonly { readonly name: string; readonly expanded: boolean; readonly drawer: boolean }[] = [
+    { name: 'expanded desktop', expanded: true, drawer: false },
+    { name: 'collapsed desktop', expanded: false, drawer: false },
+    { name: 'mobile drawer', expanded: true, drawer: true }
+  ];
+
+  function renderedPaths(host: HTMLElement): string[] {
+    return Array.from(host.querySelectorAll('nav[aria-label="Primary"] svg path')).map(
+      (path) => path.getAttribute('d') ?? ''
+    );
+  }
+
+  const outlinedPaths = new Set(Object.values(OUTLINED_ICON_SHAPES).flatMap((shapes) => shapes.paths));
+  const roundedPaths = new Set(Object.values(ICON_PATHS));
+
+  it.each(states)('draws only outlined geometry in the $name sidebar', async ({ expanded, drawer }) => {
+    const { host } = await render({ expanded, drawer });
+    const paths = renderedPaths(host);
+
+    expect(paths.length).toBeGreaterThan(0);
+    for (const path of paths) {
+      expect(outlinedPaths.has(path)).toBe(true);
+      expect(roundedPaths.has(path)).toBe(false);
+    }
+  });
+
+  it('draws an outlined glyph for every declared destination and group icon', async () => {
+    const { fixture, host } = await render({ expanded: true });
+    for (const label of ['Products', 'Purchases', 'Reports', 'Admin']) {
+      groupToggle(host, label).click();
+    }
+    fixture.detectChanges();
+
+    const declaredIcons = primaryNavigation.flatMap((item) => (item.icon === undefined ? [] : [item.icon]));
+    expect(declaredIcons).toHaveLength(primaryNavigation.length);
+
+    for (const icon of declaredIcons) {
+      for (const expected of OUTLINED_ICON_SHAPES[icon].paths) {
+        expect(renderedPaths(host)).toContain(expected);
+      }
+    }
+  });
+
+  it('keeps the destination glyphs decorative, because the adjacent label names the destination', async () => {
+    const { host } = await render({ expanded: true });
+    const dashboard = link(host, '/');
+
+    expect(dashboard?.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
+    expect(dashboard?.querySelector('svg')?.hasAttribute('role')).toBe(false);
+    expect(dashboard?.textContent).toContain('Dashboard');
+  });
+
+  it('inherits the item colour, so the active item keeps a white icon on the dark gradient', async () => {
+    const { host } = await render({ expanded: true, url: '/machines' });
+    const active = link(host, '/machines');
+
+    expect(active?.classList.contains('text-white')).toBe(true);
+    expect(active?.querySelector('svg')?.getAttribute('fill')).toBe('currentColor');
+  });
+});
+
+/**
+ * The desktop collapse control lives in the sidebar's own header row, beside the app title
+ * (issue #456). It replaces the detached toggle the shell's top bar used to show on a wide layout,
+ * so the sidebar now owns the control and still owns none of the state: it reports the intent
+ * through `collapseToggled` and the shell keeps deciding what `expanded` means.
+ */
+describe('SidebarNavComponent header collapse control (issue #456)', () => {
+  function headerToggle(host: HTMLElement, navId = PRIMARY_NAVIGATION_ID): HTMLButtonElement | null {
+    return host.querySelector<HTMLButtonElement>(`nav[aria-label="Primary"] > div button[aria-controls="${navId}"]`);
+  }
+
+  it('gives the navigation landmark the id the shell asks for, so a toggle can control it', async () => {
+    const { host } = await render({ navId: 'shell-provided-navigation' });
+
+    expect(host.querySelector('nav[aria-label="Primary"]')?.id).toBe('shell-provided-navigation');
+  });
+
+  it('renders a real labelled button in the same header row as the app title when expanded', async () => {
+    const { host } = await render({ expanded: true });
+    const toggle = headerToggle(host);
+
+    expect(toggle).not.toBeNull();
+    expect(toggle?.tagName).toBe('BUTTON');
+    expect(toggle?.getAttribute('type')).toBe('button');
+    expect(toggle?.getAttribute('aria-label')).toBe('Collapse navigation');
+    expect(toggle?.getAttribute('aria-expanded')).toBe('true');
+    expect(toggle?.getAttribute('aria-controls')).toBe(PRIMARY_NAVIGATION_ID);
+
+    // Same header row as the title, with the title before it: the row is the toggle's parent.
+    const row = toggle?.parentElement as HTMLElement;
+    expect(row.textContent).toContain('Inventory Manager');
+    expect(row.firstElementChild?.textContent).toContain('Inventory Manager');
+  });
+
+  it('reports the collapse intent instead of changing its own expanded state', async () => {
+    const { fixture, component, host } = await render({ expanded: true });
+    const collapseToggled = jest.fn();
+    component.collapseToggled.subscribe(collapseToggled);
+
+    headerToggle(host)?.click();
+    fixture.detectChanges();
+
+    expect(collapseToggled).toHaveBeenCalledTimes(1);
+    // The shell owns the flag, so the sidebar is still expanded until it is told otherwise.
+    expect(component.expanded).toBe(true);
+    expect(headerToggle(host)?.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('keeps a reachable expand button, and its reversed label and state, while collapsed', async () => {
+    const { fixture, component, host } = await render({ expanded: false });
+    const toggle = headerToggle(host);
+
+    expect(toggle).not.toBeNull();
+    expect(toggle?.getAttribute('aria-label')).toBe('Expand navigation');
+    expect(toggle?.getAttribute('aria-expanded')).toBe('false');
+    expect(toggle?.getAttribute('aria-controls')).toBe(PRIMARY_NAVIGATION_ID);
+    // Visible, not an sr-only control, and not hidden from assistive technology.
+    expect(toggle?.classList.contains('hidden')).toBe(false);
+    expect(toggle?.classList.contains('sr-only')).toBe(false);
+    expect(toggle?.getAttribute('aria-hidden')).toBeNull();
+
+    const collapseToggled = jest.fn();
+    component.collapseToggled.subscribe(collapseToggled);
+    toggle?.click();
+    fixture.detectChanges();
+
+    expect(collapseToggled).toHaveBeenCalledTimes(1);
+  });
+
+  // JSDOM computes no layout, so the 44x44 CSS-pixel minimum touch target the issue requires is
+  // asserted on the sizing utilities that produce it (`h-11`/`w-11` are 2.75rem = 44px), and on
+  // the `shrink-0` that stops a long title squeezing it below that.
+  it.each([true, false])('keeps the 44x44 touch target and never shrinks (expanded: %s)', async (expanded) => {
+    const { host } = await render({ expanded });
+    const classes = Array.from(headerToggle(host)?.classList ?? []);
+
+    expect(classes).toContain('h-11');
+    expect(classes).toContain('w-11');
+    expect(classes).toContain('shrink-0');
+  });
+
+  it('leaves the app title room of its own so the two never overlap', async () => {
+    const { host } = await render({ expanded: true });
+    const title = headerToggle(host)?.parentElement?.firstElementChild as HTMLElement;
+
+    expect(Array.from(title.classList)).toEqual(expect.arrayContaining(['min-w-0', 'truncate']));
+  });
+
+  it('offers no collapse control in the narrow drawer, which closes instead of collapsing', async () => {
+    const { host } = await render({ drawer: true });
+
+    expect(headerToggle(host)).toBeNull();
+    expect(host.querySelector('button[aria-label="Collapse navigation"]')).toBeNull();
+    expect(host.querySelector('button[aria-label="Expand navigation"]')).toBeNull();
+    expect(host.querySelector('button[aria-label="Close navigation menu"]')).not.toBeNull();
+  });
+
+  it('changes no destination, group or active-state behaviour when it is used', async () => {
+    const { fixture, host } = await render({ expanded: true, url: '/reports/gst' });
+    const before = Array.from(host.querySelectorAll('a')).map((anchor) => anchor.getAttribute('href'));
+
+    headerToggle(host)?.click();
+    fixture.detectChanges();
+
+    expect(Array.from(host.querySelectorAll('a')).map((anchor) => anchor.getAttribute('href'))).toEqual(before);
+    expect(groupToggle(host, 'Reports').getAttribute('aria-expanded')).toBe('true');
+    expect(link(host, '/reports/gst')?.getAttribute('aria-current')).toBe('page');
   });
 });
 
