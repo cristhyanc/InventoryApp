@@ -34,6 +34,16 @@ namespace InventoryApi.Controllers;
 [RequiredScope("access_as_user")]
 public sealed class NayaxSaleTimestampRepairsController : ControllerBase
 {
+    // The cap on the evidence export upload, deliberately tighter than the 10 MB general
+    // document-upload limit the imports, purchases and expense-attachment endpoints carry. This
+    // upload is not a business document: it is a Nayax transaction export read only for its
+    // AuthorizationDateTimeGMT values and then discarded, and an export covering a repair's period
+    // is orders of magnitude smaller than this. Eight million bytes also sits inside SonarCloud
+    // S5693's fileUploadSizeLimit, which the 10 MB limit exceeded: the rule reads a limit that large
+    // as an excessive content length rather than as a mitigation. Raising this cap is a human
+    // decision, pinned by NayaxSaleTimestampRepairUploadLimitTests.
+    private const long MaxEvidenceExportBytes = 8_000_000;
+
     private readonly PreviewNayaxSaleTimestampRepair _preview;
     private readonly ApplyNayaxSaleTimestampRepair _apply;
 
@@ -57,7 +67,14 @@ public sealed class NayaxSaleTimestampRepairsController : ControllerBase
     /// </summary>
     [HttpPost("preview")]
     [Consumes("multipart/form-data")]
-    [RequestSizeLimit(10485760)]
+    // Both limits, because each is enforced somewhere else and only together are they effective.
+    // RequestSizeLimit caps the raw body through the server's max-request-body-size feature, so it
+    // depends on the host implementing that feature. RequestFormLimits caps what the multipart
+    // reader itself will consume, in process, whatever the host is: without it this action would
+    // read a multipart body up to FormOptions' 128 MB default, because this application configures
+    // neither Kestrel's limits nor FormOptions globally.
+    [RequestSizeLimit(MaxEvidenceExportBytes)]
+    [RequestFormLimits(MultipartBodyLengthLimit = MaxEvidenceExportBytes)]
     public async Task<ActionResult<NayaxSaleTimestampRepairPreview>> Preview(
         [FromForm] bool includeLatestSalesApiEvidence,
         [FromForm] DateTime? reconciliationCutoffUtc,

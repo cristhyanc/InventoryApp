@@ -3491,6 +3491,15 @@ creating or merging the issue that built it authorizes no production execution.
    side of the period's boundaries — a cohort stored just before a window's first day is otherwise
    reported as unresolved rather than decided. Confirm the export came from the business's own
    operator account.
+
+   The preview request is capped at 8,000,000 bytes (`MaxEvidenceExportBytes`), deliberately tighter
+   than the 10 MB general document-upload limit, and the cap is declared twice so it holds wherever
+   the API is hosted: `[RequestSizeLimit]` bounds the raw body through the server's
+   max-request-body-size feature and `[RequestFormLimits]` bounds what the multipart reader itself
+   consumes, which would otherwise default to 128 MB because the application configures neither
+   Kestrel's limits nor `FormOptions` globally. An export of authorization instants for a repair's
+   period is far smaller than the cap; a larger upload is refused at the HTTP boundary rather than
+   read, and raising the cap is a human decision.
 3. **Preview**, naming the sources and the fixed cutoff and Sydney business-date window to reconcile:
 
    ```bash
@@ -3549,6 +3558,8 @@ transitions including the second pass of the April 2026 repeated hour.
 $216.40 / $147.40** and weekly **$655.00** once the missing sales are imported and the repair applied,
 the later sale excluded at the cutoff, and the boundary cohort decided — rather than left unresolved —
 once source coverage includes 4 October.
+`NayaxSaleTimestampRepairUploadLimitTests` pins the preview upload cap: both declared limits, the
+same value in each, and no disabled-limit escape hatch on the action or the controller.
 
 ## Data flow
 

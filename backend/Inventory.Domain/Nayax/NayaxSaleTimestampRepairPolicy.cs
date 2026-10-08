@@ -276,8 +276,15 @@ public static class NayaxSaleTimestampRepairPolicy
         if (previewed.Count != current.Count)
             throw new DomainValidationException(StalePlanMessage);
 
+        // Indexing rather than adding keeps the loop body a plain statement and the enumeration free
+        // of side-effecting predicates: a repeated remote transaction id simply collapses, so the
+        // dictionary ends up smaller than the collection it was built from. A duplicate means this is
+        // not the set the plan was computed from, which is the stale-plan refusal.
         var currentByTransaction = new Dictionary<long, StoredNayaxSale>(current.Count);
-        foreach (var sale in current.Where(sale => !currentByTransaction.TryAdd(sale.TransactionId, sale)))
+        foreach (var sale in current)
+            currentByTransaction[sale.TransactionId] = sale;
+
+        if (currentByTransaction.Count != current.Count)
             throw new DomainValidationException(StalePlanMessage);
 
         foreach (var sale in previewed)

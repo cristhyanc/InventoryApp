@@ -225,8 +225,8 @@ public class NayaxSaleTimestampRepairPolicyTests
     /// <summary>
     /// The stale-state rule: the previewed sales, their stored instants, machines, amounts and
     /// statuses are compared against the apply's own authoritative read, so a sale imported, moved,
-    /// restatused or repaired in between is refused rather than repaired against a plan nobody
-    /// approved.
+    /// restatused or repaired in between - or a set carrying the same transaction twice - is refused
+    /// rather than repaired against a plan nobody approved.
     /// </summary>
     [Theory]
     [InlineData("instant")]
@@ -235,6 +235,7 @@ public class NayaxSaleTimestampRepairPolicyTests
     [InlineData("status")]
     [InlineData("added")]
     [InlineData("removed")]
+    [InlineData("duplicated")]
     public void A_previewed_plan_is_refused_when_the_stored_sales_changed_underneath_it(string change)
     {
         StoredNayaxSale[] previewed = [Sale(StoredUtc, transactionId: 1), Sale(StoredUtc, transactionId: 2)];
@@ -245,6 +246,10 @@ public class NayaxSaleTimestampRepairPolicyTests
             "amount" => [previewed[0] with { SettlementValue = 4.80m }, previewed[1]],
             "status" => [previewed[0] with { TransactionStatusId = NayaxTransactionStatusIds.Refunded }, previewed[1]],
             "added" => [.. previewed, Sale(StoredUtc, transactionId: 3)],
+            // Same count as the plan, but one transaction read twice and the other gone: the
+            // comparison keys on the remote transaction id, so a duplicate must be refused rather
+            // than silently satisfying the plan's other sale.
+            "duplicated" => [previewed[0], previewed[0]],
             _ => [previewed[0]],
         };
 
