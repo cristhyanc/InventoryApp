@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using ClosedXML.Excel;
 using Inventory.Application.Imports;
+using Inventory.Application.Nayax;
 
 namespace Inventory.Infrastructure.Imports;
 
@@ -173,13 +174,15 @@ public sealed class ClosedXmlNayaxSalesWorkbookReader : INayaxSalesWorkbookReade
     /// A cell under a column the export itself names as GMT, read as a true UTC instant (issue #380).
     /// The header is what establishes the timezone, so a value carrying no designator is taken as UTC
     /// and one carrying an explicit offset is converted to the same physical instant rather than being
-    /// shifted a second time.
+    /// shifted a second time. That reading is <see cref="NayaxGmtTimestamp"/>, the one parser the live
+    /// Lynx JSON boundary uses for its own documented-GMT field (issue #471), so neither path can
+    /// drift towards reading an offset-free GMT value against the host's time zone.
     ///
-    /// The export's own <c>d/M/yyyy h:mm:ss tt</c> text form is tried before the ISO/offset form,
-    /// because <see cref="CultureInfo.InvariantCulture"/> would otherwise read
-    /// <c>4/10/2026 11:30:00 PM</c> as 10 April. Offset-aware parsing is deliberately not applied to
-    /// the machine-local <c>MachineAuthorizationTime</c> column, where an offset would contradict what
-    /// the field means; that column keeps <see cref="DateValue"/>'s rules unchanged.
+    /// The export's own <c>d/M/yyyy h:mm:ss tt</c> text form is tried before that parser, because
+    /// <see cref="CultureInfo.InvariantCulture"/> would otherwise read <c>4/10/2026 11:30:00 PM</c> as
+    /// 10 April. Offset-aware parsing is deliberately not applied to the machine-local
+    /// <c>MachineAuthorizationTime</c> column, where an offset would contradict what the field means;
+    /// that column keeps <see cref="DateValue"/>'s rules unchanged.
     /// </summary>
     private static DateTime? UtcDateValue(IXLCell? cell)
     {
@@ -194,13 +197,7 @@ public sealed class ClosedXmlNayaxSalesWorkbookReader : INayaxSalesWorkbookReade
         if (DateTime.TryParseExact(
                 text, "d/M/yyyy h:mm:ss tt", CultureInfo.InvariantCulture, DateTimeStyles.None, out var exact))
             return DateTime.SpecifyKind(exact, DateTimeKind.Utc);
-        return DateTimeOffset.TryParse(
-            text,
-            CultureInfo.InvariantCulture,
-            DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
-            out var offset)
-            ? offset.UtcDateTime
-            : null;
+        return NayaxGmtTimestamp.ParseInstantUtc(text);
     }
 
     /// <summary>
