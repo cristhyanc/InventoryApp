@@ -1472,6 +1472,10 @@ video {
   min-width: 16rem;
 }
 
+.min-w-\[1120px\] {
+  min-width: 1120px;
+}
+
 .min-w-\[140px\] {
   min-width: 140px;
 }
@@ -1684,6 +1688,10 @@ video {
 
 .whitespace-nowrap {
   white-space: nowrap;
+}
+
+.break-words {
+  overflow-wrap: break-word;
 }
 
 .rounded {
@@ -2331,6 +2339,11 @@ img {
     grid-column: span 2 / span 2;
   }
 
+  .sm\:-mx-6 {
+    margin-left: -1.5rem;
+    margin-right: -1.5rem;
+  }
+
   .sm\:max-w-none {
     max-width: none;
   }
@@ -2424,6 +2437,10 @@ img {
 @media (min-width: 1280px) {
   .xl\:col-span-6 {
     grid-column: span 6 / span 6;
+  }
+
+  .xl\:min-w-0 {
+    min-width: 0px;
   }
 
   .xl\:grid-cols-3 {
