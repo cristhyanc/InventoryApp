@@ -2150,7 +2150,7 @@ Shadows are `shadow-md-card` (cards, which also carry a `1px solid md-gray-200` 
 
 - Layout: `.page`, `.page-header`, `.page-title`, `.page-subtitle`, `.page-actions`
 - Cards: `.card`, `.card-header`, `.card-title`, `.card-body`, `.card-footer`
-- Stat card: `.stat-card` with `.stat-card-head`, `.stat-card-label`, `.stat-card-value`, `.stat-card-footer`; the icon tile overlaps the top-left corner by 1rem
+- Stat card: `.stat-card` with `.stat-card-head`, `.stat-card-content`, `.stat-card-label`, `.stat-card-value`, `.stat-card-footer`; the icon tile sits fully inside the card at the upper right, the label/value sit on the left — see [Stat-card icon tile arrangement](#stat-card-icon-tile-arrangement-issue-453)
 - Icon tile: `.icon-tile` (48x48, 24px white glyph, md-dark gradient by default) plus `.icon-tile-dark|info|success|warning|danger`
 - Buttons: `.btn` with `.btn-primary`, `.btn-secondary`, `.btn-danger`, `.btn-link` and the `.btn-sm` size
 - Tables: `.table`, `.table-head`, `.table-row`, `.table-cell`, `.table-num`
@@ -2168,6 +2168,49 @@ Shadows are `shadow-md-card` (cards, which also carry a `1px solid md-gray-200` 
 **Bundled font.** Inter (weights 400/500/600/700) is self-hosted through the `@fontsource/inter` npm package and loaded from the `styles` array in `angular.json`; the Angular build copies the font files into the output. The token stack is `Inter` followed by the previous system fallback `'Segoe UI', Roboto, Helvetica, Arial, sans-serif`. Do not add a Google Fonts, Font Awesome kit or other CDN request for a font or icon set.
 
 **Third-party notices.** `THIRD-PARTY-NOTICES.md` at the repository root records the Material Dashboard MIT notice (the look was recreated, not copied — no Material Dashboard CSS, JavaScript or asset is bundled, and Bootstrap is not a dependency), the SIL OFL notice for Inter, and the Apache-2.0 notice for the bundled Material Icons Rounded and Outlined icon geometry (see below). Add an entry there whenever a change bundles third-party code or assets, or recreates a third-party design.
+
+#### Stat-card icon tile arrangement (issue #453)
+
+The Material reference puts the icon tile fully inside the card at the upper right, with the
+label and value on the left, opposite it; the original #410 restyle instead overlapped the icon
+over the top-left corner with a `-mt-8` negative margin and right-aligned the label/value. That
+margin is gone, and `.stat-card-head` is a plain flex row (`items-start justify-between gap-4`)
+with the content first and the icon tile last: the card's own `p-4` padding alone insets the tile
+from the top and right edges, so no negative margin, transform or absolute offset is needed to
+keep it inside the border, and the removed 1rem overhang reserve (`.stat-card`'s former `mt-4`) is
+no longer needed either, which is also what makes the card's height content-driven instead of
+carrying extra empty space.
+
+- **Markup order, not CSS, decides the side.** A consumer's template puts the label/value wrapper
+  — given the `.stat-card-content` class (`min-w-0 flex-1 break-words`) — before the icon tile
+  inside `.stat-card-head`; `justify-between` then renders the icon at the right edge and
+  `items-start` keeps it at the top instead of vertically centered. `.stat-card-content`'s
+  `min-w-0`/`flex-1`/`break-words` let a long label or a large value wrap onto a second line and
+  take the remaining row width instead of overflowing the card or pushing the icon tile outward,
+  checked at 1440px and 390px.
+- **Left-aligned, opposite the icon, only inside the icon pattern.** `.stat-card-label`/
+  `.stat-card-value` still default to right-aligned text, because several report summary tiles
+  (bookkeeping/dashboard/transaction-sales/reconciliation/GST reports) use them directly inside a
+  plain `.card card-body`, with no icon tile, and keep that existing alignment unchanged. A
+  `.stat-card-head .stat-card-label`/`.stat-card-head .stat-card-value` override flips only the
+  icon-tile stat-card pattern to left-aligned text.
+- **Every consumer of the pattern moved together**: `dashboard.component.html`,
+  `bookkeeping-report.component.ts`, `dashboard-report.component.ts`, and the
+  `design-system-showcase.component.html` fixture that renders one card per icon-tile colour
+  variant. Icon glyphs, semantic colours, label text, numeric values and formatting, loading
+  states, and existing footer content are unchanged; no comparison percentage or footer metric was
+  added. The decorative icon-tile usage in the design-system widget gallery (outside any
+  `.stat-card`) is untouched.
+- **Regression coverage** (`stat-card-icon-position.spec.ts`) loads the real compiled
+  `styles.css` into jsdom and asserts the resolved computed style — DOM order, `margin`,
+  `align-items`, `text-align`, `min-width`/`flex-shrink`/`overflow-wrap` — rather than only
+  checking which class names a template carries; `dashboard.component.spec.ts`,
+  `dashboard-report.component.spec.ts` and `bookkeeping-report.component.spec.ts` each separately
+  confirm their own production template renders the content wrapper before the icon tile. jsdom
+  does not compute real flex geometry or take screenshots; this sandboxed run could not reach a
+  browser or install one (no outbound network), so the 1440px/390px visual evidence and the final
+  on-screen check against the reference are deferred to Cristhyan's recorded visual check before
+  merge, per the issue's documented fallback.
 
 #### Icon component (issues #411 and #456)
 
