@@ -669,7 +669,7 @@ public class PurchaseUseCaseTests
     public async Task ComputeValidation_detects_total_mismatch()
     {
         // Items = 20, no delivery/package, but entered total = 30
-        // Calculated total = 20, difference = 10 (exceeds 0.02 tolerance)
+        // Calculated total = 20, difference = 10 (exceeds the $1.00 tolerance)
         using var db = CreateDbContext("purchase_validation_mismatch_test");
         db.Products.Add(new Product { Id = 1, Name = "M&M", QuantityInStock = 0 });
         AddTransitionBaseline(db, 1, 0);
