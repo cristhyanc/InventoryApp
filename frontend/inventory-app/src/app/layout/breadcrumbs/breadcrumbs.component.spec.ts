@@ -38,14 +38,12 @@ function items(host: HTMLElement): HTMLLIElement[] {
 }
 
 describe('BreadcrumbsComponent (issue #457)', () => {
-  it('renders nothing for a standalone top-level page', async () => {
-    const { host } = await render('/');
-
-    expect(nav(host)).toBeNull();
-  });
-
-  it('renders nothing for a URL with no breadcrumb mapping, inventing no label from the raw path', async () => {
-    const { host } = await render('/admin/some-unmapped-child');
+  it.each([
+    ['a standalone top-level page', '/'],
+    ['a URL with no breadcrumb mapping, inventing no label from the raw path', '/admin/some-unmapped-child'],
+    ['a page with no mapped parent', '/machines']
+  ])('renders nothing for %s', async (_description, url) => {
+    const { host } = await render(url);
 
     expect(nav(host)).toBeNull();
   });
@@ -118,11 +116,5 @@ describe('BreadcrumbsComponent (issue #457)', () => {
 
     expect(items(host)[1].textContent).toContain('Machine details');
     expect(items(host)[1].textContent).not.toContain('Snack Attack 42');
-  });
-
-  it('never shows a parent link for a page with no mapped parent', async () => {
-    const { host } = await render('/machines');
-
-    expect(nav(host)).toBeNull();
   });
 });
