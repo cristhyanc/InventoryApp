@@ -3144,6 +3144,34 @@ and the converter above is how the live JSON boundary applies it:
 - `CultureInfo.InvariantCulture` is used throughout, so the host's locale cannot change the reading
   either.
 
+**Only the documented date-time shapes are readable; a malformed-but-parseable value fails closed
+(issue #471).** The field is declared `string<date-time>`, so `NayaxGmtTimestamp` matches an explicit
+allowlist (`DateTimeOffset.TryParseExact` over its own `AcceptedFormats`) rather than
+accepting whatever a permissive `DateTimeOffset.TryParse` can make of the text. A value must carry an
+ISO 8601 calendar date (`yyyy-MM-dd`), a `T` or single-space separator, and a 24-hour time of day to
+at least the second; fractional seconds are optional and may be one to seven digits, because the
+portal's own live samples print `.817`, `.46` and `.5` on neighbouring items; the designator may be
+absent (UTC, per the field contract), `Z`, or a signed hours-and-minutes offset with or without its
+colon. Surrounding whitespace is trimmed. Everything else has **no instant at all** and is treated
+exactly like a blank or unreadable value — the sale is skipped, nothing falls back to the
+machine-local field, and the rolling window offers the transaction again:
+
+| Refused value | What a permissive parse invented |
+| --- | --- |
+| `2026-10-07` (date only) | `2026-10-07T00:00:00Z` — a midnight the payload never stated, which is 11:00 on 7 October in Sydney under AEDT, so an evening sale lands on the wrong business day |
+| `07/10/2026`, `07/10/2026 23:42:44` | 10 July 2026 — invariant culture resolves the ambiguous slash date as month/day, while the operator means 7 October |
+| `Wed, 07 Oct 2026 23:42:44 GMT`, `October 7, 2026 11:42:44 PM`, `20261007T234244Z` | the right instant from the wrong contract: formats this field is not documented to use, accepted today and silently mis-read the day the renderer changes |
+| `23:42:44` (time only) | today's date from the host clock |
+| `2026-10-08T10:42:44.263+11` (hours-only offset) | `+11:00` — an assumption, since half-hour and three-quarter-hour zones exist |
+
+Inventing an instant is worse than skipping the item: a skipped sale is offered again on the next
+refresh, while a sale persisted at a guessed instant is a financial record that silently misplaces
+revenue between Sydney business days. `NayaxGmtTimestampTests` states the allowlist and this refusal
+list, including a characterization of what the permissive parse actually produced for the date-only
+and slash-date values, and `NayaxLastSalesGmtTimestampTests` and
+`NayaxLiveSaleGmtTimestampSyncTests` assert the same refusal at the JSON boundary and through the
+real client, use case and SQLite persistence.
+
 This replaced .NET's default `DateTimeOffset` binding, which reads an offset-free value against
 `TimeZoneInfo.Local` and therefore answered a different instant on every host. On the Sydney-hosted
 API that stored a GMT value of `2026-10-07T23:42:44.263` as the instant `2026-10-07T12:42:44.263Z` —
@@ -3200,7 +3228,14 @@ for each row (`NayaxSalesImportRow.AuthorizationDateTimeGmtInput`: no column, bl
 valid). That column was already read as UTC when it carried no designator, and since issue #471 it is
 read by the same `NayaxGmtTimestamp` parser the live JSON boundary uses, so the two ingestion paths
 cannot drift apart (the export's own `d/M/yyyy h:mm:ss tt` text form is still tried first, because
-invariant-culture parsing would otherwise read `4/10/2026 11:30:00 PM` as 10 April). The supplied
+invariant-culture parsing would otherwise read `4/10/2026 11:30:00 PM` as 10 April). The shared parser
+means the shape allowlist above governs this column's **text** values too: a date-only `2026-10-04`
+cell, or a slash date without the export's own full `h:mm:ss tt` time, is reported `Malformed` and the
+row is skipped rather than imported at an invented midnight
+(`NayaxSalesExportTimestampTests.A_malformed_but_parseable_GMT_text_value_is_reported_unreadable`).
+A genuinely typed date/time cell in an `.xlsx` workbook is unaffected: it carries a real
+`DateTime` value rather than text, and the reader takes it as the instant it already is, which is the
+reading issue #380 established. The supplied
 export's columns are **not** interchangeable with the API's: an export carrying `Updated Date and Time
 (GMT)` rather than `AuthorizationDateTimeGMT` has no authorization time, and an update time is never
 substituted for one. It reads the export's own `MachineAuthorizationTime` column exactly as earlier

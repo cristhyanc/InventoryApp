@@ -230,6 +230,32 @@ public class NayaxLastSalesGmtTimestampTests
     }
 
     /// <summary>
+    /// Fail closed at the JSON boundary on a value that is malformed but parseable. The field is
+    /// declared <c>string&lt;date-time&gt;</c>, so a date-only value, an ambiguous slash date, or any
+    /// other non-contract rendering has no instant: it must not become midnight UTC, the wrong
+    /// calendar month, or - the point of this test, since every payload here carries one - the
+    /// machine-local <c>MachineAuthorizationTime</c> beside it.
+    /// </summary>
+    [Theory]
+    // Date only: 2026-10-07T00:00:00Z would be an invented midnight, 11:00 on 7 October in Sydney.
+    [InlineData("2026-10-07")]
+    // Ambiguous: 7 October to this operator, 10 July to an invariant-culture reader.
+    [InlineData("07/10/2026")]
+    [InlineData("07/10/2026 23:42:44")]
+    // Formats the GMT field's contract does not use.
+    [InlineData("Wed, 07 Oct 2026 23:42:44 GMT")]
+    [InlineData("October 7, 2026 11:42:44 PM")]
+    [InlineData("20261007T234244Z")]
+    public void A_malformed_but_parseable_authoritative_timestamp_has_no_instant(string authorizationDateTimeGmt)
+    {
+        var sale = Deserialize(LastSalesPayload(authorizationDateTimeGmt));
+
+        Assert.Null(sale.AuthorizationDateTimeGmt);
+        Assert.Null(sale.AuthorizationInstantUtc);
+        Assert.Equal(new DateTime(2026, 10, 8, 10, 42, 44, 93), sale.MachineAuthorizationTime);
+    }
+
+    /// <summary>
     /// The machine-local field is untouched by this change: it stays the raw wall-clock fact the
     /// Nayax contract says it is, is not reinterpreted as an instant, and is never substituted for a
     /// missing GMT value.

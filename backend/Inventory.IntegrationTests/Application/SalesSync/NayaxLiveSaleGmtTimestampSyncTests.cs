@@ -237,10 +237,10 @@ public sealed class NayaxLiveSaleGmtTimestampSyncTests : IDisposable
     }
 
     /// <summary>
-    /// Fail closed, per item: an authoritative timestamp that is absent, null, blank, unreadable or
-    /// structurally wrong is not imported at a defaulted instant and not imported at the
-    /// machine-local wall clock the same item carries. The rolling window offers the transaction again
-    /// on the next refresh.
+    /// Fail closed, per item: an authoritative timestamp that is absent, null, blank, unreadable,
+    /// structurally wrong, or malformed-but-parseable is not imported at a defaulted, invented or
+    /// guessed instant, and not imported at the machine-local wall clock the same item carries. The
+    /// rolling window offers the transaction again on the next refresh.
     /// </summary>
     [Theory]
     [InlineData("""[{ "TransactionID": 3564567268, "MachineID": 531595328, "SettlementValue": 3.0, "MachineAuthorizationTime": "2026-10-08T10:42:44.093" }]""")]
@@ -248,6 +248,12 @@ public sealed class NayaxLiveSaleGmtTimestampSyncTests : IDisposable
     [InlineData("""[{ "TransactionID": 3564567268, "MachineID": 531595328, "SettlementValue": 3.0, "AuthorizationDateTimeGMT": "", "MachineAuthorizationTime": "2026-10-08T10:42:44.093" }]""")]
     [InlineData("""[{ "TransactionID": 3564567268, "MachineID": 531595328, "SettlementValue": 3.0, "AuthorizationDateTimeGMT": "not-an-instant", "MachineAuthorizationTime": "2026-10-08T10:42:44.093" }]""")]
     [InlineData("""[{ "TransactionID": 3564567268, "MachineID": 531595328, "SettlementValue": 3.0, "AuthorizationDateTimeGMT": 1760000000, "MachineAuthorizationTime": "2026-10-08T10:42:44.093" }]""")]
+    // Malformed but parseable: a permissive parse would have persisted an invented instant for each
+    // of these - midnight UTC for the date-only value, 10 July for the ambiguous slash date.
+    [InlineData("""[{ "TransactionID": 3564567268, "MachineID": 531595328, "SettlementValue": 3.0, "AuthorizationDateTimeGMT": "2026-10-07", "MachineAuthorizationTime": "2026-10-08T10:42:44.093" }]""")]
+    [InlineData("""[{ "TransactionID": 3564567268, "MachineID": 531595328, "SettlementValue": 3.0, "AuthorizationDateTimeGMT": "07/10/2026", "MachineAuthorizationTime": "2026-10-08T10:42:44.093" }]""")]
+    [InlineData("""[{ "TransactionID": 3564567268, "MachineID": 531595328, "SettlementValue": 3.0, "AuthorizationDateTimeGMT": "07/10/2026 23:42:44", "MachineAuthorizationTime": "2026-10-08T10:42:44.093" }]""")]
+    [InlineData("""[{ "TransactionID": 3564567268, "MachineID": 531595328, "SettlementValue": 3.0, "AuthorizationDateTimeGMT": "Wed, 07 Oct 2026 23:42:44 GMT", "MachineAuthorizationTime": "2026-10-08T10:42:44.093" }]""")]
     public async Task A_sale_whose_authoritative_timestamp_cannot_be_read_is_not_imported(string payload)
     {
         await SyncAsync(BusinessA, payload);
