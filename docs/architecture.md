@@ -845,7 +845,7 @@ InventoryApp/
 ├── frontend/inventory-app/
 │   ├── src/app/
 │   │   ├── components/          Feature pages and shared UI
-│   │   ├── layout/              Application shell navigation: sidebar, navigation data, user menu
+│   │   ├── layout/              Application shell navigation: sidebar, navigation data, user menu, shared breadcrumbs (breadcrumbs/)
 │   │   ├── models/              Shared TypeScript contracts
 │   │   ├── services/            API clients and UI services
 │   │   ├── auth/                Entra redirect callback and the browser authentication providers
@@ -1865,6 +1865,73 @@ its route exist — not a template change in the shell.
 - **Sign-in callback.** `auth-callback.component.ts` centres a `.card` on the canvas background
   instead of a bare paragraph; its logic is still just the static "Signing you in..." message.
 
+### Breadcrumbs (issue #457)
+
+A shared breadcrumb renders once, in `app.component.html` immediately above `<router-outlet>`, so
+it sits above every routed page's own `.page-title` without any page template rendering its own
+copy. Three files own it, alongside the shell files above:
+
+| File | Responsibility |
+| --- | --- |
+| `layout/breadcrumbs/breadcrumb-routes.ts` | The route → label/parent mapping (`breadcrumbRoutes`) and the pure `buildBreadcrumbTrail`/`buildTrailFrom` that turn a URL into a trail |
+| `layout/breadcrumbs/breadcrumb.service.ts` | `BreadcrumbService`: the one live label a routed page may contribute from data it already loaded, reset to `null` on every `NavigationStart` |
+| `layout/breadcrumbs/breadcrumbs.component.ts` | Renders the trail for the router's current URL, recomputed on every `NavigationEnd` and on `BreadcrumbService`'s label |
+
+**Metadata, not URL splitting.** `breadcrumb-routes.ts` is a small, explicit mapping — the same
+convention `layout/navigation.ts` uses for the sidebar — of each nested route pattern (for example
+`/machines/:id`) to a current-page label and an optional `parent` (`{ label, path? }`). It is
+deliberately a separate mapping from `primaryNavigation`: the sidebar's `Products`/`Purchases`/
+`Reports`/`Admin` groups are headings that are not themselves a route, while a breadcrumb parent
+must be the real page that owns the child route (`/products`, `/purchases`, `/reports`, `/admin`,
+`/machines`, `/sites`), so the two metadata sets name the same areas without being interchangeable.
+A route with no entry — every top-level list page, the Dashboard, and the two URLs that load the
+cross-cutting global Stock History page (`/stock-history`, `/products/:id/stock`, see [Routing and
+loading](#routing-and-loading)) — renders no breadcrumb: `buildBreadcrumbTrail` returns an empty
+trail for an unmapped URL and for an entry with no `parent`, because a one-item trail adds no
+hierarchy. Nothing here ever derives a label by splitting the URL or reading browser history.
+
+**Links, text, and the current page.** A parent with a `path` renders as a real `routerLink`; a
+`parent` entry with no `path` renders as plain, non-link text — the "non-routable group" case the
+acceptance criteria asks the mapping to support, exercised today only by a constructed fixture in
+`breadcrumb-routes.spec.ts` because every current parent (`Products`, `Machines`, `Sites`,
+`Purchases`, `Reports`, `Admin`) happens to have a real landing route. The current page is always
+the trail's last item, is always plain text, and is the only item ever carrying
+`aria-current="page"`; `BreadcrumbsComponent` never routes a `current` item through `routerLink`
+even when the matched entry also has a `path`. Authorization is unaffected: every parent `path` is
+an existing route already behind `MsalGuard` and its own API authorization, exactly as a sidebar
+link is, so a breadcrumb exposes no name or route a guard would otherwise hide, and bypasses no
+guard, because it only ever links to a destination that was already reachable.
+
+**The live label, and why it cannot leak.** `/machines/:id` is today's one dynamic entry
+(`dynamic: true`): `MachineDetailComponent` calls `BreadcrumbService.setCurrentPageLabel(machine
+?.machineName ?? null)` from inside the same `machine$` pipeline its template already subscribes
+to through `| async` — one `tap`, zero extra requests. `BreadcrumbsComponent` shows that live label
+only while it is non-null and the matched entry is `dynamic`; otherwise it shows the entry's static
+`label` (`Machine details` here), which is what covers both the initial load and a failed load.
+Because `BreadcrumbService` resets the label to `null` on every `Router` `NavigationStart`, moving
+from `/machines/5` to `/machines/9` on the same reused `MachineDetailComponent` instance shows
+`Machine details` again the instant navigation starts, never `5`'s stale name, until `9`'s own
+`machine$` emission supplies the new one. `/sites/:id/products` and the `/purchases/new` "receiving
+a supplier order" variant stay on their static labels for now — `dynamic` is available to either
+without touching `BreadcrumbsComponent` if a future issue asks for it.
+
+**Responsive behaviour.** Every current trail is exactly two items (parent, current): no mapped
+route is nested more than one level below a page that itself has no further parent. "Shorten a long
+trail to the immediate parent plus current page" is therefore already the full trail, and
+`.breadcrumb-list` (`styles.scss`) uses `flex-wrap` rather than a forced single line, so a long
+label wraps onto a second line at a narrow width instead of causing horizontal overflow or being cut
+off — nothing is hidden or ellipsized, so the full label stays in the accessible tree and visible at
+every width. A third breadcrumb level, if one is ever needed, would need `buildTrailFrom` to return
+more than two items and a collapsing rule for which middle item to hide first; neither exists yet
+because no current route needs it.
+
+**Semantics.** The root element is one `nav[aria-label="Breadcrumb"]` landmark holding an `<ol>`;
+each separator is a `span[aria-hidden="true"]` between list items, never read by assistive
+technology. A parent link is a real `<a routerLink>`, so it is keyboard-operable and picks up the
+same global `:focus-visible` outline every other link uses (see [Application shell and
+navigation](#application-shell-and-navigation-issue-391) and `styles.scss`); nothing here needs a
+bespoke focus style.
+
 ### Target feature boundaries
 
 Keep Angular standalone and migrate incrementally toward feature-local code:
@@ -1958,7 +2025,7 @@ partial enforceable rule.
 
 ### Routing and loading
 
-Routes are declared centrally in `app.routes.ts`. Every top-level route loads its component with `loadComponent` (issue #65), except the public `/auth` Entra redirect callback, which stays eagerly imported because it is the landing route for an in-progress authentication redirect, not a migrated feature area. This keeps initial bundles smaller and creates an enforceable feature boundary without introducing NgModules. Preserve route URLs, guards, and parameters when adding or changing a route. Which of these routes the sidebar offers, and under which group, is navigation data in `layout/navigation.ts` (see [Application shell and navigation](#application-shell-and-navigation-issue-391)); a route always keeps working by direct URL whether or not it appears there.
+Routes are declared centrally in `app.routes.ts`. Every top-level route loads its component with `loadComponent` (issue #65), except the public `/auth` Entra redirect callback, which stays eagerly imported because it is the landing route for an in-progress authentication redirect, not a migrated feature area. This keeps initial bundles smaller and creates an enforceable feature boundary without introducing NgModules. Preserve route URLs, guards, and parameters when adding or changing a route. Which of these routes the sidebar offers, and under which group, is navigation data in `layout/navigation.ts` (see [Application shell and navigation](#application-shell-and-navigation-issue-391)); a route always keeps working by direct URL whether or not it appears there. Separately, whether a route shows a parent breadcrumb above its page title, and under which label, is `layout/breadcrumbs/breadcrumb-routes.ts` (see [Breadcrumbs](#breadcrumbs-issue-457)) — a third piece of navigation metadata, alongside `app.routes.ts` and `layout/navigation.ts`, that a new nested page should be added to when it has a meaningful parent.
 
 `/machines` (issue #385) is a dedicated, authenticated list page, `MachineListComponent`, that reads the same `MachineService.getAll()` machine-summary contract the home dashboard already uses, applies a client-side name/number search against the loaded list (there is no server-side filter on that endpoint), and never triggers a Nayax sales sync as a side effect of opening the page — it only reads whatever summary data is already persisted. Selecting a machine on this page navigates to the existing `/machines/:id` detail route (`MachineDetailComponent`), which is unchanged; `/machines` is a drill-down entry point into that existing page, not a replacement for it. `Machines` is a top-level link in the sidebar (issue #391; see [Application shell and navigation](#application-shell-and-navigation-issue-391)).
 
