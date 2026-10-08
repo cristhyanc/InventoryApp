@@ -52,6 +52,36 @@
     @apply flex flex-wrap items-center gap-3;
   }
 
+  /*
+   * The shared route breadcrumb (issue #457), rendered once above every page title in
+   * `app.component.html`. `flex-wrap` on the list is what satisfies "no horizontal overflow" at a
+   * narrow width without truncating a label's accessible text: a long trail wraps onto a second
+   * line instead of forcing a scrollbar or hiding part of a name.
+   */
+  .breadcrumbs {
+    @apply mb-2;
+  }
+
+  .breadcrumb-list {
+    @apply flex flex-wrap items-center gap-x-1 gap-y-1 text-md-body;
+  }
+
+  .breadcrumb-item {
+    @apply flex items-center gap-1;
+  }
+
+  .breadcrumb-link {
+    @apply rounded-md-control text-md-gray-600 hover:text-md-gray-800 hover:underline;
+  }
+
+  .breadcrumb-current {
+    @apply font-medium text-md-gray-800;
+  }
+
+  .breadcrumb-separator {
+    @apply text-md-gray-600;
+  }
+
   /* ---- Cards ------------------------------------------------------------------------- */
 
   .card {
