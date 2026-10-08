@@ -262,7 +262,10 @@ public class NayaxSaleTimestampRepairPolicyTests
     {
         StoredNayaxSale[] previewed = [Sale(StoredUtc, transactionId: 1), Sale(StoredUtc, transactionId: 2)];
 
-        NayaxSaleTimestampRepairPolicy.EnsureStoredSalesUnchanged(previewed, [previewed[1], previewed[0]]);
+        var exception = Record.Exception(() =>
+            NayaxSaleTimestampRepairPolicy.EnsureStoredSalesUnchanged(previewed, [previewed[1], previewed[0]]));
+
+        Assert.Null(exception);
     }
 
     private static StoredNayaxSale Sale(DateTime storedUtc, long transactionId = TransactionId) =>

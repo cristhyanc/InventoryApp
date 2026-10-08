@@ -277,9 +277,8 @@ public static class NayaxSaleTimestampRepairPolicy
             throw new DomainValidationException(StalePlanMessage);
 
         var currentByTransaction = new Dictionary<long, StoredNayaxSale>(current.Count);
-        foreach (var sale in current)
-            if (!currentByTransaction.TryAdd(sale.TransactionId, sale))
-                throw new DomainValidationException(StalePlanMessage);
+        foreach (var sale in current.Where(sale => !currentByTransaction.TryAdd(sale.TransactionId, sale)))
+            throw new DomainValidationException(StalePlanMessage);
 
         foreach (var sale in previewed)
             if (!currentByTransaction.TryGetValue(sale.TransactionId, out var now) || now != sale)
