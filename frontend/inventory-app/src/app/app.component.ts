@@ -6,6 +6,7 @@ import { Subject, filter, takeUntil } from 'rxjs';
 import { ToastContainerComponent } from "./components/shared/toast-container.component";
 import { IconComponent } from './components/shared/icon.component';
 import { LoadingIndicatorComponent } from './components/shared/loading-indicator.component';
+import { BreadcrumbsComponent } from './layout/breadcrumbs/breadcrumbs.component';
 import { PRIMARY_NAVIGATION_ID, SidebarNavComponent } from './layout/sidebar-nav.component';
 import { UserMenuComponent } from './layout/user-menu.component';
 import { loginRequest } from './auth-config';
@@ -38,7 +39,8 @@ import { loginRequest } from './auth-config';
     UserMenuComponent,
     IconComponent,
     ToastContainerComponent,
-    LoadingIndicatorComponent
+    LoadingIndicatorComponent,
+    BreadcrumbsComponent
   ],
   templateUrl: './app.component.html'
 })
