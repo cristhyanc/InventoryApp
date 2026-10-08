@@ -22,37 +22,37 @@
   <section class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
     <article class="stat-card">
       <div class="stat-card-head">
-        <span class="icon-tile icon-tile-dark">
-          <app-icon name="assignment" />
-        </span>
-        <div>
+        <div class="stat-card-content">
           <p class="stat-card-label">Total Products</p>
           <p class="stat-card-value">{{ totalProducts }}</p>
         </div>
+        <span class="icon-tile icon-tile-dark">
+          <app-icon name="assignment" />
+        </span>
       </div>
     </article>
 
     <article class="stat-card">
       <div class="stat-card-head">
-        <span class="icon-tile icon-tile-dark">
-          <app-icon name="inventory_2" />
-        </span>
-        <div>
+        <div class="stat-card-content">
           <p class="stat-card-label">Units In Stock</p>
           <p class="stat-card-value">{{ totalUnitsInStock }}</p>
         </div>
+        <span class="icon-tile icon-tile-dark">
+          <app-icon name="inventory_2" />
+        </span>
       </div>
     </article>
 
     <article class="stat-card">
       <div class="stat-card-head">
-        <span class="icon-tile icon-tile-dark">
-          <app-icon name="attach_money" />
-        </span>
-        <div>
+        <div class="stat-card-content">
           <p class="stat-card-label">Inventory Value (cost)</p>
           <p class="stat-card-value">{{ inventoryValueDisplay }}</p>
         </div>
+        <span class="icon-tile icon-tile-dark">
+          <app-icon name="attach_money" />
+        </span>
       </div>
       <p class="stat-card-footer"><span class="value-muted">{{ inventoryValueHelpText }}</span></p>
     </article>

@@ -229,6 +229,39 @@ describe('DashboardComponent reorder alerts table rendering', () => {
   });
 });
 
+describe('DashboardComponent stat-card icon tile position (issue #453)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  async function renderDashboard(): Promise<HTMLElement> {
+    await TestBed.configureTestingModule({
+      imports: [DashboardComponent],
+      providers: [
+        provideRouter([]),
+        { provide: ProductService, useValue: { getAll: () => of([]), getLowStock: () => of([]), getInventoryValuationSummary: () => of(SUMMARY) } },
+        { provide: MachineService, useValue: { getAll: () => of([]) } },
+        { provide: SiteService, useValue: { getAll: () => of([]) } },
+        { provide: NayaxSalesSyncService, useValue: { syncLatest: () => of(undefined) } }
+      ]
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(DashboardComponent);
+    fixture.detectChanges();
+    return fixture.nativeElement as HTMLElement;
+  }
+
+  it('renders the label/value content before the icon tile in every summary stat card, so the icon sits at the right', async () => {
+    const host = await renderDashboard();
+    const heads = Array.from(host.querySelectorAll('.stat-card-head'));
+
+    expect(heads.length).toBe(3);
+    for (const head of heads) {
+      const children = Array.from(head.children);
+      expect(children[0].classList.contains('stat-card-content')).toBe(true);
+      expect(children[children.length - 1].classList.contains('icon-tile')).toBe(true);
+    }
+  });
+});
+
 describe('DashboardComponent coordinated sales refresh', () => {
   it('synchronizes latest sales before loading Sites and Machines', () => {
     const calls: string[] = [];
