@@ -100,6 +100,16 @@ export const routes: Routes = [
     loadComponent: () => import('./components/purchases/supplier-orders.component').then((m) => m.SupplierOrdersComponent)
   },
   {
+    // The dedicated Edit purchase page (issue #475), which replaced the purchases table's inline
+    // editor. It loads the purchase from this id, so the URL is bookmarkable and survives a refresh.
+    // Declared after `purchases/new` and `purchases/orders`, which are two-segment paths this
+    // three-segment pattern cannot shadow either way.
+    path: 'purchases/:id/edit',
+    canActivate: [MsalGuard],
+    loadComponent: () =>
+      import('./components/purchases/purchase-edit/purchase-edit-page.component').then((m) => m.PurchaseEditPageComponent)
+  },
+  {
     path: 'reports',
     canActivate: [MsalGuard],
     loadComponent: () => import('./components/reports/dashboard-report.component').then((m) => m.DashboardReportComponent)

@@ -59,6 +59,7 @@ export const breadcrumbRoutes: readonly BreadcrumbRouteEntry[] = [
   { pattern: '/machines/:id', label: 'Machine details', parent: MACHINES, dynamic: true },
   { pattern: '/sites/:id/products', label: 'Site products', parent: SITES },
   { pattern: '/purchases/new', label: 'Add purchase', parent: PURCHASES },
+  { pattern: '/purchases/:id/edit', label: 'Edit purchase', parent: PURCHASES },
   { pattern: '/reports/bookkeeping', label: 'Bookkeeping', parent: REPORTS },
   { pattern: '/reports/daily', label: 'Daily', parent: REPORTS },
   { pattern: '/reports/transactions', label: 'Transactions', parent: REPORTS },

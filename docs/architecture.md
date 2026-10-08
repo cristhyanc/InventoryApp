@@ -2037,6 +2037,13 @@ redirected, so existing links and bookmarks stay valid.
 
 `/sites` (issue #386) is a standalone, authenticated list page that loads every site summary through the existing `SiteService.getAll()` contract, offers client-side search/filter by site name, and drills down into the existing `/sites/:id/products` route when a site is selected. It does not change the `Site` summary contract or the site-products workflow; `Sites` is a top-level link in the sidebar (issue #391).
 
+`/purchases/:id/edit` (issue #475) is the dedicated Edit purchase page, `PurchaseEditPageComponent`,
+which replaced the editor the purchases table used to expand inline. It is a three-segment pattern,
+so it cannot shadow the two-segment `/purchases/new` and `/purchases/orders` in either declaration
+order, and it loads its purchase from the route id rather than from navigation state — a bookmarked
+edit URL and a refresh both work, and Save and Cancel both return to `/purchases`. See [Purchase
+edit page](#purchase-edit-page-issue-475) for the page, its states and what moved out of the list.
+
 The static host must rewrite unknown application paths to `index.html`; otherwise refreshing a deep link such as `/reports/bookkeeping` or the Entra redirect landing on `/auth` will bypass Angular and return a host-level 404. `frontend/inventory-app/src/staticwebapp.config.json` (copied to the deployed output root by the `assets` build option) declares that Azure Static Web Apps `navigationFallback`, rewriting unmatched paths to `/index.html` while excluding `/assets/*` and static file extensions.
 
 **Admin decomposition (issue #388, Admin split 1/3).** `AdminComponent` was decomposed into
@@ -2295,7 +2302,7 @@ co-located `icon-paths.ts`. Later #409 sub-issues wire it into restyled pages an
 
 #### Purchases table row actions (issue #449)
 
-The Purchases list (`purchase-list.component.html`) keeps its `table-cell` column widths — the `Items` column in particular can grow wide with several product lines — inside a horizontally scrolling `<table class="table min-w-[900px]">` within `overflow-x-auto`. The restyled #410 table widened enough that, without a pinned Actions column, the Edit/Delete buttons could scroll out of view and appear missing. The Actions header `<th>` and each row's Actions `<td>` are `sticky right-0` with their own opaque background (`bg-md-gray-100` on the header, matching `.table-head`; `bg-white` on each row cell) and a `border-md-gray-200` left divider, so both actions stay visible and reachable at the right edge while the rest of the row scrolls underneath, at 1440px and down to the 390px minimum width where horizontal scrolling remains expected. Sticky positioning here only changes where the cell paints; it does not change column sizing, and `startEdit(r)`/`remove(r)` keep their existing behaviour.
+The Purchases list (`purchase-list.component.html`) keeps its `table-cell` column widths — the `Items` column in particular can grow wide with several product lines — inside a horizontally scrolling `<table class="table min-w-[900px]">` within `overflow-x-auto`. The restyled #410 table widened enough that, without a pinned Actions column, the Edit/Delete buttons could scroll out of view and appear missing. The Actions header `<th>` and each row's Actions `<td>` are `sticky right-0` with their own opaque background (`bg-md-gray-100` on the header, matching `.table-head`; `bg-white` on each row cell) and a `border-md-gray-200` left divider, so both actions stay visible and reachable at the right edge while the rest of the row scrolls underneath, at 1440px and down to the 390px minimum width where horizontal scrolling remains expected. Sticky positioning here only changes where the cell paints; it does not change column sizing. Since issue #475 the Actions cell holds an Edit **link** to `/purchases/:id/edit` (see [Purchase edit page](#purchase-edit-page-issue-475)) beside the unchanged `remove(r)` Delete button; the sticky behaviour is the same for both.
 
 #### Reconciliation and Transaction Sales table width (issue #452)
 
@@ -2410,17 +2417,17 @@ The purchase form sets the classifications and the purchase list displays what t
 **The response summary.** The `/api/purchases` envelope carries a third member, `gst`, beside `purchase` and `validation` — the saved purchase's `inputGst`, `unresolvedComponentCount` and `unresolvedAmount`. It is additive: `purchase` and `validation` keep their names, order and values, so the existing contract is unchanged (`PurchaseJsonContractTests`).
 
 - `Inventory.Application.Purchases.ComputePurchaseGstSummary` is the use case behind it. Like `ComputePurchaseTotalValidation`, it owns no formula: it projects the persisted `PurchaseRecord` onto `PurchaseGstPolicy.Calculate`'s component inputs — every line, plus each charge with its own classification — and returns that policy's answer. `PurchasesController` maps it onto `PurchaseGstSummaryDto` for every purchase it returns, on the list, the single read, the create and the edit alike.
-- The summary describes what is **stored**. It is never a projection of an unsaved edit, which is why the purchase list marks the figures as excluding unsaved changes while a purchase's edit form is open rather than recomputing them in the browser.
+- The summary describes what is **stored**. It is never a projection of an unsaved edit, and nothing recomputes it in the browser. Since issue #475 moved editing to its own page, the list only ever displays saved figures, so the "these are the saved figures" note it used to show beside an open inline editor is gone; the edit page itself shows no GST figure at all and says the API calculates them once the purchase is saved.
 - This is the only purchase input-GST figure the API exposes. The period-level report of #432 consumes the same Domain policy; it does not aggregate these response blocks.
 
-**The form.** `purchase-upload.component.ts` (entry) and `purchase-list.component.ts` (edit) share the picker vocabulary in `components/purchases/gst-classification-options.ts`, so the two pages cannot drift on the options they offer (`Not classified`, `Taxable`, `GST-free`) or on what a stored state is called.
+**The form.** `purchase-upload.component.ts` (entry) and `purchase-edit/purchase-edit-form.component.ts` (edit, moved out of `purchase-list.component.ts` by issue #475 — see [Purchase edit page](#purchase-edit-page-issue-475)) share the picker vocabulary in `components/purchases/gst-classification-options.ts`, so the two pages cannot drift on the options they offer (`Not classified`, `Taxable`, `GST-free`) or on what a stored state is called.
 
 - A new line and a new charge start as `Unknown`/Not classified and stay there unless a person picks something. Nothing is pre-filled from the product, the supplier, the amount or a received supplier order (decision D4).
 - A charge's picker appears only while the charge has a value, mirroring the server's absent-charge rule. `isChargePresent` is a visibility decision, not a calculation: an absent charge has no classification and the form never submits one for it, nor warns that it is unresolved (decision D3).
 - **An edit submits only what the person changed.** Each edit line keeps the classification the purchase was read with and the request omits any classification that still matches it, so a `ProductRule`/`SupplierDefault`/`SupplierFeeDefault` provenance survives an edit of a quantity, a cost or a date. An explicit move back to Not classified is a change like any other and is submitted.
 - **Each edit line carries its stored `id`.** A line added in the form has none. That is what keeps a classification on its own line when duplicate-product lines are reordered or one of them is removed; line identity is never substituted by the product or by the array position (`PurchaseLineIdentityPolicy`).
 - **A stored line keeps its product, so the form offers no product picker for one.** An identified line submitted with a different product is refused (`PurchaseLineIdentityPolicy.ProductChangedMessage`), because re-pointing it would carry its classification, its provenance and its restock movement onto another product's costing history. The edit form therefore names a stored line's product as text (`isStoredLine`) and states the workflow the server's message names: remove the line and add the new product as its own line, which is a line with no `id`, no classification and no inherited provenance. A line added during the edit still has its picker, and quantity, unit cost and classification stay editable on every line.
-- A refused save — the `400` a rejected classification or an ambiguous line set produces — leaves the edit form open with the person's selections and shows the API's own message, so a rejected classification never looks like a saved one.
+- A refused save — the `400` a rejected classification or an ambiguous line set produces — leaves the edit page open with the person's selections and shows the API's own message, so a rejected classification never looks like a saved one.
 
 ### Product and supplier GST rules (issue #430)
 
@@ -3509,6 +3516,65 @@ the (now single) Supplier Orders implementation instead of a stale duplicate. `P
 `/purchases/orders` (rather than the old `/products/on-order`) after a receipt that started from a
 supplier order, and its "Unable to load supplier order" and Cancel links point at the same new page.
 
+#### Purchase edit page (issue #475)
+
+Editing a purchase is a dedicated page, not a row that expands inside the purchases table. The
+inline editor the list used to hold is **gone**: `purchase-list.component.{ts,html}` is display and
+delete only, holds no edit form, no edit state and no `PUT` request, and its Actions cell's Edit is
+an `<a [routerLink]="['/purchases', r.id, 'edit']">` rather than a button that toggled a second
+`<tr>`. That is also what makes the list compact again — the saved-figures-exclude-unsaved-edits
+note the list rendered while an editor was open (issue #431) no longer exists, because no unsaved
+edit can be in the list any more.
+
+Two components sit behind the route, split on the [page composition
+boundary](#page-composition-boundary-issue-191):
+
+| File | Responsibility |
+| --- | --- |
+| `components/purchases/purchase-edit/purchase-edit-page.component.{ts,html}` | The routed page: the `:id` route parameter, the purchase/supplier/product reads, the loading, unavailable and save-error states, the `PurchaseService.update` call, and the navigation back to the list |
+| `components/purchases/purchase-edit/purchase-edit-form.component.{ts,html}` | The form itself: its fields, its line-item operations and the request payload it emits through `(saveRequested)`/`(editCancelled)`. It makes no request of its own |
+
+- **Direct loading, by id.** The page resolves `:id` from `ActivatedRoute.paramMap` and reads the
+  purchase through the existing authorized `PurchaseService.get` (`GET /api/purchases/{id}`), so a
+  bookmarked edit URL, a page refresh and browser Back/Forward between two edit URLs all load the
+  right purchase. Nothing is carried in navigation-only state and nothing depends on a list
+  component instance still existing. `paramMap` rather than a snapshot is what makes an id change on
+  a reused component reload instead of leaving the previous purchase's values on screen.
+- **Permissions and tenant isolation are the API's, unchanged.** The route is behind `MsalGuard`
+  exactly as every other page is, and `GET`/`PUT /api/purchases/{id}` stay `[Authorize]`d and scoped
+  by the `AppDbContext` tenant query filters (see [Tenant ownership](#tenant-ownership-issue-64)).
+  Another business's purchase id therefore reaches this page's unavailable state rather than its
+  data, and no request this page makes names an owner. The route is not an authorization boundary
+  and must not become one.
+- **The three non-form states.** A loading state while the read is outstanding (never an empty
+  form); a `404` reported as "no longer available" and a failed read reported separately as a
+  failure to load, each with a Back to Purchases link and no form at all; and a save refusal shown
+  above the form with the API's own message, with every entered value still on the page, so a
+  rejected GST classification never looks like a saved one. A save in flight disables Save, and the
+  page ignores a second submission, so one purchase cannot be updated twice by a double press.
+- **Save and Cancel both return to `/purchases`.** The list reloads on `ngOnInit`, which is how the
+  updated values appear. The list carries no filter, sort or paging state, so there is nothing to
+  preserve across the round trip and no query parameter or navigation state is used for it; if the
+  list ever gains those, this is the one place that would need to carry them.
+- **The form moved unchanged.** Title, supplier, purchase date, total amount, the purchased-item
+  lines (product for a new line, quantity, unit cost, per-line GST classification, add and remove),
+  delivery cost with its GST picker, package cost with its GST picker, and notes are exactly the
+  fields and operations the inline editor offered, with the same `name`s, the same `data-testid`s and
+  the same validation. Every issue #431 rule still holds and its tests moved with the code: only a
+  changed classification is submitted, a stored line travels with its own `id` and keeps its product,
+  an absent charge submits no classification, and an unchanged purchase date is resubmitted as the
+  stored instant. The GST figures are still the API's alone and are still displayed on the list; this
+  page performs no GST arithmetic. Editing a purchase still cannot replace its uploaded document -
+  `PUT /api/purchases/{id}` never accepted a file, and this page adds no way to send one.
+- **Breadcrumb.** `/purchases/:id/edit` is a static `Purchases > Edit purchase` entry in
+  `layout/breadcrumbs/breadcrumb-routes.ts` (see [Breadcrumbs](#breadcrumbs-issue-457)); the page
+  renders no breadcrumb markup of its own and contributes no live label.
+- **No unsaved-change guard.** The repository has no unsaved-change protection pattern - no
+  `CanDeactivate` guard, no dirty-state service, and `/products/:id/edit` has none either - so this
+  page behaves like every other form page: leaving it, by Cancel, by Back or by any other link,
+  discards unsaved edits without a prompt. Introducing a prompt here would be a new cross-cutting
+  pattern and is deliberately not part of issue #475.
+
 #### Supplier product price history and comparison (issue #63)
 
 The Purchasing/Suppliers vertical slice derives a per-product supplier price comparison from actual,
@@ -3691,7 +3757,7 @@ or tag exists.
 | `InventoryApi.Controllers` | `PurchasesController` (file `PurchasesController.cs`), `[Route("api/purchases")]` | — | The route is now canonical; there is no supported external client left to preserve `api/receipts` for. |
 | `InventoryApi.DTOs` | `PurchaseItemDto`, `PurchaseCreateMetaDto`, `PurchaseValidationDto`, `PurchaseGstSummaryDto`, `PurchaseResponseDto` (JSON keys `purchase`/`validation`/`gst`), and since issue #304 the API-owned `PurchaseResponse`/`PurchaseItemResponse` the `purchase` key carries | — | The `receipt`/`validation` wrapper existed only for old clients; `PurchaseResponseDto`'s property is now named `Purchase`. The `gst` key is issue #431's additive input-GST summary. `PurchaseItemResponse.ReceiptId` keeps the persistence-facing JSON name, as the entity's did. |
 | Frontend `models.ts`/`purchase.service.ts` | `Purchase`, `PurchaseItem`, `PurchaseValidation`, `PurchaseGstSummary`, `PurchaseResponse` (`purchase` field), `PurchaseService` (canonical `/purchases` base URL), `PurchaseUploadPayload`/`PurchaseItemPayload`/`PurchaseUpdatePayload` | JSON-bound field `receiptId` on `PurchaseItem` | `receiptId` matches the backend `PurchaseItem.ReceiptId` persistence/JSON contract above, which is out of this issue's scope. |
-| Frontend routing | `/purchases`, `/purchases/new` and `/purchases/orders` (issue #387) are the supported purchase routes | `/products/on-order` redirects to `/purchases/orders` (issue #387) | The `/receipts` and `/receipts/new` redirect aliases were removed; there is no supported bookmark to preserve. `/products/on-order` keeps its old bookmark working instead of a second supplier-order listing. |
+| Frontend routing | `/purchases`, `/purchases/new`, `/purchases/orders` (issue #387) and `/purchases/:id/edit` (issue #475) are the supported purchase routes | `/products/on-order` redirects to `/purchases/orders` (issue #387) | The `/receipts` and `/receipts/new` redirect aliases were removed; there is no supported bookmark to preserve. `/products/on-order` keeps its old bookmark working instead of a second supplier-order listing. |
 | Supporting documents | Not renamed: `Purchase.FileName`/`StoredFileName`/`ContentType`/`FileSizeBytes`, the "Receipt or invoice" upload copy, `OperatingExpense` receipt-attachment naming | — | A purchase's attached scan/photo, and an operating expense's attachment, are supporting *documents*, a distinct concept from the Purchase business record. |
 
 Out of scope for the Purchase/Products contract cleanup (per issues #60 and #127): changing purchase

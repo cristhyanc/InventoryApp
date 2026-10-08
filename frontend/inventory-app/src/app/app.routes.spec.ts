@@ -8,6 +8,10 @@ import { AvcoTransitionComponent } from './components/admin/avco-transition/avco
 import { CostingRepairPageComponent } from './components/admin/costing-repair/costing-repair-page.component';
 import { HistoricalGstClassificationComponent } from './components/admin/historical-gst-classification/historical-gst-classification.component';
 import { PlatformDiagnosticsComponent } from './components/admin/diagnostics/platform-diagnostics.component';
+import { PurchaseEditPageComponent } from './components/purchases/purchase-edit/purchase-edit-page.component';
+import { PurchaseListComponent } from './components/purchases/purchase-list.component';
+import { PurchaseUploadComponent } from './components/purchases/purchase-upload.component';
+import { SupplierOrdersComponent } from './components/purchases/supplier-orders.component';
 
 function route(path: string): Route {
   const match = routes.find((candidate) => candidate.path === path);
@@ -35,6 +39,24 @@ describe('Stock History routes', () => {
   it('keeps the legacy product entry point and resolves it to the same page', async () => {
     expect(route('products/:id/stock').canActivate).toContain(MsalGuard);
     await expect(loadedComponent('products/:id/stock')).resolves.toBe(StockHistoryPageComponent);
+  });
+});
+
+describe('Purchase edit route (issue #475)', () => {
+  it('serves the dedicated Edit purchase page at /purchases/:id/edit, behind authentication', async () => {
+    expect(route('purchases/:id/edit').canActivate).toContain(MsalGuard);
+    await expect(loadedComponent('purchases/:id/edit')).resolves.toBe(PurchaseEditPageComponent);
+  });
+
+  /**
+   * `purchases/new` and `purchases/orders` are two-segment paths, so the three-segment edit pattern
+   * cannot shadow them in either declaration order. This pins that none of the purchase routes
+   * started resolving to a different page when the edit route arrived.
+   */
+  it('leaves the existing purchase routes resolving to their own pages', async () => {
+    await expect(loadedComponent('purchases')).resolves.toBe(PurchaseListComponent);
+    await expect(loadedComponent('purchases/new')).resolves.toBe(PurchaseUploadComponent);
+    await expect(loadedComponent('purchases/orders')).resolves.toBe(SupplierOrdersComponent);
   });
 });
 

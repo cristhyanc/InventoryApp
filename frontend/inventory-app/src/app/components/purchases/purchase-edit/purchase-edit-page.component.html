@@ -1,0 +1,36 @@
+<div class="page">
+  <header class="page-header">
+    <div>
+      <h1 class="page-title">Edit Purchase</h1>
+      <p class="page-subtitle">Change this purchase's details, items and charges, then save to return to the list.</p>
+    </div>
+  </header>
+
+  <div class="card mx-auto w-full max-w-5xl">
+    <div class="card-body">
+      @if (loading) {
+        <output class="alert alert-info block" data-testid="purchase-edit-loading">
+          <p class="alert-title">Loading purchase...</p>
+          <p>Please wait while the purchase details are loaded.</p>
+        </output>
+      } @else if (unavailable) {
+        <div class="alert alert-danger" role="alert" data-testid="purchase-edit-unavailable">
+          <p class="alert-title">{{ unavailable }}</p>
+          <p>
+            <a routerLink="/purchases" class="btn btn-secondary btn-sm" data-testid="purchase-edit-back">Back to Purchases</a>
+          </p>
+        </div>
+      } @else if (purchase) {
+        <app-purchase-edit-form
+          [purchase]="purchase"
+          [suppliers]="suppliers"
+          [products]="products"
+          [saving]="saving"
+          [error]="saveError"
+          (saveRequested)="onSave($event)"
+          (editCancelled)="onCancel()"
+        />
+      }
+    </div>
+  </div>
+</div>

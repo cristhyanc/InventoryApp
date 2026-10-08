@@ -621,11 +621,17 @@ The complete invariants and change rules are in [AGENTS.md](AGENTS.md).
 
 ## Purchase entry and GST classification
 
-Purchase amounts are entered **GST-inclusive**. GST is recorded per component, so **Add Purchase** and the
-**Edit Purchase** form on the Purchases page each offer a GST picker with three states — **Taxable**,
+Purchase amounts are entered **GST-inclusive**. GST is recorded per component, so the **Add Purchase** page
+and the **Edit Purchase** page each offer a GST picker with three states — **Taxable**,
 **GST-free** and **Not classified** — for every purchased item line and, separately, for the delivery charge
 and the package charge. A charge never inherits a line's classification, and there is no single
 classification for a whole purchase.
+
+**Edit** on a purchase row opens the Edit Purchase page at `/purchases/<id>/edit`; nothing expands inside the
+Purchases table. That address is bookmarkable and survives a page refresh, **Save** stores the changes and
+returns to the Purchases list, and **Cancel** returns without saving. Leaving the page by Cancel, by the
+browser's Back button or by any other link discards unsaved edits without asking first, which is how every
+other form page in the application behaves.
 
 - Everything starts as **Not classified**, including lines prefilled while receiving a supplier order.
   Nothing is guessed from the product, the supplier or the amount, so a line is classified only when a
@@ -637,15 +643,17 @@ classification for a whole purchase.
   classification that came from a configured product or supplier rule keeps that origin when you edit a
   quantity, a cost, a date or another line. Choosing **Not classified** again is a deliberate change and is
   saved as one.
-- A line already on the purchase keeps its product: the edit form shows the product name rather than a
+- A line already on the purchase keeps its product: the edit page shows the product name rather than a
   picker, because a stored line's GST classification, its origin and its restock movement belong to that
   product. To record a different product, **Remove** that line and add the new product as its own line; the
   new line starts **Not classified** and carries none of the removed line's classification or history. You can
   still change a stored line's quantity, unit cost and classification.
+- If a save is refused — an unsupported classification, for example — the edit page stays open with everything
+  you entered and shows the reason, so a rejected classification never looks like a saved one.
 - Each purchase row then shows the API's **Purchase GST (input tax credit)** figure, each component's
   classification, and a warning naming how many components and how much money are still unclassified. Those
-  figures are calculated by the API from the saved purchase — the frontend never calculates GST — so while an
-  edit form is open the row says explicitly that the saved figures do not include your unsaved changes.
+  figures are calculated by the API from the saved purchase — the frontend never calculates GST — so they
+  update on the Purchases list once your edit is saved.
 
 GST classification is accounting data only. It never changes a purchase's unit cost, the weighted-average
 cost, costing quantity or inventory value.

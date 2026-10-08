@@ -40,14 +40,14 @@ test('creating, editing and deleting a purchase moves inventory and costing with
   expect([created.quantityInStock, created.costingQuantity, created.inventoryValue, created.averageUnitCost])
     .toEqual([10, 10, 20, 2]);
 
-  // Edit: the same purchase, six units fewer.
-  await purchaseRow.getByRole('button', { name: 'Edit' }).click();
-  const editForm = page.locator('form').filter({ hasText: 'Edit Purchase' });
-  await expect(editForm).toBeVisible();
-  await expect(editForm.getByTestId('edit-purchase-item-quantity')).toHaveValue('10');
-  await editForm.getByTestId('edit-purchase-item-quantity').fill('4');
-  await editForm.getByRole('button', { name: 'Save' }).click();
-  await expect(editForm).toBeHidden();
+  // Edit: the same purchase, six units fewer. Editing is its own page since issue #475, so Edit is
+  // a link to /purchases/:id/edit and a successful Save returns to the list.
+  await purchaseRow.getByRole('link', { name: `Edit ${title}` }).click();
+  await expect(page).toHaveURL(/\/purchases\/\d+\/edit$/);
+  await expect(page.getByTestId('edit-purchase-item-quantity')).toHaveValue('10');
+  await page.getByTestId('edit-purchase-item-quantity').fill('4');
+  await page.getByTestId('edit-purchase-save').click();
+  await expect(page).toHaveURL(/\/purchases$/);
 
   const edited = await productByName(api, seeded.purchaseProduct);
   expect([edited.quantityInStock, edited.costingQuantity, edited.inventoryValue, edited.averageUnitCost])
