@@ -1,0 +1,18 @@
+@if (trail.length) {
+  <nav aria-label="Breadcrumb" class="breadcrumbs">
+    <ol class="breadcrumb-list">
+      @for (item of trail; track item.label + '|' + (item.path ?? ''); let isLast = $last) {
+        <li class="breadcrumb-item">
+          @if (item.path && !item.current) {
+            <a [routerLink]="item.path" class="breadcrumb-link">{{ item.label }}</a>
+          } @else {
+            <span class="breadcrumb-current" [attr.aria-current]="item.current ? 'page' : null">{{ item.label }}</span>
+          }
+          @if (!isLast) {
+            <span aria-hidden="true" class="breadcrumb-separator">/</span>
+          }
+        </li>
+      }
+    </ol>
+  </nav>
+}
