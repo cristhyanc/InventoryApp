@@ -279,6 +279,21 @@ describe('SidebarNavComponent super-admin diagnostics link (issue #335)', () => 
   });
 });
 
+/**
+ * The sidebar's white panel must fill the available application height (issue #455): the shell
+ * stretches `app-sidebar-nav` to the full height of the row beside `<main>`, but that stretch only
+ * reaches the visible `<nav>` panel if the component's own host element contributes no box of its
+ * own. A host that renders as an ordinary block traps the stretched height on the invisible host
+ * and leaves the white `<nav>` sized to its content instead.
+ */
+describe('SidebarNavComponent host element (issue #455)', () => {
+  it('renders as display:contents so the shell can stretch the nav panel itself, not an invisible wrapper', async () => {
+    const { host } = await render();
+
+    expect(host.classList.contains('contents')).toBe(true);
+  });
+});
+
 describe('SidebarNavComponent drawer behaviour (issue #391)', () => {
   it('offers no dismiss control when the sidebar is part of the wide layout', async () => {
     const { host } = await render({ drawer: false });
