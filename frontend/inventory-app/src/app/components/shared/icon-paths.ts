@@ -1,9 +1,17 @@
 /**
- * Inline SVG `d` path data for the `app-icon` component (issue #411), copied verbatim from
- * Google's official Material Icons **Rounded** set (Apache License 2.0). See
- * `THIRD-PARTY-NOTICES.md`.
+ * Inline SVG geometry for the `app-icon` component, copied verbatim from Google's official
+ * Material Icons sets (Apache License 2.0). See `THIRD-PARTY-NOTICES.md`.
  *
- * Provenance: every string below is the single `<path d="...">` of the matching
+ * Two variants are bundled, and an icon is only ever rendered in the variant its caller asks for:
+ *
+ * - `rounded` (the default) is `ICON_PATHS` below, the **Rounded** set (issue #411). It is what
+ *   every stat card, icon tile, action button and report control uses, and it does not change.
+ * - `outlined` is `OUTLINED_ICON_SHAPES`, the **Outlined** set (issue #456), bundled only for the
+ *   sidebar navigation, which needs unfilled glyphs. It deliberately holds just the navigation
+ *   glyphs: an icon absent from it renders nothing in that variant rather than silently falling
+ *   back to the filled Rounded geometry the variant exists to avoid.
+ *
+ * Provenance of `ICON_PATHS`: every string below is the single `<path d="...">` of the matching
  * `round/<name>.svg` file published by `@material-design-icons/svg` (version 0.14.15), which is
  * generated from the official `google/material-design-icons` repository. That is the Rounded
  * geometry on the 24x24 canvas this component renders (`viewBox="0 0 24 24"`); Google's newer
@@ -57,3 +65,100 @@ export const ICON_PATHS: Readonly<Record<string, string>> = {
   inventory_2:
     'M20 2H4c-1 0-2 .9-2 2v3.01c0 .72.43 1.34 1 1.69V20c0 1.1 1.1 2 2 2h14c.9 0 2-.9 2-2V8.7c.57-.35 1-.97 1-1.69V4c0-1.1-1-2-2-2zm-6 12h-4c-.55 0-1-.45-1-1s.45-1 1-1h4c.55 0 1 .45 1 1s-.45 1-1 1zm6-7H4V4h16v3z',
 };
+
+/** The icon sets `app-icon` can draw from. `rounded` is the default everywhere but the sidebar. */
+export type IconVariant = 'rounded' | 'outlined';
+
+/** A `<circle>` child of an upstream glyph, with its own `cx`/`cy`/`r` exactly as published. */
+export interface IconCircle {
+  readonly cx: number;
+  readonly cy: number;
+  readonly r: number;
+}
+
+/**
+ * One glyph's child shapes. The Rounded set draws each of its glyphs with a single `<path>`, but
+ * several Outlined glyphs need more than one shape — `inventory_2` is two paths and `location_on`
+ * is a path plus a circle — so the geometry is a shape list rather than one `d` string. Splitting
+ * or merging those shapes would mean rewriting the geometry, which is exactly what this file
+ * forbids, so they are carried across as published.
+ */
+export interface IconShapes {
+  readonly paths: readonly string[];
+  readonly circles?: readonly IconCircle[];
+}
+
+/**
+ * The **Outlined** navigation glyphs (issue #456), copied verbatim from the matching
+ * `outlined/<name>.svg` files of the same `@material-design-icons/svg` distribution (version
+ * 0.14.15) that `ICON_PATHS` comes from — the official `google/material-design-icons` Outlined
+ * set, unmodified, on its native `viewBox="0 0 24 24"` canvas. The same rule applies: never
+ * reconstruct, approximate, hand-tune or stroke-fake an outlined glyph, and never derive one from
+ * the filled Rounded path above. Copy it from the upstream file.
+ *
+ * The map holds exactly the glyphs the sidebar renders — its destinations, its group headings, and
+ * its own `menu`/`close` controls. Adding an entry here changes only the navigation, because
+ * nothing else asks for this variant.
+ */
+export const OUTLINED_ICON_SHAPES: Readonly<Record<string, IconShapes>> = {
+  // Sidebar controls
+  menu: { paths: ['M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z'] },
+  close: {
+    paths: ['M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41z']
+  },
+
+  // Sidebar destinations and group headings
+  home: { paths: ['m12 5.69 5 4.5V18h-2v-6H9v6H7v-7.81l5-4.5M12 3 2 12h3v8h6v-6h2v6h6v-8h3L12 3z'] },
+  assignment: {
+    paths: [
+      'M7 15h7v2H7zm0-4h10v2H7zm0-4h10v2H7zm12-4h-4.18C14.4 1.84 13.3 1 12 1c-1.3 0-2.4.84-2.82 2H5c-.14 0-.27.01-.4.04a2.008 2.008 0 0 0-1.44 1.19c-.1.23-.16.49-.16.77v14c0 .27.06.54.16.78s.25.45.43.64c.27.27.62.47 1.01.55.13.02.26.03.4.03h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7-.25c.41 0 .75.34.75.75s-.34.75-.75.75-.75-.34-.75-.75.34-.75.75-.75zM19 19H5V5h14v14z'
+    ]
+  },
+  inventory_2: {
+    paths: [
+      'M20 2H4c-1 0-2 .9-2 2v3.01c0 .72.43 1.34 1 1.69V20c0 1.1 1.1 2 2 2h14c.9 0 2-.9 2-2V8.7c.57-.35 1-.97 1-1.69V4c0-1.1-1-2-2-2zm-1 18H5V9h14v11zm1-13H4V4h16v3z',
+      'M9 12h6v2H9z'
+    ]
+  },
+  refresh: {
+    paths: [
+      'M17.65 6.35A7.958 7.958 0 0 0 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0 1 12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z'
+    ]
+  },
+  location_on: {
+    paths: [
+      'M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zM7 9c0-2.76 2.24-5 5-5s5 2.24 5 5c0 2.88-2.88 7.19-5 9.88C9.92 16.21 7 11.85 7 9z'
+    ],
+    circles: [{ cx: 12, cy: 9, r: 2.5 }]
+  },
+  download: { paths: ['M19 9h-4V3H9v6H5l7 7 7-7zm-8 2V5h2v6h1.17L12 13.17 9.83 11H11zm-6 7h14v2H5z'] },
+  attach_money: {
+    paths: [
+      'M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1h-2.2c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c1.95-.37 3.5-1.5 3.5-3.55 0-2.84-2.43-3.81-4.7-4.4z'
+    ]
+  },
+  bar_chart: { paths: ['M4 9h4v11H4zm12 4h4v7h-4zm-6-9h4v16h-4z'] },
+  settings: {
+    paths: [
+      'M19.43 12.98c.04-.32.07-.64.07-.98 0-.34-.03-.66-.07-.98l2.11-1.65c.19-.15.24-.42.12-.64l-2-3.46a.5.5 0 0 0-.61-.22l-2.49 1c-.52-.4-1.08-.73-1.69-.98l-.38-2.65A.488.488 0 0 0 14 2h-4c-.25 0-.46.18-.49.42l-.38 2.65c-.61.25-1.17.59-1.69.98l-2.49-1a.566.566 0 0 0-.18-.03c-.17 0-.34.09-.43.25l-2 3.46c-.13.22-.07.49.12.64l2.11 1.65c-.04.32-.07.65-.07.98 0 .33.03.66.07.98l-2.11 1.65c-.19.15-.24.42-.12.64l2 3.46a.5.5 0 0 0 .61.22l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65c.03.24.24.42.49.42h4c.25 0 .46-.18.49-.42l.38-2.65c.61-.25 1.17-.59 1.69-.98l2.49 1c.06.02.12.03.18.03.17 0 .34-.09.43-.25l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.65zm-1.98-1.71c.04.31.05.52.05.73 0 .21-.02.43-.05.73l-.14 1.13.89.7 1.08.84-.7 1.21-1.27-.51-1.04-.42-.9.68c-.43.32-.84.56-1.25.73l-1.06.43-.16 1.13-.2 1.35h-1.4l-.19-1.35-.16-1.13-1.06-.43c-.43-.18-.83-.41-1.23-.71l-.91-.7-1.06.43-1.27.51-.7-1.21 1.08-.84.89-.7-.14-1.13c-.03-.31-.05-.54-.05-.74s.02-.43.05-.73l.14-1.13-.89-.7-1.08-.84.7-1.21 1.27.51 1.04.42.9-.68c.43-.32.84-.56 1.25-.73l1.06-.43.16-1.13.2-1.35h1.39l.19 1.35.16 1.13 1.06.43c.43.18.83.41 1.23.71l.91.7 1.06-.43 1.27-.51.7 1.21-1.07.85-.89.7.14 1.13zM12 8c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4zm0 6c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z'
+    ]
+  }
+};
+
+/**
+ * `ICON_PATHS` as shape lists, built once at module load so every lookup returns the same object
+ * reference. A getter that rebuilt the wrapper on each change-detection pass would hand Angular a
+ * new array every time and re-render the glyph for no reason.
+ */
+const ROUNDED_ICON_SHAPES: Readonly<Record<string, IconShapes>> = Object.freeze(
+  Object.fromEntries(Object.entries(ICON_PATHS).map(([name, path]) => [name, Object.freeze({ paths: [path] })]))
+);
+
+/**
+ * The geometry for one glyph in one variant, or `undefined` when that variant does not bundle it —
+ * which is how a typo, or an icon only the Rounded set holds, renders nothing instead of the wrong
+ * glyph (see `IconComponent`).
+ */
+export function iconShapes(name: string, variant: IconVariant): IconShapes | undefined {
+  return variant === 'outlined' ? OUTLINED_ICON_SHAPES[name] : ROUNDED_ICON_SHAPES[name];
+}

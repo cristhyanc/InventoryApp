@@ -1,17 +1,25 @@
 <div class="flex min-h-screen flex-col bg-md-gray-100">
   <header class="sticky top-0 z-30">
     <div class="flex items-center gap-3 px-4 py-3 sm:px-6">
-      <button
-        #sidebarToggle
-        type="button"
-        class="btn btn-secondary btn-sm"
-        [attr.aria-expanded]="isSidebarOpen"
-        [attr.aria-controls]="sidebarId"
-        [attr.aria-label]="sidebarToggleLabel"
-        (click)="toggleSidebar()"
-      >
-        <span aria-hidden="true">&#9776;</span>
-      </button>
+      <!--
+        The top bar keeps an opener only on a narrow layout, where the sidebar is a drawer that is
+        not on the page and so has no header row of its own to put a control in. On a wide layout
+        the single collapse control lives in the sidebar's own header, beside the app title
+        (issue #456), so no detached toggle floats above the menu.
+      -->
+      @if (isSidebarDrawer) {
+        <button
+          #sidebarToggle
+          type="button"
+          class="btn btn-secondary flex h-11 w-11 shrink-0 items-center justify-center p-0"
+          [attr.aria-expanded]="isSidebarOpen"
+          [attr.aria-controls]="sidebarId"
+          [attr.aria-label]="sidebarToggleLabel"
+          (click)="toggleSidebar()"
+        >
+          <app-icon name="menu" variant="outlined" [size]="20" />
+        </button>
+      }
       <div class="ml-auto">
         <app-user-menu
           [isSignedIn]="isLoggedIn"
@@ -35,12 +43,13 @@
 
     @if (isSidebarVisible) {
       <app-sidebar-nav
-        [id]="sidebarId"
+        [navId]="sidebarId"
         [expanded]="isSidebarExpanded"
         [drawer]="isSidebarDrawer"
         (navigated)="onSidebarNavigated()"
         (dismissed)="closeSidebar()"
         (expandRequested)="expandSidebar()"
+        (collapseToggled)="toggleSidebar()"
       />
     }
 

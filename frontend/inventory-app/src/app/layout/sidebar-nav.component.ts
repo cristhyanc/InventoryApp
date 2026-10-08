@@ -6,12 +6,24 @@ import { PlatformDiagnosticsAccessService } from '../services/platform-diagnosti
 import { NavGroup, NavItem, NavLink, activeNavGroup, activeNavRoute, navigationFor } from './navigation';
 
 /**
+ * The id of the navigation landmark. It lives here because the `<nav>` that carries it is this
+ * component's own element, and both of the shell's toggles point `aria-controls` at it.
+ */
+export const PRIMARY_NAVIGATION_ID = 'primary-navigation';
+
+/**
  * The application shell's left sidebar (issue #391). It renders the primary navigation, owns which
  * groups are expanded, and resolves which entry the current URL belongs to.
  *
  * It owns no layout decision: the shell says whether the labels are visible (`expanded`) and
  * whether this is a narrow-screen drawer (`drawer`), and the sidebar reports what the operator did
- * (`navigated`, `dismissed`, `expandRequested`) instead of reaching back into the shell.
+ * (`navigated`, `dismissed`, `expandRequested`, `collapseToggled`) instead of reaching back into
+ * the shell.
+ *
+ * Its header row holds the desktop collapse control (issue #456). The control moved here from the
+ * shell's top bar so it sits beside the app title instead of floating above the menu, but it still
+ * only reports the intent: the shell keeps the one `isSidebarOpen` flag that decides what
+ * `expanded` means on each layout.
  *
  * It owns no access decision either (issue #335). It starts with the navigation every operator
  * gets and adds the super-admin diagnostics link only when the diagnostics API itself confirms
@@ -37,6 +49,9 @@ export class SidebarNavComponent implements OnInit, OnDestroy {
   /** True while the sidebar is the narrow-screen overlay drawer rather than part of the layout. */
   @Input() drawer = false;
 
+  /** The id the shell's `aria-controls` points at; it is set on the `<nav>` landmark itself. */
+  @Input() navId = PRIMARY_NAVIGATION_ID;
+
   /** A destination was chosen, so a narrow drawer can be dismissed. */
   @Output() readonly navigated = new EventEmitter<void>();
 
@@ -45,6 +60,9 @@ export class SidebarNavComponent implements OnInit, OnDestroy {
 
   /** A group heading was used while collapsed, which has no room for a submenu. */
   @Output() readonly expandRequested = new EventEmitter<void>();
+
+  /** The header row's collapse/expand control was used (issue #456). */
+  @Output() readonly collapseToggled = new EventEmitter<void>();
 
   /** Starts without the diagnostics link: an unanswered probe must never show it. */
   navigation: readonly NavItem[] = navigationFor(false);
@@ -101,6 +119,11 @@ export class SidebarNavComponent implements OnInit, OnDestroy {
 
   isGroupOpen(group: NavGroup): boolean {
     return this.openGroups.has(group.label);
+  }
+
+  /** The header control's accessible name names the action, not the current state (issue #456). */
+  get collapseToggleLabel(): string {
+    return this.expanded ? 'Collapse navigation' : 'Expand navigation';
   }
 
   groupPanelId(group: NavGroup): string {
