@@ -11,7 +11,8 @@ import {
   Product,
   Purchase,
   PurchaseGstSummary,
-  PurchaseItem
+  PurchaseItem,
+  PurchaseValidation
 } from '../../models/models';
 
 function item(overrides: Partial<PurchaseItem> = {}): PurchaseItem {
@@ -448,6 +449,69 @@ describe('PurchaseListComponent GST display (issue #431)', () => {
     fixture.detectChanges();
 
     expect(host.querySelector('[data-testid="purchase-gst-stale"]')).not.toBeNull();
+  });
+});
+
+describe('PurchaseListComponent consolidated row layout (issue #474)', () => {
+  const render = async (
+    purchases: Purchase[],
+    gst: PurchaseGstSummary | null,
+    validation: PurchaseValidation | null
+  ) => {
+    await TestBed.configureTestingModule({
+      imports: [PurchaseListComponent],
+      providers: [
+        provideRouter([]),
+        {
+          provide: PurchaseService,
+          useValue: {
+            getAll: jest.fn(() => of(purchases)),
+            update: jest.fn(),
+            delete: jest.fn(),
+            getFile: jest.fn(() => of(new Blob())),
+            getValidationFor: jest.fn(() => validation),
+            getGstSummaryFor: jest.fn(() => gst)
+          }
+        },
+        { provide: SupplierService, useValue: { getAll: jest.fn(() => of([])) } },
+        { provide: ProductService, useValue: { getAll: jest.fn(() => of([product(10, 'Coke')])) } }
+      ]
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(PurchaseListComponent);
+    fixture.detectChanges();
+    return { fixture, host: fixture.nativeElement as HTMLElement };
+  };
+
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('renders one display row per purchase even when notes, GST and a total mismatch warning are all present', async () => {
+    const withEverything = purchase({
+      notes: 'Call supplier before reordering - price went up a lot this time.',
+      totalAmount: 20
+    });
+    const { host } = await render(
+      [withEverything],
+      { inputGst: 0.65, unresolvedComponentCount: 0, unresolvedAmount: 0 },
+      { hasTotalMismatch: true, calculatedTotal: 18, totalDifference: 2 }
+    );
+
+    const displayRows = host.querySelectorAll('tbody > tr.table-row');
+    expect(displayRows).toHaveLength(1);
+
+    const row = displayRows[0];
+    expect(row.textContent).toContain('Call supplier before reordering');
+    expect(row.textContent).toContain('$0.65');
+    expect(row.textContent).toContain('Does not match calculated total');
+    expect(row.querySelector('[data-testid="purchase-gst-summary"]')).not.toBeNull();
+  });
+
+  it('renders one plain display row for a purchase with no notes, GST summary or mismatch', async () => {
+    const minimal = purchase({ notes: null });
+    const { host } = await render([minimal], null, null);
+
+    const displayRows = host.querySelectorAll('tbody > tr.table-row');
+    expect(displayRows).toHaveLength(1);
   });
 });
 
