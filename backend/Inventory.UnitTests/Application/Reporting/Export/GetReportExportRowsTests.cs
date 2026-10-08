@@ -64,6 +64,57 @@ public class GetReportExportRowsTests
         Assert.Equal(apiResult.Sales.ToString(System.Globalization.CultureInfo.InvariantCulture), grossSales);
     }
 
+    private static string Cell(ReportExportTable table, string column)
+    {
+        var index = table.Rows[0].ToList().IndexOf(column);
+        Assert.True(index >= 0, $"The export has no '{column}' column.");
+        return table.Rows[1][index];
+    }
+
+    [Fact]
+    public async Task Bookkeeping_export_carries_the_same_conditional_limitations_as_the_api_report()
+    {
+        var bookkeeping = new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(
+            FakeBookkeepingReportFactsProvider.Complete() with
+            {
+                IsCogsComplete = false,
+                UncostedTransactionCount = 2,
+                UncostedSalesAmount = 12.5m,
+                MissingStatusTransactionCount = 1,
+                UnknownStatusTransactionCount = 3,
+                DeclinedOrCancelledTransactionCount = 4
+            }));
+        var filter = new ReportingFilterDto(new DateTime(2025, 7, 1), new DateTime(2025, 7, 31));
+        var apiResult = await bookkeeping.Handle(filter, CancellationToken.None);
+
+        var table = await Sut(bookkeeping: bookkeeping).Handle("bookkeeping", filter, CancellationToken.None);
+
+        Assert.Equal("False", Cell(table, "IsCogsComplete"));
+        Assert.Equal("2", Cell(table, "UncostedTransactionCount"));
+        Assert.Equal("12.5", Cell(table, "UncostedSalesAmount"));
+        Assert.Equal("1", Cell(table, "MissingStatusTransactionCount"));
+        Assert.Equal("3", Cell(table, "UnknownStatusTransactionCount"));
+        Assert.Equal("4", Cell(table, "DeclinedOrCancelledTransactionCount"));
+        Assert.Equal(string.Join(" ", apiResult.DataQuality.Notes!), Cell(table, "DataQualityNotes"));
+        Assert.Contains("no persisted COGS", Cell(table, "DataQualityNotes"));
+        Assert.Contains("have no status ID", Cell(table, "DataQualityNotes"));
+    }
+
+    [Fact]
+    public async Task Bookkeeping_export_states_the_gst_on_sales_estimate_basis_even_for_a_clean_period()
+    {
+        var bookkeeping = new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(
+            FakeBookkeepingReportFactsProvider.Complete()));
+        var filter = new ReportingFilterDto(new DateTime(2025, 7, 1), new DateTime(2025, 7, 31));
+
+        var table = await Sut(bookkeeping: bookkeeping).Handle("bookkeeping", filter, CancellationToken.None);
+
+        Assert.Equal(string.Empty, Cell(table, "DataQualityNotes"));
+        Assert.Equal(
+            "Estimated GST on sales - assumes all included sales are taxable at 10% (GST-inclusive).",
+            Cell(table, "GstOnSalesBasis"));
+    }
+
     [Fact]
     public async Task Transactions_export_uses_the_transactions_sheet_name_and_the_unpaginated_result()
     {

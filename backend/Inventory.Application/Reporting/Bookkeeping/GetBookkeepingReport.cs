@@ -1,3 +1,4 @@
+using System.Globalization;
 using Inventory.Application.Reporting.Shared;
 using Inventory.Domain.Reporting;
 using Inventory.Domain.Reporting.Bookkeeping;
@@ -43,6 +44,10 @@ public sealed class GetBookkeepingReport : IGetBookkeepingReport
             ImportedNetSettlement: facts.ImportedNetSettlement));
 
         var qualityNotes = new List<string>();
+        if (facts.MissingStatusTransactionCount > 0)
+            qualityNotes.Add($"{facts.MissingStatusTransactionCount} Nayax transaction(s) have no status ID and are excluded from completed sales.");
+        if (facts.UnknownStatusTransactionCount > 0)
+            qualityNotes.Add($"{facts.UnknownStatusTransactionCount} Nayax transaction(s) have an unrecognised status ID and are excluded from completed sales.");
         if (facts.UnknownTransactions > 0)
             qualityNotes.Add("One or more transactions have an unknown payment method.");
         if (isMachineFiltered && !facts.ImportedMachineFilterMatched)
@@ -52,15 +57,20 @@ public sealed class GetBookkeepingReport : IGetBookkeepingReport
         if (facts.ProcessingFees.HasMissingRates)
             qualityNotes.Add($"{facts.ProcessingFees.MissingRateTransactionCount} card transaction(s) have no effective Nayax processing fee rate; profit is unavailable.");
         if (!facts.IsCogsComplete)
-            qualityNotes.Add("One or more completed sales have no persisted COGS; profit is incomplete.");
+            qualityNotes.Add(string.Create(CultureInfo.InvariantCulture,
+                $"{facts.UncostedTransactionCount} completed sale(s) totalling {facts.UncostedSalesAmount:0.00} have no persisted COGS; profit is incomplete."));
         if (isMachineFiltered)
             qualityNotes.Add("Net profit is unavailable for a machine-filtered report because shared business overhead is not allocated to individual machines.");
         if (!facts.CommissionIsComplete)
             qualityNotes.Add($"Commission configuration is incomplete; {(isMachineFiltered ? "direct profit" : "net profit")} is unavailable.");
         qualityNotes.AddRange(facts.CommissionWarnings);
 
-        var quality = ReportingQuality.Quality(
-            missingStatus: true,
+        // Conditional, scope-derived diagnostics (issue #476): every note above comes from a fact in
+        // the requested business, date range and machine scope, and the calculation methodology this
+        // report used lives in its "How this report is calculated" help instead. An empty note list
+        // means no problem was detected in this period - never that GST classification is verified.
+        var quality = ReportingQuality.Conditional(
+            missingStatus: facts.MissingStatusTransactionCount > 0 || facts.UnknownStatusTransactionCount > 0,
             historicalCostUnavailable: !facts.IsCogsComplete,
             gstClassificationMissing: !facts.ImportedContainsGstClassification,
             commissionNotPersisted: !facts.CommissionIsComplete,
@@ -76,7 +86,10 @@ public sealed class GetBookkeepingReport : IGetBookkeepingReport
             facts.SiteCommission, profit.NetProfit, profit.NetMarginPercent,
             fees, feesIncludingGst, facts.ReceiptDeliveryCost, facts.ReceiptPackageCost, facts.OperatingExpensesTotal,
             facts.CardSales, facts.CashSales, facts.CardTransactions, facts.CashTransactions,
-            ReportingCalculations.PercentageOf(feesIncludingGst, facts.CardSales))
+            ReportingCalculations.PercentageOf(feesIncludingGst, facts.CardSales),
+            facts.PendingTransactionCount, facts.RefundedTransactionCount,
+            facts.DeclinedOrCancelledTransactionCount, facts.UnknownStatusTransactionCount,
+            facts.MissingStatusTransactionCount)
         {
             PartialCostOfGoods = facts.PartialCostOfGoods,
             IsCogsComplete = facts.IsCogsComplete,

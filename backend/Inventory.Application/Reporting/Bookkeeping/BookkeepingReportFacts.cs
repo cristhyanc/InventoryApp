@@ -37,4 +37,20 @@ public sealed record BookkeepingReportFacts(
     // Used only for the human-readable "commission configuration is incomplete" data-quality note.
     bool CommissionIsComplete,
     IReadOnlyList<string> CommissionWarnings,
-    NayaxProcessingFeeResult ProcessingFees);
+    NayaxProcessingFeeResult ProcessingFees,
+    // Transaction-status diagnostics for the requested business, date range and machine scope,
+    // counted before the completed-sale filter excludes them (issue #476), so the report can say
+    // what was actually excluded and why. They never change which sales the financial totals
+    // include: only status 12 is a completed sale, and every amount above is still derived from
+    // completed sales alone.
+    //
+    // The kinds stay separate because they mean different things. Pending, refunded and
+    // cancelled/declined rows are normal Nayax outcomes, not data errors.
+    // UnknownStatusTransactionCount counts rows whose status ID is present but unrecognised, and
+    // MissingStatusTransactionCount counts rows carrying no status ID at all; the two never
+    // overlap, and only those two are data-quality problems.
+    int PendingTransactionCount,
+    int RefundedTransactionCount,
+    int DeclinedOrCancelledTransactionCount,
+    int UnknownStatusTransactionCount,
+    int MissingStatusTransactionCount);
