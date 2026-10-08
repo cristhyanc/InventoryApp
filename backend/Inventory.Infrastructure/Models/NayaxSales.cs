@@ -50,8 +50,14 @@ public class NayaxSales : IBusinessOwned
     /// ingested before that fix; rows the live synchronization stored between issues #380 and #471
     /// from an offset-free <c>AuthorizationDateTimeGMT</c> value, which were shifted by the host's
     /// own UTC offset; and new sales imported from an export without a usable GMT value, which carry
-    /// the export's own unconverted value. Repairing them is a separate, explicit maintenance
-    /// operation that does not exist yet; see docs/architecture.md § Nayax sale timestamps.
+    /// the export's own unconverted value.
+    ///
+    /// Repairing them is the separate, explicit Nayax sale timestamp repair maintenance operation
+    /// (issue #472): a business-scoped preview over authoritative source evidence, then an apply bound
+    /// to it that writes this column and appends a <see cref="NayaxSaleTimestampRepair"/> audit row.
+    /// That operation is the only thing in the application that rewrites a stored sale instant other
+    /// than the uploaded export import; the latest-sales synchronization never does. See
+    /// docs/architecture.md § Nayax sale timestamps.
     /// </summary>
     public DateTime MachineAuthorizationTime { get; set; }
     public decimal? NayaxProductCostPrice { get; set; }

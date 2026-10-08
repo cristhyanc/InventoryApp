@@ -307,6 +307,24 @@ This procedure, and the non-destructive local check in the README, do not touch 
 connection string, credential, or data; every example above uses a placeholder path that a human
 operator supplies for their own environment.
 
+**Database operations that change stored business data are named maintenance operations, never ad hoc
+SQL.** `bootstrap-business`, `migrate-documents`, the historical GST classification Preview/Apply, the
+costing repair and the [Nayax sale timestamp repair](#nayax-sale-timestamp-repair-preview-then-apply-issue-472)
+are the shape every such operation takes: an explicit, reviewable preview; an apply bound to that
+preview and refused when the database moved underneath it; an audit row naming what changed, from
+which verified source, and which operator confirmed it; and idempotence, so running it again after it
+succeeded changes nothing. None of them is reachable by submitting SQL, and the platform diagnostics
+API must never become their execution path (AGENTS.md § Architecture rules, § Database and
+migrations).
+
+Two of this procedure's steps are load-bearing for such an operation, and the repair runbook below
+names them explicitly: **step 2 and 3 - a verified snapshot taken and `PRAGMA integrity_check`ed
+before the apply** - are the recovery point, because an apply that succeeded is not undone by the
+application (there is no reversal path for an audited historical correction, by design); and **step 5
+- the deliberate, human-run restore** - is the only rollback for a repair an operator later judges
+wrong. Inside one apply, rollback is the database transaction: a failure leaves nothing behind, which
+is a different guarantee from undoing a committed repair and must not be confused with it.
+
 #### Scheduling the backup with an App Service WebJob (issue #333)
 
 A backup must happen whether or not anyone signs in, which is the one workload in this application
@@ -1484,7 +1502,7 @@ The authorizer is why the acceptance criterion "do not rely on regex rejection a
 
 **Audit: one structured log event per query, and no table.** `LoggingPlatformDiagnosticsAudit` writes one `ILogger` `Information` event for every query — including a refused one, which is precisely what an investigation into misuse would look for, and including one whose execution threw instead of returning an outcome, which `RunDiagnosticsQuery` audits as `Failed` before letting the exception propagate — carrying the actor's `(tid, oid)`, the timestamp, the request/correlation id, a SHA-256 fingerprint of the *normalized query shape*, the duration, the row count, the cross-business scope flag and the outcome. It never carries the raw SQL, a result row, a column value, a business name or any credential. There is deliberately **no audit table and no migration**: an audit row written into the same database the query reads would be evidence kept inside the thing it is evidence about, would need an owner for a non-tenant-owned table, and would make a read-only request a write. **The log destination and retention period are platform configuration — Application Insights when `APPLICATIONINSIGHTS_CONNECTION_STRING` is set, the App Service log stream otherwise — and they are set on that resource, not in this repository. The application therefore cannot assert that its audit trail is durable, and does not: a human must verify the destination and retention before relying on this API's audit trail.**
 
-**Repair is out of scope, and must stay a separate, named operation.** This API is read-only and is not an execution path for anything else. Any future data repair must be a separately reviewed, named maintenance operation with a preview/dry-run step and explicit verification — the shape [`bootstrap-business`](#tenant-ownership-issue-64), [`migrate-documents`](#document-storage) and `InventoryCostRepair` already use: explicit, auditable, idempotent or safely restartable, and covered by regression tests. A repair must never be reachable by submitting SQL. Issue #62's [Historical GST Preview/Apply](#historical-gst-classification-preview-and-apply-issue-433) is a separate, business-scoped maintenance workflow and does not depend on this API.
+**Repair is out of scope, and must stay a separate, named operation.** This API is read-only and is not an execution path for anything else. Any future data repair must be a separately reviewed, named maintenance operation with a preview/dry-run step and explicit verification — the shape [`bootstrap-business`](#tenant-ownership-issue-64), [`migrate-documents`](#document-storage) and `InventoryCostRepair` already use: explicit, auditable, idempotent or safely restartable, and covered by regression tests. A repair must never be reachable by submitting SQL. Issue #62's [Historical GST Preview/Apply](#historical-gst-classification-preview-and-apply-issue-433) and issue #472's [Nayax sale timestamp repair](#nayax-sale-timestamp-repair-preview-then-apply-issue-472) are separate, business-scoped maintenance workflows and neither depends on this API.
 
 **What proves it.** `Inventory.UnitTests/Application/PlatformDiagnostics` covers the surface contract, the shape check, the limits and their clamping, and the use case's audit behaviour. `Inventory.IntegrationTests/Infrastructure/PlatformDiagnostics/SqliteDiagnosticsQueryExecutorTests` runs against a real migrated SQLite file: permitted reads across two businesses, forbidden columns and tables through joins, subqueries, aliases and expressions, forbidden functions, every write and DDL shape refused with the row counts proving nothing changed, `PRAGMA`/`ATTACH`/transaction control refused, the row and byte caps, a costly permitted query interrupted at its deadline with the next query still working, request cancellation, and a column added to a permitted table after the fact staying inaccessible — including one named `rowid`, `oid` or `_rowid_`, which must be refused rather than mistaken for the internal row identifier. `Inventory.IntegrationTests/Auth/PlatformAdminAuthorizationTests`, `PlatformAdminCompositionTests`, `PlatformDiagnosticsResponseSizeTests` and `BusinessScopeMiddlewarePlatformDiagnosticsTests` cover the HTTP boundary, the shipped unconfigured state, the serialized-byte cap, and the middleware's independent policy re-check.
 
@@ -3261,16 +3279,19 @@ the instant with a fixed precedence:
    always imported); the operator action that removes the ambiguity is to include the
    `AuthorizationDateTimeGMT` column in the export.
 
-**Historical repair is a separate, dependent task, and these fixes do not perform one.** Two
+**Historical repair is a separate operation, and these fixes do not perform one.** Two
 populations of stored rows hold an instant that was never the authoritative one, and neither issue
 #380 nor issue #471 repairs either of them: rows ingested before #380, which hold machine-local
 wall-clock ticks, and rows the live synchronization stored between #380 and #471 from an offset-free
 GMT value, which hold an instant shifted by the host's offset at the time (ten or eleven hours early on
-the Sydney-hosted API). Both fixes only prevent new corruption. Repair must be its own reviewed,
+the Sydney-hosted API). Both fixes only prevent new corruption. Repair is its own reviewed,
 explicit, idempotent and observable maintenance operation with a preview step — the shape
 `bootstrap-business`, `migrate-documents` and `InventoryCostRepair` already use (AGENTS.md § Database
-and migrations, § Architecture rules) — and until it has run, dashboards and reports may place those
-rows on the wrong Sydney business day. The detail of why no implicit shift is possible follows.
+and migrations, § Architecture rules) — and issue #472 added it: see
+[Nayax sale timestamp repair: Preview then Apply](#nayax-sale-timestamp-repair-preview-then-apply-issue-472)
+below. Until an operator has actually previewed and applied it against a given population, dashboards
+and reports may still place those rows on the wrong Sydney business day. The detail of why no implicit
+shift is possible follows.
 
 **Rows ingested before these fixes are left exactly as they are.** A persisted instant carries no record
 of which field or which ingestion path produced it, and no stored value can be converted back without
@@ -3285,11 +3306,13 @@ from that transaction's current `AuthorizationDateTimeGMT` is affected, and the 
 correction. Deploying these fixes, and the live last-sales refresh, do **not** repair any existing
 row: the synchronization never rewrites a stored instant. Repairing older rows needs an
 operator-supplied authoritative source — a Nayax transaction export covering the period **with** the
-`AuthorizationDateTimeGMT` column — re-imported through the ordinary uploaded-export path, which
-applies the correction immediately (it is not a dry run and shows no preview), updates the stored
-transaction in place rather than duplicating it, and replays the affected products' costs through the
-existing rebuild rules. A reviewed, previewable remediation that lists each transaction's old and
-proposed instant and Sydney date before applying anything does not exist yet and is follow-up work.
+`AuthorizationDateTimeGMT` column. Such an export re-imported through the ordinary uploaded-export
+path still applies its corrections immediately (it is not a dry run and shows no preview), updates the
+stored transaction in place rather than duplicating it, and replays the affected products' costs
+through the existing rebuild rules; that path remains the only way to import a **missing** sale, but it
+is no longer the way to repair a timestamp. The reviewed, previewable remediation that lists each
+transaction's old and proposed instant and Sydney date before applying anything is the issue #472
+operation below, and it is the supported one.
 Until older rows are repaired, dashboards and reports may put them on the wrong Sydney day — by the
 machine's UTC offset for the pre-#380 rows, by the host's for the #380-to-#471 ones; sales stored
 after both fixes from the live synchronization or from an export carrying a valid GMT value hold
@@ -3324,6 +3347,208 @@ discarding its neighbours. **No test mutates the process time zone**: `TimeZoneI
 process-global state the parallel test collections would race on, so a host offset is simulated
 arithmetically instead, and the suites were additionally run under `TZ=Australia/Sydney` to confirm
 the defect and the fix on the real host configuration.
+
+#### Nayax sale timestamp repair: Preview then Apply (issue #472)
+
+A stored sale instant that was never the authoritative one is repaired in exactly one way: the
+business-scoped maintenance operation behind `POST /api/admin/nayax-sale-timestamp-repair/preview` and
+`.../apply`. There is no other path, and adding one is a human decision.
+
+- **Never on a migration, a deployment, a startup step, a sales sync, a report or an import.** The
+  live last-sales synchronization still never rewrites a stored instant, so a normal refresh cannot
+  repair history and cannot corrupt it either. A repair only ever happens because a person previewed
+  it, read it, and pressed Apply.
+- **Never a global offset.** The affected population is mixed — of 152 matched records on 8 October
+  2026, 28 already held the authoritative instant and 124 were eleven hours early — so there is no
+  business-wide difference to apply, and nothing in this operation derives a correction by subtracting
+  one stored value from another. `Inventory.Domain.Nayax.NayaxSaleTimestampRepairPolicy` decides every
+  stored sale from its own evidence, one transaction at a time.
+
+**The source must be authoritative, and its identity is verified.** Only two sources are supported,
+and both deliver their value through the one integration-boundary parser established by issues #380
+and #471 — nothing here parses a timestamp or applies an offset:
+
+| Source | What it is | Covers |
+| --- | --- | --- |
+| `NayaxLastSalesApi` | `GET /v1/machines/{MachineID}/lastSales` through `INayaxLynxClient`, field `AuthorizationDateTimeGMT` (documented `string<date-time>`, "in GMT"; re-verified for issue #472 through the Nayax documentation MCP server) | only the transactions the rolling window still returns |
+| `OperatorExport` | An operator-supplied Nayax transaction export **carrying the `AuthorizationDateTimeGMT` column**, read by `ClosedXmlNayaxSalesWorkbookReader` for its authorization instants only — it imports nothing | any period the operator can export, including dates older than the rolling window |
+
+The Lynx API publishes **no** date-ranged sales endpoint that carries the authorization instant (the
+reporting surface is the dashboard widget API, which returns aggregates), so an operator export is the
+only supported historical source. Three refusals follow from that, and each exists because the
+alternative is an invented financial instant:
+
+- An export **without** the `AuthorizationDateTimeGMT` column is refused outright, with the reason.
+  The workbook supplied on 8 October 2026 carried `Updated Date and Time (GMT)`, which is an update
+  time and not an authorization time; a machine-local column cannot be converted at all without a
+  source-timezone contract Nayax does not publish for the export. Refusing is what stops an export
+  like that from being mistaken for a checked source.
+- Evidence whose `AuthorizationDateTimeGMT` value is present but blank or unreadable yields evidence
+  with **no instant**, which is reported as `UnreadableEvidence` — not as "no evidence", and never as
+  permission to fall back to anything.
+- Evidence must identify the stored sale: the same machine, and a settled amount within the
+  repository's established one-cent tolerance. Evidence naming another machine or another amount is
+  evidence about another sale (a remote `TransactionID` is unique only within the operator account
+  that issued it) and is reported as `MachineMismatch`/`AmountMismatch`. The owning business is not
+  "checked" so much as structural: a caller only ever reads its own sales, through the `AppDbContext`
+  tenant query filters.
+
+**Every examined sale gets one of three outcomes, and two of them write nothing.**
+
+| Outcome | Meaning |
+| --- | --- |
+| `Repairable` | A verified source names a different authoritative instant. The sale would move. |
+| `AlreadyCorrect` | The source names exactly the stored instant. Nothing to write — which is what makes applying the same verified repair again a no-op. |
+| `Unresolved` | `NoSourceEvidence`, `UnreadableEvidence`, `ConflictingEvidence` (two sources disagreeing is the operator's to resolve, never a majority vote or a latest-wins), `MachineMismatch` or `AmountMismatch`. The sale is left exactly as it is and stays visibly unresolved. |
+
+**The examined range comes from the evidence, not from an assumed period.** It is the earliest and
+latest instant among the readable evidence values, widened to the stored instants of the sales that
+evidence names (a shifted row's stored value can sit many hours outside the authoritative range) and
+to the requested reconciliation window. Every stored sale inside that range is examined, which is why
+a transaction no source covered appears as an explicitly unresolved row instead of a silent difference
+between a report and an export. The preview reports the range it used.
+
+**What the preview reports**, per business, computed without changing a single sale: each examined
+transaction with its machine, settled amount, status, old and new UTC instant, old and new Sydney
+business date, outcome, unresolved reason and source provenance; the revenue each Sydney business day
+loses and gains (completed sales only — a pending, refunded, cancelled or unknown-status row is still
+re-dated and still listed, but moves no revenue); the products whose costing would be replayed, from
+when, and whether the replay is actually planned; the transactions the source carries that this
+business holds **no** sale for; and the fixed-cutoff reconciliation.
+
+**The fixed-cutoff reconciliation is what makes a comparison with a Nayax export valid.** It takes an
+explicit cutoff instant and an inclusive Sydney business-date window — all three together or none,
+because a daily or weekly total is only comparable when both sides cover the same days and exclude the
+sales authorized after the same instant — and reports, per day and for the window:
+
+- completed-sale count and value **before** the repair, and **after** it, with a sale re-dated into the
+  window counted and one re-dated out of it not;
+- `unresolvedCount`/`unresolvedAmount` — completed sales no source covered, which do not move;
+- `sourceVerifiedAfter` = after less unresolved: the figure comparable with the source export,
+  because it covers exactly the transactions the source accounted for;
+- `excludedAfterCutoffCount`/`Amount` — completed sales the compared export was taken too early to
+  contain. Not a discrepancy;
+- `missingFromDatabaseCount`/`Amount` — transactions the export carries that this business holds no
+  sale for. **Those are missing sales, not timestamp defects.** A repair can never create a sale; they
+  are imported through the ordinary uploaded-export import, and counting them as repaired rows would
+  claim a timestamp change explains revenue that was never imported.
+
+So `sourceVerifiedTotalAfter + missingFromDatabaseAmount` is what a source export's own period total
+has to equal once the repair is applied **and** the missing sales are imported, while `totalAfter` on
+its own still carries the unresolved rows — and a repair never creates or destroys revenue, it only
+moves it between days.
+
+**Apply is one transaction, and it writes one column.** The preview stores its plan as a tenant-owned,
+single-use, two-hour draft (`NayaxSaleTimestampRepairPreviewDraft`); the apply names that draft and
+nothing else. Inside its own transaction it loads the plan, re-reads the stored sales in the examined
+range authoritatively, compares every stored fact the plan was derived from — instant, machine, settled
+amount, status, product mapping — and refuses the plan if any of them changed or if a sale was added
+inside the range (`NayaxSaleTimestampRepairPolicy.EnsureStoredSalesUnchanged`), then writes each
+repairable sale's `MachineAuthorizationTime` and appends its audit row. Nothing a caller submits is
+written: the request carries a preview id and an explicit confirmation, and every instant, business
+date and provenance comes from the stored plan, so a tampered request can only name a plan that does
+not exist, is not this business's, has already been applied, has expired, or no longer matches the
+database. A transaction id, amount, status, payment method, product mapping, costing value or stock
+movement is never written, and no sale is created or removed — so no transaction is double counted and
+no physical stock movement is repeated.
+
+**The audit is the record of a change to historical financial data.** `NayaxSaleTimestampRepair` is
+append-only — no update, delete or reversal path exists anywhere in the application — and holds the
+transaction and machine, the previous and repaired UTC instants, the previous and repaired Sydney
+business dates (stored rather than derived, so the movement the operator approved stays readable
+exactly as applied), the evidence source and a caller-safe provenance reference, the preview id, and
+the applying operator's validated Entra `(tid, oid)` pair. A caller the repair cannot be attributed to
+is refused before anything is read.
+
+**Costing is replayed from the earlier of each affected sale's old and new instant**
+(`NayaxSaleTimestampRepairPolicy.EarliestAffectedInstant`), through the same baseline-cutoff-gated
+`IRebuildProductCost.RebuildAsync` the uploaded sales import and the latest-sales synchronization use.
+A date change must not silently leave stale COGS: a sale moving later vacates its old position, where
+the replay has to restart, and one moving earlier arrives before sales that now follow it. A sale at or
+before a product's inventory-cost transition baseline cutoff is covered by that baseline, so it is not
+replayed and the preview says so rather than recosting history the transition owns; a product with no
+baseline is not replayed either, exactly as the other write paths read it.
+
+**Failure semantics are all-or-nothing, and an opening-cost failure is reported, never papered over.**
+A product whose cost history cannot be replayed raises `InventoryCostDataQualityException`; the apply
+converts it to a caller-safe refusal naming that product and the instant the replay started from, and
+the transaction's rollback leaves no repaired instant, no audit row and an unapplied draft. Nothing
+fabricates an opening cost or a purchase to make the replay succeed, and a failed replay is never
+reported as a successful repair. Recovery is to complete the product's cost history first — the
+explicit [costing repair](#costing-repairs-issue-359) exists for that — and then preview and apply
+again. Rollback **after** a committed apply is not an application feature: it is the human-run restore
+in the [backup and restore procedure](#sqlite-operating-assumptions-and-scale-strategy-issue-53),
+which is why the runbook takes a verified snapshot first.
+
+**Runbook.** Every step is human-run. No agent and no workflow in this repository may run it, and
+creating or merging the issue that built it authorizes no production execution.
+
+1. **Take and verify a recovery point.** `dotnet InventoryApi.dll backup-database --upload` (or
+   `--output <path>`), and confirm it exited `0` and reported `ok` for `PRAGMA integrity_check`. This
+   is the only rollback for a repair judged wrong after it commits.
+2. **Obtain the authoritative source.** Export the Nayax transactions for the whole period in
+   question **with the `AuthorizationDateTimeGMT` column**, and extend the coverage to the days either
+   side of the period's boundaries — a cohort stored just before a window's first day is otherwise
+   reported as unresolved rather than decided. Confirm the export came from the business's own
+   operator account.
+3. **Preview**, naming the sources and the fixed cutoff and Sydney business-date window to reconcile:
+
+   ```bash
+   curl -X POST "$API/api/admin/nayax-sale-timestamp-repair/preview" \
+     -H "Authorization: Bearer <token>" \
+     -F includeLatestSalesApiEvidence=true \
+     -F reconciliationCutoffUtc=2026-10-08T04:00:00Z \
+     -F reconciliationFromBusinessDate=2026-10-05 \
+     -F reconciliationToBusinessDate=2026-10-08 \
+     -F evidenceExport=@transactions.xlsx
+   ```
+
+4. **Review the preview, row by row, before confirming anything.** Check that every `repairable` row's
+   new instant and Sydney date match the export; that no `unresolved` row is being assumed away; that
+   the revenue movement between days is the movement expected; and that the affected products and
+   their replay start instants are the ones expected.
+5. **Account for the missing sales separately.** If `missingFromDatabase` is non-empty, those
+   transactions are absent from the database entirely. Import them through the ordinary uploaded-export
+   import (`POST /api/imports/nayax-sales`), scoped to those transactions — re-uploading the whole
+   export through that path would also move stored instants with no preview, which is the thing this
+   operation exists to replace. Then take a fresh preview.
+6. **Apply** the reviewed preview, within its two-hour lifetime:
+
+   ```bash
+   curl -X POST "$API/api/admin/nayax-sale-timestamp-repair/apply" \
+     -H "Authorization: Bearer <token>" -H 'Content-Type: application/json' \
+     -d '{"previewId":"<id from step 3>","confirmed":true}'
+   ```
+
+   A `400` means nothing was written: the plan was stale, expired, already applied, or a product's
+   costing could not be replayed. Read the message, fix the stated cause, and preview again.
+7. **Verify the costing.** Confirm the apply's `productsRebuilt`/`recostedSales`, then check the
+   affected products' COGS and inventory value, and that no completed sale became uncosted.
+8. **Reconcile at the fixed cutoff.** Take a fresh preview over the same sources and window: every
+   repairable row should now be `alreadyCorrect`, `missingFromDatabase` should be empty, and each day's
+   `sourceVerifiedAfter` should equal the export's own daily total, summing to its period total. A
+   remaining difference is `unresolvedAmount` (obtain source coverage for those rows) or
+   `excludedAfterCutoffAmount` (later sales, not a discrepancy).
+9. **Record the evidence** — the snapshot's SHA-256, the preview id, the applied counts and the
+   reconciliation — with the issue. Production verification is recorded separately, after an
+   authorized execution; building this operation does not perform one.
+
+**Regression coverage.** `NayaxSaleTimestampRepairPolicyTests` (unit) pins the per-transaction
+decisions: the known transaction, the mixed cohort, each unresolved reason, the amount identity
+tolerance, re-deciding after a repair, the single-use/expiry rule and the stale-plan comparison.
+`NayaxSaleTimestampRepairTests` (relational SQLite) covers the preview's contents and refusals, the
+evidence-derived examined range, the apply's write and audit, a stale, expired, re-confirmed, unknown
+or unattributable apply, two-business isolation of both the sales and the stored plan, repeated apply
+as a no-op, the replay start instant and the untouched physical movement history, the baseline-cutoff
+gate, the all-or-nothing rollback when a replay fails, the Sydney week boundary, and both daylight-saving
+transitions including the second pass of the April 2026 repeated hour.
+`NayaxSaleTimestampRepairReconciliationTests` (relational SQLite) rebuilds the operator's own
+8 October 2026 evidence as five cohorts and asserts the reported figures fall out of it: the snapshot's
+**$726.20** weekly window before any repair, **$535.30** source-verified after the repair alone with
+**$119.70** of missing sales and **$190.90** unresolved, the export's daily **$108.20 / $183.00 /
+$216.40 / $147.40** and weekly **$655.00** once the missing sales are imported and the repair applied,
+the later sale excluded at the cutoff, and the boundary cohort decided — rather than left unresolved —
+once source coverage includes 4 October.
 
 ## Data flow
 
