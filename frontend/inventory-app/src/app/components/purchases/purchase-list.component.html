@@ -40,7 +40,7 @@
             @for (r of purchases; track r.id) {
               <tr class="table-row align-top">
                 <td class="table-cell">
-                  <div class="flex min-w-56 items-center gap-3">
+                  <div class="flex min-w-56 items-start gap-3">
                     <button type="button" class="shrink-0" (click)="openDocument(r)" [attr.aria-label]="'Open document for ' + r.title">
                       @if (isImage(r) && thumbnailUrl(r)) {
                         <img [src]="thumbnailUrl(r)" [alt]="r.title" class="h-14 w-14 rounded-md-control object-cover" />
@@ -48,7 +48,14 @@
                         <div class="flex h-14 w-14 items-center justify-center rounded-md-control bg-md-gray-100 text-xl">📄</div>
                       }
                     </button>
-                    <strong class="font-semibold text-md-gray-800">{{ r.title }}</strong>
+                    <div class="min-w-0">
+                      <strong class="block font-semibold text-md-gray-800">{{ r.title }}</strong>
+                      @if (r.notes) {
+                        <div class="mt-1 max-w-xs whitespace-pre-wrap break-words text-xs value-muted">
+                          <span class="font-medium text-md-gray-700">Notes:</span> {{ r.notes }}
+                        </div>
+                      }
+                    </div>
                   </div>
                 </td>
                 <td class="table-cell">{{ r.supplier?.name ?? 'None' }}</td>
@@ -64,8 +71,45 @@
                     <span class="value-muted">No items</span>
                   }
                 </td>
-                <td class="table-cell table-num whitespace-nowrap font-medium">
-                  {{ r.totalAmount !== null && r.totalAmount !== undefined ? (r.totalAmount | currency) : '—' }}
+                <td class="table-cell table-num">
+                  <div class="whitespace-nowrap font-medium">
+                    {{ r.totalAmount !== null && r.totalAmount !== undefined ? (r.totalAmount | currency) : '—' }}
+                  </div>
+                  @if (getValidation(r)?.hasTotalMismatch) {
+                    <div class="mt-2 rounded-md-card border-l-4 border-md-warning bg-md-warning/15 p-2 text-left text-xs text-md-gray-800">
+                      <p class="font-semibold text-md-warning-text">Does not match calculated total.</p>
+                      @if (getValidation(r)?.calculatedTotal !== null && getValidation(r)?.calculatedTotal !== undefined) {
+                        <div class="value-muted">
+                          <div>Entered: <strong>{{ r.totalAmount | currency }}</strong></div>
+                          <div>Calculated: <strong>{{ getValidation(r)?.calculatedTotal | currency }}</strong></div>
+                          @if (getValidation(r)?.totalDifference !== null && getValidation(r)?.totalDifference !== undefined) {
+                            <div>Difference: <strong>{{ getValidation(r)?.totalDifference | currency }}</strong></div>
+                          }
+                        </div>
+                      }
+                    </div>
+                  }
+                  @if (gstSummary(r); as gst) {
+                    <div data-testid="purchase-gst-summary" class="mt-2 rounded-md-card bg-md-gray-100 p-2 text-left text-xs text-md-gray-600">
+                      <div><strong class="text-md-gray-800">GST (ITC):</strong> {{ gst.inputGst | currency }}</div>
+                      @if (hasCharge(r.deliveryCost)) {
+                        <div>Delivery: {{ classificationLabel(r.deliveryGstClassification) }}</div>
+                      }
+                      @if (hasCharge(r.packageCost)) {
+                        <div>Package: {{ classificationLabel(r.packageGstClassification) }}</div>
+                      }
+                      @if (gst.unresolvedComponentCount > 0) {
+                        <div data-testid="purchase-gst-unresolved" class="mt-1 text-md-warning-text">
+                          ⚠️ {{ gst.unresolvedComponentCount }} component(s) totalling {{ gst.unresolvedAmount | currency }} are not classified, so this purchase GST is incomplete.
+                        </div>
+                      }
+                      @if (gstSummaryExcludesUnsavedEdits(r)) {
+                        <div data-testid="purchase-gst-stale" class="mt-1 value-muted">
+                          These are the saved figures. Edits in the form below are not included until you save.
+                        </div>
+                      }
+                    </div>
+                  }
                 </td>
                 <td class="table-cell text-xs value-muted">{{ r.fileName }} · {{ formatSize(r.fileSizeBytes) }}</td>
                 <td data-testid="purchases-actions-cell" class="table-cell sticky right-0 z-10 border-l border-md-gray-200 bg-white">
@@ -81,61 +125,6 @@
                   </div>
                 </td>
               </tr>
-
-              @if (getValidation(r)?.hasTotalMismatch) {
-                <tr class="table-row">
-                  <td colspan="7" class="table-cell">
-                    <div class="alert alert-warning">
-                      <p class="alert-title">Purchase total does not match calculated total.</p>
-                      @if (getValidation(r)?.calculatedTotal !== null && getValidation(r)?.calculatedTotal !== undefined) {
-                        <div class="text-xs value-muted">
-                          <div>Entered total: <strong>{{ r.totalAmount | currency }}</strong></div>
-                          <div>Calculated total: <strong>{{ getValidation(r)?.calculatedTotal | currency }}</strong></div>
-                          @if (getValidation(r)?.totalDifference !== null && getValidation(r)?.totalDifference !== undefined) {
-                            <div>Difference: <strong>{{ getValidation(r)?.totalDifference | currency }}</strong></div>
-                          }
-                        </div>
-                      }
-                    </div>
-                  </td>
-                </tr>
-              }
-
-              @if (gstSummary(r); as gst) {
-                <tr class="table-row">
-                  <td colspan="7" class="table-cell">
-                    <div data-testid="purchase-gst-summary" class="rounded-md-card bg-md-gray-100 p-4 text-md-body text-md-gray-600">
-                      <span><strong class="text-md-gray-800">Purchase GST (input tax credit):</strong> {{ gst.inputGst | currency }}</span>
-                      @if (hasCharge(r.deliveryCost)) {
-                        <span class="ml-3">Delivery: {{ classificationLabel(r.deliveryGstClassification) }}</span>
-                      }
-                      @if (hasCharge(r.packageCost)) {
-                        <span class="ml-3">Package: {{ classificationLabel(r.packageGstClassification) }}</span>
-                      }
-                      @if (gst.unresolvedComponentCount > 0) {
-                        <div data-testid="purchase-gst-unresolved" class="mt-1 text-xs text-md-warning-text">
-                          ⚠️ {{ gst.unresolvedComponentCount }} component(s) totalling {{ gst.unresolvedAmount | currency }} are not classified, so this purchase GST is incomplete.
-                        </div>
-                      }
-                      @if (gstSummaryExcludesUnsavedEdits(r)) {
-                        <div data-testid="purchase-gst-stale" class="mt-1 text-xs value-muted">
-                          These are the saved figures. Edits in the form below are not included until you save.
-                        </div>
-                      }
-                    </div>
-                  </td>
-                </tr>
-              }
-
-              @if (r.notes) {
-                <tr class="table-row">
-                  <td colspan="7" class="table-cell">
-                    <div class="rounded-md-card bg-md-gray-100 p-4 text-md-body text-md-gray-600">
-                      <strong class="text-md-gray-800">Notes:</strong> {{ r.notes }}
-                    </div>
-                  </td>
-                </tr>
-              }
 
               @if (editingPurchaseId === r.id) {
                 <tr>
