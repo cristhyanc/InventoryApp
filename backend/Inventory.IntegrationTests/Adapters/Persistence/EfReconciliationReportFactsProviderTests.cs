@@ -243,4 +243,90 @@ public class EfReconciliationReportFactsProviderTests
         Assert.Equal(1, facts.UnknownStatusTransactionCount);
         Assert.Equal(1, facts.NullStatusTransactionCount);
     }
+
+    /// <summary>
+    /// Issue #477: each reimbursement period reports the non-completed transactions inside its own
+    /// coverage dates, so a period-level data-quality flag describes that period rather than the
+    /// whole requested range. The aggregate counts must never be repeated onto every period.
+    /// </summary>
+    [Fact]
+    public async Task Each_matched_period_counts_only_the_non_completed_transactions_inside_its_own_dates()
+    {
+        await using var connection = await CreateSqliteAsync();
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        db.NayaxSales.AddRange(
+            new NayaxSales { TransactionID = 1, MachineID = 10, SettlementValue = 20m, PaymentMethod = "Credit Card", MachineAuthorizationTime = new DateTime(2025, 8, 5), TransactionStatusId = NayaxTransactionStatusIds.Completed },
+            new NayaxSales { TransactionID = 2, MachineID = 10, SettlementValue = 30m, PaymentMethod = "Credit Card", MachineAuthorizationTime = new DateTime(2025, 8, 20), TransactionStatusId = NayaxTransactionStatusIds.Completed },
+            // Second period only: one cancelled, one pending, one unrecognised and one absent status.
+            new NayaxSales { TransactionID = 3, MachineID = 10, SettlementValue = 4m, PaymentMethod = "Credit Card", MachineAuthorizationTime = new DateTime(2025, 8, 20), TransactionStatusId = NayaxTransactionStatusIds.CancelledOrDeclined26 },
+            new NayaxSales { TransactionID = 4, MachineID = 10, SettlementValue = 4m, PaymentMethod = "Credit Card", MachineAuthorizationTime = new DateTime(2025, 8, 21), TransactionStatusId = NayaxTransactionStatusIds.PendingBatch },
+            new NayaxSales { TransactionID = 5, MachineID = 10, SettlementValue = 4m, PaymentMethod = "Credit Card", MachineAuthorizationTime = new DateTime(2025, 8, 22), TransactionStatusId = 21 },
+            new NayaxSales { TransactionID = 6, MachineID = 10, SettlementValue = 4m, PaymentMethod = "Credit Card", MachineAuthorizationTime = new DateTime(2025, 8, 23), TransactionStatusId = null },
+            // First period only: one refunded row.
+            new NayaxSales { TransactionID = 7, MachineID = 10, SettlementValue = 4m, PaymentMethod = "Credit Card", MachineAuthorizationTime = new DateTime(2025, 8, 6), TransactionStatusId = NayaxTransactionStatusIds.Refunded });
+        var file = new ImportedFile { FileName = "two-periods.xml", FileHash = "two-periods", ImportedAt = DateTime.UtcNow };
+        file.Reimbursements.Add(new ImportedReimbursement
+        {
+            ReimbursementStartDate = new DateTime(2025, 8, 1),
+            ReimbursementEndDate = new DateTime(2025, 8, 15),
+            Total = 20m
+        });
+        file.Reimbursements.Add(new ImportedReimbursement
+        {
+            ReimbursementStartDate = new DateTime(2025, 8, 16),
+            ReimbursementEndDate = new DateTime(2025, 8, 31),
+            Total = 30m
+        });
+        db.ImportedFiles.Add(file);
+        await db.SaveChangesAsync();
+        var provider = new EfReconciliationReportFactsProvider(db);
+
+        var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31), null, CancellationToken.None);
+
+        Assert.Equal(2, facts.Periods.Count);
+        var first = facts.Periods[0];
+        var second = facts.Periods[1];
+        Assert.Equal(0, first.PendingTransactionCount);
+        Assert.Equal(1, first.RefundedTransactionCount);
+        Assert.Equal(0, first.DeclinedOrCancelledTransactionCount);
+        Assert.Equal(0, first.UnknownStatusTransactionCount);
+        Assert.Equal(0, first.MissingStatusTransactionCount);
+        Assert.Equal(1, second.PendingTransactionCount);
+        Assert.Equal(0, second.RefundedTransactionCount);
+        Assert.Equal(1, second.DeclinedOrCancelledTransactionCount);
+        Assert.Equal(1, second.UnknownStatusTransactionCount);
+        Assert.Equal(1, second.MissingStatusTransactionCount);
+        // The aggregate still covers the whole requested range.
+        Assert.Equal(1, facts.PendingTransactionCount);
+        Assert.Equal(1, facts.RefundedTransactionCount);
+        Assert.Equal(1, facts.DeclinedOrCancelledTransactionCount);
+        Assert.Equal(1, facts.UnknownStatusTransactionCount);
+        Assert.Equal(1, facts.NullStatusTransactionCount);
+    }
+
+    /// <summary>
+    /// Issue #477: with no matched reimbursement the single fallback period is the requested range,
+    /// so its own counts are the range's counts - still read per period, not copied from the
+    /// aggregate.
+    /// </summary>
+    [Fact]
+    public async Task The_fallback_period_counts_the_non_completed_transactions_in_the_requested_range()
+    {
+        await using var connection = await CreateSqliteAsync();
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        db.NayaxSales.AddRange(
+            new NayaxSales { TransactionID = 1, MachineID = 10, SettlementValue = 20m, PaymentMethod = "Credit Card", MachineAuthorizationTime = new DateTime(2025, 8, 5), TransactionStatusId = NayaxTransactionStatusIds.Completed },
+            new NayaxSales { TransactionID = 2, MachineID = 10, SettlementValue = 4m, PaymentMethod = "Credit Card", MachineAuthorizationTime = new DateTime(2025, 8, 6), TransactionStatusId = NayaxTransactionStatusIds.CancelledOrDeclined31 },
+            new NayaxSales { TransactionID = 3, MachineID = 10, SettlementValue = 4m, PaymentMethod = "Credit Card", MachineAuthorizationTime = new DateTime(2025, 8, 7), TransactionStatusId = null });
+        await db.SaveChangesAsync();
+        var provider = new EfReconciliationReportFactsProvider(db);
+
+        var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31), null, CancellationToken.None);
+
+        var period = Assert.Single(facts.Periods);
+        Assert.False(period.HasImported);
+        Assert.Equal(1, period.DeclinedOrCancelledTransactionCount);
+        Assert.Equal(1, period.MissingStatusTransactionCount);
+        Assert.Equal(0, period.RefundedTransactionCount);
+    }
 }

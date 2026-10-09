@@ -5,6 +5,11 @@ namespace Inventory.Application.Reporting.Reconciliation;
 /// reimbursement period, or the single fallback period used when no reimbursement matches the
 /// requested range. Contains no reconciliation-status/tolerance formulas: those live in
 /// <c>Inventory.Domain.Reporting.Reconciliation.ReconciliationPeriodPolicy</c>.
+///
+/// The five non-completed transaction counts are this period's own (issue #477), counted inside its
+/// coverage dates and machine scope before the completed-sale filter, so a period-level
+/// data-quality flag or note describes that period. They are never the report's aggregate counts
+/// repeated, and they never change which transactions the period's amounts include.
 /// </summary>
 public sealed record ReconciliationPeriodFacts(
     DateTime From,
@@ -25,7 +30,12 @@ public sealed record ReconciliationPeriodFacts(
     bool HasGstClassification,
     bool Warning,
     bool PaymentDetailMissing,
-    decimal ActualNetReimbursement);
+    decimal ActualNetReimbursement,
+    int PendingTransactionCount,
+    int RefundedTransactionCount,
+    int DeclinedOrCancelledTransactionCount,
+    int UnknownStatusTransactionCount,
+    int MissingStatusTransactionCount);
 
 /// <summary>
 /// Raw facts needed to build the reconciliation report for a resolved date range and optional

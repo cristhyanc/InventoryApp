@@ -52,12 +52,18 @@ public sealed class EfReconciliationReportFactsProvider : IReconciliationReportF
         var periods = new List<ReconciliationPeriodFacts>();
         foreach (var reimbursement in matching)
         {
-            var periodSales = sales.Where(x => x.MachineAuthorizationTime.Date >= reimbursement.ReimbursementStartDate!.Value.Date &&
-                x.MachineAuthorizationTime.Date <= reimbursement.ReimbursementEndDate!.Value.Date).ToList();
-            periods.Add(BuildPeriodFacts(reimbursement, periodSales, machineId));
+            var periodFrom = reimbursement.ReimbursementStartDate!.Value.Date;
+            var periodTo = reimbursement.ReimbursementEndDate!.Value.Date;
+            var periodSales = sales.Where(x => x.MachineAuthorizationTime.Date >= periodFrom &&
+                x.MachineAuthorizationTime.Date <= periodTo).ToList();
+            // Issue #477: each period's own non-completed transactions, so a period-level
+            // data-quality flag describes that period instead of repeating the whole range's counts.
+            var periodStatusSales = statusSales.Where(x => x.MachineAuthorizationTime.Date >= periodFrom &&
+                x.MachineAuthorizationTime.Date <= periodTo).ToList();
+            periods.Add(BuildPeriodFacts(reimbursement, periodSales, periodStatusSales, machineId));
         }
         if (periods.Count == 0)
-            periods.Add(BuildPeriodFacts(null, sales, machineId, from, to));
+            periods.Add(BuildPeriodFacts(null, sales, statusSales, machineId, from, to));
 
         return new ReconciliationReportFacts(
             periods,
@@ -69,16 +75,30 @@ public sealed class EfReconciliationReportFactsProvider : IReconciliationReportF
             CardTransactionCount: paymentSummary.CardTransactions,
             CashTransactionCount: paymentSummary.CashTransactions,
             UnknownPaymentTransactionCount: paymentSummary.UnknownTransactions,
-            PendingTransactionCount: statusSales.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Pending),
-            RefundedTransactionCount: statusSales.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Refunded),
-            DeclinedOrCancelledTransactionCount: statusSales.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.CancelledOrDeclined),
-            UnknownStatusTransactionCount: statusSales.Count(x => x.TransactionStatusId is not null && NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Unknown),
-            NullStatusTransactionCount: statusSales.Count(x => x.TransactionStatusId is null),
+            PendingTransactionCount: CountStatus(statusSales, NayaxTransactionStatus.Pending),
+            RefundedTransactionCount: CountStatus(statusSales, NayaxTransactionStatus.Refunded),
+            DeclinedOrCancelledTransactionCount: CountStatus(statusSales, NayaxTransactionStatus.CancelledOrDeclined),
+            UnknownStatusTransactionCount: CountUnrecognisedStatus(statusSales),
+            NullStatusTransactionCount: CountMissingStatus(statusSales),
             IsMachineFiltered: isMachineFiltered);
     }
 
+    // The status counts are read before the completed-sale predicate removes those rows, which is
+    // the only way the report can say what it excluded. They are reported, never summed into a
+    // financial total: only status 12 is a completed sale.
+    private static int CountStatus(IEnumerable<NayaxSales> rows, NayaxTransactionStatus status) =>
+        rows.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == status);
+
+    private static int CountUnrecognisedStatus(IEnumerable<NayaxSales> rows) =>
+        rows.Count(x => x.TransactionStatusId is not null &&
+            NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Unknown);
+
+    private static int CountMissingStatus(IEnumerable<NayaxSales> rows) =>
+        rows.Count(x => x.TransactionStatusId is null);
+
     private static ReconciliationPeriodFacts BuildPeriodFacts(
-        ImportedReimbursement? reimbursement, IReadOnlyList<NayaxSales> periodSales, long? machineId,
+        ImportedReimbursement? reimbursement, IReadOnlyList<NayaxSales> periodSales,
+        IReadOnlyList<NayaxSales> periodStatusSales, long? machineId,
         DateTime? fallbackFrom = null, DateTime? fallbackTo = null)
     {
         var totalVendingSales = periodSales.Sum(x => x.SettlementValue);
@@ -138,7 +158,12 @@ public sealed class EfReconciliationReportFactsProvider : IReconciliationReportF
             periodSales.Count, periodSales.Count(x => PaymentMethodClassifier.Classify(x.PaymentMethod) == NayaxPaymentType.Cash),
             reportedGross, reportedCount,
             processingFees, feeGst, otherFees,
-            hasGstClassification, warning, paymentDetailMissing, actualNet);
+            hasGstClassification, warning, paymentDetailMissing, actualNet,
+            CountStatus(periodStatusSales, NayaxTransactionStatus.Pending),
+            CountStatus(periodStatusSales, NayaxTransactionStatus.Refunded),
+            CountStatus(periodStatusSales, NayaxTransactionStatus.CancelledOrDeclined),
+            CountUnrecognisedStatus(periodStatusSales),
+            CountMissingStatus(periodStatusSales));
     }
 
     private static bool IsProcessingFee(ImportedFee fee) =>

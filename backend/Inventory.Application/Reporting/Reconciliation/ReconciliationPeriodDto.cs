@@ -34,4 +34,11 @@ public record ReconciliationPeriodDto(
     public int RefundedTransactionCount { get; init; }
     public int DeclinedOrCancelledTransactionCount { get; init; }
     public int UnknownStatusTransactionCount { get; init; }
+
+    /// <summary>
+    /// Transactions in this period's own scope carrying no status ID at all (issue #477), kept
+    /// distinct from <see cref="UnknownStatusTransactionCount"/> and never copied from the report's
+    /// aggregate counts.
+    /// </summary>
+    public int MissingStatusTransactionCount { get; init; }
 }

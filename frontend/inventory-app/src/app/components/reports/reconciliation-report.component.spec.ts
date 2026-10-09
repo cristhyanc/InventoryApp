@@ -48,7 +48,7 @@ function period(overrides: Partial<ReconciliationPeriod> = {}): ReconciliationPe
   };
 }
 
-function report(periodRows: ReconciliationPeriod[]): ReconciliationReport {
+function report(periodRows: ReconciliationPeriod[], overrides: Partial<ReconciliationReport> = {}): ReconciliationReport {
   return {
     from: '2026-06-01', to: '2026-06-30', nayaxSales: 11640.6, importedReimbursement: 11626.8,
     difference: 13.8, tolerance: 0.01, isMatch: false, dataQuality: { ...quality },
@@ -69,16 +69,17 @@ function report(periodRows: ReconciliationPeriod[]): ReconciliationReport {
       adjustments: 0, adjustmentsSupported: false,
       expectedNetReimbursement: 11230.59, actualNetReimbursement: 11230.59,
       settlementDifference: 0, grossStatus: 'Mismatch', settlementStatus: 'Reconciled', status: 'Mismatch'
-    }
+    },
+    ...overrides
   };
 }
 
-async function render(periodRows: ReconciliationPeriod[] = [period()]) {
+async function render(periodRows: ReconciliationPeriod[] = [period()], overrides: Partial<ReconciliationReport> = {}) {
   await TestBed.configureTestingModule({
     imports: [ReconciliationReportComponent],
     providers: [
       { provide: ActivatedRoute, useValue: {} },
-      { provide: ReportingService, useValue: { reconciliation: jest.fn(() => of(report(periodRows))) } },
+      { provide: ReportingService, useValue: { reconciliation: jest.fn(() => of(report(periodRows, overrides))) } },
       { provide: MachineService, useValue: { getAll: jest.fn(() => of([])) } }
     ]
   }).compileComponents();
@@ -185,5 +186,84 @@ describe('ReconciliationReportComponent period table width (issue #452)', () => 
     expect(totals.textContent).toContain('$11,640.60');
     expect(totals.textContent).toContain('$11,230.59');
     expect(totals.querySelectorAll('td')).toHaveLength(12);
+  });
+});
+
+/**
+ * Issue #477: the reconciliation page separates three different things - an actual problem with the
+ * requested period, the ordinary transaction outcomes it leaves out, and how the report calculates
+ * what it shows. The data-quality section is driven entirely by the API's conditional notes, so a
+ * clean period has none at all.
+ */
+describe('ReconciliationReportComponent diagnostics and calculation help (issue #477)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('hides the data-quality section when the API reports no problem', async () => {
+    const { host } = await render();
+
+    expect(host.querySelector('[data-testid="data-quality-notes"]')).toBeNull();
+  });
+
+  it('shows each reported problem as a prominent data-quality warning', async () => {
+    const notes = [
+      'No imported Nayax reimbursement period falls entirely inside 2026-06-01 to 2026-06-30, so recorded card sales cannot be compared with a Nayax payout.',
+      '2 Nayax transaction(s) have no status ID and are excluded from completed sales.'
+    ];
+    const { host } = await render([period()], { dataQuality: { ...quality, notes } });
+
+    const section = host.querySelector('[data-testid="data-quality-notes"]');
+    expect(section).not.toBeNull();
+    expect(Array.from(section!.classList)).toContain('alert-warning');
+    const items = Array.from(section!.querySelectorAll('li')).map((li) => li.textContent?.trim());
+    expect(items).toEqual(notes);
+  });
+
+  it('lists cancelled, declined, refunded and pending transactions as neutral exclusions with their counts', async () => {
+    const { host } = await render([period()], {
+      pendingTransactionCount: 2, refundedTransactionCount: 1,
+      declinedOrCancelledTransactionCount: 17, unknownStatusTransactionCount: 1,
+      missingStatusTransactionCount: 3
+    });
+
+    const section = host.querySelector('[data-testid="excluded-transactions"]');
+    expect(section).not.toBeNull();
+    expect(Array.from(section!.classList)).not.toContain('alert-danger');
+    const items = Array.from(section!.querySelectorAll('li')).map((li) => li.textContent?.trim());
+    expect(items).toEqual([
+      'Pending: 2',
+      'Refunded: 1',
+      'Cancelled or declined: 17',
+      'Unrecognised status: 1',
+      'No status recorded: 3'
+    ]);
+  });
+
+  it('hides the exclusions section when every transaction in the period was completed', async () => {
+    const { host } = await render();
+
+    expect(host.querySelector('[data-testid="excluded-transactions"]')).toBeNull();
+  });
+
+  it('keeps the adjustments assumption beside the adjustments figure', async () => {
+    const { host } = await render();
+
+    const assumption = host.querySelector('[data-testid="adjustments-assumption"]');
+    expect(assumption).not.toBeNull();
+    expect(assumption!.textContent).toContain('Reimbursement adjustments are not imported');
+    expect(assumption!.textContent).toContain('assumes $0.00');
+  });
+
+  it('offers collapsed, keyboard-reachable calculation help that explains the reconciliation method', async () => {
+    const { host } = await render();
+
+    const help = host.querySelector<HTMLDetailsElement>('[data-testid="calculation-help"]');
+    expect(help).not.toBeNull();
+    expect(help!.tagName).toBe('DETAILS');
+    expect(help!.open).toBe(false);
+    expect(help!.querySelector('summary')?.textContent).toContain('How this report is calculated');
+    const text = help!.textContent ?? '';
+    expect(text).toContain('card sales');
+    expect(text).toContain('$0.01');
+    expect(text).toContain('coverage dates');
   });
 });

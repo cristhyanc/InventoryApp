@@ -1384,7 +1384,7 @@ public class ReportingRegressionTests
 
         Assert.Equal(0m, report.ImportedReimbursement);
         Assert.False(report.IsMatch);
-        Assert.Contains(report.DataQuality.Notes!, x => x.Contains("No imported reimbursement"));
+        Assert.Contains(report.DataQuality.Notes!, x => x.Contains("No imported Nayax reimbursement period falls entirely inside"));
     }
 
     [Fact]
