@@ -79,6 +79,14 @@ import { RouterLink } from '@angular/router';
             <a routerLink="/admin/historical-gst-classification" class="btn btn-primary mt-4 inline-flex">Open Historical GST Classification</a>
           </div>
         </section>
+
+        <section class="card">
+          <div class="card-body">
+            <h2 class="card-title">Nayax Sale Timestamp Repair</h2>
+            <p class="mt-1 text-sm value-muted">Repair stored Nayax sale instants that were never the authoritative ones, from verified source evidence and one transaction at a time, after previewing every row that would move.</p>
+            <a routerLink="/admin/nayax-sale-timestamp-repair" class="btn btn-primary mt-4 inline-flex">Open Nayax Sale Timestamp Repair</a>
+          </div>
+        </section>
       </div>
     </div>
   `

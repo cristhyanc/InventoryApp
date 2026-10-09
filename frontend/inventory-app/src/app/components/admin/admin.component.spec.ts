@@ -46,6 +46,14 @@ describe('AdminComponent Historical GST Classification (issue #433)', () => {
   });
 });
 
+describe('AdminComponent Nayax Sale Timestamp Repair (issue #487)', () => {
+  it('links to the dedicated Nayax Sale Timestamp Repair page', async () => {
+    const { host } = await render();
+
+    expect(host.querySelector('a[routerLink="/admin/nayax-sale-timestamp-repair"]')).not.toBeNull();
+  });
+});
+
 describe('AdminComponent Admin split (issue #390)', () => {
   it('links to the dedicated Historical Cost Recovery, AVCO Transition and Costing Repair pages', async () => {
     const { host } = await render();

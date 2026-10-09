@@ -45,7 +45,8 @@ const adminChildRoutes: { label: string; route: string }[] = [
   { label: 'Historical Cost Recovery', route: '/admin/historical-cost-recovery' },
   { label: 'AVCO Transition', route: '/admin/avco-transition' },
   { label: 'Costing Repair', route: '/admin/costing-repair' },
-  { label: 'Historical GST Classification', route: '/admin/historical-gst-classification' }
+  { label: 'Historical GST Classification', route: '/admin/historical-gst-classification' },
+  { label: 'Nayax Sale Timestamp Repair', route: '/admin/nayax-sale-timestamp-repair' }
 ];
 
 describe('primary navigation (issue #391)', () => {

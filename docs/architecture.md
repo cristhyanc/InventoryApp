@@ -1758,7 +1758,8 @@ group needs an overview page. **Every `route` must be a real page already declar
 of the page that serves it, which is how the navigation stays free of placeholder
 Users/Roles/Audit/Settings/Profile entries. `/admin` itself keeps its own address
 and its `AdminComponent` link hub — the sidebar is now the primary way into the dedicated Admin
-pages (six at issue #391, joined by `Historical GST Classification` in issue #433), and `/admin`
+pages (six at issue #391, joined by `Historical GST Classification` in issue #433 and
+`Nayax Sale Timestamp Repair` in issue #487), and `/admin`
 remains a valid bookmark that the home Dashboard's "Open Admin" action and each dedicated page's
 "Back to Admin" link still reach.
 
@@ -2146,6 +2147,25 @@ rule exists in the frontend - and carries the preview's `fingerprint` back uncha
 nothing on arrival: this maintenance action runs only because a person pressed Preview and then
 Apply.
 
+**Nayax Sale Timestamp Repair (issue #487)** is the Admin UI over issue #472's Preview/Apply API,
+and follows the same shape again:
+
+| Route | Page component | Authoritative boundary it calls |
+| --- | --- | --- |
+| `/admin/nayax-sale-timestamp-repair` | `NayaxSaleTimestampRepairComponent`, composing `NayaxSaleTimestampRepairWorkflowComponent` | `NayaxSaleTimestampRepairService` `preview`/`apply` (`POST api/admin/nayax-sale-timestamp-repair/preview`/`apply`, see [Nayax sale timestamp repair](#nayax-sale-timestamp-repair-preview-then-apply-issue-472)) |
+
+The page renders the heading and the warning and composes the workflow; the workflow owns the source
+form, the optional reconciliation window, both requests, the confirmation, the expiry handling and
+every reported outcome, and composes three display components of its own —
+`NayaxSaleTimestampRepairPreviewComponent` (the plan), `NayaxSaleTimestampRepairRowsComponent` (the
+examined-sales table with its client-side outcome filter, search and paging) and
+`NayaxSaleTimestampRepairResultComponent` (the applied counts and audit rows, with its
+`(verifyRequested)` output back to the workflow). The whole page calculates nothing: no timestamp is
+parsed or shifted, no Sydney business date is converted, no outcome is classified and no revenue,
+rebuild-eligibility or reconciliation figure is derived in Angular. See [Nayax sale timestamp repair:
+Preview then Apply](#nayax-sale-timestamp-repair-preview-then-apply-issue-472), "The Admin page", for
+what the page offers and refuses.
+
 **Platform Diagnostics (issue #335)** adds the one Admin route that is not offered to every
 operator:
 
@@ -2169,10 +2189,10 @@ dependency and no second copy of any Admin tool, so it no longer owns duplicate 
 configuration logic. It deliberately keeps its own `/admin` address rather than redirecting to
 `/admin/nayax-settings`, because the home Dashboard's "Open Admin" action and each
 dedicated page's "Back to Admin" link point at it. The sidebar's `Admin` group (issue #391) is now
-the primary way into the seven dedicated pages, so `AdminComponent` is a second, still valid entry
+the primary way into the eight dedicated pages, so `AdminComponent` is a second, still valid entry
 point rather than the only one; the root shell no longer links to `/admin` itself, because the
 group heading replaced that single header link. `/admin/diagnostics` is the exception in the other
-direction: the hub links to the seven pages every operator has and not to it, because that page is
+direction: the hub links to the eight pages every operator has and not to it, because that page is
 offered only to the configured platform administrator and only the diagnostics API can say who
 that is. It is reached from the sidebar group, or by URL, and links back to the hub like every
 other dedicated page.
@@ -3536,8 +3556,66 @@ again. Rollback **after** a committed apply is not an application feature: it is
 in the [backup and restore procedure](#sqlite-operating-assumptions-and-scale-strategy-issue-53),
 which is why the runbook takes a verified snapshot first.
 
+**The Admin page (issue #487).** `/admin/nayax-sale-timestamp-repair` is the operator-facing entry
+point to exactly these two endpoints, so the runbook's Preview and Apply steps no longer need
+Postman or a hand-built `curl`. It is an
+entry point and a review surface and nothing else: the API keeps every decision, its authorization
+and its trusted current-business scoping, and the page sends no business identifier and no repair of
+its own. See [Routing and loading](#routing-and-loading) for the component composition.
+
+- **Sources.** A checkbox for the live last-sales window and an optional file input for an export,
+  with at least one required before a request is spent. The page states that the API source is a
+  *rolling window* rather than a date range, that an export must carry the
+  `AuthorizationDateTimeGMT` column, and that `Updated Date and Time (GMT)` is an update time that is
+  never substituted for an authorization time. It mirrors the server's accepted formats (`.xlsx`,
+  `.xls`, `.csv`) and the 8,000,000-byte request cap as client-side refusals, which weaken neither:
+  the server validates, reads and refuses the upload on its own terms, and the browser sets the
+  multipart boundary because the client sends `FormData` with no request options.
+- **The UTC cutoff is typed as an explicit instant.** The reconciliation cutoff is a text input that
+  must match an ISO instant ending in `Z` (`2026-10-08T04:00:00Z`); a value without the designator is
+  refused rather than read in the viewer's timezone, which would silently reconcile a shifted window.
+  The two inclusive Sydney business dates are `yyyy-MM-dd` calendar dates sent verbatim — the page
+  never converts a date-only boundary into an instant, and never guesses a cutoff for an old export.
+  All three are required together or omitted together, and a window that runs backwards is refused
+  before the request.
+- **Preview is always user-triggered**, and reports loading, no-change, validation-refusal,
+  upstream-Nayax, upload-too-large and unreachable-API states distinctly. The plan is displayed as
+  returned: the three outcome counts, every examined row with its old and new UTC instant and Sydney
+  business date, its raw status and whether the server called it a completed sale, its unresolved
+  reason and its provenance; the daily revenue movement; the affected products with the server's own
+  `rebuildPlanned` gate shown per product, so an affected product is never presented as a rebuilt
+  one; the missing sales, separately, with the import guidance and **no import action**; and the
+  fixed-cutoff reconciliation, which is never called reconciled while an unresolved or missing amount
+  remains. The row table's outcome filter, search and paging are presentation only and say so: Apply
+  confirms the server's whole plan, because there is no selective-row repair.
+- **Apply needs an explicit acknowledgement.** A checkbox records that the operator reviewed every
+  row and that a verified backup is available, and the text states that ticking it does not create or
+  verify a backup and points at runbook step 1. Apply is enabled only for a successful, unexpired
+  plan with repairable rows, with the acknowledgement given and no request in flight, and it sends
+  only `{ previewId, confirmed: true }`.
+- **A plan stops being actionable the moment it stops describing the inputs.** Changing the API
+  source, the uploaded file or any reconciliation value withdraws the displayed plan and the
+  acknowledgement; so does applying it, so a second Apply is impossible from the page as well as
+  refused by the server. The server's two-hour lifetime is honoured too: once `expiresAt` has passed
+  the page withdraws Apply and asks for a fresh preview. Nothing — plan, preview id or uploaded file
+  — is written to `localStorage`, `sessionStorage`, a URL or a log.
+- **An unanswered Apply is reported as an unconfirmed outcome, never as "nothing was written".** A
+  refusal the API answered with (a stale, expired or already-applied plan, or a costing replay that
+  could not complete) is reported with the server's own caller-safe message plus the rollback
+  semantics, and a fresh preview is required. A request that produced no answer at all — a transport
+  failure or an ambiguous `408`/`502`/`503`/`504` — is reported as *outcome unconfirmed*: the page
+  states that it is not known whether any sale timestamp was written, never retries the apply
+  automatically, and requires a fresh preview and verification instead.
+- **Success shows the server's own counts and audit rows**, repeats the confirmed plan's unresolved
+  and missing counts so a repair is never mistaken for a reconciliation, says that reversing a
+  committed repair is the human-run restore, and offers a user-triggered fresh preview over the
+  retained inputs. Nothing re-previews or re-applies by itself, and the success evidence stays on
+  screen until the operator chooses another action.
+
 **Runbook.** Every step is human-run. No agent and no workflow in this repository may run it, and
-creating or merging the issue that built it authorizes no production execution.
+creating or merging the issue that built it authorizes no production execution. Steps 3 to 8 are
+normally done on the Admin page above; the `curl` forms are the same two endpoints and stay here as
+the authoritative contract.
 
 1. **Take and verify a recovery point.** `dotnet InventoryApi.dll backup-database --upload` (or
    `--output <path>`), and confirm it exited `0` and reported `ok` for `PRAGMA integrity_check`. This
@@ -3556,7 +3634,9 @@ creating or merging the issue that built it authorizes no production execution.
    Kestrel's limits nor `FormOptions` globally. An export of authorization instants for a repair's
    period is far smaller than the cap; a larger upload is refused at the HTTP boundary rather than
    read, and raising the cap is a human decision.
-3. **Preview**, naming the sources and the fixed cutoff and Sydney business-date window to reconcile:
+3. **Preview**, naming the sources and the fixed cutoff and Sydney business-date window to reconcile.
+   On the Admin page this is the source checkbox, the file input and the three reconciliation fields,
+   then **Preview repair**; the equivalent request is:
 
    ```bash
    curl -X POST "$API/api/admin/nayax-sale-timestamp-repair/preview" \
@@ -3577,7 +3657,8 @@ creating or merging the issue that built it authorizes no production execution.
    import (`POST /api/imports/nayax-sales`), scoped to those transactions — re-uploading the whole
    export through that path would also move stored instants with no preview, which is the thing this
    operation exists to replace. Then take a fresh preview.
-6. **Apply** the reviewed preview, within its two-hour lifetime:
+6. **Apply** the reviewed preview, within its two-hour lifetime. On the Admin page this is the
+   review/backup acknowledgement and then **Apply repair**, which sends exactly this body:
 
    ```bash
    curl -X POST "$API/api/admin/nayax-sale-timestamp-repair/apply" \
@@ -3586,10 +3667,15 @@ creating or merging the issue that built it authorizes no production execution.
    ```
 
    A `400` means nothing was written: the plan was stale, expired, already applied, or a product's
-   costing could not be replayed. Read the message, fix the stated cause, and preview again.
+   costing could not be replayed. Read the message, fix the stated cause, and preview again. A
+   request that produces **no answer at all** — a dropped connection, or a `408`/`502`/`503`/`504`
+   from something in front of the API — is a different outcome: the apply may or may not have
+   committed. Do not repeat it. Take a fresh preview and read it: the rows come back as
+   `alreadyCorrect` if the repair committed, and as `repairable` again if it did not.
 7. **Verify the costing.** Confirm the apply's `productsRebuilt`/`recostedSales`, then check the
    affected products' COGS and inventory value, and that no completed sale became uncosted.
-8. **Reconcile at the fixed cutoff.** Take a fresh preview over the same sources and window: every
+8. **Reconcile at the fixed cutoff.** Take a fresh preview over the same sources and window — on the
+   Admin page, **Preview again to verify**, which reuses the inputs still on the form: every
    repairable row should now be `alreadyCorrect`, `missingFromDatabase` should be empty, and each day's
    `sourceVerifiedAfter` should equal the export's own daily total, summing to its period total. A
    remaining difference is `unresolvedAmount` (obtain source coverage for those rows) or
@@ -3616,6 +3702,18 @@ the later sale excluded at the cutoff, and the boundary cohort decided — rathe
 once source coverage includes 4 October.
 `NayaxSaleTimestampRepairUploadLimitTests` pins the preview upload cap: both declared limits, the
 same value in each, and no disabled-limit escape hatch on the action or the controller.
+
+The Admin page's own coverage is in `frontend/inventory-app/src/app`:
+`services/nayax-sale-timestamp-repair.service.spec.ts` pins the multipart field names, the absent
+`Content-Type` (so the browser sets the boundary), the verbatim cutoff and business dates, the
+all-three-or-none window, and that the apply body is `previewId` plus `confirmed` and nothing else.
+`nayax-sale-timestamp-repair-workflow.component.spec.ts` covers the source and window validation,
+each input change invalidating the plan and the acknowledgement, the acknowledgement gate, the
+expiry withdrawal, duplicate-submit protection, the stale/costing/already-applied refusals, each
+ambiguous transport status as an unconfirmed outcome, and the absence of any browser-storage write.
+The three display components' specs cover the outcome categories, the unresolved and missing-sale
+presentation, rebuild eligibility, the reconciliation's source-gap rule, the audit rows and the
+client-side filter/paging.
 
 ## Data flow
 

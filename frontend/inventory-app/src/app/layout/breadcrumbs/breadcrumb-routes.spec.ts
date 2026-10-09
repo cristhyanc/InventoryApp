@@ -62,6 +62,7 @@ describe('breadcrumbRoutes (issue #457 route inventory)', () => {
       '/admin/avco-transition',
       '/admin/costing-repair',
       '/admin/historical-gst-classification',
+      '/admin/nayax-sale-timestamp-repair',
       '/admin/diagnostics',
       '/admin/nayax-settings',
       '/admin/site-commission-agreements'
