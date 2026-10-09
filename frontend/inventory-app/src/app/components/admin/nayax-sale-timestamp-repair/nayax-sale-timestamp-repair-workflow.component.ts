@@ -43,7 +43,7 @@ const UTC_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?(\.\d{1,7})?Z$/;
  * An apply whose request produced no answer from this API. These are the only outcomes where
  * "nothing was written" would be a guess rather than a fact, so they are reported as unconfirmed.
  */
-const AMBIGUOUS_TRANSPORT_STATUSES = [0, 408, 502, 503, 504];
+const AMBIGUOUS_TRANSPORT_STATUSES = new Set([0, 408, 502, 503, 504]);
 
 /**
  * The Nayax sale timestamp repair workflow (issue #487), composed by its routed page per
@@ -643,7 +643,7 @@ export class NayaxSaleTimestampRepairWorkflowComponent implements OnDestroy {
    */
   private describeApplyFailure(error: unknown): RepairFailure {
     const status = this.statusOf(error);
-    if (AMBIGUOUS_TRANSPORT_STATUSES.includes(status)) {
+    if (AMBIGUOUS_TRANSPORT_STATUSES.has(status)) {
       return {
         tone: 'warning',
         title: "The repair's outcome could not be confirmed.",
@@ -746,6 +746,14 @@ export class NayaxSaleTimestampRepairWorkflowComponent implements OnDestroy {
 
   /** `8000000` as `8,000,000`, without depending on the runtime's locale data. */
   private static groupDigits(value: number): string {
-    return value.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    const digits = Math.abs(value).toString();
+    let grouped = '';
+    for (let i = 0; i < digits.length; i++) {
+      if (i > 0 && (digits.length - i) % 3 === 0) {
+        grouped += ',';
+      }
+      grouped += digits[i];
+    }
+    return value < 0 ? `-${grouped}` : grouped;
   }
 }
