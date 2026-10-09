@@ -155,7 +155,7 @@ public sealed class GetReportExportRows
             var value = await _getReconciliationReport.Handle(filter, 0.01m, cancellationToken);
             var rows = new List<List<string>>
             {
-                new() { "From", "To", "TotalVendingSales", "CardSales", "CashSales", "CardTransactionSales", "NayaxReportedGrossCardSales", "CardTransactionCount", "NayaxReportedCardTransactionCount", "CountDifference", "GrossDifference", "GrossStatus", "ProcessingFeesExGst", "FeeGst", "OtherFees", "Adjustments", "ExpectedNetReimbursement", "ActualNetReimbursement", "SettlementDifference", "SettlementStatus", "Status", "PayoutDate" }
+                new() { "From", "To", "TotalVendingSales", "CardSales", "CashSales", "CardTransactionSales", "NayaxReportedGrossCardSales", "CardTransactionCount", "NayaxReportedCardTransactionCount", "CountDifference", "GrossDifference", "GrossStatus", "ProcessingFeesExGst", "FeeGst", "OtherFees", "Adjustments", "AdjustmentsSupported", "AdjustmentsBasis", "ExpectedNetReimbursement", "ActualNetReimbursement", "SettlementDifference", "SettlementStatus", "Status", "PayoutDate", "PendingTransactionCount", "RefundedTransactionCount", "DeclinedOrCancelledTransactionCount", "UnknownStatusTransactionCount", "MissingStatusTransactionCount", "DataQualityNotes" }
             };
             rows.AddRange(value.PeriodRows.Select(x => new List<string>
             {
@@ -167,9 +167,16 @@ public sealed class GetReportExportRows
                 x.GrossDifference.ToString(CultureInfo.InvariantCulture), x.GrossStatus,
                 x.ProcessingFeesExGst.ToString(CultureInfo.InvariantCulture), x.FeeGst.ToString(CultureInfo.InvariantCulture),
                 x.OtherFees.ToString(CultureInfo.InvariantCulture), x.Adjustments.ToString(CultureInfo.InvariantCulture),
+                x.AdjustmentsSupported.ToString(), GetReconciliationReport.AdjustmentsAssumption,
                 x.ExpectedNetReimbursement.ToString(CultureInfo.InvariantCulture), x.ActualNetReimbursement.ToString(CultureInfo.InvariantCulture),
                 x.SettlementDifference.ToString(CultureInfo.InvariantCulture), x.SettlementStatus, x.Status,
-                x.PayoutDate?.ToString("yyyy-MM-dd") ?? string.Empty
+                x.PayoutDate?.ToString("yyyy-MM-dd") ?? string.Empty,
+                x.PendingTransactionCount.ToString(CultureInfo.InvariantCulture),
+                x.RefundedTransactionCount.ToString(CultureInfo.InvariantCulture),
+                x.DeclinedOrCancelledTransactionCount.ToString(CultureInfo.InvariantCulture),
+                x.UnknownStatusTransactionCount.ToString(CultureInfo.InvariantCulture),
+                x.MissingStatusTransactionCount.ToString(CultureInfo.InvariantCulture),
+                string.Join(" ", x.DataQuality.Notes ?? [])
             }));
             if (value.Totals is not null)
             {
@@ -183,8 +190,17 @@ public sealed class GetReportExportRows
                     x.GrossDifference.ToString(CultureInfo.InvariantCulture), x.GrossStatus,
                     x.ProcessingFeesExGst.ToString(CultureInfo.InvariantCulture), x.FeeGst.ToString(CultureInfo.InvariantCulture),
                     x.OtherFees.ToString(CultureInfo.InvariantCulture), x.Adjustments.ToString(CultureInfo.InvariantCulture),
+                    x.AdjustmentsSupported.ToString(), GetReconciliationReport.AdjustmentsAssumption,
                     x.ExpectedNetReimbursement.ToString(CultureInfo.InvariantCulture), x.ActualNetReimbursement.ToString(CultureInfo.InvariantCulture),
-                    x.SettlementDifference.ToString(CultureInfo.InvariantCulture), x.SettlementStatus, x.Status, string.Empty
+                    x.SettlementDifference.ToString(CultureInfo.InvariantCulture), x.SettlementStatus, x.Status, string.Empty,
+                    // The totals row carries the report's own range-wide counts and notes, never a
+                    // sum of the period rows' scoped ones.
+                    value.PendingTransactionCount.ToString(CultureInfo.InvariantCulture),
+                    value.RefundedTransactionCount.ToString(CultureInfo.InvariantCulture),
+                    value.DeclinedOrCancelledTransactionCount.ToString(CultureInfo.InvariantCulture),
+                    value.UnknownStatusTransactionCount.ToString(CultureInfo.InvariantCulture),
+                    value.MissingStatusTransactionCount.ToString(CultureInfo.InvariantCulture),
+                    string.Join(" ", value.DataQuality.Notes ?? [])
                 });
             }
             return new ReportExportTable(rows, "Report");
