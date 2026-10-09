@@ -1,4 +1,4 @@
-<div class="card max-w-2xl">
+<div class="card w-full">
   <div class="card-header">
     <h2 class="card-title">Adjust Stock</h2>
   </div>
@@ -9,44 +9,51 @@
       </div>
     }
     <form class="space-y-4" (ngSubmit)="adjust()">
-      <div class="field">
-        <label for="adjustment-quantity-change" class="field-label">Quantity Change *</label>
-        <input id="adjustment-quantity-change" [(ngModel)]="form.quantityChange" (ngModelChange)="onAdjustmentInputsChanged()" name="quantityChange" type="number" [min]="isCorrection ? 1 : null" step="1" required [placeholder]="isCorrection ? 'e.g. 4' : 'e.g. 20 to add, -5 to remove'" />
-        @if (isCorrection) {
-          <p class="field-hint">Enter the quantity to remove. It will be recorded as a negative stock correction.</p>
-        }
-      </div>
-      <div class="field">
-        <label for="adjustment-reason" class="field-label">Reason</label>
-        <select id="adjustment-reason" [(ngModel)]="form.reason" (ngModelChange)="onAdjustmentInputsChanged()" name="reason">
-          @for (r of reasonOptions; track r.value) {
-            <option [ngValue]="r.value">{{ r.label }}</option>
-          }
-        </select>
-      </div>
-      @if (requiresRestockCost) {
+      <!--
+        The card fills the page's content width (issue #478), so these short controls are laid out
+        in columns - one, then two from `md` and three from `xl` - instead of each stretching the
+        whole page. Notes spans the row at `md` and takes its own column at `xl`.
+      -->
+      <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         <div class="field">
-          <label for="adjustment-unit-cost" class="field-label">Unit Cost *</label>
-          <input id="adjustment-unit-cost" [(ngModel)]="form.unitCost" name="unitCost" type="number" min="0" step="0.0001" required placeholder="Acquisition cost per unit" />
-          <p class="field-hint">{{ restockCostHelp }}</p>
-        </div>
-      }
-      <div class="field">
-        <label for="adjustment-machine" class="field-label">Machine (optional)</label>
-        <select id="adjustment-machine" [(ngModel)]="form.machineId" name="machineId">
-          <option [ngValue]="null">— None —</option>
-          @for (m of machines; track m.machineID) {
-            <option [ngValue]="m.machineID">{{ m.machineName || m.machineID }}</option>
+          <label for="adjustment-quantity-change" class="field-label">Quantity Change *</label>
+          <input id="adjustment-quantity-change" [(ngModel)]="form.quantityChange" (ngModelChange)="onAdjustmentInputsChanged()" name="quantityChange" type="number" [min]="isCorrection ? 1 : null" step="1" required [placeholder]="isCorrection ? 'e.g. 4' : 'e.g. 20 to add, -5 to remove'" />
+          @if (isCorrection) {
+            <p class="field-hint">Enter the quantity to remove. It will be recorded as a negative stock correction.</p>
           }
-        </select>
-      </div>
-      <div class="field">
-        <label for="adjustment-eat-before" class="field-label">Eat Before</label>
-        <input id="adjustment-eat-before" [(ngModel)]="form.EatBefore" name="eatBefore" type="date" />
-      </div>
-      <div class="field">
-        <label for="adjustment-notes" class="field-label">Notes</label>
-        <textarea id="adjustment-notes" [(ngModel)]="form.notes" name="notes" rows="2" placeholder="Optional"></textarea>
+        </div>
+        <div class="field">
+          <label for="adjustment-reason" class="field-label">Reason</label>
+          <select id="adjustment-reason" [(ngModel)]="form.reason" (ngModelChange)="onAdjustmentInputsChanged()" name="reason">
+            @for (r of reasonOptions; track r.value) {
+              <option [ngValue]="r.value">{{ r.label }}</option>
+            }
+          </select>
+        </div>
+        @if (requiresRestockCost) {
+          <div class="field">
+            <label for="adjustment-unit-cost" class="field-label">Unit Cost *</label>
+            <input id="adjustment-unit-cost" [(ngModel)]="form.unitCost" name="unitCost" type="number" min="0" step="0.0001" required placeholder="Acquisition cost per unit" />
+            <p class="field-hint">{{ restockCostHelp }}</p>
+          </div>
+        }
+        <div class="field">
+          <label for="adjustment-machine" class="field-label">Machine (optional)</label>
+          <select id="adjustment-machine" [(ngModel)]="form.machineId" name="machineId">
+            <option [ngValue]="null">— None —</option>
+            @for (m of machines; track m.machineID) {
+              <option [ngValue]="m.machineID">{{ m.machineName || m.machineID }}</option>
+            }
+          </select>
+        </div>
+        <div class="field">
+          <label for="adjustment-eat-before" class="field-label">Eat Before</label>
+          <input id="adjustment-eat-before" [(ngModel)]="form.EatBefore" name="eatBefore" type="date" />
+        </div>
+        <div class="field md:col-span-2 xl:col-span-1">
+          <label for="adjustment-notes" class="field-label">Notes</label>
+          <textarea id="adjustment-notes" [(ngModel)]="form.notes" name="notes" rows="2" placeholder="Optional"></textarea>
+        </div>
       </div>
       <button type="submit" data-testid="apply-adjustment" [disabled]="saving" class="btn btn-primary">
         {{ saving ? 'Applying…' : 'Apply Adjustment' }}

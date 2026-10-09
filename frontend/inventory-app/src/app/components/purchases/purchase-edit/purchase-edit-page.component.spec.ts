@@ -280,12 +280,21 @@ describe('PurchaseEditPageComponent template (issue #475)', () => {
     expect((host.querySelector('#editTitle') as HTMLInputElement).value).toBe('Weekly restock');
   });
 
-  /** The same page shell and capped card width `/purchases/new` uses, so both forms read alike. */
-  it('uses the shared page shell and the purchase form card width', async () => {
+  /**
+   * The same page shell and card width `/purchases/new` uses, so both forms read alike. Since
+   * issue #478 that width is the whole available content area: the card must neither cap nor
+   * centre itself, because the content area already supplies the sidebar space and the gutters.
+   */
+  it('uses the shared page shell and lets the form card use the available content width', async () => {
     const { host } = await render({ get: jest.fn(() => of(purchase())) });
 
     expect(host.querySelector('.page > .page-header .page-title')?.textContent).toContain('Edit Purchase');
-    expect(host.querySelector('.card.mx-auto.w-full.max-w-5xl')).not.toBeNull();
+
+    const card = host.querySelector('.page > .card');
+    expect(card).not.toBeNull();
+    const classes = Array.from(card?.classList ?? []);
+    expect(classes).not.toContain('mx-auto');
+    expect(classes.filter((className) => /(^|:)max-w-/.test(className))).toEqual([]);
   });
 
   it('renders an unavailable state with a way back to the list instead of a form', async () => {
