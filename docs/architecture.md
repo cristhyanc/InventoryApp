@@ -2189,6 +2189,7 @@ The UI may format and explain backend results, but it must not recreate authorit
 
 - Display sales, fees, commission, COGS, and profit values returned by the API.
 - Preserve quality/status fields so partial, estimated, unmatched, or uncosted results remain visible.
+- Show a data-quality warning only for an actual problem in the requested scope, and hide the section when there is none. Normal calculation methodology belongs in a report's own expandable "How this report is calculated" help, and a figure that is an estimate stays labelled as one beside the figure itself — see [Bookkeeping data-quality diagnostics and calculation help](#bookkeeping-data-quality-diagnostics-and-calculation-help-issue-476).
 - Use an unavailable/unknown presentation for nullable COGS or profit. A generic formatter that turns `null` into `$0.00` is unsafe for these fields.
 - Keep card and cash amounts visibly distinct where settlement is discussed.
 - Keep ex-GST, GST, and GST-inclusive fee amounts distinct.
@@ -2387,6 +2388,22 @@ Nayax fee data is effective-dated and has two sources:
 The sources must not overlap for the same day. Ex-GST, GST, and GST-inclusive amounts remain separate.
 
 Site commissions use effective-dated agreements and one of three bases: gross sales, card sales, or sales excluding GST. Missing coverage and overlaps remain visible quality/configuration failures. The absence of any agreement for a site is a valid zero-commission state.
+
+### Bookkeeping data-quality diagnostics and calculation help (issue #476)
+
+A report's data-quality section states what is wrong with the period in front of the reader. It is not where the report explains how it works, and it is not a permanent disclaimer list: a list that says the same four things for every period says nothing about any of them. Bookkeeping separates the two concerns; other report families are unchanged.
+
+**Two forms of the shared helper.** `Inventory.Application.Reporting.Shared.ReportingQuality` now has `Quality(...)`, which still prefixes the four standard disclaimer notes and is what the daily, reconciliation, dashboard, GST accounting-aid and profitability reports keep calling, and `Conditional(...)`, which returns only the caller's own fact-derived notes. Both map every boolean 1:1 onto the identically named `ReportingDataQualityDto` flag, so no flag changes meaning for any family. `GetBookkeepingReport` is the one caller of `Conditional` today: a clean period returns an empty note list, and the Angular report and its export then show no data-quality section at all. A report that moves to `Conditional` owes its reader a conditional note for every real problem in the requested scope and its methodology presented as report help instead.
+
+**Scoped status diagnostics, counted before the completed-sale filter.** `BookkeepingReportFacts` carries `PendingTransactionCount`, `RefundedTransactionCount`, `DeclinedOrCancelledTransactionCount`, `UnknownStatusTransactionCount` (a status ID that is present but unrecognised) and `MissingStatusTransactionCount` (no status ID at all), and `EfBookkeepingReportFactsProvider` reads them from `EfReportingSharedQueries.AllSalesQuery` for the requested business, date range and machine scope — before `CompletedSalePredicate` removes those rows, which is the only way the report can say what it excluded. **These counts never change what the totals include.** Only status `12` is a completed sale; every amount in the report still comes from the completed-sale queries, and the counts exist to be reported, not summed.
+
+The two kinds are not the same thing and are never merged. An absent or unrecognised status is a data-quality problem: each produces its own conditional note naming its own count, and together they are what sets `dataQuality.missingStatus`. Pending, refunded and cancelled/declined rows are ordinary Nayax payment outcomes, not data errors: they produce no warning, and the bookkeeping page lists them as neutral "Transactions excluded from sales" scope information so every row in the period is accounted for. `missingStatus` is no longer hard-coded `true` for this report, and nothing in normal report presentation refers to the historical status-12 backfill migration.
+
+**Unresolved historical COGS reuses the authoritative facts.** The incomplete-COGS note names `UncostedTransactionCount` and `UncostedSalesAmount` as the report already reports them, rather than recounting or recosting anything; cost-of-goods completeness, partial COGS and the null-profit rules are untouched.
+
+**Calculation help, and the GST-on-sales estimate.** The Angular bookkeeping report carries a collapsed, keyboard-accessible native `<details>`/`<summary>` "How this report is calculated" disclosure explaining, in plain language, that only completed transactions count as sales, that COGS and profit use the cost recorded on each sale (an uncosted sale leaves profit unavailable, never estimated from today's cost), that commission comes from the effective-dated site commission agreement covering each sale's date, and how the fee sources combine. The GST-on-sales limitation is *not* only in there: GST classification is still not persisted per sale, so the GST card labels the figure "GST on Sales (estimated)" with the estimate stated beside it, and the help is explicit that GST on Nayax fees and operating-expense GST come from imported and recorded amounts instead. An empty data-quality note list means no problem was detected in that period — never that GST classification has been verified.
+
+**Export parity.** The bookkeeping CSV/XLSX row adds `GstOnSalesBasis` (the same estimate statement), `IsCogsComplete`, `UncostedTransactionCount`, `UncostedSalesAmount`, the five status counts and `DataQualityNotes`, all taken from the same `BookkeepingReportDto` the API returns. Moving an explanation out of the on-screen notes must never leave a downloaded file implying a verified figure.
 
 ### Product selling price
 

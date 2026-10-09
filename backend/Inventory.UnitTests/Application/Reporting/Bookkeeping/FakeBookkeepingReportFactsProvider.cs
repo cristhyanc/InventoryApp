@@ -48,5 +48,10 @@ public sealed class FakeBookkeepingReportFactsProvider : IBookkeepingReportFacts
         CommissionCompleteForScope: true,
         CommissionIsComplete: true,
         CommissionWarnings: [],
-        ProcessingFees: new NayaxProcessingFeeResult(4m, 0.4m, 4.4m, 0m, 0m, 0m, 0, DateTime.UtcNow, null));
+        ProcessingFees: new NayaxProcessingFeeResult(4m, 0.4m, 4.4m, 0m, 0m, 0m, 0, DateTime.UtcNow, null),
+        PendingTransactionCount: 0,
+        RefundedTransactionCount: 0,
+        DeclinedOrCancelledTransactionCount: 0,
+        UnknownStatusTransactionCount: 0,
+        MissingStatusTransactionCount: 0);
 }

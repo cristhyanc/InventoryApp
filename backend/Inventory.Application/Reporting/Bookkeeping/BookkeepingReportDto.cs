@@ -30,7 +30,8 @@ public record BookkeepingReportDto(
     int PendingTransactionCount = 0,
     int RefundedTransactionCount = 0,
     int DeclinedOrCancelledTransactionCount = 0,
-    int UnknownStatusTransactionCount = 0)
+    int UnknownStatusTransactionCount = 0,
+    int MissingStatusTransactionCount = 0)
 {
     public decimal PartialCostOfGoods { get; init; }
     public bool IsCogsComplete { get; init; } = true;

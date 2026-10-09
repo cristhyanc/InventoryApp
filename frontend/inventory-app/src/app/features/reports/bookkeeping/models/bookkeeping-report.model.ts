@@ -10,6 +10,13 @@ export interface BookkeepingReport {
   nayaxFeesExGst?: number; nayaxFeesIncludingGst?: number;
   deliveryCosts?: number; packageCosts?: number; otherOperatingExpenses?: number;
   cardSales?: number; cashSales?: number; cardTransactionCount?: number; cashTransactionCount?: number;
+  // Transaction-status counts for the requested period/machine, scoped by the API before the
+  // completed-sale filter excluded them (issue #476). Pending, refunded and cancelled/declined rows
+  // are normal Nayax outcomes; only an unrecognised or absent status ID is a data-quality problem,
+  // and the report's own data-quality notes are what report it.
+  pendingTransactionCount?: number; refundedTransactionCount?: number;
+  declinedOrCancelledTransactionCount?: number; unknownStatusTransactionCount?: number;
+  missingStatusTransactionCount?: number;
   nayaxProcessingRate?: number;
   nayaxProcessingFees?: NayaxProcessingFeeResult;
   structuredOperatingExpenses?: number; operatingExpenseGst?: number; operatingExpensesByCategory?: Record<string, number>;

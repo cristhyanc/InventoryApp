@@ -47,11 +47,32 @@ import { IconComponent } from '../shared/icon.component';
         <section class="card"><div class="card-header"><h2 class="card-title">Cost of Sales</h2></div><div class="card-body space-y-3"><div class="flex justify-between"><span>Gross Sales</span><strong>{{ money(report.sales) }}</strong></div><div class="flex justify-between pl-4"><span class="value-muted">Card Sales</span><strong>{{ money(report.cardSales) }}</strong></div><div class="flex justify-between pl-4"><span class="value-muted">Cash Sales</span><strong>{{ money(report.cashSales) }}</strong></div><div class="flex justify-between"><span>COGS</span><strong>{{ report.isCogsComplete === false ? 'Partial ' + money(report.partialCostOfGoods) : money(report.costOfGoods) }}</strong></div>@if (report.isCogsComplete === false) {<div class="text-md-warning-text">{{ report.uncostedTransactionCount }} completed sale(s) uncosted ({{ money(report.uncostedSalesAmount) }})</div>}<div class="flex justify-between border-t border-md-gray-200 pt-3"><span class="font-semibold">Gross Profit</span><strong>{{ moneyOrUnavailable(report.grossProfit) }}</strong></div><div class="flex justify-between"><span class="value-muted">Gross Margin</span><strong>{{ report.grossProfit == null ? 'Profit unavailable' : (margin(report.sales, report.grossProfit) | number:'1.1-1') + '%' }}</strong></div></div></section>
         <section class="card"><div class="card-header"><h2 class="card-title">Operating Costs</h2></div><div class="card-body space-y-3"><div class="flex justify-between"><span>Total Nayax Processing Fees</span><strong>{{ money(report.nayaxFeesIncludingGst) }}</strong></div><div class="pl-2"><span class="value-muted">@if (report.nayaxProcessingFees?.hasEstimatedFees) { {{ money(report.nayaxProcessingFees?.actualFeeIncGst) }} actual · {{ money(report.nayaxProcessingFees?.estimatedFeeIncGst) }} estimated } @else {Actual}</span></div><div class="flex justify-between"><span>Site Commission</span><strong>{{ money(report.siteCommission) }}</strong></div><div class="flex justify-between"><span>Delivery Costs</span><strong>{{ money(report.deliveryCosts) }}</strong></div><div class="flex justify-between"><span>Package Costs</span><strong>{{ money(report.packageCosts) }}</strong></div>@for (entry of categoryEntries(report); track entry[0]) {<div class="flex justify-between"><span>{{ categoryLabel(entry[0]) }}</span><strong>{{ money(entry[1]) }}</strong></div>}<div class="flex justify-between border-t border-md-gray-200 pt-3 text-md-card-title"><span class="font-semibold">Total Operating Costs</span><strong>{{ money(totalOperatingCosts(report)) }}</strong></div></div></section>
         <section class="card lg:col-span-2"><div class="card-header"><h2 class="card-title">Nayax Card Settlement</h2></div><div class="card-body max-w-xl space-y-3"><div class="flex justify-between"><span>Card Sales</span><strong>{{ money(report.cardSales) }}</strong></div><div class="flex justify-between"><span>- Nayax Fees</span><strong>{{ money(report.nayaxFeesIncludingGst) }}</strong></div><div class="flex justify-between border-t border-md-gray-200 pt-3 text-md-card-title"><span class="font-semibold">Net Reimbursement</span><strong>{{ money(report.netSettlement) }}</strong></div></div><div class="card-footer">Net reimbursement is the amount paid by Nayax for card sales and is not business profit.</div></section>
-        <section class="card"><div class="card-header"><h2 class="card-title">GST</h2></div><div class="card-body space-y-3"><div class="flex justify-between"><span>GST on Sales</span><strong>{{ money(report.gstOnSales) }}</strong></div><div class="flex justify-between"><span>GST on Nayax Fees</span><strong>{{ money(report.gstOnFees) }}</strong></div></div></section>
+        <section class="card"><div class="card-header"><h2 class="card-title">GST</h2></div><div class="card-body space-y-3"><div class="flex justify-between"><span>GST on Sales (estimated)</span><strong>{{ money(report.gstOnSales) }}</strong></div><p class="value-muted" data-testid="gst-on-sales-estimate">Estimated GST on sales - assumes all included sales are taxable at 10% (GST-inclusive).</p><div class="flex justify-between"><span>GST on Nayax Fees</span><strong>{{ money(report.gstOnFees) }}</strong></div></div></section>
         <section class="card"><div class="card-header"><h2 class="card-title">Cash Reconciliation</h2></div><div class="card-body"><div class="flex justify-between"><span>Cash Sales</span><strong>{{ money(report.cashSales) }}</strong></div></div><div class="card-footer">Cash collection data is not currently recorded.</div></section>
       </div>
+      @if (excludedTransactions(report).length) {
+        <section class="card" data-testid="excluded-transactions">
+          <div class="card-header"><h2 class="card-title">Transactions excluded from sales</h2></div>
+          <div class="card-body">
+            <ul class="list-disc pl-5 value-muted">
+              @for (entry of excludedTransactions(report); track entry[0]) {<li>{{ entry[0] }}: {{ entry[1] }}</li>}
+            </ul>
+          </div>
+          <div class="card-footer">Only approved, completed transactions are counted as sales. These are the other outcomes recorded for this period.</div>
+        </section>
+      }
+      <details class="card card-body" data-testid="calculation-help">
+        <summary class="card-title cursor-pointer">How this report is calculated</summary>
+        <div class="space-y-3 pt-3">
+          <p>Sales count only approved, completed Nayax transactions. Pending, refunded, cancelled and declined transactions are ordinary payment outcomes and are left out of every figure here.</p>
+          <p>Cost of goods and profit use the cost recorded on each sale when that sale was costed, so an earlier period keeps the cost history it was built from. A completed sale with no recorded cost stays uncosted: cost of goods is shown as partial and profit is left unavailable rather than estimated from today's product cost.</p>
+          <p>Site commission comes from the effective-dated site commission agreement that covered each sale's date, so a rate that changed part-way through the period applies from the date it took effect.</p>
+          <p>Nayax processing fees use the imported fee amounts for the dates those cover, and the configured rate for the remaining dates; any estimated part is shown beside the fee total.</p>
+          <p>GST on sales is an estimate: GST classification is not recorded per sale, so every included sale is assumed taxable at 10% (GST-inclusive). GST on Nayax fees and operating-expense GST come from imported and recorded amounts, and are not estimated this way.</p>
+        </div>
+      </details>
     }
-    @if (quality().length) { <div class="alert alert-warning"><p class="alert-title">Data quality notes</p><ul class="list-disc pl-5">@for (note of quality(); track note) {<li>{{ note }}</li>}</ul></div> }
+    @if (quality().length) { <div class="alert alert-warning" data-testid="data-quality-notes"><p class="alert-title">Data quality notes</p><ul class="list-disc pl-5">@for (note of quality(); track note) {<li>{{ note }}</li>}</ul></div> }
   </div>
   `
 })
@@ -60,6 +81,23 @@ export class BookkeepingReportComponent extends ReportPageBase<BookkeepingReport
   request(filter: ReportingFilter): Observable<BookkeepingReport> { return this.reports.bookkeeping(filter); }
   margin(sales: number, profit: number | null | undefined): number { return sales && profit != null ? profit / sales * 100 : 0; }
   categoryEntries(report: BookkeepingReport): [string, number][] { return Object.entries(report.operatingExpensesByCategory ?? {}); }
+  /**
+   * The non-completed transaction counts the API reported for this period and machine scope
+   * (issue #476), shown as neutral scope information. Pending, refunded and cancelled/declined rows
+   * are ordinary payment outcomes, so they never appear as a data-quality warning; the two genuine
+   * problems - an unrecognised status ID and no status ID at all - are reported by the API's own
+   * conditional data-quality notes as well, and are listed here only to account for every row.
+   */
+  excludedTransactions(report: BookkeepingReport): [string, number][] {
+    const counts: [string, number][] = [
+      ['Pending', report.pendingTransactionCount ?? 0],
+      ['Refunded', report.refundedTransactionCount ?? 0],
+      ['Cancelled or declined', report.declinedOrCancelledTransactionCount ?? 0],
+      ['Unrecognised status', report.unknownStatusTransactionCount ?? 0],
+      ['No status recorded', report.missingStatusTransactionCount ?? 0]
+    ];
+    return counts.filter(entry => entry[1] > 0);
+  }
   categoryLabel(category: string): string { return category.replace(/([a-z])([A-Z])/g, '$1 $2'); }
   totalOperatingCosts(report: BookkeepingReport): number { return (report.nayaxFeesIncludingGst ?? 0) + (report.siteCommission ?? 0) + (report.deliveryCosts ?? 0) + (report.packageCosts ?? 0) + (report.structuredOperatingExpenses ?? report.otherOperatingExpenses ?? 0); }
 }

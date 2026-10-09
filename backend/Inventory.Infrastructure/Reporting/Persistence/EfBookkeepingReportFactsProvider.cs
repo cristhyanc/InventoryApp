@@ -53,6 +53,13 @@ public sealed class EfBookkeepingReportFactsProvider : IBookkeepingReportFactsPr
         var unknown = classified.GetValueOrDefault(NayaxPaymentType.Unknown);
         var grossSales = paymentRows.Sum(x => x.SettlementValue);
 
+        // Read every status in the same business/date/machine scope before the completed-sale filter
+        // removes them (issue #476), so the report can state what it excluded and why. The financial
+        // queries above and below stay on the completed-sale predicate: this list only produces counts.
+        var statuses = await EfReportingSharedQueries.AllSalesQuery(_db, from, endExclusive, machineId)
+            .Select(x => x.TransactionStatusId)
+            .ToListAsync(cancellationToken);
+
         var saleCosts = await EfReportingSharedQueries.CostQuery(_db, from, endExclusive, machineId).ToListAsync(cancellationToken);
         var partialCost = saleCosts.Sum(x => x.CostOfGoodsSold ?? 0m);
         var uncosted = saleCosts.Where(x => !x.HasCost).ToList();
@@ -98,7 +105,12 @@ public sealed class EfBookkeepingReportFactsProvider : IBookkeepingReportFactsPr
             CommissionCompleteForScope: commissionCompleteForScope,
             CommissionIsComplete: commissions.IsComplete,
             CommissionWarnings: commissions.Warnings,
-            ProcessingFees: processingFees);
+            ProcessingFees: processingFees,
+            PendingTransactionCount: statuses.Count(x => NayaxTransactionStatusClassifier.Classify(x) == NayaxTransactionStatus.Pending),
+            RefundedTransactionCount: statuses.Count(x => NayaxTransactionStatusClassifier.Classify(x) == NayaxTransactionStatus.Refunded),
+            DeclinedOrCancelledTransactionCount: statuses.Count(x => NayaxTransactionStatusClassifier.Classify(x) == NayaxTransactionStatus.CancelledOrDeclined),
+            UnknownStatusTransactionCount: statuses.Count(x => x is not null && NayaxTransactionStatusClassifier.Classify(x) == NayaxTransactionStatus.Unknown),
+            MissingStatusTransactionCount: statuses.Count(x => x is null));
     }
 
     private async Task<(decimal Delivery, decimal Package)> ReceiptCostsAsync(DateTime from, DateTime endExclusive, CancellationToken cancellationToken)

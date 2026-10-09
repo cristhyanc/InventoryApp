@@ -89,4 +89,49 @@ public class ReportingQualityTests
 
         Assert.Equal(4, quality.Notes!.Count);
     }
+
+    [Fact]
+    public void Conditional_with_no_notes_returns_an_empty_note_list_so_a_report_can_hide_the_section()
+    {
+        var quality = ReportingQuality.Conditional(false, false, false, false, false);
+
+        Assert.Empty(quality.Notes!);
+    }
+
+    [Fact]
+    public void Conditional_returns_only_the_callers_own_notes_and_none_of_the_standard_disclaimers()
+    {
+        var quality = ReportingQuality.Conditional(false, false, false, false, false,
+            notes: new List<string> { "First specific note.", "Second specific note." });
+
+        Assert.Equal(["First specific note.", "Second specific note."], quality.Notes!);
+        Assert.DoesNotContain(quality.Notes!, note => note.Contains("Nayax status IDs are stored raw"));
+        Assert.DoesNotContain(quality.Notes!, note => note.Contains("GST classification is not persisted on sales"));
+    }
+
+    [Fact]
+    public void Conditional_skips_empty_notes_and_passes_every_flag_through_unchanged()
+    {
+        var quality = ReportingQuality.Conditional(
+            missingStatus: true, historicalCostUnavailable: false, gstClassificationMissing: true,
+            commissionNotPersisted: false, containsUnmappedProducts: true,
+            notes: new List<string> { "", "A real note." });
+
+        Assert.Equal(["A real note."], quality.Notes!);
+        Assert.True(quality.MissingStatus);
+        Assert.False(quality.HistoricalCostUnavailable);
+        Assert.True(quality.GstClassificationMissing);
+        Assert.False(quality.CommissionNotPersisted);
+        Assert.True(quality.ContainsUnmappedProducts);
+    }
+
+    [Fact]
+    public void Conditional_leaves_Quality_untouched_for_the_report_families_that_still_use_it()
+    {
+        ReportingQuality.Conditional(false, false, false, false, false);
+
+        var quality = ReportingQuality.Quality(false, false, false, false, false);
+
+        Assert.Equal(4, quality.Notes!.Count);
+    }
 }
