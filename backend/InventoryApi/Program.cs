@@ -1,49 +1,26 @@
 using Microsoft.EntityFrameworkCore;
 using Inventory.Application;
-using Inventory.Application.CatalogReconciliation;
-using Inventory.Application.Commissions;
-using Inventory.Application.Costing;
-using Inventory.Application.Categories;
-using Inventory.Application.Products;
-using Inventory.Application.Expenses;
-using Inventory.Application.Imports;
-using Inventory.Application.InventoryCounting;
-using Inventory.Application.MachineStockSync;
-using Inventory.Application.Machines;
-using Inventory.Application.NayaxFeeSettings;
-using Inventory.Application.NayaxProcessingFees;
-using Inventory.Application.PickList;
-using Inventory.Application.Purchases;
-using Inventory.Application.Reorder;
-using Inventory.Application.Reporting.Bookkeeping;
-using Inventory.Application.Reporting.Dashboard;
-using Inventory.Application.Reporting.Daily;
-using Inventory.Application.Reporting.Gst;
-using Inventory.Application.Reporting.MachineProfitability;
-using Inventory.Application.Reporting.ProductProfitability;
-using Inventory.Application.Reporting.Reconciliation;
-using Inventory.Application.Reporting.Transactions;
-using Inventory.Application.SalesSync;
-using Inventory.Application.Sites;
-using Inventory.Application.Stock;
-using Inventory.Application.Suppliers;
-using Inventory.Application.SupplierOrders;
+using Inventory.Application.Nayax;
 using Inventory.Application.Tenancy;
 using Inventory.Infrastructure;
 using Inventory.Infrastructure.Documents;
 using Inventory.Infrastructure.Imports;
 using Inventory.Infrastructure.Nayax;
-using InventoryApi.Adapters.Persistence;
+using InventoryApi.Adapters.Nayax;
+using InventoryApi.Adapters.PlatformDiagnostics;
 using InventoryApi.Bootstrap;
 using InventoryApi.Auth;
+using InventoryApi.Auth.E2ETesting;
+using InventoryApi.Auth.PlatformAdmin;
+using Inventory.Application.PlatformDiagnostics;
+using Inventory.Infrastructure.PlatformDiagnostics;
+using Microsoft.AspNetCore.Authorization;
 using Inventory.Infrastructure.Data;
 using InventoryApi.Http;
 using InventoryApi.Http.HealthChecks;
 using InventoryApi.Observability;
 using InventoryApi.Swagger;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
-using Microsoft.Identity.Web;
 
 // The business bootstrap is a separate, human-invoked path (issue #64, checkpoint 3). It is
 // checked before the web host is built so that starting the API and backfilling ownership can
@@ -87,10 +64,31 @@ var builder = WebApplication.CreateBuilder(args);
 // README.md § Observability and error diagnostics.
 builder.Services.AddInventoryApiTelemetry(builder.Configuration);
 
-builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddMicrosoftIdentityWebApi(builder.Configuration.GetSection("AzureAd"));
+// Authentication (issue #38, extended by issue #46). Every environment except the dedicated
+// end-to-end testing host registers exactly the real Microsoft Entra JwtBearer scheme this line
+// always registered; that host, and only that host, registers the synthetic E2E test scheme
+// instead. The decision is made from the hosting environment before any request exists and
+// cannot be influenced by request input - see InventoryApi.Auth.E2ETesting.
+builder.Services.AddInventoryApiAuthentication(builder.Configuration, builder.Environment);
 
-builder.Services.AddAuthorization();
+// Authorization (issue #336). The default policy is unchanged - every business controller keeps
+// [Authorize] plus [RequiredScope("access_as_user")] - and exactly one named policy is added, for
+// the platform diagnostics endpoints. It is satisfied only by the separately configured Entra
+// (tid, oid) pair below, never by a business role, a membership row or anything a request supplies.
+// With nothing configured, which is the shipped state, the policy denies everyone.
+var configuredPlatformAdmin = ConfiguredPlatformAdmin.From(
+    builder.Configuration.GetSection(PlatformAdminOptions.SectionName).Get<PlatformAdminOptions>());
+
+builder.Services.AddSingleton(configuredPlatformAdmin);
+builder.Services.AddScoped<IAuthorizationHandler, PlatformAdminAuthorizationHandler>();
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy(PlatformAdminPolicy.Name, policy =>
+    {
+        policy.RequireAuthenticatedUser();
+        policy.AddRequirements(new PlatformAdminRequirement());
+    });
+});
 
 // Required by EntraActorIdentityAccessor, which reads the current request's ClaimsPrincipal.
 builder.Services.AddHttpContextAccessor();
@@ -144,11 +142,26 @@ builder.Services.AddExceptionHandler<DomainExceptionHandler>();
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 builder.Services.AddInventoryApiSwagger();
 
+var databaseConnectionString = builder.Configuration.GetConnectionString("DefaultConnection")
+    ?? "Data Source=inventory.db";
+
 builder.Services.AddDbContext<AppDbContext>(options =>
 {
-    options.UseSqlite(builder.Configuration.GetConnectionString("DefaultConnection")
-        ?? "Data Source=inventory.db");
+    options.UseSqlite(databaseConnectionString);
 });
+
+// The platform diagnostics read path (issue #336). The composition root hands the adapter the same
+// configured data source AppDbContext uses; the adapter forces the connection open read-only and
+// installs the SQLite protections, so no setting here can widen what it may read. The limits are
+// the hard maxima - PlatformDiagnosticsQueryLimits.Create can only tighten them - and the audit
+// port is satisfied by the ILogger adapter, which is in this layer because the audit event carries
+// the request's correlation id.
+builder.Services.AddPlatformDiagnostics(new SqliteDiagnosticsOptions
+{
+    ConnectionString = databaseConnectionString,
+});
+
+builder.Services.AddScoped<IPlatformDiagnosticsAudit, LoggingPlatformDiagnosticsAudit>();
 
 builder.Services.AddCors(options =>
 {
@@ -167,12 +180,23 @@ builder.Services.AddCors(options =>
 // An incomplete BaseUrl/OperatorId fails registration here, at startup, rather than the first
 // Nayax call. See Inventory.Infrastructure.Nayax.NayaxLynxConfiguration and
 // README.md § Configuration and secrets.
-var nayaxLynxOptions = builder.Configuration.GetSection(NayaxLynxOptions.SectionName).Get<NayaxLynxOptions>()
-    ?? new NayaxLynxOptions();
-nayaxLynxOptions.AccessToken = NayaxLynxConfiguration.ResolveAccessToken(
-    builder.Configuration["NayaxLynx:AccessToken"],
-    builder.Configuration["Nayax:Token"]);
-builder.Services.AddNayaxLynxClient(nayaxLynxOptions);
+//
+// The dedicated end-to-end testing host is the one exception (issue #46): it registers no Nayax
+// HTTP client at all, so an E2E run has nothing configured that could reach the live operator
+// account, and the workflows that legitimately read the fleet see a business with no machines.
+if (E2ETestEnvironment.IsEnabled(builder.Environment))
+{
+    builder.Services.AddScoped<INayaxLynxClient, E2ETestNayaxLynxClient>();
+}
+else
+{
+    var nayaxLynxOptions = builder.Configuration.GetSection(NayaxLynxOptions.SectionName).Get<NayaxLynxOptions>()
+        ?? new NayaxLynxOptions();
+    nayaxLynxOptions.AccessToken = NayaxLynxConfiguration.ResolveAccessToken(
+        builder.Configuration["NayaxLynx:AccessToken"],
+        builder.Configuration["Nayax:Token"]);
+    builder.Services.AddNayaxLynxClient(nayaxLynxOptions);
+}
 
 // Tenancy (issue #64). Claims parsing stays at this boundary: EntraActorIdentityAccessor is the
 // only implementation of the Application's actor port, and the current-business abstraction
@@ -185,134 +209,12 @@ builder.Services.AddScoped<IAuthenticatedActorAccessor, EntraActorIdentityAccess
 builder.Services.AddScoped<BusinessScope>();
 builder.Services.AddScoped<IBusinessScope>(sp => sp.GetRequiredService<BusinessScope>());
 
-// Temporary API-owned adapter for the business membership port; see EfBusinessMembershipStore.
-builder.Services.AddScoped<IBusinessMembershipStore, EfBusinessMembershipStore>();
-
-// Temporary API-owned adapter for the Nayax fee-settings persistence port; see EfNayaxFeeRateStore.
-builder.Services.AddScoped<INayaxFeeRateStore, EfNayaxFeeRateStore>();
-
-// Temporary API-owned adapters for commission and processing-fee facts, pending persistence
-// consolidation in issue #153.
-builder.Services.AddScoped<INayaxProcessingFeeFactsProvider, EfNayaxProcessingFeeFactsProvider>();
-builder.Services.AddScoped<ISiteCommissionStore, EfSiteCommissionStore>();
-
-// Temporary API-owned adapters for the categories/suppliers persistence ports; see EfCategoryStore/EfSupplierStore.
-builder.Services.AddScoped<ICategoryStore, EfCategoryStore>();
-builder.Services.AddScoped<ISupplierStore, EfSupplierStore>();
-
-// Temporary API-owned adapter for the operating-expenses persistence port; see EfOperatingExpenseStore.
-builder.Services.AddScoped<IOperatingExpenseStore, EfOperatingExpenseStore>();
-
-// Temporary API-owned adapter for the product create/update/delete persistence port; see EfProductStore.
-builder.Services.AddScoped<IProductStore, EfProductStore>();
-
-// Temporary API-owned adapter for the product catalogue read port; see EfProductCatalogStore.
-builder.Services.AddScoped<IProductCatalogStore, EfProductCatalogStore>();
-
-// Temporary API-owned adapter for the purchase create/read/update/delete persistence port; see EfPurchaseStore.
-builder.Services.AddScoped<IPurchaseStore, EfPurchaseStore>();
-
-// Temporary API-owned adapters for the inventory movement and product cost rebuild persistence
-// ports (issue #296); see EfInventoryMovementStore/EfInventoryCostLedgerStore.
-builder.Services.AddScoped<IInventoryMovementStore, EfInventoryMovementStore>();
-builder.Services.AddScoped<IInventoryCostLedgerStore, EfInventoryCostLedgerStore>();
-
-// Temporary API-owned adapter for the sale-costing port (issue #297); see EfSaleCostingStore.
-builder.Services.AddScoped<ISaleCostingStore, EfSaleCostingStore>();
-
-// Temporary API-owned adapter for the inventory-cost transition port (issue #298); see
-// EfInventoryCostTransitionStore.
-builder.Services.AddScoped<IInventoryCostTransitionStore, EfInventoryCostTransitionStore>();
-
-// Temporary API-owned adapter for the costing-repair port (issue #359); see EfInventoryCostRepairStore.
-builder.Services.AddScoped<IInventoryCostRepairStore, EfInventoryCostRepairStore>();
-
-// Temporary API-owned adapter for the stock history/restock-cost-suggestion/manual-adjustment
-// persistence port (issue #282); see EfStockAdjustmentStore.
-builder.Services.AddScoped<IStockAdjustmentStore, EfStockAdjustmentStore>();
-
-// Temporary API-owned adapter for the supplier-order create/read/cancel persistence port; see EfSupplierOrderStore.
-builder.Services.AddScoped<ISupplierOrderStore, EfSupplierOrderStore>();
-
-// Temporary API-owned adapter for the site dashboard facts port; see EfSiteFactsStore. Its
-// site-name counterpart is a real Infrastructure adapter since issue #306
-// (Inventory.Infrastructure.Sites.SiteNameResolver), registered by AddInfrastructureServices().
-builder.Services.AddScoped<ISiteFactsStore, EfSiteFactsStore>();
-
-// Temporary API-owned adapter for the machine dashboard facts port; see EfMachineDashboardFactsStore.
-builder.Services.AddScoped<IMachineDashboardFactsStore, EfMachineDashboardFactsStore>();
-
-// Temporary API-owned adapter for the bookkeeping report facts port; see EfBookkeepingReportFactsProvider.
-builder.Services.AddScoped<IBookkeepingReportFactsProvider, EfBookkeepingReportFactsProvider>();
-
-// Temporary API-owned adapter for the daily report facts port; see EfDailyReportFactsProvider.
-builder.Services.AddScoped<IDailyReportFactsProvider, EfDailyReportFactsProvider>();
-
-// Temporary API-owned adapter for the reconciliation report facts port; see EfReconciliationReportFactsProvider.
-builder.Services.AddScoped<IReconciliationReportFactsProvider, EfReconciliationReportFactsProvider>();
-
-// Temporary API-owned adapter for the machine profitability report facts port; see EfMachineProfitabilityReportFactsProvider.
-builder.Services.AddScoped<IMachineProfitabilityReportFactsProvider, EfMachineProfitabilityReportFactsProvider>();
-
-// Temporary API-owned adapter for the product profitability report facts port; see EfProductProfitabilityReportFactsProvider.
-builder.Services.AddScoped<IProductProfitabilityReportFactsProvider, EfProductProfitabilityReportFactsProvider>();
-
-// Temporary API-owned adapter for the GST accounting-aid report facts port; see EfGstReportFactsProvider.
-builder.Services.AddScoped<IGstReportFactsProvider, EfGstReportFactsProvider>();
-
-// Temporary API-owned adapter for the dashboard report facts port; see EfDashboardReportFactsProvider.
-builder.Services.AddScoped<IDashboardReportFactsProvider, EfDashboardReportFactsProvider>();
-
-// Temporary API-owned adapter for the inventory valuation facts port; see EfInventoryValuationFactsProvider.
-builder.Services.AddScoped<IInventoryValuationFactsProvider, EfInventoryValuationFactsProvider>();
-
-// Temporary API-owned adapter for the product purchase-price-history port; see EfProductPurchasePriceHistoryProvider.
-builder.Services.AddScoped<IProductPurchasePriceHistoryProvider, EfProductPurchasePriceHistoryProvider>();
-
-// Temporary API-owned adapter for the product profitability report's bulk purchase-cost facts port; see EfProductPurchaseCostFactsProvider.
-builder.Services.AddScoped<IProductPurchaseCostFactsProvider, EfProductPurchaseCostFactsProvider>();
-
-// Temporary API-owned adapter for the transaction sales report facts port; see EfTransactionSalesReportFactsProvider.
-builder.Services.AddScoped<ITransactionSalesReportFactsProvider, EfTransactionSalesReportFactsProvider>();
-
-// Temporary API-owned adapter for the local half of the Nayax catalog reconciliation (issue #55);
-// see EfLocalCatalogSnapshotProvider. The remote half needs no AppDbContext, so issue #306 moved it
-// to Inventory.Infrastructure.Nayax.NayaxCatalogSnapshotProvider, registered by
-// AddInfrastructureServices().
-builder.Services.AddScoped<ILocalCatalogSnapshotProvider, EfLocalCatalogSnapshotProvider>();
-
-// Temporary API-owned adapter for the machine Sync Restock persistence port (issue #183); see
-// EfMachineStockEventStore.
-builder.Services.AddScoped<IMachineStockEventStore, EfMachineStockEventStore>();
-
-// Temporary API-owned adapter for the reorder outstanding-supplier-order-quantity port (issue #47);
-// see EfOutstandingSupplierOrderQuantityStore.
-builder.Services.AddScoped<IOutstandingSupplierOrderQuantityStore, EfOutstandingSupplierOrderQuantityStore>();
-
-// Temporary API-owned adapter for the read-only Pick List projection's storage-quantity port
-// (issue #221); see EfPickListStorageStockStore.
-builder.Services.AddScoped<IPickListStorageStockStore, EfPickListStorageStockStore>();
-
-// Temporary API-owned adapter for the coordinated latest-Nayax-sales persistence port (issue #187);
-// see EfLatestNayaxSalesStore.
-builder.Services.AddScoped<ILatestNayaxSalesStore, EfLatestNayaxSalesStore>();
-
-// Temporary API-owned adapter for the Take Inventory apply port (issue #245); see
-// EfInventoryCountAdjustmentStore.
-builder.Services.AddScoped<IInventoryCountAdjustmentStore, EfInventoryCountAdjustmentStore>();
-
-// Temporary API-owned adapter for the imported-reimbursement persistence port (issue #299); see
-// EfImportedReimbursementStore.
-builder.Services.AddScoped<IImportedReimbursementStore, EfImportedReimbursementStore>();
-
-// Temporary API-owned adapter for the Nayax product catalogue import persistence port (issue
-// #300); see EfNayaxProductCatalogImportStore.
-builder.Services.AddScoped<INayaxProductCatalogImportStore, EfNayaxProductCatalogImportStore>();
-
-// Temporary API-owned adapter for the uploaded Nayax sales import persistence port (issue #301);
-// see EfNayaxSalesImportStore. Its workbook-reading counterpart is a real Infrastructure adapter,
-// registered by AddInfrastructureServices().
-builder.Services.AddScoped<INayaxSalesImportStore, EfNayaxSalesImportStore>();
+// No EF persistence adapter is registered here any more. Issue #307 moved AppDbContext, the EF
+// entities and the migrations into Inventory.Infrastructure, issue #308 the ten reporting fact
+// providers, and issue #309 the remaining feature stores, so AddInfrastructureServices() above
+// registers every Application persistence port - each Scoped, exactly as its registration here
+// was - and this file keeps only the provider decision: the AddDbContext/UseSqlite call and the
+// connection string a host that calls AddInfrastructureServices() must still make.
 
 var app = builder.Build();
 
@@ -335,6 +237,16 @@ using (var scope = app.Services.CreateScope())
 
     TenantOwnershipReadiness.Report(db, loggerFactory);
 }
+
+// Isolated end-to-end test data (issue #46). This does nothing at all unless the process was
+// started as the dedicated E2E host, and it writes only its own two synthetic businesses and
+// their catalogue into whatever disposable database that host was pointed at. No other
+// environment reaches it, and it never performs a backfill or touches an existing row.
+await E2ETestFixture.SeedAsync(
+    app.Services,
+    app.Environment,
+    app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("InventoryApi.E2ETestFixture"),
+    CancellationToken.None);
 
 // First in the pipeline so exceptions from controllers, services, and the Nayax
 // client are all caught.

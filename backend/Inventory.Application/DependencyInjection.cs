@@ -2,7 +2,9 @@ using Inventory.Application.CatalogReconciliation;
 using Inventory.Application.Categories;
 using Inventory.Application.Commissions;
 using Inventory.Application.Costing;
+using Inventory.Application.Dashboard;
 using Inventory.Application.Expenses;
+using Inventory.Application.Gst;
 using Inventory.Application.Imports;
 using Inventory.Application.InventoryCounting;
 using Inventory.Application.MachineStockSync;
@@ -10,6 +12,7 @@ using Inventory.Application.Machines;
 using Inventory.Application.NayaxFeeSettings;
 using Inventory.Application.NayaxProcessingFees;
 using Inventory.Application.PickList;
+using Inventory.Application.PlatformDiagnostics;
 using Inventory.Application.Products;
 using Inventory.Application.Purchases;
 using Inventory.Application.Reorder;
@@ -23,6 +26,7 @@ using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Transactions;
 using Inventory.Application.SalesSync;
+using Inventory.Application.SaleTimestampRepair;
 using Inventory.Application.Sites;
 using Inventory.Application.Stock;
 using Inventory.Application.Suppliers;
@@ -55,6 +59,8 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<CreateSupplier>();
         services.AddScoped<UpdateSupplier>();
         services.AddScoped<DeleteSupplier>();
+        services.AddScoped<GetSupplierGstDefaults>();
+        services.AddScoped<SetSupplierGstDefaults>();
         services.AddScoped<ListOperatingExpenses>();
         services.AddScoped<GetOperatingExpense>();
         services.AddScoped<GetOperatingExpenseAttachment>();
@@ -73,6 +79,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<ResolveMachineStockEventsAsAlreadyRecorded>();
         services.AddScoped<SyncLatestNayaxSales>();
         services.AddScoped<ComputePurchaseTotalValidation>();
+        services.AddScoped<ComputePurchaseGstSummary>();
         services.AddScoped<ListPurchases>();
         services.AddScoped<GetPurchase>();
         services.AddScoped<GetPurchaseFile>();
@@ -90,6 +97,8 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<CreateProduct>();
         services.AddScoped<UpdateProduct>();
         services.AddScoped<DeleteProduct>();
+        services.AddScoped<GetProductGstRule>();
+        services.AddScoped<SetProductGstRule>();
         services.AddScoped<ResolveMachineProductPricing>();
         services.AddScoped<GetPickList>();
         services.AddScoped<RecordInventoryMovement>();
@@ -108,6 +117,10 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<PreviewInventoryCostRepair>();
         services.AddScoped<ApplyInventoryCostRepair>();
         services.AddScoped<GetInventoryCostRepairHistory>();
+        services.AddScoped<PreviewNayaxSaleTimestampRepair>();
+        services.AddScoped<ApplyNayaxSaleTimestampRepair>();
+        services.AddScoped<PreviewHistoricalGstClassification>();
+        services.AddScoped<ApplyHistoricalGstClassification>();
         services.AddScoped<ApplyInventoryCount>();
         services.AddScoped<ImportNayaxProductCatalog>();
         services.AddScoped<ImportNayaxSales>();
@@ -128,8 +141,16 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<GetGstAccountingAid>();
         services.AddScoped<GetDashboardReport>();
         services.AddScoped<GetInventoryValuationSummary>();
+        services.AddScoped<GetDashboardSummary>();
         services.AddScoped<GetTransactionSalesReport>();
         services.AddScoped<GetReportExportRows>();
+
+        // The platform-admin diagnostics read (issue #336). The use case is registered here with
+        // every other use case; its IDiagnosticsQueryExecutor port is satisfied by
+        // AddPlatformDiagnostics() in Inventory.Infrastructure, and its IPlatformDiagnosticsAudit
+        // port by the ILogger adapter in InventoryApi, because the audit event carries the
+        // request's correlation id.
+        services.AddScoped<RunDiagnosticsQuery>();
 
         return services;
     }

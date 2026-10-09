@@ -6,58 +6,64 @@ import { MachineService } from '../../services/machine.service';
 import { ReportingService, TransactionSalesFilter, TransactionSalesReport, TransactionSalesRow } from '../../services/reporting.service';
 import { ReportFiltersComponent } from './report-filters.component';
 import { BusinessDateTimePipe } from '../../formatting/business-date-time.pipe';
+import { IconComponent } from '../shared/icon.component';
 
 @Component({
   selector: 'app-transaction-sales-report',
   standalone: true,
-  imports: [CommonModule, FormsModule, ReportFiltersComponent, BusinessDateTimePipe],
+  imports: [CommonModule, FormsModule, ReportFiltersComponent, BusinessDateTimePipe, IconComponent],
   template: `
-<div class="mb-5 flex flex-wrap items-center justify-between gap-3">
-  <h1 class="text-2xl font-semibold text-slate-800">Transaction Sales</h1>
-  <div class="flex gap-2"><button class="rounded-md border px-3 py-2 text-sm" (click)="export('csv')">Export CSV</button><button class="rounded-md border px-3 py-2 text-sm" (click)="export('xlsx')">Export XLSX</button></div>
-</div>
-<app-report-filters [from]="filter.from!" [to]="filter.to!" [machineId]="filter.machineId ?? null" [machines]="machines" [period]="period"
-  (fromChange)="filter.from=$event" (toChange)="filter.to=$event" (machineChange)="filter.machineId=$event" (periodChange)="selectPeriod($event)" (apply)="apply()" />
-<div class="mb-5 grid gap-3 rounded-xl border border-slate-200 bg-white p-3 shadow-sm md:grid-cols-3 xl:grid-cols-6">
-  <label class="text-xs text-slate-600">Site<select class="mt-1 w-full rounded border border-slate-300 p-2 text-sm" [(ngModel)]="filter.siteId"><option [ngValue]="null">All sites</option>@for (site of report?.filterOptions?.sites ?? []; track site.id) {<option [ngValue]="site.id">{{ site.name }}</option>}</select></label>
-  <label class="text-xs text-slate-600">Product<select class="mt-1 w-full rounded border border-slate-300 p-2 text-sm" [(ngModel)]="filter.productId"><option [ngValue]="null">All products</option>@for (product of report?.filterOptions?.products ?? []; track product.id) {<option [ngValue]="product.id">{{ product.name }}</option>}</select></label>
-  <label class="text-xs text-slate-600">Payment<select class="mt-1 w-full rounded border border-slate-300 p-2 text-sm" [(ngModel)]="filter.paymentType"><option value="">All payments</option><option value="card">Card</option><option value="cash">Cash</option><option value="unknown">Unknown</option></select></label>
-  <label class="text-xs text-slate-600">Status<select class="mt-1 w-full rounded border border-slate-300 p-2 text-sm" [(ngModel)]="filter.status"><option value="completed">Completed</option><option value="pending">Pending</option><option value="refunded">Refunded</option><option value="cancelled">Cancelled / declined</option><option value="unknown">Unknown</option><option value="all">All statuses</option></select></label>
-  <label class="text-xs text-slate-600">COGS<select class="mt-1 w-full rounded border border-slate-300 p-2 text-sm" [(ngModel)]="filter.cogsStatus"><option value="">All COGS</option><option value="costed">Costed</option><option value="uncosted">Incomplete</option></select></label>
-  <label class="text-xs text-slate-600">Search<input class="mt-1 w-full rounded border border-slate-300 p-2 text-sm" placeholder="ID, machine, product" [(ngModel)]="filter.search" (keyup.enter)="apply()" /></label>
-  <div class="md:col-span-3 xl:col-span-6"><button class="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700" (click)="apply()">Apply filters</button></div>
-</div>
-@if (loading) { <div class="rounded-xl bg-white p-8 text-center text-slate-500">Loading transactions...</div> }
-@else if (error) { <div class="rounded-xl bg-red-50 p-6 text-red-700">{{ error }}</div> }
-@else if (report) {
-  @if (report.dataQuality.notes?.length) { <div class="mb-4 rounded-lg bg-amber-50 p-3 text-xs text-amber-800">@for (note of report.dataQuality.notes; track note) {<div>{{ note }}</div>}</div> }
-  <div class="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-    <div class="rounded-lg bg-white p-3 shadow-sm"><div class="text-xs text-slate-500">Sales</div><div class="font-semibold">{{ money(report.totals.sales) }}</div></div>
-    <div class="rounded-lg bg-white p-3 shadow-sm"><div class="text-xs text-slate-500">COGS</div><div class="font-semibold" [class.text-amber-700]="!report.totals.isCogsComplete">{{ report.totals.isCogsComplete ? money(report.totals.costOfGoods) : 'Incomplete' }}</div></div>
-    <div class="rounded-lg bg-white p-3 shadow-sm"><div class="text-xs text-slate-500">Gross Profit</div><div class="font-semibold" [class.text-amber-700]="report.totals.grossProfit == null">{{ moneyOrDash(report.totals.grossProfit) }}</div></div>
-    <div class="rounded-lg bg-white p-3 shadow-sm"><div class="text-xs text-slate-500">Direct Profit</div><div class="font-semibold" [class.text-amber-700]="report.totals.directProfit == null">{{ moneyOrDash(report.totals.directProfit) }}</div></div>
-    <div class="rounded-lg bg-white p-3 shadow-sm"><div class="text-xs text-slate-500">Estimated fees (inc GST)</div><div class="font-semibold">{{ money(report.totals.estimatedFeeIncGst) }}</div></div>
+<div class="page">
+  <header class="page-header">
+    <h1 class="page-title">Transaction Sales</h1>
+    <div class="page-actions">
+      <button type="button" class="btn btn-sm btn-secondary" (click)="export('csv')"><app-icon name="download" [size]="18" />Export CSV</button>
+      <button type="button" class="btn btn-sm btn-secondary" (click)="export('xlsx')"><app-icon name="download" [size]="18" />Export XLSX</button>
+    </div>
+  </header>
+  <app-report-filters [from]="filter.from!" [to]="filter.to!" [machineId]="filter.machineId ?? null" [machines]="machines" [period]="period"
+    (fromChange)="filter.from=$event" (toChange)="filter.to=$event" (machineChange)="filter.machineId=$event" (periodChange)="selectPeriod($event)" (apply)="apply()" />
+  <div class="card card-body grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+    <label class="field-label">Site<select class="mt-1" [(ngModel)]="filter.siteId"><option [ngValue]="null">All sites</option>@for (site of report?.filterOptions?.sites ?? []; track site.id) {<option [ngValue]="site.id">{{ site.name }}</option>}</select></label>
+    <label class="field-label">Product<select class="mt-1" [(ngModel)]="filter.productId"><option [ngValue]="null">All products</option>@for (product of report?.filterOptions?.products ?? []; track product.id) {<option [ngValue]="product.id">{{ product.name }}</option>}</select></label>
+    <label class="field-label">Payment<select class="mt-1" [(ngModel)]="filter.paymentType"><option value="">All payments</option><option value="card">Card</option><option value="cash">Cash</option><option value="unknown">Unknown</option></select></label>
+    <label class="field-label">Status<select class="mt-1" [(ngModel)]="filter.status"><option value="completed">Completed</option><option value="pending">Pending</option><option value="refunded">Refunded</option><option value="cancelled">Cancelled / declined</option><option value="unknown">Unknown</option><option value="all">All statuses</option></select></label>
+    <label class="field-label">COGS<select class="mt-1" [(ngModel)]="filter.cogsStatus"><option value="">All COGS</option><option value="costed">Costed</option><option value="uncosted">Incomplete</option></select></label>
+    <label class="field-label">Search<input class="mt-1" placeholder="ID, machine, product" [(ngModel)]="filter.search" (keyup.enter)="apply()" /></label>
+    <div class="md:col-span-3 xl:col-span-6"><button type="button" class="btn btn-primary" (click)="apply()">Apply filters</button></div>
   </div>
-  <div class="overflow-x-auto rounded-xl bg-white shadow-sm"><table class="min-w-full text-sm">
-    <thead><tr class="bg-slate-50 text-left">@for (column of columns; track column.key) {<th class="whitespace-nowrap px-3 py-3">@if (column.sortable) {<button class="font-semibold" (click)="sort(column.key)">{{ column.label }} @if (filter.sortBy === column.key) {<span>{{ filter.sortDescending ? '↓' : '↑' }}</span>}</button>} @else {<span class="font-semibold">{{ column.label }}</span>}</th>}<th class="px-3 py-3">Fees / commission</th></tr></thead>
-    <tbody>@for (row of report.rows; track row.transactionId) {<tr class="border-t align-top">
-      <td class="whitespace-nowrap px-3 py-3">{{ row.transactionDate | businessDateTime }}<div class="text-xs text-slate-500">#{{ row.transactionId }}</div></td>
-      <td class="px-3 py-3">{{ row.machineName }}<div class="text-xs text-slate-500">{{ row.siteName || 'Site unavailable' }}</div></td>
-      <td class="px-3 py-3">{{ row.productName }}</td>
-      <td class="px-3 py-3">{{ row.paymentType }}<div class="text-xs text-slate-500">{{ row.rawPaymentMethod || '—' }}</div></td>
-      <td class="px-3 py-3">{{ money(row.sale) }}</td>
-      <td class="px-3 py-3" [class.text-amber-700]="row.costOfGoods == null">{{ moneyOrDash(row.costOfGoods) }}<div class="text-xs text-slate-500">{{ cogsSource(row) }}</div></td>
-      <td class="px-3 py-3" [class.text-amber-700]="row.grossProfit == null">{{ moneyOrDash(row.grossProfit) }} @if (row.grossMarginPercent != null) {<div class="text-xs text-slate-500">{{ row.grossMarginPercent | number:'1.1-1' }}%</div>}</td>
-      <td class="px-3 py-3" [class.text-amber-700]="row.directProfit == null">{{ moneyOrDash(row.directProfit) }} @if (row.directMarginPercent != null) {<div class="text-xs text-slate-500">{{ row.directMarginPercent | number:'1.1-1' }}%</div>}</td>
-      <td class="px-3 py-3">{{ row.transactionStatus }}</td>
-      <td class="px-3 py-3">{{ row.feeSource }}@if (row.feeIncGst != null) {<div class="text-xs text-slate-500">{{ money(row.feeIncGst) }} inc GST</div>}@if (row.commissionAmount != null) {<div class="text-xs text-slate-500">Commission {{ money(row.commissionAmount) }}{{ row.commissionBasis ? ' · ' + row.commissionBasis : '' }}</div>}</td>
-    </tr>}</tbody>
-  </table></div>
-  <div class="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-slate-600">
-    <span>{{ report.totalCount }} transaction{{ report.totalCount === 1 ? '' : 's' }} · {{ report.totals.completedTransactionCount }} completed</span>
-    <div class="flex items-center gap-2"><label>Rows <select class="rounded border p-1" [(ngModel)]="filter.pageSize" (ngModelChange)="changePageSize($event)"><option [ngValue]="50">50</option><option [ngValue]="100">100</option><option [ngValue]="250">250</option></select></label><button class="rounded border px-3 py-1 disabled:opacity-50" [disabled]="report.page <= 1" (click)="goTo(report.page - 1)">Previous</button><span>Page {{ report.page }} / {{ pages }}</span><button class="rounded border px-3 py-1 disabled:opacity-50" [disabled]="report.page >= pages" (click)="goTo(report.page + 1)">Next</button></div>
-  </div>
-}
+  @if (loading) { <div class="card"><div class="card-body text-center"><span class="value-muted">Loading transactions...</span></div></div> }
+  @else if (error) { <div class="alert alert-danger">{{ error }}</div> }
+  @else if (report) {
+    @if (report.dataQuality.notes?.length) { <div class="alert alert-warning">@for (note of report.dataQuality.notes; track note) {<p>{{ note }}</p>}</div> }
+    <section class="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+      <div class="card card-body"><p class="stat-card-label">Sales</p><p class="font-semibold text-md-gray-800">{{ money(report.totals.sales) }}</p></div>
+      <div class="card card-body"><p class="stat-card-label">COGS</p><p class="font-semibold" [class.text-md-warning-text]="!report.totals.isCogsComplete" [class.text-md-gray-800]="report.totals.isCogsComplete">{{ report.totals.isCogsComplete ? money(report.totals.costOfGoods) : 'Incomplete' }}</p></div>
+      <div class="card card-body"><p class="stat-card-label">Gross Profit</p><p class="font-semibold" [class.text-md-warning-text]="report.totals.grossProfit == null" [class.text-md-gray-800]="report.totals.grossProfit != null">{{ moneyOrDash(report.totals.grossProfit) }}</p></div>
+      <div class="card card-body"><p class="stat-card-label">Direct Profit</p><p class="font-semibold" [class.text-md-warning-text]="report.totals.directProfit == null" [class.text-md-gray-800]="report.totals.directProfit != null">{{ moneyOrDash(report.totals.directProfit) }}</p></div>
+      <div class="card card-body"><p class="stat-card-label">Estimated fees (inc GST)</p><p class="font-semibold text-md-gray-800">{{ money(report.totals.estimatedFeeIncGst) }}</p></div>
+    </section>
+    <div class="card overflow-x-auto sm:-mx-6"><table class="table min-w-[900px]">
+      <thead class="table-head"><tr>@for (column of columns; track column.key) {<th scope="col" class="table-cell px-2">@if (column.sortable) {<button type="button" class="font-bold uppercase hover:underline" (click)="sort(column.key)">{{ column.label }} @if (filter.sortBy === column.key) {<span>{{ filter.sortDescending ? '↓' : '↑' }}</span>}</button>} @else {<span>{{ column.label }}</span>}</th>}<th scope="col" class="table-cell px-2">Fees / commission</th></tr></thead>
+      <tbody>@for (row of report.rows; track row.transactionId) {<tr class="table-row">
+        <td class="table-cell px-2">{{ row.transactionDate | businessDateTime }}<div class="value-muted break-words">#{{ row.transactionId }}</div></td>
+        <td class="table-cell px-2 break-words">{{ row.machineName }}<div class="value-muted break-words">{{ row.siteName || 'Site unavailable' }}</div></td>
+        <td class="table-cell px-2 break-words">{{ row.productName }}</td>
+        <td class="table-cell px-2 break-words">{{ row.paymentType }}<div class="value-muted break-words">{{ row.rawPaymentMethod || '—' }}</div></td>
+        <td class="table-cell px-2">{{ money(row.sale) }}</td>
+        <td class="table-cell px-2" [class.text-md-warning-text]="row.costOfGoods == null">{{ moneyOrDash(row.costOfGoods) }}<div class="value-muted break-words">{{ cogsSource(row) }}</div></td>
+        <td class="table-cell px-2" [class.text-md-warning-text]="row.grossProfit == null">{{ moneyOrDash(row.grossProfit) }} @if (row.grossMarginPercent != null) {<div class="value-muted break-words">{{ row.grossMarginPercent | number:'1.1-1' }}%</div>}</td>
+        <td class="table-cell px-2" [class.text-md-warning-text]="row.directProfit == null">{{ moneyOrDash(row.directProfit) }} @if (row.directMarginPercent != null) {<div class="value-muted break-words">{{ row.directMarginPercent | number:'1.1-1' }}%</div>}</td>
+        <td class="table-cell px-2 break-words">{{ row.transactionStatus }}</td>
+        <td class="table-cell px-2">{{ row.feeSource }}@if (row.feeIncGst != null) {<div class="value-muted break-words">{{ money(row.feeIncGst) }} inc GST</div>}@if (row.commissionAmount != null) {<div class="value-muted break-words">Commission {{ money(row.commissionAmount) }}{{ row.commissionBasis ? ' · ' + row.commissionBasis : '' }}</div>}</td>
+      </tr>}</tbody>
+    </table></div>
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <span class="value-muted">{{ report.totalCount }} transaction{{ report.totalCount === 1 ? '' : 's' }} · {{ report.totals.completedTransactionCount }} completed</span>
+      <div class="flex items-center gap-2"><label class="value-muted">Rows <select class="w-auto" [(ngModel)]="filter.pageSize" (ngModelChange)="changePageSize($event)"><option [ngValue]="50">50</option><option [ngValue]="100">100</option><option [ngValue]="250">250</option></select></label><button type="button" class="btn btn-sm btn-secondary" [disabled]="report.page <= 1" (click)="goTo(report.page - 1)">Previous</button><span class="value-muted">Page {{ report.page }} / {{ pages }}</span><button type="button" class="btn btn-sm btn-secondary" [disabled]="report.page >= pages" (click)="goTo(report.page + 1)">Next</button></div>
+    </div>
+  }
+</div>
 `})
 export class TransactionSalesReportComponent implements OnInit {
   machines: Machine[] = [];

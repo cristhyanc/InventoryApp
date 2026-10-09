@@ -1,160 +1,134 @@
-<div class="mb-6 flex flex-wrap items-center justify-between gap-4">
-  <h1 class="text-2xl font-semibold text-slate-800">Purchases</h1>
-  <div class="flex flex-wrap gap-2">
-    <a routerLink="/purchases/new" class="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">+ Add Purchase</a>
-  </div>
-</div>
+<div class="page">
+  <header class="page-header">
+    <div>
+      <h1 class="page-title">Purchases</h1>
+    </div>
+    <div class="page-actions">
+      <a routerLink="/purchases/new" class="btn btn-primary">
+        <app-icon name="add" [size]="16" />
+        Add Purchase
+      </a>
+    </div>
+  </header>
 
-@if (purchases.length === 0) {
-  <div class="rounded-xl bg-white p-6 text-sm text-slate-500 shadow-sm">No purchases recorded yet.</div>
-} @else {
-  <div class="overflow-x-auto rounded-xl bg-white shadow-sm">
-    <table class="w-full min-w-[900px] text-left text-sm">
-      <thead class="border-b border-slate-200 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
-        <tr>
-          <th class="px-4 py-3 font-medium">Purchase</th>
-          <th class="px-4 py-3 font-medium">Supplier</th>
-          <th class="px-4 py-3 font-medium">Purchase Date</th>
-          <th class="px-4 py-3 font-medium">Items</th>
-          <th class="px-4 py-3 font-medium">Total</th>
-          <th class="px-4 py-3 font-medium">Document</th>
-          <th class="px-4 py-3 text-right font-medium">Actions</th>
-        </tr>
-      </thead>
-      <tbody class="divide-y divide-slate-200">
-        @for (r of purchases; track r.id) {
-          <tr class="align-top">
-            <td class="px-4 py-4">
-              <div class="flex min-w-56 items-center gap-3">
-                <button type="button" class="shrink-0" (click)="openDocument(r)" [attr.aria-label]="'Open document for ' + r.title">
-                  @if (isImage(r) && thumbnailUrl(r)) {
-                    <img [src]="thumbnailUrl(r)" [alt]="r.title" class="h-14 w-14 rounded-lg object-cover" />
-                  } @else {
-                    <div class="flex h-14 w-14 items-center justify-center rounded-lg bg-slate-100 text-xl">📄</div>
-                  }
-                </button>
-                <strong class="font-semibold text-slate-800">{{ r.title }}</strong>
-              </div>
-            </td>
-            <td class="px-4 py-4 text-slate-600">{{ r.supplier?.name ?? 'None' }}</td>
-            <td class="whitespace-nowrap px-4 py-4 text-slate-600">{{ r.purchaseDate | date:'mediumDate' }}</td>
-            <td class="px-4 py-4">
-              @if (r.items?.length) {
-                <div class="min-w-64 space-y-1 text-xs text-slate-600">
-                  @for (item of r.items; track item.id ?? item.productId) {
-                    <div>{{ item.product?.name ?? ('Product ' + item.productId) }} · {{ item.quantity }} × ${{ item.unitCost.toFixed(2) }}</div>
-                  }
-                </div>
-              } @else {
-                <span class="text-slate-400">No items</span>
-              }
-            </td>
-            <td class="whitespace-nowrap px-4 py-4 font-medium text-slate-700">
-              {{ r.totalAmount !== null && r.totalAmount !== undefined ? (r.totalAmount | currency) : '—' }}
-            </td>
-            <td class="px-4 py-4 text-xs text-slate-400">{{ r.fileName }} · {{ formatSize(r.fileSizeBytes) }}</td>
-            <td class="px-4 py-4">
-              <div class="flex justify-end gap-2">
-                <button class="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50" (click)="startEdit(r)">Edit</button>
-                <button class="inline-flex items-center rounded-md bg-red-600 px-3 py-2 text-xs font-medium text-white hover:bg-red-700" (click)="remove(r)">Delete</button>
-              </div>
-            </td>
-          </tr>
-
-          @if (getValidation(r)?.hasTotalMismatch) {
-            <tr class="bg-amber-50 border-b border-slate-200">
-              <td colspan="7" class="px-4 py-3">
-                <div class="flex items-start gap-2 text-sm text-amber-900">
-                  <div class="mt-0.5 text-amber-600">⚠️</div>
-                  <div>
-                    <strong>Purchase total does not match calculated total.</strong>
-                    @if (getValidation(r)?.calculatedTotal !== null && getValidation(r)?.calculatedTotal !== undefined) {
-                      <div class="mt-1 space-y-1 text-xs text-slate-600">
-                        <div>Entered total: <strong>{{ r.totalAmount | currency }}</strong></div>
-                        <div>Calculated total: <strong>{{ getValidation(r)?.calculatedTotal | currency }}</strong></div>
-                        @if (getValidation(r)?.totalDifference !== null && getValidation(r)?.totalDifference !== undefined) {
-                          <div>Difference: <strong>{{ getValidation(r)?.totalDifference | currency }}</strong></div>
-                        }
-                      </div>
-                    }
-                  </div>
-                </div>
-              </td>
-            </tr>
-          }
-
-          @if (r.notes) {
-            <tr class="bg-slate-50 border-b border-slate-200">
-              <td colspan="7" class="px-4 py-3">
-                <div class="text-sm text-slate-600">
-                  <strong class="text-slate-700">Notes:</strong> {{ r.notes }}
-                </div>
-              </td>
-            </tr>
-          }
-
-          @if (editingPurchaseId === r.id) {
+  @if (purchases.length === 0) {
+    <div class="card">
+      <div class="card-body text-md-body value-muted">No purchases recorded yet.</div>
+    </div>
+  } @else {
+    <div class="card">
+      <div class="card-body p-0 overflow-x-auto">
+        <table class="table min-w-[900px]">
+          <thead class="table-head">
             <tr>
-              <td colspan="7" class="bg-slate-50 px-4 py-5">
-                <form class="space-y-3" (ngSubmit)="saveEdit(r)">
-            <h2 class="text-lg font-semibold text-slate-800">Edit Purchase</h2>
-            <div>
-              <label class="mb-1 block text-sm font-medium text-slate-700">Purchase Title</label>
-              <input [(ngModel)]="editForm.title" name="editTitle" required />
-            </div>
-            <div>
-              <label class="mb-1 block text-sm font-medium text-slate-700">Supplier</label>
-              <select [(ngModel)]="editForm.supplierId" name="editSupplierId">
-                <option value="">None</option>
-                @for (s of suppliers; track s.id) {
-                  <option [ngValue]="s.id">{{ s.name }}</option>
-                }
-              </select>
-            </div>
-            <div>
-              <label class="mb-1 block text-sm font-medium text-slate-700">Purchase Date</label>
-              <input type="date" [(ngModel)]="editForm.purchaseDate" name="editPurchaseDate" />
-            </div>
-            <div class="grid gap-3 md:grid-cols-2">
-              <div>
-                <label class="mb-1 block text-sm font-medium text-slate-700">Total Amount ($)</label>
-                <input type="number" step="0.01" min="0" [(ngModel)]="editForm.totalAmount" name="editTotalAmount" />
-              </div>
-              <div class="border-t border-slate-200 pt-3 md:col-span-2">
-                <div class="mb-2 flex items-center justify-between"><strong class="text-sm">Purchased Items</strong><button type="button" class="rounded border px-2 py-1 text-xs" (click)="addEditItem()">Add Product</button></div>
-                @for (item of editItems; track $index) {
-                  <div class="mb-2 grid gap-2 md:grid-cols-[minmax(0,3fr)_minmax(7rem,1fr)_minmax(9rem,1fr)_auto]">
-                    <select [(ngModel)]="item.productId" [name]="'editProduct' + $index"><option [ngValue]="0">Select product</option>@for (p of products; track p.id) {<option [ngValue]="p.id">{{ p.name }}</option>}</select>
-                    <input type="number" min="1" step="1" [(ngModel)]="item.quantity" [name]="'editQuantity' + $index" />
-                    <div><input type="number" min="0" step="0.0001" [(ngModel)]="item.unitCost" [name]="'editCost' + $index" /><div class="text-xs text-slate-500">{{ editLineTotal(item) | currency }}</div></div>
-                    <button type="button" class="text-xs text-red-600" (click)="removeEditItem($index)">Remove</button>
-                  </div>
-                }
-                <div class="text-right text-xs text-slate-500">Items subtotal: {{ editItemsSubtotal | currency }}</div>
-              </div>
-              <div>
-                <label class="mb-1 block text-sm font-medium text-slate-700">Delivery Cost ($)</label>
-                <input type="number" step="0.01" min="0" [(ngModel)]="editForm.deliveryCost" name="editDeliveryCost" />
-              </div>
-              <div>
-                <label class="mb-1 block text-sm font-medium text-slate-700">Package Cost ($)</label>
-                <input type="number" step="0.01" min="0" [(ngModel)]="editForm.packageCost" name="editPackageCost" />
-              </div>
-            </div>
-            <div>
-              <label class="mb-1 block text-sm font-medium text-slate-700">Notes</label>
-              <textarea [(ngModel)]="editForm.notes" name="editNotes" rows="2"></textarea>
-            </div>
-            <div class="flex flex-wrap gap-2">
-              <button type="submit" class="inline-flex items-center rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700">Save</button>
-              <button type="button" class="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50" (click)="cancelEdit()">Cancel</button>
-            </div>
-                </form>
-              </td>
+              <th scope="col" class="table-cell">Purchase</th>
+              <th scope="col" class="table-cell">Supplier</th>
+              <th scope="col" class="table-cell">Purchase Date</th>
+              <th scope="col" class="table-cell">Items</th>
+              <th scope="col" class="table-cell table-num">Total</th>
+              <th scope="col" class="table-cell">Document</th>
+              <th
+                scope="col"
+                data-testid="purchases-actions-header"
+                class="table-cell sticky right-0 z-20 border-l border-md-gray-200 bg-md-gray-100 text-right"
+              >
+                Actions
+              </th>
             </tr>
-          }
-        }
-      </tbody>
-    </table>
-  </div>
-}
+          </thead>
+          <tbody>
+            @for (r of purchases; track r.id) {
+              <tr class="table-row align-top">
+                <td class="table-cell">
+                  <div class="flex min-w-56 items-start gap-3">
+                    <button type="button" class="shrink-0" (click)="openDocument(r)" [attr.aria-label]="'Open document for ' + r.title">
+                      @if (isImage(r) && thumbnailUrl(r)) {
+                        <img [src]="thumbnailUrl(r)" [alt]="r.title" class="h-14 w-14 rounded-md-control object-cover" />
+                      } @else {
+                        <div class="flex h-14 w-14 items-center justify-center rounded-md-control bg-md-gray-100 text-xl">📄</div>
+                      }
+                    </button>
+                    <div class="min-w-0">
+                      <strong class="block font-semibold text-md-gray-800">{{ r.title }}</strong>
+                      @if (r.notes) {
+                        <div class="mt-1 max-w-xs whitespace-pre-wrap break-words text-xs value-muted">
+                          <span class="font-medium text-md-gray-700">Notes:</span> {{ r.notes }}
+                        </div>
+                      }
+                    </div>
+                  </div>
+                </td>
+                <td class="table-cell">{{ r.supplier?.name ?? 'None' }}</td>
+                <td class="table-cell whitespace-nowrap">{{ r.purchaseDate | date:'mediumDate' }}</td>
+                <td class="table-cell">
+                  @if (r.items?.length) {
+                    <div class="min-w-64 space-y-1 text-xs value-muted">
+                      @for (item of r.items; track item.id ?? item.productId) {
+                        <div data-testid="purchase-item-line">{{ item.product?.name ?? ('Product ' + item.productId) }} · {{ item.quantity }} × ${{ item.unitCost.toFixed(2) }} · GST: {{ classificationLabel(item.gstClassification) }}</div>
+                      }
+                    </div>
+                  } @else {
+                    <span class="value-muted">No items</span>
+                  }
+                </td>
+                <td class="table-cell table-num">
+                  <div class="whitespace-nowrap font-medium">
+                    {{ r.totalAmount !== null && r.totalAmount !== undefined ? (r.totalAmount | currency) : '—' }}
+                  </div>
+                  @if (getValidation(r)?.hasTotalMismatch) {
+                    <div class="mt-2 rounded-md-card border-l-4 border-md-warning bg-md-warning/15 p-2 text-left text-xs text-md-gray-800">
+                      <p class="font-semibold text-md-warning-text">Does not match calculated total.</p>
+                      @if (getValidation(r)?.calculatedTotal !== null && getValidation(r)?.calculatedTotal !== undefined) {
+                        <div class="value-muted">
+                          <div>Entered: <strong>{{ r.totalAmount | currency }}</strong></div>
+                          <div>Calculated: <strong>{{ getValidation(r)?.calculatedTotal | currency }}</strong></div>
+                          @if (getValidation(r)?.totalDifference !== null && getValidation(r)?.totalDifference !== undefined) {
+                            <div>Difference: <strong>{{ getValidation(r)?.totalDifference | currency }}</strong></div>
+                          }
+                        </div>
+                      }
+                    </div>
+                  }
+                  @if (gstSummary(r); as gst) {
+                    <div data-testid="purchase-gst-summary" class="mt-2 rounded-md-card bg-md-gray-100 p-2 text-left text-xs text-md-gray-600">
+                      <div><strong class="text-md-gray-800">GST (ITC):</strong> {{ gst.inputGst | currency }}</div>
+                      @if (hasCharge(r.deliveryCost)) {
+                        <div>Delivery: {{ classificationLabel(r.deliveryGstClassification) }}</div>
+                      }
+                      @if (hasCharge(r.packageCost)) {
+                        <div>Package: {{ classificationLabel(r.packageGstClassification) }}</div>
+                      }
+                      @if (gst.unresolvedComponentCount > 0) {
+                        <div data-testid="purchase-gst-unresolved" class="mt-1 text-md-warning-text">
+                          ⚠️ {{ gst.unresolvedComponentCount }} component(s) totalling {{ gst.unresolvedAmount | currency }} are not classified, so this purchase GST is incomplete.
+                        </div>
+                      }
+                    </div>
+                  }
+                </td>
+                <td class="table-cell text-xs value-muted">{{ r.fileName }} · {{ formatSize(r.fileSizeBytes) }}</td>
+                <td data-testid="purchases-actions-cell" class="table-cell sticky right-0 z-10 border-l border-md-gray-200 bg-white">
+                  <div class="flex justify-end gap-2">
+                    <a
+                      data-testid="purchase-edit-link"
+                      class="btn btn-sm btn-secondary"
+                      [routerLink]="['/purchases', r.id, 'edit']"
+                      [attr.aria-label]="'Edit ' + r.title"
+                    >
+                      <app-icon name="edit" [size]="16" />
+                      Edit
+                    </a>
+                    <button type="button" class="btn btn-sm btn-danger" (click)="remove(r)">
+                      <app-icon name="delete" [size]="16" />
+                      Delete
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    </div>
+  }
+</div>

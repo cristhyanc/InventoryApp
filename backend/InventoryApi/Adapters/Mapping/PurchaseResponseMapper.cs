@@ -24,7 +24,11 @@ public static class PurchaseResponseMapper
         Notes = record.Notes,
         TotalAmount = record.TotalAmount,
         DeliveryCost = record.DeliveryCost,
+        DeliveryGstClassification = record.DeliveryGstClassification,
+        DeliveryGstClassificationSource = record.DeliveryGstClassificationSource,
         PackageCost = record.PackageCost,
+        PackageGstClassification = record.PackageGstClassification,
+        PackageGstClassificationSource = record.PackageGstClassificationSource,
         PurchaseDate = record.PurchaseDate,
         SupplierId = record.SupplierId,
         Supplier = record.Supplier is null
@@ -52,6 +56,8 @@ public static class PurchaseResponseMapper
         Product = record.Product is null ? null : ToProductResponse(record.Product),
         Quantity = record.Quantity,
         UnitCost = record.UnitCost,
+        GstClassification = record.GstClassification,
+        GstClassificationSource = record.GstClassificationSource,
     };
 
     /// <summary>

@@ -5,6 +5,7 @@ import { MsalBroadcastService, MsalService } from '@azure/msal-angular';
 import { AccountInfo, InteractionStatus } from '@azure/msal-browser';
 import { BehaviorSubject, of } from 'rxjs';
 import { AppComponent } from './app.component';
+import { PlatformDiagnosticsAccessService } from './services/platform-diagnostics-access.service';
 
 @Component({ standalone: true, template: 'page body' })
 class BlankPageComponent {}
@@ -65,7 +66,11 @@ async function render(options: { signedIn?: boolean } = {}): Promise<Rendered> {
     providers: [
       provideRouter([{ path: '**', component: BlankPageComponent }]),
       { provide: MsalService, useValue: msalService },
-      { provide: MsalBroadcastService, useValue: { inProgress$: new BehaviorSubject(InteractionStatus.None) } }
+      { provide: MsalBroadcastService, useValue: { inProgress$: new BehaviorSubject(InteractionStatus.None) } },
+      // The shell renders the sidebar, which asks the diagnostics API whether to offer the
+      // super-admin link (issue #335). The shell itself owns no part of that decision, so the
+      // probe is stubbed as refused here and tested where it belongs.
+      { provide: PlatformDiagnosticsAccessService, useValue: { isGranted: () => of(false) } }
     ]
   }).compileComponents();
 
@@ -75,10 +80,23 @@ async function render(options: { signedIn?: boolean } = {}): Promise<Rendered> {
   return { fixture, host: fixture.nativeElement as HTMLElement, msal: { loginRedirect, logoutRedirect } };
 }
 
+/**
+ * The one control that shows or hides the navigation, wherever the current layout puts it
+ * (issue #456): the sidebar's own header row on a wide layout, the top bar on a narrow one. Both
+ * carry `aria-controls` pointing at the navigation landmark, which is what makes this one query.
+ */
 function sidebarToggle(host: HTMLElement): HTMLButtonElement {
-  const toggle = host.querySelector<HTMLButtonElement>('header button[aria-controls="primary-navigation"]');
-  expect(toggle).not.toBeNull();
-  return toggle as HTMLButtonElement;
+  const toggles = host.querySelectorAll<HTMLButtonElement>('button[aria-controls="primary-navigation"]');
+  expect(toggles).toHaveLength(1);
+  return toggles[0];
+}
+
+function headerToggle(host: HTMLElement): HTMLButtonElement | null {
+  return host.querySelector<HTMLButtonElement>('header button[aria-controls="primary-navigation"]');
+}
+
+function sidebarHeaderToggle(host: HTMLElement): HTMLButtonElement | null {
+  return host.querySelector<HTMLButtonElement>('nav[aria-label="Primary"] button[aria-controls="primary-navigation"]');
 }
 
 function sidebar(host: HTMLElement): HTMLElement | null {
@@ -121,6 +139,94 @@ describe('AppComponent shell (issue #391)', () => {
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
     expect(toggle.getAttribute('aria-label')).toBeTruthy();
     expect(host.querySelector(`#${toggle.getAttribute('aria-controls')}`)).not.toBeNull();
+  });
+});
+
+/**
+ * The desktop toggle moved out of the top bar and into the sidebar's own header row, beside the
+ * app title (issue #456). The shell keeps the single `isSidebarOpen` flag and every handler it
+ * already had; only which element the operator presses changed, and on a narrow layout nothing
+ * changed at all because the drawer has no header row on the page to put a control in.
+ */
+describe('AppComponent sidebar toggle placement (issue #456)', () => {
+  it('puts the only wide-layout toggle in the sidebar header and leaves none detached in the top bar', async () => {
+    stubMatchMedia(true);
+    const { host } = await render();
+
+    expect(headerToggle(host)).toBeNull();
+    expect(sidebarHeaderToggle(host)).not.toBeNull();
+    expect(sidebarHeaderToggle(host)?.getAttribute('aria-label')).toBe('Collapse navigation');
+    expect(host.querySelector('nav[aria-label="Primary"]')?.id).toBe('primary-navigation');
+  });
+
+  it('collapses and reopens the wide sidebar from that one control', async () => {
+    stubMatchMedia(true);
+    const { fixture, host } = await render();
+
+    sidebarHeaderToggle(host)?.click();
+    fixture.detectChanges();
+
+    const collapsed = sidebarHeaderToggle(host);
+    expect(collapsed).not.toBeNull();
+    expect(collapsed?.getAttribute('aria-expanded')).toBe('false');
+    expect(collapsed?.getAttribute('aria-label')).toBe('Expand navigation');
+    expect(sidebar(host)?.querySelector('.sr-only')?.textContent?.trim()).toBe('Dashboard');
+
+    collapsed?.click();
+    fixture.detectChanges();
+
+    expect(sidebarHeaderToggle(host)?.getAttribute('aria-expanded')).toBe('true');
+    expect(sidebar(host)?.querySelector('.sr-only')).toBeNull();
+  });
+
+  it('keeps the opener in the top bar on a narrow layout, where the sidebar is not on the page', async () => {
+    stubMatchMedia(false);
+    const { fixture, host } = await render();
+
+    const opener = headerToggle(host);
+    expect(opener).not.toBeNull();
+    expect(opener?.getAttribute('aria-label')).toBe('Open navigation menu');
+    expect(opener?.getAttribute('aria-expanded')).toBe('false');
+
+    opener?.click();
+    fixture.detectChanges();
+
+    expect(sidebar(host)).not.toBeNull();
+    expect(headerToggle(host)?.getAttribute('aria-label')).toBe('Close navigation menu');
+    // The drawer closes; it never offers a collapse control, because a drawer has no rail state.
+    expect(sidebarHeaderToggle(host)).toBeNull();
+    expect(host.querySelector('nav[aria-label="Primary"] button[aria-label="Close navigation menu"]')).not.toBeNull();
+  });
+
+  // JSDOM computes no layout, so the 44x44 CSS-pixel minimum is asserted on the sizing utilities
+  // that produce it: `h-11`/`w-11` are 2.75rem = 44px.
+  it('gives the narrow-layout opener the same 44x44 touch target as the sidebar control', async () => {
+    stubMatchMedia(false);
+    const { host } = await render();
+    const classes = Array.from(headerToggle(host)?.classList ?? []);
+
+    expect(classes).toContain('h-11');
+    expect(classes).toContain('w-11');
+  });
+
+  it('reuses the shell state, so the relocated control changes no routing or navigation availability', async () => {
+    stubMatchMedia(true);
+    const { fixture, host } = await render();
+    const destinations = Array.from(host.querySelectorAll('nav[aria-label="Primary"] a')).map((anchor) =>
+      anchor.getAttribute('href')
+    );
+
+    sidebarHeaderToggle(host)?.click();
+    fixture.detectChanges();
+
+    expect(
+      Array.from(host.querySelectorAll('nav[aria-label="Primary"] a')).map((anchor) => anchor.getAttribute('href'))
+    ).toEqual(destinations);
+
+    await TestBed.inject(Router).navigateByUrl('/reports/bookkeeping');
+    fixture.detectChanges();
+
+    expect(host.querySelector('main')?.textContent).toContain('page body');
   });
 });
 
@@ -277,6 +383,22 @@ describe('AppComponent authenticated user control (issue #391)', () => {
     signIn?.click();
 
     expect(msal.loginRedirect).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('AppComponent main content width (issue #454)', () => {
+  beforeEach(() => stubMatchMedia(true));
+
+  it('does not cap or center the main content area, so a page can use the full available width', async () => {
+    const { host } = await render();
+
+    const main = host.querySelector('main');
+    const wrapper = main?.firstElementChild;
+    expect(wrapper).not.toBeNull();
+
+    const classList = Array.from(wrapper?.classList ?? []);
+    expect(classList).not.toContain('mx-auto');
+    expect(classList.some((className) => className.startsWith('max-w-'))).toBe(false);
   });
 });
 

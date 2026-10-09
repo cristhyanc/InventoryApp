@@ -1,6 +1,8 @@
 // Imported for StockAdjustmentDto.Reason only - the temporary compatibility exception documented on
 // that record (issue #305). No other DTO in this file names the persistence model.
 using Inventory.Infrastructure.Models;
+// The GST classification a purchase line carries is a Domain vocabulary type, not a persistence one.
+using Inventory.Domain.Gst;
 
 namespace InventoryApi.DTOs;
 
@@ -75,7 +77,26 @@ public record SupplierDto(string Name, string? ContactName, string? Phone, strin
 
 public record SupplierResponse(int Id, string Name, string? ContactName, string? Phone, string? Email, string? Address);
 
-public record PurchaseItemDto(long ProductId, decimal Quantity, decimal UnitCost);
+/// <summary>
+/// One purchase line in the JSON <c>items</c> field of a purchase create/update form (issue #429).
+/// <c>gstClassification</c> is optional: omitting it leaves a new line unclassified and an edited
+/// line's stored classification untouched. The classification's provenance is never submitted -
+/// the server records a person's explicit choice as <c>Manual</c>. A value outside the published
+/// <c>GstClassification</c> enum is rejected with <c>400</c>, because the JSON number would
+/// otherwise bind to an undefined state no GST rule describes.
+///
+/// <c>id</c> is the stored line's own id, as a purchase read returns it. It is optional: a create
+/// ignores it, and an update that omits it matches lines by product exactly as before. Sending it
+/// is what lets an update of a purchase that holds several lines for one product keep each line's
+/// classification on the right line; when those lines disagree about their classification and no
+/// id is sent, the update is refused rather than guessing.
+/// </summary>
+public record PurchaseItemDto(
+    long ProductId,
+    decimal Quantity,
+    decimal UnitCost,
+    GstClassification? GstClassification = null,
+    int? Id = null);
 public record PurchaseCreateMetaDto(string Title, string? Notes, decimal? TotalAmount, decimal? DeliveryCost, decimal? PackageCost, DateTime? PurchaseDate, int? SupplierId, IReadOnlyList<PurchaseItemDto>? Items = null);
 
 public record PurchaseValidationDto(
@@ -85,12 +106,35 @@ public record PurchaseValidationDto(
     decimal? TotalDifference
 );
 
+/// <summary>
+/// The saved purchase's input GST (issue #431), calculated by
+/// <c>Inventory.Application.Purchases.ComputePurchaseGstSummary</c> over the one authoritative
+/// <c>Inventory.Domain.Purchases.PurchaseGstPolicy</c>. A client displays these figures and never
+/// derives GST from an amount itself.
+///
+/// <see cref="InputGst"/> is the sum of the individually rounded GST amounts of the taxable
+/// components only. Unclassified components contribute nothing to it and are reported separately as
+/// <see cref="UnresolvedComponentCount"/> and <see cref="UnresolvedAmount"/>, so a purchase stays
+/// visibly incomplete instead of looking like a resolved <c>$0</c>. A delivery or package charge
+/// that is null or zero is not a component at all and is never unresolved.
+///
+/// It describes what is stored. It never reflects edits a client has not saved.
+/// </summary>
+public record PurchaseGstSummaryDto(
+    decimal InputGst,
+    int UnresolvedComponentCount,
+    decimal UnresolvedAmount
+);
+
 // The envelope the purchase endpoints return: the business record under the canonical "purchase"
 // key (issue #127) next to its total-validation block. Issue #304 replaced the EF Purchase entity
-// in that key with the API-owned PurchaseResponse; the serialized envelope is unchanged.
+// in that key with the API-owned PurchaseResponse; the serialized envelope is unchanged. Issue #431
+// added the "gst" member after them, additively: "purchase" and "validation" keep their names,
+// order and values.
 public record PurchaseResponseDto(
     PurchaseResponse Purchase,
-    PurchaseValidationDto? Validation = null
+    PurchaseValidationDto? Validation = null,
+    PurchaseGstSummaryDto? Gst = null
 );
 
 public record SiteSummaryDto(

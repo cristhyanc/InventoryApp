@@ -13,6 +13,13 @@ namespace Inventory.Application.Reorder;
 /// are keyed by product ID over the whole catalogue/machine fleet, so a caller looks up only the
 /// products it cares about.
 ///
+/// Issue #459 additionally keeps the individual machine selections that read returned
+/// (<see cref="ReorderNeedsResult.MachineSelections"/>) and the machines it covered
+/// (<see cref="ReorderNeedsResult.MachineIds"/>). Nothing about the reorder aggregation changes: they
+/// are the same payload the per-product totals are summed from, retained so the home Dashboard's
+/// refill and ordering cards can both be answered from this one fleet read instead of a second
+/// <c>GetMachineProductsAsync</c> fan-out.
+///
 /// The per-machine <c>GetMachineProductsAsync</c> calls run with bounded parallelism
 /// (<see cref="MaxConcurrentMachineRequests"/>) rather than one request per machine in sequence or an
 /// unbounded fan-out, chosen over a cache/snapshot because the current machine fleet is small and a
@@ -62,6 +69,12 @@ public sealed class CalculateReorderNeeds
 
         var machineReplenishmentNeedByProductId = new ConcurrentDictionary<long, int>();
 
+        // The individual selections behind those per-product totals, kept from the same read so a
+        // caller that needs the machines' current stock levels - the home Dashboard's refill card
+        // (issue #459) - does not fan out across the fleet a second time. A concurrent collection,
+        // because the fan-out below writes to it from several machine requests at once.
+        var selections = new ConcurrentBag<MachineSelectionStock>();
+
         await Parallel.ForEachAsync(
             machines,
             new ParallelOptions
@@ -74,6 +87,15 @@ public sealed class CalculateReorderNeeds
                 var machineProducts = await _nayax.GetMachineProductsAsync(machine.MachineID, machineCancellationToken);
                 foreach (var machineProduct in machineProducts)
                 {
+                    // The machine the request was made for, not the payload's own nullable MachineID
+                    // field, so a selection is always attributable to a machine.
+                    selections.Add(new MachineSelectionStock(
+                        machine.MachineID,
+                        machineProduct.NayaxProductID,
+                        machineProduct.PAR ?? 0,
+                        machineProduct.MissingStockByMDB ?? 0,
+                        machineProduct.VendOutAlertThreshold ?? 0));
+
                     if (machineProduct.NayaxProductID is not long productId)
                         continue;
 
@@ -85,6 +107,15 @@ public sealed class CalculateReorderNeeds
 
         var onOrderQuantityByProductId = await _outstandingOrders.GetOutstandingQuantitiesByProductAsync(cancellationToken);
 
-        return new ReorderNeedsResult(machineReplenishmentNeedByProductId, onOrderQuantityByProductId);
+        return new ReorderNeedsResult(machineReplenishmentNeedByProductId, onOrderQuantityByProductId)
+        {
+            MachineIds = machines.Select(machine => machine.MachineID).Distinct().Order().ToList(),
+            // Ordered, so the same fleet always produces the same result whatever order the
+            // concurrent requests happened to complete in.
+            MachineSelections = selections
+                .OrderBy(selection => selection.MachineId)
+                .ThenBy(selection => selection.ProductId)
+                .ToList(),
+        };
     }
 }

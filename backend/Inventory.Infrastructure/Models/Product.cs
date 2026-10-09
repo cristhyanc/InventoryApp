@@ -2,6 +2,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 
 using System.Text.Json.Serialization;
 
+using Inventory.Domain.Gst;
 using Inventory.Domain.Products;
 
 namespace Inventory.Infrastructure.Models;
@@ -53,6 +54,22 @@ public class Product : IBusinessOwned
         QuantityInStock, OnOrderQuantity, MachineReplenishmentNeed, LowStockThreshold, RestockTo);
     public string? Unit { get; set; } = "unit";
     public bool IsActive { get; set; } = true;
+
+    /// <summary>
+    /// This product's configured GST rule (issue #430), <see cref="GstRules.None"/> until an
+    /// administrator sets one. It is rule configuration, never a classification: it changes no
+    /// purchase line, charge, unit cost or inventory value, and it is only read by the explicit
+    /// historical Preview/Apply maintenance workflow (issue #433).
+    ///
+    /// Deliberately off the wire. This entity's serialisable surface is a pinned legacy API
+    /// contract - <c>InventoryApi.Swagger.PublishedResponseSchemaContract</c> regenerates the
+    /// published <c>Product</c> component from it, and <c>InventoryApi.DTOs.ProductResponse</c> is
+    /// compared against it byte for byte - so the rule is published on its own
+    /// <c>/api/products/{id}/gst-rule</c> resource rather than added to the catalogue payload and
+    /// to every nested product snapshot a purchase or supplier-order response carries.
+    /// </summary>
+    [JsonIgnore]
+    public GstClassification GstRule { get; set; } = GstRules.None;
     [NotMapped]
     public DateTime? LastEatBefore1 { get; set; }
     [NotMapped]

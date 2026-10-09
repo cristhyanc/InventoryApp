@@ -44,6 +44,17 @@ public sealed class GetReportExportRows
         _getTransactionSalesReport = getTransactionSalesReport;
     }
 
+    /// <summary>
+    /// What the bookkeeping report's GST-on-sales figure actually is (issue #476). GST
+    /// classification is not persisted per sale, so this figure stays the indicative inclusive
+    /// calculation and the export says so in its own column: moving the on-screen explanation into
+    /// the report's calculation help must never leave a downloaded file implying a verified figure.
+    /// It is a label for one figure, not a blanket statement about GST on fees or expenses, which
+    /// come from imported and recorded amounts.
+    /// </summary>
+    private const string BookkeepingGstOnSalesBasis =
+        "Estimated GST on sales - assumes all included sales are taxable at 10% (GST-inclusive).";
+
     private static string Number(decimal? value) => value?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
     private static string Number(long? value) => value?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
     private static string Number(int? value) => value?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
@@ -134,8 +145,8 @@ public sealed class GetReportExportRows
             var isMachineFiltered = MachineId(filter).HasValue;
             var rows = new List<List<string>>
             {
-                new() { "From", "To", "FinancialYear", "GrossSales", "CardSales", "CashSales", "CardTransactions", "CashTransactions", "COGS", "GrossProfit",                 "NayaxFeeExGst", "NayaxFeeGST", "NayaxFeeIncGST", "ActualNayaxFee", "EstimatedNayaxFee", "EstimatedCardTransactionCount", "HasEstimates", "DeliveryCosts", "PackageCosts", "OtherOperatingExpenses", "NetSettlement", "SiteCommission", isMachineFiltered ? "DirectProfit" : "NetProfit", isMachineFiltered ? "DirectMarginPercent" : "NetMargin", "GstOnSales", "GstOnFees" },
-                new() { value.From.ToString("yyyy-MM-dd"), value.To.ToString("yyyy-MM-dd"), value.FinancialYear, value.Sales.ToString(CultureInfo.InvariantCulture), value.CardSales.ToString(CultureInfo.InvariantCulture), value.CashSales.ToString(CultureInfo.InvariantCulture), value.CardTransactionCount.ToString(), value.CashTransactionCount.ToString(), Number(value.CostOfGoods), Number(value.GrossProfit), value.NayaxProcessingFees.TotalFeeExGst.ToString(CultureInfo.InvariantCulture), value.NayaxProcessingFees.TotalFeeGst.ToString(CultureInfo.InvariantCulture), value.NayaxProcessingFees.TotalFeeIncGst.ToString(CultureInfo.InvariantCulture), value.NayaxProcessingFees.ActualFeeIncGst.ToString(CultureInfo.InvariantCulture), value.NayaxProcessingFees.EstimatedFeeIncGst.ToString(CultureInfo.InvariantCulture), value.NayaxProcessingFees.EstimatedCardTransactionCount.ToString(), value.NayaxProcessingFees.HasEstimatedFees.ToString(), value.DeliveryCosts.ToString(CultureInfo.InvariantCulture), value.PackageCosts.ToString(CultureInfo.InvariantCulture), value.OtherOperatingExpenses.ToString(CultureInfo.InvariantCulture), value.NetSettlement.ToString(CultureInfo.InvariantCulture), value.SiteCommission.ToString(CultureInfo.InvariantCulture), Number(isMachineFiltered ? value.DirectProfit : value.NetProfit), Number(isMachineFiltered ? value.DirectMarginPercent : value.NetMarginPercent), value.GstOnSales.ToString(CultureInfo.InvariantCulture), value.GstOnFees.ToString(CultureInfo.InvariantCulture) }
+                new() { "From", "To", "FinancialYear", "GrossSales", "CardSales", "CashSales", "CardTransactions", "CashTransactions", "COGS", "GrossProfit",                 "NayaxFeeExGst", "NayaxFeeGST", "NayaxFeeIncGST", "ActualNayaxFee", "EstimatedNayaxFee", "EstimatedCardTransactionCount", "HasEstimates", "DeliveryCosts", "PackageCosts", "OtherOperatingExpenses", "NetSettlement", "SiteCommission", isMachineFiltered ? "DirectProfit" : "NetProfit", isMachineFiltered ? "DirectMarginPercent" : "NetMargin", "GstOnSales", "GstOnFees", "GstOnSalesBasis", "IsCogsComplete", "UncostedTransactionCount", "UncostedSalesAmount", "PendingTransactionCount", "RefundedTransactionCount", "DeclinedOrCancelledTransactionCount", "UnknownStatusTransactionCount", "MissingStatusTransactionCount", "DataQualityNotes" },
+                new() { value.From.ToString("yyyy-MM-dd"), value.To.ToString("yyyy-MM-dd"), value.FinancialYear, value.Sales.ToString(CultureInfo.InvariantCulture), value.CardSales.ToString(CultureInfo.InvariantCulture), value.CashSales.ToString(CultureInfo.InvariantCulture), value.CardTransactionCount.ToString(), value.CashTransactionCount.ToString(), Number(value.CostOfGoods), Number(value.GrossProfit), value.NayaxProcessingFees.TotalFeeExGst.ToString(CultureInfo.InvariantCulture), value.NayaxProcessingFees.TotalFeeGst.ToString(CultureInfo.InvariantCulture), value.NayaxProcessingFees.TotalFeeIncGst.ToString(CultureInfo.InvariantCulture), value.NayaxProcessingFees.ActualFeeIncGst.ToString(CultureInfo.InvariantCulture), value.NayaxProcessingFees.EstimatedFeeIncGst.ToString(CultureInfo.InvariantCulture), value.NayaxProcessingFees.EstimatedCardTransactionCount.ToString(), value.NayaxProcessingFees.HasEstimatedFees.ToString(), value.DeliveryCosts.ToString(CultureInfo.InvariantCulture), value.PackageCosts.ToString(CultureInfo.InvariantCulture), value.OtherOperatingExpenses.ToString(CultureInfo.InvariantCulture), value.NetSettlement.ToString(CultureInfo.InvariantCulture), value.SiteCommission.ToString(CultureInfo.InvariantCulture), Number(isMachineFiltered ? value.DirectProfit : value.NetProfit), Number(isMachineFiltered ? value.DirectMarginPercent : value.NetMarginPercent), value.GstOnSales.ToString(CultureInfo.InvariantCulture), value.GstOnFees.ToString(CultureInfo.InvariantCulture), BookkeepingGstOnSalesBasis, value.IsCogsComplete.ToString(), value.UncostedTransactionCount.ToString(CultureInfo.InvariantCulture), value.UncostedSalesAmount.ToString(CultureInfo.InvariantCulture), value.PendingTransactionCount.ToString(CultureInfo.InvariantCulture), value.RefundedTransactionCount.ToString(CultureInfo.InvariantCulture), value.DeclinedOrCancelledTransactionCount.ToString(CultureInfo.InvariantCulture), value.UnknownStatusTransactionCount.ToString(CultureInfo.InvariantCulture), value.MissingStatusTransactionCount.ToString(CultureInfo.InvariantCulture), string.Join(" ", value.DataQuality.Notes ?? []) }
             };
             return new ReportExportTable(rows, "Report");
         }
@@ -144,7 +155,7 @@ public sealed class GetReportExportRows
             var value = await _getReconciliationReport.Handle(filter, 0.01m, cancellationToken);
             var rows = new List<List<string>>
             {
-                new() { "From", "To", "TotalVendingSales", "CardSales", "CashSales", "CardTransactionSales", "NayaxReportedGrossCardSales", "CardTransactionCount", "NayaxReportedCardTransactionCount", "CountDifference", "GrossDifference", "GrossStatus", "ProcessingFeesExGst", "FeeGst", "OtherFees", "Adjustments", "ExpectedNetReimbursement", "ActualNetReimbursement", "SettlementDifference", "SettlementStatus", "Status", "PayoutDate" }
+                new() { "From", "To", "TotalVendingSales", "CardSales", "CashSales", "CardTransactionSales", "NayaxReportedGrossCardSales", "CardTransactionCount", "NayaxReportedCardTransactionCount", "CountDifference", "GrossDifference", "GrossStatus", "ProcessingFeesExGst", "FeeGst", "OtherFees", "Adjustments", "AdjustmentsSupported", "AdjustmentsBasis", "ExpectedNetReimbursement", "ActualNetReimbursement", "SettlementDifference", "SettlementStatus", "Status", "PayoutDate", "PendingTransactionCount", "RefundedTransactionCount", "DeclinedOrCancelledTransactionCount", "UnknownStatusTransactionCount", "MissingStatusTransactionCount", "DataQualityNotes" }
             };
             rows.AddRange(value.PeriodRows.Select(x => new List<string>
             {
@@ -156,9 +167,16 @@ public sealed class GetReportExportRows
                 x.GrossDifference.ToString(CultureInfo.InvariantCulture), x.GrossStatus,
                 x.ProcessingFeesExGst.ToString(CultureInfo.InvariantCulture), x.FeeGst.ToString(CultureInfo.InvariantCulture),
                 x.OtherFees.ToString(CultureInfo.InvariantCulture), x.Adjustments.ToString(CultureInfo.InvariantCulture),
+                x.AdjustmentsSupported.ToString(), GetReconciliationReport.AdjustmentsAssumption,
                 x.ExpectedNetReimbursement.ToString(CultureInfo.InvariantCulture), x.ActualNetReimbursement.ToString(CultureInfo.InvariantCulture),
                 x.SettlementDifference.ToString(CultureInfo.InvariantCulture), x.SettlementStatus, x.Status,
-                x.PayoutDate?.ToString("yyyy-MM-dd") ?? string.Empty
+                x.PayoutDate?.ToString("yyyy-MM-dd") ?? string.Empty,
+                x.PendingTransactionCount.ToString(CultureInfo.InvariantCulture),
+                x.RefundedTransactionCount.ToString(CultureInfo.InvariantCulture),
+                x.DeclinedOrCancelledTransactionCount.ToString(CultureInfo.InvariantCulture),
+                x.UnknownStatusTransactionCount.ToString(CultureInfo.InvariantCulture),
+                x.MissingStatusTransactionCount.ToString(CultureInfo.InvariantCulture),
+                string.Join(" ", x.DataQuality.Notes ?? [])
             }));
             if (value.Totals is not null)
             {
@@ -172,8 +190,17 @@ public sealed class GetReportExportRows
                     x.GrossDifference.ToString(CultureInfo.InvariantCulture), x.GrossStatus,
                     x.ProcessingFeesExGst.ToString(CultureInfo.InvariantCulture), x.FeeGst.ToString(CultureInfo.InvariantCulture),
                     x.OtherFees.ToString(CultureInfo.InvariantCulture), x.Adjustments.ToString(CultureInfo.InvariantCulture),
+                    x.AdjustmentsSupported.ToString(), GetReconciliationReport.AdjustmentsAssumption,
                     x.ExpectedNetReimbursement.ToString(CultureInfo.InvariantCulture), x.ActualNetReimbursement.ToString(CultureInfo.InvariantCulture),
-                    x.SettlementDifference.ToString(CultureInfo.InvariantCulture), x.SettlementStatus, x.Status, string.Empty
+                    x.SettlementDifference.ToString(CultureInfo.InvariantCulture), x.SettlementStatus, x.Status, string.Empty,
+                    // The totals row carries the report's own range-wide counts and notes, never a
+                    // sum of the period rows' scoped ones.
+                    value.PendingTransactionCount.ToString(CultureInfo.InvariantCulture),
+                    value.RefundedTransactionCount.ToString(CultureInfo.InvariantCulture),
+                    value.DeclinedOrCancelledTransactionCount.ToString(CultureInfo.InvariantCulture),
+                    value.UnknownStatusTransactionCount.ToString(CultureInfo.InvariantCulture),
+                    value.MissingStatusTransactionCount.ToString(CultureInfo.InvariantCulture),
+                    string.Join(" ", value.DataQuality.Notes ?? [])
                 });
             }
             return new ReportExportTable(rows, "Report");
@@ -190,8 +217,8 @@ public sealed class GetReportExportRows
             var value = await _getGstAccountingAid.Handle(filter, cancellationToken);
             var rows = new List<List<string>>
             {
-                new() { "From", "To", "TaxableSales", "GstOnSales", "TaxableFees", "GstOnFees", "NetGst" },
-                new() { value.From.ToString("yyyy-MM-dd"), value.To.ToString("yyyy-MM-dd"), value.TaxableSales.ToString(CultureInfo.InvariantCulture), value.GstOnSales.ToString(CultureInfo.InvariantCulture), value.TaxableFees.ToString(CultureInfo.InvariantCulture), value.GstOnFees.ToString(CultureInfo.InvariantCulture), value.NetGst.ToString(CultureInfo.InvariantCulture) }
+                new() { "From", "To", "TaxableSales", "GstOnSales", "TaxableFees", "GstOnFees", "PurchaseLineGst", "PurchaseChargeGst", "PurchaseInputGst", "PurchaseUnresolvedComponents", "PurchaseUnresolvedAmount", "PurchaseGstIncomplete", "NetGst" },
+                new() { value.From.ToString("yyyy-MM-dd"), value.To.ToString("yyyy-MM-dd"), value.TaxableSales.ToString(CultureInfo.InvariantCulture), value.GstOnSales.ToString(CultureInfo.InvariantCulture), value.TaxableFees.ToString(CultureInfo.InvariantCulture), value.GstOnFees.ToString(CultureInfo.InvariantCulture), value.PurchaseLineGst.ToString(CultureInfo.InvariantCulture), value.PurchaseChargeGst.ToString(CultureInfo.InvariantCulture), value.InventoryPurchaseGst.ToString(CultureInfo.InvariantCulture), value.PurchaseUnresolvedComponentCount.ToString(CultureInfo.InvariantCulture), value.PurchaseUnresolvedAmount.ToString(CultureInfo.InvariantCulture), value.PurchaseGstIncomplete.ToString(), value.NetGst.ToString(CultureInfo.InvariantCulture) }
             };
             return new ReportExportTable(rows, "Report");
         }

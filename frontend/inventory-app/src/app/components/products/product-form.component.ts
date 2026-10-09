@@ -7,11 +7,12 @@ import { CategoryService } from '../../services/category.service';
 import { SupplierService } from '../../services/supplier.service';
 import { Category, Supplier } from '../../models/models';
 import { ProductPriceHistoryComponent } from './product-price-history/product-price-history.component';
+import { ProductGstRuleComponent } from './product-gst-rule/product-gst-rule.component';
 
 @Component({
   selector: 'app-product-form',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterLink, ProductPriceHistoryComponent],
+  imports: [CommonModule, FormsModule, RouterLink, ProductPriceHistoryComponent, ProductGstRuleComponent],
   templateUrl: './product-form.component.html'
 })
 export class ProductFormComponent implements OnInit {

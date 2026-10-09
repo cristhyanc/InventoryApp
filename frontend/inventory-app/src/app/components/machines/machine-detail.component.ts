@@ -5,6 +5,7 @@ import { BehaviorSubject, catchError, map, Observable, of, switchMap, tap } from
 import { MachineService } from '../../services/machine.service';
 import { StockService } from '../../services/stock.service';
 import { ToastService } from '../../services/toast.service';
+import { BreadcrumbService } from '../../layout/breadcrumbs/breadcrumb.service';
 import { MachineRestockSyncComponent } from './machine-restock-sync/machine-restock-sync.component';
 import {
   Machine,
@@ -31,7 +32,8 @@ export class MachineDetailComponent implements OnInit {
     private route: ActivatedRoute,
     private machineService: MachineService,
     private stockService: StockService,
-    private toastService: ToastService
+    private toastService: ToastService,
+    private breadcrumbService: BreadcrumbService
   ) {}
 
   ngOnInit(): void {
@@ -62,7 +64,10 @@ export class MachineDetailComponent implements OnInit {
             return of(null);
           })
         );
-      })
+      }),
+      // The breadcrumb's live label for this page (issue #457), from the machine data this page
+      // already requested for itself - never a second request made just for the breadcrumb.
+      tap((machine) => this.breadcrumbService.setCurrentPageLabel(machine?.machineName ?? null))
     );
 
     this.products$ = machineId$.pipe(
@@ -94,9 +99,9 @@ export class MachineDetailComponent implements OnInit {
       ? ((product.quantityInStock ?? 0) / maxStock) * 100
       : 100;
 
-    if (stockPercentage < 30) return 'bg-red-100 text-red-700';
-    if (stockPercentage < 80) return 'bg-yellow-100 text-yellow-700';
-    return 'bg-green-100 text-green-700';
+    if (stockPercentage < 30) return 'badge-danger';
+    if (stockPercentage < 80) return 'badge-warning';
+    return 'badge-success';
   }
 
   restockProduct(product: Product, machine: Machine | null, qty?: string | number, qtyInput?: HTMLInputElement): void {

@@ -5,7 +5,7 @@ namespace Inventory.Application.Costing;
 /// <summary>
 /// A sale's persisted costing status (issue #297), mirroring the persisted
 /// <c>Inventory.Infrastructure.Models.SaleCostingStatus</c> member-for-member and ordinal-for-ordinal so the
-/// temporary API-owned adapter converts between them by a plain cast.
+/// EF adapter converts between them by a plain cast.
 /// </summary>
 public enum SaleCostStatus
 {

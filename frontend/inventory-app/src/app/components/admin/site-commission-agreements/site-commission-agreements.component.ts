@@ -18,33 +18,59 @@ import { SiteService } from '../../../services/site.service';
   standalone: true,
   imports: [CommonModule, FormsModule, RouterLink],
   template: `
-    <div class="mb-6">
-      <a routerLink="/admin" class="text-sm text-blue-600 hover:underline">&larr; Back to Admin</a>
-      <h1 class="mt-2 text-2xl font-semibold text-slate-800">Site Commission Agreements</h1>
-      <p class="mt-1 text-sm text-slate-500">Rates are effective-dated and apply to sales from the selected date onward.</p>
-    </div>
-
-    <section class="rounded-xl bg-white p-6 shadow-sm">
-      <h2 class="text-lg font-semibold text-slate-800">Site Commission Agreement</h2>
-      <div class="mt-4 grid gap-3 sm:grid-cols-2">
-        <label class="text-sm text-slate-700">Site<select class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2" [(ngModel)]="commissionSiteId"><option [ngValue]="null">Select a site</option>@for (site of sites; track site.siteId) { <option [ngValue]="site.siteId">{{ site.siteName }}</option> }</select></label>
-        <label class="text-sm text-slate-700">Rate (%)<input type="number" min="0" max="100" step="0.01" class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2" [(ngModel)]="commissionRate" /></label>
-        <label class="text-sm text-slate-700">Effective from<input type="date" class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2" [(ngModel)]="commissionEffectiveFrom" /></label>
-        <label class="text-sm text-slate-700">Frequency<select class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2" [(ngModel)]="commissionFrequency"><option [ngValue]="0">None</option><option [ngValue]="1">Monthly</option><option [ngValue]="2">Quarterly</option></select></label>
-        <label class="text-sm text-slate-700">Basis<select class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2" [(ngModel)]="commissionBasis"><option [ngValue]="0">Gross Sales</option><option [ngValue]="1">Card Sales</option><option [ngValue]="2">Sales ex GST</option></select></label>
-        <label class="text-sm text-slate-700">Due days after period end (optional)<input type="number" min="0" class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2" [(ngModel)]="commissionDueDays" /></label>
-      </div>
-      <button type="button" class="mt-3 rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50" [disabled]="loading" (click)="saveCommissionAgreement()">Save agreement</button>
-      @if (commissionAgreements.length) {
-        <div class="mt-5 overflow-x-auto border-t border-slate-100 pt-4">
-          <h3 class="mb-2 text-sm font-semibold text-slate-700">Current agreements</h3>
-          <table class="min-w-full text-left text-xs">
-            <thead class="bg-slate-50 text-slate-600"><tr><th class="px-2 py-2">Site</th><th class="px-2 py-2">Effective</th><th class="px-2 py-2">Rate</th><th class="px-2 py-2">Frequency</th><th class="px-2 py-2">Basis</th><th class="px-2 py-2">Due days</th></tr></thead>
-            <tbody>@for (agreement of commissionAgreements; track agreement.id) { <tr class="border-t"><td class="px-2 py-2">{{ siteName(agreement.siteId) }}</td><td class="px-2 py-2">{{ agreement.effectiveFrom | date:'dd/MM/yyyy' }}@if (agreement.effectiveTo) { - {{ agreement.effectiveTo | date:'dd/MM/yyyy' }}}</td><td class="px-2 py-2">{{ agreement.commissionRate * 100 | number:'1.2-2' }}%</td><td class="px-2 py-2">{{ frequencyLabel(agreement.frequency) }}</td><td class="px-2 py-2">{{ basisLabel(agreement.basis) }}</td><td class="px-2 py-2">{{ agreement.paymentDueDaysAfterPeriodEnd ?? '—' }}</td></tr> }</tbody>
-          </table>
+    <div class="page">
+      <header class="page-header">
+        <div>
+          <a routerLink="/admin" class="btn-link text-sm">&larr; Back to Admin</a>
+          <h1 class="page-title mt-2">Site Commission Agreements</h1>
+          <p class="page-subtitle">Rates are effective-dated and apply to sales from the selected date onward.</p>
         </div>
-      } @else { <p class="mt-4 text-sm text-slate-500">No site commission agreements have been configured.</p> }
-    </section>
+      </header>
+
+      <section class="card">
+        <div class="card-header">
+          <h2 class="card-title">Site Commission Agreement</h2>
+        </div>
+        <div class="card-body">
+          <div class="grid gap-4 sm:grid-cols-2">
+            <div class="field">
+              <label class="field-label" for="commission-site">Site</label>
+              <select id="commission-site" [(ngModel)]="commissionSiteId"><option [ngValue]="null">Select a site</option>@for (site of sites; track site.siteId) { <option [ngValue]="site.siteId">{{ site.siteName }}</option> }</select>
+            </div>
+            <div class="field">
+              <label class="field-label" for="commission-rate">Rate (%)</label>
+              <input id="commission-rate" type="number" min="0" max="100" step="0.01" [(ngModel)]="commissionRate" />
+            </div>
+            <div class="field">
+              <label class="field-label" for="commission-effective-from">Effective from</label>
+              <input id="commission-effective-from" type="date" [(ngModel)]="commissionEffectiveFrom" />
+            </div>
+            <div class="field">
+              <label class="field-label" for="commission-frequency">Frequency</label>
+              <select id="commission-frequency" [(ngModel)]="commissionFrequency"><option [ngValue]="0">None</option><option [ngValue]="1">Monthly</option><option [ngValue]="2">Quarterly</option></select>
+            </div>
+            <div class="field">
+              <label class="field-label" for="commission-basis">Basis</label>
+              <select id="commission-basis" [(ngModel)]="commissionBasis"><option [ngValue]="0">Gross Sales</option><option [ngValue]="1">Card Sales</option><option [ngValue]="2">Sales ex GST</option></select>
+            </div>
+            <div class="field">
+              <label class="field-label" for="commission-due-days">Due days after period end (optional)</label>
+              <input id="commission-due-days" type="number" min="0" [(ngModel)]="commissionDueDays" />
+            </div>
+          </div>
+          <button type="button" class="btn btn-primary mt-3" [disabled]="loading" (click)="saveCommissionAgreement()">Save agreement</button>
+          @if (commissionAgreements.length) {
+            <div class="mt-5 overflow-x-auto border-t border-md-gray-200 pt-4">
+              <h3 class="mb-2 text-sm font-semibold text-md-gray-800">Current agreements</h3>
+              <table class="table">
+                <thead class="table-head"><tr><th scope="col" class="table-cell">Site</th><th scope="col" class="table-cell">Effective</th><th scope="col" class="table-cell table-num">Rate</th><th scope="col" class="table-cell">Frequency</th><th scope="col" class="table-cell">Basis</th><th scope="col" class="table-cell table-num">Due days</th></tr></thead>
+                <tbody>@for (agreement of commissionAgreements; track agreement.id) { <tr class="table-row"><td class="table-cell">{{ siteName(agreement.siteId) }}</td><td class="table-cell">{{ agreement.effectiveFrom | date:'dd/MM/yyyy' }}@if (agreement.effectiveTo) { - {{ agreement.effectiveTo | date:'dd/MM/yyyy' }}}</td><td class="table-cell table-num">{{ agreement.commissionRate * 100 | number:'1.2-2' }}%</td><td class="table-cell">{{ frequencyLabel(agreement.frequency) }}</td><td class="table-cell">{{ basisLabel(agreement.basis) }}</td><td class="table-cell table-num">{{ agreement.paymentDueDaysAfterPeriodEnd ?? '—' }}</td></tr> }</tbody>
+              </table>
+            </div>
+          } @else { <p class="mt-4 text-sm value-muted">No site commission agreements have been configured.</p> }
+        </div>
+      </section>
+    </div>
   `
 })
 export class SiteCommissionAgreementsComponent {

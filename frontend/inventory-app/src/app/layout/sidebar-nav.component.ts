@@ -1,20 +1,45 @@
 import { Component, EventEmitter, Input, OnDestroy, OnInit, Output } from '@angular/core';
 import { NavigationEnd, Router, RouterLink } from '@angular/router';
 import { Subject, filter, takeUntil } from 'rxjs';
-import { NavGroup, NavItem, NavLink, activeNavGroup, activeNavRoute, primaryNavigation } from './navigation';
+import { IconComponent } from '../components/shared/icon.component';
+import { PlatformDiagnosticsAccessService } from '../services/platform-diagnostics-access.service';
+import { NavGroup, NavItem, NavLink, activeNavGroup, activeNavRoute, navigationFor } from './navigation';
 
 /**
- * The application shell's left sidebar (issue #391). It renders `primaryNavigation`, owns which
+ * The id of the navigation landmark. It lives here because the `<nav>` that carries it is this
+ * component's own element, and both of the shell's toggles point `aria-controls` at it.
+ */
+export const PRIMARY_NAVIGATION_ID = 'primary-navigation';
+
+/**
+ * The application shell's left sidebar (issue #391). It renders the primary navigation, owns which
  * groups are expanded, and resolves which entry the current URL belongs to.
  *
  * It owns no layout decision: the shell says whether the labels are visible (`expanded`) and
  * whether this is a narrow-screen drawer (`drawer`), and the sidebar reports what the operator did
- * (`navigated`, `dismissed`, `expandRequested`) instead of reaching back into the shell.
+ * (`navigated`, `dismissed`, `expandRequested`, `collapseToggled`) instead of reaching back into
+ * the shell.
+ *
+ * Its header row holds the desktop collapse control (issue #456). The control moved here from the
+ * shell's top bar so it sits beside the app title instead of floating above the menu, but it still
+ * only reports the intent: the shell keeps the one `isSidebarOpen` flag that decides what
+ * `expanded` means on each layout.
+ *
+ * It owns no access decision either (issue #335). It starts with the navigation every operator
+ * gets and adds the super-admin diagnostics link only when the diagnostics API itself confirms
+ * platform-admin access, which is why the link is composed from `navigationFor` rather than
+ * conditioned in this template.
+ *
+ * The host renders as `display: contents` (issue #455) so it contributes no box of its own: the
+ * shell's `items-stretch` row needs to stretch the actual white `<nav>` panel to the row's full
+ * height, and a host element rendering as an ordinary block would absorb that stretched height
+ * instead of passing it to its single child, leaving the visible panel sized to its content.
  */
 @Component({
   selector: 'app-sidebar-nav',
   standalone: true,
-  imports: [RouterLink],
+  imports: [RouterLink, IconComponent],
+  host: { class: 'contents' },
   templateUrl: './sidebar-nav.component.html'
 })
 export class SidebarNavComponent implements OnInit, OnDestroy {
@@ -23,6 +48,9 @@ export class SidebarNavComponent implements OnInit, OnDestroy {
 
   /** True while the sidebar is the narrow-screen overlay drawer rather than part of the layout. */
   @Input() drawer = false;
+
+  /** The id the shell's `aria-controls` points at; it is set on the `<nav>` landmark itself. */
+  @Input() navId = PRIMARY_NAVIGATION_ID;
 
   /** A destination was chosen, so a narrow drawer can be dismissed. */
   @Output() readonly navigated = new EventEmitter<void>();
@@ -33,17 +61,40 @@ export class SidebarNavComponent implements OnInit, OnDestroy {
   /** A group heading was used while collapsed, which has no room for a submenu. */
   @Output() readonly expandRequested = new EventEmitter<void>();
 
-  readonly navigation: readonly NavItem[] = primaryNavigation;
+  /** The header row's collapse/expand control was used (issue #456). */
+  @Output() readonly collapseToggled = new EventEmitter<void>();
+
+  /** Starts without the diagnostics link: an unanswered probe must never show it. */
+  navigation: readonly NavItem[] = navigationFor(false);
 
   activeRoute?: string;
 
   private readonly openGroups = new Set<string>();
   private readonly destroying$ = new Subject<void>();
 
-  constructor(private readonly router: Router) {}
+  constructor(
+    private readonly router: Router,
+    private readonly diagnosticsAccess: PlatformDiagnosticsAccessService
+  ) {}
 
   ngOnInit(): void {
     this.applyActiveRoute(this.router.url);
+
+    this.diagnosticsAccess
+      .isGranted()
+      .pipe(takeUntil(this.destroying$))
+      .subscribe({
+        next: (granted) => {
+          this.navigation = navigationFor(granted);
+          // A diagnostics page opened by URL before the probe answered becomes the active entry
+          // once the link exists, so the Admin group reflects where the operator actually is.
+          this.applyActiveRoute(this.router.url);
+        },
+        // Fail closed and silently: an unanswerable probe leaves the navigation everyone gets,
+        // and a navigation menu is not the place to report that one capability could not be
+        // checked.
+        error: () => undefined
+      });
 
     this.router.events
       .pipe(
@@ -68,6 +119,11 @@ export class SidebarNavComponent implements OnInit, OnDestroy {
 
   isGroupOpen(group: NavGroup): boolean {
     return this.openGroups.has(group.label);
+  }
+
+  /** The header control's accessible name names the action, not the current state (issue #456). */
+  get collapseToggleLabel(): string {
+    return this.expanded ? 'Collapse navigation' : 'Expand navigation';
   }
 
   groupPanelId(group: NavGroup): string {

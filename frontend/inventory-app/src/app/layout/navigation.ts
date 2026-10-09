@@ -7,7 +7,11 @@
  * that serves it.
  */
 
-/** A navigable destination. `icon` is decorative and only the top-level rail needs one. */
+/**
+ * A navigable destination. `icon` is decorative and only the top-level rail needs one; it names a
+ * glyph the sidebar renders through `app-icon` in its outlined variant, so the name must have an
+ * entry in `OUTLINED_ICON_SHAPES` (issues #411 and #456) and not only in the Rounded `ICON_PATHS`.
+ */
 export interface NavLink {
   readonly kind: 'link';
   readonly label: string;
@@ -30,12 +34,12 @@ function link(label: string, route: string): NavLink {
 }
 
 export const primaryNavigation: readonly NavItem[] = [
-  { kind: 'link', label: 'Dashboard', route: '/', icon: '🏠' },
-  { kind: 'link', label: 'Pick List', route: '/pick-list', icon: '📝' },
+  { kind: 'link', label: 'Dashboard', route: '/', icon: 'home' },
+  { kind: 'link', label: 'Pick List', route: '/pick-list', icon: 'assignment' },
   {
     kind: 'group',
     label: 'Products',
-    icon: '📦',
+    icon: 'inventory_2',
     children: [
       link('Products', '/products'),
       link('Take Inventory', '/take-inventory'),
@@ -43,19 +47,19 @@ export const primaryNavigation: readonly NavItem[] = [
       link('Stock History', '/stock-history')
     ]
   },
-  { kind: 'link', label: 'Machines', route: '/machines', icon: '🏭' },
-  { kind: 'link', label: 'Sites', route: '/sites', icon: '📍' },
+  { kind: 'link', label: 'Machines', route: '/machines', icon: 'refresh' },
+  { kind: 'link', label: 'Sites', route: '/sites', icon: 'location_on' },
   {
     kind: 'group',
     label: 'Purchases',
-    icon: '🧾',
+    icon: 'download',
     children: [link('Purchases', '/purchases'), link('Supplier Orders', '/purchases/orders'), link('Suppliers', '/suppliers')]
   },
-  { kind: 'link', label: 'Expenses', route: '/expenses', icon: '💸' },
+  { kind: 'link', label: 'Expenses', route: '/expenses', icon: 'attach_money' },
   {
     kind: 'group',
     label: 'Reports',
-    icon: '📊',
+    icon: 'bar_chart',
     children: [
       link('Dashboard', '/reports'),
       link('Bookkeeping', '/reports/bookkeeping'),
@@ -71,17 +75,49 @@ export const primaryNavigation: readonly NavItem[] = [
   {
     kind: 'group',
     label: 'Admin',
-    icon: '⚙️',
+    icon: 'settings',
     children: [
       link('Nayax Settings', '/admin/nayax-settings'),
       link('Site Commission Agreements', '/admin/site-commission-agreements'),
       link('Imports', '/admin/imports'),
       link('Historical Cost Recovery', '/admin/historical-cost-recovery'),
       link('AVCO Transition', '/admin/avco-transition'),
-      link('Costing Repair', '/admin/costing-repair')
+      link('Costing Repair', '/admin/costing-repair'),
+      link('Historical GST Classification', '/admin/historical-gst-classification'),
+      link('Nayax Sale Timestamp Repair', '/admin/nayax-sale-timestamp-repair')
     ]
   }
 ];
+
+/**
+ * The super-admin platform diagnostics page (issue #335).
+ *
+ * It is deliberately not part of `primaryNavigation`, because it is not a destination every
+ * signed-in operator has: it is composed into the `Admin` group by `navigationFor` only while
+ * `GET /api/admin/diagnostics/access` confirms the signed-in actor is the configured platform
+ * administrator. The link is presentation, never a boundary - `/admin/diagnostics` entered
+ * directly still resolves, and both diagnostics endpoints authorize every request themselves, so
+ * a hidden link hides a page rather than protecting one.
+ */
+export const platformDiagnosticsNavLink: NavLink = link('Platform Diagnostics', '/admin/diagnostics');
+
+/**
+ * The navigation to render for an actor the diagnostics API has, or has not, confirmed as the
+ * platform administrator. It adds exactly one destination to the end of the `Admin` group and
+ * changes nothing else, and it copies rather than mutates, so `primaryNavigation` stays the
+ * navigation everyone else sees.
+ */
+export function navigationFor(hasPlatformDiagnosticsAccess: boolean): readonly NavItem[] {
+  if (!hasPlatformDiagnosticsAccess) {
+    return primaryNavigation;
+  }
+
+  return primaryNavigation.map((item) =>
+    item.kind === 'group' && item.label === 'Admin'
+      ? { ...item, children: [...item.children, platformDiagnosticsNavLink] }
+      : item
+  );
+}
 
 /** Every destination in the navigation, top-level links first, then each group's children. */
 export function navLinks(items: readonly NavItem[]): readonly NavLink[] {

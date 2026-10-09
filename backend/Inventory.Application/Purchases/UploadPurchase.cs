@@ -45,6 +45,9 @@ public sealed class UploadPurchase
         if (PurchaseItemFormatPolicy.HasInvalidItem(items.Select(ToCandidate)))
             throw new InvalidOperationException(PurchaseItemFormatPolicy.InvalidItemsMessage);
 
+        // Before the document is saved, so an unsupported classification stores nothing at all.
+        PurchaseGstSubmission.EnsureClassificationsAreSupported(fields, items);
+
         var productIds = items.Select(item => item.ProductId).Distinct().ToList();
         if (productIds.Count > 0 && !await _store.AllProductsExistAsync(productIds, cancellationToken))
             throw new InvalidOperationException("One or more purchase products do not exist.");

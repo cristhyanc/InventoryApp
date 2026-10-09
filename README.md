@@ -31,7 +31,7 @@ InventoryApp is a full-stack operations and bookkeeping system for a vending-mac
 
 ## Architecture
 
-The application is a modular monolith with separate API and browser deployments. The backend is being evolved incrementally toward pragmatic Clean Architecture with vertical feature slices. The Angular frontend remains standalone and is moving toward feature-local pages, components, data access, and contracts.
+The application is a modular monolith with separate API and browser deployments. The backend's incremental move to pragmatic Clean Architecture with vertical feature slices is complete: `InventoryApi` is the HTTP boundary and composition root, `Inventory.Application` holds the use cases and ports, `Inventory.Domain` the deterministic rules and `Inventory.Infrastructure` the adapters, and architecture tests fail if business logic or persistence returns to the API project. The Angular frontend remains standalone and is moving toward feature-local pages, components, data access, and contracts.
 
 ```mermaid
 flowchart LR
@@ -50,7 +50,8 @@ See [docs/architecture.md](docs/architecture.md) for the current system, target 
 ```text
 Inventory App/
 ├── backend/InventoryApi/          ASP.NET Core API, EF migrations, and solution
-├── backend/InventoryApi.Tests/    Backend test suite
+├── backend/Inventory.UnitTests/   Pure Domain/Application backend tests
+├── backend/Inventory.IntegrationTests/ Database, API, adapter and architecture backend tests
 ├── frontend/inventory-app/        Angular application
 ├── docs/architecture.md           Current and target architecture
 ├── docs/automation.md             Automated development lifecycle and authority model
@@ -210,6 +211,8 @@ ConnectionStrings__DefaultConnection
 NayaxLynx__BaseUrl
 NayaxLynx__OperatorId
 NayaxLynx__AccessToken
+PlatformAdmin__DirectoryTenantId
+PlatformAdmin__ObjectId
 APPLICATIONINSIGHTS_CONNECTION_STRING
 ```
 
@@ -217,7 +220,25 @@ APPLICATIONINSIGHTS_CONNECTION_STRING
 
 `APPLICATIONINSIGHTS_CONNECTION_STRING` is the Application Insights connection string, a secret that is never committed — see [Observability and error diagnostics](#observability-and-error-diagnostics). Unlike the Nayax settings it is optional: with the variable absent or blank no telemetry is registered at all and the API starts and runs normally, which is what local development and the automated tests do.
 
+`PlatformAdmin__DirectoryTenantId` and `PlatformAdmin__ObjectId` name the platform super-administrator for the diagnostics API below. Neither is a secret — an Entra object id is an identifier that grants nothing without a validated token carrying it — so they are ordinary application settings and need no Key Vault reference, but they are a real person's identifiers and are therefore **empty in `appsettings.json` and must never be committed**. Set them with `dotnet user-secrets` locally or application settings in Azure.
+
 Uploaded purchase and expense documents are stored outside the API web root, under the content root's `protected-files/` folder, with their metadata in SQLite; they are readable only through the authenticated API endpoints. Do not commit uploaded business documents, local databases, or credentials.
+
+## Platform diagnostics API
+
+The tenant boundary fails closed, which is what makes a problem *in* it hard to see: a row assigned to the wrong business, or a child row whose parent belongs to another business, is invisible to the only person who would notice. The platform diagnostics API is one narrowly bounded, read-only, audited path for that investigation and nothing else. See [docs/architecture.md](docs/architecture.md#platform-diagnostics-issue-336) for the complete design.
+
+```text
+GET  /api/admin/diagnostics/access   capability signal only; exposes no business data
+POST /api/admin/diagnostics/query    { "sql": "..." } -> a bounded, truncation-flagged result
+```
+
+- **Who.** Only the Entra `(tid, oid)` pair in `PlatformAdmin__DirectoryTenantId` / `PlatformAdmin__ObjectId`, checked on every request by the named `PlatformDiagnostics` authorization policy. Not a business role, not a `BusinessMembership` row, not an email address, and nothing a request supplies. **With the pair unset — the shipped state — nobody is a platform administrator and both endpoints refuse every caller, including business members.**
+- **Nothing else changes.** The membership requirement is bypassed for these two endpoints only, and only after that policy succeeds. The platform administrator still receives `403` from `/api/products` and every other business route, and ordinary members' access is untouched.
+- **Read-only and bounded.** One statement, 5 seconds, 500 rows, 1 MiB of serialized response, 16 KiB of submitted SQL. A truncated result says so; it is never presented as complete. No caller can raise a limit.
+- **The permitted surface is an allowlist of table *and column* pairs** — identity and foreign-key columns on `Businesses`, `Categories`, `Suppliers`, `Products`, `Receipts`, `ReceiptItems` and `StockAdjustments` — enforced inside SQLite by a read-only connection, `PRAGMA query_only`, a zero attached-database limit and an authorizer callback, so a join, alias, subquery or expression cannot reach outside it. No name, note, amount, quantity or free-text column is on it; `BusinessMemberships` and the `Nayax*`/`Imported*` tables are not on it at all. A new table or column is denied automatically until a reviewed change adds it — including a column named `rowid`, `oid` or `_rowid_`, which SQLite resolves to a declared column of that name when one exists.
+- **Audit.** Every query — including a refused one, and one that fails unexpectedly — emits one structured `ILogger` event with the actor `(tid, oid)`, the timestamp, the correlation id, a SHA-256 fingerprint of the normalized query *shape*, the duration, the row count and the outcome. It never contains the statement, a result row or a credential, and there is deliberately no audit table. **The log destination and retention period are platform configuration — Application Insights when `APPLICATIONINSIGHTS_CONNECTION_STRING` is set, the App Service log stream otherwise — set on that resource and not in this repository. A human must verify the destination and its retention period before relying on this audit trail.**
+- **It cannot repair anything, by design.** Any future data repair must be a separately reviewed, named maintenance operation with a preview/dry-run step and explicit verification, like `bootstrap-business`, `migrate-documents` and [Costing repair](#costing-repair-admin-page). A repair must never be reachable by submitting SQL.
 
 ## Database backup and restore
 
@@ -304,7 +325,7 @@ step-by-step procedure, including why a plain filesystem copy is unsafe on a liv
 [docs/architecture.md](docs/architecture.md#sqlite-operating-assumptions-and-scale-strategy-issue-53).
 
 **Non-destructive local validation.**
-`backend/InventoryApi.Tests/Operations/SqliteBackupRestoreTests.cs` proves the backup mechanism
+`backend/Inventory.IntegrationTests/Operations/SqliteBackupRestoreTests.cs` proves the backup mechanism
 itself and, built on top of it, the `backup-database` command's path validation, verification,
 hashing, and failure reporting (`DatabaseBackupRunnerTests`) and its argument parsing
 (`BackupDatabaseArgumentsTests`). The upload workflow is covered the same way:
@@ -445,7 +466,7 @@ is "every application warning and error, and nothing a framework emits per reque
 No category may be set below `Warning`: that would hide a real failure from the only place an
 operator can look afterwards. `appsettings.Development.json` raises the framework, EF command and
 Identity.Web categories back to `Information` for local debugging, where nothing is exported.
-`backend/InventoryApi.Tests/Observability/LoggingLevelPolicyTests.cs` enforces all of this.
+`backend/Inventory.IntegrationTests/Observability/LoggingLevelPolicyTests.cs` enforces all of this.
 
 ### KQL troubleshooting queries
 
@@ -550,8 +571,34 @@ Quality settings are centralised so every backend project gets them:
 - **`Directory.Build.props`** (repository root) enables nullable reference types, .NET analyzers at the latest analysis level, `EnforceCodeStyleInBuild`, and `TreatWarningsAsErrors`. A new warning in application code fails the build.
 - **`.editorconfig`** (repository root) holds formatting, naming and diagnostic severities for the whole repository, and is what `dotnet format` enforces. Rules set to `suggestion` are IDE guidance only; only `warning`/`error` rules can fail validation.
 - EF Core generated migrations are the one scoped exception. Their all-lowercase generated class names raise `CS8981`, which `.editorconfig` switches off under `[**/Migrations/*.cs]` only — never globally and never through `<NoWarn>` — because an applied migration must not be renamed. `dotnet format` skips the `Migrations` folder for the same reason.
-- Coverage is collected on every run (`--collect:"XPlat Code Coverage"`) and written to `backend/InventoryApi.Tests/TestResults/<run-id>/coverage.cobertura.xml`, which is git-ignored. There is deliberately **no** minimum-coverage threshold yet; this establishes the baseline.
-- Architecture tests in `backend/InventoryApi.Tests/Architecture/` enforce the Clean Architecture dependency direction (Domain ← Application ← Infrastructure ← InventoryApi) and keep ASP.NET/EF Core/HTTP types out of Domain and Application. `ProjectDependencyDirectionTests` reads the project files; `CleanArchitectureDependencyTests` (NetArchTest) checks the compiled assemblies.
+- Coverage is collected on every run (`--collect:"XPlat Code Coverage"`) and written per test project to `backend/Inventory.UnitTests/TestResults/<run-id>/coverage.cobertura.xml` and `backend/Inventory.IntegrationTests/TestResults/<run-id>/coverage.cobertura.xml`, which are git-ignored. There is deliberately **no** minimum-coverage threshold yet; this establishes the baseline.
+- Architecture tests in `backend/Inventory.IntegrationTests/Architecture/` enforce the Clean Architecture dependency direction (Domain ← Application ← Infrastructure ← InventoryApi) and keep ASP.NET/EF Core/HTTP types out of Domain and Application. `ProjectDependencyDirectionTests` reads the project files; `CleanArchitectureDependencyTests` (NetArchTest) checks the compiled assemblies; `ApiLayerOwnershipTests` keeps `InventoryApi` to the HTTP boundary and composition root, so no business service, financial rule or persistence implementation can return to it.
+
+### End-to-end workflow tests
+
+The browser-level end-to-end suite (issue #46) is **not** part of `scripts/validate.sh`: it drives a real Chromium against a real API, so it is an opt-in command with its own npm project (`frontend/inventory-app/e2e`) and its own dependencies. Keeping Playwright out of `frontend/inventory-app`'s dependency graph is deliberate — `npm ci` runs during repository validation and during the production deployment, and neither may start downloading a browser.
+
+```bash
+# once per machine (installs the suite's dependencies and the Chromium build it pins)
+npm --prefix frontend/inventory-app run e2e:install
+
+# run the suite headlessly
+npm --prefix frontend/inventory-app run e2e
+
+# watch it in a visible browser
+npm --prefix frontend/inventory-app run e2e:headed
+```
+
+Prerequisites: the .NET SDK and Node/npm you already need to build the repository, plus the shared libraries Chromium needs. On a bare Linux machine install those once with `npm --prefix frontend/inventory-app/e2e run browsers:with-deps` (it uses `sudo apt-get`), or install the distribution's Chromium dependencies by hand. No secret, token, Entra account or Nayax credential is involved, and nothing has to be running before you start: Playwright starts the API and the Angular dev server itself and stops both afterwards.
+
+What a run does, and why it is safe to repeat:
+
+- It starts the API as the dedicated **E2ETest** host on `http://127.0.0.1:5199` against a throwaway SQLite database under `frontend/inventory-app/e2e/.artifacts/` (git-ignored, deleted at the start of every run), and the Angular application on `http://127.0.0.1:4300`. Your own `inventory.db` is never opened.
+- That host, and only that host, authenticates the suite's synthetic test actors instead of real Microsoft Entra sign-in, and seeds two synthetic businesses with a small catalogue. See [docs/architecture.md § End-to-end testing authentication](docs/architecture.md#end-to-end-testing-authentication-issue-46) for the scheme and its fail-closed safeguards; the backend suite in `backend/Inventory.IntegrationTests/Auth/` proves it cannot be reached in any other environment, and those tests *are* part of `scripts/validate.sh`.
+- It registers no Nayax HTTP client at all, so no run can reach the live Nayax operator account.
+- Tests run serially against that one host, each on its own seeded product, and the covered workflows are the reorder → supplier order → receive-as-purchase chain, the positive-magnitude stock correction, purchase create/edit/delete inventory effects, the COGS/profit-unavailable report state, and two-business isolation.
+
+Failure output (screenshots and traces) is written under `frontend/inventory-app/e2e/.artifacts/test-results/`; open a trace with `npm --prefix frontend/inventory-app/e2e exec -- playwright show-trace <path>`.
 
 ### Frontend code quality
 
@@ -567,9 +614,120 @@ Quality settings are centralised so every backend project gets them:
 - Historical sale cost is persisted from internal AVCO when reliable, with transaction-level Nayax product cost as a fallback.
 - Missing COGS or profit remains unknown; it is never silently converted to zero.
 - Australian financial years run from 1 July to 30 June, using `Australia/Sydney` for business reporting.
+- Purchase amounts are GST-inclusive, and purchase input GST comes from an explicit per-line and per-charge classification, never from an amount. Anything unclassified stays visibly unresolved rather than being treated as GST-free.
 - UI reports and CSV/XLSX exports must use the same backend calculations and quality states.
 
 The complete invariants and change rules are in [AGENTS.md](AGENTS.md).
+
+## Purchase entry and GST classification
+
+Purchase amounts are entered **GST-inclusive**. GST is recorded per component, so the **Add Purchase** page
+and the **Edit Purchase** page each offer a GST picker with three states — **Taxable**,
+**GST-free** and **Not classified** — for every purchased item line and, separately, for the delivery charge
+and the package charge. A charge never inherits a line's classification, and there is no single
+classification for a whole purchase.
+
+**Edit** on a purchase row opens the Edit Purchase page at `/purchases/<id>/edit`; nothing expands inside the
+Purchases table. That address is bookmarkable and survives a page refresh, **Save** stores the changes and
+returns to the Purchases list, and **Cancel** returns without saving. Leaving the page by Cancel, by the
+browser's Back button or by any other link discards unsaved edits without asking first, which is how every
+other form page in the application behaves.
+
+- Everything starts as **Not classified**, including lines prefilled while receiving a supplier order.
+  Nothing is guessed from the product, the supplier or the amount, so a line is classified only when a
+  person chooses. **Not classified** contributes no GST and keeps the purchase visibly unresolved for
+  bookkeeping review; it does not mean GST-free.
+- A charge's picker appears only once that charge has a value. A delivery or package charge left empty (or
+  zero) has no classification at all and is never reported as unresolved.
+- Editing a purchase shows the stored classifications and sends only the ones you change, so a
+  classification that came from a configured product or supplier rule keeps that origin when you edit a
+  quantity, a cost, a date or another line. Choosing **Not classified** again is a deliberate change and is
+  saved as one.
+- A line already on the purchase keeps its product: the edit page shows the product name rather than a
+  picker, because a stored line's GST classification, its origin and its restock movement belong to that
+  product. To record a different product, **Remove** that line and add the new product as its own line; the
+  new line starts **Not classified** and carries none of the removed line's classification or history. You can
+  still change a stored line's quantity, unit cost and classification.
+- If a save is refused — an unsupported classification, for example — the edit page stays open with everything
+  you entered and shows the reason, so a rejected classification never looks like a saved one.
+- Each purchase row then shows the API's **Purchase GST (input tax credit)** figure, each component's
+  classification, and a warning naming how many components and how much money are still unclassified. Those
+  figures are calculated by the API from the saved purchase — the frontend never calculates GST — so they
+  update on the Purchases list once your edit is saved.
+
+GST classification is accounting data only. It never changes a purchase's unit cost, the weighted-average
+cost, costing quantity or inventory value.
+
+## Product and supplier GST rules
+
+Purchase amounts are GST-inclusive, and GST is recorded per purchase line and per delivery/package
+charge rather than for a whole purchase. Two pages hold the rules that describe what *should* be
+classified:
+
+- **Products → edit a product → GST rule.** Choose **Taxable**, **GST-free**, or **No rule**, then
+  **Save GST rule**. It saves separately from the rest of the product form, because it is
+  bookkeeping configuration rather than a catalogue field.
+- **Suppliers → Edit a supplier → GST defaults.** Choose a default for the supplier's **product
+  lines** and separate defaults for its **delivery charge** and **package charge**, then **Save GST
+  defaults**. The three are independent: a charge never inherits the product-line default.
+
+Both panels read the stored setting first, and the save button stays disabled until it is on screen,
+so you are always editing what is actually configured. If that read fails the panel says so and
+saving stays disabled: the pickers open on "No rule"/"No default", which are real values that would
+replace whatever is stored, so reload the page instead of saving. Opening one product or supplier
+and then another also discards the first one's answer, so a slow response can never put one
+record's settings on another record's form.
+
+A supplier default applies only where the purchased product has no GST rule of its own, and a
+product rule applies only where nobody has classified the purchase line by hand. "No rule" and "No
+default" leave a component unclassified, which is not the same as GST-free: an unclassified
+component contributes no input GST and stays visibly unresolved in the GST reporting aid.
+
+These settings are explicit configuration, not inference. A supplier being registered for GST does
+not classify its products, because a supplier may sell both taxable and GST-free goods. Saving a
+rule or a default never changes a purchase that is already recorded; applying rules to purchases
+already recorded is the separate, explicit
+[Historical GST classification](#historical-gst-classification-admin-page) maintenance action below.
+
+## Historical GST classification (Admin page)
+
+Purchases recorded before GST classification existed are **Not classified**, and so is anything
+nobody has classified since. **Admin → Historical GST Classification** (also in the sidebar's Admin
+group) is the only way to classify them from the product and supplier rules above. It is a two-step
+action, and nothing is written until the second step.
+
+1. **Preview classification.** This reads only; it writes nothing at all, not even a draft. It
+   reports how many purchases and components it examined, how many would become **Taxable**, how
+   many **GST-free** and how many stay **Not classified**, the same counts separately for purchased
+   items, delivery charges and package charges, the unresolved amount left behind, and the input GST
+   the change would make available. Review those numbers: they are the whole point of the step.
+2. **Apply classification.** After a confirmation, this writes exactly what the preview showed, as
+   one all-or-nothing change.
+
+What it will and will not do:
+
+- It examines only components that are still **Not classified**. A classification you chose by hand
+  is never changed, and neither is one an earlier run applied — so running Preview and Apply again
+  after an Apply changes nothing.
+- A component carries the product's own GST rule when it has one, otherwise the supplier's
+  product-line default. A delivery or package charge takes the supplier's matching **delivery** or
+  **package** default only; it never inherits a product rule or the product-line default. A
+  component no rule covers stays **Not classified**, contributes no input GST, and keeps its purchase
+  visibly unresolved in the GST reporting aid — the preview says how many and how much, so you can
+  configure the missing rule instead.
+- A delivery or package charge that is empty or zero has no classification and is left alone.
+- If any relevant purchase or rule changed between your preview and your apply — a purchase added,
+  edited or deleted, a component classified, a product rule or supplier default saved — the apply is
+  refused, **nothing** is written, and it asks you to preview again. That is deliberate: the figures
+  you approved would no longer describe what would be written. Preview again and review the new
+  numbers.
+- It changes accounting data only. Purchase amounts, unit costs, the weighted-average cost, costing
+  quantity, inventory value, physical stock and stock movements are untouched.
+- It only ever runs because you pressed Apply. It never runs on startup, on a deployment, during a
+  database migration, when a purchase is read, or when you save a rule.
+
+It applies to your own business's purchases only, and only to the purchases of the business you are
+signed in to.
 
 ## Costing repair (Admin page)
 

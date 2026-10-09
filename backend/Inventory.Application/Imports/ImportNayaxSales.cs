@@ -53,9 +53,6 @@ public sealed record NayaxSalesImportResult(int Imported, int Updated, int Skipp
 /// </summary>
 public sealed class ImportNayaxSales
 {
-    /// <summary>The upload formats <see cref="INayaxSalesWorkbookReader"/> is asked to read.</summary>
-    private static readonly string[] SupportedExtensions = [".xlsx", ".xls", ".csv"];
-
     private readonly INayaxSalesWorkbookReader _workbook;
     private readonly INayaxSalesImportStore _store;
     private readonly ICostSale _saleCosting;
@@ -92,8 +89,8 @@ public sealed class ImportNayaxSales
         NayaxSalesFileInput file, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(file);
-        if (!SupportedExtensions.Contains(Path.GetExtension(file.FileName), StringComparer.OrdinalIgnoreCase))
-            throw new InvalidOperationException("Only .xlsx, .xls, or .csv files are supported.");
+        if (!NayaxSalesExportFormats.IsSupported(file.FileName))
+            throw new InvalidOperationException(NayaxSalesExportFormats.UnsupportedMessage);
 
         IReadOnlyList<NayaxSalesImportRow> rows;
         using (var content = file.OpenReadStream())

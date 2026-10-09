@@ -77,6 +77,24 @@ public enum NayaxSalesGmtInput
 }
 
 /// <summary>
+/// The upload formats <see cref="INayaxSalesWorkbookReader"/> can read, stated once because more
+/// than one use case now accepts a Nayax transaction export: <see cref="ImportNayaxSales"/> imports
+/// one, and the sale timestamp repair preview reads one for its authorization instants alone
+/// (issue #472).
+/// </summary>
+public static class NayaxSalesExportFormats
+{
+    /// <summary>The accepted file extensions, compared case-insensitively.</summary>
+    public static readonly string[] Supported = [".xlsx", ".xls", ".csv"];
+
+    /// <summary>The caller-facing refusal, unchanged from the import's long-standing message.</summary>
+    public const string UnsupportedMessage = "Only .xlsx, .xls, or .csv files are supported.";
+
+    public static bool IsSupported(string fileName) =>
+        Supported.Contains(Path.GetExtension(fileName), StringComparer.OrdinalIgnoreCase);
+}
+
+/// <summary>
 /// Reads an uploaded Nayax transaction export into raw rows (issue #301), behind which the
 /// workbook format lives entirely: ClosedXML, the CSV quoting rules, the header spellings this
 /// export has been seen to use and the cell-to-value conversions are all the adapter's business,

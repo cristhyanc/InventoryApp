@@ -1,7 +1,14 @@
 import { Injectable } from '@angular/core';
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Observable } from 'rxjs';
-import { InventoryValuationSummary, Product, ProductPriceComparison, ProductUpdateDto } from '../models/models';
+import {
+  GstClassification,
+  InventoryValuationSummary,
+  Product,
+  ProductGstRule,
+  ProductPriceComparison,
+  ProductUpdateDto
+} from '../models/models';
 import { ConfigService } from './config.service';
 
 export interface ProductFilters {
@@ -52,6 +59,15 @@ export class ProductService {
 
   update(id: number, payload: ProductUpdateDto): Observable<void> {
     return this.http.put<void>(`${this.baseUrl}/${id}`, payload);
+  }
+
+  /** The product's configured GST rule (issue #430); it is its own resource, not a catalogue field. */
+  getGstRule(id: number): Observable<ProductGstRule> {
+    return this.http.get<ProductGstRule>(`${this.baseUrl}/${id}/gst-rule`);
+  }
+
+  setGstRule(id: number, gstRule: GstClassification): Observable<void> {
+    return this.http.put<void>(`${this.baseUrl}/${id}/gst-rule`, { gstRule });
   }
 
   delete(id: number): Observable<void> {

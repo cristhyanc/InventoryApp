@@ -19,16 +19,20 @@ import { AvcoTransitionWorkflowComponent } from './avco-transition-workflow.comp
   standalone: true,
   imports: [CommonModule, RouterLink, AvcoTransitionWorkflowComponent],
   template: `
-    <div class="mb-6">
-      <a routerLink="/admin" class="text-sm text-blue-600 hover:underline">&larr; Back to Admin</a>
-      <h1 class="mt-2 text-2xl font-semibold text-slate-800">Inventory AVCO Transition Baseline</h1>
-      <p class="mt-1 text-sm text-slate-500">A saved baseline is permanent and changes how later sales are costed. Preview and confirm before saving.</p>
-    </div>
+    <div class="page">
+      <header class="page-header">
+        <div>
+          <a routerLink="/admin" class="btn-link text-sm">&larr; Back to Admin</a>
+          <h1 class="page-title mt-2">Inventory AVCO Transition Baseline</h1>
+          <p class="page-subtitle">A saved baseline is permanent and changes how later sales are costed. Preview and confirm before saving.</p>
+        </div>
+      </header>
 
-    <app-avco-transition-workflow
-      [products]="products"
-      (baselinesSaved)="reloadProducts()">
-    </app-avco-transition-workflow>
+      <app-avco-transition-workflow
+        [products]="products"
+        (baselinesSaved)="reloadProducts()">
+      </app-avco-transition-workflow>
+    </div>
   `
 })
 export class AvcoTransitionComponent {

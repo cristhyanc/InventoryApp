@@ -8,7 +8,12 @@
     "build:styles": "npx tailwindcss -i src/styles.scss -o src/styles.css --content \"./src/**/*.{html,ts}\"",
     "start": "npm run build:styles && ng serve",
     "build": "npm run build:styles && ng build",
-    "watch": "npm run build:styles && ng build --watch --configuration development"
+    "watch": "npm run build:styles && ng build --watch --configuration development",
+    "start:e2e": "npm run build:styles && ng serve --configuration e2e",
+    "e2e:install": "npm --prefix e2e ci && npm --prefix e2e run browsers",
+    "e2e": "npm --prefix e2e run test",
+    "e2e:headed": "npm --prefix e2e run test:headed",
+    "e2e:visual": "npm --prefix e2e run visual"
   },
   "private": true,
   "dependencies": {
@@ -22,6 +27,7 @@
     "@angular/router": "^19.0.0",
     "@azure/msal-angular": "^5.3.1",
     "@azure/msal-browser": "^5.22.0",
+    "@fontsource/inter": "^5.2.8",
     "rxjs": "~7.8.0",
     "tslib": "^2.6.0",
     "zone.js": "~0.15.0"

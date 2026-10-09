@@ -1,0 +1,17 @@
+{
+  "name": "inventory-app-e2e",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Browser-level end-to-end workflow tests for InventoryApp (issue #46). Deliberately its own npm project so that `npm ci` on frontend/inventory-app - which scripts/validate.sh and the production deployment both run - never installs Playwright and never downloads a browser. Run it through the parent package's e2e scripts.",
+  "scripts": {
+    "browsers": "playwright install chromium",
+    "browsers:with-deps": "playwright install --with-deps chromium",
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "visual": "playwright test --config playwright.visual.config.ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/node": "22.10.2"
+  }
+}

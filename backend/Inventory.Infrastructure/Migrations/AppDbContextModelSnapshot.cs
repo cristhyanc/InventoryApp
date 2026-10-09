@@ -798,6 +798,92 @@ namespace Inventory.Infrastructure.Migrations
                     b.ToTable("NayaxProcessingFeeRates");
                 });
 
+            modelBuilder.Entity("Inventory.Infrastructure.Models.NayaxSaleTimestampRepair", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("AppliedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("AppliedByDirectoryTenantId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("AppliedByObjectId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("EvidenceReference")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("EvidenceSource")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("MachineId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<Guid>("PreviewId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("PreviousBusinessDate")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("PreviousInstantUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("RepairedBusinessDate")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("RepairedInstantUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("TransactionId")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex("BusinessId", "TransactionId", "AppliedAt");
+
+                    b.ToTable("NayaxSaleTimestampRepairs");
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.NayaxSaleTimestampRepairPreviewDraft", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("AppliedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("ExpiresAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PlanJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId");
+
+                    b.ToTable("NayaxSaleTimestampRepairPreviewDrafts");
+                });
+
             modelBuilder.Entity("Inventory.Infrastructure.Models.NayaxSales", b =>
                 {
                     b.Property<long>("Id")
@@ -962,6 +1048,9 @@ namespace Inventory.Infrastructure.Migrations
                     b.Property<string>("Description")
                         .HasColumnType("TEXT");
 
+                    b.Property<int>("GstRule")
+                        .HasColumnType("INTEGER");
+
                     b.Property<decimal?>("InventoryValue")
                         .HasColumnType("decimal(18,6)");
 
@@ -1028,6 +1117,12 @@ namespace Inventory.Infrastructure.Migrations
                     b.Property<decimal?>("DeliveryCost")
                         .HasColumnType("decimal(18,2)");
 
+                    b.Property<int>("DeliveryGstClassification")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("DeliveryGstClassificationSource")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("FileName")
                         .IsRequired()
                         .HasColumnType("TEXT");
@@ -1040,6 +1135,12 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.Property<decimal?>("PackageCost")
                         .HasColumnType("decimal(18,2)");
+
+                    b.Property<int>("PackageGstClassification")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("PackageGstClassificationSource")
+                        .HasColumnType("INTEGER");
 
                     b.Property<DateTime>("PurchaseDate")
                         .HasColumnType("TEXT");
@@ -1074,6 +1175,12 @@ namespace Inventory.Infrastructure.Migrations
                         .HasColumnType("INTEGER");
 
                     b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("GstClassification")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("GstClassificationSource")
                         .HasColumnType("INTEGER");
 
                     b.Property<long>("ProductId")
@@ -1228,6 +1335,9 @@ namespace Inventory.Infrastructure.Migrations
                     b.Property<string>("ContactName")
                         .HasColumnType("TEXT");
 
+                    b.Property<int>("DeliveryGstDefault")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("Email")
                         .HasColumnType("TEXT");
 
@@ -1235,8 +1345,14 @@ namespace Inventory.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<int>("PackageGstDefault")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("Phone")
                         .HasColumnType("TEXT");
+
+                    b.Property<int>("ProductLineGstDefault")
+                        .HasColumnType("INTEGER");
 
                     b.HasKey("Id");
 

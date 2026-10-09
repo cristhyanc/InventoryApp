@@ -18,13 +18,17 @@ import { CostingRepairComponent } from './costing-repair.component';
   standalone: true,
   imports: [CommonModule, RouterLink, CostingRepairComponent],
   template: `
-    <div class="mb-6">
-      <a routerLink="/admin" class="text-sm text-blue-600 hover:underline">&larr; Back to Admin</a>
-      <h1 class="mt-2 text-2xl font-semibold text-slate-800">Costing Repair</h1>
-      <p class="mt-1 text-sm text-slate-500">An applied repair changes historical cost of goods sold and cannot be reversed. Preview and confirm before applying.</p>
-    </div>
+    <div class="page">
+      <header class="page-header">
+        <div>
+          <a routerLink="/admin" class="btn-link text-sm">&larr; Back to Admin</a>
+          <h1 class="page-title mt-2">Costing Repair</h1>
+          <p class="page-subtitle">An applied repair changes historical cost of goods sold and cannot be reversed. Preview and confirm before applying.</p>
+        </div>
+      </header>
 
-    <app-costing-repair [products]="products"></app-costing-repair>
+      <app-costing-repair [products]="products"></app-costing-repair>
+    </div>
   `
 })
 export class CostingRepairPageComponent {

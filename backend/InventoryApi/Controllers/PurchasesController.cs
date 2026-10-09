@@ -1,4 +1,5 @@
 using Inventory.Application.Purchases;
+using Inventory.Domain.Gst;
 using Inventory.Domain.Purchases;
 using InventoryApi.Adapters.Mapping;
 using InventoryApi.DTOs;
@@ -29,6 +30,7 @@ public class PurchasesController : ControllerBase
     private readonly UpdatePurchase _updatePurchase;
     private readonly DeletePurchase _deletePurchase;
     private readonly ComputePurchaseTotalValidation _computeValidation;
+    private readonly ComputePurchaseGstSummary _computeGstSummary;
 
     public PurchasesController(
         ListPurchases listPurchases,
@@ -37,7 +39,8 @@ public class PurchasesController : ControllerBase
         UploadPurchase uploadPurchase,
         UpdatePurchase updatePurchase,
         DeletePurchase deletePurchase,
-        ComputePurchaseTotalValidation computeValidation)
+        ComputePurchaseTotalValidation computeValidation,
+        ComputePurchaseGstSummary computeGstSummary)
     {
         _listPurchases = listPurchases;
         _getPurchase = getPurchase;
@@ -46,6 +49,7 @@ public class PurchasesController : ControllerBase
         _updatePurchase = updatePurchase;
         _deletePurchase = deletePurchase;
         _computeValidation = computeValidation;
+        _computeGstSummary = computeGstSummary;
     }
 
     [HttpGet]
@@ -71,7 +75,8 @@ public class PurchasesController : ControllerBase
         return File(file.Content, file.ContentType, file.FileName);
     }
 
-    // multipart/form-data: file + title + notes + totalAmount + deliveryCost + packageCost + purchaseDate + supplierId
+    // multipart/form-data: file + title + notes + totalAmount + deliveryCost + deliveryGstClassification
+    // + packageCost + packageGstClassification + purchaseDate + supplierId + items
     [HttpPost]
     [Consumes("multipart/form-data")]
     [RequestSizeLimit(10485760)]
@@ -81,7 +86,9 @@ public class PurchasesController : ControllerBase
         [FromForm] string? notes,
         [FromForm] decimal? totalAmount,
         [FromForm] decimal? deliveryCost,
+        [FromForm] GstClassification? deliveryGstClassification,
         [FromForm] decimal? packageCost,
+        [FromForm] GstClassification? packageGstClassification,
         [FromForm] DateTime? purchaseDate,
         [FromForm] int? supplierId,
         [FromForm] string? items)
@@ -95,7 +102,9 @@ public class PurchasesController : ControllerBase
         {
             purchase = await _uploadPurchase.Handle(
                 new PurchaseFileInput(file.FileName, file.ContentType, file.Length, file.OpenReadStream),
-                new PurchaseFields(title, notes, totalAmount, deliveryCost, packageCost, purchaseDate, supplierId),
+                new PurchaseFields(
+                    title, notes, totalAmount, deliveryCost, packageCost, purchaseDate, supplierId,
+                    deliveryGstClassification, packageGstClassification),
                 (ParseItems(items) ?? []).Select(ToItemInput).ToList(),
                 CancellationToken.None);
         }
@@ -114,7 +123,9 @@ public class PurchasesController : ControllerBase
         [FromForm] string? notes,
         [FromForm] decimal? totalAmount,
         [FromForm] decimal? deliveryCost,
+        [FromForm] GstClassification? deliveryGstClassification,
         [FromForm] decimal? packageCost,
+        [FromForm] GstClassification? packageGstClassification,
         [FromForm] DateTime? purchaseDate,
         [FromForm] int? supplierId,
         [FromForm] string? items)
@@ -124,7 +135,9 @@ public class PurchasesController : ControllerBase
         {
             purchase = await _updatePurchase.Handle(
                 id,
-                new PurchaseFields(title, notes, totalAmount, deliveryCost, packageCost, purchaseDate, supplierId),
+                new PurchaseFields(
+                    title, notes, totalAmount, deliveryCost, packageCost, purchaseDate, supplierId,
+                    deliveryGstClassification, packageGstClassification),
                 ParseItems(items)?.Select(ToItemInput).ToList(),
                 CancellationToken.None);
         }
@@ -151,10 +164,12 @@ public class PurchasesController : ControllerBase
     }
 
     /// <summary>
-    /// Pairs the purchase with its total-validation block, both derived from the same persisted
-    /// record the response carries. The mismatch rule itself stays in the one authoritative
-    /// <see cref="ComputePurchaseTotalValidation"/> use case over
-    /// <c>Inventory.Domain.Purchases.PurchaseTotalValidationPolicy</c>.
+    /// Pairs the purchase with its total-validation and input-GST blocks, all three derived from the
+    /// same persisted record the response carries. Neither rule lives here: the mismatch rule stays
+    /// in the <see cref="ComputePurchaseTotalValidation"/> use case over
+    /// <c>Inventory.Domain.Purchases.PurchaseTotalValidationPolicy</c>, and the input-GST rule in
+    /// <see cref="ComputePurchaseGstSummary"/> over
+    /// <c>Inventory.Domain.Purchases.PurchaseGstPolicy</c> (issue #431).
     /// </summary>
     private PurchaseResponseDto ToResponseDto(PurchaseRecord purchase)
     {
@@ -163,6 +178,7 @@ public class PurchasesController : ControllerBase
             purchase.DeliveryCost,
             purchase.PackageCost,
             purchase.Items.Select(item => new PurchaseTotalValidationItem(item.Quantity, item.UnitCost)));
+        var gst = _computeGstSummary.Handle(purchase);
 
         return new PurchaseResponseDto(
             PurchaseResponseMapper.ToResponse(purchase),
@@ -170,7 +186,11 @@ public class PurchasesController : ControllerBase
                 result.HasMismatch,
                 result.ItemSubtotal,
                 result.CalculatedTotal,
-                result.Difference));
+                result.Difference),
+            new PurchaseGstSummaryDto(
+                gst.InputGst,
+                gst.UnresolvedComponentCount,
+                gst.UnresolvedAmount));
     }
 
     /// <summary>
@@ -189,5 +209,6 @@ public class PurchasesController : ControllerBase
                 PropertyNameCaseInsensitive = true
             });
 
-    private static PurchaseItemInput ToItemInput(PurchaseItemDto dto) => new(dto.ProductId, dto.Quantity, dto.UnitCost);
+    private static PurchaseItemInput ToItemInput(PurchaseItemDto dto) =>
+        new(dto.ProductId, dto.Quantity, dto.UnitCost, dto.GstClassification, dto.Id);
 }

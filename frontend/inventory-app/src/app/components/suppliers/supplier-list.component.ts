@@ -3,11 +3,13 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { SupplierService } from '../../services/supplier.service';
 import { Supplier } from '../../models/models';
+import { SupplierGstDefaultsComponent } from './supplier-gst-defaults/supplier-gst-defaults.component';
+import { IconComponent } from '../shared/icon.component';
 
 @Component({
   selector: 'app-supplier-list',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, SupplierGstDefaultsComponent, IconComponent],
   templateUrl: './supplier-list.component.html'
 })
 export class SupplierListComponent implements OnInit {

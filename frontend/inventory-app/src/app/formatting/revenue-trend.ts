@@ -14,9 +14,9 @@ export function trendLabel(current: number, previous: number): string {
   return `${value >= 0 ? '↑' : '↓'} ${Math.abs(value).toFixed(1)}%`;
 }
 
-/** The Tailwind text color class for `trend(current, previous)`. */
+/** The shared Material Dashboard value class for `trend(current, previous)`. */
 export function trendClass(current: number, previous: number): string {
   const value = trend(current, previous);
-  if (value === null) return 'text-slate-500';
-  return value >= 0 ? 'text-emerald-600' : 'text-rose-600';
+  if (value === null) return 'value-muted';
+  return value >= 0 ? 'value-positive' : 'value-negative';
 }

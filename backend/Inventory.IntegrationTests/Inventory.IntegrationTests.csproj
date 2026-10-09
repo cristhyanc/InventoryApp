@@ -1,0 +1,61 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>InventoryApi.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="10.0.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.0" />
+    <PackageReference Include="Moq" Version="4.20.72" />
+    <PackageReference Include="xunit" Version="2.5.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.3" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.9.0" />
+    <PackageReference Include="Microsoft.AspNetCore.Http.Abstractions" Version="2.2.0" />
+
+    <!-- Architecture tests: asserts the Clean Architecture dependency direction against the
+         compiled assemblies (see Architecture/CleanArchitectureDependencyTests.cs). -->
+    <PackageReference Include="NetArchTest.Rules" Version="1.3.2" />
+
+    <!-- Code coverage. The "XPlat Code Coverage" data collector used by the validation scripts
+         needs this package on the test project; it never ships with the application. -->
+    <PackageReference Include="coverlet.collector" Version="10.0.1">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\InventoryApi\InventoryApi.csproj" />
+  </ItemGroup>
+
+  <!-- Test doubles shared with Inventory.UnitTests (issue #311). They depend only on
+       Inventory.Domain and Inventory.Application, so they live in the unit test project and are
+       compiled into this one as linked source files, at the same relative path and namespace.
+       Linking the source keeps either test project from referencing the other. -->
+  <ItemGroup>
+    <Compile Include="..\Inventory.UnitTests\Application\CatalogReconciliation\FakeCatalogSnapshotProviders.cs" Link="Application\CatalogReconciliation\FakeCatalogSnapshotProviders.cs" />
+    <Compile Include="..\Inventory.UnitTests\Application\Categories\FakeCategoryStore.cs" Link="Application\Categories\FakeCategoryStore.cs" />
+    <Compile Include="..\Inventory.UnitTests\Application\NayaxFeeSettings\FakeNayaxFeeRateStore.cs" Link="Application\NayaxFeeSettings\FakeNayaxFeeRateStore.cs" />
+    <Compile Include="..\Inventory.UnitTests\Application\Products\FakeSiteFactsStore.cs" Link="Application\Products\FakeSiteFactsStore.cs" />
+    <Compile Include="..\Inventory.UnitTests\Application\Reporting\Bookkeeping\FakeBookkeepingReportFactsProvider.cs" Link="Application\Reporting\Bookkeeping\FakeBookkeepingReportFactsProvider.cs" />
+    <Compile Include="..\Inventory.UnitTests\Application\Reporting\Daily\FakeDailyReportFactsProvider.cs" Link="Application\Reporting\Daily\FakeDailyReportFactsProvider.cs" />
+    <Compile Include="..\Inventory.UnitTests\Application\Reporting\Dashboard\FakeDashboardReportFactsProvider.cs" Link="Application\Reporting\Dashboard\FakeDashboardReportFactsProvider.cs" />
+    <Compile Include="..\Inventory.UnitTests\Application\Reporting\Gst\FakeGstReportFactsProvider.cs" Link="Application\Reporting\Gst\FakeGstReportFactsProvider.cs" />
+    <Compile Include="..\Inventory.UnitTests\Application\Reporting\MachineProfitability\FakeMachineProfitabilityReportFactsProvider.cs" Link="Application\Reporting\MachineProfitability\FakeMachineProfitabilityReportFactsProvider.cs" />
+    <Compile Include="..\Inventory.UnitTests\Application\Reporting\ProductProfitability\FakeGetProductProfitabilityReport.cs" Link="Application\Reporting\ProductProfitability\FakeGetProductProfitabilityReport.cs" />
+    <Compile Include="..\Inventory.UnitTests\Application\Reporting\ProductProfitability\FakeProductProfitabilityReportFactsProvider.cs" Link="Application\Reporting\ProductProfitability\FakeProductProfitabilityReportFactsProvider.cs" />
+    <Compile Include="..\Inventory.UnitTests\Application\Reporting\ProductProfitability\FakeProductPurchaseCostFactsProvider.cs" Link="Application\Reporting\ProductProfitability\FakeProductPurchaseCostFactsProvider.cs" />
+    <Compile Include="..\Inventory.UnitTests\Application\Reporting\Reconciliation\FakeReconciliationReportFactsProvider.cs" Link="Application\Reporting\Reconciliation\FakeReconciliationReportFactsProvider.cs" />
+    <Compile Include="..\Inventory.UnitTests\Application\Reporting\Transactions\FakeTransactionSalesReportFactsProvider.cs" Link="Application\Reporting\Transactions\FakeTransactionSalesReportFactsProvider.cs" />
+    <Compile Include="..\Inventory.UnitTests\Application\Stock\FakeStockAdjustmentStore.cs" Link="Application\Stock\FakeStockAdjustmentStore.cs" />
+    <Compile Include="..\Inventory.UnitTests\Application\Suppliers\FakeSupplierStore.cs" Link="Application\Suppliers\FakeSupplierStore.cs" />
+    <Compile Include="..\Inventory.UnitTests\Application\Tenancy\FakeAuthenticatedActorAccessor.cs" Link="Application\Tenancy\FakeAuthenticatedActorAccessor.cs" />
+    <Compile Include="..\Inventory.UnitTests\Application\Time\FakeBusinessCalendar.cs" Link="Application\Time\FakeBusinessCalendar.cs" />
+    <Compile Include="..\Inventory.UnitTests\Application\Time\FakeClock.cs" Link="Application\Time\FakeClock.cs" />
+  </ItemGroup>
+
+</Project>

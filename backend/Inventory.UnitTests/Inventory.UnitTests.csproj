@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Pure Domain/Application tests (issue #311). This project references only Inventory.Domain and
+       Inventory.Application: a test that needs Infrastructure, InventoryApi, EF Core or a database
+       belongs in Inventory.IntegrationTests instead. Test doubles that both projects use live here
+       and are compiled into Inventory.IntegrationTests as linked source files (see its .csproj), so
+       neither test project references the other. -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>InventoryApi.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Moq" Version="4.20.72" />
+    <PackageReference Include="xunit" Version="2.5.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.3" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.9.0" />
+
+    <!-- Code coverage. The "XPlat Code Coverage" data collector used by the validation scripts
+         needs this package on the test project; it never ships with the application. -->
+    <PackageReference Include="coverlet.collector" Version="10.0.1">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Inventory.Domain\Inventory.Domain.csproj" />
+    <ProjectReference Include="..\Inventory.Application\Inventory.Application.csproj" />
+  </ItemGroup>
+
+</Project>

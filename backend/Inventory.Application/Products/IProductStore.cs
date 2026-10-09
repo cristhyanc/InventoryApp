@@ -1,3 +1,5 @@
+using Inventory.Domain.Gst;
+
 namespace Inventory.Application.Products;
 
 /// <summary>
@@ -25,4 +27,19 @@ public interface IProductStore
 
     /// <summary>Deletes the product. Returns <c>false</c> when no product with <paramref name="id"/> exists.</summary>
     Task<bool> DeleteAsync(long id, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The product's configured GST rule (issue #430), or <c>null</c> when no product with
+    /// <paramref name="id"/> is visible to the caller's business. A product that has never been
+    /// given a rule answers <see cref="GstRules.None"/>, which is a configured state of its own and
+    /// not a missing product.
+    /// </summary>
+    Task<GstClassification?> FindGstRuleAsync(long id, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Stores the product's GST rule and nothing else: no purchase, purchase line, stock movement,
+    /// unit cost, costing quantity or inventory value is touched (AGENTS.md § Purchase GST
+    /// classification). Returns <c>false</c> when no product with <paramref name="id"/> was updated.
+    /// </summary>
+    Task<bool> SetGstRuleAsync(long id, GstClassification rule, CancellationToken cancellationToken);
 }

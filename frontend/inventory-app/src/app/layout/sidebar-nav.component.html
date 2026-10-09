@@ -1,28 +1,60 @@
 <nav
+  [id]="navId"
   aria-label="Primary"
-  class="flex shrink-0 flex-col overflow-y-auto border-r border-slate-200 bg-white p-3 text-sm"
+  class="flex shrink-0 flex-col overflow-y-auto bg-white p-3 text-md-body shadow-md"
   [class.fixed]="drawer"
   [class.inset-y-0]="drawer"
   [class.left-0]="drawer"
   [class.z-40]="drawer"
+  [class.rounded-md-card]="!drawer"
+  [class.m-4]="!drawer"
   [class.w-72]="drawer"
-  [class.shadow-xl]="drawer"
   [class.w-64]="!drawer && expanded"
   [class.w-16]="!drawer && !expanded"
 >
-  @if (drawer) {
-    <div class="mb-2 flex items-center justify-between border-b border-slate-200 px-1 pb-3">
-      <span class="font-semibold text-slate-700">Navigation</span>
+  <!--
+    The header row owns the app title and, on a wide layout, the collapse control that used to
+    float above the menu in the shell's top bar (issue #456). Collapsed to the rail there is no
+    title to sit beside, so the row holds the expand control alone and centres it: the panel's
+    `w-16` rail leaves a 40px content box inside its `p-3`, narrower than the 44x44 CSS-pixel
+    minimum touch target, and `-mx-2` widens the row to 56px inside the panel's 64px padding box
+    so the control reaches that size without overflowing the panel or overlapping anything.
+  -->
+  <div
+    class="mb-2 flex items-center border-b border-md-gray-200 pb-3"
+    [class.gap-2]="drawer || expanded"
+    [class.px-1]="drawer || expanded"
+    [class.-mx-2]="!drawer && !expanded"
+    [class.justify-center]="!drawer && !expanded"
+  >
+    @if (drawer || expanded) {
+      <div class="flex min-w-0 flex-1 items-center gap-2 truncate font-semibold text-md-gray-800">
+        <span aria-hidden="true" class="text-base">🧃</span>
+        <span class="truncate">Inventory Manager</span>
+      </div>
+    }
+    @if (drawer) {
       <button
         type="button"
         aria-label="Close navigation menu"
-        class="rounded-md px-2 py-1 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+        class="flex h-11 w-11 shrink-0 items-center justify-center rounded-md-control text-md-gray-600 transition hover:bg-md-gray-100 hover:text-md-gray-800"
         (click)="dismissed.emit()"
       >
-        <span aria-hidden="true">&#10005;</span>
+        <app-icon name="close" variant="outlined" [size]="20" />
       </button>
-    </div>
-  }
+    } @else {
+      <button
+        type="button"
+        class="flex h-11 w-11 shrink-0 items-center justify-center rounded-md-control text-md-gray-600 transition hover:bg-md-gray-100 hover:text-md-gray-800"
+        [attr.aria-label]="collapseToggleLabel"
+        [attr.aria-expanded]="expanded"
+        [attr.aria-controls]="navId"
+        (click)="collapseToggled.emit()"
+      >
+        <app-icon name="menu" variant="outlined" [size]="20" />
+      </button>
+    }
+  </div>
 
   <ul class="flex flex-col gap-1">
     @for (item of navigation; track item.label) {
@@ -30,33 +62,32 @@
         @if (item.kind === 'group') {
           <button
             type="button"
-            class="flex w-full items-center gap-3 rounded-md px-3 py-2 font-medium transition hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
-            [class.bg-blue-50]="isGroupActive(item)"
-            [class.text-blue-700]="isGroupActive(item)"
-            [class.text-slate-600]="!isGroupActive(item)"
+            class="flex w-full items-center gap-3 rounded-md-control px-3 py-2 font-medium text-md-gray-800 transition hover:bg-md-gray-100"
+            [class.bg-md-gray-100]="isGroupActive(item)"
+            [class.font-semibold]="isGroupActive(item)"
             [attr.aria-expanded]="expanded && isGroupOpen(item)"
             [attr.aria-controls]="expanded && isGroupOpen(item) ? groupPanelId(item) : null"
             [attr.title]="expanded ? null : item.label"
             (click)="toggleGroup(item)"
           >
-            <span aria-hidden="true" class="w-5 shrink-0 text-center text-base">{{ item.icon }}</span>
+            <app-icon [name]="item.icon" variant="outlined" [size]="20" />
             <span class="truncate" [class.sr-only]="!expanded">{{ item.label }}</span>
             @if (expanded) {
-              <span aria-hidden="true" class="ml-auto text-xs text-slate-400">{{ isGroupOpen(item) ? '▴' : '▾' }}</span>
+              <span aria-hidden="true" class="ml-auto text-xs text-md-gray-500">{{ isGroupOpen(item) ? '▴' : '▾' }}</span>
             }
           </button>
 
           @if (expanded && isGroupOpen(item)) {
-            <ul [id]="groupPanelId(item)" class="ml-5 mt-1 flex flex-col gap-1 border-l border-slate-200 pl-3">
+            <ul [id]="groupPanelId(item)" class="ml-5 mt-1 flex flex-col gap-1 border-l border-md-gray-200 pl-3">
               @for (child of item.children; track child.route) {
                 <li>
                   <a
                     [routerLink]="child.route"
-                    class="block truncate rounded-md px-3 py-1.5 transition hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
-                    [class.bg-blue-50]="isLinkActive(child)"
+                    class="block truncate rounded-md-control px-3 py-1.5 transition hover:bg-md-gray-100"
+                    [class.bg-md-dark-gradient]="isLinkActive(child)"
+                    [class.text-white]="isLinkActive(child)"
                     [class.font-semibold]="isLinkActive(child)"
-                    [class.text-blue-700]="isLinkActive(child)"
-                    [class.text-slate-600]="!isLinkActive(child)"
+                    [class.text-md-gray-800]="!isLinkActive(child)"
                     [attr.aria-current]="isLinkActive(child) ? 'page' : null"
                     (click)="navigated.emit()"
                     >{{ child.label }}</a
@@ -68,15 +99,15 @@
         } @else {
           <a
             [routerLink]="item.route"
-            class="flex items-center gap-3 rounded-md px-3 py-2 font-medium transition hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
-            [class.bg-blue-50]="isLinkActive(item)"
-            [class.text-blue-700]="isLinkActive(item)"
-            [class.text-slate-600]="!isLinkActive(item)"
+            class="flex items-center gap-3 rounded-md-control px-3 py-2 font-medium transition hover:bg-md-gray-100"
+            [class.bg-md-dark-gradient]="isLinkActive(item)"
+            [class.text-white]="isLinkActive(item)"
+            [class.text-md-gray-800]="!isLinkActive(item)"
             [attr.aria-current]="isLinkActive(item) ? 'page' : null"
             [attr.title]="expanded ? null : item.label"
             (click)="navigated.emit()"
           >
-            <span aria-hidden="true" class="w-5 shrink-0 text-center text-base">{{ item.icon }}</span>
+            <app-icon [name]="item.icon ?? ''" variant="outlined" [size]="20" />
             <span class="truncate" [class.sr-only]="!expanded">{{ item.label }}</span>
           </a>
         }

@@ -1,17 +1,385 @@
+/*
+ * Global styles and the shared Material Dashboard component classes (issue #410).
+ *
+ * Every value here comes from a token in `tailwind.config.js`. Prefer one of the shared classes
+ * below to an ad-hoc pile of utilities in a template; see docs/architecture.md
+ * § Interaction and presentation for when to use which, and for the contrast rules the
+ * `-text` colour variants exist to satisfy.
+ *
+ * `src/styles.css` is generated from this file plus every template by `npm run build:styles`
+ * and is committed. Never hand-edit the generated file.
+ */
 /* stylelint-disable at-rule-no-unknown */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 /* stylelint-enable at-rule-no-unknown */
 
+@layer components {
+  /* ---- Page layout ------------------------------------------------------------------- */
+
+  /*
+   * `--md-muted-text` carries the muted text colour for the current surface, because the
+   * accessible value depends on it: md-gray-500 reaches 4.74:1 on white but only 4.35:1 on
+   * md-gray-100, so a gray surface has to step up to md-gray-600 (7.17:1). `.value-muted`
+   * reads this variable; surface classes set it.
+   */
+  .page {
+    @apply flex flex-col gap-6 p-4;
+
+    --md-muted-text: theme('colors.md-gray.600');
+  }
+
+  @screen sm {
+    .page {
+      @apply p-6;
+    }
+  }
+
+  .page-header {
+    @apply flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between;
+  }
+
+  .page-title {
+    @apply text-md-page-title font-semibold text-md-gray-800;
+  }
+
+  .page-subtitle {
+    @apply text-md-body text-md-gray-600;
+  }
+
+  .page-actions {
+    @apply flex flex-wrap items-center gap-3;
+  }
+
+  /*
+   * The shared route breadcrumb (issue #457), rendered once above every page title in
+   * `app.component.html`. `flex-wrap` on the list is what satisfies "no horizontal overflow" at a
+   * narrow width without truncating a label's accessible text: a long trail wraps onto a second
+   * line instead of forcing a scrollbar or hiding part of a name.
+   */
+  .breadcrumbs {
+    @apply mb-2;
+  }
+
+  .breadcrumb-list {
+    @apply flex flex-wrap items-center gap-x-1 gap-y-1 text-md-body;
+  }
+
+  .breadcrumb-item {
+    @apply flex items-center gap-1;
+  }
+
+  .breadcrumb-link {
+    @apply rounded-md-control text-md-gray-600 hover:text-md-gray-800 hover:underline;
+  }
+
+  .breadcrumb-current {
+    @apply font-medium text-md-gray-800;
+  }
+
+  .breadcrumb-separator {
+    @apply text-md-gray-600;
+  }
+
+  /* ---- Cards ------------------------------------------------------------------------- */
+
+  .card {
+    @apply rounded-md-card border border-md-gray-200 bg-white shadow-md-card;
+
+    --md-muted-text: theme('colors.md-gray.500');
+  }
+
+  .card-header {
+    @apply flex flex-wrap items-center justify-between gap-3 border-b border-md-gray-200 px-4 py-3;
+  }
+
+  .card-title {
+    @apply text-md-card-title font-semibold text-md-gray-800;
+  }
+
+  .card-body {
+    @apply p-4 text-md-body text-md-gray-600;
+  }
+
+  .card-footer {
+    @apply border-t border-md-gray-200 px-4 py-3 text-md-body text-md-gray-600;
+  }
+
+  /* ---- Stat card --------------------------------------------------------------------- */
+
+  /*
+   * The icon tile sits inside the card body at the upper right (issue #453): `.stat-card-head`
+   * is a flex row with the content first and the icon tile last, so the card's own `p-4` padding
+   * alone insets the tile from the top and right edges, with no negative margin or offset
+   * pulling it outside the border. The content wrapper takes the remaining row width
+   * (`.stat-card-content`) so a long label or large value wraps instead of pushing the tile out
+   * or overflowing the card.
+   */
+  .stat-card {
+    @apply rounded-md-card border border-md-gray-200 bg-white p-4 shadow-md-card;
+
+    --md-muted-text: theme('colors.md-gray.500');
+  }
+
+  .stat-card-head {
+    @apply flex items-start justify-between gap-4;
+  }
+
+  .stat-card-content {
+    @apply min-w-0 flex-1 break-words;
+  }
+
+  /*
+   * `.stat-card-label`/`.stat-card-value` default to right-aligned text because several report
+   * summary tiles (bookkeeping/dashboard/transaction-sales/reconciliation/GST reports) use them
+   * directly inside a plain `.card card-body`, without an icon tile, and keep their existing
+   * alignment. Only the icon-tile stat-card head flips to left-aligned, opposite the icon.
+   */
+  .stat-card-label {
+    @apply text-right text-md-body text-md-gray-500;
+  }
+
+  .stat-card-value {
+    @apply text-right text-md-stat-value font-bold text-md-gray-800;
+  }
+
+  .stat-card-head .stat-card-label,
+  .stat-card-head .stat-card-value {
+    @apply text-left;
+  }
+
+  .stat-card-footer {
+    @apply mt-4 border-t border-md-gray-200 pt-3 text-md-body text-md-gray-600;
+  }
+
+  /* ---- Icon tile --------------------------------------------------------------------- */
+
+  /*
+   * Decorative only. The icon inside is `aria-hidden`; the meaning is carried by the adjacent
+   * text label, which is why the light status gradients are allowed here and nowhere else
+   * behind white content. `.icon-tile` on its own is the default md-dark tile; the variants
+   * below follow it in source order so they win.
+   */
+  .icon-tile {
+    @apply flex h-12 w-12 shrink-0 items-center justify-center rounded-md-card bg-md-dark-gradient text-white shadow-md-tile-dark;
+  }
+
+  .icon-tile > svg,
+  .icon-tile > img {
+    @apply h-6 w-6;
+  }
+
+  .icon-tile-dark {
+    @apply bg-md-dark-gradient shadow-md-tile-dark;
+  }
+
+  .icon-tile-info {
+    @apply bg-md-info-gradient shadow-md-tile-info;
+  }
+
+  .icon-tile-success {
+    @apply bg-md-success-gradient shadow-md-tile-success;
+  }
+
+  .icon-tile-warning {
+    @apply bg-md-warning-gradient shadow-md-tile-warning;
+  }
+
+  .icon-tile-danger {
+    @apply bg-md-danger-gradient shadow-md-tile-danger;
+  }
+
+  /* ---- Buttons ----------------------------------------------------------------------- */
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-md-control px-4 py-2 text-md-badge font-bold uppercase leading-none tracking-wide transition-shadow;
+  }
+
+  .btn:hover {
+    @apply shadow-md;
+  }
+
+  .btn-sm {
+    @apply px-4 py-1.5;
+  }
+
+  .btn-primary {
+    @apply bg-md-dark-gradient text-white;
+  }
+
+  .btn-secondary {
+    @apply border border-md-gray-300 bg-white text-md-gray-800;
+  }
+
+  .btn-danger {
+    @apply bg-md-danger-button-gradient text-white;
+  }
+
+  .btn-link {
+    @apply bg-none px-0 py-0 text-md-info-text underline-offset-2;
+  }
+
+  .btn-link:hover {
+    @apply underline shadow-none;
+  }
+
+  /*
+   * Disabled controls are exempt from the contrast minimum under WCAG 1.4.3, so the disabled
+   * state is a flat 50% with no hover affordance at all.
+   */
+  .btn:disabled,
+  .btn[aria-disabled='true'] {
+    @apply cursor-not-allowed opacity-50 shadow-none;
+  }
+
+  .btn:disabled:hover,
+  .btn[aria-disabled='true']:hover {
+    @apply no-underline shadow-none;
+  }
+
+  /* ---- Tables ------------------------------------------------------------------------ */
+
+  .table {
+    @apply w-full border-collapse text-left text-md-body;
+  }
+
+  .table-head {
+    @apply bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide text-md-gray-600;
+
+    --md-muted-text: theme('colors.md-gray.600');
+  }
+
+  /* A row turns md-gray-100 on hover, so muted text inside one stays at md-gray-600. */
+  .table-row {
+    @apply border-b border-md-gray-200 transition-colors;
+
+    --md-muted-text: theme('colors.md-gray.600');
+  }
+
+  .table-row:hover {
+    @apply bg-md-gray-100;
+  }
+
+  .table-cell {
+    @apply px-3 py-2 align-middle text-md-gray-600 sm:px-6 sm:py-3;
+  }
+
+  .table-num {
+    @apply text-right tabular-nums;
+  }
+
+  /* ---- Badges ------------------------------------------------------------------------ */
+
+  .badge {
+    @apply inline-flex items-center rounded-md-badge px-2 py-1 text-md-badge font-bold uppercase leading-none tracking-wide;
+  }
+
+  .badge-success {
+    @apply bg-md-success/15 text-md-success-text;
+  }
+
+  .badge-warning {
+    @apply bg-md-warning/15 text-md-warning-text;
+  }
+
+  .badge-danger {
+    @apply bg-md-danger/15 text-md-danger-text;
+  }
+
+  .badge-info {
+    @apply bg-md-info/15 text-md-info-text;
+  }
+
+  /*
+   * #EAEAEA is the neutral badge surface named in the #410 visual specification rather than in
+   * the token table; md-gray-600 on it measures 6.5:1. The contrast spec asserts this literal.
+   */
+  .badge-neutral {
+    @apply bg-[#EAEAEA] text-md-gray-600;
+  }
+
+  /* ---- Alerts ------------------------------------------------------------------------ */
+
+  .alert {
+    @apply flex flex-col gap-1 rounded-md-card border-l-4 p-4 text-md-body text-md-gray-800;
+  }
+
+  .alert-title {
+    @apply font-semibold;
+  }
+
+  .alert-success {
+    @apply border-md-success bg-md-success/15;
+  }
+
+  .alert-success .alert-title {
+    @apply text-md-success-text;
+  }
+
+  .alert-warning {
+    @apply border-md-warning bg-md-warning/15;
+  }
+
+  .alert-warning .alert-title {
+    @apply text-md-warning-text;
+  }
+
+  .alert-danger {
+    @apply border-md-danger bg-md-danger/15;
+  }
+
+  .alert-danger .alert-title {
+    @apply text-md-danger-text;
+  }
+
+  .alert-info {
+    @apply border-md-info bg-md-info/15;
+  }
+
+  .alert-info .alert-title {
+    @apply text-md-info-text;
+  }
+
+  /* ---- Form fields ------------------------------------------------------------------- */
+
+  .field {
+    @apply flex flex-col gap-1;
+  }
+
+  .field-label {
+    @apply text-md-body font-medium text-md-gray-600;
+  }
+
+  .field-hint {
+    @apply text-md-body text-md-gray-500;
+  }
+
+  .field-error {
+    @apply text-md-body text-md-danger-text;
+  }
+
+  /* ---- Values ------------------------------------------------------------------------ */
+
+  .value-positive {
+    @apply text-md-success-text;
+  }
+
+  .value-negative {
+    @apply text-md-danger-text;
+  }
+
+  .value-muted {
+    color: var(--md-muted-text, theme('colors.md-gray.500'));
+  }
+}
+
 * { box-sizing: border-box; }
 
 html, body {
   margin: 0;
   padding: 0;
-  font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-  background: #f4f6f8;
-  color: #1f2933;
+  @apply bg-md-gray-100 font-sans text-md-gray-600;
 }
 
 a {
@@ -20,11 +388,40 @@ a {
 }
 
 input, select, textarea {
-  @apply w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-700 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100;
+  @apply w-full rounded-md-control border border-md-input-border px-3 py-2 text-sm text-slate-700 placeholder:text-slate-400 focus:border-md-info;
 }
 
 button {
   @apply cursor-pointer;
+}
+
+/*
+ * Disabled state for every form control (buttons are covered by `.btn:disabled` as well, for
+ * the `<a>`-based variants): opacity 0.5, no pointer affordance, no shadow.
+ */
+button:disabled,
+input:disabled,
+select:disabled,
+textarea:disabled,
+fieldset:disabled {
+  @apply cursor-not-allowed opacity-50 shadow-none;
+}
+
+/*
+ * Keyboard focus, WCAG 2.2 AA: a 2px md-info outline at 2px offset on every interactive
+ * element. md-info measures 4.51:1 against white, above the 3:1 non-text minimum. Never remove
+ * a focus outline anywhere without putting this one in its place.
+ */
+a:focus-visible,
+area:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible,
+[tabindex]:focus-visible,
+[contenteditable]:focus-visible {
+  @apply outline outline-2 outline-offset-2 outline-md-info;
 }
 
 img {

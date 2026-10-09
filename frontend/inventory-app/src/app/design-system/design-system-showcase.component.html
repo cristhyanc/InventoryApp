@@ -1,0 +1,254 @@
+<!--
+  Rendering fixture for every shared class in src/styles.scss (issue #410). Neutral sample
+  content only. Not routed, not linked from navigation.
+-->
+<div class="page">
+  <header class="page-header">
+    <div>
+      <h1 class="page-title">Design system</h1>
+      <p class="page-subtitle">Shared cards, buttons, tables, badges, alerts and fields.</p>
+    </div>
+    <div class="page-actions">
+      <button type="button" class="btn btn-primary">Primary action</button>
+      <button type="button" class="btn btn-secondary">Secondary</button>
+      <button type="button" class="btn btn-sm btn-secondary">Small</button>
+    </div>
+  </header>
+
+  <!-- Stat cards: one per icon tile variant. The tile is decorative; the label carries meaning. -->
+  <section class="grid grid-cols-1 gap-6 sm:grid-cols-2 xl:grid-cols-3">
+    <article class="stat-card">
+      <div class="stat-card-head">
+        <div class="stat-card-content">
+          <p class="stat-card-label">Sample total</p>
+          <p class="stat-card-value">1,248</p>
+        </div>
+        <span class="icon-tile icon-tile-dark">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M4 5h16v2H4zm0 6h16v2H4zm0 6h10v2H4z" />
+          </svg>
+        </span>
+      </div>
+      <p class="stat-card-footer"><span class="value-muted">Sample period comparison</span></p>
+    </article>
+
+    <article class="stat-card">
+      <div class="stat-card-head">
+        <div class="stat-card-content">
+          <p class="stat-card-label">Sample information</p>
+          <p class="stat-card-value">36</p>
+        </div>
+        <span class="icon-tile icon-tile-info">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M11 7h2v2h-2zm0 4h2v6h-2zm1-9a10 10 0 100 20 10 10 0 000-20z" />
+          </svg>
+        </span>
+      </div>
+      <p class="stat-card-footer"><span class="value-muted">Sample secondary line</span></p>
+    </article>
+
+    <article class="stat-card">
+      <div class="stat-card-head">
+        <div class="stat-card-content">
+          <p class="stat-card-label">Sample positive</p>
+          <p class="stat-card-value value-positive">+$4,120.00</p>
+        </div>
+        <span class="icon-tile icon-tile-success">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M9 16.2L4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z" />
+          </svg>
+        </span>
+      </div>
+      <p class="stat-card-footer"><span class="value-positive">Sample increase</span></p>
+    </article>
+
+    <article class="stat-card">
+      <div class="stat-card-head">
+        <div class="stat-card-content">
+          <p class="stat-card-label">Sample provisional</p>
+          <p class="stat-card-value">Unavailable</p>
+        </div>
+        <span class="icon-tile icon-tile-warning">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M1 21h22L12 2zm12-3h-2v-2h2zm0-4h-2v-4h2z" />
+          </svg>
+        </span>
+      </div>
+      <p class="stat-card-footer"><span class="value-muted">Sample data-quality note</span></p>
+    </article>
+
+    <article class="stat-card">
+      <div class="stat-card-head">
+        <div class="stat-card-content">
+          <p class="stat-card-label">Sample negative</p>
+          <p class="stat-card-value value-negative">-$318.50</p>
+        </div>
+        <span class="icon-tile icon-tile-danger">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M19 6.4L17.6 5 12 10.6 6.4 5 5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12z" />
+          </svg>
+        </span>
+      </div>
+      <p class="stat-card-footer"><span class="value-negative">Sample decrease</span></p>
+    </article>
+
+    <article class="stat-card">
+      <div class="stat-card-head">
+        <div class="stat-card-content">
+          <p class="stat-card-label">Sample default tile</p>
+          <p class="stat-card-value">7</p>
+        </div>
+        <span class="icon-tile">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M12 2l3 7h7l-5.5 4.5L18 21l-6-4-6 4 1.5-7.5L2 9h7z" />
+          </svg>
+        </span>
+      </div>
+    </article>
+  </section>
+
+  <!-- Buttons, including the disabled state of every variant. -->
+  <section class="card">
+    <div class="card-header">
+      <h2 class="card-title">Buttons</h2>
+      <button type="button" class="btn btn-link">Header link action</button>
+    </div>
+    <div class="card-body">
+      <div class="flex flex-wrap items-center gap-3">
+        <button type="button" class="btn btn-primary">Primary</button>
+        <button type="button" class="btn btn-secondary">Secondary</button>
+        <button type="button" class="btn btn-danger">Delete</button>
+        <button type="button" class="btn btn-link">Link</button>
+        <button type="button" class="btn btn-sm btn-primary">Small primary</button>
+      </div>
+      <div class="mt-4 flex flex-wrap items-center gap-3">
+        <button type="button" class="btn btn-primary" disabled>Primary</button>
+        <button type="button" class="btn btn-secondary" disabled>Secondary</button>
+        <button type="button" class="btn btn-danger" disabled>Delete</button>
+        <button type="button" class="btn btn-link" disabled>Link</button>
+        <button type="button" class="btn btn-sm btn-secondary" disabled>Small secondary</button>
+      </div>
+    </div>
+    <div class="card-footer">Hover adds the shared dropdown shadow; disabled removes it.</div>
+  </section>
+
+  <!-- Table, with a numeric column and value classes. -->
+  <section class="card">
+    <div class="card-header">
+      <h2 class="card-title">Table</h2>
+      <span class="badge badge-neutral">Sample</span>
+    </div>
+    <div class="card-body overflow-x-auto p-0">
+      <table class="table">
+        <thead class="table-head">
+          <tr>
+            <th scope="col" class="table-cell">Item</th>
+            <th scope="col" class="table-cell">Status</th>
+            <th scope="col" class="table-cell table-num">Quantity</th>
+            <th scope="col" class="table-cell table-num">Result</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="table-row">
+            <td class="table-cell">Sample item A</td>
+            <td class="table-cell"><span class="badge badge-success">Complete</span></td>
+            <td class="table-cell table-num">120</td>
+            <td class="table-cell table-num value-positive">+$82.40</td>
+          </tr>
+          <tr class="table-row">
+            <td class="table-cell">Sample item B</td>
+            <td class="table-cell"><span class="badge badge-warning">Pending</span></td>
+            <td class="table-cell table-num">18</td>
+            <td class="table-cell table-num"><span class="value-muted">Unknown</span></td>
+          </tr>
+          <tr class="table-row">
+            <td class="table-cell">Sample item C</td>
+            <td class="table-cell"><span class="badge badge-danger">Failed</span></td>
+            <td class="table-cell table-num">0</td>
+            <td class="table-cell table-num value-negative">-$12.05</td>
+          </tr>
+          <tr class="table-row">
+            <td class="table-cell">Sample item D</td>
+            <td class="table-cell"><span class="badge badge-info">Imported</span></td>
+            <td class="table-cell table-num">64</td>
+            <td class="table-cell table-num">$0.00</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="card-footer"><span class="value-muted">4 sample rows</span></div>
+  </section>
+
+  <!-- Alerts. -->
+  <section class="card">
+    <div class="card-header">
+      <h2 class="card-title">Alerts</h2>
+    </div>
+    <div class="card-body flex flex-col gap-4">
+      <div class="alert alert-success">
+        <p class="alert-title">Sample success title</p>
+        <p>Sample success body text explaining the outcome.</p>
+      </div>
+      <div class="alert alert-warning">
+        <p class="alert-title">Sample warning title</p>
+        <p>Sample warning body text explaining the incomplete result.</p>
+      </div>
+      <div class="alert alert-danger">
+        <p class="alert-title">Sample error title</p>
+        <p>Sample error body text with the server validation detail.</p>
+      </div>
+      <div class="alert alert-info">
+        <p class="alert-title">Sample information title</p>
+        <p>Sample information body text about the current filter.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Form fields, with hint, error and disabled control. -->
+  <section class="card">
+    <div class="card-header">
+      <h2 class="card-title">Form fields</h2>
+    </div>
+    <div class="card-body grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <div class="field">
+        <label class="field-label" for="showcase-name">Sample name</label>
+        <input id="showcase-name" type="text" placeholder="Sample placeholder" />
+        <p class="field-hint" id="showcase-name-hint">Sample hint describing the expected value.</p>
+      </div>
+      <div class="field">
+        <label class="field-label" for="showcase-amount">Sample amount</label>
+        <input
+          id="showcase-amount"
+          type="text"
+          value="-1"
+          aria-describedby="showcase-amount-error"
+          aria-invalid="true"
+        />
+        <p class="field-error" id="showcase-amount-error" role="alert">
+          Sample error: enter an amount of zero or more.
+        </p>
+      </div>
+      <div class="field">
+        <label class="field-label" for="showcase-category">Sample category</label>
+        <select id="showcase-category">
+          <option>Sample option one</option>
+          <option>Sample option two</option>
+        </select>
+        <p class="field-hint">Sample hint for a select.</p>
+      </div>
+      <div class="field">
+        <label class="field-label" for="showcase-locked">Sample locked value</label>
+        <input id="showcase-locked" type="text" value="Sample read-only value" disabled />
+        <p class="field-hint">Disabled controls drop to 50% with no hover affordance.</p>
+      </div>
+      <div class="field sm:col-span-2">
+        <label class="field-label" for="showcase-notes">Sample notes</label>
+        <textarea id="showcase-notes" rows="3" placeholder="Sample placeholder"></textarea>
+      </div>
+    </div>
+    <div class="card-footer flex flex-wrap items-center gap-3">
+      <button type="button" class="btn btn-primary">Save</button>
+      <button type="button" class="btn btn-link">Cancel</button>
+    </div>
+  </section>
+</div>

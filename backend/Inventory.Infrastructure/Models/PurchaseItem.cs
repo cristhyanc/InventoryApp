@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations.Schema;
 using System.Text.Json.Serialization;
+using Inventory.Domain.Gst;
 
 namespace Inventory.Infrastructure.Models;
 
@@ -22,6 +23,17 @@ public class PurchaseItem : IBusinessOwned
     public virtual Product? Product { get; set; }
     public decimal Quantity { get; set; }
     public decimal UnitCost { get; set; }
+
+    /// <summary>
+    /// This line's own GST classification and its provenance (issue #429). GST is classified per
+    /// line, not once for the whole purchase. Both default to <c>Unknown</c>, which is what the
+    /// additive migration leaves on every existing line and what a new line carries until a person
+    /// classifies it. Classification is accounting data only: it never affects
+    /// <see cref="UnitCost"/>, AVCO, or the restock stock movement this line creates.
+    /// </summary>
+    public GstClassification GstClassification { get; set; }
+    public GstClassificationSource GstClassificationSource { get; set; }
+
     [JsonIgnore]
     public virtual ICollection<SupplierOrderReceiptAllocation> SupplierOrderAllocations { get; set; } = new List<SupplierOrderReceiptAllocation>();
 

@@ -1,8 +1,14 @@
+using Inventory.Domain.Gst;
+
 namespace Inventory.Application.Purchases;
 
 /// <summary>
 /// One purchase as the Application layer sees it: its fields, its supplier detail, its line
 /// items, and the stored-document metadata for its supporting scan/photo.
+///
+/// Each of the two purchase-level charges carries its own persisted GST classification and
+/// provenance (issue #429); they are never nullable here, because a read always has a stored state,
+/// and that state is <c>Unknown</c>/<c>Unknown</c> for everything nobody has classified.
 /// </summary>
 public sealed record PurchaseRecord(
     int Id,
@@ -11,7 +17,11 @@ public sealed record PurchaseRecord(
     string? Notes,
     decimal? TotalAmount,
     decimal? DeliveryCost,
+    GstClassification DeliveryGstClassification,
+    GstClassificationSource DeliveryGstClassificationSource,
     decimal? PackageCost,
+    GstClassification PackageGstClassification,
+    GstClassificationSource PackageGstClassificationSource,
     DateTime PurchaseDate,
     int? SupplierId,
     PurchaseSupplierRecord? Supplier,
@@ -26,9 +36,19 @@ public sealed record PurchaseRecord(
 public sealed record PurchaseSupplierRecord(
     int Id, string Name, string? ContactName, string? Phone, string? Email, string? Address);
 
-/// <summary>One persisted purchase line item, with its product's catalogue snapshot.</summary>
+/// <summary>
+/// One persisted purchase line item, with its own GST classification and provenance (issue #429)
+/// and its product's catalogue snapshot.
+/// </summary>
 public sealed record PurchaseItemRecord(
-    int Id, int ReceiptId, long ProductId, decimal Quantity, decimal UnitCost, PurchaseProductSummaryRecord? Product);
+    int Id,
+    int ReceiptId,
+    long ProductId,
+    decimal Quantity,
+    decimal UnitCost,
+    GstClassification GstClassification,
+    GstClassificationSource GstClassificationSource,
+    PurchaseProductSummaryRecord? Product);
 
 /// <summary>
 /// The catalogue snapshot a purchase line item's product navigation carries. It mirrors only the

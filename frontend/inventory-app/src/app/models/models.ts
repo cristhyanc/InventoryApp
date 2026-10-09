@@ -7,6 +7,28 @@ export enum StockAdjustmentReason {
   MachineRefill = 5
 }
 
+/**
+ * A product's configured GST rule (issue #430), from `/api/products/{id}/gst-rule`. It is rule
+ * configuration only: it never reclassifies an existing purchase and never affects cost.
+ */
+export interface ProductGstRule {
+  productId: number;
+  gstRule: GstClassification;
+}
+
+/**
+ * A supplier's explicitly configured GST defaults (issue #430), from
+ * `/api/suppliers/{id}/gst-defaults`. The delivery and package defaults are separate from the
+ * product-line default because a charge never inherits a product line's classification, and a
+ * default only applies where the purchased product has no rule of its own.
+ */
+export interface SupplierGstDefaults {
+  supplierId: number;
+  productLineGstDefault: GstClassification;
+  deliveryGstDefault: GstClassification;
+  packageGstDefault: GstClassification;
+}
+
 export interface Category {
   id: number;
   name: string;
@@ -67,6 +89,97 @@ export interface InventoryValuationSummary {
   isComplete: boolean;
   productsWithUnknownCost: number;
   totalProducts: number;
+}
+
+/**
+ * One summary period, in both time bases the home Dashboard summary measures in (issue #459): the
+ * UTC instants its sales are selected between (inclusive at both ends) and the Sydney business
+ * dates those instants cover.
+ */
+export interface DashboardSummaryPeriod {
+  startUtc: string;
+  endUtc: string;
+  firstBusinessDate: string;
+  lastBusinessDate: string;
+}
+
+/**
+ * The "Sales this week" card (issue #459, rendered by issue #460). `sales`/`transactionCount` are
+ * known figures over `period` - zero means no completed sale was recorded, not missing data. Every
+ * comparison field is `null` when `isComparisonAvailable` is `false`, and `changePercent` is also
+ * `null` for a zero prior period, because there is no honest percentage change from nothing;
+ * `comparisonNote` carries the reason to show instead. Angular never recomputes any of this.
+ */
+export interface DashboardSalesThisWeek {
+  sales: number;
+  transactionCount: number;
+  period: DashboardSummaryPeriod;
+  comparisonPeriod: DashboardSummaryPeriod;
+  isComparisonAvailable: boolean;
+  comparisonSales: number | null;
+  comparisonTransactionCount: number | null;
+  changeAmount: number | null;
+  changePercent: number | null;
+  comparisonNote: string | null;
+}
+
+/**
+ * The "Needs refill" card. `machinesNeedingRefill` is the distinct machine count with at least one
+ * low or empty selection; the low/empty selection and machine counts are supporting detail only -
+ * see `Inventory.Domain.Machines.MachineRefillAlertPolicy` for the overlap semantics this mirrors.
+ * `machinesEvaluated`/`selectionsEvaluated` are what make a zero honest: zero of zero is nothing to
+ * evaluate, zero of many is everything adequately stocked.
+ */
+export interface DashboardRefillSummary {
+  machinesNeedingRefill: number;
+  machinesWithEmptySelections: number;
+  machinesWithLowSelections: number;
+  emptySelectionCount: number;
+  lowSelectionCount: number;
+  machinesEvaluated: number;
+  selectionsEvaluated: number;
+}
+
+/**
+ * The "Needs ordering" card: the distinct catalogue products the authoritative reorder policy says
+ * must be purchased - the same set `GET /api/products/alerts/low-stock` lists for the unnarrowed
+ * catalogue. `productsEvaluated` is the whole business-owned catalogue the count was taken over.
+ */
+export interface DashboardOrderingSummary {
+  productsNeedingOrdering: number;
+  productsEvaluated: number;
+}
+
+/**
+ * The "Inventory" card. The three figures have deliberately different scopes and are not
+ * interchangeable: `inventoryValueAtCost` is the business-owned perpetual AVCO valuation, `null`
+ * whenever `isInventoryValueComplete` is `false` (an unknown cost, never a real `$0.00`);
+ * `unitsInStorage` is physical storage/home stock only - it excludes units already loaded into a
+ * machine and is never a valuation input; `productCount` is the whole catalogue, active and
+ * inactive, that the other two figures are taken over.
+ */
+export interface DashboardInventorySummary {
+  inventoryValueAtCost: number | null;
+  isInventoryValueComplete: boolean;
+  productsWithUnknownCost: number;
+  productCount: number;
+  unitsInStorage: number;
+}
+
+/**
+ * The authoritative home Dashboard summary contract, from `GET /api/dashboard/summary`
+ * (`Inventory.Application.Dashboard.GetDashboardSummary`, issue #459) and rendered by
+ * `DashboardComponent` (issue #460). The backend owns every sales, refill, ordering and valuation
+ * decision behind the four headline cards; Angular displays the figures and completeness flags
+ * exactly as returned, with no revenue, percentage, refill, reorder or valuation formula of its own.
+ */
+export interface DashboardSummary {
+  asOfUtc: string;
+  businessDate: string;
+  salesThisWeek: DashboardSalesThisWeek;
+  needsRefill: DashboardRefillSummary;
+  needsOrdering: DashboardOrderingSummary;
+  inventory: DashboardInventorySummary;
 }
 
 /**
@@ -376,6 +489,41 @@ export interface RestockCostSuggestion {
   purchaseDate: string | null;
 }
 
+/**
+ * The GST status of one purchase component - a purchase line, or the purchase's delivery or package
+ * charge (issue #429, under the approved GST design of parent issue #62). The numbers are the
+ * contract the API serializes, so they must stay in step with the backend
+ * `Inventory.Domain.Gst.GstClassification`.
+ *
+ * `Unknown` is a real persisted state, not a missing value: it contributes no input GST and stays
+ * visibly unresolved. Never present it as GST-free, and never derive GST from an amount here - the
+ * server returns the calculated figures (`PurchaseGstSummary`).
+ *
+ * The same vocabulary describes a product's GST rule and a supplier's GST defaults (issue #430);
+ * there `Unknown` means "no rule configured", which must stay distinct from an explicit `GstFree`
+ * rule.
+ */
+export enum GstClassification {
+  Unknown = 0,
+  Taxable = 1,
+  GstFree = 2
+}
+
+/**
+ * How a `GstClassification` was established, as the API returns it (backend
+ * `Inventory.Domain.Gst.GstClassificationSource`). It is audit provenance, never submitted by the
+ * client: the server records a person's explicit choice as `Manual`. A purchase edit therefore omits
+ * the classifications the person did not change, so a rule-derived provenance survives an unrelated
+ * edit.
+ */
+export enum GstClassificationSource {
+  Unknown = 0,
+  Manual = 1,
+  ProductRule = 2,
+  SupplierDefault = 3,
+  SupplierFeeDefault = 4
+}
+
 // The Purchase business record served under the "/api/purchases" JSON contract
 // (see backend Purchase.cs / PurchaseResponseDto).
 export interface Purchase {
@@ -384,7 +532,11 @@ export interface Purchase {
   notes?: string | null;
   totalAmount?: number | null;
   deliveryCost?: number | null;
+  deliveryGstClassification?: GstClassification;
+  deliveryGstClassificationSource?: GstClassificationSource;
   packageCost?: number | null;
+  packageGstClassification?: GstClassification;
+  packageGstClassificationSource?: GstClassificationSource;
   purchaseDate: string;
   supplierId?: number | null;
   supplier?: Supplier | null;
@@ -403,9 +555,24 @@ export interface PurchaseValidation {
   totalDifference?: number | null;
 }
 
+/**
+ * The saved purchase's input GST as the API calculated it (issue #431). `unresolvedComponentCount`
+ * and `unresolvedAmount` cover the components nobody has classified; they are reported separately so
+ * an incomplete purchase never looks like a resolved $0. Absent delivery/package charges are not
+ * components and are never unresolved.
+ *
+ * These figures describe the saved purchase. They do not reflect unsaved edits.
+ */
+export interface PurchaseGstSummary {
+  inputGst: number;
+  unresolvedComponentCount: number;
+  unresolvedAmount: number;
+}
+
 export interface PurchaseResponse {
   purchase: Purchase;
   validation?: PurchaseValidation | null;
+  gst?: PurchaseGstSummary | null;
 }
 
 export interface PurchaseItem {
@@ -415,6 +582,8 @@ export interface PurchaseItem {
   product?: Product | null;
   quantity: number;
   unitCost: number;
+  gstClassification?: GstClassification;
+  gstClassificationSource?: GstClassificationSource;
   lineTotal?: number;
 }
 
