@@ -8,8 +8,9 @@
  */
 
 /**
- * A navigable destination. `icon` is decorative and only the top-level rail needs one; it names
- * an entry in `ICON_PATHS` (issue #411) rendered through `app-icon`.
+ * A navigable destination. `icon` is decorative and only the top-level rail needs one; it names a
+ * glyph the sidebar renders through `app-icon` in its outlined variant, so the name must have an
+ * entry in `OUTLINED_ICON_SHAPES` (issues #411 and #456) and not only in the Rounded `ICON_PATHS`.
  */
 export interface NavLink {
   readonly kind: 'link';
@@ -81,10 +82,42 @@ export const primaryNavigation: readonly NavItem[] = [
       link('Imports', '/admin/imports'),
       link('Historical Cost Recovery', '/admin/historical-cost-recovery'),
       link('AVCO Transition', '/admin/avco-transition'),
-      link('Costing Repair', '/admin/costing-repair')
+      link('Costing Repair', '/admin/costing-repair'),
+      link('Historical GST Classification', '/admin/historical-gst-classification'),
+      link('Nayax Sale Timestamp Repair', '/admin/nayax-sale-timestamp-repair')
     ]
   }
 ];
+
+/**
+ * The super-admin platform diagnostics page (issue #335).
+ *
+ * It is deliberately not part of `primaryNavigation`, because it is not a destination every
+ * signed-in operator has: it is composed into the `Admin` group by `navigationFor` only while
+ * `GET /api/admin/diagnostics/access` confirms the signed-in actor is the configured platform
+ * administrator. The link is presentation, never a boundary - `/admin/diagnostics` entered
+ * directly still resolves, and both diagnostics endpoints authorize every request themselves, so
+ * a hidden link hides a page rather than protecting one.
+ */
+export const platformDiagnosticsNavLink: NavLink = link('Platform Diagnostics', '/admin/diagnostics');
+
+/**
+ * The navigation to render for an actor the diagnostics API has, or has not, confirmed as the
+ * platform administrator. It adds exactly one destination to the end of the `Admin` group and
+ * changes nothing else, and it copies rather than mutates, so `primaryNavigation` stays the
+ * navigation everyone else sees.
+ */
+export function navigationFor(hasPlatformDiagnosticsAccess: boolean): readonly NavItem[] {
+  if (!hasPlatformDiagnosticsAccess) {
+    return primaryNavigation;
+  }
+
+  return primaryNavigation.map((item) =>
+    item.kind === 'group' && item.label === 'Admin'
+      ? { ...item, children: [...item.children, platformDiagnosticsNavLink] }
+      : item
+  );
+}
 
 /** Every destination in the navigation, top-level links first, then each group's children. */
 export function navLinks(items: readonly NavItem[]): readonly NavLink[] {

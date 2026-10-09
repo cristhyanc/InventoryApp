@@ -17,7 +17,7 @@ public readonly record struct PurchaseTotalValidationResult(
 /// </summary>
 public static class PurchaseTotalValidationPolicy
 {
-    public const decimal Tolerance = 0.02m;
+    public const decimal Tolerance = 1.00m;
 
     public static PurchaseTotalValidationResult Evaluate(
         decimal? totalAmount,
@@ -30,7 +30,12 @@ public static class PurchaseTotalValidationPolicy
 
         var itemSubtotal = items.Sum(i => i.Quantity * i.UnitCost);
         var calculatedTotal = itemSubtotal + (deliveryCost ?? 0m) + (packageCost ?? 0m);
-        var difference = Math.Abs(calculatedTotal - totalAmount.Value);
+        // Quantity/unit-cost products can carry sub-cent digits that never reach the entered total
+        // (itself always currency-precision), so the comparison rounds to cents the same way
+        // PurchaseGstPolicy.RoundToCents does - away from zero - before it is held against Tolerance.
+        // Otherwise a sub-cent artifact could push a difference that is exactly $1.00 in currency
+        // terms just past the boundary and trigger a false warning.
+        var difference = Math.Round(Math.Abs(calculatedTotal - totalAmount.Value), 2, MidpointRounding.AwayFromZero);
         var hasMismatch = difference > Tolerance;
 
         return new PurchaseTotalValidationResult(

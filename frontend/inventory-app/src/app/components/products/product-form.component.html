@@ -1,87 +1,104 @@
-<h1 class="mb-6 text-2xl font-semibold text-slate-800">Edit Product</h1>
+<div class="page">
+  <header class="page-header">
+    <h1 class="page-title">Edit Product</h1>
+  </header>
 
-<div class="mx-auto max-w-2xl rounded-xl bg-white p-6 shadow-sm">
-  @if (error) {
-    <p class="mb-4 text-sm text-red-600">{{ error }}</p>
-  }
+  <div class="card w-full">
+    <div class="card-body">
+      @if (error) {
+        <p class="field-error mb-4">{{ error }}</p>
+      }
 
-  <p class="mb-4 rounded-md bg-blue-50 px-3 py-2 text-sm text-blue-800">Product name, category, and unit price are managed by Nayax and cannot be edited here.</p>
-
-  <form class="space-y-4" (ngSubmit)="save()">
-    <div>
-      <label class="mb-1 block text-sm font-medium text-slate-700">Name *</label>
-      <input [(ngModel)]="form.name" name="name" readonly />
-    </div>
-
-    <div>
-      <label class="mb-1 block text-sm font-medium text-slate-700">SKU</label>
-      <input [(ngModel)]="form.sku" name="sku" placeholder="Optional, e.g. SNK-001" />
-    </div>
-
-    <div>
-      <label class="mb-1 block text-sm font-medium text-slate-700">Description</label>
-      <textarea [(ngModel)]="form.description" name="description" rows="2"></textarea>
-    </div>
-
-    <div>
-      <label class="mb-1 block text-sm font-medium text-slate-700">Category</label>
-      <select [(ngModel)]="form.categoryId" name="categoryId" disabled>
-        <option value="">None</option>
-        @for (c of categories; track c.id) {
-          <option [ngValue]="c.id">{{ c.name }}</option>
-        }
-      </select>
-    </div>
-
-    <div>
-      <label class="mb-1 block text-sm font-medium text-slate-700">Supplier</label>
-      <select [(ngModel)]="form.supplierId" name="supplierId">
-        <option value="">None</option>
-        @for (s of suppliers; track s.id) {
-          <option [ngValue]="s.id">{{ s.name }}</option>
-        }
-      </select>
-    </div>
-
-    <div class="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-      <input [(ngModel)]="form.isActive" name="isActive" type="checkbox" class="h-4 w-4 rounded border-slate-300 text-blue-600" />
-      <label class="text-sm font-medium text-slate-700">Active product</label>
-    </div>
-
-    <div>
-      <label class="mb-1 block text-sm font-medium text-slate-700">Unit Price ($) *</label>
-      <input [(ngModel)]="form.unitPrice" name="unitPrice" type="number" readonly />
-    </div>
-
-    <div class="grid gap-4 sm:grid-cols-2">
-      <div>
-        <label class="mb-1 block text-sm font-medium text-slate-700">Low Stock Threshold *</label>
-        <input [(ngModel)]="form.lowStockThreshold" name="lowStockThreshold" type="number" min="0" step="1" required />
-        <p class="mt-1 text-xs text-slate-500">Minimum home stock before a new order is needed.</p>
+      <div class="alert alert-info mb-4">
+        <p class="alert-title">Product name, category, and unit price are managed by Nayax and cannot be edited here.</p>
       </div>
-      <div>
-        <label class="mb-1 block text-sm font-medium text-slate-700">Restock To *</label>
-        <input [(ngModel)]="form.restockTo" name="restockTo" type="number" min="0" step="1" required />
-        <p class="mt-1 text-xs text-slate-500">Target home stock after machines are replenished and the order is received.</p>
-      </div>
-    </div>
-    @if (form.restockTo < form.lowStockThreshold) {
-      <p class="text-sm text-red-600">Restock To must be greater than or equal to the Low Stock Threshold.</p>
-    }
 
-    <div>
-      <label class="mb-1 block text-sm font-medium text-slate-700">Unit Label</label>
-      <input [(ngModel)]="form.unit" name="unit" placeholder="e.g. bag, can, bottle" />
-    </div>
+      <form class="space-y-4" (ngSubmit)="save()">
+        <!--
+          The card fills the content area (issue #478), so the fields are laid out in columns
+          rather than stretched: one column on a narrow screen, two from `md` and three from `xl`.
+          The description spans the row at `md`, where a two-row textarea beside a single short
+          input reads poorly, and takes its own column at `xl`, where a third column exists for it.
+        -->
+        <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <label class="field">
+            <span class="field-label">Name *</span>
+            <input [(ngModel)]="form.name" name="name" readonly />
+          </label>
 
-    <div class="flex flex-wrap gap-3 pt-2">
-      <button type="submit" class="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60" [disabled]="saving || form.restockTo < form.lowStockThreshold">Update Product</button>
-      <a routerLink="/products" class="inline-flex items-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Cancel</a>
-    </div>
-  </form>
+          <label class="field">
+            <span class="field-label">SKU</span>
+            <input [(ngModel)]="form.sku" name="sku" placeholder="Optional, e.g. SNK-001" />
+          </label>
 
-  @if (productId) {
-    <app-product-gst-rule [productId]="productId"></app-product-gst-rule>
-    <app-product-price-history [productId]="productId"></app-product-price-history>
-  }
+          <label class="field md:col-span-2 xl:col-span-1">
+            <span class="field-label">Description</span>
+            <textarea [(ngModel)]="form.description" name="description" rows="2"></textarea>
+          </label>
+
+          <label class="field">
+            <span class="field-label">Category</span>
+            <select [(ngModel)]="form.categoryId" name="categoryId" disabled>
+              <option value="">None</option>
+              @for (c of categories; track c.id) {
+                <option [ngValue]="c.id">{{ c.name }}</option>
+              }
+            </select>
+          </label>
+
+          <label class="field">
+            <span class="field-label">Supplier</span>
+            <select [(ngModel)]="form.supplierId" name="supplierId">
+              <option value="">None</option>
+              @for (s of suppliers; track s.id) {
+                <option [ngValue]="s.id">{{ s.name }}</option>
+              }
+            </select>
+          </label>
+
+          <!-- `self-end` keeps this label-less control's box on the same baseline as the inputs beside it. -->
+          <label class="flex items-center gap-2 self-end rounded-md-control border border-md-gray-200 bg-md-gray-100 px-3 py-2">
+            <input [(ngModel)]="form.isActive" name="isActive" type="checkbox" class="h-4 w-4 border-md-gray-300 text-md-dark" />
+            <span class="field-label">Active product</span>
+          </label>
+
+          <label class="field">
+            <span class="field-label">Unit Price ($) *</span>
+            <input [(ngModel)]="form.unitPrice" name="unitPrice" type="number" readonly />
+          </label>
+
+          <label class="field">
+            <span class="field-label">Low Stock Threshold *</span>
+            <input [(ngModel)]="form.lowStockThreshold" name="lowStockThreshold" type="number" min="0" step="1" required />
+            <span class="field-hint">Minimum home stock before a new order is needed.</span>
+          </label>
+
+          <label class="field">
+            <span class="field-label">Restock To *</span>
+            <input [(ngModel)]="form.restockTo" name="restockTo" type="number" min="0" step="1" required />
+            <span class="field-hint">Target home stock after machines are replenished and the order is received.</span>
+          </label>
+
+          @if (form.restockTo < form.lowStockThreshold) {
+            <p class="field-error md:col-span-2 xl:col-span-3">Restock To must be greater than or equal to the Low Stock Threshold.</p>
+          }
+
+          <label class="field">
+            <span class="field-label">Unit Label</span>
+            <input [(ngModel)]="form.unit" name="unit" placeholder="e.g. bag, can, bottle" />
+          </label>
+        </div>
+
+        <div class="flex flex-wrap gap-3 pt-2">
+          <button type="submit" class="btn btn-primary" [disabled]="saving || form.restockTo < form.lowStockThreshold">Update Product</button>
+          <a routerLink="/products" class="btn btn-secondary">Cancel</a>
+        </div>
+      </form>
+
+      @if (productId) {
+        <app-product-gst-rule [productId]="productId"></app-product-gst-rule>
+        <app-product-price-history [productId]="productId"></app-product-price-history>
+      }
+    </div>
+  </div>
 </div>

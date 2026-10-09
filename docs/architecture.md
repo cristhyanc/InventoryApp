@@ -307,6 +307,24 @@ This procedure, and the non-destructive local check in the README, do not touch 
 connection string, credential, or data; every example above uses a placeholder path that a human
 operator supplies for their own environment.
 
+**Database operations that change stored business data are named maintenance operations, never ad hoc
+SQL.** `bootstrap-business`, `migrate-documents`, the historical GST classification Preview/Apply, the
+costing repair and the [Nayax sale timestamp repair](#nayax-sale-timestamp-repair-preview-then-apply-issue-472)
+are the shape every such operation takes: an explicit, reviewable preview; an apply bound to that
+preview and refused when the database moved underneath it; an audit row naming what changed, from
+which verified source, and which operator confirmed it; and idempotence, so running it again after it
+succeeded changes nothing. None of them is reachable by submitting SQL, and the platform diagnostics
+API must never become their execution path (AGENTS.md § Architecture rules, § Database and
+migrations).
+
+Two of this procedure's steps are load-bearing for such an operation, and the repair runbook below
+names them explicitly: **step 2 and 3 - a verified snapshot taken and `PRAGMA integrity_check`ed
+before the apply** - are the recovery point, because an apply that succeeded is not undone by the
+application (there is no reversal path for an audited historical correction, by design); and **step 5
+- the deliberate, human-run restore** - is the only rollback for a repair an operator later judges
+wrong. Inside one apply, rollback is the database transaction: a failure leaves nothing behind, which
+is a different guarantee from undoing a committed repair and must not be confused with it.
+
 #### Scheduling the backup with an App Service WebJob (issue #333)
 
 A backup must happen whether or not anyone signs in, which is the one workload in this application
@@ -817,11 +835,19 @@ complete until they are:
 ```text
 InventoryApp/
 ├── backend/
-│   ├── InventoryApi/
-│   │   ├── Adapters/Mapping/       Response-DTO projections only; no persistence adapter since issue #309
+│   ├── InventoryApi/                HTTP boundary and composition root only; the folder set is frozen by ApiLayerOwnershipTests (issue #154)
+│   │   ├── Adapters/Mapping/        Response-DTO projections only; no persistence adapter since issue #309
+│   │   ├── Adapters/Nayax/          E2ETestNayaxLynxClient, the test double the E2ETest host registers (issue #46)
+│   │   ├── Adapters/PlatformDiagnostics/  The ILogger audit adapter, here because the event carries the request correlation id (issue #336)
+│   │   ├── App_Data/jobs/           The App Service WebJob that triggers the backup command (issue #333)
+│   │   ├── Auth/                    Authentication, authorization, BusinessScopeMiddleware, the E2E test host's scheme and fixture
 │   │   ├── Bootstrap/               DatabaseSchemaStartup and the human-invoked commands (host-owned, calling Infrastructure services)
 │   │   ├── Controllers/
-│   │   ├── DTOs/
+│   │   ├── DTOs/                    API-owned transport contracts
+│   │   ├── Http/                    Exception handlers (ProblemDetails mapping) and the liveness/readiness health checks
+│   │   ├── Observability/           Application Insights telemetry registration (issue #165)
+│   │   ├── Properties/              Launch and service-dependency settings
+│   │   ├── Swagger/                 OpenAPI configuration and the published-schema compatibility boundary
 │   │   ├── Program.cs               Composition root; chooses the SQLite provider
 │   │   └── InventoryApi.csproj
 │   ├── Inventory.Domain/            NayaxFeeSettings rule, reporting policies/calculations (Inventory.Domain.Reporting.<Feature>), Purchases.PurchaseTotalValidationPolicy; other features not yet migrated
@@ -837,7 +863,7 @@ InventoryApp/
 ├── frontend/inventory-app/
 │   ├── src/app/
 │   │   ├── components/          Feature pages and shared UI
-│   │   ├── layout/              Application shell navigation: sidebar, navigation data, user menu
+│   │   ├── layout/              Application shell navigation: sidebar, navigation data, user menu, shared breadcrumbs (breadcrumbs/)
 │   │   ├── models/              Shared TypeScript contracts
 │   │   ├── services/            API clients and UI services
 │   │   ├── auth/                Entra redirect callback and the browser authentication providers
@@ -882,9 +908,9 @@ flowchart TD
 
 ## Current pressure points
 
-- HTTP, use cases and domain calculations still live in one project for every feature area pending migration (the remaining direct-`AppDbContext` controllers). EF Core, Nayax, file storage and export generation no longer do: issue #306 moved the non-EF adapters, issue #307 `AppDbContext`, the EF entities and the migrations, and issues #308/#309 the whole EF adapter family, so `InventoryApi` holds no persistence implementation. Reporting is no longer part of this pressure point at all: its use cases live in `Inventory.Application.Reporting.<Feature>`, its calculations in `Inventory.Domain.Reporting.<Feature>`, its CSV/XLSX byte encoding in `Inventory.Infrastructure.Reporting` (issue #306) and, since issue #308, its EF/Nayax fact providers in `Inventory.Infrastructure.Reporting.Persistence`; only its HTTP controller remains in `InventoryApi`. `Purchases.PurchaseTotalValidationPolicy`/`ComputePurchaseTotalValidation` were the first pieces of the purchase slice to move out (see the [Purchase rename plan](#purchase-rename-plan)); the purchase and supplier-order upload/update/delete orchestration followed in issue #281, and issue #304 removed the last `InventoryApi` services for them, so only their HTTP controllers and the API-owned response DTOs remain here.
+- ~~HTTP, use cases and domain calculations still live in one project.~~ **Resolved (issue #154).** `InventoryApi` is the HTTP boundary and composition root only; no business service, use-case orchestration, financial/classification rule or persistence implementation remains in it, and `ApiLayerOwnershipTests` fails if one returns — see [InventoryApi](#inventoryapi). EF Core, Nayax, file storage and export generation left first: issue #306 moved the non-EF adapters, issue #307 `AppDbContext`, the EF entities and the migrations, and issues #308/#309 the whole EF adapter family. Reporting had already left: its use cases live in `Inventory.Application.Reporting.<Feature>`, its calculations in `Inventory.Domain.Reporting.<Feature>`, its CSV/XLSX byte encoding in `Inventory.Infrastructure.Reporting` (issue #306) and, since issue #308, its EF/Nayax fact providers in `Inventory.Infrastructure.Reporting.Persistence`; only its HTTP controller remains in `InventoryApi`. `Purchases.PurchaseTotalValidationPolicy`/`ComputePurchaseTotalValidation` were the first pieces of the purchase slice to move out (see the [Purchase rename plan](#purchase-rename-plan)); the purchase and supplier-order upload/update/delete orchestration followed in issue #281, and issue #304 removed the last `InventoryApi` services for them, so only their HTTP controllers and the API-owned response DTOs remain here.
 - The machine, site, purchase and inventory-cost-transition services no longer exist either: the transition services moved to `Inventory.Application.Costing` (issue #298), `PurchaseService`/`SupplierOrderService` were deleted by issue #304, and `MachineService`/`SiteService` by issue #302; their EF adapters (`EfPurchaseStore`/`EfSupplierOrderStore` and `EfMachineDashboardFactsStore`/`EfSiteFactsStore`) were the documented temporary API-owned persistence adapters until issue #309 relocated them to `Inventory.Infrastructure.Persistence`.
-- The site-commission controller still directly accesses `AppDbContext`. Fee-setting, categories/suppliers, and operating expenses no longer do (see the Nayax fee-settings slice above and the Operating expenses slice below); each goes through its slice's narrow persistence port, whose EF adapter is Infrastructure-owned since issue #309.
+- ~~The site-commission controller still directly accesses `AppDbContext`.~~ **Resolved.** No controller accesses a `DbContext`: the commission endpoints go through `Inventory.Application.Commissions` and `ISiteCommissionStore`, whose EF adapter is Infrastructure-owned since issue #309, exactly as fee settings, categories/suppliers and operating expenses do. Issue #154's `DbContext` rule pins it for every controller at once rather than per slice.
 - `Product` contains persistence state, business calculations, and transient Nayax/UI fields.
 - Several tests use EF Core InMemory where SQLite behavior may be more representative.
 - Frontend contracts are split between a broad `models.ts` file and service-local report interfaces. `reporting.service.ts` is already a large multi-report API client.
@@ -897,7 +923,11 @@ These are reasons to improve boundaries, not reasons for a wholesale rewrite.
 
 ## Backend target: pragmatic Clean Architecture with vertical slices
 
-The application remains a single deployable modular monolith. The intended projects are:
+The application remains a single deployable modular monolith. This is the structure the backend now
+has, not only the one it is heading for: the migration track below is complete through its final
+enforcement step (issue #154), and the only items still open are the two persistence-model and
+published-contract leftovers named in [Remove legacy structure](#backend-migration-track) item 11.
+The projects are:
 
 ```text
 backend/
@@ -1012,6 +1042,72 @@ Contains:
 
 Controllers do not implement accounting, inventory, persistence, or filesystem rules.
 
+**That list is now the complete and enforced ownership of this project (issue #154).** With every
+slice of #145-#153 migrated, `InventoryApi` is the HTTP boundary and the composition root and holds
+nothing else: no business service, no use-case orchestration, no financial or classification rule,
+and no persistence implementation. `ApiLayerOwnershipTests`
+(`backend/Inventory.IntegrationTests/Architecture/`) is where that is enforced rather than merely
+described, and each rule below fails by naming the offending type, file or line:
+
+- **No business service.** No type in the assembly has a name ending in `Service`. The composition
+  root's own `...ServiceCollectionExtensions`/`...Extensions` helpers are deliberately not matched:
+  registering a service is composition, implementing one is not.
+- **Neither retired layer folder.** No git-tracked file under `InventoryApi/Services` or
+  `InventoryApi/Adapters/Persistence`. Use-case and domain logic belongs in
+  `Inventory.Application`/`Inventory.Domain`, an EF adapter in `Inventory.Infrastructure`.
+- **Only the folders listed above.** The project's top-level git-tracked folders are frozen as an
+  exact set, each mapped to one of these responsibilities — `Adapters`, `App_Data`, `Auth`,
+  `Bootstrap`, `Controllers`, `DTOs`, `Http`, `Observability`, `Properties`, `Swagger`. Adding or
+  removing one is a decision about what the HTTP boundary is for, made here and in that test
+  together.
+- **Every controller delegates.** Each controller is constructed with at least one
+  `Inventory.Application` dependency, so a controller that reimplemented a rule inline — taking
+  nothing but an `ILogger` and computing the answer itself — fails rather than quietly satisfying
+  every negative rule. Only the constructor parameters answer this question, with generic
+  arguments and element types unwrapped so a use case injected as `IEnumerable<T>` still counts. An
+  `Inventory.Application` type in an action's parameter or return type does *not* satisfy it: a
+  controller applying a rule at the boundary itself would still bind and serialise the records a use
+  case returns, so counting its whole declared surface would answer "yes" for exactly the controller
+  this rule exists to catch. A regression fixture in the test holds that distinction in place.
+- **A `DbContext` only in the composition root and the operator commands.** Checked against the
+  compiled assembly, so a doc comment explaining why a type must *not* touch EF (as
+  `BusinessScopeMiddleware` does) is not read as the violation it forbids. Exactly four namespaces
+  may depend on `Microsoft.EntityFrameworkCore` or `Inventory.Infrastructure.Data`: the global
+  namespace `Program.cs` compiles into (the `AddDbContext`/`UseSqlite` provider decision and the one
+  scope that runs the startup schema step), `InventoryApi.Bootstrap` (the operator-only boundary
+  below), `InventoryApi.Http.HealthChecks` (the readiness probe, which exists to prove database
+  connectivity) and `InventoryApi.Auth.E2ETesting` (the disposable E2E host's fixture). Widening
+  that set is a decision about where unmediated or unrestricted data access may live, and therefore
+  a human one.
+- **No `DbSet` at all.** Enforced as an absolute over the git-tracked sources, in code and in
+  comments alike: the mapped model's query surface belongs to `Inventory.Infrastructure.Data.AppDbContext`.
+- **No persistence type in a controller's declared surface** — not a constructor parameter, injected
+  field, property, action parameter or return type, including the ones wrapped in
+  `Task<>`/`ActionResult<>`/`IEnumerable<>`. This is the metadata counterpart of the source scan
+  under "No controller names the persistence model" below, and neither subsumes the other: a source
+  scan cannot see an entity arriving through an aliased or generic type, and a declared-surface scan
+  cannot see a local variable.
+- **The financial and classification rules stay Domain-owned.** `EffectiveFinancialConfiguration`,
+  `SiteCommissionCalculator`, `PaymentMethodClassifier` and `NayaxTransactionStatusClassifier` are
+  declared exactly once each, in `Inventory.Domain.FinancialConfiguration`, in no other production
+  assembly, and no file under `InventoryApi` even names one — the endpoints call the migrated
+  `Inventory.Application` use cases, which apply them. See
+  [Financial and classification ownership](#temporary-api-owned-exception-and-its-enforcement-issue-145)
+  below.
+- **No entity query expression in the inner layers.** `Inventory.Domain` and
+  `Inventory.Application` declare no `IQueryable` and no `Expression<Func<...>>`: a port returns
+  already-materialised facts, which is what lets a use case be tested with a fake and a Domain rule
+  with plain values.
+- **No reference to the retired `InventoryApi.Services` namespace** anywhere in the project, so no
+  stale dependency-injection registration or `using` directive can point at code that no longer
+  exists. The inner layers keep naming it in their own doc comments on purpose, recording which
+  legacy implementation each migrated use case replaced.
+
+These complement rather than restate the per-slice ownership tests: `ProjectDependencyDirectionTests`
+reads the `.csproj` files and the git-tracked controller sources, `CleanArchitectureDependencyTests`
+checks the compiled layer-to-layer direction, and `PersistenceAdapterOwnershipTests`/
+`ReportingAdapterOwnershipTests` pin where each relocated adapter ended up.
+
 **InventoryApi owns no persistence model (issue #307) and no persistence adapter (issue #309).**
 `InventoryApi/Data`, `InventoryApi/Models` and `InventoryApi/Migrations` no longer exist;
 `ProjectDependencyDirectionTests.InventoryApi_owns_no_db_context_persistence_model_or_migration`
@@ -1071,12 +1167,32 @@ response side. Their wire enums are the ones that boundary keeps published:
 purchase/supplier-order schemas reference, so a same-named API-owned copy makes Swashbuckle fail
 document generation with a duplicate-schema-id error, and renaming or duplicating the published
 component is an API-contract change issue #305 excludes. This is a **temporary compatibility
-exception**, not a target state: those two enums move with the persistence models under #153/#154,
-not before them, and `InventoryApi.Tests.Swagger.StockAndExpenseSchemaContractTests` fails as soon as
-the pinned components stop publishing them, which is the signal that the stock DTOs can become fully
-API-owned with no document change.
+exception**, not a target state, and `InventoryApi.Tests.Swagger.StockAndExpenseSchemaContractTests`
+fails as soon as the pinned components stop publishing them, which is the signal that the stock DTOs
+can become fully API-owned with no document change.
+
+**Issue #154 deliberately did not retire it.** Earlier text said these two enums would move with the
+persistence models under #153/#154; that was wrong about #154, whose explicit exclusions forbid an
+API contract change. Retiring the exception means either renaming the published
+`StockAdjustmentReason`/`StockAdjustmentSource` components or duplicating them under a second schema
+id, because a same-named API-owned copy makes Swashbuckle fail document generation with a
+duplicate-schema-id error — a client-visible change to the published document, not a refactor. It is
+also the narrowest form the exception can take: both are wire enums on API-owned DTOs, reached only
+inside a controller method body through a DTO member, and the enforcement above forbids an entity in
+a controller's own signature precisely so this one case cannot grow into the general one. Retiring it
+needs its own issue, with the contract decision made explicitly — a deliberate component rename with
+its own contract tests, or the whole stock-adjustment reason/source vocabulary becoming API-owned at
+the same time the published document changes.
 
 #### Temporary API-owned exception and its enforcement (issue #145)
+
+**This exception is closed (issue #154).** The section below is the record of how it was opened,
+shrunk slice by slice and finally removed; it is history, not a live deviation. Nothing in
+`InventoryApi` is now permitted to be a temporary resident, and what enforces that is the rule set
+under [InventoryApi](#inventoryapi) above rather than the allow-list described here. One documented
+compatibility exception survives it, deliberately and with its own reasoning: the Swagger published-schema
+boundary and the two stock-DTO wire enums it keeps publishing, which cannot be retired without the API
+contract change #154 excludes.
 
 `InventoryApi/Services` held the
 use-case/domain logic that predates the `Inventory.Domain`/`Inventory.Application` split; the folder
@@ -1112,7 +1228,15 @@ delegator left to remove but still named the persistence model were last: issue 
 operating-expense DTOs an API-owned `InventoryApi.DTOs.OperatingExpenseCategory`, which closed the
 `InventoryApi/Controllers` side of this exception entirely (see "No controller names the persistence
 model" above).
-`InventoryApi/Adapters` now holds `Mapping` only: the response-DTO projections
+`InventoryApi/Adapters` now holds no adapter the migration left behind. Its `Mapping` folder is the
+HTTP boundary's own response-DTO projection work, and the two other folders beside it are API-owned
+by nature rather than by deferral: `Adapters/Nayax` holds `E2ETestNayaxLynxClient`, the test double
+the dedicated `E2ETest` host registers in place of the real Nayax client so an end-to-end run has
+nothing configured that could reach the live operator account (see
+[End-to-end testing authentication](#end-to-end-testing-authentication-issue-46)), and
+`Adapters/PlatformDiagnostics` holds `LoggingPlatformDiagnosticsAudit`, which is in this layer
+because the audit event it emits carries the request's correlation id (see
+[Platform diagnostics](#platform-diagnostics-issue-336)). `Mapping` holds the response-DTO projections
 `ProductRecordResponseMapper` (the products DTO projection, and
 since issue #302 the machine-slot projection onto the same DTO),
 `PurchaseResponseMapper`/`SupplierOrderResponseMapper` (the purchase and supplier-order DTO
@@ -1138,7 +1262,8 @@ moved the remaining 29 feature stores and `NayaxSaleCosting` into
 registers none of them; `AddInfrastructureServices()` does. What remains of the whole exception is
 `Adapters/Mapping` above, which is not a temporary deviation but the HTTP boundary's own work, plus
 the Swagger compatibility boundary and the two stock-DTO wire enums named under
-[InventoryApi](#inventoryapi), which #154 retires. Neither is a place for new business logic to land.
+[InventoryApi](#inventoryapi), which #154 kept for the contract reason recorded there and bounded
+rather than retired. Neither is a place for new business logic to land.
 
 **Financial and classification ownership (issues #150/#153/#154).**
 `EffectiveFinancialConfiguration`, `SiteCommissionCalculator`, `PaymentMethodClassifier`, and
@@ -1162,11 +1287,22 @@ commission, costing and import consumers now use the authoritative migrated rule
 #151 can classify transaction statuses without depending on the legacy API service,
 `EfLatestNayaxSalesStore` uses the same status rule, and Products'
 `ResolveMachineProductPricing` resolves commission/fee through the shared Sites financial port.
-`EfSiteCommissionStore` and the Sites/Machines adapters remain API-owned only until #153 relocates
-the rest of persistence; `EfNayaxProcessingFeeFactsProvider` and `EfNayaxSalesQueries` no longer do
-(issue #308). Row-level and aggregate-report coverage policies remain distinct.
+None of those adapters is API-owned any more: `EfNayaxProcessingFeeFactsProvider` and
+`EfNayaxSalesQueries` left with the reporting half in issue #308, and `EfSiteCommissionStore` with
+the Sites/Machines fact stores in Persistence 8/8 of #153 (issue #309), which completed the
+relocation this paragraph used to describe as outstanding — see item 9 of the
+[Backend migration track](#backend-migration-track). Row-level and aggregate-report coverage
+policies remain distinct.
 The obsolete API implementations and their exact legacy-services allow-list entries were removed
 after migrating their callers.
+
+Issue #154 narrowed `EfNayaxSalesQueries` back to `internal`. Issue #308 had to make it `public`
+while the sale-costing, inventory-cost-ledger and site-commission stores calling its predicate were
+still API-owned; with all three in the same assembly since #309, the completed-sale expression can no
+longer be taken out of the layer that can translate it — a caller outside `Inventory.Infrastructure`
+now fails to compile rather than failing a review. `ApiLayerOwnershipTests` asserts both that the type
+is not externally visible and that `Inventory.Domain`/`Inventory.Application` declare no `IQueryable`
+or expression tree of their own, which is the general form of the same rule.
 
 `Inventory.Application.Commissions.GetSiteCommissionReport` and the agreement/payment use cases
 orchestrate the commission endpoints through `ISiteCommissionStore`.
@@ -1177,19 +1313,27 @@ fee and GST calculations. The controller routes and DTO contracts are unchanged,
 transaction-row fee/commission policy remains distinct from aggregate report coverage and
 completeness rules.
 
-Issue #154 runs after these migrations and #153, removes the temporary exceptions, and proves
-that no financial/classification business logic remains in the API. The API retains the HTTP
-boundary responsibilities listed above (including authentication, middleware, error mapping and
-startup/composition); these do not permit legacy business services to remain indefinitely.
+Issue #154 ran after these migrations and #153 and proved the outcome rather than asserting it:
+`EffectiveFinancialConfiguration`, `SiteCommissionCalculator`, `PaymentMethodClassifier` and
+`NayaxTransactionStatusClassifier` are each declared exactly once, in
+`Inventory.Domain.FinancialConfiguration`, in no other production assembly, and no file under
+`InventoryApi` names any of them — so there is no second answer to what a sale earned, or to whether
+it was card, cash or completed, reachable from an endpoint. #241's transitional use of these helpers
+through the API services was never a permanent exception, and the rules above make reintroducing one
+a test failure. The API retains the HTTP boundary responsibilities listed under
+[InventoryApi](#inventoryapi) — authentication, authorization, middleware, HTTP error/result mapping,
+OpenAPI, the persistence *provider* decision, the startup schema decision and the human-invoked
+operator commands — and nothing in this enforcement narrows them; what it removes is any room for a
+legacy business service beside them.
 
-What issue #145 adds is enforcement that the `InventoryApi/Services` side of the exception stops
+What issue #145 added was enforcement that the `InventoryApi/Services` side of the exception stopped
 growing silently. `ProjectDependencyDirectionTests.Only_the_documented_legacy_services_remain_in_InventoryApi_Services`
-(`backend/Inventory.IntegrationTests/Architecture/`) freezes the exact, named set of git-tracked files in
-that folder; the moment a file is added, removed, or renamed there, the
-test fails and names the mismatch. A new slice's use-case or domain logic must go into
+(`backend/Inventory.IntegrationTests/Architecture/`) froze the exact, named set of git-tracked files in
+that folder; the moment a file was added, removed, or renamed there, the
+test failed and named the mismatch. A new slice's use-case or domain logic had to go into
 `Inventory.Application`/`Inventory.Domain` instead of extending the legacy folder; growing the
-exception is still possible, but only as a conscious, reviewed edit to both that allow-list and this
-paragraph, never as a silent side effect of an unrelated change. Shrinking it follows the same rule:
+exception stayed possible, but only as a conscious, reviewed edit to both that allow-list and this
+paragraph, never as a silent side effect of an unrelated change. Shrinking it followed the same rule:
 issue #296 removed `InventoryCostService.cs`, `InventoryCostRebuildService.cs`,
 `InventoryCostRebuildResult.cs`, `Interfaces/IInventoryCostService.cs` and
 `Interfaces/IInventoryCostRebuildService.cs` from the allow-list in the same change that deleted them,
@@ -1214,20 +1358,33 @@ adapter relocation rather than with a delegator (issue #306): the pure site-name
 helper and the `Adapters/Persistence/SiteNameResolverAdapter` wrapper that implemented
 `ISiteNameResolver` for it merged into `Inventory.Infrastructure.Sites.SiteNameResolver`, which
 `AddInfrastructureServices()` registers and which `EfTransactionSalesReportFactsProvider` calls
-through the same static entry point it used before. With nothing left, the test now asserts that
-`InventoryApi/Services` stays gone: a file appearing under it fails here and must go to
-`Inventory.Application`/`Inventory.Domain` (use-case or domain logic) or `Inventory.Infrastructure`
-(an adapter) instead, and reviving the folder stays a conscious, reviewed edit to both the
-allow-list and this paragraph.
+through the same static entry point it used before.
 `NayaxProductMatcher.cs` left the list with the import (issue #301): its last callers - the uploaded
 sales import, `EfLatestNayaxSalesStore` and `EfInventoryCostLedgerStore` - now call the Domain
 `Inventory.Domain.Reporting.ProductMatching.ProductMatcher` on their own candidate projections, so
 the wrapper over the persistence `Product` entity had no reason to exist.
-`InventoryApi/Adapters/*` is not
-frozen the same way: unlike `Services`, adding a new temporary EF/Nayax/export adapter there for a
-migrating slice (mirroring `EfNayaxFeeRateStore`) is the established, expected pattern for this
-migration track, not scope creep - it implements an `Inventory.Application`-owned port rather than
-containing use-case logic itself.
+While the migration ran, `InventoryApi/Adapters/*` was deliberately not frozen the same way: unlike
+`Services`, adding a temporary EF/Nayax/export adapter there for a migrating slice (mirroring
+`EfNayaxFeeRateStore`) was the established, expected pattern for the track, not scope creep - it
+implemented an `Inventory.Application`-owned port rather than containing use-case logic itself. That
+latitude ended with the track: a new adapter now belongs in `Inventory.Infrastructure`, beside
+`AppDbContext`, and `Adapters/Persistence` is one of the two folders #154 forbids outright.
+
+**Issue #154 replaced that allow-list with enforcement.** An empty allow-list can only prove that
+one folder name stays unused; it says nothing about a business service landing somewhere else in the
+project under a different path, which is exactly what a closed exception needs to rule out. The
+test above is therefore gone, and `ApiLayerOwnershipTests` states the rule positively instead - no
+type named `*Service` anywhere in the assembly, neither retired folder, only the documented
+top-level folders, every controller constructed with a use case, a `DbContext` only in the four named
+namespaces, no `DbSet`, no persistence type in a controller's surface, the four financial rules
+Domain-only and unnamed at the boundary, no entity query expression in Domain or Application, and no
+reference to the retired namespace. See [InventoryApi](#inventoryapi) for the full rule set and what
+each one is for. Acceptance criterion 7 of that issue was verified by introducing a deliberate
+violation of every rule - a legacy service with a `DbSet` and an `AppDbContext` dependency under
+`InventoryApi/Services`, a duplicate `SiteCommissionCalculator`, a controller taking no use case and
+publishing the EF `Product` entity, an `IQueryable` in `Inventory.Domain`, and a publicly visible
+completed-sale predicate - confirming all eleven rules failed and named the offender, then removing
+it.
 
 `CleanArchitectureDependencyTests` (same directory) is the complementary, compiled-assembly side of
 the boundary: `Domain_must_not_depend_on_Application_Infrastructure_or_Api`,
@@ -1310,6 +1467,10 @@ POST /api/admin/diagnostics/query    { sql } -> a bounded, truncation-flagged re
 
 `access` exists for the UI in issue #335 and exposes no tenant data at all — reaching it *is* the signal, and the body carries only the server's limits. `query` takes one statement and nothing else: no page size, no row count, no timeout and no business identifier, so there is no request input that could widen or loosen anything. `crossBusinessScope` is `true` in both contracts because this path reads across every business by design, and saying so in the contract is what keeps it from being a surprise.
 
+**The super-admin page (issue #335).** `/admin/diagnostics` is the Angular page in front of those two endpoints, and it is presentation only: it adds no authority, no limit and no second access rule. The sidebar's `Admin` group offers its link only while `GET /api/admin/diagnostics/access` has confirmed the signed-in actor, and the page itself asks the same endpoint on arrival and renders a refusal instead of the query form when it is refused — but **neither is the boundary, and the design depends on that rather than on hiding the link**. Entering the URL directly reaches the page, and reaches nothing else: `MsalGuard` requires only a signed-in actor, exactly as on every other route, and the policy on `POST /api/admin/diagnostics/query` re-decides authority on every single request. There is deliberately no frontend role, claim, flag or cached verdict that could grant access and then diverge from the configured Entra `(tid, oid)` identity: `PlatformDiagnosticsAccessService` asks the API, treats a refusal, a failure, an unanswered probe and a body that does not confirm access all as "no", and never reports a capability the API did not confirm.
+
+The page says what it is before it knows who is asking: cross-business scope, read-only, repair out of scope, every query audited. It publishes the server's own limits — the 5-second ceiling, the 500-row cap, the 1 MiB response cap and the 16 KiB SQL cap — from the `access` body rather than restating them, lists the permitted table/column surface as help text while saying the server is what decides, and offers only read-only examples. Every outcome the contract can report has its own visible state: a complete result, a timeout, a refusal with its denial reason, a provider failure, and a truncated read labelled **incomplete** with the cap that stopped it — the row cap and the response-byte cap separately, because a byte cap reached before 500 rows is exactly the case a row count alone would misrepresent. Result values and server messages are rendered through Angular interpolation only, never as markup. The statement and its results live in component state while the page is open and nowhere else: no `localStorage`, `sessionStorage`, cookie, URL, toast or console, because they describe data across every business. The query-shape fingerprint the response carries is shown so a result on screen can be matched to its audit entry without the statement appearing in either. Per [Page composition boundary](#page-composition-boundary-issue-191) the routed `PlatformDiagnosticsComponent` resolves the capability and composes `PlatformDiagnosticsQueryComponent`, which owns the statement, the submission and every outcome.
+
 **The permitted data surface.** `Inventory.Application.PlatformDiagnostics.PlatformDiagnosticsDataSurface` is an allowlist of table *and column* pairs, with no wildcard over current or future columns. The physical names are verified against the mappings on `develop` — `Purchase` is mapped to `Receipts` and `PurchaseItem` to `ReceiptItems`, and `PurchaseItem.ReceiptId` / `StockAdjustment.ReceiptItemId` keep their legacy names:
 
 ```text
@@ -1341,7 +1502,7 @@ The authorizer is why the acceptance criterion "do not rely on regex rejection a
 
 **Audit: one structured log event per query, and no table.** `LoggingPlatformDiagnosticsAudit` writes one `ILogger` `Information` event for every query — including a refused one, which is precisely what an investigation into misuse would look for, and including one whose execution threw instead of returning an outcome, which `RunDiagnosticsQuery` audits as `Failed` before letting the exception propagate — carrying the actor's `(tid, oid)`, the timestamp, the request/correlation id, a SHA-256 fingerprint of the *normalized query shape*, the duration, the row count, the cross-business scope flag and the outcome. It never carries the raw SQL, a result row, a column value, a business name or any credential. There is deliberately **no audit table and no migration**: an audit row written into the same database the query reads would be evidence kept inside the thing it is evidence about, would need an owner for a non-tenant-owned table, and would make a read-only request a write. **The log destination and retention period are platform configuration — Application Insights when `APPLICATIONINSIGHTS_CONNECTION_STRING` is set, the App Service log stream otherwise — and they are set on that resource, not in this repository. The application therefore cannot assert that its audit trail is durable, and does not: a human must verify the destination and retention before relying on this API's audit trail.**
 
-**Repair is out of scope, and must stay a separate, named operation.** This API is read-only and is not an execution path for anything else. Any future data repair must be a separately reviewed, named maintenance operation with a preview/dry-run step and explicit verification — the shape [`bootstrap-business`](#tenant-ownership-issue-64), [`migrate-documents`](#document-storage) and `InventoryCostRepair` already use: explicit, auditable, idempotent or safely restartable, and covered by regression tests. A repair must never be reachable by submitting SQL. Issue #62's Historical GST Preview/Apply is a separate, business-scoped maintenance workflow and does not depend on this API.
+**Repair is out of scope, and must stay a separate, named operation.** This API is read-only and is not an execution path for anything else. Any future data repair must be a separately reviewed, named maintenance operation with a preview/dry-run step and explicit verification — the shape [`bootstrap-business`](#tenant-ownership-issue-64), [`migrate-documents`](#document-storage) and `InventoryCostRepair` already use: explicit, auditable, idempotent or safely restartable, and covered by regression tests. A repair must never be reachable by submitting SQL. Issue #62's [Historical GST Preview/Apply](#historical-gst-classification-preview-and-apply-issue-433) and issue #472's [Nayax sale timestamp repair](#nayax-sale-timestamp-repair-preview-then-apply-issue-472) are separate, business-scoped maintenance workflows and neither depends on this API.
 
 **What proves it.** `Inventory.UnitTests/Application/PlatformDiagnostics` covers the surface contract, the shape check, the limits and their clamping, and the use case's audit behaviour. `Inventory.IntegrationTests/Infrastructure/PlatformDiagnostics/SqliteDiagnosticsQueryExecutorTests` runs against a real migrated SQLite file: permitted reads across two businesses, forbidden columns and tables through joins, subqueries, aliases and expressions, forbidden functions, every write and DDL shape refused with the row counts proving nothing changed, `PRAGMA`/`ATTACH`/transaction control refused, the row and byte caps, a costly permitted query interrupted at its deadline with the next query still working, request cancellation, and a column added to a permitted table after the fact staying inaccessible — including one named `rowid`, `oid` or `_rowid_`, which must be refused rather than mistaken for the internal row identifier. `Inventory.IntegrationTests/Auth/PlatformAdminAuthorizationTests`, `PlatformAdminCompositionTests`, `PlatformDiagnosticsResponseSizeTests` and `BusinessScopeMiddlewarePlatformDiagnosticsTests` cover the HTTP boundary, the shipped unconfigured state, the serialized-byte cap, and the middleware's independent policy re-check.
 
@@ -1587,7 +1748,7 @@ and they are the first realized part of the target `layout/` folder described be
 | `layout/navigation.ts` | The navigation data (`primaryNavigation`) and the pure matching rules `navLinks`, `activeNavRoute` and `activeNavGroup` |
 | `layout/sidebar-nav.component.*` | Renders that data, owns which groups are expanded, and resolves the active entry from the router |
 | `layout/user-menu.component.ts` | The top-right signed-in user control: the active account and a sign-out item, or a sign-in button |
-| `app.component.*` | The shell layout, the burger/collapse control, the wide-versus-narrow layout decision, and the MSAL identity it passes to the user menu |
+| `app.component.*` | The shell layout, the sidebar open/collapsed state and its handlers, the narrow layout's top-bar opener, the wide-versus-narrow layout decision, and the MSAL identity it passes to the user menu |
 
 `primaryNavigation` is a `NavItem[]` of direct links (`Dashboard`, `Pick List`, `Machines`,
 `Sites`, `Expenses`) and expandable groups (`Products`, `Purchases`, `Reports`, `Admin`). A group
@@ -1595,12 +1756,25 @@ heading is a `<button>` that toggles its children and is deliberately not a dest
 group needs an overview page. **Every `route` must be a real page already declared in
 `app.routes.ts`**: `navigation.spec.ts` compares the two and fails on a destination invented ahead
 of the page that serves it, which is how the navigation stays free of placeholder
-Users/Roles/Audit/Settings/Profile entries. The super-admin diagnostics page (#335) has not merged,
-so nothing is wired for it yet; when it does, its link belongs in the `Admin` group behind the
-diagnostics access API exactly as that issue implements it. `/admin` itself keeps its own address
-and its `AdminComponent` link hub — the sidebar is now the primary way into the six dedicated Admin
-pages, and `/admin` remains a valid bookmark that the home Dashboard's "Open Admin" action and each
-dedicated page's "Back to Admin" link still reach.
+Users/Roles/Audit/Settings/Profile entries. `/admin` itself keeps its own address
+and its `AdminComponent` link hub — the sidebar is now the primary way into the dedicated Admin
+pages (six at issue #391, joined by `Historical GST Classification` in issue #433 and
+`Nayax Sale Timestamp Repair` in issue #487), and `/admin`
+remains a valid bookmark that the home Dashboard's "Open Admin" action and each dedicated page's
+"Back to Admin" link still reach.
+
+**One conditional destination (issue #335).** `Platform Diagnostics` (`/admin/diagnostics`) is the
+only entry that is not in `primaryNavigation`: `navigationFor(hasPlatformDiagnosticsAccess)`
+appends it to the end of the `Admin` group, and only `GET /api/admin/diagnostics/access` can say
+yes. `SidebarNavComponent` starts from `navigationFor(false)`, asks
+`PlatformDiagnosticsAccessService` once, and re-resolves the active entry when the answer arrives;
+a refusal, a failure and an unanswered probe all leave the navigation everyone else gets, silently,
+because a navigation menu is not the place to report that one capability could not be checked. The
+link is presentation and never a boundary — the route and both endpoints are independently
+authorized, so a hidden link hides a page rather than protecting one (see [Platform
+diagnostics](#platform-diagnostics-issue-336)). Everything else about the shell is unchanged: the
+groups, their order, the matching rules and the active-state behaviour below all stay as issue #391
+left them.
 
 **Active state.** `activeNavRoute` resolves the current URL to the most specific matching entry,
 rather than relying on `routerLinkActive`, because several destinations are prefixes of each other:
@@ -1614,23 +1788,42 @@ control an operator reaches for is the same in each. `AppComponent` reads the sa
 (`min-width: 1024px`) breakpoint the Tailwind classes use through `window.matchMedia` and keeps
 listening for changes:
 
-- **Wide layout:** the sidebar is always part of the page. The burger expands it to labels or
+- **Wide layout:** the sidebar is always part of the page. The toggle expands it to labels or
   collapses it to a compact icon rail, whose labels stay in the accessibility tree (`sr-only` plus
   a `title`) so the names are never lost. A collapsed rail has no room for a submenu, so a group
   heading then asks the shell to expand (`expandRequested`) instead of opening one invisibly.
 - **Narrow layout:** the sidebar becomes a dismissible overlay drawer that is not rendered while
   closed, so it is never left off-screen but focusable. It is dismissed by its own close control,
-  by the backdrop, by `Escape` (which returns focus to the burger), and by choosing a destination.
-  It never falls back to a horizontal menu.
+  by the backdrop, by `Escape` (which returns focus to the top bar's opener), and by choosing a
+  destination. It never falls back to a horizontal menu.
 
 Crossing the breakpoint re-applies that default: a wide layout opens with labels, a narrow one
 starts dismissed so the drawer never covers the page the operator asked for.
 
-**Semantics.** Every control is a native `<button>` or `<a>`, so it is keyboard operable; the
-burger and each group heading expose `aria-expanded` and (while their target is rendered)
-`aria-controls`; the sidebar is a single `nav[aria-label="Primary"]` landmark. The routed page sits
-in a `<main>` beside the sidebar with its own responsive width and padding, so nothing is hidden
-behind the sidebar or the sticky header.
+**Where the toggle is rendered (issue #456).** There is exactly one toggle at a time, and the
+layout alone decides where it is. On a **wide** layout it is in the sidebar's own header row,
+beside the app title, and reports back through `collapseToggled`; the shell's top bar renders no
+toggle at all, so nothing floats detached above the menu. Collapsed to the rail that header row
+drops the title and centres the control alone, with a negative horizontal margin that lets it reach
+the 44x44 CSS-pixel minimum touch target inside a `w-16` rail whose padding would otherwise leave
+40px — the sidebar can therefore always be reopened, by pointer or by keyboard. On a **narrow**
+layout the sidebar is a drawer that is not on the page, so there is no header row to hold a
+control and the opener stays in the shell's top bar; that is also the element `closeSidebar()`
+returns focus to. The drawer's own close control is unchanged in behaviour and sized to the same
+44x44 target. None of this moved state: `AppComponent` keeps the one `isSidebarOpen` flag,
+`toggleSidebar`/`expandSidebar`/`closeSidebar`/`onSidebarNavigated` and the `Escape` handler, and
+`SidebarNavComponent` still decides nothing about layout.
+
+**Semantics.** Every control is a native `<button>` or `<a>`, so it is keyboard operable and picks
+up the global `:focus-visible` outline defined in `styles.scss`; the sidebar toggle, the top-bar
+opener and each group heading expose `aria-expanded` and (while their target is rendered)
+`aria-controls`. The sidebar is a single `nav[aria-label="Primary"]` landmark, and that `<nav>`
+carries the `primary-navigation` id both toggles point `aria-controls` at — the id is on the
+navigation container itself rather than on the component's `display: contents` host. Each toggle's
+accessible name states the action rather than the state (`Collapse navigation` / `Expand
+navigation`, `Open navigation menu` / `Close navigation menu`). The routed page sits in a `<main>`
+beside the sidebar with its own responsive width and padding, so nothing is hidden behind the
+sidebar or the sticky header.
 
 **Authentication is unchanged.** `AppComponent` still owns the MSAL redirect handling, active
 account resolution and `loginRedirect`/`logoutRedirect` calls; `UserMenuComponent` is presentation
@@ -1645,22 +1838,128 @@ its route exist — not a template change in the shell.
 
 - **Sidebar.** `sidebar-nav.component.html` renders a white panel (`rounded-md-card`, `shadow-md`)
   that floats with a `1rem` margin from the viewport edge on a wide layout; the narrow drawer keeps
-  the same panel without the margin. Its own top section shows the app name above a
-  `border-md-gray-200` divider. Each top-level link and group heading declares a decorative icon
-  name in `NavItem.icon` (`layout/navigation.ts`) — presentation data only, rendered through
-  `<app-icon [name]="item.icon">` — and items are `text-md-body text-md-gray-800` with a
-  `hover:bg-md-gray-100` state. The active link gets the `bg-md-dark-gradient` background with
-  white text and (because `app-icon` fills with `currentColor`) a white icon; its parent group
-  heading stays expanded and keeps a `bg-md-gray-100` highlight while one of its pages is open.
-  Collapsed to the icon-only rail, each label keeps its accessible name as `sr-only` text (the
-  behaviour above), not a styling change.
+  the same panel without the margin. Its own top section shows the app name, and the collapse
+  control beside it (issue #456), above a `border-md-gray-200` divider. Each top-level link and
+  group heading declares a decorative icon name in `NavItem.icon` (`layout/navigation.ts`) —
+  presentation data only, rendered through `<app-icon [name]="item.icon" variant="outlined">` — and
+  items are `text-md-body text-md-gray-800` with a `hover:bg-md-gray-100` state. The active link
+  gets the `bg-md-dark-gradient` background with white text and (because `app-icon` fills with
+  `currentColor`) a white icon; its parent group heading stays expanded and keeps a
+  `bg-md-gray-100` highlight while one of its pages is open. Collapsed to the icon-only rail, each
+  label keeps its accessible name as `sr-only` text (the behaviour above), not a styling change.
+- **Outlined navigation glyphs (issue #456).** The sidebar is the one caller that asks `app-icon`
+  for the `outlined` variant, and it asks for it everywhere a glyph appears — each destination,
+  each group heading, the collapse/expand control and the drawer's close control — so the expanded
+  desktop sidebar, the collapsed rail and the mobile drawer all draw the same unfilled geometry.
+  The glyphs are the official Material Icons Outlined files, not filled paths thinned with a CSS
+  stroke (see [Icon component](#icon-component-issues-411-and-456)). Nothing outside the sidebar
+  changed: a Dashboard stat card, a report control and an action button all still render the
+  default Rounded set. The group disclosure markers stay the existing `▴`/`▾` text characters —
+  they are not Material glyphs and are not part of this icon set.
+- **Sidebar height fills the available viewport (issue #455).** The white panel's height is not
+  driven by its menu content: `app.component.html`'s shell row (`flex flex-1 items-stretch`)
+  stretches the sidebar to the full height of that row, which the surrounding `min-h-screen`
+  flex column already sizes to the viewport height minus the header, so no component adds a
+  second, unconditional `100vh`. `SidebarNavComponent`'s host renders as `display: contents`
+  (`host: { class: 'contents' }`) so it contributes no box of its own between the shell and the
+  visible `<nav>` panel — without that, the host's own block box would absorb the stretched
+  height and leave the white panel sized to its content, which is the bug this fixed. The panel's
+  own `overflow-y-auto` then scrolls the navigation list internally, inside the stretched height,
+  whenever expanded groups or a short browser window make it taller than the available space, so
+  every entry (including nested `Admin` children) stays reachable without growing the page.
 - **Top bar and user menu.** `app.component.html`'s header has no background of its own, so it
   shows the `bg-md-gray-100` canvas the shell's root element sets; `user-menu.component.ts` renders
   its open panel as a compact dropdown (`rounded-md-card`, `shadow-md`). The main content wrapper
   carries the same canvas colour and the #410 page padding (`p-4 sm:p-6`) so a restyled page's cards
   sit on the light grey canvas.
+- **Main content width (issue #454).** The main content wrapper has no `max-width` or centering of
+  its own: it fills whatever space the flex row beside the sidebar leaves it, at any sidebar state
+  (expanded, collapsed, or the narrow drawer) and at any desktop width, with only the #410 page
+  padding as a gutter. A data-heavy page (Products, Dashboard, Purchases, Reconciliation,
+  Transaction Sales) therefore uses the full main-area width; it does not reintroduce a capped,
+  centered column.
+- **Page content containers fill that width too (issue #478).** A routed page's own outer content
+  container — the `.card` an edit or upload page wraps its form in — carries no `max-w-*` and no
+  `mx-auto` either, so the page is as wide as the content area the shell leaves it. The short
+  controls inside it are laid out in a responsive column grid (one column, two from `md`, three
+  from `xl`, with a textarea spanning the row at `md`) rather than stretched across the whole page;
+  `product-form.component.html`, `purchase-upload.component.html`,
+  `purchase-edit/purchase-edit-page.component.html` and
+  `stock-adjustment-form.component.html` are the worked examples. A narrower `max-w-*` remains
+  correct, and stays, on the things it genuinely serves: dialogs and modals, the sidebar, menus and
+  dropdowns, toasts, a single filter control or table cell, a readable explanatory paragraph, and a
+  report's label/value summary panel (`card-body max-w-xl`), where a full-width line would put the
+  label and its figure at opposite ends of the screen. This is a page-level content choice in each
+  template, not something the shell imposes or forbids.
 - **Sign-in callback.** `auth-callback.component.ts` centres a `.card` on the canvas background
   instead of a bare paragraph; its logic is still just the static "Signing you in..." message.
+
+### Breadcrumbs (issue #457)
+
+A shared breadcrumb renders once, in `app.component.html` immediately above `<router-outlet>`, so
+it sits above every routed page's own `.page-title` without any page template rendering its own
+copy. Three files own it, alongside the shell files above:
+
+| File | Responsibility |
+| --- | --- |
+| `layout/breadcrumbs/breadcrumb-routes.ts` | The route → label/parent mapping (`breadcrumbRoutes`) and the pure `buildBreadcrumbTrail`/`buildTrailFrom` that turn a URL into a trail |
+| `layout/breadcrumbs/breadcrumb.service.ts` | `BreadcrumbService`: the one live label a routed page may contribute from data it already loaded, reset to `null` on every `NavigationStart` |
+| `layout/breadcrumbs/breadcrumbs.component.ts` | Renders the trail for the router's current URL, recomputed on every `NavigationEnd` and on `BreadcrumbService`'s label |
+
+**Metadata, not URL splitting.** `breadcrumb-routes.ts` is a small, explicit mapping — the same
+convention `layout/navigation.ts` uses for the sidebar — of each nested route pattern (for example
+`/machines/:id`) to a current-page label and an optional `parent` (`{ label, path? }`). It is
+deliberately a separate mapping from `primaryNavigation`: the sidebar's `Products`/`Purchases`/
+`Reports`/`Admin` groups are headings that are not themselves a route, while a breadcrumb parent
+must be the real page that owns the child route (`/products`, `/purchases`, `/reports`, `/admin`,
+`/machines`, `/sites`), so the two metadata sets name the same areas without being interchangeable.
+A route with no entry — every top-level list page, the Dashboard, and the two URLs that load the
+cross-cutting global Stock History page (`/stock-history`, `/products/:id/stock`, see [Routing and
+loading](#routing-and-loading)) — renders no breadcrumb: `buildBreadcrumbTrail` returns an empty
+trail for an unmapped URL and for an entry with no `parent`, because a one-item trail adds no
+hierarchy. Nothing here ever derives a label by splitting the URL or reading browser history.
+
+**Links, text, and the current page.** A parent with a `path` renders as a real `routerLink`; a
+`parent` entry with no `path` renders as plain, non-link text — the "non-routable group" case the
+acceptance criteria asks the mapping to support, exercised today only by a constructed fixture in
+`breadcrumb-routes.spec.ts` because every current parent (`Products`, `Machines`, `Sites`,
+`Purchases`, `Reports`, `Admin`) happens to have a real landing route. The current page is always
+the trail's last item, is always plain text, and is the only item ever carrying
+`aria-current="page"`; `BreadcrumbsComponent` never routes a `current` item through `routerLink`
+even when the matched entry also has a `path`. Authorization is unaffected: every parent `path` is
+an existing route already behind `MsalGuard` and its own API authorization, exactly as a sidebar
+link is, so a breadcrumb exposes no name or route a guard would otherwise hide, and bypasses no
+guard, because it only ever links to a destination that was already reachable.
+
+**The live label, and why it cannot leak.** `/machines/:id` is today's one dynamic entry
+(`dynamic: true`): `MachineDetailComponent` calls `BreadcrumbService.setCurrentPageLabel(machine
+?.machineName ?? null)` from inside the same `machine$` pipeline its template already subscribes
+to through `| async` — one `tap`, zero extra requests. `BreadcrumbsComponent` shows that live label
+only while it is non-null and the matched entry is `dynamic`; otherwise it shows the entry's static
+`label` (`Machine details` here), which is what covers both the initial load and a failed load.
+Because `BreadcrumbService` resets the label to `null` on every `Router` `NavigationStart`, moving
+from `/machines/5` to `/machines/9` on the same reused `MachineDetailComponent` instance shows
+`Machine details` again the instant navigation starts, never `5`'s stale name, until `9`'s own
+`machine$` emission supplies the new one. `/sites/:id/products` and the `/purchases/new` "receiving
+a supplier order" variant stay on their static labels for now — `dynamic` is available to either
+without touching `BreadcrumbsComponent` if a future issue asks for it.
+
+**Responsive behaviour.** Every current trail is exactly two items (parent, current): no mapped
+route is nested more than one level below a page that itself has no further parent. "Shorten a long
+trail to the immediate parent plus current page" is therefore already the full trail, and
+`.breadcrumb-list` (`styles.scss`) uses `flex-wrap` rather than a forced single line, so a long
+label wraps onto a second line at a narrow width instead of causing horizontal overflow or being cut
+off — nothing is hidden or ellipsized, so the full label stays in the accessible tree and visible at
+every width. A third breadcrumb level, if one is ever needed, would need `buildTrailFrom` to return
+more than two items and a collapsing rule for which middle item to hide first; neither exists yet
+because no current route needs it.
+
+**Semantics.** The root element is one `nav[aria-label="Breadcrumb"]` landmark holding an `<ol>`;
+each separator is a `span[aria-hidden="true"]` between list items, never read by assistive
+technology. A parent link is a real `<a routerLink>`, so it is keyboard-operable and picks up the
+same global `:focus-visible` outline every other link uses (see [Application shell and
+navigation](#application-shell-and-navigation-issue-391) and `styles.scss`); nothing here needs a
+bespoke focus style.
 
 ### Target feature boundaries
 
@@ -1755,7 +2054,7 @@ partial enforceable rule.
 
 ### Routing and loading
 
-Routes are declared centrally in `app.routes.ts`. Every top-level route loads its component with `loadComponent` (issue #65), except the public `/auth` Entra redirect callback, which stays eagerly imported because it is the landing route for an in-progress authentication redirect, not a migrated feature area. This keeps initial bundles smaller and creates an enforceable feature boundary without introducing NgModules. Preserve route URLs, guards, and parameters when adding or changing a route. Which of these routes the sidebar offers, and under which group, is navigation data in `layout/navigation.ts` (see [Application shell and navigation](#application-shell-and-navigation-issue-391)); a route always keeps working by direct URL whether or not it appears there.
+Routes are declared centrally in `app.routes.ts`. Every top-level route loads its component with `loadComponent` (issue #65), except the public `/auth` Entra redirect callback, which stays eagerly imported because it is the landing route for an in-progress authentication redirect, not a migrated feature area. This keeps initial bundles smaller and creates an enforceable feature boundary without introducing NgModules. Preserve route URLs, guards, and parameters when adding or changing a route. Which of these routes the sidebar offers, and under which group, is navigation data in `layout/navigation.ts` (see [Application shell and navigation](#application-shell-and-navigation-issue-391)); a route always keeps working by direct URL whether or not it appears there. Separately, whether a route shows a parent breadcrumb above its page title, and under which label, is `layout/breadcrumbs/breadcrumb-routes.ts` (see [Breadcrumbs](#breadcrumbs-issue-457)) — a third piece of navigation metadata, alongside `app.routes.ts` and `layout/navigation.ts`, that a new nested page should be added to when it has a meaningful parent.
 
 `/machines` (issue #385) is a dedicated, authenticated list page, `MachineListComponent`, that reads the same `MachineService.getAll()` machine-summary contract the home dashboard already uses, applies a client-side name/number search against the loaded list (there is no server-side filter on that endpoint), and never triggers a Nayax sales sync as a side effect of opening the page — it only reads whatever summary data is already persisted. Selecting a machine on this page navigates to the existing `/machines/:id` detail route (`MachineDetailComponent`), which is unchanged; `/machines` is a drill-down entry point into that existing page, not a replacement for it. `Machines` is a top-level link in the sidebar (issue #391; see [Application shell and navigation](#application-shell-and-navigation-issue-391)).
 
@@ -1766,6 +2065,13 @@ History](#global-stock-history-issue-384)). The older URL keeps its own address 
 redirected, so existing links and bookmarks stay valid.
 
 `/sites` (issue #386) is a standalone, authenticated list page that loads every site summary through the existing `SiteService.getAll()` contract, offers client-side search/filter by site name, and drills down into the existing `/sites/:id/products` route when a site is selected. It does not change the `Site` summary contract or the site-products workflow; `Sites` is a top-level link in the sidebar (issue #391).
+
+`/purchases/:id/edit` (issue #475) is the dedicated Edit purchase page, `PurchaseEditPageComponent`,
+which replaced the editor the purchases table used to expand inline. It is a three-segment pattern,
+so it cannot shadow the two-segment `/purchases/new` and `/purchases/orders` in either declaration
+order, and it loads its purchase from the route id rather than from navigation state — a bookmarked
+edit URL and a refresh both work, and Save and Cancel both return to `/purchases`. See [Purchase
+edit page](#purchase-edit-page-issue-475) for the page, its states and what moved out of the list.
 
 The static host must rewrite unknown application paths to `index.html`; otherwise refreshing a deep link such as `/reports/bookkeeping` or the Entra redirect landing on `/auth` will bypass Angular and return a host-level 404. `frontend/inventory-app/src/staticwebapp.config.json` (copied to the deployed output root by the `assets` build option) declares that Azure Static Web Apps `navigationFallback`, rewriting unmatched paths to `/index.html` while excluding `/assets/*` and static file extensions.
 
@@ -1826,14 +2132,70 @@ the form's current values, on both the AVCO transition and the costing repair.
 `ProductService.getAll()` for their workflow's product selector, as `AdminComponent` did for both
 workflows.
 
+**Historical GST Classification (issue #433)** joined the same group afterwards and follows the same
+shape:
+
+| Route | Page component | Authoritative boundary it calls |
+| --- | --- | --- |
+| `/admin/historical-gst-classification` | `HistoricalGstClassificationComponent`, composing `HistoricalGstClassificationWorkflowComponent` | `HistoricalGstClassificationService` `preview`/`apply` (`POST api/admin/historical-gst-classification/preview`/`apply`, see [Historical GST classification](#historical-gst-classification-preview-and-apply-issue-433)) |
+
+Its page needs no `@Input` at all, because the action is whole-business rather than per product: the
+workflow component owns the Preview/Apply actions, the confirmation, the reported counts and the
+loading/error lifecycle, and the page renders only the heading and the warning. The workflow
+calculates nothing - no eligibility rule, precedence, GST divisor, rounding rule or stale-preview
+rule exists in the frontend - and carries the preview's `fingerprint` back unchanged. It previews
+nothing on arrival: this maintenance action runs only because a person pressed Preview and then
+Apply.
+
+**Nayax Sale Timestamp Repair (issue #487)** is the Admin UI over issue #472's Preview/Apply API,
+and follows the same shape again:
+
+| Route | Page component | Authoritative boundary it calls |
+| --- | --- | --- |
+| `/admin/nayax-sale-timestamp-repair` | `NayaxSaleTimestampRepairComponent`, composing `NayaxSaleTimestampRepairWorkflowComponent` | `NayaxSaleTimestampRepairService` `preview`/`apply` (`POST api/admin/nayax-sale-timestamp-repair/preview`/`apply`, see [Nayax sale timestamp repair](#nayax-sale-timestamp-repair-preview-then-apply-issue-472)) |
+
+The page renders the heading and the warning and composes the workflow; the workflow owns the source
+form, the optional reconciliation window, both requests, the confirmation, the expiry handling and
+every reported outcome, and composes three display components of its own —
+`NayaxSaleTimestampRepairPreviewComponent` (the plan), `NayaxSaleTimestampRepairRowsComponent` (the
+examined-sales table with its client-side outcome filter, search and paging) and
+`NayaxSaleTimestampRepairResultComponent` (the applied counts and audit rows, with its
+`(verifyRequested)` output back to the workflow). The whole page calculates nothing: no timestamp is
+parsed or shifted, no Sydney business date is converted, no outcome is classified and no revenue,
+rebuild-eligibility or reconciliation figure is derived in Angular. See [Nayax sale timestamp repair:
+Preview then Apply](#nayax-sale-timestamp-repair-preview-then-apply-issue-472), "The Admin page", for
+what the page offers and refuses.
+
+**Platform Diagnostics (issue #335)** adds the one Admin route that is not offered to every
+operator:
+
+| Route | Page component | Authoritative boundary it calls |
+| --- | --- | --- |
+| `/admin/diagnostics` | `PlatformDiagnosticsComponent`, composing `PlatformDiagnosticsQueryComponent` through `[limits]` | `PlatformDiagnosticsService` `access`/`query` (`GET api/admin/diagnostics/access`, `POST api/admin/diagnostics/query`, see [Platform diagnostics](#platform-diagnostics-issue-336)) |
+
+Its guard is the ordinary `MsalGuard`, because platform-admin authority is not a frontend
+concern: the API decides it per request, so the route is reachable by URL and simply shows a
+refusal instead of the query form. The page resolves the capability and the server's limits from
+`access`, states the cross-business, read-only scope before it knows who is asking, and composes
+the workflow component that owns the statement and every reported outcome. The sidebar link exists
+only while that same endpoint confirms access (see [Application shell and
+navigation](#application-shell-and-navigation-issue-391)), and `PlatformDiagnosticsAccessService`
+is the only thing that answers that question — there is no frontend role source. Nothing here
+calculates, caches or persists anything: no limit is restated, no result is written to browser
+storage or a log, and no value is rendered as markup.
+
 With this split `AdminComponent` is a link hub only: it holds no workflow state, no service
 dependency and no second copy of any Admin tool, so it no longer owns duplicate costing, import or
 configuration logic. It deliberately keeps its own `/admin` address rather than redirecting to
 `/admin/nayax-settings`, because the home Dashboard's "Open Admin" action and each
 dedicated page's "Back to Admin" link point at it. The sidebar's `Admin` group (issue #391) is now
-the primary way into the six dedicated pages, so `AdminComponent` is a second, still valid entry
+the primary way into the eight dedicated pages, so `AdminComponent` is a second, still valid entry
 point rather than the only one; the root shell no longer links to `/admin` itself, because the
-group heading replaced that single header link.
+group heading replaced that single header link. `/admin/diagnostics` is the exception in the other
+direction: the hub links to the eight pages every operator has and not to it, because that page is
+offered only to the configured platform administrator and only the diagnostics API can say who
+that is. It is reached from the sidebar group, or by URL, and links back to the hub like every
+other dedicated page.
 
 ### Runtime configuration and API contracts
 
@@ -1857,6 +2219,9 @@ The UI may format and explain backend results, but it must not recreate authorit
 
 - Display sales, fees, commission, COGS, and profit values returned by the API.
 - Preserve quality/status fields so partial, estimated, unmatched, or uncosted results remain visible.
+- Show a data-quality warning only for an actual problem in the requested scope, and hide the section when there is none. Normal calculation methodology belongs in a report's own expandable "How this report is calculated" help, and a figure that is an estimate stays labelled as one beside the figure itself — see [Bookkeeping data-quality diagnostics and calculation help](#bookkeeping-data-quality-diagnostics-and-calculation-help-issue-476).
+- Keep an ordinary transaction outcome out of the warning section. Pending, refunded and cancelled/declined transactions are normal payment results and are presented as neutral counts, while an absent or unrecognised status ID stays a warning — see [Reconciliation diagnostics, exclusions and the adjustments assumption](#reconciliation-diagnostics-exclusions-and-the-adjustments-assumption-issue-477).
+- Keep an unimplemented input visible as an assumption beside the figure it affects, never as a verified value and never only inside collapsed help.
 - Use an unavailable/unknown presentation for nullable COGS or profit. A generic formatter that turns `null` into `$0.00` is unsafe for these fields.
 - Keep card and cash amounts visibly distinct where settlement is discussed.
 - Keep ex-GST, GST, and GST-inclusive fee amounts distinct.
@@ -1883,7 +2248,7 @@ The frontend has one shared visual language, recreated from Material Dashboard 3
 - `DesignSystemShowcaseComponent` renders every shared class in one place. It is the reference rendering when the visual language changes, and it is what puts the shared classes into the generated `styles.css`. It is deliberately absent from `app.routes.ts` entirely.
 - `WidgetGalleryComponent` (issue #411) renders the shared widgets and the whole bundled icon set so the series' required screenshots can be taken from the real components inside the real shell. It reaches the router through `designSystemRoutes` in `design-system.routes.ts`, which returns **an empty route list in every optimized build** and the single `__design-system/widgets` path only on the unoptimized dev and `e2e` servers; `design-system.routes.spec.ts` asserts both branches. It calls no API and holds no business logic.
 
-**Visual evidence.** `frontend/inventory-app/e2e/playwright.visual.config.ts` plus `e2e/visual/` screenshot that fixture at 1440px and 390px — the confirmation dialog, the loading indicator, each toast variant, the open multi-select dropdown and the icon strip — and write the PNGs to the version-controlled `docs/screenshots/issue-411/`. The run starts the Angular dev server alone: no API, no database, no external service. Regenerate it with `npm run e2e:install` (once) then `npm run e2e:visual` from `frontend/inventory-app`. It is a human-invoked evidence run, not part of `scripts/validate.sh`, because it needs a browser download that normal validation deliberately avoids.
+**Visual evidence.** `frontend/inventory-app/e2e/playwright.visual.config.ts` plus `e2e/visual/` screenshot at 1440px and 390px and write the PNGs to version-controlled directories under `docs/screenshots/`. `shared-widgets.visual.ts` captures the design-system fixture — the confirmation dialog, the loading indicator, each toast variant, the open multi-select dropdown and the icon strip — into `docs/screenshots/issue-411/`. `sidebar-navigation.visual.ts` (issue #456) captures the shell's own navigation into `docs/screenshots/issue-456/`: the expanded sidebar, the sidebar with its groups open, the active item beside inactive ones, the collapsed desktop rail (skipped at 390px, which has a drawer and no rail) and the top bar beside it. The run starts the Angular dev server alone: no API, no database, no external service; the one real route it opens, `/machines`, is opened only so a navigation item is the active one, and its unanswerable data request is never what is captured. Regenerate with `npm run e2e:install` (once) then `npm run e2e:visual` from `frontend/inventory-app`. It is a human-invoked evidence run, not part of `scripts/validate.sh`, because it needs a browser download that normal validation deliberately avoids — and it rewrites **every** screenshot in both directories, so a run for one issue re-renders the other's evidence too, and text rasterization differences between hosts can change those PNGs without anything in the application changing.
 
 **Colour tokens.** Gradients are `linear-gradient(195deg, from, to)` and are exposed as `backgroundImage` entries (`bg-md-dark-gradient`, `bg-md-danger-button-gradient`, and one per status).
 
@@ -1897,7 +2262,7 @@ The frontend has one shared visual language, recreated from Material Dashboard 3
 | `md-gray` | 100 `#F5F5F5`, 200 `#E5E5E5`, 300 `#D4D4D4`, 500 `#737373`, 600 `#525252`, 800 `#262626` | | | canvas, borders, text |
 | `md-input-border` | `#D2D6DA` | | | form field borders |
 
-Shadows are `shadow-md-card` (cards, which also carry a `1px solid md-gray-200` border), `shadow-md` (dropdowns, sidebar panel), `shadow-md-lg` (dialogs) and `shadow-md-tile-dark|info|success|warning|danger` (icon tiles). Radii are `rounded-md-control` (0.375rem: buttons, inputs), `rounded-md-card` (0.5rem: cards, icon tiles, dropdowns), `rounded-md-badge` (0.45rem) and `rounded-md-dialog` (0.75rem). Type sizes are `text-md-page-title` (1.25rem/600), `text-md-card-title` (1rem/600), `text-md-stat-value` (1.5rem/700), `text-md-body` (0.875rem), `text-md-badge` (0.75rem/700 uppercase) and `text-md-table-head` (0.65rem/700 uppercase). Spacing: page padding 1.5rem (1rem below 640px), 1.5rem between cards, 1rem card padding (0.75rem 1rem for header and footer), 0.75rem 1.5rem table cells (0.5rem 0.75rem below 640px), 0.5rem 1rem buttons (0.375rem 1rem small).
+Shadows are `shadow-md-card` (cards, which also carry a `1px solid md-gray-200` border), `shadow-md` (dropdowns, sidebar panel), `shadow-md-lg` (dialogs) and `shadow-md-tile-dark|info|success|warning|danger` (icon tiles). Radii are `rounded-md-control` (0.375rem: buttons, inputs), `rounded-md-card` (0.5rem: cards, icon tiles, dropdowns), `rounded-md-badge` (0.45rem) and `rounded-md-dialog` (0.75rem). Type sizes are `text-md-page-title` (1.25rem/600), `text-md-card-title` (1rem/600), `text-md-stat-value` (1.5rem/700), `text-md-body` (0.875rem), `text-md-badge` (0.75rem/700 uppercase) and `text-md-table-head` (0.65rem/700 uppercase). Spacing: page padding 1.5rem (1rem below 640px), 1.5rem between cards, 1rem card padding (0.75rem 1rem for header and footer), 0.75rem 1.5rem table cells (0.5rem 0.75rem below 640px), 0.5rem 1rem buttons (0.375rem 1rem small). The Reconciliation and Transaction Sales tables narrow their own horizontal cell padding to 0.5rem per cell in their templates, which is the one deliberate exception; see [Reconciliation and Transaction Sales table width](#reconciliation-and-transaction-sales-table-width-issue-452).
 
 **Contrast rules.** These are invariants, not preferences, and `design-tokens.contrast.spec.ts` enforces them by recomputing the ratios from the token values:
 
@@ -1910,7 +2275,7 @@ Shadows are `shadow-md-card` (cards, which also carry a `1px solid md-gray-200` 
 
 - Layout: `.page`, `.page-header`, `.page-title`, `.page-subtitle`, `.page-actions`
 - Cards: `.card`, `.card-header`, `.card-title`, `.card-body`, `.card-footer`
-- Stat card: `.stat-card` with `.stat-card-head`, `.stat-card-label`, `.stat-card-value`, `.stat-card-footer`; the icon tile overlaps the top-left corner by 1rem
+- Stat card: `.stat-card` with `.stat-card-head`, `.stat-card-content`, `.stat-card-label`, `.stat-card-value`, `.stat-card-footer`; the icon tile sits fully inside the card at the upper right, the label/value sit on the left — see [Stat-card icon tile arrangement](#stat-card-icon-tile-arrangement-issue-453)
 - Icon tile: `.icon-tile` (48x48, 24px white glyph, md-dark gradient by default) plus `.icon-tile-dark|info|success|warning|danger`
 - Buttons: `.btn` with `.btn-primary`, `.btn-secondary`, `.btn-danger`, `.btn-link` and the `.btn-sm` size
 - Tables: `.table`, `.table-head`, `.table-row`, `.table-cell`, `.table-num`
@@ -1927,18 +2292,106 @@ Shadows are `shadow-md-card` (cards, which also carry a `1px solid md-gray-200` 
 
 **Bundled font.** Inter (weights 400/500/600/700) is self-hosted through the `@fontsource/inter` npm package and loaded from the `styles` array in `angular.json`; the Angular build copies the font files into the output. The token stack is `Inter` followed by the previous system fallback `'Segoe UI', Roboto, Helvetica, Arial, sans-serif`. Do not add a Google Fonts, Font Awesome kit or other CDN request for a font or icon set.
 
-**Third-party notices.** `THIRD-PARTY-NOTICES.md` at the repository root records the Material Dashboard MIT notice (the look was recreated, not copied — no Material Dashboard CSS, JavaScript or asset is bundled, and Bootstrap is not a dependency), the SIL OFL notice for Inter, and the Apache-2.0 notice for the bundled Material Icons Rounded icon paths (see below). Add an entry there whenever a change bundles third-party code or assets, or recreates a third-party design.
+**Third-party notices.** `THIRD-PARTY-NOTICES.md` at the repository root records the Material Dashboard MIT notice (the look was recreated, not copied — no Material Dashboard CSS, JavaScript or asset is bundled, and Bootstrap is not a dependency), the SIL OFL notice for Inter, and the Apache-2.0 notice for the bundled Material Icons Rounded and Outlined icon geometry (see below). Add an entry there whenever a change bundles third-party code or assets, or recreates a third-party design.
 
-#### Icon component (issue #411)
+#### Stat-card icon tile arrangement (issue #453)
+
+The Material reference puts the icon tile fully inside the card at the upper right, with the
+label and value on the left, opposite it; the original #410 restyle instead overlapped the icon
+over the top-left corner with a `-mt-8` negative margin and right-aligned the label/value. That
+margin is gone, and `.stat-card-head` is a plain flex row (`items-start justify-between gap-4`)
+with the content first and the icon tile last: the card's own `p-4` padding alone insets the tile
+from the top and right edges, so no negative margin, transform or absolute offset is needed to
+keep it inside the border, and the removed 1rem overhang reserve (`.stat-card`'s former `mt-4`) is
+no longer needed either, which is also what makes the card's height content-driven instead of
+carrying extra empty space.
+
+- **Markup order, not CSS, decides the side.** A consumer's template puts the label/value wrapper
+  — given the `.stat-card-content` class (`min-w-0 flex-1 break-words`) — before the icon tile
+  inside `.stat-card-head`; `justify-between` then renders the icon at the right edge and
+  `items-start` keeps it at the top instead of vertically centered. `.stat-card-content`'s
+  `min-w-0`/`flex-1`/`break-words` let a long label or a large value wrap onto a second line and
+  take the remaining row width instead of overflowing the card or pushing the icon tile outward,
+  checked at 1440px and 390px.
+- **Left-aligned, opposite the icon, only inside the icon pattern.** `.stat-card-label`/
+  `.stat-card-value` still default to right-aligned text, because several report summary tiles
+  (bookkeeping/dashboard/transaction-sales/reconciliation/GST reports) use them directly inside a
+  plain `.card card-body`, with no icon tile, and keep that existing alignment unchanged. A
+  `.stat-card-head .stat-card-label`/`.stat-card-head .stat-card-value` override flips only the
+  icon-tile stat-card pattern to left-aligned text.
+- **Every consumer of the pattern moved together**: `dashboard.component.html`,
+  `bookkeeping-report.component.ts`, `dashboard-report.component.ts`, and the
+  `design-system-showcase.component.html` fixture that renders one card per icon-tile colour
+  variant. Icon glyphs, semantic colours, label text, numeric values and formatting, loading
+  states, and existing footer content are unchanged; no comparison percentage or footer metric was
+  added. The decorative icon-tile usage in the design-system widget gallery (outside any
+  `.stat-card`) is untouched.
+- **Regression coverage** (`stat-card-icon-position.spec.ts`) loads the real compiled
+  `styles.css` into jsdom and asserts the resolved computed style — DOM order, `margin`,
+  `align-items`, `text-align`, `min-width`/`flex-shrink`/`overflow-wrap` — rather than only
+  checking which class names a template carries; `dashboard.component.spec.ts`,
+  `dashboard-report.component.spec.ts` and `bookkeeping-report.component.spec.ts` each separately
+  confirm their own production template renders the content wrapper before the icon tile. jsdom
+  does not compute real flex geometry or take screenshots; this sandboxed run could not reach a
+  browser or install one (no outbound network), so the 1440px/390px visual evidence and the final
+  on-screen check against the reference are deferred to Cristhyan's recorded visual check before
+  merge, per the issue's documented fallback.
+
+#### Icon component (issues #411 and #456)
 
 `frontend/inventory-app/src/app/components/shared/icon.component.ts` is the one standalone
-`app-icon` component for rendering a glyph, backed by the inline SVG path lookup in the
+`app-icon` component for rendering a glyph, backed by the inline SVG geometry in the
 co-located `icon-paths.ts`. Later #409 sub-issues wire it into restyled pages and widgets.
 
-- **Adding an icon.** Add a `name → d` entry to the `ICON_PATHS` map in `icon-paths.ts`, **copied verbatim** from the matching `round/<name>.svg` of Google's official Material Icons Rounded set (`currentColor` fill, `viewBox="0 0 24 24"`). Never reconstruct, approximate or hand-tune a path from memory: the first implementation did, and shipped square-cornered baseline glyphs under a Rounded label. Google's newer Material Symbols Rounded set draws the same style on a `0 -960 960 960` canvas and is not interchangeable with this one. `icon-paths.spec.ts` guards the map — it fails if a path leaves the 24px canvas, if a glyph loses its rounded curve commands, or if the `add`/`delete` paths drift from their pinned upstream strings. Reference an icon from a template as `<app-icon name="...">`; an unmapped `name` renders nothing and never throws, so a typo fails silently rather than breaking the page.
-- **Inputs.** `name` (required) selects the glyph; `size` (default `24`, pixels) sets the SVG's width and height; the optional `label` controls the accessibility mode below.
-- **Decorative vs labelled accessibility.** Without `label`, the icon is decorative: the SVG has `aria-hidden="true"` and no `role` or accessible name — use this whenever adjacent visible text already carries the meaning (an icon tile, a labelled button). With `label` set, `aria-hidden` is removed (never set to `"false"`), the SVG gets `role="img"` and an accessible name equal to `label` — use this for an icon that is the only content of its control (for example an icon-only button). Either way the SVG is never focusable.
-- **Licence.** The bundled `d` path data is copied from Google's Material Icons Rounded set (Apache License 2.0), obtained from the generated `@material-design-icons/svg` distribution of the official `google/material-design-icons` repository; see `THIRD-PARTY-NOTICES.md`. That package is not a dependency — nothing but the path strings enters the repository. No icon font, icon-font stylesheet, CDN script or Font Awesome kit is added.
+- **Two variants, chosen explicitly (issue #456).** `variant` is `rounded` by default — the filled Material Icons **Rounded** set in `ICON_PATHS`, which every stat card, icon tile, action button and report control uses and which this issue did not touch. `outlined` selects the unfilled Material Icons **Outlined** set in `OUTLINED_ICON_SHAPES`, and the sidebar navigation is its only caller. Asking for the variant explicitly is the whole point: a shared map silently restyled would have changed every Dashboard and report glyph along with the navigation. `OUTLINED_ICON_SHAPES` deliberately holds **only** the glyphs the sidebar renders, and `iconShapes(name, variant)` returns `undefined` for anything else, so a navigation icon that is missing from it renders nothing rather than falling back to the filled geometry the variant exists to avoid. Never approximate an outlined glyph by stroking a filled one in CSS, and never derive one from its Rounded path.
+- **Adding an icon.** Add a `name → d` entry to the `ICON_PATHS` map in `icon-paths.ts`, **copied verbatim** from the matching `round/<name>.svg` of Google's official Material Icons Rounded set (`currentColor` fill, `viewBox="0 0 24 24"`); for the outlined variant add a `name → shapes` entry to `OUTLINED_ICON_SHAPES`, copied just as verbatim from the matching `outlined/<name>.svg`. Never reconstruct, approximate or hand-tune a path from memory: the first implementation did, and shipped square-cornered baseline glyphs under a Rounded label. Google's newer Material Symbols set draws the same styles on a `0 -960 960 960` canvas and is not interchangeable with these. `icon-paths.spec.ts` guards both maps — it fails if a path leaves the 24px canvas, if a Rounded glyph loses its curve commands, if the `add`/`delete` paths drift from their pinned upstream strings, if the outlined map stops covering exactly the sidebar's icons, or if an outlined glyph is the filled Rounded path under a new label. Reference an icon from a template as `<app-icon name="...">` (or `<app-icon name="..." variant="outlined">`); an unmapped `name` renders nothing and never throws, so a typo fails silently rather than breaking the page.
+- **A glyph is a shape list, not one path.** Several Outlined glyphs are published as more than one shape — `inventory_2` as two `<path>` elements, `location_on` as a `<path>` plus a `<circle>` — so `IconShapes` carries `paths` and optional `circles`, each value exactly as published, and the component renders them all inside the one `viewBox="0 0 24 24"` SVG. Merging or dropping a shape would mean rewriting geometry, which is what this file forbids.
+- **Inputs.** `name` (required) selects the glyph; `size` (default `24`, pixels) sets the SVG's width and height; `variant` (default `rounded`) selects the icon set; the optional `label` controls the accessibility mode below.
+- **Decorative vs labelled accessibility.** Without `label`, the icon is decorative: the SVG has `aria-hidden="true"` and no `role` or accessible name — use this whenever adjacent visible text already carries the meaning (an icon tile, a labelled button, a sidebar destination whose label names it). With `label` set, `aria-hidden` is removed (never set to `"false"`), the SVG gets `role="img"` and an accessible name equal to `label` — use this for an icon that is the only content of its control (for example an icon-only button). Either way the SVG is never focusable, and the rule is the same in both variants.
+- **Colour and contrast.** Every shape fills with `currentColor` in both variants, so a glyph inherits its control's text colour and keeps whatever contrast that colour already has — `text-md-gray-800` on the white sidebar panel, white on the active item's `bg-md-dark-gradient`, unchanged on hover and focus. An outlined glyph therefore needs no colour of its own, and none is defined for one.
+- **Licence.** Both maps' geometry is copied from Google's Material Icons sets (Apache License 2.0) — `round/<name>.svg` for `ICON_PATHS` and `outlined/<name>.svg` for `OUTLINED_ICON_SHAPES` — obtained from the generated `@material-design-icons/svg` distribution (version 0.14.15) of the official `google/material-design-icons` repository; see `THIRD-PARTY-NOTICES.md`. That package is not a dependency — nothing but the geometry enters the repository. No icon font, icon-font stylesheet, CDN script or Font Awesome kit is added.
+
+#### Purchases table row actions (issue #449)
+
+The Purchases list (`purchase-list.component.html`) keeps its `table-cell` column widths — the `Items` column in particular can grow wide with several product lines — inside a horizontally scrolling `<table class="table min-w-[900px]">` within `overflow-x-auto`. The restyled #410 table widened enough that, without a pinned Actions column, the Edit/Delete buttons could scroll out of view and appear missing. The Actions header `<th>` and each row's Actions `<td>` are `sticky right-0` with their own opaque background (`bg-md-gray-100` on the header, matching `.table-head`; `bg-white` on each row cell) and a `border-md-gray-200` left divider, so both actions stay visible and reachable at the right edge while the rest of the row scrolls underneath, at 1440px and down to the 390px minimum width where horizontal scrolling remains expected. Sticky positioning here only changes where the cell paints; it does not change column sizing. Since issue #475 the Actions cell holds an Edit **link** to `/purchases/:id/edit` (see [Purchase edit page](#purchase-edit-page-issue-475)) beside the unchanged `remove(r)` Delete button; the sticky behaviour is the same for both.
+
+#### Reconciliation and Transaction Sales table width (issue #452)
+
+These two reports carry the widest tables in the application — twelve financial columns on
+`reconciliation-report.component.ts` and ten on `transaction-sales-report.component.ts` — and both
+overflowed the desktop content area even after #454 removed the shell's `max-w-7xl` cap. The fix is
+page-local and lives entirely in those two templates; nothing in `styles.scss`, the shared
+`.table*` classes or the shell changed. Three decisions make up the width budget, in the order the
+issue required them:
+
+- **Reclaim the duplicated page gutter.** The shell's main content wrapper already applies the #410
+  page padding (`p-4 sm:p-6`, see § Application shell and navigation), and the shared `.page` class
+  applies it a second time, so a routed page's content box is inset twice. Each wide table card
+  cancels the inner gutter with `sm:-mx-6`, which gives the table the wrapper's full content width
+  (about 48px more at every desktop size) while the page header, filters and summary cards keep the
+  normal page inset. Below `sm` the card keeps the page gutter, so the 390px layout is unchanged.
+- **Compact horizontal cell padding.** Every `th`/`td` in these two tables adds `px-2` on top of
+  `.table-cell`, replacing the shared 1.5rem desktop padding with the 0.5rem value the shared class
+  already uses below 640px. This is the only place that deviates from the `.table-cell` spacing
+  recorded under § Visual language; it is per-cell in the template, so the shared class keeps its
+  documented 0.75rem 1.5rem for every other table. Vertical padding, type sizes, colours and the
+  shared classes themselves are untouched — no text is made smaller to force a fit.
+- **Wrap and break the secondary text, never the amounts.** Column headers no longer force
+  `whitespace-nowrap`, the Transaction Sales timestamp cell may wrap between its date and its time,
+  the free-text Machine/site, Product, Payment and Status cells carry `break-words`, and every
+  `.value-muted` secondary line inside both tables does too. Currency amounts and dates are left
+  with no `break-words` of their own, so a money value or a `dd/MM/yyyy` date is never split.
+
+The `overflow-x-auto` card stays the contained fallback: exceptional unbroken content scrolls
+inside the card and can never produce page-level horizontal overflow. A `min-w-*` on each table is
+the readable floor for that fallback — `min-w-[900px]` on Transaction Sales, and
+`min-w-[1120px] xl:min-w-0` on Reconciliation, which keeps all twelve columns unbroken while the
+table is scrolling at narrow and mid widths and then lets it shrink onto the available content
+width from the `xl` breakpoint up, where the full desktop layout is in use.
+
+Bindings, pipes, formatting, the `Australia/Sydney` timestamp semantics, totals, status badges,
+data-quality notes, filter defaults, sorting, pagination, exports and every service call are
+unchanged; so is the set of columns and the completeness of every value in them.
 
 ## Domain model and financial boundaries
 
@@ -1968,6 +2421,42 @@ The sources must not overlap for the same day. Ex-GST, GST, and GST-inclusive am
 
 Site commissions use effective-dated agreements and one of three bases: gross sales, card sales, or sales excluding GST. Missing coverage and overlaps remain visible quality/configuration failures. The absence of any agreement for a site is a valid zero-commission state.
 
+### Bookkeeping data-quality diagnostics and calculation help (issue #476)
+
+A report's data-quality section states what is wrong with the period in front of the reader. It is not where the report explains how it works, and it is not a permanent disclaimer list: a list that says the same four things for every period says nothing about any of them. Bookkeeping separates the two concerns; other report families are unchanged.
+
+**Two forms of the shared helper.** `Inventory.Application.Reporting.Shared.ReportingQuality` now has `Quality(...)`, which still prefixes the four standard disclaimer notes and is what the daily, dashboard, GST accounting-aid and profitability reports keep calling, and `Conditional(...)`, which returns only the caller's own fact-derived notes. Both map every boolean 1:1 onto the identically named `ReportingDataQualityDto` flag, so no flag changes meaning for any family. `GetBookkeepingReport` was the first caller of `Conditional`, and `GetReconciliationReport` is the second (issue #477, see [Reconciliation diagnostics, exclusions and the adjustments assumption](#reconciliation-diagnostics-exclusions-and-the-adjustments-assumption-issue-477)): a clean period returns an empty note list, and the Angular report and its export then show no data-quality section at all. A report that moves to `Conditional` owes its reader a conditional note for every real problem in the requested scope and its methodology presented as report help instead.
+
+**Scoped status diagnostics, counted before the completed-sale filter.** `BookkeepingReportFacts` carries `PendingTransactionCount`, `RefundedTransactionCount`, `DeclinedOrCancelledTransactionCount`, `UnknownStatusTransactionCount` (a status ID that is present but unrecognised) and `MissingStatusTransactionCount` (no status ID at all), and `EfBookkeepingReportFactsProvider` reads them from `EfReportingSharedQueries.AllSalesQuery` for the requested business, date range and machine scope — before `CompletedSalePredicate` removes those rows, which is the only way the report can say what it excluded. **These counts never change what the totals include.** Only status `12` is a completed sale; every amount in the report still comes from the completed-sale queries, and the counts exist to be reported, not summed.
+
+The two kinds are not the same thing and are never merged. An absent or unrecognised status is a data-quality problem: each produces its own conditional note naming its own count, and together they are what sets `dataQuality.missingStatus`. Pending, refunded and cancelled/declined rows are ordinary Nayax payment outcomes, not data errors: they produce no warning, and the bookkeeping page lists them as neutral "Transactions excluded from sales" scope information so every row in the period is accounted for. `missingStatus` is no longer hard-coded `true` for this report, and nothing in normal report presentation refers to the historical status-12 backfill migration.
+
+**Unresolved historical COGS reuses the authoritative facts.** The incomplete-COGS note names `UncostedTransactionCount` and `UncostedSalesAmount` as the report already reports them, rather than recounting or recosting anything; cost-of-goods completeness, partial COGS and the null-profit rules are untouched.
+
+**Calculation help, and the GST-on-sales estimate.** The Angular bookkeeping report carries a collapsed, keyboard-accessible native `<details>`/`<summary>` "How this report is calculated" disclosure explaining, in plain language, that only completed transactions count as sales, that COGS and profit use the cost recorded on each sale (an uncosted sale leaves profit unavailable, never estimated from today's cost), that commission comes from the effective-dated site commission agreement covering each sale's date, and how the fee sources combine. The GST-on-sales limitation is *not* only in there: GST classification is still not persisted per sale, so the GST card labels the figure "GST on Sales (estimated)" with the estimate stated beside it, and the help is explicit that GST on Nayax fees and operating-expense GST come from imported and recorded amounts instead. An empty data-quality note list means no problem was detected in that period — never that GST classification has been verified.
+
+**Export parity.** The bookkeeping CSV/XLSX row adds `GstOnSalesBasis` (the same estimate statement), `IsCogsComplete`, `UncostedTransactionCount`, `UncostedSalesAmount`, the five status counts and `DataQualityNotes`, all taken from the same `BookkeepingReportDto` the API returns. Moving an explanation out of the on-screen notes must never leave a downloaded file implying a verified figure.
+
+### Reconciliation diagnostics, exclusions and the adjustments assumption (issue #477)
+
+Reconciliation applies the same separation as bookkeeping, and adds a third category. This report compares completed card sales with an imported Nayax reimbursement; it calculates no COGS, no commission and no GST on sales, so it must never claim any of them is missing. Three different things are now presented three different ways, and no report family other than reconciliation changed.
+
+1. **An actual problem with the requested scope** is a conditional data-quality note, and the Angular page hides the section entirely when there is none.
+2. **A normal transaction exclusion** is a neutral count, never a warning.
+3. **A calculation assumption or limitation** stays beside the figure it affects and in the report's "How this report is calculated" help.
+
+**Report-specific flags.** `GetReconciliationReport` calls `ReportingQuality.Conditional(...)` for both the report and every period row. `historicalCostUnavailable` and `commissionNotPersisted` are `false` because this report computes neither; `missingStatus` is derived from the absent/unrecognised status counts of **that** scope, replacing the hard-coded `true` the period rows used to return; `gstClassificationMissing` keeps its existing meaning (no imported fee row stated a GST percentage) and is unchanged. The four standard disclaimers, including the blanket indicative GST-on-sales statement that never described this report's imported fee-GST figures, are gone from both levels.
+
+**Problems that produce a note.** No reimbursement matched the requested range; an unknown payment method; transactions with no status ID; transactions with an unrecognised status ID; pending transactions; a machine filter (imported fees stay account-level); a period that fell back to device or reimbursement gross because card payment detail was missing; and a period whose imported fee rows state no GST percentage, which explains where that period's fee GST came from instead. The missing-reimbursement note names the requested range, states that the comparison cannot be completed, and asks for the reimbursement covering those dates or the period an import covers — because matching requires a reimbursement's coverage dates to fall **entirely inside** the requested range, an unmatched range says nothing about whether other periods were imported. Pending rows keep a note of their own: they are not a data error, but they are not final either, and they are why an otherwise matching period still reports a warning.
+
+**Exclusions that do not.** Refunded and cancelled/declined transactions are ordinary Nayax payment outcomes. They produce no warning at either level; the report and each period row report their counts, and the Angular page lists them, with the pending and unrecognised/absent-status counts, under a neutral "Transactions excluded from completed sales" card so every row is accounted for. Report totals, the `$0.01` tolerance, the gross/settlement statuses, transaction inclusion and reimbursement matching are all unchanged: only status `12` is a completed sale, and these counts are reported, never summed into a figure.
+
+**Period-scoped facts, never aggregate counts repeated.** `ReconciliationPeriodFacts` carries its own `PendingTransactionCount`, `RefundedTransactionCount`, `DeclinedOrCancelledTransactionCount`, `UnknownStatusTransactionCount` and `MissingStatusTransactionCount`, and `EfReconciliationReportFactsProvider` counts them from `EfReportingSharedQueries.AllSalesQuery` inside each matched reimbursement's coverage dates (or the requested range, for the single fallback period) before the completed-sale predicate removes those rows. A period row therefore reports what happened in that period, and the report-level counts stay the whole requested range's. Where a problem belongs to specific periods, the aggregate note names those periods by date (`yyyy-MM-dd to yyyy-MM-dd`) instead of repeating one period's wording as if it applied to the range. `ReconciliationReportDto` and `ReconciliationPeriodDto` both gained `MissingStatusTransactionCount`, and the period rows now populate the four status counts they previously always returned as zero.
+
+**The adjustments assumption.** The imported reimbursement model holds no adjustment facts, so every adjustment amount in this report is an assumed `$0.00`, not a verified one. `GetReconciliationReport.AdjustmentsAssumption` is the one authoritative statement of that, and it is not a data-quality warning about the period: the Angular page prints it beside the Adjustments figure that feeds expected net reimbursement, the calculation help repeats it in context, and the export carries it in every row. It must never disappear because the rest of the period's data is complete, and `adjustmentsSupported` stays `false` on the report, the totals and every period row.
+
+**Export parity.** The reconciliation CSV/XLSX rows add `AdjustmentsSupported`, `AdjustmentsBasis` (the assumption above), the five status counts and `DataQualityNotes`. Each period row carries its own counts and its own notes; the `TOTAL` row carries the report's range-wide counts and notes rather than a sum of the period rows'. A clean period exports an empty `DataQualityNotes` cell and no boilerplate, and the export keeps every figure, filter and status it exported before.
+
 ### Product selling price
 
 `Product.UnitPrice` is the catalog default/list selling price, synced one-way from the Nayax product catalog's `ProductDefaultRetailPrice` field by `Inventory.Application.Imports.ImportNayaxProductCatalog` (issue #57; the use case was `ImportService.ImportProductsAsync` until issue #300 migrated it — see [Nayax product catalogue import](#nayax-product-catalogue-import-issue-300)). It is a display/default value, not a calculation input: no reporting, profit, or costing calculation in `Inventory.Application`/`Inventory.Domain` reads it. It is distinct from:
@@ -1982,7 +2471,7 @@ The public property name `UnitPrice` is retained for API/contract compatibility.
 
 ### Purchase GST classification (issue #429)
 
-Purchase amounts are GST-inclusive, and input GST is derived from an explicit classification rather than from an amount. Issue #429 added the data model, the Domain rule and the purchase API surface for the approved GST design of parent issue #62. Issue #431 added the purchase form's pickers and the purchase response's input-GST summary (see [Purchase GST on the purchase pages](#purchase-gst-on-the-purchase-pages-issue-431) below). Issue #430 added product/supplier rule configuration (see [Product and supplier GST rules](#product-and-supplier-gst-rules-issue-430) below). Issue #432 added the reporting consumer, described in [Purchase input GST in the GST accounting aid](#purchase-input-gst-in-the-gst-accounting-aid-issue-432) below. The historical Preview/Apply maintenance workflow (#433) builds on them and is not part of any of these.
+Purchase amounts are GST-inclusive, and input GST is derived from an explicit classification rather than from an amount. Issue #429 added the data model, the Domain rule and the purchase API surface for the approved GST design of parent issue #62. Issue #431 added the purchase form's pickers and the purchase response's input-GST summary (see [Purchase GST on the purchase pages](#purchase-gst-on-the-purchase-pages-issue-431) below). Issue #430 added product/supplier rule configuration (see [Product and supplier GST rules](#product-and-supplier-gst-rules-issue-430) below). Issue #432 added the reporting consumer, described in [Purchase input GST in the GST accounting aid](#purchase-input-gst-in-the-gst-accounting-aid-issue-432) below. Issue #433 added the historical Preview/Apply maintenance workflow, the one place a rule is applied to purchase data that already exists; see [Historical GST classification](#historical-gst-classification-preview-and-apply-issue-433) below. It is not part of any of the earlier four.
 
 **Where each piece lives**, following the Purchasing and costing slice's ownership:
 
@@ -2015,17 +2504,17 @@ The purchase form sets the classifications and the purchase list displays what t
 **The response summary.** The `/api/purchases` envelope carries a third member, `gst`, beside `purchase` and `validation` — the saved purchase's `inputGst`, `unresolvedComponentCount` and `unresolvedAmount`. It is additive: `purchase` and `validation` keep their names, order and values, so the existing contract is unchanged (`PurchaseJsonContractTests`).
 
 - `Inventory.Application.Purchases.ComputePurchaseGstSummary` is the use case behind it. Like `ComputePurchaseTotalValidation`, it owns no formula: it projects the persisted `PurchaseRecord` onto `PurchaseGstPolicy.Calculate`'s component inputs — every line, plus each charge with its own classification — and returns that policy's answer. `PurchasesController` maps it onto `PurchaseGstSummaryDto` for every purchase it returns, on the list, the single read, the create and the edit alike.
-- The summary describes what is **stored**. It is never a projection of an unsaved edit, which is why the purchase list marks the figures as excluding unsaved changes while a purchase's edit form is open rather than recomputing them in the browser.
+- The summary describes what is **stored**. It is never a projection of an unsaved edit, and nothing recomputes it in the browser. Since issue #475 moved editing to its own page, the list only ever displays saved figures, so the "these are the saved figures" note it used to show beside an open inline editor is gone; the edit page itself shows no GST figure at all and says the API calculates them once the purchase is saved.
 - This is the only purchase input-GST figure the API exposes. The period-level report of #432 consumes the same Domain policy; it does not aggregate these response blocks.
 
-**The form.** `purchase-upload.component.ts` (entry) and `purchase-list.component.ts` (edit) share the picker vocabulary in `components/purchases/gst-classification-options.ts`, so the two pages cannot drift on the options they offer (`Not classified`, `Taxable`, `GST-free`) or on what a stored state is called.
+**The form.** `purchase-upload.component.ts` (entry) and `purchase-edit/purchase-edit-form.component.ts` (edit, moved out of `purchase-list.component.ts` by issue #475 — see [Purchase edit page](#purchase-edit-page-issue-475)) share the picker vocabulary in `components/purchases/gst-classification-options.ts`, so the two pages cannot drift on the options they offer (`Not classified`, `Taxable`, `GST-free`) or on what a stored state is called.
 
 - A new line and a new charge start as `Unknown`/Not classified and stay there unless a person picks something. Nothing is pre-filled from the product, the supplier, the amount or a received supplier order (decision D4).
 - A charge's picker appears only while the charge has a value, mirroring the server's absent-charge rule. `isChargePresent` is a visibility decision, not a calculation: an absent charge has no classification and the form never submits one for it, nor warns that it is unresolved (decision D3).
 - **An edit submits only what the person changed.** Each edit line keeps the classification the purchase was read with and the request omits any classification that still matches it, so a `ProductRule`/`SupplierDefault`/`SupplierFeeDefault` provenance survives an edit of a quantity, a cost or a date. An explicit move back to Not classified is a change like any other and is submitted.
 - **Each edit line carries its stored `id`.** A line added in the form has none. That is what keeps a classification on its own line when duplicate-product lines are reordered or one of them is removed; line identity is never substituted by the product or by the array position (`PurchaseLineIdentityPolicy`).
 - **A stored line keeps its product, so the form offers no product picker for one.** An identified line submitted with a different product is refused (`PurchaseLineIdentityPolicy.ProductChangedMessage`), because re-pointing it would carry its classification, its provenance and its restock movement onto another product's costing history. The edit form therefore names a stored line's product as text (`isStoredLine`) and states the workflow the server's message names: remove the line and add the new product as its own line, which is a line with no `id`, no classification and no inherited provenance. A line added during the edit still has its picker, and quantity, unit cost and classification stay editable on every line.
-- A refused save — the `400` a rejected classification or an ambiguous line set produces — leaves the edit form open with the person's selections and shows the API's own message, so a rejected classification never looks like a saved one.
+- A refused save — the `400` a rejected classification or an ambiguous line set produces — leaves the edit page open with the person's selections and shows the API's own message, so a rejected classification never looks like a saved one.
 
 ### Product and supplier GST rules (issue #430)
 
@@ -2045,7 +2534,7 @@ A classification says what a recorded purchase component *is*. A **rule** says w
 
 **The rules themselves:**
 
-- Precedence, for whoever reads a rule (today only #433): manual always wins and is never overwritten; then the product's rule; then the supplier's product-line default for a line, or its matching fee default for a delivery or package charge; otherwise the component stays `Unknown`.
+- Precedence, for whoever reads a rule (today only the [historical Preview/Apply workflow](#historical-gst-classification-preview-and-apply-issue-433), which applies it through `HistoricalGstClassificationPolicy`): manual always wins and is never overwritten; then the product's rule; then the supplier's product-line default for a line, or its matching fee default for a delivery or package charge; otherwise the component stays `Unknown`.
 - A supplier default is explicit configuration. GST registration, GST elsewhere on an invoice, a product's price - none of them configure a default, and nothing in the code derives one.
 - Saving a rule or a default changes no recorded purchase: not its classification, provenance, amounts, costing or stock movements. `ProductAndSupplierGstRuleApiTests` compares every purchase and purchase line of both synthetic businesses across each request, and the migration upgrade test asserts the same across the schema change.
 - Only a declared value is a rule. `{"gstRule": 999}` binds to a `GstClassification` no policy describes, so it is refused with `400` and nothing is written - including the rule the row already had.
@@ -2068,6 +2557,30 @@ The GST accounting aid (`GET api/reports/gst` and its CSV/XLSX export) reports p
 - A machine-filtered report excludes purchases altogether, because a purchase is a whole-business record with no machine — the same exclusion bookkeeping applies to its delivery/package totals, and the same reason whole-business net profit is unavailable for a machine-filtered report.
 - The CSV/XLSX export carries `PurchaseLineGst`, `PurchaseChargeGst`, `PurchaseInputGst`, `PurchaseUnresolvedComponents`, `PurchaseUnresolvedAmount` and `PurchaseGstIncomplete` beside the existing columns, from the same result object the API returns. The Angular GST report displays those values and the incomplete warning and calculates nothing.
 - Delivery and package costs remain GST-inclusive wherever bookkeeping presents them as expenses (decision D5); this issue added no GST-exclusive expense figure.
+
+### Historical GST classification: Preview and Apply (issue #433)
+
+Issue #430 added rules that *could* classify a component; this is the one place a rule is ever applied to purchase data that already exists. It is an explicit, human-triggered maintenance action with a read-only preview and an all-or-nothing apply - the same shape `bootstrap-business`, `migrate-documents` and the costing repair already use (AGENTS.md § Architecture rules, "any future data repair must be a separately reviewed, named maintenance operation with a preview/dry-run step and explicit verification"). It never runs on a migration, a deployment, a startup step, a purchase read, a report, an import, or when a rule is configured.
+
+**Where each piece lives:**
+
+- `Inventory.Domain.Gst.HistoricalGstClassificationPolicy` is the one authoritative rule. `IsReclassifiable` answers "may a rule touch this component at all?" - only one carrying no classification yet (`Unknown`/`Unknown`), so a `Manual` classification and an earlier rule-based one are both left alone. `Resolve` applies the precedence, selecting the supplier's fee default by component kind itself so "a charge never inherits the product-line default" is decided in one place. `Plan` turns a business's stored purchases into both the summary a person approves and the exact component writes it stands for. It owns no amount and no rounding: the GST comes from `Inventory.Domain.Reporting.Gst.PurchaseInputGstPolicy` over the newly classified components only, which delegates to `PurchaseGstPolicy`, so the figure an operator approves is produced by the calculation the GST accounting aid reports with.
+- `Inventory.Domain.Gst.GstComponentKind` names the three kinds (product line, delivery charge, package charge), because the kind is what decides which rule may classify a component.
+- `Inventory.Domain.Gst.HistoricalGstPurchase`/`HistoricalGstPurchaseLine` are the input shape: every component of a purchase with its stored classification state and the configured rules that could classify it. They deliberately carry the already-classified components too, which is what lets the fingerprint notice relevant data changing.
+- `Inventory.Domain.Gst.HistoricalGstClassificationFingerprint` is the stale- and foreign-preview guard, built the same way `Inventory.Domain.Costing.CostLedgerFingerprint` is: a canonical rendering (fixed field order, collections sorted by key, decimals without insignificant trailing zeros) hashed to SHA-256. It renders the owning business id, every purchase component's amounts, classification and provenance, and every applicable product rule and supplier default.
+- `Inventory.Application.Gst.PreviewHistoricalGstClassification` and `ApplyHistoricalGstClassification` are the use cases, over the shared internal `HistoricalGstClassificationProjection` so the numbers an operator approves and the numbers the apply validates come from one calculation. `IHistoricalGstClassificationStore` is their narrow port.
+- `Inventory.Infrastructure.Persistence.EfHistoricalGstClassificationStore` is the adapter. Its load projects raw stored values and calculates nothing, exactly as `EfGstReportFactsProvider` does, and returns the whole purchase history rather than the eligible components alone: eligibility is a Domain decision. Its apply sets only the two classification columns per named component. Reads and writes go through the `AppDbContext` tenant query filters and the ownership stamp, so there is no business predicate in the adapter.
+- `HistoricalGstClassificationController` publishes `POST /api/admin/historical-gst-classification/preview` and `.../apply`. Both are POST: the preview writes nothing, but its response carries a fingerprint that is only valid for the exact state it was computed from, and a cached `GET` would hand a caller a fingerprint for data it never read.
+- `components/admin/historical-gst-classification` holds the routed page and the `HistoricalGstClassificationWorkflowComponent` it composes through the page composition boundary. Angular performs no GST arithmetic and no eligibility decision: it renders the API's own counts and totals and carries the fingerprint back unchanged.
+
+**The maintenance boundaries, which are the reason this is a separate named operation:**
+
+- **Preview is read-only by construction**, not by convention: the use case holds no transaction and no write path, and the only store method it can reach is the load.
+- **The apply's authoritative read, its recomputation and its write are one operation.** The apply opens its transaction, re-reads the purchase history and the configured rules, recomputes the plan from that read, compares the fingerprint, and only then writes. A purchase added, edited or deleted, a component classified by hand, or a product rule or supplier default saved in between therefore produces a `400` that writes nothing and asks for a fresh preview. Moving the read outside the transaction, or letting the apply trust the summary it is handed, would silently reintroduce the race.
+- **Nothing a caller submits is written.** `ApplyHistoricalGstClassificationRequest` carries one fingerprint and no classification, provenance, component list, count or GST total. A tampered body can only fail the fingerprint comparison, which is why a request that also claims its own counts, totals or owner changes nothing at all.
+- **The preview is bound to its business.** The `BusinessId` is resolved from the authenticated actor's membership (`ICurrentBusinessProvider.RequireBusinessIdAsync`, fail-closed) and is part of the fingerprint, so one business cannot apply another's preview even in the one case two histories would otherwise render identically - two empty histories. This is an ordinary tenant-scoped endpoint family, and deliberately not the [platform diagnostics](#platform-diagnostics-issue-336) cross-business exception: no diagnostics SQL path is involved.
+- **Idempotence is a Domain property, not a database one.** Because only an unclassified component is eligible, the plan over an applied history is empty; re-running Preview and Apply changes nothing, and a later rule change never silently restates recorded bookkeeping.
+- **Accounting data only.** The apply writes the two classification columns of each named component and nothing else: no purchase amount, unit cost, `AverageUnitCost`, `CostingQuantity`, `InventoryValue`, `QuantityInStock`, stock movement or stored document. `HistoricalGstClassificationApiTests` compares the purchase amounts and the whole costing/stock snapshot of both synthetic businesses across an apply.
 
 ### Historical inventory cost
 
@@ -2334,25 +2847,177 @@ and it never substitutes for a real purchase, correction or write-off.
 
 #### Dashboard "Inventory Value" tile (issue #42)
 
-The home Dashboard's "Inventory Value" tile (`DashboardComponent`, distinct from the reporting
-dashboard at `/reports/dashboard`, `GetDashboardReport`) represents the business-owned perpetual
-inventory value described above - the sum of every product's persisted `InventoryValue` (the AVCO
-valuation the `RebuildProductCost` use case maintains) - not `QuantityInStock * UnitPrice` retail value
-and not home/storage stock quantity on its own.
+The business-owned perpetual inventory value - the sum of every product's persisted
+`InventoryValue` (the AVCO valuation the `RebuildProductCost` use case maintains), never
+`QuantityInStock * UnitPrice` retail value and never home/storage stock quantity on its own - is
+the figure behind the home Dashboard's "Inventory" card (see
+[Home dashboard: four headline cards](#home-dashboard-four-headline-cards-issue-460) below).
 
 The backend is authoritative: `Inventory.Domain.Reporting.Dashboard.InventoryValuationPolicy`
-aggregates the per-product values, `Inventory.Application.Reporting.Dashboard.GetInventoryValuationSummary`
-is the use case (retrieving them through the narrow `IInventoryValuationFactsProvider` port, whose
-EF adapter is `Inventory.Infrastructure.Reporting.Persistence.EfInventoryValuationFactsProvider`
-since issue #308), and
-`ProductsController` exposes it as `GET /api/products/inventory-value-summary`. A product's
+aggregates the per-product values. `Inventory.Application.Reporting.Dashboard.GetInventoryValuationSummary`
+is the dedicated use case for this figure alone (retrieving it through the narrow
+`IInventoryValuationFactsProvider` port, whose EF adapter is
+`Inventory.Infrastructure.Reporting.Persistence.EfInventoryValuationFactsProvider` since issue
+#308), exposed by `ProductsController` as `GET /api/products/inventory-value-summary`. A product's
 `InventoryValue` is `null` only when it has never had a cost rebuild run for it - a genuinely
 unknown cost, not a zero one - so the policy makes the whole total unavailable
 (`InventoryValuationSummaryDto.IsComplete = false`, `TotalInventoryValue = null`) whenever any
-product's cost is unknown, rather than silently summing only the known ones. Angular
-(`DashboardComponent`) only displays the returned total and status - it performs no valuation
-calculation of its own - showing "Unavailable" plus how many of how many products are missing cost
-data instead of a real `$0.00` when costing is incomplete.
+product's cost is unknown, rather than silently summing only the known ones.
+
+The same valuation, with the same completeness rule, is also part of the combined Dashboard summary
+contract described in [Home Dashboard summary API](#home-dashboard-summary-api-issue-459) below. That
+endpoint reuses the Domain `InventoryValuationPolicy` directly rather than calling this use case, so
+its valuation, product count and storage units all describe one catalogue read. Issue #460 moved
+`DashboardComponent`'s own display from this dedicated endpoint to that combined summary's
+`inventory` card, so the home Dashboard no longer calls `GET /api/products/inventory-value-summary`
+directly; the endpoint itself is unchanged and stays available for any other caller that needs the
+valuation alone.
+
+#### Home Dashboard summary API (issue #459)
+
+`GET /api/dashboard/summary` (`InventoryApi.Controllers.DashboardController`, thin: it binds no
+input and only invokes the use case) is the authoritative contract behind the home Dashboard's
+sales, refill, ordering and inventory cards. It is **additive and read-only**: no existing endpoint,
+response or figure changed with it, and it creates no inventory movement, refill or persisted state.
+It carries no business, machine or site identifier - the business is resolved from the authenticated
+actor's membership, and every read it makes is scoped by the central `AppDbContext` query filters.
+Issue #460 renders it; before it existed, `DashboardComponent` aggregated machine rows and totalled
+product quantities in TypeScript, which is exactly the duplication this endpoint removes.
+
+`Inventory.Application.Dashboard.GetDashboardSummary` is the use case. It owns no formula of its
+own: every figure comes from an authority that already existed.
+
+- **Sales this week.** Week-to-date gross vending revenue - the sum of `SettlementValue` over
+  approved (status `12`) sales, the same definition the bookkeeping, daily and reporting-dashboard
+  reports use - over the `Australia/Sydney` business week. The period boundaries are
+  `MachineDashboardWindow.CurrentWeek`/`PreviousComparableWeek`, the very same window the Sites and
+  Machines dashboards resolve (see [Time](#time)), so the week starts at Sydney midnight rather than
+  UTC midnight and the comparison is the **same elapsed trading time into the previous business
+  week**, never the whole of it. Across a daylight-saving transition the two weeks start 167 or 169
+  hours apart, and each period is measured from its own week's Sydney Monday midnight; the
+  comparable period is held at the previous week's own end so it can never reach into the current
+  week and count one sale on both sides. `IDashboardSummarySalesFactsProvider` is the narrow port
+  and `Inventory.Infrastructure.Persistence.EfDashboardSummarySalesFactsProvider` its EF adapter,
+  which totals both periods in one grouped read filtered by
+  `EfNayaxSalesQueries.CompletedSalePredicate`.
+- **The comparison's availability and its zero-prior rule** belong to
+  `Inventory.Domain.Reporting.Dashboard.PeriodRevenueComparisonPolicy`. The percentage is
+  `(current − prior) / prior × 100`, and it is `null` when the prior period's revenue is zero: there
+  is no honest percentage change from nothing, and an infinite or 100% rise would misstate a
+  financial figure. The comparison is available only when the business's earliest recorded completed
+  sale is at or before the comparable period's start; a prior period the recorded data never reached
+  back to returns `isComparisonAvailable: false` with every comparison field `null`, because its
+  zero or part-week total would read as a collapse in trade rather than as missing data. Each case
+  carries the note the UI shows instead.
+- **Needs refill** counts the **distinct machines** with at least one low or empty selection, using
+  `Inventory.Domain.Machines.MachineRefillAlertPolicy`. Its per-selection
+  `Classify(quantity, vendOutAlertThreshold)` - empty at or below zero, otherwise low up to and
+  including the threshold - is now the one authoritative low/empty test, and
+  `Inventory.Domain.Sites.SiteStockPolicy.CalculateAlertCounts` calls it too, so the site rows and
+  this card cannot come to mean different things. The quantity is `PAR − MissingStockByMDB`, the
+  arithmetic the Pick List and the machine product list already use, summed first across however
+  many MDB slots carry one product on one machine. **Overlap semantics:** the low and empty
+  *selection* counts are disjoint; the low and empty *machine* counts overlap (a machine with both
+  appears in both); and `machinesNeedingRefill` is the distinct union, never the sum. Aggregating
+  the site counts instead would double count, because one product low on two machines at a site is
+  one site alert and two machine alerts. `machinesEvaluated`/`selectionsEvaluated` are what make a
+  zero honest: zero of zero is "nothing to look at", zero of many is "everything is stocked".
+- **Needs ordering** counts the distinct products the authoritative reorder policy says must be
+  purchased - exactly the set `GET /api/products/alerts/low-stock` lists for the unnarrowed
+  catalogue, including its treatment of outstanding supplier-order quantity. Both come from
+  `ListLowStockProducts.SelectReorderAlerts`, which issue #459 extracted from that use case's
+  `Handle` so the count and the list are one implementation; `ProductReorderPolicy` still owns the
+  formulas and no threshold changed.
+- **Inventory** reports three figures with deliberately different scopes, and they are not
+  interchangeable. `inventoryValueAtCost` is the business-owned perpetual AVCO valuation from
+  `InventoryValuationPolicy` over the same catalogue snapshot - never a selling-price valuation -
+  and is `null` with `isInventoryValueComplete: false` and an unknown-cost count whenever any
+  product's cost is unknown, the same rule as the
+  [Inventory Value tile](#dashboard-inventory-value-tile-issue-42) above. `unitsInStorage` is the sum
+  of `Product.QuantityInStock`: physical storage/home stock, which **excludes** units already loaded
+  into a machine, and is never a valuation input. `productCount` is every product in the caller's
+  catalogue, active and inactive, which is the population the other two are taken over.
+
+**Aggregation strategy.** The summary makes exactly three reads: one grouped sales read, one
+unnarrowed `IProductCatalogStore.ListUnorderedAsync` catalogue read, and one
+`CalculateReorderNeeds` fleet read. The two persistence reads are awaited one at a time, because the
+scoped EF adapters share a single `AppDbContext`, which supports one operation at a time - the same
+constraint `GetSiteSummaries` documents. The ordering count, product count, storage units and
+valuation all come from that one catalogue snapshot, so they cannot disagree with one another.
+
+**No new Nayax fan-out.** The refill and ordering cards are both answered from one
+`CalculateReorderNeeds` call: one `GetMachinesAsync` plus one `GetMachineProductsAsync` per machine,
+bounded by the existing `CalculateReorderNeeds.MaxConcurrentMachineRequests`. Issue #459 made that
+use case additionally keep the individual selections it already read
+(`ReorderNeedsResult.MachineSelections`) and the machines it covered (`MachineIds`), rather than
+adding a second fan-out for the cards; its reorder aggregation is unchanged, and existing callers
+ignore the new members. A failing machine request or a cancelled request propagates out unchanged,
+surfacing as the usual `502` from `NayaxUpstreamExceptionHandler`, so a partial aggregate is never
+presented as a complete summary - the behaviour the reorder-alert list and the Pick List already
+have. The `PAR`, `MissingStockByMDB` and `VendOutAlertThreshold` fields the refill rules read are
+confirmed against the published Nayax `GET /machines/{id}/machineProducts` contract; a selection is
+attributed to the machine the request was made for, not to the payload's own nullable `MachineID`.
+
+**Placement.** The slice is `Inventory.Application.Dashboard`, not
+`Inventory.Application.Reporting.Dashboard`: it is the home Dashboard's own summary across
+reporting, stock and ordering, not a report with a date filter and an export, and the reporting
+namespace is reserved for the `/reports/*` slices (`GetDashboardReport` is the reporting dashboard at
+`/reports/dashboard`, a different feature). `GetInventoryValuationSummary` stays where it is; this
+use case reuses the Domain `InventoryValuationPolicy` it is built on rather than calling it, so the
+valuation and the product count describe one catalogue read instead of two.
+
+#### Home dashboard: four headline cards (issue #460)
+
+`DashboardComponent` renders the [Home Dashboard summary API](#home-dashboard-summary-api-issue-459)
+contract as four headline stat cards, in this order, replacing the former separate Total
+Products/Units In Stock/Inventory Value tiles and the permanent Admin tools banner (Admin remains
+reachable from the existing sidebar `Admin` group; issue #460 added no replacement alert system).
+`DashboardService.getSummary()` is the one HTTP call behind all four; a request failure clears the
+summary, so every card shows "Unavailable" rather than a fabricated zero, and the page shows a
+warning banner alongside the existing sales-sync-failure one. Angular performs no revenue,
+percentage, refill, reorder or valuation calculation anywhere in this card section - every value
+and completeness flag is the backend's, read and displayed as returned (`DashboardComponent.money`
+is the one exception, formatting an already-known amount via `components/reports/report-formatting`'s
+shared `money`).
+
+1. **Sales this week** (`summary.salesThisWeek`) shows the week-to-date gross revenue and, in the
+   card footer, the week-on-week comparison exactly as the backend decided: the arrow/percentage
+   when `changePercent` is not `null`, and `comparisonNote` verbatim - never a frontend-computed
+   percentage - when `isComparisonAvailable` is `false` or the prior period's revenue was zero, so a
+   missing-data or zero-baseline period is never misread as a collapse or a 100% rise. Links to
+   `/reports` (`DashboardReportComponent`, the "Dashboard" entry under the Reports navigation group),
+   the general sales report; no query parameter is added because that report has no week-to-date
+   filter to target, and inventing one would duplicate a filter the page does not have.
+2. **Needs refill** (`summary.needsRefill`) shows the distinct machine count
+   (`machinesNeedingRefill`) as the primary value, with the low/empty selection counts and
+   `machinesEvaluated` as supporting footer detail - distinguishing "no machines to evaluate yet"
+   (`machinesEvaluated === 0`) from "every evaluated machine is adequately stocked"
+   (`machinesNeedingRefill === 0` with machines evaluated). Links to `/pick-list`
+   (`PickListComponent`), the existing Pick List workflow.
+3. **Needs ordering** (`summary.needsOrdering`) shows `productsNeedingOrdering` as the primary
+   value, with `productsEvaluated` (the whole catalogue) as supporting footer detail, distinguishing
+   an empty catalogue from every product being adequately stocked. Links to
+   `/products/needs-ordering` (`ProductNeedsOrderingComponent`), the existing Needs ordering
+   workflow.
+4. **Inventory** (`summary.inventory`) shows `inventoryValueAtCost` as the primary value -
+   "Unavailable", never a real `$0.00`, whenever `isInventoryValueComplete` is `false` - with
+   `productCount` and `unitsInStorage` as explicitly scoped footer detail ("excludes machines"), so
+   storage/home stock is never read as a whole-business count. This card replaces the former
+   dedicated "Inventory Value" tile described above. Links to `/products`
+   (`ProductListComponent`), the existing Products/inventory list.
+
+Every card is a single `<a class="stat-card">` using the existing #453 icon-top-right stat-card
+layout and an explicit `aria-label` naming the card and its destination (e.g. "Sales this week. View
+the Reporting Dashboard."), so its accessible name stays stable and descriptive regardless of the
+currently displayed figures; the icon inside is decorative (`app-icon` without a `label`, so it
+renders `aria-hidden`) because the label text already carries the meaning. The cards lay out
+`sm:grid-cols-2 lg:grid-cols-4` - four columns where width permits, stacking without horizontal
+scroll below that - and rely on the existing global `a:focus-visible` outline for keyboard focus;
+no new interaction styling was added.
+
+The existing Sites/Machines detail sections, their report meanings, the Reorder Alerts product
+table and the available profit detail are unchanged by this issue; no profit headline was added, and
+no unknown profit/cost figure was turned into a zero.
 
 #### Home dashboard coordinated Sites/Machines sales sync (issue #187)
 
@@ -2384,7 +3049,9 @@ The one rule here that issue #380 changed is which payload field the stored sale
 the authoritative `AuthorizationDateTimeGMT`, normalized once at the integration boundary, rather
 than the machine-local `MachineAuthorizationTime` payload field it had been read from. A payload item
 carrying no authoritative GMT instant is not imported at all rather than imported at a guessed time.
-See [Nayax sale timestamps](#nayax-sale-timestamps-issue-380).
+Issue #471 then fixed what an *offset-free* value in that field means: it is UTC, because the field
+contract says GMT, independent of the host's time zone. See
+[Nayax sale timestamps](#nayax-sale-timestamps-issue-380).
 
 The persist step and the rebuild step have deliberately different failure boundaries. The sales
 batch is one save, but the rebuild is per product (issue #362): the sales are already persisted and
@@ -2432,13 +3099,14 @@ All report, dashboard, transaction-detail, CSV, and XLSX paths must call the sam
 
 Timezone migration is not part of an incidental feature. Changes require explicit boundary and daylight-saving tests.
 
-Time acquisition and timezone conversion are external boundaries, not pure calculations, so their port lives in `Inventory.Application` and their implementation lives in `Inventory.Infrastructure` (issue #44): `Inventory.Application.Time.IClock` (promoted from the NayaxFeeSettings-scoped port the first Clean Architecture slice introduced) is the narrow port for the current UTC instant, implemented by `Inventory.Infrastructure.Clock.SystemClock`. `Inventory.Application.Time.IBusinessCalendar` converts a UTC instant to its `Australia/Sydney` business calendar date (`ToBusinessDate`) and resolves the UTC instant of the start of a Sydney business day (`StartOfBusinessDayUtc`), so a caller can derive inclusive-date-range UTC boundaries without ever touching `TimeZoneInfo` itself; `Inventory.Infrastructure.Time.SydneyBusinessCalendar` prefers the IANA ID `Australia/Sydney` and, when a host cannot resolve IANA IDs (notably some Windows setups), converts it with `TimeZoneInfo.TryConvertIanaIdToWindowsId` and resolves the corresponding Windows ID instead. Both paths use the platform timezone database, so AEST/AEDT daylight-saving transitions keep the same semantics. `Inventory.Domain` still owns only the deterministic, timezone-free date-range/financial-year rules (`AustralianFinancialYear`, `ReportingRangeResolver`) and must not reference `TimeZoneInfo`, server-local time, or an infrastructure clock implementation. `GetSiteCommissionReport`'s commission-due "Overdue" determination uses `IBusinessCalendar` outside the clock's original NayaxFeeSettings feature, replacing a server-local `DateTime.Today` comparison with the injected Sydney business date. Storage keeps true UTC instants (`MachineAuthorizationTime`, `CreatedAt`/`UpdatedAt`, and similar timestamp columns); `IBusinessCalendar` is what turns a stored instant into the Sydney calendar date a report or a due-date comparison actually means, and no historical timestamp is reinterpreted or rewritten by this abstraction. That storage invariant is a rule about what the column must hold, not evidence about what an external payload means, and for `NayaxSales.MachineAuthorizationTime` it is not yet met by every row (rows stored before issue #380, and new sales from an uploaded export without a usable GMT value, are unverified): for a timestamp that arrives from Nayax, the invariant is established by the normalization described in [Nayax sale timestamps](#nayax-sale-timestamps-issue-380) below, and never inferred from the EF Core mapping, from this document, or from the column's name.
+Time acquisition and timezone conversion are external boundaries, not pure calculations, so their port lives in `Inventory.Application` and their implementation lives in `Inventory.Infrastructure` (issue #44): `Inventory.Application.Time.IClock` (promoted from the NayaxFeeSettings-scoped port the first Clean Architecture slice introduced) is the narrow port for the current UTC instant, implemented by `Inventory.Infrastructure.Clock.SystemClock`. `Inventory.Application.Time.IBusinessCalendar` converts a UTC instant to its `Australia/Sydney` business calendar date (`ToBusinessDate`) and resolves the UTC instant of the start of a Sydney business day (`StartOfBusinessDayUtc`), so a caller can derive inclusive-date-range UTC boundaries without ever touching `TimeZoneInfo` itself; `Inventory.Infrastructure.Time.SydneyBusinessCalendar` prefers the IANA ID `Australia/Sydney` and, when a host cannot resolve IANA IDs (notably some Windows setups), converts it with `TimeZoneInfo.TryConvertIanaIdToWindowsId` and resolves the corresponding Windows ID instead. Both paths use the platform timezone database, so AEST/AEDT daylight-saving transitions keep the same semantics. `Inventory.Domain` still owns only the deterministic, timezone-free date-range/financial-year rules (`AustralianFinancialYear`, `ReportingRangeResolver`) and must not reference `TimeZoneInfo`, server-local time, or an infrastructure clock implementation. `GetSiteCommissionReport`'s commission-due "Overdue" determination uses `IBusinessCalendar` outside the clock's original NayaxFeeSettings feature, replacing a server-local `DateTime.Today` comparison with the injected Sydney business date. Storage keeps true UTC instants (`MachineAuthorizationTime`, `CreatedAt`/`UpdatedAt`, and similar timestamp columns); `IBusinessCalendar` is what turns a stored instant into the Sydney calendar date a report or a due-date comparison actually means, and no historical timestamp is reinterpreted or rewritten by this abstraction. That storage invariant is a rule about what the column must hold, not evidence about what an external payload means, and for `NayaxSales.MachineAuthorizationTime` it is not yet met by every row (rows stored before issue #380, rows the live synchronization stored between issues #380 and #471 from an offset-free GMT value, and new sales from an uploaded export without a usable GMT value, are unverified): for a timestamp that arrives from Nayax, the invariant is established by the normalization described in [Nayax sale timestamps](#nayax-sale-timestamps-issue-380) below, and never inferred from the EF Core mapping, from this document, or from the column's name.
 
 **No host clock inside Domain or Application (issue #310).** `Inventory.Domain` and `Inventory.Application` acquire the current time only through those two ports; the architecture test `InventoryApi.Tests.Architecture.TimeAcquisitionTests` fails if either project's source reads `DateTime.Now`, `DateTime.UtcNow` or `DateTime.Today` (see [Testing architecture](#backend-tests)). The last six such reads were removed with the guard:
 
 - **The Sites and Machines dashboards use the Sydney business day.** `Inventory.Application.Machines.MachineDashboardWindow` resolves the dashboards' six rolling comparison periods (today, week-to-date, the previous comparable week, last full week, month-to-date, two weeks ago) once per request: it takes the current instant from `IClock`, converts it to the Sydney business date with `IBusinessCalendar.ToBusinessDate`, feeds *that* date to the unchanged `Inventory.Domain.Machines.MachineDashboardPeriods` arithmetic, and converts each resulting business-day boundary back to a UTC instant with `IBusinessCalendar.StartOfBusinessDayUtc` (a completed week's inclusive end is the following business day's start minus one millisecond, so a week containing a transition still ends when the next Sydney day begins). The period boundaries are UTC instants because the sales facts they select are UTC instants: `NayaxSales.MachineAuthorizationTime` is a persisted true UTC instant, normalized from the Nayax payload's authoritative GMT field at ingestion (see [Nayax sale timestamps](#nayax-sale-timestamps-issue-380) below — issue #380 corrected this; the `AppDbContext` `DateTimeKind.Utc` conversion described under **Serialised instant identity at the persistence boundary** restores in-memory `Kind` metadata only and is not what makes the value UTC), so period and sale are compared in one time base with no conversion at the comparison site. `GetSiteSummaries`, `ListMachineDashboard` and `GetMachineDashboard` each resolve one window per request — `ListMachineDashboard` no longer reads the clock once per machine, so every machine in a listing is aggregated over identical periods — and `IMachineDashboardFactsStore.GetFactsAsync` takes that resolved window instead of a bare "now", which keeps the decision of *which* business day the dashboard means in the use case and leaves `EfMachineDashboardFactsStore` to select sales between the instants it is handed. The owner decided (2 October 2026) that these dashboards report the Sydney business day, not server-local time.
   - *Both endpoints of a comparison period are resolved in Sydney time, never by shifting the current UTC instant.* The previous comparable week ends the same elapsed trading time into the previous Sydney business week as now is into the current one, measured from each week's own Monday-midnight instant. Subtracting seven days from the current UTC instant instead would break across a daylight-saving transition, where the two weeks begin an hour apart in UTC: on the Monday after a transition the subtraction lands *before* the previous week began, and the comparison period is empty. The end is also held at the previous week's own last instant, because the week daylight saving ends is 169 hours long and a longer current week would otherwise push the comparable period into the current one.
   - *Each period also carries the Sydney business dates it covers* (`MachineDashboardPeriodUtc.FirstBusinessDate`/`LastBusinessDate`), describing the same period as its instants, because the dashboard's financial inputs are measured in both bases: revenue and commission by instant, Nayax processing fees by business date (see the fee paragraph below).
+  - *The home Dashboard summary shares the same window* (issue #459). `Inventory.Application.Dashboard.GetDashboardSummary` resolves one `MachineDashboardWindow` per request and takes its week-to-date and previous-comparable-week periods from it unchanged, so the "Sales this week" card, a site row and a machine row all mean the same Sydney business week. See [Home Dashboard summary API](#home-dashboard-summary-api-issue-459).
 - **Effective-dated commission and Nayax fee lookups use `IBusinessCalendar.Today`.** `Inventory.Application.Products.ResolveMachineProductPricing` and `Inventory.Application.Sites.GetSiteProducts` select the site commission agreement and the Nayax processing fee rate for the Sydney business date, consistent with the repository's Australia/Sydney reporting-date rule and with `GetSiteCommissionReport`. On a UTC host the Sydney date is a day ahead for ten to eleven hours of every day, which previously priced a slot with the previous day's configuration whenever a new rate took effect. The pricing formulas and the existing missing/overlapping-configuration handling are unchanged.
 - **`UploadPurchase` defaults a missing purchase date to `IClock.UtcNow`.** The stored value for a given instant is unchanged: a purchase date the client omitted is still recorded as the upload instant, deliberately not reduced to a business-calendar date.
 
@@ -2518,7 +3186,17 @@ carries two authorization timestamps:
 | `AuthorizationDateTimeGMT` | "The date and time when the transaction was authorized, in GMT." | **Authoritative instant.** The only sale timestamp this integration may persist. |
 | `MachineAuthorizationTime` | "The local date and time when the machine authorized the transaction." | Machine-local wall clock, no offset. A raw imported fact; never a sale instant. |
 
-Two things follow, and both are load-bearing:
+Both are declared `string<date-time>`, and the live endpoint renders the GMT field **with and without a
+designator**. The published reference sample prints
+`"AuthorizationDateTimeGMT": "2024-10-09T16:53:51.225Z"`, while the portal's own live sample response
+([Retrieving a machine's last sales](https://devzone.nayax.com/docs/manage-data-operations/lynx-api/machines/getting-a-machines-last-sales-ereceipt-information))
+prints it offset-free — `"AuthorizationDateTimeGMT": "2026-02-08T09:31:51.817"` beside a
+`"MachineAuthorizationTime": "2026-02-08T11:31:51.46"` two hours later — and the operator's own live
+sample of 8 October 2026 was offset-free too. **The field's UTC meaning therefore comes from the field
+contract, never from the presence of a `Z` and never from the time zone of the host the process runs
+in** (issue #471; see **Offset-free GMT values** below).
+
+Two further things follow, and both are load-bearing:
 
 - The upstream field named `MachineAuthorizationTime` is **not** UTC. Nothing about our own storage
   can establish otherwise: the `AppDbContext` `DateTimeKind.Utc` conversion is `Kind` metadata on
@@ -2534,15 +3212,72 @@ Two things follow, and both are load-bearing:
 
 **2. Normalization happens once, at the integration boundary.**
 `Inventory.Application.Nayax.NayaxLastSalesReport` models `AuthorizationDateTimeGmt` as a nullable
-`DateTimeOffset`, because the payload carries an explicit offset, and exposes the one conversion:
-`AuthorizationInstantUtc => AuthorizationDateTimeGmt?.UtcDateTime`. `DateTimeOffset.UtcDateTime` is
-offset-aware and idempotent — a `Z` value is returned unchanged, a `+11:00` value becomes the same
-physical instant, and applying it again cannot shift anything — so a transaction re-encountered by
-the rolling last-sales window, or re-uploaded in an export, can never be shifted twice.
-`EfLatestNayaxSalesStore` writes that instant and **fails closed**: a payload item carrying no
-authoritative GMT value is not imported at a guessed or defaulted time, and the rolling window
-returns the transaction again on the next refresh. An already stored transaction's instant is never
-rewritten; only its missing product match and status are enriched, exactly as before.
+`DateTimeOffset` bound by `Inventory.Application.Nayax.NayaxGmtTimestampJsonConverter`, and exposes
+the one conversion: `AuthorizationInstantUtc => AuthorizationDateTimeGmt?.UtcDateTime`.
+`DateTimeOffset.UtcDateTime` is offset-aware and idempotent — a `Z` value is returned unchanged, a
+`+11:00` value becomes the same physical instant, and applying it again cannot shift anything — so a
+transaction re-encountered by the rolling last-sales window, or re-uploaded in an export, can never be
+shifted twice. `EfLatestNayaxSalesStore` writes that instant and **fails closed**: a payload item
+carrying no usable authoritative GMT value is not imported at a guessed or defaulted time, and the
+rolling window returns the transaction again on the next refresh. An already stored transaction's
+instant is never rewritten; only its missing product match and status are enriched, exactly as before.
+
+**Offset-free GMT values are UTC, whatever the host is (issue #471).**
+`Inventory.Application.Nayax.NayaxGmtTimestamp` is the one parser for a field Nayax documents as GMT,
+and the converter above is how the live JSON boundary applies it:
+
+- A value with **no designator and no offset** is UTC (`DateTimeStyles.AssumeUniversal`), because the
+  field contract says GMT.
+- A value with `Z` or an **explicit offset**, positive or negative, keeps its physical instant and is
+  normalized to UTC **exactly once** (`DateTimeStyles.AdjustToUniversal`, then `UtcDateTime`), so
+  re-reading or re-importing a transaction cannot shift it again.
+- A value that is **absent, null, blank or unreadable** has no instant at all. It never becomes
+  `DateTime.MinValue`, the current date, or the machine-local wall clock, and the sale is not imported;
+  from issue #471 an unreadable value also no longer throws out of the JSON reader, so one malformed
+  item costs only that item instead of discarding every machine's sales for that refresh.
+- `CultureInfo.InvariantCulture` is used throughout, so the host's locale cannot change the reading
+  either.
+
+**Only the documented date-time shapes are readable; a malformed-but-parseable value fails closed
+(issue #471).** The field is declared `string<date-time>`, so `NayaxGmtTimestamp` matches an explicit
+allowlist (`DateTimeOffset.TryParseExact` over its own `AcceptedFormats`) rather than
+accepting whatever a permissive `DateTimeOffset.TryParse` can make of the text. A value must carry an
+ISO 8601 calendar date (`yyyy-MM-dd`), a `T` or single-space separator, and a 24-hour time of day to
+at least the second; fractional seconds are optional and may be one to seven digits, because the
+portal's own live samples print `.817`, `.46` and `.5` on neighbouring items; the designator may be
+absent (UTC, per the field contract), `Z`, or a signed hours-and-minutes offset with or without its
+colon. Surrounding whitespace is trimmed. Everything else has **no instant at all** and is treated
+exactly like a blank or unreadable value — the sale is skipped, nothing falls back to the
+machine-local field, and the rolling window offers the transaction again:
+
+| Refused value | What a permissive parse invented |
+| --- | --- |
+| `2026-10-07` (date only) | `2026-10-07T00:00:00Z` — a midnight the payload never stated, which is 11:00 on 7 October in Sydney under AEDT, so an evening sale lands on the wrong business day |
+| `07/10/2026`, `07/10/2026 23:42:44` | 10 July 2026 — invariant culture resolves the ambiguous slash date as month/day, while the operator means 7 October |
+| `Wed, 07 Oct 2026 23:42:44 GMT`, `October 7, 2026 11:42:44 PM`, `20261007T234244Z` | the right instant from the wrong contract: formats this field is not documented to use, accepted today and silently mis-read the day the renderer changes |
+| `23:42:44` (time only) | today's date from the host clock |
+| `2026-10-08T10:42:44.263+11` (hours-only offset) | `+11:00` — an assumption, since half-hour and three-quarter-hour zones exist |
+
+Inventing an instant is worse than skipping the item: a skipped sale is offered again on the next
+refresh, while a sale persisted at a guessed instant is a financial record that silently misplaces
+revenue between Sydney business days. `NayaxGmtTimestampTests` states the allowlist and this refusal
+list, including a characterization of what the permissive parse actually produced for the date-only
+and slash-date values, and `NayaxLastSalesGmtTimestampTests` and
+`NayaxLiveSaleGmtTimestampSyncTests` assert the same refusal at the JSON boundary and through the
+real client, use case and SQLite persistence.
+
+This replaced .NET's default `DateTimeOffset` binding, which reads an offset-free value against
+`TimeZoneInfo.Local` and therefore answered a different instant on every host. On the Sydney-hosted
+API that stored a GMT value of `2026-10-07T23:42:44.263` as the instant `2026-10-07T12:42:44.263Z` —
+eleven hours early under AEDT, ten under AEST — putting the sale on the previous Sydney business day
+and under-reporting the current day and week, which is the defect the operator reported on 8 October
+2026. CI runs in UTC, where the host offset is zero and the defect is invisible, which is why the
+regression tests state the rule as host independence rather than as a shift. **A fixed `+10`/`+11`
+compensation, a correction applied in the frontend, or a global `DateTime` reinterpretation are all
+prohibited:** the converter is attached per property, to documented GMT fields only, and nothing
+downstream adjusts an instant. The machine-local `MachineAuthorizationTime` field keeps its own
+unchanged reading — it is a raw wall-clock fact, and offset-aware parsing there would contradict what
+it means.
 
 **3. Persistence keeps a true UTC instant.** `NayaxSales.MachineAuthorizationTime` is that instant.
 The column name is unchanged — renaming it is a migration and an API-contract change, not a timezone
@@ -2584,10 +3319,23 @@ Lynx API's sales fields but publishes no contract for the downloadable transacti
 `ClosedXmlNayaxSalesWorkbookReader` reads an `AuthorizationDateTimeGMT` column as an instant,
 including the ISO/offset-carrying form a GMT column is written in, and reports what the column held
 for each row (`NayaxSalesImportRow.AuthorizationDateTimeGmtInput`: no column, blank, malformed or
-valid). It reads the export's own `MachineAuthorizationTime` column exactly as earlier imports read
-it, unconverted. Offset-aware parsing is deliberately scoped to the GMT column: an offset on the
-machine-local column would contradict what that field means. `ImportNayaxSales` then decides the
-instant with a fixed precedence:
+valid). That column was already read as UTC when it carried no designator, and since issue #471 it is
+read by the same `NayaxGmtTimestamp` parser the live JSON boundary uses, so the two ingestion paths
+cannot drift apart (the export's own `d/M/yyyy h:mm:ss tt` text form is still tried first, because
+invariant-culture parsing would otherwise read `4/10/2026 11:30:00 PM` as 10 April). The shared parser
+means the shape allowlist above governs this column's **text** values too: a date-only `2026-10-04`
+cell, or a slash date without the export's own full `h:mm:ss tt` time, is reported `Malformed` and the
+row is skipped rather than imported at an invented midnight
+(`NayaxSalesExportTimestampTests.A_malformed_but_parseable_GMT_text_value_is_reported_unreadable`).
+A genuinely typed date/time cell in an `.xlsx` workbook is unaffected: it carries a real
+`DateTime` value rather than text, and the reader takes it as the instant it already is, which is the
+reading issue #380 established. The supplied
+export's columns are **not** interchangeable with the API's: an export carrying `Updated Date and Time
+(GMT)` rather than `AuthorizationDateTimeGMT` has no authorization time, and an update time is never
+substituted for one. It reads the export's own `MachineAuthorizationTime` column exactly as earlier
+imports read it, unconverted. Offset-aware parsing is deliberately scoped to the GMT column: an offset
+on the machine-local column would contradict what that field means. `ImportNayaxSales` then decides
+the instant with a fixed precedence:
 
 1. A **valid** GMT value is the authoritative instant, for a new sale and for a stored one alike, so
    it may correct an older stored instant through the ordinary update and cost-rebuild path (the
@@ -2607,25 +3355,44 @@ instant with a fixed precedence:
    always imported); the operator action that removes the ambiguity is to include the
    `AuthorizationDateTimeGMT` column in the export.
 
-**Rows ingested before this fix are left exactly as they are.** A persisted instant carries no record
+**Historical repair is a separate operation, and these fixes do not perform one.** Two
+populations of stored rows hold an instant that was never the authoritative one, and neither issue
+#380 nor issue #471 repairs either of them: rows ingested before #380, which hold machine-local
+wall-clock ticks, and rows the live synchronization stored between #380 and #471 from an offset-free
+GMT value, which hold an instant shifted by the host's offset at the time (ten or eleven hours early on
+the Sydney-hosted API). Both fixes only prevent new corruption. Repair is its own reviewed,
+explicit, idempotent and observable maintenance operation with a preview step — the shape
+`bootstrap-business`, `migrate-documents` and `InventoryCostRepair` already use (AGENTS.md § Database
+and migrations, § Architecture rules) — and issue #472 added it: see
+[Nayax sale timestamp repair: Preview then Apply](#nayax-sale-timestamp-repair-preview-then-apply-issue-472)
+below. Until an operator has actually previewed and applied it against a given population, dashboards
+and reports may still place those rows on the wrong Sydney business day. The detail of why no implicit
+shift is possible follows.
+
+**Rows ingested before these fixes are left exactly as they are.** A persisted instant carries no record
 of which field or which ingestion path produced it, and no stored value can be converted back without
 inventing the machine's daylight-saving-aware zone, so no bulk shift is applied — the repository rule
 that a correction must be explicit, idempotent and observable (AGENTS.md § Database and migrations)
-rules out doing it implicitly. The affected population is identifiable only against authoritative
+rules out doing it implicitly. The same applies to the issue #471 population, even though the shift
+there is a host offset rather than a machine offset: the row itself does not record which ingestion
+path, which release or which host offset produced it, so it cannot be reversed by arithmetic either.
+The affected population is identifiable only against authoritative
 evidence: for a transaction Nayax still returns, a stored `MachineAuthorizationTime` that differs
 from that transaction's current `AuthorizationDateTimeGMT` is affected, and the difference is the
-correction. Deploying this fix, and the live last-sales refresh, do **not** repair any existing
+correction. Deploying these fixes, and the live last-sales refresh, do **not** repair any existing
 row: the synchronization never rewrites a stored instant. Repairing older rows needs an
 operator-supplied authoritative source — a Nayax transaction export covering the period **with** the
-`AuthorizationDateTimeGMT` column — re-imported through the ordinary uploaded-export path, which
-applies the correction immediately (it is not a dry run and shows no preview), updates the stored
-transaction in place rather than duplicating it, and replays the affected products' costs through the
-existing rebuild rules. A reviewed, previewable remediation that lists each transaction's old and
-proposed instant and Sydney date before applying anything does not exist yet and is follow-up work.
-Until older rows are repaired, dashboards and reports may put them on the wrong Sydney day by the
-machine's UTC offset; sales stored after this fix from the live synchronization or from an export
-carrying a valid GMT value hold verified instants, while new sales from an export without one remain
-unverified as described above.
+`AuthorizationDateTimeGMT` column. Such an export re-imported through the ordinary uploaded-export
+path still applies its corrections immediately (it is not a dry run and shows no preview), updates the
+stored transaction in place rather than duplicating it, and replays the affected products' costs
+through the existing rebuild rules; that path remains the only way to import a **missing** sale, but it
+is no longer the way to repair a timestamp. The reviewed, previewable remediation that lists each
+transaction's old and proposed instant and Sydney date before applying anything is the issue #472
+operation below, and it is the supported one.
+Until older rows are repaired, dashboards and reports may put them on the wrong Sydney day — by the
+machine's UTC offset for the pre-#380 rows, by the host's for the #380-to-#471 ones; sales stored
+after both fixes from the live synchronization or from an export carrying a valid GMT value hold
+verified instants, while new sales from an export without one remain unverified as described above.
 
 **Regression coverage.** `NayaxSaleTimestampContractTests` (relational SQLite) pins the persisted
 instant to the GMT field, reproduces the production symptom — a 23:30 Sydney sale on Sunday
@@ -2639,6 +3406,314 @@ transaction without GMT, then live sync again, keeping the authoritative instant
 blank and malformed GMT on a stored sale, a malformed GMT value on a new sale, a valid GMT value
 correcting an older stored instant with the affected product replayed, and replay idempotency.
 `DailyReportSydneyBusinessDayTests` covers the daily report's Sydney business days.
+
+Issue #471 adds three more, all stated as host independence rather than as a shift, because the
+defect is invisible on the UTC host CI runs on: `NayaxGmtTimestampTests` covers the shared parser's
+renderings of one instant and its absent/blank/unreadable and idempotence cases;
+`NayaxLastSalesGmtTimestampTests` covers the live field's binding — the operator's offset-free value,
+an AEST one, explicit `Z`/`+11:00`/`+10:00`/`-05:00` forms, round-trip stability, the
+missing/null/blank/malformed/wrong-token cases, and a characterization test pinning the framework's
+own host-dependent default binding that motivated the converter; and
+`NayaxLiveSaleGmtTimestampSyncTests` (relational SQLite) runs the operator's exact payload through
+the real `NayaxLynxClient`, `SyncLatestNayaxSales` and `EfLatestNayaxSalesStore` and asserts the
+persisted instant, the Sydney business date for the October 2026 transition days and both passes of
+the April 2026 repeated hour, the reported day and week symptoms against the real dashboard window,
+repeated-sync uniqueness, two-business isolation, and that an unreadable item is skipped without
+discarding its neighbours. **No test mutates the process time zone**: `TimeZoneInfo.Local` is
+process-global state the parallel test collections would race on, so a host offset is simulated
+arithmetically instead, and the suites were additionally run under `TZ=Australia/Sydney` to confirm
+the defect and the fix on the real host configuration.
+
+#### Nayax sale timestamp repair: Preview then Apply (issue #472)
+
+A stored sale instant that was never the authoritative one is repaired in exactly one way: the
+business-scoped maintenance operation behind `POST /api/admin/nayax-sale-timestamp-repair/preview` and
+`.../apply`. There is no other path, and adding one is a human decision.
+
+- **Never on a migration, a deployment, a startup step, a sales sync, a report or an import.** The
+  live last-sales synchronization still never rewrites a stored instant, so a normal refresh cannot
+  repair history and cannot corrupt it either. A repair only ever happens because a person previewed
+  it, read it, and pressed Apply.
+- **Never a global offset.** The affected population is mixed — of 152 matched records on 8 October
+  2026, 28 already held the authoritative instant and 124 were eleven hours early — so there is no
+  business-wide difference to apply, and nothing in this operation derives a correction by subtracting
+  one stored value from another. `Inventory.Domain.Nayax.NayaxSaleTimestampRepairPolicy` decides every
+  stored sale from its own evidence, one transaction at a time.
+
+**The source must be authoritative, and its identity is verified.** Only two sources are supported,
+and both deliver their value through the one integration-boundary parser established by issues #380
+and #471 — nothing here parses a timestamp or applies an offset:
+
+| Source | What it is | Covers |
+| --- | --- | --- |
+| `NayaxLastSalesApi` | `GET /v1/machines/{MachineID}/lastSales` through `INayaxLynxClient`, field `AuthorizationDateTimeGMT` (documented `string<date-time>`, "in GMT"; re-verified for issue #472 through the Nayax documentation MCP server) | only the transactions the rolling window still returns |
+| `OperatorExport` | An operator-supplied Nayax transaction export **carrying the `AuthorizationDateTimeGMT` column**, read by `ClosedXmlNayaxSalesWorkbookReader` for its authorization instants only — it imports nothing | any period the operator can export, including dates older than the rolling window |
+
+The Lynx API publishes **no** date-ranged sales endpoint that carries the authorization instant (the
+reporting surface is the dashboard widget API, which returns aggregates), so an operator export is the
+only supported historical source. Three refusals follow from that, and each exists because the
+alternative is an invented financial instant:
+
+- An export **without** the `AuthorizationDateTimeGMT` column is refused outright, with the reason.
+  The workbook supplied on 8 October 2026 carried `Updated Date and Time (GMT)`, which is an update
+  time and not an authorization time; a machine-local column cannot be converted at all without a
+  source-timezone contract Nayax does not publish for the export. Refusing is what stops an export
+  like that from being mistaken for a checked source.
+- Evidence whose `AuthorizationDateTimeGMT` value is present but blank or unreadable yields evidence
+  with **no instant**, which is reported as `UnreadableEvidence` — not as "no evidence", and never as
+  permission to fall back to anything.
+- Evidence must identify the stored sale: the same machine, and a settled amount within the
+  repository's established one-cent tolerance. Evidence naming another machine or another amount is
+  evidence about another sale (a remote `TransactionID` is unique only within the operator account
+  that issued it) and is reported as `MachineMismatch`/`AmountMismatch`. The owning business is not
+  "checked" so much as structural: a caller only ever reads its own sales, through the `AppDbContext`
+  tenant query filters.
+
+**Every examined sale gets one of three outcomes, and two of them write nothing.**
+
+| Outcome | Meaning |
+| --- | --- |
+| `Repairable` | A verified source names a different authoritative instant. The sale would move. |
+| `AlreadyCorrect` | The source names exactly the stored instant. Nothing to write — which is what makes applying the same verified repair again a no-op. |
+| `Unresolved` | `NoSourceEvidence`, `UnreadableEvidence`, `ConflictingEvidence` (two sources disagreeing is the operator's to resolve, never a majority vote or a latest-wins), `MachineMismatch` or `AmountMismatch`. The sale is left exactly as it is and stays visibly unresolved. |
+
+**The examined range comes from the evidence, not from an assumed period.** It is the earliest and
+latest instant among the readable evidence values, widened to the stored instants of the sales that
+evidence names (a shifted row's stored value can sit many hours outside the authoritative range) and
+to the requested reconciliation window. Every stored sale inside that range is examined, which is why
+a transaction no source covered appears as an explicitly unresolved row instead of a silent difference
+between a report and an export. The preview reports the range it used.
+
+**What the preview reports**, per business, computed without changing a single sale: each examined
+transaction with its machine, settled amount, status, old and new UTC instant, old and new Sydney
+business date, outcome, unresolved reason and source provenance; the revenue each Sydney business day
+loses and gains (completed sales only — a pending, refunded, cancelled or unknown-status row is still
+re-dated and still listed, but moves no revenue); the products whose costing would be replayed, from
+when, and whether the replay is actually planned; the transactions the source carries that this
+business holds **no** sale for; and the fixed-cutoff reconciliation.
+
+**The fixed-cutoff reconciliation is what makes a comparison with a Nayax export valid.** It takes an
+explicit cutoff instant and an inclusive Sydney business-date window — all three together or none,
+because a daily or weekly total is only comparable when both sides cover the same days and exclude the
+sales authorized after the same instant — and reports, per day and for the window:
+
+- completed-sale count and value **before** the repair, and **after** it, with a sale re-dated into the
+  window counted and one re-dated out of it not;
+- `unresolvedCount`/`unresolvedAmount` — completed sales no source covered, which do not move;
+- `sourceVerifiedAfter` = after less unresolved: the figure comparable with the source export,
+  because it covers exactly the transactions the source accounted for;
+- `excludedAfterCutoffCount`/`Amount` — completed sales the compared export was taken too early to
+  contain. Not a discrepancy;
+- `missingFromDatabaseCount`/`Amount` — transactions the export carries that this business holds no
+  sale for. **Those are missing sales, not timestamp defects.** A repair can never create a sale; they
+  are imported through the ordinary uploaded-export import, and counting them as repaired rows would
+  claim a timestamp change explains revenue that was never imported.
+
+So `sourceVerifiedTotalAfter + missingFromDatabaseAmount` is what a source export's own period total
+has to equal once the repair is applied **and** the missing sales are imported, while `totalAfter` on
+its own still carries the unresolved rows — and a repair never creates or destroys revenue, it only
+moves it between days.
+
+**Apply is one transaction, and it writes one column.** The preview stores its plan as a tenant-owned,
+single-use, two-hour draft (`NayaxSaleTimestampRepairPreviewDraft`); the apply names that draft and
+nothing else. Inside its own transaction it loads the plan, re-reads the stored sales in the examined
+range authoritatively, compares every stored fact the plan was derived from — instant, machine, settled
+amount, status, product mapping — and refuses the plan if any of them changed or if a sale was added
+inside the range (`NayaxSaleTimestampRepairPolicy.EnsureStoredSalesUnchanged`), then writes each
+repairable sale's `MachineAuthorizationTime` and appends its audit row. Nothing a caller submits is
+written: the request carries a preview id and an explicit confirmation, and every instant, business
+date and provenance comes from the stored plan, so a tampered request can only name a plan that does
+not exist, is not this business's, has already been applied, has expired, or no longer matches the
+database. A transaction id, amount, status, payment method, product mapping, costing value or stock
+movement is never written, and no sale is created or removed — so no transaction is double counted and
+no physical stock movement is repeated.
+
+**The audit is the record of a change to historical financial data.** `NayaxSaleTimestampRepair` is
+append-only — no update, delete or reversal path exists anywhere in the application — and holds the
+transaction and machine, the previous and repaired UTC instants, the previous and repaired Sydney
+business dates (stored rather than derived, so the movement the operator approved stays readable
+exactly as applied), the evidence source and a caller-safe provenance reference, the preview id, and
+the applying operator's validated Entra `(tid, oid)` pair. A caller the repair cannot be attributed to
+is refused before anything is read.
+
+**Costing is replayed from the earlier of each affected sale's old and new instant**
+(`NayaxSaleTimestampRepairPolicy.EarliestAffectedInstant`), through the same baseline-cutoff-gated
+`IRebuildProductCost.RebuildAsync` the uploaded sales import and the latest-sales synchronization use.
+A date change must not silently leave stale COGS: a sale moving later vacates its old position, where
+the replay has to restart, and one moving earlier arrives before sales that now follow it. A sale at or
+before a product's inventory-cost transition baseline cutoff is covered by that baseline, so it is not
+replayed and the preview says so rather than recosting history the transition owns; a product with no
+baseline is not replayed either, exactly as the other write paths read it.
+
+**Failure semantics are all-or-nothing, and an opening-cost failure is reported, never papered over.**
+A product whose cost history cannot be replayed raises `InventoryCostDataQualityException`; the apply
+converts it to a caller-safe refusal naming that product and the instant the replay started from, and
+the transaction's rollback leaves no repaired instant, no audit row and an unapplied draft. Nothing
+fabricates an opening cost or a purchase to make the replay succeed, and a failed replay is never
+reported as a successful repair. Recovery is to complete the product's cost history first — the
+explicit [costing repair](#costing-repairs-issue-359) exists for that — and then preview and apply
+again. Rollback **after** a committed apply is not an application feature: it is the human-run restore
+in the [backup and restore procedure](#sqlite-operating-assumptions-and-scale-strategy-issue-53),
+which is why the runbook takes a verified snapshot first.
+
+**The Admin page (issue #487).** `/admin/nayax-sale-timestamp-repair` is the operator-facing entry
+point to exactly these two endpoints, so the runbook's Preview and Apply steps no longer need
+Postman or a hand-built `curl`. It is an
+entry point and a review surface and nothing else: the API keeps every decision, its authorization
+and its trusted current-business scoping, and the page sends no business identifier and no repair of
+its own. See [Routing and loading](#routing-and-loading) for the component composition.
+
+- **Sources.** A checkbox for the live last-sales window and an optional file input for an export,
+  with at least one required before a request is spent. The page states that the API source is a
+  *rolling window* rather than a date range, that an export must carry the
+  `AuthorizationDateTimeGMT` column, and that `Updated Date and Time (GMT)` is an update time that is
+  never substituted for an authorization time. It mirrors the server's accepted formats (`.xlsx`,
+  `.xls`, `.csv`) and the 8,000,000-byte request cap as client-side refusals, which weaken neither:
+  the server validates, reads and refuses the upload on its own terms, and the browser sets the
+  multipart boundary because the client sends `FormData` with no request options.
+- **The UTC cutoff is typed as an explicit instant.** The reconciliation cutoff is a text input that
+  must match an ISO instant ending in `Z` (`2026-10-08T04:00:00Z`); a value without the designator is
+  refused rather than read in the viewer's timezone, which would silently reconcile a shifted window.
+  The two inclusive Sydney business dates are `yyyy-MM-dd` calendar dates sent verbatim — the page
+  never converts a date-only boundary into an instant, and never guesses a cutoff for an old export.
+  All three are required together or omitted together, and a window that runs backwards is refused
+  before the request.
+- **Preview is always user-triggered**, and reports loading, no-change, validation-refusal,
+  upstream-Nayax, upload-too-large and unreachable-API states distinctly. The plan is displayed as
+  returned: the three outcome counts, every examined row with its old and new UTC instant and Sydney
+  business date, its raw status and whether the server called it a completed sale, its unresolved
+  reason and its provenance; the daily revenue movement; the affected products with the server's own
+  `rebuildPlanned` gate shown per product, so an affected product is never presented as a rebuilt
+  one; the missing sales, separately, with the import guidance and **no import action**; and the
+  fixed-cutoff reconciliation, which is never called reconciled while an unresolved or missing amount
+  remains. The row table's outcome filter, search and paging are presentation only and say so: Apply
+  confirms the server's whole plan, because there is no selective-row repair.
+- **Apply needs an explicit acknowledgement.** A checkbox records that the operator reviewed every
+  row and that a verified backup is available, and the text states that ticking it does not create or
+  verify a backup and points at runbook step 1. Apply is enabled only for a successful, unexpired
+  plan with repairable rows, with the acknowledgement given and no request in flight, and it sends
+  only `{ previewId, confirmed: true }`.
+- **A plan stops being actionable the moment it stops describing the inputs.** Changing the API
+  source, the uploaded file or any reconciliation value withdraws the displayed plan and the
+  acknowledgement; so does applying it, so a second Apply is impossible from the page as well as
+  refused by the server. The server's two-hour lifetime is honoured too: once `expiresAt` has passed
+  the page withdraws Apply and asks for a fresh preview. Nothing — plan, preview id or uploaded file
+  — is written to `localStorage`, `sessionStorage`, a URL or a log.
+- **An unanswered Apply is reported as an unconfirmed outcome, never as "nothing was written".** A
+  refusal the API answered with (a stale, expired or already-applied plan, or a costing replay that
+  could not complete) is reported with the server's own caller-safe message plus the rollback
+  semantics, and a fresh preview is required. A request that produced no answer at all — a transport
+  failure or an ambiguous `408`/`502`/`503`/`504` — is reported as *outcome unconfirmed*: the page
+  states that it is not known whether any sale timestamp was written, never retries the apply
+  automatically, and requires a fresh preview and verification instead.
+- **Success shows the server's own counts and audit rows**, repeats the confirmed plan's unresolved
+  and missing counts so a repair is never mistaken for a reconciliation, says that reversing a
+  committed repair is the human-run restore, and offers a user-triggered fresh preview over the
+  retained inputs. Nothing re-previews or re-applies by itself, and the success evidence stays on
+  screen until the operator chooses another action.
+
+**Runbook.** Every step is human-run. No agent and no workflow in this repository may run it, and
+creating or merging the issue that built it authorizes no production execution. Steps 3 to 8 are
+normally done on the Admin page above; the `curl` forms are the same two endpoints and stay here as
+the authoritative contract.
+
+1. **Take and verify a recovery point.** `dotnet InventoryApi.dll backup-database --upload` (or
+   `--output <path>`), and confirm it exited `0` and reported `ok` for `PRAGMA integrity_check`. This
+   is the only rollback for a repair judged wrong after it commits.
+2. **Obtain the authoritative source.** Export the Nayax transactions for the whole period in
+   question **with the `AuthorizationDateTimeGMT` column**, and extend the coverage to the days either
+   side of the period's boundaries — a cohort stored just before a window's first day is otherwise
+   reported as unresolved rather than decided. Confirm the export came from the business's own
+   operator account.
+
+   The preview request is capped at 8,000,000 bytes (`MaxEvidenceExportBytes`), deliberately tighter
+   than the 10 MB general document-upload limit, and the cap is declared twice so it holds wherever
+   the API is hosted: `[RequestSizeLimit]` bounds the raw body through the server's
+   max-request-body-size feature and `[RequestFormLimits]` bounds what the multipart reader itself
+   consumes, which would otherwise default to 128 MB because the application configures neither
+   Kestrel's limits nor `FormOptions` globally. An export of authorization instants for a repair's
+   period is far smaller than the cap; a larger upload is refused at the HTTP boundary rather than
+   read, and raising the cap is a human decision.
+3. **Preview**, naming the sources and the fixed cutoff and Sydney business-date window to reconcile.
+   On the Admin page this is the source checkbox, the file input and the three reconciliation fields,
+   then **Preview repair**; the equivalent request is:
+
+   ```bash
+   curl -X POST "$API/api/admin/nayax-sale-timestamp-repair/preview" \
+     -H "Authorization: Bearer <token>" \
+     -F includeLatestSalesApiEvidence=true \
+     -F reconciliationCutoffUtc=2026-10-08T04:00:00Z \
+     -F reconciliationFromBusinessDate=2026-10-05 \
+     -F reconciliationToBusinessDate=2026-10-08 \
+     -F evidenceExport=@transactions.xlsx
+   ```
+
+4. **Review the preview, row by row, before confirming anything.** Check that every `repairable` row's
+   new instant and Sydney date match the export; that no `unresolved` row is being assumed away; that
+   the revenue movement between days is the movement expected; and that the affected products and
+   their replay start instants are the ones expected.
+5. **Account for the missing sales separately.** If `missingFromDatabase` is non-empty, those
+   transactions are absent from the database entirely. Import them through the ordinary uploaded-export
+   import (`POST /api/imports/nayax-sales`), scoped to those transactions — re-uploading the whole
+   export through that path would also move stored instants with no preview, which is the thing this
+   operation exists to replace. Then take a fresh preview.
+6. **Apply** the reviewed preview, within its two-hour lifetime. On the Admin page this is the
+   review/backup acknowledgement and then **Apply repair**, which sends exactly this body:
+
+   ```bash
+   curl -X POST "$API/api/admin/nayax-sale-timestamp-repair/apply" \
+     -H "Authorization: Bearer <token>" -H 'Content-Type: application/json' \
+     -d '{"previewId":"<id from step 3>","confirmed":true}'
+   ```
+
+   A `400` means nothing was written: the plan was stale, expired, already applied, or a product's
+   costing could not be replayed. Read the message, fix the stated cause, and preview again. A
+   request that produces **no answer at all** — a dropped connection, or a `408`/`502`/`503`/`504`
+   from something in front of the API — is a different outcome: the apply may or may not have
+   committed. Do not repeat it. Take a fresh preview and read it: the rows come back as
+   `alreadyCorrect` if the repair committed, and as `repairable` again if it did not.
+7. **Verify the costing.** Confirm the apply's `productsRebuilt`/`recostedSales`, then check the
+   affected products' COGS and inventory value, and that no completed sale became uncosted.
+8. **Reconcile at the fixed cutoff.** Take a fresh preview over the same sources and window — on the
+   Admin page, **Preview again to verify**, which reuses the inputs still on the form: every
+   repairable row should now be `alreadyCorrect`, `missingFromDatabase` should be empty, and each day's
+   `sourceVerifiedAfter` should equal the export's own daily total, summing to its period total. A
+   remaining difference is `unresolvedAmount` (obtain source coverage for those rows) or
+   `excludedAfterCutoffAmount` (later sales, not a discrepancy).
+9. **Record the evidence** — the snapshot's SHA-256, the preview id, the applied counts and the
+   reconciliation — with the issue. Production verification is recorded separately, after an
+   authorized execution; building this operation does not perform one.
+
+**Regression coverage.** `NayaxSaleTimestampRepairPolicyTests` (unit) pins the per-transaction
+decisions: the known transaction, the mixed cohort, each unresolved reason, the amount identity
+tolerance, re-deciding after a repair, the single-use/expiry rule and the stale-plan comparison.
+`NayaxSaleTimestampRepairTests` (relational SQLite) covers the preview's contents and refusals, the
+evidence-derived examined range, the apply's write and audit, a stale, expired, re-confirmed, unknown
+or unattributable apply, two-business isolation of both the sales and the stored plan, repeated apply
+as a no-op, the replay start instant and the untouched physical movement history, the baseline-cutoff
+gate, the all-or-nothing rollback when a replay fails, the Sydney week boundary, and both daylight-saving
+transitions including the second pass of the April 2026 repeated hour.
+`NayaxSaleTimestampRepairReconciliationTests` (relational SQLite) rebuilds the operator's own
+8 October 2026 evidence as five cohorts and asserts the reported figures fall out of it: the snapshot's
+**$726.20** weekly window before any repair, **$535.30** source-verified after the repair alone with
+**$119.70** of missing sales and **$190.90** unresolved, the export's daily **$108.20 / $183.00 /
+$216.40 / $147.40** and weekly **$655.00** once the missing sales are imported and the repair applied,
+the later sale excluded at the cutoff, and the boundary cohort decided — rather than left unresolved —
+once source coverage includes 4 October.
+`NayaxSaleTimestampRepairUploadLimitTests` pins the preview upload cap: both declared limits, the
+same value in each, and no disabled-limit escape hatch on the action or the controller.
+
+The Admin page's own coverage is in `frontend/inventory-app/src/app`:
+`services/nayax-sale-timestamp-repair.service.spec.ts` pins the multipart field names, the absent
+`Content-Type` (so the browser sets the boundary), the verbatim cutoff and business dates, the
+all-three-or-none window, and that the apply body is `previewId` plus `confirmed` and nothing else.
+`nayax-sale-timestamp-repair-workflow.component.spec.ts` covers the source and window validation,
+each input change invalidating the plan and the acknowledgement, the acknowledgement gate, the
+expiry withdrawal, duplicate-submit protection, the stale/costing/already-applied refusals, each
+ambiguous transport status as an unconfirmed outcome, and the absence of any browser-storage write.
+The three display components' specs cover the outcome categories, the unresolved and missing-sale
+presentation, rebuild eligibility, the reconciliation's source-gap rule, the audit rows and the
+client-side filter/paging.
 
 ## Data flow
 
@@ -2794,8 +3869,10 @@ column - is individually `sticky top-0` with an opaque background and a z-index 
 so the whole header row stays visible while rows scroll under it without showing through. The
 `<thead>` element itself, the filter panel and the Selected Machines card are deliberately not
 sticky. Sticky positioning does not participate in table column sizing, so header and body keep
-identical column widths; the header's bottom rule is an inset box shadow on each header cell, because
-the collapsed `divide-y` border between `<thead>` and `<tbody>` scrolls away with the body.
+identical column widths. The separator between header and body is the opaque `md-gray-100` table-head
+surface itself, as in every other #410 table: a collapsed border between `<thead>` and `<tbody>`
+scrolls away with the body, and #410 defines no shadow token for a sticky header rule, so the header
+cells carry no shadow (issue #417).
 
 #### Supplier Orders frontend page (issue #387)
 
@@ -2821,6 +3898,65 @@ the (now single) Supplier Orders implementation instead of a stale duplicate. `P
 "On order" tab links directly to `/purchases/orders`. `PurchaseUploadComponent` navigates back to
 `/purchases/orders` (rather than the old `/products/on-order`) after a receipt that started from a
 supplier order, and its "Unable to load supplier order" and Cancel links point at the same new page.
+
+#### Purchase edit page (issue #475)
+
+Editing a purchase is a dedicated page, not a row that expands inside the purchases table. The
+inline editor the list used to hold is **gone**: `purchase-list.component.{ts,html}` is display and
+delete only, holds no edit form, no edit state and no `PUT` request, and its Actions cell's Edit is
+an `<a [routerLink]="['/purchases', r.id, 'edit']">` rather than a button that toggled a second
+`<tr>`. That is also what makes the list compact again — the saved-figures-exclude-unsaved-edits
+note the list rendered while an editor was open (issue #431) no longer exists, because no unsaved
+edit can be in the list any more.
+
+Two components sit behind the route, split on the [page composition
+boundary](#page-composition-boundary-issue-191):
+
+| File | Responsibility |
+| --- | --- |
+| `components/purchases/purchase-edit/purchase-edit-page.component.{ts,html}` | The routed page: the `:id` route parameter, the purchase/supplier/product reads, the loading, unavailable and save-error states, the `PurchaseService.update` call, and the navigation back to the list |
+| `components/purchases/purchase-edit/purchase-edit-form.component.{ts,html}` | The form itself: its fields, its line-item operations and the request payload it emits through `(saveRequested)`/`(editCancelled)`. It makes no request of its own |
+
+- **Direct loading, by id.** The page resolves `:id` from `ActivatedRoute.paramMap` and reads the
+  purchase through the existing authorized `PurchaseService.get` (`GET /api/purchases/{id}`), so a
+  bookmarked edit URL, a page refresh and browser Back/Forward between two edit URLs all load the
+  right purchase. Nothing is carried in navigation-only state and nothing depends on a list
+  component instance still existing. `paramMap` rather than a snapshot is what makes an id change on
+  a reused component reload instead of leaving the previous purchase's values on screen.
+- **Permissions and tenant isolation are the API's, unchanged.** The route is behind `MsalGuard`
+  exactly as every other page is, and `GET`/`PUT /api/purchases/{id}` stay `[Authorize]`d and scoped
+  by the `AppDbContext` tenant query filters (see [Tenant ownership](#tenant-ownership-issue-64)).
+  Another business's purchase id therefore reaches this page's unavailable state rather than its
+  data, and no request this page makes names an owner. The route is not an authorization boundary
+  and must not become one.
+- **The three non-form states.** A loading state while the read is outstanding (never an empty
+  form); a `404` reported as "no longer available" and a failed read reported separately as a
+  failure to load, each with a Back to Purchases link and no form at all; and a save refusal shown
+  above the form with the API's own message, with every entered value still on the page, so a
+  rejected GST classification never looks like a saved one. A save in flight disables Save, and the
+  page ignores a second submission, so one purchase cannot be updated twice by a double press.
+- **Save and Cancel both return to `/purchases`.** The list reloads on `ngOnInit`, which is how the
+  updated values appear. The list carries no filter, sort or paging state, so there is nothing to
+  preserve across the round trip and no query parameter or navigation state is used for it; if the
+  list ever gains those, this is the one place that would need to carry them.
+- **The form moved unchanged.** Title, supplier, purchase date, total amount, the purchased-item
+  lines (product for a new line, quantity, unit cost, per-line GST classification, add and remove),
+  delivery cost with its GST picker, package cost with its GST picker, and notes are exactly the
+  fields and operations the inline editor offered, with the same `name`s, the same `data-testid`s and
+  the same validation. Every issue #431 rule still holds and its tests moved with the code: only a
+  changed classification is submitted, a stored line travels with its own `id` and keeps its product,
+  an absent charge submits no classification, and an unchanged purchase date is resubmitted as the
+  stored instant. The GST figures are still the API's alone and are still displayed on the list; this
+  page performs no GST arithmetic. Editing a purchase still cannot replace its uploaded document -
+  `PUT /api/purchases/{id}` never accepted a file, and this page adds no way to send one.
+- **Breadcrumb.** `/purchases/:id/edit` is a static `Purchases > Edit purchase` entry in
+  `layout/breadcrumbs/breadcrumb-routes.ts` (see [Breadcrumbs](#breadcrumbs-issue-457)); the page
+  renders no breadcrumb markup of its own and contributes no live label.
+- **No unsaved-change guard.** The repository has no unsaved-change protection pattern - no
+  `CanDeactivate` guard, no dirty-state service, and `/products/:id/edit` has none either - so this
+  page behaves like every other form page: leaving it, by Cancel, by Back or by any other link,
+  discards unsaved edits without a prompt. Introducing a prompt here would be a new cross-cutting
+  pattern and is deliberately not part of issue #475.
 
 #### Supplier product price history and comparison (issue #63)
 
@@ -3004,7 +4140,7 @@ or tag exists.
 | `InventoryApi.Controllers` | `PurchasesController` (file `PurchasesController.cs`), `[Route("api/purchases")]` | — | The route is now canonical; there is no supported external client left to preserve `api/receipts` for. |
 | `InventoryApi.DTOs` | `PurchaseItemDto`, `PurchaseCreateMetaDto`, `PurchaseValidationDto`, `PurchaseGstSummaryDto`, `PurchaseResponseDto` (JSON keys `purchase`/`validation`/`gst`), and since issue #304 the API-owned `PurchaseResponse`/`PurchaseItemResponse` the `purchase` key carries | — | The `receipt`/`validation` wrapper existed only for old clients; `PurchaseResponseDto`'s property is now named `Purchase`. The `gst` key is issue #431's additive input-GST summary. `PurchaseItemResponse.ReceiptId` keeps the persistence-facing JSON name, as the entity's did. |
 | Frontend `models.ts`/`purchase.service.ts` | `Purchase`, `PurchaseItem`, `PurchaseValidation`, `PurchaseGstSummary`, `PurchaseResponse` (`purchase` field), `PurchaseService` (canonical `/purchases` base URL), `PurchaseUploadPayload`/`PurchaseItemPayload`/`PurchaseUpdatePayload` | JSON-bound field `receiptId` on `PurchaseItem` | `receiptId` matches the backend `PurchaseItem.ReceiptId` persistence/JSON contract above, which is out of this issue's scope. |
-| Frontend routing | `/purchases`, `/purchases/new` and `/purchases/orders` (issue #387) are the supported purchase routes | `/products/on-order` redirects to `/purchases/orders` (issue #387) | The `/receipts` and `/receipts/new` redirect aliases were removed; there is no supported bookmark to preserve. `/products/on-order` keeps its old bookmark working instead of a second supplier-order listing. |
+| Frontend routing | `/purchases`, `/purchases/new`, `/purchases/orders` (issue #387) and `/purchases/:id/edit` (issue #475) are the supported purchase routes | `/products/on-order` redirects to `/purchases/orders` (issue #387) | The `/receipts` and `/receipts/new` redirect aliases were removed; there is no supported bookmark to preserve. `/products/on-order` keeps its old bookmark working instead of a second supplier-order listing. |
 | Supporting documents | Not renamed: `Purchase.FileName`/`StoredFileName`/`ContentType`/`FileSizeBytes`, the "Receipt or invoice" upload copy, `OperatingExpense` receipt-attachment naming | — | A purchase's attached scan/photo, and an operating expense's attachment, are supporting *documents*, a distinct concept from the Purchase business record. |
 
 Out of scope for the Purchase/Products contract cleanup (per issues #60 and #127): changing purchase
@@ -3732,6 +4868,13 @@ the EF entities from `InventoryApi.Models` to `Inventory.Infrastructure.Models`,
 behaviour are the same, only the owning project changed. Sections outside this track describe the
 code as it is now.
 
+One test these notes mention repeatedly no longer exists either.
+`ProjectDependencyDirectionTests.Only_the_documented_legacy_services_remain_in_InventoryApi_Services`
+was the #145 allow-list of legacy service files, and most slices below record shrinking it as they
+migrated. Issue #154 removed it once the list was empty and replaced it with
+`ApiLayerOwnershipTests` - see [InventoryApi](#inventoryapi). Read "the allow-list shrank by these
+files" as the historical record of that slice, not as a test to look for today.
+
 1. **Safety baseline**
    - Add repository instructions, architecture documentation, and cross-platform validation scripts.
    - Correct documentation/CI drift in focused follow-up changes.
@@ -4289,7 +5432,7 @@ code as it is now.
    - `Inventory.Domain.Sites.SiteStockPolicy` computes a site's overall stock percentage and its low/empty product alert counts from already-fetched machine-product facts; `Inventory.Domain.Sites.SiteProductPricingPolicy` computes the site product preview's average retail price and estimated card-sale profit, given an already-resolved per-item commission amount and fee rate. `Inventory.Domain.Machines.MachineDashboardPeriods` is the pure today/week-to-date/previous-comparable-week/last-week/month-to-date/two-weeks-ago range arithmetic, moved out of the former `MachineService` statics unchanged; `Inventory.Domain.Machines.MachineDashboardDirectProfitPolicy` and `MachineProfitabilityStatusPolicy` are the machine dashboard's period direct-profit and status-message rules, given already-resolved facts. Both direct-profit policies are deliberately kept separate from `Inventory.Domain.Reporting.Profitability.MachineDirectProfitPolicy`, which answers the same question at report-row (aggregate period) granularity rather than the dashboard's fixed rolling periods, matching the precedent the reporting slice already documented for row-level versus aggregate rules.
    - `Inventory.Application.Sites.GetSiteSummaries`/`GetSiteProducts` and `Inventory.Application.Machines.ListMachineDashboard`/`GetMachineDashboard` are the use cases, calling `INayaxLynxClient` with the same bounded per-site/per-machine fan-out (`Task.WhenAll` over each site's/machine's `GetMachineProductsAsync` calls) the former services used. `Inventory.Application.Sites.ISiteFactsStore`/`ISiteNameResolver` and `Inventory.Application.Machines.IMachineDashboardFactsStore` are their narrow ports. Issue #150 moved commission/fee resolution and payment/status classification to Domain-owned rules and Application use cases/ports; these consumers use those authorities rather than API service wrappers. The ports return already-resolved decimal/boolean facts rather than raw agreements: `ISiteFactsStore.ResolveCardCommissionAsync` takes the distinct candidate retail prices appearing in a site's machine products and returns the commission amount already resolved for each (the exact per-price Domain commission calculation computes each entry, not a re-derived multiplier), and `IMachineDashboardFactsStore.GetFactsAsync` returns each rolling period's already-resolved gross revenue and direct-profit inputs plus the profitability-status inputs, mirroring the former per-sale commission-resolution loop and its exact short-circuiting (an ambiguous or gap-covered agreement, or a missing site mapping with sales present, skips the Nayax fee lookup entirely, exactly as before) fact for fact. `ResolveMachineProductPricing` uses the same Sites financial port, while `EfLatestNayaxSalesStore` uses the Domain transaction-status classifier.
    - **Scoped EF reads serialized (issue #313).** The Nayax fan-out above is unchanged and still concurrent, but no two `ISiteFactsStore` calls are ever in flight together, because the store is scoped and its EF adapter shares one `AppDbContext` (see [Concurrency inside one request: the scoped EF context](#concurrency-inside-one-request-the-scoped-ef-context-issue-313)). `GetSiteProducts` awaits its cost-basis, commission and fee reads one at a time instead of starting all three and joining them with `Task.WhenAll`. `GetSiteSummaries` no longer builds its per-site summaries concurrently: it reads the catalogue activity facts, then loads every site's recent completed sales through one scoped read over the whole fleet's machine ids with the same 16-day lookback each per-site read used, and distributes them per machine in memory, so the per-site aggregation itself is pure. Site-name ordering, machine counts, stock percentages, alert counts, per-site revenue attribution, financial-configuration handling, the API routes and response JSON, and exception behaviour are unchanged; tenancy is unchanged too, since the batched read is still scoped only by the central `AppDbContext` query filters. The focused regression tests live in `backend/Inventory.IntegrationTests/Application/Sites/` (call-sequence recorders plus the behavioural assertions) and in `EfSiteFactsStoreTenancyTests` (the batched completed-sales read loads no other business's sales).
-   - `EfSiteFactsStore`/`EfMachineDashboardFactsStore`, `EfSiteCommissionStore`, `EfNayaxProcessingFeeFactsProvider`, and `EfNayaxSalesQueries` were temporary API-owned adapters because they depend on `AppDbContext` and persistence models. `SiteNameResolverAdapter` was one of them until issue #306, which found it had no `AppDbContext` dependency at all and merged it into `Inventory.Infrastructure.Sites.SiteNameResolver`; `EfNayaxProcessingFeeFactsProvider` and `EfNayaxSalesQueries` left with the reporting adapters in issue #308 (Persistence 7/8) for `Inventory.Infrastructure.Reporting.Persistence` and `Inventory.Infrastructure.Data`; the first three followed in issue #309 (Persistence 8/8) for `Inventory.Infrastructure.Persistence`, beside the `AppDbContext`, the entities and the migrations issue #307 had already moved. Entity-specific EF query expressions stay in those persistence adapters; they implement Application-owned ports and apply the authoritative Domain rules. The existing report facts adapters likewise compose the migrated commission and fee use cases and Domain rules.
+   - `EfSiteFactsStore`/`EfMachineDashboardFactsStore`, `EfSiteCommissionStore`, `EfNayaxProcessingFeeFactsProvider`, and `EfNayaxSalesQueries` were temporary API-owned adapters because they depend on `AppDbContext` and persistence models. `SiteNameResolverAdapter` was one of them until issue #306, which found it had no `AppDbContext` dependency at all and merged it into `Inventory.Infrastructure.Sites.SiteNameResolver`; `EfNayaxProcessingFeeFactsProvider` and `EfNayaxSalesQueries` left with the reporting adapters in issue #308 (Persistence 7/8) for `Inventory.Infrastructure.Reporting.Persistence` and `Inventory.Infrastructure.Data`; the first three followed in issue #309 (Persistence 8/8) for `Inventory.Infrastructure.Persistence`, beside the `AppDbContext`, the entities and the migrations issue #307 had already moved. Entity-specific EF query expressions stay in those persistence adapters; they implement Application-owned ports and apply the authoritative Domain rules. The existing report facts adapters likewise compose the migrated commission and fee use cases and Domain rules. Issue #154 closed this item's remaining architectural debt rather than relocating anything further: the commission, fee, payment-method and transaction-status rules issue #150 moved into `Inventory.Domain` are now asserted to be declared there and nowhere else, no file under `InventoryApi` names one, `Inventory.Domain`/`Inventory.Application` are asserted to declare no `IQueryable` or expression tree at all, and `EfNayaxSalesQueries` is `internal` so the completed-sale predicate cannot be called from outside `Inventory.Infrastructure` - see [InventoryApi](#inventoryapi).
    - `InventoryApi.Services.SiteService`/`MachineService` were not deleted by this slice: it left them as thin delegators that only mapped the migrated use cases' results to the unchanged `SiteSummaryDto`/`SiteProductDto`/`Machine`/`Product` API contracts — the same transitional "legacy service delegates to the new use case" shape the reporting slices used before issue #92's final removal — and physically deleting them was left as explicit follow-up work, tracked the same way issue #92 was a separate, later step after every report family had migrated.
    - **Sites/Machines delegators removed and the machine responses are API-owned** (issue #302, child 1 of 8 of #153).
      - **Controllers.** `SitesController` injects `GetSiteSummaries`/`GetSiteProducts` and `MachinesController` injects `GetMachineDashboard`/`ListMachineDashboard`/`ListMachineProducts` directly, alongside the four machine-stock-sync use cases it already held. `SiteService`, `MachineService`, `ISiteService`, `IMachineService` and their two DI registrations in `Program.cs` are deleted; the use cases were already registered by `AddApplicationServices()`. Neither controller names `InventoryApi.Models` any more, and the `Only_the_documented_legacy_services_remain_in_InventoryApi_Services` allow-list shrank by all four files in the same change.
@@ -4371,7 +5514,7 @@ code as it is now.
     - **Non-EF adapters relocated and `InventoryApi/Services` removed** (issue #306, child 5 of 8 of #153). The three API-owned adapters that never needed `AppDbContext` are now real `Inventory.Infrastructure` residents, registered by `AddInfrastructureServices()` instead of directly in `Program.cs`:
       - **Report export.** CSV/XLSX byte encoding sits behind the new Application-owned `Inventory.Application.Reporting.Export.IReportExportFileWriter` port, implemented by `Inventory.Infrastructure.Reporting.ReportExportFileWriter`; `ReportsController` injects the port instead of calling the former static `InventoryApi.Adapters.Export.ReportExportFileWriter`. The encoding is unchanged line for line, so the downloaded bytes, the two content types (`text/csv`, `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`) and the `{report}.{format}` file names are identical; `InventoryApi.Tests.Infrastructure.Reporting.ReportExportFileWriterTests` pins the exact CSV payload and compares it cell by cell with the XLSX, and `ReportsControllerExportTests` pins the transport contract. With the writer gone, `InventoryApi` dropped its ClosedXML package reference - `Inventory.Infrastructure` holds the only one, alongside `ClosedXmlNayaxSalesWorkbookReader` from issue #301 - so an accidental ClosedXML reference in the API project now fails to compile.
       - **Nayax catalog snapshot.** `NayaxCatalogSnapshotProvider` moved to `Inventory.Infrastructure.Nayax`, beside the `NayaxLynxClient` it reads through, with its mapping and its empty-string-for-a-missing-name rule untouched (both fields are documented as nullable in the Nayax contract for `GET /v1/operators/{OperatorID}/products` and `GET /v1/machines`). The EF half, `EfLocalCatalogSnapshotProvider`, stayed API-owned until the rest of the adapter family moved in Persistence 8/8 of #153 (issue #307 having moved `AppDbContext` itself, issue #308 the reporting adapters, and issue #309 this one).
-      - **Site names.** `Services/SiteNameResolver.cs` and the `Adapters/Persistence/SiteNameResolverAdapter` wrapper merged into one `Inventory.Infrastructure.Sites.SiteNameResolver` implementing `ISiteNameResolver`, keeping the static `FromMachines` entry point that `EfTransactionSalesReportFactsProvider` calls from inside its static row iterator, so the site dashboard, the commission report and the transaction report still share one rule. `InventoryApi/Services` and `InventoryApi/Adapters/{Export,Nayax}` no longer exist, and the `Only_the_documented_legacy_services_remain_in_InventoryApi_Services` allow-list is empty in the same change, which turns that test into a guard that the folder stays gone (see [Temporary API-owned exception](#temporary-api-owned-exception-and-its-enforcement-issue-145)).
+      - **Site names.** `Services/SiteNameResolver.cs` and the `Adapters/Persistence/SiteNameResolverAdapter` wrapper merged into one `Inventory.Infrastructure.Sites.SiteNameResolver` implementing `ISiteNameResolver`, keeping the static `FromMachines` entry point that `EfTransactionSalesReportFactsProvider` calls from inside its static row iterator, so the site dashboard, the commission report and the transaction report still share one rule. `InventoryApi/Services` was gone with that change, as were `InventoryApi/Adapters/Export` and the `Adapters/Nayax` folder as this slice knew it - the real Nayax client left for `Inventory.Infrastructure.Nayax`, and the `Adapters/Nayax` folder that exists today holds only the `E2ETestNayaxLynxClient` test double the dedicated `E2ETest` host registers (issue #46). The `Only_the_documented_legacy_services_remain_in_InventoryApi_Services` allow-list became empty in the same change, which turned that test into a guard that the folder stayed gone, until issue #154 replaced it with the rule set described under [InventoryApi](#inventoryapi) (see [Temporary API-owned exception](#temporary-api-owned-exception-and-its-enforcement-issue-145)).
 
       Nothing about Nayax HTTP behaviour, report contents, the schema or the API contracts changed, and no EF adapter or `AppDbContext` moved - those are #153's remaining persistence children.
     - **`AppDbContext`, the EF entities and the migrations relocated** (issue #307, child 6 of 8 of #153). `InventoryApi/Data`, `InventoryApi/Models` and `InventoryApi/Migrations` are gone; they are now `Inventory.Infrastructure/Data` (`AppDbContext` with its tenant query filters, `BusinessOwnershipEnforcer`, `CrossBusinessAccessException`), `Inventory.Infrastructure/Models` and `Inventory.Infrastructure/Migrations`, with the namespaces renamed to match. `Inventory.Infrastructure` took the `Microsoft.EntityFrameworkCore`/`Microsoft.EntityFrameworkCore.Relational` package references; `InventoryApi` kept the SQLite provider, the `Design` package and the one `UseSqlite` call, because choosing a provider and a connection string is a composition-root decision.
@@ -4385,8 +5528,9 @@ code as it is now.
       - **Nothing about behaviour changed.** Per relocated file the diff is the `namespace` directive, the `using` directives and the placement sentences in its doc comment: no query, predicate, projection, ordering, materialisation point, transaction boundary, `SaveChanges` call or `IsRelational()` branch moved with the files, and no schema, migration or API contract is touched. Tenant isolation moved as files, not as behaviour: reads are still scoped only by the `AppDbContext` global query filters and writes still stamped and enforced centrally by `BusinessOwnershipEnforcer` on `SaveChanges`, with no per-caller `BusinessId` predicate added or removed. `NayaxCostableSale` stayed `internal` - its only users are the two sale-importing adapters and `EfSaleCostingStore`, which moved with it.
       - **The `Bootstrap` commands stay thin host commands**, calling Infrastructure services rather than moving their persistence logic into one; see [InventoryApi](#inventoryapi) for the reasoning, including why the three commands that may pass `UnscopedBusinessScope.Instance` are better off outside the injectable adapter layer.
       - **What pins it.** The existing relational SQLite adapter tests, the two-business isolation tests (`BusinessDataIsolationTests`, `FinancialAdapterTenancyTests`, `EfInventoryCostingAdaptersTenancyTests`, `EfSiteFactsStoreTenancyTests`, `EfProductCatalogStoreTenancyTests`, `EfProductStoreTenancyTests`, `EfNayaxProductCatalogImportStoreTenancyTests`, `NayaxImportTenantIsolationTests`, `ProtectedDocumentTenantIsolationTests`) and the Application/controller suites all cover the relocated adapters unchanged apart from the namespace they import - which is what shows queries, transactions and isolation are identical. The new `PersistenceAdapterOwnershipTests` pins the ownership itself: each of the 31 relocated types is declared in `Inventory.Infrastructure` and in no `InventoryApi` type, `AddInfrastructureServices()` registers each of the 29 ports once against the expected Infrastructure implementation and `Scoped` lifetime, `Program.cs` names none of them, `InventoryApi/Adapters/Persistence` holds no git-tracked file, and `Inventory.Infrastructure/Persistence` holds one file per adapter.
-      - **Not in this slice.** The adapters' tests keep their `InventoryApi.Tests/Adapters/Persistence` location, for the same reason issues #307 and #308 left `MigrationRelocationTests` and the reporting adapter tests where they were. `EfNayaxSalesQueries` keeps the `public` modifier issue #308 gave it even though its callers are now in the same assembly, and the final architecture rules stay as they are - both belong to #154.
-    - Still pending for the remaining feature areas (the unreferenced `Machine` entity leftover above, and the remaining direct-access controllers/services); only after each is migrated and tests prove equivalent behavior does this step complete overall.
+      - **Not in this slice.** The adapters' tests keep their `InventoryApi.Tests/Adapters/Persistence` location, for the same reason issues #307 and #308 left `MigrationRelocationTests` and the reporting adapter tests where they were. `EfNayaxSalesQueries` kept the `public` modifier issue #308 gave it even though its callers were by then in the same assembly, and the final architecture rules stayed as they were - both belonged to #154, which has since done both (see the final enforcement bullet below).
+    - **Final enforcement done** (issue #154, after every slice of #145-#153). No business service, use-case orchestration, financial/classification rule or persistence implementation is left in `InventoryApi`, and that is now enforced rather than documented: `ApiLayerOwnershipTests` replaced #145's legacy-services allow-list with eleven rules over the API project, the inner layers and the completed-sale predicate - see [InventoryApi](#inventoryapi) for the list and [Temporary API-owned exception](#temporary-api-owned-exception-and-its-enforcement-issue-145) for why an empty allow-list was not enough. `EfNayaxSalesQueries` is `internal` again, so an expression over the EF model cannot leave the layer that can translate it; nothing else about behaviour, routes, response shapes, the schema or financial semantics changed. Each rule was verified by introducing a deliberate violation of it, confirming the failure, and removing it.
+    - Still pending for the remaining feature areas, now only on the persistence-model and published-contract side: the unreferenced `Machine` entity leftover above, and the `StockAdjustmentReason`/`StockAdjustmentSource` wire enums the stock DTOs still name because the Swagger compatibility boundary publishes those components (see [InventoryApi](#inventoryapi); retiring them is an API contract change #154 excluded and needs its own issue). No direct-access controller or service remains: every endpoint goes through an `Inventory.Application` use case, which `ApiLayerOwnershipTests` asserts per controller. Only after the two leftovers above are resolved and tests prove equivalent behavior does this step complete overall.
 
 ### Frontend migration track
 
@@ -4439,11 +5583,11 @@ EF Core InMemory tests remain useful for fast service checks but must not be the
 
 **Call-sequence (yielding-recorder) tests.** Some defects are about *when* calls happen rather than what they return; two operations overlapping on one request-scoped `AppDbContext` is the current example (see [Concurrency inside one request: the scoped EF context](#concurrency-inside-one-request-the-scoped-ef-context-issue-313)). Neither an InMemory nor a relational SQLite test can prove that one, because SQLite's synchronous async implementation completes each call before the next one starts. Such behavior is tested instead with an in-memory fake of the port that records a `start:`/`end:` marker per call, tracks how many calls were ever in flight at once, and awaits `Task.Yield()` before completing — so an implementation that starts two calls before awaiting either produces an interleaved trace and a concurrency count above one. `ResolveMachineProductPricingTests`' call-sequence recorder and the Sites equivalents (`backend/Inventory.IntegrationTests/Application/Sites/RecordingSiteFactsStore.cs`, plus `RecordingNayaxLynxClient`, which gates its machine-product calls so a serialized fan-out fails rather than hangs) are the examples. Pair them with the behavioral assertions the serialization must not change — per-site totals and revenue attribution, ordering, failure propagation, and the relational two-business isolation tests — so a concurrency fix cannot silently drop a site or move revenue between sites.
 
-**Source-scanning architecture tests.** Most architecture rules are checked against the compiled assemblies (`CleanArchitectureDependencyTests`) or the project files (`ProjectDependencyDirectionTests`), but some rules are invisible to both. `TimeAcquisitionTests.Domain_and_Application_acquire_the_current_time_only_through_the_time_ports` (issue #310) fails if any `Inventory.Domain` or `Inventory.Application` source file reads `DateTime.Now`, `DateTime.UtcNow` or `DateTime.Today` instead of injecting `IClock`/`IBusinessCalendar` (see [Time](#time)); it scans the source text because these are property reads on `DateTime` itself, a type the inner layers legitimately depend on everywhere, so a type-level dependency rule cannot distinguish them. `ProjectDependencyDirectionTests.No_other_source_file_references_the_removed_legacy_reporting_service` scans source for the same reason, and so does `ProjectDependencyDirectionTests.No_controller_references_the_persistence_models` (issue #305): `InventoryApi` legitimately depends on the EF entity namespace (`Inventory.Infrastructure.Models` since issue #307) everywhere else in the project, so only a file-scoped source scan can say that the `Controllers` folder does not (see [InventoryApi](#inventoryapi)). `ProjectDependencyDirectionTests.InventoryApi_owns_no_db_context_persistence_model_or_migration` and its positive counterpart (issue #307) read `git ls-files` for a related reason: a project no longer *containing* a folder is a fact about the committed tree, not about either assembly. A new rule of this kind names the offending file and line in its failure message, so the fix is the injection or removal it asks for, never a weakened rule.
+**Source-scanning architecture tests.** Most architecture rules are checked against the compiled assemblies (`CleanArchitectureDependencyTests`) or the project files (`ProjectDependencyDirectionTests`), but some rules are invisible to both. `TimeAcquisitionTests.Domain_and_Application_acquire_the_current_time_only_through_the_time_ports` (issue #310) fails if any `Inventory.Domain` or `Inventory.Application` source file reads `DateTime.Now`, `DateTime.UtcNow` or `DateTime.Today` instead of injecting `IClock`/`IBusinessCalendar` (see [Time](#time)); it scans the source text because these are property reads on `DateTime` itself, a type the inner layers legitimately depend on everywhere, so a type-level dependency rule cannot distinguish them. `ProjectDependencyDirectionTests.No_other_source_file_references_the_removed_legacy_reporting_service` scans source for the same reason, and so does `ProjectDependencyDirectionTests.No_controller_references_the_persistence_models` (issue #305): `InventoryApi` legitimately depends on the EF entity namespace (`Inventory.Infrastructure.Models` since issue #307) everywhere else in the project, so only a file-scoped source scan can say that the `Controllers` folder does not (see [InventoryApi](#inventoryapi)). `ProjectDependencyDirectionTests.InventoryApi_owns_no_db_context_persistence_model_or_migration` and its positive counterpart (issue #307) read `git ls-files` for a related reason: a project no longer *containing* a folder is a fact about the committed tree, not about either assembly. `ApiLayerOwnershipTests` (issue #154) uses all three techniques in one place, deliberately picking the one each rule needs: `git ls-files` for the retired folders, the frozen top-level folder set and the "no `DbSet`"/"no retired namespace"/"no financial rule named" text rules; the compiled assembly for the `DbContext`, business-service, controller-surface and predicate-visibility rules, because a doc comment that explains why a type must *not* touch EF would otherwise read as the violation it forbids; and a source scan for the `IQueryable`/`Expression<Func<...>>` rule, which is about a declaration rather than a dependency. A new rule of this kind names the offending file and line in its failure message, so the fix is the injection or removal it asks for, never a weakened rule.
 
 **Composition and committed-configuration tests.** Some decisions live in the composition root or in a settings file rather than in a class with behaviour. `InventoryApi.Tests.Observability.TelemetryCompositionTests` asserts what `AddInventoryApiTelemetry` registers — and, for the missing-connection-string case, that it registers nothing — by inspecting the `IServiceCollection` rather than by building the OpenTelemetry providers, so no test ever constructs an exporter or sends telemetry anywhere; `TelemetryStartupTests` then hosts the real application both with and without a synthetic, non-secret connection string. `LoggingLevelPolicyTests` reads the committed `appsettings.json`/`appsettings.Development.json` instead of a hosted application, because the value that matters is the one that ships to a deployed environment (see [Observability and error telemetry](#observability-and-error-telemetry-issue-165)).
 
-Behaviour that depends on the business timezone is tested with a fixed clock and the real `Inventory.Infrastructure.Time.SydneyBusinessCalendar` (`InventoryApi.Tests.Application.Time.FixedSydneyTime`), not with `FakeBusinessCalendar`, whose conversion is deliberately an identity. A timezone change must cover a UTC instant that falls on a different Sydney date (14:30 UTC, for example) and both daylight-saving transitions — `MachineDashboardWindowTests`, `GetSiteSummariesTests`, `GetSiteProductsTests` and `ResolveMachineProductPricingTests` are the examples. A change to how an *external* timestamp becomes an instant is covered at the ingestion boundary over a real SQLite connection as well, because the persisted instant is what every report later reads back: `NayaxSaleTimestampContractTests` (issue #380) deserializes documented Nayax payloads, persists them through the real `EfLatestNayaxSalesStore`, and classifies the result through `FixedSydneyTime` on both transitions, the skipped hour, both passes of the repeated hour, and ordinary AEST/AEDT days.
+Behaviour that depends on the business timezone is tested with a fixed clock and the real `Inventory.Infrastructure.Time.SydneyBusinessCalendar` (`InventoryApi.Tests.Application.Time.FixedSydneyTime`), not with `FakeBusinessCalendar`, whose conversion is deliberately an identity. A timezone change must cover a UTC instant that falls on a different Sydney date (14:30 UTC, for example) and both daylight-saving transitions — `MachineDashboardWindowTests`, `GetSiteSummariesTests`, `GetSiteProductsTests` and `ResolveMachineProductPricingTests` are the examples. A change to how an *external* timestamp becomes an instant is covered at the ingestion boundary over a real SQLite connection as well, because the persisted instant is what every report later reads back: `NayaxSaleTimestampContractTests` (issue #380) deserializes documented Nayax payloads, persists them through the real `EfLatestNayaxSalesStore`, and classifies the result through `FixedSydneyTime` on both transitions, the skipped hour, both passes of the repeated hour, and ordinary AEST/AEDT days, and `NayaxLiveSaleGmtTimestampSyncTests` (issue #471) does the same through the real `NayaxLynxClient` and `SyncLatestNayaxSales` for offset-free GMT values. **A test must not install a host time zone to make such a case fail**: `TimeZoneInfo.Local` is process-global and the parallel test collections would race on it, so a host-dependent reading is reproduced arithmetically and the assertion states host independence (see [Nayax sale timestamps](#nayax-sale-timestamps-issue-380)). Running a suite under `TZ=Australia/Sydney` is a developer check, never a committed test's own side effect.
 
 Most controller tests instantiate the controller directly and never exercise ASP.NET Core's middleware pipeline. Proving the `[Authorize]`/`[RequiredScope]` HTTP boundary (issue #38) instead requires a real pipeline: `AuthenticationBoundaryTests` (`backend/Inventory.IntegrationTests/Controllers/`) hosts the app with `WebApplicationFactory<Program>`, swapping `AppDbContext` for a shared open in-memory SQLite connection so `Program.cs`'s startup schema step (`DatabaseSchemaStartup.EnsureSchema`) succeeds, then asserts that an unauthenticated request to a representative protected endpoint — including the receipt and operating-expense document endpoints — returns `401`, and that a file placed in the web root has no anonymous static URL. `Program.cs` exposes a trailing `public partial class Program;` solely so `WebApplicationFactory<Program>` can reference it from the test assembly.
 

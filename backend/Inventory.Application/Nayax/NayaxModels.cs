@@ -103,7 +103,9 @@ public class NayaxProductGroup
 /// <list type="bullet">
 ///   <item><see cref="AuthorizationDateTimeGmt"/> (<c>AuthorizationDateTimeGMT</c>) is documented as
 ///   "The date and time when the transaction was authorized, in GMT" - the authoritative instant, and
-///   the only timestamp this integration may turn into a persisted UTC value.</item>
+///   the only timestamp this integration may turn into a persisted UTC value. The live endpoint sends
+///   it both with and without a <c>Z</c> designator, and an offset-free value is UTC because the field
+///   contract says GMT, not because of how it is rendered (issue #471).</item>
 ///   <item><see cref="MachineAuthorizationTime"/> is documented as "The local date and time when the
 ///   machine authorized the transaction" - machine-local wall-clock time carrying no offset. Its ticks
 ///   are not a UTC instant, and the documented sample payload prints it with a trailing <c>Z</c> and
@@ -139,14 +141,24 @@ public class NayaxLastSalesReport
     public decimal? ProductCostPrice { get; set; }
 
     /// <summary>
-    /// The authorization instant in GMT, as a <see cref="DateTimeOffset"/> because the payload carries
-    /// an explicit offset (<c>"2024-10-09T16:53:51.225Z"</c>). Nullable so that a payload item which
-    /// does not carry it stays distinguishable from one authorized at
+    /// The authorization instant in GMT, as a <see cref="DateTimeOffset"/> normalized to a zero
+    /// offset by <see cref="NayaxGmtTimestampJsonConverter"/>. Nullable so that a payload item which
+    /// does not carry a usable value stays distinguishable from one authorized at
     /// <see cref="DateTimeOffset.MinValue"/>: the documented schema declares the field non-nullable, so
-    /// an absent value means the payload did not match its contract, and a sale is then not imported at
-    /// all rather than imported at a defaulted or guessed instant.
+    /// an absent, blank or unreadable value means the payload did not match its contract, and a sale is
+    /// then not imported at all rather than imported at a defaulted or guessed instant.
+    ///
+    /// The converter is what makes this field's value mean the same instant on every host (issue
+    /// #471). The live endpoint renders it both with a designator (<c>"2024-10-09T16:53:51.225Z"</c>,
+    /// the published reference sample) and without one (<c>"2026-02-08T09:31:51.817"</c>, the
+    /// portal's live sample response), and .NET's default <see cref="DateTimeOffset"/> binding would
+    /// read the offset-free form against <see cref="TimeZoneInfo.Local"/> - which on the Sydney-hosted
+    /// API stored the sale ten or eleven hours early, on the previous Sydney business day. The field is
+    /// documented as GMT, so its UTC meaning comes from that contract rather than from the designator
+    /// or the host; see <see cref="NayaxGmtTimestamp"/>.
     /// </summary>
     [JsonPropertyName("AuthorizationDateTimeGMT")]
+    [JsonConverter(typeof(NayaxGmtTimestampJsonConverter))]
     public DateTimeOffset? AuthorizationDateTimeGmt { get; set; }
 
     /// <summary>
@@ -163,7 +175,9 @@ public class NayaxLastSalesReport
     /// arrived as <c>Z</c> is returned unchanged, one that arrived as <c>+11:00</c> becomes the same
     /// physical instant, and applying the conversion again cannot shift it a second time. That is what
     /// makes re-encountering a transaction - which the rolling last-sales window does on every refresh,
-    /// and an uploaded export does on every re-upload - safe.
+    /// and an uploaded export does on every re-upload - safe. An offset-free value has already been
+    /// read as UTC by <see cref="NayaxGmtTimestampJsonConverter"/> before it reaches here, so this
+    /// conversion never consults the host's time zone either.
     /// </summary>
     [JsonIgnore]
     public DateTime? AuthorizationInstantUtc => AuthorizationDateTimeGmt?.UtcDateTime;

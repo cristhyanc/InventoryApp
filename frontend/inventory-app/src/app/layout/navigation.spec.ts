@@ -1,21 +1,53 @@
 import { routes } from '../app.routes';
-import { NavGroup, NavLink, activeNavGroup, activeNavRoute, navLinks, primaryNavigation } from './navigation';
+import {
+  NavGroup,
+  NavItem,
+  NavLink,
+  activeNavGroup,
+  activeNavRoute,
+  navLinks,
+  navigationFor,
+  platformDiagnosticsNavLink,
+  primaryNavigation
+} from './navigation';
 
-function item(label: string): NavLink | NavGroup {
-  const match = primaryNavigation.find((candidate) => candidate.label === label);
+function item(label: string, items: readonly NavItem[] = primaryNavigation): NavLink | NavGroup {
+  const match = items.find((candidate) => candidate.label === label);
   expect(match).toBeDefined();
   return match!;
 }
 
-function group(label: string): NavGroup {
-  const match = item(label);
+function group(label: string, items: readonly NavItem[] = primaryNavigation): NavGroup {
+  const match = item(label, items);
   expect(match.kind).toBe('group');
   return match as NavGroup;
 }
 
-function childRoutes(label: string): { label: string; route: string }[] {
-  return group(label).children.map((child) => ({ label: child.label, route: child.route }));
+function childRoutes(label: string, items: readonly NavItem[] = primaryNavigation): { label: string; route: string }[] {
+  return group(label, items).children.map((child) => ({ label: child.label, route: child.route }));
 }
+
+function declaredRoutePaths(): Set<string> {
+  return new Set(routes.map((route) => route.path).filter((path): path is string => path !== undefined));
+}
+
+function undeclaredRoutes(items: readonly NavItem[]): string[] {
+  const declared = declaredRoutePaths();
+  return navLinks(items)
+    .map((link) => (link.route === '/' ? '' : link.route.replace(/^\//, '')))
+    .filter((path) => !declared.has(path));
+}
+
+const adminChildRoutes: { label: string; route: string }[] = [
+  { label: 'Nayax Settings', route: '/admin/nayax-settings' },
+  { label: 'Site Commission Agreements', route: '/admin/site-commission-agreements' },
+  { label: 'Imports', route: '/admin/imports' },
+  { label: 'Historical Cost Recovery', route: '/admin/historical-cost-recovery' },
+  { label: 'AVCO Transition', route: '/admin/avco-transition' },
+  { label: 'Costing Repair', route: '/admin/costing-repair' },
+  { label: 'Historical GST Classification', route: '/admin/historical-gst-classification' },
+  { label: 'Nayax Sale Timestamp Repair', route: '/admin/nayax-sale-timestamp-repair' }
+];
 
 describe('primary navigation (issue #391)', () => {
   it('declares the target navigation in order', () => {
@@ -73,15 +105,8 @@ describe('primary navigation (issue #391)', () => {
     ]);
   });
 
-  it('groups the six dedicated Admin pages', () => {
-    expect(childRoutes('Admin')).toEqual([
-      { label: 'Nayax Settings', route: '/admin/nayax-settings' },
-      { label: 'Site Commission Agreements', route: '/admin/site-commission-agreements' },
-      { label: 'Imports', route: '/admin/imports' },
-      { label: 'Historical Cost Recovery', route: '/admin/historical-cost-recovery' },
-      { label: 'AVCO Transition', route: '/admin/avco-transition' },
-      { label: 'Costing Repair', route: '/admin/costing-repair' }
-    ]);
+  it('groups the dedicated Admin pages', () => {
+    expect(childRoutes('Admin')).toEqual(adminChildRoutes);
   });
 
   /**
@@ -89,12 +114,7 @@ describe('primary navigation (issue #391)', () => {
    * Profile destination, and no route invented ahead of the page that would serve it.
    */
   it('points only at routes declared in app.routes.ts', () => {
-    const declared = new Set(routes.map((route) => route.path).filter((path): path is string => path !== undefined));
-    const missing = navLinks(primaryNavigation)
-      .map((link) => (link.route === '/' ? '' : link.route.replace(/^\//, '')))
-      .filter((path) => !declared.has(path));
-
-    expect(missing).toEqual([]);
+    expect(undeclaredRoutes(primaryNavigation)).toEqual([]);
   });
 
   it('adds no Settings, profile or role destination', () => {
@@ -111,10 +131,63 @@ describe('primary navigation (issue #391)', () => {
   });
 
   /**
-   * The super-admin diagnostics page (#335) has not merged, so this task adds nothing for it.
+   * `primaryNavigation` is the navigation every signed-in operator gets, so the super-admin
+   * diagnostics destination (#335) is deliberately not in it: it only exists in the navigation
+   * `navigationFor(true)` composes, and only the diagnostics access API can decide that.
    */
-  it('adds no super-admin diagnostics link while #335 is unmerged', () => {
+  it('holds no super-admin diagnostics destination of its own', () => {
     expect(navLinks(primaryNavigation).map((link) => link.route).join(' ')).not.toContain('diagnostics');
+  });
+});
+
+/**
+ * The conditional super-admin diagnostics link (issue #335).
+ *
+ * The link is presentation only. `GET /api/admin/diagnostics/access` decides whether it is
+ * composed in, and the API is independently authorized on every request, so a navigation without
+ * the link hides a page rather than protecting one: `/admin/diagnostics` entered directly still
+ * works, and still shows nothing an unauthorized caller could read.
+ */
+describe('navigationFor (issue #335)', () => {
+  it('offers no diagnostics destination until the API confirms platform-admin access', () => {
+    expect(navLinks(navigationFor(false)).map((link) => link.route)).not.toContain(platformDiagnosticsNavLink.route);
+    expect(childRoutes('Admin', navigationFor(false))).toEqual(adminChildRoutes);
+  });
+
+  it('adds it to the Admin group, last, once the API confirms access', () => {
+    expect(childRoutes('Admin', navigationFor(true))).toEqual([
+      ...adminChildRoutes,
+      { label: 'Platform Diagnostics', route: '/admin/diagnostics' }
+    ]);
+  });
+
+  it('changes nothing else: the same groups, the same order, and no other new destination', () => {
+    expect(navigationFor(true).map((entry) => `${entry.kind}:${entry.label}`)).toEqual(
+      primaryNavigation.map((entry) => `${entry.kind}:${entry.label}`)
+    );
+    expect(navLinks(navigationFor(true)).map((link) => link.route)).toEqual([
+      ...navLinks(primaryNavigation).map((link) => link.route),
+      platformDiagnosticsNavLink.route
+    ]);
+  });
+
+  it('leaves primaryNavigation itself untouched, so one granted navigation cannot leak into another', () => {
+    navigationFor(true);
+
+    expect(childRoutes('Admin')).toEqual(adminChildRoutes);
+  });
+
+  it('points only at routes declared in app.routes.ts, with or without access', () => {
+    expect(undeclaredRoutes(navigationFor(false))).toEqual([]);
+    expect(undeclaredRoutes(navigationFor(true))).toEqual([]);
+  });
+
+  it('resolves the diagnostics page as the active entry inside the Admin group', () => {
+    const granted = navigationFor(true);
+
+    expect(activeNavRoute(granted, '/admin/diagnostics')).toBe('/admin/diagnostics');
+    expect(activeNavGroup(granted, '/admin/diagnostics')?.label).toBe('Admin');
+    expect(activeNavRoute(navigationFor(false), '/admin/diagnostics')).toBeUndefined();
   });
 });
 

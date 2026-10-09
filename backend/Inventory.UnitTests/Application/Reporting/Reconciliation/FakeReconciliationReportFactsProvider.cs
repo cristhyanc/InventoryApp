@@ -39,11 +39,17 @@ public sealed class FakeReconciliationReportFactsProvider : IReconciliationRepor
         bool hasGstClassification = true,
         bool warning = false,
         bool paymentDetailMissing = false,
-        decimal actualNetReimbursement = 75.6m) => new(
+        decimal actualNetReimbursement = 75.6m,
+        int pendingTransactionCount = 0,
+        int refundedTransactionCount = 0,
+        int declinedOrCancelledTransactionCount = 0,
+        int unknownStatusTransactionCount = 0,
+        int missingStatusTransactionCount = 0) => new(
         from ?? new DateTime(2025, 8, 1), to ?? new DateTime(2025, 8, 1), payoutDate, hasImported,
         totalVendingSales, cardSales, cashSales, cardTransactionCount, totalTransactionCount, cashTransactionCount,
         reportedGross, reportedCount, processingFeesExGst, feeGst, otherFees, hasGstClassification, warning,
-        paymentDetailMissing, actualNetReimbursement);
+        paymentDetailMissing, actualNetReimbursement, pendingTransactionCount, refundedTransactionCount,
+        declinedOrCancelledTransactionCount, unknownStatusTransactionCount, missingStatusTransactionCount);
 
     public static ReconciliationReportFacts SinglePeriod(
         ReconciliationPeriodFacts? period = null,

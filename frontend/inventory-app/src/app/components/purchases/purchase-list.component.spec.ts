@@ -1,17 +1,15 @@
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
-import { of, throwError } from 'rxjs';
+import { of } from 'rxjs';
 import { PurchaseListComponent } from './purchase-list.component';
-import { PurchaseService, PurchaseItemPayload, PurchaseUpdatePayload } from '../../services/purchase.service';
-import { SupplierService } from '../../services/supplier.service';
-import { ProductService } from '../../services/product.service';
+import { PurchaseService } from '../../services/purchase.service';
 import {
   GstClassification,
   GstClassificationSource,
-  Product,
   Purchase,
   PurchaseGstSummary,
-  PurchaseItem
+  PurchaseItem,
+  PurchaseValidation
 } from '../../models/models';
 
 function item(overrides: Partial<PurchaseItem> = {}): PurchaseItem {
@@ -52,328 +50,65 @@ function purchase(overrides: Partial<Purchase> = {}): Purchase {
   };
 }
 
-function product(id: number, name: string): Product {
-  return {
-    id,
-    name,
-    unitPrice: 2,
-    averageUnitCost: 1,
-    machinePrice: null,
-    commissionValue: null,
-    suggestedNetValue: null,
-    suggestedPriceValue: null,
-    quantityInStock: 10,
-    maxStockInMachine: 10,
-    machineReplenishmentNeed: 0,
-    onOrderQuantity: 0,
-    lowStockThreshold: 2,
-    restockTo: 10,
-    needToOrder: 0,
-    mdbCode: null,
-    createdAt: '2026-01-01T00:00:00Z',
-    updatedAt: '2026-01-01T00:00:00Z',
-    isActive: true,
-    isLowStock: false,
-    isReorderAlert: false
-  };
-}
-
-function createHarness(
+async function render(
   purchases: Purchase[],
   gst: PurchaseGstSummary | null = null,
-  update: jest.Mock = jest.fn(() => of(purchases[0]))
+  validation: PurchaseValidation | null = null
 ) {
-  const purchaseService = {
-    getAll: jest.fn(() => of(purchases)),
-    update,
-    delete: jest.fn(() => of(undefined)),
-    getFile: jest.fn(() => of(new Blob())),
-    getValidationFor: jest.fn(() => null),
-    getGstSummaryFor: jest.fn(() => gst)
-  } as unknown as PurchaseService;
-  const supplierService = { getAll: jest.fn(() => of([])) } as unknown as SupplierService;
-  const productService = {
-    getAll: jest.fn(() => of([product(10, 'Coke'), product(20, 'Chips')]))
-  } as unknown as ProductService;
+  await TestBed.configureTestingModule({
+    imports: [PurchaseListComponent],
+    providers: [
+      provideRouter([]),
+      {
+        provide: PurchaseService,
+        useValue: {
+          getAll: jest.fn(() => of(purchases)),
+          delete: jest.fn(() => of(undefined)),
+          getFile: jest.fn(() => of(new Blob())),
+          getValidationFor: jest.fn(() => validation),
+          getGstSummaryFor: jest.fn(() => gst)
+        }
+      }
+    ]
+  }).compileComponents();
 
-  const component = new PurchaseListComponent(purchaseService, supplierService, productService);
-  component.ngOnInit();
-
-  return { component, update };
+  const fixture = TestBed.createComponent(PurchaseListComponent);
+  fixture.detectChanges();
+  return { fixture, host: fixture.nativeElement as HTMLElement };
 }
 
-/** The payload the component handed to `PurchaseService.update`. */
-function savedPayload(update: jest.Mock): PurchaseUpdatePayload {
-  expect(update).toHaveBeenCalledTimes(1);
-  return update.mock.calls[0][1] as PurchaseUpdatePayload;
-}
+afterEach(() => TestBed.resetTestingModule());
 
-/** The line payloads as the server will actually read them, after JSON drops omitted fields. */
-function savedItems(update: jest.Mock): PurchaseItemPayload[] {
-  return JSON.parse(JSON.stringify(savedPayload(update).items ?? [])) as PurchaseItemPayload[];
-}
+describe('PurchaseListComponent edit navigation (issue #475)', () => {
+  it('links Edit to the dedicated edit page for that purchase instead of expanding an editor', async () => {
+    const { host } = await render([purchase({ id: 7 }), purchase({ id: 9, title: 'Second' })]);
 
-describe('PurchaseListComponent GST edit mapping (issue #431)', () => {
-  it('shows each line\'s and each charge\'s stored classification when the edit starts', () => {
-    const stored = purchase({
-      deliveryCost: 5,
-      deliveryGstClassification: GstClassification.Taxable,
-      deliveryGstClassificationSource: GstClassificationSource.SupplierFeeDefault,
-      packageCost: 2,
-      packageGstClassification: GstClassification.GstFree,
-      items: [item({ id: 11, gstClassification: GstClassification.Taxable })]
-    });
-    const { component } = createHarness([stored]);
-
-    component.startEdit(stored);
-
-    expect(component.editForm.deliveryGstClassification).toBe(GstClassification.Taxable);
-    expect(component.editForm.packageGstClassification).toBe(GstClassification.GstFree);
-    expect(component.editItems[0].gstClassification).toBe(GstClassification.Taxable);
-    expect(component.editItems[0].id).toBe(11);
+    const links = Array.from(host.querySelectorAll('[data-testid="purchase-edit-link"]'));
+    expect(links.map((link) => link.getAttribute('href'))).toEqual(['/purchases/7/edit', '/purchases/9/edit']);
   });
 
-  it('omits every classification the person did not change, so rule-derived provenance survives an unrelated edit', () => {
-    const stored = purchase({
-      deliveryCost: 5,
-      deliveryGstClassification: GstClassification.Taxable,
-      deliveryGstClassificationSource: GstClassificationSource.SupplierFeeDefault,
-      packageCost: 2,
-      packageGstClassification: GstClassification.GstFree,
-      packageGstClassificationSource: GstClassificationSource.SupplierFeeDefault,
-      items: [item({ id: 11, gstClassification: GstClassification.Taxable })]
-    });
-    const { component, update } = createHarness([stored]);
+  it('expands no editor in the table at all: no edit form, no edit row, no edit controls', async () => {
+    const { host } = await render([purchase({ deliveryCost: 5, packageCost: 2 })]);
 
-    component.startEdit(stored);
-    component.editItems[0].quantity = 7;
-    component.saveEdit(stored);
-
-    const payload = savedPayload(update);
-    expect(payload.deliveryGstClassification).toBeUndefined();
-    expect(payload.packageGstClassification).toBeUndefined();
-    expect(savedItems(update)).toEqual([{ id: 11, productId: 10, quantity: 7, unitCost: 1.1 }]);
+    expect(host.querySelectorAll('form')).toHaveLength(0);
+    expect(host.querySelectorAll('[data-testid="edit-purchase-item"]')).toHaveLength(0);
+    expect(host.querySelector('[data-testid="edit-delivery-gst"]')).toBeNull();
+    expect(host.querySelector('[data-testid="edit-package-gst"]')).toBeNull();
+    expect(host.querySelector('[data-testid="edit-purchase-error"]')).toBeNull();
+    expect(host.querySelectorAll('tbody > tr')).toHaveLength(1);
   });
 
-  it('sends only the classifications the person changed', () => {
-    const stored = purchase({
-      deliveryCost: 5,
-      deliveryGstClassification: GstClassification.Unknown,
-      packageCost: 2,
-      packageGstClassification: GstClassification.GstFree,
-      items: [
-        item({ id: 11, productId: 10, gstClassification: GstClassification.Unknown }),
-        item({ id: 12, productId: 20, gstClassification: GstClassification.Taxable })
-      ]
-    });
-    const { component, update } = createHarness([stored]);
+  it('gives the Edit action an accessible name naming the purchase it opens', async () => {
+    const { host } = await render([purchase({ id: 7, title: 'Weekly restock' })]);
 
-    component.startEdit(stored);
-    component.editForm.deliveryGstClassification = GstClassification.Taxable;
-    component.editItems[1].gstClassification = GstClassification.GstFree;
-    component.saveEdit(stored);
-
-    const payload = savedPayload(update);
-    expect(payload.deliveryGstClassification).toBe(GstClassification.Taxable);
-    expect(payload.packageGstClassification).toBeUndefined();
-    expect(savedItems(update)).toEqual([
-      { id: 11, productId: 10, quantity: 2, unitCost: 1.1 },
-      { id: 12, productId: 20, quantity: 2, unitCost: 1.1, gstClassification: GstClassification.GstFree }
-    ]);
-  });
-
-  it('submits an explicit return to Not classified rather than omitting it', () => {
-    const stored = purchase({ items: [item({ id: 11, gstClassification: GstClassification.Taxable })] });
-    const { component, update } = createHarness([stored]);
-
-    component.startEdit(stored);
-    component.editItems[0].gstClassification = GstClassification.Unknown;
-    component.saveEdit(stored);
-
-    expect(savedItems(update)).toEqual([
-      { id: 11, productId: 10, quantity: 2, unitCost: 1.1, gstClassification: GstClassification.Unknown }
-    ]);
-  });
-
-  it('keeps each line id when duplicate-product lines are reordered, and never substitutes the product or the position', () => {
-    const stored = purchase({
-      items: [
-        item({ id: 11, productId: 10, gstClassification: GstClassification.Taxable }),
-        item({ id: 12, productId: 10, gstClassification: GstClassification.GstFree })
-      ]
-    });
-    const { component, update } = createHarness([stored]);
-
-    component.startEdit(stored);
-    component.editItems.reverse();
-    component.saveEdit(stored);
-
-    expect(savedItems(update)).toEqual([
-      { id: 12, productId: 10, quantity: 2, unitCost: 1.1 },
-      { id: 11, productId: 10, quantity: 2, unitCost: 1.1 }
-    ]);
-  });
-
-  it('keeps the surviving line\'s own id when one of two duplicate-product lines is removed', () => {
-    const stored = purchase({
-      items: [
-        item({ id: 11, productId: 10, gstClassification: GstClassification.Taxable }),
-        item({ id: 12, productId: 10, gstClassification: GstClassification.GstFree })
-      ]
-    });
-    const { component, update } = createHarness([stored]);
-
-    component.startEdit(stored);
-    component.removeEditItem(0);
-    component.saveEdit(stored);
-
-    expect(savedItems(update)).toEqual([{ id: 12, productId: 10, quantity: 2, unitCost: 1.1 }]);
-  });
-
-  it('omits the id of a line added during the edit and leaves it unclassified by default', () => {
-    const stored = purchase({ items: [item({ id: 11 })] });
-    const { component, update } = createHarness([stored]);
-
-    component.startEdit(stored);
-    component.addEditItem();
-    component.saveEdit(stored);
-
-    const items = savedItems(update);
-    expect(items[1].id).toBeUndefined();
-    expect(items[1].gstClassification).toBeUndefined();
-    expect(component.editItems[1].gstClassification).toBe(GstClassification.Unknown);
-  });
-
-  it('sends a new line\'s classification once the person picks one', () => {
-    const stored = purchase({ items: [item({ id: 11 })] });
-    const { component, update } = createHarness([stored]);
-
-    component.startEdit(stored);
-    component.addEditItem();
-    component.editItems[1].gstClassification = GstClassification.Taxable;
-    component.saveEdit(stored);
-
-    expect(savedItems(update)[1].gstClassification).toBe(GstClassification.Taxable);
-  });
-
-  it('changes a stored line\'s product as a removal and a genuinely new line, with no id and no inherited classification', () => {
-    const stored = purchase({
-      items: [item({ id: 11, productId: 10, gstClassification: GstClassification.Taxable, gstClassificationSource: GstClassificationSource.ProductRule })]
-    });
-    const { component, update } = createHarness([stored]);
-
-    component.startEdit(stored);
-    // The only way to record a different product: the stored line goes, the new product arrives as
-    // its own line. Re-pointing line 11 at product 20 is what the server refuses.
-    component.removeEditItem(0);
-    component.addEditItem();
-    component.editItems[0].productId = 20;
-    component.editItems[0].quantity = 3;
-    component.editItems[0].unitCost = 2.5;
-    component.saveEdit(stored);
-
-    expect(savedItems(update)).toEqual([{ productId: 20, quantity: 3, unitCost: 2.5 }]);
-    expect(component.editItems[0].gstClassification).toBe(GstClassification.Unknown);
-  });
-
-  it('treats a stored line as identified and a line added during the edit as new', () => {
-    const stored = purchase({ items: [item({ id: 11 })] });
-    const { component } = createHarness([stored]);
-
-    component.startEdit(stored);
-    component.addEditItem();
-
-    expect(component.isStoredLine(component.editItems[0])).toBe(true);
-    expect(component.isStoredLine(component.editItems[1])).toBe(false);
-  });
-
-  it('never submits a classification for a charge the person cleared', () => {
-    const stored = purchase({
-      deliveryCost: 5,
-      deliveryGstClassification: GstClassification.Taxable,
-      packageCost: 2,
-      packageGstClassification: GstClassification.Taxable
-    });
-    const { component, update } = createHarness([stored]);
-
-    component.startEdit(stored);
-    component.editForm.deliveryCost = null;
-    component.editForm.packageCost = 0;
-    component.saveEdit(stored);
-
-    const payload = savedPayload(update);
-    expect(payload.deliveryGstClassification).toBeUndefined();
-    expect(payload.packageGstClassification).toBeUndefined();
-  });
-
-  it('hides a charge picker while the charge has no value', () => {
-    const { component } = createHarness([purchase()]);
-
-    expect(component.hasCharge(null)).toBe(false);
-    expect(component.hasCharge(0)).toBe(false);
-    expect(component.hasCharge(5)).toBe(true);
-  });
-
-  it('keeps the edit open and reports the API\'s message when the save is refused', () => {
-    const stored = purchase({ items: [item({ id: 11 })] });
-    const refused = jest.fn(() => throwError(() => ({ error: 'A GST classification must be one of Unknown, Taxable, GstFree.' })));
-    const { component } = createHarness([stored], null, refused);
-    const logged = jest.spyOn(console, 'error').mockImplementation(() => undefined);
-
-    component.startEdit(stored);
-    component.saveEdit(stored);
-    logged.mockRestore();
-
-    expect(component.editingPurchaseId).toBe(stored.id);
-    expect(component.editError).toContain('A GST classification must be one of');
-  });
-
-  it('clears a previous refusal when the edit is reopened', () => {
-    const stored = purchase({ items: [item({ id: 11 })] });
-    const refused = jest.fn(() => throwError(() => ({ error: 'Rejected' })));
-    const { component } = createHarness([stored], null, refused);
-    const logged = jest.spyOn(console, 'error').mockImplementation(() => undefined);
-
-    component.startEdit(stored);
-    component.saveEdit(stored);
-    component.cancelEdit();
-    component.startEdit(stored);
-    logged.mockRestore();
-
-    expect(component.editError).toBe('');
+    expect(host.querySelector('[data-testid="purchase-edit-link"]')?.getAttribute('aria-label')).toBe(
+      'Edit Weekly restock'
+    );
   });
 });
 
 describe('PurchaseListComponent GST display (issue #431)', () => {
-  const render = async (purchases: Purchase[], gst: PurchaseGstSummary | null) => {
-    await TestBed.configureTestingModule({
-      imports: [PurchaseListComponent],
-      providers: [
-        provideRouter([]),
-        {
-          provide: PurchaseService,
-          useValue: {
-            getAll: jest.fn(() => of(purchases)),
-            update: jest.fn(),
-            delete: jest.fn(),
-            getFile: jest.fn(() => of(new Blob())),
-            getValidationFor: jest.fn(() => null),
-            getGstSummaryFor: jest.fn(() => gst)
-          }
-        },
-        { provide: SupplierService, useValue: { getAll: jest.fn(() => of([])) } },
-        { provide: ProductService, useValue: { getAll: jest.fn(() => of([product(10, 'Coke'), product(20, 'Chips')])) } }
-      ]
-    }).compileComponents();
-
-    const fixture = TestBed.createComponent(PurchaseListComponent);
-    fixture.detectChanges();
-    return { fixture, host: fixture.nativeElement as HTMLElement };
-  };
-
-  afterEach(() => TestBed.resetTestingModule());
-
-  it('shows the API\'s input GST, every component\'s classification and the unresolved state together', async () => {
+  it("shows the API's input GST, every component's classification and the unresolved state together", async () => {
     const mixed = purchase({
       deliveryCost: 5,
       deliveryGstClassification: GstClassification.Taxable,
@@ -410,43 +145,79 @@ describe('PurchaseListComponent GST display (issue #431)', () => {
     expect(summary?.textContent).not.toContain('Package:');
     expect(host.querySelector('[data-testid="purchase-gst-unresolved"]')).toBeNull();
   });
+});
 
-  it('offers no product picker for a stored line and explains the remove/add workflow instead', async () => {
-    const stored = purchase({ items: [item({ id: 11, productId: 10 })] });
-    const { fixture, host } = await render([stored], null);
+describe('PurchaseListComponent consolidated row layout (issue #474)', () => {
+  it('renders one display row per purchase even when notes, GST and a total mismatch warning are all present', async () => {
+    const withEverything = purchase({
+      notes: 'Call supplier before reordering - price went up a lot this time.',
+      totalAmount: 20
+    });
+    const { host } = await render(
+      [withEverything],
+      { inputGst: 0.65, unresolvedComponentCount: 0, unresolvedAmount: 0 },
+      { hasTotalMismatch: true, calculatedTotal: 18, totalDifference: 2 }
+    );
 
-    fixture.componentInstance.startEdit(fixture.componentInstance.purchases[0]);
-    fixture.detectChanges();
+    const displayRows = host.querySelectorAll('tbody > tr.table-row');
+    expect(displayRows).toHaveLength(1);
 
-    expect(host.querySelectorAll('[data-testid="edit-purchase-item-product"]')).toHaveLength(0);
-    const fixedProduct = host.querySelector('[data-testid="edit-purchase-item-product-fixed"]');
-    expect(fixedProduct?.textContent).toContain('Coke');
-    expect(fixedProduct?.textContent).toContain('Product cannot be changed');
-    expect(fixedProduct?.textContent).toContain('Remove this line and add the new product as its own line');
+    const row = displayRows[0];
+    expect(row.textContent).toContain('Call supplier before reordering');
+    expect(row.textContent).toContain('$0.65');
+    expect(row.textContent).toContain('Does not match calculated total');
+    expect(row.querySelector('[data-testid="purchase-gst-summary"]')).not.toBeNull();
   });
 
-  it('offers a product picker for a line added during the edit', async () => {
-    const stored = purchase({ items: [item({ id: 11, productId: 10 })] });
-    const { fixture, host } = await render([stored], null);
+  it('renders one plain display row for a purchase with no notes, GST summary or mismatch', async () => {
+    const { host } = await render([purchase({ notes: null })]);
 
-    fixture.componentInstance.startEdit(fixture.componentInstance.purchases[0]);
-    fixture.componentInstance.addEditItem();
-    fixture.detectChanges();
+    expect(host.querySelectorAll('tbody > tr.table-row')).toHaveLength(1);
+  });
+});
 
-    const pickers = host.querySelectorAll('[data-testid="edit-purchase-item-product"]');
-    expect(pickers).toHaveLength(1);
-    expect(host.querySelectorAll('[data-testid="edit-purchase-item"]')).toHaveLength(2);
+describe('PurchaseListComponent Actions column layout (issue #449)', () => {
+  const wide = () =>
+    purchase({
+      items: [item({ id: 11, productId: 10 }), item({ id: 12, productId: 20 }), item({ id: 13, productId: 10 })]
+    });
+
+  it('keeps the Actions header pinned to the right edge of the horizontally scrollable table', async () => {
+    const { host } = await render([wide()]);
+
+    const header = host.querySelector('[data-testid="purchases-actions-header"]');
+    expect(header).not.toBeNull();
+    expect(header?.classList.contains('sticky')).toBe(true);
+    expect(header?.classList.contains('right-0')).toBe(true);
   });
 
-  it('marks the saved figures as not covering unsaved edits while the edit form is open', async () => {
-    const stored = purchase();
-    const { fixture, host } = await render([stored], { inputGst: 0.2, unresolvedComponentCount: 0, unresolvedAmount: 0 });
+  it('keeps both Edit and Delete reachable in a sticky Actions cell, independent of how wide the Items column grows', async () => {
+    const { host } = await render([wide()]);
 
-    expect(host.querySelector('[data-testid="purchase-gst-stale"]')).toBeNull();
+    const actionsCell = host.querySelector('[data-testid="purchases-actions-cell"]');
+    expect(actionsCell).not.toBeNull();
+    expect(actionsCell?.classList.contains('sticky')).toBe(true);
+    expect(actionsCell?.classList.contains('right-0')).toBe(true);
 
-    fixture.componentInstance.startEdit(fixture.componentInstance.purchases[0]);
-    fixture.detectChanges();
+    expect(actionsCell?.querySelector('[data-testid="purchase-edit-link"]')?.textContent).toContain('Edit');
+    const deleteButton = Array.from(actionsCell?.querySelectorAll('button') ?? []).find((b) =>
+      b.textContent?.includes('Delete')
+    );
+    expect(deleteButton).toBeDefined();
+  });
 
-    expect(host.querySelector('[data-testid="purchase-gst-stale"]')).not.toBeNull();
+  it('leaves remove wired to the Delete button unchanged', async () => {
+    const stored = purchase({ items: [item({ id: 11, productId: 10 })] });
+    const { fixture, host } = await render([stored]);
+
+    const removeSpy = jest.spyOn(fixture.componentInstance, 'remove').mockImplementation(() => undefined);
+    const actionsCell = host.querySelector('[data-testid="purchases-actions-cell"]');
+    const deleteButton = Array.from(actionsCell?.querySelectorAll('button') ?? []).find((b) =>
+      b.textContent?.includes('Delete')
+    ) as HTMLButtonElement;
+
+    deleteButton.click();
+
+    expect(removeSpy).toHaveBeenCalledWith(stored);
   });
 });

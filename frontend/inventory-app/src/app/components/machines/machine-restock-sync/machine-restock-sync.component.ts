@@ -43,10 +43,16 @@ import {
   templateUrl: './machine-restock-sync.component.html',
   styles: [
     `
+      /*
+       * Plain CSS, not run through the Tailwind/PostCSS pipeline, so the #410 tokens cannot be
+       * referenced with @apply here. Every colour/radius/shadow literal below is instead copied
+       * from the matching tailwind.config.js token (md-gray-100/200/500, md-dialog, md-lg) so the
+       * dialog still only uses values the visual specification defines.
+       */
       .sync-modal-backdrop {
         position: fixed;
         inset: 0;
-        background: rgba(15, 23, 42, 0.5);
+        background: rgba(38, 38, 38, 0.5);
         display: flex;
         align-items: center;
         justify-content: center;
@@ -62,8 +68,8 @@ import {
         max-height: calc(100vh - 2rem);
         max-height: calc(100dvh - 2rem);
         background: #fff;
-        border-radius: 12px;
-        box-shadow: 0 18px 60px rgba(15, 23, 42, 0.18);
+        border-radius: 0.75rem;
+        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
         outline: none;
       }
 
@@ -78,13 +84,13 @@ import {
       .sync-modal-header {
         align-items: flex-start;
         justify-content: space-between;
-        border-bottom: 1px solid #e2e8f0;
+        border-bottom: 1px solid #e5e5e5;
       }
 
       .sync-modal-footer {
         flex-wrap: wrap;
         justify-content: flex-end;
-        border-top: 1px solid #e2e8f0;
+        border-top: 1px solid #e5e5e5;
       }
 
       .sync-modal-body {
@@ -98,16 +104,16 @@ import {
         flex-shrink: 0;
         border: none;
         background: transparent;
-        color: #64748b;
+        color: #737373;
         font-size: 1.5rem;
         line-height: 1;
         padding: 0.25rem 0.5rem;
-        border-radius: 6px;
+        border-radius: 0.375rem;
         cursor: pointer;
       }
 
       .sync-modal-close:hover:not(:disabled) {
-        background: #f1f5f9;
+        background: #f5f5f5;
       }
 
       .sync-modal-close:disabled {

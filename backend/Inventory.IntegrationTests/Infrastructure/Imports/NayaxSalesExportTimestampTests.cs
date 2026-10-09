@@ -110,6 +110,34 @@ public class NayaxSalesExportTimestampTests
     }
 
     /// <summary>
+    /// Issue #471: a GMT text value that is malformed but parseable is reported as unreadable rather
+    /// than turned into an invented instant, because the uploaded export shares the live boundary's
+    /// one parser. A date-only cell states no time of day - reading it as midnight UTC would place
+    /// the sale at 11:00 on the previous Sydney business day under AEDT - and a slash-separated date
+    /// cannot be told apart from its American reading. The row is then skipped by
+    /// <c>ImportNayaxSales</c> exactly as any other unreadable GMT value, never filled in from the
+    /// unverified machine-local column.
+    /// </summary>
+    [Theory]
+    [InlineData("2026-10-04")]
+    [InlineData("4/10/2026")]
+    [InlineData("4/10/2026 11:30")]
+    // Comma-free so the CSV fixture keeps its columns; the shapes are still not the contract's.
+    [InlineData("04-Oct-2026 12:30:00")]
+    [InlineData("20261004T123000Z")]
+    [InlineData("12:30:00")]
+    public void A_malformed_but_parseable_GMT_text_value_is_reported_unreadable(string cell)
+    {
+        var row = Assert.Single(ReadCsv(
+            "TransactionID,MachineID,AuthorizationDateTimeGMT,MachineAuthorizationTime\n" +
+            $"1001,7,{cell},4/10/2026 11:30:00 PM"));
+
+        Assert.Null(row.AuthorizationDateTimeGmt);
+        Assert.Equal(NayaxSalesGmtInput.Malformed, row.AuthorizationDateTimeGmtInput);
+        Assert.Equal(new DateTime(2026, 10, 4, 23, 30, 0), row.MachineAuthorizationTime);
+    }
+
+    /// <summary>
     /// A row carrying neither timestamp has no instant at all, which is what makes
     /// <c>ImportNayaxSales</c> skip it instead of importing it at a guessed time.
     /// </summary>

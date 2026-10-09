@@ -31,7 +31,7 @@ InventoryApp is a full-stack operations and bookkeeping system for a vending-mac
 
 ## Architecture
 
-The application is a modular monolith with separate API and browser deployments. The backend is being evolved incrementally toward pragmatic Clean Architecture with vertical feature slices. The Angular frontend remains standalone and is moving toward feature-local pages, components, data access, and contracts.
+The application is a modular monolith with separate API and browser deployments. The backend's incremental move to pragmatic Clean Architecture with vertical feature slices is complete: `InventoryApi` is the HTTP boundary and composition root, `Inventory.Application` holds the use cases and ports, `Inventory.Domain` the deterministic rules and `Inventory.Infrastructure` the adapters, and architecture tests fail if business logic or persistence returns to the API project. The Angular frontend remains standalone and is moving toward feature-local pages, components, data access, and contracts.
 
 ```mermaid
 flowchart LR
@@ -572,7 +572,7 @@ Quality settings are centralised so every backend project gets them:
 - **`.editorconfig`** (repository root) holds formatting, naming and diagnostic severities for the whole repository, and is what `dotnet format` enforces. Rules set to `suggestion` are IDE guidance only; only `warning`/`error` rules can fail validation.
 - EF Core generated migrations are the one scoped exception. Their all-lowercase generated class names raise `CS8981`, which `.editorconfig` switches off under `[**/Migrations/*.cs]` only — never globally and never through `<NoWarn>` — because an applied migration must not be renamed. `dotnet format` skips the `Migrations` folder for the same reason.
 - Coverage is collected on every run (`--collect:"XPlat Code Coverage"`) and written per test project to `backend/Inventory.UnitTests/TestResults/<run-id>/coverage.cobertura.xml` and `backend/Inventory.IntegrationTests/TestResults/<run-id>/coverage.cobertura.xml`, which are git-ignored. There is deliberately **no** minimum-coverage threshold yet; this establishes the baseline.
-- Architecture tests in `backend/Inventory.IntegrationTests/Architecture/` enforce the Clean Architecture dependency direction (Domain ← Application ← Infrastructure ← InventoryApi) and keep ASP.NET/EF Core/HTTP types out of Domain and Application. `ProjectDependencyDirectionTests` reads the project files; `CleanArchitectureDependencyTests` (NetArchTest) checks the compiled assemblies.
+- Architecture tests in `backend/Inventory.IntegrationTests/Architecture/` enforce the Clean Architecture dependency direction (Domain ← Application ← Infrastructure ← InventoryApi) and keep ASP.NET/EF Core/HTTP types out of Domain and Application. `ProjectDependencyDirectionTests` reads the project files; `CleanArchitectureDependencyTests` (NetArchTest) checks the compiled assemblies; `ApiLayerOwnershipTests` keeps `InventoryApi` to the HTTP boundary and composition root, so no business service, financial rule or persistence implementation can return to it.
 
 ### End-to-end workflow tests
 
@@ -621,11 +621,17 @@ The complete invariants and change rules are in [AGENTS.md](AGENTS.md).
 
 ## Purchase entry and GST classification
 
-Purchase amounts are entered **GST-inclusive**. GST is recorded per component, so **Add Purchase** and the
-**Edit Purchase** form on the Purchases page each offer a GST picker with three states — **Taxable**,
+Purchase amounts are entered **GST-inclusive**. GST is recorded per component, so the **Add Purchase** page
+and the **Edit Purchase** page each offer a GST picker with three states — **Taxable**,
 **GST-free** and **Not classified** — for every purchased item line and, separately, for the delivery charge
 and the package charge. A charge never inherits a line's classification, and there is no single
 classification for a whole purchase.
+
+**Edit** on a purchase row opens the Edit Purchase page at `/purchases/<id>/edit`; nothing expands inside the
+Purchases table. That address is bookmarkable and survives a page refresh, **Save** stores the changes and
+returns to the Purchases list, and **Cancel** returns without saving. Leaving the page by Cancel, by the
+browser's Back button or by any other link discards unsaved edits without asking first, which is how every
+other form page in the application behaves.
 
 - Everything starts as **Not classified**, including lines prefilled while receiving a supplier order.
   Nothing is guessed from the product, the supplier or the amount, so a line is classified only when a
@@ -637,15 +643,17 @@ classification for a whole purchase.
   classification that came from a configured product or supplier rule keeps that origin when you edit a
   quantity, a cost, a date or another line. Choosing **Not classified** again is a deliberate change and is
   saved as one.
-- A line already on the purchase keeps its product: the edit form shows the product name rather than a
+- A line already on the purchase keeps its product: the edit page shows the product name rather than a
   picker, because a stored line's GST classification, its origin and its restock movement belong to that
   product. To record a different product, **Remove** that line and add the new product as its own line; the
   new line starts **Not classified** and carries none of the removed line's classification or history. You can
   still change a stored line's quantity, unit cost and classification.
+- If a save is refused — an unsupported classification, for example — the edit page stays open with everything
+  you entered and shows the reason, so a rejected classification never looks like a saved one.
 - Each purchase row then shows the API's **Purchase GST (input tax credit)** figure, each component's
   classification, and a warning naming how many components and how much money are still unclassified. Those
-  figures are calculated by the API from the saved purchase — the frontend never calculates GST — so while an
-  edit form is open the row says explicitly that the saved figures do not include your unsaved changes.
+  figures are calculated by the API from the saved purchase — the frontend never calculates GST — so they
+  update on the Purchases list once your edit is saved.
 
 GST classification is accounting data only. It never changes a purchase's unit cost, the weighted-average
 cost, costing quantity or inventory value.
@@ -677,8 +685,49 @@ component contributes no input GST and stays visibly unresolved in the GST repor
 
 These settings are explicit configuration, not inference. A supplier being registered for GST does
 not classify its products, because a supplier may sell both taxable and GST-free goods. Saving a
-rule or a default never changes a purchase that is already recorded; applying rules to historical
-purchases is a separate, explicit Admin maintenance workflow.
+rule or a default never changes a purchase that is already recorded; applying rules to purchases
+already recorded is the separate, explicit
+[Historical GST classification](#historical-gst-classification-admin-page) maintenance action below.
+
+## Historical GST classification (Admin page)
+
+Purchases recorded before GST classification existed are **Not classified**, and so is anything
+nobody has classified since. **Admin → Historical GST Classification** (also in the sidebar's Admin
+group) is the only way to classify them from the product and supplier rules above. It is a two-step
+action, and nothing is written until the second step.
+
+1. **Preview classification.** This reads only; it writes nothing at all, not even a draft. It
+   reports how many purchases and components it examined, how many would become **Taxable**, how
+   many **GST-free** and how many stay **Not classified**, the same counts separately for purchased
+   items, delivery charges and package charges, the unresolved amount left behind, and the input GST
+   the change would make available. Review those numbers: they are the whole point of the step.
+2. **Apply classification.** After a confirmation, this writes exactly what the preview showed, as
+   one all-or-nothing change.
+
+What it will and will not do:
+
+- It examines only components that are still **Not classified**. A classification you chose by hand
+  is never changed, and neither is one an earlier run applied — so running Preview and Apply again
+  after an Apply changes nothing.
+- A component carries the product's own GST rule when it has one, otherwise the supplier's
+  product-line default. A delivery or package charge takes the supplier's matching **delivery** or
+  **package** default only; it never inherits a product rule or the product-line default. A
+  component no rule covers stays **Not classified**, contributes no input GST, and keeps its purchase
+  visibly unresolved in the GST reporting aid — the preview says how many and how much, so you can
+  configure the missing rule instead.
+- A delivery or package charge that is empty or zero has no classification and is left alone.
+- If any relevant purchase or rule changed between your preview and your apply — a purchase added,
+  edited or deleted, a component classified, a product rule or supplier default saved — the apply is
+  refused, **nothing** is written, and it asks you to preview again. That is deliberate: the figures
+  you approved would no longer describe what would be written. Preview again and review the new
+  numbers.
+- It changes accounting data only. Purchase amounts, unit costs, the weighted-average cost, costing
+  quantity, inventory value, physical stock and stock movements are untouched.
+- It only ever runs because you pressed Apply. It never runs on startup, on a deployment, during a
+  database migration, when a purchase is read, or when you save a rule.
+
+It applies to your own business's purchases only, and only to the purchases of the business you are
+signed in to.
 
 ## Costing repair (Admin page)
 

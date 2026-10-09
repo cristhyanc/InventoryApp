@@ -8,7 +8,8 @@ export interface ReconciliationPeriod {
   grossDifference: number; grossStatus: string; processingFeesExGst: number; feeGst: number;
   otherFees: number; adjustments: number;   adjustmentsSupported: boolean;
   pendingTransactionCount?: number; refundedTransactionCount?: number;
-  declinedOrCancelledTransactionCount?: number; unknownStatusTransactionCount?: number; expectedNetReimbursement: number;
+  declinedOrCancelledTransactionCount?: number; unknownStatusTransactionCount?: number;
+  missingStatusTransactionCount?: number; expectedNetReimbursement: number;
   actualNetReimbursement: number; settlementDifference: number; settlementStatus: string;
   status: string; payoutDate?: string; dataQuality: ReportQuality;
 }
@@ -34,5 +35,6 @@ export interface ReconciliationReport {
   adjustmentsSupported: boolean;
   pendingTransactionCount?: number; refundedTransactionCount?: number;
   declinedOrCancelledTransactionCount?: number; unknownStatusTransactionCount?: number;
+  missingStatusTransactionCount?: number;
   settlementStatus: string; status: string; periodRows: ReconciliationPeriod[]; totals?: ReconciliationTotals;
 }

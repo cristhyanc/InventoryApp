@@ -5,57 +5,143 @@
     </div>
   </header>
 
-  <div class="alert alert-info flex flex-wrap items-center justify-between gap-3">
-    <div>
-      <p class="alert-title">Admin tools</p>
-      <p>Import Nayax sales, products, and XML files, or manage historical COGS backfill.</p>
-    </div>
-    <a routerLink="/admin" class="btn btn-primary">Open Admin</a>
-  </div>
-
   @if (isSalesSyncFailed) {
     <div class="alert alert-warning">
       <p class="alert-title">Latest Nayax sales could not be synchronized. Sites and Machines below show the last successfully synchronized figures, which may be stale.</p>
     </div>
   }
 
-  <section class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-    <article class="stat-card">
-      <div class="stat-card-head">
-        <span class="icon-tile icon-tile-dark">
-          <app-icon name="assignment" />
-        </span>
-        <div>
-          <p class="stat-card-label">Total Products</p>
-          <p class="stat-card-value">{{ totalProducts }}</p>
-        </div>
-      </div>
-    </article>
+  @if (isSummaryFailed) {
+    <div class="alert alert-warning">
+      <p class="alert-title">The Dashboard summary could not be loaded. Sales, Needs refill, Needs ordering and Inventory below are unavailable, not zero.</p>
+    </div>
+  }
 
-    <article class="stat-card">
+  <section class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+    <a
+      routerLink="/reports"
+      class="stat-card block transition-colors hover:border-md-gray-300"
+      aria-label="Sales this week. View the Reporting Dashboard."
+    >
       <div class="stat-card-head">
-        <span class="icon-tile icon-tile-dark">
-          <app-icon name="inventory_2" />
-        </span>
-        <div>
-          <p class="stat-card-label">Units In Stock</p>
-          <p class="stat-card-value">{{ totalUnitsInStock }}</p>
+        <div class="stat-card-content">
+          <p class="stat-card-label">Sales this week</p>
+          @if (isLoadingSummary) {
+            <div class="h-8 w-28 animate-pulse rounded bg-md-gray-100"></div>
+          } @else if (summary) {
+            <p class="stat-card-value">{{ money(summary.salesThisWeek.sales) }}</p>
+          } @else {
+            <p class="stat-card-value value-muted">Unavailable</p>
+          }
         </div>
-      </div>
-    </article>
-
-    <article class="stat-card">
-      <div class="stat-card-head">
         <span class="icon-tile icon-tile-dark">
           <app-icon name="attach_money" />
         </span>
-        <div>
-          <p class="stat-card-label">Inventory Value (cost)</p>
-          <p class="stat-card-value">{{ inventoryValueDisplay }}</p>
-        </div>
       </div>
-      <p class="stat-card-footer"><span class="value-muted">{{ inventoryValueHelpText }}</span></p>
-    </article>
+      <p class="stat-card-footer">
+        @if (isLoadingSummary) {
+          <span class="value-muted">Loading…</span>
+        } @else if (summary) {
+          <span [ngClass]="salesComparisonClass(summary.salesThisWeek)">{{ salesComparisonText(summary.salesThisWeek) }}</span>
+        } @else {
+          <span class="value-muted">Comparison unavailable</span>
+        }
+      </p>
+    </a>
+
+    <a
+      routerLink="/pick-list"
+      class="stat-card block transition-colors hover:border-md-gray-300"
+      aria-label="Needs refill. Open the Pick List."
+    >
+      <div class="stat-card-head">
+        <div class="stat-card-content">
+          <p class="stat-card-label">Needs refill</p>
+          @if (isLoadingSummary) {
+            <div class="h-8 w-16 animate-pulse rounded bg-md-gray-100"></div>
+          } @else if (summary) {
+            <p class="stat-card-value">{{ summary.needsRefill.machinesNeedingRefill }}</p>
+          } @else {
+            <p class="stat-card-value value-muted">Unavailable</p>
+          }
+        </div>
+        <span class="icon-tile icon-tile-warning">
+          <app-icon name="assignment" />
+        </span>
+      </div>
+      <p class="stat-card-footer">
+        @if (isLoadingSummary) {
+          <span class="value-muted">Loading…</span>
+        } @else if (summary) {
+          <span [ngClass]="refillFooterClass(summary.needsRefill)">{{ refillFooterText(summary.needsRefill) }}</span>
+        } @else {
+          <span class="value-muted">Refill status unavailable</span>
+        }
+      </p>
+    </a>
+
+    <a
+      routerLink="/products/needs-ordering"
+      class="stat-card block transition-colors hover:border-md-gray-300"
+      aria-label="Needs ordering. View products that need ordering."
+    >
+      <div class="stat-card-head">
+        <div class="stat-card-content">
+          <p class="stat-card-label">Needs ordering</p>
+          @if (isLoadingSummary) {
+            <div class="h-8 w-16 animate-pulse rounded bg-md-gray-100"></div>
+          } @else if (summary) {
+            <p class="stat-card-value">{{ summary.needsOrdering.productsNeedingOrdering }}</p>
+          } @else {
+            <p class="stat-card-value value-muted">Unavailable</p>
+          }
+        </div>
+        <span class="icon-tile icon-tile-info">
+          <app-icon name="download" />
+        </span>
+      </div>
+      <p class="stat-card-footer">
+        @if (isLoadingSummary) {
+          <span class="value-muted">Loading…</span>
+        } @else if (summary) {
+          <span [ngClass]="orderingFooterClass(summary.needsOrdering)">{{ orderingFooterText(summary.needsOrdering) }}</span>
+        } @else {
+          <span class="value-muted">Ordering status unavailable</span>
+        }
+      </p>
+    </a>
+
+    <a
+      routerLink="/products"
+      class="stat-card block transition-colors hover:border-md-gray-300"
+      aria-label="Inventory. View Products."
+    >
+      <div class="stat-card-head">
+        <div class="stat-card-content">
+          <p class="stat-card-label">Inventory</p>
+          @if (isLoadingSummary) {
+            <div class="h-8 w-28 animate-pulse rounded bg-md-gray-100"></div>
+          } @else if (summary) {
+            <p class="stat-card-value">{{ inventoryValueDisplay(summary.inventory) }}</p>
+          } @else {
+            <p class="stat-card-value value-muted">Unavailable</p>
+          }
+        </div>
+        <span class="icon-tile icon-tile-dark">
+          <app-icon name="inventory_2" />
+        </span>
+      </div>
+      <p class="stat-card-footer">
+        @if (isLoadingSummary) {
+          <span class="value-muted">Loading…</span>
+        } @else if (summary) {
+          <span class="block value-muted">{{ inventoryValueHelpText(summary.inventory) }}</span>
+          <span class="block value-muted">{{ inventoryScopeText(summary.inventory) }}</span>
+        } @else {
+          <span class="value-muted">Inventory figures unavailable</span>
+        }
+      </p>
+    </a>
   </section>
 
   <section class="card">

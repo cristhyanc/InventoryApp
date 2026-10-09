@@ -2,7 +2,9 @@ using Inventory.Application.CatalogReconciliation;
 using Inventory.Application.Categories;
 using Inventory.Application.Commissions;
 using Inventory.Application.Costing;
+using Inventory.Application.Dashboard;
 using Inventory.Application.Expenses;
+using Inventory.Application.Gst;
 using Inventory.Application.Imports;
 using Inventory.Application.InventoryCounting;
 using Inventory.Application.MachineStockSync;
@@ -24,6 +26,7 @@ using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Transactions;
 using Inventory.Application.SalesSync;
+using Inventory.Application.SaleTimestampRepair;
 using Inventory.Application.Sites;
 using Inventory.Application.Stock;
 using Inventory.Application.Suppliers;
@@ -114,6 +117,10 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<PreviewInventoryCostRepair>();
         services.AddScoped<ApplyInventoryCostRepair>();
         services.AddScoped<GetInventoryCostRepairHistory>();
+        services.AddScoped<PreviewNayaxSaleTimestampRepair>();
+        services.AddScoped<ApplyNayaxSaleTimestampRepair>();
+        services.AddScoped<PreviewHistoricalGstClassification>();
+        services.AddScoped<ApplyHistoricalGstClassification>();
         services.AddScoped<ApplyInventoryCount>();
         services.AddScoped<ImportNayaxProductCatalog>();
         services.AddScoped<ImportNayaxSales>();
@@ -134,6 +141,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<GetGstAccountingAid>();
         services.AddScoped<GetDashboardReport>();
         services.AddScoped<GetInventoryValuationSummary>();
+        services.AddScoped<GetDashboardSummary>();
         services.AddScoped<GetTransactionSalesReport>();
         services.AddScoped<GetReportExportRows>();
 

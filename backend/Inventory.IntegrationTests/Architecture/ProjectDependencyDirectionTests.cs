@@ -153,75 +153,15 @@ public class ProjectDependencyDirectionTests
         }
     }
 
-    /// <summary>
-    /// Issue #145: <c>InventoryApi/Services</c> is use-case/domain business logic (import,
-    /// costing, machine/site/product/purchase/stock orchestration, ...) that predates
-    /// the <c>Inventory.Domain</c>/<c>Inventory.Application</c> split and has not migrated yet - the
-    /// temporary, explicitly documented exception described in docs/architecture.md § Backend
-    /// target. Migrating all of it is tracked feature-by-feature by issues #146-#151, with full
-    /// removal of this exception tracked by #153/#154; ripping it out here would be a much larger,
-    /// riskier change than "strengthen the architecture tests" and is explicitly out of scope for
-    /// this issue.
-    ///
-    /// What this issue does require is that the exception stop growing silently. This test freezes
-    /// the exact set of files this migration found already in that folder. A new slice's use-case
-    /// or domain logic must go into <c>Inventory.Application</c>/<c>Inventory.Domain</c> instead of
-    /// copying the legacy pattern; the moment any file is added to, removed from, or renamed in
-    /// <c>InventoryApi/Services</c>, this test fails and names the mismatch, forcing that change to
-    /// be a conscious update to both this allow-list and the docs/architecture.md exception it
-    /// documents, rather than a silent expansion of code Clean Architecture no longer allows to grow.
-    ///
-    /// Shrinking it follows the same rule: issue #299 removed <c>ImportService.Xml.cs</c> in the same
-    /// change that migrated the pending reimbursement XML import to
-    /// <c>Inventory.Application.Imports.ImportPendingReimbursementXmlFiles</c>, issue #300
-    /// removed <c>ImportService.Products.cs</c> in the same change that migrated the Nayax product
-    /// catalogue import to <c>Inventory.Application.Imports.ImportNayaxProductCatalog</c>, and issue
-    /// #303 removed <c>ProductService.cs</c>/<c>Interfaces/IProductService.cs</c> in the same change
-    /// that pointed <c>ProductsController</c> straight at the Products use cases and gave it an
-    /// API-owned response DTO, and issue #304 removed <c>PurchaseService.cs</c>/<c>SupplierOrderService.cs</c>
-    /// and their interfaces in the same change that did the same for
-    /// <c>PurchasesController</c>/<c>SupplierOrdersController</c>. Issue #301, the last child of #151,
-    /// removed the import feature entirely: <c>ImportService.cs</c>, <c>ImportService.NayaxSales.cs</c>,
-    /// <c>Interfaces/IImportService.cs</c> and <c>NayaxSalesWorkbook.cs</c> left with the uploaded
-    /// Nayax sales import's move to <c>Inventory.Application.Imports.ImportNayaxSales</c>, and
-    /// <c>NayaxProductMatcher.cs</c> left with them because its last callers now use the Domain
-    /// <c>Inventory.Domain.Reporting.ProductMatching.ProductMatcher</c> directly.
-    /// Issue #302, the first child of #153, removed <c>MachineService.cs</c>, <c>SiteService.cs</c>
-    /// and <c>Interfaces/IMachineService.cs</c>/<c>Interfaces/ISiteService.cs</c> in the same change
-    /// that pointed <c>MachinesController</c>/<c>SitesController</c> straight at the Machines and
-    /// Sites use cases and gave the machine endpoints API-owned response DTOs, which also emptied
-    /// the <c>Interfaces</c> folder.
-    ///
-    /// Nothing is left. The last entry, <c>SiteNameResolver.cs</c>, went with the non-EF adapter
-    /// relocation (issue #306): the pure site-name-from-machine-names helper and the
-    /// <c>Adapters/Persistence/SiteNameResolverAdapter</c> wrapper that implemented
-    /// <c>Inventory.Application.Sites.ISiteNameResolver</c> for it merged into
-    /// <c>Inventory.Infrastructure.Sites.SiteNameResolver</c>, which
-    /// <c>AddInfrastructureServices()</c> registers and which
-    /// <c>EfTransactionSalesReportFactsProvider</c> calls. <c>InventoryApi/Services</c> is gone, so
-    /// the allow-list is empty and this test now asserts that the folder stays gone: a new file
-    /// under it fails here and must go to <c>Inventory.Application</c>/<c>Inventory.Domain</c> (use
-    /// case or domain logic) or <c>Inventory.Infrastructure</c> (an adapter) instead. Reviving the
-    /// folder has to be a conscious edit to this list and to the docs/architecture.md exception it
-    /// documents. The API-owned EF adapter family that used to be the rest of that exception is gone
-    /// too: <c>AppDbContext</c>, the EF entities and the migrations went into
-    /// <c>Inventory.Infrastructure</c> in issue #307, the reporting fact providers in issue #308,
-    /// and the remaining feature stores in issue #309, which removed
-    /// <c>InventoryApi/Adapters/Persistence</c> entirely - see
-    /// <see cref="PersistenceAdapterOwnershipTests.InventoryApi_owns_no_persistence_adapter_folder"/>.
-    /// </summary>
-    [Fact]
-    public void Only_the_documented_legacy_services_remain_in_InventoryApi_Services()
-    {
-        string[] allowedRelativePaths = [];
-
-        var actualRelativePaths = GitTrackedFiles(Path.Combine("InventoryApi", "Services"))
-            .Where(path => path.EndsWith(".cs", StringComparison.Ordinal))
-            .OrderBy(name => name, StringComparer.Ordinal)
-            .ToArray();
-
-        Assert.Equal(allowedRelativePaths.OrderBy(name => name, StringComparer.Ordinal), actualRelativePaths);
-    }
+    // Issue #145's legacy-services allow-list used to live here. It froze the exact set of
+    // git-tracked files in `InventoryApi/Services` - the use-case and domain logic that predated the
+    // `Inventory.Domain`/`Inventory.Application` split - so that the temporary exception could shrink
+    // as issues #146-#153 migrated each slice but never grow silently. Every slice has landed and
+    // the folder is gone, so issue #154 replaced the allow-list with the enforcement it was a
+    // placeholder for: `ApiLayerOwnershipTests` asserts that InventoryApi declares no business
+    // service at all, holds neither retired layer folder, reaches a DbContext only from the
+    // composition root and the operator commands, and keeps the Domain financial rules out of the
+    // HTTP boundary. An empty allow-list could only ever prove that one folder name stayed unused.
 
     /// <summary>
     /// Issue #305, the last controller slice of #153: no file under <c>InventoryApi/Controllers</c>

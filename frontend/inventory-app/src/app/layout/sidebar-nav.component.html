@@ -1,4 +1,5 @@
 <nav
+  [id]="navId"
   aria-label="Primary"
   class="flex shrink-0 flex-col overflow-y-auto bg-white p-3 text-md-body shadow-md"
   [class.fixed]="drawer"
@@ -11,19 +12,46 @@
   [class.w-64]="!drawer && expanded"
   [class.w-16]="!drawer && !expanded"
 >
-  <div class="mb-2 flex items-center gap-2 border-b border-md-gray-200 px-1 pb-3">
-    <div class="flex min-w-0 flex-1 items-center gap-2 truncate font-semibold text-md-gray-800">
-      <span aria-hidden="true" class="text-base">🧃</span>
-      <span class="truncate" [class.hidden]="!expanded">Inventory Manager</span>
-    </div>
+  <!--
+    The header row owns the app title and, on a wide layout, the collapse control that used to
+    float above the menu in the shell's top bar (issue #456). Collapsed to the rail there is no
+    title to sit beside, so the row holds the expand control alone and centres it: the panel's
+    `w-16` rail leaves a 40px content box inside its `p-3`, narrower than the 44x44 CSS-pixel
+    minimum touch target, and `-mx-2` widens the row to 56px inside the panel's 64px padding box
+    so the control reaches that size without overflowing the panel or overlapping anything.
+  -->
+  <div
+    class="mb-2 flex items-center border-b border-md-gray-200 pb-3"
+    [class.gap-2]="drawer || expanded"
+    [class.px-1]="drawer || expanded"
+    [class.-mx-2]="!drawer && !expanded"
+    [class.justify-center]="!drawer && !expanded"
+  >
+    @if (drawer || expanded) {
+      <div class="flex min-w-0 flex-1 items-center gap-2 truncate font-semibold text-md-gray-800">
+        <span aria-hidden="true" class="text-base">🧃</span>
+        <span class="truncate">Inventory Manager</span>
+      </div>
+    }
     @if (drawer) {
       <button
         type="button"
         aria-label="Close navigation menu"
-        class="rounded-md-control px-2 py-1 text-md-gray-600 transition hover:bg-md-gray-100"
+        class="flex h-11 w-11 shrink-0 items-center justify-center rounded-md-control text-md-gray-600 transition hover:bg-md-gray-100 hover:text-md-gray-800"
         (click)="dismissed.emit()"
       >
-        <app-icon name="close" [size]="20" />
+        <app-icon name="close" variant="outlined" [size]="20" />
+      </button>
+    } @else {
+      <button
+        type="button"
+        class="flex h-11 w-11 shrink-0 items-center justify-center rounded-md-control text-md-gray-600 transition hover:bg-md-gray-100 hover:text-md-gray-800"
+        [attr.aria-label]="collapseToggleLabel"
+        [attr.aria-expanded]="expanded"
+        [attr.aria-controls]="navId"
+        (click)="collapseToggled.emit()"
+      >
+        <app-icon name="menu" variant="outlined" [size]="20" />
       </button>
     }
   </div>
@@ -42,7 +70,7 @@
             [attr.title]="expanded ? null : item.label"
             (click)="toggleGroup(item)"
           >
-            <app-icon [name]="item.icon" [size]="20" />
+            <app-icon [name]="item.icon" variant="outlined" [size]="20" />
             <span class="truncate" [class.sr-only]="!expanded">{{ item.label }}</span>
             @if (expanded) {
               <span aria-hidden="true" class="ml-auto text-xs text-md-gray-500">{{ isGroupOpen(item) ? '▴' : '▾' }}</span>
@@ -79,7 +107,7 @@
             [attr.title]="expanded ? null : item.label"
             (click)="navigated.emit()"
           >
-            <app-icon [name]="item.icon ?? ''" [size]="20" />
+            <app-icon [name]="item.icon ?? ''" variant="outlined" [size]="20" />
             <span class="truncate" [class.sr-only]="!expanded">{{ item.label }}</span>
           </a>
         }

@@ -4,8 +4,10 @@ using Inventory.Application.CatalogReconciliation;
 using Inventory.Application.Categories;
 using Inventory.Application.Commissions;
 using Inventory.Application.Costing;
+using Inventory.Application.Dashboard;
 using Inventory.Application.Documents;
 using Inventory.Application.Expenses;
+using Inventory.Application.Gst;
 using Inventory.Application.Imports;
 using Inventory.Application.InventoryCounting;
 using Inventory.Application.Machines;
@@ -27,6 +29,7 @@ using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Transactions;
 using Inventory.Application.SalesSync;
+using Inventory.Application.SaleTimestampRepair;
 using Inventory.Application.Sites;
 using Inventory.Application.Stock;
 using Inventory.Application.SupplierOrders;
@@ -134,6 +137,8 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<ISaleCostingStore, EfSaleCostingStore>();
         services.AddScoped<IInventoryCostTransitionStore, EfInventoryCostTransitionStore>();
         services.AddScoped<IInventoryCostRepairStore, EfInventoryCostRepairStore>();
+        services.AddScoped<IHistoricalGstClassificationStore, EfHistoricalGstClassificationStore>();
+        services.AddScoped<INayaxSaleTimestampRepairStore, EfNayaxSaleTimestampRepairStore>();
         services.AddScoped<IStockAdjustmentStore, EfStockAdjustmentStore>();
         services.AddScoped<ISupplierOrderStore, EfSupplierOrderStore>();
         services.AddScoped<ISiteFactsStore, EfSiteFactsStore>();
@@ -149,6 +154,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IImportedReimbursementStore, EfImportedReimbursementStore>();
         services.AddScoped<INayaxProductCatalogImportStore, EfNayaxProductCatalogImportStore>();
         services.AddScoped<INayaxSalesImportStore, EfNayaxSalesImportStore>();
+        services.AddScoped<IDashboardSummarySalesFactsProvider, EfDashboardSummarySalesFactsProvider>();
 
         return services;
     }

@@ -90,6 +90,17 @@ public class AppDbContext : DbContext
     public DbSet<InventoryCostRepair> InventoryCostRepairs => Set<InventoryCostRepair>();
 
     /// <summary>
+    /// Append-only records of stored Nayax sale instants repaired from authoritative source evidence
+    /// (issue #472). Nothing in the application updates or deletes a row in this set; see
+    /// <see cref="NayaxSaleTimestampRepair"/>.
+    /// </summary>
+    public DbSet<NayaxSaleTimestampRepair> NayaxSaleTimestampRepairs => Set<NayaxSaleTimestampRepair>();
+
+    /// <summary>The stored, single-use, expiring plans those repairs are confirmed from (issue #472).</summary>
+    public DbSet<NayaxSaleTimestampRepairPreviewDraft> NayaxSaleTimestampRepairPreviewDrafts =>
+        Set<NayaxSaleTimestampRepairPreviewDraft>();
+
+    /// <summary>
     /// Both save paths funnel through <see cref="BusinessOwnershipEnforcer"/> so tenant
     /// ownership is applied to every write, whichever overload a service happens to call. This
     /// is why services do not, and must not, add their own business filters or stamping.
@@ -178,6 +189,41 @@ public class AppDbContext : DbContext
             .HasConversion(
                 toProvider => toProvider,
                 fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+
+        // Nayax sale timestamp repairs (issue #472). A transaction may legitimately be repaired more
+        // than once - a later, better source can correct an earlier correction - so the audit has no
+        // unique constraint, and the index is the read path: one business's repairs, newest applied
+        // first, with a transaction lookup leading on the column every query filters on.
+        modelBuilder.Entity<NayaxSaleTimestampRepair>().Property(x => x.EvidenceReference).IsRequired();
+        modelBuilder.Entity<NayaxSaleTimestampRepair>().Property(x => x.AppliedByDirectoryTenantId).IsRequired();
+        modelBuilder.Entity<NayaxSaleTimestampRepair>().Property(x => x.AppliedByObjectId).IsRequired();
+        modelBuilder.Entity<NayaxSaleTimestampRepair>()
+            .HasIndex(x => new { x.BusinessId, x.TransactionId, x.AppliedAt });
+        // The three instants are persisted UTC and are exposed by the repair API, so each is marked
+        // UTC on read - see the StockAdjustment.CreatedAt comment below for the complete explanation
+        // of why the SQLite provider makes that necessary. The two business dates are deliberately
+        // Kind-free calendar dates and are not converted, so the audit never serialises a date as an
+        // instant.
+        modelBuilder.Entity<NayaxSaleTimestampRepair>()
+            .Property(x => x.PreviousInstantUtc)
+            .HasConversion(
+                toProvider => toProvider,
+                fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+        modelBuilder.Entity<NayaxSaleTimestampRepair>()
+            .Property(x => x.RepairedInstantUtc)
+            .HasConversion(
+                toProvider => toProvider,
+                fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+        modelBuilder.Entity<NayaxSaleTimestampRepair>()
+            .Property(x => x.AppliedAt)
+            .HasConversion(
+                toProvider => toProvider,
+                fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+
+        // The stored plan is server-internal state, never part of an API response, so it needs no
+        // Kind conversion: its two instants are only ever compared against the clock, and a DateTime
+        // comparison looks at ticks and not Kind. This matches InventoryCostTransitionPreviewDraft.
+        modelBuilder.Entity<NayaxSaleTimestampRepairPreviewDraft>().Property(x => x.PlanJson).IsRequired();
 
         // Purchase/PurchaseItem are the Purchase-language CLR types; explicitly mapped to
         // their legacy "Receipt"/"ReceiptItem" tables so the rename does not change the schema.

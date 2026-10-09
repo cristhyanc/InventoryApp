@@ -5,9 +5,14 @@ import { Machine, Product } from '../../models/models';
 import { MachineService } from '../../services/machine.service';
 import { StockService } from '../../services/stock.service';
 import { ToastService } from '../../services/toast.service';
+import { BreadcrumbService } from '../../layout/breadcrumbs/breadcrumb.service';
 
 function product(quantityInStock: number): Product {
   return { id: 55, name: 'Beef Jerky', quantityInStock } as Product;
+}
+
+function breadcrumbServiceStub(): { setCurrentPageLabel: jest.Mock } & BreadcrumbService {
+  return { setCurrentPageLabel: jest.fn() } as unknown as { setCurrentPageLabel: jest.Mock } & BreadcrumbService;
 }
 
 describe('MachineDetailComponent product refresh', () => {
@@ -24,7 +29,8 @@ describe('MachineDetailComponent product refresh', () => {
       route,
       machineService,
       {} as StockService,
-      {} as ToastService
+      {} as ToastService,
+      breadcrumbServiceStub()
     );
 
     component.ngOnInit();
@@ -38,5 +44,42 @@ describe('MachineDetailComponent product refresh', () => {
     expect(getProducts).toHaveBeenCalledTimes(2);
     expect(getProducts).toHaveBeenLastCalledWith(7);
     expect(products[0].quantityInStock).toBe(8);
+  });
+});
+
+/**
+ * The breadcrumb's live label for `/machines/:id` (issue #457): the already-loaded `machine$` data
+ * this component already requests for its own page, never a second request made just for the
+ * breadcrumb.
+ */
+describe('MachineDetailComponent breadcrumb label', () => {
+  function render(machine: Machine | null, id = '7'): { breadcrumbService: { setCurrentPageLabel: jest.Mock } } {
+    const machineService = { get: () => of(machine), getProducts: () => of([]) } as unknown as MachineService;
+    const route = { paramMap: of(convertToParamMap({ id })) } as unknown as ActivatedRoute;
+    const breadcrumbService = breadcrumbServiceStub();
+    const component = new MachineDetailComponent(route, machineService, {} as StockService, {} as ToastService, breadcrumbService);
+
+    component.ngOnInit();
+    component.machine$.subscribe();
+
+    return { breadcrumbService };
+  }
+
+  it('sets the live breadcrumb label from the already-loaded machine name', () => {
+    const { breadcrumbService } = render({ machineID: 7, machineName: 'Snack Attack 42' } as Machine);
+
+    expect(breadcrumbService.setCurrentPageLabel).toHaveBeenCalledWith('Snack Attack 42');
+  });
+
+  it('clears the live label rather than inventing one for an unnamed machine', () => {
+    const { breadcrumbService } = render({ machineID: 7, machineName: null } as Machine);
+
+    expect(breadcrumbService.setCurrentPageLabel).toHaveBeenCalledWith(null);
+  });
+
+  it('clears the live label when the machine fails to load', () => {
+    const { breadcrumbService } = render(null, 'not-a-number');
+
+    expect(breadcrumbService.setCurrentPageLabel).toHaveBeenCalledWith(null);
   });
 });

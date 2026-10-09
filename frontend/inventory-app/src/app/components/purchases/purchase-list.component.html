@@ -27,14 +27,20 @@
               <th scope="col" class="table-cell">Items</th>
               <th scope="col" class="table-cell table-num">Total</th>
               <th scope="col" class="table-cell">Document</th>
-              <th scope="col" class="table-cell text-right">Actions</th>
+              <th
+                scope="col"
+                data-testid="purchases-actions-header"
+                class="table-cell sticky right-0 z-20 border-l border-md-gray-200 bg-md-gray-100 text-right"
+              >
+                Actions
+              </th>
             </tr>
           </thead>
           <tbody>
             @for (r of purchases; track r.id) {
               <tr class="table-row align-top">
                 <td class="table-cell">
-                  <div class="flex min-w-56 items-center gap-3">
+                  <div class="flex min-w-56 items-start gap-3">
                     <button type="button" class="shrink-0" (click)="openDocument(r)" [attr.aria-label]="'Open document for ' + r.title">
                       @if (isImage(r) && thumbnailUrl(r)) {
                         <img [src]="thumbnailUrl(r)" [alt]="r.title" class="h-14 w-14 rounded-md-control object-cover" />
@@ -42,7 +48,14 @@
                         <div class="flex h-14 w-14 items-center justify-center rounded-md-control bg-md-gray-100 text-xl">📄</div>
                       }
                     </button>
-                    <strong class="font-semibold text-md-gray-800">{{ r.title }}</strong>
+                    <div class="min-w-0">
+                      <strong class="block font-semibold text-md-gray-800">{{ r.title }}</strong>
+                      @if (r.notes) {
+                        <div class="mt-1 max-w-xs whitespace-pre-wrap break-words text-xs value-muted">
+                          <span class="font-medium text-md-gray-700">Notes:</span> {{ r.notes }}
+                        </div>
+                      }
+                    </div>
                   </div>
                 </td>
                 <td class="table-cell">{{ r.supplier?.name ?? 'None' }}</td>
@@ -58,16 +71,53 @@
                     <span class="value-muted">No items</span>
                   }
                 </td>
-                <td class="table-cell table-num whitespace-nowrap font-medium">
-                  {{ r.totalAmount !== null && r.totalAmount !== undefined ? (r.totalAmount | currency) : '—' }}
+                <td class="table-cell table-num">
+                  <div class="whitespace-nowrap font-medium">
+                    {{ r.totalAmount !== null && r.totalAmount !== undefined ? (r.totalAmount | currency) : '—' }}
+                  </div>
+                  @if (getValidation(r)?.hasTotalMismatch) {
+                    <div class="mt-2 rounded-md-card border-l-4 border-md-warning bg-md-warning/15 p-2 text-left text-xs text-md-gray-800">
+                      <p class="font-semibold text-md-warning-text">Does not match calculated total.</p>
+                      @if (getValidation(r)?.calculatedTotal !== null && getValidation(r)?.calculatedTotal !== undefined) {
+                        <div class="value-muted">
+                          <div>Entered: <strong>{{ r.totalAmount | currency }}</strong></div>
+                          <div>Calculated: <strong>{{ getValidation(r)?.calculatedTotal | currency }}</strong></div>
+                          @if (getValidation(r)?.totalDifference !== null && getValidation(r)?.totalDifference !== undefined) {
+                            <div>Difference: <strong>{{ getValidation(r)?.totalDifference | currency }}</strong></div>
+                          }
+                        </div>
+                      }
+                    </div>
+                  }
+                  @if (gstSummary(r); as gst) {
+                    <div data-testid="purchase-gst-summary" class="mt-2 rounded-md-card bg-md-gray-100 p-2 text-left text-xs text-md-gray-600">
+                      <div><strong class="text-md-gray-800">GST (ITC):</strong> {{ gst.inputGst | currency }}</div>
+                      @if (hasCharge(r.deliveryCost)) {
+                        <div>Delivery: {{ classificationLabel(r.deliveryGstClassification) }}</div>
+                      }
+                      @if (hasCharge(r.packageCost)) {
+                        <div>Package: {{ classificationLabel(r.packageGstClassification) }}</div>
+                      }
+                      @if (gst.unresolvedComponentCount > 0) {
+                        <div data-testid="purchase-gst-unresolved" class="mt-1 text-md-warning-text">
+                          ⚠️ {{ gst.unresolvedComponentCount }} component(s) totalling {{ gst.unresolvedAmount | currency }} are not classified, so this purchase GST is incomplete.
+                        </div>
+                      }
+                    </div>
+                  }
                 </td>
                 <td class="table-cell text-xs value-muted">{{ r.fileName }} · {{ formatSize(r.fileSizeBytes) }}</td>
-                <td class="table-cell">
+                <td data-testid="purchases-actions-cell" class="table-cell sticky right-0 z-10 border-l border-md-gray-200 bg-white">
                   <div class="flex justify-end gap-2">
-                    <button type="button" class="btn btn-sm btn-secondary" (click)="startEdit(r)">
+                    <a
+                      data-testid="purchase-edit-link"
+                      class="btn btn-sm btn-secondary"
+                      [routerLink]="['/purchases', r.id, 'edit']"
+                      [attr.aria-label]="'Edit ' + r.title"
+                    >
                       <app-icon name="edit" [size]="16" />
                       Edit
-                    </button>
+                    </a>
                     <button type="button" class="btn btn-sm btn-danger" (click)="remove(r)">
                       <app-icon name="delete" [size]="16" />
                       Delete
@@ -75,174 +125,6 @@
                   </div>
                 </td>
               </tr>
-
-              @if (getValidation(r)?.hasTotalMismatch) {
-                <tr class="table-row">
-                  <td colspan="7" class="table-cell">
-                    <div class="alert alert-warning">
-                      <p class="alert-title">Purchase total does not match calculated total.</p>
-                      @if (getValidation(r)?.calculatedTotal !== null && getValidation(r)?.calculatedTotal !== undefined) {
-                        <div class="text-xs value-muted">
-                          <div>Entered total: <strong>{{ r.totalAmount | currency }}</strong></div>
-                          <div>Calculated total: <strong>{{ getValidation(r)?.calculatedTotal | currency }}</strong></div>
-                          @if (getValidation(r)?.totalDifference !== null && getValidation(r)?.totalDifference !== undefined) {
-                            <div>Difference: <strong>{{ getValidation(r)?.totalDifference | currency }}</strong></div>
-                          }
-                        </div>
-                      }
-                    </div>
-                  </td>
-                </tr>
-              }
-
-              @if (gstSummary(r); as gst) {
-                <tr class="table-row">
-                  <td colspan="7" class="table-cell">
-                    <div data-testid="purchase-gst-summary" class="rounded-md-card bg-md-gray-100 p-4 text-md-body text-md-gray-600">
-                      <span><strong class="text-md-gray-800">Purchase GST (input tax credit):</strong> {{ gst.inputGst | currency }}</span>
-                      @if (hasCharge(r.deliveryCost)) {
-                        <span class="ml-3">Delivery: {{ classificationLabel(r.deliveryGstClassification) }}</span>
-                      }
-                      @if (hasCharge(r.packageCost)) {
-                        <span class="ml-3">Package: {{ classificationLabel(r.packageGstClassification) }}</span>
-                      }
-                      @if (gst.unresolvedComponentCount > 0) {
-                        <div data-testid="purchase-gst-unresolved" class="mt-1 text-xs text-md-warning-text">
-                          ⚠️ {{ gst.unresolvedComponentCount }} component(s) totalling {{ gst.unresolvedAmount | currency }} are not classified, so this purchase GST is incomplete.
-                        </div>
-                      }
-                      @if (gstSummaryExcludesUnsavedEdits(r)) {
-                        <div data-testid="purchase-gst-stale" class="mt-1 text-xs value-muted">
-                          These are the saved figures. Edits in the form below are not included until you save.
-                        </div>
-                      }
-                    </div>
-                  </td>
-                </tr>
-              }
-
-              @if (r.notes) {
-                <tr class="table-row">
-                  <td colspan="7" class="table-cell">
-                    <div class="rounded-md-card bg-md-gray-100 p-4 text-md-body text-md-gray-600">
-                      <strong class="text-md-gray-800">Notes:</strong> {{ r.notes }}
-                    </div>
-                  </td>
-                </tr>
-              }
-
-              @if (editingPurchaseId === r.id) {
-                <tr>
-                  <td colspan="7" class="bg-md-gray-100 px-4 py-5">
-                    <form class="space-y-3" (ngSubmit)="saveEdit(r)">
-                      <h2 class="text-md-card-title font-semibold text-md-gray-800">Edit Purchase</h2>
-                      @if (editError) {
-                        <div class="alert alert-danger" role="alert" data-testid="edit-purchase-error">
-                          <p class="alert-title">{{ editError }}</p>
-                        </div>
-                      }
-                      <div class="field">
-                        <label class="field-label" for="editTitle">Purchase Title</label>
-                        <input id="editTitle" [(ngModel)]="editForm.title" name="editTitle" required />
-                      </div>
-                      <div class="field">
-                        <label class="field-label" for="editSupplierId">Supplier</label>
-                        <select id="editSupplierId" [(ngModel)]="editForm.supplierId" name="editSupplierId">
-                          <option value="">None</option>
-                          @for (s of suppliers; track s.id) {
-                            <option [ngValue]="s.id">{{ s.name }}</option>
-                          }
-                        </select>
-                      </div>
-                      <div class="field">
-                        <label class="field-label" for="editPurchaseDate">Purchase Date</label>
-                        <input id="editPurchaseDate" type="date" [(ngModel)]="editForm.purchaseDate" name="editPurchaseDate" />
-                      </div>
-                      <div class="grid gap-3 md:grid-cols-2">
-                        <div class="field">
-                          <label class="field-label" for="editTotalAmount">Total Amount ($)</label>
-                          <input id="editTotalAmount" type="number" step="0.01" min="0" [(ngModel)]="editForm.totalAmount" name="editTotalAmount" />
-                        </div>
-                        <div class="border-t border-md-gray-200 pt-3 md:col-span-2">
-                          <div class="mb-2 flex items-center justify-between">
-                            <strong class="text-md-body">Purchased Items</strong>
-                            <button type="button" class="btn btn-secondary btn-sm" (click)="addEditItem()">
-                              <app-icon name="add" [size]="16" />
-                              Add Product
-                            </button>
-                          </div>
-                          @for (item of editItems; track $index) {
-                            <div data-testid="edit-purchase-item" class="mb-2 grid gap-2 md:grid-cols-[minmax(0,3fr)_minmax(7rem,1fr)_minmax(9rem,1fr)_minmax(9rem,1fr)_auto]">
-                              @if (isStoredLine(item)) {
-                                <div data-testid="edit-purchase-item-product-fixed">
-                                  <span class="block text-md-body text-md-gray-700">{{ productName(item.productId) }}</span>
-                                  <div class="field-hint">Product cannot be changed. Remove this line and add the new product as its own line.</div>
-                                </div>
-                              } @else {
-                                <select data-testid="edit-purchase-item-product" [(ngModel)]="item.productId" [name]="'editProduct' + $index"><option [ngValue]="0">Select product</option>@for (p of products; track p.id) {<option [ngValue]="p.id">{{ p.name }}</option>}</select>
-                              }
-                              <input data-testid="edit-purchase-item-quantity" type="number" min="1" step="1" [(ngModel)]="item.quantity" [name]="'editQuantity' + $index" />
-                              <div><input data-testid="edit-purchase-item-cost" type="number" min="0" step="0.0001" [(ngModel)]="item.unitCost" [name]="'editCost' + $index" [attr.aria-label]="'Unit cost for item ' + ($index + 1)" /><div class="field-hint">{{ editLineTotal(item) | currency }}</div></div>
-                              <div>
-                                <select data-testid="edit-purchase-item-gst" [(ngModel)]="item.gstClassification" [name]="'editGstClassification' + $index" [attr.aria-label]="'GST classification for item ' + ($index + 1)">
-                                  @for (option of gstOptions; track option.value) {
-                                    <option [ngValue]="option.value">{{ option.label }}</option>
-                                  }
-                                </select>
-                                <div class="field-hint">GST</div>
-                              </div>
-                              <button type="button" class="btn btn-link btn-sm" (click)="removeEditItem($index)">
-                                <app-icon name="delete" [size]="16" />
-                                Remove
-                              </button>
-                            </div>
-                          }
-                          <div class="text-right field-hint">Items subtotal: {{ editItemsSubtotal | currency }}</div>
-                        </div>
-                        <div class="field">
-                          <label class="field-label" for="editDeliveryCost">Delivery Cost ($)</label>
-                          <input id="editDeliveryCost" type="number" step="0.01" min="0" [(ngModel)]="editForm.deliveryCost" name="editDeliveryCost" />
-                          @if (hasCharge(editForm.deliveryCost)) {
-                            <label class="field-label mt-2" for="editDeliveryGst">Delivery GST</label>
-                            <select id="editDeliveryGst" data-testid="edit-delivery-gst" [(ngModel)]="editForm.deliveryGstClassification" name="editDeliveryGstClassification">
-                              @for (option of gstOptions; track option.value) {
-                                <option [ngValue]="option.value">{{ option.label }}</option>
-                              }
-                            </select>
-                          }
-                        </div>
-                        <div class="field">
-                          <label class="field-label" for="editPackageCost">Package Cost ($)</label>
-                          <input id="editPackageCost" type="number" step="0.01" min="0" [(ngModel)]="editForm.packageCost" name="editPackageCost" />
-                          @if (hasCharge(editForm.packageCost)) {
-                            <label class="field-label mt-2" for="editPackageGst">Package GST</label>
-                            <select id="editPackageGst" data-testid="edit-package-gst" [(ngModel)]="editForm.packageGstClassification" name="editPackageGstClassification">
-                              @for (option of gstOptions; track option.value) {
-                                <option [ngValue]="option.value">{{ option.label }}</option>
-                              }
-                            </select>
-                          }
-                        </div>
-                      </div>
-                      <p class="field-hint">
-                        Purchase amounts are GST-inclusive. A classification you do not change is left untouched, so an
-                        automatically derived classification keeps its origin. <strong>Not classified</strong> contributes no GST and
-                        stays visibly unresolved. The GST amounts are calculated by the API and shown above once you save.
-                        A line already on the purchase keeps its product: to record a different product, remove that line and
-                        add the new product as its own line, which starts <strong>Not classified</strong>.
-                      </p>
-                      <div class="field">
-                        <label class="field-label" for="editNotes">Notes</label>
-                        <textarea id="editNotes" [(ngModel)]="editForm.notes" name="editNotes" rows="2"></textarea>
-                      </div>
-                      <div class="page-actions">
-                        <button type="submit" class="btn btn-primary">Save</button>
-                        <button type="button" class="btn btn-secondary" (click)="cancelEdit()">Cancel</button>
-                      </div>
-                    </form>
-                  </td>
-                </tr>
-              }
             }
           </tbody>
         </table>

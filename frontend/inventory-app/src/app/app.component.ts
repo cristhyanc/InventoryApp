@@ -4,14 +4,16 @@ import { MsalBroadcastService, MsalService } from '@azure/msal-angular';
 import { AuthenticationResult, InteractionStatus } from '@azure/msal-browser';
 import { Subject, filter, takeUntil } from 'rxjs';
 import { ToastContainerComponent } from "./components/shared/toast-container.component";
+import { IconComponent } from './components/shared/icon.component';
 import { LoadingIndicatorComponent } from './components/shared/loading-indicator.component';
-import { SidebarNavComponent } from './layout/sidebar-nav.component';
+import { BreadcrumbsComponent } from './layout/breadcrumbs/breadcrumbs.component';
+import { PRIMARY_NAVIGATION_ID, SidebarNavComponent } from './layout/sidebar-nav.component';
 import { UserMenuComponent } from './layout/user-menu.component';
 import { loginRequest } from './auth-config';
 
 /**
  * The application shell (issue #391): a collapsible left sidebar for the primary navigation, a
- * header holding the burger/collapse control and the signed-in user control, and the routed page.
+ * header holding the signed-in user control, and the routed page.
  *
  * One `isSidebarOpen` flag drives both layouts, because the control an operator reaches for is the
  * same in each: on a wide layout the sidebar is always part of the page and the flag expands it to
@@ -19,13 +21,27 @@ import { loginRequest } from './auth-config';
  * drawer and the flag shows or hides it. `isWideLayout` comes from the same `lg` breakpoint the
  * Tailwind classes use, so the drawer is never left off-screen but focusable.
  *
+ * Where that one control is rendered depends on the layout (issue #456), and only on the layout:
+ * on a wide layout it is the sidebar's own header row beside the app title, reported back through
+ * `collapseToggled`; on a narrow layout the sidebar is a drawer that is not on the page, so the
+ * opener stays in this header and keeps the focus-return behaviour `closeSidebar` relies on. The
+ * state, the handlers and every `aria` attribute are the ones this component already had.
+ *
  * Authentication is unchanged: this component still owns the MSAL redirect handling, active
  * account and login/logout calls, and `UserMenuComponent` only reports the operator's intent.
  */
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [RouterOutlet, SidebarNavComponent, UserMenuComponent, ToastContainerComponent, LoadingIndicatorComponent],
+  imports: [
+    RouterOutlet,
+    SidebarNavComponent,
+    UserMenuComponent,
+    IconComponent,
+    ToastContainerComponent,
+    LoadingIndicatorComponent,
+    BreadcrumbsComponent
+  ],
   templateUrl: './app.component.html'
 })
 export class AppComponent implements OnInit, OnDestroy {
@@ -40,8 +56,9 @@ export class AppComponent implements OnInit, OnDestroy {
   isSidebarOpen = true;
   isWideLayout = true;
 
-  readonly sidebarId = 'primary-navigation';
+  readonly sidebarId = PRIMARY_NAVIGATION_ID;
 
+  /** Only rendered on a narrow layout, which is the only layout that returns focus to it. */
   @ViewChild('sidebarToggle') private readonly sidebarToggle?: ElementRef<HTMLButtonElement>;
 
   private wideLayout?: MediaQueryList;

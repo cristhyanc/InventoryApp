@@ -100,6 +100,16 @@ export const routes: Routes = [
     loadComponent: () => import('./components/purchases/supplier-orders.component').then((m) => m.SupplierOrdersComponent)
   },
   {
+    // The dedicated Edit purchase page (issue #475), which replaced the purchases table's inline
+    // editor. It loads the purchase from this id, so the URL is bookmarkable and survives a refresh.
+    // Declared after `purchases/new` and `purchases/orders`, which are two-segment paths this
+    // three-segment pattern cannot shadow either way.
+    path: 'purchases/:id/edit',
+    canActivate: [MsalGuard],
+    loadComponent: () =>
+      import('./components/purchases/purchase-edit/purchase-edit-page.component').then((m) => m.PurchaseEditPageComponent)
+  },
+  {
     path: 'reports',
     canActivate: [MsalGuard],
     loadComponent: () => import('./components/reports/dashboard-report.component').then((m) => m.DashboardReportComponent)
@@ -186,6 +196,32 @@ export const routes: Routes = [
     canActivate: [MsalGuard],
     loadComponent: () =>
       import('./components/admin/costing-repair/costing-repair-page.component').then((m) => m.CostingRepairPageComponent)
+  },
+  {
+    path: 'admin/historical-gst-classification',
+    canActivate: [MsalGuard],
+    loadComponent: () =>
+      import('./components/admin/historical-gst-classification/historical-gst-classification.component').then(
+        (m) => m.HistoricalGstClassificationComponent
+      )
+  },
+  {
+    path: 'admin/nayax-sale-timestamp-repair',
+    canActivate: [MsalGuard],
+    loadComponent: () =>
+      import('./components/admin/nayax-sale-timestamp-repair/nayax-sale-timestamp-repair.component').then(
+        (m) => m.NayaxSaleTimestampRepairComponent
+      )
+  },
+  {
+    // The super-admin diagnostics page (issue #335). `MsalGuard` only requires a signed-in
+    // actor, exactly as every other route does: platform-admin access is decided by the
+    // diagnostics API on every request, so entering this URL directly is safe and the page shows
+    // a refusal rather than a query form.
+    path: 'admin/diagnostics',
+    canActivate: [MsalGuard],
+    loadComponent: () =>
+      import('./components/admin/diagnostics/platform-diagnostics.component').then((m) => m.PlatformDiagnosticsComponent)
   },
   {
     path: 'admin/nayax-settings',

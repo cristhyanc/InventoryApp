@@ -1,3 +1,4 @@
+using System.Globalization;
 using Inventory.Application.Reporting.Shared;
 using Inventory.Domain.Reporting;
 using Inventory.Domain.Reporting.Reconciliation;
@@ -15,6 +16,16 @@ public sealed class GetReconciliationReport
 {
     private const decimal Adjustments = 0m;
 
+    /// <summary>
+    /// The one authoritative statement of the adjustments assumption (issue #477). The imported
+    /// reimbursement model carries no adjustment facts, so every adjustment amount in this report is
+    /// an assumed zero, not a verified one. It is presented beside the Adjustments/expected-net
+    /// figures and in the CSV/XLSX export rather than as a data-quality warning, because it describes
+    /// the calculation rather than a problem with the requested period.
+    /// </summary>
+    public const string AdjustmentsAssumption =
+        "Reimbursement adjustments are not imported; this calculation assumes $0.00.";
+
     private readonly IReconciliationReportFactsProvider _facts;
 
     public GetReconciliationReport(IReconciliationReportFactsProvider facts) => _facts = facts;
@@ -31,20 +42,39 @@ public sealed class GetReconciliationReport
         var totals = BuildTotals(facts, periodRows, tolerance);
         var actualNet = totals.ActualNetReimbursement;
 
+        // Conditional, scope-derived diagnostics (issue #477, reusing issue #476's shared helper):
+        // every note below comes from a fact about the requested range and machine scope. A
+        // reconciliation of card sales against an imported reimbursement calculates no COGS, no
+        // commission and no GST on sales, so it never claims any of those is missing, and a refunded
+        // or cancelled/declined transaction is an ordinary payment outcome reported as a count
+        // instead of a warning. The report's calculation methodology, including this report's
+        // assumed-zero adjustments, is presented beside the figures it explains.
         var qualityNotes = new List<string>();
         if (!facts.HasMatchedReimbursement)
-            qualityNotes.Add("No imported reimbursement row matched the requested start and end dates.");
+            qualityNotes.Add(MissingReimbursementNote(range.From, range.ToDate));
         if (facts.UnknownPaymentTransactionCount > 0)
             qualityNotes.Add("One or more transactions have an unknown payment method.");
-        AddStatusQualityNotes(qualityNotes, facts);
+        if (facts.NullStatusTransactionCount > 0)
+            qualityNotes.Add(MissingStatusNote(facts.NullStatusTransactionCount));
+        if (facts.UnknownStatusTransactionCount > 0)
+            qualityNotes.Add(UnrecognisedStatusNote(facts.UnknownStatusTransactionCount));
+        if (facts.PendingTransactionCount > 0)
+            qualityNotes.Add(PendingNote(facts.PendingTransactionCount));
         if (facts.IsMachineFiltered)
-            qualityNotes.Add("Imported fees are account-level amounts and are not allocated to a selected machine.");
-        qualityNotes.Add("Adjustments are unsupported by the imported reimbursement model and are treated as zero.");
-        var quality = ReportingQuality.Quality(
+            qualityNotes.Add(MachineFilteredFeeNote);
+        var paymentDetailPeriods = facts.Periods.Where(period => period.PaymentDetailMissing).ToList();
+        if (paymentDetailPeriods.Count > 0)
+            qualityNotes.Add($"Imported card payment detail was unavailable for {PeriodScope(paymentDetailPeriods)}; " +
+                "the device or reimbursement gross was used as the Nayax card gross.");
+        var unstatedFeeGstPeriods = facts.Periods.Where(HasUnstatedFeeGstPercentage).ToList();
+        if (unstatedFeeGstPeriods.Count > 0)
+            qualityNotes.Add($"Imported fee rows for {PeriodScope(unstatedFeeGstPeriods)} do not state a GST percentage; " +
+                "fee GST is taken from the imported GST-inclusive and GST-exclusive fee amounts, and is $0.00 where only one of them was imported.");
+        var quality = ReportingQuality.Conditional(
             missingStatus: facts.NullStatusTransactionCount > 0 || facts.UnknownStatusTransactionCount > 0,
-            historicalCostUnavailable: true,
+            historicalCostUnavailable: false,
             gstClassificationMissing: facts.Periods.Any(period => !period.HasGstClassification),
-            commissionNotPersisted: true,
+            commissionNotPersisted: false,
             containsUnmappedProducts: false,
             notes: qualityNotes);
 
@@ -64,6 +94,7 @@ public sealed class GetReconciliationReport
             RefundedTransactionCount = facts.RefundedTransactionCount,
             DeclinedOrCancelledTransactionCount = facts.DeclinedOrCancelledTransactionCount,
             UnknownStatusTransactionCount = facts.UnknownStatusTransactionCount,
+            MissingStatusTransactionCount = facts.NullStatusTransactionCount,
             CardTransactionSales = totals.CardTransactionSales,
             NayaxReportedGrossCardSales = totals.NayaxReportedGrossCardSales,
             NayaxReportedCardTransactionCount = totals.NayaxReportedCardTransactionCount,
@@ -99,19 +130,31 @@ public sealed class GetReconciliationReport
             Warning: period.Warning,
             Tolerance: tolerance));
 
+        // Every period note is derived from this period's own facts (issue #477): the aggregate
+        // counts are never copied onto a period, and a period with no detected problem returns an
+        // empty note list.
         var notes = new List<string>();
         if (!period.HasImported)
-            notes.Add("No imported reimbursement row matched the requested start and end dates.");
+            notes.Add($"No imported Nayax reimbursement covers {PeriodRange(period)}, " +
+                "so its recorded card sales cannot be compared with a Nayax payout.");
         if (isMachineFiltered)
-            notes.Add("Imported fees are account-level amounts and are not allocated to a selected machine.");
+            notes.Add(MachineFilteredFeeNote);
         if (period.PaymentDetailMissing)
-            notes.Add("Imported card payment detail was unavailable; device or reimbursement gross was used as the card gross.");
-        notes.Add("Adjustments are unsupported by the imported reimbursement model and are treated as zero.");
-        var quality = ReportingQuality.Quality(
-            missingStatus: true,
-            historicalCostUnavailable: true,
+            notes.Add("Imported card payment detail was unavailable; the device or reimbursement gross was used as the Nayax card gross.");
+        if (period.MissingStatusTransactionCount > 0)
+            notes.Add(MissingStatusNote(period.MissingStatusTransactionCount));
+        if (period.UnknownStatusTransactionCount > 0)
+            notes.Add(UnrecognisedStatusNote(period.UnknownStatusTransactionCount));
+        if (period.PendingTransactionCount > 0)
+            notes.Add(PendingNote(period.PendingTransactionCount));
+        if (HasUnstatedFeeGstPercentage(period))
+            notes.Add("Imported fee rows for this period do not state a GST percentage; " +
+                "fee GST is taken from the imported GST-inclusive and GST-exclusive fee amounts, and is $0.00 where only one of them was imported.");
+        var quality = ReportingQuality.Conditional(
+            missingStatus: period.MissingStatusTransactionCount > 0 || period.UnknownStatusTransactionCount > 0,
+            historicalCostUnavailable: false,
             gstClassificationMissing: !period.HasGstClassification,
-            commissionNotPersisted: true,
+            commissionNotPersisted: false,
             containsUnmappedProducts: false,
             notes: notes);
 
@@ -123,7 +166,12 @@ public sealed class GetReconciliationReport
             result.SettlementStatus, result.OverallStatus, period.PayoutDate, quality)
         {
             TotalTransactionCount = period.TotalTransactionCount,
-            CashTransactionCount = period.CashTransactionCount
+            CashTransactionCount = period.CashTransactionCount,
+            PendingTransactionCount = period.PendingTransactionCount,
+            RefundedTransactionCount = period.RefundedTransactionCount,
+            DeclinedOrCancelledTransactionCount = period.DeclinedOrCancelledTransactionCount,
+            UnknownStatusTransactionCount = period.UnknownStatusTransactionCount,
+            MissingStatusTransactionCount = period.MissingStatusTransactionCount
         };
     }
 
@@ -161,17 +209,46 @@ public sealed class GetReconciliationReport
         };
     }
 
-    private static void AddStatusQualityNotes(List<string> notes, ReconciliationReportFacts facts)
-    {
-        if (facts.PendingTransactionCount > 0)
-            notes.Add($"{facts.PendingTransactionCount} pending Nayax transaction(s) are excluded from completed sales.");
-        if (facts.RefundedTransactionCount > 0)
-            notes.Add($"{facts.RefundedTransactionCount} refunded Nayax transaction(s) are excluded from completed sales.");
-        if (facts.DeclinedOrCancelledTransactionCount > 0)
-            notes.Add($"{facts.DeclinedOrCancelledTransactionCount} cancelled or declined Nayax transaction(s) are excluded from completed sales.");
-        if (facts.UnknownStatusTransactionCount > 0)
-            notes.Add($"{facts.UnknownStatusTransactionCount} Nayax transaction(s) have unrecognised status IDs.");
-        if (facts.NullStatusTransactionCount > 0)
-            notes.Add($"{facts.NullStatusTransactionCount} Nayax transaction(s) have no status ID and are excluded from completed sales.");
-    }
+    private const string MachineFilteredFeeNote =
+        "Imported fees are account-level amounts and are not allocated to a selected machine.";
+
+    /// <summary>
+    /// A reimbursement matches only when its own coverage period falls entirely inside the requested
+    /// range, so an unmatched range says nothing about whether reimbursements have been imported for
+    /// other dates. The note states that, and what the reader can do about it.
+    /// </summary>
+    private static string MissingReimbursementNote(DateTime from, DateTime to) =>
+        $"No imported Nayax reimbursement period falls entirely inside {Day(from)} to {Day(to)}, " +
+        "so recorded card sales cannot be compared with a Nayax payout. " +
+        "Import the reimbursement that covers these dates, or request the period an imported reimbursement covers.";
+
+    private static string MissingStatusNote(int count) =>
+        $"{count} Nayax transaction(s) have no status ID and are excluded from completed sales.";
+
+    private static string UnrecognisedStatusNote(int count) =>
+        $"{count} Nayax transaction(s) have an unrecognised status ID and are excluded from completed sales.";
+
+    // Pending rows are not a data error, but they are not final either, and they are why an
+    // otherwise matching period still reports a warning - so the note explains that significance
+    // rather than asking for a repair. Refunded and cancelled/declined rows are ordinary outcomes
+    // and are reported only as counts.
+    private static string PendingNote(int count) =>
+        $"{count} pending Nayax transaction(s) are not final sales and are excluded from card sales; " +
+        "reconciliation stays provisional until they settle.";
+
+    /// <summary>
+    /// True when this period's fee GST could not be read from an imported GST percentage and the
+    /// period actually holds fee amounts to explain. A period with no imported fees has no fee GST
+    /// figure, so it is not described as a limitation.
+    /// </summary>
+    private static bool HasUnstatedFeeGstPercentage(ReconciliationPeriodFacts period) =>
+        !period.HasGstClassification &&
+        (period.ProcessingFeesExGst != 0m || period.FeeGst != 0m || period.OtherFees != 0m);
+
+    private static string PeriodScope(IReadOnlyList<ReconciliationPeriodFacts> periods) =>
+        string.Join(", ", periods.Select(PeriodRange));
+
+    private static string PeriodRange(ReconciliationPeriodFacts period) => $"{Day(period.From)} to {Day(period.To)}";
+
+    private static string Day(DateTime value) => value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 }

@@ -17,14 +17,15 @@ public class GetReportExportRowsTests
 {
     private static GetReportExportRows Sut(GetBookkeepingReport? bookkeeping = null, GetTransactionSalesReport? transactions = null,
         Inventory.Application.Reporting.Daily.GetDailyReport? daily = null,
-        Inventory.Application.Reporting.Gst.GetGstAccountingAid? gstAccountingAid = null)
+        Inventory.Application.Reporting.Gst.GetGstAccountingAid? gstAccountingAid = null,
+        Inventory.Application.Reporting.Reconciliation.GetReconciliationReport? reconciliationReport = null)
     {
         bookkeeping ??= new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(FakeBookkeepingReportFactsProvider.Complete()));
         transactions ??= new GetTransactionSalesReport(new FakeTransactionSalesReportFactsProvider(FakeTransactionSalesReportFactsProvider.Empty()));
         daily ??= new Inventory.Application.Reporting.Daily.GetDailyReport(
             new InventoryApi.Tests.Application.Reporting.Daily.FakeDailyReportFactsProvider(
                 InventoryApi.Tests.Application.Reporting.Daily.FakeDailyReportFactsProvider.SingleDay()));
-        var reconciliation = new Inventory.Application.Reporting.Reconciliation.GetReconciliationReport(
+        var reconciliation = reconciliationReport ?? new Inventory.Application.Reporting.Reconciliation.GetReconciliationReport(
             new InventoryApi.Tests.Application.Reporting.Reconciliation.FakeReconciliationReportFactsProvider(
                 InventoryApi.Tests.Application.Reporting.Reconciliation.FakeReconciliationReportFactsProvider.SinglePeriod()));
         var machineProfitability = new Inventory.Application.Reporting.MachineProfitability.GetMachineProfitabilityReport(
@@ -62,6 +63,111 @@ public class GetReportExportRowsTests
         var values = table.Rows[1];
         var grossSales = values[Array.IndexOf(header.ToArray(), "GrossSales")];
         Assert.Equal(apiResult.Sales.ToString(System.Globalization.CultureInfo.InvariantCulture), grossSales);
+    }
+
+    private static string Cell(ReportExportTable table, string column)
+    {
+        var index = table.Rows[0].ToList().IndexOf(column);
+        Assert.True(index >= 0, $"The export has no '{column}' column.");
+        return table.Rows[1][index];
+    }
+
+    [Fact]
+    public async Task Bookkeeping_export_carries_the_same_conditional_limitations_as_the_api_report()
+    {
+        var bookkeeping = new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(
+            FakeBookkeepingReportFactsProvider.Complete() with
+            {
+                IsCogsComplete = false,
+                UncostedTransactionCount = 2,
+                UncostedSalesAmount = 12.5m,
+                MissingStatusTransactionCount = 1,
+                UnknownStatusTransactionCount = 3,
+                DeclinedOrCancelledTransactionCount = 4
+            }));
+        var filter = new ReportingFilterDto(new DateTime(2025, 7, 1), new DateTime(2025, 7, 31));
+        var apiResult = await bookkeeping.Handle(filter, CancellationToken.None);
+
+        var table = await Sut(bookkeeping: bookkeeping).Handle("bookkeeping", filter, CancellationToken.None);
+
+        Assert.Equal("False", Cell(table, "IsCogsComplete"));
+        Assert.Equal("2", Cell(table, "UncostedTransactionCount"));
+        Assert.Equal("12.5", Cell(table, "UncostedSalesAmount"));
+        Assert.Equal("1", Cell(table, "MissingStatusTransactionCount"));
+        Assert.Equal("3", Cell(table, "UnknownStatusTransactionCount"));
+        Assert.Equal("4", Cell(table, "DeclinedOrCancelledTransactionCount"));
+        Assert.Equal(string.Join(" ", apiResult.DataQuality.Notes!), Cell(table, "DataQualityNotes"));
+        Assert.Contains("no persisted COGS", Cell(table, "DataQualityNotes"));
+        Assert.Contains("have no status ID", Cell(table, "DataQualityNotes"));
+    }
+
+    [Fact]
+    public async Task Bookkeeping_export_states_the_gst_on_sales_estimate_basis_even_for_a_clean_period()
+    {
+        var bookkeeping = new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(
+            FakeBookkeepingReportFactsProvider.Complete()));
+        var filter = new ReportingFilterDto(new DateTime(2025, 7, 1), new DateTime(2025, 7, 31));
+
+        var table = await Sut(bookkeeping: bookkeeping).Handle("bookkeeping", filter, CancellationToken.None);
+
+        Assert.Equal(string.Empty, Cell(table, "DataQualityNotes"));
+        Assert.Equal(
+            "Estimated GST on sales - assumes all included sales are taxable at 10% (GST-inclusive).",
+            Cell(table, "GstOnSalesBasis"));
+    }
+
+    /// <summary>
+    /// Issue #477: the reconciliation export carries the same scoped diagnostics the API report
+    /// returns - the per-period status exclusion counts, the period's own data-quality notes, and
+    /// the adjustments assumption - so a downloaded file never implies a verified zero adjustment or
+    /// repeats boilerplate the report no longer shows.
+    /// </summary>
+    [Fact]
+    public async Task Reconciliation_export_carries_each_periods_own_status_counts_notes_and_the_adjustments_assumption()
+    {
+        var period = InventoryApi.Tests.Application.Reporting.Reconciliation.FakeReconciliationReportFactsProvider.Period(
+            declinedOrCancelledTransactionCount: 17, missingStatusTransactionCount: 2);
+        var facts = InventoryApi.Tests.Application.Reporting.Reconciliation.FakeReconciliationReportFactsProvider.SinglePeriod(
+            period, declinedOrCancelledTransactionCount: 17, nullStatusTransactionCount: 2);
+        var reconciliation = new Inventory.Application.Reporting.Reconciliation.GetReconciliationReport(
+            new InventoryApi.Tests.Application.Reporting.Reconciliation.FakeReconciliationReportFactsProvider(facts));
+        var filter = new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1));
+        var apiResult = await reconciliation.Handle(filter, 0.01m, CancellationToken.None);
+
+        var table = await Sut(reconciliationReport: reconciliation).Handle("reconciliation", filter, CancellationToken.None);
+
+        var header = table.Rows[0].ToList();
+        Assert.All(table.Rows, row => Assert.Equal(header.Count, row.Count));
+        var periodRow = table.Rows[1];
+        var totalsRow = table.Rows[^1];
+        Assert.Equal("TOTAL", totalsRow[0]);
+        Assert.Equal("17", periodRow[header.IndexOf("DeclinedOrCancelledTransactionCount")]);
+        Assert.Equal("2", periodRow[header.IndexOf("MissingStatusTransactionCount")]);
+        Assert.Equal("17", totalsRow[header.IndexOf("DeclinedOrCancelledTransactionCount")]);
+        Assert.Equal("2", totalsRow[header.IndexOf("MissingStatusTransactionCount")]);
+        Assert.Equal("False", periodRow[header.IndexOf("AdjustmentsSupported")]);
+        Assert.Equal(Inventory.Application.Reporting.Reconciliation.GetReconciliationReport.AdjustmentsAssumption,
+            periodRow[header.IndexOf("AdjustmentsBasis")]);
+        Assert.Equal(Inventory.Application.Reporting.Reconciliation.GetReconciliationReport.AdjustmentsAssumption,
+            totalsRow[header.IndexOf("AdjustmentsBasis")]);
+        Assert.Equal(string.Join(" ", apiResult.PeriodRows[0].DataQuality.Notes!),
+            periodRow[header.IndexOf("DataQualityNotes")]);
+        Assert.Equal(string.Join(" ", apiResult.DataQuality.Notes!), totalsRow[header.IndexOf("DataQualityNotes")]);
+        Assert.Contains("have no status ID", totalsRow[header.IndexOf("DataQualityNotes")]);
+        Assert.DoesNotContain("cancelled or declined", totalsRow[header.IndexOf("DataQualityNotes")]);
+    }
+
+    [Fact]
+    public async Task Reconciliation_export_of_a_clean_period_exports_no_data_quality_boilerplate()
+    {
+        var table = await Sut().Handle("reconciliation",
+            new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)), CancellationToken.None);
+
+        var header = table.Rows[0].ToList();
+        Assert.Equal(string.Empty, table.Rows[1][header.IndexOf("DataQualityNotes")]);
+        Assert.Equal(string.Empty, table.Rows[^1][header.IndexOf("DataQualityNotes")]);
+        Assert.Equal(Inventory.Application.Reporting.Reconciliation.GetReconciliationReport.AdjustmentsAssumption,
+            table.Rows[1][header.IndexOf("AdjustmentsBasis")]);
     }
 
     [Fact]
