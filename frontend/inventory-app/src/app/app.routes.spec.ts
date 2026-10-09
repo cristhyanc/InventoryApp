@@ -7,6 +7,7 @@ import { HistoricalCostRecoveryComponent } from './components/admin/historical-c
 import { AvcoTransitionComponent } from './components/admin/avco-transition/avco-transition.component';
 import { CostingRepairPageComponent } from './components/admin/costing-repair/costing-repair-page.component';
 import { HistoricalGstClassificationComponent } from './components/admin/historical-gst-classification/historical-gst-classification.component';
+import { NayaxSaleTimestampRepairComponent } from './components/admin/nayax-sale-timestamp-repair/nayax-sale-timestamp-repair.component';
 import { PlatformDiagnosticsComponent } from './components/admin/diagnostics/platform-diagnostics.component';
 import { PurchaseEditPageComponent } from './components/purchases/purchase-edit/purchase-edit-page.component';
 import { PurchaseListComponent } from './components/purchases/purchase-list.component';
@@ -87,6 +88,18 @@ describe('Admin costing and maintenance routes (issue #390)', () => {
     expect(route('admin/historical-gst-classification').canActivate).toContain(MsalGuard);
     await expect(loadedComponent('admin/historical-gst-classification')).resolves.toBe(
       HistoricalGstClassificationComponent
+    );
+  });
+
+  /**
+   * The Nayax Sale Timestamp Repair page (#487, the UI over #472's Preview/Apply API) is routed
+   * like every other Admin maintenance page, so the URL is reachable directly by an authenticated
+   * operator; the API authorizes and business-scopes both of its requests itself.
+   */
+  it('serves the dedicated Nayax Sale Timestamp Repair page, behind authentication (issue #487)', async () => {
+    expect(route('admin/nayax-sale-timestamp-repair').canActivate).toContain(MsalGuard);
+    await expect(loadedComponent('admin/nayax-sale-timestamp-repair')).resolves.toBe(
+      NayaxSaleTimestampRepairComponent
     );
   });
 

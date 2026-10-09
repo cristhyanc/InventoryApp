@@ -83,7 +83,8 @@ export const primaryNavigation: readonly NavItem[] = [
       link('Historical Cost Recovery', '/admin/historical-cost-recovery'),
       link('AVCO Transition', '/admin/avco-transition'),
       link('Costing Repair', '/admin/costing-repair'),
-      link('Historical GST Classification', '/admin/historical-gst-classification')
+      link('Historical GST Classification', '/admin/historical-gst-classification'),
+      link('Nayax Sale Timestamp Repair', '/admin/nayax-sale-timestamp-repair')
     ]
   }
 ];
