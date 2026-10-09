@@ -1876,10 +1876,20 @@ its route exist — not a template change in the shell.
   (expanded, collapsed, or the narrow drawer) and at any desktop width, with only the #410 page
   padding as a gutter. A data-heavy page (Products, Dashboard, Purchases, Reconciliation,
   Transaction Sales) therefore uses the full main-area width; it does not reintroduce a capped,
-  centered column. A page or a component inside it may still choose its own narrower `max-w-*` for
-  a reading or edit form where a full-width line length would hurt usability (for example
-  `product-form.component.html`'s `.card`) — that is a page-level content choice, not something the
-  shell imposes on every page.
+  centered column.
+- **Page content containers fill that width too (issue #478).** A routed page's own outer content
+  container — the `.card` an edit or upload page wraps its form in — carries no `max-w-*` and no
+  `mx-auto` either, so the page is as wide as the content area the shell leaves it. The short
+  controls inside it are laid out in a responsive column grid (one column, two from `md`, three
+  from `xl`, with a textarea spanning the row at `md`) rather than stretched across the whole page;
+  `product-form.component.html`, `purchase-upload.component.html`,
+  `purchase-edit/purchase-edit-page.component.html` and
+  `stock-adjustment-form.component.html` are the worked examples. A narrower `max-w-*` remains
+  correct, and stays, on the things it genuinely serves: dialogs and modals, the sidebar, menus and
+  dropdowns, toasts, a single filter control or table cell, a readable explanatory paragraph, and a
+  report's label/value summary panel (`card-body max-w-xl`), where a full-width line would put the
+  label and its figure at opposite ends of the screen. This is a page-level content choice in each
+  template, not something the shell imposes or forbids.
 - **Sign-in callback.** `auth-callback.component.ts` centres a `.card` on the canvas background
   instead of a bare paragraph; its logic is still just the static "Signing you in..." message.
 

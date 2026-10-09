@@ -5,24 +5,27 @@
     </div>
   }
 
-  <div class="field">
-    <label class="field-label" for="editTitle">Purchase Title *</label>
-    <input id="editTitle" [(ngModel)]="editForm.title" name="editTitle" required />
-  </div>
+  <!-- Three short header fields side by side now that the page card is not capped (issue #478). -->
+  <div class="grid gap-4 md:grid-cols-3">
+    <div class="field">
+      <label class="field-label" for="editTitle">Purchase Title *</label>
+      <input id="editTitle" [(ngModel)]="editForm.title" name="editTitle" required />
+    </div>
 
-  <div class="field">
-    <label class="field-label" for="editSupplierId">Supplier</label>
-    <select id="editSupplierId" [(ngModel)]="editForm.supplierId" name="editSupplierId">
-      <option value="">None</option>
-      @for (s of suppliers; track s.id) {
-        <option [ngValue]="s.id">{{ s.name }}</option>
-      }
-    </select>
-  </div>
+    <div class="field">
+      <label class="field-label" for="editSupplierId">Supplier</label>
+      <select id="editSupplierId" [(ngModel)]="editForm.supplierId" name="editSupplierId">
+        <option value="">None</option>
+        @for (s of suppliers; track s.id) {
+          <option [ngValue]="s.id">{{ s.name }}</option>
+        }
+      </select>
+    </div>
 
-  <div class="field">
-    <label class="field-label" for="editPurchaseDate">Purchase Date</label>
-    <input id="editPurchaseDate" type="date" [(ngModel)]="editForm.purchaseDate" name="editPurchaseDate" />
+    <div class="field">
+      <label class="field-label" for="editPurchaseDate">Purchase Date</label>
+      <input id="editPurchaseDate" type="date" [(ngModel)]="editForm.purchaseDate" name="editPurchaseDate" />
+    </div>
   </div>
 
   <div class="grid gap-4 md:grid-cols-2">

@@ -11,7 +11,7 @@
     </div>
   </header>
 
-  <div class="card mx-auto w-full max-w-5xl">
+  <div class="card w-full">
     <div class="card-body">
       @if (loadingSupplierOrder) {
         <div class="alert alert-info">
@@ -82,24 +82,27 @@
             </div>
           }
 
-          <div class="field">
-            <label class="field-label" for="title">Purchase Title *</label>
-            <input id="title" [(ngModel)]="form.title" name="title" required placeholder="e.g. Weekly snack restock" />
-          </div>
+          <!-- Three short header fields side by side now that the card is not capped (issue #478). -->
+          <div class="grid gap-4 md:grid-cols-3">
+            <div class="field">
+              <label class="field-label" for="title">Purchase Title *</label>
+              <input id="title" [(ngModel)]="form.title" name="title" required placeholder="e.g. Weekly snack restock" />
+            </div>
 
-          <div class="field">
-            <label class="field-label" for="supplierId">Supplier</label>
-            <select id="supplierId" [(ngModel)]="form.supplierId" name="supplierId">
-              <option value="">None</option>
-              @for (s of suppliers; track s.id) {
-                <option [ngValue]="s.id">{{ s.name }}</option>
-              }
-            </select>
-          </div>
+            <div class="field">
+              <label class="field-label" for="supplierId">Supplier</label>
+              <select id="supplierId" [(ngModel)]="form.supplierId" name="supplierId">
+                <option value="">None</option>
+                @for (s of suppliers; track s.id) {
+                  <option [ngValue]="s.id">{{ s.name }}</option>
+                }
+              </select>
+            </div>
 
-          <div class="field">
-            <label class="field-label" for="purchaseDate">Purchase Date</label>
-            <input id="purchaseDate" type="date" [(ngModel)]="form.purchaseDate" name="purchaseDate" />
+            <div class="field">
+              <label class="field-label" for="purchaseDate">Purchase Date</label>
+              <input id="purchaseDate" type="date" [(ngModel)]="form.purchaseDate" name="purchaseDate" />
+            </div>
           </div>
 
           <div class="grid gap-4 md:grid-cols-2">
