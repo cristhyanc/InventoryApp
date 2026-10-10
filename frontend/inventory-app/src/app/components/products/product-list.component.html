@@ -38,18 +38,37 @@
         <table class="table">
           <thead class="table-head">
             <tr>
-              <th scope="col" class="table-cell">Name</th>
-              <th scope="col" class="table-cell">Category</th>
-              <th scope="col" class="table-cell">Supplier</th>
-              <th scope="col" class="table-cell table-num">Price</th>
-              <th scope="col" class="table-cell">Stock</th>
-              <th scope="col" class="table-cell">Status</th>
+              <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('name')">
+                <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('name')">{{ sortLabel('Name', 'name') }}</button>
+              </th>
+              <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('category')">
+                <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('category')">{{ sortLabel('Category', 'category') }}</button>
+              </th>
+              <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('supplier')">
+                <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('supplier')">{{ sortLabel('Supplier', 'supplier') }}</button>
+              </th>
+              <th scope="col" class="table-cell table-num" [attr.aria-sort]="ariaSort('price')">
+                <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('price')">{{ sortLabel('Price', 'price') }}</button>
+              </th>
+              <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('stock')">
+                <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('stock')">{{ sortLabel('Stock', 'stock') }}</button>
+              </th>
+              <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('status')">
+                <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('status')">{{ sortLabel('Status', 'status') }}</button>
+              </th>
               <th scope="col" class="table-cell sticky right-0 z-10 bg-md-gray-100"></th>
             </tr>
           </thead>
           <tbody>
-            @for (p of products; track p.id) {
-              <tr class="table-row">
+            @for (p of sortedProducts; track p.id) {
+              <tr
+                class="table-row cursor-pointer"
+                tabindex="0"
+                role="link"
+                [attr.aria-label]="'Edit product ' + p.name"
+                (click)="onRowActivate(p, $event)"
+                (keydown.enter)="onRowActivate(p, $event)"
+              >
                 <td class="table-cell">{{ p.name }}</td>
                 <td class="table-cell">{{ p.category?.name }}</td>
                 <td class="table-cell">{{ p.supplier?.name }}</td>
@@ -66,7 +85,6 @@
                 </td>
                 <td class="table-cell sticky right-0 z-10 bg-white">
                   <div class="flex flex-wrap gap-2 max-w-[140px] sm:max-w-none">
-                    <a [routerLink]="['/products', p.id, 'edit']" class="btn btn-sm btn-secondary">Edit</a>
                     <a [routerLink]="['/products', p.id, 'stock']" class="btn btn-sm btn-primary">Stock</a>
                     <button type="button" class="btn btn-sm btn-danger" (click)="confirmDelete(p)">Delete</button>
                   </div>
