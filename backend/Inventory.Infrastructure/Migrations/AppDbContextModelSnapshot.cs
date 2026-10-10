@@ -111,6 +111,9 @@ namespace Inventory.Infrastructure.Migrations
                     b.Property<int>("Role")
                         .HasColumnType("INTEGER");
 
+                    b.Property<DateTime>("StatusChangedAtUtc")
+                        .HasColumnType("TEXT");
+
                     b.HasKey("Id");
 
                     b.HasIndex("BusinessId");
@@ -119,6 +122,10 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasIndex("DirectoryTenantId", "ObjectId", "BusinessId")
                         .IsUnique();
+
+                    b.HasIndex(new[] { "DirectoryTenantId", "ObjectId" }, "IX_BusinessMemberships_DirectoryTenantId_ObjectId_Active")
+                        .IsUnique()
+                        .HasFilter("\"IsActive\" = 1");
 
                     b.ToTable("BusinessMemberships");
                 });

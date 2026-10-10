@@ -17,7 +17,7 @@ only the schema-migration step's "deploy and let startup apply it" alternative i
 | Create `BusinessMembership` rows from the supplied Entra mapping, in the role it names | **Human**, via `bootstrap-business` (see [The member's role](#the-members-role-issue-521)) |
 | Assign existing rows to that business | **Human**, via `bootstrap-business --apply` |
 | Move the global Nayax operator id and token into that business's record | **Human**, via `migrate-nayax-connection --apply` (issue #519; see [Migrating the Nayax connection](#migrating-the-nayax-connection-into-the-business-issue-519)) |
-| Remove the global `NayaxLynx` settings | **Human**, after the client reads the per-business record (issue #520) |
+| Remove the global `NayaxLynx` operator id and token | **Human**, once the per-business record is in use and verified (the client reads it since issue #520; `NayaxLynx__BaseUrl` stays) |
 | Back up the database | **Human** |
 | Deploy | **Human** |
 
@@ -268,6 +268,78 @@ rolls back automatically if any row count or financial total moved. Then check b
 - **Ownership was assigned to the wrong business.** Restore from the backup. Do not attempt to
   reassign rows by hand; ownership is immutable through the application and editing it directly
   bypasses every check in the boundary.
+- **A migration refused to apply with "holds more than one active BusinessMembership".** That is
+  the `AddOneActiveMembershipPerIdentity` migration of issue #522 declining to guess which
+  business a person stays in. Nothing was changed. See
+  [One active membership per identity](#one-active-membership-per-identity-issue-522) below.
+
+## One active membership per identity (issue #522)
+
+A person belongs to one business at a time, and since issue #522 the database enforces it: a
+unique index allows at most one **active** `BusinessMembership` per Entra identity
+(`(DirectoryTenantId, ObjectId)`), whatever state the owning businesses are in. Revoked rows are
+unaffected — any number may exist — so revoking a membership is how somebody moves from one
+business to another.
+
+This matters to an operator in exactly one situation: the migration that adds the index checks the
+existing data first, and **refuses to apply** if any identity already holds more than one active
+membership.
+
+### If the migration aborts
+
+The failure looks like this (one line, wrapped here), and it is the whole of what happened:
+
+```text
+Cannot apply AddOneActiveMembershipPerIdentity: at least one identity (DirectoryTenantId,
+ObjectId) holds more than one active BusinessMembership, and this migration will not choose
+which one to keep. Revoke all but one active membership per person, then run the migration
+again. Nothing has been changed. See docs/tenant-rollout.md.
+```
+
+**Nothing was changed.** The migration runs in a transaction and aborts before its first schema
+change, so no column, no index and no row was touched, and the migration is not recorded as
+applied. The application does not start against the new code with the old schema either: startup
+migration fails closed (see [Automatic Production-startup migration](#automatic-production-startup-migration-issue-201)),
+so the API logs a critical error and refuses to serve requests rather than running against a
+schema its code does not match. Expect an outage until the data is resolved, and plan the upgrade
+accordingly.
+
+It will not pick a membership for you. Which business a person keeps access to is a decision about
+access to financial data: choosing wrongly either strands somebody or shows them another
+business's ledger, and neither is a decision a migration may make unattended.
+
+**Resolving it.**
+
+1. Find the conflicting identities. On a copy of the database, or through a read-only connection:
+
+   ```sql
+   SELECT "DirectoryTenantId", "ObjectId", COUNT(*) AS "ActiveMemberships"
+   FROM "BusinessMemberships"
+   WHERE "IsActive" = 1
+   GROUP BY "DirectoryTenantId", "ObjectId"
+   HAVING COUNT(*) > 1;
+   ```
+
+   The result is Entra identifiers, not names: the membership table deliberately stores no email
+   address or display name. Match them to people through Entra, with a person who is entitled to.
+
+2. **Ask, then decide.** For each identity, a human decides which single business that person keeps
+   — and says so to the person and to the business losing access. Do not infer it from which
+   membership is older or which business is busier.
+
+3. Back up the database, verify the backup restores, and revoke every other active membership for
+   that identity by setting `IsActive = 0` (leave the rows: they are the membership history, and
+   deleting one would lose the record that the access ever existed). There is no
+   `StatusChangedAtUtc` to set yet — the aborted migration is the one that adds that column, and
+   when it does apply it fills every row from `CreatedAtUtc`.
+
+4. Re-run the upgrade. The migration re-checks and applies normally once no identity has two
+   active memberships; the refusal is repeatable, not a one-off, so a half-resolved database stops
+   it again rather than applying with the problem still present.
+
+Note that until the duplicate exists the index never fires: the application's single live business
+cannot produce this state through any supported path, and no request path creates, revokes or
+reactivates a membership today. A database that has it, has it from a hand-written change.
 
 ## Migrating the Nayax connection into the business (issue #519)
 
@@ -353,13 +425,20 @@ in any case.
 
 ### The cutover window
 
-**Run this command before deploying issue #520, not after.** Nothing reads the per-business record
-until #520 changes the Nayax client, so running it early is safe and changes no behaviour. Once
-#520 is deployed, the client reads the business's record instead of the global configuration — so
-if the record is still empty at that moment, every Nayax read (sales sync, machine and product
-catalogue, the dashboard's remote data) fails until this command has run. Running it first makes
-that window zero. If #520 has already been deployed and Nayax is failing, this command is the fix:
-run the dry run, confirm it reports `CredentialsStored`, then apply.
+**Run this command before deploying issue #520, not after.** Before that deploy the per-business
+record is read by nothing, so running the command early is safe and changes no behaviour. The
+deploy is the cutover: from it on, the client reads the business's record instead of the global
+configuration, and **while that record is empty every Nayax operation fails closed** — sales sync,
+the machine and product catalogue, the dashboard's remote data and the scheduled syncs alike — with
+the stable "Nayax is not connected" error (HTTP `409`, code `nayax_not_connected`) rather than an
+upstream error. Running the command first makes that window zero. If #520 has already been deployed
+and Nayax is failing this way, this command is the fix: run the dry run, confirm it reports
+`CredentialsStored`, then apply. There is no fallback to the global settings during the window, by
+design, and none to another business's credential ever.
+
+A `NayaxTokenProtection` key must be provisioned before this command (it refuses with the setting
+named otherwise), and it must stay provisioned afterwards: since the cutover, every Nayax call
+decrypts the stored token, so removing the key takes the integration down.
 
 ### Verifying Nayax afterwards
 
@@ -370,8 +449,12 @@ deployed and this command has been applied, verify through the application:
   an upstream error;
 - run a sales sync for a recent date range and confirm it imports as it did before;
 - confirm no `NayaxUpstreamException` entries appear for the period after the cutover (README.md §
-  KQL troubleshooting queries);
-- read the connection record's status: it stays `Ready` unless a later permission test changes it.
+  KQL troubleshooting queries), and no `Nayax connection unavailable` warnings either — that is the
+  entry the "Nayax is not connected" and "permission not granted" errors log, with the
+  `NayaxErrorCode` property naming which one;
+- read the connection record's status: it stays `Ready` unless a Nayax `401` moves it to
+  `NeedsAttention` (an invalid or expired token), which is also the state to look for if Nayax
+  stopped working some time after a successful cutover.
 
 If Nayax fails after the cutover, the credential is the first thing to check — re-run
 `migrate-nayax-connection --dry-run` and read what it reports is stored. Do not edit the
@@ -380,18 +463,23 @@ credential table by hand; the token is encrypted and its key id is stored with i
 ### When to remove the global settings
 
 Only after #520 is deployed and the verification above has passed, and as a deliberate human step:
-remove `NayaxLynx__AccessToken` / `Nayax__Token` (and, if nothing else reads it,
-`NayaxLynx__OperatorId`) from the environment's configuration. Until then leave them exactly as
-they are — this command deliberately does not remove them, so a rollback of #520 still has a
-working client. Keep `NayaxTokenProtection__*` forever: removing the key that encrypted a stored
-token is what makes that token undecryptable.
+remove `NayaxLynx__AccessToken` / `Nayax__Token` and `NayaxLynx__OperatorId` from the environment's
+configuration. Since the cutover this command is their only reader, so removing them costs the
+ability to re-run it and nothing else. **Keep `NayaxLynx__BaseUrl`**: it is still global, and
+startup validates it. Until the removal, leave them exactly as they are — this command deliberately
+does not remove them, so a rollback of #520 still has a working client. Keep
+`NayaxTokenProtection__*` forever: removing the key that encrypted a stored token is what makes that
+token undecryptable.
 
 ## Not part of this rollout
 
-- **Onboarding a second business.** The Nayax integration still uses one operator account and
-  token, so remote identifiers and imports are not yet partitioned. Do not add a second business
-  until they are. Issue #519's `migrate-nayax-connection` moves the existing business's credential
-  into its own record, but the client still reads the global configuration until issue #520.
+- **Onboarding a second business.** The Nayax *credential* is now per business: issue #519's
+  `migrate-nayax-connection` moves the existing business's credential into its own record, and since
+  issue #520 the client reads each business's own with no global fallback. What is still missing is
+  the self-service side — a credential reaches the database only through that human-run command, so
+  there is no supported way for a second business to connect its own Nayax account (the Owner
+  connection wizard and re-test endpoints of issue #506). Do not add a second business until it
+  exists.
 - **Database foreign keys from `BusinessId` to `Businesses`.** Deliberately deferred, and still
   **required**. This is an outstanding integrity step, not a decision that the constraint is
   unnecessary.

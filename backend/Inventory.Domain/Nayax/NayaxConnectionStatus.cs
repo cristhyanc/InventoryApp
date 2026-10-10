@@ -9,9 +9,9 @@ namespace Inventory.Domain.Nayax;
 /// (<c>Inventory.Infrastructure.Nayax.NayaxUpstreamException</c>), never a status change.
 ///
 /// <see cref="NotConfigured"/> is the shipped state and the state of a business with no connection
-/// record at all, so "nothing stored" and "stored but unusable" can never be confused. Nothing
-/// reads the connection yet - the Nayax client still uses the single configured operator/token
-/// until issue #520 - so no status currently changes application behaviour.
+/// record at all, so "nothing stored" and "stored but unusable" can never be confused. Since issue
+/// #520 the status decides whether an ordinary Nayax call may happen at all; which states allow one
+/// is <see cref="NayaxConnectionStatusGate"/>, the one place that rule is written.
 /// </summary>
 public enum NayaxConnectionStatus
 {

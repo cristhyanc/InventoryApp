@@ -106,6 +106,57 @@ public sealed class EfNayaxConnectionStore : INayaxConnectionStore
     }
 
     /// <inheritdoc />
+    public async Task<NayaxConnectionSnapshot?> FindForOperationAsync(
+        Func<NayaxConnectionStatus, bool> mayDecryptToken,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(mayDecryptToken);
+
+        if (_db.CurrentBusinessId is null)
+        {
+            return null;
+        }
+
+        // One statement for the status, the operator id, the ciphertext and the revision. Two
+        // queries would let a credential save commit between them and hand the caller the previous
+        // status beside the new token - a pair the row never held.
+        var stored = await _db.BusinessNayaxConnections
+            .AsNoTracking()
+            .Select(connection => new
+            {
+                connection.OperatorId,
+                connection.Status,
+                connection.AccessTokenCiphertext,
+                connection.EncryptionKeyId,
+                connection.CredentialRevision,
+            })
+            .SingleOrDefaultAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        if (stored is null)
+        {
+            return null;
+        }
+
+        if (!mayDecryptToken(stored.Status))
+        {
+            // The caller's gate refused this snapshot's own status, so the ciphertext is left
+            // alone: a refused state never handles the secret at all.
+            return new NayaxConnectionSnapshot(stored.Status, credential: null);
+        }
+
+        // Throws for a corrupt ciphertext or an unconfigured key, exactly as FindCredentialAsync
+        // does, and for the same reason: an undecryptable credential must not look like an absent
+        // one.
+        var accessToken = _protector.Unprotect(
+            new ProtectedNayaxToken(stored.EncryptionKeyId, stored.AccessTokenCiphertext));
+
+        return new NayaxConnectionSnapshot(
+            stored.Status,
+            new NayaxConnectionCredential(stored.OperatorId, accessToken, stored.CredentialRevision));
+    }
+
+    /// <inheritdoc />
     public async Task<NayaxConnection> SaveCredentialAsync(
         string operatorId,
         string accessToken,

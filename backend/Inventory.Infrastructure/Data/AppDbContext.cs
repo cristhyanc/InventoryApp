@@ -683,9 +683,14 @@ public class AppDbContext : DbContext
             .Property(m => m.Role)
             .IsRequired();
 
-        // One membership row per (actor, business). Cross-business ambiguity is not a schema
-        // constraint - it is deliberately left to BusinessMembershipResolutionPolicy, which
-        // denies access rather than picking one.
+        // When this membership's state last changed (issue #522). Required: every row records an
+        // instant, and the additive migration filled the pre-existing ones from CreatedAtUtc.
+        modelBuilder.Entity<BusinessMembership>()
+            .Property(m => m.StatusChangedAtUtc)
+            .IsRequired();
+
+        // One membership row per (actor, business), active or revoked, so duplicates cannot
+        // quietly accumulate for one person in one business.
         modelBuilder.Entity<BusinessMembership>()
             .HasIndex(m => new { m.DirectoryTenantId, m.ObjectId, m.BusinessId })
             .IsUnique();
@@ -693,5 +698,29 @@ public class AppDbContext : DbContext
         // The resolution lookup path: every membership for one authenticated actor.
         modelBuilder.Entity<BusinessMembership>()
             .HasIndex(m => new { m.DirectoryTenantId, m.ObjectId });
+
+        // One *active* membership per identity, across every business (issue #522). A person
+        // belongs to one business at a time, and until this slice that was only a resolution rule:
+        // BusinessMembershipResolutionPolicy denied an actor with two active memberships every
+        // business, which is the right fail-closed answer but arrives at sign-in, after the fact.
+        //
+        // The index is filtered on the active rows, which is what makes it a rule about state
+        // rather than about how the state was reached: an INSERT of a second active membership and
+        // an UPDATE that reactivates a revoked one are refused alike, while any number of revoked
+        // rows may stay for the membership history. It reads no business state, so a Pending or
+        // Deactivated business's membership still occupies the identity's one active membership.
+        //
+        // Both columns are NOCASE (above), so a case-shifted hand-entered row collides here rather
+        // than becoming a second active membership. It is named explicitly, and declared with the
+        // named HasIndex overload, because it covers the same two columns as the unfiltered lookup
+        // index above: EF identifies an index by its property list, so an unnamed declaration here
+        // would reconfigure that index instead of adding this one - and the lookup index has to
+        // stay, since a filtered index cannot serve a lookup that must also see revoked rows.
+        modelBuilder.Entity<BusinessMembership>()
+            .HasIndex(
+                m => new { m.DirectoryTenantId, m.ObjectId },
+                "IX_BusinessMemberships_DirectoryTenantId_ObjectId_Active")
+            .HasFilter("\"IsActive\" = 1")
+            .IsUnique();
     }
 }

@@ -170,6 +170,7 @@ public static class E2ETestFixture
                 ObjectId = owner.ObjectId,
                 IsActive = true,
                 CreatedAtUtc = SeededAtUtc,
+                StatusChangedAtUtc = SeededAtUtc,
             });
 
             await db.SaveChangesAsync(cancellationToken);
