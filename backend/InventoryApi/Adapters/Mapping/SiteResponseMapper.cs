@@ -33,5 +33,9 @@ public static class SiteResponseMapper
         product.SitePrice,
         product.EstimatedCardProfit,
         product.QuantityInStock,
-        product.MaxStock);
+        product.MaxStock,
+        product.MdbCode,
+        product.MachineMdbCodes
+            .Select(code => new SiteProductMachineMdbCodeDto(code.MachineId, code.MachineLabel, code.MdbCode))
+            .ToList());
 }

@@ -138,6 +138,90 @@ public class GetSiteProductsTests
         Assert.Equal(2.28m, product.EstimatedCardProfit);
     }
 
+    /// <summary>
+    /// Issue #495: the row's representative <c>MdbCode</c> is the lowest non-null per-machine code,
+    /// and every machine mapping stays visible in <c>MachineMdbCodes</c> rather than being collapsed -
+    /// including a repeated code across two machines, mirroring the Pick List row convention
+    /// (issue #496).
+    /// </summary>
+    [Fact]
+    public async Task Handle_ReportsTheLowestMachineMdbCodeAndEveryMachineMapping_ForAMultiMachineProduct()
+    {
+        var nayax = new RecordingNayaxLynxClient(
+            [
+                new NayaxMachine { MachineID = 10, CustomerID = SiteId, MachineName = "Lobby" },
+                new NayaxMachine { MachineID = 11, CustomerID = SiteId, MachineNumber = "M-11" },
+            ],
+            new Dictionary<long, List<NayaxMachineProduct>>
+            {
+                [10] = [new() { MachineID = 10, NayaxProductID = 1, RetailPrice = 5m, PAR = 5, MissingStockByMDB = 1, MDBCode = 10 }],
+                [11] = [new() { MachineID = 11, NayaxProductID = 1, RetailPrice = 5m, PAR = 5, MissingStockByMDB = 1, MDBCode = 2 }],
+            });
+        var facts = new RecordingSiteFactsStore(
+            costBasis: CostBasis, commissionByPrice: CommissionByPrice, feeExGst: 0.20m);
+        var useCase = new GetSiteProducts(nayax, facts, Calendar);
+
+        var product = Assert.Single(await useCase.Handle(SiteId, CancellationToken.None));
+
+        Assert.Equal(2, product.MdbCode);
+        Assert.Equal(2, product.MachineMdbCodes.Count);
+        Assert.Contains(product.MachineMdbCodes, m => m.MachineId == 10 && m.MachineLabel == "Lobby" && m.MdbCode == 10);
+        Assert.Contains(product.MachineMdbCodes, m => m.MachineId == 11 && m.MachineLabel == "M-11" && m.MdbCode == 2);
+    }
+
+    /// <summary>
+    /// Issue #495: a product whose machine mappings carry no MDB code at all reports a null
+    /// representative code rather than a fabricated zero, and the machine mapping itself still
+    /// appears with its own null code - the row never pretends a code exists.
+    /// </summary>
+    [Fact]
+    public async Task Handle_ReportsANullMdbCode_WhenNoMachineMappingHasOne()
+    {
+        var nayax = new RecordingNayaxLynxClient(
+            [new NayaxMachine { MachineID = 10, CustomerID = SiteId }],
+            new Dictionary<long, List<NayaxMachineProduct>>
+            {
+                [10] = [new() { MachineID = 10, NayaxProductID = 1, RetailPrice = 5m, PAR = 5, MissingStockByMDB = 1, MDBCode = null }],
+            });
+        var facts = new RecordingSiteFactsStore(
+            costBasis: CostBasis, commissionByPrice: CommissionByPrice, feeExGst: 0.20m);
+        var useCase = new GetSiteProducts(nayax, facts, Calendar);
+
+        var product = Assert.Single(await useCase.Handle(SiteId, CancellationToken.None));
+
+        Assert.Null(product.MdbCode);
+        var machineMdbCode = Assert.Single(product.MachineMdbCodes);
+        Assert.Null(machineMdbCode.MdbCode);
+        Assert.Equal("Machine #10", machineMdbCode.MachineLabel);
+    }
+
+    /// <summary>
+    /// Issue #495: when only one of two machine mappings has a code, the null one must not win the
+    /// representative row-level value, and a repeated code across both machines stays visible on
+    /// both entries rather than being deduplicated into one.
+    /// </summary>
+    [Fact]
+    public async Task Handle_IgnoresANullMachineCode_WhenResolvingTheRepresentativeMdbCode()
+    {
+        var nayax = new RecordingNayaxLynxClient(
+            [
+                new NayaxMachine { MachineID = 10, CustomerID = SiteId },
+                new NayaxMachine { MachineID = 11, CustomerID = SiteId },
+            ],
+            new Dictionary<long, List<NayaxMachineProduct>>
+            {
+                [10] = [new() { MachineID = 10, NayaxProductID = 1, RetailPrice = 5m, PAR = 5, MissingStockByMDB = 1, MDBCode = null }],
+                [11] = [new() { MachineID = 11, NayaxProductID = 1, RetailPrice = 5m, PAR = 5, MissingStockByMDB = 1, MDBCode = 7 }],
+            });
+        var facts = new RecordingSiteFactsStore(
+            costBasis: CostBasis, commissionByPrice: CommissionByPrice, feeExGst: 0.20m);
+        var useCase = new GetSiteProducts(nayax, facts, Calendar);
+
+        var product = Assert.Single(await useCase.Handle(SiteId, CancellationToken.None));
+
+        Assert.Equal(7, product.MdbCode);
+    }
+
     private static RecordingNayaxLynxClient Fleet() =>
         new(
             [
