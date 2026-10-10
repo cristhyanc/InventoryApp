@@ -613,7 +613,7 @@ Failure output (screenshots and traces) is written under `frontend/inventory-app
 - A machine refill is an internal stock transfer, not COGS or an expense.
 - Historical sale cost is persisted from internal AVCO when reliable, with transaction-level Nayax product cost as a fallback.
 - Missing COGS or profit remains unknown; it is never silently converted to zero.
-- Australian financial years run from 1 July to 30 June, using `Australia/Sydney` for business reporting.
+- Australian financial years run from 1 July to 30 June. Business days, and therefore every report date boundary, follow the business's own configured IANA timezone (`Business.TimeZoneId`, issue #499); the existing business is `Australia/Sydney`. A business whose zone cannot be resolved gets no business dates at all rather than another zone's.
 - Purchase amounts are GST-inclusive, and purchase input GST comes from an explicit per-line and per-charge classification, never from an amount. Anything unclassified stays visibly unresolved rather than being treated as GST-free.
 - UI reports and CSV/XLSX exports must use the same backend calculations and quality states.
 
@@ -733,17 +733,17 @@ signed in to.
 
 The Admin page's **Costing Repair** section is how an operator restores a product's cost history
 when it has a fatal missing-opening or unknown-cost costing issue: select the product, enter the
-quantity, unit cost, reason and effective date/time (entered and shown in Sydney time, converted
-to UTC for the API), and **Preview repair** to see the cost position before and after, the
+quantity, unit cost, reason and effective date/time (entered and shown in the business's own
+timezone, converted to UTC for the API), and **Preview repair** to see the cost position before and after, the
 resulting average unit cost, the first previously uncostable sale, the projected position once the
 rest of the history replays, and any fatal issues still remaining. **Apply repair** only becomes
 available once that preview is shown, and reapplies exactly the previewed proposal; if the
 product's cost history changed in the meantime, the apply is refused and asks for a fresh preview.
 Changing the selected product discards any preview or history still loading for the previous
 product, and a preview can only be applied to the product it was taken for. An effective time that
-does not exist in Sydney (the hour skipped when daylight saving starts in October) or that happens
-twice (the hour repeated when it ends in April) is rejected before preview; enter a time outside
-that hour. The product's repair history is shown underneath, newest first.
+does not exist in the business's timezone (the hour its clocks skip when daylight saving starts) or
+that happens twice (the hour they repeat when it ends) is rejected before preview; enter a time
+outside that hour. The product's repair history is shown underneath, newest first.
 
 A costing repair is a human-entered historical correction: it changes the product's historical
 cost of goods sold from the effective time onward, and it is never proof that the recorded history
