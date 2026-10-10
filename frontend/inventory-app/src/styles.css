@@ -1149,6 +1149,16 @@ video {
   color: rgb(21 87 176 / var(--tw-text-opacity, 1));
 }
 
+/* A success toast (#489) floats over page content, so its surface must be opaque: the same
+     15% md-success tint as an inline .alert-success, layered over solid white (#E4F3E5), so
+     nothing underneath shows through. Inline alerts and badges keep their translucent tint. */
+
+.toast.alert-success {
+  --tw-bg-opacity: 1;
+  background-color: rgb(255 255 255 / var(--tw-bg-opacity, 1));
+  background-image: linear-gradient(rgb(76 175 80 / 15%), rgb(76 175 80 / 15%));
+}
+
 /* ---- Form fields ------------------------------------------------------------------- */
 
 .field {
