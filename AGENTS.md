@@ -30,7 +30,7 @@ backend/Inventory.Infrastructure/     Adapters behind those ports: Nayax Lynx cl
 backend/Inventory.UnitTests/          xUnit tests of Inventory.Domain/Inventory.Application only (references nothing else)
 backend/Inventory.IntegrationTests/   xUnit database, API, adapter, migration, bootstrap and architecture tests
 frontend/inventory-app/               Angular 19 standalone application
-.github/workflows/                    Validation, Claude Code agent, Copilot CLI review, optional ChatGPT final review, and Azure deployment workflows
+.github/workflows/                    Validation, Claude Code agent, Copilot CLI review, and Azure deployment workflows
 CLAUDE.md                             Claude Code entry point: read and obey this file and the docs
 docs/architecture.md                  Current and target architecture
 docs/automation.md                    Automated development lifecycle and authority model
@@ -41,8 +41,7 @@ Directory.Build.props                 Shared .NET build quality settings (nullab
 frontend/inventory-app/eslint.config.js    Angular/TypeScript ESLint flat configuration
 scripts/validate.ps1                  Complete Windows validation
 scripts/validate.sh                   Complete Bash validation
-scripts/validate-agent-workflows.mjs  Agent workflow and template contract checks (with .test.mjs and chatgpt-review-contract.test.mjs)
-scripts/chatgpt-repair-provenance.mjs Proves an automatic repair request came from a chatgpt-review.yml run (with .test.mjs)
+scripts/validate-agent-workflows.mjs  Agent workflow and template contract checks (with .test.mjs)
 scripts/validate-deployment-workflows.mjs  Production deployment workflow contract checks (with .test.mjs)
 scripts/deployment-migration-preflight.mjs Deploy Production migration preflight (with .test.mjs)
 scripts/validate-documentation-impact.mjs  Documentation-impact declaration parser for issues and PRs (with .test.mjs)
@@ -91,7 +90,7 @@ These rules govern any current or future automated agent that implements a GitHu
 - The issue's acceptance criteria and explicit exclusions define the agent's authority. Work outside them is out of scope even when it is nearby, related, or looks like useful cleanup.
 - When requirements are materially ambiguous, conflict with each other, or conflict with this file, `docs/architecture.md`, or existing tests, stop and request a human decision. State exactly which decision is needed.
 - Do not expand scope, broaden acceptance criteria, or reinterpret exclusions. Propose follow-up work in the pull request instead.
-- After a pull request fails validation or review, an agent may make at most two automated repair attempts. A repair is requested by the repository owner's `@claude repair` comment or, on an agent pull request, by the ChatGPT final review (which starts automatically after a READY FOR HUMAN REVIEW agent review) when it requests changes; `agent-repair.yml` verifies that review and counts it toward the same limit (`docs/automation.md` § Repair workflow). After that, or as soon as a repair would require weakening a test or changing an established rule, the task is blocked and returns to a human.
+- After a pull request fails validation or review, an agent may make at most two automated repair attempts. After that, or as soon as a repair would require weakening a test or changing an established rule, the task is blocked and returns to a human.
 - After the initial architecture pass, the implementation agent may update its feature branch for at most two permitted repair attempts in response to CI or review failures. It stops and returns control to a human when validation and review succeed, after two failed repair attempts, or when requirements are ambiguous or conflicting. It never merges a feature or release pull request, never pushes to `develop` or `main`, never deploys, and never runs production migrations or modifies production data. An agent prepares a release pull request only on a separate, explicit human request, and only a human approves and merges it.
 - High-risk categories require explicit human scrutiny of both the issue and the pull request: financial or profit calculations, inventory quantity or historical costing, database schema or migrations, backfills or destructive data operations, authentication or authorization, secrets or environment configuration, GitHub Actions/Azure/deployment changes, any Nayax or other external-integration change (whether it reads, writes, imports, synchronises, maps errors, changes authentication, or handles remote payloads), imports or reconciliation, public API contract changes, file upload or filesystem security, and any production-impacting operation.
 - Every automated change must be traceable through its issue, branch, commits, pull request, validation result, review result, and human merge decision.

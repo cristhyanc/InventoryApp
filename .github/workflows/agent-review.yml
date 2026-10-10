@@ -468,8 +468,6 @@ jobs:
       - review
       - copilot-review
     runs-on: ubuntu-latest
-    outputs:
-      ready: ${{ steps.publish.outputs.ready }}
     permissions:
       pull-requests: write
       statuses: write
@@ -616,7 +614,6 @@ jobs:
 
           if [ "$verdict" = "READY FOR HUMAN REVIEW" ]; then
             set_verdict_status success "Ready for human review (advisory) for this SHA only"
-            echo "ready=true" >> "$GITHUB_OUTPUT"
           else
             set_verdict_status failure "Changes requested for this SHA"
           fi
@@ -640,40 +637,3 @@ jobs:
             -f context="$VERDICT_CONTEXT" \
             -f description="$description" \
             -f target_url="$RUN_URL" >/dev/null || echo "::warning::Could not record the fail-closed status."
-
-  dispatch-chatgpt-review:
-    name: Start the ChatGPT final review
-    # Only after a READY FOR HUMAN REVIEW verdict was published and recorded for this exact SHA. A label
-    # applied with GITHUB_TOKEN starts no workflow, so this job dispatches chatgpt-review.yml from main
-    # instead; that workflow re-verifies the head, validation and this verdict before calling OpenAI.
-    # No checkout and no model credential; its only write permission is the dispatch.
-    needs:
-      - context
-      - publish
-    if: needs.publish.outputs.ready == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write
-      pull-requests: read
-
-    steps:
-      - name: Reverify head and dispatch ChatGPT review
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ needs.context.outputs.pr_number }}
-          HEAD_SHA: ${{ needs.context.outputs.head_sha }}
-        run: |
-          set -euo pipefail
-          fail() { echo "::error::$1"; exit 1; }
-          [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] || fail "Invalid pull request number."
-          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "Invalid reviewed head SHA."
-          current_sha="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json headRefOid --jq '.headRefOid')"
-          if [ "$current_sha" != "$HEAD_SHA" ]; then
-            echo "::notice::The head moved to $current_sha after the review; the ChatGPT review is not started for the stale SHA."
-            exit 0
-          fi
-          gh workflow run chatgpt-review.yml \
-            --repo "$GITHUB_REPOSITORY" \
-            --ref main \
-            -f pr_number="$PR_NUMBER"
-          echo "::notice::Dispatched the ChatGPT final review of $HEAD_SHA from main."
