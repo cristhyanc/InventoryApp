@@ -1,14 +1,15 @@
 import { Component, ElementRef, HostListener, OnDestroy, OnInit, ViewChild } from '@angular/core';
 import { RouterOutlet } from '@angular/router';
 import { MsalBroadcastService, MsalService } from '@azure/msal-angular';
-import { AuthenticationResult, InteractionStatus } from '@azure/msal-browser';
-import { Subject, filter, takeUntil } from 'rxjs';
+import { AccountInfo, AuthenticationResult, InteractionStatus } from '@azure/msal-browser';
+import { Subject, Subscription, catchError, defer, filter, map, of, retry, takeUntil, timer } from 'rxjs';
 import { ToastContainerComponent } from "./components/shared/toast-container.component";
 import { IconComponent } from './components/shared/icon.component';
 import { LoadingIndicatorComponent } from './components/shared/loading-indicator.component';
 import { BreadcrumbsComponent } from './layout/breadcrumbs/breadcrumbs.component';
 import { PRIMARY_NAVIGATION_ID, SidebarNavComponent } from './layout/sidebar-nav.component';
 import { UserMenuComponent } from './layout/user-menu.component';
+import { BusinessService } from './services/business.service';
 import { loginRequest } from './auth-config';
 
 /**
@@ -47,6 +48,14 @@ import { loginRequest } from './auth-config';
 export class AppComponent implements OnInit, OnDestroy {
   private static readonly wideLayoutQuery = '(min-width: 1024px)';
 
+  /**
+   * Further attempts at the business lookup after a failed one, and the base delay between them
+   * (issue #499). A transient failure at sign-in is retried while the page is still waiting, so a
+   * single network blip does not leave every date on the page blank for the rest of the session.
+   */
+  static readonly businessLookupRetries = 2;
+  static readonly businessLookupRetryDelayMs = 1000;
+
   title = 'Inventory Manager';
 
   isLoggedIn = false;
@@ -55,6 +64,18 @@ export class AppComponent implements OnInit, OnDestroy {
   /** Expanded on a wide layout; the drawer is visible on a narrow one. */
   isSidebarOpen = true;
   isWideLayout = true;
+
+  /** Whether the signed-in operator's business lookup has settled (issue #499). */
+  private isBusinessSettled = false;
+  private businessRequested = false;
+
+  /**
+   * The signed-in identity the business context above was requested for, or `null` when nobody is
+   * signed in. A different identity means a different business, so the context is discarded and
+   * read again rather than kept from the previous account.
+   */
+  private businessAccountKey: string | null = null;
+  private businessLookup?: Subscription;
 
   readonly sidebarId = PRIMARY_NAVIGATION_ID;
 
@@ -67,7 +88,8 @@ export class AppComponent implements OnInit, OnDestroy {
 
   constructor(
     private readonly authService: MsalService,
-    private readonly msalBroadcastService: MsalBroadcastService
+    private readonly msalBroadcastService: MsalBroadcastService,
+    private readonly businessService: BusinessService
   ) {}
 
   /** The sidebar is only off the page when a narrow layout has dismissed its drawer. */
@@ -82,6 +104,16 @@ export class AppComponent implements OnInit, OnDestroy {
 
   get isSidebarDrawer(): boolean {
     return !this.isWideLayout;
+  }
+
+  /**
+   * Whether the routed page may be rendered yet (issue #499). A signed-in operator's page is held
+   * back until the business lookup has settled, because the business's time zone is what every
+   * instant on that page is displayed in; a signed-out visitor sees the public landing page
+   * immediately, as there is no business to read.
+   */
+  get isBusinessContextReady(): boolean {
+    return !this.isLoggedIn || this.isBusinessSettled;
   }
 
   get sidebarToggleLabel(): string {
@@ -200,5 +232,59 @@ export class AppComponent implements OnInit, OnDestroy {
     const account = this.authService.instance.getActiveAccount();
     this.isLoggedIn = account !== null;
     this.userName = account?.name ?? account?.username ?? '';
+
+    const accountKey = AppComponent.accountKey(account);
+    if (accountKey !== this.businessAccountKey) {
+      // A different account (or a sign-out) owns a different business context. Drop the previous
+      // one entirely - the cached lookup, the published zone and any lookup still in flight - so
+      // neither the loading state nor a failure can show the previous business's zone, and read
+      // the business again as the new account.
+      this.businessAccountKey = accountKey;
+      this.businessLookup?.unsubscribe();
+      this.businessLookup = undefined;
+      this.businessService.reset();
+      this.businessRequested = false;
+      this.isBusinessSettled = false;
+    }
+
+    if (this.isLoggedIn && !this.businessRequested) {
+      // The business's own name and time zone, which every operator-facing date/time is rendered
+      // in (issue #499). It is an authenticated read, so it cannot happen at bootstrap; it is
+      // requested here, once sign-in has settled. The routed page waits for it (see
+      // isBusinessContextReady), because a page rendered before the business is known would show
+      // its instants in no time zone at all.
+      this.businessRequested = true;
+      this.businessLookup = defer(() => this.businessService.load())
+        .pipe(
+          // A failed lookup emits null and is retryable (BusinessService drops it), so it is asked
+          // again, with a growing delay, before the shell gives up on it.
+          map((business) => {
+            if (business === null) {
+              throw new Error('The current business could not be read.');
+            }
+            return business;
+          }),
+          retry({
+            count: AppComponent.businessLookupRetries,
+            delay: (_error, attempt) => timer(attempt * AppComponent.businessLookupRetryDelayMs)
+          }),
+          catchError(() => of(null)),
+          takeUntil(this.destroying$)
+        )
+        .subscribe(() => {
+          // Settled either way. A lookup that still failed after its retries published no zone,
+          // so dates render as unavailable - but the application is still shown rather than
+          // waiting forever.
+          this.isBusinessSettled = true;
+        });
+    }
+  }
+
+  /** The stable identity of a signed-in account, independent of its display name. */
+  private static accountKey(account: AccountInfo | null): string | null {
+    if (account === null) {
+      return null;
+    }
+    return account.homeAccountId || account.localAccountId || account.username || '';
   }
 }

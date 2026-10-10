@@ -3,9 +3,10 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
 import { MsalBroadcastService, MsalService } from '@azure/msal-angular';
 import { AccountInfo, InteractionStatus } from '@azure/msal-browser';
-import { BehaviorSubject, of } from 'rxjs';
+import { BehaviorSubject, Observable, Subject, of } from 'rxjs';
 import { AppComponent } from './app.component';
 import { PlatformDiagnosticsAccessService } from './services/platform-diagnostics-access.service';
+import { BusinessService, CurrentBusiness } from './services/business.service';
 
 @Component({ standalone: true, template: 'page body' })
 class BlankPageComponent {}
@@ -44,16 +45,34 @@ interface Rendered {
     loginRedirect: jest.Mock;
     logoutRedirect: jest.Mock;
   };
+  businessLoad: jest.Mock;
+  businessReset: jest.Mock;
+  /** Re-runs the shell's sign-in check, as MSAL does when an interaction settles. */
+  settleInteraction: () => void;
 }
 
-async function render(options: { signedIn?: boolean } = {}): Promise<Rendered> {
+async function render(
+  options: {
+    signedIn?: boolean;
+    business?: () => Observable<CurrentBusiness | null>;
+    /** The active account, read on every sign-in check; defaults to `signedIn`. */
+    activeAccount?: () => AccountInfo | null;
+  } = {}
+): Promise<Rendered> {
   const signedIn = options.signedIn ?? true;
+  const activeAccount = options.activeAccount ?? (() => (signedIn ? account : null));
+  const businessLoad = jest.fn(options.business ?? (() => of({ name: 'Vending Co', timeZoneId: 'Australia/Sydney' })));
+  const businessReset = jest.fn();
+  const inProgress$ = new BehaviorSubject(InteractionStatus.None);
   const loginRedirect = jest.fn();
   const logoutRedirect = jest.fn();
   const msalService = {
     instance: {
-      getActiveAccount: () => (signedIn ? account : null),
-      getAllAccounts: () => (signedIn ? [account] : []),
+      getActiveAccount: () => activeAccount(),
+      getAllAccounts: () => {
+        const active = activeAccount();
+        return active ? [active] : [];
+      },
       setActiveAccount: jest.fn()
     },
     handleRedirectObservable: () => of(null),
@@ -66,18 +85,32 @@ async function render(options: { signedIn?: boolean } = {}): Promise<Rendered> {
     providers: [
       provideRouter([{ path: '**', component: BlankPageComponent }]),
       { provide: MsalService, useValue: msalService },
-      { provide: MsalBroadcastService, useValue: { inProgress$: new BehaviorSubject(InteractionStatus.None) } },
+      { provide: MsalBroadcastService, useValue: { inProgress$ } },
       // The shell renders the sidebar, which asks the diagnostics API whether to offer the
       // super-admin link (issue #335). The shell itself owns no part of that decision, so the
       // probe is stubbed as refused here and tested where it belongs.
-      { provide: PlatformDiagnosticsAccessService, useValue: { isGranted: () => of(false) } }
+      { provide: PlatformDiagnosticsAccessService, useValue: { isGranted: () => of(false) } },
+      // The shell reads the signed-in operator's business so every instant on the page can be
+      // rendered in that business's time zone (issue #499). The shell owns only the waiting; the
+      // lookup itself is tested in business.service.spec.ts.
+      { provide: BusinessService, useValue: { load: businessLoad, reset: businessReset } }
     ]
   }).compileComponents();
 
   const fixture = TestBed.createComponent(AppComponent);
   fixture.detectChanges();
 
-  return { fixture, host: fixture.nativeElement as HTMLElement, msal: { loginRedirect, logoutRedirect } };
+  return {
+    fixture,
+    host: fixture.nativeElement as HTMLElement,
+    msal: { loginRedirect, logoutRedirect },
+    businessLoad,
+    businessReset,
+    settleInteraction: () => {
+      inProgress$.next(InteractionStatus.None);
+      fixture.detectChanges();
+    }
+  };
 }
 
 /**
@@ -399,6 +432,150 @@ describe('AppComponent main content width (issue #454)', () => {
     const classList = Array.from(wrapper?.classList ?? []);
     expect(classList).not.toContain('mx-auto');
     expect(classList.some((className) => className.startsWith('max-w-'))).toBe(false);
+  });
+});
+
+/**
+ * The shell is where the business's own time zone enters the application (issue #499). Every
+ * instant a page displays is rendered in that zone, so the shell reads the business once sign-in
+ * has settled and holds the routed page back until the lookup has answered - either way, so a
+ * failed lookup degrades to dates being unavailable rather than to an application that never
+ * appears.
+ */
+describe('AppComponent business context (issue #499)', () => {
+  beforeEach(() => stubMatchMedia(true));
+
+  /** The routed page, which is only rendered once the business context is ready. */
+  async function navigatedMain(fixture: ComponentFixture<AppComponent>): Promise<string> {
+    await TestBed.inject(Router).navigateByUrl('/reports/bookkeeping');
+    fixture.detectChanges();
+    return (fixture.nativeElement as HTMLElement).querySelector('main')?.textContent ?? '';
+  }
+
+  it('reads the signed-in operator business once, and then renders the page', async () => {
+    const { fixture, businessLoad } = await render();
+
+    expect(businessLoad).toHaveBeenCalledTimes(1);
+    expect(await navigatedMain(fixture)).toContain('page body');
+  });
+
+  it('asks for no business at all when nobody is signed in, and still renders the page', async () => {
+    const { fixture, businessLoad } = await render({ signedIn: false });
+
+    expect(businessLoad).not.toHaveBeenCalled();
+    expect(await navigatedMain(fixture)).toContain('page body');
+  });
+
+  it('shows a loading state instead of the page while the business lookup is in flight', async () => {
+    const pending = new Subject<CurrentBusiness | null>();
+    const { fixture } = await render({ business: () => pending.asObservable() });
+
+    const whileLoading = await navigatedMain(fixture);
+    expect(whileLoading).toContain('Loading your business');
+    expect(whileLoading).not.toContain('page body');
+
+    pending.next({ name: 'Vending Co', timeZoneId: 'Australia/Sydney' });
+    fixture.detectChanges();
+
+    const afterLoading = (fixture.nativeElement as HTMLElement).querySelector('main')?.textContent ?? '';
+    expect(afterLoading).toContain('page body');
+    expect(afterLoading).not.toContain('Loading your business');
+  });
+
+  it('reads the business again, as the new account, when the signed-in account changes', async () => {
+    const dana = { ...account, homeAccountId: 'dana.tenant' } as AccountInfo;
+    const lee = { name: 'Lee Operator', username: 'lee@example.test', homeAccountId: 'lee.tenant' } as unknown as AccountInfo;
+    let active: AccountInfo | null = dana;
+    const leeBusiness = new Subject<CurrentBusiness | null>();
+    const lookups = [
+      () => of({ name: 'Vending Co', timeZoneId: 'Australia/Sydney' }),
+      () => leeBusiness.asObservable()
+    ];
+    let lookupCount = 0;
+    const { fixture, businessLoad, businessReset, settleInteraction } = await render({
+      activeAccount: () => active,
+      business: () => lookups[lookupCount++]()
+    });
+    expect(await navigatedMain(fixture)).toContain('page body');
+    const resetsBeforeSwitch = businessReset.mock.calls.length;
+
+    active = lee;
+    settleInteraction();
+
+    // The previous account's business context is discarded and read again, and the page waits
+    // for the new account's business rather than showing the previous one's zone meanwhile.
+    expect(businessReset.mock.calls.length).toBe(resetsBeforeSwitch + 1);
+    expect(businessLoad).toHaveBeenCalledTimes(2);
+    const whileLoading = (fixture.nativeElement as HTMLElement).querySelector('main')?.textContent ?? '';
+    expect(whileLoading).toContain('Loading your business');
+    expect(whileLoading).not.toContain('page body');
+
+    leeBusiness.next({ name: 'Vending NY', timeZoneId: 'America/New_York' });
+    fixture.detectChanges();
+    expect((fixture.nativeElement as HTMLElement).querySelector('main')?.textContent).toContain('page body');
+  });
+
+  it('does not read the business again when the same account signs in again', async () => {
+    const { businessLoad, businessReset, settleInteraction } = await render();
+    const resets = businessReset.mock.calls.length;
+
+    settleInteraction();
+
+    expect(businessLoad).toHaveBeenCalledTimes(1);
+    expect(businessReset.mock.calls.length).toBe(resets);
+  });
+
+  it('discards the business context on sign-out and reads it afresh on the next sign-in', async () => {
+    let active: AccountInfo | null = account;
+    const { businessLoad, businessReset, settleInteraction } = await render({ activeAccount: () => active });
+    const resets = businessReset.mock.calls.length;
+
+    active = null;
+    settleInteraction();
+    expect(businessReset.mock.calls.length).toBe(resets + 1);
+
+    active = account;
+    settleInteraction();
+    expect(businessLoad).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries a failed business lookup before rendering the page, so one blip is not permanent', async () => {
+    jest.useFakeTimers();
+    try {
+      let attempt = 0;
+      const { fixture, businessLoad } = await render({
+        business: () => (++attempt === 1 ? of(null) : of({ name: 'Vending Co', timeZoneId: 'Australia/Sydney' }))
+      });
+      expect(businessLoad).toHaveBeenCalledTimes(1);
+      fixture.detectChanges();
+      expect((fixture.nativeElement as HTMLElement).querySelector('main')?.textContent).toContain('Loading your business');
+
+      jest.advanceTimersByTime(AppComponent.businessLookupRetryDelayMs);
+      fixture.detectChanges();
+
+      expect(businessLoad).toHaveBeenCalledTimes(2);
+      expect((fixture.nativeElement as HTMLElement).querySelector('main')?.textContent).not.toContain('Loading your business');
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('renders the page anyway when the business still could not be read after its retries', async () => {
+    jest.useFakeTimers();
+    try {
+      const { fixture, businessLoad } = await render({ business: () => of(null) });
+
+      jest.advanceTimersByTime(
+        AppComponent.businessLookupRetryDelayMs * (AppComponent.businessLookupRetries * (AppComponent.businessLookupRetries + 1)) / 2
+      );
+      fixture.detectChanges();
+
+      expect(businessLoad).toHaveBeenCalledTimes(1 + AppComponent.businessLookupRetries);
+      const main = (fixture.nativeElement as HTMLElement).querySelector('main')?.textContent ?? '';
+      expect(main).not.toContain('Loading your business');
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });
 

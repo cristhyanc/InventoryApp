@@ -35,16 +35,35 @@
             <table class="table">
               <thead class="table-head">
                 <tr>
-                  <th scope="col" class="table-cell">Name</th>
-                  <th scope="col" class="table-cell">Average Unit Cost</th>
-                  <th scope="col" class="table-cell">Site Price</th>
-                  <th scope="col" class="table-cell">Estimated Card Profit</th>
-                  <th scope="col" class="table-cell">Stock</th>
+                  <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('name')">
+                    <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('name')">{{ sortLabel('Name', 'name') }}</button>
+                  </th>
+                  <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('mdbCode')">
+                    <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('mdbCode')">{{ sortLabel('MDB Code', 'mdbCode') }}</button>
+                  </th>
+                  <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('averageUnitCost')">
+                    <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('averageUnitCost')">{{ sortLabel('Average Unit Cost', 'averageUnitCost') }}</button>
+                  </th>
+                  <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('sitePrice')">
+                    <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('sitePrice')">{{ sortLabel('Site Price', 'sitePrice') }}</button>
+                  </th>
+                  <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('estimatedCardProfit')">
+                    <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('estimatedCardProfit')">{{ sortLabel('Estimated Card Profit', 'estimatedCardProfit') }}</button>
+                  </th>
+                  <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('quantityInStock')">
+                    <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('quantityInStock')">{{ sortLabel('Stock', 'quantityInStock') }}</button>
+                  </th>
                 </tr>
               </thead>
               <tbody>
-                <tr class="table-row" *ngFor="let product of products">
+                <tr class="table-row" *ngFor="let product of sortedProducts">
                   <td class="table-cell">{{ product.name }}</td>
+                  <td class="table-cell" data-testid="site-product-mdb-code">
+                    <ng-container *ngIf="product.machineMdbCodes.length; else noMdbCode">
+                      <div *ngFor="let machineCode of product.machineMdbCodes">{{ machineCode.machineLabel }}: {{ machineCode.mdbCode ?? '—' }}</div>
+                    </ng-container>
+                    <ng-template #noMdbCode>—</ng-template>
+                  </td>
                   <td class="table-cell">{{ product.averageUnitCost == null ? 'Unavailable' : ('$' + product.averageUnitCost.toFixed(2)) }}</td>
                   <td class="table-cell">${{ product.sitePrice.toFixed(2) }}</td>
                   <td class="table-cell">{{ product.estimatedCardProfit == null ? 'Unavailable' : ('$' + product.estimatedCardProfit.toFixed(2)) }}</td>

@@ -4,11 +4,11 @@ import { BehaviorSubject } from 'rxjs';
 import { MachineService } from '../../../services/machine.service';
 import { ToastService } from '../../../services/toast.service';
 import {
-  BUSINESS_TIME_ZONE,
   currentDateInTimeZone,
   shiftCalendarDate,
   startOfDayUtc
 } from '../../../formatting/business-time-zone';
+import { BusinessTimeZoneService } from '../../../formatting/business-time-zone.service';
 import { BusinessDateTimePipe } from '../../../formatting/business-date-time.pipe';
 import {
   NayaxDuplicateResolution,
@@ -170,8 +170,18 @@ export class MachineRestockSyncComponent {
   resolvingManyEvents$ = new BehaviorSubject(false);
   selectedEventIds = new Set<number>();
 
-  /** The Sync Restock From date filter (issue #206), as a `yyyy-MM-dd` local-date input value. */
-  fromDate$ = new BehaviorSubject<string>(this.defaultFromDate());
+  /**
+   * The Sync Restock From date filter (issue #206), as a `yyyy-MM-dd` local-date input value. It
+   * is empty until the dialog is opened, because its default is a date in the business's own
+   * timezone and that zone is not known before the business has been read (issue #499).
+   */
+  fromDate$ = new BehaviorSubject<string>('');
+  /**
+   * The dialog was opened before the business timezone was known, so its From date default could
+   * not be dated yet (issue #499). An empty From date otherwise means the operator cleared it, so
+   * this is what keeps a later refresh from treating "not yet defaulted" as "no lower bound".
+   */
+  private fromDateDefaultPending = false;
   /** Show reconciled (issue #206): off by default, so reconciled-manually events stay hidden. */
   showReconciled$ = new BehaviorSubject<boolean>(false);
 
@@ -189,7 +199,8 @@ export class MachineRestockSyncComponent {
 
   constructor(
     private machineService: MachineService,
-    private toastService: ToastService
+    private toastService: ToastService,
+    private businessTimeZone: BusinessTimeZoneService
   ) {}
 
   /**
@@ -286,7 +297,9 @@ export class MachineRestockSyncComponent {
       return;
     }
 
-    this.fromDate$.next(this.defaultFromDate());
+    const defaultFromDate = this.defaultFromDate();
+    this.fromDateDefaultPending = defaultFromDate === '';
+    this.fromDate$.next(defaultFromDate);
     this.showReconciled$.next(false);
     this.modalOpen$.next(true);
     this.refreshPreview();
@@ -294,6 +307,7 @@ export class MachineRestockSyncComponent {
 
   /** The From date filter changed (issue #206): fetches a preview bounded by the new date. */
   onFromDateChange(value: string): void {
+    this.fromDateDefaultPending = false;
     this.fromDate$.next(value);
     this.refreshPreview();
   }
@@ -317,6 +331,21 @@ export class MachineRestockSyncComponent {
     }
 
     this.syncError$.next(null);
+
+    // The From date filter is a business-timezone calendar day, so without that zone there is no
+    // correct window to ask for (issue #499). Reporting it beats asking for an unbounded one.
+    if (this.businessTimeZone.timeZoneId === null) {
+      this.syncError$.next('Loading the business time zone. Please try again in a moment.');
+      return;
+    }
+
+    if (this.fromDateDefaultPending) {
+      // The zone has arrived since the dialog opened: apply the default the operator would have
+      // seen, rather than asking for an unbounded window.
+      this.fromDateDefaultPending = false;
+      this.fromDate$.next(this.defaultFromDate());
+    }
+
     this.syncing$.next(true);
     const fromDateIso = this.toUtcInstant(this.fromDate$.value);
     this.machineService.syncRestock(machineId, fromDateIso, this.showReconciled$.value).subscribe({
@@ -341,30 +370,36 @@ export class MachineRestockSyncComponent {
   }
 
   /**
-   * Three calendar days before the operator's current Australia/Canberra business date (issue
-   * #206; timezone corrected by issue #218; shortened from seven days by issue #242), as
-   * `yyyy-MM-dd`.
+   * Three calendar days before the operator's current business date (issue #206; timezone
+   * corrected by issue #218; shortened from seven days by issue #242), as `yyyy-MM-dd`. Empty
+   * while the business timezone is still unknown (issue #499), which is the loading state
+   * `refreshPreview` reports rather than dating the filter in a zone nobody confirmed.
    */
   private defaultFromDate(): string {
-    const today = currentDateInTimeZone(new Date(), BUSINESS_TIME_ZONE);
+    const timeZone = this.businessTimeZone.timeZoneId;
+    if (timeZone === null) {
+      return '';
+    }
+    const today = currentDateInTimeZone(new Date(), timeZone);
     const { year, month, day } = shiftCalendarDate(today, -3);
     const pad = (value: number) => value.toString().padStart(2, '0');
     return `${year}-${pad(month)}-${pad(day)}`;
   }
 
   /**
-   * The operator's chosen calendar date as the UTC instant of its Australia/Canberra midnight
-   * (issue #218) - the InventoryApp business timezone, not the browser's local timezone - so the
-   * backend compares it against the canonical (UTC) EventDateTimeGMT without a second, separate
-   * event-date interpretation. Resolved from the IANA timezone database, so AEST/AEDT
+   * The operator's chosen calendar date as the UTC instant of its midnight in the business's own
+   * timezone (issue #218; per business since issue #499) - not the browser's local timezone - so
+   * the backend compares it against the canonical (UTC) EventDateTimeGMT without a second,
+   * separate event-date interpretation. Resolved from the IANA timezone database, so that zone's
    * daylight-saving transitions are applied automatically rather than a fixed UTC offset.
    */
   private toUtcInstant(dateInputValue: string): string | null {
-    if (!dateInputValue) {
+    const timeZone = this.businessTimeZone.timeZoneId;
+    if (!dateInputValue || timeZone === null) {
       return null;
     }
     const [year, month, day] = dateInputValue.split('-').map(Number);
-    return startOfDayUtc(year, month, day, BUSINESS_TIME_ZONE).toISOString();
+    return startOfDayUtc(year, month, day, timeZone).toISOString();
   }
 
   applySelectedEvents(): void {

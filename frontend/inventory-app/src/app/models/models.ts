@@ -93,7 +93,7 @@ export interface InventoryValuationSummary {
 
 /**
  * One summary period, in both time bases the home Dashboard summary measures in (issue #459): the
- * UTC instants its sales are selected between (inclusive at both ends) and the Sydney business
+ * UTC instants its sales are selected between (inclusive at both ends) and the business
  * dates those instants cover.
  */
 export interface DashboardSummaryPeriod {
@@ -244,6 +244,13 @@ export interface Site {
   previousComparableWeekRevenue: number;
 }
 
+/** One machine's MDB code for a Site Products row (issue #495); null when Nayax has none. */
+export interface SiteProductMachineMdbCode {
+  machineId: number;
+  machineLabel: string;
+  mdbCode: number | null;
+}
+
 export interface SiteProduct {
   productId: number;
   name: string;
@@ -252,6 +259,13 @@ export interface SiteProduct {
   estimatedCardProfit: number | null;
   quantityInStock: number;
   maxStock: number;
+  /**
+   * The row's representative MDB code (issue #495): the lowest non-null code across
+   * `machineMdbCodes`, or null when none of them has one. Not assumed to be the product's single
+   * globally unique code - see `machineMdbCodes` for the per-machine values.
+   */
+  mdbCode: number | null;
+  machineMdbCodes: SiteProductMachineMdbCode[];
 }
 
 export interface ProductUpdateDto {
@@ -366,7 +380,7 @@ export interface StockHistoryPage {
 }
 
 /**
- * The global Stock History filters. `from`/`to` are inclusive `Australia/Sydney` calendar days
+ * The global Stock History filters. `from`/`to` are inclusive business calendar days
  * (`yyyy-MM-dd`), which the backend converts to that business day's UTC boundaries; the browser's
  * own timezone never takes part.
  */
@@ -593,6 +607,8 @@ export interface PurchaseItem {
  */
 export interface PickListMachineQuantity {
   machineId: number;
+  /** The MDB code for this specific machine-product entry (issue #496); null when Nayax has none. */
+  mdbCode: number | null;
   currentQuantity: number;
   targetQuantity: number;
   quantityToPick: number;
@@ -602,6 +618,12 @@ export interface PickListMachineQuantity {
 export interface PickListProduct {
   productId: number;
   productName: string;
+  /**
+   * The row's representative MDB code (issue #496): the lowest non-null code across
+   * `machineQuantities`, or null when none of them has one. Not assumed to be the product's single
+   * globally unique code - see each `machineQuantities[].mdbCode` for the per-machine value.
+   */
+  mdbCode: number | null;
   storageQuantityInStock: number;
   totalQuantityToPick: number;
   storageShortageQuantity: number;

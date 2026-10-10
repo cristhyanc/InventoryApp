@@ -1,7 +1,6 @@
 using System.Text.Json;
 using Inventory.Application.Nayax;
 using Inventory.Application.Reporting.Transactions;
-using Inventory.Infrastructure.Time;
 using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Reporting.Persistence;
 using Inventory.Infrastructure.Data;
@@ -108,7 +107,7 @@ public class NayaxSaleTimestampContractTests
     /// The production symptom, end to end over the persisted instant: the Sunday evening sale belongs
     /// to Sunday 4 October and to the week that ended with it, not to Monday 5 October. The dashboard
     /// window is the real one, resolved from a Monday-afternoon Sydney instant through the real
-    /// <see cref="SydneyBusinessCalendar"/>.
+    /// business calendar over the Sydney zone (<see cref="FixedSydneyTime"/>).
     /// </summary>
     [Fact]
     public async Task A_Sunday_evening_sale_stays_in_Sunday_and_last_week_once_daylight_saving_has_started()

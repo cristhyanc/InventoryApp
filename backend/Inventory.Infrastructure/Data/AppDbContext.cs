@@ -104,10 +104,15 @@ public class AppDbContext : DbContext
     /// Both save paths funnel through <see cref="BusinessOwnershipEnforcer"/> so tenant
     /// ownership is applied to every write, whichever overload a service happens to call. This
     /// is why services do not, and must not, add their own business filters or stamping.
+    ///
+    /// <see cref="BusinessTimeZoneEnforcer"/> joins it for the same reason (issue #499): a
+    /// business's time zone is what every business date is derived from, so an unresolvable one is
+    /// refused on whichever path writes it rather than per write path.
     /// </summary>
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {
         BusinessOwnershipEnforcer.Enforce(this);
+        BusinessTimeZoneEnforcer.Enforce(this);
         return base.SaveChanges(acceptAllChangesOnSuccess);
     }
 
@@ -116,6 +121,7 @@ public class AppDbContext : DbContext
         CancellationToken cancellationToken = default)
     {
         BusinessOwnershipEnforcer.Enforce(this);
+        BusinessTimeZoneEnforcer.Enforce(this);
         return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
     }
 
@@ -595,6 +601,11 @@ public class AppDbContext : DbContext
         // carries no uniqueness constraint and no index. Two businesses may legitimately trade
         // under the same name; ownership is decided by the key and the membership rows alone.
         modelBuilder.Entity<Business>().Property(b => b.Name).IsRequired();
+
+        // The business's IANA time zone (issue #499). Required, because a business with no zone
+        // has no derivable business dates at all; the value itself is validated against the host's
+        // time-zone database by BusinessTimeZoneEnforcer, which a schema constraint cannot do.
+        modelBuilder.Entity<Business>().Property(b => b.TimeZoneId).IsRequired();
 
         // The backfill audit is keyed only by its own id: it records what happened to a table,
         // including runs that assigned rows to the wrong business, so it must stay queryable

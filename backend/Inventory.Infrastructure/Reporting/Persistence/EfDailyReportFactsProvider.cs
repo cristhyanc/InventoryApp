@@ -36,8 +36,8 @@ public sealed class EfDailyReportFactsProvider : IDailyReportFactsProvider
 
     public async Task<DailyReportFacts> GetFactsAsync(DateTime from, DateTime to, long? machineId, CancellationToken cancellationToken)
     {
-        // Two different kinds of boundary (issue #380). Sales are selected by instant, between Sydney
-        // midnight at the start of the first requested business date and, exclusively, Sydney midnight
+        // Two different kinds of boundary (issue #380). Sales are selected by instant, between the
+        // business-day midnight at the start of the first requested business date and, exclusively, business-day midnight
         // at the start of the day after the last one - 23, 24 or 25 hours per day. Imported
         // reimbursement coverage dates are date-only values, so they keep plain calendar-date bounds
         // and are never shifted by a timezone.
@@ -51,8 +51,8 @@ public sealed class EfDailyReportFactsProvider : IDailyReportFactsProvider
         var importedPeriod = await EfReportingSharedQueries.ImportedSummaryAsync(_db, from, endExclusive, machineId, cancellationToken);
 
         // Each day's fees are charged to exactly the sales that day's revenue counts: the fee use case
-        // selects them between the same Sydney-midnight instants and buckets them by the same business
-        // date, rather than by the whole UTC date a Sydney day straddles.
+        // selects them between the same business-day-midnight instants and buckets them by the same business
+        // date, rather than by the whole UTC date a business day straddles.
         var feeByDate = new Dictionary<DateTime, NayaxProcessingFeeResult>();
         foreach (var date in sales.Select(x => BusinessCalendarDate(x.MachineAuthorizationTime)).Distinct())
             feeByDate[date] = await _nayaxProcessingFees.HandleBusinessPeriod(BusinessPeriod(date, date), machineId, cancellationToken);
@@ -118,7 +118,7 @@ public sealed class EfDailyReportFactsProvider : IDailyReportFactsProvider
     }
 
     /// <summary>
-    /// The <c>Australia/Sydney</c> business date a sale belongs to, as a true date-only value
+    /// The business date a sale belongs to, as a true date-only value
     /// (issue #380): the same date the Sites/Machines dashboards and Transaction Sales put the sale's
     /// instant on, taken from the business calendar port rather than from the instant's UTC date.
     ///
@@ -131,8 +131,8 @@ public sealed class EfDailyReportFactsProvider : IDailyReportFactsProvider
         DateTime.SpecifyKind(_businessCalendar.ToBusinessDate(instant), DateTimeKind.Unspecified);
 
     /// <summary>
-    /// The fee period for an inclusive range of business dates: its sales between Sydney midnight at
-    /// the start of the first date and the last instant before Sydney midnight after the last date,
+    /// The fee period for an inclusive range of business dates: its sales between business-day midnight at
+    /// the start of the first date and the last instant before business-day midnight after the last date,
     /// which is the same set of sales the daily rows and totals select.
     /// </summary>
     private NayaxProcessingFeeBusinessPeriod BusinessPeriod(DateTime firstBusinessDate, DateTime lastBusinessDate) =>

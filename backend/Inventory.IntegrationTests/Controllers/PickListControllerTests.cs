@@ -32,7 +32,7 @@ public class PickListControllerTests
     {
         var nayax = new Mock<INayaxLynxClient>();
         nayax.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new List<NayaxMachineProduct> { new() { NayaxProductID = 100, PAR = 10, MissingStockByMDB = 4 } });
+            .ReturnsAsync(new List<NayaxMachineProduct> { new() { NayaxProductID = 100, MDBCode = 12, PAR = 10, MissingStockByMDB = 4 } });
         var storage = new Mock<IPickListStorageStockStore>();
         storage.Setup(x => x.GetStorageProductsAsync(It.IsAny<IReadOnlyCollection<long>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((IReadOnlyDictionary<long, PickListStorageProduct>)new Dictionary<long, PickListStorageProduct>
@@ -47,5 +47,7 @@ public class PickListControllerTests
         var body = Assert.IsType<PickListResult>(ok.Value);
         var product = Assert.Single(body.Products);
         Assert.Equal(4, product.TotalQuantityToPick);
+        Assert.Equal(12, product.MdbCode);
+        Assert.Equal(12, Assert.Single(product.MachineQuantities).MdbCode);
     }
 }

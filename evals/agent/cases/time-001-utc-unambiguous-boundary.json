@@ -17,7 +17,7 @@
     {
       "type": "repoFileContains",
       "file": "AGENTS.md",
-      "text": "The business reporting timezone is `Australia/Sydney`. Store true instants consistently and do not introduce server-local or browser-local date shifts."
+      "text": "Store true instants consistently and do not introduce server-local or browser-local date shifts"
     }
   ]
 }

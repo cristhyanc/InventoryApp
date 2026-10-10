@@ -149,6 +149,8 @@ public record SiteSummaryDto(
     decimal PreviousComparableWeekRevenue
 );
 
+public record SiteProductMachineMdbCodeDto(long MachineId, string MachineLabel, int? MdbCode);
+
 public record SiteProductDto(
     long ProductId,
     string Name,
@@ -156,5 +158,7 @@ public record SiteProductDto(
     decimal SitePrice,
     decimal? EstimatedCardProfit,
     int QuantityInStock,
-    int MaxStock
+    int MaxStock,
+    int? MdbCode,
+    List<SiteProductMachineMdbCodeDto> MachineMdbCodes
 );

@@ -363,7 +363,13 @@ public class ReportingRegressionTests
         // explicit registration is kept so the assertion still reads as "every port this use case
         // graph needs is present", regardless of which extension method supplies it.
         services.AddScoped<ISiteNameResolver, SiteNameResolver>();
-        services.AddScoped<IBusinessCalendar>(_ => new FakeBusinessCalendar(DateTime.UtcNow));
+        // IBusinessCalendar is registered by AddInfrastructureServices() as the per-request
+        // CurrentBusinessCalendar since issue #499, so the obligation a host takes on is the
+        // per-request business time zone it reads - published by the composition root beside
+        // IBusinessScope (see Program.cs). Registering it here is what makes this assertion still
+        // read as "every port this use case graph needs is present".
+        services.AddScoped<BusinessTimeZoneScope>();
+        services.AddScoped<IBusinessTimeZoneProvider>(sp => sp.GetRequiredService<BusinessTimeZoneScope>());
         services.AddScoped<IBookkeepingReportFactsProvider, EfBookkeepingReportFactsProvider>();
         services.AddScoped<IDailyReportFactsProvider, EfDailyReportFactsProvider>();
         services.AddScoped<IReconciliationReportFactsProvider, EfReconciliationReportFactsProvider>();

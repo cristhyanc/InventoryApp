@@ -7,6 +7,7 @@ import {
   NayaxSaleTimestampReconciliation,
   NayaxSaleTimestampUnresolvedReason
 } from '../../../services/nayax-sale-timestamp-repair.service';
+import { BusinessTimeZoneService } from '../../../formatting/business-time-zone.service';
 
 function reconciliation(
   overrides: Partial<NayaxSaleTimestampReconciliation> = {}
@@ -109,6 +110,8 @@ async function render(plan: NayaxSaleTimestampRepairPreview): Promise<{
   // Reset first, so a test that renders two plans in a row configures a fresh module each time.
   TestBed.resetTestingModule();
   await TestBed.configureTestingModule({ imports: [NayaxSaleTimestampRepairPreviewComponent] }).compileComponents();
+  // The business time zone the shell loads at sign-in (issue #499); instants render in it.
+  TestBed.inject(BusinessTimeZoneService).publish('Australia/Sydney');
   const fixture = TestBed.createComponent(NayaxSaleTimestampRepairPreviewComponent);
   fixture.componentRef.setInput('preview', plan);
   fixture.detectChanges();

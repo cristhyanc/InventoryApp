@@ -45,7 +45,7 @@ public class NayaxSales : IBusinessOwned
     /// the latest-sales synchronization writes this from the authoritative
     /// <c>AuthorizationDateTimeGMT</c> field instead, and an uploaded export writes it from a valid
     /// value in that column, which may also correct a stored instant. Every report, dashboard period
-    /// and costing replay compares it as a UTC instant and converts it to the <c>Australia/Sydney</c>
+    /// and costing replay compares it as a UTC instant and converts it to the
     /// business date through <c>IBusinessCalendar</c>. Three kinds of row are not verified UTC: rows
     /// ingested before that fix; rows the live synchronization stored between issues #380 and #471
     /// from an offset-free <c>AuthorizationDateTimeGMT</c> value, which were shifted by the host's

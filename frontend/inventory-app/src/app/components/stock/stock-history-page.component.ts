@@ -21,7 +21,7 @@ import { StockAdjustmentFormComponent } from './stock-adjustment-form/stock-adju
  * preselected.
  *
  * It lists stock movements across every product the business owns, newest first, and narrows them by
- * product, Sydney calendar date range, reason, machine and source. One bounded request serves a
+ * product, business calendar date range, reason, machine and source. One bounded request serves a
  * page: the page never loads every product to fan out a history request per product, and the server
  * caps the page size whatever this page asks for.
  *

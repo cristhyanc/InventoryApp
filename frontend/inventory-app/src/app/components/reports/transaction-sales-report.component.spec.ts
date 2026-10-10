@@ -3,6 +3,7 @@ import { of } from 'rxjs';
 import { TransactionSalesReportComponent } from './transaction-sales-report.component';
 import { ReportingService, TransactionSalesReport, TransactionSalesRow } from '../../services/reporting.service';
 import { MachineService } from '../../services/machine.service';
+import { BusinessTimeZoneService } from '../../formatting/business-time-zone.service';
 
 function row(overrides: Partial<TransactionSalesRow> = {}): TransactionSalesRow {
   return {
@@ -50,6 +51,10 @@ async function render(rows: TransactionSalesRow[]) {
       { provide: MachineService, useValue: { getAll: jest.fn(() => of([])) } }
     ]
   }).compileComponents();
+
+  // The business time zone the shell loads at sign-in (issue #499). Every instant the report
+  // renders is shown in it, and the application's existing business is in Sydney.
+  TestBed.inject(BusinessTimeZoneService).publish('Australia/Sydney');
 
   const fixture = TestBed.createComponent(TransactionSalesReportComponent);
   fixture.detectChanges();
