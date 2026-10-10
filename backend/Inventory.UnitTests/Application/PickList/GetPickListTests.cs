@@ -61,6 +61,122 @@ public class GetPickListTests
     }
 
     [Fact]
+    public async Task Handle_ExposesMdbCode_PerMachineProductEntry()
+    {
+        var nayax = new Mock<INayaxLynxClient>();
+        nayax.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<NayaxMachineProduct>
+            {
+                new() { NayaxProductID = 100, MDBCode = 12, PAR = 10, MissingStockByMDB = 4 },
+            });
+        var storage = StorageWith((100, "Coke Zero", 50));
+
+        var result = await new GetPickList(nayax.Object, storage.Object).Handle([1], CancellationToken.None);
+
+        var product = Assert.Single(result.Products);
+        Assert.Equal(12, product.MdbCode);
+        var cell = Assert.Single(product.MachineQuantities);
+        Assert.Equal(12, cell.MdbCode);
+    }
+
+    [Fact]
+    public async Task Handle_PreservesDifferentMdbCodesPerMachine_ForTheSameProductOnDifferentMachines()
+    {
+        var nayax = new Mock<INayaxLynxClient>();
+        nayax.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<NayaxMachineProduct> { new() { NayaxProductID = 100, MDBCode = 12, PAR = 10, MissingStockByMDB = 3 } });
+        nayax.Setup(x => x.GetMachineProductsAsync(2, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<NayaxMachineProduct> { new() { NayaxProductID = 100, MDBCode = 45, PAR = 8, MissingStockByMDB = 5 } });
+        var storage = StorageWith((100, "Coke Zero", 100));
+
+        var result = await new GetPickList(nayax.Object, storage.Object).Handle([1, 2], CancellationToken.None);
+
+        var product = Assert.Single(result.Products);
+        // Two genuinely distinct MDB slots on two different machines for the same product: neither
+        // the per-machine codes nor the combined pick quantity collapse into one another.
+        Assert.Equal(8, product.TotalQuantityToPick);
+        var machine1Cell = product.MachineQuantities.Single(mq => mq.MachineId == 1);
+        var machine2Cell = product.MachineQuantities.Single(mq => mq.MachineId == 2);
+        Assert.Equal(12, machine1Cell.MdbCode);
+        Assert.Equal(45, machine2Cell.MdbCode);
+        Assert.Equal(3, machine1Cell.QuantityToPick);
+        Assert.Equal(5, machine2Cell.QuantityToPick);
+    }
+
+    [Fact]
+    public async Task Handle_PreservesRepeatedMdbCode_AcrossDifferentMachines()
+    {
+        var nayax = new Mock<INayaxLynxClient>();
+        nayax.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<NayaxMachineProduct> { new() { NayaxProductID = 100, MDBCode = 12, PAR = 10, MissingStockByMDB = 3 } });
+        nayax.Setup(x => x.GetMachineProductsAsync(2, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<NayaxMachineProduct> { new() { NayaxProductID = 100, MDBCode = 12, PAR = 10, MissingStockByMDB = 5 } });
+        var storage = StorageWith((100, "Coke Zero", 100));
+
+        var result = await new GetPickList(nayax.Object, storage.Object).Handle([1, 2], CancellationToken.None);
+
+        var product = Assert.Single(result.Products);
+        Assert.Equal(12, product.MdbCode);
+        Assert.All(product.MachineQuantities, mq => Assert.Equal(12, mq.MdbCode));
+        Assert.Equal(8, product.TotalQuantityToPick);
+    }
+
+    [Fact]
+    public async Task Handle_OrdersProductsAscendingByMdbCode_NumericallyNotLexically()
+    {
+        var nayax = new Mock<INayaxLynxClient>();
+        nayax.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<NayaxMachineProduct>
+            {
+                new() { NayaxProductID = 100, MDBCode = 10, PAR = 10, MissingStockByMDB = 1 },
+                new() { NayaxProductID = 200, MDBCode = 2, PAR = 10, MissingStockByMDB = 1 },
+            });
+        var storage = StorageWith((100, "Zucchini Chips", 10), (200, "Apple Juice", 10));
+
+        var result = await new GetPickList(nayax.Object, storage.Object).Handle([1], CancellationToken.None);
+
+        // Numeric 2 sorts before 10, even though "10" sorts before "2" lexically; a sort purely on
+        // ProductName would also put Apple Juice (200) first, so this proves the MDB code drives
+        // ordering rather than the previous ProductName-only default.
+        Assert.Equal([200, 100], result.Products.Select(p => p.ProductId));
+    }
+
+    [Fact]
+    public async Task Handle_OrdersMissingMdbCodesDeterministically_BeforeAnyCode()
+    {
+        var nayax = new Mock<INayaxLynxClient>();
+        nayax.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<NayaxMachineProduct>
+            {
+                new() { NayaxProductID = 100, MDBCode = 5, PAR = 10, MissingStockByMDB = 1 },
+                new() { NayaxProductID = 200, MDBCode = null, PAR = 10, MissingStockByMDB = 1 },
+            });
+        var storage = StorageWith((100, "Coke", 10), (200, "Chips", 10));
+
+        var result = await new GetPickList(nayax.Object, storage.Object).Handle([1], CancellationToken.None);
+
+        Assert.Equal([200, 100], result.Products.Select(p => p.ProductId));
+        Assert.Null(result.Products.First().MdbCode);
+    }
+
+    [Fact]
+    public async Task Handle_BreaksMdbCodeTies_ByProductNameOrdinal()
+    {
+        var nayax = new Mock<INayaxLynxClient>();
+        nayax.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<NayaxMachineProduct>
+            {
+                new() { NayaxProductID = 100, MDBCode = 7, PAR = 10, MissingStockByMDB = 1 },
+                new() { NayaxProductID = 200, MDBCode = 7, PAR = 10, MissingStockByMDB = 1 },
+            });
+        var storage = StorageWith((100, "Zebra Snack", 10), (200, "Apple Juice", 10));
+
+        var result = await new GetPickList(nayax.Object, storage.Object).Handle([1], CancellationToken.None);
+
+        Assert.Equal([200, 100], result.Products.Select(p => p.ProductId));
+    }
+
+    [Fact]
     public async Task Handle_SumsQuantityToPick_AcrossSelectedMachinesForTheSameProduct()
     {
         var nayax = new Mock<INayaxLynxClient>();

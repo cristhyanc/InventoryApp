@@ -62,22 +62,24 @@ function pickListResult(overrides: Partial<PickListResult> = {}): PickListResult
       {
         productId: 1,
         productName: 'Coke',
+        mdbCode: 2,
         storageQuantityInStock: 50,
         totalQuantityToPick: 4,
         storageShortageQuantity: 0,
         machineQuantities: [
-          { machineId: 10, currentQuantity: 6, targetQuantity: 10, quantityToPick: 4 },
-          { machineId: 20, currentQuantity: 10, targetQuantity: 10, quantityToPick: 0 }
+          { machineId: 10, mdbCode: 2, currentQuantity: 6, targetQuantity: 10, quantityToPick: 4 },
+          { machineId: 20, mdbCode: 2, currentQuantity: 10, targetQuantity: 10, quantityToPick: 0 }
         ]
       },
       {
         productId: 2,
         productName: 'Chips',
+        mdbCode: 10,
         storageQuantityInStock: 2,
         totalQuantityToPick: 5,
         storageShortageQuantity: 3,
         machineQuantities: [
-          { machineId: 10, currentQuantity: 0, targetQuantity: 5, quantityToPick: 5 }
+          { machineId: 10, mdbCode: 10, currentQuantity: 0, targetQuantity: 5, quantityToPick: 5 }
         ]
       }
     ],
@@ -245,8 +247,8 @@ describe('PickListComponent Selected Machines chip removal', () => {
   it('removes the machine from both the applied and staged selections and refetches with the remaining ids', () => {
     const afterRemoval = of(pickListResult({
       products: [{
-        productId: 2, productName: 'Chips', storageQuantityInStock: 2, totalQuantityToPick: 5, storageShortageQuantity: 3,
-        machineQuantities: [{ machineId: 10, currentQuantity: 0, targetQuantity: 5, quantityToPick: 5 }]
+        productId: 2, productName: 'Chips', mdbCode: 10, storageQuantityInStock: 2, totalQuantityToPick: 5, storageShortageQuantity: 3,
+        machineQuantities: [{ machineId: 10, mdbCode: 10, currentQuantity: 0, targetQuantity: 5, quantityToPick: 5 }]
       }]
     }));
     const getPickList = jest.fn(() => of(pickListResult()));
@@ -371,8 +373,8 @@ describe('PickListComponent picked/unpicked tracking', () => {
       .mockReturnValueOnce(of(pickListResult()))
       .mockReturnValueOnce(of(pickListResult({
         products: [{
-          productId: 1, productName: 'Coke', storageQuantityInStock: 50, totalQuantityToPick: 0, storageShortageQuantity: 0,
-          machineQuantities: [{ machineId: 10, currentQuantity: 10, targetQuantity: 10, quantityToPick: 0 }]
+          productId: 1, productName: 'Coke', mdbCode: 2, storageQuantityInStock: 50, totalQuantityToPick: 0, storageShortageQuantity: 0,
+          machineQuantities: [{ machineId: 10, mdbCode: 2, currentQuantity: 10, targetQuantity: 10, quantityToPick: 0 }]
         }]
       })));
     const { component } = createHarness(undefined, undefined, getPickList);
@@ -566,7 +568,8 @@ describe('PickListComponent rendered structure', () => {
 
     const headers = Array.from(host.querySelectorAll('thead th')).map((th) => th.textContent?.trim());
     expect(headers[0]).toBe('Product');
-    expect(headers[1]).toBe('Total to Pick');
+    expect(headers[1]).toBe('MDB Code');
+    expect(headers[2]).toBe('Total to Pick');
     expect(headers).toContain('Machine A');
     expect(headers).toContain('Machine B');
     expect(host.textContent).toContain('Selected Machines (2)');
@@ -576,6 +579,40 @@ describe('PickListComponent rendered structure', () => {
     expect(rows[0].textContent).toContain('Coke');
     expect(rows[0].textContent).toContain('Pick: 4');
     expect(rows[0].textContent).toContain('Current: 6 of 10');
+  });
+
+  it('shows the MDB code column, default-sorted so the lower code renders first, and per-machine codes inside each cell', async () => {
+    const pickList = jest.fn(() => of(pickListResult()));
+    const { host, openDropdown, checkOption, applyFilters } = await render(undefined, undefined, pickList);
+    openDropdown('Machines');
+    checkOption('Machine A');
+    applyFilters();
+
+    const rows = Array.from(host.querySelectorAll('tbody tr'));
+    // The fixture returns Coke (MDB 2) before Chips (MDB 10): the backend projection is already
+    // ordered ascending by MDB code, and the page renders rows in that order rather than re-sorting.
+    expect(rows[0].textContent).toContain('Coke');
+    expect(rows[1].textContent).toContain('Chips');
+    const mdbCells = Array.from(host.querySelectorAll('[data-testid="pick-list-mdb-code"]')).map((td) => td.textContent?.trim());
+    expect(mdbCells).toEqual(['2', '10']);
+    expect(rows[0].textContent).toContain('MDB: 2');
+  });
+
+  it('renders a dash for a missing MDB code instead of leaving the cell blank or showing "null"', async () => {
+    const pickList = jest.fn(() => of(pickListResult({
+      products: [{
+        productId: 1, productName: 'Coke', mdbCode: null, storageQuantityInStock: 50, totalQuantityToPick: 4, storageShortageQuantity: 0,
+        machineQuantities: [{ machineId: 10, mdbCode: null, currentQuantity: 6, targetQuantity: 10, quantityToPick: 4 }]
+      }]
+    })));
+    const { host, openDropdown, checkOption, applyFilters } = await render(undefined, undefined, pickList);
+    openDropdown('Machines');
+    checkOption('Machine A');
+    applyFilters();
+
+    const mdbCell = host.querySelector('[data-testid="pick-list-mdb-code"]');
+    expect(mdbCell?.textContent?.trim()).toBe('—');
+    expect(host.textContent).not.toContain('MDB: null');
   });
 
   it('keeps the whole matrix header row sticky inside a scrollable table area', async () => {
@@ -592,7 +629,7 @@ describe('PickListComponent rendered structure', () => {
     expect(Array.from(scrollArea.classList)).toEqual(expect.arrayContaining(['max-h-[70vh]', 'overflow-auto']));
 
     const headers = Array.from(host.querySelectorAll<HTMLTableCellElement>('thead th'));
-    expect(headers.map((th) => th.textContent?.trim())).toEqual(['Product', 'Total to Pick', 'Machine A', 'Machine B']);
+    expect(headers.map((th) => th.textContent?.trim())).toEqual(['Product', 'MDB Code', 'Total to Pick', 'Machine A', 'Machine B']);
     for (const th of headers) {
       // Every header cell, not just the first two, is pinned and opaque so rows cannot show through.
       expect(Array.from(th.classList)).toEqual(expect.arrayContaining(['sticky', 'top-0', 'z-10', 'bg-md-gray-100']));

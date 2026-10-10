@@ -593,6 +593,8 @@ export interface PurchaseItem {
  */
 export interface PickListMachineQuantity {
   machineId: number;
+  /** The MDB code for this specific machine-product entry (issue #496); null when Nayax has none. */
+  mdbCode: number | null;
   currentQuantity: number;
   targetQuantity: number;
   quantityToPick: number;
@@ -602,6 +604,12 @@ export interface PickListMachineQuantity {
 export interface PickListProduct {
   productId: number;
   productName: string;
+  /**
+   * The row's representative MDB code (issue #496): the lowest non-null code across
+   * `machineQuantities`, or null when none of them has one. Not assumed to be the product's single
+   * globally unique code - see each `machineQuantities[].mdbCode` for the per-machine value.
+   */
+  mdbCode: number | null;
   storageQuantityInStock: number;
   totalQuantityToPick: number;
   storageShortageQuantity: number;
