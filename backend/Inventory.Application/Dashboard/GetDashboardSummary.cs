@@ -11,7 +11,7 @@ namespace Inventory.Application.Dashboard;
 /// The home Dashboard summary use case (issue #459): the one authoritative source for the sales,
 /// refill, ordering and inventory figures the Dashboard cards show. It composes the existing
 /// authorities rather than re-deriving anything -
-/// <see cref="MachineDashboardWindow"/> for the Sydney business week and its comparable period,
+/// <see cref="MachineDashboardWindow"/> for the business week and its comparable period,
 /// <see cref="IDashboardSummarySalesFactsProvider"/> for completed-sale revenue over those periods,
 /// <see cref="CalculateReorderNeeds"/> for the live fleet read, <see cref="IProductCatalogStore"/>
 /// for the catalogue, and the Domain
@@ -61,7 +61,7 @@ public sealed class GetDashboardSummary
     public async Task<DashboardSummaryDto> Handle(CancellationToken cancellationToken)
     {
         // Resolved once, before anything is read, so every card describes the same instant and the
-        // same Sydney business week rather than whichever moment its own read happened to start at.
+        // same business week rather than whichever moment its own read happened to start at.
         var window = MachineDashboardWindow.Resolve(_clock, _businessCalendar);
 
         var salesFacts = await _salesFacts.GetSalesFactsAsync(

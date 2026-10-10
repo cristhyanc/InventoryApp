@@ -13,6 +13,7 @@ import {
   StockHistoryEntry,
   StockHistoryPage
 } from '../../models/models';
+import { BusinessTimeZoneService } from '../../formatting/business-time-zone.service';
 
 function product(overrides: Partial<Product> = {}): Product {
   return {
@@ -340,6 +341,10 @@ describe('StockHistoryPageComponent rendering', () => {
         { provide: MachineService, useValue: { getAll: jest.fn(() => of([machine(9, 'Lobby')])) } }
       ]
     }).compileComponents();
+
+    // The business time zone the shell loads at sign-in (issue #499); the movement instants are
+    // rendered in it, and the application's existing business is in Sydney.
+    TestBed.inject(BusinessTimeZoneService).publish('Australia/Sydney');
 
     const fixture = TestBed.createComponent(StockHistoryPageComponent);
     fixture.detectChanges();

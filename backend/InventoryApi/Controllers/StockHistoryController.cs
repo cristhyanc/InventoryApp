@@ -31,7 +31,7 @@ public sealed class StockHistoryController : ControllerBase
     /// <summary>
     /// One page of stock movements, most recent first.
     ///
-    /// <para><c>from</c>/<c>to</c> are the inclusive first and last <c>Australia/Sydney</c> business
+    /// <para><c>from</c>/<c>to</c> are the inclusive first and last business
     /// days to cover: the client sends calendar dates, and the server converts them to the UTC
     /// boundaries of those business days, so the last day is covered whole however long it is.</para>
     ///

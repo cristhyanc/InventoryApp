@@ -16,8 +16,8 @@ namespace Inventory.Application.SaleTimestampRepair;
 /// migrations: a repair is explicit, previewable, idempotent and observable).
 ///
 /// What it is for is deciding, before anything is written, whether a change to historical financial
-/// records is justified: every examined transaction with its old and new UTC instant and Sydney
-/// business date and the source that decided it, the revenue that moves between Sydney days, the
+/// records is justified: every examined transaction with its old and new UTC instant and business
+/// date and the source that decided it, the revenue that moves between business days, the
 /// products whose costing would be replayed and from when, the transactions no source covered, the
 /// export transactions this business holds no sale for, and - against a fixed cutoff - how the
 /// repaired state reconciles with the export it is being compared to.

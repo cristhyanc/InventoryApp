@@ -23,7 +23,7 @@ public enum NayaxSaleTimestampEvidenceSource
 /// authoritative instant - rows ingested before issue #380, which hold machine-local wall-clock
 /// ticks, and rows the live synchronization stored between issues #380 and #471 from an offset-free
 /// <c>AuthorizationDateTimeGMT</c> value, which hold an instant shifted by the Sydney host's own UTC
-/// offset. Changing such a value moves revenue between Sydney business days and recosts historical
+/// offset. Changing such a value moves revenue between business days and recosts historical
 /// COGS, so every change is recorded here with what it moved, where the authoritative value came
 /// from, which reviewed preview authorised it and which operator confirmed it.
 ///
@@ -59,12 +59,12 @@ public class NayaxSaleTimestampRepair : IBusinessOwned
     public DateTime RepairedInstantUtc { get; set; }
 
     /// <summary>
-    /// The <c>Australia/Sydney</c> business date the sale reported on before the repair, stored
+    /// The business date the sale reported on before the repair, stored
     /// rather than derived so the movement the operator approved stays readable exactly as applied.
     /// </summary>
     public DateTime PreviousBusinessDate { get; set; }
 
-    /// <summary>The <c>Australia/Sydney</c> business date the sale reports on after the repair.</summary>
+    /// <summary>The business date the sale reports on after the repair.</summary>
     public DateTime RepairedBusinessDate { get; set; }
 
     /// <summary>Which supported source the authoritative instant was read from.</summary>

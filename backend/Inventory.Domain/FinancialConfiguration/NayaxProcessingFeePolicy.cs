@@ -24,7 +24,7 @@ public sealed record CompletedCardTransaction(DateTime MachineAuthorizationTime,
     /// The calendar day this transaction's processing fee belongs to: the day whose authoritative
     /// imported fee covers it, and otherwise the day whose effective rate estimates it. Null means the
     /// date part of <see cref="MachineAuthorizationTime"/>, which is what a caller asking for a range
-    /// of calendar dates means. A caller whose period is bounded by <c>Australia/Sydney</c> business
+    /// of calendar dates means. A caller whose period is bounded by business
     /// days supplies the sale's business date instead, so a sale is charged a fee on the same day its
     /// revenue was counted even when the two dates differ (issue #310).
     /// </summary>

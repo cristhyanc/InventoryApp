@@ -84,7 +84,7 @@ public sealed class NayaxSaleTimestampRepairsController : ControllerBase
         CancellationToken cancellationToken)
     {
         // The reconciliation window is all three values or none: a daily or weekly total is only
-        // comparable with an export's when both sides cover the same Sydney dates and exclude the
+        // comparable with an export's when both sides cover the same business dates and exclude the
         // sales authorized after the same cutoff. A partial window would silently compare a
         // different period, so it is refused at the boundary rather than defaulted.
         var supplied = new[]

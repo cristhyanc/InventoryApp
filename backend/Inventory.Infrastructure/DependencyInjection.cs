@@ -1,5 +1,6 @@
 using Azure.Identity;
 using Azure.Storage.Blobs;
+using Inventory.Application.Businesses;
 using Inventory.Application.CatalogReconciliation;
 using Inventory.Application.Categories;
 using Inventory.Application.Commissions;
@@ -54,7 +55,19 @@ public static class InfrastructureServiceCollectionExtensions
     public static IServiceCollection AddInfrastructureServices(this IServiceCollection services)
     {
         services.AddSingleton<IClock, SystemClock>();
-        services.AddSingleton<IBusinessCalendar, SydneyBusinessCalendar>();
+
+        // The business calendar is per request, not a singleton (issue #499): it derives its dates
+        // in the time zone configured on the business this request resolved, which it reads from
+        // the IBusinessTimeZoneProvider the API boundary publishes once per request (registered in
+        // the composition root beside IBusinessScope, for the same reason).
+        //
+        // A host that resolves this outside a request - the human-invoked bootstrap-business,
+        // migrate-database and backup commands - has no current business, so it has no business
+        // calendar either: every member of the port fails closed with
+        // BusinessTimeZoneUnavailableException rather than silently answering in Australia/Sydney
+        // or the host's own zone. None of those commands needs a business date; one that ever does
+        // must construct a ZonedBusinessCalendar with the zone it means, explicitly.
+        services.AddScoped<IBusinessCalendar, CurrentBusinessCalendar>();
 
         // The uploaded Nayax sales export reader (issue #301). Unlike the pending-XML source below
         // it needs no host path and no configuration - the caller hands it the uploaded bytes - so
@@ -124,6 +137,7 @@ public static class InfrastructureServiceCollectionExtensions
         // Grouped by the Application feature whose port each satisfies, in the order Program.cs
         // registered them.
         services.AddScoped<IBusinessMembershipStore, EfBusinessMembershipStore>();
+        services.AddScoped<IBusinessProfileStore, EfBusinessProfileStore>();
         services.AddScoped<INayaxFeeRateStore, EfNayaxFeeRateStore>();
         services.AddScoped<ISiteCommissionStore, EfSiteCommissionStore>();
         services.AddScoped<ICategoryStore, EfCategoryStore>();

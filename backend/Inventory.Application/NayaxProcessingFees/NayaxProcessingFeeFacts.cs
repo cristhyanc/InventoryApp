@@ -7,11 +7,11 @@ public sealed record NayaxProcessingFeeFacts(
     IReadOnlyList<CompletedCardTransaction> CompletedSales);
 
 /// <summary>
-/// A fee period that is bounded by <c>Australia/Sydney</c> business days rather than by calendar
+/// A fee period that is bounded by business days rather than by calendar
 /// dates: the exact UTC instants its completed sales are selected between (inclusive at both ends),
 /// and the first and last business date those instants cover (issue #310).
 ///
-/// The machine dashboard's comparison periods are of this kind. Their boundaries are Sydney midnights,
+/// The machine dashboard's comparison periods are of this kind. Their boundaries are business-day midnights,
 /// which fall in the middle of a UTC day, so asking for the whole UTC dates they touch would charge a
 /// period for fees on sales its own revenue excludes; the business dates are what the imported fee
 /// data and the effective-dated rates are keyed by.

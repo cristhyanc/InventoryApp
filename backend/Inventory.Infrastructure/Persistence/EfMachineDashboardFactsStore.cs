@@ -30,8 +30,8 @@ public sealed class EfMachineDashboardFactsStore : IMachineDashboardFactsStore
     public async Task<MachineDashboardFacts> GetFactsAsync(
         long machineId, long? siteId, MachineDashboardWindow window, CancellationToken cancellationToken)
     {
-        // Every period boundary is an already-resolved UTC instant derived from the Australia/Sydney
-        // business day by the use case (issue #310), and MachineAuthorizationTime is a persisted true
+        // Every period boundary is an already-resolved UTC instant derived from the business
+        // day by the use case (issue #310), and MachineAuthorizationTime is a persisted true
         // UTC instant, so the comparisons below stay in one time base. This adapter no longer decides
         // which day "today" is.
         var lastSales = await _db.NayaxSales.AsNoTracking()
@@ -128,7 +128,7 @@ public sealed class EfMachineDashboardFactsStore : IMachineDashboardFactsStore
         // The fee use case takes each period's own bounds, as it always has, but as a business-day
         // period rather than a pair of instants it would truncate to whole UTC dates: the fees this
         // period's profit subtracts are charged to exactly the sales its revenue counted above, on the
-        // Australia/Sydney business dates the period covers (issue #310).
+        // business dates the period covers (issue #310).
         var fees = await _nayaxProcessingFees.HandleBusinessPeriod(
             new NayaxProcessingFeeBusinessPeriod(
                 period.StartUtc, period.EndUtc, period.FirstBusinessDate, period.LastBusinessDate),

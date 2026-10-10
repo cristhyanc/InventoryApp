@@ -8,6 +8,7 @@ using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Imports;
 using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Time;
+using InventoryApi.Tests.Application.Time;
 
 namespace InventoryApi.Tests;
 
@@ -16,9 +17,10 @@ namespace InventoryApi.Tests;
 /// uploaded-export reader and the real <c>Australia/Sydney</c> calendar over one
 /// <see cref="AppDbContext"/>, the way the production DI container does.
 ///
-/// The calendar is deliberately the production <see cref="SydneyBusinessCalendar"/> rather than a
-/// trivial fake: every business date, revenue movement and reconciliation day this workflow reports
-/// depends on real daylight-saving behaviour, which a fake identity conversion would hide.
+/// The calendar is deliberately the production <see cref="ZonedBusinessCalendar"/> over the Sydney
+/// zone rather than a trivial fake: every business date, revenue movement and reconciliation day
+/// this workflow reports depends on real daylight-saving behaviour, which a fake identity
+/// conversion would hide.
 /// </summary>
 internal static class TestSaleTimestampRepairUseCases
 {
@@ -31,7 +33,7 @@ internal static class TestSaleTimestampRepairUseCases
             new EfNayaxSaleTimestampRepairStore(db),
             nayax,
             workbook ?? new ClosedXmlNayaxSalesWorkbookReader(),
-            new SydneyBusinessCalendar(clock),
+            ZonedBusinessCalendar.ForTimeZone(clock, FixedSydneyTime.SydneyTimeZoneId),
             clock);
 
     public static ApplyNayaxSaleTimestampRepair Apply(
@@ -43,6 +45,6 @@ internal static class TestSaleTimestampRepairUseCases
             new EfNayaxSaleTimestampRepairStore(db),
             rebuild ?? TestCostingUseCases.Rebuild(db),
             actors,
-            new SydneyBusinessCalendar(clock),
+            ZonedBusinessCalendar.ForTimeZone(clock, FixedSydneyTime.SydneyTimeZoneId),
             clock);
 }

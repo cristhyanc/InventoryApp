@@ -80,8 +80,8 @@ public sealed class GetPickList
 
                     cellsByProductAndMachine.AddOrUpdate(
                         (productId, machineId),
-                        _ => new PickListCell(current, target, toPick),
-                        (_, existing) => existing.Add(current, target, toPick));
+                        _ => new PickListCell(current, target, toPick, machineProduct.MDBCode),
+                        (_, existing) => existing.Add(current, target, toPick, machineProduct.MDBCode));
                 }
             });
 
@@ -100,20 +100,32 @@ public sealed class GetPickList
                 var machineQuantities = group
                     .OrderBy(cell => cell.Key.MachineId)
                     .Select(cell => new PickListMachineQuantity(
-                        cell.Key.MachineId, cell.Value.CurrentQuantity, cell.Value.TargetQuantity, cell.Value.QuantityToPick))
+                        cell.Key.MachineId, cell.Value.MdbCode, cell.Value.CurrentQuantity, cell.Value.TargetQuantity, cell.Value.QuantityToPick))
                     .ToList();
                 var totalQuantityToPick = machineQuantities.Sum(machineQuantity => machineQuantity.QuantityToPick);
                 var storageShortageQuantity = Math.Max(0, totalQuantityToPick - storageProduct.QuantityInStock);
 
+                // The lowest non-null per-machine code represents the row for sorting/display; Min()
+                // over a nullable sequence ignores nulls and returns null only when every machine
+                // quantity lacks a code, which is exactly the "missing code" case the row should fall
+                // back to.
+                var mdbCode = machineQuantities.Select(machineQuantity => machineQuantity.MdbCode).Min();
+
                 return new PickListProduct(
                     group.Key,
                     storageProduct.ProductName,
+                    mdbCode,
                     storageProduct.QuantityInStock,
                     totalQuantityToPick,
                     storageShortageQuantity,
                     machineQuantities);
             })
-            .OrderBy(product => product.ProductName, StringComparer.Ordinal)
+            // Ascending by MDB code - numeric, so 2 sorts before 10 - with missing codes grouped
+            // deterministically (the default nullable comparer orders null before any value) and
+            // ProductName as the tie-break for repeated/missing codes, matching the page's previous
+            // sole ordering.
+            .OrderBy(product => product.MdbCode)
+            .ThenBy(product => product.ProductName, StringComparer.Ordinal)
             .ToList();
 
         return new PickListResult(products);
@@ -123,10 +135,13 @@ public sealed class GetPickList
     /// The accumulated current/target/pick figures for one product on one machine, summed across
     /// however many MDB slots that product occupies there - the same duplicate-mapping aggregation
     /// <see cref="CalculateReorderNeeds"/> already applies within a single machine.
+    /// <see cref="MdbCode"/> is the first slot's code in Nayax's returned order; when more than one
+    /// slot merges here, the later slots' codes are not kept separately, matching how their
+    /// quantities are already merged rather than kept apart.
     /// </summary>
-    private readonly record struct PickListCell(int CurrentQuantity, int TargetQuantity, int QuantityToPick)
+    private readonly record struct PickListCell(int CurrentQuantity, int TargetQuantity, int QuantityToPick, int? MdbCode)
     {
-        public PickListCell Add(int current, int target, int toPick) =>
-            new(CurrentQuantity + current, TargetQuantity + target, QuantityToPick + toPick);
+        public PickListCell Add(int current, int target, int toPick, int? mdbCode) =>
+            new(CurrentQuantity + current, TargetQuantity + target, QuantityToPick + toPick, MdbCode ?? mdbCode);
     }
 }

@@ -1,4 +1,6 @@
+using Inventory.Application.Businesses;
 using Inventory.Application.Tenancy;
+using Inventory.Application.Time;
 using Inventory.Domain.Tenancy;
 using InventoryApi.Auth.PlatformAdmin;
 using Microsoft.AspNetCore.Authorization;
@@ -7,7 +9,8 @@ namespace InventoryApi.Auth;
 
 /// <summary>
 /// Resolves the authenticated caller's business once per request and publishes it to the
-/// persistence layer (issue #64).
+/// persistence layer (issue #64), together with that business's own time zone for the business
+/// calendar (issue #499).
 ///
 /// It runs after authentication and before the endpoint, so membership is checked "before any
 /// business endpoint reads data" rather than inside each controller. An authenticated caller
@@ -51,6 +54,8 @@ public sealed class BusinessScopeMiddleware
         HttpContext context,
         ICurrentBusinessProvider currentBusinessProvider,
         BusinessScope businessScope,
+        BusinessTimeZoneScope businessTimeZoneScope,
+        IBusinessProfileStore businessProfileStore,
         IAuthorizationService authorizationService)
     {
         if (context.User.Identity is not { IsAuthenticated: true })
@@ -91,7 +96,42 @@ public sealed class BusinessScopeMiddleware
 
         businessScope.Resolve(businessId);
 
+        await PublishBusinessTimeZoneAsync(context, businessId, businessTimeZoneScope, businessProfileStore);
+
         await _next(context);
+    }
+
+    /// <summary>
+    /// Publishes the resolved business's own IANA time zone for the rest of the request (issue
+    /// #499), so <c>IBusinessCalendar</c> derives business dates in that business's calendar
+    /// without querying anything itself and without any possibility of a request value choosing a
+    /// zone. The business id is the one resolved immediately above, from membership.
+    ///
+    /// A business with no readable zone leaves the request's zone unresolved rather than being
+    /// given one. That is deliberate: the request is not refused here, because most endpoints
+    /// derive no business date at all and refusing them would turn a configuration problem into a
+    /// total outage, but every business-date derivation in it then fails closed with
+    /// <c>BusinessTimeZoneUnavailableException</c>. The blank zone is logged for an operator,
+    /// because the only real cause is a business row that never received one.
+    /// </summary>
+    private async Task PublishBusinessTimeZoneAsync(
+        HttpContext context,
+        BusinessId businessId,
+        BusinessTimeZoneScope businessTimeZoneScope,
+        IBusinessProfileStore businessProfileStore)
+    {
+        var profile = await businessProfileStore.FindAsync(businessId, context.RequestAborted);
+
+        if (string.IsNullOrWhiteSpace(profile?.TimeZoneId))
+        {
+            _logger.LogError(
+                "The current business has no usable time zone, so no business date can be derived "
+                    + "for this request. Business dates will fail rather than fall back to another "
+                    + "calendar.");
+            return;
+        }
+
+        businessTimeZoneScope.Resolve(profile.TimeZoneId);
     }
 
     /// <summary>
