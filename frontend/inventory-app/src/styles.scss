@@ -261,9 +261,22 @@
     @apply bg-md-gray-100;
   }
 
-  /* Row-level navigation (the whole row acts as a link): signal it with a pointer cursor. */
+  /*
+   * Row-level navigation. The row's first cell holds the real link; clicking anywhere else in
+   * the row follows it, so the whole row shows the pointer cursor. Because the anchor - not the
+   * row - takes focus, the row carries the focus state for the link inside it, on top of the
+   * 2px outline the anchor itself gets from the global focus-visible rule.
+   */
   .table-row-link {
     @apply cursor-pointer;
+  }
+
+  .table-row-link:focus-within {
+    @apply bg-md-gray-100;
+  }
+
+  .table-row-anchor {
+    @apply font-medium text-md-gray-800 underline-offset-2 hover:underline;
   }
 
   .table-cell {
