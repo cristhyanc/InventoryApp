@@ -14,7 +14,7 @@ namespace Inventory.Application.SaleTimestampRepair;
 /// <c>AuthorizationDateTimeGMT</c> values from the supported sources, lets
 /// <see cref="NayaxSaleTimestampRepairPolicy"/> decide every stored sale against them, and projects
 /// those decisions onto what an operator has to see before approving a change to historical
-/// financial records - business dates, revenue movement between Sydney days, the products whose
+/// financial records - business dates, revenue movement between business days, the products whose
 /// costing would be replayed and from when, the transactions no source covered, the transactions the
 /// source carries that this business holds no sale for, and the fixed-cutoff reconciliation.
 ///
@@ -118,7 +118,7 @@ internal sealed class NayaxSaleTimestampRepairProjection
 
     /// <summary>
     /// The requested reconciliation window as UTC instants, or <c>null</c> when none was requested.
-    /// The examined range always covers it: a reconciliation that reported a Sydney day without
+    /// The examined range always covers it: a reconciliation that reported a business day without
     /// examining every stored sale on it would hide exactly the rows it exists to surface - the ones
     /// no source covered - so the window widens the range rather than filtering it.
     /// </summary>
@@ -223,7 +223,7 @@ internal sealed class NayaxSaleTimestampRepairProjection
             decision.Evidence?.Reference);
 
     /// <summary>
-    /// Revenue the repair moves between Sydney business days, per day, from the completed repairable
+    /// Revenue the repair moves between business days, per day, from the completed repairable
     /// sales alone. A sale that does not change its business date contributes nothing even when its
     /// instant moves within the day.
     /// </summary>
@@ -393,7 +393,7 @@ internal sealed class NayaxSaleTimestampRepairProjection
             Add(after, _calendar.ToBusinessDate(effective), sale.SettlementValue);
         }
 
-        // Unresolved completed sales do not move, so they sit on the same Sydney day before and
+        // Unresolved completed sales do not move, so they sit on the same business day before and
         // after. Reporting them per day is what makes a day's figure comparable with a source
         // export that does not account for them.
         var unresolved = decisions

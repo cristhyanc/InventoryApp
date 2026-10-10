@@ -35,7 +35,7 @@ jobs:
       github.event.pull_request.draft == false &&
       github.event.pull_request.base.ref == 'develop' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
-      (startsWith(github.event.pull_request.head.ref, 'agent/issue-') || startsWith(github.event.pull_request.head.ref, 'copilot/'))
+      startsWith(github.event.pull_request.head.ref, 'agent/issue-')
     runs-on: ubuntu-latest
     permissions:
       actions: write
@@ -49,7 +49,6 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}
-          EXPECTED_COPILOT_AUTHOR: ${{ vars.COPILOT_AGENT_BOT_LOGIN || 'Copilot' }}
         run: |
           set -euo pipefail
           fail() { echo "::error::$1"; exit 1; }
@@ -75,14 +74,9 @@ jobs:
           if [[ "$head_ref" == agent/issue-* ]]; then
             [ -n "$EXPECTED_AGENT_AUTHOR" ] || fail "AGENT_AUTOMATION_APP_BOT_LOGIN is not configured."
             [ "$author" = "$EXPECTED_AGENT_AUTHOR" ] || fail "Pull request #$PR_NUMBER is not authored by $EXPECTED_AGENT_AUTHOR."
-            implementer="claude"
-          elif [[ "$head_ref" == copilot/* ]]; then
-            [ "$author" = "$EXPECTED_COPILOT_AUTHOR" ] || fail "Pull request #$PR_NUMBER is not authored by $EXPECTED_COPILOT_AUTHOR."
-            implementer="copilot"
           else
-            fail "Pull request #$PR_NUMBER does not use an agent/issue-* or copilot/* branch."
+            fail "Pull request #$PR_NUMBER does not use an agent/issue-* branch."
           fi
-          echo "::notice::Pull request #$PR_NUMBER was implemented by $implementer; the other agent reviews it."
           [ "$current_sha" = "$HEAD_SHA" ] || fail "Refusing stale review request: pull request head is $current_sha, labelled SHA is $HEAD_SHA."
           jq -e 'any(.labels[]?; .name == "agent-review")' <<<"$pr_json" >/dev/null \
             || fail "The agent-review label was removed before the review could be requested."

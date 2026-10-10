@@ -21,6 +21,21 @@ public class Business
     public string Name { get; set; } = string.Empty;
 
     /// <summary>
+    /// The IANA time-zone identifier the business's calendar days are derived in, for example
+    /// <c>Australia/Sydney</c> or <c>America/New_York</c> (issue #499). It is what turns a stored
+    /// UTC instant into the business date a report, a dashboard period or an effective-dated
+    /// lookup means, through <c>Inventory.Application.Time.IBusinessCalendar</c>.
+    ///
+    /// Required and validated: a value that the host's time-zone database cannot resolve is
+    /// refused by <see cref="Data.BusinessTimeZoneEnforcer"/> on <c>SaveChanges</c> rather than
+    /// stored, because an unresolvable zone would leave every business date underivable. The
+    /// default is the zone the application's single existing business has always used and the
+    /// value the additive migration backfills; a newly onboarded business is given its own zone
+    /// explicitly.
+    /// </summary>
+    public string TimeZoneId { get; set; } = "Australia/Sydney";
+
+    /// <summary>
     /// Deactivating a business denies access to its data without deleting the records, so an
     /// offboarded business fails closed rather than being dropped.
     /// </summary>

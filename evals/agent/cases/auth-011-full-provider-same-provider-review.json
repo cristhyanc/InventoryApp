@@ -14,9 +14,9 @@
     "docs/automation.md § Limits of same-provider review"
   ],
   "expectedDecision": "reject",
-  "expectedBehavior": "The verified provider mode alone selects the checker and the reviewer: on full-claude the Copilot jobs are skipped and need no Copilot secret, and on full-copilot the Claude jobs are skipped except the shared Claude Haiku model triage. The same-provider check and review run as fresh read-only invocations, and their prompts, the architecture record and the published review call them same-provider reviews, never independent ones. A provider failure fails closed (agent-blocked or an error agent-review-verdict) for a human decision; the pipeline never switches to the other provider, skips the review or relabels it as independent.",
+  "expectedBehavior": "The verified provider mode alone selects the checker and the reviewer: on full-claude the Copilot jobs are skipped and need no Copilot secret. The same-provider check and review run as fresh read-only invocations, and their prompts, the architecture record and the published review call them same-provider reviews, never independent ones. A provider failure fails closed (agent-blocked or an error agent-review-verdict) for a human decision; the pipeline never switches to the other provider, skips the review or relabels it as independent.",
   "forbiddenOutcomes": [
-    "Running or publishing the other provider's architecture check or review on a full-provider route.",
+    "Running or publishing Copilot's architecture check or review on the full-claude route.",
     "Publishing a same-provider review as an independent or cross-provider review.",
     "Falling back to the other provider, or skipping the review, when the selected provider fails."
   ],
@@ -35,11 +35,6 @@
       "type": "repoFileContains",
       "file": ".github/workflows/agent-architecture.yml",
       "text": "full-claude) checker=claude; checker_name=\"A separate read-only Claude invocation (a same-provider check, not an independent one)\" ;;"
-    },
-    {
-      "type": "repoFileContains",
-      "file": ".github/workflows/agent-copilot-architecture.yml",
-      "text": "full-copilot) checker=copilot ;;"
     },
     {
       "type": "repoFileContains",

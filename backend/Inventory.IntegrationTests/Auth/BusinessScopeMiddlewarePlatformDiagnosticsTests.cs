@@ -1,5 +1,7 @@
 using System.Security.Claims;
+using Inventory.Application.Businesses;
 using Inventory.Application.Tenancy;
+using Inventory.Application.Time;
 using Inventory.Domain.Tenancy;
 using InventoryApi.Auth;
 using InventoryApi.Auth.PlatformAdmin;
@@ -23,6 +25,12 @@ namespace InventoryApi.Tests.Auth;
 /// <para>The other assertion worth making here is what a bypassed request carries: a
 /// <em>denied</em> scope. The bypass is of the membership requirement, not of tenant filtering, so
 /// a diagnostics request still reads nothing at all through <c>AppDbContext</c>.</para>
+///
+/// <para>Issue #499 gave the middleware a second thing to publish from the same resolved business
+/// - its time zone, for the per-request business calendar - so the tests below also cover what a
+/// request carries in each of these cases: a member's own zone, no zone at all for a bypassed
+/// diagnostics request, and no zone rather than a default one for a business whose record has
+/// none.</para>
 /// </summary>
 public class BusinessScopeMiddlewarePlatformDiagnosticsTests
 {
@@ -139,11 +147,83 @@ public class BusinessScopeMiddlewarePlatformDiagnosticsTests
         Assert.True(reached);
     }
 
+    /// <summary>
+    /// The business calendar's half of the same resolution (issue #499): the request carries the
+    /// time zone of the business its membership resolved, published from the business record and
+    /// from nothing the request supplied.
+    /// </summary>
+    [Fact]
+    public async Task An_ordinary_member_also_carries_their_own_businesss_time_zone()
+    {
+        var context = AuthenticatedRequest(platformDiagnosticsEndpoint: false);
+        var timeZoneScope = new BusinessTimeZoneScope();
+
+        var reached = await InvokeAsync(
+            context,
+            new BusinessScope(),
+            BusinessMembershipResolution.Resolved(BusinessId.From(7)),
+            policySucceeds: false,
+            timeZoneScope,
+            storedTimeZoneId: "America/New_York");
+
+        Assert.True(reached);
+        Assert.Equal("America/New_York", timeZoneScope.TimeZoneId);
+    }
+
+    /// <summary>
+    /// A bypassed diagnostics request has no business, so it has no business calendar either. The
+    /// zone stays unresolved for exactly the reason the scope stays denied.
+    /// </summary>
+    [Fact]
+    public async Task A_bypassed_diagnostics_request_carries_no_business_time_zone()
+    {
+        var context = AuthenticatedRequest(platformDiagnosticsEndpoint: true);
+        var timeZoneScope = new BusinessTimeZoneScope();
+
+        await InvokeAsync(
+            context,
+            new BusinessScope(),
+            BusinessMembershipResolution.Denied(BusinessAccessDenialReason.MembershipMissing),
+            policySucceeds: true,
+            timeZoneScope);
+
+        Assert.Null(timeZoneScope.TimeZoneId);
+    }
+
+    /// <summary>
+    /// A business whose record carries no usable zone leaves the request's zone unresolved rather
+    /// than being given a default one. The request still runs - most endpoints derive no business
+    /// date at all - and any business-date derivation in it then fails closed.
+    /// </summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task A_business_with_no_usable_stored_zone_resolves_no_zone_rather_than_a_default(
+        string? storedTimeZoneId)
+    {
+        var context = AuthenticatedRequest(platformDiagnosticsEndpoint: false);
+        var timeZoneScope = new BusinessTimeZoneScope();
+
+        var reached = await InvokeAsync(
+            context,
+            new BusinessScope(),
+            BusinessMembershipResolution.Resolved(BusinessId.From(7)),
+            policySucceeds: false,
+            timeZoneScope,
+            storedTimeZoneId);
+
+        Assert.True(reached);
+        Assert.Null(timeZoneScope.TimeZoneId);
+    }
+
     private static async Task<bool> InvokeAsync(
         HttpContext context,
         BusinessScope scope,
         BusinessMembershipResolution resolution,
-        bool policySucceeds)
+        bool policySucceeds,
+        BusinessTimeZoneScope? timeZoneScope = null,
+        string? storedTimeZoneId = "Australia/Sydney")
     {
         var reached = false;
         var middleware = new BusinessScopeMiddleware(
@@ -160,6 +240,8 @@ public class BusinessScopeMiddlewarePlatformDiagnosticsTests
             context,
             new StubCurrentBusinessProvider(resolution),
             scope,
+            timeZoneScope ?? new BusinessTimeZoneScope(),
+            new StubBusinessProfileStore(storedTimeZoneId),
             new StubAuthorizationService(policySucceeds));
 
         return reached;
@@ -195,6 +277,17 @@ public class BusinessScopeMiddlewarePlatformDiagnosticsTests
 
         public Task<BusinessId> RequireBusinessIdAsync(CancellationToken cancellationToken) =>
             throw new NotSupportedException();
+    }
+
+    /// <summary>
+    /// Returns one business profile whatever is asked for, so these tests decide what the resolved
+    /// business's stored time zone is (issue #499) without a database.
+    /// </summary>
+    private sealed class StubBusinessProfileStore(string? timeZoneId) : IBusinessProfileStore
+    {
+        public Task<BusinessProfile?> FindAsync(BusinessId businessId, CancellationToken cancellationToken) =>
+            Task.FromResult<BusinessProfile?>(
+                timeZoneId is null ? null : new BusinessProfile("Stub business", timeZoneId));
     }
 
     /// <summary>

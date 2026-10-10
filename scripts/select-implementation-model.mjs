@@ -6,12 +6,11 @@ import { FULL_PROVIDER_EXECUTION_ENABLED, parseReadinessLabel } from './agent-mo
 // Trusted policy: model output can select a tier, never supply a model ID or CLI arguments.
 export const MODELS = Object.freeze({
   claude: { low: 'haiku', standard: 'sonnet', high: 'opus' },
-  copilot: { low: 'claude-haiku-4.5', standard: 'claude-sonnet-5.5', high: 'claude-opus-5.5' },
 });
 // Readiness labels, routes and the full-provider gate live in the standalone agent-mode.mjs, which
 // jobs without a checkout also fetch from the trusted workflow commit.
 export { READINESS_LABELS, READINESS_LABEL_PATTERN, FULL_READY_LABELS, DEFAULT_READY_LABEL, ROUTES, FULL_PROVIDER_EXECUTION_ENABLED, parseReadinessLabel, STANDARD_READY_LABELS as READY_LABELS } from './agent-mode.mjs';
-const activeStates = ['agent-working', 'agent-architecture-fix', 'agent-review', 'agent-blocked'];
+const activeStates = ['agent-working', 'agent-review', 'agent-blocked'];
 const hasControlCharacter = text => [...text].some(char => char.charCodeAt(0) < 0x20 || char.charCodeAt(0) === 0x7f);
 const fingerprint = issue => createHash('sha256').update(JSON.stringify({ title: issue.title, body: issue.body })).digest('hex');
 

@@ -7,7 +7,7 @@ namespace Inventory.Application.Machines;
 /// The machine dashboard listing use case. Mirrors the former
 /// <c>InventoryApi.Services.MachineService.GetAll</c> exactly (issue #241): machines calculate from
 /// whatever <c>NayaxSales</c> rows are already persisted and never trigger a fresh Nayax sales import
-/// as a side effect (issue #187). Its rolling comparison periods come from the <c>Australia/Sydney</c>
+/// as a side effect (issue #187). Its rolling comparison periods come from the
 /// business day rather than the host's local clock (issue #310; see
 /// <see cref="MachineDashboardWindow"/>).
 /// </summary>

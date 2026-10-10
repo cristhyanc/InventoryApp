@@ -56,7 +56,17 @@
     <main class="min-w-0 flex-1">
       <div class="w-full p-4 sm:p-6">
         <app-breadcrumbs />
-        <router-outlet />
+        <!--
+          The page waits for the signed-in operator's business (issue #499): its time zone is what
+          every instant the page displays is rendered in, so showing the page first would show
+          those instants in no time zone at all. A signed-out visitor is not waiting for anything
+          and sees the landing page immediately.
+        -->
+        @if (isBusinessContextReady) {
+          <router-outlet />
+        } @else {
+          <output class="block text-md-body value-muted">Loading your business…</output>
+        }
       </div>
     </main>
   </div>

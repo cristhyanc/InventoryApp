@@ -486,3 +486,19 @@ Every model answer also set `humanDecisionRequired` as the deterministic checks 
 `DB-001` and `AUTH-003`, `false` for the others). This is one run of one probabilistic model
 configuration: it shows the pipeline works end to end and is a first data point, not a guarantee
 for other models, versions, or repeated runs.
+
+## Corpus version 8 (Copilot implementation route retired)
+
+- **Corpus version:** 8. Copilot no longer implements, so `AUTH-009` to `AUTH-013` no longer describe the retired `agent-ready-copilot`, `agent-ready-full-copilot` and `agent-architecture-fix` routes. Their scenarios and repository assertions now ground the two remaining routes: `cross-claude` (Claude implements, the Copilot CLI checks and reviews) and the `full-claude` single-provider fallback. `AUTH-012` additionally asserts that `scripts/agent-mode.mjs` lists only the `claude` provider and that `scripts/validate-agent-workflows.mjs` rejects the retired Copilot implementation workflows. No case was added or removed and no expected decision, category, risk level or criticality changed.
+- **Case count:** 32 (29 graded deterministically, 3 reserved for hand-graded model evaluation), unchanged.
+
+Deterministic result, run on 2026-10-06 on the working tree of this change with
+`node scripts/run-agent-evals.mjs`:
+
+```text
+Total: 32 | Passed: 29 | Failed: 0 | Skipped (model-eval only): 3
+
+Agent evals: PASS
+```
+
+The model-decision set (corpus version 7 above) was not re-run for this change; none of its six cases was edited.

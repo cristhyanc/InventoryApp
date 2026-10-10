@@ -1,5 +1,5 @@
 import { TestBed } from '@angular/core/testing';
-import { provideRouter } from '@angular/router';
+import { provideRouter, Router } from '@angular/router';
 import { of, Subject, throwError } from 'rxjs';
 import { SiteListComponent } from './site-list.component';
 import { SiteService } from '../../services/site.service';
@@ -28,6 +28,16 @@ async function renderWith(getAll: () => ReturnType<SiteService['getAll']>) {
 
   const fixture = TestBed.createComponent(SiteListComponent);
   return { fixture, host: fixture.nativeElement as HTMLElement };
+}
+
+/** `routerLink` navigates through `navigateByUrl`, so that is where a followed link shows up. */
+function spyOnNavigateByUrl() {
+  return jest.spyOn(TestBed.inject(Router), 'navigateByUrl').mockResolvedValue(true);
+}
+
+function navigatedUrls(spy: ReturnType<typeof spyOnNavigateByUrl>): string[] {
+  const router = TestBed.inject(Router);
+  return spy.mock.calls.map(([url]) => (typeof url === 'string' ? url : router.serializeUrl(url)));
 }
 
 describe('SiteListComponent', () => {
@@ -101,12 +111,80 @@ describe('SiteListComponent', () => {
     expect(host.querySelectorAll('table')).toHaveLength(0);
   });
 
-  it('links each site to its existing site-products route', async () => {
+  /*
+   * Row navigation is a real `<a href>` in the site cell, not an ARIA `role="link"` on the row:
+   * keyboard activation (Enter), focus, ctrl/cmd/middle-click and "copy link address" are then
+   * the browser's own link behaviour rather than something this component reimplements. jsdom
+   * does not run an anchor's activation behaviour for Enter, so these tests assert the native
+   * anchor and its href - the things that make that behaviour exist - plus the row-click
+   * convenience this component does own.
+   */
+  it('renders the site name as a native link to the existing site-products route', async () => {
     const { fixture, host } = await renderWith(() => of([site({ siteId: 42, siteName: 'North Mall' })]));
 
     fixture.detectChanges();
 
-    const link = host.querySelector('a[href="/sites/42/products"]');
+    const link = host.querySelector('tbody tr td a') as HTMLAnchorElement;
     expect(link).not.toBeNull();
+    expect(link.getAttribute('href')).toBe('/sites/42/products');
+    expect(link.textContent?.trim()).toBe('North Mall');
+    expect(link.getAttribute('aria-label')).toBe('View products for North Mall');
+  });
+
+  it('leaves the row itself without an emulated link role and without a Details button', async () => {
+    const { fixture, host } = await renderWith(() => of([site({ siteId: 42, siteName: 'North Mall' })]));
+
+    fixture.detectChanges();
+
+    const row = host.querySelector('tbody tr') as HTMLElement;
+    expect(row.getAttribute('role')).toBeNull();
+    expect(row.getAttribute('tabindex')).toBeNull();
+    expect(row.classList.contains('table-row-link')).toBe(true);
+    expect(host.querySelector('.btn')).toBeNull();
+  });
+
+  it('follows the row link when the row itself is clicked', async () => {
+    const { fixture, host } = await renderWith(() => of([site({ siteId: 42, siteName: 'North Mall' })]));
+    fixture.detectChanges();
+    const navigateByUrl = spyOnNavigateByUrl();
+
+    const row = host.querySelector('tbody tr') as HTMLElement;
+    row.click();
+
+    expect(navigatedUrls(navigateByUrl)).toEqual(['/sites/42/products']);
+  });
+
+  it('navigates once, through the link, when the link itself is clicked', async () => {
+    const { fixture, host } = await renderWith(() => of([site({ siteId: 42, siteName: 'North Mall' })]));
+    fixture.detectChanges();
+    const navigateByUrl = spyOnNavigateByUrl();
+
+    const link = host.querySelector('tbody tr td a') as HTMLAnchorElement;
+    link.click();
+
+    expect(navigatedUrls(navigateByUrl)).toEqual(['/sites/42/products']);
+  });
+
+  it('leaves a ctrl-click on the row to the browser so the link can open in a new tab', async () => {
+    const { fixture, host } = await renderWith(() => of([site({ siteId: 42, siteName: 'North Mall' })]));
+    fixture.detectChanges();
+    const navigateByUrl = spyOnNavigateByUrl();
+
+    const row = host.querySelector('tbody tr') as HTMLElement;
+    row.dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true }));
+
+    expect(navigateByUrl).not.toHaveBeenCalled();
+  });
+
+  it('navigates once when Enter is pressed on the focused link', async () => {
+    const { fixture, host } = await renderWith(() => of([site({ siteId: 42, siteName: 'North Mall' })]));
+    fixture.detectChanges();
+    const navigateByUrl = spyOnNavigateByUrl();
+
+    const link = host.querySelector('tbody tr td a') as HTMLAnchorElement;
+    link.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    link.click(); // the browser's own activation of a focused anchor on Enter
+
+    expect(navigatedUrls(navigateByUrl)).toEqual(['/sites/42/products']);
   });
 });

@@ -22,7 +22,7 @@ export type RowOutcomeFilter = 'all' | 'repairable' | 'alreadyCorrect' | 'unreso
  * selective-row repair: the note above the table says so, and no filter, page or search value is
  * ever sent to the server or used to build a request.
  *
- * Every value in a cell is the server's own: the stored and repaired UTC instants, the Sydney
+ * Every value in a cell is the server's own: the stored and repaired UTC instants, the
  * business dates the server resolved, the outcome, the unresolved reason, the evidence provenance
  * and whether the sale is a completed one. No timestamp is parsed or shifted, no business date is
  * re-converted and no status is reclassified here.
@@ -34,7 +34,7 @@ export type RowOutcomeFilter = 'all' | 'repairable' | 'alreadyCorrect' | 'unreso
   template: `
     <h3 class="text-sm font-semibold text-md-gray-800">Examined sales</h3>
     <p class="mt-1 text-sm value-muted">
-      Every stored sale in the examined range, with the instant and Sydney business date it holds
+      Every stored sale in the examined range, with the instant and business date it holds
       now and the ones the repair would give it. Filtering, searching and paging change only what is
       listed here: Apply confirms the server's whole plan, including every repairable row that is
       not currently on screen. There is no way to repair a selection of rows.
@@ -74,7 +74,7 @@ export type RowOutcomeFilter = 'all' | 'repairable' | 'alreadyCorrect' | 'unreso
       <div class="mt-3 overflow-x-auto">
         <table class="table" data-testid="repair-rows-table">
           <caption class="sr-only">
-            Examined Nayax sales, with their stored and repaired UTC instants, Sydney business dates,
+            Examined Nayax sales, with their stored and repaired UTC instants, business dates,
             outcome and evidence source
           </caption>
           <thead class="table-head">

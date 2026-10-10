@@ -30,8 +30,8 @@ public sealed class ResolveMachineProductPricing
         if (siteId is null || facts.Count == 0)
             return facts.Select(fact => new MachineProductPricingResult(fact.ProductId, null, null)).ToList();
 
-        // The effective-dated commission and Nayax fee configuration is selected by the Australia/Sydney
-        // business date (issue #310), not the host's local date: on a UTC host the two differ for ten to
+        // The effective-dated commission and Nayax fee configuration is selected by the business
+        // date (issue #310), not the host's local date: on a UTC host the two differ for ten to
         // eleven hours of every day, which would price a slot with the previous day's configuration on
         // the day a new rate takes effect.
         var today = _businessCalendar.Today;

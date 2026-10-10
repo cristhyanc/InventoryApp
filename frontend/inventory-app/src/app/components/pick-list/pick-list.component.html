@@ -80,6 +80,7 @@
         <thead>
           <tr>
             <th scope="col" class="table-cell sticky top-0 z-10 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide">Product</th>
+            <th scope="col" class="table-cell sticky top-0 z-10 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide">MDB Code</th>
             <th scope="col" class="table-cell sticky top-0 z-10 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide">Total to Pick</th>
             @for (machineId of appliedMachineIds; track machineId) {
               <th scope="col" class="table-cell sticky top-0 z-10 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide">{{ machineLabel(machineId) }}</th>
@@ -97,6 +98,7 @@
                   </span>
                 }
               </td>
+              <td data-testid="pick-list-mdb-code" class="table-cell text-md-gray-800">{{ product.mdbCode ?? '—' }}</td>
               <td class="table-cell font-semibold text-md-gray-800">{{ product.totalQuantityToPick }}</td>
               @for (machineId of appliedMachineIds; track machineId) {
                 @if (cellFor(product, machineId); as cell) {
@@ -112,11 +114,17 @@
                           Pick: {{ cell.quantityToPick }}
                         </span>
                         <span class="block text-md-badge value-muted">Current: {{ cell.currentQuantity }} of {{ cell.targetQuantity }}</span>
+                        @if (cell.mdbCode !== null) {
+                          <span class="block text-md-badge value-muted">MDB: {{ cell.mdbCode }}</span>
+                        }
                       </button>
                     } @else {
                       <div class="px-2 py-1 value-muted">
                         <span class="block font-medium">Pick: 0</span>
                         <span class="block text-md-badge value-muted">Current: {{ cell.currentQuantity }} of {{ cell.targetQuantity }}</span>
+                        @if (cell.mdbCode !== null) {
+                          <span class="block text-md-badge value-muted">MDB: {{ cell.mdbCode }}</span>
+                        }
                       </div>
                     }
                   </td>

@@ -13,14 +13,14 @@ export function desiredStatus(issue) {
   const labels = new Set(issue.labels);
   const prs = issue.prs.filter(pr => pr.agent && pr.sameRepository && pr.base === 'develop');
   const managed = [...labels].some(label => parseReadinessLabel(label) ||
-    ['agent-working', 'agent-architecture-fix', 'agent-review', 'agent-blocked'].includes(label)) || prs.length > 0;
+    ['agent-working', 'agent-review', 'agent-blocked'].includes(label)) || prs.length > 0;
   if (!managed) return null;
   if (issue.state === 'CLOSED') return issue.stateReason === 'COMPLETED' ? 'Done' : null;
   if (labels.has('agent-blocked')) return 'Blocked';
   const ready = [...labels].filter(parseReadinessLabel);
   if (ready.length > 1) return 'Blocked';
   if (ready.length === 1) {
-    if (['agent-working', 'agent-architecture-fix', 'agent-review'].some(label => labels.has(label))) return 'Blocked';
+    if (['agent-working', 'agent-review'].some(label => labels.has(label))) return 'Blocked';
     return 'Ready';
   }
   const open = prs.filter(pr => pr.state === 'OPEN');
@@ -28,7 +28,7 @@ export function desiredStatus(issue) {
   // A merged implementation completes the issue even if its old agent-review label remains.
   if (!open.length && prs.some(pr => pr.state === 'MERGED' &&
       (!issue.reopenedAt || Date.parse(pr.mergedAt) > Date.parse(issue.reopenedAt)))) return 'Done';
-  if (labels.has('agent-working') || labels.has('agent-architecture-fix')) return 'In progress';
+  if (labels.has('agent-working')) return 'In progress';
   if (open.length === 1) {
     const pr = open[0];
     if (pr.draft) return 'In progress';
@@ -189,7 +189,7 @@ export class ProjectSync {
         ? await this.client.json(`repos/${PROJECT.repository}/pulls/${number}`, this.client.repositoryToken)
         : cached.get(number);
       const sameRepository = pr.head.repo?.full_name === PROJECT.repository && pr.base.repo?.full_name === PROJECT.repository;
-      const agent = pr.head.ref.startsWith(`agent/issue-${issue.number}-`) || (linked.includes(pr.number) && pr.head.ref.startsWith('copilot/'));
+      const agent = pr.head.ref.startsWith(`agent/issue-${issue.number}-`);
       if (!sameRepository || !agent || pr.base.ref !== 'develop') continue;
       const statuses = {};
       if (pr.state === 'open') {

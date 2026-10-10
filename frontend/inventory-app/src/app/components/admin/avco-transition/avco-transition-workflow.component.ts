@@ -23,7 +23,7 @@ import { BusinessDateTimePipe } from '../../../formatting/business-date-time.pip
  * and the four use cases behind it remain the sole authority for the opening quantity/value, the
  * cutoff instant, the legacy-replay discrepancy and the cost rebuild, so no costing calculation or
  * persistence rule is reimplemented here; Apply always resubmits exactly the previewed object
- * rather than the form's current values, as before. The cutoff is displayed in Sydney time through
+ * rather than the form's current values, as before. The cutoff is displayed in the business's time zone through
  * `BusinessDateTimePipe` (issue #232).
  */
 @Component({

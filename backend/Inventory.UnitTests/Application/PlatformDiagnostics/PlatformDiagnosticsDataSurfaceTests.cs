@@ -76,7 +76,11 @@ public class PlatformDiagnosticsDataSurfaceTests
 
     /// <summary>
     /// The tables that must stay invisible entirely: Entra identity rows, raw imported Nayax
-    /// payloads - where issue #327's token configuration would land - and SQLite's own schema.
+    /// payloads, SQLite's own schema - and <c>BusinessNayaxConnections</c>, the per-business Nayax
+    /// credentials issue #518 added, which is the table this surface was always meant to exclude.
+    /// Its token column holds ciphertext, but a diagnostics query must not reach the row at all:
+    /// the operator id, the key id and the credential revision are not an operator's business to
+    /// read across tenants either.
     /// </summary>
     [Theory]
     [InlineData("BusinessMemberships")]
@@ -84,6 +88,7 @@ public class PlatformDiagnosticsDataSurfaceTests
     [InlineData("NayaxSales")]
     [InlineData("NayaxMachineStockEvents")]
     [InlineData("NayaxProcessingFeeRates")]
+    [InlineData("BusinessNayaxConnections")]
     [InlineData("ImportedFiles")]
     [InlineData("ImportedReimbursements")]
     [InlineData("ImportedFees")]

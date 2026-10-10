@@ -33,6 +33,10 @@ namespace Inventory.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("TimeZoneId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
                     b.HasKey("Id");
 
                     b.ToTable("Businesses");
@@ -114,6 +118,47 @@ namespace Inventory.Infrastructure.Migrations
                         .IsUnique();
 
                     b.ToTable("BusinessMemberships");
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.BusinessNayaxConnection", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("AccessTokenCiphertext")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("CredentialRevision")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("EncryptionKeyId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("LastTestedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("OperatorId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId")
+                        .IsUnique();
+
+                    b.ToTable("BusinessNayaxConnections");
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.Category", b =>

@@ -6,7 +6,7 @@ namespace Inventory.Application.Stock;
 /// What the global Stock History page asks for (issue #384): movements across every product the
 /// caller's business owns, optionally narrowed, and always one bounded page at a time.
 ///
-/// <para>The date range is a pair of <c>Australia/Sydney</c> calendar days, not instants.
+/// <para>The date range is a pair of business calendar days, not instants.
 /// <see cref="ListStockHistory"/> converts them to the UTC boundaries of those business days (start
 /// inclusive, end exclusive) through <see cref="Time.IBusinessCalendar"/>, so a client never has to
 /// know the business timezone or its daylight-saving transitions. Any time component is ignored.</para>

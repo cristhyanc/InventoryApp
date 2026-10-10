@@ -46,7 +46,7 @@ export enum NayaxSaleTimestampUnresolvedReason {
 /**
  * One examined stored sale. `storedInstantUtc`/`repairedInstantUtc` are true UTC instants and must
  * be rendered with `BusinessDateTimePipe`; `storedBusinessDate`/`repairedBusinessDate` are already
- * `Australia/Sydney` calendar dates the server resolved and carry no timezone designator, so they
+ * business calendar dates the server resolved and carry no timezone designator, so they
  * are rendered as plain dates and never re-converted.
  */
 export interface NayaxSaleTimestampRepairRow {
@@ -66,7 +66,7 @@ export interface NayaxSaleTimestampRepairRow {
   evidenceReference: string | null;
 }
 
-/** Revenue a repair moves between Sydney business days. Completed sales only. */
+/** Revenue a repair moves between business days. Completed sales only. */
 export interface NayaxSaleTimestampRevenueMovement {
   businessDate: string;
   amountLeaving: number;
@@ -88,7 +88,7 @@ export interface NayaxSaleTimestampRepairProduct {
   rebuildPlanned: boolean;
 }
 
-/** One Sydney business day of the fixed-cutoff reconciliation. */
+/** One business day of the fixed-cutoff reconciliation. */
 export interface NayaxSaleTimestampReconciliationDay {
   businessDate: string;
   completedCountBefore: number;
@@ -192,7 +192,7 @@ export interface NayaxSaleTimestampRepairApplied {
 
 /**
  * The fixed-cutoff reconciliation window to request. `cutoffUtc` is an explicitly labelled ISO UTC
- * instant (with its `Z`) and the two business dates are plain `yyyy-MM-dd` Sydney calendar dates;
+ * instant (with its `Z`) and the two business dates are plain `yyyy-MM-dd` business calendar dates;
  * all three are sent verbatim so no browser-local offset can shift the compared window.
  */
 export interface NayaxSaleTimestampReconciliationWindow {

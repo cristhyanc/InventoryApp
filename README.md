@@ -211,12 +211,16 @@ ConnectionStrings__DefaultConnection
 NayaxLynx__BaseUrl
 NayaxLynx__OperatorId
 NayaxLynx__AccessToken
+NayaxTokenProtection__ActiveKeyId
+NayaxTokenProtection__Keys__<key-id>
 PlatformAdmin__DirectoryTenantId
 PlatformAdmin__ObjectId
 APPLICATIONINSIGHTS_CONNECTION_STRING
 ```
 
 `NayaxLynx__BaseUrl` and `NayaxLynx__OperatorId` are non-secret and validated at startup — the API refuses to start with a missing or invalid value rather than failing on the first Nayax call. `NayaxLynx__AccessToken` is the Nayax Core bearer token, a secret: set it through user-secrets locally or Key Vault/App Service configuration in Azure, and it is never logged. The already deployed secret, `Nayax__Token`, keeps working as a fallback with no rollout required — `Inventory.Infrastructure.Nayax.NayaxLynxConfiguration.ResolveAccessToken` prefers `NayaxLynx__AccessToken` when both are set. New environments should set `NayaxLynx__AccessToken`; `Nayax__Token` is retained only for the deployment that predates this consolidation.
+
+`NayaxTokenProtection__ActiveKeyId` and `NayaxTokenProtection__Keys__<key-id>` are the encryption keys a business's **own** stored Nayax access token is protected with (issue #518). Each key is a base64-encoded 256-bit (32-byte) AES key and is a secret: set it with `dotnet user-secrets` locally or Key Vault/App Service configuration in Azure, and never commit it. `ActiveKeyId` names the key new ciphertext is produced with, and the key id is stored beside each ciphertext, so a rotation adds a second `Keys__<key-id>` entry and repoints `ActiveKeyId` while the previous key stays configured until nothing names it any more; removing a key is what retires it, and it makes anything still encrypted with it undecryptable on purpose. A half-configured section — an active key id with no matching key, a value that is not base64, a key of the wrong length — fails at startup with the setting named. **The section is empty in `appsettings.json`, and that is the shipped state**: with no key configured the API starts and runs completely normally, and only storing or reading a *per-business* Nayax token fails closed. Nothing reads a per-business connection yet — the Nayax client still uses the single `NayaxLynx__*` configuration above — so provisioning the production key is a human step that must happen before the existing business's credential is moved into the table. See [docs/architecture.md § Per-business Nayax connection](docs/architecture.md#per-business-nayax-connection-issue-518).
 
 `APPLICATIONINSIGHTS_CONNECTION_STRING` is the Application Insights connection string, a secret that is never committed — see [Observability and error diagnostics](#observability-and-error-diagnostics). Unlike the Nayax settings it is optional: with the variable absent or blank no telemetry is registered at all and the API starts and runs normally, which is what local development and the automated tests do.
 
@@ -613,7 +617,7 @@ Failure output (screenshots and traces) is written under `frontend/inventory-app
 - A machine refill is an internal stock transfer, not COGS or an expense.
 - Historical sale cost is persisted from internal AVCO when reliable, with transaction-level Nayax product cost as a fallback.
 - Missing COGS or profit remains unknown; it is never silently converted to zero.
-- Australian financial years run from 1 July to 30 June, using `Australia/Sydney` for business reporting.
+- Australian financial years run from 1 July to 30 June. Business days, and therefore every report date boundary, follow the business's own configured IANA timezone (`Business.TimeZoneId`, issue #499); the existing business is `Australia/Sydney`. A business whose zone cannot be resolved gets no business dates at all rather than another zone's.
 - Purchase amounts are GST-inclusive, and purchase input GST comes from an explicit per-line and per-charge classification, never from an amount. Anything unclassified stays visibly unresolved rather than being treated as GST-free.
 - UI reports and CSV/XLSX exports must use the same backend calculations and quality states.
 
@@ -733,17 +737,17 @@ signed in to.
 
 The Admin page's **Costing Repair** section is how an operator restores a product's cost history
 when it has a fatal missing-opening or unknown-cost costing issue: select the product, enter the
-quantity, unit cost, reason and effective date/time (entered and shown in Sydney time, converted
-to UTC for the API), and **Preview repair** to see the cost position before and after, the
+quantity, unit cost, reason and effective date/time (entered and shown in the business's own
+timezone, converted to UTC for the API), and **Preview repair** to see the cost position before and after, the
 resulting average unit cost, the first previously uncostable sale, the projected position once the
 rest of the history replays, and any fatal issues still remaining. **Apply repair** only becomes
 available once that preview is shown, and reapplies exactly the previewed proposal; if the
 product's cost history changed in the meantime, the apply is refused and asks for a fresh preview.
 Changing the selected product discards any preview or history still loading for the previous
 product, and a preview can only be applied to the product it was taken for. An effective time that
-does not exist in Sydney (the hour skipped when daylight saving starts in October) or that happens
-twice (the hour repeated when it ends in April) is rejected before preview; enter a time outside
-that hour. The product's repair history is shown underneath, newest first.
+does not exist in the business's timezone (the hour its clocks skip when daylight saving starts) or
+that happens twice (the hour they repeat when it ends) is rejected before preview; enter a time
+outside that hour. The product's repair history is shown underneath, newest first.
 
 A costing repair is a human-entered historical correction: it changes the product's historical
 cost of goods sold from the effective time onward, and it is never proof that the recorded history
@@ -756,7 +760,7 @@ costing value that was never recorded in the first place.
 
 Changes are made on feature branches created from `develop` and validated through pull requests that target `develop`. Every pull request to `develop` or `main` runs the validation workflow. A push to `develop` builds and tests the backend without deploying. Production releases are separate pull requests from `develop` to `main`; a merge to `main` makes the code releasable but deploys nothing. A human deploys production by starting the **Deploy Production** workflow from the Actions tab for an exact `main` commit; it validates that commit, reports the database migrations production startup is expected to apply, deploys the API, checks `/health/ready`, and then deploys the frontend from the same commit (see `docs/automation.md` § Deploy Production). After opening a pull request, an automated engineering agent may update only its feature branch, for at most two permitted repair attempts in response to CI or review failures, and then returns control to a human. It never merges or deploys. An agent may prepare a release pull request only when a human explicitly requests it; a human reviews and merges that pull request, and a human starts Deploy Production.
 
-Tasks intended for an implementation agent use the **Agent task** issue form, and every pull request uses the repository pull request template. Claude is the primary implementer and Copilot the normal reviewer. Two agents cross-review each other: applying `agent-ready-claude` (the default) to a reviewed issue has Claude Code implement it, Copilot check its architecture read-only, Claude fix the findings, and Copilot (through the Copilot CLI) do the final review after exact-SHA validation; applying `agent-ready-copilot` (an explicit override) has the Copilot coding agent implement it, Claude check its architecture read-only, Copilot fix the findings, and Claude do the final review. When one provider is unavailable, a human may apply a single-provider fallback label instead, `agent-ready-full-claude` or `agent-ready-full-copilot`: that provider implements, and separate read-only invocations of the same provider check the architecture and do the final review, recorded as a same-provider review rather than an independent one. Model triage always uses Claude Haiku, on every route. All final reviews are comment-only and publish an explicit verdict. The repository owner may request at most two repairs, with `@claude repair` on a Claude pull request or `@copilot` on a Copilot pull request. Human approval and branch protection remain the merge gate. The full lifecycle, authority model, task labels, risk classification, and retry policy are in [docs/automation.md](docs/automation.md).
+Tasks intended for an implementation agent use the **Agent task** issue form, and every pull request uses the repository pull request template. Claude is the only implementer and Copilot the normal reviewer: applying `agent-ready-claude` (the default) to a reviewed issue has Claude Code implement it, Copilot check its architecture read-only, Claude fix the findings, and Copilot (through the Copilot CLI) do the final review after exact-SHA validation. Copilot no longer implements. When Copilot is unavailable, a human may apply the single-provider fallback label `agent-ready-full-claude` instead: Claude implements, and separate read-only Claude invocations check the architecture and do the final review, recorded as a same-provider review rather than an independent one. Model triage always uses Claude Haiku, on every route. All final reviews are comment-only and publish an explicit verdict. The repository owner may request at most two repairs, with `@claude repair` on the agent pull request. Human approval and branch protection remain the merge gate. The full lifecycle, authority model, task labels, risk classification, and retry policy are in [docs/automation.md](docs/automation.md).
 
 Implementation model tiers: append `-low` for a cheap model or `-high` for a stronger model to either readiness label. The existing labels use a brief cheap triage to select low, standard or high automatically, and stop only when the requirements need clarification. Apply exactly one readiness label per issue. Architecture/review/repair models remain unchanged; see [Implementation model tiers](docs/automation.md#implementation-model-tiers) for models, costs, limits and rollout.
 

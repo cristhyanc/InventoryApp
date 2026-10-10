@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Inventory.Application;
 using Inventory.Application.Nayax;
 using Inventory.Application.Tenancy;
+using Inventory.Application.Time;
 using Inventory.Infrastructure;
 using Inventory.Infrastructure.Documents;
 using Inventory.Infrastructure.Imports;
@@ -198,6 +199,17 @@ else
     builder.Services.AddNayaxLynxClient(nayaxLynxOptions);
 }
 
+// Encryption of each business's own stored Nayax access token (issue #518). Registered for every
+// environment, including the E2E host: the keys are secret configuration this root reads, and with
+// the section absent the registration is the fail-closed protector, so the API starts normally and
+// only storing or reading a per-business token fails. Nothing reads a per-business connection yet -
+// the Nayax client above still uses the single configured operator/token until issue #520. See
+// Inventory.Infrastructure.Nayax.NayaxTokenProtectionOptions and README.md § Configuration and
+// secrets.
+builder.Services.AddNayaxTokenProtection(
+    builder.Configuration.GetSection(NayaxTokenProtectionOptions.SectionName).Get<NayaxTokenProtectionOptions>()
+        ?? new NayaxTokenProtectionOptions());
+
 // Tenancy (issue #64). Claims parsing stays at this boundary: EntraActorIdentityAccessor is the
 // only implementation of the Application's actor port, and the current-business abstraction
 // itself (ICurrentBusinessProvider) is registered by AddApplicationServices().
@@ -208,6 +220,14 @@ builder.Services.AddScoped<IAuthenticatedActorAccessor, EntraActorIdentityAccess
 // well, because only the middleware may resolve it; everything else consumes the read-only port.
 builder.Services.AddScoped<BusinessScope>();
 builder.Services.AddScoped<IBusinessScope>(sp => sp.GetRequiredService<BusinessScope>());
+
+// The per-request business time zone (issue #499), published by the same middleware from the same
+// trusted current business and read by the scoped IBusinessCalendar. Registered here, beside the
+// business scope, and as the concrete type as well for the same reason: only the middleware may
+// publish it, and every consumer reads the read-only port. A request that resolves no business
+// resolves no zone either, and the calendar then fails closed instead of guessing one.
+builder.Services.AddScoped<BusinessTimeZoneScope>();
+builder.Services.AddScoped<IBusinessTimeZoneProvider>(sp => sp.GetRequiredService<BusinessTimeZoneScope>());
 
 // No EF persistence adapter is registered here any more. Issue #307 moved AppDbContext, the EF
 // entities and the migrations into Inventory.Infrastructure, issue #308 the ten reporting fact

@@ -6,9 +6,8 @@ name: Agent repair
 # - Runs only when the repository owner comments `@claude repair ...` on an open, non-draft
 #   pull request that targets `develop`, carries `agent-review`, and whose head branch is in this repository.
 #   (Restricted to the owner for now; widening it to other collaborators is a deliberate later change.)
-# - Repairs go to the implementer on every route (cross-claude and full-claude here). It never runs on a
-#   Copilot-implemented `copilot/*` pull request (cross-copilot or full-copilot): Copilot repairs its own
-#   work when asked with an @copilot comment.
+# - Claude is the only implementer, so repairs run on its `agent/issue-*` pull requests on both
+#   routes (cross-claude and full-claude). Any other branch is refused.
 # - Updates only that pull request's head branch. Never merges, deploys, or pushes anywhere else.
 # - Repair counting is human-controlled: the human who comments decides whether an attempt is still
 #   permitted (at most two per pull request). This workflow does not count attempts or start on its own.
@@ -72,9 +71,8 @@ jobs:
           [ "$is_draft" = "false" ] || fail "Repair is not permitted on a draft pull request."
           [ "$head_repo" = "$GITHUB_REPOSITORY" ] || fail "Repair is only permitted for branches in this repository (head is '$head_repo')."
           case "$head_ref" in develop|main) fail "Refusing to operate on protected branch '$head_ref'.";; esac
-          # Repairs go to the implementer: Copilot repairs its own pull requests (cross-copilot and
-          # full-copilot) when the owner mentions @copilot, so Claude never changes them.
-          case "$head_ref" in copilot/*) fail "Claude does not repair Copilot-implemented pull requests (head '$head_ref'); comment @copilot on the pull request instead.";; esac
+          # Repairs go to the implementer, and Claude is the only implementer: only its agent/issue-* branches.
+          case "$head_ref" in agent/issue-*) ;; *) fail "Repair is only permitted on a Claude agent/issue-* pull request (head is '$head_ref').";; esac
           [[ "$head_ref" =~ ^[A-Za-z0-9._/-]+$ ]] || fail "Unexpected characters in head branch name."
           [[ "$start_sha" =~ ^[0-9a-f]{40}$ ]] || fail "Could not determine the pull request head SHA before the repair."
           # Provider mode (#339): verify the route claimed in the issue's label history against this pull request, using the
