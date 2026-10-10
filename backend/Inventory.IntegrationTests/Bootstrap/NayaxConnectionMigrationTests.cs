@@ -697,6 +697,11 @@ public sealed class NayaxConnectionMigrationTests
         public Task<NayaxConnectionCredential?> FindCredentialAsync(CancellationToken cancellationToken) =>
             _inner.FindCredentialAsync(cancellationToken);
 
+        public Task<NayaxConnectionSnapshot?> FindForOperationAsync(
+            Func<NayaxConnectionStatus, bool> mayDecryptToken,
+            CancellationToken cancellationToken) =>
+            _inner.FindForOperationAsync(mayDecryptToken, cancellationToken);
+
         public Task<NayaxConnection> SaveCredentialAsync(
             string operatorId,
             string accessToken,
@@ -729,6 +734,11 @@ public sealed class NayaxConnectionMigrationTests
 
         public Task<NayaxConnectionCredential?> FindCredentialAsync(CancellationToken cancellationToken) =>
             _inner.FindCredentialAsync(cancellationToken);
+
+        public Task<NayaxConnectionSnapshot?> FindForOperationAsync(
+            Func<NayaxConnectionStatus, bool> mayDecryptToken,
+            CancellationToken cancellationToken) =>
+            _inner.FindForOperationAsync(mayDecryptToken, cancellationToken);
 
         public Task<NayaxConnection> SaveCredentialAsync(
             string operatorId,

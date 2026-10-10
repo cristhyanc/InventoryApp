@@ -217,6 +217,42 @@ public class NayaxLynxClientPerBusinessCredentialTests
     }
 
     /// <summary>
+    /// A 403 is classified against the status of the credential the request actually carried, with a
+    /// credential replacement landing in the middle of the client resolving them.
+    ///
+    /// Both outcomes are legitimate - which one happens depends on whether the replacement commits
+    /// before or after the connection is read - but they must agree with each other: revision 1 is
+    /// <see cref="NayaxConnectionStatus.Ready"/>, tested credentials, so a 403 is an ordinary
+    /// upstream failure, while revision 2 is <see cref="NayaxConnectionStatus.PendingPermissions"/>,
+    /// so a 403 is the per-feature permission answer. The pair that must never occur is revision 2's
+    /// token classified against revision 1's status, which is exactly what resolving the status and
+    /// the token in two separate reads produces.
+    /// </summary>
+    [Fact]
+    public async Task A_403_is_classified_against_the_status_of_the_credential_the_request_carried()
+    {
+        await using var fixture = await ClientFixture.CreateAsync();
+        await fixture.ConnectAsync(fixture.BusinessA, OperatorA, TokenA, NayaxConnectionStatus.Ready);
+        var handler = new RecordingHandler(
+            HttpStatusCode.Forbidden, "{\"message\":\"Insufficient permissions to perform this action.\"}");
+        var client = fixture.ClientReplacingTheCredentialMidResolution(
+            fixture.BusinessA, OperatorA, TokenB, handler);
+
+        var exception = await Record.ExceptionAsync(() => client.GetMachinesAsync(CancellationToken.None));
+
+        var sent = Assert.Single(handler.Requests).Authorization;
+        if (sent == $"Bearer {TokenA}")
+        {
+            Assert.IsType<NayaxUpstreamException>(exception);
+        }
+        else
+        {
+            Assert.Equal($"Bearer {TokenB}", sent);
+            Assert.IsType<NayaxPermissionNotGrantedException>(exception);
+        }
+    }
+
+    /// <summary>
     /// A consumer written against <c>INayaxLynxClient</c> keeps working unchanged, which is the
     /// point of resolving the credential centrally: this adapter never learns that an operator id, a
     /// token or a connection status exists.
@@ -315,6 +351,20 @@ public class NayaxLynxClientPerBusinessCredentialTests
         public INayaxLynxClient ClientFor(int businessId, HttpMessageHandler handler) =>
             CreateClient(new NayaxRequestCredentialProvider(StoreFor(businessId), new FakeClock(Now)), handler);
 
+        /// <summary>
+        /// A client whose store replaces the stored credential as soon as the connection has been
+        /// read once, so a real save commits while the credentials for one call are being resolved.
+        /// </summary>
+        public INayaxLynxClient ClientReplacingTheCredentialMidResolution(
+            int businessId, string operatorId, string accessToken, HttpMessageHandler handler) =>
+            CreateClient(
+                new NayaxRequestCredentialProvider(
+                    new ReplacingAfterFirstReadStore(
+                        StoreFor(businessId),
+                        () => SaveCredentialAsync(businessId, operatorId, accessToken)),
+                    new FakeClock(Now)),
+                handler);
+
         public INayaxLynxClient DeniedClient(HttpMessageHandler handler) =>
             CreateClient(
                 new NayaxRequestCredentialProvider(StoreForContext(TestAppDbContext.Denied(_options)), new FakeClock(Now)),
@@ -366,6 +416,69 @@ public class NayaxLynxClientPerBusinessCredentialTests
                 new AesGcmNayaxTokenProtector(options),
                 new FakeClock(Now),
                 StoreLogger);
+        }
+    }
+
+    /// <summary>
+    /// Replaces the stored credential - a real save, through the real store - the first time the
+    /// connection is read, whichever read that is. Under a two-read resolution that save lands
+    /// between the status read and the token read, which is the interleaving that could once produce
+    /// a request carrying the new token while being classified against the old status.
+    /// </summary>
+    private sealed class ReplacingAfterFirstReadStore : INayaxConnectionStore
+    {
+        private readonly INayaxConnectionStore _inner;
+        private readonly Func<Task> _replaceCredential;
+        private bool _replaced;
+
+        public ReplacingAfterFirstReadStore(INayaxConnectionStore inner, Func<Task> replaceCredential)
+        {
+            _inner = inner;
+            _replaceCredential = replaceCredential;
+        }
+
+        public async Task<NayaxConnection?> FindAsync(CancellationToken cancellationToken)
+        {
+            var connection = await _inner.FindAsync(cancellationToken);
+            await ReplaceOnceAsync();
+
+            return connection;
+        }
+
+        public async Task<NayaxConnectionCredential?> FindCredentialAsync(CancellationToken cancellationToken)
+        {
+            var credential = await _inner.FindCredentialAsync(cancellationToken);
+            await ReplaceOnceAsync();
+
+            return credential;
+        }
+
+        public async Task<NayaxConnectionSnapshot?> FindForOperationAsync(
+            Func<NayaxConnectionStatus, bool> mayDecryptToken, CancellationToken cancellationToken)
+        {
+            var snapshot = await _inner.FindForOperationAsync(mayDecryptToken, cancellationToken);
+            await ReplaceOnceAsync();
+
+            return snapshot;
+        }
+
+        public Task<NayaxConnection> SaveCredentialAsync(
+            string operatorId, string accessToken, CancellationToken cancellationToken) =>
+            _inner.SaveCredentialAsync(operatorId, accessToken, cancellationToken);
+
+        public Task<bool> TryApplyStatusResultAsync(
+            NayaxConnectionStatusResult result, CancellationToken cancellationToken) =>
+            _inner.TryApplyStatusResultAsync(result, cancellationToken);
+
+        private async Task ReplaceOnceAsync()
+        {
+            if (_replaced)
+            {
+                return;
+            }
+
+            _replaced = true;
+            await _replaceCredential();
         }
     }
 

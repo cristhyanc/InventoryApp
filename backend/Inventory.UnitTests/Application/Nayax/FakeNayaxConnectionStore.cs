@@ -83,6 +83,45 @@ internal sealed class FakeNayaxConnectionStore : INayaxConnectionStore
             new NayaxConnectionCredential(_connection.OperatorId, _accessToken, _connection.CredentialRevision));
     }
 
+    /// <summary>
+    /// One snapshot of the stored state, like the real adapter's single statement: the status and
+    /// the credential cannot disagree here either, and the token counts as decrypted
+    /// (<see cref="CredentialReads"/>) only when <paramref name="mayDecryptToken"/> accepted that
+    /// same snapshot's status.
+    /// </summary>
+    public Task<NayaxConnectionSnapshot?> FindForOperationAsync(
+        Func<NayaxConnectionStatus, bool> mayDecryptToken,
+        CancellationToken cancellationToken)
+    {
+        ConnectionReads++;
+
+        if (_connection is null)
+        {
+            return Task.FromResult<NayaxConnectionSnapshot?>(null);
+        }
+
+        if (!mayDecryptToken(_connection.Status))
+        {
+            return Task.FromResult<NayaxConnectionSnapshot?>(
+                new NayaxConnectionSnapshot(_connection.Status, credential: null));
+        }
+
+        CredentialReads++;
+
+        if (CredentialReadFailure is not null)
+        {
+            throw CredentialReadFailure;
+        }
+
+        var credential = _accessToken is null
+            ? null
+            : new NayaxConnectionCredential(
+                _connection.OperatorId, _accessToken, _connection.CredentialRevision);
+
+        return Task.FromResult<NayaxConnectionSnapshot?>(
+            new NayaxConnectionSnapshot(_connection.Status, credential));
+    }
+
     public Task<NayaxConnection> SaveCredentialAsync(
         string operatorId,
         string accessToken,

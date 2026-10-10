@@ -1715,10 +1715,25 @@ decides: `Ready` and `PendingPermissions` may run ordinary operations, `NotConfi
 `NeedsAttention` may not, and a status value outside the declared vocabulary — which is what a cast
 integer or a hand-edited row can produce — is refused rather than assumed usable. `PendingPermissions`
 is deliberately allowed: the credentials are stored and may well work, and refusing every call until
-something had tested them would make a freshly connected business look broken. **The status is read
-before the token is decrypted**, so a refused state never handles the secret at all, and the gate is
-a decision taken before the risky step rather than after it. The provider caches nothing, so the
-call after a status change sees the new status.
+something had tested them would make a freshly connected business look broken. The provider caches
+nothing, so the call after a status change sees the new status.
+
+**The status, the operator id, the token and the revision come from one snapshot of the row.** The
+gate decides, and the 403 classification below depends on the status *the sent token is stored
+with* — so resolving the two separately would be wrong, not merely untidy: a credential save
+committing between a status read and a token read hands the caller the previous status beside the new
+token, a pair the record never held, and a connection disabled between those reads would still have
+its credential sent under the status the earlier read saw. `INayaxConnectionStore.FindForOperationAsync`
+is therefore the one read an ordinary call resolves its credentials through, and
+`EfNayaxConnectionStoreTests.The_operation_read_resolves_the_status_and_the_credential_in_one_statement`
+pins it to a single `SELECT`. The gate travels *into* that read as the predicate that decides whether
+the token may be decrypted, which keeps both properties at once: the rule stays the single Domain
+allow-list the Application layer owns, and **a refused status never decrypts the token at all** — the
+adapter stops before the ciphertext, so the gate is still a decision taken before the risky step
+rather than after it. `NayaxRequestCredentialProvider` then applies the same gate to the snapshot's
+own status to refuse and report the operation. `FindAsync` and `FindCredentialAsync` remain for the
+callers that genuinely want one or the other: a token-free status read, and the gate-free re-test
+read below.
 
 **A refusal is a stable error the frontend can show.** `NayaxNotConnectedException` (Application)
 carries the fixed sentence of `NayaxNotConnectedException.StableMessage`, the stable code
@@ -1748,7 +1763,8 @@ error is issue #329 and is deliberately not part of this change.
   last test result, because a 401 in production traffic is exactly a test of those credentials.
 - **403 — the token's scopes do not cover this resource or action.** That is a verdict on one
   feature, not on the credentials, so **nothing writes a status**. While the credentials have not been
-  tested since they were saved (`PendingPermissions`), it surfaces as the per-feature "Nayax hasn't
+  tested since they were saved (`PendingPermissions` in the same snapshot the request's token came
+  from, never a status read separately from it), it surfaces as the per-feature "Nayax hasn't
   granted permission for this" error, which is what lets the rest of the integration keep working. A
   403 against credentials that were tested and worked stays the ordinary upstream failure it was
   before this change: the issue defines the per-feature error for the unverified state, and widening

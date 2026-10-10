@@ -13,6 +13,11 @@ namespace InventoryApi.Tests.Application.Nayax;
 /// credentials only in <see cref="NayaxConnectionStatus.Ready"/> or
 /// <see cref="NayaxConnectionStatus.PendingPermissions"/>, a refused state never decrypts the token
 /// at all, and a 401 writes its status for the revision the call started with.
+///
+/// Both decisions are taken on one snapshot of the connection, so the status that is gated and the
+/// token that is sent can never describe different states of the record. Two of the tests below
+/// drive a store that answers the separate status and credential reads inconsistently - the shape of
+/// a credential replaced underneath a call - and pin that the provider resolves neither from it.
 /// </summary>
 public class NayaxRequestCredentialProviderTests
 {
@@ -140,17 +145,64 @@ public class NayaxRequestCredentialProviderTests
     }
 
     /// <summary>
-    /// The row was readable when the status was read and gone when the token was, which is the one
-    /// way a usable status can produce no credential. It must not surface as a credential with an
-    /// empty token.
+    /// A snapshot that reports a usable status and yet carries no credential - a row without usable
+    /// credentials, whatever produced it. It must not surface as a credential with an empty token.
     /// </summary>
     [Fact]
-    public async Task A_connection_whose_credential_disappeared_mid_call_fails_closed()
+    public async Task A_usable_status_with_no_credential_in_the_snapshot_fails_closed()
     {
-        var store = new DisappearingCredentialStore(OperatorId, Token, NayaxConnectionStatus.Ready);
+        var store = new CredentiallessSnapshotStore(NayaxConnectionStatus.Ready);
 
         await Assert.ThrowsAsync<NayaxNotConnectedException>(
             () => CreateProvider(store).GetForOperationAsync(CancellationToken.None));
+    }
+
+    /// <summary>
+    /// The race the snapshot read exists for. This store answers the *separate* reads the way a
+    /// connection being replaced underneath a call would - the status read sees the old row, the
+    /// credential read sees the new one - while its snapshot read answers from one state, as the
+    /// relational adapter's single statement does.
+    ///
+    /// So the provider must return a status that belongs to the token it actually got: resolving the
+    /// two separately would return <see cref="NayaxConnectionStatus.Ready"/> beside revision 2's
+    /// token, a pair the record never held, and a Nayax 403 against it would then be classified as a
+    /// generic upstream failure instead of the per-feature permission answer
+    /// <see cref="NayaxConnectionStatus.PendingPermissions"/> calls for.
+    /// </summary>
+    [Fact]
+    public async Task The_status_and_the_revision_describe_the_token_that_was_actually_read()
+    {
+        var store = new ReplacedBetweenReadsStore(
+            statusRead: new NayaxConnection(OperatorId, NayaxConnectionStatus.Ready, 1, null, Now),
+            snapshotStatus: NayaxConnectionStatus.PendingPermissions,
+            snapshotCredential: new NayaxConnectionCredential(OperatorId, "fake-replacement-token", 2));
+
+        var credential = await CreateProvider(store).GetForOperationAsync(CancellationToken.None);
+
+        Assert.Equal("fake-replacement-token", credential.AccessToken);
+        Assert.Equal(2, credential.CredentialRevision);
+        Assert.Equal(NayaxConnectionStatus.PendingPermissions, credential.Status);
+        Assert.True(credential.PermissionsAreUnverified);
+    }
+
+    /// <summary>
+    /// The more serious half of the same race: the connection became unusable, so the credential
+    /// stored with it must not be sent under the status an earlier read happened to see. The gate
+    /// applies to the snapshot's own status, which also means the token is never decrypted.
+    /// </summary>
+    [Fact]
+    public async Task A_connection_that_became_unusable_is_refused_on_the_snapshot_s_own_status()
+    {
+        var store = new ReplacedBetweenReadsStore(
+            statusRead: new NayaxConnection(OperatorId, NayaxConnectionStatus.Ready, 1, null, Now),
+            snapshotStatus: NayaxConnectionStatus.NeedsAttention,
+            snapshotCredential: new NayaxConnectionCredential(OperatorId, Token, 2));
+
+        var exception = await Assert.ThrowsAsync<NayaxNotConnectedException>(
+            () => CreateProvider(store).GetForOperationAsync(CancellationToken.None));
+
+        Assert.Equal(NayaxConnectionStatus.NeedsAttention, exception.Status);
+        Assert.False(store.DecryptedTheToken);
     }
 
     [Fact]
@@ -234,24 +286,86 @@ public class NayaxRequestCredentialProviderTests
         new(store, new FakeClock(Now));
 
     /// <summary>
-    /// Reports a usable status and then no credential, the race a real store can produce when the
-    /// row is replaced between the two reads.
+    /// Reports a usable status in a snapshot that carries no credential at all.
     /// </summary>
-    private sealed class DisappearingCredentialStore : INayaxConnectionStore
+    private sealed class CredentiallessSnapshotStore : INayaxConnectionStore
     {
-        private readonly NayaxConnection _connection;
+        private readonly NayaxConnectionStatus _status;
 
-        public DisappearingCredentialStore(string operatorId, string accessToken, NayaxConnectionStatus status)
-        {
-            _ = accessToken;
-            _connection = new NayaxConnection(operatorId, status, 1, null, Now);
-        }
+        public CredentiallessSnapshotStore(NayaxConnectionStatus status) => _status = status;
 
         public Task<NayaxConnection?> FindAsync(CancellationToken cancellationToken) =>
-            Task.FromResult<NayaxConnection?>(_connection);
+            Task.FromResult<NayaxConnection?>(new NayaxConnection(OperatorId, _status, 1, null, Now));
 
         public Task<NayaxConnectionCredential?> FindCredentialAsync(CancellationToken cancellationToken) =>
             Task.FromResult<NayaxConnectionCredential?>(null);
+
+        public Task<NayaxConnectionSnapshot?> FindForOperationAsync(
+            Func<NayaxConnectionStatus, bool> mayDecryptToken, CancellationToken cancellationToken) =>
+            Task.FromResult<NayaxConnectionSnapshot?>(
+                new NayaxConnectionSnapshot(_status, credential: null));
+
+        public Task<NayaxConnection> SaveCredentialAsync(
+            string operatorId, string accessToken, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<bool> TryApplyStatusResultAsync(
+            NayaxConnectionStatusResult result, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+    }
+
+    /// <summary>
+    /// A store whose row is replaced while a call is resolving its credentials: the separate status
+    /// read still answers from the row as it was, and the snapshot read answers from the row as it
+    /// now is - one state, status and credential together, like the adapter's single statement.
+    ///
+    /// Resolving the status and the token through the two separate reads therefore produces a
+    /// mismatched pair here, which is exactly what these tests are for. The gate is applied to the
+    /// snapshot's status before anything is decrypted, so <see cref="DecryptedTheToken"/> records
+    /// whether the refused path touched the credential.
+    /// </summary>
+    private sealed class ReplacedBetweenReadsStore : INayaxConnectionStore
+    {
+        private readonly NayaxConnection _statusRead;
+        private readonly NayaxConnectionStatus _snapshotStatus;
+        private readonly NayaxConnectionCredential _snapshotCredential;
+
+        public ReplacedBetweenReadsStore(
+            NayaxConnection statusRead,
+            NayaxConnectionStatus snapshotStatus,
+            NayaxConnectionCredential snapshotCredential)
+        {
+            _statusRead = statusRead;
+            _snapshotStatus = snapshotStatus;
+            _snapshotCredential = snapshotCredential;
+        }
+
+        /// <summary>Whether the stored token was decrypted at all.</summary>
+        public bool DecryptedTheToken { get; private set; }
+
+        public Task<NayaxConnection?> FindAsync(CancellationToken cancellationToken) =>
+            Task.FromResult<NayaxConnection?>(_statusRead);
+
+        public Task<NayaxConnectionCredential?> FindCredentialAsync(CancellationToken cancellationToken)
+        {
+            DecryptedTheToken = true;
+            return Task.FromResult<NayaxConnectionCredential?>(_snapshotCredential);
+        }
+
+        public Task<NayaxConnectionSnapshot?> FindForOperationAsync(
+            Func<NayaxConnectionStatus, bool> mayDecryptToken, CancellationToken cancellationToken)
+        {
+            if (!mayDecryptToken(_snapshotStatus))
+            {
+                return Task.FromResult<NayaxConnectionSnapshot?>(
+                    new NayaxConnectionSnapshot(_snapshotStatus, credential: null));
+            }
+
+            DecryptedTheToken = true;
+
+            return Task.FromResult<NayaxConnectionSnapshot?>(
+                new NayaxConnectionSnapshot(_snapshotStatus, _snapshotCredential));
+        }
 
         public Task<NayaxConnection> SaveCredentialAsync(
             string operatorId, string accessToken, CancellationToken cancellationToken) =>

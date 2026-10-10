@@ -21,6 +21,11 @@ public interface INayaxRequestCredentialProvider
     /// operation, with the status gate applied
     /// (<see cref="Domain.Nayax.NayaxConnectionStatusGate"/>).
     ///
+    /// The status, the operator id, the token and the revision all come from one consistent
+    /// snapshot of the connection (<see cref="INayaxConnectionStore.FindForOperationAsync"/>), so
+    /// the status the gate accepted is the status the returned token is stored with - which is what
+    /// the 403 classification and the 401 revision write both depend on.
+    ///
     /// It fails closed rather than returning a usable-looking result: a business with no stored
     /// connection, a connection in <see cref="Domain.Nayax.NayaxConnectionStatus.NotConfigured"/>
     /// or <see cref="Domain.Nayax.NayaxConnectionStatus.NeedsAttention"/>, and a caller whose

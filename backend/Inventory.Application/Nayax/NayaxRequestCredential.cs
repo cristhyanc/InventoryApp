@@ -13,7 +13,8 @@ namespace Inventory.Application.Nayax;
 /// quietly reintroduce the log line it exists to prevent. <see cref="ToString"/> here renders the
 /// wrapped credential, so it redacts for the same reason.
 ///
-/// <see cref="Status"/> is the status read when the call started, and it is carried because the
+/// <see cref="Status"/> is the status of the very snapshot the token was read from
+/// (<see cref="INayaxConnectionStore.FindForOperationAsync"/>), and it is carried because the
 /// answer to a Nayax refusal depends on it: in
 /// <see cref="NayaxConnectionStatus.PendingPermissions"/> a 403 is a per-feature permission answer
 /// rather than a credential verdict. <see cref="CredentialRevision"/> is carried for the matching
@@ -23,7 +24,7 @@ namespace Inventory.Application.Nayax;
 public sealed class NayaxRequestCredential
 {
     /// <param name="credential">The operator id and decrypted token this call authenticates with.</param>
-    /// <param name="status">The connection status read when the call started.</param>
+    /// <param name="status">The connection status of the snapshot that credential came from.</param>
     public NayaxRequestCredential(NayaxConnectionCredential credential, NayaxConnectionStatus status)
     {
         ArgumentNullException.ThrowIfNull(credential);
@@ -35,7 +36,7 @@ public sealed class NayaxRequestCredential
     /// <summary>The operator id and decrypted access token. Carries a secret; never serialise it.</summary>
     public NayaxConnectionCredential Credential { get; }
 
-    /// <summary>The connection status read when the call started.</summary>
+    /// <summary>The connection status read in the same snapshot as the credential.</summary>
     public NayaxConnectionStatus Status { get; }
 
     /// <summary>The Nayax operator id, the Lynx API's <c>OperatorID</c> path parameter.</summary>
