@@ -3808,11 +3808,28 @@ workflows, and Nayax remains the read-only source for the machine-stock facts th
 The Pick List Angular page, its machine chips/filter controls, and any persisted
 picked/unpicked completion state are out of scope for this projection and remain frontend-phase work.
 
+**MDB code and default ordering (issue #496).** Each selected machine's `PickListMachineQuantity`
+also carries that machine's own `MDBCode` (the same `NayaxMachineProduct.MDBCode`
+`ListMachineProducts` already surfaces): a product is never assumed to have one globally unique code,
+only the code its slot on that one machine carries, so the same product can legitimately show a
+different code on another machine, or the same code again, without merging rows or altering the
+per-machine pick quantities above. `PickListProduct.MdbCode` is a row-level display/sort convenience
+derived from those per-machine codes - the lowest non-null one, or `null` when none of a product's
+machine quantities has a code - and the products are returned ordered ascending by it (numerically,
+so `2` sorts before `10`), with missing codes ordered deterministically before any code and
+`ProductName` (ordinal) as the tie-break for repeated or missing codes, replacing the projection's
+previous `ProductName`-only default order.
+
 #### Pick List frontend page (issue #222)
 
 `PickListComponent` (`frontend/inventory-app/src/app/components/pick-list`, routed at `/pick-list`)
 is a thin, entirely client-side consumer of the read-only `GET /api/pick-list` projection above: it
-restates none of its arithmetic. Every piece of state the page adds on top of that projection -
+restates none of its arithmetic, including the projection's default ascending-by-MDB-code product
+ordering (issue #496) - the page renders `pickListProducts` in the order the backend returned it
+rather than re-sorting. Its row-level MDB Code column shows each product's `mdbCode`, and each
+machine cell additionally shows that machine's own `mdbCode` alongside its Current/Target figures, so
+a product with a different (or repeated) code on another machine stays visible per machine rather
+than being collapsed into the row-level value. Every piece of state the page adds on top of that projection -
 the applied machine/product filter selections, the matrix data for the applied machines, and which
 positive-pick cells the operator has marked picked (`pickedCells`) - lives only in the component
 instance. None of it is written to `localStorage`, a query parameter, or any backend store, so it is
@@ -3864,8 +3881,9 @@ with the matrix data, `pickedCells`, and the snapshot timestamp.
 
 **Matrix table layout.** The matrix lives in one bounded scroll area (`max-h-[70vh] overflow-auto`),
 so a long product list scrolls vertically inside the card while many machine columns still scroll
-horizontally in the same area. Every header cell - Product, Total to Pick and each applied machine
-column - is individually `sticky top-0` with an opaque background and a z-index above the body cells,
+horizontally in the same area. Every header cell - Product, MDB Code, Total to Pick and each applied
+machine column (issue #496 added MDB Code) - is individually `sticky top-0` with an opaque background
+and a z-index above the body cells,
 so the whole header row stays visible while rows scroll under it without showing through. The
 `<thead>` element itself, the filter panel and the Selected Machines card are deliberately not
 sticky. Sticky positioning does not participate in table column sizing, so header and body keep
