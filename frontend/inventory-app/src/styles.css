@@ -1009,6 +1009,33 @@ video {
   background-color: rgb(245 245 245 / var(--tw-bg-opacity, 1));
 }
 
+/*
+   * Row-level navigation. The row's first cell holds the real link; clicking anywhere else in
+   * the row follows it, so the whole row shows the pointer cursor. Because the anchor - not the
+   * row - takes focus, the row carries the focus state for the link inside it, on top of the
+   * 2px outline the anchor itself gets from the global focus-visible rule.
+   */
+
+.table-row-link {
+  cursor: pointer;
+}
+
+.table-row-link:focus-within {
+  --tw-bg-opacity: 1;
+  background-color: rgb(245 245 245 / var(--tw-bg-opacity, 1));
+}
+
+.table-row-anchor {
+  font-weight: 500;
+  --tw-text-opacity: 1;
+  color: rgb(38 38 38 / var(--tw-text-opacity, 1));
+  text-underline-offset: 2px;
+}
+
+.table-row-anchor:hover {
+  text-decoration-line: underline;
+}
+
 .table-cell {
   padding-left: 0.75rem;
   padding-right: 0.75rem;

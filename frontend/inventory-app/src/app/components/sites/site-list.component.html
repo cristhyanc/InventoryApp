@@ -38,13 +38,17 @@
                 <th scope="col" class="table-cell table-num">Today</th>
                 <th scope="col" class="table-cell table-num">This Week</th>
                 <th scope="col" class="table-cell table-num">vs Last Week</th>
-                <th scope="col" class="table-cell table-num"></th>
               </tr>
             </thead>
             <tbody>
               @for (site of filteredSites; track site.siteId) {
-                <tr class="table-row">
-                  <td class="table-cell">{{ site.siteName }}</td>
+                <tr class="table-row table-row-link" (click)="followRowLink($event)" (keydown.enter)="followRowLink($event)">
+                  <td class="table-cell">
+                    <a
+                      class="table-row-anchor"
+                      [routerLink]="['/sites', site.siteId, 'products']"
+                      [attr.aria-label]="'View products for ' + site.siteName">{{ site.siteName }}</a>
+                  </td>
                   <td class="table-cell">{{ site.machineCount }}</td>
                   <td class="table-cell">
                     <span class="badge" [ngClass]="siteStockClass(site)">{{ site.totalStockPercentage.toFixed(0) }}%</span>
@@ -54,9 +58,6 @@
                   <td class="table-cell table-num">${{ site.currentWeekRevenue.toFixed(2) }}</td>
                   <td class="table-cell table-num" [ngClass]="trendClass(site.currentWeekRevenue, site.previousComparableWeekRevenue)">
                     {{ trendLabel(site.currentWeekRevenue, site.previousComparableWeekRevenue) }}
-                  </td>
-                  <td class="table-cell table-num">
-                    <a [routerLink]="['/sites', site.siteId, 'products']" class="btn btn-sm btn-primary">View Products</a>
                   </td>
                 </tr>
               }
