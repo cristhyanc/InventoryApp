@@ -8,7 +8,8 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { describe, it } from 'node:test';
 import {
-  MAX_ENVELOPE_BYTES, TransportError, artifactName, contextFromEnv, contractFailures, packageReview, redactSecrets, redactText, verifyEnvelope,
+  MAX_ENVELOPE_BYTES, TransportError, artifactName, contextFromEnv, contractFailures, knownSecretForms, knownSecretsFromEnv, looksLikeGeneratedToken,
+  packageReview, redactSecrets, redactText, verifyEnvelope,
 } from './agent-review-transport.mjs';
 
 const SHA = '6b5ade799d290fb2c4e59710cbf047c43a305df0';
@@ -68,6 +69,52 @@ describe('secret redaction', () => {
     assert.equal(count, 2);
     assert.deepEqual(value.blockers, ['key [REDACTED]']);
     assert.equal(value.inline_comments[0].line, 3);
+  });
+});
+
+// A held credential with no recognisable shape: no prefix, low entropy, all lower case. Only the
+// exact-value layer can catch it, which is why the reviewer job passes the credentials it holds.
+const SHAPELESS_SECRET = 'correct-horse-battery-staple-fixture';
+
+describe('exact-value redaction of the credentials a job holds', () => {
+  it('removes a shapeless held credential and its encoded forms that no pattern would recognise', () => {
+    assert.equal(redactText(`token ${SHAPELESS_SECRET} end`).count, 0, 'no pattern or entropy rule catches it');
+    for (const form of [SHAPELESS_SECRET, Buffer.from(SHAPELESS_SECRET).toString('base64'), Buffer.from(SHAPELESS_SECRET).toString('base64url'), encodeURIComponent(`${SHAPELESS_SECRET}/x`)]) {
+      const { value } = redactSecrets(review({ validation_evidence: `seen ${form} in a log` }), [SHAPELESS_SECRET, `${SHAPELESS_SECRET}/x`]);
+      assert.ok(!value.validation_evidence.includes(SHAPELESS_SECRET), form);
+      assert.match(value.validation_evidence, /^seen \[REDACTED\]/);
+    }
+  });
+
+  it('packages a review with the held credential removed and never stores it', () => {
+    const { text, redactions } = packageReview(JSON.stringify(review({ blockers: [], suggestions: [`printed ${SHAPELESS_SECRET}`] })), context, [SHAPELESS_SECRET]);
+    assert.ok(!text.includes(SHAPELESS_SECRET));
+    assert.equal(redactions, 1);
+  });
+
+  it('fails closed when a held credential would still reach the stored envelope', () => {
+    // The review holds a real newline; JSON writes it as backslash-n, which spells the held value.
+    const held = 'abcd\\nefgh-held';
+    assert.equal(code(() => packageReview(JSON.stringify(review({ suggestions: ['abcd\nefgh-held'] })), context, [held])), 'secret');
+  });
+
+  it('reads only REVIEW_REDACT_* variables and ignores short or empty values', () => {
+    assert.deepEqual(knownSecretsFromEnv({ REVIEW_REDACT_A: 'value-one-long', REVIEW_REDACT_B: '', GH_TOKEN: 'not-this-one' }), ['value-one-long']);
+    assert.deepEqual(knownSecretForms(['short', '']), []);
+  });
+});
+
+describe('unrecognised generated tokens', () => {
+  it('redacts a long mixed-case, digit-bearing, high-entropy token of unknown format', () => {
+    const token = 'q7Rz2LmX9vKp4TnB8wYc3HdJ6sFg1AeU';
+    assert.ok(looksLikeGeneratedToken(token));
+    assert.deepEqual(redactText(`key=${token};`), { value: 'key=[REDACTED];', count: 1 });
+  });
+
+  it('keeps SHAs, digests, test names, paths and long words', () => {
+    for (const text of [SHA, 'a'.repeat(64), 'f3c79328f076d4011197ab3af10dd40b6091173cf3c79328f076d4011197ab3a', 'InventoryCount_ChangedBetweenReadAndApply_Conflicts', 'backend/Inventory.IntegrationTests/Architecture/ApiLayerOwnershipTests.cs', 'BusinessOwnershipCoverageTests2026Regression']) {
+      assert.deepEqual(redactText(text), { value: text, count: 0 }, text);
+    }
   });
 });
 

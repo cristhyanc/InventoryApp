@@ -546,6 +546,20 @@ describe('review result hand-off from reviewer to publisher', () => {
     }
   });
 
+  it('removes a credential the reviewer job holds even when it has no recognisable shape', () => {
+    // GitHub masks exactly the credentials a job holds; those are what could have been in #558's output.
+    const held = 'correct-horse-battery-staple-fixture';
+    for (const [shell, reviewer, mode, rawFile] of [[claudePackageShell, 'claude', 'full-claude', false], [copilotPackageShell, 'copilot', 'cross-claude', true]]) {
+      const output = changesOutput({ suggestions: [`The run printed ${held} and its base64 ${Buffer.from(held).toString('base64')}.`] });
+      const packaged = packageStep(shell, { raw: JSON.stringify(output), rawFile, mode, reviewer, env: { REVIEW_REDACT_PROVIDER_TOKEN: held } });
+      assert.equal(packaged.status, 0, packaged.log);
+      assert.ok(!packaged.envelope.includes(held), `${reviewer}: the held credential must not be stored`);
+      assert.ok(!packaged.envelope.includes(Buffer.from(held).toString('base64').replace(/=+$/, '')), `${reviewer}: nor its base64 form`);
+      assert.ok(!packaged.log.includes(held), `${reviewer}: nor logged`);
+      assert.equal(JSON.parse(packaged.envelope).redactions, 2);
+    }
+  });
+
   it('publishes a clean ready review through the artifact with no redaction note', () => {
     const { outcome } = handOff({ output: readyOutput() });
     const [review] = reviews(outcome.calls);

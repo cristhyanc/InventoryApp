@@ -932,8 +932,15 @@ export const REVIEW_TRANSPORT_CONTRACT = Object.freeze({
  * commit, never from the pull request head.
  */
 function verifyReviewTransport(review) {
+  // Each reviewer job hands its own credentials to the package step for exact-value redaction.
+  const heldCredentials = {
+    review: ['REVIEW_REDACT_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}', 'REVIEW_REDACT_PROVIDER_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}'],
+    'copilot-review': ['REVIEW_REDACT_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}', 'REVIEW_REDACT_PROVIDER_TOKEN: ${{ secrets.COPILOT_CLI_TOKEN }}'],
+  };
   for (const [name, start, end] of [['review', '  review:\n', '  copilot-review:\n'], ['copilot-review', '  copilot-review:\n', '  publish:\n']]) {
     const job = section(review, start, end, `agent-review.yml ${name} job`);
+    const packageStep = section(job, '      - name: Package review result\n', '      - name: Upload review result\n', `agent-review.yml ${name} package step`);
+    for (const required of heldCredentials[name]) requireText(packageStep, required, `agent-review.yml ${name} review transport`);
     const outputs = section(job, '    outputs:\n', '\n    steps:\n', `agent-review.yml ${name} outputs`);
     for (const required of REVIEW_TRANSPORT_CONTRACT.reviewerOutputs) requireText(outputs, required, `agent-review.yml ${name} outputs`);
     forbidText(outputs, 'structured_output', `agent-review.yml ${name} outputs`);

@@ -34,8 +34,8 @@ export const REDACTED = '[REDACTED]';
 
 const REVIEW_KEYS = ['blockers', 'criteria', 'inline_comments', 'reviewed_head_sha', 'suggestions', 'validation_evidence', 'verdict'];
 const ENVELOPE_KEYS = ['agent_mode', 'head_sha', 'implementer', 'pr_number', 'redactions', 'repository', 'review', 'reviewer', 'run_attempt', 'run_id', 'schema'];
-const VERDICTS = ['CHANGES REQUESTED', 'READY FOR HUMAN REVIEW'];
-const STATUSES = ['met', 'not met', 'not verified'];
+const VERDICTS = new Set(['CHANGES REQUESTED', 'READY FOR HUMAN REVIEW']);
+const STATUSES = new Set(['met', 'not met', 'not verified']);
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
 
 export class TransportError extends Error {
@@ -47,12 +47,22 @@ export class TransportError extends Error {
 
 const fail = (code, message) => { throw new TransportError(code, message); };
 
-// Secret-like values that must never be published or kept in a stored artifact. Each pattern needs
-// a recognisable prefix or key name, so commit SHAs, file paths and ordinary prose are untouched.
+// Redaction runs in three layers, strongest first:
+// 1. Exact values. The reviewer job passes the credentials it actually holds (its GITHUB_TOKEN and the
+//    provider token) as REVIEW_REDACT_* variables; every occurrence of each, and of its base64,
+//    base64url and URL-encoded forms, is removed, whatever its shape. These are the values GitHub
+//    masks in that job, so this is the layer that closes the #558 case. Packaging then fails closed if
+//    any of them is still present.
+// 2. Known credential formats (below), each anchored on a recognisable prefix or key name.
+// 3. Unrecognised tokens: any run of 32 or more token characters that mixes upper case, lower case and
+//    digits, has high character entropy and is not made of words. Commit SHAs and digests (lower-case
+//    hex), file paths, CamelCase test names and prose do not qualify.
+// A secret with no recognisable shape that the job does not hold (for example a short password the
+// model read somewhere) cannot be detected by any of these; see docs/automation.md.
 const SECRET_PATTERNS = [
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g, REDACTED],
   [/\bgh[pousr]_[A-Za-z0-9]{30,}/g, REDACTED],
-  [/\bgithub_pat_[A-Za-z0-9_]{22,}/g, REDACTED],
+  [/\bgithub_pat_\w{22,}/g, REDACTED],
   [/\bsk-ant-[A-Za-z0-9_-]{16,}/g, REDACTED],
   [/\bsk-(?:proj-)?[A-Za-z0-9_-]{32,}/g, REDACTED],
   [/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, REDACTED],
@@ -64,25 +74,85 @@ const SECRET_PATTERNS = [
   [/(https?:\/\/)[^\s:@/]+:[^\s@/]+@/g, `$1${REDACTED}@`],
 ];
 
-/** Redacts secret-like values in one string; returns the new string and how many were replaced. */
-export function redactText(text) {
+const MIN_KNOWN_SECRET_LENGTH = 8;
+const TOKEN_CANDIDATE = /[A-Za-z0-9_+-]{32,}={0,2}/g;
+const MIN_TOKEN_ENTROPY = 3.5;
+
+/** Shannon entropy in bits per character. */
+export function entropy(text) {
+  const counts = new Map();
+  for (const ch of text) counts.set(ch, (counts.get(ch) ?? 0) + 1);
+  let bits = 0;
+  for (const n of counts.values()) bits -= (n / text.length) * Math.log2(n / text.length);
+  return bits;
+}
+
+/**
+ * True for an unrecognised token that looks generated rather than written: it mixes upper case, lower
+ * case and digits, has high character entropy, and is not made of words. CamelCase identifiers keep
+ * most of their letters in lower-case runs of four or more ("Business", "Ownership"); random tokens
+ * almost never do.
+ */
+export function looksLikeGeneratedToken(token) {
+  if (!/[A-Z]/.test(token) || !/[a-z]/.test(token) || !/\d/.test(token)) return false;
+  const wordLetters = (token.match(/[a-z]{4,}/g) ?? []).join('').length;
+  return wordLetters / token.length < 0.3 && entropy(token) >= MIN_TOKEN_ENTROPY;
+}
+
+/** Every form of a known secret that could appear in text: as is, base64, base64url and URL-encoded. */
+export function knownSecretForms(values) {
+  const forms = new Set();
+  for (const value of values) {
+    if (typeof value !== 'string' || value.length < MIN_KNOWN_SECRET_LENGTH) continue;
+    forms.add(value);
+    forms.add(Buffer.from(value).toString('base64').replace(/=+$/, ''));
+    forms.add(Buffer.from(value).toString('base64url'));
+    forms.add(encodeURIComponent(value));
+  }
+  // Longest first, so a value is never left half-redacted by a shorter form inside it.
+  return [...forms].filter((f) => f.length >= MIN_KNOWN_SECRET_LENGTH).sort((a, b) => b.length - a.length);
+}
+
+/** The secret values a job passed for exact redaction (REVIEW_REDACT_*). Never logged. */
+export function knownSecretsFromEnv(env = process.env) {
+  return Object.entries(env).filter(([key, value]) => key.startsWith('REVIEW_REDACT_') && value).map(([, value]) => value);
+}
+
+/**
+ * Redacts secret-like values in one string; returns the new string and how many were replaced.
+ * `knownForms` comes from knownSecretForms().
+ */
+export function redactText(text, knownForms = []) {
   let count = 0;
   let value = text;
+  for (const form of knownForms) {
+    const parts = value.split(form);
+    if (parts.length > 1) {
+      count += parts.length - 1;
+      value = parts.join(REDACTED);
+    }
+  }
   for (const [pattern, replacement] of SECRET_PATTERNS) {
     value = value.replace(pattern, (...match) => {
       count += 1;
       return replacement.replace('$1', match[1] ?? '');
     });
   }
+  value = value.replace(TOKEN_CANDIDATE, (token) => {
+    if (!looksLikeGeneratedToken(token)) return token;
+    count += 1;
+    return REDACTED;
+  });
   return { value, count };
 }
 
 /** Redacts every string inside a JSON value; keys are fixed by the contract and left alone. */
-export function redactSecrets(input) {
+export function redactSecrets(input, knownValues = []) {
+  const knownForms = knownSecretForms(knownValues);
   let count = 0;
   const walk = (value) => {
     if (typeof value === 'string') {
-      const result = redactText(value);
+      const result = redactText(value, knownForms);
       count += result.count;
       return result.value;
     }
@@ -106,10 +176,10 @@ export function contractFailures(review) {
   const checks = {
     exact_keys: exactKeys(review, REVIEW_KEYS),
     reviewed_head_sha: typeof review.reviewed_head_sha === 'string' && SHA_PATTERN.test(review.reviewed_head_sha),
-    verdict: VERDICTS.includes(review.verdict),
+    verdict: VERDICTS.has(review.verdict),
     blockers: Array.isArray(review.blockers) && review.blockers.every(nonEmptyString),
     criteria: Array.isArray(review.criteria) && review.criteria.length > 0 && review.criteria.every((c) =>
-      exactKeys(c, ['criterion', 'evidence', 'status']) && nonEmptyString(c.criterion) && nonEmptyString(c.evidence) && STATUSES.includes(c.status)),
+      exactKeys(c, ['criterion', 'evidence', 'status']) && nonEmptyString(c.criterion) && nonEmptyString(c.evidence) && STATUSES.has(c.status)),
     suggestions: Array.isArray(review.suggestions) && review.suggestions.every((s) => typeof s === 'string'),
     validation_evidence: nonEmptyString(review.validation_evidence),
     inline_comments: Array.isArray(review.inline_comments) && review.inline_comments.every((c) =>
@@ -120,7 +190,7 @@ export function contractFailures(review) {
 
 /** The run-scoped artifact name. The run id, not the name, is the trust anchor; the name only selects. */
 export function artifactName({ runId, reviewer }) {
-  if (!/^[1-9][0-9]*$/.test(String(runId))) fail('context', 'The workflow run id is missing or invalid.');
+  if (!/^[1-9]\d*$/.test(String(runId))) fail('context', 'The workflow run id is missing or invalid.');
   if (!['claude', 'copilot'].includes(reviewer)) fail('context', 'The reviewer is missing or unknown.');
   return `agent-review-result-${reviewer}-${runId}`;
 }
@@ -138,17 +208,20 @@ export function contextFromEnv(env = process.env) {
     runAttempt: env.GITHUB_RUN_ATTEMPT ?? '',
   };
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(context.repository)) fail('context', 'The repository is missing or invalid.');
-  if (!/^[1-9][0-9]*$/.test(context.prNumber)) fail('context', 'The pull request number is missing or invalid.');
+  if (!/^[1-9]\d*$/.test(context.prNumber)) fail('context', 'The pull request number is missing or invalid.');
   if (!SHA_PATTERN.test(context.headSha)) fail('context', 'The reviewed head SHA is missing or invalid.');
   if (!['cross-claude', 'full-claude'].includes(context.agentMode)) fail('context', 'The review route is missing or unknown.');
   if (context.implementer !== 'claude') fail('context', 'The implementer is missing or unknown.');
-  if (!/^[1-9][0-9]*$/.test(context.runAttempt)) fail('context', 'The workflow run attempt is missing or invalid.');
+  if (!/^[1-9]\d*$/.test(context.runAttempt)) fail('context', 'The workflow run attempt is missing or invalid.');
   artifactName(context);
   return context;
 }
 
-/** Validates the raw model output and returns the envelope text to upload. */
-export function packageReview(raw, context) {
+/**
+ * Validates the raw model output and returns the envelope text to upload. `knownValues` are the
+ * credentials the reviewer job holds; none of them may survive into the envelope in any form.
+ */
+export function packageReview(raw, context, knownValues = []) {
   if (typeof raw !== 'string' || raw.trim() === '') fail('empty', 'The reviewer produced no structured output.');
   let review;
   try {
@@ -159,7 +232,7 @@ export function packageReview(raw, context) {
   const failures = contractFailures(review);
   if (failures.length > 0) fail('contract', `The reviewer output breaks the review contract (${failures.join(', ')}).`);
   if (review.reviewed_head_sha !== context.headSha) fail('wrong-sha', `The review names SHA ${review.reviewed_head_sha}, not the reviewed SHA ${context.headSha}.`);
-  const redacted = redactSecrets(review);
+  const redacted = redactSecrets(review, knownValues);
   const envelope = {
     schema: ENVELOPE_SCHEMA,
     repository: context.repository,
@@ -174,6 +247,9 @@ export function packageReview(raw, context) {
     review: redacted.value,
   };
   const text = JSON.stringify(envelope);
+  // Fail closed rather than store a credential the job holds: check the serialized form too, so a value
+  // split across JSON escaping or fields can never slip through unnoticed.
+  if (knownSecretForms(knownValues).some((form) => text.includes(form))) fail('secret', 'A credential held by the reviewer job is still present after redaction.');
   if (Buffer.byteLength(text) > MAX_ENVELOPE_BYTES) fail('oversized', `The review result exceeds ${MAX_ENVELOPE_BYTES} bytes.`);
   return { text, redactions: redacted.count };
 }
@@ -227,7 +303,7 @@ const run = (file, args, maxBuffer) => execFileSync(file, args, { maxBuffer, std
  * reviewer job's outputs; both are short values that can never carry review text.
  */
 export function fetchReview(context, { artifactId, digest }) {
-  if (!/^[1-9][0-9]*$/.test(artifactId ?? '')) fail('missing', 'The reviewer job reported no review artifact id.');
+  if (!/^[1-9]\d*$/.test(artifactId ?? '')) fail('missing', 'The reviewer job reported no review artifact id.');
   if (!/^[0-9a-f]{64}$/.test(digest ?? '')) fail('missing', 'The reviewer job reported no review artifact digest.');
   const name = artifactName(context);
   let listing;
@@ -280,7 +356,7 @@ function main(argv) {
       const context = contextFromEnv();
       let raw = '';
       try { raw = readFileSync(args[0], 'utf8'); } catch { raw = ''; }
-      const { text, redactions } = packageReview(raw, context);
+      const { text, redactions } = packageReview(raw, context, knownSecretsFromEnv());
       writeFileSync(args[1], text);
       process.stdout.write(`${JSON.stringify({ name: artifactName(context), digest: sha256(Buffer.from(text)), bytes: Buffer.byteLength(text), redactions })}\n`);
       return 0;

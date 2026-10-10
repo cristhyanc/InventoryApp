@@ -5,14 +5,17 @@ name: Agent review transport check
 # GitHub withholds a job output that contains any masked value ("Skip output ... since it may contain
 # secret"). That once lost a finished review on its way to the publisher. agent-review.yml now passes
 # the review as a run-bound artifact instead. This workflow proves that hand-off on real runners:
-# - the `package` job builds a fixture review whose text contains a value masked in that job and a
-#   secret-shaped fake token, packages it with scripts/agent-review-transport.mjs and uploads it with
-#   the same pinned upload-artifact action and one-day retention;
-# - the `verify` job fetches it through the Actions API by id and digest with the same script and
-#   checks that the review arrived intact and the secret-shaped value was redacted.
-# It also reports whether GitHub withheld the same text when it was offered as a job output, which is
-# the original failure. No secret, no model and no write permission is involved; the fixture token is
-# fake.
+# - the `package` job builds a fixture review, packages it with scripts/agent-review-transport.mjs and
+#   uploads it with the same pinned upload-artifact action and one-day retention;
+# - the `verify` job fetches it through the Actions API by id and digest with the same script.
+# The fixture carries three values, and the check keeps them apart:
+# - a transport marker: NOT a secret. It is masked only so that GitHub withholds the job output, and
+#   its arrival proves the artifact delivers what the job output would have lost;
+# - a held credential: a fake, shapeless value passed to the package step as REVIEW_REDACT_*, the way
+#   each reviewer job passes the credentials it holds. It must be gone from the stored artifact, which
+#   is the security guarantee (exact-value redaction catches what no pattern recognises);
+# - a fake `ghs_` token: it must be removed by the known-format redaction.
+# No repository secret, no model and no write permission is involved; every value is generated here.
 
 on:
   pull_request:
@@ -56,23 +59,28 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Build a fixture review containing a masked value
+      - name: Build a fixture review
         id: fixture
         run: |
           set -euo pipefail
-          masked="masked-$(openssl rand -hex 16)"
-          echo "::add-mask::$masked"
+          # Not a secret: masked only to make GitHub withhold the job output below.
+          marker="transport-marker-$(openssl rand -hex 16)"
+          echo "::add-mask::$marker"
+          # A fake held credential with no recognisable shape (lower-case hex after a plain prefix).
+          held="fixture-held-$(openssl rand -hex 12)"
+          echo "::add-mask::$held"
           fake_token="ghs_$(openssl rand -hex 18)"
-          jq -n --arg sha "$HEAD_SHA" --arg masked "$masked" --arg token "$fake_token" '{
+          jq -n --arg sha "$HEAD_SHA" --arg marker "$marker" --arg held "$held" --arg token "$fake_token" '{
             reviewed_head_sha: $sha,
             verdict: "CHANGES REQUESTED",
-            blockers: ["Fixture blocker that quotes \($masked)."],
+            blockers: ["Fixture blocker that quotes \($marker)."],
             criteria: [{ criterion: "Fixture criterion", status: "not met", evidence: "Fixture evidence." }],
-            suggestions: [],
+            suggestions: ["The run printed the provider credential \($held)."],
             validation_evidence: "The log printed GH_TOKEN=\($token) by mistake.",
             inline_comments: []
           }' > "$RUNNER_TEMP/review-raw.json"
-          echo "$masked" > "$RUNNER_TEMP/masked-value"
+          echo "$marker" > "$RUNNER_TEMP/marker-value"
+          echo "$held" > "$RUNNER_TEMP/held-value"
           echo "review=$(jq -c . "$RUNNER_TEMP/review-raw.json")" >> "$GITHUB_OUTPUT"
 
       - name: Package review result
@@ -81,11 +89,15 @@ jobs:
           set -euo pipefail
           result_dir="$RUNNER_TEMP/agent-review-result"
           mkdir -p "$result_dir"
-          summary="$(node scripts/agent-review-transport.mjs package "$RUNNER_TEMP/review-raw.json" "$result_dir/review-envelope.json")"
+          held="$(cat "$RUNNER_TEMP/held-value")"
+          summary="$(REVIEW_REDACT_FIXTURE_CREDENTIAL="$held" node scripts/agent-review-transport.mjs package "$RUNNER_TEMP/review-raw.json" "$result_dir/review-envelope.json")"
           echo "Packaged review result: $summary"
-          [ "$(jq -r '.redactions' <<<"$summary")" = "1" ] || { echo "::error::The fake token was not redacted before upload."; exit 1; }
+          # Security guarantee: neither the held credential nor the fake token is stored.
+          [ "$(jq -r '.redactions' <<<"$summary")" = "2" ] || { echo "::error::Unexpected redaction count before upload."; exit 1; }
+          if grep -qF "$held" "$result_dir/review-envelope.json"; then echo "::error::The stored artifact keeps the held credential."; exit 1; fi
           if grep -q 'ghs_' "$result_dir/review-envelope.json"; then echo "::error::The stored artifact keeps the fake token."; exit 1; fi
-          grep -qF "$(cat "$RUNNER_TEMP/masked-value")" "$result_dir/review-envelope.json" || { echo "::error::The masked value did not reach the artifact."; exit 1; }
+          # Transport demonstration: the non-secret marker that blocks a job output reaches the artifact.
+          grep -qF "$(cat "$RUNNER_TEMP/marker-value")" "$result_dir/review-envelope.json" || { echo "::error::The transport marker did not reach the artifact."; exit 1; }
           echo "name=$(jq -r '.name' <<<"$summary")" >> "$GITHUB_OUTPUT"
           echo "digest=$(jq -r '.digest' <<<"$summary")" >> "$GITHUB_OUTPUT"
 
@@ -125,7 +137,7 @@ jobs:
           WITHHELD_REVIEW: ${{ needs.package.outputs.withheld_review }}
         run: |
           if [ -z "$WITHHELD_REVIEW" ]; then
-            echo "::notice::GitHub withheld the review job output because it contains a masked value: the PR #558 failure reproduced, and the artifact path below is what delivers the review."
+            echo "::notice::GitHub withheld the review job output because it contains a masked value: the PR #558 failure reproduced. The artifact below is what delivers the review."
           else
             echo "::warning::GitHub did not withhold the job output this time; the artifact path is still the only one agent-review.yml uses."
           fi
@@ -138,13 +150,15 @@ jobs:
         run: |
           set -euo pipefail
           summary="$(node scripts/agent-review-transport.mjs fetch "$RUNNER_TEMP/review.json")"
-          [ "$(jq -r '.redactions' <<<"$summary")" = "1" ] || { echo "::error::Unexpected redaction count."; exit 1; }
+          [ "$(jq -r '.redactions' <<<"$summary")" = "2" ] || { echo "::error::Unexpected redaction count."; exit 1; }
           jq -e --arg sha "$HEAD_SHA" '.reviewed_head_sha == $sha and .verdict == "CHANGES REQUESTED"' "$RUNNER_TEMP/review.json" >/dev/null \
             || { echo "::error::The review did not arrive intact."; exit 1; }
           jq -e '.validation_evidence == "The log printed GH_TOKEN=[REDACTED] by mistake."' "$RUNNER_TEMP/review.json" >/dev/null \
             || { echo "::error::The fake token was not redacted."; exit 1; }
-          jq -e '.blockers[0] | test("^Fixture blocker that quotes masked-[0-9a-f]{32}\\.$")' "$RUNNER_TEMP/review.json" >/dev/null \
-            || { echo "::error::The text containing the masked value was lost."; exit 1; }
+          jq -e '.suggestions[0] == "The run printed the provider credential [REDACTED]."' "$RUNNER_TEMP/review.json" >/dev/null \
+            || { echo "::error::The held credential was not redacted."; exit 1; }
+          jq -e '.blockers[0] | test("^Fixture blocker that quotes transport-marker-[0-9a-f]{32}\\.$")' "$RUNNER_TEMP/review.json" >/dev/null \
+            || { echo "::error::The text carrying the transport marker was lost."; exit 1; }
 
       - name: Refuse a tampered digest
         env:
