@@ -1,7 +1,7 @@
 import { CommonModule } from '@angular/common';
 import { Component, OnInit } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { RouterLink } from '@angular/router';
+import { Router } from '@angular/router';
 import { catchError, of, tap } from 'rxjs';
 import { Site } from '../../models/models';
 import { SiteService } from '../../services/site.service';
@@ -12,7 +12,7 @@ import { siteStockClass } from '../../formatting/site-stock-status';
 @Component({
   selector: 'app-site-list',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterLink],
+  imports: [CommonModule, FormsModule],
   templateUrl: './site-list.component.html'
 })
 export class SiteListComponent implements OnInit {
@@ -20,7 +20,10 @@ export class SiteListComponent implements OnInit {
   search = '';
   readonly loadState = new ListLoadState();
 
-  constructor(private readonly siteService: SiteService) {}
+  constructor(
+    private readonly siteService: SiteService,
+    private readonly router: Router
+  ) {}
 
   ngOnInit(): void {
     this.load();
@@ -61,5 +64,9 @@ export class SiteListComponent implements OnInit {
 
   trendClass(current: number, previous: number): string {
     return trendClass(current, previous);
+  }
+
+  openSite(site: Site): void {
+    this.router.navigate(['/sites', site.siteId, 'products']);
   }
 }

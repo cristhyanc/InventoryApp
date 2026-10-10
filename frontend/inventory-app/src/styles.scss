@@ -261,6 +261,11 @@
     @apply bg-md-gray-100;
   }
 
+  /* Row-level navigation (the whole row acts as a link): signal it with a pointer cursor. */
+  .table-row-link {
+    @apply cursor-pointer;
+  }
+
   .table-cell {
     @apply px-3 py-2 align-middle text-md-gray-600 sm:px-6 sm:py-3;
   }

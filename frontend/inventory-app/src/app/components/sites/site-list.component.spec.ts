@@ -1,5 +1,5 @@
 import { TestBed } from '@angular/core/testing';
-import { provideRouter } from '@angular/router';
+import { provideRouter, Router } from '@angular/router';
 import { of, Subject, throwError } from 'rxjs';
 import { SiteListComponent } from './site-list.component';
 import { SiteService } from '../../services/site.service';
@@ -101,12 +101,39 @@ describe('SiteListComponent', () => {
     expect(host.querySelectorAll('table')).toHaveLength(0);
   });
 
-  it('links each site to its existing site-products route', async () => {
+  it('navigates to the existing site-products route when the row is clicked', async () => {
     const { fixture, host } = await renderWith(() => of([site({ siteId: 42, siteName: 'North Mall' })]));
+    fixture.detectChanges();
+    const router = TestBed.inject(Router);
+    const navigateSpy = jest.spyOn(router, 'navigate').mockResolvedValue(true);
 
+    const row = host.querySelector('tbody tr') as HTMLElement;
+    row.click();
+
+    expect(navigateSpy).toHaveBeenCalledWith(['/sites', 42, 'products']);
+  });
+
+  it('navigates to the site-products route when Enter is pressed on a focused row', async () => {
+    const { fixture, host } = await renderWith(() => of([site({ siteId: 42, siteName: 'North Mall' })]));
+    fixture.detectChanges();
+    const router = TestBed.inject(Router);
+    const navigateSpy = jest.spyOn(router, 'navigate').mockResolvedValue(true);
+
+    const row = host.querySelector('tbody tr') as HTMLElement;
+    row.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+
+    expect(navigateSpy).toHaveBeenCalledWith(['/sites', 42, 'products']);
+  });
+
+  it('exposes the row with accessible link semantics, a visible focus target, and no Details button', async () => {
+    const { fixture, host } = await renderWith(() => of([site({ siteId: 42, siteName: 'North Mall' })]));
     fixture.detectChanges();
 
-    const link = host.querySelector('a[href="/sites/42/products"]');
-    expect(link).not.toBeNull();
+    const row = host.querySelector('tbody tr') as HTMLElement;
+
+    expect(row.getAttribute('role')).toBe('link');
+    expect(row.getAttribute('tabindex')).toBe('0');
+    expect(row.getAttribute('aria-label')).toBe('View products for North Mall');
+    expect(host.querySelector('button, a')).toBeNull();
   });
 });

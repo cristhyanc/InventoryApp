@@ -1009,6 +1009,12 @@ video {
   background-color: rgb(245 245 245 / var(--tw-bg-opacity, 1));
 }
 
+/* Row-level navigation (the whole row acts as a link): signal it with a pointer cursor. */
+
+.table-row-link {
+  cursor: pointer;
+}
+
 .table-cell {
   padding-left: 0.75rem;
   padding-right: 0.75rem;
