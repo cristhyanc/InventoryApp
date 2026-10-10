@@ -461,6 +461,7 @@ export const RETIRED_COPILOT_IMPLEMENTATION_PATHS = Object.freeze([
   '.github/workflows/copilot-setup-steps.yml',
 ]);
 export const reviewRequestPath = '.github/workflows/agent-review-request.yml';
+export const reviewTransportCheckPath = '.github/workflows/agent-review-transport-check.yml';
 
 // ---------------------------------------------------------------------------------------
 // Documentation-impact gate. The templates collect the decision, the preflight and validation
@@ -739,7 +740,7 @@ export const REVIEW_PROMPT_JUDGMENT_CONTRACT = Object.freeze([
 export const REVIEW_JOB_CONTRACT = Object.freeze({
   required: [
     'id: review_agent',
-    'structured_output: ${{ steps.review_agent.outputs.structured_output }}',
+    'REVIEW_OUTPUT: ${{ steps.review_agent.outputs.structured_output }}',
     "--json-schema '",
     '"reviewed_head_sha":{"type":"string","pattern":"^[0-9a-f]{40}$"}',
     '"enum":["met","not met","not verified"]',
@@ -875,7 +876,7 @@ function verifyCopilotReviewJob(review) {
     "--deny-tool='write' \\\n            -p \"$prompt\" > \"$work/copilot-output.md\"", '--no-ask-user',
     '[ -z "$(git status --porcelain)" ]', '[ "$(git rev-parse HEAD)" = "$HEAD_SHA" ]',
     'BEGIN_REVIEW_JSON', 'END_REVIEW_JSON',
-    'structured_output: ${{ steps.copilot_review.outputs.structured_output }}',
+    'jq -c . "$work/review.json" > "$RUNNER_TEMP/review-raw.json"',
   ]) requireText(job, required, 'agent-review.yml Copilot review job');
   // The enforced contract lives in validate_copilot_output; the diagnostics that repeat it do not count.
   const validator = section(job, 'validate_copilot_output() {\n', '\n          }\n', 'agent-review.yml Copilot review contract');
@@ -896,6 +897,81 @@ function verifyCopilotReviewJob(review) {
     'npm install', '@github/copilot@', '--allow-all', "--allow-tool='write'", "--allow-tool='shell'",
     "shell(gh api", "shell(gh pr comment", "shell(gh pr review", "shell(gh pr edit", "shell(gh issue edit", "shell(git push", "shell(git commit",
   ]) forbidText(job, forbidden, 'agent-review.yml Copilot review job');
+}
+
+export const REVIEW_TRANSPORT_CONTRACT = Object.freeze({
+  reviewerOutputs: [
+    'artifact_id: ${{ steps.upload.outputs.artifact-id }}',
+    'artifact_digest: ${{ steps.package.outputs.digest }}',
+  ],
+  packageRequired: [
+    '      - name: Package review result\n        id: package\n',
+    '"repos/$GITHUB_REPOSITORY/contents/scripts/agent-review-transport.mjs?ref=$GITHUB_WORKFLOW_SHA"',
+    'node "$transport" package "$RUNNER_TEMP/review-raw.json" "$result_dir/review-envelope.json"',
+    'rm -f "$RUNNER_TEMP/review-raw.json"',
+    '      - name: Upload review result\n        id: upload\n        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2\n',
+    'name: ${{ steps.package.outputs.name }}',
+    'path: ${{ runner.temp }}/agent-review-result/review-envelope.json',
+    'if-no-files-found: error',
+    'retention-days: 1',
+  ],
+  publishRequired: [
+    '    permissions:\n      pull-requests: write\n      statuses: write\n      contents: read\n      issues: read\n      actions: read\n',
+    '"repos/$GITHUB_REPOSITORY/contents/scripts/agent-review-transport.mjs?ref=$GITHUB_WORKFLOW_SHA"',
+    'node "$transport" fetch "$work/review.json"',
+    'transport_failed() {',
+    'set_verdict_status error "Review result not delivered: ',
+  ],
+  publishForbidden: ['REVIEW_OUTPUT', 'structured_output', 'actions/download-artifact', 'scripts/agent-review-transport.mjs "'],
+});
+
+/**
+ * The review travels from each read-only reviewer job to the publisher as a run-bound artifact, never
+ * as a job output: GitHub withholds a job output containing any masked value, which once silently
+ * lost a finished review (PR #558). Both sides run the transport script from the trusted workflow
+ * commit, never from the pull request head.
+ */
+function verifyReviewTransport(review) {
+  // Each reviewer job hands its own credentials to the package step for exact-value redaction.
+  const heldCredentials = {
+    review: ['REVIEW_REDACT_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}', 'REVIEW_REDACT_PROVIDER_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}'],
+    'copilot-review': ['REVIEW_REDACT_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}', 'REVIEW_REDACT_PROVIDER_TOKEN: ${{ secrets.COPILOT_CLI_TOKEN }}'],
+  };
+  for (const [name, start, end] of [['review', '  review:\n', '  copilot-review:\n'], ['copilot-review', '  copilot-review:\n', '  publish:\n']]) {
+    const job = section(review, start, end, `agent-review.yml ${name} job`);
+    const packageStep = section(job, '      - name: Package review result\n', '      - name: Upload review result\n', `agent-review.yml ${name} package step`);
+    for (const required of heldCredentials[name]) requireText(packageStep, required, `agent-review.yml ${name} review transport`);
+    const outputs = section(job, '    outputs:\n', '\n    steps:\n', `agent-review.yml ${name} outputs`);
+    for (const required of REVIEW_TRANSPORT_CONTRACT.reviewerOutputs) requireText(outputs, required, `agent-review.yml ${name} outputs`);
+    forbidText(outputs, 'structured_output', `agent-review.yml ${name} outputs`);
+    for (const required of REVIEW_TRANSPORT_CONTRACT.packageRequired) requireText(job, required, `agent-review.yml ${name} review transport`);
+    forbidText(job, 'scripts/agent-review-transport.mjs package', `agent-review.yml ${name} review transport`);
+    const permissions = section(job, '    permissions:\n', '\n    outputs:\n', `agent-review.yml ${name} permissions`);
+    forbidText(permissions, 'write', `agent-review.yml ${name} permissions`);
+  }
+  const publish = section(review, '  publish:\n', null, 'agent-review.yml publish job');
+  for (const required of REVIEW_TRANSPORT_CONTRACT.publishRequired) requireText(publish, required, 'agent-review.yml publish transport');
+  for (const forbidden of REVIEW_TRANSPORT_CONTRACT.publishForbidden) forbidText(publish, forbidden, 'agent-review.yml publish transport');
+  requireOrder(publish, 'node "$transport" fetch', 'repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews', 'agent-review.yml publish transport', 'the review must be received and verified before anything is published.');
+}
+
+/**
+ * The live hand-off check exercises the transport on real runners with a fixture only: read-only
+ * permissions, no repository secret, no model, and the same pinned upload action and retention.
+ */
+function verifyReviewTransportCheck(check) {
+  const source = reviewTransportCheckPath;
+  for (const required of [
+    'permissions: {}',
+    '      - scripts/agent-review-transport.mjs\n',
+    '      - .github/workflows/agent-review.yml\n',
+    'node scripts/agent-review-transport.mjs package',
+    'node scripts/agent-review-transport.mjs fetch',
+    'uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2',
+    'retention-days: 1',
+    'persist-credentials: false',
+  ]) requireText(check, required, source);
+  for (const forbidden of ['secrets.', ': write', 'pull_request_target', 'claude-code-action', 'copilot -', 'gh pr ', 'gh workflow']) forbidText(check, forbidden, source);
 }
 
 /** Enforces the review judgment, guarded publication and updated-head scheduling contract. */
@@ -938,7 +1014,8 @@ export function verifyReviewPublicationAndScheduling(read = readRepositoryFile) 
     'IMPLEMENTER: ${{ needs.context.outputs.implementer }}',
     '[ "$live_implementer" = "$IMPLEMENTER" ]',
     "REVIEW_RESULT: ${{ needs.context.outputs.reviewer == 'copilot' && needs.copilot-review.result || needs.review.result }}",
-    "REVIEW_OUTPUT: ${{ needs.context.outputs.reviewer == 'copilot' && needs.copilot-review.outputs.structured_output || needs.review.outputs.structured_output }}",
+    "REVIEW_ARTIFACT_ID: ${{ needs.context.outputs.reviewer == 'copilot' && needs.copilot-review.outputs.artifact_id || needs.review.outputs.artifact_id }}",
+    "REVIEW_ARTIFACT_DIGEST: ${{ needs.context.outputs.reviewer == 'copilot' && needs.copilot-review.outputs.artifact_digest || needs.review.outputs.artifact_digest }}",
     'REVIEWER: ${{ needs.context.outputs.reviewer }}',
     '      - review\n      - copilot-review\n',
   ]) requireText(publish, required, 'agent-review.yml publish job');
@@ -948,6 +1025,8 @@ export function verifyReviewPublicationAndScheduling(read = readRepositoryFile) 
   }
   requireOrder(publish, '--input "$work/payload-fallback.json" >/dev/null\n          fi\n', 'echo "review_posted=true" >> "$GITHUB_OUTPUT"', 'agent-review.yml publish job', 'publication must be recorded only after the review was posted.');
   verifyCopilotReviewJob(review);
+  verifyReviewTransport(review);
+  verifyReviewTransportCheck(read(reviewTransportCheckPath));
   requireOrder(publish, '[ "$current_sha" = "$HEAD_SHA" ]', 'repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews', 'agent-review.yml publish job', 'the current head must be re-verified before the review is published.');
   requireOrder(publish, '[ "$validation_state" = "success" ]', 'repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews', 'agent-review.yml publish job', 'validation must be re-verified before the review is published.');
 

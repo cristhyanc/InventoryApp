@@ -23,10 +23,13 @@ name: Agent review
 #   agent PR, its current head SHA, its successful `agent-validation` status, and the workflow-file exclusion.
 # - Every run is a fresh review of the pull request's current head SHA in a new job with its own context.
 # - The review jobs are read-only: the reviewer returns its verdict as structured output and publishes
-#   nothing. A separate deterministic publish job re-verifies the pull request immediately before
-#   publishing, binds the review to the exact reviewed SHA, suppresses stale or ineligible results, and
-#   records the outcome as the per-SHA `agent-review-verdict` commit status. No job can modify code,
-#   labels, branches, settings, merge, or deploy.
+#   nothing. The review job binds that result to this repository, pull request, head SHA, route and run
+#   and uploads it as a short-lived artifact (scripts/agent-review-transport.mjs), never as a job
+#   output, which GitHub withholds when it contains a masked value. A separate deterministic publish
+#   job verifies that artifact, re-verifies the pull request immediately before publishing, binds the
+#   review to the exact reviewed SHA, suppresses stale or ineligible results, and records the outcome
+#   as the per-SHA `agent-review-verdict` commit status. No job can modify code, labels, branches,
+#   settings, merge, or deploy.
 
 on:
   workflow_dispatch:
@@ -157,7 +160,7 @@ jobs:
     timeout-minutes: 45
     # Read-only: this job runs Claude and holds no pull-request, issue, status or workflow write
     # permission, so the model cannot publish, label, dispatch or push even if it tried. Its only
-    # output is the schema-validated structured_output consumed by the publish job below.
+    # result is the schema-validated review, packaged as this run's review artifact for the publish job.
     permissions:
       contents: read
       pull-requests: read
@@ -165,8 +168,12 @@ jobs:
       actions: read
       checks: read
       statuses: read
+    # Only the artifact id and the envelope digest leave this job as outputs. The review itself
+    # travels as a run-bound artifact, because GitHub withholds a job output that contains any masked
+    # value ("Skip output ... since it may contain secret"), which once silently lost a finished review.
     outputs:
-      structured_output: ${{ steps.review_agent.outputs.structured_output }}
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      artifact_digest: ${{ steps.package.outputs.digest }}
 
     steps:
       - name: Check out pull request head
@@ -248,6 +255,46 @@ jobs:
             "Bash(gh pr review *),Bash(gh pr comment *),Bash(gh pr merge *),Bash(gh pr edit *),Bash(gh pr close *),Bash(gh pr reopen *),Bash(gh pr ready *),Bash(gh issue edit *),Bash(gh issue comment *),Bash(gh api *),Bash(gh workflow *),Bash(gh run rerun *),Bash(gh run cancel *),Bash(gh label *)"
             "Bash(git push *),Bash(git commit *),Bash(git add *),Bash(git checkout *),Bash(git switch *),Bash(git reset *),Bash(git rebase *),Bash(git merge *),Bash(git stash *),Bash(git restore *),Bash(git clean *)"
 
+      - name: Package review result
+        id: package
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REVIEW_OUTPUT: ${{ steps.review_agent.outputs.structured_output }}
+          # The credentials this job holds, removed from the review by exact value before anything is
+          # stored. They are only compared against, never printed.
+          REVIEW_REDACT_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REVIEW_REDACT_PROVIDER_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          PR_NUMBER: ${{ needs.context.outputs.pr_number }}
+          HEAD_SHA: ${{ needs.context.outputs.head_sha }}
+          AGENT_MODE: ${{ needs.context.outputs.agent_mode }}
+          IMPLEMENTER: ${{ needs.context.outputs.implementer }}
+          REVIEWER: ${{ needs.context.outputs.reviewer }}
+        run: |
+          set -euo pipefail
+          # The transport script comes from the trusted workflow commit, never from the checked-out pull
+          # request head. It validates the contract, redacts secret-like values and binds the result to
+          # this repository, pull request, head SHA, route and run before anything is stored.
+          transport="$RUNNER_TEMP/agent-review-transport.mjs"
+          gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/scripts/agent-review-transport.mjs?ref=$GITHUB_WORKFLOW_SHA" > "$transport"
+          printf '%s' "$REVIEW_OUTPUT" > "$RUNNER_TEMP/review-raw.json"
+          result_dir="$RUNNER_TEMP/agent-review-result"
+          mkdir -p "$result_dir"
+          summary="$(node "$transport" package "$RUNNER_TEMP/review-raw.json" "$result_dir/review-envelope.json")"
+          rm -f "$RUNNER_TEMP/review-raw.json"
+          echo "Packaged review result: $summary"
+          echo "name=$(jq -r '.name' <<<"$summary")" >> "$GITHUB_OUTPUT"
+          echo "digest=$(jq -r '.digest' <<<"$summary")" >> "$GITHUB_OUTPUT"
+
+      - name: Upload review result
+        id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: ${{ runner.temp }}/agent-review-result/review-envelope.json
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
   copilot-review:
     name: Copilot review of current head
     needs: context
@@ -266,8 +313,10 @@ jobs:
       actions: read
       checks: read
       statuses: read
+    # Only the artifact id and the envelope digest leave this job as outputs; see the review job.
     outputs:
-      structured_output: ${{ steps.copilot_review.outputs.structured_output }}
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      artifact_digest: ${{ steps.package.outputs.digest }}
 
     steps:
       - name: Check out pull request head
@@ -449,19 +498,53 @@ jobs:
             fi
           fi
 
-          delimiter="REVIEW_$(openssl rand -hex 16)"
-          {
-            echo "structured_output<<$delimiter"
-            jq -c . "$work/review.json"
-            echo "$delimiter"
-          } >> "$GITHUB_OUTPUT"
+          jq -c . "$work/review.json" > "$RUNNER_TEMP/review-raw.json"
+
+      - name: Package review result
+        id: package
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The credentials this job holds, removed from the review by exact value before anything is
+          # stored. They are only compared against, never printed.
+          REVIEW_REDACT_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REVIEW_REDACT_PROVIDER_TOKEN: ${{ secrets.COPILOT_CLI_TOKEN }}
+          PR_NUMBER: ${{ needs.context.outputs.pr_number }}
+          HEAD_SHA: ${{ needs.context.outputs.head_sha }}
+          AGENT_MODE: ${{ needs.context.outputs.agent_mode }}
+          IMPLEMENTER: ${{ needs.context.outputs.implementer }}
+          REVIEWER: ${{ needs.context.outputs.reviewer }}
+        run: |
+          set -euo pipefail
+          # The transport script comes from the trusted workflow commit, never from the checked-out pull
+          # request head. It validates the contract, redacts secret-like values and binds the result to
+          # this repository, pull request, head SHA, route and run before anything is stored.
+          transport="$RUNNER_TEMP/agent-review-transport.mjs"
+          gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/scripts/agent-review-transport.mjs?ref=$GITHUB_WORKFLOW_SHA" > "$transport"
+          result_dir="$RUNNER_TEMP/agent-review-result"
+          mkdir -p "$result_dir"
+          summary="$(node "$transport" package "$RUNNER_TEMP/review-raw.json" "$result_dir/review-envelope.json")"
+          rm -f "$RUNNER_TEMP/review-raw.json"
+          echo "Packaged review result: $summary"
+          echo "name=$(jq -r '.name' <<<"$summary")" >> "$GITHUB_OUTPUT"
+          echo "digest=$(jq -r '.digest' <<<"$summary")" >> "$GITHUB_OUTPUT"
+
+      - name: Upload review result
+        id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: ${{ runner.temp }}/agent-review-result/review-envelope.json
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
 
   publish:
     name: Guarded review publication
     # Runs even when the review job failed or was cancelled (for example superseded by a newer review
     # of the same pull request), so every reviewed SHA ends with an explicit agent-review-verdict
-    # outcome. No checkout and no Anthropic credential: it only reads the structured review output
-    # and the live pull request state through the API.
+    # outcome. No checkout and no Anthropic credential: it reads the review only from this run's own
+    # review artifact (actions: read), verified by scripts/agent-review-transport.mjs fetched from
+    # the trusted workflow commit, and the live pull request state through the API.
     if: always() && needs.context.result == 'success'
     needs:
       - context
@@ -473,6 +556,7 @@ jobs:
       statuses: write
       contents: read
       issues: read
+      actions: read
 
     steps:
       - name: Guard and publish review
@@ -487,7 +571,8 @@ jobs:
           REVIEWER: ${{ needs.context.outputs.reviewer }}
           # The review comes only from the job of the reviewer the verified route selected.
           REVIEW_RESULT: ${{ needs.context.outputs.reviewer == 'copilot' && needs.copilot-review.result || needs.review.result }}
-          REVIEW_OUTPUT: ${{ needs.context.outputs.reviewer == 'copilot' && needs.copilot-review.outputs.structured_output || needs.review.outputs.structured_output }}
+          REVIEW_ARTIFACT_ID: ${{ needs.context.outputs.reviewer == 'copilot' && needs.copilot-review.outputs.artifact_id || needs.review.outputs.artifact_id }}
+          REVIEW_ARTIFACT_DIGEST: ${{ needs.context.outputs.reviewer == 'copilot' && needs.copilot-review.outputs.artifact_digest || needs.review.outputs.artifact_digest }}
           VERDICT_CONTEXT: agent-review-verdict
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -508,6 +593,13 @@ jobs:
             set_verdict_status error "Superseded or not published: ${1:0:100}"
             exit 0
           }
+          # The reviewer finished but its result could not be delivered or verified: an infrastructure
+          # failure, never a code finding, and never a ready result.
+          transport_failed() {
+            echo "::warning::Review not published: the review result could not be delivered: $1"
+            set_verdict_status error "Review result not delivered: ${1:0:110}"
+            exit 0
+          }
 
           [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] || { echo "::error::Invalid pull request number."; exit 1; }
           [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Invalid reviewed head SHA."; exit 1; }
@@ -520,9 +612,19 @@ jobs:
           esac
           [ "$REVIEW_RESULT" = "success" ] || suppress "the review job ended with '$REVIEW_RESULT' (failed, cancelled or superseded)."
 
-          # 1. The structured output must be well formed, bound to the reviewed SHA, and internally
-          #    consistent with the blocking rules before anything else is considered.
-          printf '%s' "$REVIEW_OUTPUT" > "$work/review.json"
+          # 1. Receive the review from this run's own artifact, never from a job output, and re-verify
+          #    its identity, digest, binding, contract and redaction with the trusted transport script.
+          transport="$RUNNER_TEMP/agent-review-transport.mjs"
+          gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/scripts/agent-review-transport.mjs?ref=$GITHUB_WORKFLOW_SHA" > "$transport" \
+            || transport_failed "the trusted transport script could not be read."
+          if ! transport_summary="$(node "$transport" fetch "$work/review.json" 2>"$work/transport-error.txt")"; then
+            transport_failed "$(tail -n 1 "$work/transport-error.txt")"
+          fi
+          redactions="$(jq -r '.redactions // 0' <<<"$transport_summary")"
+          [[ "$redactions" =~ ^[0-9]+$ ]] || transport_failed "the transport summary is invalid."
+
+          # 2. The review must be well formed, bound to the reviewed SHA, and internally consistent
+          #    with the blocking rules before anything else is considered.
           jq -e 'type == "object"' "$work/review.json" >/dev/null 2>&1 || suppress "the review produced no valid structured output."
           reviewed_sha="$(jq -r '.reviewed_head_sha // ""' "$work/review.json")"
           [ "$reviewed_sha" = "$HEAD_SHA" ] || suppress "the review output names SHA '$reviewed_sha', not the reviewed SHA $HEAD_SHA."
@@ -539,7 +641,7 @@ jobs:
             *) suppress "unknown verdict '$verdict'." ;;
           esac
 
-          # 2. Re-fetch eligibility and the current head immediately before publishing. Any failure
+          # 3. Re-fetch eligibility and the current head immediately before publishing. Any failure
           #    to read the live state stops the step (set -e) before a review is posted: fail closed.
           pr_json="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
             --json state,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,labels)"
@@ -581,15 +683,16 @@ jobs:
           fi
           [ "$validation_state" = "success" ] || suppress "the reviewed SHA no longer has a successful latest agent-validation status."
 
-          # 3. Render the review deterministically. The publisher, not the model, writes the reviewed
+          # 4. Render the review deterministically. The publisher, not the model, writes the reviewed
           #    SHA, the single verdict line and the advisory sentence.
-          jq -r --arg sha "$HEAD_SHA" --arg run "$RUN_URL" --arg reviewer "$reviewer" --arg review_type "$review_type" '
+          jq -r --arg sha "$HEAD_SHA" --arg run "$RUN_URL" --arg reviewer "$reviewer" --arg review_type "$review_type" --argjson redactions "$redactions" '
             def numbered(xs): [xs | to_entries[] | "\(.key + 1). \(.value)"] | join("\n");
             "Reviewer: \($reviewer)\nReview type: \($review_type)\nHead SHA reviewed: \($sha)\n\nVERDICT: \(.verdict)\n\n"
             + (if (.blockers | length) == 0 then "Blockers: none" else "Blockers:\n" + numbered(.blockers) end)
             + "\n\nAcceptance criteria:\n" + ([.criteria[] | "- [\(.status)] \(.criterion): \(.evidence)"] | join("\n"))
             + "\n\nNon-blocking suggestions:\n" + (if (.suggestions | length) == 0 then "none" else ([.suggestions[] | "- \(.)"] | join("\n")) end)
             + "\n\nValidation evidence confirmed:\n" + .validation_evidence
+            + (if $redactions > 0 then "\n\n\($redactions) secret-like value(s) were redacted from this review before it was stored or published." else "" end)
             + "\n\nThis verdict applies only to \($sha); any later commit needs its own validation and review. Published by the guarded publication job of \($run)."
             + "\n\nThis is an advisory review. Human approval and branch protection remain the merge gate."
           ' "$work/review.json" > "$work/body.md"
@@ -601,7 +704,7 @@ jobs:
               comments: [$review[0].inline_comments[] | { path, line, side: "RIGHT", body }] }
           ' > "$work/payload.json"
 
-          # 4. Publish one comment-only review bound to the exact reviewed commit. If GitHub rejects an
+          # 5. Publish one comment-only review bound to the exact reviewed commit. If GitHub rejects an
           #    inline position, publish once more with the inline comments folded into the body.
           if ! gh api --method POST "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews" --input "$work/payload.json" >/dev/null; then
             echo "::warning::Inline comments were rejected; publishing them in the review body instead."
