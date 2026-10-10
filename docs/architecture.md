@@ -1039,7 +1039,7 @@ Contains:
 - Dependency injection and application startup.
 - HTTP error/result mapping.
 - The persistence *provider* decision: the `Microsoft.EntityFrameworkCore.Sqlite` reference, the single `options.UseSqlite(ConnectionStrings:DefaultConnection)` call in `Program.cs`, and the `Microsoft.EntityFrameworkCore.Design` reference the `dotnet ef` tooling needs. The model itself is not here (issue #307).
-- The startup schema decision and the human-invoked commands in `InventoryApi/Bootstrap`: `DatabaseSchemaStartup`, `migrate-database`, `bootstrap-business`, `migrate-documents` and the database backup commands.
+- The startup schema decision and the human-invoked commands in `InventoryApi/Bootstrap`: `DatabaseSchemaStartup`, `migrate-database`, `bootstrap-business`, `migrate-documents`, `migrate-nayax-connection` and the database backup commands.
 
 Controllers do not implement accounting, inventory, persistence, or filesystem rules.
 
@@ -1124,8 +1124,9 @@ fails if a file appears under it, its positive counterpart asserts the 29 adapte
 `AddInfrastructureServices()` must still make.
 
 **The `Bootstrap` commands stay thin host commands (issue #309).** `BusinessBootstrapper`,
-`DocumentMigrator`, `DatabaseMigrationCommand`, the database backup commands and
-`DatabaseSchemaStartup` were reviewed with the adapter relocation and deliberately left in
+`DocumentMigrator`, `DatabaseMigrationCommand`, `NayaxConnectionMigrator` (issue #519), the
+database backup commands and `DatabaseSchemaStartup` were reviewed with the adapter relocation and
+deliberately left in
 `InventoryApi/Bootstrap`: they keep calling `Inventory.Infrastructure` services directly, and none of
 their persistence logic moved into an Infrastructure service. They are not request-path persistence
 adapters - they implement no `Inventory.Application` port, nothing injects them, and each command is
@@ -1140,9 +1141,14 @@ permitted to do so (AGENTS.md § Tenant ownership and data isolation); keeping t
 request is served from is what keeps that opt-in visibly exceptional, where an injectable
 Infrastructure service would put unrestricted access one DI registration away from a request path.
 Second, their work - an EF-model-driven ownership backfill, a cross-business document copy, an
-operator-facing migration dry run, a snapshot verification - is a deliberate one-off operation with
-console output and an exit code, not a port a use case calls. Their behaviour, argument parsing,
-transaction boundaries and audit output are unchanged by issue #309.
+operator-facing migration dry run, a snapshot verification, a one-time credential move - is a
+deliberate one-off operation with console output and an exit code, not a port a use case calls.
+Their behaviour, argument parsing, transaction boundaries and audit output are unchanged by issue
+#309.
+`migrate-nayax-connection` is the newest of them and deliberately takes neither property of the
+first: it constructs no unrestricted context at all, because every read and write of the credential
+goes through a context scoped to the one business it resolved (see
+[Migrating the Nayax connection](#migrating-the-nayax-connection-issue-519)).
 
 **No controller names the persistence model (issue #305).** Since the last controller slice of #153,
 no file under `InventoryApi/Controllers` references the EF entity namespace at all: a controller
@@ -1443,11 +1449,11 @@ Authentication answers "who is this?". Tenant ownership answers "whose data is t
 
 **Protected documents.** A document's bytes live outside the database, so hiding the row is not enough. Retrieval always resolves the tenant-owned parent record first — `GET /api/purchases/{id}/file` and `GET /api/operating-expenses/{id}/attachment` both go through the filtered `DbSet` — and the stored file name is read from that record, never from the request. No endpoint accepts a file name or path as input, and `FileSystemDocumentStorage` reduces any stored name with `Path.GetFileName` and then proves the result is inside the category folder, so a crafted value cannot escape it. Knowing another business's purchase ID, attachment ID, stored file name, and on-disk path therefore yields nothing.
 
-**The unrestricted-context rule.** `new AppDbContext(options)` is fail-closed. Unrestricted, all-business access requires passing `UnscopedBusinessScope.Instance` explicitly, so every such place is greppable. Outside tests it exists only in the three human-invoked commands — `migrate-database`, `bootstrap-business` and `migrate-documents`, the last of which reads every business's document metadata to migrate it (see [Document storage](#document-storage)). No controller, service, or request path may run unrestricted; a composition-root test pins down that the DI container never produces an unscoped context. The platform diagnostics API (issue #336) does **not** change this and is deliberately not implemented with it: a diagnostics request carries a *denied* `BusinessScope`, so the query filters and `BusinessOwnershipEnforcer` stay in force and it reads nothing at all through `AppDbContext`. Its cross-business read is a separate read-only SQLite connection restricted by SQLite's own authorizer — see [Platform diagnostics](#platform-diagnostics-issue-336) for the exception's exact boundaries.
+**The unrestricted-context rule.** `new AppDbContext(options)` is fail-closed. Unrestricted, all-business access requires passing `UnscopedBusinessScope.Instance` explicitly, so every such place is greppable. Outside tests it exists only in the three human-invoked commands — `migrate-database`, `bootstrap-business` and `migrate-documents`, the last of which reads every business's document metadata to migrate it (see [Document storage](#document-storage)). Being a human-invoked command is not what grants it: `migrate-nayax-connection` (issue #519) is a fourth such command and constructs no unrestricted context at all, because it needs none — the tenancy tables it reads to resolve the target business carry no tenant filter, and the credential itself is read and written through a context scoped to that one business (see [Migrating the Nayax connection](#migrating-the-nayax-connection-issue-519)). No controller, service, or request path may run unrestricted; a composition-root test pins down that the DI container never produces an unscoped context. The platform diagnostics API (issue #336) does **not** change this and is deliberately not implemented with it: a diagnostics request carries a *denied* `BusinessScope`, so the query filters and `BusinessOwnershipEnforcer` stay in force and it reads nothing at all through `AppDbContext`. Its cross-business read is a separate read-only SQLite connection restricted by SQLite's own authorizer — see [Platform diagnostics](#platform-diagnostics-issue-336) for the exception's exact boundaries.
 
 **Schema and data are separate steps, and only the data step is exclusively human-controlled.** `DatabaseSchemaStartup` decides per environment: Production, Development, and `Testing` all migrate automatically and fail closed if the attempt fails (issue #201); any other non-Production environment does so only under the `Database:AllowAutomaticMigrationUnsafeOutsideDevelopment` override. Migrations never assign ownership, automatically or otherwise. The backfill is exclusively `bootstrap-business`, run by a human: deterministic, idempotent (it touches only unassigned rows), restartable, transactional, dry-runnable, and verified by before/after counts and financial totals, with a `BusinessBackfillAudit` record of what it did. `TenantOwnershipReadiness` reports at startup whether ownership has actually been bootstrapped, so "all my data is gone" cannot be the first symptom of an unfinished rollout.
 
-**Known limits of this rollout.** One business is live. The Nayax client still uses a single operator/token configuration, so remote identifiers and imports are not partitioned per business; a second live business must wait until they are. Issue #518 added the per-business storage those credentials will move into — see [Per-business Nayax connection](#per-business-nayax-connection-issue-518) — but nothing reads it yet, so this limit stands until issue #520 changes the client and issue #519 moves the existing business's credential. The database foreign keys from `BusinessId` to `Businesses` are a deliberate, still-outstanding deferral — see `docs/tenant-rollout.md`. Issue #39 (document storage) consumes this ownership key and must not introduce blob storage before it.
+**Known limits of this rollout.** One business is live. The Nayax client still uses a single operator/token configuration, so remote identifiers and imports are not partitioned per business; a second live business must wait until they are. Issue #518 added the per-business storage those credentials move into — see [Per-business Nayax connection](#per-business-nayax-connection-issue-518) — and issue #519 added the human-run `migrate-nayax-connection` command that moves them, but nothing reads the record yet, so this limit stands until issue #520 changes the client. Running the command is a human step, described in `docs/tenant-rollout.md` § Migrating the Nayax connection into the business. The database foreign keys from `BusinessId` to `Businesses` are a deliberate, still-outstanding deferral — see `docs/tenant-rollout.md`. Issue #39 (document storage) consumes this ownership key and must not introduce blob storage before it.
 
 ### Platform diagnostics (issue #336)
 
@@ -1522,8 +1528,10 @@ connection status, the credential revision, and the last-tested and updated inst
 tenant-owned entity, with no predicate of its own anywhere; the additive
 `AddBusinessNayaxConnections` migration creates the table and a **unique index on `BusinessId`**, so
 "one connection per business" is a schema guarantee rather than an adapter convention. The migration
-stores and infers nothing — moving the existing configured credential is the human-run command of
-issue #519 — so every business starts with no row at all, which is what `NotConfigured` means.
+stores and infers nothing — moving the existing configured credential is the human-run
+`migrate-nayax-connection` command of issue #519, described in
+[Migrating the Nayax connection](#migrating-the-nayax-connection-issue-519) — so every business
+starts with no row at all, which is what `NotConfigured` means.
 `BusinessNayaxConnections` is deliberately **not** on the [platform diagnostics](#platform-diagnostics-issue-336)
 allow-list and must not be added to it.
 
@@ -1578,6 +1586,69 @@ two-business isolation for reading, decrypting, saving and status writes, two ov
 leaving the last committed credentials, a retired key and a tampered ciphertext failing closed, a
 denied and an unscoped context writing nothing, and the unique index refusing a second row.
 `AddBusinessNayaxConnectionsMigrationTests` is the upgrade test from the previous migration.
+
+### Migrating the Nayax connection (issue #519)
+
+The record #518 added starts empty, and the credential it is for is live in production
+configuration. `migrate-nayax-connection` is the human-run command that moves it: the fourth
+early-command branch in `Program.cs`, alongside `bootstrap-business`, `migrate-database` and
+`migrate-documents`, so starting the API and moving a credential can never be the same action. The
+operator procedure, the cutover window around issue #520 and when the global settings may be
+removed are in `docs/tenant-rollout.md` § Migrating the Nayax connection into the business; what
+follows is why it is built this way.
+
+**It reads the same configuration the client reads, and writes only through #518's store.**
+`NayaxConnectionMigrationCommand` binds `NayaxLynxOptions` and resolves the token through
+`NayaxLynxConfiguration.ResolveAccessToken`, the same function the composition root uses, so the
+command cannot hold a second opinion about where the live credential lives. It then hands the
+plaintext token to `INayaxConnectionStore.SaveCredentialAsync` exactly once. Encryption, the key id
+and the credential revision stay entirely inside the #518 adapter; nothing here knows a cipher.
+
+**It uses no unrestricted context** — see [the unrestricted-context rule](#tenant-ownership-issue-64).
+`NayaxConnectionMigrator` resolves and verifies the business through a *denied* context, which can
+read `Businesses`, `BusinessMemberships` and `BusinessBackfillAudits` because those are the
+deliberately global tenancy tables, and reaches no tenant-owned row at all. The credential is then
+read and written through a context scoped to that one resolved business, so the central query
+filters and `BusinessOwnershipEnforcer` are in force for every statement, and the adapter's own
+refusal to run without a single resolved business is satisfied honestly rather than bypassed.
+
+**A dry run writes nothing, rather than writing and rolling back.** `bootstrap-business` measures by
+doing the work inside a transaction and rolling it back, because its numbers are counts across every
+owned table. Here the whole change is two values and a status, so it can be reported exactly without
+writing: a dry run opens no transaction on the credential table and the status it reports for
+"after" is declared as a prediction.
+
+**`Ready`, not `PendingPermissions`, and the command never calls Nayax.** Every save through the
+store lands on `PendingPermissions` — a freshly stored token is never assumed to work — so the
+command applies a status result for the exact revision it just wrote, through the same conditional
+`TryApplyStatusResultAsync` path a real permission test uses. The evidence is production use rather
+than a live test, which is also why the instant recorded is when that was adopted. A revision that
+moved in between discards the result rather than describing credentials it was not produced for, and
+the command reports that rather than claiming success.
+
+**Refusals, and what makes a re-run a true no-op.** It refuses when the configuration holds no
+operator id or token; when the schema has pending migrations; when tenant ownership is not
+bootstrapped — which is where "more than one business exists" lands, since `TenantOwnershipReadiness`
+requires exactly one active business with a usable membership and no unassigned rows; when no
+`BusinessBackfillAudit` row names that business, so it is not demonstrably the one
+`bootstrap-business` adopted; when a *different* operator id or token is already stored, because
+replacing a credential something else stored is a human decision; and when the token cannot be
+encrypted or the stored ciphertext cannot be decrypted, which fails closed rather than overwriting
+a credential nothing could read. A business already holding exactly the configured pair, marked
+`Ready`, is left completely untouched — the row is not rewritten, so not even the ciphertext changes
+and the revision does not move. The same pair stored but not yet `Ready` has only its status
+written.
+
+**The token never leaves the ciphertext column.** It is in no result member, no message, no
+exception and no printed line — not as a length, a prefix or a hash. The operator id is printed,
+because it is a remote identity an operator has to be able to confirm, and whether the stored token
+matches the configured one is printed as a plain yes/no.
+`Inventory.IntegrationTests/Bootstrap/NayaxConnectionMigrationTests` asserts that directly: it
+sweeps every reachable outcome's message, record `ToString`, printed report and captured log entries
+for both the configured and a second token, and sweeps every column of the credential table for the
+plaintext. Its fixture is built by running the real `BusinessBootstrapper`, because "bootstrapped"
+means that command's outcome — a migrated-but-unbootstrapped database is not merely empty, since a
+migration seeds a `NayaxProcessingFeeRate` with no owner.
 
 ### Document storage
 
