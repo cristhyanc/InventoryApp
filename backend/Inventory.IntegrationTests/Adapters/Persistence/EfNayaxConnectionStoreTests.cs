@@ -298,6 +298,48 @@ public class EfNayaxConnectionStoreTests
         Assert.Equal(3, credential.CredentialRevision);
     }
 
+    /// <summary>
+    /// A save takes part in a transaction its caller already began instead of committing on its
+    /// own. That is what lets a caller make the save and the status write that follows it one
+    /// change - the issue-#519 migration command stores a production credential and marks the
+    /// connection <c>Ready</c>, and "both or neither" is only true if nothing inside commits early.
+    /// Rolled back, the save leaves no row at all; committed, exactly the same sequence lands.
+    /// </summary>
+    [Fact]
+    public async Task A_save_inside_a_callers_transaction_lands_only_when_that_caller_commits()
+    {
+        await using var fixture = await StoreFixture.CreateAsync();
+        var (rollingBackDb, rollingBack) = fixture.TransactionalStoreFor(fixture.BusinessA);
+
+        await using (var transaction = await rollingBackDb.Database.BeginTransactionAsync())
+        {
+            var saved = await rollingBack.SaveCredentialAsync(OperatorId, Token, CancellationToken.None);
+            Assert.True(await rollingBack.TryApplyStatusResultAsync(
+                new NayaxConnectionStatusResult(saved.CredentialRevision, NayaxConnectionStatus.Ready, TestedAt),
+                CancellationToken.None));
+
+            await transaction.RollbackAsync();
+        }
+
+        Assert.Empty(await fixture.AllRowsAsync());
+
+        var (committingDb, committing) = fixture.TransactionalStoreFor(fixture.BusinessA);
+
+        await using (var transaction = await committingDb.Database.BeginTransactionAsync())
+        {
+            var saved = await committing.SaveCredentialAsync(OperatorId, Token, CancellationToken.None);
+            Assert.True(await committing.TryApplyStatusResultAsync(
+                new NayaxConnectionStatusResult(saved.CredentialRevision, NayaxConnectionStatus.Ready, TestedAt),
+                CancellationToken.None));
+
+            await transaction.CommitAsync();
+        }
+
+        var row = await fixture.ReadRowAsync(fixture.BusinessA);
+        Assert.Equal(NayaxConnectionStatus.Ready, row.Status);
+        Assert.Equal(1, row.CredentialRevision);
+    }
+
     [Fact]
     public async Task A_credential_whose_key_is_no_longer_configured_fails_closed_instead_of_reading_as_absent()
     {
@@ -502,6 +544,16 @@ public class EfNayaxConnectionStoreTests
                 protector ?? Protector(ActiveKeyId),
                 new FakeClock(SavedAt),
                 Logger);
+        }
+
+        /// <summary>
+        /// A business-scoped context and the store built over it, so a test can own the transaction
+        /// the store's writes have to take part in.
+        /// </summary>
+        public (AppDbContext Db, EfNayaxConnectionStore Store) TransactionalStoreFor(int businessId)
+        {
+            var context = TestAppDbContext.For(_options, businessId);
+            return (context, StoreForContext(context));
         }
 
         public EfNayaxConnectionStore DeniedStore() => StoreForContext(TestAppDbContext.Denied(_options));

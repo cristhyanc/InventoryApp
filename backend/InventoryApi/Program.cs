@@ -47,6 +47,15 @@ if (DocumentMigrationCommand.Matches(args))
     return await DocumentMigrationCommand.RunAsync(args, CancellationToken.None);
 }
 
+// Moving the globally configured Nayax operator id and token into the existing business's own
+// encrypted record is the fourth human-invoked command (issue #519, a slice of #500). It writes a
+// production credential, so it is never something the web host does on the way up: reaching this
+// branch means the process was started to migrate that credential and will exit when it has.
+if (NayaxConnectionMigrationCommand.Matches(args))
+{
+    return await NayaxConnectionMigrationCommand.RunAsync(args, CancellationToken.None);
+}
+
 // Taking a verified snapshot is likewise a deliberate, human- or scheduler-invoked command, not
 // something normal startup performs (issue #331). It is callable manually for one-off
 // verification and by the scheduled backup job (issue #333) against the same configured database.

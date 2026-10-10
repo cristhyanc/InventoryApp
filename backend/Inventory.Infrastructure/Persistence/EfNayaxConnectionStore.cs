@@ -121,7 +121,11 @@ public sealed class EfNayaxConnectionStore : INayaxConnectionStore
         var protectedToken = _protector.Protect(accessToken);
         var savedAt = _clock.UtcNow;
 
-        await using var transaction = _db.Database.IsRelational()
+        // A caller that already opened a transaction on this context owns the commit, and this save
+        // joins it rather than starting a second one - which is how the issue-#519 migration command
+        // makes storing the credential and marking the connection Ready one atomic change. With no
+        // ambient transaction the save still gets its own, so a save on its own is unchanged.
+        await using var transaction = _db.Database.IsRelational() && _db.Database.CurrentTransaction is null
             ? await _db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false)
             : null;
 

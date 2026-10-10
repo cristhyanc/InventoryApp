@@ -48,6 +48,10 @@ public interface INayaxConnectionStore
     /// returns to <see cref="Domain.Nayax.NayaxConnectionStatus.PendingPermissions"/> and the
     /// last-tested instant is cleared, so a newly stored token can never inherit the previous
     /// token's test result.
+    ///
+    /// A save is atomic, and it takes part in a transaction already in progress on the same unit of
+    /// work rather than committing on its own, so a save and the status write that follows it can be
+    /// one change that either lands completely or not at all.
     /// </summary>
     /// <param name="operatorId">The Nayax operator id the token belongs to.</param>
     /// <param name="accessToken">The Lynx API access token to store encrypted.</param>

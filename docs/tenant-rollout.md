@@ -16,6 +16,8 @@ only the schema-migration step's "deploy and let startup apply it" alternative i
 | Create the `Business` record | **Human**, via `bootstrap-business` |
 | Create `BusinessMembership` rows from the supplied Entra mapping | **Human**, via `bootstrap-business` |
 | Assign existing rows to that business | **Human**, via `bootstrap-business --apply` |
+| Move the global Nayax operator id and token into that business's record | **Human**, via `migrate-nayax-connection --apply` (issue #519; see [Migrating the Nayax connection](#migrating-the-nayax-connection-into-the-business-issue-519)) |
+| Remove the global `NayaxLynx` settings | **Human**, after the client reads the per-business record (issue #520) |
 | Back up the database | **Human** |
 | Deploy | **Human** |
 
@@ -54,7 +56,7 @@ high-risk migration ahead of a deployment window under review — as this rollou
 
 ## Running the commands
 
-Both operator commands ship inside the application. How you invoke them depends on what you are
+The operator commands ship inside the application. How you invoke them depends on what you are
 standing in front of.
 
 **A source tree, with the .NET SDK installed** (local development, a build agent):
@@ -64,6 +66,8 @@ dotnet run --project backend/InventoryApi -- migrate-database --dry-run
 dotnet run --project backend/InventoryApi -- migrate-database --apply
 dotnet run --project backend/InventoryApi -- bootstrap-business --dry-run
 dotnet run --project backend/InventoryApi -- bootstrap-business --apply
+dotnet run --project backend/InventoryApi -- migrate-nayax-connection --dry-run
+dotnet run --project backend/InventoryApi -- migrate-nayax-connection --apply
 ```
 
 **The deployed application** (Azure App Service, or anywhere the published output runs). The
@@ -75,6 +79,8 @@ dotnet InventoryApi.dll migrate-database --dry-run
 dotnet InventoryApi.dll migrate-database --apply
 dotnet InventoryApi.dll bootstrap-business --dry-run
 dotnet InventoryApi.dll bootstrap-business --apply
+dotnet InventoryApi.dll migrate-nayax-connection --dry-run
+dotnet InventoryApi.dll migrate-nayax-connection --apply
 ```
 
 On App Service, run these from the SSH/console session for the app, where the environment already
@@ -234,11 +240,129 @@ rolls back automatically if any row count or financial total moved. Then check b
   reassign rows by hand; ownership is immutable through the application and editing it directly
   bypasses every check in the boundary.
 
+## Migrating the Nayax connection into the business (issue #519)
+
+A separate, later step, and a separate human decision. The ownership rollout above gives the
+business its data; this gives it its own Nayax credential. It is **not** part of the sequence above
+and must not be run before it: the command refuses until ownership is bootstrapped.
+
+Today the Nayax integration is configured once for the whole application — `NayaxLynx:OperatorId`
+and the bearer token (`NayaxLynx:AccessToken`, or the legacy `Nayax:Token` key). Issue #518 added
+each business's own encrypted connection record, empty for every business. This command copies the
+configured operator id and token into the existing business's record, encrypted, and marks the
+connection `Ready`, because that token is the one already authenticating to Nayax in production —
+the command never calls Nayax and performs no permission test.
+
+### Before you run it
+
+1. **The token encryption key must be provisioned** for the environment:
+   `NayaxTokenProtection:ActiveKeyId` and the matching `NayaxTokenProtection:Keys:<key-id>` entry
+   (a base64-encoded 256-bit AES key — see README.md § Configuration and secrets). Both the dry run
+   and the apply refuse with the setting named while it is absent, because a credential this
+   command cannot encrypt is never stored in some other form.
+2. **The ownership bootstrap must be complete** — no unassigned rows, exactly one active business,
+   at least one usable membership. This is the same readiness `TenantOwnershipReadiness` reports in
+   the startup log.
+3. **Nothing else must have stored a credential for that business.** If a different operator id or
+   token is already there, the command refuses rather than replacing it.
+
+### Dry run, then apply
+
+```bash
+migrate-nayax-connection --dry-run
+```
+
+The dry run writes **nothing at all** — no row, no status, no credential revision. It reports the
+business it resolved, the configured operator id, what is stored today, and the change an apply
+would make. Nothing it prints is a secret: the access token is never printed, never logged, and
+never put in a message or an exception, not even as a length or a prefix, and whether the stored
+token matches the configured one is reported as a plain yes/no.
+
+Read the output and confirm:
+
+- `Business id` is the business you expect;
+- `Configured operator` is the Nayax operator account this business trades under;
+- `Change` is `CredentialsStored` (nothing stored yet) or `None` (already migrated).
+
+Then apply:
+
+```bash
+migrate-nayax-connection --apply
+```
+
+`--apply` must be typed explicitly; an invocation with neither flag is a dry run, and passing both
+is refused rather than resolved by precedence. Re-running an applied migration changes nothing at
+all — the row is not rewritten, so the stored ciphertext and the credential revision do not move.
+Exit code `0` means the run succeeded, including an idempotent re-run; `1` means it did not.
+
+The apply is **one transaction**: the credential and the `Ready` status are committed together, or
+neither is. The report says which in as many words — a `Database` line reading `unchanged - nothing
+was written` or `changed, as reported below` — so you never have to infer it from the outcome name.
+
+### If an apply fails
+
+Read the `Database` line, and then act on it:
+
+- **`unchanged - nothing was written`** — the apply rolled back; the database is exactly as it was,
+  including when the failure happened after the credential had been written inside the transaction.
+  Fix the cause the message names, run the dry run to confirm what is stored, and apply again. The
+  retry is a first apply, not the repair of a half-finished one.
+  - `StatusNotApplied` means something else saved a credential for this business while the command
+    was running, so the status write it had prepared no longer matched what was stored. Find out
+    what else wrote, confirm which credential is correct, then apply again.
+  - `RolledBack` means reading or writing the connection failed outright (the message carries the
+    database error).
+- **`UNKNOWN - the commit failed`** — the only state the command cannot report, and the only one
+  that needs you to look: the database holds either the whole change (credential stored, connection
+  `Ready`) or none of it, never a part of it. Run the dry run: `Change: None` means it committed and
+  there is nothing left to do; `Change: CredentialsStored` or `Change: StatusMarkedReady` means it
+  did not, and you should apply again.
+
+There is no state in which the credential is stored but its status was never written, so "stored
+but not Ready" never needs repairing by hand — and the credential table must not be edited by hand
+in any case.
+
+### The cutover window
+
+**Run this command before deploying issue #520, not after.** Nothing reads the per-business record
+until #520 changes the Nayax client, so running it early is safe and changes no behaviour. Once
+#520 is deployed, the client reads the business's record instead of the global configuration — so
+if the record is still empty at that moment, every Nayax read (sales sync, machine and product
+catalogue, the dashboard's remote data) fails until this command has run. Running it first makes
+that window zero. If #520 has already been deployed and Nayax is failing, this command is the fix:
+run the dry run, confirm it reports `CredentialsStored`, then apply.
+
+### Verifying Nayax afterwards
+
+The command's own output is not evidence that Nayax works — it never contacts Nayax. After #520 is
+deployed and this command has been applied, verify through the application:
+
+- sign in and open the dashboard; confirm remote machine and sales data loads rather than reporting
+  an upstream error;
+- run a sales sync for a recent date range and confirm it imports as it did before;
+- confirm no `NayaxUpstreamException` entries appear for the period after the cutover (README.md §
+  KQL troubleshooting queries);
+- read the connection record's status: it stays `Ready` unless a later permission test changes it.
+
+If Nayax fails after the cutover, the credential is the first thing to check — re-run
+`migrate-nayax-connection --dry-run` and read what it reports is stored. Do not edit the
+credential table by hand; the token is encrypted and its key id is stored with it.
+
+### When to remove the global settings
+
+Only after #520 is deployed and the verification above has passed, and as a deliberate human step:
+remove `NayaxLynx__AccessToken` / `Nayax__Token` (and, if nothing else reads it,
+`NayaxLynx__OperatorId`) from the environment's configuration. Until then leave them exactly as
+they are — this command deliberately does not remove them, so a rollback of #520 still has a
+working client. Keep `NayaxTokenProtection__*` forever: removing the key that encrypted a stored
+token is what makes that token undecryptable.
+
 ## Not part of this rollout
 
 - **Onboarding a second business.** The Nayax integration still uses one operator account and
   token, so remote identifiers and imports are not yet partitioned. Do not add a second business
-  until they are.
+  until they are. Issue #519's `migrate-nayax-connection` moves the existing business's credential
+  into its own record, but the client still reads the global configuration until issue #520.
 - **Database foreign keys from `BusinessId` to `Businesses`.** Deliberately deferred, and still
   **required**. This is an outstanding integrity step, not a decision that the constraint is
   unnecessary.
