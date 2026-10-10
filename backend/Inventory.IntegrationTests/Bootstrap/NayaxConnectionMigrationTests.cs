@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using Inventory.Application.Nayax;
 using Inventory.Domain.Nayax;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
@@ -266,6 +267,178 @@ public sealed class NayaxConnectionMigrationTests
 
     #endregion
 
+    #region An apply is one transaction
+
+    /// <summary>
+    /// The partial state the apply's transaction exists to rule out. The credential is saved, and
+    /// before the <c>Ready</c> status is written something else replaces it, so the conditional
+    /// status write matches no row. A command that reported that refusal over a database it had
+    /// already changed would be telling the operator something false, so the whole apply is rolled
+    /// back instead: there is no row at all afterwards, and the report says the database is
+    /// unchanged.
+    /// </summary>
+    [Fact]
+    public async Task A_credential_replaced_between_the_save_and_the_ready_write_rolls_the_whole_apply_back()
+    {
+        await using var fixture = await MigrationFixture.CreateAsync();
+
+        var result = await fixture.RunAsync(
+            dryRun: false,
+            interleave: store => new ReplacingStore(store, OtherOperatorId, OtherToken));
+
+        Assert.Equal(NayaxConnectionMigrationOutcome.StatusNotApplied, result.Outcome);
+        Assert.Equal(NayaxConnectionMigrationChange.None, result.Change);
+        Assert.Equal(NayaxConnectionMigrationDatabaseState.Unchanged, result.DatabaseState);
+        Assert.Contains("nothing was written", result.Message, StringComparison.Ordinal);
+
+        // Not "the credential is stored, only its status is missing": nothing was stored at all.
+        Assert.Empty(await fixture.AllRowsAsync());
+    }
+
+    /// <summary>
+    /// The same change between the read and the mutation on the status-only path, where the command
+    /// deliberately does not re-save the credential: the row that was committed before the apply
+    /// comes out of the refused run byte-for-byte as it went in.
+    /// </summary>
+    [Fact]
+    public async Task A_credential_replaced_during_a_status_only_apply_leaves_the_committed_row_untouched()
+    {
+        await using var fixture = await MigrationFixture.CreateAsync();
+        await fixture.StoreFor(fixture.BusinessId).SaveCredentialAsync(OperatorId, Token, CancellationToken.None);
+        var stored = await fixture.SingleRowAsync();
+
+        var result = await fixture.RunAsync(
+            dryRun: false,
+            interleave: store => new ReplacingStore(store, OtherOperatorId, OtherToken));
+
+        Assert.Equal(NayaxConnectionMigrationOutcome.StatusNotApplied, result.Outcome);
+        Assert.Equal(NayaxConnectionMigrationDatabaseState.Unchanged, result.DatabaseState);
+
+        var after = await fixture.SingleRowAsync();
+        Assert.Equal(stored.OperatorId, after.OperatorId);
+        Assert.Equal(stored.AccessTokenCiphertext, after.AccessTokenCiphertext);
+        Assert.Equal(stored.CredentialRevision, after.CredentialRevision);
+        Assert.Equal(stored.Status, after.Status);
+        Assert.Equal(stored.UpdatedAtUtc, after.UpdatedAtUtc);
+    }
+
+    /// <summary>
+    /// A status write that fails outright rather than being discarded. The credential save must go
+    /// back with it, and the run must report the failure as the no-write it is.
+    /// </summary>
+    [Fact]
+    public async Task A_failed_status_write_rolls_the_credential_save_back_and_reports_it()
+    {
+        await using var fixture = await MigrationFixture.CreateAsync();
+
+        var result = await fixture.RunAsync(dryRun: false, interleave: store => new FailingStatusWriteStore(store));
+
+        Assert.Equal(NayaxConnectionMigrationOutcome.RolledBack, result.Outcome);
+        Assert.Equal(NayaxConnectionMigrationChange.None, result.Change);
+        Assert.Equal(NayaxConnectionMigrationDatabaseState.Unchanged, result.DatabaseState);
+        Assert.Contains("nothing was written", result.Message, StringComparison.Ordinal);
+        Assert.Empty(await fixture.AllRowsAsync());
+    }
+
+    /// <summary>
+    /// Recovering from a failed apply is simply running the command again: because the failure left
+    /// nothing behind, the dry run still reports <c>CredentialsStored</c> and the retry is a first
+    /// apply rather than the repair of a half-finished one.
+    /// </summary>
+    [Fact]
+    public async Task An_apply_after_a_rolled_back_one_stores_the_credential_at_revision_1()
+    {
+        await using var fixture = await MigrationFixture.CreateAsync();
+        Assert.Equal(
+            NayaxConnectionMigrationOutcome.RolledBack,
+            (await fixture.RunAsync(
+                dryRun: false,
+                interleave: store => new FailingStatusWriteStore(store))).Outcome);
+
+        var dryRun = await fixture.RunAsync(dryRun: true);
+        Assert.Equal(NayaxConnectionMigrationChange.CredentialsStored, dryRun.Change);
+        Assert.Null(dryRun.StatusBefore);
+
+        var result = await fixture.RunAsync(dryRun: false);
+
+        Assert.True(result.Succeeded, result.Message);
+        Assert.Equal(NayaxConnectionMigrationChange.CredentialsStored, result.Change);
+        Assert.Equal(NayaxConnectionMigrationDatabaseState.Changed, result.DatabaseState);
+
+        var row = await fixture.SingleRowAsync();
+        Assert.Equal(1, row.CredentialRevision);
+        Assert.Equal(NayaxConnectionStatus.Ready, row.Status);
+    }
+
+    /// <summary>
+    /// Every ending states what happened to the database, in the result and in the printed report.
+    /// No refusal may read as a partial write, and the committed apply is the only one that reports
+    /// a change.
+    /// </summary>
+    [Fact]
+    public async Task Every_outcome_states_what_happened_to_the_database()
+    {
+        await using var fixture = await MigrationFixture.CreateAsync();
+
+        var unchanged = new List<NayaxConnectionMigrationResult>
+        {
+            await fixture.RunAsync(dryRun: true),
+            await fixture.RunAsync(dryRun: false, accessToken: null),
+            await fixture.RunAsync(dryRun: false, protector: new UnconfiguredNayaxTokenProtector()),
+            await fixture.RunAsync(dryRun: false, interleave: store => new FailingStatusWriteStore(store)),
+            await fixture.RunAsync(
+                dryRun: false,
+                interleave: store => new ReplacingStore(store, OtherOperatorId, OtherToken)),
+            await MigrationFixture.RunWithoutAuditAsync(),
+        };
+
+        foreach (var result in unchanged)
+        {
+            Assert.Equal(NayaxConnectionMigrationDatabaseState.Unchanged, result.DatabaseState);
+
+            using var printed = new StringWriter();
+            NayaxConnectionMigrationCommand.Write(result, printed);
+            Assert.Contains("unchanged - nothing was written", printed.ToString(), StringComparison.Ordinal);
+        }
+
+        Assert.Empty(await fixture.AllRowsAsync());
+
+        var applied = await fixture.RunAsync(dryRun: false);
+        using var appliedReport = new StringWriter();
+        NayaxConnectionMigrationCommand.Write(applied, appliedReport);
+
+        Assert.Equal(NayaxConnectionMigrationDatabaseState.Changed, applied.DatabaseState);
+        Assert.Contains("changed, as reported below", appliedReport.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The one ending that cannot say what the database holds says exactly that instead of the
+    /// "nothing was written" every other failure reports: a commit that fails leaves either the
+    /// whole change or none of it, and only a fresh dry run can say which.
+    /// </summary>
+    [Fact]
+    public void A_failed_commit_is_reported_as_an_unknown_database_state()
+    {
+        var result = new NayaxConnectionMigrationResult
+        {
+            Outcome = NayaxConnectionMigrationOutcome.CommitFailed,
+            DryRun = false,
+            BusinessId = 1,
+            ConfiguredOperatorId = OperatorId,
+            Message = "The apply's transaction failed to commit.",
+        };
+
+        Assert.Equal(NayaxConnectionMigrationDatabaseState.Unknown, result.DatabaseState);
+
+        using var printed = new StringWriter();
+        NayaxConnectionMigrationCommand.Write(result, printed);
+
+        Assert.Contains("UNKNOWN", printed.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("nothing was written", printed.ToString(), StringComparison.Ordinal);
+    }
+
+    #endregion
+
     #region Refusals
 
     [Theory]
@@ -498,6 +671,78 @@ public sealed class NayaxConnectionMigrationTests
     #endregion
 
     /// <summary>
+    /// Replaces the stored credential at the moment the command tries to mark the connection
+    /// <c>Ready</c> - the change between the authoritative read and the mutation that the credential
+    /// revision guard exists for. It writes through the store it wraps, and therefore through the
+    /// apply's own transaction, which is the only way one SQLite connection can be made to change
+    /// underneath a run in progress; a second connection would be blocked by the write lock rather
+    /// than interleave.
+    /// </summary>
+    private sealed class ReplacingStore : INayaxConnectionStore
+    {
+        private readonly INayaxConnectionStore _inner;
+        private readonly string _operatorId;
+        private readonly string _accessToken;
+
+        public ReplacingStore(INayaxConnectionStore inner, string operatorId, string accessToken)
+        {
+            _inner = inner;
+            _operatorId = operatorId;
+            _accessToken = accessToken;
+        }
+
+        public Task<NayaxConnection?> FindAsync(CancellationToken cancellationToken) =>
+            _inner.FindAsync(cancellationToken);
+
+        public Task<NayaxConnectionCredential?> FindCredentialAsync(CancellationToken cancellationToken) =>
+            _inner.FindCredentialAsync(cancellationToken);
+
+        public Task<NayaxConnection> SaveCredentialAsync(
+            string operatorId,
+            string accessToken,
+            CancellationToken cancellationToken) =>
+            _inner.SaveCredentialAsync(operatorId, accessToken, cancellationToken);
+
+        public async Task<bool> TryApplyStatusResultAsync(
+            NayaxConnectionStatusResult result,
+            CancellationToken cancellationToken)
+        {
+            await _inner.SaveCredentialAsync(_operatorId, _accessToken, cancellationToken);
+
+            return await _inner.TryApplyStatusResultAsync(result, cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// A status write that fails outright, which is the other way the second half of an apply can
+    /// not happen: the save has already run, so what the command does next is what decides whether
+    /// a credential is left behind with no status.
+    /// </summary>
+    private sealed class FailingStatusWriteStore : INayaxConnectionStore
+    {
+        private readonly INayaxConnectionStore _inner;
+
+        public FailingStatusWriteStore(INayaxConnectionStore inner) => _inner = inner;
+
+        public Task<NayaxConnection?> FindAsync(CancellationToken cancellationToken) =>
+            _inner.FindAsync(cancellationToken);
+
+        public Task<NayaxConnectionCredential?> FindCredentialAsync(CancellationToken cancellationToken) =>
+            _inner.FindCredentialAsync(cancellationToken);
+
+        public Task<NayaxConnection> SaveCredentialAsync(
+            string operatorId,
+            string accessToken,
+            CancellationToken cancellationToken) =>
+            _inner.SaveCredentialAsync(operatorId, accessToken, cancellationToken);
+
+        public Task<bool> TryApplyStatusResultAsync(
+            NayaxConnectionStatusResult result,
+            CancellationToken cancellationToken) =>
+            throw new DbUpdateException("The Nayax connection status could not be written.");
+    }
+
+    /// <summary>
     /// One in-memory SQLite database migrated to the current schema, holding the single
     /// bootstrapped business the production database holds: active, with an active membership and
     /// with the <c>BusinessBackfillAudit</c> row <c>bootstrap-business</c> leaves behind.
@@ -583,7 +828,8 @@ public sealed class NayaxConnectionMigrationTests
             bool dryRun,
             string? operatorId = OperatorId,
             string? accessToken = Token,
-            INayaxTokenProtector? protector = null)
+            INayaxTokenProtector? protector = null,
+            Func<INayaxConnectionStore, INayaxConnectionStore>? interleave = null)
         {
             // A denied scope, exactly as the command uses: the tenancy tables it reads carry no
             // query filter, and nothing tenant-owned is reachable through this context at all.
@@ -591,7 +837,7 @@ public sealed class NayaxConnectionMigrationTests
 
             var migrator = new NayaxConnectionMigrator(
                 tenancyDb,
-                businessId => StoreFor(businessId, protector),
+                businessId => TargetFor(businessId, protector, interleave),
                 operatorId,
                 accessToken,
                 new FakeClock(MigratedAt));
@@ -599,17 +845,30 @@ public sealed class NayaxConnectionMigrationTests
             return await migrator.RunAsync(dryRun, CancellationToken.None);
         }
 
-        public EfNayaxConnectionStore StoreFor(int businessId, INayaxTokenProtector? protector = null)
+        /// <summary>
+        /// The scoped context and the store over it, exactly as the command pairs them, optionally
+        /// with a store double wrapped around the real one so a test can make the database change
+        /// in the middle of the apply.
+        /// </summary>
+        public NayaxConnectionMigrationTarget TargetFor(
+            int businessId,
+            INayaxTokenProtector? protector = null,
+            Func<INayaxConnectionStore, INayaxConnectionStore>? interleave = null)
         {
             var context = TestAppDbContext.For(_options, businessId);
             _contexts.Add(context);
 
-            return new EfNayaxConnectionStore(
+            INayaxConnectionStore store = new EfNayaxConnectionStore(
                 context,
                 protector ?? ConfiguredProtector(),
                 new FakeClock(MigratedAt),
                 _logger);
+
+            return new NayaxConnectionMigrationTarget(context, interleave is null ? store : interleave(store));
         }
+
+        public INayaxConnectionStore StoreFor(int businessId, INayaxTokenProtector? protector = null) =>
+            TargetFor(businessId, protector).Store;
 
         public async Task AddBusinessAsync(string name)
         {

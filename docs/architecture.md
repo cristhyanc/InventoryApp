@@ -1558,7 +1558,11 @@ provisioning the production key is a human step (see README.md § Configuration 
 `Inventory.Infrastructure.Persistence.EfNayaxConnectionStore`. A credential save increments the
 revision in the database, resets the status to `PendingPermissions` and clears the last-tested
 instant, so a newly stored token can never inherit the previous token's test result; the first save
-creates the row at revision 1. A permission test result carries the revision it was produced for,
+creates the row at revision 1. A save is atomic, and it takes part in a transaction its caller has
+already begun on the same context instead of committing on its own, which is what lets
+`migrate-nayax-connection` make the save and the status write that follows it one change (see
+[Migrating the Nayax connection](#migrating-the-nayax-connection-issue-519)); with no transaction in
+progress a save still gets its own. A permission test result carries the revision it was produced for,
 and applying it is **one conditional statement** — `UPDATE … WHERE BusinessId = @b AND
 CredentialRevision = @r`, where the business predicate is contributed by the central query filter
 and the revision predicate by the caller's expected value. Zero rows matched means an operator saved
@@ -1583,7 +1587,8 @@ unconfigured protector and the startup validation of the key section.
 SQLite: revision 1 on first save, the increment and cleared test result on a later save, the applied
 and the discarded status result with the log event's exact properties, the statement shape itself,
 two-business isolation for reading, decrypting, saving and status writes, two overlapping saves
-leaving the last committed credentials, a retired key and a tampered ciphertext failing closed, a
+leaving the last committed credentials, a save inside a caller's transaction landing only when that
+caller commits, a retired key and a tampered ciphertext failing closed, a
 denied and an unscoped context writing nothing, and the unique index refusing a second row.
 `AddBusinessNayaxConnectionsMigrationTests` is the upgrade test from the previous migration.
 
@@ -1626,6 +1631,25 @@ than a live test, which is also why the instant recorded is when that was adopte
 moved in between discards the result rather than describing credentials it was not produced for, and
 the command reports that rather than claiming success.
 
+**An apply is one transaction, so a partial state is not something it can leave.** Storing the
+credential and marking the connection `Ready` are two statements, and a command that committed the
+first and then failed the second would leave a credential whose status was never written while
+reporting a failure — the database changed by a run that says it refused. `NayaxConnectionMigrator`
+therefore opens one transaction on the business-scoped context and does everything inside it: the
+authoritative read of what the business holds, the comparison against the configured credential, the
+save, the `Ready` status write and the read-back. It commits only once the connection is actually
+`Ready`. A refusal, a status result the revision guard discarded, and a failed read or write all
+roll it back, so a run that reports anything other than success has written nothing at all, and
+recovering from one is simply running the command again rather than repairing a half-finished
+change. Putting the read inside that transaction is also what makes the "never replace a credential
+I did not recognise" refusal a decision about the state the write lands on, rather than about a
+state that may have been superseded since; the conditional status write still carries the revision
+it was produced for as well. The one ending the transaction cannot decide is a commit that itself
+fails: the database then holds the whole change or none of it, and the result says exactly that
+(`CommitFailed`, reported as an unknown database state) instead of claiming either. Every result
+carries a `DatabaseState` of `Unchanged`, `Changed` or `Unknown`, and the printed report states it
+in words on success and failure alike, so a refusal can never be read as a partial write.
+
 **Refusals, and what makes a re-run a true no-op.** It refuses when the configuration holds no
 operator id or token; when the schema has pending migrations; when tenant ownership is not
 bootstrapped — which is where "more than one business exists" lands, since `TenantOwnershipReadiness`
@@ -1649,6 +1673,13 @@ for both the configured and a second token, and sweeps every column of the crede
 plaintext. Its fixture is built by running the real `BusinessBootstrapper`, because "bootstrapped"
 means that command's outcome — a migrated-but-unbootstrapped database is not merely empty, since a
 migration seeds a `NayaxProcessingFeeRate` with no owner.
+
+The same tests pin the atomicity, with the credential replaced between the save and the `Ready`
+write: on the first-save path the apply leaves no row at all, on the status-only path the row that
+was committed before it comes out byte-for-byte unchanged, a status write that fails outright takes
+the save back with it, the apply that follows a rolled-back one stores the credential at revision 1
+as a first apply would, and every ending reports its database state — only a failed commit is
+allowed to report `Unknown`, and no refusal may claim a write it did not make.
 
 ### Document storage
 

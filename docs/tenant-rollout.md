@@ -293,8 +293,34 @@ migrate-nayax-connection --apply
 `--apply` must be typed explicitly; an invocation with neither flag is a dry run, and passing both
 is refused rather than resolved by precedence. Re-running an applied migration changes nothing at
 all — the row is not rewritten, so the stored ciphertext and the credential revision do not move.
-Exit code `0` means the run succeeded, including an idempotent re-run; `1` means it refused, and a
-refusal always leaves the database exactly as it was.
+Exit code `0` means the run succeeded, including an idempotent re-run; `1` means it did not.
+
+The apply is **one transaction**: the credential and the `Ready` status are committed together, or
+neither is. The report says which in as many words — a `Database` line reading `unchanged - nothing
+was written` or `changed, as reported below` — so you never have to infer it from the outcome name.
+
+### If an apply fails
+
+Read the `Database` line, and then act on it:
+
+- **`unchanged - nothing was written`** — the apply rolled back; the database is exactly as it was,
+  including when the failure happened after the credential had been written inside the transaction.
+  Fix the cause the message names, run the dry run to confirm what is stored, and apply again. The
+  retry is a first apply, not the repair of a half-finished one.
+  - `StatusNotApplied` means something else saved a credential for this business while the command
+    was running, so the status write it had prepared no longer matched what was stored. Find out
+    what else wrote, confirm which credential is correct, then apply again.
+  - `RolledBack` means reading or writing the connection failed outright (the message carries the
+    database error).
+- **`UNKNOWN - the commit failed`** — the only state the command cannot report, and the only one
+  that needs you to look: the database holds either the whole change (credential stored, connection
+  `Ready`) or none of it, never a part of it. Run the dry run: `Change: None` means it committed and
+  there is nothing left to do; `Change: CredentialsStored` or `Change: StatusMarkedReady` means it
+  did not, and you should apply again.
+
+There is no state in which the credential is stored but its status was never written, so "stored
+but not Ready" never needs repairing by hand — and the credential table must not be edited by hand
+in any case.
 
 ### The cutover window
 

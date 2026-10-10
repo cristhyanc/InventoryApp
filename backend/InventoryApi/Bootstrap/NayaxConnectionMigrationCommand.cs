@@ -34,9 +34,12 @@ namespace InventoryApi.Bootstrap;
 /// </code>
 ///
 /// <c>--apply</c> must be typed explicitly; an invocation with neither flag is a dry run, and a
-/// dry run writes nothing at all. Re-running an applied migration changes nothing. It reads the
-/// same configuration the running Nayax client reads - <c>NayaxLynx:OperatorId</c> and the token
-/// resolved by <see cref="NayaxLynxConfiguration.ResolveAccessToken"/> - and it does not remove
+/// dry run writes nothing at all. An apply is one transaction, committed only once the credential
+/// is stored <em>and</em> the connection is marked Ready, so a run that reports anything other than
+/// success has written nothing and the report says so in as many words. Re-running an applied
+/// migration changes nothing, and re-running after a failed apply is simply the same run again. It
+/// reads the same configuration the running Nayax client reads - <c>NayaxLynx:OperatorId</c> and the
+/// token resolved by <see cref="NayaxLynxConfiguration.ResolveAccessToken"/> - and it does not remove
 /// those settings: retiring them is a separate human step, after issue #520 makes the client read
 /// the per-business record. See docs/tenant-rollout.md § Migrating the Nayax connection.
 ///
@@ -137,11 +140,16 @@ public static class NayaxConnectionMigrationCommand
                     var scopedDb = new AppDbContext(dbOptions, ResolvedScopeFor(businessId));
                     scopedContexts.Add(scopedDb);
 
-                    return new EfNayaxConnectionStore(
+                    // The context and the store built over it travel together, because the apply's
+                    // transaction is begun on that context and only covers writes the store makes
+                    // through it (see NayaxConnectionMigrationTarget).
+                    return new NayaxConnectionMigrationTarget(
                         scopedDb,
-                        protector,
-                        clock,
-                        loggerFactory.CreateLogger<EfNayaxConnectionStore>());
+                        new EfNayaxConnectionStore(
+                            scopedDb,
+                            protector,
+                            clock,
+                            loggerFactory.CreateLogger<EfNayaxConnectionStore>()));
                 },
                 lynxOptions.OperatorId,
                 configuredAccessToken,
@@ -203,11 +211,13 @@ public static class NayaxConnectionMigrationCommand
         if (!result.Succeeded)
         {
             output.WriteLine($"FAILED ({result.Outcome}): {result.Message}");
+            output.WriteLine($"Database             : {Describe(result.DatabaseState)}");
             output.WriteLine();
             return;
         }
 
         output.WriteLine($"Business id          : {Describe(result.BusinessId)}");
+        output.WriteLine($"Database             : {Describe(result.DatabaseState)}");
         output.WriteLine($"Configured operator  : {Describe(result.ConfiguredOperatorId)}");
         output.WriteLine($"Stored operator      : {Describe(result.StoredOperatorId)}");
         output.WriteLine($"Stored token matches : {DescribeMatch(result.StoredTokenMatchesConfigured)}");
@@ -228,6 +238,21 @@ public static class NayaxConnectionMigrationCommand
 
     private static string Describe(int? value) =>
         value is null ? "none" : value.Value.ToString(CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// Says in plain words whether this run changed anything, on success and on failure alike, so
+    /// that a failure is never read as a partial write and a failed commit is never read as a
+    /// refusal that left the database alone.
+    /// </summary>
+    private static string Describe(NayaxConnectionMigrationDatabaseState state) =>
+        state switch
+        {
+            NayaxConnectionMigrationDatabaseState.Changed => "changed, as reported below",
+            NayaxConnectionMigrationDatabaseState.Unknown =>
+                "UNKNOWN - the commit failed; it holds either the whole change or none of it. Run "
+                    + "--dry-run to see which.",
+            _ => "unchanged - nothing was written",
+        };
 
     private static string Describe(NayaxConnectionStatus? status) =>
         status is null ? "none" : status.Value.ToString();

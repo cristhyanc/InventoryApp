@@ -49,11 +49,47 @@ public enum NayaxConnectionMigrationOutcome
     TokenProtectionUnavailable = 6,
 
     /// <summary>
-    /// The credentials were stored, but the <see cref="NayaxConnectionStatus.Ready"/> status was
-    /// not applied because the stored credential revision changed in between - something else
-    /// saved a credential while this command ran. Re-run the command.
+    /// The <see cref="NayaxConnectionStatus.Ready"/> status was not applied because the stored
+    /// credential revision changed in between - something else saved a credential while this
+    /// command ran, so the conditional status write matched no row. The whole apply is rolled back
+    /// rather than left with a credential whose status was never written, so nothing is written at
+    /// all. Re-run the dry run, confirm what is stored, then apply again.
     /// </summary>
     StatusNotApplied = 7,
+
+    /// <summary>
+    /// Reading or writing the connection failed during an apply, so its transaction was rolled
+    /// back and nothing was written - neither the credential nor the status.
+    /// </summary>
+    RolledBack = 8,
+
+    /// <summary>
+    /// The apply's transaction failed to commit. The database therefore holds either the whole
+    /// change or none of it - never a part of it - and which one is something only a fresh dry run
+    /// can say, so this outcome claims neither.
+    /// </summary>
+    CommitFailed = 9,
+}
+
+/// <summary>
+/// What this run did to the database, stated rather than left to be inferred from an outcome
+/// (issue #519). A failure that wrote nothing and a failure that may have written everything are
+/// not the same thing to the operator in front of the console, and a partial write is deliberately
+/// not expressible: an apply is one transaction.
+/// </summary>
+public enum NayaxConnectionMigrationDatabaseState
+{
+    /// <summary>Nothing was written: a dry run, an idempotent no-op, a refusal, or a rolled-back apply.</summary>
+    Unchanged = 0,
+
+    /// <summary>The apply committed: the credential, the status, or both, exactly as reported.</summary>
+    Changed = 1,
+
+    /// <summary>
+    /// The apply's commit failed, so this run cannot say whether the committed change is there.
+    /// It is all of it or none of it; a dry run says which.
+    /// </summary>
+    Unknown = 2,
 }
 
 /// <summary>What the migration did, or - in a dry run - what an apply would do.</summary>
@@ -132,4 +168,18 @@ public sealed record NayaxConnectionMigrationResult
     public int? CredentialRevisionAfter { get; init; }
 
     public bool Succeeded => Outcome == NayaxConnectionMigrationOutcome.Succeeded;
+
+    /// <summary>
+    /// Whether this run changed the database. Derived here, from the outcome and the change, so
+    /// that every ending reports it the same way and a refusal can never read as a partial write:
+    /// an apply is one transaction, committed only when the run succeeds, so the only ending that
+    /// cannot state the answer is a commit that failed.
+    /// </summary>
+    public NayaxConnectionMigrationDatabaseState DatabaseState => Outcome switch
+    {
+        NayaxConnectionMigrationOutcome.Succeeded when !DryRun && Change != NayaxConnectionMigrationChange.None =>
+            NayaxConnectionMigrationDatabaseState.Changed,
+        NayaxConnectionMigrationOutcome.CommitFailed => NayaxConnectionMigrationDatabaseState.Unknown,
+        _ => NayaxConnectionMigrationDatabaseState.Unchanged,
+    };
 }
