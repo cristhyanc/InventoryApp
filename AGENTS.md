@@ -30,7 +30,7 @@ backend/Inventory.Infrastructure/     Adapters behind those ports: Nayax Lynx cl
 backend/Inventory.UnitTests/          xUnit tests of Inventory.Domain/Inventory.Application only (references nothing else)
 backend/Inventory.IntegrationTests/   xUnit database, API, adapter, migration, bootstrap and architecture tests
 frontend/inventory-app/               Angular 19 standalone application
-.github/workflows/                    Validation, Claude Code agent, Copilot CLI review, and Azure deployment workflows
+.github/workflows/                    Validation, Claude Code agent, Copilot CLI review, optional ChatGPT final review, and Azure deployment workflows
 CLAUDE.md                             Claude Code entry point: read and obey this file and the docs
 docs/architecture.md                  Current and target architecture
 docs/automation.md                    Automated development lifecycle and authority model
