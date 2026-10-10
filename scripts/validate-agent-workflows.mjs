@@ -942,6 +942,11 @@ export function verifyReviewPublicationAndScheduling(read = readRepositoryFile) 
     'REVIEWER: ${{ needs.context.outputs.reviewer }}',
     '      - review\n      - copilot-review\n',
   ]) requireText(publish, required, 'agent-review.yml publish job');
+  // The fail-closed status must not claim "nothing was published" once the review is public.
+  for (const required of ['echo "review_posted=true" >> "$GITHUB_OUTPUT"', 'REVIEW_POSTED: ${{ steps.publish.outputs.review_posted }}', 'if [ "$REVIEW_POSTED" = "true" ]; then']) {
+    requireText(publish, required, 'agent-review.yml publish job');
+  }
+  requireOrder(publish, '--input "$work/payload-fallback.json" >/dev/null\n          fi\n', 'echo "review_posted=true" >> "$GITHUB_OUTPUT"', 'agent-review.yml publish job', 'publication must be recorded only after the review was posted.');
   verifyCopilotReviewJob(review);
   requireOrder(publish, '[ "$current_sha" = "$HEAD_SHA" ]', 'repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews', 'agent-review.yml publish job', 'the current head must be re-verified before the review is published.');
   requireOrder(publish, '[ "$validation_state" = "success" ]', 'repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews', 'agent-review.yml publish job', 'validation must be re-verified before the review is published.');
@@ -1366,6 +1371,17 @@ function verifyArchitectureFinalizer(architectureWorkflow) {
 export const chatGptReviewPath = '.github/workflows/chatgpt-review.yml';
 
 export const CHATGPT_REVIEW_CONTRACT = Object.freeze({
+  // A CHANGES REQUESTED review starts with this line; on an agent/issue-* pull request it is handed to
+  // agent-repair.yml by a least-privilege dispatcher.
+  repairPrefix: '(if .verdict == "CHANGES REQUESTED" then "@claude repair Fix the blockers listed in this ChatGPT review.\\n\\n" else "" end)',
+  repairFlag: 'if [ "$verdict" = "CHANGES REQUESTED" ] && [[ "$head_ref" == agent/issue-* ]] && [[ "$review_id" =~ ^[1-9][0-9]*$ ]]; then',
+  dispatcherRequired: [
+    "if: needs.publish.outputs.repair == 'true'",
+    '[ "$(jq -r \'.headRefOid\' <<<"$pr_json")" = "$HEAD_SHA" ] || fail "Refusing stale repair dispatch',
+    '[[ "$(jq -r \'.headRefName\' <<<"$pr_json")" == agent/issue-* ]] || fail',
+    'jq -e \'any(.labels[]?; .name == "agent-review")\' <<<"$pr_json" >/dev/null || fail',
+    'gh workflow run agent-repair.yml \\\n            --repo "$GITHUB_REPOSITORY" \\\n            --ref main \\\n            -f pr_number="$PR_NUMBER" \\\n            -f head_sha="$HEAD_SHA" \\\n            -f review_id="$REVIEW_ID"',
+  ],
   openAiSecret: 'secrets.OPENAI_API_KEY',
   triggers: ['  pull_request_target:\n    types: [labeled]\n    branches:\n      - develop\n', '  workflow_dispatch:\n'],
   forbiddenTriggers: ['  pull_request:\n', 'workflow_run', 'push:', 'issue_comment', 'schedule:'],
@@ -1406,6 +1422,7 @@ export const CHATGPT_REVIEW_CONTRACT = Object.freeze({
     'VERDICT_CONTEXT: chatgpt-review-verdict',
     'This is an advisory review. Human approval and branch protection remain the merge gate.',
     'echo "review_posted=true" >> "$GITHUB_OUTPUT"',
+    'echo "review_id=$review_id" >> "$GITHUB_OUTPUT"',
     'REVIEW_POSTED: ${{ steps.publish.outputs.review_posted }}',
     'if [ "$REVIEW_POSTED" = "true" ]; then',
   ],
@@ -1415,24 +1432,88 @@ function jobSection(workflow, job, nextJob, source) {
   return section(workflow, `  ${job}:\n`, nextJob ? `\n  ${nextJob}:\n` : null, source);
 }
 
+function verifyChatGptRepairHandOff(publish, dispatcher, contract, source) {
+  requireText(publish, contract.repairPrefix, `${source} publish job`);
+  requireText(publish, contract.repairFlag, `${source} publish job`);
+  requireOrder(publish, 'echo "review_posted=true" >> "$GITHUB_OUTPUT"', contract.repairFlag, `${source} publish job`, 'a repair may be requested only after the review was posted.');
+  for (const required of contract.dispatcherRequired) requireText(dispatcher, required, `${source} repair dispatcher`);
+  const grants = section(dispatcher, '    permissions:\n', '\n    steps:\n', `${source} repair dispatcher permissions`)
+    .split('\n').slice(1).map((line) => line.trim()).filter(Boolean).sort();
+  if (grants.join(',') !== 'actions: write,pull-requests: read') {
+    throw new Error(`${source} repair dispatcher permissions: must be exactly actions: write and pull-requests: read, found ${grants.join(', ')}`);
+  }
+  if (dispatcher.split('gh workflow run').length !== 2) throw new Error(`${source} repair dispatcher: must dispatch exactly one workflow, agent-repair.yml.`);
+  for (const forbidden of ['secrets.OPENAI_API_KEY', 'actions/checkout', 'gh pr comment', 'gh pr review', 'gh pr edit', 'gh pr merge', 'statuses/']) forbidText(dispatcher, forbidden, `${source} repair dispatcher`);
+  requireOrder(dispatcher, 'Refusing stale repair dispatch', 'gh workflow run agent-repair.yml', `${source} repair dispatcher`, 'the head must be rechecked before the repair is dispatched.');
+}
+
+// agent-repair.yml accepts a dispatched ChatGPT repair request only from main, only for a review the
+// ChatGPT workflow posted for the exact current head, and at most twice per pull request; the
+// human comment path stays owner-only.
+export const CHATGPT_REPAIR_INTAKE_CONTRACT = Object.freeze({
+  trigger: '  workflow_dispatch:\n    inputs:\n      pr_number:',
+  jobCondition: "(github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')",
+  commentCondition: [
+    "(github.event_name == 'issue_comment' &&",
+    "startsWith(github.event.comment.body, '@claude repair') &&",
+    'github.event.comment.user.login == github.repository_owner &&',
+  ],
+  verifyRequired: [
+    '[ "$GITHUB_REF" = "refs/heads/main" ] || fail "A dispatched repair must run from main',
+    'jq -e \'any(.labels[]?; .name == "agent-review")\' <<<"$pr_json" >/dev/null || fail',
+    '[ "$start_sha" = "$INPUT_HEAD_SHA" ] || fail "Refusing stale repair',
+    '[ "$(jq -r \'.user.login\' <<<"$review_json")" = "github-actions[bot]" ] || fail',
+    '[ "$(jq -r \'.commit_id\' <<<"$review_json")" = "$INPUT_HEAD_SHA" ] || fail',
+    '[[ "$request" == "@claude repair "* ]] || fail',
+    "grep -q '^Reviewer: ChatGPT ' <<<\"$request\" || fail",
+    "grep -q '^VERDICT: CHANGES REQUESTED$' <<<\"$request\" || fail",
+    'select(.user.login == $owner and (.body // "" | startswith("@claude repair")))',
+    'repair_requests=$((human_requests + automatic_requests))',
+    '[ "$repair_requests" -le 2 ] || fail "Repair limit reached',
+  ],
+});
+
+function verifyChatGptRepairIntake(repair) {
+  const contract = CHATGPT_REPAIR_INTAKE_CONTRACT;
+  const source = `${repairPath} ChatGPT repair intake`;
+  requireText(section(repair, '\non:\n', '\npermissions: {}\n', `${repairPath} triggers`), contract.trigger, source);
+  const job = section(repair, '  repair:\n', '  dispatch-validation:\n', repairPath);
+  const condition = section(job, '    if: |\n', '\n    runs-on:', source);
+  requireText(condition, contract.jobCondition, source);
+  for (const required of contract.commentCondition) requireText(condition, required, source);
+  const verify = section(job, '      - name: Resolve and verify pull request head\n', '      - name: Check out pull request head branch\n', source);
+  const dispatchBranch = section(verify, 'if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then\n', '\n          else\n', source);
+  for (const required of contract.verifyRequired) requireText(dispatchBranch, required, source);
+  requireOrder(verify, 'if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then', 'echo "start_sha=$start_sha" >> "$GITHUB_OUTPUT"', source, 'the dispatched request must be verified before the repair starts.');
+  const agent = section(job, '      - name: Run Claude Code repair agent\n', '      - name: Verify repair result\n', source);
+  requireText(agent, 'REQUEST COMMENT:\n            ${{ steps.pr.outputs.request }}', source);
+  requireText(agent, 'allowed_bots: "github-actions[bot]"', source);
+  // The request text reaches the prompt only after verification, never straight from the event.
+  forbidText(agent, 'github.event.comment.body', source);
+}
+
 export function verifyChatGptReview(read = readRepositoryFile) {
   const contract = CHATGPT_REVIEW_CONTRACT;
   const source = chatGptReviewPath;
   const workflow = read(chatGptReviewPath);
+  verifyChatGptRepairIntake(read(repairPath));
 
   const triggers = section(workflow, '\non:\n', '\npermissions: {}\n', `${source} triggers`);
   for (const required of contract.triggers) requireText(triggers, required, `${source} triggers`);
   for (const forbidden of contract.forbiddenTriggers) forbidText(triggers, forbidden, `${source} triggers`);
-  for (const forbidden of contract.workflowForbidden) forbidText(workflow, forbidden, source);
+  // The repair dispatcher is the one job allowed to dispatch a workflow; every other job is checked without it.
+  const dispatchRepair = jobSection(workflow, 'dispatch-repair', null, `${source} repair dispatcher`);
+  const withoutDispatcher = workflow.replace(dispatchRepair, '');
+  for (const forbidden of contract.workflowForbidden) forbidText(withoutDispatcher, forbidden, source);
   if (/^\s+(-\s+)?uses:/m.test(workflow)) throw new Error(`${source}: contains forbidden text: uses: (no action may run in this workflow)`);
 
   // Secret isolation: the OpenAI key is referenced exactly once, inside the read-only review job.
   if (workflow.split(contract.openAiSecret).length !== 2) throw new Error(`${source}: ${contract.openAiSecret} must be referenced exactly once, in the review job.`);
   const context = jobSection(workflow, 'context', 'review', `${source} context job`);
   const review = jobSection(workflow, 'review', 'publish', `${source} review job`);
-  const publish = jobSection(workflow, 'publish', null, `${source} publish job`);
+  const publish = jobSection(workflow, 'publish', 'dispatch-repair', `${source} publish job`);
   requireText(review, contract.openAiSecret, `${source} review job`);
-  for (const [job, text] of [['context', context], ['publish', publish]]) forbidText(text, 'OPENAI_API_KEY', `${source} ${job} job`);
+  for (const [job, text] of [['context', context], ['publish', publish], ['dispatch-repair', dispatchRepair]]) forbidText(text, 'OPENAI_API_KEY', `${source} ${job} job`);
 
   // Permissions: none at the top; read-only context and review jobs; publish writes only the review and its status.
   const permissionsOf = (text, job) => section(text, '    permissions:\n', '\n    outputs:\n', `${source} ${job} permissions`);
@@ -1458,8 +1539,9 @@ export function verifyChatGptReview(read = readRepositoryFile) {
   requireText(publish, contract.agentGate, `${source} publish job`);
   requireOrder(publish, '[ "$agent_verdict" = "success" ] || suppress', 'gh api --method POST "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews"', `${source} publish job`, 'the agent verdict must be rechecked before the review is posted.');
   // The fail-closed status must not claim "nothing was published" once the review is public.
-  requireOrder(publish, '--input "$work/payload-fallback.json" >/dev/null\n          fi\n', 'echo "review_posted=true" >> "$GITHUB_OUTPUT"', `${source} publish job`, 'publication must be recorded only after the review was posted.');
+  requireOrder(publish, '--input "$work/payload-fallback.json" --jq \'.id\')"\n          fi\n', 'echo "review_posted=true" >> "$GITHUB_OUTPUT"', `${source} publish job`, 'publication must be recorded only after the review was posted.');
   requireOrder(publish, 'echo "review_posted=true" >> "$GITHUB_OUTPUT"', 'set_verdict_status success', `${source} publish job`, 'publication must be recorded before the verdict status is set.');
+  verifyChatGptRepairHandOff(publish, dispatchRepair, contract, source);
   requireOrder(publish, '[ "$current_sha" = "$HEAD_SHA" ] || suppress', 'gh api --method POST "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews"', `${source} publish job`, 'the head must be rechecked before the review is posted.');
 }
 

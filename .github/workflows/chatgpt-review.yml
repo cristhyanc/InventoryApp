@@ -18,6 +18,11 @@ name: ChatGPT final review
 #   write permission. It returns structured output only. A separate deterministic `publish` job
 #   re-verifies the pull request head, posts one comment-only review bound to the reviewed SHA and
 #   records the per-SHA `chatgpt-review-verdict` status.
+# - A CHANGES REQUESTED review starts with `@claude repair`. On a Claude `agent/issue-*` pull request a
+#   separate least-privilege `dispatch-repair` job then dispatches agent-repair.yml from `main`
+#   for that exact head and review; agent-repair.yml verifies the review itself and caps these
+#   automatic repairs at two per pull request. Another ChatGPT review needs a human to apply the label
+#   again, so repair and review never loop on their own.
 # - Nothing here approves, merges, labels, pushes or deploys. Human approval remains the merge gate.
 
 on:
@@ -261,6 +266,9 @@ jobs:
       - context
       - review
     runs-on: ubuntu-latest
+    outputs:
+      review_id: ${{ steps.publish.outputs.review_id }}
+      repair: ${{ steps.publish.outputs.repair }}
     permissions:
       pull-requests: write
       statuses: write
@@ -322,7 +330,8 @@ jobs:
           # The publisher, not the model, writes the reviewer, the SHA, the verdict line and the advisory sentence.
           jq -r --arg sha "$HEAD_SHA" --arg run "$RUN_URL" --arg model "$OPENAI_MODEL" '
             def bullets(xs): if (xs | length) == 0 then "none" else ([xs[] | "- \(.)"] | join("\n")) end;
-            "Reviewer: ChatGPT (OpenAI \($model)), final advisory review\nHead SHA reviewed: \($sha)\n\nVERDICT: \(.verdict)\n\n"
+            (if .verdict == "CHANGES REQUESTED" then "@claude repair Fix the blockers listed in this ChatGPT review.\n\n" else "" end)
+            + "Reviewer: ChatGPT (OpenAI \($model)), final advisory review\nHead SHA reviewed: \($sha)\n\nVERDICT: \(.verdict)\n\n"
             + "Summary:\n" + .summary
             + "\n\nBlockers:\n" + bullets(.blockers)
             + "\n\nNon-blocking suggestions:\n" + bullets(.suggestions)
@@ -336,14 +345,19 @@ jobs:
               comments: [$review[0].inline_comments[] | { path, line, side: "RIGHT", body }] }
           ' > "$work/payload.json"
 
-          if ! gh api --method POST "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews" --input "$work/payload.json" >/dev/null; then
+          if ! review_id="$(gh api --method POST "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews" --input "$work/payload.json" --jq '.id')"; then
             echo "::warning::Inline comments were rejected; publishing them in the review body instead."
             jq '.body += "\n\nInline comments (could not be anchored):\n" + ([.comments[] | "- \(.path):\(.line): \(.body)"] | join("\n")) | .comments = []' \
               "$work/payload.json" > "$work/payload-fallback.json"
-            gh api --method POST "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews" --input "$work/payload-fallback.json" >/dev/null
+            review_id="$(gh api --method POST "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews" --input "$work/payload-fallback.json" --jq '.id')"
           fi
           # From here on the review is public; a later failure must not be reported as "nothing published".
           echo "review_posted=true" >> "$GITHUB_OUTPUT"
+          echo "review_id=$review_id" >> "$GITHUB_OUTPUT"
+          # Only a Claude agent/issue-* pull request can be repaired by agent-repair.yml.
+          if [ "$verdict" = "CHANGES REQUESTED" ] && [[ "$head_ref" == agent/issue-* ]] && [[ "$review_id" =~ ^[1-9][0-9]*$ ]]; then
+            echo "repair=true" >> "$GITHUB_OUTPUT"
+          fi
 
           if [ "$verdict" = "READY FOR HUMAN REVIEW" ]; then
             set_verdict_status success "ChatGPT: ready for human review (advisory), this SHA only"
@@ -368,3 +382,44 @@ jobs:
             -f state=error -f context=chatgpt-review-verdict \
             -f description="$description" \
             -f target_url="$RUN_URL" >/dev/null || echo "::warning::Could not record the fail-closed status."
+
+  dispatch-repair:
+    name: Dispatch agent repair for a changes-requested review
+    # Least privilege: no checkout, no OpenAI credential, and its only write permission dispatches
+    # agent-repair.yml from main. agent-repair.yml re-verifies the review, the head and the limit.
+    needs:
+      - context
+      - publish
+    if: needs.publish.outputs.repair == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      pull-requests: read
+
+    steps:
+      - name: Reverify head and dispatch repair
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ needs.context.outputs.pr_number }}
+          HEAD_SHA: ${{ needs.context.outputs.head_sha }}
+          REVIEW_ID: ${{ needs.publish.outputs.review_id }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+          [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] || fail "Invalid pull request number."
+          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "Invalid reviewed head SHA."
+          [[ "$REVIEW_ID" =~ ^[1-9][0-9]*$ ]] || fail "Invalid review id."
+
+          pr_json="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json state,headRefName,headRefOid,labels)"
+          [ "$(jq -r '.state' <<<"$pr_json")" = "OPEN" ] || fail "Pull request #$PR_NUMBER is no longer open."
+          [[ "$(jq -r '.headRefName' <<<"$pr_json")" == agent/issue-* ]] || fail "Only agent/issue-* pull requests are repaired automatically."
+          [ "$(jq -r '.headRefOid' <<<"$pr_json")" = "$HEAD_SHA" ] || fail "Refusing stale repair dispatch: the head moved after the review."
+          jq -e 'any(.labels[]?; .name == "agent-review")' <<<"$pr_json" >/dev/null || fail "The agent-review label is required for a repair."
+
+          gh workflow run agent-repair.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref main \
+            -f pr_number="$PR_NUMBER" \
+            -f head_sha="$HEAD_SHA" \
+            -f review_id="$REVIEW_ID"
+          echo "::notice::Dispatched agent-repair.yml for ChatGPT review $REVIEW_ID on $HEAD_SHA."

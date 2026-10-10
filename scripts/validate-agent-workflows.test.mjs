@@ -751,6 +751,11 @@ describe('review judgment contract', () => {
 });
 
 describe('guarded publication contract', () => {
+  it('reports a posted review accurately when its verdict status cannot be recorded', () => {
+    assertPublicationRejects({ [reviewPath]: replaceOnce(reviewWorkflow, '          echo "review_posted=true" >> "$GITHUB_OUTPUT"\n', '') }, /review_posted=true/);
+    assertPublicationRejects({ [reviewPath]: replaceOnce(reviewWorkflow, '          if [ "$REVIEW_POSTED" = "true" ]; then\n', '          if false; then\n') }, /REVIEW_POSTED/);
+  });
+
   it('keeps the model job read-only so it cannot publish around the guard', () => {
     assertPublicationRejects(
       { [reviewPath]: replaceOnce(reviewWorkflow, '      contents: read\n      pull-requests: read\n      issues: read\n', '      contents: read\n      pull-requests: write\n      issues: read\n') },

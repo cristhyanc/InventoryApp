@@ -4,20 +4,23 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { chatGptReviewPath, readRepositoryFile, runContractChecks, verifyChatGptReview } from './validate-agent-workflows.mjs';
+import { chatGptReviewPath, readRepositoryFile, repairPath, runContractChecks, verifyChatGptReview } from './validate-agent-workflows.mjs';
 
 const workflow = readRepositoryFile(chatGptReviewPath);
+const repairWorkflow = readRepositoryFile(repairPath);
 
 function replaceOnce(text, from, to) {
   assert.equal(text.split(from).length, 2, `fixture must contain exactly once: ${from}`);
   return text.replace(from, to);
 }
 
-function rejects(mutated, pattern) {
-  const read = (path) => (path === chatGptReviewPath ? mutated : readRepositoryFile(path));
+function rejects(mutated, pattern, path = chatGptReviewPath) {
+  const read = (candidate) => (candidate === path ? mutated : readRepositoryFile(candidate));
   assert.throws(() => verifyChatGptReview(read), pattern);
   assert.throws(() => runContractChecks({ read }), pattern);
 }
+
+const rejectsRepair = (mutated, pattern) => rejects(mutated, pattern, repairPath);
 
 const REVIEW_PERMISSIONS = '      contents: read\n      pull-requests: read\n      issues: read\n    outputs:\n      structured_output:';
 const PUBLISH_PERMISSIONS = '    permissions:\n      pull-requests: write\n      statuses: write\n';
@@ -143,8 +146,8 @@ describe('ChatGPT final review contract', () => {
     it('rejects recording publication before the review is posted', () => {
       const moved = replaceOnce(
         replaceOnce(workflow, '          echo "review_posted=true" >> "$GITHUB_OUTPUT"\n', ''),
-        '          if ! gh api --method POST "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews"',
-        '          echo "review_posted=true" >> "$GITHUB_OUTPUT"\n          if ! gh api --method POST "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews"',
+        '          if ! review_id="$(gh api --method POST "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews"',
+        '          echo "review_posted=true" >> "$GITHUB_OUTPUT"\n          if ! review_id="$(gh api --method POST "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews"',
       );
       rejects(moved, /publication must be recorded only after the review was posted/);
     });
@@ -152,6 +155,64 @@ describe('ChatGPT final review contract', () => {
     it('rejects a failure handler that always says nothing was published', () => {
       rejects(replaceOnce(workflow, '          REVIEW_POSTED: ${{ steps.publish.outputs.review_posted }}\n', ''), /REVIEW_POSTED/);
       rejects(replaceOnce(workflow, '          if [ "$REVIEW_POSTED" = "true" ]; then\n', '          if false; then\n'), /REVIEW_POSTED/);
+    });
+  });
+
+  describe('repair hand-off after a changes-requested review', () => {
+    it('rejects dropping the @claude repair prefix', () => {
+      rejects(replaceOnce(workflow, '"@claude repair Fix the blockers listed in this ChatGPT review.\\n\\n"', '""'), /publish job: missing required text: \(if \.verdict/);
+    });
+
+    it('rejects requesting a repair for a ready verdict or a non-agent branch', () => {
+      rejects(replaceOnce(workflow, 'if [ "$verdict" = "CHANGES REQUESTED" ] && [[ "$head_ref" == agent/issue-* ]]', 'if [[ "$head_ref" == agent/issue-* ]]'), /publish job: missing required text: if \[ "\$verdict"/);
+      rejects(replaceOnce(workflow, 'if [ "$verdict" = "CHANGES REQUESTED" ] && [[ "$head_ref" == agent/issue-* ]]', 'if [ "$verdict" = "CHANGES REQUESTED" ]'), /publish job: missing required text: if \[ "\$verdict"/);
+    });
+
+    it('rejects widening the dispatcher permissions', () => {
+      rejects(replaceOnce(workflow, '      actions: write\n      pull-requests: read\n', '      actions: write\n      pull-requests: write\n'), /repair dispatcher permissions: must be exactly/);
+      rejects(replaceOnce(workflow, '      actions: write\n      pull-requests: read\n', '      actions: write\n      pull-requests: read\n      contents: write\n'), /repair dispatcher permissions: must be exactly|contents: write/);
+    });
+
+    it('rejects dispatching from another job or another workflow', () => {
+      rejects(replaceOnce(workflow, '          echo "repair=true" >> "$GITHUB_OUTPUT"\n', '          echo "repair=true" >> "$GITHUB_OUTPUT"\n          gh workflow run agent-repair.yml --ref main\n'), /contains forbidden text: gh workflow/);
+      rejects(replaceOnce(workflow, 'gh workflow run agent-repair.yml \\', 'gh workflow run agent-implement.yml \\'), /repair dispatcher: missing required text: gh workflow run agent-repair.yml/);
+      rejects(replaceOnce(workflow, '            --ref main \\\n            -f pr_number="$PR_NUMBER" \\\n            -f head_sha="$HEAD_SHA" \\\n            -f review_id', '            --ref "$GITHUB_HEAD_REF" \\\n            -f pr_number="$PR_NUMBER" \\\n            -f head_sha="$HEAD_SHA" \\\n            -f review_id'), /repair dispatcher: missing required text/);
+    });
+
+    it('rejects dropping the dispatcher head recheck or the OpenAI key leaking into it', () => {
+      rejects(replaceOnce(workflow, '[ "$(jq -r \'.headRefOid\' <<<"$pr_json")" = "$HEAD_SHA" ] || fail "Refusing stale repair dispatch', 'true || fail "Refusing stale repair dispatch'), /repair dispatcher: missing required text/);
+      rejects(replaceOnce(workflow, '          REVIEW_ID: ${{ needs.publish.outputs.review_id }}\n', '          REVIEW_ID: ${{ needs.publish.outputs.review_id }}\n          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}\n'), /exactly once|OPENAI_API_KEY/);
+    });
+  });
+
+  describe('agent-repair.yml accepts only a verified ChatGPT repair request', () => {
+    it('rejects a dispatched repair that may run from a branch other than main', () => {
+      rejectsRepair(replaceOnce(repairWorkflow, "(github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')", "(github.event_name == 'workflow_dispatch')"), /ChatGPT repair intake: missing required text/);
+      rejectsRepair(replaceOnce(repairWorkflow, '[ "$GITHUB_REF" = "refs/heads/main" ] || fail "A dispatched repair must run from main', 'true || fail "A dispatched repair must run from main'), /ChatGPT repair intake: missing required text/);
+    });
+
+    it('keeps the human comment path owner-only', () => {
+      rejectsRepair(replaceOnce(repairWorkflow, '      github.event.comment.user.login == github.repository_owner &&\n', ''), /ChatGPT repair intake: missing required text: github.event.comment.user.login == github.repository_owner/);
+    });
+
+    for (const [name, guard] of [
+      ['the stale-head check', '[ "$start_sha" = "$INPUT_HEAD_SHA" ] || fail "Refusing stale repair'],
+      ['the review author check', '[ "$(jq -r \'.user.login\' <<<"$review_json")" = "github-actions[bot]" ] || fail'],
+      ['the review commit check', '[ "$(jq -r \'.commit_id\' <<<"$review_json")" = "$INPUT_HEAD_SHA" ] || fail'],
+      ['the @claude repair check', '[[ "$request" == "@claude repair "* ]] || fail'],
+      ['the ChatGPT reviewer check', "grep -q '^Reviewer: ChatGPT ' <<<\"$request\" || fail"],
+      ['the changes-requested check', "grep -q '^VERDICT: CHANGES REQUESTED$' <<<\"$request\" || fail"],
+      ['the two-repair limit', '[ "$repair_requests" -le 2 ] || fail "Repair limit reached'],
+      ['counting the owner\'s repair comments', 'repair_requests=$((human_requests + automatic_requests))'],
+      ['the agent-review label check', 'jq -e \'any(.labels[]?; .name == "agent-review")\' <<<"$pr_json" >/dev/null || fail "The agent-review label is required for a repair."'],
+    ]) {
+      it(`rejects dropping ${name}`, () => {
+        rejectsRepair(replaceOnce(repairWorkflow, guard, 'true'), /ChatGPT repair intake: missing required text/);
+      });
+    }
+
+    it('rejects passing the raw comment body to the repair agent', () => {
+      rejectsRepair(replaceOnce(repairWorkflow, '            ${{ steps.pr.outputs.request }}', '            ${{ github.event.comment.body }}'), /ChatGPT repair intake: (missing required text|contains forbidden text)/);
     });
   });
 
