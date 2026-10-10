@@ -139,6 +139,10 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IBusinessMembershipStore, EfBusinessMembershipStore>();
         services.AddScoped<IBusinessProfileStore, EfBusinessProfileStore>();
         services.AddScoped<INayaxFeeRateStore, EfNayaxFeeRateStore>();
+        // The per-business Nayax connection (issue #518). Its INayaxTokenProtector dependency comes
+        // from AddNayaxTokenProtection below rather than from this method, for the same reason the
+        // Nayax HTTP client's options do: only the composition root reads configuration.
+        services.AddScoped<INayaxConnectionStore, EfNayaxConnectionStore>();
         services.AddScoped<ISiteCommissionStore, EfSiteCommissionStore>();
         services.AddScoped<ICategoryStore, EfCategoryStore>();
         services.AddScoped<ISupplierStore, EfSupplierStore>();
@@ -295,6 +299,51 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddTransient<NayaxResilienceHandler>();
         services.AddHttpClient<INayaxLynxClient, NayaxLynxClient>()
             .AddHttpMessageHandler<NayaxResilienceHandler>();
+
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the encryption of a business's stored Nayax access token behind
+    /// <see cref="INayaxTokenProtector"/> (issue #518).
+    ///
+    /// Separate from <see cref="AddInfrastructureServices"/>, like
+    /// <see cref="AddNayaxLynxClient"/> and <see cref="AddDocumentStorage"/>, because only the
+    /// composition root reads configuration - which keeps Key Vault and app secrets out of
+    /// Inventory.Application and Inventory.Domain entirely.
+    ///
+    /// Two outcomes, and both are deliberate. Configured key material is validated here, eagerly,
+    /// so a half-configured section fails at startup with the setting named rather than the first
+    /// time an operator saves a token. No key material at all is a legitimate state - provisioning
+    /// the production key is a human step, and nothing reads a per-business connection until issue
+    /// #520 - so it registers the fail-closed <see cref="UnconfiguredNayaxTokenProtector"/>
+    /// instead of refusing to start: the API runs normally and only storing or reading a
+    /// per-business token fails.
+    ///
+    /// Singleton: the decoded keys are immutable and are read on every save and every credential
+    /// read.
+    /// </summary>
+    /// <param name="services">The container being built.</param>
+    /// <param name="options">The configured encryption keys, bound from configuration.</param>
+    /// <exception cref="InvalidOperationException">
+    /// Key material is configured but incomplete, malformed, or names an active key that is absent.
+    /// </exception>
+    public static IServiceCollection AddNayaxTokenProtection(
+        this IServiceCollection services,
+        NayaxTokenProtectionOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        if (!options.IsConfigured)
+        {
+            services.AddSingleton<INayaxTokenProtector>(new UnconfiguredNayaxTokenProtector());
+
+            return services;
+        }
+
+        // Constructed now rather than lazily: validation of the key section belongs at startup.
+        var protector = new AesGcmNayaxTokenProtector(options);
+        services.AddSingleton<INayaxTokenProtector>(protector);
 
         return services;
     }
