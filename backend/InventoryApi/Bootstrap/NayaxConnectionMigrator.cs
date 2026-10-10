@@ -207,9 +207,9 @@ public sealed class NayaxConnectionMigrator
         CancellationToken cancellationToken)
     {
         var plan = await PlanAsync(store, businessId, operatorId, accessToken, dryRun: true, cancellationToken);
-        if (plan.Refusal is not null)
+        if (plan.RefusalResult is not null)
         {
-            return plan.Refusal;
+            return plan.RefusalResult;
         }
 
         return new NayaxConnectionMigrationResult
@@ -305,9 +305,9 @@ public sealed class NayaxConnectionMigrator
         CancellationToken cancellationToken)
     {
         var plan = await PlanAsync(store, businessId, operatorId, accessToken, dryRun: false, cancellationToken);
-        if (plan.Refusal is not null)
+        if (plan.RefusalResult is not null)
         {
-            return plan.Refusal;
+            return plan.RefusalResult;
         }
 
         var notApplied = await ApplyPlanAsync(store, plan, businessId, operatorId, accessToken, cancellationToken);
@@ -346,7 +346,7 @@ public sealed class NayaxConnectionMigrator
     /// one operation: a credential that arrives after this read cannot be overwritten by a plan
     /// made before it existed.
     /// </summary>
-    private async Task<MigrationPlan> PlanAsync(
+    private static async Task<MigrationPlan> PlanAsync(
         INayaxConnectionStore store,
         int businessId,
         string operatorId,
@@ -623,5 +623,5 @@ public sealed class NayaxConnectionMigrator
         NayaxConnection? Existing,
         bool? StoredTokenMatches,
         NayaxConnectionMigrationChange Change,
-        NayaxConnectionMigrationResult? Refusal);
+        NayaxConnectionMigrationResult? RefusalResult);
 }
