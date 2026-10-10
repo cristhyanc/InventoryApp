@@ -155,14 +155,6 @@ public class NayaxLynxClient : INayaxLynxClient
         // A cancelled caller must keep observing cancellation rather than a 502 - or a status write.
         ct.ThrowIfCancellationRequested();
 
-        _logger.LogError(
-            "Nayax request failed. Operation={NayaxOperation} Method={NayaxHttpMethod} Endpoint={NayaxEndpoint} Status={NayaxStatusCode} Reason={NayaxReasonPhrase}",
-            operation,
-            method.Method,
-            endpoint,
-            (int)response.StatusCode,
-            response.ReasonPhrase);
-
         if (response.StatusCode == HttpStatusCode.Unauthorized)
         {
             // The revision read when this call started, never whatever is stored now: the store's
@@ -171,13 +163,24 @@ public class NayaxLynxClient : INayaxLynxClient
                 .ReportUnauthorizedAsync(credential.CredentialRevision, ct)
                 .ConfigureAwait(false);
 
+            // NayaxConnectionExceptionHandler logs this once, at Warning: a connection failure is an
+            // expected, business-facing outcome, not a server error.
             throw new NayaxNotConnectedException(NayaxConnectionStatus.NeedsAttention);
         }
 
         if (response.StatusCode == HttpStatusCode.Forbidden && credential.PermissionsAreUnverified)
         {
+            // Same reasoning as the 401 branch above: logged once, at Warning, by the handler.
             throw new NayaxPermissionNotGrantedException(operation);
         }
+
+        _logger.LogError(
+            "Nayax request failed. Operation={NayaxOperation} Method={NayaxHttpMethod} Endpoint={NayaxEndpoint} Status={NayaxStatusCode} Reason={NayaxReasonPhrase}",
+            operation,
+            method.Method,
+            endpoint,
+            (int)response.StatusCode,
+            response.ReasonPhrase);
 
         throw new NayaxUpstreamException(operation, method, endpoint, response.StatusCode);
     }

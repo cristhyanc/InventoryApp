@@ -181,14 +181,16 @@ public class NayaxLynxClientConnectionGateTests
     }
 
     /// <summary>
-    /// A 401 or 403 is still an infrastructure event an operator has to be able to find, logged
-    /// exactly once with the same safe structured fields as any other failed Nayax call.
+    /// A 401 or an unverified-permissions 403 is a connection failure, not an upstream one: the
+    /// client itself must not log it, because <c>NayaxConnectionExceptionHandler</c> logs it exactly
+    /// once, at <c>Warning</c>, once it reaches the HTTP boundary. Logging it here too would leave
+    /// every such failure traced twice - once at this client's own <c>Error</c> level - which is
+    /// exactly the "expected outcome, not a server error" distinction the handler's contract draws.
     /// </summary>
     [Theory]
-    [InlineData(HttpStatusCode.Unauthorized, "401")]
-    [InlineData(HttpStatusCode.Forbidden, "403")]
-    public async Task The_failure_is_logged_once_with_the_operation_and_status(
-        HttpStatusCode status, string expectedStatusText)
+    [InlineData(HttpStatusCode.Unauthorized)]
+    [InlineData(HttpStatusCode.Forbidden)]
+    public async Task A_connection_failure_is_not_logged_by_the_client(HttpStatusCode status)
     {
         var handler = new RecordingHandler(status, SensitiveUpstreamBody);
         var credentials = new FakeNayaxRequestCredentialProvider(
@@ -197,9 +199,28 @@ public class NayaxLynxClientConnectionGateTests
 
         await Assert.ThrowsAnyAsync<Exception>(() => client.GetMachinesAsync(CancellationToken.None));
 
+        Assert.Empty(logger.Messages);
+    }
+
+    /// <summary>
+    /// A 403 against credentials that were already tested and worked is an ordinary upstream
+    /// failure (unchanged from before issue #520), so it is still an infrastructure event the client
+    /// itself logs exactly once, with the same safe structured fields as any other failed call.
+    /// </summary>
+    [Fact]
+    public async Task An_upstream_failure_is_logged_once_with_the_operation_and_status()
+    {
+        var handler = new RecordingHandler(HttpStatusCode.Forbidden, SensitiveUpstreamBody);
+        var credentials = new FakeNayaxRequestCredentialProvider(
+            OperatorId, FakeToken, NayaxConnectionStatus.Ready);
+        var client = CreateClient(handler, credentials, out var logger);
+
+        await Assert.ThrowsAsync<NayaxUpstreamException>(
+            () => client.GetMachinesAsync(CancellationToken.None));
+
         var log = Assert.Single(logger.Messages);
         Assert.Contains("GetMachinesAsync", log, StringComparison.Ordinal);
-        Assert.Contains(expectedStatusText, log, StringComparison.Ordinal);
+        Assert.Contains("403", log, StringComparison.Ordinal);
     }
 
     /// <summary>
