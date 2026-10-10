@@ -124,9 +124,23 @@ export class ProductListComponent implements OnInit, OnDestroy {
     this.productService.delete(product.id).subscribe(() => this.applyFilters());
   }
 
-  /** Row click/Enter navigates to the product editor, unless it originated from a nested action control. */
-  onRowActivate(product: Product, event: Event): void {
-    if ((event.target as HTMLElement).closest('a, button')) {
+  /**
+   * Row click/Enter navigates to the product editor, unless it originated from a nested control
+   * (the name link, Stock, Delete, Status) or is a modified/non-primary click the browser should handle.
+   * The name cell's routerLink anchor is the real link: it gives keyboard focus, open-in-new-tab and copy-link.
+   */
+  onRowActivate(product: Product, rowEvent: Event): void {
+    // Bound to (click) and (keydown.enter) only; Angular types both template $events as Event.
+    const event = rowEvent as MouseEvent | KeyboardEvent;
+    const ownControl = (event.target as Element | null)?.closest('a, button');
+    const browserHandlesIt =
+      event.defaultPrevented ||
+      (event instanceof MouseEvent && event.button !== 0) ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.shiftKey ||
+      event.altKey;
+    if (ownControl || browserHandlesIt) {
       return;
     }
 

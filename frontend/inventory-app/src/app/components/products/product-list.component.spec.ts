@@ -196,6 +196,30 @@ describe('ProductListComponent row navigation and sorting (issue #497)', () => {
     expect(navigate).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['Ctrl', { ctrlKey: true }],
+    ['Meta', { metaKey: true }],
+    ['Shift', { shiftKey: true }],
+    ['Alt', { altKey: true }],
+    ['middle-button', { button: 1 }]
+  ])('leaves a %s click on a non-action cell to the browser instead of navigating in place', async (_label, init) => {
+    const { host, navigate } = await render([product({ id: 9, name: 'Widget' })]);
+
+    const supplierCell = host.querySelectorAll('tbody tr td')[2] as HTMLTableCellElement;
+    supplierCell.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ...init }));
+
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('does not navigate the row when the name link itself is clicked, so the link handles it once', async () => {
+    const { host, navigate } = await render([product({ id: 9, name: 'Widget' })]);
+
+    const editLink = host.querySelector('tbody tr a.table-row-anchor') as HTMLAnchorElement;
+    editLink.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ctrlKey: true }));
+
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
   it('does not navigate when the Stock link is clicked', async () => {
     const { host, navigate } = await render([product({ id: 9, name: 'Widget' })]);
 
