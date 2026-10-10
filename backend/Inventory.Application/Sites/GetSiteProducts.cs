@@ -61,11 +61,42 @@ public sealed class GetSiteProducts
             mp.PAR ?? 0,
             mp.MissingStockByMDB ?? 0));
 
+        var machineById = machines.ToDictionary(machine => machine.MachineID);
+        var machineMdbCodesByProduct = machineProducts
+            .GroupBy(mp => mp.NayaxProductID!.Value)
+            .ToDictionary(
+                group => group.Key,
+                group => (IReadOnlyList<SiteProductMachineMdbCode>)group
+                    .OrderBy(mp => mp.MachineID)
+                    .Select(mp => new SiteProductMachineMdbCode(
+                        mp.MachineID, MachineLabel(machineById[mp.MachineID]), mp.MDBCode))
+                    .ToList());
+
         return SiteProductPricingPolicy
             .Calculate(priceFacts, costBasis, feeExGst, commission.ConfigurationUnavailable)
-            .Select(result => new SiteProductRecord(
-                result.ProductId, result.Name, result.AverageUnitCost, result.SitePrice,
-                result.EstimatedCardProfit, result.QuantityInStock, result.MaxStock))
+            .Select(result =>
+            {
+                var machineMdbCodes = machineMdbCodesByProduct.GetValueOrDefault(
+                    result.ProductId, Array.Empty<SiteProductMachineMdbCode>());
+                var mdbCode = machineMdbCodes.Select(code => code.MdbCode).Min();
+
+                return new SiteProductRecord(
+                    result.ProductId, result.Name, result.AverageUnitCost, result.SitePrice,
+                    result.EstimatedCardProfit, result.QuantityInStock, result.MaxStock,
+                    mdbCode, machineMdbCodes);
+            })
             .ToList();
+    }
+
+    /// <summary>
+    /// The display label for one of the site's machines in the MDB Code cell, matching the
+    /// name/number/id fallback <c>PickListComponent.machineLabel</c> already applies on the frontend
+    /// (issue #222) when no machine name is configured in Nayax.
+    /// </summary>
+    private static string MachineLabel(NayaxMachine machine)
+    {
+        if (!string.IsNullOrWhiteSpace(machine.MachineName)) return machine.MachineName;
+        if (!string.IsNullOrWhiteSpace(machine.MachineNumber)) return machine.MachineNumber;
+        return $"Machine #{machine.MachineID}";
     }
 }
