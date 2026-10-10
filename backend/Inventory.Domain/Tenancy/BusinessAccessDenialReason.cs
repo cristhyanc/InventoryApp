@@ -31,4 +31,12 @@ public enum BusinessAccessDenialReason
 
     /// <summary>The single active membership points at a business that is no longer active.</summary>
     BusinessInactive = 6,
+
+    /// <summary>
+    /// The single active membership on an active business carries a role this code does not
+    /// declare (issue #521): a column an older schema never filled, a hand-written value, or a
+    /// role a newer deployment wrote. There is no capability table for it, so access is denied
+    /// rather than granted at whatever the lowest declared role happens to be.
+    /// </summary>
+    RoleUnrecognised = 7,
 }

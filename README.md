@@ -231,6 +231,21 @@ Azure Static Web Apps direct navigation (including the `/auth` redirect landing)
 
 The first rollout serves **one** business. Adding a second live business is deliberately not enabled. The Nayax credential is no longer the reason: since issue #520 every Nayax call uses the current business's own encrypted operator id and token, with no global fallback (see [docs/architecture.md § Per-business Nayax credentials](docs/architecture.md#per-business-nayax-credentials-issue-520)). What is still missing is the self-service side — a business's credential reaches the database only through the human-run [`migrate-nayax-connection`](#migrating-the-nayax-connection-into-the-business) command, so there is no supported way for a second business to connect its own Nayax account yet. See [docs/tenant-rollout.md](docs/tenant-rollout.md) for the bootstrap procedure and [docs/architecture.md](docs/architecture.md#tenant-ownership-issue-64) for the design.
 
+## Roles and capabilities
+
+Ownership decides *whose* data a member sees; their **role** decides what they may do with it. Every `BusinessMembership` carries one of three roles (issue #521):
+
+| Role | What it may do |
+| --- | --- |
+| **Owner** | Everything, including the Nayax integration, data repairs, members, roles and the business record itself |
+| **Manager** | Everything operational, plus the financial figures: dashboard financials, reports, operating expenses, imports, site commissions and supplier GST defaults |
+| **Operator** | Day-to-day work only: the dashboard without financial figures, the pick list, inventory (products, take inventory, categories, stock history, machines including Sync Restock, sites) and purchasing (purchases, supplier orders, suppliers) |
+
+- A signed-in member reads their own role and the capability names it grants from `GET /api/me/access`, which also returns their business's name and time zone. It describes the caller alone — never another member or another business — and a role change applies on their next request.
+- A role is set when the membership is created, by `bootstrap-business` (its `Role` option is optional and defaults to `Owner`; see [docs/tenant-rollout.md](docs/tenant-rollout.md#the-members-role-issue-521)). Existing memberships were backfilled to `Owner`, so no one's access changed when roles arrived, and nothing accepts a role from client input.
+- A stored role the application does not recognise **denies access** rather than falling back to the least privileged role.
+- **Capabilities are defined and reported, not yet enforced per endpoint.** Issue #502 adds that enforcement; until then every member reaches the same endpoints they did before. The capability vocabulary and the one role → capability table are described in [docs/architecture.md](docs/architecture.md#membership-roles-and-capabilities-issue-521).
+
 ## Configuration and secrets
 
 Backend configuration follows normal ASP.NET Core precedence. Override local or deployed values with user-secrets, environment variables, or the hosting platform's configuration instead of committing credentials.
