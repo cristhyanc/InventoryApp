@@ -48,13 +48,15 @@ public class EfBusinessMembershipStoreTests
         int businessId,
         string tid = Tid,
         string oid = Oid,
-        bool isActive = true)
+        bool isActive = true,
+        BusinessRole role = BusinessRole.Owner)
     {
         db.BusinessMemberships.Add(new BusinessMembership
         {
             BusinessId = businessId,
             DirectoryTenantId = tid,
             ObjectId = oid,
+            Role = role,
             IsActive = isActive,
             CreatedAtUtc = DateTime.UtcNow,
         });
@@ -78,6 +80,94 @@ public class EfBusinessMembershipStoreTests
             Assert.Equal(BusinessId.From(business.Id), membership.BusinessId);
             Assert.True(membership.IsActive);
             Assert.True(membership.BusinessIsActive);
+        }
+    }
+
+    /// <summary>
+    /// The stored role round-trips through the real schema and the real adapter, for every
+    /// declared role (issue #521), and resolution reports that role rather than a usual one.
+    /// </summary>
+    [Theory]
+    [InlineData(BusinessRole.Operator)]
+    [InlineData(BusinessRole.Manager)]
+    [InlineData(BusinessRole.Owner)]
+    public async Task The_stored_role_is_returned_and_resolved(BusinessRole role)
+    {
+        var (connection, options) = await CreateSqliteAsync();
+        await using (connection)
+        {
+            await using var db = TestAppDbContext.Unrestricted(options);
+            var business = await AddBusinessAsync(db, "Vending Co");
+            await AddMembershipAsync(db, business.Id, role: role);
+
+            var memberships = await new EfBusinessMembershipStore(db)
+                .FindMembershipsAsync(Actor(), CancellationToken.None);
+
+            Assert.Equal(role, Assert.Single(memberships).Role);
+            Assert.Equal(role, BusinessMembershipResolutionPolicy.Resolve(memberships).ResolvedRole);
+        }
+    }
+
+    /// <summary>
+    /// A membership created without stating a role - the shape the existing bootstrap and the
+    /// migration both produce - is an Owner, so nobody's access changes with this slice.
+    /// </summary>
+    [Fact]
+    public async Task A_membership_created_without_a_stated_role_is_an_Owner()
+    {
+        var (connection, options) = await CreateSqliteAsync();
+        await using (connection)
+        {
+            await using var db = TestAppDbContext.Unrestricted(options);
+            var business = await AddBusinessAsync(db, "Vending Co");
+
+            db.BusinessMemberships.Add(new BusinessMembership
+            {
+                BusinessId = business.Id,
+                DirectoryTenantId = Tid,
+                ObjectId = Oid,
+                CreatedAtUtc = DateTime.UtcNow,
+            });
+            await db.SaveChangesAsync();
+
+            var memberships = await new EfBusinessMembershipStore(db)
+                .FindMembershipsAsync(Actor(), CancellationToken.None);
+
+            Assert.Equal(BusinessRole.Owner, Assert.Single(memberships).Role);
+        }
+    }
+
+    /// <summary>
+    /// A stored role this code does not declare - written here by raw SQL, which is the only way
+    /// it can happen: a hand-edited row, or a role a newer deployment wrote and this one does not
+    /// know. The adapter must hand it back untouched so the policy can deny it; an adapter that
+    /// normalised it to a default would grant access nobody recorded, and would do so invisibly.
+    /// </summary>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(10)]
+    [InlineData(99)]
+    public async Task An_undeclared_stored_role_is_returned_as_it_is_and_denies_access(int storedRole)
+    {
+        var (connection, options) = await CreateSqliteAsync();
+        await using (connection)
+        {
+            await using var db = TestAppDbContext.Unrestricted(options);
+            var business = await AddBusinessAsync(db, "Vending Co");
+            await AddMembershipAsync(db, business.Id);
+
+            await db.Database.ExecuteSqlRawAsync(
+                "UPDATE BusinessMemberships SET Role = {0};", storedRole);
+
+            var memberships = await new EfBusinessMembershipStore(db)
+                .FindMembershipsAsync(Actor(), CancellationToken.None);
+
+            Assert.Equal((BusinessRole)storedRole, Assert.Single(memberships).Role);
+
+            var resolution = BusinessMembershipResolutionPolicy.Resolve(memberships);
+            Assert.False(resolution.IsResolved);
+            Assert.Null(resolution.ResolvedBusinessId);
+            Assert.Equal(BusinessAccessDenialReason.RoleUnrecognised, resolution.DenialReason);
         }
     }
 

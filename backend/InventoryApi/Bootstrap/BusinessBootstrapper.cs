@@ -273,11 +273,18 @@ public sealed class BusinessBootstrapper
     }
 
     /// <summary>
-    /// Validates the human-supplied mapping through the same
-    /// <see cref="ActorIdentity"/> rule the request path uses, so a value that would not identify
-    /// an actor at sign-in cannot be written as a membership here either.
+    /// One configured member after validation: the identity that will own the membership row and
+    /// the role it will be created in (issue #521).
     /// </summary>
-    private bool TryReadConfiguredMembers(out List<ActorIdentity> members, out string error)
+    private readonly record struct ConfiguredMember(ActorIdentity Actor, BusinessRole Role);
+
+    /// <summary>
+    /// Validates the human-supplied mapping through the same
+    /// <see cref="ActorIdentity"/> and <see cref="BusinessRoles"/> rules the request path uses, so
+    /// a value that would not identify an actor at sign-in, or a role that would deny access once
+    /// stored, cannot be written as a membership here either.
+    /// </summary>
+    private bool TryReadConfiguredMembers(out List<ConfiguredMember> members, out string error)
     {
         members = [];
 
@@ -307,10 +314,30 @@ public sealed class BusinessBootstrapper
                 return false;
             }
 
-            members.Add(actor);
+            // Omitted means Owner - the role this command has always created and the one the
+            // migration backfills - so an existing configuration behaves exactly as before. A
+            // value that is present but not a declared role name is refused rather than defaulted:
+            // "Manger" must not quietly become an Owner. The role is configuration, not a personal
+            // identifier, so it is safe to name in the error.
+            var configuredRole = _options.Members[i].Role;
+            if (string.IsNullOrWhiteSpace(configuredRole))
+            {
+                members.Add(new ConfiguredMember(actor, BusinessRole.Owner));
+                continue;
+            }
+
+            if (!BusinessRoles.TryParse(configuredRole, out var role))
+            {
+                error = $"{BusinessBootstrapOptions.SectionName}:Members[{i}]:Role is not a valid "
+                    + $"role. {BusinessRoles.UnsupportedMessage} Leave it blank for "
+                    + $"{BusinessRole.Owner}.";
+                return false;
+            }
+
+            members.Add(new ConfiguredMember(actor, role));
         }
 
-        var distinct = members.Distinct().Count();
+        var distinct = members.Select(member => member.Actor).Distinct().Count();
         if (distinct != members.Count)
         {
             error = $"{BusinessBootstrapOptions.SectionName}:Members contains the same actor more than once.";
@@ -321,9 +348,17 @@ public sealed class BusinessBootstrapper
         return true;
     }
 
+    /// <summary>
+    /// Creates the missing memberships in their configured roles (issue #521).
+    ///
+    /// A membership that already exists is left exactly as it is, role included. Re-running must
+    /// not resurrect a revoked approval, and for the same reason it must not change the role
+    /// somebody holds: altering an existing member's access is a deliberate act, not a side effect
+    /// of re-running a backfill, and it belongs to the member management of issue #524.
+    /// </summary>
     private async Task<int> EnsureMembershipsAsync(
         int businessId,
-        IReadOnlyList<ActorIdentity> configuredMembers,
+        IReadOnlyList<ConfiguredMember> configuredMembers,
         DateTime recordedAt,
         CancellationToken cancellationToken)
     {
@@ -333,7 +368,7 @@ public sealed class BusinessBootstrapper
 
         var created = 0;
 
-        foreach (var actor in configuredMembers)
+        foreach (var (actor, role) in configuredMembers)
         {
             var match = existing.FirstOrDefault(membership =>
                 string.Equals(membership.DirectoryTenantId, actor.DirectoryTenantId, StringComparison.OrdinalIgnoreCase)
@@ -341,7 +376,8 @@ public sealed class BusinessBootstrapper
 
             if (match is not null)
             {
-                // Re-running must not resurrect an approval a human deliberately revoked.
+                // Re-running must not resurrect an approval a human deliberately revoked, nor
+                // change the role an existing member already holds.
                 continue;
             }
 
@@ -350,6 +386,7 @@ public sealed class BusinessBootstrapper
                 BusinessId = businessId,
                 DirectoryTenantId = actor.DirectoryTenantId,
                 ObjectId = actor.ObjectId,
+                Role = role,
                 IsActive = true,
                 CreatedAtUtc = recordedAt,
             });

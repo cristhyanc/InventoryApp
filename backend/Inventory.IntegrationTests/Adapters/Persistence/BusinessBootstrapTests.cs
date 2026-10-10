@@ -1,4 +1,5 @@
 using InventoryApi.Bootstrap;
+using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Microsoft.Data.Sqlite;
@@ -55,6 +56,20 @@ public class BusinessBootstrapTests : IDisposable
         {
             options.Members.Add(new BusinessBootstrapMemberOptions { DirectoryTenantId = Tid, ObjectId = objectId });
         }
+
+        return options;
+    }
+
+    /// <summary>One configured member with an explicit role string, exactly as configuration supplies it.</summary>
+    private static BusinessBootstrapOptions OptionsWithRole(string role, string objectId = Oid)
+    {
+        var options = new BusinessBootstrapOptions { BusinessName = "Existing Vending Business" };
+        options.Members.Add(new BusinessBootstrapMemberOptions
+        {
+            DirectoryTenantId = Tid,
+            ObjectId = objectId,
+            Role = role,
+        });
 
         return options;
     }
@@ -233,6 +248,126 @@ public class BusinessBootstrapTests : IDisposable
 
         Assert.DoesNotContain(Tid, result.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Members[0]", result.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The role is optional (issue #521), and omitting it creates an Owner - the role this command
+    /// has always created and the one the migration backfills - so an existing configuration
+    /// behaves exactly as it did before roles existed.
+    /// </summary>
+    [Fact]
+    public async Task A_member_with_no_configured_role_is_created_as_an_Owner()
+    {
+        SeedUnassignedBusinessData();
+
+        var result = await RunAsync(ValidOptions(), dryRun: false);
+
+        Assert.True(result.Succeeded, result.Message);
+        Assert.Equal(1, result.MembershipsCreated);
+
+        using var db = TestAppDbContext.Unrestricted(_options);
+        Assert.Equal(BusinessRole.Owner, Assert.Single(db.BusinessMemberships.ToList()).Role);
+    }
+
+    [Theory]
+    [InlineData("Owner", BusinessRole.Owner)]
+    [InlineData("Manager", BusinessRole.Manager)]
+    [InlineData("Operator", BusinessRole.Operator)]
+    [InlineData("operator", BusinessRole.Operator)]
+    [InlineData("  MANAGER  ", BusinessRole.Manager)]
+    public async Task A_configured_role_name_is_honoured(string configuredRole, BusinessRole expected)
+    {
+        SeedUnassignedBusinessData();
+
+        var result = await RunAsync(OptionsWithRole(configuredRole), dryRun: false);
+
+        Assert.True(result.Succeeded, result.Message);
+
+        using var db = TestAppDbContext.Unrestricted(_options);
+        Assert.Equal(expected, Assert.Single(db.BusinessMemberships.ToList()).Role);
+    }
+
+    /// <summary>
+    /// A role that is not one of the declared names refuses the whole run and writes nothing - not
+    /// the business, not the membership, and not one row of ownership. A numeric value is refused
+    /// too: configuration names a role, it does not supply the stored representation, and
+    /// accepting <c>"0"</c> or <c>"99"</c> would create a member who is then denied at sign-in.
+    /// </summary>
+    [Theory]
+    [InlineData("Boss")]
+    [InlineData("Manger")]
+    [InlineData("Viewer")]
+    [InlineData("40")]
+    [InlineData("0")]
+    [InlineData("99")]
+    public async Task An_invalid_configured_role_refuses_and_writes_nothing(string configuredRole)
+    {
+        SeedUnassignedBusinessData();
+        var before = Snapshot();
+
+        var result = await RunAsync(OptionsWithRole(configuredRole), dryRun: false);
+
+        Assert.Equal(BusinessBootstrapOutcome.ConfigurationInvalid, result.Outcome);
+        Assert.Contains("Members[0]:Role", result.Message, StringComparison.Ordinal);
+        Assert.Equal(before, Snapshot());
+
+        using var db = TestAppDbContext.Unrestricted(_options);
+        Assert.Empty(db.Businesses.ToList());
+        Assert.Empty(db.BusinessMemberships.ToList());
+    }
+
+    /// <summary>
+    /// Re-running must not change the role an existing member already holds, for the same reason
+    /// it must not resurrect a revoked approval: changing somebody's access is a deliberate act,
+    /// not a side effect of re-running a backfill.
+    /// </summary>
+    [Fact]
+    public async Task Re_running_with_a_different_role_leaves_an_existing_members_role_alone()
+    {
+        SeedUnassignedBusinessData();
+
+        await RunAsync(OptionsWithRole("Operator"), dryRun: false);
+
+        var second = await RunAsync(OptionsWithRole("Owner"), dryRun: false);
+
+        Assert.True(second.Succeeded, second.Message);
+        Assert.Equal(0, second.MembershipsCreated);
+
+        using var db = TestAppDbContext.Unrestricted(_options);
+        Assert.Equal(BusinessRole.Operator, Assert.Single(db.BusinessMemberships.ToList()).Role);
+    }
+
+    /// <summary>
+    /// Each configured member gets their own role; one entry's role never carries onto another.
+    /// </summary>
+    [Fact]
+    public async Task Each_configured_member_is_created_in_their_own_role()
+    {
+        SeedUnassignedBusinessData();
+
+        var options = new BusinessBootstrapOptions { BusinessName = "Existing Vending Business" };
+        options.Members.Add(new BusinessBootstrapMemberOptions
+        {
+            DirectoryTenantId = Tid,
+            ObjectId = Oid,
+            Role = "Owner",
+        });
+        options.Members.Add(new BusinessBootstrapMemberOptions
+        {
+            DirectoryTenantId = Tid,
+            ObjectId = SecondOid,
+            Role = "Operator",
+        });
+
+        var result = await RunAsync(options, dryRun: false);
+
+        Assert.True(result.Succeeded, result.Message);
+        Assert.Equal(2, result.MembershipsCreated);
+
+        using var db = TestAppDbContext.Unrestricted(_options);
+        var memberships = db.BusinessMemberships.ToList();
+        Assert.Equal(BusinessRole.Owner, memberships.Single(m => m.ObjectId == Oid).Role);
+        Assert.Equal(BusinessRole.Operator, memberships.Single(m => m.ObjectId == SecondOid).Role);
     }
 
     [Fact]

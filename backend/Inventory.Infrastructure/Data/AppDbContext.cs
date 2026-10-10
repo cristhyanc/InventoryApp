@@ -671,6 +671,18 @@ public class AppDbContext : DbContext
             .IsRequired()
             .UseCollation("NOCASE");
 
+        // The member's role (issue #521). Stored as the constrained BusinessRole vocabulary - an
+        // integer column holding one of the declared values - not a free-text name, so a typo
+        // cannot become a role. The schema does not additionally forbid an undeclared integer:
+        // SQLite cannot add a CHECK constraint to an existing table without rebuilding it, and the
+        // migration that added this column is deliberately additive on the one table that decides
+        // who may sign in. An undeclared stored value is therefore handled where it has to be
+        // handled anyway, for a value a newer deployment wrote as much as for a hand-edited one:
+        // BusinessMembershipResolutionPolicy denies access for it.
+        modelBuilder.Entity<BusinessMembership>()
+            .Property(m => m.Role)
+            .IsRequired();
+
         // One membership row per (actor, business). Cross-business ambiguity is not a schema
         // constraint - it is deliberately left to BusinessMembershipResolutionPolicy, which
         // denies access rather than picking one.

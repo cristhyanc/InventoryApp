@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Inventory.Domain.Tenancy;
 
 namespace Inventory.Infrastructure.Models;
 
@@ -28,6 +29,24 @@ public class BusinessMembership
 
     /// <summary>The actor's stable Entra object id (<c>oid</c>) within that directory.</summary>
     public string ObjectId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// What this member may do in the business (issue #521), stored as the constrained
+    /// <see cref="BusinessRole"/> vocabulary rather than a free-text name or a set of flags.
+    ///
+    /// Required, and <see cref="BusinessRole.Owner"/> by default. The default is not a convenience:
+    /// it is the same value the additive migration backfills every existing row with, so a
+    /// membership created by the existing <c>bootstrap-business</c> path keeps exactly the access
+    /// it has today. A creation path that means something else - the member management of issue
+    /// #524 - states the role deliberately instead of relying on it.
+    ///
+    /// A stored value this code does not declare (a hand-written <c>UPDATE</c>, or a role a newer
+    /// deployment wrote) is carried through to
+    /// <see cref="BusinessMembershipResolutionPolicy"/> unchanged and denies access there. It is
+    /// deliberately not corrected on read: silently reading it as some default role would grant
+    /// access nobody recorded.
+    /// </summary>
+    public BusinessRole Role { get; set; } = BusinessRole.Owner;
 
     /// <summary>
     /// Revoking a membership sets this to false rather than deleting the row, so the revoked
