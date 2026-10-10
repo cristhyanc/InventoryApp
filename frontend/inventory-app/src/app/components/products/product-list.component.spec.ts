@@ -165,17 +165,35 @@ describe('ProductListComponent row navigation and sorting (issue #497)', () => {
     expect(navigate).toHaveBeenCalledWith(['/products', 9, 'edit']);
   });
 
-  it('activates row navigation with Enter when the row itself has focus, with accessible row semantics', async () => {
+  it('gives keyboard users a real link to the product editor instead of a focusable row with role="link"', async () => {
+    const { host } = await render([product({ id: 9, name: 'Widget' })]);
+
+    const row = host.querySelector('tbody tr') as HTMLTableRowElement;
+    expect(row.hasAttribute('tabindex')).toBe(false);
+    expect(row.hasAttribute('role')).toBe(false);
+
+    const editLink = row.querySelector('a.table-row-anchor') as HTMLAnchorElement;
+    expect(editLink.getAttribute('href')).toBe('/products/9/edit');
+    expect(editLink.getAttribute('aria-label')).toContain('Widget');
+    expect(editLink.textContent?.trim()).toBe('Widget');
+  });
+
+  it('activates row navigation with Enter on a non-action part of the row', async () => {
     const { host, navigate } = await render([product({ id: 9, name: 'Widget' })]);
 
     const row = host.querySelector('tbody tr') as HTMLTableRowElement;
-    expect(row.getAttribute('tabindex')).toBe('0');
-    expect(row.getAttribute('role')).toBe('link');
-    expect(row.getAttribute('aria-label')).toContain('Widget');
-
     row.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
 
     expect(navigate).toHaveBeenCalledWith(['/products', 9, 'edit']);
+  });
+
+  it('leaves Enter on the name link to the link itself so navigation is not triggered twice', async () => {
+    const { host, navigate } = await render([product({ id: 9, name: 'Widget' })]);
+
+    const editLink = host.querySelector('tbody tr a.table-row-anchor') as HTMLAnchorElement;
+    editLink.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+
+    expect(navigate).not.toHaveBeenCalled();
   });
 
   it('does not navigate when the Stock link is clicked', async () => {
