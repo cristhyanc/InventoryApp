@@ -258,30 +258,10 @@ public sealed class NayaxConnectionMigrator
             };
         }
 
-        if (plan == NayaxConnectionMigrationChange.CredentialsStored)
+        var notApplied = await ApplyPlanAsync(store, plan, existing, businessId, operatorId, accessToken, cancellationToken);
+        if (notApplied is not null)
         {
-            var saved = await store.SaveCredentialAsync(operatorId, accessToken, cancellationToken);
-
-            // Ready rather than the PendingPermissions a save leaves: this token is the one the
-            // application is authenticating to Nayax with today, so its permissions are evidenced
-            // by production use. The instant recorded is when that was adopted, not a live test -
-            // this command never calls Nayax.
-            if (!await ApplyReadyAsync(store, saved.CredentialRevision, cancellationToken))
-            {
-                return StatusNotApplied(businessId, operatorId, plan, existing, saved.CredentialRevision);
-            }
-        }
-        else if (plan == NayaxConnectionMigrationChange.StatusMarkedReady)
-        {
-            if (!await ApplyReadyAsync(store, existing!.CredentialRevision, cancellationToken))
-            {
-                return StatusNotApplied(
-                    businessId,
-                    operatorId,
-                    NayaxConnectionMigrationChange.None,
-                    existing,
-                    existing.CredentialRevision);
-            }
+            return notApplied;
         }
 
         // Measured, not intended: the revision is computed in the database, so only the row can
@@ -306,6 +286,43 @@ public sealed class NayaxConnectionMigrator
             CredentialRevisionAfter = after.CredentialRevision,
             Message = AppliedMessage(plan),
         };
+    }
+
+    // Ready rather than the PendingPermissions a save leaves: the token being stored is the one
+    // the application is authenticating to Nayax with today, so its permissions are evidenced by
+    // production use - this command never calls Nayax. Returns the StatusNotApplied result if the
+    // conditional status update was discarded, or null when the plan's write succeeded (or there
+    // was nothing to write).
+    private async Task<NayaxConnectionMigrationResult?> ApplyPlanAsync(
+        INayaxConnectionStore store,
+        NayaxConnectionMigrationChange plan,
+        NayaxConnection? existing,
+        int businessId,
+        string operatorId,
+        string accessToken,
+        CancellationToken cancellationToken)
+    {
+        if (plan == NayaxConnectionMigrationChange.CredentialsStored)
+        {
+            var saved = await store.SaveCredentialAsync(operatorId, accessToken, cancellationToken);
+
+            return await ApplyReadyAsync(store, saved.CredentialRevision, cancellationToken)
+                ? null
+                : StatusNotApplied(businessId, operatorId, plan, existing, saved.CredentialRevision);
+        }
+
+        if (plan == NayaxConnectionMigrationChange.StatusMarkedReady
+            && !await ApplyReadyAsync(store, existing!.CredentialRevision, cancellationToken))
+        {
+            return StatusNotApplied(
+                businessId,
+                operatorId,
+                NayaxConnectionMigrationChange.None,
+                existing,
+                existing.CredentialRevision);
+        }
+
+        return null;
     }
 
     private Task<bool> ApplyReadyAsync(
