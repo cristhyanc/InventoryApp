@@ -41,8 +41,8 @@ public sealed class GetSiteProducts
 
         var machineProducts = machineProductsByMachine.SelectMany(entry => entry.Products).ToList();
 
-        // The effective-dated commission and Nayax fee configuration is selected by the Australia/Sydney
-        // business date (issue #310), not the host's local date, exactly as ResolveMachineProductPricing
+        // The effective-dated commission and Nayax fee configuration is selected by the business
+        // date (issue #310), not the host's local date, exactly as ResolveMachineProductPricing
         // selects it for the machine product listing that shares this port.
         var today = _businessCalendar.Today;
         var distinctPrices = machineProducts

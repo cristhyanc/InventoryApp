@@ -14,7 +14,7 @@ public interface IGetNayaxProcessingFees
         CancellationToken cancellationToken);
 
     /// <summary>
-    /// Fees for a period bounded by <c>Australia/Sydney</c> business days, the form the machine
+    /// Fees for a period bounded by business days, the form the machine
     /// dashboard asks for: the fees charged belong to exactly the sales the period's revenue counts
     /// (issue #310).
     /// </summary>

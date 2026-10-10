@@ -6,7 +6,7 @@ namespace Inventory.Application.Machines;
 /// <summary>
 /// The single-machine dashboard use case. Mirrors the former
 /// <c>InventoryApi.Services.MachineService.GetById</c> exactly (issue #241), except that its rolling
-/// comparison periods come from the <c>Australia/Sydney</c> business day rather than the host's local
+/// comparison periods come from the business day rather than the host's local
 /// clock (issue #310; see <see cref="MachineDashboardWindow"/>).
 /// </summary>
 public sealed class GetMachineDashboard

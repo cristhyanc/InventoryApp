@@ -27,7 +27,7 @@ public sealed record DashboardSummarySalesFacts(
 /// period or per machine.
 ///
 /// Both periods arrive as <see cref="MachineDashboardPeriodUtc"/> - the period type the site and
-/// machine dashboards already resolve from the <c>Australia/Sydney</c> business day - so this port
+/// machine dashboards already resolve from the business day - so this port
 /// never decides which week "this week" is, and its UTC instants are directly comparable with the
 /// persisted UTC <c>MachineAuthorizationTime</c> of a sale.
 /// </summary>

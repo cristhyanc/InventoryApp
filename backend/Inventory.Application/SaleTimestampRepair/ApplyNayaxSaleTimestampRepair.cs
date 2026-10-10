@@ -166,7 +166,7 @@ public sealed class ApplyNayaxSaleTimestampRepair
             : $"{product.ProductName} (product {product.ProductId})";
 
     /// <summary>
-    /// One repairable decision as the write and its audit row. The two Sydney business dates are
+    /// One repairable decision as the write and its audit row. The two business dates are
     /// recorded with the instants rather than derived later, because that is the movement the
     /// operator approved and it must stay readable exactly as it was applied.
     /// </summary>

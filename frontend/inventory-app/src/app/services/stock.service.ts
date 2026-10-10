@@ -29,7 +29,7 @@ export class StockService {
   /**
    * One bounded page of the global stock history across products (issue #384), optionally filtered.
    * Only the filters that are set are sent, so an empty filter is the all-products view; the server
-   * decides the ordering (newest first), the Sydney-day date boundaries and the maximum page size.
+   * decides the ordering (newest first), the business-day date boundaries and the maximum page size.
    */
   historyPage(filters: StockHistoryFilters = {}): Observable<StockHistoryPage> {
     let params = new HttpParams();

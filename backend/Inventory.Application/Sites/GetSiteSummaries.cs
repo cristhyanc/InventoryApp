@@ -14,7 +14,7 @@ namespace Inventory.Application.Sites;
 /// for every site are loaded by one scoped read and distributed per machine in memory (issue #313),
 /// because the scoped store's EF adapter shares a single <c>AppDbContext</c>, which supports only one
 /// operation at a time. Its today/week-to-date/previous-comparable-week periods come from the
-/// <c>Australia/Sydney</c> business day rather than the host's local clock (issue #310; see
+/// business day rather than the host's local clock (issue #310; see
 /// <see cref="MachineDashboardWindow"/>, shared with the machine dashboard).
 /// </summary>
 public sealed class GetSiteSummaries
@@ -131,7 +131,7 @@ public sealed class GetSiteSummaries
     }
 
     /// <summary>
-    /// A period's completed-sale revenue. Both bounds are UTC instants resolved from the Sydney
+    /// A period's completed-sale revenue. Both bounds are UTC instants resolved from the
     /// business day, and <c>MachineAuthorizationTime</c> is a persisted true UTC instant, so period
     /// and sale are compared in the same time base.
     /// </summary>

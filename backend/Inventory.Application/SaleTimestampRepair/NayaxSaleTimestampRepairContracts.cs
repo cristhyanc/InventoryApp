@@ -4,7 +4,7 @@ namespace Inventory.Application.SaleTimestampRepair;
 
 // The Nayax sale timestamp repair's Preview/Apply contracts (issue #472), owned by the Application
 // layer. The preview is the instrument: it says, per transaction, which stored instant source
-// evidence would move and where to, what that does to each Sydney business day's revenue, which
+// evidence would move and where to, what that does to each business day's revenue, which
 // products' costing would be replayed and from when, and - against a fixed cutoff - how the result
 // reconciles with the operator's own Nayax export totals. The apply carries nothing but the preview
 // it confirms.
@@ -18,7 +18,7 @@ namespace Inventory.Application.SaleTimestampRepair;
 /// authoritative source for the transactions that window still returns, and nothing else.
 /// </param>
 /// <param name="Reconciliation">
-/// The fixed-cutoff Sydney reconciliation window to report, or <c>null</c> for none. All three of
+/// The fixed-cutoff business-date reconciliation window to report, or <c>null</c> for none. All three of
 /// its values are required together, because a daily or weekly total is only comparable with an
 /// export's when both sides exclude the sales authorized after the same instant.
 /// </param>
@@ -27,21 +27,21 @@ public sealed record NayaxSaleTimestampRepairPreviewRequest(
     NayaxSaleTimestampReconciliationRequest? Reconciliation = null);
 
 /// <summary>
-/// The fixed cutoff and inclusive Sydney business-date window a reconciliation is computed over.
+/// The fixed cutoff and inclusive business-date window a reconciliation is computed over.
 /// </summary>
 /// <param name="CutoffUtc">
 /// The instant the compared export was taken at. A sale authorized after it is excluded from both
 /// sides of the comparison and reported separately, because a later sale is not a discrepancy.
 /// </param>
-/// <param name="FromBusinessDate">The first inclusive <c>Australia/Sydney</c> business date.</param>
-/// <param name="ToBusinessDate">The last inclusive <c>Australia/Sydney</c> business date.</param>
+/// <param name="FromBusinessDate">The first inclusive business date.</param>
+/// <param name="ToBusinessDate">The last inclusive business date.</param>
 public sealed record NayaxSaleTimestampReconciliationRequest(
     DateTime CutoffUtc,
     DateTime FromBusinessDate,
     DateTime ToBusinessDate);
 
 /// <summary>
-/// One examined stored sale, with the instant and Sydney business date it holds now, the ones the
+/// One examined stored sale, with the instant and business date it holds now, the ones the
 /// repair would give it, and the source that decided it. A row whose outcome is
 /// <see cref="NayaxSaleTimestampRepairOutcome.Unresolved"/> keeps its stored values and states why.
 /// </summary>
@@ -62,7 +62,7 @@ public sealed record NayaxSaleTimestampRepairRow(
     string? EvidenceReference);
 
 /// <summary>
-/// Revenue a repair moves between <c>Australia/Sydney</c> business days: what leaves a day because a
+/// Revenue a repair moves between business days: what leaves a day because a
 /// completed sale is re-dated away from it, what arrives because one is re-dated into it, and the
 /// net. Only completed sales move revenue; a pending, refunded, cancelled or unknown-status row is
 /// re-dated too but contributes nothing here, and stays visible in the rows above.
@@ -100,11 +100,11 @@ public sealed record NayaxSaleTimestampRepairProduct(
     bool RebuildPlanned);
 
 /// <summary>
-/// One <c>Australia/Sydney</c> business day of the fixed-cutoff reconciliation: its completed-sale
+/// One business day of the fixed-cutoff reconciliation: its completed-sale
 /// revenue and count as the database holds it now, as it would read after the repair, and the part of
 /// that a source actually verified.
 /// </summary>
-/// <param name="BusinessDate">The <c>Australia/Sydney</c> business date.</param>
+/// <param name="BusinessDate">The business date.</param>
 /// <param name="CompletedCountBefore">Completed sales the day holds now, before the cutoff.</param>
 /// <param name="CompletedSalesBefore">Their settled value.</param>
 /// <param name="CompletedCountAfter">Completed sales the day would hold after the repair.</param>
@@ -135,7 +135,7 @@ public sealed record NayaxSaleTimestampReconciliationDay(
 
 /// <summary>
 /// The fixed-cutoff reconciliation. It answers the only comparison that is valid against a Nayax
-/// export: the same transaction set, the same cutoff, the same Sydney business days.
+/// export: the same transaction set, the same cutoff, the same business days.
 ///
 /// Three figures keep a timestamp repair from being mistaken for a complete explanation of a
 /// reported difference:

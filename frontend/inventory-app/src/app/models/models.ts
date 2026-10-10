@@ -93,7 +93,7 @@ export interface InventoryValuationSummary {
 
 /**
  * One summary period, in both time bases the home Dashboard summary measures in (issue #459): the
- * UTC instants its sales are selected between (inclusive at both ends) and the Sydney business
+ * UTC instants its sales are selected between (inclusive at both ends) and the business
  * dates those instants cover.
  */
 export interface DashboardSummaryPeriod {
@@ -380,7 +380,7 @@ export interface StockHistoryPage {
 }
 
 /**
- * The global Stock History filters. `from`/`to` are inclusive `Australia/Sydney` calendar days
+ * The global Stock History filters. `from`/`to` are inclusive business calendar days
  * (`yyyy-MM-dd`), which the backend converts to that business day's UTC boundaries; the browser's
  * own timezone never takes part.
  */

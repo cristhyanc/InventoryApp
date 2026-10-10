@@ -9,7 +9,7 @@ namespace Inventory.Domain.Machines;
 /// arithmetic itself deterministic and testable in isolation: the reference date is resolved by the
 /// caller, and since issue #310 that caller is
 /// <c>Inventory.Application.Machines.MachineDashboardWindow</c>, which derives it from the
-/// <c>Australia/Sydney</c> business day through the Application time ports and converts these
+/// business day through the Application time ports and converts these
 /// business-date boundaries back to UTC instants (see docs/architecture.md § Time).
 /// </summary>
 public static class MachineDashboardPeriods

@@ -11,7 +11,7 @@ namespace Inventory.Application.Stock;
 /// It owns exactly two decisions, and neither is left to the client or to the adapter:
 /// <list type="number">
 ///   <item>the page is bounded by <see cref="StockHistoryPaging"/>; and</item>
-///   <item>a requested date range is a pair of <c>Australia/Sydney</c> calendar days, converted here
+///   <item>a requested date range is a pair of business calendar days, converted here
 ///   to the UTC boundaries of those business days through <see cref="IBusinessCalendar"/> - start
 ///   inclusive, end exclusive, which stays correct across a daylight-saving transition because the
 ///   calendar resolves each boundary in its own offset.</item>

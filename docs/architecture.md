@@ -2821,7 +2821,7 @@ and it never substitutes for a real purchase, correction or write-off.
   boundary](#page-composition-boundary-issue-191) - by `AdminComponent` until issue #390 moved it to
   the dedicated `/admin/costing-repair` page (`CostingRepairPageComponent`): it owns the whole preview/apply/history
   workflow's own form, loading and error state, and its own calls to the three endpoints above.
-  The effective date/time is entered and displayed in Sydney time and converted to/from the UTC
+  The effective date/time is entered and displayed in the current business's time zone (issue #499) and converted to/from the UTC
   instant the contract carries through `zonedDateTimeToUtc`/`currentDateTimeInTimeZone`/
   `toDateTimeLocalValue`/`fromDateTimeLocalValue` (added to `business-time-zone.ts` alongside the
   existing `startOfDayUtc`, which issue #361 re-expressed as `zonedDateTimeToUtc` called with a
@@ -2889,12 +2889,12 @@ own: every figure comes from an authority that already existed.
 
 - **Sales this week.** Week-to-date gross vending revenue - the sum of `SettlementValue` over
   approved (status `12`) sales, the same definition the bookkeeping, daily and reporting-dashboard
-  reports use - over the `Australia/Sydney` business week. The period boundaries are
+  reports use - over the current business's business week (`Australia/Sydney` for the existing business). The period boundaries are
   `MachineDashboardWindow.CurrentWeek`/`PreviousComparableWeek`, the very same window the Sites and
-  Machines dashboards resolve (see [Time](#time)), so the week starts at Sydney midnight rather than
+  Machines dashboards resolve (see [Time](#time)), so the week starts at business-day midnight rather than
   UTC midnight and the comparison is the **same elapsed trading time into the previous business
   week**, never the whole of it. Across a daylight-saving transition the two weeks start 167 or 169
-  hours apart, and each period is measured from its own week's Sydney Monday midnight; the
+  hours apart, and each period is measured from its own week's business-day Monday midnight; the
   comparable period is held at the previous week's own end so it can never reach into the current
   week and count one sale on both sides. `IDashboardSummarySalesFactsProvider` is the narrow port
   and `Inventory.Infrastructure.Persistence.EfDashboardSummarySalesFactsProvider` its EF adapter,
@@ -3116,9 +3116,9 @@ A business's calendar days are derived in **its own** IANA time zone, stored on 
 
 **No host clock inside Domain or Application (issue #310).** `Inventory.Domain` and `Inventory.Application` acquire the current time only through those two ports; the architecture test `InventoryApi.Tests.Architecture.TimeAcquisitionTests` fails if either project's source reads `DateTime.Now`, `DateTime.UtcNow` or `DateTime.Today` (see [Testing architecture](#backend-tests)). The last six such reads were removed with the guard:
 
-- **The Sites and Machines dashboards use the Sydney business day.** `Inventory.Application.Machines.MachineDashboardWindow` resolves the dashboards' six rolling comparison periods (today, week-to-date, the previous comparable week, last full week, month-to-date, two weeks ago) once per request: it takes the current instant from `IClock`, converts it to the Sydney business date with `IBusinessCalendar.ToBusinessDate`, feeds *that* date to the unchanged `Inventory.Domain.Machines.MachineDashboardPeriods` arithmetic, and converts each resulting business-day boundary back to a UTC instant with `IBusinessCalendar.StartOfBusinessDayUtc` (a completed week's inclusive end is the following business day's start minus one millisecond, so a week containing a transition still ends when the next Sydney day begins). The period boundaries are UTC instants because the sales facts they select are UTC instants: `NayaxSales.MachineAuthorizationTime` is a persisted true UTC instant, normalized from the Nayax payload's authoritative GMT field at ingestion (see [Nayax sale timestamps](#nayax-sale-timestamps-issue-380) below — issue #380 corrected this; the `AppDbContext` `DateTimeKind.Utc` conversion described under **Serialised instant identity at the persistence boundary** restores in-memory `Kind` metadata only and is not what makes the value UTC), so period and sale are compared in one time base with no conversion at the comparison site. `GetSiteSummaries`, `ListMachineDashboard` and `GetMachineDashboard` each resolve one window per request — `ListMachineDashboard` no longer reads the clock once per machine, so every machine in a listing is aggregated over identical periods — and `IMachineDashboardFactsStore.GetFactsAsync` takes that resolved window instead of a bare "now", which keeps the decision of *which* business day the dashboard means in the use case and leaves `EfMachineDashboardFactsStore` to select sales between the instants it is handed. The owner decided (2 October 2026) that these dashboards report the Sydney business day, not server-local time.
-  - *Both endpoints of a comparison period are resolved in Sydney time, never by shifting the current UTC instant.* The previous comparable week ends the same elapsed trading time into the previous Sydney business week as now is into the current one, measured from each week's own Monday-midnight instant. Subtracting seven days from the current UTC instant instead would break across a daylight-saving transition, where the two weeks begin an hour apart in UTC: on the Monday after a transition the subtraction lands *before* the previous week began, and the comparison period is empty. The end is also held at the previous week's own last instant, because the week daylight saving ends is 169 hours long and a longer current week would otherwise push the comparable period into the current one.
-  - *Each period also carries the Sydney business dates it covers* (`MachineDashboardPeriodUtc.FirstBusinessDate`/`LastBusinessDate`), describing the same period as its instants, because the dashboard's financial inputs are measured in both bases: revenue and commission by instant, Nayax processing fees by business date (see the fee paragraph below).
+- **The Sites and Machines dashboards use the current business's business day.** `Inventory.Application.Machines.MachineDashboardWindow` resolves the dashboards' six rolling comparison periods (today, week-to-date, the previous comparable week, last full week, month-to-date, two weeks ago) once per request: it takes the current instant from `IClock`, converts it to the business date with `IBusinessCalendar.ToBusinessDate`, feeds *that* date to the unchanged `Inventory.Domain.Machines.MachineDashboardPeriods` arithmetic, and converts each resulting business-day boundary back to a UTC instant with `IBusinessCalendar.StartOfBusinessDayUtc` (a completed week's inclusive end is the following business day's start minus one millisecond, so a week containing a transition still ends when the next business day begins). The period boundaries are UTC instants because the sales facts they select are UTC instants: `NayaxSales.MachineAuthorizationTime` is a persisted true UTC instant, normalized from the Nayax payload's authoritative GMT field at ingestion (see [Nayax sale timestamps](#nayax-sale-timestamps-issue-380) below — issue #380 corrected this; the `AppDbContext` `DateTimeKind.Utc` conversion described under **Serialised instant identity at the persistence boundary** restores in-memory `Kind` metadata only and is not what makes the value UTC), so period and sale are compared in one time base with no conversion at the comparison site. `GetSiteSummaries`, `ListMachineDashboard` and `GetMachineDashboard` each resolve one window per request — `ListMachineDashboard` no longer reads the clock once per machine, so every machine in a listing is aggregated over identical periods — and `IMachineDashboardFactsStore.GetFactsAsync` takes that resolved window instead of a bare "now", which keeps the decision of *which* business day the dashboard means in the use case and leaves `EfMachineDashboardFactsStore` to select sales between the instants it is handed. The owner decided (2 October 2026) that these dashboards report the business day, not server-local time; since issue #499 that is the current business's own configured zone.
+  - *Both endpoints of a comparison period are resolved in the business's time zone, never by shifting the current UTC instant.* The previous comparable week ends the same elapsed trading time into the previous business week as now is into the current one, measured from each week's own Monday-midnight instant. Subtracting seven days from the current UTC instant instead would break across a daylight-saving transition, where the two weeks begin an hour apart in UTC: on the Monday after a transition the subtraction lands *before* the previous week began, and the comparison period is empty. The end is also held at the previous week's own last instant, because the week daylight saving ends is 169 hours long and a longer current week would otherwise push the comparable period into the current one.
+  - *Each period also carries the business dates it covers* (`MachineDashboardPeriodUtc.FirstBusinessDate`/`LastBusinessDate`), describing the same period as its instants, because the dashboard's financial inputs are measured in both bases: revenue and commission by instant, Nayax processing fees by business date (see the fee paragraph below).
   - *The home Dashboard summary shares the same window* (issue #459). `Inventory.Application.Dashboard.GetDashboardSummary` resolves one `MachineDashboardWindow` per request and takes its week-to-date and previous-comparable-week periods from it unchanged, so the "Sales this week" card, a site row and a machine row all mean the same Sydney business week. See [Home Dashboard summary API](#home-dashboard-summary-api-issue-459).
 - **Effective-dated commission and Nayax fee lookups use `IBusinessCalendar.Today`.** `Inventory.Application.Products.ResolveMachineProductPricing` and `Inventory.Application.Sites.GetSiteProducts` select the site commission agreement and the Nayax processing fee rate for the business date, consistent with the repository's reporting-date rule - the current business's own configured timezone, `Australia/Sydney` for the existing business - and with `GetSiteCommissionReport`. On a UTC host the Sydney date is a day ahead for ten to eleven hours of every day, which previously priced a slot with the previous day's configuration whenever a new rate took effect. The pricing formulas and the existing missing/overlapping-configuration handling are unchanged.
 - **`UploadPurchase` defaults a missing purchase date to `IClock.UtcNow`.** The stored value for a given instant is unchanged: a purchase date the client omitted is still recorded as the upload instant, deliberately not reduced to a business-calendar date.
@@ -3304,20 +3304,20 @@ business + `TransactionID`, status enrichment, product matching, sale costing an
 cost-rebuild cutoff semantics are all unchanged; only which payload field supplies the instant
 changed.
 
-**4. Reporting converts UTC to the Sydney business calendar.** Nothing downstream converts a
-timezone itself: dashboard periods are Sydney business-day boundaries expressed as UTC instants
+**4. Reporting converts UTC to the current business's calendar.** Nothing downstream converts a
+timezone itself: dashboard periods are business-day boundaries expressed as UTC instants
 ([the dashboard rule above](#time)), the Nayax processing fee engine buckets a sale by
 `IBusinessCalendar.ToBusinessDate`, and Transaction Sales hands the instant itself to the frontend's
 `BusinessDateTimePipe`. One instant, one conversion port.
 
 The daily report (`GET api/reports/daily` and its CSV/XLSX export) follows the same rule. Its
-requested `from`/`to` are inclusive Sydney business dates: `EfDailyReportFactsProvider` selects the
+requested `from`/`to` are inclusive business dates: `EfDailyReportFactsProvider` selects the
 completed and all-status sales from `IBusinessCalendar.StartOfBusinessDayUtc(from)` up to, exclusively,
 `StartOfBusinessDayUtc(to + 1 day)` — 23, 24 or 25 hours per day — and puts each sale on the row of
 its `IBusinessCalendar.ToBusinessDate`, kept `Kind`-free so the row `date` stays date-only. Each
 row's Nayax processing fees, and the period's fee totals, are asked of the fee use case as a
 business-day period (`HandleBusinessPeriod`) over exactly those instants, so a day's revenue, COGS,
-status counts and fee estimate all describe the same Sydney day. Imported reimbursement coverage
+status counts and fee estimate all describe the same business day. Imported reimbursement coverage
 dates are date-only values and keep plain calendar-date bounds: they are not timezone-shifted. The
 shared `EfReportingSharedQueries` helpers are unchanged — only the bounds the daily adapter passes
 them changed — so no other report's selection moved. Before issue #380 the daily report bucketed and
@@ -3328,7 +3328,7 @@ day and the 23- and 25-hour daylight-saving days.
 
 Transaction Sales still filters its `from`/`to` by the UTC date of the instant
 (`EfTransactionSalesReportFactsProvider`); every row it returns carries the true instant and is shown
-on the correct Sydney date, but a sale in the first 10–11 hours of the first requested Sydney day is
+on the correct business date, but a sale in the first hours of the first requested business day (10–11 hours for `Australia/Sydney`) is
 outside the requested range, and one in the same hours of the day after the last requested day is
 inside it. That filter was left unchanged by #380 and is an open follow-up.
 

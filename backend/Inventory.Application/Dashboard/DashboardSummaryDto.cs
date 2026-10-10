@@ -2,8 +2,8 @@ namespace Inventory.Application.Dashboard;
 
 /// <summary>
 /// One summary period, in both time bases the Dashboard measures in: the UTC instants its completed
-/// sales are selected between (inclusive at both ends) and the first/last <c>Australia/Sydney</c>
-/// business dates those instants cover. It is the published projection of
+/// sales are selected between (inclusive at both ends) and the first/last business dates
+/// (in the current business's time zone) those instants cover. It is the published projection of
 /// <see cref="Inventory.Application.Machines.MachineDashboardPeriodUtc"/>, the period type the site
 /// and machine dashboards already resolve, so a caller can state exactly which week-to-date it is
 /// being shown.
@@ -16,7 +16,7 @@ public sealed record DashboardSummaryPeriodDto(
 
 /// <summary>
 /// The "Sales this week" card: week-to-date gross vending revenue from completed sales, and its
-/// comparison against the same elapsed trading time into the previous Sydney business week.
+/// comparison against the same elapsed trading time into the previous business week.
 ///
 /// <see cref="Sales"/> and <see cref="TransactionCount"/> are known figures over
 /// <see cref="Period"/>: zero means no completed sale was recorded in the period, not missing data.
@@ -97,11 +97,12 @@ public sealed record DashboardInventorySummaryDto(
 /// changes - and read-only.
 ///
 /// <see cref="AsOfUtc"/> is the single instant every metric was resolved against, and
-/// <see cref="BusinessDate"/> the <c>Australia/Sydney</c> business date it falls on, so a caller can
+/// <see cref="BusinessDate"/> the business date it falls on, so a caller can
 /// label the figures rather than infer freshness from its own clock. The business timezone itself is
-/// not carried here: it is a fixed business constant owned by
-/// <c>Inventory.Infrastructure.Time.SydneyBusinessCalendar</c> (see docs/architecture.md § Time),
-/// and repeating its identifier in a response body would make it look negotiable per request.
+/// not carried here: it is the current business's configured IANA time zone (issue #499), resolved
+/// per request from the trusted current business through <c>IBusinessCalendar</c> (see
+/// docs/architecture.md § Time), and a caller reads it from <c>GET /api/business/current</c> rather
+/// than from each response body.
 /// </summary>
 public sealed record DashboardSummaryDto(
     DateTime AsOfUtc,

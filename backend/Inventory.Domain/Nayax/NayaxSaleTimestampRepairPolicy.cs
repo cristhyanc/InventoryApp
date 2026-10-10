@@ -142,15 +142,15 @@ public sealed record NayaxSaleTimestampDecision(
 ///   caller only ever reads its own sales, through the <c>AppDbContext</c> tenant query filters.)</item>
 ///   <item><b>Absent, unreadable and conflicting evidence are refusals.</b> Each leaves the sale
 ///   exactly as it is and is reported as explicitly unresolved, because inventing an instant
-///   misplaces revenue between Sydney business days permanently, while an unresolved row can be
+///   misplaces revenue between business days permanently, while an unresolved row can be
 ///   repaired later once the operator obtains the source for it.</item>
 ///   <item><b>Re-deciding after a repair changes nothing.</b> The evidence then matches the stored
 ///   instant, so the row is <see cref="NayaxSaleTimestampRepairOutcome.AlreadyCorrect"/> and the
 ///   apply writes nothing - which is what makes applying the same verified repair again a no-op.</item>
 /// </list>
-/// Business dates, revenue movement between Sydney periods and the affected products' costing
+/// Business dates, revenue movement between business-day periods and the affected products' costing
 /// ranges are derived from these decisions by the Application layer, which owns the
-/// <c>Australia/Sydney</c> calendar port; this type stays free of time zones and of persistence.
+/// business calendar port; this type stays free of time zones and of persistence.
 /// </summary>
 public static class NayaxSaleTimestampRepairPolicy
 {

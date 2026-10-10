@@ -164,11 +164,11 @@ const AMBIGUOUS_TRANSPORT_STATUSES = new Set([0, 408, 502, 503, 504]);
             [(ngModel)]="reconcileWindow"
             (ngModelChange)="onInputChanged()"
           />
-          <span>Reconcile a Sydney business-date window against a fixed cutoff</span>
+          <span>Reconcile a business-date window against a fixed cutoff</span>
         </label>
         <p class="mt-1 text-sm value-muted">
           A daily or weekly total is only comparable with an export's when both sides cover the same
-          Sydney dates and exclude the sales authorized after the same instant, so all three values
+          business dates and exclude the sales authorized after the same instant, so all three values
           are required together or not at all. The cutoff is the instant the compared export was
           taken at &mdash; it is not guessed from the export, and the two business dates are calendar
           dates, never converted into instants here.
@@ -194,7 +194,7 @@ const AMBIGUOUS_TRANSPORT_STATUSES = new Set([0, 408, 502, 503, 504]);
               </p>
             </div>
             <div class="field">
-              <label class="field-label" for="repair-from-date">First business date (Sydney, inclusive)</label>
+              <label class="field-label" for="repair-from-date">First business date (business time zone, inclusive)</label>
               <input
                 id="repair-from-date"
                 type="date"
@@ -204,7 +204,7 @@ const AMBIGUOUS_TRANSPORT_STATUSES = new Set([0, 408, 502, 503, 504]);
               />
             </div>
             <div class="field">
-              <label class="field-label" for="repair-to-date">Last business date (Sydney, inclusive)</label>
+              <label class="field-label" for="repair-to-date">Last business date (business time zone, inclusive)</label>
               <input
                 id="repair-to-date"
                 type="date"
@@ -545,7 +545,7 @@ export class NayaxSaleTimestampRepairWorkflowComponent implements OnDestroy {
         tone: 'danger',
         title: 'A reconciliation needs all three values, or none of them.',
         detail:
-          'Enter the cutoff instant and both inclusive Sydney business dates, or switch the ' +
+          'Enter the cutoff instant and both inclusive business dates, or switch the ' +
           'reconciliation off. A partial window would compare a different period without saying so.'
       };
       return null;
@@ -566,7 +566,7 @@ export class NayaxSaleTimestampRepairWorkflowComponent implements OnDestroy {
         kind: 'validation',
         tone: 'danger',
         title: "The window's last business date cannot be before its first.",
-        detail: 'Enter an inclusive Sydney date range that runs forwards, then preview again.'
+        detail: 'Enter an inclusive business date range that runs forwards, then preview again.'
       };
       return null;
     }
