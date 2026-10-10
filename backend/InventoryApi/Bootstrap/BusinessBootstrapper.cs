@@ -37,6 +37,13 @@ public sealed class BusinessBootstrapper
     /// </summary>
     private const int Unassigned = 0;
 
+    /// <summary>
+    /// The IANA time zone the pre-tenancy data this command adopts has always been reported in
+    /// (issue #499), and the same value the additive migration backfills an existing business row
+    /// with, so a bootstrapped and a migrated database describe the same business identically.
+    /// </summary>
+    private const string ExistingBusinessTimeZoneId = "Australia/Sydney";
+
     private readonly AppDbContext _db;
     private readonly BusinessBootstrapOptions _options;
     private readonly TimeProvider _timeProvider;
@@ -118,6 +125,13 @@ public sealed class BusinessBootstrapper
             business = new Business
             {
                 Name = _options.BusinessName.Trim(),
+                // The zone the data this bootstrap assigns has always been reported in, stated
+                // here rather than left to a default (issue #499). This command exists to adopt
+                // one specific history - the single Australian vending operation - so its zone is
+                // a known fact, not a choice; a newly onboarded business gets its own zone from
+                // onboarding instead. The command itself derives no business date and needs no
+                // calendar.
+                TimeZoneId = ExistingBusinessTimeZoneId,
                 IsActive = true,
                 CreatedAtUtc = recordedAt,
             };

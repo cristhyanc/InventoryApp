@@ -10,6 +10,7 @@ import {
 } from '../../../services/inventory-cost-repair.service';
 import { ToastService } from '../../../services/toast.service';
 import { Product } from '../../../models/models';
+import { BusinessTimeZoneService } from '../../../formatting/business-time-zone.service';
 
 function product(overrides: Partial<Product> = {}): Product {
   return {
@@ -108,6 +109,11 @@ async function createHarness(
       { provide: ToastService, useValue: toast }
     ]
   }).compileComponents();
+
+  // The business time zone the shell loads at sign-in (issue #499). The effective date/time is
+  // entered, displayed and resolved to a UTC instant in it, so these tests run as a business
+  // configured for Sydney - the zone this workflow was built against.
+  TestBed.inject(BusinessTimeZoneService).publish('Australia/Sydney');
 
   const fixture = TestBed.createComponent(CostingRepairComponent);
   fixture.componentInstance.products = [product()];
@@ -487,8 +493,8 @@ describe('CostingRepairComponent (issue #361)', () => {
       fixture.detectChanges();
 
       expect(previewFn).not.toHaveBeenCalled();
-      expect(component.effectiveAtError).toContain('does not exist in Sydney');
-      expect(host.textContent).toContain('does not exist in Sydney');
+      expect(component.effectiveAtError).toContain('does not exist in Australia/Sydney');
+      expect(host.textContent).toContain('does not exist in Australia/Sydney');
       expect(toast.error).toHaveBeenCalledWith(component.effectiveAtError);
     });
 
@@ -498,7 +504,45 @@ describe('CostingRepairComponent (issue #361)', () => {
       component.previewRepair();
 
       expect(previewFn).not.toHaveBeenCalled();
-      expect(component.effectiveAtError).toContain('happens twice in Sydney');
+      expect(component.effectiveAtError).toContain('happens twice in Australia/Sydney');
+    });
+
+    /**
+     * The loading state (issue #499): the wall-clock time the operator typed means nothing until
+     * the business's zone is known, and guessing one would decide which historical sales the
+     * repair recosts. The field also starts empty rather than defaulted to a guessed "now".
+     */
+    it('refuses an effective time until the business time zone is known, and calls no API', async () => {
+      const previewFn = jest.fn(() => of(preview()));
+      const toast = { success: jest.fn(), error: jest.fn() };
+      await TestBed.configureTestingModule({
+        imports: [CostingRepairComponent],
+        providers: [
+          {
+            provide: InventoryCostRepairService,
+            useValue: { preview: previewFn, apply: jest.fn(), history: jest.fn(() => of([])) }
+          },
+          { provide: ToastService, useValue: toast }
+        ]
+      }).compileComponents();
+      // Deliberately no published zone: GET /api/business/current has not answered yet.
+      const fixture = TestBed.createComponent(CostingRepairComponent);
+      const component = fixture.componentInstance;
+      component.products = [product()];
+      fixture.detectChanges();
+
+      expect(component.effectiveAtLocal).toBe('');
+
+      component.productId = 1;
+      component.quantity = 4;
+      component.unitCost = 2;
+      component.reason = 'Machine stock at the 2026 cutover was never costed.';
+      component.effectiveAtLocal = '2026-01-02T12:00';
+      component.previewRepair();
+
+      expect(previewFn).not.toHaveBeenCalled();
+      expect(component.effectiveAtError).toContain('business time zone is still loading');
+      expect(toast.error).toHaveBeenCalledWith(component.effectiveAtError);
     });
 
     it.each([

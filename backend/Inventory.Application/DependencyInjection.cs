@@ -1,3 +1,4 @@
+using Inventory.Application.Businesses;
 using Inventory.Application.CatalogReconciliation;
 using Inventory.Application.Categories;
 using Inventory.Application.Commissions;
@@ -42,6 +43,10 @@ public static class ApplicationServiceCollectionExtensions
     {
         // Current-business resolution is per request: it must never be cached across callers.
         services.AddScoped<ICurrentBusinessProvider, CurrentBusinessProvider>();
+
+        // The current business's own name and time zone (issue #499). Per request like everything
+        // tenancy-scoped: the answer belongs to one caller's membership.
+        services.AddScoped<GetCurrentBusiness>();
 
         services.AddScoped<ListNayaxFeeRates>();
         services.AddScoped<SaveNayaxFeeRate>();

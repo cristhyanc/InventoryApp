@@ -55,7 +55,7 @@ public sealed class EfNayaxProcessingFeeFactsProvider : INayaxProcessingFeeFacts
 
         // Selected between the period's own UTC instants, inclusive at both ends, exactly as the
         // dashboard selects the sales whose revenue it reports - not by the whole UTC dates those
-        // instants fall on, which for a Sydney business day spans two of them (issue #310).
+        // instants fall on, which for a business day spans two of them (issue #310).
         var completedSales = await _db.NayaxSales.AsNoTracking()
             .Where(sale => sale.MachineAuthorizationTime >= period.StartUtc &&
                 sale.MachineAuthorizationTime <= period.EndUtc &&

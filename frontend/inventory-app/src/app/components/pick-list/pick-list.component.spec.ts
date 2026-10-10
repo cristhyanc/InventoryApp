@@ -6,6 +6,7 @@ import { ProductService } from '../../services/product.service';
 import { PickListService } from '../../services/pick-list.service';
 import { ToastService } from '../../services/toast.service';
 import { Machine, PickListResult, Product } from '../../models/models';
+import { BusinessTimeZoneService } from '../../formatting/business-time-zone.service';
 
 function machine(overrides: Partial<Machine>): Machine {
   return {
@@ -454,6 +455,10 @@ describe('PickListComponent rendered structure', () => {
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() } }
       ]
     }).compileComponents();
+
+    // The business time zone the shell loads at sign-in (issue #499); the "As of" snapshot instant
+    // is rendered in it, and the application's existing business is in Sydney.
+    TestBed.inject(BusinessTimeZoneService).publish('Australia/Sydney');
 
     const fixture = TestBed.createComponent(PickListComponent);
     fixture.detectChanges();

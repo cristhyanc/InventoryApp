@@ -49,7 +49,7 @@ internal static class NayaxSaleTimestampRepairSales
     /// <summary>
     /// The affected range: the earliest and latest instant among the readable evidence values, the
     /// stored instants of the sales that evidence names, and - when one was requested - the
-    /// reconciliation window, so every sale a reconciled Sydney day contains is examined. It is
+    /// reconciliation window, so every sale a reconciled business day contains is examined. It is
     /// <c>null</c> only when there is nothing at all to bound it with.
     /// </summary>
     public static (DateTime? FromUtc, DateTime? ToUtc) Range(

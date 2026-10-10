@@ -1,5 +1,4 @@
 using Inventory.Infrastructure.Data;
-using Inventory.Infrastructure.Models;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
@@ -144,8 +143,14 @@ public class BusinessOwnershipMigrationTests
             await SeedLegacyBusinessDataAsync(connection);
             await MigrateToAsync(migrated, ScopedUniquenessMigration);
 
-            migrated.Businesses.Add(new Business { Name = "Vending Co", CreatedAtUtc = DateTime.UtcNow });
-            await migrated.SaveChangesAsync();
+            // Raw SQL, not the EF model, for the same reason the reads below select ids only: this
+            // database stops at ScopedUniquenessMigration, so a column a later additive migration
+            // adds to Businesses does not exist here yet (issue #499's TimeZoneId is the current
+            // example).
+            await using var insertBusiness = connection.CreateCommand();
+            insertBusiness.CommandText =
+                "INSERT INTO Businesses (Name, IsActive, CreatedAtUtc) VALUES ('Vending Co', 1, '2026-01-01 00:00:00');";
+            await insertBusiness.ExecuteNonQueryAsync();
         }
 
         await using var scoped = TestAppDbContext.For(options, 1);

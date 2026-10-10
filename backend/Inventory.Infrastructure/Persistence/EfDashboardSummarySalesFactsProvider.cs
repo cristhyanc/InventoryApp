@@ -19,7 +19,7 @@ namespace Inventory.Infrastructure.Persistence;
 /// Both period bounds are compared inclusively against the persisted UTC
 /// <c>MachineAuthorizationTime</c>, the same convention <see cref="EfMachineDashboardFactsStore"/>
 /// applies to the periods this one is handed, and the instants themselves were resolved from the
-/// <c>Australia/Sydney</c> business day by the use case.
+/// business day by the use case.
 /// </summary>
 public sealed class EfDashboardSummarySalesFactsProvider : IDashboardSummarySalesFactsProvider
 {

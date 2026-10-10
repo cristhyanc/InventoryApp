@@ -48,7 +48,7 @@ public sealed class GetNayaxProcessingFees : IGetNayaxProcessingFees
         var facts = await _factsProvider.GetBusinessPeriodFactsAsync(period, machineId, cancellationToken);
 
         // The sales were selected by instant, so each one is already inside the period; bucketing each
-        // by its Australia/Sydney business date is what makes the day whose imported fee covers it and
+        // by its business date is what makes the day whose imported fee covers it and
         // the effective rate that estimates it the same day the period counted its revenue in. The
         // business date comes from the time port, not from the adapter that read the sale.
         var completedSales = facts.CompletedSales

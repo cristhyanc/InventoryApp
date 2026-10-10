@@ -90,7 +90,7 @@ import { NayaxSaleTimestampRepairRowsComponent } from './nayax-sale-timestamp-re
         <div class="mt-6">
           <h3 class="text-sm font-semibold text-md-gray-800">Daily revenue movement</h3>
           <p class="mt-1 text-sm value-muted">
-            What each <code>Australia/Sydney</code> business day loses and gains because a completed
+            What each business day loses and gains because a completed
             sale is re-dated. A repair never creates or destroys revenue; it only moves it between
             days. A pending, refunded, cancelled or unknown-status row is re-dated too but moves no
             revenue.
@@ -98,7 +98,7 @@ import { NayaxSaleTimestampRepairRowsComponent } from './nayax-sale-timestamp-re
           @if (preview.revenueMovement.length) {
             <div class="mt-3 overflow-x-auto">
               <table class="table" data-testid="repair-revenue-movement">
-                <caption class="sr-only">Revenue leaving and arriving on each Sydney business day</caption>
+                <caption class="sr-only">Revenue leaving and arriving on each business day</caption>
                 <thead class="table-head">
                   <tr>
                     <th scope="col" class="table-cell">Business date</th>
@@ -121,7 +121,7 @@ import { NayaxSaleTimestampRepairRowsComponent } from './nayax-sale-timestamp-re
             </div>
           } @else {
             <p class="mt-3 text-sm value-muted" data-testid="repair-revenue-movement-empty">
-              No completed sale changes its Sydney business date, so no day's revenue moves.
+              No completed sale changes its business date, so no day's revenue moves.
             </p>
           }
         </div>
@@ -258,7 +258,7 @@ import { NayaxSaleTimestampRepairRowsComponent } from './nayax-sale-timestamp-re
             <h3 class="text-sm font-semibold text-md-gray-800">Fixed-cutoff reconciliation</h3>
             <p class="mt-1 text-sm value-muted">
               Completed sales between {{ preview.reconciliation.fromBusinessDate | date:'dd/MM/yyyy' }}
-              and {{ preview.reconciliation.toBusinessDate | date:'dd/MM/yyyy' }} (Sydney, inclusive),
+              and {{ preview.reconciliation.toBusinessDate | date:'dd/MM/yyyy' }} (business time zone, inclusive),
               excluding everything authorized at or after
               {{ preview.reconciliation.cutoffUtc | businessDateTime }}.
             </p>
@@ -315,7 +315,7 @@ import { NayaxSaleTimestampRepairRowsComponent } from './nayax-sale-timestamp-re
               <div class="mt-3 overflow-x-auto">
                 <table class="table" data-testid="repair-reconciliation-days">
                   <caption class="sr-only">
-                    Completed-sale count and value per Sydney business day, before and after the repair
+                    Completed-sale count and value per business day, before and after the repair
                   </caption>
                   <thead class="table-head">
                     <tr>
