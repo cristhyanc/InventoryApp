@@ -175,7 +175,7 @@ public sealed class NayaxConnectionMigrationTests
         Assert.NotEqual(Token, row.AccessTokenCiphertext);
 
         // The stored ciphertext is the configured token, decryptable through the same store the
-        // Nayax client will read it with after issue #520.
+        // Nayax client reads it with (issue #520).
         var credential = await fixture.StoreFor(fixture.BusinessId).FindCredentialAsync(CancellationToken.None);
         Assert.NotNull(credential);
         Assert.Equal(OperatorId, credential!.OperatorId);
@@ -697,6 +697,11 @@ public sealed class NayaxConnectionMigrationTests
         public Task<NayaxConnectionCredential?> FindCredentialAsync(CancellationToken cancellationToken) =>
             _inner.FindCredentialAsync(cancellationToken);
 
+        public Task<NayaxConnectionSnapshot?> FindForOperationAsync(
+            Func<NayaxConnectionStatus, bool> mayDecryptToken,
+            CancellationToken cancellationToken) =>
+            _inner.FindForOperationAsync(mayDecryptToken, cancellationToken);
+
         public Task<NayaxConnection> SaveCredentialAsync(
             string operatorId,
             string accessToken,
@@ -729,6 +734,11 @@ public sealed class NayaxConnectionMigrationTests
 
         public Task<NayaxConnectionCredential?> FindCredentialAsync(CancellationToken cancellationToken) =>
             _inner.FindCredentialAsync(cancellationToken);
+
+        public Task<NayaxConnectionSnapshot?> FindForOperationAsync(
+            Func<NayaxConnectionStatus, bool> mayDecryptToken,
+            CancellationToken cancellationToken) =>
+            _inner.FindForOperationAsync(mayDecryptToken, cancellationToken);
 
         public Task<NayaxConnection> SaveCredentialAsync(
             string operatorId,

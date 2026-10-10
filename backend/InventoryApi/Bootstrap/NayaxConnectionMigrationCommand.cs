@@ -38,10 +38,11 @@ namespace InventoryApi.Bootstrap;
 /// is stored <em>and</em> the connection is marked Ready, so a run that reports anything other than
 /// success has written nothing and the report says so in as many words. Re-running an applied
 /// migration changes nothing, and re-running after a failed apply is simply the same run again. It
-/// reads the same configuration the running Nayax client reads - <c>NayaxLynx:OperatorId</c> and the
-/// token resolved by <see cref="NayaxLynxConfiguration.ResolveAccessToken"/> - and it does not remove
-/// those settings: retiring them is a separate human step, after issue #520 makes the client read
-/// the per-business record. See docs/tenant-rollout.md § Migrating the Nayax connection.
+/// reads the global configuration the Nayax client used to read - <c>NayaxLynx:OperatorId</c> and
+/// the token resolved by <see cref="NayaxLynxConfiguration.ResolveAccessToken"/> - and it does not
+/// remove those settings: since issue #520 the client reads the per-business record instead, and
+/// this command is the only remaining reader of the global pair, so retiring them is a separate
+/// human step. See docs/tenant-rollout.md § Migrating the Nayax connection.
 ///
 /// Exit code: <c>0</c> when the run succeeded (including a dry run and an idempotent re-run);
 /// <c>1</c> for a refused argument list, an unusable key configuration, or any refusal
