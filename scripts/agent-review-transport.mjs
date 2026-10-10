@@ -105,7 +105,7 @@ export function knownSecretForms(values) {
   for (const value of values) {
     if (typeof value !== 'string' || value.length < MIN_KNOWN_SECRET_LENGTH) continue;
     forms.add(value);
-    forms.add(Buffer.from(value).toString('base64').replace(/=+$/, ''));
+    forms.add(Buffer.from(value).toString('base64').replace(/={1,2}$/, ''));
     forms.add(Buffer.from(value).toString('base64url'));
     forms.add(encodeURIComponent(value));
   }
