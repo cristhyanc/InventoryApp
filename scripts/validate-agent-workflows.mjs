@@ -1405,6 +1405,9 @@ export const CHATGPT_REVIEW_CONTRACT = Object.freeze({
     'commit_id: $sha, event: "COMMENT"',
     'VERDICT_CONTEXT: chatgpt-review-verdict',
     'This is an advisory review. Human approval and branch protection remain the merge gate.',
+    'echo "review_posted=true" >> "$GITHUB_OUTPUT"',
+    'REVIEW_POSTED: ${{ steps.publish.outputs.review_posted }}',
+    'if [ "$REVIEW_POSTED" = "true" ]; then',
   ],
 });
 
@@ -1454,6 +1457,9 @@ export function verifyChatGptReview(read = readRepositoryFile) {
   for (const required of contract.publishRequired) requireText(publish, required, `${source} publish job`);
   requireText(publish, contract.agentGate, `${source} publish job`);
   requireOrder(publish, '[ "$agent_verdict" = "success" ] || suppress', 'gh api --method POST "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews"', `${source} publish job`, 'the agent verdict must be rechecked before the review is posted.');
+  // The fail-closed status must not claim "nothing was published" once the review is public.
+  requireOrder(publish, '--input "$work/payload-fallback.json" >/dev/null\n          fi\n', 'echo "review_posted=true" >> "$GITHUB_OUTPUT"', `${source} publish job`, 'publication must be recorded only after the review was posted.');
+  requireOrder(publish, 'echo "review_posted=true" >> "$GITHUB_OUTPUT"', 'set_verdict_status success', `${source} publish job`, 'publication must be recorded before the verdict status is set.');
   requireOrder(publish, '[ "$current_sha" = "$HEAD_SHA" ] || suppress', 'gh api --method POST "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews"', `${source} publish job`, 'the head must be rechecked before the review is posted.');
 }
 

@@ -135,6 +135,26 @@ describe('ChatGPT final review contract', () => {
     });
   });
 
+  describe('accurate fail-closed outcome', () => {
+    it('rejects dropping the posted-review marker', () => {
+      rejects(replaceOnce(workflow, '          echo "review_posted=true" >> "$GITHUB_OUTPUT"\n', ''), /review_posted=true/);
+    });
+
+    it('rejects recording publication before the review is posted', () => {
+      const moved = replaceOnce(
+        replaceOnce(workflow, '          echo "review_posted=true" >> "$GITHUB_OUTPUT"\n', ''),
+        '          if ! gh api --method POST "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews"',
+        '          echo "review_posted=true" >> "$GITHUB_OUTPUT"\n          if ! gh api --method POST "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews"',
+      );
+      rejects(moved, /publication must be recorded only after the review was posted/);
+    });
+
+    it('rejects a failure handler that always says nothing was published', () => {
+      rejects(replaceOnce(workflow, '          REVIEW_POSTED: ${{ steps.publish.outputs.review_posted }}\n', ''), /REVIEW_POSTED/);
+      rejects(replaceOnce(workflow, '          if [ "$REVIEW_POSTED" = "true" ]; then\n', '          if false; then\n'), /REVIEW_POSTED/);
+    });
+  });
+
   describe('agent review must pass before ChatGPT reviews', () => {
     it('rejects treating a missing agent verdict as passed', () => {
       rejects(

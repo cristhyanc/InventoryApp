@@ -267,6 +267,7 @@ jobs:
 
     steps:
       - name: Guard and publish review
+        id: publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ needs.context.outputs.pr_number }}
@@ -341,6 +342,8 @@ jobs:
               "$work/payload.json" > "$work/payload-fallback.json"
             gh api --method POST "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews" --input "$work/payload-fallback.json" >/dev/null
           fi
+          # From here on the review is public; a later failure must not be reported as "nothing published".
+          echo "review_posted=true" >> "$GITHUB_OUTPUT"
 
           if [ "$verdict" = "READY FOR HUMAN REVIEW" ]; then
             set_verdict_status success "ChatGPT: ready for human review (advisory), this SHA only"
@@ -353,9 +356,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HEAD_SHA: ${{ needs.context.outputs.head_sha }}
+          REVIEW_POSTED: ${{ steps.publish.outputs.review_posted }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          if [ "$REVIEW_POSTED" = "true" ]; then
+            description="ChatGPT review was posted, but its verdict status could not be recorded; see the review"
+          else
+            description="ChatGPT review publication failed closed; nothing was published"
+          fi
           gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" \
             -f state=error -f context=chatgpt-review-verdict \
-            -f description="ChatGPT review publication failed closed; nothing was published" \
+            -f description="$description" \
             -f target_url="$RUN_URL" >/dev/null || echo "::warning::Could not record the fail-closed status."
