@@ -2,6 +2,7 @@ import './agent-mode.test.mjs';
 import './select-implementation-model.test.mjs';
 import './agent-persistence.test.mjs';
 import './agent-review-publication.test.mjs';
+import './agent-review-transport.test.mjs';
 import './agent-architecture-handoff.test.mjs';
 // Deterministic contract tests for the validation workflow's concurrency and status model.
 // Run with: node --test scripts/validate-agent-workflows.test.mjs
@@ -888,7 +889,7 @@ describe('cross-review contract (Claude implements; Copilot checks and reviews)'
   it('rejects a Copilot final review that could write, float its CLI version or skip the review contract', () => {
     for (const unsafe of [
       replaceOnce(reviewWorkflow, "            --deny-tool='write' \\\n            -p \"$prompt\" > \"$work/copilot-output.md\"", '            -p "$prompt" > "$work/copilot-output.md"'),
-      replaceOnce(reviewWorkflow, "    permissions:\n      contents: read\n      pull-requests: read\n      issues: read\n      actions: read\n      checks: read\n      statuses: read\n    outputs:\n      structured_output: ${{ steps.copilot_review", "    permissions:\n      contents: read\n      pull-requests: write\n      issues: read\n      actions: read\n      checks: read\n      statuses: read\n    outputs:\n      structured_output: ${{ steps.copilot_review"),
+      replaceOnce(reviewWorkflow, "    permissions:\n      contents: read\n      pull-requests: read\n      issues: read\n      actions: read\n      checks: read\n      statuses: read\n    # Only the artifact id and the envelope digest leave this job as outputs; see the review job.", "    permissions:\n      contents: read\n      pull-requests: write\n      issues: read\n      actions: read\n      checks: read\n      statuses: read\n    # Only the artifact id and the envelope digest leave this job as outputs; see the review job."),
       replaceOnce(reviewWorkflow, 'COPILOT_AUTO_UPDATE: "false"', 'COPILOT_AUTO_UPDATE: "true"'),
       reviewWorkflow.replace('npm ci --prefix "$cli_dir" --ignore-scripts --no-audit --no-fund\n          echo "$cli_dir/node_modules/.bin" >> "$GITHUB_PATH"\n\n      - name: Run Copilot review', 'npm install -g @github/copilot@latest\n\n      - name: Run Copilot review'),
       replaceOnce(reviewWorkflow, "--allow-tool='shell(gh run list:*)'", "--allow-tool='shell(gh run list:*)' --allow-tool='shell(gh pr comment:*)'"),
@@ -897,6 +898,35 @@ describe('cross-review contract (Claude implements; Copilot checks and reviews)'
       replaceOnce(reviewWorkflow, 'copilot -s --no-ask-user --disable-builtin-mcps', 'copilot -s --no-ask-user'),
     ]) {
       rejects({ [reviewPath]: unsafe }, /agent-review.yml Copilot review/);
+    }
+  });
+
+  // PR #558: the review must never travel as a job output again, and both ends of the artifact
+  // hand-off must use the trusted transport script and a pinned, short-lived artifact.
+  it('rejects a review hand-off through job outputs, untrusted transport code or a long-lived artifact', () => {
+    const copilotJob = reviewWorkflow.split('\n  copilot-review:\n')[1].split('\n  publish:\n')[0];
+    for (const [unsafe, reason] of [
+      [replaceOnce(reviewWorkflow, '      artifact_id: ${{ steps.upload.outputs.artifact-id }}\n      artifact_digest: ${{ steps.package.outputs.digest }}\n\n    steps:\n      - name: Check out pull request head\n        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0\n        with:\n          ref: ${{ needs.context.outputs.head_sha }}\n          fetch-depth: 0\n          persist-credentials: false\n\n      - name: Run Claude Code review agent', '      artifact_id: ${{ steps.upload.outputs.artifact-id }}\n      artifact_digest: ${{ steps.package.outputs.digest }}\n      structured_output: ${{ steps.review_agent.outputs.structured_output }}\n\n    steps:\n      - name: Check out pull request head\n        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0\n        with:\n          ref: ${{ needs.context.outputs.head_sha }}\n          fetch-depth: 0\n          persist-credentials: false\n\n      - name: Run Claude Code review agent'), /agent-review.yml review outputs/],
+      [reviewWorkflow.replace(copilotJob, copilotJob.replace('node "$transport" package', 'node scripts/agent-review-transport.mjs package')), /agent-review.yml copilot-review review transport/],
+      [reviewWorkflow.replace(copilotJob, copilotJob.replace('retention-days: 1', 'retention-days: 90')), /agent-review.yml copilot-review review transport/],
+      [reviewWorkflow.replace(copilotJob, copilotJob.replace('actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2', 'actions/upload-artifact@v4')), /agent-review.yml copilot-review review transport/],
+      [replaceOnce(reviewWorkflow, '      issues: read\n      actions: read\n\n    steps:\n      - name: Guard and publish review', '      issues: read\n\n    steps:\n      - name: Guard and publish review'), /agent-review.yml publish transport/],
+      [replaceOnce(reviewWorkflow, "          REVIEW_ARTIFACT_ID: ", "          REVIEW_OUTPUT: ${{ needs.review.outputs.structured_output }}\n          REVIEW_ARTIFACT_ID: "), /agent-review.yml publish (job|transport)/],
+      [replaceOnce(reviewWorkflow, 'set_verdict_status error "Review result not delivered: ${1:0:110}"', 'set_verdict_status success "Review result not delivered"'), /agent-review.yml publish transport/],
+    ]) {
+      rejects({ [reviewPath]: unsafe }, reason);
+    }
+  });
+
+  it('keeps the live transport check read-only and free of secrets', () => {
+    const check = readWithOverrides({})('.github/workflows/agent-review-transport-check.yml');
+    for (const unsafe of [
+      replaceOnce(check, '    permissions:\n      contents: read\n      actions: read\n', '    permissions:\n      contents: read\n      actions: write\n'),
+      replaceOnce(check, '          GH_TOKEN: ${{ github.token }}\n          REVIEW_ARTIFACT_ID: ${{ needs.package.outputs.artifact_id }}\n          REVIEW_ARTIFACT_DIGEST', '          GH_TOKEN: ${{ secrets.AGENT_AUTOMATION_APP_PRIVATE_KEY }}\n          REVIEW_ARTIFACT_ID: ${{ needs.package.outputs.artifact_id }}\n          REVIEW_ARTIFACT_DIGEST'),
+      replaceOnce(check, 'on:\n  pull_request:\n', 'on:\n  pull_request_target:\n'),
+      replaceOnce(check, '          retention-days: 1\n', '          retention-days: 30\n'),
+    ]) {
+      rejects({ '.github/workflows/agent-review-transport-check.yml': unsafe }, /agent-review-transport-check\.yml/);
     }
   });
 

@@ -14,6 +14,7 @@ import { spawnSync } from 'node:child_process';
 import { describe, it } from 'node:test';
 import { claimEvents } from './agent-mode.fixtures.mjs';
 import { ROUTES } from './agent-mode.mjs';
+import { ENVELOPE_FILE, ENVELOPE_SCHEMA, sha256 } from './agent-review-transport.mjs';
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8').replaceAll('\r\n', '\n');
 
@@ -84,6 +85,17 @@ if (args[0] === 'pr' && args[1] === 'view') {
     out({ user: { login: state.author } });
   } else if (path.includes('/contents/scripts/agent-mode.mjs')) {
     process.stdout.write(fs.readFileSync(process.env.AGENT_MODE_SCRIPT, 'utf8'));
+  } else if (path.includes('/contents/scripts/agent-review-transport.mjs')) {
+    process.stdout.write(fs.readFileSync(process.env.AGENT_REVIEW_TRANSPORT_SCRIPT, 'utf8'));
+  } else if (/\\/actions\\/runs\\/\\d+\\/artifacts\\?/.test(path)) {
+    log({ kind: 'artifact-list', path });
+    out({ total_count: (state.artifacts ?? []).length, artifacts: state.artifacts ?? [] });
+  } else if (/\\/actions\\/artifacts\\/\\d+\\/zip$/.test(path)) {
+    log({ kind: 'artifact-download', path });
+    const id = path.split('/actions/artifacts/')[1].split('/')[0];
+    const zip = (state.artifactZips ?? {})[id];
+    if (!zip) fail('HTTP 404: artifact not found');
+    process.stdout.write(fs.readFileSync(zip));
   } else if (/\\/issues\\/\\d+\\/events/.test(path)) {
     out(state.events ?? claimEvents('agent-ready-claude'));
   } else fail('unexpected api call: ' + args.join(' '));
@@ -144,9 +156,55 @@ function changesOutput(overrides = {}) {
   });
 }
 
-function run(shell, { state, env = {} }) {
+const RUN_ID = '38050149174';
+const ARTIFACT_ID = '4242';
+
+// The envelope a reviewer job's package step uploads (scripts/agent-review-transport.mjs), built
+// here directly so a test can also produce one the package step would never write.
+function envelopeFor(output, { mode, implementer, reviewer, overrides = {} }) {
+  return {
+    schema: ENVELOPE_SCHEMA,
+    repository: REPO,
+    pr_number: Number(PR),
+    head_sha: SHA,
+    agent_mode: mode,
+    implementer,
+    reviewer,
+    run_id: Number(RUN_ID),
+    run_attempt: 1,
+    redactions: 0,
+    review: output,
+    ...overrides,
+  };
+}
+
+// Writes the run's review artifact as the Actions API serves it: a zip holding one envelope file.
+// `artifact` is the review delivery under test: { envelope (object or raw string), entries, listing, id, digest }.
+function stageArtifact(root, state, artifact, reviewer) {
+  if (!artifact) return { id: '', digest: '' };
+  const dir = mkdtempSync(join(root, 'artifact-'));
+  const text = typeof artifact.envelope === 'string' ? artifact.envelope : JSON.stringify(artifact.envelope);
+  for (const entry of artifact.entries ?? [ENVELOPE_FILE]) writeFileSync(join(dir, entry), text);
+  const zip = join(root, `artifact-${ARTIFACT_ID}.zip`);
+  const zipped = spawnSync('zip', ['-q', '-j', zip, ...(artifact.entries ?? [ENVELOPE_FILE]).map((e) => join(dir, e))], { encoding: 'utf8' });
+  assert.equal(zipped.status, 0, zipped.stderr);
+  state.artifacts = artifact.listing ?? [{
+    id: Number(ARTIFACT_ID),
+    name: `agent-review-result-${reviewer}-${RUN_ID}`,
+    size_in_bytes: readFileSync(zip).length,
+    expired: false,
+    workflow_run: { id: Number(RUN_ID) },
+  }];
+  state.artifactZips = { [ARTIFACT_ID]: zip };
+  return { id: artifact.id ?? ARTIFACT_ID, digest: artifact.digest ?? sha256(Buffer.from(text)) };
+}
+
+function run(shell, { state, env = {}, artifact, reviewer }) {
   const root = mkdtempSync(join(tmpdir(), 'agent-review-publication-'));
   try {
+    state = structuredClone(state);
+    const delivered = stageArtifact(root, state, artifact, reviewer);
+    if (artifact) env = { REVIEW_ARTIFACT_ID: delivered.id, REVIEW_ARTIFACT_DIGEST: delivered.digest, ...env };
     const bin = join(root, 'bin');
     spawnSync('mkdir', [bin]);
     writeFileSync(join(bin, 'gh'), FAKE_GH);
@@ -169,6 +227,9 @@ function run(shell, { state, env = {} }) {
         RUNNER_TEMP: root,
         GITHUB_WORKFLOW_SHA: 'a'.repeat(40),
         AGENT_MODE_SCRIPT: new URL('./agent-mode.mjs', import.meta.url).pathname,
+        AGENT_REVIEW_TRANSPORT_SCRIPT: new URL('./agent-review-transport.mjs', import.meta.url).pathname,
+        GITHUB_RUN_ID: RUN_ID,
+        GITHUB_RUN_ATTEMPT: '1',
         GH_TOKEN: 'fixture-token',
         EXPECTED_AGENT_AUTHOR: BOT,
         PR_NUMBER: PR,
@@ -185,15 +246,20 @@ function run(shell, { state, env = {} }) {
   }
 }
 
-function publish({ state = eligibleState(), output = readyOutput(), result = 'success', implementer = 'claude', mode = `cross-${implementer}`, reviewer = ROUTES[mode]?.reviewer ?? '' } = {}) {
+// `output` is the model's review; null means the reviewer delivered no artifact at all. `artifact`
+// overrides the delivery itself (a tampered envelope, a wrong listing, a wrong digest...).
+function publish({ state = eligibleState(), output = readyOutput(), result = 'success', implementer = 'claude', mode = `cross-${implementer}`, reviewer = ROUTES[mode]?.reviewer ?? '', artifact, env = {} } = {}) {
+  const delivery = artifact ?? (output === null ? undefined : { envelope: envelopeFor(output, { mode, implementer, reviewer }) });
   return run(publishShell, {
     state,
+    artifact: delivery,
+    reviewer: reviewer || 'copilot',
     env: {
+      ...env,
       IMPLEMENTER: implementer,
       AGENT_MODE: mode,
       REVIEWER: reviewer,
       REVIEW_RESULT: result,
-      REVIEW_OUTPUT: output === null ? '' : JSON.stringify(output),
       VERDICT_CONTEXT: 'agent-review-verdict',
       RUN_URL: 'https://github.com/owner/InventoryApp/actions/runs/1',
     },
@@ -348,8 +414,8 @@ describe('guarded review publication', () => {
     assertSuppressed(publish({ output: readyOutput({ reviewed_head_sha: NEWER_SHA }) }), /not the reviewed SHA/);
   });
 
-  it('refuses missing or malformed structured output', () => {
-    assertSuppressed(publish({ output: null }), /no valid structured output/);
+  it('refuses a review that delivered no artifact', () => {
+    assertSuppressed(publish({ output: null }), /could not be delivered: missing: The reviewer job reported no review artifact id/);
   });
 
   it('refuses a ready verdict with a blocker or any criterion not met or not verified', () => {
@@ -358,12 +424,13 @@ describe('guarded review publication', () => {
       const criteria = [{ criterion: 'Concurrent changes never produce incorrect stock adjustments', status, evidence: 'Race between read and write; legacy flow is worse.' }];
       assertSuppressed(publish({ output: readyOutput({ criteria }) }), /ready verdict requires/);
     }
-    assertSuppressed(publish({ output: readyOutput({ criteria: [] }) }), /ready verdict requires/);
+    // An empty criteria list already breaks the contract, so it never reaches the verdict check.
+    assertSuppressed(publish({ output: readyOutput({ criteria: [] }) }), /breaks the review contract \(criteria\)/);
   });
 
   it('refuses a changes-requested verdict without blockers, and an unknown verdict', () => {
     assertSuppressed(publish({ output: changesOutput({ blockers: [] }) }), /at least one blocker/);
-    assertSuppressed(publish({ output: readyOutput({ verdict: 'APPROVE' }) }), /unknown verdict/);
+    assertSuppressed(publish({ output: readyOutput({ verdict: 'APPROVE' }) }), /breaks the review contract \(verdict\)/);
   });
 
   it('refuses output that smuggles a second verdict line into a field', () => {
@@ -377,6 +444,197 @@ describe('guarded review publication', () => {
       assert.equal(reviews(outcome.calls).length, 0);
       assert.ok(!statuses(outcome.calls).some((s) => s.state === 'success' || s.state === 'failure'));
     }
+  });
+});
+
+// The review hand-off (PR #558, run 38050149174): the reviewer's job output was withheld by GitHub's
+// secret masking, so a finished review reached the publisher as an empty string. The review now
+// travels as a run-bound artifact. These tests run the real package step of each reviewer job and the
+// real publish step, joined by the artifact exactly as the Actions API would serve it.
+const reviewWorkflow = read('.github/workflows/agent-review.yml');
+const claudePackageShell = stepShell(reviewWorkflow.split('\n  copilot-review:\n')[0], 'Package review result');
+const copilotPackageShell = stepShell(reviewWorkflow.split('\n  copilot-review:\n')[1].split('\n  publish:\n')[0], 'Package review result');
+
+// Runs a reviewer job's package step; returns the envelope it would upload and its step outputs.
+function packageStep(shell, { raw, rawFile = false, mode = 'cross-claude', reviewer = 'copilot', env = {} }) {
+  const root = mkdtempSync(join(tmpdir(), 'agent-review-package-'));
+  try {
+    const bin = join(root, 'bin');
+    spawnSync('mkdir', [bin]);
+    writeFileSync(join(bin, 'gh'), FAKE_GH);
+    chmodSync(join(bin, 'gh'), 0o755);
+    const statePath = join(root, 'state.json');
+    writeFileSync(statePath, JSON.stringify(eligibleState()));
+    const outputPath = join(root, 'github-output');
+    writeFileSync(outputPath, '');
+    if (rawFile) writeFileSync(join(root, 'review-raw.json'), raw);
+    const result = spawnSync('bash', ['-c', shell], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${bin}:${process.env.PATH}`,
+        FAKE_GH_STATE: statePath,
+        FAKE_GH_LOG: join(root, 'calls.jsonl'),
+        GITHUB_OUTPUT: outputPath,
+        GITHUB_REPOSITORY: REPO,
+        GITHUB_RUN_ID: RUN_ID,
+        GITHUB_RUN_ATTEMPT: '1',
+        GITHUB_WORKFLOW_SHA: 'a'.repeat(40),
+        RUNNER_TEMP: root,
+        AGENT_REVIEW_TRANSPORT_SCRIPT: new URL('./agent-review-transport.mjs', import.meta.url).pathname,
+        GH_TOKEN: 'fixture-token',
+        PR_NUMBER: PR,
+        HEAD_SHA: SHA,
+        AGENT_MODE: mode,
+        IMPLEMENTER: 'claude',
+        REVIEWER: reviewer,
+        ...(rawFile ? {} : { REVIEW_OUTPUT: raw }),
+        ...env,
+      },
+    });
+    const envelopePath = join(root, 'agent-review-result', 'review-envelope.json');
+    const outputs = Object.fromEntries(readFileSync(outputPath, 'utf8').trim().split('\n').filter(Boolean).map((l) => [l.split('=')[0], l.slice(l.indexOf('=') + 1)]));
+    return {
+      status: result.status,
+      log: result.stdout + result.stderr,
+      envelope: existsSync(envelopePath) ? readFileSync(envelopePath, 'utf8') : null,
+      leftover: existsSync(join(root, 'review-raw.json')),
+      outputs,
+    };
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+// Package, then publish what was packaged, as one run would.
+function handOff({ output, mode = 'cross-claude', reviewer = ROUTES[mode].reviewer, state = eligibleState() }) {
+  const packaged = packageStep(reviewer === 'claude' ? claudePackageShell : copilotPackageShell, {
+    raw: typeof output === 'string' ? output : JSON.stringify(output),
+    rawFile: reviewer === 'copilot',
+    mode,
+    reviewer,
+  });
+  assert.equal(packaged.status, 0, packaged.log);
+  assert.equal(packaged.leftover, false, 'the unbound raw review is deleted once packaged');
+  const outcome = publish({
+    state: mode === 'full-claude' ? { ...state, events: claimEvents('agent-ready-full-claude') } : state,
+    mode,
+    reviewer,
+    artifact: { envelope: packaged.envelope, digest: packaged.outputs.digest },
+  });
+  return { packaged, outcome };
+}
+
+const MASKED_TOKEN = `ghs_${'Ab3'.repeat(12)}`;
+
+describe('review result hand-off from reviewer to publisher', () => {
+  it('delivers a review whose text contains a masked value, the exact #558 failure, through the artifact', () => {
+    for (const [mode, reviewer] of [['cross-claude', 'copilot'], ['full-claude', 'claude']]) {
+      // The masked value lands in evidence text; as a job output this review would have been dropped.
+      const output = changesOutput({ validation_evidence: `agent-validation success; the job log printed GH_TOKEN=${MASKED_TOKEN} by mistake.` });
+      const { packaged, outcome } = handOff({ output, mode, reviewer });
+      assert.equal(packaged.outputs.name, `agent-review-result-${reviewer}-${RUN_ID}`);
+      assert.match(packaged.outputs.digest, /^[0-9a-f]{64}$/);
+      assert.ok(!packaged.envelope.includes(MASKED_TOKEN), 'the stored artifact never keeps the secret-like value');
+      assert.equal(outcome.status, 0, outcome.stderr);
+      const [review] = reviews(outcome.calls);
+      assert.ok(review, `the ${reviewer} review must be published`);
+      assert.ok(!review.payload.body.includes(MASKED_TOKEN));
+      assert.match(review.payload.body, /GH_TOKEN=\[REDACTED\] by mistake/);
+      assert.match(review.payload.body, /1 secret-like value\(s\) were redacted from this review/);
+      assert.equal(statuses(outcome.calls)[0].state, 'failure', 'a real finding stays a changes-requested verdict');
+    }
+  });
+
+  it('publishes a clean ready review through the artifact with no redaction note', () => {
+    const { outcome } = handOff({ output: readyOutput() });
+    const [review] = reviews(outcome.calls);
+    assert.doesNotMatch(review.payload.body, /redacted/);
+    assert.equal(statuses(outcome.calls)[0].state, 'success');
+  });
+
+  for (const [name, raw, reason] of [
+    ['empty output', '', /empty: The reviewer produced no structured output/],
+    ['invalid JSON', '{"verdict": ', /malformed: The reviewer output is not valid JSON/],
+    ['a contract violation', JSON.stringify(readyOutput({ verdict: 'APPROVE' })), /contract: .*\(verdict\)/],
+    ['a review of another SHA', JSON.stringify(readyOutput({ reviewed_head_sha: NEWER_SHA })), /wrong-sha: The review names SHA f49fcc3/],
+  ]) {
+    it(`fails the reviewer job and uploads nothing for ${name}`, () => {
+      const packaged = packageStep(claudePackageShell, { raw, mode: 'full-claude', reviewer: 'claude' });
+      assert.notEqual(packaged.status, 0);
+      assert.equal(packaged.envelope, null);
+      assert.equal(packaged.outputs.digest, undefined);
+      assert.match(packaged.log, reason);
+      // The publisher then sees a failed reviewer job and records an error, never a verdict.
+      assertSuppressed(publish({ result: 'failure', output: null, mode: 'full-claude', reviewer: 'claude', state: { ...eligibleState(), events: claimEvents('agent-ready-full-claude') } }), /review job ended with 'failure'/);
+    });
+  }
+
+  it('refuses a review job that succeeded but delivered no artifact (the silent-loss case)', () => {
+    assertSuppressed(publish({ output: null }), /could not be delivered: missing: The reviewer job reported no review artifact id/);
+  });
+
+  const envelope = (overrides = {}) => envelopeFor(readyOutput(), { mode: 'cross-claude', implementer: 'claude', reviewer: 'copilot', overrides });
+  const listed = (overrides = {}) => [{ id: Number(ARTIFACT_ID), name: `agent-review-result-copilot-${RUN_ID}`, size_in_bytes: 400, expired: false, workflow_run: { id: Number(RUN_ID) }, ...overrides }];
+
+  for (const [name, artifact, reason] of [
+    ['an artifact id the reviewer did not report', { envelope: envelope(), id: '999' }, /mismatch: The review artifact id does not match/],
+    ['a digest that does not match', { envelope: envelope(), digest: 'f'.repeat(64) }, /mismatch: The review artifact digest does not match/],
+    ['a missing digest output', { envelope: envelope(), digest: '' }, /missing: The reviewer job reported no review artifact digest/],
+    ['an artifact of another run', { envelope: envelope(), listing: listed({ workflow_run: { id: 1 } }) }, /belongs to another workflow run/],
+    ['two artifacts with the review name', { envelope: envelope(), listing: [...listed(), ...listed({ id: 4243 })] }, /more than one review artifact/],
+    ['no listed artifact', { envelope: envelope(), listing: [] }, /missing: This run has no review artifact/],
+    ['an expired artifact', { envelope: envelope(), listing: listed({ expired: true }) }, /has expired/],
+    ['an oversized artifact', { envelope: envelope(), listing: listed({ size_in_bytes: 2 * 1024 * 1024 }) }, /oversized: The review artifact is larger than allowed/],
+    ['an extra file in the archive', { envelope: envelope(), entries: ['review-envelope.json', 'run.sh'] }, /must contain exactly review-envelope\.json/],
+    ['an empty envelope', { envelope: '' }, /empty: The review artifact is empty/],
+    ['an unparseable envelope', { envelope: '{"schema": ' }, /malformed: The review artifact is not valid JSON/],
+    ['an envelope of another pull request', { envelope: envelope({ pr_number: 268 }) }, /bound to a different pr number/],
+    ['an envelope of another head', { envelope: envelope({ head_sha: NEWER_SHA }) }, /bound to a different head sha/],
+    ['an envelope of another route', { envelope: envelope({ agent_mode: 'full-claude' }) }, /bound to a different agent mode/],
+    ['an envelope of another reviewer', { envelope: envelope({ reviewer: 'claude' }) }, /bound to a different reviewer/],
+    ['an envelope of another repository', { envelope: envelope({ repository: 'someone/else' }) }, /bound to a different repository/],
+    ['an envelope of another run', { envelope: envelope({ run_id: 1 }) }, /bound to a different run id/],
+    ['an envelope from a later attempt', { envelope: envelope({ run_attempt: 2 }) }, /different run attempt/],
+    ['an envelope with an unknown schema', { envelope: envelope({ schema: 'other' }) }, /unknown schema/],
+    ['an envelope with an extra field', { envelope: { ...envelope(), approved: true } }, /envelope shape/],
+    ['a review whose SHA differs from its envelope', { envelope: envelope({ review: readyOutput({ reviewed_head_sha: NEWER_SHA }) }) }, /wrong-sha/],
+    ['an oversized envelope', { envelope: envelope({ review: readyOutput({ validation_evidence: 'x'.repeat(600 * 1024) }) }) }, /oversized: The review artifact could not be extracted within/],
+  ]) {
+    it(`records a transport error and publishes nothing for ${name}`, () => {
+      const outcome = publish({ artifact });
+      assertSuppressed(outcome, reason);
+      assert.match(statuses(outcome.calls)[0].description, /^Review result not delivered: /, 'transport failures are distinguishable from review findings');
+    });
+  }
+
+  it('records a transport error when the artifact cannot be listed or downloaded', () => {
+    for (const unavailable of ['/artifacts?', '/zip']) {
+      const outcome = publish({ state: eligibleState({ unavailable: [unavailable] }) });
+      assertSuppressed(outcome, /unavailable: The (run artifacts could not be listed|review artifact could not be downloaded)/);
+    }
+  });
+
+  it('redacts again in the publisher even when the envelope claims none were needed', () => {
+    const outcome = publish({ artifact: { envelope: envelope({ review: changesOutput({ blockers: [`Hard-coded key sk-ant-${'x'.repeat(40)} in Program.cs`] }) }) } });
+    assert.equal(outcome.status, 0, outcome.stderr);
+    const [review] = reviews(outcome.calls);
+    assert.match(review.payload.body, /Hard-coded key \[REDACTED\] in Program\.cs/);
+    assert.match(review.payload.body, /1 secret-like value\(s\) were redacted/);
+  });
+
+  it('accepts an envelope from an earlier attempt of the same run (re-run of the publisher only)', () => {
+    const outcome = publish({ artifact: { envelope: envelope() }, env: { GITHUB_RUN_ATTEMPT: '2' } });
+    assert.equal(outcome.status, 0, outcome.stderr);
+    assert.equal(reviews(outcome.calls).length, 1);
+  });
+
+  it('never reads the review from a job output any more', () => {
+    for (const job of ['review', 'copilot-review']) {
+      const outputs = reviewWorkflow.split(`\n  ${job}:\n`)[1].split('\n    steps:\n')[0];
+      assert.doesNotMatch(outputs, /structured_output/, `${job} must not expose the review as a job output`);
+    }
+    assert.doesNotMatch(reviewWorkflow.split('\n  publish:\n')[1], /structured_output/);
   });
 });
 
@@ -551,7 +809,8 @@ describe('cross-review routing after exact-SHA validation', () => {
 });
 
 // The Copilot CLI review step (agent-review.yml copilot-review job), run against a fake `copilot`
-// in a throwaway repository. It must turn only a well-formed, marked review JSON into output.
+// in a throwaway repository. It must turn only a well-formed, marked review JSON into the raw review
+// file the package step then binds and uploads; it writes no job output.
 const copilotReviewShell = stepShell(read('.github/workflows/agent-review.yml').split('\n  publish:\n')[0], 'Run Copilot review');
 
 const CROSS_RELATION = 'This pull request was implemented by Claude, a different agent: do not rely on anything it claimed; verify it.';
@@ -578,9 +837,11 @@ function runCopilotReview(copilotOutput, { touchTree = false, token = 'cli-token
     const result = spawnSync('bash', ['-c', copilotReviewShell], {
       cwd: repo,
       encoding: 'utf8',
-      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, GITHUB_OUTPUT: outputPath, COPILOT_GITHUB_TOKEN: token, PR_NUMBER: PR, HEAD_SHA: head, BASE_REF: 'develop', REVIEW_RELATION: relation },
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, GITHUB_OUTPUT: outputPath, RUNNER_TEMP: root, COPILOT_GITHUB_TOKEN: token, PR_NUMBER: PR, HEAD_SHA: head, BASE_REF: 'develop', REVIEW_RELATION: relation },
     });
-    return { status: result.status, stderr: result.stderr + result.stdout, output: readFileSync(outputPath, 'utf8'), head, prompts: readFileSync(promptLog, 'utf8') };
+    const raw = join(root, 'review-raw.json');
+    assert.equal(readFileSync(outputPath, 'utf8'), '', 'the review must never travel as a job output');
+    return { status: result.status, stderr: result.stderr + result.stdout, output: existsSync(raw) ? readFileSync(raw, 'utf8') : '', head, prompts: readFileSync(promptLog, 'utf8') };
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -589,15 +850,14 @@ function runCopilotReview(copilotOutput, { touchTree = false, token = 'cli-token
 const marked = (review) => `Reviewed the diff.\n\nBEGIN_REVIEW_JSON\n\`\`\`json\n${JSON.stringify(review, null, 2)}\n\`\`\`\nEND_REVIEW_JSON\n`;
 
 describe('Copilot CLI final review output', () => {
-  it('emits the last marked review JSON as compact structured output', () => {
+  it('writes the last marked review JSON as compact raw review for the package step', () => {
     const stale = marked(readyOutput({ reviewed_head_sha: '@SHA@', validation_evidence: 'draft' }));
     const outcome = runCopilotReview(stale + marked(changesOutput({ reviewed_head_sha: '@SHA@' })));
     assert.equal(outcome.status, 0, outcome.stderr);
-    const json = outcome.output.split('\n')[1];
-    const parsed = JSON.parse(json);
+    assert.equal(outcome.output.trim().split('\n').length, 1, 'compact single-line JSON');
+    const parsed = JSON.parse(outcome.output);
     assert.equal(parsed.reviewed_head_sha, outcome.head);
     assert.equal(parsed.verdict, 'CHANGES REQUESTED');
-    assert.match(outcome.output, /^structured_output<<REVIEW_[0-9a-f]{32}\n/);
   });
 
   for (const [name, text] of [

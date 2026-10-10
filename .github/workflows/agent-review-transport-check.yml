@@ -1,0 +1,158 @@
+name: Agent review transport check
+
+# Live GitHub Actions check of the review-result hand-off used by agent-review.yml (PR #558).
+#
+# GitHub withholds a job output that contains any masked value ("Skip output ... since it may contain
+# secret"). That once lost a finished review on its way to the publisher. agent-review.yml now passes
+# the review as a run-bound artifact instead. This workflow proves that hand-off on real runners:
+# - the `package` job builds a fixture review whose text contains a value masked in that job and a
+#   secret-shaped fake token, packages it with scripts/agent-review-transport.mjs and uploads it with
+#   the same pinned upload-artifact action and one-day retention;
+# - the `verify` job fetches it through the Actions API by id and digest with the same script and
+#   checks that the review arrived intact and the secret-shaped value was redacted.
+# It also reports whether GitHub withheld the same text when it was offered as a job output, which is
+# the original failure. No secret, no model and no write permission is involved; the fixture token is
+# fake.
+
+on:
+  pull_request:
+    branches:
+      - develop
+      - main
+    paths:
+      - scripts/agent-review-transport.mjs
+      - .github/workflows/agent-review.yml
+      - .github/workflows/agent-review-transport-check.yml
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: agent-review-transport-check-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: Package and upload a fixture review
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      artifact_digest: ${{ steps.package.outputs.digest }}
+      # The original transport, kept only to show GitHub withholding it: never read by a publisher.
+      withheld_review: ${{ steps.fixture.outputs.review }}
+    env:
+      PR_NUMBER: '1'
+      HEAD_SHA: ${{ github.sha }}
+      AGENT_MODE: cross-claude
+      IMPLEMENTER: claude
+      REVIEWER: copilot
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Build a fixture review containing a masked value
+        id: fixture
+        run: |
+          set -euo pipefail
+          masked="masked-$(openssl rand -hex 16)"
+          echo "::add-mask::$masked"
+          fake_token="ghs_$(openssl rand -hex 18)"
+          jq -n --arg sha "$HEAD_SHA" --arg masked "$masked" --arg token "$fake_token" '{
+            reviewed_head_sha: $sha,
+            verdict: "CHANGES REQUESTED",
+            blockers: ["Fixture blocker that quotes \($masked)."],
+            criteria: [{ criterion: "Fixture criterion", status: "not met", evidence: "Fixture evidence." }],
+            suggestions: [],
+            validation_evidence: "The log printed GH_TOKEN=\($token) by mistake.",
+            inline_comments: []
+          }' > "$RUNNER_TEMP/review-raw.json"
+          echo "$masked" > "$RUNNER_TEMP/masked-value"
+          echo "review=$(jq -c . "$RUNNER_TEMP/review-raw.json")" >> "$GITHUB_OUTPUT"
+
+      - name: Package review result
+        id: package
+        run: |
+          set -euo pipefail
+          result_dir="$RUNNER_TEMP/agent-review-result"
+          mkdir -p "$result_dir"
+          summary="$(node scripts/agent-review-transport.mjs package "$RUNNER_TEMP/review-raw.json" "$result_dir/review-envelope.json")"
+          echo "Packaged review result: $summary"
+          [ "$(jq -r '.redactions' <<<"$summary")" = "1" ] || { echo "::error::The fake token was not redacted before upload."; exit 1; }
+          if grep -q 'ghs_' "$result_dir/review-envelope.json"; then echo "::error::The stored artifact keeps the fake token."; exit 1; fi
+          grep -qF "$(cat "$RUNNER_TEMP/masked-value")" "$result_dir/review-envelope.json" || { echo "::error::The masked value did not reach the artifact."; exit 1; }
+          echo "name=$(jq -r '.name' <<<"$summary")" >> "$GITHUB_OUTPUT"
+          echo "digest=$(jq -r '.digest' <<<"$summary")" >> "$GITHUB_OUTPUT"
+
+      - name: Upload review result
+        id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: ${{ runner.temp }}/agent-review-result/review-envelope.json
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
+  verify:
+    name: Fetch and verify the review artifact
+    needs: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    env:
+      PR_NUMBER: '1'
+      HEAD_SHA: ${{ github.sha }}
+      AGENT_MODE: cross-claude
+      IMPLEMENTER: claude
+      REVIEWER: copilot
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Report the job-output failure mode
+        env:
+          WITHHELD_REVIEW: ${{ needs.package.outputs.withheld_review }}
+        run: |
+          if [ -z "$WITHHELD_REVIEW" ]; then
+            echo "::notice::GitHub withheld the review job output because it contains a masked value: the PR #558 failure reproduced, and the artifact path below is what delivers the review."
+          else
+            echo "::warning::GitHub did not withhold the job output this time; the artifact path is still the only one agent-review.yml uses."
+          fi
+
+      - name: Fetch and verify review artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVIEW_ARTIFACT_ID: ${{ needs.package.outputs.artifact_id }}
+          REVIEW_ARTIFACT_DIGEST: ${{ needs.package.outputs.artifact_digest }}
+        run: |
+          set -euo pipefail
+          summary="$(node scripts/agent-review-transport.mjs fetch "$RUNNER_TEMP/review.json")"
+          [ "$(jq -r '.redactions' <<<"$summary")" = "1" ] || { echo "::error::Unexpected redaction count."; exit 1; }
+          jq -e --arg sha "$HEAD_SHA" '.reviewed_head_sha == $sha and .verdict == "CHANGES REQUESTED"' "$RUNNER_TEMP/review.json" >/dev/null \
+            || { echo "::error::The review did not arrive intact."; exit 1; }
+          jq -e '.validation_evidence == "The log printed GH_TOKEN=[REDACTED] by mistake."' "$RUNNER_TEMP/review.json" >/dev/null \
+            || { echo "::error::The fake token was not redacted."; exit 1; }
+          jq -e '.blockers[0] | test("^Fixture blocker that quotes masked-[0-9a-f]{32}\\.$")' "$RUNNER_TEMP/review.json" >/dev/null \
+            || { echo "::error::The text containing the masked value was lost."; exit 1; }
+
+      - name: Refuse a tampered digest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVIEW_ARTIFACT_ID: ${{ needs.package.outputs.artifact_id }}
+        run: |
+          set -uo pipefail
+          if REVIEW_ARTIFACT_DIGEST="$(printf 'f%.0s' {1..64})" node scripts/agent-review-transport.mjs fetch "$RUNNER_TEMP/tampered.json" 2>"$RUNNER_TEMP/err.txt"; then
+            echo "::error::A wrong digest was accepted."; exit 1
+          fi
+          grep -q '^mismatch: The review artifact digest does not match' "$RUNNER_TEMP/err.txt" || { echo "::error::Unexpected refusal reason."; exit 1; }
