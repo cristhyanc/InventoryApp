@@ -55,13 +55,10 @@ public static class BusinessRoles
 
         var trimmed = name.Trim();
 
-        foreach (var candidate in All)
+        foreach (var candidate in All.Where(candidate => string.Equals(candidate.ToString(), trimmed, StringComparison.OrdinalIgnoreCase)))
         {
-            if (string.Equals(candidate.ToString(), trimmed, StringComparison.OrdinalIgnoreCase))
-            {
-                role = candidate;
-                return true;
-            }
+            role = candidate;
+            return true;
         }
 
         return false;
