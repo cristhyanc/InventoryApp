@@ -211,12 +211,16 @@ ConnectionStrings__DefaultConnection
 NayaxLynx__BaseUrl
 NayaxLynx__OperatorId
 NayaxLynx__AccessToken
+NayaxTokenProtection__ActiveKeyId
+NayaxTokenProtection__Keys__<key-id>
 PlatformAdmin__DirectoryTenantId
 PlatformAdmin__ObjectId
 APPLICATIONINSIGHTS_CONNECTION_STRING
 ```
 
 `NayaxLynx__BaseUrl` and `NayaxLynx__OperatorId` are non-secret and validated at startup — the API refuses to start with a missing or invalid value rather than failing on the first Nayax call. `NayaxLynx__AccessToken` is the Nayax Core bearer token, a secret: set it through user-secrets locally or Key Vault/App Service configuration in Azure, and it is never logged. The already deployed secret, `Nayax__Token`, keeps working as a fallback with no rollout required — `Inventory.Infrastructure.Nayax.NayaxLynxConfiguration.ResolveAccessToken` prefers `NayaxLynx__AccessToken` when both are set. New environments should set `NayaxLynx__AccessToken`; `Nayax__Token` is retained only for the deployment that predates this consolidation.
+
+`NayaxTokenProtection__ActiveKeyId` and `NayaxTokenProtection__Keys__<key-id>` are the encryption keys a business's **own** stored Nayax access token is protected with (issue #518). Each key is a base64-encoded 256-bit (32-byte) AES key and is a secret: set it with `dotnet user-secrets` locally or Key Vault/App Service configuration in Azure, and never commit it. `ActiveKeyId` names the key new ciphertext is produced with, and the key id is stored beside each ciphertext, so a rotation adds a second `Keys__<key-id>` entry and repoints `ActiveKeyId` while the previous key stays configured until nothing names it any more; removing a key is what retires it, and it makes anything still encrypted with it undecryptable on purpose. A half-configured section — an active key id with no matching key, a value that is not base64, a key of the wrong length — fails at startup with the setting named. **The section is empty in `appsettings.json`, and that is the shipped state**: with no key configured the API starts and runs completely normally, and only storing or reading a *per-business* Nayax token fails closed. Nothing reads a per-business connection yet — the Nayax client still uses the single `NayaxLynx__*` configuration above — so provisioning the production key is a human step that must happen before the existing business's credential is moved into the table. See [docs/architecture.md § Per-business Nayax connection](docs/architecture.md#per-business-nayax-connection-issue-518).
 
 `APPLICATIONINSIGHTS_CONNECTION_STRING` is the Application Insights connection string, a secret that is never committed — see [Observability and error diagnostics](#observability-and-error-diagnostics). Unlike the Nayax settings it is optional: with the variable absent or blank no telemetry is registered at all and the API starts and runs normally, which is what local development and the automated tests do.
 

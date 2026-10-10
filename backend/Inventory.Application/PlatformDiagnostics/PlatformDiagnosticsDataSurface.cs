@@ -23,8 +23,8 @@ public sealed record PlatformDiagnosticsTable(string Table, IReadOnlyList<string
 ///
 /// Three families are absent on purpose and must stay absent: <c>BusinessMemberships</c> (Entra
 /// <c>(tid, oid)</c> identity data), the <c>Nayax*</c> and <c>Imported*</c> tables (raw remote
-/// payloads, and where future Nayax token configuration of issue #327 would land), and every
-/// free-text or monetary column on the tables that are listed.
+/// payloads, and - since issue #518 - <c>BusinessNayaxConnections</c>, each business's own Nayax
+/// credentials), and every free-text or monetary column on the tables that are listed.
 ///
 /// This type is the authoritative contract. <c>Inventory.Infrastructure</c> enforces it inside
 /// SQLite itself; nothing may re-state it, widen it per request, or accept it from a caller.

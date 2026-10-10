@@ -199,6 +199,17 @@ else
     builder.Services.AddNayaxLynxClient(nayaxLynxOptions);
 }
 
+// Encryption of each business's own stored Nayax access token (issue #518). Registered for every
+// environment, including the E2E host: the keys are secret configuration this root reads, and with
+// the section absent the registration is the fail-closed protector, so the API starts normally and
+// only storing or reading a per-business token fails. Nothing reads a per-business connection yet -
+// the Nayax client above still uses the single configured operator/token until issue #520. See
+// Inventory.Infrastructure.Nayax.NayaxTokenProtectionOptions and README.md § Configuration and
+// secrets.
+builder.Services.AddNayaxTokenProtection(
+    builder.Configuration.GetSection(NayaxTokenProtectionOptions.SectionName).Get<NayaxTokenProtectionOptions>()
+        ?? new NayaxTokenProtectionOptions());
+
 // Tenancy (issue #64). Claims parsing stays at this boundary: EntraActorIdentityAccessor is the
 // only implementation of the Application's actor port, and the current-business abstraction
 // itself (ICurrentBusinessProvider) is registered by AddApplicationServices().
