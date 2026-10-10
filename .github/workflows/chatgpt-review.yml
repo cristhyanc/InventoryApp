@@ -21,7 +21,8 @@ name: ChatGPT final review
 #   records the per-SHA `chatgpt-review-verdict` status.
 # - A CHANGES REQUESTED review starts with `@claude repair`. On a Claude `agent/issue-*` pull request a
 #   separate least-privilege `dispatch-repair` job then dispatches agent-repair.yml from `main`
-#   for that exact head and review; agent-repair.yml verifies the review itself and caps these
+#   for that exact head, review and run; agent-repair.yml verifies the review, proves through the
+#   Actions API that this run posted it (scripts/chatgpt-repair-provenance.mjs), and caps these
 #   repairs at two per pull request. A repaired head is validated, agent-reviewed and, if ready,
 #   ChatGPT-reviewed again; that two-repair limit is what ends the cycle.
 # - Nothing here approves, merges, labels, pushes or deploys. Human approval remains the merge gate.
@@ -329,7 +330,10 @@ jobs:
           fi
 
           # The publisher, not the model, writes the reviewer, the SHA, the verdict line and the advisory sentence.
-          jq -r --arg sha "$HEAD_SHA" --arg run "$RUN_URL" --arg model "$OPENAI_MODEL" '
+          # The last line ties the review to this run; agent-repair.yml checks it against the Actions API
+          # (scripts/chatgpt-repair-provenance.mjs) before it accepts an automatic repair request.
+          jq -r --arg sha "$HEAD_SHA" --arg run "$RUN_URL" --arg model "$OPENAI_MODEL" \
+            --arg run_id "$GITHUB_RUN_ID" --arg attempt "$GITHUB_RUN_ATTEMPT" --arg pr "$PR_NUMBER" '
             def bullets(xs): if (xs | length) == 0 then "none" else ([xs[] | "- \(.)"] | join("\n")) end;
             (if .verdict == "CHANGES REQUESTED" then "@claude repair Fix the blockers listed in this ChatGPT review.\n\n" else "" end)
             + "Reviewer: ChatGPT (OpenAI \($model)), final advisory review\nHead SHA reviewed: \($sha)\n\nVERDICT: \(.verdict)\n\n"
@@ -338,6 +342,7 @@ jobs:
             + "\n\nNon-blocking suggestions:\n" + bullets(.suggestions)
             + "\n\nThis verdict applies only to \($sha). Published by \($run)."
             + "\n\nThis is an advisory review. Human approval and branch protection remain the merge gate."
+            + "\n\n<!-- chatgpt-review-provenance run_id=\($run_id) run_attempt=\($attempt) pr=\($pr) head_sha=\($sha) -->"
           ' "$work/review.json" > "$work/body.md"
           [ "$(grep -c '^VERDICT:' "$work/body.md" || true)" = "1" ] || suppress "the rendered review must contain exactly one verdict line."
 
@@ -404,6 +409,8 @@ jobs:
           PR_NUMBER: ${{ needs.context.outputs.pr_number }}
           HEAD_SHA: ${{ needs.context.outputs.head_sha }}
           REVIEW_ID: ${{ needs.publish.outputs.review_id }}
+          SOURCE_RUN_ID: ${{ github.run_id }}
+          SOURCE_RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
           fail() { echo "::error::$1"; exit 1; }
@@ -422,5 +429,7 @@ jobs:
             --ref main \
             -f pr_number="$PR_NUMBER" \
             -f head_sha="$HEAD_SHA" \
-            -f review_id="$REVIEW_ID"
+            -f review_id="$REVIEW_ID" \
+            -f source_run_id="$SOURCE_RUN_ID" \
+            -f source_run_attempt="$SOURCE_RUN_ATTEMPT"
           echo "::notice::Dispatched agent-repair.yml for ChatGPT review $REVIEW_ID on $HEAD_SHA."

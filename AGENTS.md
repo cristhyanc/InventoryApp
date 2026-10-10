@@ -42,6 +42,7 @@ frontend/inventory-app/eslint.config.js    Angular/TypeScript ESLint flat config
 scripts/validate.ps1                  Complete Windows validation
 scripts/validate.sh                   Complete Bash validation
 scripts/validate-agent-workflows.mjs  Agent workflow and template contract checks (with .test.mjs and chatgpt-review-contract.test.mjs)
+scripts/chatgpt-repair-provenance.mjs Proves an automatic repair request came from a chatgpt-review.yml run (with .test.mjs)
 scripts/validate-deployment-workflows.mjs  Production deployment workflow contract checks (with .test.mjs)
 scripts/deployment-migration-preflight.mjs Deploy Production migration preflight (with .test.mjs)
 scripts/validate-documentation-impact.mjs  Documentation-impact declaration parser for issues and PRs (with .test.mjs)

@@ -14,7 +14,9 @@ name: Agent repair
 # - Automatic repair after a ChatGPT review (chatgpt-review.yml): a CHANGES REQUESTED ChatGPT review on an
 #   agent pull request starts with `@claude repair` and is dispatched here with `workflow_dispatch` from
 #   `main` (a comment posted with GITHUB_TOKEN starts no workflow). The run verifies that the review is a
-#   ChatGPT review posted by github-actions[bot] for the exact current head, and refuses when the pull
+#   ChatGPT review posted by github-actions[bot] for the exact current head, proves through the Actions API
+#   that the named chatgpt-review.yml run posted it (scripts/chatgpt-repair-provenance.mjs; the bot identity
+#   alone proves nothing, every workflow here shares it), and refuses when the pull
 #   request would then have more than two repair requests in total (the owner's `@claude repair`
 #   comments plus ChatGPT's); the human then decides.
 # - When a repair pushes a commit, a separate least-privilege job verifies the new head and dispatches
@@ -36,6 +38,14 @@ on:
         type: string
       review_id:
         description: Id of the ChatGPT CHANGES REQUESTED review to address
+        required: true
+        type: string
+      source_run_id:
+        description: Id of the chatgpt-review.yml run that posted the review
+        required: true
+        type: string
+      source_run_attempt:
+        description: Attempt of the chatgpt-review.yml run that posted the review
         required: true
         type: string
 
@@ -83,6 +93,8 @@ jobs:
           COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
           INPUT_HEAD_SHA: ${{ inputs.head_sha }}
           INPUT_REVIEW_ID: ${{ inputs.review_id }}
+          INPUT_SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          INPUT_SOURCE_RUN_ATTEMPT: ${{ inputs.source_run_attempt }}
           REPO_OWNER: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
@@ -124,6 +136,25 @@ jobs:
             [[ "$request" == "@claude repair "* ]] || fail "Review $INPUT_REVIEW_ID does not request a repair."
             grep -q '^Reviewer: ChatGPT ' <<<"$request" || fail "Review $INPUT_REVIEW_ID is not a ChatGPT review."
             grep -q '^VERDICT: CHANGES REQUESTED$' <<<"$request" || fail "Review $INPUT_REVIEW_ID did not request changes."
+            # Provenance: the same bot identity is shared by every workflow here, so the review must be tied to
+            # one run of chatgpt-review.yml through the Actions API (scripts/chatgpt-repair-provenance.mjs,
+            # fetched from this workflow's own commit): trusted workflow and source, the run's provenance line,
+            # no other review claiming that run, posted during its successful publish job, never edited.
+            [[ "$INPUT_SOURCE_RUN_ID" =~ ^[1-9][0-9]*$ ]] || fail "The dispatch must name the ChatGPT review run."
+            [[ "$INPUT_SOURCE_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || fail "The dispatch must name the ChatGPT review run attempt."
+            provenance="$RUNNER_TEMP/chatgpt-repair-provenance"
+            mkdir -p "$provenance"
+            gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/scripts/chatgpt-repair-provenance.mjs?ref=$GITHUB_WORKFLOW_SHA" > "$RUNNER_TEMP/chatgpt-repair-provenance.mjs"
+            jq -n --arg repository "$GITHUB_REPOSITORY" --arg pr "$PR_NUMBER" --arg sha "$INPUT_HEAD_SHA" --arg review "$INPUT_REVIEW_ID" \
+              --arg run "$INPUT_SOURCE_RUN_ID" --arg attempt "$INPUT_SOURCE_RUN_ATTEMPT" \
+              '{repository: $repository, prNumber: $pr, headSha: $sha, reviewId: $review, sourceRunId: $run, sourceRunAttempt: $attempt}' > "$provenance/request.json"
+            printf '%s' "$review_json" > "$provenance/review.json"
+            gh api graphql -f query='query($id: ID!) { node(id: $id) { ... on PullRequestReview { lastEditedAt } } }' \
+              -f id="$(jq -r '.node_id' <<<"$review_json")" --jq '{lastEditedAt: .data.node.lastEditedAt}' > "$provenance/review-edit.json"
+            gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews?per_page=100" > "$provenance/reviews.json"
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$INPUT_SOURCE_RUN_ID/attempts/$INPUT_SOURCE_RUN_ATTEMPT" > "$provenance/run.json"
+            gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs/$INPUT_SOURCE_RUN_ID/attempts/$INPUT_SOURCE_RUN_ATTEMPT/jobs?per_page=100" > "$provenance/jobs.json"
+            node "$RUNNER_TEMP/chatgpt-repair-provenance.mjs" verify "$provenance" || fail "Review $INPUT_REVIEW_ID could not be proven to come from the ChatGPT review workflow."
             # Two repair attempts per pull request in total (docs/automation.md "Failure and retry policy"):
             # the owner's `@claude repair` comments plus the ChatGPT repair requests, this one included.
             human_requests="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" \
@@ -132,7 +163,7 @@ jobs:
               --jq '.[] | select(.user.login == "github-actions[bot]" and (.body // "" | startswith("@claude repair ")) and (.body // "" | test("(^|\\n)Reviewer: ChatGPT "))) | .id' | wc -l)"
             repair_requests=$((human_requests + automatic_requests))
             [ "$repair_requests" -le 2 ] || fail "Repair limit reached: this pull request already has $repair_requests repair requests ($human_requests by the owner, $automatic_requests by ChatGPT). A human must decide the next step."
-            requested_by="ChatGPT final review $INPUT_REVIEW_ID (automatic, dispatched by chatgpt-review.yml)"
+            requested_by="ChatGPT final review $INPUT_REVIEW_ID (automatic, dispatched by chatgpt-review.yml run $INPUT_SOURCE_RUN_ID)"
           else
             request="$COMMENT_BODY"
             requested_by="$COMMENT_AUTHOR"

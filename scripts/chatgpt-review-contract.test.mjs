@@ -216,6 +216,63 @@ describe('ChatGPT final review contract', () => {
     });
   });
 
+  describe('automatic repair provenance', () => {
+    const PROVENANCE_RUN = '            node "$RUNNER_TEMP/chatgpt-repair-provenance.mjs" verify "$provenance" || fail';
+
+    it('rejects dropping the provenance check from the repair intake', () => {
+      rejectsRepair(replaceOnce(repairWorkflow, PROVENANCE_RUN, '            true || fail'), /missing required text: node "\$RUNNER_TEMP\/chatgpt-repair-provenance\.mjs" verify/);
+    });
+
+    it('rejects running the provenance script from the pull request checkout or another ref', () => {
+      rejectsRepair(replaceOnce(repairWorkflow, PROVENANCE_RUN, '            node scripts/chatgpt-repair-provenance.mjs verify "$provenance" || fail'), /missing required text|node scripts\/chatgpt-repair-provenance\.mjs/);
+      rejectsRepair(
+        `${repairWorkflow}\n# gh api "repos/$GITHUB_REPOSITORY/contents/scripts/chatgpt-repair-provenance.mjs?ref=$INPUT_HEAD_SHA"\n`,
+        /must be fetched from \$GITHUB_WORKFLOW_SHA only/,
+      );
+    });
+
+    it('rejects dropping the run, jobs, reviews or edit evidence', () => {
+      for (const evidence of [
+        '"repos/$GITHUB_REPOSITORY/actions/runs/$INPUT_SOURCE_RUN_ID/attempts/$INPUT_SOURCE_RUN_ATTEMPT" > "$provenance/run.json"',
+        '"repos/$GITHUB_REPOSITORY/actions/runs/$INPUT_SOURCE_RUN_ID/attempts/$INPUT_SOURCE_RUN_ATTEMPT/jobs?per_page=100" > "$provenance/jobs.json"',
+        '"repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews?per_page=100" > "$provenance/reviews.json"',
+        '... on PullRequestReview { lastEditedAt }',
+      ]) {
+        rejectsRepair(replaceOnce(repairWorkflow, evidence, 'nothing'), /ChatGPT repair intake: missing required text/);
+      }
+    });
+
+    it('rejects accepting the request before provenance is proven', () => {
+      const accepted = '            requested_by="ChatGPT final review $INPUT_REVIEW_ID (automatic, dispatched by chatgpt-review.yml run $INPUT_SOURCE_RUN_ID)"\n';
+      const moved = replaceOnce(replaceOnce(repairWorkflow, accepted, ''), '            # Provenance: the same bot identity', `${accepted}            # Provenance: the same bot identity`);
+      rejectsRepair(moved, /provenance must be proven before the request is accepted/);
+    });
+
+    it('rejects a dispatch that does not name the source run', () => {
+      rejects(replaceOnce(workflow, ' \\\n            -f source_run_id="$SOURCE_RUN_ID"', ''), /repair dispatcher: missing required text/);
+      rejectsRepair(replaceOnce(repairWorkflow, '      source_run_attempt:\n', '      source_attempt:\n'), /missing required text:       source_run_attempt:/);
+    });
+
+    it('rejects a review without the provenance line or with a renamed publish job', () => {
+      rejects(replaceOnce(workflow, ' run_attempt=\\($attempt)', ''), /publish job: missing required text: "\\n\\n<!-- chatgpt-review-provenance/);
+      rejects(replaceOnce(workflow, '    name: Guarded review publication\n', '    name: Publish review\n'), /publish job: missing required text:     name: Guarded review publication/);
+      rejects(replaceOnce(workflow, '    name: Dispatch agent repair for a changes-requested review\n', '    name: Dispatch repair\n'), /repair dispatcher: missing required text:     name: Dispatch agent repair/);
+    });
+
+    it('rejects any other workflow that requests a repair or writes a ChatGPT review', () => {
+      const other = '.github/workflows/agent-review.yml';
+      const original = readRepositoryFile(other);
+      for (const addition of [
+        '# gh workflow run agent-repair.yml --ref main -f pr_number=1\n',
+        '# gh workflow run "Agent repair" --ref main\n',
+        '# printf "Reviewer: ChatGPT (forged)"\n',
+        '# <!-- chatgpt-review-provenance run_id=1 run_attempt=1 pr=1 head_sha=x -->\n',
+      ]) {
+        rejects(`${addition}${original}`, /only chatgpt-review\.yml may request a ChatGPT repair/, other);
+      }
+    });
+  });
+
   describe('agent review must pass before ChatGPT reviews', () => {
     it('rejects treating a missing agent verdict as passed', () => {
       rejects(

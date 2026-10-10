@@ -1,4 +1,5 @@
 import { readFileSync, readdirSync } from 'node:fs';
+import { DISPATCH_JOB_NAME, MARKER_PREFIX, PUBLISH_JOB_NAME, provenanceMarker } from './chatgpt-repair-provenance.mjs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FULL_PROVIDER_EXECUTION_ENABLED } from './select-implementation-model.mjs';
@@ -1413,8 +1414,13 @@ export const CHATGPT_REVIEW_CONTRACT = Object.freeze({
     '[ "$(jq -r \'.headRefOid\' <<<"$pr_json")" = "$HEAD_SHA" ] || fail "Refusing stale repair dispatch',
     '[[ "$(jq -r \'.headRefName\' <<<"$pr_json")" == agent/issue-* ]] || fail',
     'jq -e \'any(.labels[]?; .name == "agent-review")\' <<<"$pr_json" >/dev/null || fail',
-    'gh workflow run agent-repair.yml \\\n            --repo "$GITHUB_REPOSITORY" \\\n            --ref main \\\n            -f pr_number="$PR_NUMBER" \\\n            -f head_sha="$HEAD_SHA" \\\n            -f review_id="$REVIEW_ID"',
+    'gh workflow run agent-repair.yml \\\n            --repo "$GITHUB_REPOSITORY" \\\n            --ref main \\\n            -f pr_number="$PR_NUMBER" \\\n            -f head_sha="$HEAD_SHA" \\\n            -f review_id="$REVIEW_ID" \\\n            -f source_run_id="$SOURCE_RUN_ID" \\\n            -f source_run_attempt="$SOURCE_RUN_ATTEMPT"',
+    'SOURCE_RUN_ID: ${{ github.run_id }}',
+    'SOURCE_RUN_ATTEMPT: ${{ github.run_attempt }}',
   ],
+  // The provenance line agent-repair.yml checks; it must match scripts/chatgpt-repair-provenance.mjs.
+  provenanceLine: provenanceMarker({ runId: '\\($run_id)', runAttempt: '\\($attempt)', prNumber: '\\($pr)', headSha: '\\($sha)' }),
+  provenanceArgs: '--arg run_id "$GITHUB_RUN_ID" --arg attempt "$GITHUB_RUN_ATTEMPT" --arg pr "$PR_NUMBER"',
   openAiSecret: 'secrets.OPENAI_API_KEY',
   triggers: ['  pull_request_target:\n    types: [labeled]\n    branches:\n      - develop\n', '  workflow_dispatch:\n'],
   forbiddenTriggers: ['  pull_request:\n', 'workflow_run', 'push:', 'issue_comment', 'schedule:'],
@@ -1478,6 +1484,21 @@ function verifyChatGptRepairHandOff(publish, dispatcher, contract, source) {
   if (dispatcher.split('gh workflow run').length !== 2) throw new Error(`${source} repair dispatcher: must dispatch exactly one workflow, agent-repair.yml.`);
   for (const forbidden of ['secrets.OPENAI_API_KEY', 'actions/checkout', 'gh pr comment', 'gh pr review', 'gh pr edit', 'gh pr merge', 'statuses/']) forbidText(dispatcher, forbidden, `${source} repair dispatcher`);
   requireOrder(dispatcher, 'Refusing stale repair dispatch', 'gh workflow run agent-repair.yml', `${source} repair dispatcher`, 'the head must be rechecked before the repair is dispatched.');
+  // agent-repair.yml finds the run's jobs by these names and the review by this line.
+  requireText(publish, `    name: ${PUBLISH_JOB_NAME}\n`, `${source} publish job`);
+  requireText(dispatcher, `    name: ${DISPATCH_JOB_NAME}\n`, `${source} repair dispatcher`);
+  requireText(publish, `"\\n\\n${contract.provenanceLine}"`, `${source} publish job`);
+  requireText(publish, contract.provenanceArgs, `${source} publish job`);
+}
+
+// Only chatgpt-review.yml may request an automatic repair or write a ChatGPT provenance line, so a
+// matching review or dispatch from any other workflow in this repository is a contract failure.
+function verifyChatGptRepairSources(read) {
+  for (const path of listWorkflowFiles()) {
+    if (path === chatGptReviewPath || path === repairPath) continue;
+    const text = read(path);
+    for (const forbidden of ['agent-repair', 'Agent repair', MARKER_PREFIX.trim(), 'Reviewer: ChatGPT']) forbidText(text, forbidden, `${path} (only chatgpt-review.yml may request a ChatGPT repair)`);
+  }
 }
 
 // agent-repair.yml accepts a dispatched ChatGPT repair request only from main, only for a review the
@@ -1503,7 +1524,16 @@ export const CHATGPT_REPAIR_INTAKE_CONTRACT = Object.freeze({
     'select(.user.login == $owner and (.body // "" | startswith("@claude repair")))',
     'repair_requests=$((human_requests + automatic_requests))',
     '[ "$repair_requests" -le 2 ] || fail "Repair limit reached',
+    '[[ "$INPUT_SOURCE_RUN_ID" =~ ^[1-9][0-9]*$ ]] || fail',
+    '[[ "$INPUT_SOURCE_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || fail',
+    'gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/scripts/chatgpt-repair-provenance.mjs?ref=$GITHUB_WORKFLOW_SHA" > "$RUNNER_TEMP/chatgpt-repair-provenance.mjs"',
+    '... on PullRequestReview { lastEditedAt }',
+    'gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews?per_page=100" > "$provenance/reviews.json"',
+    'gh api "repos/$GITHUB_REPOSITORY/actions/runs/$INPUT_SOURCE_RUN_ID/attempts/$INPUT_SOURCE_RUN_ATTEMPT" > "$provenance/run.json"',
+    'gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs/$INPUT_SOURCE_RUN_ID/attempts/$INPUT_SOURCE_RUN_ATTEMPT/jobs?per_page=100" > "$provenance/jobs.json"',
+    'node "$RUNNER_TEMP/chatgpt-repair-provenance.mjs" verify "$provenance" || fail',
   ],
+  provenanceInputs: ['      source_run_id:\n', '      source_run_attempt:\n', 'INPUT_SOURCE_RUN_ID: ${{ inputs.source_run_id }}', 'INPUT_SOURCE_RUN_ATTEMPT: ${{ inputs.source_run_attempt }}'],
 });
 
 function verifyChatGptRepairIntake(repair) {
@@ -1517,6 +1547,13 @@ function verifyChatGptRepairIntake(repair) {
   const verify = section(job, '      - name: Resolve and verify pull request head\n', '      - name: Check out pull request head branch\n', source);
   const dispatchBranch = section(verify, 'if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then\n', '\n          else\n', source);
   for (const required of contract.verifyRequired) requireText(dispatchBranch, required, source);
+  for (const required of contract.provenanceInputs) requireText(repair, required, source);
+  // The provenance script is always the trusted copy, never one from the pull request checkout.
+  forbidText(repair, 'node scripts/chatgpt-repair-provenance.mjs', source);
+  if (repair.split('chatgpt-repair-provenance.mjs?ref=').length !== repair.split('chatgpt-repair-provenance.mjs?ref=$GITHUB_WORKFLOW_SHA').length) {
+    throw new Error(`${source}: chatgpt-repair-provenance.mjs must be fetched from $GITHUB_WORKFLOW_SHA only.`);
+  }
+  requireOrder(dispatchBranch, 'node "$RUNNER_TEMP/chatgpt-repair-provenance.mjs" verify', 'requested_by=', source, 'provenance must be proven before the request is accepted.');
   requireOrder(verify, 'if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then', 'echo "start_sha=$start_sha" >> "$GITHUB_OUTPUT"', source, 'the dispatched request must be verified before the repair starts.');
   const agent = section(job, '      - name: Run Claude Code repair agent\n', '      - name: Verify repair result\n', source);
   requireText(agent, 'REQUEST COMMENT:\n            ${{ steps.pr.outputs.request }}', source);
@@ -1530,6 +1567,7 @@ export function verifyChatGptReview(read = readRepositoryFile) {
   const source = chatGptReviewPath;
   const workflow = read(chatGptReviewPath);
   verifyChatGptRepairIntake(read(repairPath));
+  verifyChatGptRepairSources(read);
 
   const triggers = section(workflow, '\non:\n', '\npermissions: {}\n', `${source} triggers`);
   for (const required of contract.triggers) requireText(triggers, required, `${source} triggers`);
