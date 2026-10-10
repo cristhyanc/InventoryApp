@@ -29,11 +29,17 @@ public sealed class GetSiteProducts
             .ToList();
         if (machines.Count == 0) return [];
 
-        var machineProducts = (await Task.WhenAll(
-                machines.Select(machine => _nayax.GetMachineProductsAsync(machine.MachineID, cancellationToken))))
-            .SelectMany(items => items)
-            .Where(mp => mp.NayaxProductID.HasValue)
-            .ToList();
+        // Paired with the machine the request was actually made for, not re-derived from the
+        // response's own MachineID field: GET .../machineProducts documents MachineID as nullable,
+        // and CalculateReorderNeeds/GetPickList already avoid trusting it for the same reason.
+        var machineProductsByMachine = await Task.WhenAll(
+            machines.Select(async machine => (
+                Machine: machine,
+                Products: (await _nayax.GetMachineProductsAsync(machine.MachineID, cancellationToken))
+                    .Where(mp => mp.NayaxProductID.HasValue)
+                    .ToList())));
+
+        var machineProducts = machineProductsByMachine.SelectMany(entry => entry.Products).ToList();
 
         // The effective-dated commission and Nayax fee configuration is selected by the Australia/Sydney
         // business date (issue #310), not the host's local date, exactly as ResolveMachineProductPricing
@@ -61,15 +67,15 @@ public sealed class GetSiteProducts
             mp.PAR ?? 0,
             mp.MissingStockByMDB ?? 0));
 
-        var machineById = machines.ToDictionary(machine => machine.MachineID);
-        var machineMdbCodesByProduct = machineProducts
-            .GroupBy(mp => mp.NayaxProductID!.Value)
+        var machineMdbCodesByProduct = machineProductsByMachine
+            .SelectMany(entry => entry.Products.Select(mp => (entry.Machine, Product: mp)))
+            .GroupBy(pair => pair.Product.NayaxProductID!.Value)
             .ToDictionary(
                 group => group.Key,
                 group => (IReadOnlyList<SiteProductMachineMdbCode>)group
-                    .OrderBy(mp => mp.MachineID)
-                    .Select(mp => new SiteProductMachineMdbCode(
-                        mp.MachineID, MachineLabel(machineById[mp.MachineID]), mp.MDBCode))
+                    .OrderBy(pair => pair.Machine.MachineID)
+                    .Select(pair => new SiteProductMachineMdbCode(
+                        pair.Machine.MachineID, MachineLabel(pair.Machine), pair.Product.MDBCode))
                     .ToList());
 
         return SiteProductPricingPolicy
