@@ -269,6 +269,27 @@ public class BusinessBootstrapTests : IDisposable
         Assert.Equal(BusinessRole.Owner, Assert.Single(db.BusinessMemberships.ToList()).Role);
     }
 
+    /// <summary>
+    /// Creating a membership is a state change, so the row records when it happened (issue #522):
+    /// <c>StatusChangedAtUtc</c> is the creation instant, not the unset default a later feature
+    /// would read as "changed at the beginning of time". This command is the only path that
+    /// creates a membership today, so it is the only path that can get this wrong.
+    /// </summary>
+    [Fact]
+    public async Task A_created_membership_records_when_its_state_changed()
+    {
+        SeedUnassignedBusinessData();
+
+        var result = await RunAsync(ValidOptions(), dryRun: false);
+
+        Assert.True(result.Succeeded, result.Message);
+
+        using var db = TestAppDbContext.Unrestricted(_options);
+        var membership = Assert.Single(db.BusinessMemberships.ToList());
+        Assert.Equal(membership.CreatedAtUtc, membership.StatusChangedAtUtc);
+        Assert.NotEqual(default, membership.StatusChangedAtUtc);
+    }
+
     [Theory]
     [InlineData("Owner", BusinessRole.Owner)]
     [InlineData("Manager", BusinessRole.Manager)]

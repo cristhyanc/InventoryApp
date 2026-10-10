@@ -389,6 +389,9 @@ public sealed class BusinessBootstrapper
                 Role = role,
                 IsActive = true,
                 CreatedAtUtc = recordedAt,
+                // Creation is a state change like any other (issue #522), so the row records when
+                // it happened from the start rather than only once somebody revokes it.
+                StatusChangedAtUtc = recordedAt,
             });
             created++;
         }

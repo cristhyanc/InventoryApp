@@ -268,6 +268,78 @@ rolls back automatically if any row count or financial total moved. Then check b
 - **Ownership was assigned to the wrong business.** Restore from the backup. Do not attempt to
   reassign rows by hand; ownership is immutable through the application and editing it directly
   bypasses every check in the boundary.
+- **A migration refused to apply with "holds more than one active BusinessMembership".** That is
+  the `AddOneActiveMembershipPerIdentity` migration of issue #522 declining to guess which
+  business a person stays in. Nothing was changed. See
+  [One active membership per identity](#one-active-membership-per-identity-issue-522) below.
+
+## One active membership per identity (issue #522)
+
+A person belongs to one business at a time, and since issue #522 the database enforces it: a
+unique index allows at most one **active** `BusinessMembership` per Entra identity
+(`(DirectoryTenantId, ObjectId)`), whatever state the owning businesses are in. Revoked rows are
+unaffected — any number may exist — so revoking a membership is how somebody moves from one
+business to another.
+
+This matters to an operator in exactly one situation: the migration that adds the index checks the
+existing data first, and **refuses to apply** if any identity already holds more than one active
+membership.
+
+### If the migration aborts
+
+The failure looks like this (one line, wrapped here), and it is the whole of what happened:
+
+```text
+Cannot apply AddOneActiveMembershipPerIdentity: at least one identity (DirectoryTenantId,
+ObjectId) holds more than one active BusinessMembership, and this migration will not choose
+which one to keep. Revoke all but one active membership per person, then run the migration
+again. Nothing has been changed. See docs/tenant-rollout.md.
+```
+
+**Nothing was changed.** The migration runs in a transaction and aborts before its first schema
+change, so no column, no index and no row was touched, and the migration is not recorded as
+applied. The application does not start against the new code with the old schema either: startup
+migration fails closed (see [Automatic Production-startup migration](#automatic-production-startup-migration-issue-201)),
+so the API logs a critical error and refuses to serve requests rather than running against a
+schema its code does not match. Expect an outage until the data is resolved, and plan the upgrade
+accordingly.
+
+It will not pick a membership for you. Which business a person keeps access to is a decision about
+access to financial data: choosing wrongly either strands somebody or shows them another
+business's ledger, and neither is a decision a migration may make unattended.
+
+**Resolving it.**
+
+1. Find the conflicting identities. On a copy of the database, or through a read-only connection:
+
+   ```sql
+   SELECT "DirectoryTenantId", "ObjectId", COUNT(*) AS "ActiveMemberships"
+   FROM "BusinessMemberships"
+   WHERE "IsActive" = 1
+   GROUP BY "DirectoryTenantId", "ObjectId"
+   HAVING COUNT(*) > 1;
+   ```
+
+   The result is Entra identifiers, not names: the membership table deliberately stores no email
+   address or display name. Match them to people through Entra, with a person who is entitled to.
+
+2. **Ask, then decide.** For each identity, a human decides which single business that person keeps
+   — and says so to the person and to the business losing access. Do not infer it from which
+   membership is older or which business is busier.
+
+3. Back up the database, verify the backup restores, and revoke every other active membership for
+   that identity by setting `IsActive = 0` (leave the rows: they are the membership history, and
+   deleting one would lose the record that the access ever existed). There is no
+   `StatusChangedAtUtc` to set yet — the aborted migration is the one that adds that column, and
+   when it does apply it fills every row from `CreatedAtUtc`.
+
+4. Re-run the upgrade. The migration re-checks and applies normally once no identity has two
+   active memberships; the refusal is repeatable, not a one-off, so a half-resolved database stops
+   it again rather than applying with the problem still present.
+
+Note that until the duplicate exists the index never fires: the application's single live business
+cannot produce this state through any supported path, and no request path creates, revokes or
+reactivates a membership today. A database that has it, has it from a hand-written change.
 
 ## Migrating the Nayax connection into the business (issue #519)
 
