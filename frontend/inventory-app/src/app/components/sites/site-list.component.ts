@@ -71,13 +71,23 @@ export class SiteListComponent implements OnInit {
    * it, so there is one destination and one navigation path. Two kinds of click are left alone:
    * one that came from a control inside the row - the anchor included, which would otherwise
    * navigate twice - and a modified or non-primary click, which the browser handles itself.
+   * Enter is bound to the same handler so the row's pointer path has a keyboard equivalent: the
+   * row is not focusable, so Enter only reaches it from a focused control inside it (normally
+   * the anchor, which has already navigated) and is ignored by the same rule.
    */
-  followRowLink(event: MouseEvent): void {
+  followRowLink(rowEvent: Event): void {
+    // Bound to (click) and (keydown.enter) only; Angular types both template $events as Event.
+    const event = rowEvent as MouseEvent | KeyboardEvent;
     const ownControl = (event.target as Element | null)?.closest(
       'a, button, input, select, textarea, label, [role="button"]'
     );
     const browserHandlesIt =
-      event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey;
+      event.defaultPrevented ||
+      (event instanceof MouseEvent && event.button !== 0) ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.shiftKey ||
+      event.altKey;
     if (ownControl || browserHandlesIt) return;
 
     (event.currentTarget as Element).querySelector<HTMLAnchorElement>('a.table-row-anchor')?.click();

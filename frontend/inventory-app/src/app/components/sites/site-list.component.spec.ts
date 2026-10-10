@@ -175,4 +175,16 @@ describe('SiteListComponent', () => {
 
     expect(navigateByUrl).not.toHaveBeenCalled();
   });
+
+  it('navigates once when Enter is pressed on the focused link', async () => {
+    const { fixture, host } = await renderWith(() => of([site({ siteId: 42, siteName: 'North Mall' })]));
+    fixture.detectChanges();
+    const navigateByUrl = spyOnNavigateByUrl();
+
+    const link = host.querySelector('tbody tr td a') as HTMLAnchorElement;
+    link.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    link.click(); // the browser's own activation of a focused anchor on Enter
+
+    expect(navigatedUrls(navigateByUrl)).toEqual(['/sites/42/products']);
+  });
 });

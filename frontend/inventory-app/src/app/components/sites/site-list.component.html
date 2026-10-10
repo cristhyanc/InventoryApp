@@ -42,7 +42,7 @@
             </thead>
             <tbody>
               @for (site of filteredSites; track site.siteId) {
-                <tr class="table-row table-row-link" (click)="followRowLink($event)">
+                <tr class="table-row table-row-link" (click)="followRowLink($event)" (keydown.enter)="followRowLink($event)">
                   <td class="table-cell">
                     <a
                       class="table-row-anchor"
