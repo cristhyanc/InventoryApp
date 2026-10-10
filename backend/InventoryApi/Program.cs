@@ -145,8 +145,10 @@ builder.Services.AddPendingReimbursementXmlSource(new PendingReimbursementXmlOpt
     WebRootPath = builder.Environment.WebRootPath,
 });
 
-// Controlled RFC 7807 responses for Nayax upstream failures.
+// Controlled RFC 7807 responses for Nayax upstream failures, and for the current business's own
+// Nayax connection being unusable (issue #520).
 builder.Services.AddProblemDetails();
+builder.Services.AddExceptionHandler<NayaxConnectionExceptionHandler>();
 builder.Services.AddExceptionHandler<NayaxUpstreamExceptionHandler>();
 builder.Services.AddExceptionHandler<DomainExceptionHandler>();
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
@@ -183,12 +185,13 @@ builder.Services.AddCors(options =>
     });
 });
 
-// Nayax Lynx HTTP client configuration (issue #49): one typed, validated options contract
-// instead of the client separately reading IConfiguration for the token. AccessToken prefers the
-// consolidated NayaxLynx:AccessToken key and falls back to the legacy Nayax:Token key, so the
-// already deployed Key Vault/App Service secret (Nayax__Token) keeps working with no rollout.
-// An incomplete BaseUrl/OperatorId fails registration here, at startup, rather than the first
-// Nayax call. See Inventory.Infrastructure.Nayax.NayaxLynxConfiguration and
+// Nayax Lynx HTTP client configuration (issue #49): one typed, validated options contract instead
+// of the client separately reading IConfiguration. Since issue #520 the only setting it holds is
+// BaseUrl - the operator id and the bearer token are each business's own, resolved per call from
+// the current business's stored connection - so no credential is read here and there is nothing to
+// fall back to. A missing or non-https BaseUrl fails registration here, at startup, rather than the
+// first Nayax call; an operator id or token still in configuration is read only by the human-run
+// migrate-nayax-connection command. See Inventory.Infrastructure.Nayax.NayaxLynxConfiguration and
 // README.md § Configuration and secrets.
 //
 // The dedicated end-to-end testing host is the one exception (issue #46): it registers no Nayax
@@ -202,17 +205,14 @@ else
 {
     var nayaxLynxOptions = builder.Configuration.GetSection(NayaxLynxOptions.SectionName).Get<NayaxLynxOptions>()
         ?? new NayaxLynxOptions();
-    nayaxLynxOptions.AccessToken = NayaxLynxConfiguration.ResolveAccessToken(
-        builder.Configuration["NayaxLynx:AccessToken"],
-        builder.Configuration["Nayax:Token"]);
     builder.Services.AddNayaxLynxClient(nayaxLynxOptions);
 }
 
 // Encryption of each business's own stored Nayax access token (issue #518). Registered for every
 // environment, including the E2E host: the keys are secret configuration this root reads, and with
 // the section absent the registration is the fail-closed protector, so the API starts normally and
-// only storing or reading a per-business token fails. Nothing reads a per-business connection yet -
-// the Nayax client above still uses the single configured operator/token until issue #520. See
+// only storing or reading a per-business token fails - which, since issue #520, is what every
+// Nayax call needs, so an environment that uses Nayax must have a key provisioned. See
 // Inventory.Infrastructure.Nayax.NayaxTokenProtectionOptions and README.md § Configuration and
 // secrets.
 builder.Services.AddNayaxTokenProtection(

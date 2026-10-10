@@ -278,26 +278,31 @@ public static class InfrastructureServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Validates <paramref name="options"/> (<see cref="NayaxLynxConfiguration.ValidateNonSecretFields"/>)
-    /// and registers the Nayax Lynx HTTP client behind <see cref="INayaxLynxClient"/> (issue #49),
-    /// with bounded timeout/retry/circuit-breaker resilience (<see cref="NayaxResilienceHandler"/>,
+    /// Registers the Nayax Lynx HTTP client behind <see cref="INayaxLynxClient"/> (issue #49), with
+    /// bounded timeout/retry/circuit-breaker resilience (<see cref="NayaxResilienceHandler"/>,
     /// issue #48) applied to every call it makes.
-    /// <paramref name="options"/> should already have its <see cref="NayaxLynxOptions.AccessToken"/>
-    /// resolved (<see cref="NayaxLynxConfiguration.ResolveAccessToken"/>), since that is a secret
-    /// this method does not read configuration for. Validation happens here, eagerly, so a
-    /// missing base URL or operator ID fails registration at startup rather than the first Nayax
-    /// call.
+    ///
+    /// <strong>Only the base URL is global (issue #520.)</strong> The operator id and the bearer
+    /// token are each business's own: <see cref="NayaxLynxClient"/> resolves them per call from
+    /// <c>INayaxRequestCredentialProvider</c> over the current business's stored connection, so
+    /// nothing credential-shaped is registered here, baked into the shared <c>HttpClient</c>, or
+    /// available to fall back to. <paramref name="options"/> is read for its
+    /// <see cref="NayaxLynxOptions.BaseUrl"/> and is deliberately not registered in the container;
+    /// an operator id or token that is still in configuration is read only by the human-run
+    /// <c>migrate-nayax-connection</c> command.
+    ///
+    /// Validation and the base address happen here, eagerly, so a missing or non-https base URL
+    /// fails registration at startup rather than the first Nayax call.
     /// </summary>
-    /// <exception cref="InvalidOperationException">A required non-secret field is missing or invalid.</exception>
+    /// <exception cref="InvalidOperationException">The configured base URL is missing or invalid.</exception>
     public static IServiceCollection AddNayaxLynxClient(this IServiceCollection services, NayaxLynxOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
 
-        NayaxLynxConfiguration.ValidateNonSecretFields(options);
+        var baseAddress = NayaxLynxConfiguration.BuildBaseAddress(options);
 
-        services.AddSingleton(options);
         services.AddTransient<NayaxResilienceHandler>();
-        services.AddHttpClient<INayaxLynxClient, NayaxLynxClient>()
+        services.AddHttpClient<INayaxLynxClient, NayaxLynxClient>(http => http.BaseAddress = baseAddress)
             .AddHttpMessageHandler<NayaxResilienceHandler>();
 
         return services;
@@ -315,10 +320,10 @@ public static class InfrastructureServiceCollectionExtensions
     /// Two outcomes, and both are deliberate. Configured key material is validated here, eagerly,
     /// so a half-configured section fails at startup with the setting named rather than the first
     /// time an operator saves a token. No key material at all is a legitimate state - provisioning
-    /// the production key is a human step, and nothing reads a per-business connection until issue
-    /// #520 - so it registers the fail-closed <see cref="UnconfiguredNayaxTokenProtector"/>
-    /// instead of refusing to start: the API runs normally and only storing or reading a
-    /// per-business token fails.
+    /// the key is a human step, and an environment that uses no Nayax integration needs none - so
+    /// it registers the fail-closed <see cref="UnconfiguredNayaxTokenProtector"/> instead of
+    /// refusing to start: the API runs normally and only storing or reading a per-business token
+    /// fails, which since issue #520 is what every Nayax call does and nothing else does.
     ///
     /// Singleton: the decoded keys are immutable and are read on every save and every credential
     /// read.

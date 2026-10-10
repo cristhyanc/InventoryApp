@@ -42,9 +42,11 @@ public class NayaxLynxClientTests
         Assert.Equal(500, ex.StatusCodeValue);
     }
 
+    // 401 and, while permissions are unverified, 403 are deliberately absent: since issue #520 they
+    // are credential and permission answers about the current business's own connection rather than
+    // ordinary upstream failures. NayaxLynxClientConnectionGateTests owns them.
     [Theory]
     [InlineData(HttpStatusCode.BadRequest)]
-    [InlineData(HttpStatusCode.Unauthorized)]
     [InlineData(HttpStatusCode.NotFound)]
     [InlineData(HttpStatusCode.BadGateway)]
     [InlineData(HttpStatusCode.ServiceUnavailable)]
@@ -154,17 +156,54 @@ public class NayaxLynxClientTests
         Assert.Empty(logger.Messages);
     }
 
+    /// <summary>
+    /// Every request carries the credential the current business resolved, on the request itself
+    /// (issue #520). Nayax documents the access token as a <c>Bearer</c> credential in the
+    /// <c>Authorization</c> header of each request
+    /// (https://devzone.nayax.com/docs/manage-data-operations/lynx-api/security).
+    /// </summary>
     [Fact]
-    public async Task Missing_access_token_sends_no_authorization_header()
+    public async Task Every_request_carries_the_resolved_business_s_bearer_token()
     {
-        var handler = new StubHttpMessageHandler(HttpStatusCode.OK, "[]");
-        var http = new HttpClient(handler) { BaseAddress = new Uri("https://nayax.invalid") };
-        var options = new NayaxLynxOptions { BaseUrl = "https://nayax.invalid", OperatorId = "test-operator" };
+        var (client, _, handler, credentials) = CreateClientWith(HttpStatusCode.OK, "[]");
 
-        var client = new NayaxLynxClient(http, options, new CapturingLogger<NayaxLynxClient>());
         await client.GetMachinesAsync(CancellationToken.None);
 
-        Assert.Null(handler.LastRequest?.Headers.Authorization);
+        Assert.Equal("Bearer", handler.LastRequest?.Headers.Authorization?.Scheme);
+        Assert.Equal(FakeToken, handler.LastRequest?.Headers.Authorization?.Parameter);
+        Assert.Equal(1, credentials.Resolutions);
+    }
+
+    /// <summary>
+    /// The operator id in the path and the token in the header come from the same resolved
+    /// credential, so they always belong to the same business.
+    /// </summary>
+    [Fact]
+    public async Task The_operator_path_parameter_comes_from_the_resolved_credential()
+    {
+        var (client, _, handler, _) = CreateClientWith(HttpStatusCode.OK, "[]");
+
+        await client.GetProductsAsync(CancellationToken.None);
+
+        Assert.Equal(
+            "https://nayax.invalid/operational/v1/operators/test-operator/products",
+            handler.LastRequest?.RequestUri?.ToString());
+    }
+
+    /// <summary>
+    /// Nothing credential-shaped is cached on the client or its <c>HttpClient</c>: each call
+    /// resolves again, which is what makes a status that changed mid-request take effect on the
+    /// next call rather than at the end of the request.
+    /// </summary>
+    [Fact]
+    public async Task Each_call_resolves_the_credential_again()
+    {
+        var (client, _, _, credentials) = CreateClientWith(HttpStatusCode.OK, "[]");
+
+        await client.GetMachinesAsync(CancellationToken.None);
+        await client.GetDevicesAsync(CancellationToken.None);
+
+        Assert.Equal(2, credentials.Resolutions);
     }
 
     [Fact]
@@ -327,19 +366,30 @@ public class NayaxLynxClientTests
     private static (NayaxLynxClient Client, CapturingLogger<NayaxLynxClient> Logger) CreateClient(
         HttpStatusCode status, string body)
     {
-        var handler = new StubHttpMessageHandler(status, body);
-        // A deliberately unroutable host: these tests must never reach a real Nayax endpoint.
-        var http = new HttpClient(handler) { BaseAddress = new Uri("https://nayax.invalid") };
+        var (client, logger, _, _) = CreateClientWith(status, body);
+        return (client, logger);
+    }
 
-        var options = new NayaxLynxOptions
+    private static (
+        NayaxLynxClient Client,
+        CapturingLogger<NayaxLynxClient> Logger,
+        StubHttpMessageHandler Handler,
+        FakeNayaxRequestCredentialProvider Credentials) CreateClientWith(
+        HttpStatusCode status, string body)
+    {
+        var handler = new StubHttpMessageHandler(status, body);
+        // A deliberately unroutable host: these tests must never reach a real Nayax endpoint. The
+        // base address is what AddNayaxLynxClient configures from the global BaseUrl; the client
+        // itself no longer holds any configuration (issue #520).
+        var http = new HttpClient(handler)
         {
-            BaseUrl = "https://nayax.invalid",
-            OperatorId = "test-operator",
-            AccessToken = FakeToken,
+            BaseAddress = new Uri("https://nayax.invalid/operational/v1/"),
         };
 
+        var credentials = new FakeNayaxRequestCredentialProvider("test-operator", FakeToken);
         var logger = new CapturingLogger<NayaxLynxClient>();
-        return (new NayaxLynxClient(http, options, logger), logger);
+
+        return (new NayaxLynxClient(http, credentials, logger), logger, handler, credentials);
     }
 
     private sealed class StubHttpMessageHandler : HttpMessageHandler

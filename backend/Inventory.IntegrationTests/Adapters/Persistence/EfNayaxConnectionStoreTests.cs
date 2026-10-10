@@ -100,6 +100,7 @@ public class EfNayaxConnectionStoreTests
 
         Assert.Null(await store.FindAsync(CancellationToken.None));
         Assert.Null(await store.FindCredentialAsync(CancellationToken.None));
+        Assert.Null(await store.FindForOperationAsync(Allowed, CancellationToken.None));
     }
 
     [Fact]
@@ -119,6 +120,94 @@ public class EfNayaxConnectionStoreTests
         Assert.Equal(TestedAt, connection.LastTestedAtUtc);
         Assert.Equal(DateTimeKind.Utc, connection.LastTestedAtUtc!.Value.Kind);
         Assert.Equal(DateTimeKind.Utc, connection.UpdatedAtUtc.Kind);
+    }
+
+    /// <summary>
+    /// The read an ordinary Nayax call resolves its credentials through: the status, the operator
+    /// id, the token and the revision all describe the same row as it is now, including after a
+    /// save has replaced the credentials and reset the status.
+    /// </summary>
+    [Fact]
+    public async Task The_operation_read_reports_the_status_and_the_credential_of_the_same_row()
+    {
+        await using var fixture = await StoreFixture.CreateAsync();
+        var store = fixture.StoreFor(fixture.BusinessA);
+        var saved = await store.SaveCredentialAsync(OperatorId, Token, CancellationToken.None);
+        Assert.True(await store.TryApplyStatusResultAsync(
+            new NayaxConnectionStatusResult(saved.CredentialRevision, NayaxConnectionStatus.Ready, TestedAt),
+            CancellationToken.None));
+
+        var ready = await fixture.StoreFor(fixture.BusinessA)
+            .FindForOperationAsync(Allowed, CancellationToken.None);
+
+        Assert.NotNull(ready);
+        Assert.Equal(NayaxConnectionStatus.Ready, ready!.Status);
+        Assert.Equal((OperatorId, Token, 1), Values(ready.Credential));
+
+        // A save replaces the credentials and returns the connection to PendingPermissions, and the
+        // next snapshot reports both together - never the previous status beside the new token.
+        await fixture.StoreFor(fixture.BusinessA)
+            .SaveCredentialAsync(OtherOperatorId, OtherToken, CancellationToken.None);
+
+        var replaced = await fixture.StoreFor(fixture.BusinessA)
+            .FindForOperationAsync(Allowed, CancellationToken.None);
+
+        Assert.NotNull(replaced);
+        Assert.Equal(NayaxConnectionStatus.PendingPermissions, replaced!.Status);
+        Assert.Equal((OtherOperatorId, OtherToken, 2), Values(replaced.Credential));
+    }
+
+    /// <summary>
+    /// The property the snapshot exists for, pinned against the SQL the provider actually sends:
+    /// one <c>SELECT</c>, so no credential save can commit between reading the status and reading
+    /// the token and hand a caller a pair the row never held.
+    /// </summary>
+    [Fact]
+    public async Task The_operation_read_resolves_the_status_and_the_credential_in_one_statement()
+    {
+        await using var fixture = await StoreFixture.CreateAsync();
+        await fixture.StoreFor(fixture.BusinessA).SaveCredentialAsync(OperatorId, Token, CancellationToken.None);
+        var store = fixture.StoreFor(fixture.BusinessA);
+        fixture.Commands.Clear();
+
+        await store.FindForOperationAsync(Allowed, CancellationToken.None);
+
+        var select = Assert.Single(fixture.Commands.Where(command =>
+            command.Contains("BusinessNayaxConnections", StringComparison.Ordinal)));
+        Assert.StartsWith("SELECT", select, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Status", select, StringComparison.Ordinal);
+        Assert.Contains("AccessTokenCiphertext", select, StringComparison.Ordinal);
+        Assert.Contains("CredentialRevision", select, StringComparison.Ordinal);
+        Assert.DoesNotContain(Token, select, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A status the caller's gate refuses never reaches the ciphertext. The proof is a store whose
+    /// encryption key has been retired: decrypting would throw, so a snapshot that comes back
+    /// cleanly with no credential is a snapshot that never tried.
+    /// </summary>
+    [Fact]
+    public async Task A_status_the_gate_refuses_is_reported_without_touching_the_ciphertext()
+    {
+        await using var fixture = await StoreFixture.CreateAsync();
+        var store = fixture.StoreFor(fixture.BusinessA);
+        var saved = await store.SaveCredentialAsync(OperatorId, Token, CancellationToken.None);
+        Assert.True(await store.TryApplyStatusResultAsync(
+            new NayaxConnectionStatusResult(
+                saved.CredentialRevision, NayaxConnectionStatus.NeedsAttention, TestedAt),
+            CancellationToken.None));
+        var afterTheKeyWasRetired = fixture.StoreFor(fixture.BusinessA, Protector("2027-01"));
+
+        var snapshot = await afterTheKeyWasRetired.FindForOperationAsync(Allowed, CancellationToken.None);
+
+        Assert.NotNull(snapshot);
+        Assert.Equal(NayaxConnectionStatus.NeedsAttention, snapshot!.Status);
+        Assert.Null(snapshot.Credential);
+
+        // The same row, read with the gate open, does try - and fails closed.
+        await Assert.ThrowsAsync<NayaxTokenProtectionException>(
+            () => afterTheKeyWasRetired.FindForOperationAsync(
+                _ => true, CancellationToken.None));
     }
 
     [Fact]
@@ -232,6 +321,7 @@ public class EfNayaxConnectionStoreTests
 
         Assert.Null(await storeA.FindAsync(CancellationToken.None));
         Assert.Null(await storeA.FindCredentialAsync(CancellationToken.None));
+        Assert.Null(await storeA.FindForOperationAsync(Allowed, CancellationToken.None));
     }
 
     [Fact]
@@ -365,6 +455,11 @@ public class EfNayaxConnectionStoreTests
 
         await Assert.ThrowsAsync<NayaxTokenProtectionException>(
             () => fixture.StoreFor(fixture.BusinessA).FindCredentialAsync(CancellationToken.None));
+
+        // The snapshot read an ordinary call uses fails closed the same way: a usable status with a
+        // credential that cannot be decrypted is a failure, not an absent connection.
+        await Assert.ThrowsAsync<NayaxTokenProtectionException>(
+            () => fixture.StoreFor(fixture.BusinessA).FindForOperationAsync(Allowed, CancellationToken.None));
     }
 
     [Fact]
@@ -388,6 +483,7 @@ public class EfNayaxConnectionStoreTests
 
         Assert.Null(await denied.FindAsync(CancellationToken.None));
         Assert.Null(await denied.FindCredentialAsync(CancellationToken.None));
+        Assert.Null(await denied.FindForOperationAsync(Allowed, CancellationToken.None));
         await Assert.ThrowsAsync<CrossBusinessAccessException>(
             () => denied.SaveCredentialAsync(OtherOperatorId, OtherToken, CancellationToken.None));
         await Assert.ThrowsAsync<CrossBusinessAccessException>(
@@ -417,6 +513,7 @@ public class EfNayaxConnectionStoreTests
 
         Assert.Null(await unscoped.FindAsync(CancellationToken.None));
         Assert.Null(await unscoped.FindCredentialAsync(CancellationToken.None));
+        Assert.Null(await unscoped.FindForOperationAsync(Allowed, CancellationToken.None));
         await Assert.ThrowsAsync<CrossBusinessAccessException>(
             () => unscoped.SaveCredentialAsync("7777777777", "another-token", CancellationToken.None));
         await Assert.ThrowsAsync<CrossBusinessAccessException>(
@@ -470,6 +567,15 @@ public class EfNayaxConnectionStoreTests
 
         await Assert.ThrowsAsync<DbUpdateException>(() => unrestricted.SaveChangesAsync());
     }
+
+    /// <summary>The gate an ordinary Nayax call hands to the snapshot read (issue #520).</summary>
+    private static bool Allowed(NayaxConnectionStatus status) =>
+        NayaxConnectionStatusGate.AllowsOrdinaryOperations(status);
+
+    /// <summary>The credential's values, or nulls, for comparing a snapshot in one assertion.</summary>
+    private static (string? OperatorId, string? AccessToken, int? CredentialRevision) Values(
+        NayaxConnectionCredential? credential) =>
+        (credential?.OperatorId, credential?.AccessToken, credential?.CredentialRevision);
 
     private static AesGcmNayaxTokenProtector Protector(string activeKeyId)
     {
