@@ -12,6 +12,7 @@ import {
   InventoryCostTransitionPreview,
   InventoryCostTransitionService
 } from '../../../services/inventory-cost-transition.service';
+import { BusinessTimeZoneService } from '../../../formatting/business-time-zone.service';
 import { Product } from '../../../models/models';
 
 function transitionPreview(overrides: Partial<InventoryCostTransitionPreview> = {}): InventoryCostTransitionPreview {
@@ -53,6 +54,10 @@ async function render(
       { provide: InventoryCostTransitionService, useValue: transition }
     ]
   }).compileComponents();
+
+  // The business time zone the shell loads at sign-in (issue #499); the cutoff instants below are
+  // rendered in it, and the application's existing business is in Sydney.
+  TestBed.inject(BusinessTimeZoneService).publish('Australia/Sydney');
 
   const fixture = TestBed.createComponent(AvcoTransitionComponent);
   fixture.detectChanges();

@@ -3,9 +3,10 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
 import { MsalBroadcastService, MsalService } from '@azure/msal-angular';
 import { AccountInfo, InteractionStatus } from '@azure/msal-browser';
-import { BehaviorSubject, of } from 'rxjs';
+import { BehaviorSubject, Observable, Subject, of } from 'rxjs';
 import { AppComponent } from './app.component';
 import { PlatformDiagnosticsAccessService } from './services/platform-diagnostics-access.service';
+import { BusinessService, CurrentBusiness } from './services/business.service';
 
 @Component({ standalone: true, template: 'page body' })
 class BlankPageComponent {}
@@ -44,10 +45,14 @@ interface Rendered {
     loginRedirect: jest.Mock;
     logoutRedirect: jest.Mock;
   };
+  businessLoad: jest.Mock;
 }
 
-async function render(options: { signedIn?: boolean } = {}): Promise<Rendered> {
+async function render(
+  options: { signedIn?: boolean; business?: () => Observable<CurrentBusiness | null> } = {}
+): Promise<Rendered> {
   const signedIn = options.signedIn ?? true;
+  const businessLoad = jest.fn(options.business ?? (() => of({ name: 'Vending Co', timeZoneId: 'Australia/Sydney' })));
   const loginRedirect = jest.fn();
   const logoutRedirect = jest.fn();
   const msalService = {
@@ -70,14 +75,23 @@ async function render(options: { signedIn?: boolean } = {}): Promise<Rendered> {
       // The shell renders the sidebar, which asks the diagnostics API whether to offer the
       // super-admin link (issue #335). The shell itself owns no part of that decision, so the
       // probe is stubbed as refused here and tested where it belongs.
-      { provide: PlatformDiagnosticsAccessService, useValue: { isGranted: () => of(false) } }
+      { provide: PlatformDiagnosticsAccessService, useValue: { isGranted: () => of(false) } },
+      // The shell reads the signed-in operator's business so every instant on the page can be
+      // rendered in that business's time zone (issue #499). The shell owns only the waiting; the
+      // lookup itself is tested in business.service.spec.ts.
+      { provide: BusinessService, useValue: { load: businessLoad } }
     ]
   }).compileComponents();
 
   const fixture = TestBed.createComponent(AppComponent);
   fixture.detectChanges();
 
-  return { fixture, host: fixture.nativeElement as HTMLElement, msal: { loginRedirect, logoutRedirect } };
+  return {
+    fixture,
+    host: fixture.nativeElement as HTMLElement,
+    msal: { loginRedirect, logoutRedirect },
+    businessLoad
+  };
 }
 
 /**
@@ -399,6 +413,62 @@ describe('AppComponent main content width (issue #454)', () => {
     const classList = Array.from(wrapper?.classList ?? []);
     expect(classList).not.toContain('mx-auto');
     expect(classList.some((className) => className.startsWith('max-w-'))).toBe(false);
+  });
+});
+
+/**
+ * The shell is where the business's own time zone enters the application (issue #499). Every
+ * instant a page displays is rendered in that zone, so the shell reads the business once sign-in
+ * has settled and holds the routed page back until the lookup has answered - either way, so a
+ * failed lookup degrades to dates being unavailable rather than to an application that never
+ * appears.
+ */
+describe('AppComponent business context (issue #499)', () => {
+  beforeEach(() => stubMatchMedia(true));
+
+  /** The routed page, which is only rendered once the business context is ready. */
+  async function navigatedMain(fixture: ComponentFixture<AppComponent>): Promise<string> {
+    await TestBed.inject(Router).navigateByUrl('/reports/bookkeeping');
+    fixture.detectChanges();
+    return (fixture.nativeElement as HTMLElement).querySelector('main')?.textContent ?? '';
+  }
+
+  it('reads the signed-in operator business once, and then renders the page', async () => {
+    const { fixture, businessLoad } = await render();
+
+    expect(businessLoad).toHaveBeenCalledTimes(1);
+    expect(await navigatedMain(fixture)).toContain('page body');
+  });
+
+  it('asks for no business at all when nobody is signed in, and still renders the page', async () => {
+    const { fixture, businessLoad } = await render({ signedIn: false });
+
+    expect(businessLoad).not.toHaveBeenCalled();
+    expect(await navigatedMain(fixture)).toContain('page body');
+  });
+
+  it('shows a loading state instead of the page while the business lookup is in flight', async () => {
+    const pending = new Subject<CurrentBusiness | null>();
+    const { fixture } = await render({ business: () => pending.asObservable() });
+
+    const whileLoading = await navigatedMain(fixture);
+    expect(whileLoading).toContain('Loading your business');
+    expect(whileLoading).not.toContain('page body');
+
+    pending.next({ name: 'Vending Co', timeZoneId: 'Australia/Sydney' });
+    fixture.detectChanges();
+
+    const afterLoading = (fixture.nativeElement as HTMLElement).querySelector('main')?.textContent ?? '';
+    expect(afterLoading).toContain('page body');
+    expect(afterLoading).not.toContain('Loading your business');
+  });
+
+  it('renders the page anyway when the business could not be read', async () => {
+    const { fixture } = await render({ business: () => of(null) });
+
+    const main = await navigatedMain(fixture);
+    expect(main).toContain('page body');
+    expect(main).not.toContain('Loading your business');
   });
 });
 

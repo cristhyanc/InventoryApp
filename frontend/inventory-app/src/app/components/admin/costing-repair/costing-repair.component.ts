@@ -1,4 +1,4 @@
-import { Component, Input, OnDestroy } from '@angular/core';
+import { Component, Input, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Subscription } from 'rxjs';
@@ -12,12 +12,12 @@ import {
 } from '../../../services/inventory-cost-repair.service';
 import { BusinessDateTimePipe } from '../../../formatting/business-date-time.pipe';
 import {
-  BUSINESS_TIME_ZONE,
   currentDateTimeInTimeZone,
   fromDateTimeLocalValue,
   resolveZonedDateTime,
   toDateTimeLocalValue
 } from '../../../formatting/business-time-zone';
+import { BusinessTimeZoneService } from '../../../formatting/business-time-zone.service';
 
 /**
  * The Admin page's Costing Repair workflow (issue #361, the UI over #359/#360's repair API): the
@@ -28,13 +28,14 @@ import {
  * page-composition boundary `MachineRestockSyncComponent` follows for `MachineDetailComponent`
  * (see docs/architecture.md § Page composition boundary).
  *
- * The effective date/time is entered and displayed in Sydney time (`BUSINESS_TIME_ZONE`) and
- * converted to/from the UTC instant the API contract requires, through the same IANA-timezone-
- * aware conversion `business-time-zone.ts` already uses for other operator-facing date/time
- * input. A time that does not exist in Sydney (the hour skipped when daylight saving starts) or
- * that occurs twice (the hour repeated when it ends) is rejected with guidance rather than
- * silently moved or guessed, because the effective time decides which historical sales the
- * repair affects.
+ * The effective date/time is entered and displayed in the business's own timezone
+ * (`BusinessTimeZoneService`, issue #499) and converted to/from the UTC instant the API contract
+ * requires, through the same IANA-timezone-aware conversion `business-time-zone.ts` already uses
+ * for other operator-facing date/time input. A time that does not exist in that zone (the hour
+ * skipped when daylight saving starts) or that occurs twice (the hour repeated when it ends) is
+ * rejected with guidance rather than silently moved or guessed, because the effective time decides
+ * which historical sales the repair affects. Until the zone is known the field is left empty and a
+ * submission is refused with that reason, rather than being resolved in a guessed zone.
  *
  * Switching product discards every in-flight preview and history response for the previous
  * product (each request carries a sequence number and its subscription is cancelled), and Apply
@@ -92,7 +93,9 @@ import {
             />
           </div>
           <div class="field">
-            <label class="field-label" for="costing-repair-effective-at">Effective date/time (Sydney time)</label>
+            <label class="field-label" for="costing-repair-effective-at">
+              Effective date/time ({{ businessTimeZoneLabel }})
+            </label>
             <input
               id="costing-repair-effective-at"
               type="datetime-local"
@@ -207,7 +210,7 @@ import {
     </section>
   `
 })
-export class CostingRepairComponent implements OnDestroy {
+export class CostingRepairComponent implements OnInit, OnDestroy {
   @Input() products: Product[] = [];
 
   previewLoading = false;
@@ -218,7 +221,11 @@ export class CostingRepairComponent implements OnDestroy {
   quantity: number | null = null;
   unitCost: number | null = null;
   reason = '';
-  effectiveAtLocal = toDateTimeLocalValue(currentDateTimeInTimeZone(new Date(), BUSINESS_TIME_ZONE));
+  /**
+   * Empty until the business timezone is known (issue #499), then defaulted to "now" in that zone.
+   * An operator who has already typed a value keeps it.
+   */
+  effectiveAtLocal = '';
   effectiveAtError: string | null = null;
   preview: InventoryCostRepairPreview | null = null;
   history: InventoryCostRepairRecord[] = [];
@@ -231,19 +238,40 @@ export class CostingRepairComponent implements OnDestroy {
   private historySequence = 0;
   private previewSubscription: Subscription | null = null;
   private historySubscription: Subscription | null = null;
+  private timeZoneSubscription: Subscription | null = null;
 
   constructor(
     private readonly repairService: InventoryCostRepairService,
-    private readonly toast: ToastService
+    private readonly toast: ToastService,
+    private readonly businessTimeZone: BusinessTimeZoneService
   ) {}
+
+  ngOnInit(): void {
+    // The default effective time is "now" in the business's own timezone, so it cannot be set
+    // until that zone is known (issue #499). The current value is emitted immediately, so an
+    // already-loaded zone fills the field before the form is first rendered, and an operator who
+    // has already typed a value keeps it.
+    this.timeZoneSubscription = this.businessTimeZone.timeZoneId$.subscribe(timeZone => {
+      if (timeZone !== null && this.effectiveAtLocal === '') {
+        this.effectiveAtLocal = toDateTimeLocalValue(currentDateTimeInTimeZone(new Date(), timeZone));
+      }
+    });
+  }
 
   get loading(): boolean {
     return this.previewLoading || this.applying;
   }
 
+  /** The timezone the effective date/time is entered in, or that it is still being loaded. */
+  get businessTimeZoneLabel(): string {
+    return this.businessTimeZone.timeZoneId ?? 'business time zone loading…';
+  }
+
   ngOnDestroy(): void {
     this.cancelPreview();
     this.cancelHistory();
+    this.timeZoneSubscription?.unsubscribe();
+    this.timeZoneSubscription = null;
   }
 
   selectProduct(): void {
@@ -384,23 +412,32 @@ export class CostingRepairComponent implements OnDestroy {
 
   private effectiveAtUtcIso(): string | null {
     this.effectiveAtError = null;
+    const timeZone = this.businessTimeZone.timeZoneId;
+    if (timeZone === null) {
+      // Without the business's zone there is no instant this wall-clock time means, and guessing
+      // one would decide which historical sales the repair recosts (issue #499).
+      this.effectiveAtError =
+        'The business time zone is still loading, so an effective time cannot be resolved yet. ' +
+        'Please try again in a moment.';
+      return null;
+    }
     const wallClock = fromDateTimeLocalValue(this.effectiveAtLocal);
     if (!wallClock) return null;
     const resolution = resolveZonedDateTime(
-      wallClock.year, wallClock.month, wallClock.day, wallClock.hour, wallClock.minute, BUSINESS_TIME_ZONE
+      wallClock.year, wallClock.month, wallClock.day, wallClock.hour, wallClock.minute, timeZone
     );
     switch (resolution.kind) {
       case 'valid':
         return resolution.utc.toISOString();
       case 'nonexistent':
         this.effectiveAtError =
-          'This time does not exist in Sydney: the clocks skip forward an hour when daylight saving starts. ' +
-          'Enter a time outside the skipped hour.';
+          `This time does not exist in ${timeZone}: the clocks skip forward an hour when daylight ` +
+          'saving starts. Enter a time outside the skipped hour.';
         return null;
       case 'ambiguous':
         this.effectiveAtError =
-          'This time happens twice in Sydney: the clocks go back an hour when daylight saving ends. ' +
-          'Enter a time outside the repeated hour so the effective time is unambiguous.';
+          `This time happens twice in ${timeZone}: the clocks go back an hour when daylight saving ` +
+          'ends. Enter a time outside the repeated hour so the effective time is unambiguous.';
         return null;
     }
   }

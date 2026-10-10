@@ -4,6 +4,7 @@ import {
   NayaxSaleTimestampEvidenceSource,
   NayaxSaleTimestampRepairApplied
 } from '../../../services/nayax-sale-timestamp-repair.service';
+import { BusinessTimeZoneService } from '../../../formatting/business-time-zone.service';
 
 function applied(overrides: Partial<NayaxSaleTimestampRepairApplied> = {}): NayaxSaleTimestampRepairApplied {
   return {
@@ -41,6 +42,8 @@ async function render(
   host: HTMLElement;
 }> {
   await TestBed.configureTestingModule({ imports: [NayaxSaleTimestampRepairResultComponent] }).compileComponents();
+  // The business time zone the shell loads at sign-in (issue #499); instants render in it.
+  TestBed.inject(BusinessTimeZoneService).publish('Australia/Sydney');
   const fixture = TestBed.createComponent(NayaxSaleTimestampRepairResultComponent);
   fixture.componentRef.setInput('applied', result);
   fixture.componentRef.setInput('unresolvedAtPreview', inputs.unresolvedAtPreview ?? 0);

@@ -1,9 +1,12 @@
 /**
- * The InventoryApp business timezone used for operator-facing date/time display and local calendar
- * inputs. `Australia/Canberra` is an IANA identifier, so `Intl.DateTimeFormat` resolves AEST/AEDT
- * from the platform timezone database instead of a fixed UTC offset.
+ * Timezone-aware conversions for operator-facing date/time display and local calendar inputs.
+ *
+ * Every function here takes the IANA `timeZone` it works in rather than reading a constant: since
+ * issue #499 the business timezone is a property of the signed-in operator's business, supplied by
+ * `BusinessTimeZoneService` from `GET /api/business/current`. Because the ids are IANA ones,
+ * `Intl.DateTimeFormat` resolves each zone's daylight-saving rules from the platform timezone
+ * database instead of a fixed UTC offset.
  */
-export const BUSINESS_TIME_ZONE = 'Australia/Canberra';
 
 /** The `timeZone`'s offset from UTC, in minutes, at the given instant. */
 function timeZoneOffsetMinutes(instant: Date, timeZone: string): number {
@@ -27,7 +30,7 @@ function timeZoneOffsetMinutes(instant: Date, timeZone: string): number {
 
 /**
  * The UTC instant of the given `year`/`month`(1-12)/`day`/`hour`/`minute` wall-clock time in
- * `timeZone`, resolved from the IANA timezone database so AEST/AEDT daylight-saving transitions
+ * `timeZone`, resolved from the IANA timezone database so that zone's daylight-saving transitions
  * are applied automatically rather than a fixed UTC offset (issue #218; generalised from
  * whole-day resolution to also carry a time-of-day component by issue #361's costing-repair
  * effective-time input). It always returns some instant: a time inside a daylight-saving gap is
@@ -159,7 +162,8 @@ export function currentDateTimeInTimeZone(instant: Date, timeZone: string): Cale
 /**
  * Formats `dateTime` as an `<input type="datetime-local">` value (`yyyy-MM-ddTHH:mm`), with no
  * timezone designator - the caller supplies the wall-clock values already resolved in whichever
- * timezone the input represents (issue #361's Sydney-time costing-repair effective date/time).
+ * timezone the input represents (issue #361's costing-repair effective date/time, entered in the
+ * business's own timezone).
  */
 export function toDateTimeLocalValue(dateTime: CalendarDateTime): string {
   const pad = (value: number) => value.toString().padStart(2, '0');

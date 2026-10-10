@@ -4,11 +4,11 @@ import { MachineRestockSyncComponent } from './machine-restock-sync.component';
 import { MachineService } from '../../../services/machine.service';
 import { ToastService } from '../../../services/toast.service';
 import {
-  BUSINESS_TIME_ZONE,
   currentDateInTimeZone,
   shiftCalendarDate,
   startOfDayUtc
 } from '../../../formatting/business-time-zone';
+import { BusinessTimeZoneService } from '../../../formatting/business-time-zone.service';
 import {
   NayaxDuplicateResolution,
   NayaxDuplicateResolutionChoice,
@@ -20,6 +20,13 @@ import {
   NayaxStockEventPreview,
   NayaxStockEventProcessingStatus
 } from '../../../models/models';
+
+/**
+ * The zone these tests run as: the business the application already has. It was a constant in
+ * production code until issue #499 made the zone per business, and it stays here as the test's own
+ * choice of business, so every From date expectation below means exactly what it did before.
+ */
+const BUSINESS_TIME_ZONE = 'Australia/Sydney';
 
 function event(overrides: Partial<NayaxStockEventPreview>): NayaxStockEventPreview {
   return {
@@ -84,7 +91,13 @@ function createHarness(
     syncRestock, applySyncRestock, resolveSyncRestockDuplicate, resolveSyncRestockManually
   } as unknown as MachineService;
   const toast = { success: jest.fn(), error: jest.fn(), warning: jest.fn() };
-  const component = new MachineRestockSyncComponent(machineService, toast as unknown as ToastService);
+  // The business time zone the shell loads at sign-in (issue #499), already resolved: the From
+  // date filter is a calendar day in it, and this harness runs as the Sydney business these
+  // expectations were written for.
+  const businessTimeZone = new BusinessTimeZoneService();
+  businessTimeZone.publish(BUSINESS_TIME_ZONE);
+  const component = new MachineRestockSyncComponent(
+    machineService, toast as unknown as ToastService, businessTimeZone);
   component.machineId = 7;
 
   const harness: Harness = {
@@ -365,7 +378,7 @@ describe('MachineRestockSyncComponent sync', () => {
     expect(toast.error).toHaveBeenCalledWith('Failed to sync Nayax stock-adjustment alerts.');
   });
 
-  it('defaults the From date to three Australia/Canberra calendar days before today and shows reconciled off', () => {
+  it('defaults the From date to three business-timezone calendar days before today and shows reconciled off', () => {
     const syncRestock: jest.Mock = jest.fn(() => of(preview([])));
     const { component } = createHarness(syncRestock);
     const today = currentDateInTimeZone(new Date(), BUSINESS_TIME_ZONE);
@@ -382,7 +395,29 @@ describe('MachineRestockSyncComponent sync', () => {
     expect(includeReconciled).toBe(false);
   });
 
-  it('resets the From date to three Australia/Canberra calendar days back on every fresh sync, not just the first', () => {
+  /**
+   * The loading state (issue #499): the From date filter is a calendar day in the business's own
+   * timezone, so until that zone is known there is no correct window to ask for. Asking for an
+   * unbounded one instead would quietly change which events the operator is shown.
+   */
+  it('reports the still-loading business timezone instead of syncing an unbounded window', () => {
+    const syncRestock: jest.Mock = jest.fn(() => of(preview([])));
+    const machineService = { syncRestock } as unknown as MachineService;
+    const toast = { success: jest.fn(), error: jest.fn(), warning: jest.fn() };
+    // Deliberately unresolved: GET /api/business/current has not answered yet.
+    const component = new MachineRestockSyncComponent(
+      machineService, toast as unknown as ToastService, new BusinessTimeZoneService());
+    component.machineId = 7;
+
+    component.syncRestock();
+
+    expect(syncRestock).not.toHaveBeenCalled();
+    expect(component.fromDate$.value).toBe('');
+    expect(component.syncing$.value).toBe(false);
+    expect(component.syncError$.value).toContain('business time zone');
+  });
+
+  it('resets the From date to three business-timezone calendar days back on every fresh sync, not just the first', () => {
     const syncRestock: jest.Mock = jest.fn(() => of(preview([])));
     const { component } = createHarness(syncRestock);
     const today = currentDateInTimeZone(new Date(), BUSINESS_TIME_ZONE);
@@ -446,7 +481,7 @@ describe('MachineRestockSyncComponent filters', () => {
     expect(component.isAllApplicableSelected(preview([needsReview]))).toBe(false);
   });
 
-  it('changing the From date fetches a new preview bounded by the Australia/Canberra midnight of the new date, as a UTC instant', () => {
+  it('changing the From date fetches a new preview bounded by the business-timezone midnight of the new date, as a UTC instant', () => {
     const syncRestock: jest.Mock = jest.fn(() => of(preview([])));
     const { component } = createHarness(syncRestock);
     component.syncRestock();
@@ -457,7 +492,7 @@ describe('MachineRestockSyncComponent filters', () => {
     expect(component.fromDate$.value).toBe('2026-09-01');
     const [machineId, fromDateIso, includeReconciled] = syncRestock.mock.calls[0];
     expect(machineId).toBe(7);
-    // 2026-09-01 is in the Australian winter (AEST, UTC+10), so Canberra midnight is the previous UTC calendar day.
+    // 2026-09-01 is in the Australian winter (AEST, UTC+10), so the business's midnight is the previous UTC calendar day.
     expect(fromDateIso).toBe(startOfDayUtc(2026, 9, 1, BUSINESS_TIME_ZONE).toISOString());
     expect(fromDateIso).toBe('2026-08-31T14:00:00.000Z');
     expect(includeReconciled).toBe(false);
@@ -644,6 +679,11 @@ describe('MachineRestockSyncComponent dialog', () => {
       ]
     }).compileComponents();
 
+    // The business time zone the shell loads at sign-in (issue #499). The From date filter is a
+    // calendar day in it, and the application's existing business is in Sydney - the same offsets
+    // the expectations below were written against.
+    TestBed.inject(BusinessTimeZoneService).publish(BUSINESS_TIME_ZONE);
+
     const fixture = TestBed.createComponent(MachineRestockSyncComponent);
     fixture.componentRef.setInput('machineId', 7);
     let appliedCount = 0;
@@ -762,7 +802,7 @@ describe('MachineRestockSyncComponent dialog', () => {
     expect(text).toContain('Ready to apply');
   });
 
-  it('renders the canonical GMT event time as Australia/Canberra local time during AEST (UTC+10), not raw UTC', async () => {
+  it("renders the canonical GMT event time as the business's local time during AEST (UTC+10), not raw UTC", async () => {
     // 2026-06-15T00:00:00Z falls in the Australian winter, outside daylight saving (AEST, UTC+10).
     const aest = event({ id: 1, eventDateTimeGmt: '2026-06-15T00:00:00Z' });
     const { requireElement, openDialog } = await render(jest.fn(() => of(preview([aest]))));
@@ -773,7 +813,7 @@ describe('MachineRestockSyncComponent dialog', () => {
     expect(timeCell?.textContent?.trim()).toBe('15/06/2026, 10:00 am');
   });
 
-  it('renders the canonical GMT event time as Australia/Canberra local time during AEDT (UTC+11), not raw UTC', async () => {
+  it("renders the canonical GMT event time as the business's local time during AEDT (UTC+11), not raw UTC", async () => {
     // 2026-01-15T00:00:00Z falls in the Australian summer, inside daylight saving (AEDT, UTC+11).
     const aedt = event({ id: 1, eventDateTimeGmt: '2026-01-15T00:00:00Z' });
     const { requireElement, openDialog } = await render(jest.fn(() => of(preview([aedt]))));
@@ -784,7 +824,7 @@ describe('MachineRestockSyncComponent dialog', () => {
     expect(timeCell?.textContent?.trim()).toBe('15/01/2026, 11:00 am');
   });
 
-  it('rolls the displayed calendar date forward across the UTC/Canberra day boundary rather than showing the UTC date', async () => {
+  it("rolls the displayed calendar date forward across the UTC/business day boundary rather than showing the UTC date", async () => {
     // 2026-06-14T14:30:00Z is still 14 June in UTC, but AEST (UTC+10) has already crossed into 15 June.
     const boundary = event({ id: 1, eventDateTimeGmt: '2026-06-14T14:30:00Z' });
     const { requireElement, openDialog } = await render(jest.fn(() => of(preview([boundary]))));

@@ -9,6 +9,7 @@ import { LoadingIndicatorComponent } from './components/shared/loading-indicator
 import { BreadcrumbsComponent } from './layout/breadcrumbs/breadcrumbs.component';
 import { PRIMARY_NAVIGATION_ID, SidebarNavComponent } from './layout/sidebar-nav.component';
 import { UserMenuComponent } from './layout/user-menu.component';
+import { BusinessService } from './services/business.service';
 import { loginRequest } from './auth-config';
 
 /**
@@ -56,6 +57,10 @@ export class AppComponent implements OnInit, OnDestroy {
   isSidebarOpen = true;
   isWideLayout = true;
 
+  /** Whether the signed-in operator's business lookup has settled (issue #499). */
+  private isBusinessSettled = false;
+  private businessRequested = false;
+
   readonly sidebarId = PRIMARY_NAVIGATION_ID;
 
   /** Only rendered on a narrow layout, which is the only layout that returns focus to it. */
@@ -67,7 +72,8 @@ export class AppComponent implements OnInit, OnDestroy {
 
   constructor(
     private readonly authService: MsalService,
-    private readonly msalBroadcastService: MsalBroadcastService
+    private readonly msalBroadcastService: MsalBroadcastService,
+    private readonly businessService: BusinessService
   ) {}
 
   /** The sidebar is only off the page when a narrow layout has dismissed its drawer. */
@@ -82,6 +88,16 @@ export class AppComponent implements OnInit, OnDestroy {
 
   get isSidebarDrawer(): boolean {
     return !this.isWideLayout;
+  }
+
+  /**
+   * Whether the routed page may be rendered yet (issue #499). A signed-in operator's page is held
+   * back until the business lookup has settled, because the business's time zone is what every
+   * instant on that page is displayed in; a signed-out visitor sees the public landing page
+   * immediately, as there is no business to read.
+   */
+  get isBusinessContextReady(): boolean {
+    return !this.isLoggedIn || this.isBusinessSettled;
   }
 
   get sidebarToggleLabel(): string {
@@ -200,5 +216,21 @@ export class AppComponent implements OnInit, OnDestroy {
     const account = this.authService.instance.getActiveAccount();
     this.isLoggedIn = account !== null;
     this.userName = account?.name ?? account?.username ?? '';
+
+    if (this.isLoggedIn && !this.businessRequested) {
+      // The business's own name and time zone, which every operator-facing date/time is rendered
+      // in (issue #499). It is an authenticated read, so it cannot happen at bootstrap; it is
+      // requested here, once sign-in has settled. The routed page waits for it (see
+      // isBusinessContextReady), because a page rendered before the business is known would show
+      // its instants in no time zone at all.
+      this.businessRequested = true;
+      this.businessService.load()
+        .pipe(takeUntil(this.destroying$))
+        .subscribe(() => {
+          // Settled either way. A failed lookup published no zone, so dates render as
+          // unavailable - but the application is still shown rather than waiting forever.
+          this.isBusinessSettled = true;
+        });
+    }
   }
 }
