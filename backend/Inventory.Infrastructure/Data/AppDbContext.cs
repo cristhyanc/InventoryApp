@@ -77,6 +77,13 @@ public class AppDbContext : DbContext
     public DbSet<SupplierOrderReceiptAllocation> SupplierOrderReceiptAllocations => Set<SupplierOrderReceiptAllocation>();
     public DbSet<OperatingExpense> OperatingExpenses => Set<OperatingExpense>();
     public DbSet<NayaxProcessingFeeRate> NayaxProcessingFeeRates => Set<NayaxProcessingFeeRate>();
+
+    /// <summary>
+    /// Each business's own Nayax Lynx credentials, with the access token encrypted at rest and the
+    /// id of the key that encrypted it (issue #518). Exactly one row per business; see
+    /// <see cref="BusinessNayaxConnection"/>.
+    /// </summary>
+    public DbSet<BusinessNayaxConnection> BusinessNayaxConnections => Set<BusinessNayaxConnection>();
     public DbSet<SiteCommissionAgreement> SiteCommissionAgreements => Set<SiteCommissionAgreement>();
     public DbSet<CommissionPayment> CommissionPayments => Set<CommissionPayment>();
     public DbSet<InventoryCostTransitionBaseline> InventoryCostTransitionBaselines => Set<InventoryCostTransitionBaseline>();
@@ -230,6 +237,36 @@ public class AppDbContext : DbContext
         // Kind conversion: its two instants are only ever compared against the clock, and a DateTime
         // comparison looks at ticks and not Kind. This matches InventoryCostTransitionPreviewDraft.
         modelBuilder.Entity<NayaxSaleTimestampRepairPreviewDraft>().Property(x => x.PlanJson).IsRequired();
+
+        // One Nayax connection per business (issue #518). The unique index is on the ownership
+        // column alone, which is what makes "one per business" a schema guarantee instead of a
+        // convention the adapter has to remember: a second row for a business cannot be inserted,
+        // so a credential save can only ever create the first one or update the existing one.
+        modelBuilder.Entity<BusinessNayaxConnection>()
+            .HasIndex(connection => connection.BusinessId)
+            .IsUnique();
+        modelBuilder.Entity<BusinessNayaxConnection>().Property(x => x.OperatorId).IsRequired();
+        // Required, not nullable: the row exists only once credentials have been stored, so an
+        // empty ciphertext or a nameless key would be a state nothing can act on. "No credentials"
+        // is the absence of the row, reported as NayaxConnectionStatus.NotConfigured.
+        modelBuilder.Entity<BusinessNayaxConnection>().Property(x => x.AccessTokenCiphertext).IsRequired();
+        modelBuilder.Entity<BusinessNayaxConnection>().Property(x => x.EncryptionKeyId).IsRequired();
+        // Both instants are persisted UTC and are exposed through the connection read, so each is
+        // marked UTC on the way out - see the StockAdjustment.CreatedAt comment below for why the
+        // SQLite provider makes that necessary. The conversion changes no stored byte and no
+        // comparison, so the conditional revision check is unaffected.
+        modelBuilder.Entity<BusinessNayaxConnection>()
+            .Property(x => x.LastTestedAtUtc)
+            .HasConversion(
+                toProvider => toProvider,
+                fromProvider => fromProvider.HasValue
+                    ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
+                    : fromProvider);
+        modelBuilder.Entity<BusinessNayaxConnection>()
+            .Property(x => x.UpdatedAtUtc)
+            .HasConversion(
+                toProvider => toProvider,
+                fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
 
         // Purchase/PurchaseItem are the Purchase-language CLR types; explicitly mapped to
         // their legacy "Receipt"/"ReceiptItem" tables so the rename does not change the schema.
