@@ -750,6 +750,31 @@ describe('review judgment contract', () => {
   });
 });
 
+describe('ChatGPT final review dispatch after a ready agent review', () => {
+  it('passes for the committed workflow', () => {
+    assert.doesNotThrow(() => verifyReviewPublicationAndScheduling());
+  });
+
+  it('rejects dispatching without a ready verdict', () => {
+    assertPublicationRejects({ [reviewPath]: replaceOnce(reviewWorkflow, "    if: needs.publish.outputs.ready == 'true'\n", "    if: always()\n") }, /ChatGPT review dispatcher: missing required text/);
+    assertPublicationRejects({ [reviewPath]: replaceOnce(reviewWorkflow, '            echo "ready=true" >> "$GITHUB_OUTPUT"\n', '') }, /publish job: missing required text/);
+  });
+
+  it('rejects dispatching without rechecking the head', () => {
+    assertPublicationRejects({ [reviewPath]: replaceOnce(reviewWorkflow, '          if [ "$current_sha" != "$HEAD_SHA" ]; then\n', '          if false; then\n') }, /ChatGPT review dispatcher: missing required text/);
+  });
+
+  it('rejects widened permissions, a label instead of a dispatch, or another target', () => {
+    assertPublicationRejects({ [reviewPath]: replaceOnce(reviewWorkflow, '      actions: write\n      pull-requests: read\n', '      actions: write\n      pull-requests: write\n') }, /ChatGPT review dispatcher permissions: must be exactly/);
+    assertPublicationRejects({ [reviewPath]: replaceOnce(reviewWorkflow, '          gh workflow run chatgpt-review.yml \\\n', '          gh pr edit "$PR_NUMBER" --add-label chatgpt-review\n          gh workflow run chatgpt-review.yml \\\n') }, /ChatGPT review dispatcher: contains forbidden text/);
+    assertPublicationRejects({ [reviewPath]: replaceOnce(reviewWorkflow, 'gh workflow run chatgpt-review.yml \\', 'gh workflow run agent-repair.yml \\') }, /ChatGPT review dispatcher: missing required text/);
+  });
+
+  it('rejects dispatching from the publish job itself', () => {
+    assertPublicationRejects({ [reviewPath]: replaceOnce(reviewWorkflow, '            echo "ready=true" >> "$GITHUB_OUTPUT"\n', '            echo "ready=true" >> "$GITHUB_OUTPUT"\n            gh workflow run chatgpt-review.yml --ref main\n') }, /publish job: contains forbidden text: gh workflow/);
+  });
+});
+
 describe('guarded publication contract', () => {
   it('reports a posted review accurately when its verdict status cannot be recorded', () => {
     assertPublicationRejects({ [reviewPath]: replaceOnce(reviewWorkflow, '          echo "review_posted=true" >> "$GITHUB_OUTPUT"\n', '') }, /review_posted=true/);

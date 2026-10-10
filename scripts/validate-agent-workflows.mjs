@@ -850,7 +850,7 @@ function verifyReviewRoutes(review) {
   for (const required of ['*) fail "Provider mode', 'reviewer: ${{ steps.context.outputs.reviewer }}', 'echo "reviewer=$reviewer"', 'echo "review_relation=$review_relation"']) {
     requireText(context, required, 'agent-review.yml context');
   }
-  const publish = section(review, '  publish:\n', null, 'agent-review.yml publish job');
+  const publish = section(review, '  publish:\n', '  dispatch-chatgpt-review:\n', 'agent-review.yml publish job');
   for (const required of [
     'cross-claude:claude:copilot)',
     'full-claude:claude:claude)', 'Same-provider review (full-claude fallback): not independent',
@@ -899,6 +899,38 @@ function verifyCopilotReviewJob(review) {
 }
 
 /** Enforces the review judgment, guarded publication and updated-head scheduling contract. */
+// After a READY FOR HUMAN REVIEW verdict, agent-review.yml starts the ChatGPT final review by dispatch
+// (a GITHUB_TOKEN label starts no workflow). Only a dedicated job may dispatch, only for the reviewed SHA.
+export const CHATGPT_DISPATCH_CONTRACT = Object.freeze({
+  publishRequired: [
+    'ready: ${{ steps.publish.outputs.ready }}',
+    'set_verdict_status success "Ready for human review (advisory) for this SHA only"\n            echo "ready=true" >> "$GITHUB_OUTPUT"\n',
+  ],
+  dispatcherRequired: [
+    "if: needs.publish.outputs.ready == 'true'",
+    'if [ "$current_sha" != "$HEAD_SHA" ]; then',
+    'gh workflow run chatgpt-review.yml \\\n            --repo "$GITHUB_REPOSITORY" \\\n            --ref main \\\n            -f pr_number="$PR_NUMBER"',
+  ],
+  dispatcherForbidden: ['actions/checkout', 'CLAUDE_CODE_OAUTH_TOKEN', 'COPILOT_CLI_TOKEN', 'OPENAI_API_KEY', 'gh pr edit', '--add-label', 'gh pr review', 'gh pr comment', 'statuses/'],
+});
+
+function verifyChatGptReviewDispatch(review) {
+  const contract = CHATGPT_DISPATCH_CONTRACT;
+  const source = 'agent-review.yml ChatGPT review dispatcher';
+  const publish = section(review, '  publish:\n', '  dispatch-chatgpt-review:\n', 'agent-review.yml publish job');
+  for (const required of contract.publishRequired) requireText(publish, required, 'agent-review.yml publish job');
+  const dispatcher = section(review, '  dispatch-chatgpt-review:\n', null, source);
+  for (const required of contract.dispatcherRequired) requireText(dispatcher, required, source);
+  for (const forbidden of contract.dispatcherForbidden) forbidText(dispatcher, forbidden, source);
+  const grants = section(dispatcher, '    permissions:\n', '\n    steps:\n', `${source} permissions`)
+    .split('\n').slice(1).map((line) => line.trim()).filter(Boolean).sort();
+  if (grants.join(',') !== 'actions: write,pull-requests: read') {
+    throw new Error(`${source} permissions: must be exactly actions: write and pull-requests: read, found ${grants.join(', ')}`);
+  }
+  if (dispatcher.split('gh workflow run').length !== 2) throw new Error(`${source}: must dispatch exactly one workflow, chatgpt-review.yml.`);
+  requireOrder(dispatcher, 'if [ "$current_sha" != "$HEAD_SHA" ]; then', 'gh workflow run chatgpt-review.yml', source, 'the head must be rechecked before the ChatGPT review is dispatched.');
+}
+
 export function verifyReviewPublicationAndScheduling(read = readRepositoryFile) {
   const review = read(reviewPath);
   const reviewJob = section(review, '  review:\n', '  copilot-review:\n', reviewPath);
@@ -924,7 +956,7 @@ export function verifyReviewPublicationAndScheduling(read = readRepositoryFile) 
     forbidText(allowed, forbidden, 'agent-review.yml allowed tools');
   }
 
-  const publish = section(review, '  publish:\n', null, reviewPath);
+  const publish = section(review, '  publish:\n', '  dispatch-chatgpt-review:\n', reviewPath);
   for (const required of REVIEW_PUBLISH_CONTRACT.required) {
     requireText(publish, required, 'agent-review.yml publish job');
   }
@@ -947,6 +979,7 @@ export function verifyReviewPublicationAndScheduling(read = readRepositoryFile) 
     requireText(publish, required, 'agent-review.yml publish job');
   }
   requireOrder(publish, '--input "$work/payload-fallback.json" >/dev/null\n          fi\n', 'echo "review_posted=true" >> "$GITHUB_OUTPUT"', 'agent-review.yml publish job', 'publication must be recorded only after the review was posted.');
+  verifyChatGptReviewDispatch(review);
   verifyCopilotReviewJob(review);
   requireOrder(publish, '[ "$current_sha" = "$HEAD_SHA" ]', 'repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews', 'agent-review.yml publish job', 'the current head must be re-verified before the review is published.');
   requireOrder(publish, '[ "$validation_state" = "success" ]', 'repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews', 'agent-review.yml publish job', 'validation must be re-verified before the review is published.');

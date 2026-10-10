@@ -1,11 +1,12 @@
 name: ChatGPT final review
 
-# Optional, advisory last review of a pull request into `develop` by an OpenAI GPT model, requested by
-# a human just before merging.
+# Advisory last review of a pull request into `develop` by an OpenAI GPT model, run just before a
+# human decides whether to merge.
 #
 # Authority and lifecycle: docs/automation.md ("ChatGPT final review").
-# - Starts only when a human applies the `chatgpt-review` label, or a human dispatches this workflow
-#   from `main`. Labels applied by automation with GITHUB_TOKEN start no workflow.
+# - Starts when agent-review.yml publishes a READY FOR HUMAN REVIEW verdict (it dispatches this workflow
+#   from `main`), when a human applies the `chatgpt-review` label, or when a human dispatches it from
+#   `main`. Labels applied by automation with GITHUB_TOKEN start no workflow.
 # - Trusted source: `pull_request_target` always runs this definition from the default branch, and a
 #   dispatch must use `main`. No job checks out or executes pull request code; the diff, the pull
 #   request text and the linked issue are read through the API and passed to the model as data only.
@@ -21,8 +22,8 @@ name: ChatGPT final review
 # - A CHANGES REQUESTED review starts with `@claude repair`. On a Claude `agent/issue-*` pull request a
 #   separate least-privilege `dispatch-repair` job then dispatches agent-repair.yml from `main`
 #   for that exact head and review; agent-repair.yml verifies the review itself and caps these
-#   automatic repairs at two per pull request. Another ChatGPT review needs a human to apply the label
-#   again, so repair and review never loop on their own.
+#   repairs at two per pull request. A repaired head is validated, agent-reviewed and, if ready,
+#   ChatGPT-reviewed again; that two-repair limit is what ends the cycle.
 # - Nothing here approves, merges, labels, pushes or deploys. Human approval remains the merge gate.
 
 on:
