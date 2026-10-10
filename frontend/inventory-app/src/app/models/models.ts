@@ -244,6 +244,13 @@ export interface Site {
   previousComparableWeekRevenue: number;
 }
 
+/** One machine's MDB code for a Site Products row (issue #495); null when Nayax has none. */
+export interface SiteProductMachineMdbCode {
+  machineId: number;
+  machineLabel: string;
+  mdbCode: number | null;
+}
+
 export interface SiteProduct {
   productId: number;
   name: string;
@@ -252,6 +259,13 @@ export interface SiteProduct {
   estimatedCardProfit: number | null;
   quantityInStock: number;
   maxStock: number;
+  /**
+   * The row's representative MDB code (issue #495): the lowest non-null code across
+   * `machineMdbCodes`, or null when none of them has one. Not assumed to be the product's single
+   * globally unique code - see `machineMdbCodes` for the per-machine values.
+   */
+  mdbCode: number | null;
+  machineMdbCodes: SiteProductMachineMdbCode[];
 }
 
 export interface ProductUpdateDto {

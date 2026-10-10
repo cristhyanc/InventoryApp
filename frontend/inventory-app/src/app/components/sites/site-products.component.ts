@@ -66,6 +66,66 @@ export class SiteProductsComponent implements OnInit {
     );
   }
 
+  sortColumn: SiteProductSortColumn = 'mdbCode';
+  sortDirection: SiteProductSortDirection = 'asc';
+
+  get sortedProducts(): SiteProduct[] {
+    const direction = this.sortDirection === 'asc' ? 1 : -1;
+
+    return [...this.products].sort((left, right) => {
+      const leftValue = this.columnValue(left, this.sortColumn);
+      const rightValue = this.columnValue(right, this.sortColumn);
+
+      // Missing values always sort last, in both directions, so toggling a column's direction never
+      // scatters its "Unavailable"/missing rows to the top.
+      if (leftValue == null && rightValue == null) return this.tieBreak(left, right);
+      if (leftValue == null) return 1;
+      if (rightValue == null) return -1;
+
+      const comparison = typeof leftValue === 'number' && typeof rightValue === 'number'
+        ? leftValue - rightValue
+        : String(leftValue).localeCompare(String(rightValue));
+      return comparison !== 0 ? comparison * direction : this.tieBreak(left, right);
+    });
+  }
+
+  sortBy(column: SiteProductSortColumn): void {
+    if (this.sortColumn === column) {
+      this.sortDirection = this.sortDirection === 'asc' ? 'desc' : 'asc';
+      return;
+    }
+
+    this.sortColumn = column;
+    this.sortDirection = 'asc';
+  }
+
+  ariaSort(column: SiteProductSortColumn): 'ascending' | 'descending' | 'none' {
+    if (this.sortColumn !== column) return 'none';
+    return this.sortDirection === 'asc' ? 'ascending' : 'descending';
+  }
+
+  sortLabel(label: string, column: SiteProductSortColumn): string {
+    if (this.sortColumn !== column) return label;
+    return `${label} (${this.sortDirection === 'asc' ? 'ascending' : 'descending'})`;
+  }
+
+  private columnValue(product: SiteProduct, column: SiteProductSortColumn): string | number | null {
+    switch (column) {
+      case 'name': return product.name;
+      case 'mdbCode': return product.mdbCode;
+      case 'averageUnitCost': return product.averageUnitCost;
+      case 'sitePrice': return product.sitePrice;
+      case 'estimatedCardProfit': return product.estimatedCardProfit;
+      case 'quantityInStock': return product.quantityInStock;
+    }
+  }
+
+  /** The deterministic tie-break for equal or missing values on the active column: product name, then id. */
+  private tieBreak(left: SiteProduct, right: SiteProduct): number {
+    const byName = left.name.localeCompare(right.name);
+    return byName !== 0 ? byName : left.productId - right.productId;
+  }
+
   stockClass(product: SiteProduct): string {
     const percentage = product.maxStock > 0
       ? (product.quantityInStock / product.maxStock) * 100
@@ -102,3 +162,6 @@ export class SiteProductsComponent implements OnInit {
     URL.revokeObjectURL(url);
   }
 }
+
+type SiteProductSortColumn = 'name' | 'mdbCode' | 'averageUnitCost' | 'sitePrice' | 'estimatedCardProfit' | 'quantityInStock';
+type SiteProductSortDirection = 'asc' | 'desc';
