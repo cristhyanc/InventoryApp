@@ -55,13 +55,10 @@ public static class BusinessRoles
 
         var trimmed = name.Trim();
 
-        foreach (var candidate in All.Where(candidate => string.Equals(candidate.ToString(), trimmed, StringComparison.OrdinalIgnoreCase)))
-        {
-            role = candidate;
-            return true;
-        }
-
-        return false;
+        // No declared role is the enum's default (0), so "no match" comes back as an undeclared
+        // value and fails the same IsSupported check every stored role has to pass.
+        role = All.FirstOrDefault(candidate => string.Equals(candidate.ToString(), trimmed, StringComparison.OrdinalIgnoreCase));
+        return IsSupported(role);
     }
 
     /// <summary>
