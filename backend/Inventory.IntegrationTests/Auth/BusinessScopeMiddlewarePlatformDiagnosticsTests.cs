@@ -84,7 +84,7 @@ public class BusinessScopeMiddlewarePlatformDiagnosticsTests
         var reached = await InvokeAsync(
             context,
             new BusinessScope(),
-            BusinessMembershipResolution.Resolved(BusinessId.From(1)),
+            BusinessMembershipResolution.Resolved(BusinessId.From(1), BusinessRole.Owner),
             policySucceeds: false);
 
         Assert.False(reached);
@@ -120,7 +120,7 @@ public class BusinessScopeMiddlewarePlatformDiagnosticsTests
         var reached = await InvokeAsync(
             context,
             scope,
-            BusinessMembershipResolution.Resolved(BusinessId.From(7)),
+            BusinessMembershipResolution.Resolved(BusinessId.From(7), BusinessRole.Owner),
             policySucceeds: false);
 
         Assert.True(reached);
@@ -161,7 +161,7 @@ public class BusinessScopeMiddlewarePlatformDiagnosticsTests
         var reached = await InvokeAsync(
             context,
             new BusinessScope(),
-            BusinessMembershipResolution.Resolved(BusinessId.From(7)),
+            BusinessMembershipResolution.Resolved(BusinessId.From(7), BusinessRole.Owner),
             policySucceeds: false,
             timeZoneScope,
             storedTimeZoneId: "America/New_York");
@@ -208,7 +208,7 @@ public class BusinessScopeMiddlewarePlatformDiagnosticsTests
         var reached = await InvokeAsync(
             context,
             new BusinessScope(),
-            BusinessMembershipResolution.Resolved(BusinessId.From(7)),
+            BusinessMembershipResolution.Resolved(BusinessId.From(7), BusinessRole.Owner),
             policySucceeds: false,
             timeZoneScope,
             storedTimeZoneId);
@@ -276,6 +276,9 @@ public class BusinessScopeMiddlewarePlatformDiagnosticsTests
             Task.FromResult(resolution);
 
         public Task<BusinessId> RequireBusinessIdAsync(CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<BusinessRole> RequireRoleAsync(CancellationToken cancellationToken) =>
             throw new NotSupportedException();
     }
 

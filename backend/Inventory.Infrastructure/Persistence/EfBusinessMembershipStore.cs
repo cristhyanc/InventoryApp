@@ -47,6 +47,7 @@ public sealed class EfBusinessMembershipStore : IBusinessMembershipStore
                 (membership, business) => new
                 {
                     business.Id,
+                    membership.Role,
                     MembershipIsActive = membership.IsActive,
                     BusinessIsActive = business.IsActive,
                 })
@@ -57,6 +58,9 @@ public sealed class EfBusinessMembershipStore : IBusinessMembershipStore
         return rows
             .Select(row => new ActorBusinessMembership(
                 BusinessId.From(row.Id),
+                // The stored role exactly as it is, including a value no BusinessRole declares.
+                // Normalising it here would hide the one case the policy has to deny.
+                row.Role,
                 row.MembershipIsActive,
                 row.BusinessIsActive))
             .ToList();

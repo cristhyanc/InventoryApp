@@ -1,3 +1,4 @@
+using Inventory.Application.Access;
 using Inventory.Application.Businesses;
 using Inventory.Application.CatalogReconciliation;
 using Inventory.Application.Categories;
@@ -47,6 +48,10 @@ public static class ApplicationServiceCollectionExtensions
         // The current business's own name and time zone (issue #499). Per request like everything
         // tenancy-scoped: the answer belongs to one caller's membership.
         services.AddScoped<GetCurrentBusiness>();
+
+        // The signed-in member's role and capabilities (issue #521). Per request for the same
+        // reason, and so a role change applies on the next request rather than being cached.
+        services.AddScoped<GetCurrentAccess>();
 
         services.AddScoped<ListNayaxFeeRates>();
         services.AddScoped<SaveNayaxFeeRate>();

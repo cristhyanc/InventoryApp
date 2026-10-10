@@ -14,7 +14,7 @@ only the schema-migration step's "deploy and let startup apply it" alternative i
 | --- | --- |
 | Apply schema migrations | **Application**, automatically at Production startup (issue #201) — or **Human**, via `migrate-database --apply`, for diagnostics or ahead of a deployment window |
 | Create the `Business` record | **Human**, via `bootstrap-business` |
-| Create `BusinessMembership` rows from the supplied Entra mapping | **Human**, via `bootstrap-business` |
+| Create `BusinessMembership` rows from the supplied Entra mapping, in the role it names | **Human**, via `bootstrap-business` (see [The member's role](#the-members-role-issue-521)) |
 | Assign existing rows to that business | **Human**, via `bootstrap-business --apply` |
 | Move the global Nayax operator id and token into that business's record | **Human**, via `migrate-nayax-connection --apply` (issue #519; see [Migrating the Nayax connection](#migrating-the-nayax-connection-into-the-business-issue-519)) |
 | Remove the global `NayaxLynx` settings | **Human**, after the client reads the per-business record (issue #520) |
@@ -129,6 +129,7 @@ Supply the real values per environment:
   dotnet user-secrets set "BusinessBootstrap:BusinessName" "<business name>"
   dotnet user-secrets set "BusinessBootstrap:Members:0:DirectoryTenantId" "<tid>"
   dotnet user-secrets set "BusinessBootstrap:Members:0:ObjectId" "<oid>"
+  dotnet user-secrets set "BusinessBootstrap:Members:0:Role" "Owner"
   ```
 
 - **Azure:** application settings on the App Service, using the same
@@ -137,6 +138,34 @@ Supply the real values per environment:
 
 With the section empty or malformed the command refuses and changes nothing. It will not invent
 an identity, and it will not create a business nobody can sign in to.
+
+#### The member's role (issue #521)
+
+`Role` is optional. Leave it out and the member is created as an `Owner`, which is what this
+command has always created and what the migration backfilled every pre-existing membership with —
+so an existing configuration behaves exactly as it did before roles existed, and the person running
+the bootstrap keeps full access.
+
+The accepted values are `Owner`, `Manager` and `Operator`, matched case-insensitively:
+
+| Role | What it may do |
+| --- | --- |
+| `Owner` | Everything, including the Nayax integration, data repairs, members, roles and the business record |
+| `Manager` | Everything operational, plus the financial figures: dashboard financials, reports, expenses, imports, site commissions and supplier GST defaults |
+| `Operator` | Day-to-day work only: dashboard without financial figures, pick list, inventory and purchasing |
+
+Anything else — a misspelling such as `Manger`, a role that does not exist yet such as `Viewer`,
+or a bare number such as `40` — refuses the whole run and writes nothing, rather than creating a
+member who would then be denied at sign-in. Configuration names a role; it does not supply the
+stored value.
+
+Give each member their own `Role` key (`Members:1:Role`, and so on); one entry's role never carries
+onto another. Re-running the command never changes the role an existing member already holds, for
+the same reason it never resurrects a revoked approval — so a role cannot be corrected by editing
+this configuration and running again. Today a role is set when the membership row is created and
+changed only by a human directly in the database; the members page that will change one is issue
+#524. A signed-in member can see their own role and capabilities at `GET /api/me/access`, and a
+change applies on their next request.
 
 ## Rollout sequence
 
