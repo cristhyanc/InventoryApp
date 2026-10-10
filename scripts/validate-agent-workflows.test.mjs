@@ -3,6 +3,7 @@ import './select-implementation-model.test.mjs';
 import './agent-persistence.test.mjs';
 import './agent-review-publication.test.mjs';
 import './agent-architecture-handoff.test.mjs';
+import './chatgpt-review-contract.test.mjs';
 // Deterministic contract tests for the validation workflow's concurrency and status model.
 // Run with: node --test scripts/validate-agent-workflows.test.mjs
 import assert from 'node:assert/strict';

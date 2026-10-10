@@ -11,8 +11,9 @@ name: ChatGPT final review
 #   request text and the linked issue are read through the API and passed to the model as data only.
 #   AGENTS.md, the review rules, comes from this workflow's own commit, never from the pull request.
 # - It is the last review: the exact head must already have a successful `agent-validation` or
-#   `merge-validation` status and, when the agent review ran on that head, a successful
-#   `agent-review-verdict`.
+#   `merge-validation` status. An agent pull request (an `agent/issue-*` branch or the `agent-review`
+#   label) must also have a successful `agent-review-verdict` (READY FOR HUMAN REVIEW) on that exact
+#   head; a missing, pending or failed verdict blocks the review, before and again at publication.
 # - The `review` job holds the only OpenAI credential (repository secret OPENAI_API_KEY) and has no
 #   write permission. It returns structured output only. A separate deterministic `publish` job
 #   re-verifies the pull request head, posts one comment-only review bound to the reviewed SHA and
@@ -71,7 +72,7 @@ jobs:
           [[ "$pr_number" =~ ^[1-9][0-9]*$ ]] || fail "A valid pull request number is required."
 
           pr_json="$(gh pr view "$pr_number" --repo "$GITHUB_REPOSITORY" \
-            --json state,isDraft,baseRefName,headRefOid,headRepository,headRepositoryOwner)"
+            --json state,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,labels)"
           state="$(jq -r '.state' <<<"$pr_json")"
           is_draft="$(jq -r '.isDraft' <<<"$pr_json")"
           base_ref="$(jq -r '.baseRefName' <<<"$pr_json")"
@@ -91,9 +92,13 @@ jobs:
           latest() { jq -r --arg c "$1" '[.[] | select(.context == $c)][0].state // ""' <<<"$statuses"; }
           [ "$(latest agent-validation)" = "success" ] || [ "$(latest merge-validation)" = "success" ] \
             || fail "The head $head_sha needs a successful agent-validation or merge-validation status first."
-          agent_verdict="$(latest agent-review-verdict)"
-          [ -z "$agent_verdict" ] || [ "$agent_verdict" = "success" ] \
-            || fail "The agent review of $head_sha is '$agent_verdict'; the ChatGPT review runs only after it passes."
+          # Agent pull requests: the agent review must have passed on this exact head. Absent is not passed.
+          head_ref="$(jq -r '.headRefName' <<<"$pr_json")"
+          if [[ "$head_ref" == agent/issue-* ]] || jq -e 'any(.labels[]?; .name == "agent-review")' <<<"$pr_json" >/dev/null; then
+            agent_verdict="$(latest agent-review-verdict)"
+            [ "$agent_verdict" = "success" ] \
+              || fail "Agent pull request: the agent review of $head_sha is '${agent_verdict:-not reported}', not READY FOR HUMAN REVIEW; the ChatGPT review runs only after it passes."
+          fi
 
           echo "::notice::ChatGPT will review pull request #$pr_number at $head_sha."
           {
@@ -300,12 +305,18 @@ jobs:
           esac
 
           # Re-check the live pull request immediately before publishing; fail closed on any read error.
-          pr_json="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json state,isDraft,baseRefName,headRefOid)"
+          pr_json="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json state,isDraft,baseRefName,headRefName,headRefOid,labels)"
           [ "$(jq -r '.state' <<<"$pr_json")" = "OPEN" ] || suppress "pull request #$PR_NUMBER is no longer open."
           [ "$(jq -r '.isDraft' <<<"$pr_json")" = "false" ] || suppress "pull request #$PR_NUMBER is now a draft."
           [ "$(jq -r '.baseRefName' <<<"$pr_json")" = "develop" ] || suppress "pull request #$PR_NUMBER no longer targets develop."
           current_sha="$(jq -r '.headRefOid // empty' <<<"$pr_json")"
           [ "$current_sha" = "$HEAD_SHA" ] || suppress "the head moved to $current_sha."
+          head_ref="$(jq -r '.headRefName' <<<"$pr_json")"
+          if [[ "$head_ref" == agent/issue-* ]] || jq -e 'any(.labels[]?; .name == "agent-review")' <<<"$pr_json" >/dev/null; then
+            agent_verdict="$(gh api "repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA/status" \
+              --jq '[.statuses[] | select(.context == "agent-review-verdict")][0].state // ""')"
+            [ "$agent_verdict" = "success" ] || suppress "the agent review of $HEAD_SHA is no longer READY FOR HUMAN REVIEW."
+          fi
 
           # The publisher, not the model, writes the reviewer, the SHA, the verdict line and the advisory sentence.
           jq -r --arg sha "$HEAD_SHA" --arg run "$RUN_URL" --arg model "$OPENAI_MODEL" '

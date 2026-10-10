@@ -41,7 +41,7 @@ Directory.Build.props                 Shared .NET build quality settings (nullab
 frontend/inventory-app/eslint.config.js    Angular/TypeScript ESLint flat configuration
 scripts/validate.ps1                  Complete Windows validation
 scripts/validate.sh                   Complete Bash validation
-scripts/validate-agent-workflows.mjs  Agent workflow and template contract checks (with .test.mjs)
+scripts/validate-agent-workflows.mjs  Agent workflow and template contract checks (with .test.mjs and chatgpt-review-contract.test.mjs)
 scripts/validate-deployment-workflows.mjs  Production deployment workflow contract checks (with .test.mjs)
 scripts/deployment-migration-preflight.mjs Deploy Production migration preflight (with .test.mjs)
 scripts/validate-documentation-impact.mjs  Documentation-impact declaration parser for issues and PRs (with .test.mjs)
