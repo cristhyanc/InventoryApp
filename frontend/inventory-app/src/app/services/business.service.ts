@@ -24,10 +24,18 @@ export interface CurrentBusiness {
  * A failed lookup publishes nothing and emits `null`: the zone stays unknown, so dates render as
  * unavailable rather than in a zone nobody confirmed, and the shell still renders the application
  * instead of waiting forever. Calling `load()` again retries.
+ *
+ * The cached answer belongs to one signed-in identity. When the account changes, the shell calls
+ * `reset()`, which drops the cached answer and the published zone and makes any lookup still in
+ * flight for the previous account inert, so its late response can never publish the previous
+ * business's zone for the new account.
  */
 @Injectable({ providedIn: 'root' })
 export class BusinessService {
   private current$?: Observable<CurrentBusiness | null>;
+
+  /** Bumped by `reset()`; a lookup started under an older generation must not publish. */
+  private generation = 0;
 
   constructor(
     private readonly http: HttpClient,
@@ -51,12 +59,19 @@ export class BusinessService {
       return inFlight;
     }
 
+    const generation = this.generation;
     const loading = this.current().pipe(
-      tap((business) => this.timeZone.publish(business?.timeZoneId)),
+      tap((business) => {
+        if (generation === this.generation) {
+          this.timeZone.publish(business?.timeZoneId);
+        }
+      }),
       catchError((error: unknown) => {
         // Retryable: drop the shared attempt so a later call asks again. Nothing is published, so
         // no date is rendered in a zone the API never confirmed.
-        this.current$ = undefined;
+        if (generation === this.generation) {
+          this.current$ = undefined;
+        }
         console.error('Could not read the current business; business dates are unavailable.', error);
         return of(null);
       }),
@@ -65,5 +80,16 @@ export class BusinessService {
 
     this.current$ = loading;
     return loading;
+  }
+
+  /**
+   * Forgets the current business, for a change of signed-in account: the cached answer and the
+   * published zone are dropped, and a lookup still in flight can no longer publish. The next
+   * `load()` asks the endpoint again, as the new account.
+   */
+  reset(): void {
+    this.generation++;
+    this.current$ = undefined;
+    this.timeZone.clear();
   }
 }

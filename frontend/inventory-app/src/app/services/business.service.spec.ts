@@ -1,5 +1,5 @@
 import { HttpClient } from '@angular/common/http';
-import { Observable, of, throwError } from 'rxjs';
+import { Observable, Subject, of, throwError } from 'rxjs';
 import { BusinessService, CurrentBusiness } from './business.service';
 import { ConfigService } from './config.service';
 import { BusinessTimeZoneService } from '../formatting/business-time-zone.service';
@@ -104,5 +104,49 @@ describe('BusinessService (issue #499)', () => {
     service.load().subscribe();
 
     expect(timeZone.timeZoneId).toBeNull();
+  });
+
+  it('forgets the previous business on reset and asks again as the new account', () => {
+    const responses: Array<() => Observable<unknown>> = [
+      () => of(sydneyBusiness),
+      () => of({ name: 'Vending NY', timeZoneId: 'America/New_York' })
+    ];
+    const { service, http, timeZone } = createService(() => responses[http.get.mock.calls.length - 1]());
+    service.load().subscribe();
+    expect(timeZone.timeZoneId).toBe('Australia/Sydney');
+
+    service.reset();
+    expect(timeZone.timeZoneId).toBeNull();
+
+    service.load().subscribe();
+    expect(http.get).toHaveBeenCalledTimes(2);
+    expect(timeZone.timeZoneId).toBe('America/New_York');
+  });
+
+  it('never lets a lookup started before a reset publish the previous account zone', () => {
+    const previousAccount = new Subject<CurrentBusiness>();
+    const { service, timeZone } = createService(() => previousAccount.asObservable());
+    service.load().subscribe();
+
+    service.reset();
+    previousAccount.next(sydneyBusiness);
+
+    expect(timeZone.timeZoneId).toBeNull();
+  });
+
+  it('keeps the zone unknown after a reset when the new account lookup fails', () => {
+    const responses: Array<() => Observable<unknown>> = [
+      () => of(sydneyBusiness),
+      () => throwError(() => new Error('403'))
+    ];
+    const { service, http, timeZone } = createService(() => responses[http.get.mock.calls.length - 1]());
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    service.load().subscribe();
+
+    service.reset();
+    service.load().subscribe();
+
+    expect(timeZone.timeZoneId).toBeNull();
+    jest.restoreAllMocks();
   });
 });

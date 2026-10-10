@@ -45,4 +45,17 @@ describe('BusinessTimeZoneService (issue #499)', () => {
 
     expect(service.timeZoneId).toBe('Australia/Sydney');
   });
+
+  it('returns to unknown when cleared, for a change of signed-in account', () => {
+    const service = new BusinessTimeZoneService();
+    const seen: Array<string | null> = [];
+    service.timeZoneId$.subscribe((zone) => seen.push(zone));
+    service.publish('Australia/Sydney');
+
+    service.clear();
+
+    expect(service.timeZoneId).toBeNull();
+    expect(service.isResolved).toBe(false);
+    expect(seen).toEqual([null, 'Australia/Sydney', null]);
+  });
 });

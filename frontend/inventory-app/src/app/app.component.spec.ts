@@ -46,19 +46,33 @@ interface Rendered {
     logoutRedirect: jest.Mock;
   };
   businessLoad: jest.Mock;
+  businessReset: jest.Mock;
+  /** Re-runs the shell's sign-in check, as MSAL does when an interaction settles. */
+  settleInteraction: () => void;
 }
 
 async function render(
-  options: { signedIn?: boolean; business?: () => Observable<CurrentBusiness | null> } = {}
+  options: {
+    signedIn?: boolean;
+    business?: () => Observable<CurrentBusiness | null>;
+    /** The active account, read on every sign-in check; defaults to `signedIn`. */
+    activeAccount?: () => AccountInfo | null;
+  } = {}
 ): Promise<Rendered> {
   const signedIn = options.signedIn ?? true;
+  const activeAccount = options.activeAccount ?? (() => (signedIn ? account : null));
   const businessLoad = jest.fn(options.business ?? (() => of({ name: 'Vending Co', timeZoneId: 'Australia/Sydney' })));
+  const businessReset = jest.fn();
+  const inProgress$ = new BehaviorSubject(InteractionStatus.None);
   const loginRedirect = jest.fn();
   const logoutRedirect = jest.fn();
   const msalService = {
     instance: {
-      getActiveAccount: () => (signedIn ? account : null),
-      getAllAccounts: () => (signedIn ? [account] : []),
+      getActiveAccount: () => activeAccount(),
+      getAllAccounts: () => {
+        const active = activeAccount();
+        return active ? [active] : [];
+      },
       setActiveAccount: jest.fn()
     },
     handleRedirectObservable: () => of(null),
@@ -71,7 +85,7 @@ async function render(
     providers: [
       provideRouter([{ path: '**', component: BlankPageComponent }]),
       { provide: MsalService, useValue: msalService },
-      { provide: MsalBroadcastService, useValue: { inProgress$: new BehaviorSubject(InteractionStatus.None) } },
+      { provide: MsalBroadcastService, useValue: { inProgress$ } },
       // The shell renders the sidebar, which asks the diagnostics API whether to offer the
       // super-admin link (issue #335). The shell itself owns no part of that decision, so the
       // probe is stubbed as refused here and tested where it belongs.
@@ -79,7 +93,7 @@ async function render(
       // The shell reads the signed-in operator's business so every instant on the page can be
       // rendered in that business's time zone (issue #499). The shell owns only the waiting; the
       // lookup itself is tested in business.service.spec.ts.
-      { provide: BusinessService, useValue: { load: businessLoad } }
+      { provide: BusinessService, useValue: { load: businessLoad, reset: businessReset } }
     ]
   }).compileComponents();
 
@@ -90,7 +104,12 @@ async function render(
     fixture,
     host: fixture.nativeElement as HTMLElement,
     msal: { loginRedirect, logoutRedirect },
-    businessLoad
+    businessLoad,
+    businessReset,
+    settleInteraction: () => {
+      inProgress$.next(InteractionStatus.None);
+      fixture.detectChanges();
+    }
   };
 }
 
@@ -461,6 +480,63 @@ describe('AppComponent business context (issue #499)', () => {
     const afterLoading = (fixture.nativeElement as HTMLElement).querySelector('main')?.textContent ?? '';
     expect(afterLoading).toContain('page body');
     expect(afterLoading).not.toContain('Loading your business');
+  });
+
+  it('reads the business again, as the new account, when the signed-in account changes', async () => {
+    const dana = { ...account, homeAccountId: 'dana.tenant' } as AccountInfo;
+    const lee = { name: 'Lee Operator', username: 'lee@example.test', homeAccountId: 'lee.tenant' } as unknown as AccountInfo;
+    let active: AccountInfo | null = dana;
+    const leeBusiness = new Subject<CurrentBusiness | null>();
+    const lookups = [
+      () => of({ name: 'Vending Co', timeZoneId: 'Australia/Sydney' }),
+      () => leeBusiness.asObservable()
+    ];
+    let lookupCount = 0;
+    const { fixture, businessLoad, businessReset, settleInteraction } = await render({
+      activeAccount: () => active,
+      business: () => lookups[lookupCount++]()
+    });
+    expect(await navigatedMain(fixture)).toContain('page body');
+    const resetsBeforeSwitch = businessReset.mock.calls.length;
+
+    active = lee;
+    settleInteraction();
+
+    // The previous account's business context is discarded and read again, and the page waits
+    // for the new account's business rather than showing the previous one's zone meanwhile.
+    expect(businessReset.mock.calls.length).toBe(resetsBeforeSwitch + 1);
+    expect(businessLoad).toHaveBeenCalledTimes(2);
+    const whileLoading = (fixture.nativeElement as HTMLElement).querySelector('main')?.textContent ?? '';
+    expect(whileLoading).toContain('Loading your business');
+    expect(whileLoading).not.toContain('page body');
+
+    leeBusiness.next({ name: 'Vending NY', timeZoneId: 'America/New_York' });
+    fixture.detectChanges();
+    expect((fixture.nativeElement as HTMLElement).querySelector('main')?.textContent).toContain('page body');
+  });
+
+  it('does not read the business again when the same account signs in again', async () => {
+    const { businessLoad, businessReset, settleInteraction } = await render();
+    const resets = businessReset.mock.calls.length;
+
+    settleInteraction();
+
+    expect(businessLoad).toHaveBeenCalledTimes(1);
+    expect(businessReset.mock.calls.length).toBe(resets);
+  });
+
+  it('discards the business context on sign-out and reads it afresh on the next sign-in', async () => {
+    let active: AccountInfo | null = account;
+    const { businessLoad, businessReset, settleInteraction } = await render({ activeAccount: () => active });
+    const resets = businessReset.mock.calls.length;
+
+    active = null;
+    settleInteraction();
+    expect(businessReset.mock.calls.length).toBe(resets + 1);
+
+    active = account;
+    settleInteraction();
+    expect(businessLoad).toHaveBeenCalledTimes(2);
   });
 
   it('renders the page anyway when the business could not be read', async () => {

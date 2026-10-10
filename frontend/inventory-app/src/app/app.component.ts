@@ -1,8 +1,8 @@
 import { Component, ElementRef, HostListener, OnDestroy, OnInit, ViewChild } from '@angular/core';
 import { RouterOutlet } from '@angular/router';
 import { MsalBroadcastService, MsalService } from '@azure/msal-angular';
-import { AuthenticationResult, InteractionStatus } from '@azure/msal-browser';
-import { Subject, filter, takeUntil } from 'rxjs';
+import { AccountInfo, AuthenticationResult, InteractionStatus } from '@azure/msal-browser';
+import { Subject, Subscription, filter, takeUntil } from 'rxjs';
 import { ToastContainerComponent } from "./components/shared/toast-container.component";
 import { IconComponent } from './components/shared/icon.component';
 import { LoadingIndicatorComponent } from './components/shared/loading-indicator.component';
@@ -60,6 +60,14 @@ export class AppComponent implements OnInit, OnDestroy {
   /** Whether the signed-in operator's business lookup has settled (issue #499). */
   private isBusinessSettled = false;
   private businessRequested = false;
+
+  /**
+   * The signed-in identity the business context above was requested for, or `null` when nobody is
+   * signed in. A different identity means a different business, so the context is discarded and
+   * read again rather than kept from the previous account.
+   */
+  private businessAccountKey: string | null = null;
+  private businessLookup?: Subscription;
 
   readonly sidebarId = PRIMARY_NAVIGATION_ID;
 
@@ -217,6 +225,20 @@ export class AppComponent implements OnInit, OnDestroy {
     this.isLoggedIn = account !== null;
     this.userName = account?.name ?? account?.username ?? '';
 
+    const accountKey = AppComponent.accountKey(account);
+    if (accountKey !== this.businessAccountKey) {
+      // A different account (or a sign-out) owns a different business context. Drop the previous
+      // one entirely - the cached lookup, the published zone and any lookup still in flight - so
+      // neither the loading state nor a failure can show the previous business's zone, and read
+      // the business again as the new account.
+      this.businessAccountKey = accountKey;
+      this.businessLookup?.unsubscribe();
+      this.businessLookup = undefined;
+      this.businessService.reset();
+      this.businessRequested = false;
+      this.isBusinessSettled = false;
+    }
+
     if (this.isLoggedIn && !this.businessRequested) {
       // The business's own name and time zone, which every operator-facing date/time is rendered
       // in (issue #499). It is an authenticated read, so it cannot happen at bootstrap; it is
@@ -224,7 +246,7 @@ export class AppComponent implements OnInit, OnDestroy {
       // isBusinessContextReady), because a page rendered before the business is known would show
       // its instants in no time zone at all.
       this.businessRequested = true;
-      this.businessService.load()
+      this.businessLookup = this.businessService.load()
         .pipe(takeUntil(this.destroying$))
         .subscribe(() => {
           // Settled either way. A failed lookup published no zone, so dates render as
@@ -232,5 +254,13 @@ export class AppComponent implements OnInit, OnDestroy {
           this.isBusinessSettled = true;
         });
     }
+  }
+
+  /** The stable identity of a signed-in account, independent of its display name. */
+  private static accountKey(account: AccountInfo | null): string | null {
+    if (account === null) {
+      return null;
+    }
+    return account.homeAccountId || account.localAccountId || account.username || '';
   }
 }

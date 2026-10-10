@@ -39,4 +39,15 @@ export class BusinessTimeZoneService {
       this.zone$.next(timeZoneId.trim());
     }
   }
+
+  /**
+   * Forgets the published zone, back to "not known yet". Only `BusinessService.reset()` calls
+   * this, when the signed-in account changes: the zone belongs to the previous account's business,
+   * so keeping it would render the next account's dates in a business it may not belong to.
+   */
+  clear(): void {
+    if (this.zone$.value !== null) {
+      this.zone$.next(null);
+    }
+  }
 }
