@@ -53,6 +53,11 @@ public static class ApplicationServiceCollectionExtensions
         // reason, and so a role change applies on the next request rather than being cached.
         services.AddScoped<GetCurrentAccess>();
 
+        // The shared write path every membership change runs through (issue #522). Scoped, because
+        // the transaction it opens is the request's own AppDbContext transaction, which the
+        // operation's write has to save inside.
+        services.AddScoped<MembershipWriteGuard>();
+
         services.AddScoped<ListNayaxFeeRates>();
         services.AddScoped<SaveNayaxFeeRate>();
         services.AddScoped<GetNayaxProcessingFees>();

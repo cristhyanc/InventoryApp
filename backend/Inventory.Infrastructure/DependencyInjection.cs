@@ -137,6 +137,9 @@ public static class InfrastructureServiceCollectionExtensions
         // Grouped by the Application feature whose port each satisfies, in the order Program.cs
         // registered them.
         services.AddScoped<IBusinessMembershipStore, EfBusinessMembershipStore>();
+        // The write side of the membership table (issue #522): the BEGIN IMMEDIATE transaction and
+        // the rows the one-active-membership and last-Owner rules are decided from.
+        services.AddScoped<IBusinessMembershipWriteStore, EfBusinessMembershipWriteStore>();
         services.AddScoped<IBusinessProfileStore, EfBusinessProfileStore>();
         services.AddScoped<INayaxFeeRateStore, EfNayaxFeeRateStore>();
         // The per-business Nayax connection (issue #518). Its INayaxTokenProtector dependency comes

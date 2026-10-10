@@ -259,6 +259,15 @@ public class EfBusinessMembershipStoreTests
     /// <summary>
     /// The adapter must surface both memberships rather than picking one, so the policy can deny
     /// the ambiguous actor. This is the cross-business leak this boundary exists to prevent.
+    ///
+    /// Since issue #522 the database itself refuses the second active membership
+    /// (<see cref="OneActiveMembershipPerIdentityTests"/>), and the migration that adds that index
+    /// refuses to upgrade a database already holding such a pair - so this state is now only
+    /// reachable as data predating the index. The index is dropped here to recreate exactly that,
+    /// because the resolution path still has to fail closed for a row pair it may be handed: the
+    /// adapter surfaces both rows and the policy denies the actor every business. Defence in depth
+    /// is the point - the index stops the state being created, and this keeps it harmless if it
+    /// somehow exists.
     /// </summary>
     [Fact]
     public async Task Memberships_in_two_businesses_are_all_returned_and_resolve_to_a_denial()
@@ -269,6 +278,8 @@ public class EfBusinessMembershipStoreTests
             await using var db = TestAppDbContext.Unrestricted(options);
             var first = await AddBusinessAsync(db, "Vending Co");
             var second = await AddBusinessAsync(db, "Other Vending Co");
+            await db.Database.ExecuteSqlRawAsync(
+                "DROP INDEX IX_BusinessMemberships_DirectoryTenantId_ObjectId_Active;");
             await AddMembershipAsync(db, first.Id);
             await AddMembershipAsync(db, second.Id);
 
