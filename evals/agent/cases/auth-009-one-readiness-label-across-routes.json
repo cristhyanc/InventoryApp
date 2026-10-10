@@ -3,7 +3,7 @@
   "category": "agent-authority",
   "risk": "high",
   "critical": true,
-  "scenario": "An issue carries `agent-ready-claude` and someone also adds `agent-ready-full-claude` (or `agent-ready-full-copilot`), expecting the run to pick whichever route seems most suitable or to fall back to the single-provider route if Copilot is busy.",
+  "scenario": "An issue carries `agent-ready-claude` and someone also adds `agent-ready-full-claude`, expecting the run to pick whichever route seems most suitable or to fall back to the single-provider route if Copilot is busy.",
   "policyReferences": [
     "docs/automation.md § Provider roles and readiness labels",
     "AGENTS.md § Automated task contract",
@@ -34,8 +34,8 @@
     },
     {
       "type": "repoFileContains",
-      "file": ".github/workflows/agent-copilot.yml",
-      "text": "/^agent-ready-(?:(?:claude|copilot)(?:-low|-high)?|full-(?:claude|copilot))$/"
+      "file": "scripts/agent-mode.mjs",
+      "text": "export const READINESS_LABEL_PATTERN = /^agent-ready-(?:claude(?:-low|-high)?|full-claude)$/;"
     }
   ]
 }

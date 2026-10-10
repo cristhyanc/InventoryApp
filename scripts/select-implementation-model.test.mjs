@@ -50,7 +50,7 @@ test('missing or malformed task content fails before triage', () => {
   }
 });
 
-for (const provider of ['claude', 'copilot']) {
+for (const provider of ['claude']) {
   test(`${provider}: explicit tiers bypass triage and select fixed models`, () => {
     const low = resolveSelection(prepare(provider, '-low'));
     const high = resolveSelection(prepare(provider, '-high'));
@@ -81,11 +81,16 @@ test('malformed, injected or missing model output fails closed', () => {
   }
 });
 test('conflicting providers, removed labels, closed issues and active work are rejected', () => {
-  for (const labels of [[], ['agent-ready-claude', 'agent-ready-claude-high'], ['agent-ready-claude', 'agent-ready-copilot'], ['agent-ready-claude', 'agent-working']]) {
+  for (const labels of [[], ['agent-ready-claude', 'agent-ready-claude-high'], ['agent-ready-claude', 'agent-ready-full-claude'], ['agent-ready-claude', 'agent-working']]) {
     assert.throws(() => prepare('claude', '', { labels: labels.map(name => ({ name })) }), /readiness|active/i);
   }
   assert.throws(() => prepare('claude', '', { state: 'CLOSED' }), /open/i);
-  assert.throws(() => prepareSelection({ provider: 'claude', label: 'agent-ready-copilot', issue: issue('agent-ready-copilot') }), /label/i);
+  // Copilot no longer implements: its retired labels and provider are refused.
+  for (const label of ['agent-ready-copilot', 'agent-ready-copilot-high', 'agent-ready-full-copilot']) {
+    assert.throws(() => prepareSelection({ provider: 'claude', label, issue: issue(label) }), /label/i);
+    assert.throws(() => prepareSelection({ provider: 'copilot', label, issue: issue(label) }), /label/i);
+  }
+  assert.deepEqual(Object.keys(MODELS), ['claude']);
 });
 test('live task edits or readiness changes invalidate the selection before implementation', () => {
   const snapshot = issue('agent-ready-claude');
@@ -95,25 +100,20 @@ test('live task edits or readiness changes invalidate the selection before imple
     assert.throws(() => verifySnapshot(selection, changed), /changed|readiness|active/i);
   }
 });
-test('Claude reruns can resume working tasks, but a fresh run and Copilot cannot reassign them', () => {
+test('Claude reruns can resume working tasks, but a fresh run cannot reassign them', () => {
   const working = issue('agent-working');
   assert.doesNotThrow(() => prepareSelection({ provider: 'claude', label: 'agent-ready-claude-low', issue: working, attempt: 2 }));
   assert.throws(() => prepareSelection({ provider: 'claude', label: 'agent-ready-claude-low', issue: working }), /active|readiness/i);
-  assert.throws(() => prepareSelection({ provider: 'copilot', label: 'agent-ready-copilot', issue: working, attempt: 2 }), /active|readiness/i);
 });
 
 test('readiness labels map to trusted routes; Claude-primary is the default', () => {
   assert.equal(DEFAULT_READY_LABEL, 'agent-ready-claude');
-  assert.deepEqual(FULL_READY_LABELS, ['agent-ready-full-claude', 'agent-ready-full-copilot']);
+  assert.deepEqual(FULL_READY_LABELS, ['agent-ready-full-claude']);
   const expected = {
     'agent-ready-claude': ['cross-claude', 'claude', 'copilot', false, 'default'],
     'agent-ready-claude-low': ['cross-claude', 'claude', 'copilot', false, 'low'],
     'agent-ready-claude-high': ['cross-claude', 'claude', 'copilot', false, 'high'],
-    'agent-ready-copilot': ['cross-copilot', 'copilot', 'claude', false, 'default'],
-    'agent-ready-copilot-low': ['cross-copilot', 'copilot', 'claude', false, 'low'],
-    'agent-ready-copilot-high': ['cross-copilot', 'copilot', 'claude', false, 'high'],
     'agent-ready-full-claude': ['full-claude', 'claude', 'claude', true, 'default'],
-    'agent-ready-full-copilot': ['full-copilot', 'copilot', 'copilot', true, 'default'],
   };
   assert.deepEqual([...READINESS_LABELS].sort(), Object.keys(expected).sort());
   for (const [label, [mode, implementer, reviewer, sameProviderReview, tier]] of Object.entries(expected)) {
@@ -121,15 +121,15 @@ test('readiness labels map to trusted routes; Claude-primary is the default', ()
     assert.ok(READINESS_LABEL_PATTERN.test(label));
   }
   assert.equal(parseReadinessLabel(DEFAULT_READY_LABEL).reviewer, 'copilot');
-  for (const other of ['agent-ready', 'agent-ready-full', 'agent-ready-full-claude-high', 'agent-ready-full-claude-low', 'agent-ready-claude-full', 'agent-ready-gemini', 'Agent-Ready-Claude', ' agent-ready-claude', 'agent-ready-claude\n', 'agent-working', null, undefined, 42]) {
+  for (const other of ['agent-ready', 'agent-ready-full', 'agent-ready-full-claude-high', 'agent-ready-full-claude-low', 'agent-ready-claude-full', 'agent-ready-gemini', 'agent-ready-copilot', 'agent-ready-copilot-low', 'agent-ready-copilot-high', 'agent-ready-full-copilot', 'Agent-Ready-Claude', ' agent-ready-claude', 'agent-ready-claude\n', 'agent-working', null, undefined, 42]) {
     assert.equal(parseReadinessLabel(other), null, String(other));
     if (typeof other === 'string') assert.equal(READINESS_LABEL_PATTERN.test(other), false, other);
   }
 });
 
-test('full-provider labels start work by default and refuse to start when the kill switch is off', () => {
+test('the full-provider label starts work by default and refuses to start when the kill switch is off', () => {
   assert.equal(FULL_PROVIDER_EXECUTION_ENABLED, true);
-  for (const provider of ['claude', 'copilot']) {
+  for (const provider of ['claude']) {
     const label = `agent-ready-full-${provider}`;
     const selection = prepareSelection({ provider, label, issue: issue(label) });
     assert.equal(selection.mode, `full-${provider}`);
@@ -139,8 +139,8 @@ test('full-provider labels start work by default and refuse to start when the ki
   }
 });
 
-test('full-provider labels use their provider and the existing tier policy once enabled', () => {
-  for (const provider of ['claude', 'copilot']) {
+test('the full-provider label uses its provider and the existing tier policy once enabled', () => {
+  for (const provider of ['claude']) {
     const label = `agent-ready-full-${provider}`;
     const selection = prepareSelection({ provider, label, issue: issue(label), fullProviderEnabled: true });
     assert.equal(selection.mode, `full-${provider}`);
@@ -148,18 +148,15 @@ test('full-provider labels use their provider and the existing tier policy once 
     assert.equal(selection.sameProviderReview, true);
     assert.equal(selection.triage, true);
     for (const tier of ['low', 'standard', 'high']) assert.equal(resolveSelection(selection, { tier, reason: 'Triage' }).model, MODELS[provider][tier]);
-    const other = provider === 'claude' ? 'copilot' : 'claude';
-    assert.throws(() => prepareSelection({ provider: other, label, issue: issue(label), fullProviderEnabled: true }), /Invalid implementation label/);
+    assert.throws(() => prepareSelection({ provider: 'copilot', label, issue: issue(label), fullProviderEnabled: true }), /Invalid implementation label/);
   }
 });
 
 test('exactly one readiness label across standard and full variants may authorise a run', () => {
   const conflicts = [
     ['agent-ready-claude', 'agent-ready-full-claude'],
-    ['agent-ready-claude', 'agent-ready-full-copilot'],
-    ['agent-ready-copilot', 'agent-ready-full-copilot'],
     ['agent-ready-claude-high', 'agent-ready-full-claude'],
-    ['agent-ready-full-claude', 'agent-ready-full-copilot'],
+    ['agent-ready-claude-low', 'agent-ready-claude-high'],
   ];
   for (const labels of conflicts) {
     for (const label of labels) {
@@ -167,8 +164,8 @@ test('exactly one readiness label across standard and full variants may authoris
       assert.throws(() => prepareSelection({ provider, label, issue: issue(label, { labels: labels.map(name => ({ name })) }), fullProviderEnabled: true }), /Exactly one matching readiness/, labels.join('+'));
     }
   }
-  for (const state of ['agent-working', 'agent-architecture-fix', 'agent-review', 'agent-blocked']) {
-    for (const label of ['agent-ready-claude', 'agent-ready-copilot', 'agent-ready-full-claude', 'agent-ready-full-copilot']) {
+  for (const state of ['agent-working', 'agent-review', 'agent-blocked']) {
+    for (const label of ['agent-ready-claude', 'agent-ready-full-claude']) {
       const provider = parseReadinessLabel(label).implementer;
       assert.throws(() => prepareSelection({ provider, label, issue: issue(label, { labels: [{ name: label }, { name: state }] }), fullProviderEnabled: true }), /active or blocked/);
     }
@@ -183,7 +180,6 @@ test('exactly one readiness label across standard and full variants may authoris
 test('workflow contract rejects missing model gates, triage write tools and unbounded models', () => {
   const selectionPath = '.github/workflows/agent-model-selection.yml';
   const implementPath = '.github/workflows/agent-implement.yml';
-  const copilotPath = '.github/workflows/agent-copilot.yml';
   for (const [path, from, to] of [
     [selectionPath, '${{ steps.prepare.outputs.task }}', 'Task details unavailable'],
     [selectionPath, 'untrusted task data', 'trusted instructions'],
@@ -195,68 +191,11 @@ test('workflow contract rejects missing model gates, triage write tools and unbo
     [selectionPath, 'ref: ${{ github.workflow_sha }}', 'ref: develop'],
     [implementPath, 'needs: [preflight, model]', 'needs: preflight'],
     [implementPath, '--model ${{ needs.model.outputs.model }}', '--model opus'],
-    [copilotPath, 'model: $model', 'model: ""'],
-    [copilotPath, '/^agent-ready-(?:(?:claude|copilot)(?:-low|-high)?|full-(?:claude|copilot))$/', '/^agent-ready-(claude|copilot)(-low|-high)?$/'],
     // The full label must stay in the trigger while full-provider execution is enabled.
     [implementPath, " || github.event.label.name == 'agent-ready-full-claude')", ")"],
-    // The full label must stay in the trigger while full-provider execution is enabled.
-    [copilotPath, " || github.event.label.name == 'agent-ready-full-copilot')", ")"],
   ]) {
     const original = readRepositoryFile(path);
     assert.ok(original.includes(from));
     assert.throws(() => verifyImplementationModelSelection(p => p === path ? original.replaceAll(from, to) : readRepositoryFile(p)), /missing required|forbidden/);
   }
-});
-
-test('real Copilot assignment shell forwards each tier model, refuses scope edits before mutations and reports model rejection', () => {
-  const workflow = readRepositoryFile('.github/workflows/agent-copilot.yml');
-  const script = workflow.slice(workflow.indexOf('        run: |', workflow.indexOf('      - name: Relabel and assign Copilot'))).split('\n').slice(1).map(line => line.startsWith('          ') ? line.slice(10) : line).join('\n');
-  const dir = mkdtempSync(join(tmpdir(), 'model-assignment-'));
-  try {
-    writeFileSync(join(dir, 'gh'), `#!/bin/bash
-if [[ "$1 $2" == "issue view" ]]; then cat "$TEST_ISSUE"; exit 0; fi
-echo "$*" >> "$TEST_CALLS"
-if [[ "$1" == "api" ]]; then cat > "$TEST_PAYLOAD"; if [[ -n "$TEST_API_FAIL" ]]; then echo "$TEST_API_FAIL" >&2; exit 1; fi; fi
-`, { mode: 0o755 });
-    writeFileSync(join(dir, 'assign.sh'), script);
-    for (const suffix of ['-low', '', '-high']) {
-      const snapshot = issue(`agent-ready-copilot${suffix}`);
-      const prepared = prepareSelection({ provider: 'copilot', label: `agent-ready-copilot${suffix}`, issue: snapshot });
-      const resolved = resolveSelection(prepared, suffix === '' ? { tier: 'standard', reason: 'Normal development' } : undefined);
-      writeFileSync(join(dir, 'issue.json'), JSON.stringify(snapshot));
-      writeFileSync(join(dir, 'calls'), '');
-      const env = { ...process.env, PATH: `${dir}:${process.env.PATH}`, TEST_ISSUE: join(dir, 'issue.json'), TEST_CALLS: join(dir, 'calls'), TEST_PAYLOAD: join(dir, 'payload.json'), ISSUE_NUMBER: '123', GITHUB_REPOSITORY: 'test/repo', READY_LABEL: prepared.label, TASK_FINGERPRINT: prepared.fingerprint, IMPLEMENTATION_MODEL: resolved.model, MODEL_TIER: resolved.tier, MODEL_REASON: resolved.reason, AGENT_MODE: prepared.mode, COPILOT_AGENT_TOKEN: 'synthetic-token', GH_TOKEN: 'synthetic-token', RUN_URL: 'https://example.invalid/run' };
-      const run = spawnSync('bash', [join(dir, 'assign.sh')], { env, encoding: 'utf8' });
-      assert.equal(run.status, 0, run.stderr);
-      const payload = JSON.parse(readFileSync(join(dir, 'payload.json'), 'utf8'));
-      assert.equal(payload.agent_assignment.model, resolved.model);
-      assert.equal(payload.agent_assignment.base_branch, 'develop');
-      assert.deepEqual(payload.assignees, ['copilot-swe-agent[bot]']);
-      assert.match(payload.agent_assignment.custom_instructions, /Do not switch models/);
-      // The claim swaps the readiness label for agent-working in one edit; that label history is the
-      // provider-mode evidence, and no hidden record comment is written.
-      const claimCalls = readFileSync(join(dir, 'calls'), 'utf8');
-      assert.ok(claimCalls.includes(`--remove-label ${prepared.label} --add-label agent-working`));
-      assert.ok(!claimCalls.includes('agent-routing-mode'), claimCalls);
-      writeFileSync(join(dir, 'issue.json'), JSON.stringify({ ...snapshot, body: 'New scope' }));
-      writeFileSync(join(dir, 'calls'), '');
-      const stale = spawnSync('bash', [join(dir, 'assign.sh')], { env, encoding: 'utf8' });
-      assert.notEqual(stale.status, 0);
-      assert.equal(readFileSync(join(dir, 'calls'), 'utf8'), '');
-      for (const extra of ['agent-ready-full-copilot', 'agent-ready-full-claude']) {
-        writeFileSync(join(dir, 'issue.json'), JSON.stringify({ ...snapshot, labels: [...snapshot.labels, { name: extra }] }));
-        writeFileSync(join(dir, 'calls'), '');
-        const conflicting = spawnSync('bash', [join(dir, 'assign.sh')], { env, encoding: 'utf8' });
-        assert.notEqual(conflicting.status, 0, extra);
-        assert.equal(readFileSync(join(dir, 'calls'), 'utf8'), '', extra);
-      }
-      writeFileSync(join(dir, 'issue.json'), JSON.stringify(snapshot));
-      const rejected = spawnSync('bash', [join(dir, 'assign.sh')], { env: { ...env, TEST_API_FAIL: 'Model not available (HTTP 422)' }, encoding: 'utf8' });
-      assert.notEqual(rejected.status, 0);
-      const calls = readFileSync(join(dir, 'calls'), 'utf8');
-      assert.ok(calls.includes('--add-label agent-blocked'));
-      assert.ok(calls.includes(`Requested implementation model: ${resolved.model}`));
-      assert.ok(calls.includes('GitHub responded: Model not available (HTTP 422)'));
-    }
-  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

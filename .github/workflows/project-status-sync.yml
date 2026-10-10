@@ -22,9 +22,7 @@ on:
   workflow_run:
     workflows:
       - Agent implementation
-      - Agent Copilot implementation
       - Agent architecture
-      - Agent Copilot architecture check
       - Validate pull request
       - Agent review
     types: [completed]

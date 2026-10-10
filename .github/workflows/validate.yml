@@ -61,7 +61,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}
-          EXPECTED_COPILOT_AUTHOR: ${{ vars.COPILOT_AGENT_BOT_LOGIN || 'Copilot' }}
           # Each validation mode owns its own commit-status context so the two modes never
           # overwrite each other. workflow_dispatch exact-SHA validation publishes the
           # authoritative agent-validation status that agent-review.yml requires;
@@ -106,13 +105,9 @@ jobs:
               [ -n "$EXPECTED_AGENT_AUTHOR" ] || fail "AGENT_AUTOMATION_APP_BOT_LOGIN is not configured."
               [ "$author" = "$EXPECTED_AGENT_AUTHOR" ] || fail "Automated validation of an agent/issue-* branch requires $EXPECTED_AGENT_AUTHOR as the pull request author."
               implementer="claude"
-            elif [[ "$head_ref" == copilot/* ]]; then
-              [ "$author" = "$EXPECTED_COPILOT_AUTHOR" ] || fail "Automated validation of a copilot/* branch requires $EXPECTED_COPILOT_AUTHOR as the pull request author."
-              implementer="copilot"
             else
-              fail "Automated validation requires an agent/issue-* (Claude) or copilot/* (Copilot) head branch."
+              fail "Automated validation requires an agent/issue-* (Claude) head branch."
             fi
-            echo "::notice::Pull request #$pr_number was implemented by $implementer."
             [ "$current_sha" = "$head_sha" ] || fail "Refusing stale validation: pull request head is $current_sha, requested SHA is $head_sha."
             # Provider mode (#339): verify the route claimed in the issue's label history against this pull request, using the
             # resolver from this workflow's own commit. A conflicting, malformed or disabled mode fails closed.
@@ -279,8 +274,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       actions: write
-      pull-requests: write
-      issues: write
+      pull-requests: read
+      issues: read
       contents: read
 
     steps:
@@ -290,13 +285,12 @@ jobs:
           PR_NUMBER: ${{ needs.context.outputs.pr_number }}
           HEAD_SHA: ${{ needs.context.outputs.head_sha }}
           EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}
-          EXPECTED_COPILOT_AUTHOR: ${{ vars.COPILOT_AGENT_BOT_LOGIN || 'Copilot' }}
         run: |
           set -euo pipefail
           fail() { echo "::error::$1"; exit 1; }
 
           pr_json="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
-            --json state,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,labels,closingIssuesReferences)"
+            --json state,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,labels)"
           state="$(jq -r '.state' <<<"$pr_json")"
           is_draft="$(jq -r '.isDraft' <<<"$pr_json")"
           base_ref="$(jq -r '.baseRefName' <<<"$pr_json")"
@@ -314,11 +308,8 @@ jobs:
             [ -n "$EXPECTED_AGENT_AUTHOR" ] || fail "AGENT_AUTOMATION_APP_BOT_LOGIN is not configured."
             [ "$author" = "$EXPECTED_AGENT_AUTHOR" ] || fail "Pull request #$PR_NUMBER is not authored by $EXPECTED_AGENT_AUTHOR."
             implementer="claude"
-          elif [[ "$head_ref" == copilot/* ]]; then
-            [ "$author" = "$EXPECTED_COPILOT_AUTHOR" ] || fail "Pull request #$PR_NUMBER is not authored by $EXPECTED_COPILOT_AUTHOR."
-            implementer="copilot"
           else
-            fail "Pull request #$PR_NUMBER no longer uses an agent/issue-* or copilot/* branch."
+            fail "Pull request #$PR_NUMBER no longer uses an agent/issue-* branch."
           fi
           [ "$current_sha" = "$HEAD_SHA" ] || fail "Refusing stale review dispatch: pull request head is $current_sha, validated SHA is $HEAD_SHA."
           # Provider mode (#339): verify the route claimed in the issue's label history against this pull request, using the
@@ -331,24 +322,13 @@ jobs:
             fail "Pull requests that change .github/workflows/** require manual validation and review."
           fi
 
-          # A Copilot pull request waiting on architecture fixes moves to agent-review only now, after
-          # Copilot's fix push has passed exact-SHA validation. GITHUB_TOKEN label events start no
-          # workflow, so the relabel itself never triggers a premature review.
-          if [ "$implementer" = "copilot" ] \
-            && ! jq -e 'any(.labels[]?; .name == "agent-review")' <<<"$pr_json" >/dev/null \
-            && jq -e 'any(.labels[]?; .name == "agent-architecture-fix")' <<<"$pr_json" >/dev/null; then
-            issue_number="$(jq -r 'if ([.closingIssuesReferences[]?] | length) == 1 then .closingIssuesReferences[0].number else "" end' <<<"$pr_json")"
-            [[ "$issue_number" =~ ^[1-9][0-9]*$ ]] || fail "Pull request #$PR_NUMBER must close exactly one issue to leave agent-architecture-fix."
-            gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --remove-label agent-architecture-fix --add-label agent-review
-            gh issue edit "$issue_number" --repo "$GITHUB_REPOSITORY" --remove-label agent-architecture-fix --add-label agent-review
-            echo "::notice::Copilot's architecture fix passed validation at $HEAD_SHA; pull request #$PR_NUMBER moved to agent-review."
-          elif ! jq -e 'any(.labels[]?; .name == "agent-review")' <<<"$pr_json" >/dev/null; then
+          if ! jq -e 'any(.labels[]?; .name == "agent-review")' <<<"$pr_json" >/dev/null; then
             echo "::notice::The agent-review label is absent; validation passed, but no review was dispatched."
             exit 0
           fi
 
-          # agent-review.yml picks the reviewer from the verified provider mode: the other provider on
-          # the cross routes, a separate same-provider invocation on the full-provider fallbacks.
+          # agent-review.yml picks the reviewer from the verified provider mode: Copilot on the default
+          # cross-claude route, a separate same-provider Claude invocation on the full-claude fallback.
           gh workflow run agent-review.yml \
             --repo "$GITHUB_REPOSITORY" \
             --ref main \
