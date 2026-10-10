@@ -564,8 +564,8 @@ public sealed class NayaxConnectionMigrator
                 "Applied: the configured operator id and access token are now stored for this "
                     + "business, encrypted, and the connection is marked Ready - both committed as "
                     + "one transaction. The global NayaxLynx settings are deliberately unchanged - "
-                    + "removing them is a separate human step, after the Nayax client reads the "
-                    + "per-business record (issue #520).",
+                    + "the Nayax client already reads this per-business record (issue #520), so "
+                    + "removing them is a separate human step.",
             NayaxConnectionMigrationChange.StatusMarkedReady =>
                 "Applied: this business already held exactly the configured operator id and access "
                     + "token, so only the status was written and the connection is now marked Ready. "
