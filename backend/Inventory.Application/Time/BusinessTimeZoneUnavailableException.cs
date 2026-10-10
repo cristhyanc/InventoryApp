@@ -10,9 +10,12 @@ namespace Inventory.Application.Time;
 /// of them, silently moves sales, fees, commissions and profit between days; refusing the request
 /// is the only answer that cannot corrupt a financial report. The message names no business and no
 /// actor: it is for an operator reading the server log, and the HTTP boundary answers the caller
-/// with a generic 500 carrying none of it.
+/// with a generic 500 carrying none of it. It derives from <see cref="Exception"/> rather than
+/// <see cref="InvalidOperationException"/> so no controller's broad
+/// <c>catch (InvalidOperationException)</c> can turn this server fault into a 400 that echoes the
+/// stored zone id.
 /// </summary>
-public sealed class BusinessTimeZoneUnavailableException : InvalidOperationException
+public sealed class BusinessTimeZoneUnavailableException : Exception
 {
     public BusinessTimeZoneUnavailableException(string? timeZoneId)
         : base(Describe(timeZoneId))

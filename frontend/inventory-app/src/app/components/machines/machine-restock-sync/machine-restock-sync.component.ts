@@ -176,6 +176,12 @@ export class MachineRestockSyncComponent {
    * timezone and that zone is not known before the business has been read (issue #499).
    */
   fromDate$ = new BehaviorSubject<string>('');
+  /**
+   * The dialog was opened before the business timezone was known, so its From date default could
+   * not be dated yet (issue #499). An empty From date otherwise means the operator cleared it, so
+   * this is what keeps a later refresh from treating "not yet defaulted" as "no lower bound".
+   */
+  private fromDateDefaultPending = false;
   /** Show reconciled (issue #206): off by default, so reconciled-manually events stay hidden. */
   showReconciled$ = new BehaviorSubject<boolean>(false);
 
@@ -291,7 +297,9 @@ export class MachineRestockSyncComponent {
       return;
     }
 
-    this.fromDate$.next(this.defaultFromDate());
+    const defaultFromDate = this.defaultFromDate();
+    this.fromDateDefaultPending = defaultFromDate === '';
+    this.fromDate$.next(defaultFromDate);
     this.showReconciled$.next(false);
     this.modalOpen$.next(true);
     this.refreshPreview();
@@ -299,6 +307,7 @@ export class MachineRestockSyncComponent {
 
   /** The From date filter changed (issue #206): fetches a preview bounded by the new date. */
   onFromDateChange(value: string): void {
+    this.fromDateDefaultPending = false;
     this.fromDate$.next(value);
     this.refreshPreview();
   }
@@ -328,6 +337,13 @@ export class MachineRestockSyncComponent {
     if (this.businessTimeZone.timeZoneId === null) {
       this.syncError$.next('Loading the business time zone. Please try again in a moment.');
       return;
+    }
+
+    if (this.fromDateDefaultPending) {
+      // The zone has arrived since the dialog opened: apply the default the operator would have
+      // seen, rather than asking for an unbounded window.
+      this.fromDateDefaultPending = false;
+      this.fromDate$.next(this.defaultFromDate());
     }
 
     this.syncing$.next(true);

@@ -2,7 +2,7 @@ import { Component, ElementRef, HostListener, OnDestroy, OnInit, ViewChild } fro
 import { RouterOutlet } from '@angular/router';
 import { MsalBroadcastService, MsalService } from '@azure/msal-angular';
 import { AccountInfo, AuthenticationResult, InteractionStatus } from '@azure/msal-browser';
-import { Subject, Subscription, filter, takeUntil } from 'rxjs';
+import { Subject, Subscription, catchError, defer, filter, map, of, retry, takeUntil, timer } from 'rxjs';
 import { ToastContainerComponent } from "./components/shared/toast-container.component";
 import { IconComponent } from './components/shared/icon.component';
 import { LoadingIndicatorComponent } from './components/shared/loading-indicator.component';
@@ -47,6 +47,14 @@ import { loginRequest } from './auth-config';
 })
 export class AppComponent implements OnInit, OnDestroy {
   private static readonly wideLayoutQuery = '(min-width: 1024px)';
+
+  /**
+   * Further attempts at the business lookup after a failed one, and the base delay between them
+   * (issue #499). A transient failure at sign-in is retried while the page is still waiting, so a
+   * single network blip does not leave every date on the page blank for the rest of the session.
+   */
+  static readonly businessLookupRetries = 2;
+  static readonly businessLookupRetryDelayMs = 1000;
 
   title = 'Inventory Manager';
 
@@ -246,11 +254,27 @@ export class AppComponent implements OnInit, OnDestroy {
       // isBusinessContextReady), because a page rendered before the business is known would show
       // its instants in no time zone at all.
       this.businessRequested = true;
-      this.businessLookup = this.businessService.load()
-        .pipe(takeUntil(this.destroying$))
+      this.businessLookup = defer(() => this.businessService.load())
+        .pipe(
+          // A failed lookup emits null and is retryable (BusinessService drops it), so it is asked
+          // again, with a growing delay, before the shell gives up on it.
+          map((business) => {
+            if (business === null) {
+              throw new Error('The current business could not be read.');
+            }
+            return business;
+          }),
+          retry({
+            count: AppComponent.businessLookupRetries,
+            delay: (_error, attempt) => timer(attempt * AppComponent.businessLookupRetryDelayMs)
+          }),
+          catchError(() => of(null)),
+          takeUntil(this.destroying$)
+        )
         .subscribe(() => {
-          // Settled either way. A failed lookup published no zone, so dates render as
-          // unavailable - but the application is still shown rather than waiting forever.
+          // Settled either way. A lookup that still failed after its retries published no zone,
+          // so dates render as unavailable - but the application is still shown rather than
+          // waiting forever.
           this.isBusinessSettled = true;
         });
     }

@@ -539,12 +539,43 @@ describe('AppComponent business context (issue #499)', () => {
     expect(businessLoad).toHaveBeenCalledTimes(2);
   });
 
-  it('renders the page anyway when the business could not be read', async () => {
-    const { fixture } = await render({ business: () => of(null) });
+  it('retries a failed business lookup before rendering the page, so one blip is not permanent', async () => {
+    jest.useFakeTimers();
+    try {
+      let attempt = 0;
+      const { fixture, businessLoad } = await render({
+        business: () => (++attempt === 1 ? of(null) : of({ name: 'Vending Co', timeZoneId: 'Australia/Sydney' }))
+      });
+      expect(businessLoad).toHaveBeenCalledTimes(1);
+      fixture.detectChanges();
+      expect((fixture.nativeElement as HTMLElement).querySelector('main')?.textContent).toContain('Loading your business');
 
-    const main = await navigatedMain(fixture);
-    expect(main).toContain('page body');
-    expect(main).not.toContain('Loading your business');
+      jest.advanceTimersByTime(AppComponent.businessLookupRetryDelayMs);
+      fixture.detectChanges();
+
+      expect(businessLoad).toHaveBeenCalledTimes(2);
+      expect((fixture.nativeElement as HTMLElement).querySelector('main')?.textContent).not.toContain('Loading your business');
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('renders the page anyway when the business still could not be read after its retries', async () => {
+    jest.useFakeTimers();
+    try {
+      const { fixture, businessLoad } = await render({ business: () => of(null) });
+
+      jest.advanceTimersByTime(
+        AppComponent.businessLookupRetryDelayMs * (AppComponent.businessLookupRetries * (AppComponent.businessLookupRetries + 1)) / 2
+      );
+      fixture.detectChanges();
+
+      expect(businessLoad).toHaveBeenCalledTimes(1 + AppComponent.businessLookupRetries);
+      const main = (fixture.nativeElement as HTMLElement).querySelector('main')?.textContent ?? '';
+      expect(main).not.toContain('Loading your business');
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });
 

@@ -417,6 +417,24 @@ describe('MachineRestockSyncComponent sync', () => {
     expect(component.syncError$.value).toContain('business time zone');
   });
 
+  it('applies the default From date once the zone arrives, rather than syncing an unbounded window', () => {
+    const syncRestock: jest.Mock = jest.fn(() => of(preview([])));
+    const machineService = { syncRestock } as unknown as MachineService;
+    const toast = { success: jest.fn(), error: jest.fn(), warning: jest.fn() };
+    const businessTimeZone = new BusinessTimeZoneService();
+    const component = new MachineRestockSyncComponent(
+      machineService, toast as unknown as ToastService, businessTimeZone);
+    component.machineId = 7;
+    component.syncRestock();
+
+    businessTimeZone.publish(BUSINESS_TIME_ZONE);
+    component.onShowReconciledChange(true);
+
+    const expected = shiftCalendarDate(currentDateInTimeZone(new Date(), BUSINESS_TIME_ZONE), -3);
+    const [, fromDateIso] = syncRestock.mock.calls[0];
+    expect(fromDateIso).toBe(startOfDayUtc(expected.year, expected.month, expected.day, BUSINESS_TIME_ZONE).toISOString());
+  });
+
   it('resets the From date to three business-timezone calendar days back on every fresh sync, not just the first', () => {
     const syncRestock: jest.Mock = jest.fn(() => of(preview([])));
     const { component } = createHarness(syncRestock);

@@ -20,6 +20,7 @@ public class BusinessTimeZonesTests
     [InlineData("Europe/London")]
     [InlineData("Pacific/Auckland")]
     [InlineData("Etc/UTC")]
+    [InlineData("UTC")]
     public void An_IANA_id_the_platform_knows_resolves(string ianaId)
     {
         Assert.True(BusinessTimeZones.TryResolve(ianaId, out var timeZone));

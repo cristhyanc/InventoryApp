@@ -33,8 +33,10 @@ public static class BusinessTimeZones
         }
 
         // A Windows id would resolve on a Windows host and fail on a Linux one, so it is rejected
-        // on both: TryConvertWindowsIdToIanaId recognises exactly the ids that are not IANA ones.
-        if (TimeZoneInfo.TryConvertWindowsIdToIanaId(ianaTimeZoneId, out _))
+        // on both. A few ids are both ("UTC" is a Windows id and an IANA one), and those are
+        // accepted: an id the IANA-to-Windows mapping also knows is a real IANA id.
+        if (TimeZoneInfo.TryConvertWindowsIdToIanaId(ianaTimeZoneId, out _)
+            && !TimeZoneInfo.TryConvertIanaIdToWindowsId(ianaTimeZoneId, out _))
         {
             return false;
         }
