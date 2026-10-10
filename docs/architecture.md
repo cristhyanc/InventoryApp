@@ -1019,8 +1019,9 @@ Contains adapters and technical implementation:
 
 - `AppDbContext` and its entity configurations/tenant query filters (`Inventory.Infrastructure/Data`), the `BusinessOwnershipEnforcer` that guards every `SaveChanges`, the EF entities and enums (`Inventory.Infrastructure/Models`), and the EF Core migrations plus `AppDbContextModelSnapshot` (`Inventory.Infrastructure/Migrations`) — all relocated from `InventoryApi` by issue #307 with no schema change and no migration renamed. This project owns the `Microsoft.EntityFrameworkCore`/`Microsoft.EntityFrameworkCore.Relational` package references; the SQLite provider and the connection string stay in the composition root (see [InventoryApi](#inventoryapi)), so swapping the relational engine does not mean moving the model.
 - The report facts providers behind the Application's reporting ports (`Inventory.Infrastructure/Reporting/Persistence`, namespace `Inventory.Infrastructure.Reporting.Persistence`): the ten `Ef<Feature>…FactsProvider` adapters for bookkeeping, daily, reconciliation, machine/product profitability, GST, dashboard, inventory valuation, transaction sales and Nayax processing fees, plus the `EfReportingSharedQueries` helpers they share — all relocated from `InventoryApi/Adapters/Persistence` by issue #308 with no query, report or schema change, and registered by `AddInfrastructureServices()` instead of in `Program.cs`. The completed-sale predicate they filter on is `Inventory.Infrastructure.Data.EfNayaxSalesQueries`, next to `AppDbContext`, because the costing and commission adapters call it too - they were still API-owned when issue #308 placed it there, and issue #309 brought them into the same assembly.
-- Every other EF adapter behind an Application persistence port (`Inventory.Infrastructure/Persistence`, namespace `Inventory.Infrastructure.Persistence`): the 29 `Ef<Feature>Store`/`Ef<Feature>Provider` adapters for tenancy membership, Nayax fee settings, site commissions, categories, suppliers, operating expenses, products and the product catalogue, purchases and supplier orders, inventory movements/cost ledger/sale costing/cost transitions/costing repairs, stock adjustments, site and machine dashboard facts, purchase-price history and bulk purchase-cost facts, the local catalogue snapshot, machine stock events, outstanding supplier-order quantities, Pick List storage stock, latest Nayax sales, Take Inventory adjustments, and the three imports — plus the `NayaxSaleCosting` entity/contract mapping the two sale-importing adapters share. All relocated from `InventoryApi/Adapters/Persistence` by issue #309 (Persistence 8/8 of #153) with no query, transaction, schema or API change, and registered by `AddInfrastructureServices()` instead of in `Program.cs`. `InventoryApi/Adapters/Persistence` no longer exists, so `InventoryApi` owns no persistence implementation at all; `PersistenceAdapterOwnershipTests` and `ReportingAdapterOwnershipTests` pin that.
+- Every other EF adapter behind an Application persistence port (`Inventory.Infrastructure/Persistence`, namespace `Inventory.Infrastructure.Persistence`): the 29 `Ef<Feature>Store`/`Ef<Feature>Provider` adapters for tenancy membership, Nayax fee settings, site commissions, categories, suppliers, operating expenses, products and the product catalogue, purchases and supplier orders, inventory movements/cost ledger/sale costing/cost transitions/costing repairs, stock adjustments, site and machine dashboard facts, purchase-price history and bulk purchase-cost facts, the local catalogue snapshot, machine stock events, outstanding supplier-order quantities, Pick List storage stock, latest Nayax sales, Take Inventory adjustments, and the three imports — plus the `NayaxSaleCosting` entity/contract mapping the two sale-importing adapters share. All relocated from `InventoryApi/Adapters/Persistence` by issue #309 (Persistence 8/8 of #153) with no query, transaction, schema or API change, and registered by `AddInfrastructureServices()` instead of in `Program.cs`. `InventoryApi/Adapters/Persistence` no longer exists, so `InventoryApi` owns no persistence implementation at all; `PersistenceAdapterOwnershipTests` and `ReportingAdapterOwnershipTests` pin that. Adapters written since that move land in the same folder for the same reason — `EfNayaxConnectionStore` (issue #518) is the current one.
 - Nayax Lynx HTTP client (`Inventory.Infrastructure.Nayax.NayaxLynxClient`) and imported-file parsers, plus the remote half of the Nayax catalog reconciliation (`Inventory.Infrastructure.Nayax.NayaxCatalogSnapshotProvider`, behind the Application's `CatalogReconciliation.INayaxCatalogSnapshotProvider` port; issues #55/#306).
+- Encryption of a business's own stored Nayax access token (`Inventory.Infrastructure.Nayax.AesGcmNayaxTokenProtector` and the fail-closed `UnconfiguredNayaxTokenProtector`, behind the Infrastructure-internal `INayaxTokenProtector`; issue #518). Deliberately *not* an Application port: the cipher, the keys and their configuration are adapter concerns, which is what keeps Key Vault out of the inner layers. See [Per-business Nayax connection](#per-business-nayax-connection-issue-518).
 - Document storage for purchase documents and operating-expense attachments (`Inventory.Infrastructure.Documents.FileSystemDocumentStorage` and `AzureBlobDocumentStorage`, behind the Application's `Documents.IDocumentStorage` port; see [Document storage](#document-storage)).
 - CSV/XLSX report exporters (`Inventory.Infrastructure.Reporting.ReportExportFileWriter`, behind the Application's `Reporting.Export.IReportExportFileWriter` port; issue #306). It owns ClosedXML together with `Imports.ClosedXmlNayaxSalesWorkbookReader` and encodes already-formatted rows only - it never derives or recomputes a report value.
 - The site display name derived from a site's Nayax machine names (`Inventory.Infrastructure.Sites.SiteNameResolver`, behind the Application's `Sites.ISiteNameResolver` port; issue #306). Nayax identifies a site with `CustomerID` but publishes no site name, so deriving one is an adapter's job, not a domain rule.
@@ -1432,7 +1433,7 @@ Authentication answers "who is this?". Tenant ownership answers "whose data is t
 
 **Fail closed.** `BusinessScope` starts denied and can only move forward to a resolved business, once. A denied scope yields a `null` business ID, and the filters compare with `==`, so an unresolved caller matches no row. "No current business" must never be read as "no filter" — that would convert a resolution bug into a cross-business leak. A scope cannot be repointed mid-request.
 
-**Tenant-owned versus global.** Everything persisted is tenant-owned — products, categories, suppliers, purchases and items, stock adjustments, supplier orders and allocations, sales, imports and their children, expenses, commissions, fee rates, costing transition records and report facts — except three structural exceptions: `Business` (the boundary itself), `BusinessMembership` (what resolves the boundary, so filtering it would be circular), and `BusinessBackfillAudit` (operational evidence about the rollout, which must stay readable precisely when a run assigned rows to the wrong business). There is no "global reference data": the enum-like constants live in code as C# enums, not tables. `BusinessOwnershipCoverageTests` enforces this — a new entity with no ownership fails the build rather than quietly arriving unfiltered.
+**Tenant-owned versus global.** Everything persisted is tenant-owned — products, categories, suppliers, purchases and items, stock adjustments, supplier orders and allocations, sales, imports and their children, expenses, commissions, fee rates, costing transition records, each business's own Nayax credentials (issue #518) and report facts — except three structural exceptions: `Business` (the boundary itself), `BusinessMembership` (what resolves the boundary, so filtering it would be circular), and `BusinessBackfillAudit` (operational evidence about the rollout, which must stay readable precisely when a run assigned rows to the wrong business). There is no "global reference data": the enum-like constants live in code as C# enums, not tables. `BusinessOwnershipCoverageTests` enforces this — a new entity with no ownership fails the build rather than quietly arriving unfiltered.
 
 **Central read enforcement.** `AppDbContext.ConfigureBusinessOwnership` walks the model rather than naming entities: every `IBusinessOwned` type gets a required business key, an index leading with it, and a global query filter. A new tenant-owned entity is protected the day it implements the interface. There is no per-entity list to forget and no controller `Where` clause that could be omitted on one endpoint — which is why adding redundant filters in controllers or services is discouraged rather than merely unnecessary.
 
@@ -1446,7 +1447,7 @@ Authentication answers "who is this?". Tenant ownership answers "whose data is t
 
 **Schema and data are separate steps, and only the data step is exclusively human-controlled.** `DatabaseSchemaStartup` decides per environment: Production, Development, and `Testing` all migrate automatically and fail closed if the attempt fails (issue #201); any other non-Production environment does so only under the `Database:AllowAutomaticMigrationUnsafeOutsideDevelopment` override. Migrations never assign ownership, automatically or otherwise. The backfill is exclusively `bootstrap-business`, run by a human: deterministic, idempotent (it touches only unassigned rows), restartable, transactional, dry-runnable, and verified by before/after counts and financial totals, with a `BusinessBackfillAudit` record of what it did. `TenantOwnershipReadiness` reports at startup whether ownership has actually been bootstrapped, so "all my data is gone" cannot be the first symptom of an unfinished rollout.
 
-**Known limits of this rollout.** One business is live. The Nayax client still uses a single operator/token configuration, so remote identifiers and imports are not partitioned per business; a second live business must wait until they are. The database foreign keys from `BusinessId` to `Businesses` are a deliberate, still-outstanding deferral — see `docs/tenant-rollout.md`. Issue #39 (document storage) consumes this ownership key and must not introduce blob storage before it.
+**Known limits of this rollout.** One business is live. The Nayax client still uses a single operator/token configuration, so remote identifiers and imports are not partitioned per business; a second live business must wait until they are. Issue #518 added the per-business storage those credentials will move into — see [Per-business Nayax connection](#per-business-nayax-connection-issue-518) — but nothing reads it yet, so this limit stands until issue #520 changes the client and issue #519 moves the existing business's credential. The database foreign keys from `BusinessId` to `Businesses` are a deliberate, still-outstanding deferral — see `docs/tenant-rollout.md`. Issue #39 (document storage) consumes this ownership key and must not introduce blob storage before it.
 
 ### Platform diagnostics (issue #336)
 
@@ -1505,6 +1506,78 @@ The authorizer is why the acceptance criterion "do not rely on regex rejection a
 **Repair is out of scope, and must stay a separate, named operation.** This API is read-only and is not an execution path for anything else. Any future data repair must be a separately reviewed, named maintenance operation with a preview/dry-run step and explicit verification — the shape [`bootstrap-business`](#tenant-ownership-issue-64), [`migrate-documents`](#document-storage) and `InventoryCostRepair` already use: explicit, auditable, idempotent or safely restartable, and covered by regression tests. A repair must never be reachable by submitting SQL. Issue #62's [Historical GST Preview/Apply](#historical-gst-classification-preview-and-apply-issue-433) and issue #472's [Nayax sale timestamp repair](#nayax-sale-timestamp-repair-preview-then-apply-issue-472) are separate, business-scoped maintenance workflows and neither depends on this API.
 
 **What proves it.** `Inventory.UnitTests/Application/PlatformDiagnostics` covers the surface contract, the shape check, the limits and their clamping, and the use case's audit behaviour. `Inventory.IntegrationTests/Infrastructure/PlatformDiagnostics/SqliteDiagnosticsQueryExecutorTests` runs against a real migrated SQLite file: permitted reads across two businesses, forbidden columns and tables through joins, subqueries, aliases and expressions, forbidden functions, every write and DDL shape refused with the row counts proving nothing changed, `PRAGMA`/`ATTACH`/transaction control refused, the row and byte caps, a costly permitted query interrupted at its deadline with the next query still working, request cancellation, and a column added to a permitted table after the fact staying inaccessible — including one named `rowid`, `oid` or `_rowid_`, which must be refused rather than mistaken for the internal row identifier. `Inventory.IntegrationTests/Auth/PlatformAdminAuthorizationTests`, `PlatformAdminCompositionTests`, `PlatformDiagnosticsResponseSizeTests` and `BusinessScopeMiddlewarePlatformDiagnosticsTests` cover the HTTP boundary, the shipped unconfigured state, the serialized-byte cap, and the middleware's independent policy re-check.
+
+### Per-business Nayax connection (issue #518)
+
+The Nayax integration is still configured once for the whole application: `NayaxLynx:OperatorId`
+and the bearer token come from configuration, which is the known single-operator limit recorded in
+[Tenant ownership](#tenant-ownership-issue-64). Issue #518 — a slice of #500, under the contract of
+#328 — adds the **storage** a per-business connection needs, and nothing else: no consumer reads it
+yet, the Nayax client is untouched, and application behaviour is unchanged until issue #520.
+
+**One row per business, owned centrally.** `BusinessNayaxConnection` (`Inventory.Infrastructure/Models`)
+holds the operator id, the encrypted access token, the id of the key that encrypted it, the
+connection status, the credential revision, and the last-tested and updated instants. It implements
+`IBusinessOwned`, so it is filtered, indexed and stamped by the same mechanisms as every other
+tenant-owned entity, with no predicate of its own anywhere; the additive
+`AddBusinessNayaxConnections` migration creates the table and a **unique index on `BusinessId`**, so
+"one connection per business" is a schema guarantee rather than an adapter convention. The migration
+stores and infers nothing — moving the existing configured credential is the human-run command of
+issue #519 — so every business starts with no row at all, which is what `NotConfigured` means.
+`BusinessNayaxConnections` is deliberately **not** on the [platform diagnostics](#platform-diagnostics-issue-336)
+allow-list and must not be added to it.
+
+**Encryption lives in Infrastructure, behind `INayaxTokenProtector`.** `AesGcmNayaxTokenProtector`
+encrypts with AES-256-GCM, a fresh random nonce per encryption, and stores
+`base64(nonce || tag || ciphertext)` with the key id in its own column. Authenticated encryption is
+the point: a tampered ciphertext fails its tag check and throws rather than decrypting to a
+different token that would then be sent to Nayax, and a per-save nonce means the column cannot
+reveal that two businesses configured the same credential. The key id travels with the ciphertext so
+a key can be rotated without re-encrypting every row at once — new ciphertext uses
+`NayaxTokenProtection:ActiveKeyId`, older ciphertext keeps naming the key that produced it, and
+removing a key from configuration is what retires it and makes anything still naming it
+undecryptable on purpose. Every failure refuses: an unknown key id, a malformed value and a failed
+tag check all raise `NayaxTokenProtectionException`, and no message or log event ever carries a
+token, a ciphertext or key material. `Inventory.Application` and `Inventory.Domain` know none of
+this — the composition root reads the key configuration and calls `AddNayaxTokenProtection`, exactly
+as it does for the Nayax HTTP client's options — so Key Vault stays out of the inner layers. An
+environment with no key configured gets the fail-closed `UnconfiguredNayaxTokenProtector`: the API
+starts and runs normally, and only storing or reading a per-business token fails, because
+provisioning the production key is a human step (see README.md § Configuration and secrets).
+
+**`CredentialRevision` is what makes a status write safe.** The Application port is
+`Inventory.Application.Nayax.INayaxConnectionStore`, implemented by
+`Inventory.Infrastructure.Persistence.EfNayaxConnectionStore`. A credential save increments the
+revision in the database, resets the status to `PendingPermissions` and clears the last-tested
+instant, so a newly stored token can never inherit the previous token's test result; the first save
+creates the row at revision 1. A permission test result carries the revision it was produced for,
+and applying it is **one conditional statement** — `UPDATE … WHERE BusinessId = @b AND
+CredentialRevision = @r`, where the business predicate is contributed by the central query filter
+and the revision predicate by the caller's expected value. Zero rows matched means an operator saved
+different credentials while the test was running: the result is discarded, not written, and one
+structured `ILogger` warning records it with the business id and the two revisions and nothing else.
+That is also why this adapter refuses to run without a single resolved business —
+`ExecuteUpdate` executes in the database without passing through `BusinessOwnershipEnforcer`, so an
+unscoped context would be the one way such a statement could carry no business predicate at all.
+
+**Reading the secret is a separate call.** `FindAsync` returns a `NayaxConnection` that cannot hold
+a token, which is what every status read uses; only `FindCredentialAsync` decrypts, and it returns
+`NayaxConnectionCredential`, deliberately a class with a redacting `ToString` rather than a record,
+because a record's generated `ToString` would put the token into the first log line or assertion
+message that rendered it. An undecryptable credential throws rather than reading as absent or
+empty.
+
+**What proves it.** `Inventory.IntegrationTests/Infrastructure/Nayax/NayaxTokenProtectorTests`
+covers the round trip and key id, ciphertext that differs from the plaintext and from a second save
+of the same token, tampered and malformed values, an unknown key id, rotation across two keys, the
+unconfigured protector and the startup validation of the key section.
+`Inventory.IntegrationTests/Adapters/Persistence/EfNayaxConnectionStoreTests` runs on relational
+SQLite: revision 1 on first save, the increment and cleared test result on a later save, the applied
+and the discarded status result with the log event's exact properties, the statement shape itself,
+two-business isolation for reading, decrypting, saving and status writes, two overlapping saves
+leaving the last committed credentials, a retired key and a tampered ciphertext failing closed, a
+denied and an unscoped context writing nothing, and the unique index refusing a second row.
+`AddBusinessNayaxConnectionsMigrationTests` is the upgrade test from the previous migration.
 
 ### Document storage
 
