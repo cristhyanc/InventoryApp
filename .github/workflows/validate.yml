@@ -86,38 +86,17 @@ jobs:
             [[ "$pr_number" =~ ^[1-9][0-9]*$ ]] || fail "A valid pull request number is required."
             [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || fail "A full 40-character lowercase head SHA is required."
 
-            pr_json="$(gh pr view "$pr_number" --repo "$GITHUB_REPOSITORY" \
-              --json state,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner)"
-            state="$(jq -r '.state' <<<"$pr_json")"
-            is_draft="$(jq -r '.isDraft' <<<"$pr_json")"
-            base_ref="$(jq -r '.baseRefName' <<<"$pr_json")"
-            head_ref="$(jq -r '.headRefName' <<<"$pr_json")"
-            current_sha="$(jq -r '.headRefOid // empty' <<<"$pr_json")"
-            head_repo="$(jq -r '"\(.headRepositoryOwner.login)/\(.headRepository.name)"' <<<"$pr_json")"
-            author="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr_number" \
-              --jq '.user.login // empty')"
-
-            [ "$state" = "OPEN" ] || fail "Pull request #$pr_number is not open."
-            [ "$is_draft" = "false" ] || fail "Pull request #$pr_number is a draft."
-            [ "$base_ref" = "develop" ] || fail "Automated validation is limited to pull requests targeting develop."
-            [ "$head_repo" = "$GITHUB_REPOSITORY" ] || fail "Automated validation is limited to same-repository branches."
-            if [[ "$head_ref" == agent/issue-* ]]; then
-              [ -n "$EXPECTED_AGENT_AUTHOR" ] || fail "AGENT_AUTOMATION_APP_BOT_LOGIN is not configured."
-              [ "$author" = "$EXPECTED_AGENT_AUTHOR" ] || fail "Automated validation of an agent/issue-* branch requires $EXPECTED_AGENT_AUTHOR as the pull request author."
-              implementer="claude"
-            else
-              fail "Automated validation requires an agent/issue-* (Claude) head branch."
-            fi
-            [ "$current_sha" = "$head_sha" ] || fail "Refusing stale validation: pull request head is $current_sha, requested SHA is $head_sha."
+            # Eligibility (open, non-draft, develop, same repository, Claude agent branch, App author, exact head,
+            # no workflow files) comes from the one trusted guard in this workflow's own commit.
+            guard="$RUNNER_TEMP/agent-pr-guard.mjs"
+            gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/scripts/agent-pr-guard.mjs?ref=$GITHUB_WORKFLOW_SHA" > "$guard"
+            pr_guard="$(node "$guard" check "$pr_number" "$head_sha" 2>"$RUNNER_TEMP/agent-pr-guard.txt")" \
+              || fail "Validation refused: $(tail -n 1 "$RUNNER_TEMP/agent-pr-guard.txt")"
+            implementer="$(jq -r '.implementer' <<<"$pr_guard")"
             # Provider mode (#339): verify the route claimed in the issue's label history against this pull request, using the
             # resolver from this workflow's own commit. A conflicting, malformed or disabled mode fails closed.
             gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/scripts/agent-mode.mjs?ref=$GITHUB_WORKFLOW_SHA" > "$RUNNER_TEMP/agent-mode.mjs"
             agent_mode="$(node "$RUNNER_TEMP/agent-mode.mjs" verify-pr "$pr_number" "$implementer")" || fail "the provider mode of pull request #$pr_number could not be verified."
-
-            changed_files="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$pr_number/files?per_page=100" --jq '.[].filename')"
-            if grep -Eq '^\.github/workflows/' <<<"$changed_files"; then
-              fail "Pull requests that change .github/workflows/** require manual validation and review."
-            fi
 
             checkout_ref="$head_sha"
             checkout_repository="$GITHUB_REPOSITORY"
@@ -289,40 +268,19 @@ jobs:
           set -euo pipefail
           fail() { echo "::error::$1"; exit 1; }
 
-          pr_json="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
-            --json state,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,labels)"
-          state="$(jq -r '.state' <<<"$pr_json")"
-          is_draft="$(jq -r '.isDraft' <<<"$pr_json")"
-          base_ref="$(jq -r '.baseRefName' <<<"$pr_json")"
-          head_ref="$(jq -r '.headRefName' <<<"$pr_json")"
-          current_sha="$(jq -r '.headRefOid // empty' <<<"$pr_json")"
-          head_repo="$(jq -r '"\(.headRepositoryOwner.login)/\(.headRepository.name)"' <<<"$pr_json")"
-          author="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" \
-            --jq '.user.login // empty')"
-
-          [ "$state" = "OPEN" ] || fail "Pull request #$PR_NUMBER is no longer open."
-          [ "$is_draft" = "false" ] || fail "Pull request #$PR_NUMBER is now a draft."
-          [ "$base_ref" = "develop" ] || fail "Pull request #$PR_NUMBER no longer targets develop."
-          [ "$head_repo" = "$GITHUB_REPOSITORY" ] || fail "Pull request #$PR_NUMBER no longer uses a same-repository branch."
-          if [[ "$head_ref" == agent/issue-* ]]; then
-            [ -n "$EXPECTED_AGENT_AUTHOR" ] || fail "AGENT_AUTOMATION_APP_BOT_LOGIN is not configured."
-            [ "$author" = "$EXPECTED_AGENT_AUTHOR" ] || fail "Pull request #$PR_NUMBER is not authored by $EXPECTED_AGENT_AUTHOR."
-            implementer="claude"
-          else
-            fail "Pull request #$PR_NUMBER no longer uses an agent/issue-* branch."
-          fi
-          [ "$current_sha" = "$HEAD_SHA" ] || fail "Refusing stale review dispatch: pull request head is $current_sha, validated SHA is $HEAD_SHA."
+          # Eligibility (open, non-draft, develop, same repository, Claude agent branch, App author, exact head,
+          # no workflow files) comes from the one trusted guard in this workflow's own commit.
+          guard="$RUNNER_TEMP/agent-pr-guard.mjs"
+          gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/scripts/agent-pr-guard.mjs?ref=$GITHUB_WORKFLOW_SHA" > "$guard"
+          pr_guard="$(node "$guard" check "$PR_NUMBER" "$HEAD_SHA" 2>"$RUNNER_TEMP/agent-pr-guard.txt")" \
+            || fail "Review dispatch refused: $(tail -n 1 "$RUNNER_TEMP/agent-pr-guard.txt")"
+          implementer="$(jq -r '.implementer' <<<"$pr_guard")"
           # Provider mode (#339): verify the route claimed in the issue's label history against this pull request, using the
           # resolver from this workflow's own commit. A conflicting, malformed or disabled mode fails closed.
           gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/scripts/agent-mode.mjs?ref=$GITHUB_WORKFLOW_SHA" > "$RUNNER_TEMP/agent-mode.mjs"
           agent_mode="$(node "$RUNNER_TEMP/agent-mode.mjs" verify-pr "$PR_NUMBER" "$implementer")" || fail "the provider mode of pull request #$PR_NUMBER could not be verified."
 
-          changed_files="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" --jq '.[].filename')"
-          if grep -Eq '^\.github/workflows/' <<<"$changed_files"; then
-            fail "Pull requests that change .github/workflows/** require manual validation and review."
-          fi
-
-          if ! jq -e 'any(.labels[]?; .name == "agent-review")' <<<"$pr_json" >/dev/null; then
+          if ! jq -e 'any(.labels[]; . == "agent-review")' <<<"$pr_guard" >/dev/null; then
             echo "::notice::The agent-review label is absent; validation passed, but no review was dispatched."
             exit 0
           fi

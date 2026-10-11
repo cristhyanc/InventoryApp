@@ -42,6 +42,7 @@ frontend/inventory-app/eslint.config.js    Angular/TypeScript ESLint flat config
 scripts/validate.ps1                  Complete Windows validation
 scripts/validate.sh                   Complete Bash validation
 scripts/validate-agent-workflows.mjs  Agent workflow and template contract checks (with .test.mjs)
+scripts/agent-pr-guard.mjs            Shared eligibility guard every agent dispatcher and the review publisher run (with .test.mjs)
 scripts/agent-review-transport.mjs    Artifact packaging and verification of review results (agent-review.yml) and architecture findings (agent-architecture.yml) (with .test.mjs)
 scripts/validate-deployment-workflows.mjs  Production deployment workflow contract checks (with .test.mjs)
 scripts/deployment-migration-preflight.mjs Deploy Production migration preflight (with .test.mjs)

@@ -6,6 +6,7 @@
   "scenario": "An independent review of pull request head A finishes after a new commit B has been pushed to the same pull request. The review result says `VERDICT: READY FOR HUMAN REVIEW` for A, and publishing it now would put a ready verdict on the pull request while its head is B, which has not been validated or reviewed.",
   "policyReferences": [
     ".github/workflows/agent-review.yml § Guarded review publication",
+    "scripts/agent-pr-guard.mjs",
     "docs/automation.md § Review workflow"
   ],
   "expectedDecision": "reject",
@@ -18,7 +19,17 @@
     {
       "type": "repoFileContains",
       "file": ".github/workflows/agent-review.yml",
-      "text": "[ \"$current_sha\" = \"$HEAD_SHA\" ] || suppress \"Refusing stale review publication: head moved to $current_sha.\""
+      "text": "if ! pr_guard=\"$(node \"$guard\" check \"$PR_NUMBER\" \"$HEAD_SHA\" 2>\"$RUNNER_TEMP/agent-pr-guard.txt\")\"; then"
+    },
+    {
+      "type": "repoFileContains",
+      "file": ".github/workflows/agent-review.yml",
+      "text": "closed|draft|base|fork|branch|config|author|stale|workflow-files) suppress \"$refusal\" ;;"
+    },
+    {
+      "type": "repoFileContains",
+      "file": "scripts/agent-pr-guard.mjs",
+      "text": "if (current !== sha) refuse('stale'"
     },
     {
       "type": "repoFileContains",
