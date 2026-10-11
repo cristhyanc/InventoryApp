@@ -338,6 +338,23 @@ public class EndpointAuthorizationClassificationTests
     }
 
     /// <summary>
+    /// The member management surface of issue #533, read back off its routes. Every action needs
+    /// <c>Members.Manage</c>, which #328's table gives to an Owner alone - the list included,
+    /// because the list is the roster the changes are made from and it carries every member's
+    /// display name and email address. A later change that put the read on a weaker capability "so
+    /// a Manager can see the team" fails here.
+    /// </summary>
+    [Theory]
+    [InlineData("api/members", "GET")]
+    [InlineData("api/members/{membershipId:int}/role", "PUT")]
+    [InlineData("api/members/{membershipId:int}/revoke", "POST")]
+    [InlineData("api/members/{membershipId:int}/reinstate", "POST")]
+    public void Every_member_management_endpoint_requires_only_the_members_capability(
+        string route,
+        string httpMethod) =>
+        Assert.Equal([Capability.MembersManage], CapabilitiesOf(Endpoint(route, httpMethod)));
+
+    /// <summary>
     /// A preview is as restricted as its apply. Every action of every data-repair controller
     /// requires <c>Data.Repair</c> and declares no second, weaker capability beside it: a preview
     /// and a dry run read exactly the financial history the apply rewrites, and for

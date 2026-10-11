@@ -13,6 +13,7 @@ using Inventory.Application.Imports;
 using Inventory.Application.InventoryCounting;
 using Inventory.Application.Machines;
 using Inventory.Application.MachineStockSync;
+using Inventory.Application.Members;
 using Inventory.Application.Nayax;
 using Inventory.Application.NayaxFeeSettings;
 using Inventory.Application.NayaxProcessingFees;
@@ -144,6 +145,10 @@ public static class InfrastructureServiceCollectionExtensions
         // separate from the membership write store above because it changes nothing a membership
         // means and takes none of that path's write lock.
         services.AddScoped<IMemberProfileWriteStore, EfMemberProfileWriteStore>();
+        // The Owner-facing member roster and the three targeted member updates (issue #533). It
+        // reads and writes the same non-tenant-owned table as the two stores above, and takes the
+        // business id explicitly for that reason.
+        services.AddScoped<IBusinessMemberStore, EfBusinessMemberStore>();
         services.AddScoped<IBusinessProfileStore, EfBusinessProfileStore>();
         services.AddScoped<INayaxFeeRateStore, EfNayaxFeeRateStore>();
         // The per-business Nayax connection (issue #518). Its INayaxTokenProtector dependency comes

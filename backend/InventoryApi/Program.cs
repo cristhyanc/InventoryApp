@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Inventory.Application;
 using Inventory.Application.Access;
+using Inventory.Application.Members;
 using Inventory.Application.Nayax;
 using Inventory.Application.Tenancy;
 using Inventory.Application.Time;
@@ -8,6 +9,7 @@ using Inventory.Infrastructure;
 using Inventory.Infrastructure.Documents;
 using Inventory.Infrastructure.Imports;
 using Inventory.Infrastructure.Nayax;
+using InventoryApi.Adapters.Members;
 using InventoryApi.Adapters.Nayax;
 using InventoryApi.Adapters.PlatformDiagnostics;
 using InventoryApi.Bootstrap;
@@ -194,6 +196,11 @@ builder.Services.AddPlatformDiagnostics(new SqliteDiagnosticsOptions
 });
 
 builder.Services.AddScoped<IPlatformDiagnosticsAudit, LoggingPlatformDiagnosticsAudit>();
+
+// The member management audit trail (issue #533), on the same terms as the diagnostics one above:
+// a structured log event at the boundary, which is the only layer that knows the request's
+// correlation id, and never a row in the database the change was made in.
+builder.Services.AddScoped<IMemberManagementAudit, LoggingMemberManagementAudit>();
 
 builder.Services.AddCors(options =>
 {
