@@ -254,7 +254,7 @@ describe('preserved guards', () => {
     // The checks live in the one trusted guard script; weakening either is rejected there.
     for (const [from, to] of [
       ["  if (current !== sha) refuse('stale'", "  if (false) refuse('stale'"],
-      ["  if (files.some((file) => WORKFLOW_PATH.test(file))) {", '  if (false) {'],
+      ["  if (files.some((file) => file.startsWith(WORKFLOW_DIR))) {", '  if (false) {'],
     ]) {
       const weakened = replaceOnce(prGuardScript, from, to);
       assert.throws(() => runContractChecks({ read: readWithOverrides({ [PR_GUARD_PATH]: weakened }) }), /agent-pr-guard\.mjs/);

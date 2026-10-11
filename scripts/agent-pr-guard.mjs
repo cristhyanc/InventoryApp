@@ -38,7 +38,7 @@ export const REFUSAL_CODES = Object.freeze([
 ]);
 export const PR_VIEW_FIELDS = 'state,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,labels';
 export const AGENT_BRANCH_PREFIX = 'agent/issue-';
-export const WORKFLOW_PATH = /^\.github\/workflows\//;
+export const WORKFLOW_DIR = '.github/workflows/';
 export const REFUSED_EXIT = 2;
 
 export class GuardRefusal extends Error {
@@ -79,7 +79,7 @@ export function evaluate({ repository, pr: number, sha, issue }, { pr, author, f
   if (!expectedAuthor) refuse('config', 'AGENT_AUTOMATION_APP_BOT_LOGIN is not configured.');
   if (author !== expectedAuthor) refuse('author', `pull request #${number} is not authored by ${expectedAuthor}.`);
   if (current !== sha) refuse('stale', `the head of pull request #${number} is now ${current || 'unknown'}, not ${sha}.`);
-  if (files.some((file) => WORKFLOW_PATH.test(file))) {
+  if (files.some((file) => file.startsWith(WORKFLOW_DIR))) {
     refuse('workflow-files', 'pull requests that change .github/workflows/** require manual validation and review.');
   }
   return {
