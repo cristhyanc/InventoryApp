@@ -1,4 +1,6 @@
+using Inventory.Application.Access;
 using Inventory.Application.Costing;
+using InventoryApi.Auth;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Identity.Web.Resource;
@@ -26,10 +28,16 @@ namespace InventoryApi.Controllers;
 // Timestamps: the effective instant is a UTC instant. CostingRepairPolicy.NormalizeEffectiveAt
 // converts an offset-bearing value and reads a timezone-less one as UTC (issue #359's existing
 // policy, unchanged here), so every response reports the UTC instant the request named.
+//
+// Every action requires Data.Repair (issue #526), so an Owner alone - the preview and the history
+// read included. A preview reads exactly the costing history the apply rewrites and returns the
+// ledger fingerprint the apply needs back, so restricting the apply while leaving the preview open
+// would restrict nothing anybody cares about and hand every member the business's costing ledger.
 [ApiController]
 [Route("api/admin/inventory-cost-repair")]
 [Authorize]
 [RequiredScope("access_as_user")]
+[RequireCapability(Capability.DataRepair)]
 public sealed class InventoryCostRepairsController : ControllerBase
 {
     private readonly PreviewInventoryCostRepair _preview;

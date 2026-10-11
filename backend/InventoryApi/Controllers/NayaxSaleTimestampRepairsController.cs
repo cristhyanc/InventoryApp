@@ -1,5 +1,7 @@
+using Inventory.Application.Access;
 using Inventory.Application.Imports;
 using Inventory.Application.SaleTimestampRepair;
+using InventoryApi.Auth;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Identity.Web.Resource;
@@ -28,10 +30,15 @@ namespace InventoryApi.Controllers;
 // BusinessScopeMiddleware's 403, a caller the repair cannot be attributed to raises
 // BusinessAccessDeniedException, and an unexpected framework or infrastructure failure stays
 // deliberately unmapped as GlobalExceptionHandler's logged, generic 500.
+//
+// Both actions require Data.Repair (issue #526), so an Owner alone. The preview is restricted with
+// the apply: it writes a plan draft, reads the live Nayax window, accepts an uploaded transaction
+// export, and returns the identifier the apply then replays the business's sale costing from.
 [ApiController]
 [Route("api/admin/nayax-sale-timestamp-repair")]
 [Authorize]
 [RequiredScope("access_as_user")]
+[RequireCapability(Capability.DataRepair)]
 public sealed class NayaxSaleTimestampRepairsController : ControllerBase
 {
     // The cap on the evidence export upload, deliberately tighter than the 10 MB general

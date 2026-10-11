@@ -43,9 +43,11 @@ namespace InventoryApi.Tests.Architecture;
 /// that answered to two of them would have two authorization stories and no single reviewable
 /// one.</para>
 ///
-/// <para><see cref="PendingClassification"/> is the temporary list of controllers issue #525 did
-/// not reach. It is a list of what is still open, not an exemption: issue #526 empties it, and
-/// nothing may be added to it.</para>
+/// <para>Issue #525 left the Manager- and Owner-only controllers on a temporary
+/// <c>PendingClassification</c> list. Issue #526 classified all twelve of them and deleted that
+/// list, so the rule below holds for every action on every controller with no exception. There is
+/// no list to add a controller to, and no such list may be reintroduced: a new endpoint fails the
+/// build until the same pull request decides what it requires.</para>
 /// </summary>
 public class EndpointAuthorizationClassificationTests
 {
@@ -66,29 +68,19 @@ public class EndpointAuthorizationClassificationTests
     private const string OwnAccessRoute = "api/me/access";
 
     /// <summary>
-    /// The controllers whose endpoints issue #525 deliberately did not classify: the Manager- and
-    /// Owner-only surfaces of issue #526, which decides the capability each of them declares.
-    ///
-    /// <para><b>This list may only shrink.</b> It records work that is still open, and every
-    /// controller on it is reachable today by every active member of a business - which is exactly
-    /// what #502 exists to end. An entry whose controller has since been classified fails the test
-    /// below as loudly as a new unclassified endpoint, so the list cannot quietly become an
-    /// exemption that outlives the work.</para>
+    /// The five maintenance data-repair controllers (issue #526). They are named here so the test
+    /// below can state the rule they share: every action of a repair surface - preview, dry run and
+    /// apply alike - requires <see cref="Capability.DataRepair"/> and nothing weaker. A preview
+    /// reads exactly the financial history its apply rewrites, so a role that may not run the
+    /// repair may not project it either.
     /// </summary>
-    private static readonly string[] PendingClassification =
+    private static readonly string[] DataRepairControllers =
     [
-        "DataQualityController",
         "HistoricalGstClassificationController",
-        "ImportsController",
         "InventoryCostRepairsController",
         "InventoryCostTransitionsController",
         "NayaxSaleTimestampRepairsController",
-        "NayaxSalesSyncController",
-        "OperatingExpensesController",
-        "ReportsController",
         "SaleCostingController",
-        "SettingsController",
-        "SiteCommissionsController",
     ];
 
     private static readonly Assembly ApiAssembly = typeof(Program).Assembly;
@@ -109,15 +101,15 @@ public class EndpointAuthorizationClassificationTests
     #region Every endpoint is classified
 
     /// <summary>
-    /// The rule itself: every action on every controller is in one of the four classes, unless its
-    /// controller is on the pending list. A new endpoint therefore cannot default to "every member
-    /// may call it" - the build fails until somebody decides what it requires.
+    /// The rule itself: every action on every controller is in one of the four classes, with no
+    /// exception and no pending list (issue #526 removed the last one). A new endpoint therefore
+    /// cannot default to "every member may call it" - the build fails until somebody decides what
+    /// it requires.
     /// </summary>
     [Fact]
     public void Every_endpoint_declares_one_of_the_four_authorization_classes()
     {
         var unclassified = Endpoints()
-            .Where(endpoint => !PendingClassification.Contains(endpoint.Controller.Name, StringComparer.Ordinal))
             .Where(endpoint => ClassesOf(endpoint).Count == 0)
             .Select(endpoint => $"{endpoint.Controller.Name}.{endpoint.Method.Name} ({endpoint.Route})")
             .Order(StringComparer.Ordinal)
@@ -285,6 +277,88 @@ public class EndpointAuthorizationClassificationTests
         Assert.Contains(capability, CapabilitiesOf(Endpoint(route, httpMethod)));
 
     /// <summary>
+    /// The capabilities issue #526 applies to the Manager- and Owner-only surfaces, as that issue
+    /// lists them, read back from the endpoints themselves. Like the row set above it is the
+    /// acceptance criterion in one place, so a later change that moved a repair onto a weaker
+    /// capability, or put a report on the import capability, fails here and not only in the
+    /// per-role API tests.
+    ///
+    /// <para><c>api/nayax-sales-sync</c> and <c>api/data-quality/...</c> are the two endpoints the
+    /// issue says follow the page that calls them. The sync is called by the home Dashboard before
+    /// it loads Sites and Machines (issue #187), so it takes the Dashboard's own capability. No page
+    /// calls the catalogue reconciliation at all, so it takes the Owner-only capability for the
+    /// Nayax integration it reports on - see docs/architecture.md § Capability authorization on the
+    /// Manager and Owner endpoints.</para>
+    /// </summary>
+    [Theory]
+    [InlineData("api/operating-expenses", "GET", Capability.ExpensesManage)]
+    [InlineData("api/operating-expenses", "POST", Capability.ExpensesManage)]
+    [InlineData("api/operating-expenses/{id:int}", "GET", Capability.ExpensesManage)]
+    [InlineData("api/operating-expenses/{id:int}", "PUT", Capability.ExpensesManage)]
+    [InlineData("api/operating-expenses/{id:int}", "DELETE", Capability.ExpensesManage)]
+    [InlineData("api/operating-expenses/{id:int}/attachment", "GET", Capability.ExpensesManage)]
+    [InlineData("api/reports/bookkeeping", "GET", Capability.ReportsView)]
+    [InlineData("api/reports/dashboard", "GET", Capability.ReportsView)]
+    [InlineData("api/reports/transactions", "GET", Capability.ReportsView)]
+    [InlineData("api/reports/{report}/export", "GET", Capability.ReportsView)]
+    [InlineData("api/imports/products", "POST", Capability.ImportsRun)]
+    [InlineData("api/imports/nayax-sales", "POST", Capability.ImportsRun)]
+    [InlineData("api/imports/pending-xml", "POST", Capability.ImportsRun)]
+    [InlineData("api/site-commissions", "GET", Capability.SiteCommissionsManage)]
+    [InlineData("api/site-commissions/agreements", "GET", Capability.SiteCommissionsManage)]
+    [InlineData("api/site-commissions/agreements", "POST", Capability.SiteCommissionsManage)]
+    [InlineData("api/site-commissions/{siteId:long}/payments", "POST", Capability.SiteCommissionsManage)]
+    [InlineData("api/settings/nayax-processing-fee-rates", "GET", Capability.IntegrationManage)]
+    [InlineData("api/settings/nayax-processing-fee-rates", "POST", Capability.IntegrationManage)]
+    [InlineData("api/data-quality/nayax-catalog-reconciliation", "GET", Capability.IntegrationManage)]
+    [InlineData("api/nayax-sales-sync", "POST", Capability.DashboardView)]
+    [InlineData("api/admin/inventory-cost-repair/preview", "POST", Capability.DataRepair)]
+    [InlineData("api/admin/inventory-cost-repair/apply", "POST", Capability.DataRepair)]
+    [InlineData("api/admin/inventory-cost-transition/preview", "POST", Capability.DataRepair)]
+    [InlineData("api/admin/inventory-cost-transition/apply-all", "POST", Capability.DataRepair)]
+    [InlineData("api/admin/historical-gst-classification/preview", "POST", Capability.DataRepair)]
+    [InlineData("api/admin/historical-gst-classification/apply", "POST", Capability.DataRepair)]
+    [InlineData("api/admin/nayax-sale-timestamp-repair/preview", "POST", Capability.DataRepair)]
+    [InlineData("api/admin/nayax-sale-timestamp-repair/apply", "POST", Capability.DataRepair)]
+    [InlineData("api/sale-costing/backfill", "POST", Capability.DataRepair)]
+    [InlineData("api/sale-costing/nayax-cost-backfill/dry-run", "POST", Capability.DataRepair)]
+    [InlineData("api/sale-costing/nayax-cost-backfill/apply", "POST", Capability.DataRepair)]
+    public void The_manager_and_owner_endpoints_declare_the_capability_issue_526_assigns_them(
+        string route,
+        string httpMethod,
+        Capability capability)
+    {
+        // Asked over every action at the route rather than one, because two of them have a JSON and
+        // a multipart overload on the same route and verb - and both of those are endpoints a
+        // caller can reach, so both have to declare it.
+        var endpoints = EndpointsAt(route, httpMethod);
+
+        Assert.NotEmpty(endpoints);
+        Assert.All(endpoints, endpoint => Assert.Contains(capability, CapabilitiesOf(endpoint)));
+    }
+
+    /// <summary>
+    /// A preview is as restricted as its apply. Every action of every data-repair controller
+    /// requires <c>Data.Repair</c> and declares no second, weaker capability beside it: a preview
+    /// and a dry run read exactly the financial history the apply rewrites, and for
+    /// <c>api/sale-costing/nayax-cost-backfill</c> the difference between the two is a flag. A later
+    /// change that put a preview on <c>Reports.View</c> to "let a Manager look" fails here.
+    /// </summary>
+    [Fact]
+    public void Every_action_of_a_repair_controller_requires_only_the_data_repair_capability()
+    {
+        var repairs = Endpoints()
+            .Where(endpoint => DataRepairControllers.Contains(endpoint.Controller.Name, StringComparer.Ordinal))
+            .ToArray();
+
+        Assert.Equal(DataRepairControllers.Length, repairs.Select(endpoint => endpoint.Controller.Name).Distinct(StringComparer.Ordinal).Count());
+        foreach (var endpoint in repairs)
+        {
+            Assert.Equal([Capability.DataRepair], CapabilitiesOf(endpoint));
+        }
+    }
+
+    /// <summary>
     /// The supplier GST-default read and edit are deliberately different: reading stays on
     /// <c>Purchasing.Operate</c>, so an Operator recording a purchase can see which classification
     /// it will be given, while the edit needs <c>Suppliers.ManageGstDefaults</c>. A later change
@@ -369,53 +443,34 @@ public class EndpointAuthorizationClassificationTests
 
     #endregion
 
-    #region The pending list is temporary
+    #region There is no pending list
 
     /// <summary>
-    /// Every pending entry names a controller that exists and really is still unclassified. A
-    /// renamed or deleted controller would otherwise keep a line alive for nothing, and a
-    /// controller that has since been classified would keep a stale "still open" note that hides
-    /// how much of #502 is actually done.
+    /// The same rule as <see cref="Every_endpoint_declares_one_of_the_four_authorization_classes"/>,
+    /// asked one controller at a time, which is what issue #525's pending list used to say and what
+    /// issue #526 turned into a standing fact: every controller in the API is classified end to end.
+    /// It is kept beside the per-endpoint rule because this is the failure message a reviewer wants
+    /// - the controller to go and look at, not a list of action names - and because a controller
+    /// half of whose actions declare a capability is a worse state than one where none do.
     /// </summary>
     [Fact]
-    public void Every_pending_entry_names_a_controller_that_is_still_unclassified()
+    public void Every_controller_in_the_api_is_classified_end_to_end()
     {
         var controllers = Endpoints()
             .GroupBy(endpoint => endpoint.Controller.Name, StringComparer.Ordinal)
-            .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.Ordinal);
-
-        foreach (var pending in PendingClassification)
-        {
-            Assert.True(
-                controllers.ContainsKey(pending),
-                $"The pending list names {pending}, which has no endpoints. Remove the line: issue "
-                    + "#526 empties this list, and a stale entry is not an exemption to keep alive.");
-            Assert.All(
-                controllers[pending],
-                endpoint => Assert.Empty(ClassesOf(endpoint)));
-        }
-    }
-
-    /// <summary>
-    /// The pending list is a subset of the controllers that exist, has no duplicates, and - the
-    /// point of the whole exercise - is already a minority of the API. Checking that it shrank is
-    /// #526's job; checking that it cannot silently become the normal case is this one's.
-    /// </summary>
-    [Fact]
-    public void The_pending_list_holds_no_duplicate_and_is_smaller_than_the_classified_surface()
-    {
-        Assert.Equal(
-            PendingClassification.Length,
-            PendingClassification.Distinct(StringComparer.Ordinal).Count());
-
-        var classified = Endpoints().Count(endpoint => ClassesOf(endpoint).Count == 1);
-        var pending = Endpoints()
-            .Count(endpoint => PendingClassification.Contains(endpoint.Controller.Name, StringComparer.Ordinal));
+            .Where(group => group.Any(endpoint => ClassesOf(endpoint).Count == 0))
+            .Select(group => $"{group.Key} ({group.Count(endpoint => ClassesOf(endpoint).Count == 0)} of "
+                + $"{group.Count()} action(s) unclassified)")
+            .Order(StringComparer.Ordinal)
+            .ToArray();
 
         Assert.True(
-            classified > pending,
-            $"{classified} endpoints are classified and {pending} are still pending. The pending "
-                + "list is temporary work, not the normal state of the API.");
+            controllers.Length == 0,
+            "Issue #526 removed the last temporary pending list, so every controller declares how "
+                + "each of its actions is authorized and no list exists to add one to. Declare the "
+                + "capability the endpoint needs (AGENTS.md § Architecture rules, "
+                + "docs/architecture.md § Capability authorization on the Manager and Owner "
+                + $"endpoints). Unclassified controller(s): {string.Join(", ", controllers)}.");
     }
 
     #endregion
@@ -470,9 +525,17 @@ public class EndpointAuthorizationClassificationTests
     }
 
     private static ApiEndpoint Endpoint(string route, string httpMethod) =>
-        Assert.Single(Endpoints().Where(endpoint =>
+        Assert.Single(EndpointsAt(route, httpMethod));
+
+    /// <summary>
+    /// Every action routed at one route and verb. Usually one, but a route that offers a JSON and a
+    /// multipart overload has two, and each of them is separately reachable and separately
+    /// authorized.
+    /// </summary>
+    private static List<ApiEndpoint> EndpointsAt(string route, string httpMethod) =>
+        [.. Endpoints().Where(endpoint =>
             string.Equals(endpoint.Route, route, StringComparison.Ordinal)
-            && string.Equals(endpoint.HttpMethod, httpMethod, StringComparison.Ordinal)));
+            && string.Equals(endpoint.HttpMethod, httpMethod, StringComparison.Ordinal))];
 
     /// <summary>
     /// The endpoint's route as a reviewer reads it in the controller: the controller's own
