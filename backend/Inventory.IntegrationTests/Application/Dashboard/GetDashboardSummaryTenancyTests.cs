@@ -1,10 +1,13 @@
 using Inventory.Application.Dashboard;
 using Inventory.Application.Nayax;
 using Inventory.Application.Reorder;
+using Inventory.Application.Tenancy;
 using Inventory.Domain.FinancialConfiguration;
+using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Inventory.Infrastructure.Persistence;
+using InventoryApi.Tests.Application.Gst;
 using InventoryApi.Tests.Application.Time;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -128,13 +131,17 @@ public class GetDashboardSummaryTenancyTests : IDisposable
             .ReturnsAsync(new Dictionary<long, decimal>());
 
         await using var db = TestAppDbContext.For(_options, businessId);
-        return await new GetDashboardSummary(
+
+        // An Owner of that business, so the full summary - including the figures issue #527 redacts
+        // for a role without Dashboard.ViewFinancials - is what the tenant boundary is asserted on.
+        return Assert.IsType<DashboardSummaryDto>(await new GetDashboardSummary(
                 Time.Clock,
                 Time.Calendar,
+                new FakeCurrentBusinessProvider(businessId, BusinessRole.Owner),
                 new EfDashboardSummarySalesFactsProvider(db),
                 new EfProductCatalogStore(db),
                 new CalculateReorderNeeds(SharedOperatorFleet().Object, outstandingOrders.Object))
-            .Handle(CancellationToken.None);
+            .Handle(CancellationToken.None));
     }
 
     [Fact]
@@ -200,6 +207,13 @@ public class GetDashboardSummaryTenancyTests : IDisposable
     /// A caller whose business could not be resolved reads nothing anywhere in the summary: an
     /// unresolved business is never treated as "no filter" (AGENTS.md § Tenant ownership and data
     /// isolation).
+    ///
+    /// The membership here resolves while the <c>AppDbContext</c> scope is denied, which production
+    /// cannot produce - both come from one resolution, and since issue #527 an unresolved membership
+    /// is refused before any read (see
+    /// <see cref="A_caller_whose_membership_does_not_resolve_is_refused"/>). The combination is
+    /// deliberate: it is what pins the central query filters themselves, independently of whoever
+    /// refuses the request first.
     /// </summary>
     [Fact]
     public async Task A_caller_with_no_resolved_business_sees_an_empty_summary()
@@ -209,13 +223,14 @@ public class GetDashboardSummaryTenancyTests : IDisposable
             .ReturnsAsync(new Dictionary<long, decimal>());
 
         await using var db = TestAppDbContext.Denied(_options);
-        var summary = await new GetDashboardSummary(
+        var summary = Assert.IsType<DashboardSummaryDto>(await new GetDashboardSummary(
                 Time.Clock,
                 Time.Calendar,
+                new FakeCurrentBusinessProvider(BusinessA, BusinessRole.Owner),
                 new EfDashboardSummarySalesFactsProvider(db),
                 new EfProductCatalogStore(db),
                 new CalculateReorderNeeds(SharedOperatorFleet().Object, outstandingOrders.Object))
-            .Handle(CancellationToken.None);
+            .Handle(CancellationToken.None));
 
         Assert.Equal(0m, summary.SalesThisWeek.Sales);
         Assert.False(summary.SalesThisWeek.IsComparisonAvailable);
@@ -225,5 +240,33 @@ public class GetDashboardSummaryTenancyTests : IDisposable
         Assert.Equal(0, summary.NeedsOrdering.ProductsEvaluated);
         Assert.Equal(0, summary.Inventory.ProductCount);
         Assert.Equal(0, summary.Inventory.UnitsInStorage);
+    }
+
+    /// <summary>
+    /// What production does with an unresolved caller, relationally (issue #527): the summary is
+    /// refused before any read, rather than answered with the non-financial half of a business
+    /// nobody resolved. The role the financial decision needs cannot be invented, and the
+    /// least-privileged role is not a fallback.
+    /// </summary>
+    [Fact]
+    public async Task A_caller_whose_membership_does_not_resolve_is_refused()
+    {
+        var outstandingOrders = new Mock<IOutstandingSupplierOrderQuantityStore>();
+        outstandingOrders.Setup(x => x.GetOutstandingQuantitiesByProductAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<long, decimal>());
+
+        await using var db = TestAppDbContext.Denied(_options);
+        var useCase = new GetDashboardSummary(
+            Time.Clock,
+            Time.Calendar,
+            FakeCurrentBusinessProvider.Denied(BusinessAccessDenialReason.MembershipMissing),
+            new EfDashboardSummarySalesFactsProvider(db),
+            new EfProductCatalogStore(db),
+            new CalculateReorderNeeds(SharedOperatorFleet().Object, outstandingOrders.Object));
+
+        var exception = await Assert.ThrowsAsync<BusinessAccessDeniedException>(
+            () => useCase.Handle(CancellationToken.None));
+
+        Assert.Equal(BusinessAccessDenialReason.MembershipMissing, exception.Reason);
     }
 }

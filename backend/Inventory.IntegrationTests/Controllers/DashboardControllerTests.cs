@@ -3,7 +3,9 @@ using Inventory.Application.Machines;
 using Inventory.Application.Nayax;
 using Inventory.Application.Products;
 using Inventory.Application.Reorder;
+using Inventory.Domain.Tenancy;
 using InventoryApi.Controllers;
+using InventoryApi.Tests.Application.Gst;
 using InventoryApi.Tests.Application.Time;
 using Moq;
 using Xunit;
@@ -13,10 +15,16 @@ namespace InventoryApi.Tests.Controllers;
 /// <summary>
 /// The Dashboard summary endpoint's HTTP contract (issue #459): it takes no input at all - no
 /// business, machine or site identifier a caller could supply - and returns the use case's result
-/// unchanged, so the figures a client reads are the ones the backend calculated.
+/// unchanged, so the figures a client reads are the ones the backend calculated. Since issue #527
+/// "unchanged" includes which of the two published shapes the use case built: the controller returns
+/// it as it is and never strips, recomputes or decides a figure itself. The caller here is an Owner;
+/// the shape each role is answered through the real pipeline is
+/// <c>InventoryApi.Tests.Controllers.DashboardSummaryRedactionApiTests</c>.
 /// </summary>
 public class DashboardControllerTests
 {
+    private const int BusinessId = 7;
+
     private static readonly DateTime NowUtc = new(2026, 10, 7, 9, 30, 0, DateTimeKind.Utc);
 
     private static DashboardController Controller(
@@ -43,10 +51,14 @@ public class DashboardControllerTests
         return new DashboardController(new GetDashboardSummary(
             new FakeClock(NowUtc),
             new FakeBusinessCalendar(NowUtc),
+            new FakeCurrentBusinessProvider(BusinessId, BusinessRole.Owner),
             salesFacts.Object,
             catalog.Object,
             new CalculateReorderNeeds(nayax.Object, outstandingOrders.Object)));
     }
+
+    private static async Task<DashboardSummaryDto> Summary(DashboardController controller) =>
+        Assert.IsType<DashboardSummaryDto>(await controller.Summary(CancellationToken.None));
 
     private static ProductRecord Product(long id, string name, int quantityInStock, decimal? inventoryValue) => new()
     {
@@ -68,7 +80,7 @@ public class DashboardControllerTests
     {
         var controller = Controller(300m, 240m, Product(100, "Coke", 12, 30m));
 
-        var summary = await controller.Summary(CancellationToken.None);
+        var summary = await Summary(controller);
 
         Assert.Equal(NowUtc, summary.AsOfUtc);
         Assert.Equal(NowUtc.Date, summary.BusinessDate);
@@ -91,7 +103,7 @@ public class DashboardControllerTests
     {
         var controller = Controller(0m, 0m, Product(100, "Coke", 12, null));
 
-        var summary = await controller.Summary(CancellationToken.None);
+        var summary = await Summary(controller);
 
         Assert.Null(summary.Inventory.InventoryValueAtCost);
         Assert.False(summary.Inventory.IsInventoryValueComplete);

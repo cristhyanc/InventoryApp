@@ -3,9 +3,11 @@ using Inventory.Application.Nayax;
 using Inventory.Application.Reorder;
 using Inventory.Domain.FinancialConfiguration;
 using Inventory.Domain.Reporting.Dashboard;
+using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Inventory.Infrastructure.Persistence;
+using InventoryApi.Tests.Application.Gst;
 using InventoryApi.Tests.Application.Time;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -78,13 +80,18 @@ public class GetDashboardSummarySydneyPeriodTests : IDisposable
             .ReturnsAsync(new Dictionary<long, decimal>());
 
         await using var db = TestAppDbContext.For(_options, BusinessId);
-        return await new GetDashboardSummary(
+
+        // An Owner, who holds Dashboard.ViewFinancials: these tests are about which business week
+        // the sales card measures, which only a caller who is given that card can observe
+        // (issue #527).
+        return Assert.IsType<DashboardSummaryDto>(await new GetDashboardSummary(
                 time.Clock,
                 time.Calendar,
+                new FakeCurrentBusinessProvider(BusinessId, BusinessRole.Owner),
                 new EfDashboardSummarySalesFactsProvider(db),
                 new EfProductCatalogStore(db),
                 new CalculateReorderNeeds(nayax.Object, outstandingOrders.Object))
-            .Handle(CancellationToken.None);
+            .Handle(CancellationToken.None));
     }
 
     /// <summary>

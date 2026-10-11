@@ -1,6 +1,8 @@
+using Inventory.Application.Access;
 using Inventory.Application.Machines;
 using Inventory.Application.Products;
 using Inventory.Application.Reorder;
+using Inventory.Application.Tenancy;
 using Inventory.Application.Time;
 using Inventory.Domain.Machines;
 using Inventory.Domain.Reporting.Dashboard;
@@ -35,11 +37,29 @@ namespace Inventory.Application.Dashboard;
 /// <para><b>Reads are serialized.</b> The two persistence reads are awaited one at a time because
 /// the scoped EF adapters share a single <c>AppDbContext</c>, which supports one operation at a
 /// time - the same constraint <c>GetSiteSummaries</c> documents.</para>
+///
+/// <para><b>The financial figures are the caller's capability's decision</b> (issue #527). The
+/// endpoint itself needs <c>Dashboard.View</c>, which every role holds - the Dashboard is the
+/// landing page - so the part of the summary that is restricted is restricted here rather than by an
+/// endpoint policy: a caller whose role does not grant
+/// <see cref="Capability.DashboardViewFinancials"/> is answered
+/// <see cref="RedactedDashboardSummaryDto"/>, which carries neither the "Sales this week" card nor
+/// the inventory valuation. The role comes from <see cref="ICurrentBusinessProvider"/> - the same
+/// per-request memoised membership resolution the capability policies read - and the decision from
+/// <see cref="RoleCapabilities"/>, the one role → capability table, so what this use case redacts
+/// and what <c>GET /api/me/access</c> reports cannot disagree. A caller whose membership does not
+/// resolve is refused outright rather than redacted, which is also what the endpoint's own policy
+/// already did.</para>
+///
+/// <para><b>A redacted figure is not calculated.</b> The sales facts are not read at all for such a
+/// caller - there is no sales query, and nothing to drop on the way out - so the restriction cannot
+/// be reduced to a serialization detail by a later change.</para>
 /// </summary>
 public sealed class GetDashboardSummary
 {
     private readonly IClock _clock;
     private readonly IBusinessCalendar _businessCalendar;
+    private readonly ICurrentBusinessProvider _currentBusiness;
     private readonly IDashboardSummarySalesFactsProvider _salesFacts;
     private readonly IProductCatalogStore _catalog;
     private readonly CalculateReorderNeeds _calculateReorderNeeds;
@@ -47,35 +67,58 @@ public sealed class GetDashboardSummary
     public GetDashboardSummary(
         IClock clock,
         IBusinessCalendar businessCalendar,
+        ICurrentBusinessProvider currentBusiness,
         IDashboardSummarySalesFactsProvider salesFacts,
         IProductCatalogStore catalog,
         CalculateReorderNeeds calculateReorderNeeds)
     {
         _clock = clock;
         _businessCalendar = businessCalendar;
+        _currentBusiness = currentBusiness;
         _salesFacts = salesFacts;
         _catalog = catalog;
         _calculateReorderNeeds = calculateReorderNeeds;
     }
 
-    public async Task<DashboardSummaryDto> Handle(CancellationToken cancellationToken)
+    /// <exception cref="Inventory.Application.Tenancy.BusinessAccessDeniedException">
+    /// The caller has no usable membership, so there is no role to read the financial capability
+    /// from. Nothing is read and nothing is reported: an unresolved caller is never treated as the
+    /// least-privileged role (AGENTS.md § Tenant ownership and data isolation).
+    /// </exception>
+    public async Task<IDashboardSummaryDto> Handle(CancellationToken cancellationToken)
     {
         // Resolved once, before anything is read, so every card describes the same instant and the
         // same business week rather than whichever moment its own read happened to start at.
         var window = MachineDashboardWindow.Resolve(_clock, _businessCalendar);
 
-        var salesFacts = await _salesFacts.GetSalesFactsAsync(
-            window.CurrentWeek, window.PreviousComparableWeek, cancellationToken);
+        var role = await _currentBusiness.RequireRoleAsync(cancellationToken);
+        var mayViewFinancials = RoleCapabilities.Allows(role, Capability.DashboardViewFinancials);
+
+        // Not read at all for a caller who may not see it, which is what makes "the sales figures
+        // are not calculated for them" a property of this method rather than of the response shape.
+        var salesFacts = mayViewFinancials
+            ? await _salesFacts.GetSalesFactsAsync(
+                window.CurrentWeek, window.PreviousComparableWeek, cancellationToken)
+            : null;
         var products = await _catalog.ListUnorderedAsync(ProductCatalogFilter.None, cancellationToken);
         var reorderNeeds = await _calculateReorderNeeds.Handle(cancellationToken);
 
-        return new DashboardSummaryDto(
-            window.NowUtc,
-            window.BusinessToday,
-            SalesThisWeek(window, salesFacts),
-            NeedsRefill(reorderNeeds, products),
-            NeedsOrdering(reorderNeeds, products),
-            Inventory(products));
+        // Facts exist only for a caller who holds the capability, so the full shape cannot be built
+        // without them - and the redacted one has nowhere to put them.
+        return salesFacts is { } sales
+            ? new DashboardSummaryDto(
+                window.NowUtc,
+                window.BusinessToday,
+                SalesThisWeek(window, sales),
+                NeedsRefill(reorderNeeds, products),
+                NeedsOrdering(reorderNeeds, products),
+                Inventory(products))
+            : new RedactedDashboardSummaryDto(
+                window.NowUtc,
+                window.BusinessToday,
+                NeedsRefill(reorderNeeds, products),
+                NeedsOrdering(reorderNeeds, products),
+                RedactedInventory(products));
     }
 
     private static DashboardSalesThisWeekDto SalesThisWeek(
@@ -151,5 +194,23 @@ public sealed class GetDashboardSummary
             valuation.ProductsWithUnknownCost,
             valuation.TotalProducts,
             products.Sum(product => product.QuantityInStock));
+    }
+
+    /// <summary>
+    /// The same card without its valuation (issue #527). It is projected from the same catalogue
+    /// snapshot and the same <see cref="InventoryValuationPolicy"/> result as
+    /// <see cref="Inventory"/>, so the counts and the storage units an Operator reads are the
+    /// figures every other caller reads; only the total is left out.
+    /// </summary>
+    private static RedactedDashboardInventorySummaryDto RedactedInventory(
+        IReadOnlyList<ProductRecord> products)
+    {
+        var inventory = Inventory(products);
+
+        return new RedactedDashboardInventorySummaryDto(
+            inventory.IsInventoryValueComplete,
+            inventory.ProductsWithUnknownCost,
+            inventory.ProductCount,
+            inventory.UnitsInStorage);
     }
 }

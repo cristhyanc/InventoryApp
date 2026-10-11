@@ -3,7 +3,10 @@ using Inventory.Application.Machines;
 using Inventory.Application.Nayax;
 using Inventory.Application.Products;
 using Inventory.Application.Reorder;
+using Inventory.Application.Tenancy;
 using Inventory.Domain.Reporting.Dashboard;
+using Inventory.Domain.Tenancy;
+using InventoryApi.Tests.Application.Gst;
 using InventoryApi.Tests.Application.Products;
 using InventoryApi.Tests.Application.Time;
 using Moq;
@@ -19,9 +22,16 @@ namespace InventoryApi.Tests.Application.Dashboard;
 /// <c>Australia/Sydney</c>/daylight-saving boundaries are covered relationally in
 /// <c>InventoryApi.Tests.Application.Dashboard.GetDashboardSummarySydneyPeriodTests</c>; here the
 /// calendar conversion is deliberately an identity so the orchestration is what is under test.
+///
+/// Unless a test says otherwise, the caller is an Owner, who holds
+/// <c>Dashboard.ViewFinancials</c>, and <c>FullSummary()</c> asserts that the use case really
+/// answered the full shape before the figures are read. Which figures each role is given is
+/// <see cref="GetDashboardSummaryFinancialRedactionTests"/>.
 /// </summary>
 public class GetDashboardSummaryTests
 {
+    private const int BusinessId = 7;
+
     // A Wednesday, so week-to-date is a genuinely partial week.
     private static readonly DateTime NowUtc = new(2026, 10, 7, 9, 30, 0, DateTimeKind.Utc);
 
@@ -56,9 +66,11 @@ public class GetDashboardSummaryTests
         IDashboardSummarySalesFactsProvider salesFacts,
         IProductCatalogStore catalog,
         INayaxLynxClient nayax,
-        IOutstandingSupplierOrderQuantityStore outstandingOrders) =>
+        IOutstandingSupplierOrderQuantityStore outstandingOrders,
+        ICurrentBusinessProvider? currentBusiness = null) =>
         new(new FakeClock(NowUtc),
             new FakeBusinessCalendar(NowUtc),
+            currentBusiness ?? new FakeCurrentBusinessProvider(BusinessId, BusinessRole.Owner),
             salesFacts,
             catalog,
             new CalculateReorderNeeds(nayax, outstandingOrders));
@@ -66,12 +78,14 @@ public class GetDashboardSummaryTests
     private static GetDashboardSummary UseCase(
         IDashboardSummarySalesFactsProvider? salesFacts = null,
         IProductCatalogStore? catalog = null,
-        Mock<INayaxLynxClient>? nayax = null) =>
+        Mock<INayaxLynxClient>? nayax = null,
+        ICurrentBusinessProvider? currentBusiness = null) =>
         UseCase(
             salesFacts ?? new FakeDashboardSummarySalesFactsProvider(),
             catalog ?? new FakeProductCatalogStore(),
             (nayax ?? Fleet()).Object,
-            OutstandingOrders().Object);
+            OutstandingOrders().Object,
+            currentBusiness);
 
     private static ProductRecord Product(
         long id,
@@ -90,7 +104,7 @@ public class GetDashboardSummaryTests
     [Fact]
     public async Task The_summary_is_stamped_with_the_one_instant_and_business_date_every_metric_used()
     {
-        var summary = await UseCase().Handle(CancellationToken.None);
+        var summary = await UseCase().FullSummary();
 
         Assert.Equal(NowUtc, summary.AsOfUtc);
         Assert.Equal(NowUtc.Date, summary.BusinessDate);
@@ -107,7 +121,7 @@ public class GetDashboardSummaryTests
         var salesFacts = new FakeDashboardSummarySalesFactsProvider(currentPeriodSales: 100m);
         var window = MachineDashboardWindow.Resolve(new FakeClock(NowUtc), new FakeBusinessCalendar(NowUtc));
 
-        var summary = await UseCase(salesFacts).Handle(CancellationToken.None);
+        var summary = await UseCase(salesFacts).FullSummary();
 
         Assert.Equal(1, salesFacts.Calls);
         Assert.Equal(window.CurrentWeek, salesFacts.CurrentPeriod!.Value);
@@ -128,7 +142,7 @@ public class GetDashboardSummaryTests
             priorPeriodTransactionCount: 30,
             earliestRecordedSaleUtc: NowUtc.AddYears(-1));
 
-        var sales = (await UseCase(salesFacts).Handle(CancellationToken.None)).SalesThisWeek;
+        var sales = (await UseCase(salesFacts).FullSummary()).SalesThisWeek;
 
         Assert.Equal(300m, sales.Sales);
         Assert.Equal(40, sales.TransactionCount);
@@ -148,7 +162,7 @@ public class GetDashboardSummaryTests
             priorPeriodSales: 0m,
             earliestRecordedSaleUtc: NowUtc.AddYears(-1));
 
-        var sales = (await UseCase(salesFacts).Handle(CancellationToken.None)).SalesThisWeek;
+        var sales = (await UseCase(salesFacts).FullSummary()).SalesThisWeek;
 
         Assert.True(sales.IsComparisonAvailable);
         Assert.Equal(0m, sales.ComparisonSales);
@@ -169,7 +183,7 @@ public class GetDashboardSummaryTests
             currentPeriodSales: 180m,
             earliestRecordedSaleUtc: NowUtc.AddHours(-1));
 
-        var sales = (await UseCase(salesFacts).Handle(CancellationToken.None)).SalesThisWeek;
+        var sales = (await UseCase(salesFacts).FullSummary()).SalesThisWeek;
 
         Assert.False(sales.IsComparisonAvailable);
         Assert.Null(sales.ComparisonSales);
@@ -183,7 +197,7 @@ public class GetDashboardSummaryTests
     [Fact]
     public async Task A_business_with_no_recorded_sales_reports_a_known_zero_week_and_no_comparison()
     {
-        var sales = (await UseCase(new FakeDashboardSummarySalesFactsProvider()).Handle(CancellationToken.None))
+        var sales = (await UseCase(new FakeDashboardSummarySalesFactsProvider()).FullSummary())
             .SalesThisWeek;
 
         Assert.Equal(0m, sales.Sales);
@@ -200,7 +214,7 @@ public class GetDashboardSummaryTests
             (2, [Selection(100, par: 10, missing: 9, threshold: 2)]),
             (3, [Selection(100, par: 10, missing: 0, threshold: 2)]));
 
-        var refill = (await UseCase(catalog: catalog, nayax: nayax).Handle(CancellationToken.None)).NeedsRefill;
+        var refill = (await UseCase(catalog: catalog, nayax: nayax).FullSummary()).NeedsRefill;
 
         Assert.Equal(2, refill.MachinesNeedingRefill);
         Assert.Equal(1, refill.MachinesWithEmptySelections);
@@ -222,7 +236,7 @@ public class GetDashboardSummaryTests
         var catalog = new FakeProductCatalogStore(Product(100, "Coke"));
         var nayax = Fleet((1, [Selection(100, 10, 0, 2), Selection(999, par: 10, missing: 10, threshold: 2)]));
 
-        var refill = (await UseCase(catalog: catalog, nayax: nayax).Handle(CancellationToken.None)).NeedsRefill;
+        var refill = (await UseCase(catalog: catalog, nayax: nayax).FullSummary()).NeedsRefill;
 
         Assert.Equal(0, refill.MachinesNeedingRefill);
         Assert.Equal(1, refill.SelectionsEvaluated);
@@ -234,7 +248,7 @@ public class GetDashboardSummaryTests
         var catalog = new FakeProductCatalogStore(Product(100, "Discontinued", isActive: false));
         var nayax = Fleet((1, [Selection(100, par: 10, missing: 10, threshold: 2)]));
 
-        var refill = (await UseCase(catalog: catalog, nayax: nayax).Handle(CancellationToken.None)).NeedsRefill;
+        var refill = (await UseCase(catalog: catalog, nayax: nayax).FullSummary()).NeedsRefill;
 
         Assert.Equal(0, refill.MachinesNeedingRefill);
         Assert.Equal(0, refill.SelectionsEvaluated);
@@ -244,7 +258,7 @@ public class GetDashboardSummaryTests
     [Fact]
     public async Task An_empty_fleet_reports_zero_machines_evaluated_rather_than_a_silent_zero()
     {
-        var refill = (await UseCase().Handle(CancellationToken.None)).NeedsRefill;
+        var refill = (await UseCase().FullSummary()).NeedsRefill;
 
         Assert.Equal(0, refill.MachinesNeedingRefill);
         Assert.Equal(0, refill.MachinesEvaluated);
@@ -270,7 +284,7 @@ public class GetDashboardSummaryTests
         var salesFacts = new FakeDashboardSummarySalesFactsProvider();
 
         var summary = await UseCase(salesFacts, catalog, nayax.Object, outstandingOrders.Object)
-            .Handle(CancellationToken.None);
+            .FullSummary();
 
         var expected = await new ListLowStockProducts(
                 new FakeProductCatalogStore(products),
@@ -296,11 +310,11 @@ public class GetDashboardSummaryTests
         var covered = await UseCase(
                 new FakeDashboardSummarySalesFactsProvider(), catalog, nayax.Object,
                 OutstandingOrders((100, 40m)).Object)
-            .Handle(CancellationToken.None);
+            .FullSummary();
         var uncovered = await UseCase(
                 new FakeDashboardSummarySalesFactsProvider(), catalog, nayax.Object,
                 OutstandingOrders().Object)
-            .Handle(CancellationToken.None);
+            .FullSummary();
 
         Assert.Equal(0, covered.NeedsOrdering.ProductsNeedingOrdering);
         Assert.Equal(1, uncovered.NeedsOrdering.ProductsNeedingOrdering);
@@ -313,7 +327,7 @@ public class GetDashboardSummaryTests
             Product(100, "Coke", quantityInStock: 12, inventoryValue: 30m),
             Product(200, "Chips", quantityInStock: 5, inventoryValue: 12.50m));
 
-        var inventory = (await UseCase(catalog: catalog).Handle(CancellationToken.None)).Inventory;
+        var inventory = (await UseCase(catalog: catalog).FullSummary()).Inventory;
 
         Assert.Equal(42.50m, inventory.InventoryValueAtCost);
         Assert.True(inventory.IsInventoryValueComplete);
@@ -334,7 +348,7 @@ public class GetDashboardSummaryTests
             Product(100, "Coke", quantityInStock: 12, inventoryValue: 30m),
             Product(200, "Chips", quantityInStock: 5, inventoryValue: null));
 
-        var inventory = (await UseCase(catalog: catalog).Handle(CancellationToken.None)).Inventory;
+        var inventory = (await UseCase(catalog: catalog).FullSummary()).Inventory;
 
         Assert.Null(inventory.InventoryValueAtCost);
         Assert.False(inventory.IsInventoryValueComplete);
@@ -349,7 +363,7 @@ public class GetDashboardSummaryTests
         var catalog = new FakeProductCatalogStore(
             Product(100, "Discontinued", quantityInStock: 4, inventoryValue: 8m, isActive: false));
 
-        var inventory = (await UseCase(catalog: catalog).Handle(CancellationToken.None)).Inventory;
+        var inventory = (await UseCase(catalog: catalog).FullSummary()).Inventory;
 
         Assert.Equal(8m, inventory.InventoryValueAtCost);
         Assert.Equal(1, inventory.ProductCount);
@@ -365,7 +379,7 @@ public class GetDashboardSummaryTests
     {
         var catalog = new FakeProductCatalogStore(Product(100, "Coke"));
 
-        await UseCase(catalog: catalog).Handle(CancellationToken.None);
+        await UseCase(catalog: catalog).FullSummary();
 
         Assert.Equal(1, catalog.ListUnorderedCalls);
         Assert.Equal(0, catalog.ListOrderedByNameCalls);
@@ -385,7 +399,7 @@ public class GetDashboardSummaryTests
             (1, [Selection(100, par: 10, missing: 10, threshold: 2)]),
             (2, [Selection(100, par: 10, missing: 10, threshold: 2)]));
 
-        await UseCase(catalog: catalog, nayax: nayax).Handle(CancellationToken.None);
+        await UseCase(catalog: catalog, nayax: nayax).FullSummary();
 
         nayax.Verify(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()), Times.Once);
         nayax.Verify(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()), Times.Once);
@@ -409,7 +423,7 @@ public class GetDashboardSummaryTests
             .ThrowsAsync(new InvalidOperationException("Nayax unavailable"));
 
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => UseCase(catalog: catalog, nayax: nayax).Handle(CancellationToken.None));
+            () => UseCase(catalog: catalog, nayax: nayax).FullSummary());
     }
 
     [Fact]
@@ -421,4 +435,16 @@ public class GetDashboardSummaryTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
             () => UseCase().Handle(cancellation.Token));
     }
+}
+
+/// <summary>
+/// Reads the summary as the shape a caller holding <c>Dashboard.ViewFinancials</c> is given
+/// (issue #527). The assertion is part of the helper on purpose: a test about a figure should fail,
+/// rather than stop compiling or quietly read a different object, if the use case ever answered the
+/// redacted shape instead.
+/// </summary>
+internal static class GetDashboardSummaryTestExtensions
+{
+    public static async Task<DashboardSummaryDto> FullSummary(this GetDashboardSummary useCase) =>
+        Assert.IsType<DashboardSummaryDto>(await useCase.Handle(CancellationToken.None));
 }
