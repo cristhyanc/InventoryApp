@@ -23,7 +23,7 @@ using Xunit;
 namespace InventoryApi.Tests.Auth;
 
 /// <summary>
-/// The capability policies of issues #525 and #526, exercised through the real request pipeline:
+/// The capability policies of issues #525, #526 and #548, exercised through the real request pipeline:
 /// authentication, the required scope, the authorization middleware's capability policy,
 /// <c>BusinessScopeMiddleware</c>, the controller and relational SQLite with the real migration
 /// history.
@@ -117,6 +117,10 @@ public sealed class CapabilityAuthorizationApiTests : IClassFixture<CapabilityAu
         { "Data.Repair", "POST", "/api/sale-costing/backfill", "Owner" },
         { "Data.Repair", "POST", "/api/sale-costing/nayax-cost-backfill/dry-run", "Owner" },
 
+        // Issue #548: the Owner's own business settings. The read is on the write's capability
+        // because it reports the business's contact address, ABN and GST registration.
+        { "Business.Manage", "GET", "/api/business/settings", "Owner" },
+
         // Issue #526: the one endpoint that follows a page every role may open. The home Dashboard
         // calls it on load, before Sites and Machines, so both sections read one freshness
         // boundary (issue #187) - an Operator's Dashboard has to be able to refresh.
@@ -147,6 +151,10 @@ public sealed class CapabilityAuthorizationApiTests : IClassFixture<CapabilityAu
         { "Data.Repair", "POST", "/api/admin/nayax-sale-timestamp-repair/preview", true, "Operator,Manager" },
         { "Data.Repair", "POST", "/api/admin/nayax-sale-timestamp-repair/apply", false, "Operator,Manager" },
         { "Data.Repair", "POST", "/api/sale-costing/nayax-cost-backfill/apply", false, "Operator,Manager" },
+
+        // Issue #548. Only the refusal direction: the allowed direction would rename the shared
+        // fixture's business and move its time zone, which every other row here reads.
+        { "Business.Manage", "PUT", "/api/business/settings", false, "Operator,Manager" },
     };
 
     /// <summary>
@@ -225,6 +233,7 @@ public sealed class CapabilityAuthorizationApiTests : IClassFixture<CapabilityAu
     [InlineData("/api/operating-expenses", "Manager,Owner")]
     [InlineData("/api/site-commissions/agreements", "Manager,Owner")]
     [InlineData("/api/settings/nayax-processing-fee-rates", "Owner")]
+    [InlineData("/api/business/settings", "Owner")]
     public async Task A_role_that_holds_the_capability_is_answered_normally(string route, string rolesThatHoldIt)
     {
         await _factory.SeedAsync();
