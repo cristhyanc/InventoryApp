@@ -1211,6 +1211,11 @@ export function verifyScopedDirectoryCreationPermissions(allowed, source) {
 export function verifyAgentShellTimeout(stepText, source) {
   requireText(stepText, 'BASH_DEFAULT_TIMEOUT_MS: "1800000"', source);
   requireText(stepText, 'BASH_MAX_TIMEOUT_MS: "1800000"', source);
+  // A headless run ends when the agent's turn ends, so validation started in the background and
+  // waited on (Bash run_in_background or the Monitor tool) leaves uncommitted work behind
+  // (issue #498, run 38104920781). Background tasks are disabled and Monitor is refused.
+  requireText(stepText, 'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"', source);
+  requireText(stepText, '            "Monitor"\n', source);
 }
 
 export const AGENT_APP_TOKEN_ACTION =
