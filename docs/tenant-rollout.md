@@ -13,7 +13,7 @@ only the schema-migration step's "deploy and let startup apply it" alternative i
 | Action | Who |
 | --- | --- |
 | Apply schema migrations | **Application**, automatically at Production startup (issue #201) — or **Human**, via `migrate-database --apply`, for diagnostics or ahead of a deployment window |
-| Create the `Business` record | **Human**, via `bootstrap-business` |
+| Create the `Business` record, in the `Active` lifecycle status | **Human**, via `bootstrap-business` (see [The business lifecycle status](#the-business-lifecycle-status-issue-540)) |
 | Create `BusinessMembership` rows from the supplied Entra mapping, in the role it names | **Human**, via `bootstrap-business` (see [The member's role](#the-members-role-issue-521)) |
 | Assign existing rows to that business | **Human**, via `bootstrap-business --apply` |
 | Move the global Nayax operator id and token into that business's record | **Human**, via `migrate-nayax-connection --apply` (issue #519; see [Migrating the Nayax connection](#migrating-the-nayax-connection-into-the-business-issue-519)) |
@@ -177,6 +177,30 @@ capabilities and the Manager- and Owner-only endpoints are not yet enforced (iss
 role deliberately all the same, since those endpoints will begin refusing as that work lands.
 `Owner`, the default and what every existing member was backfilled to, grants everything.
 
+#### The business lifecycle status (issue #540)
+
+Since issue #540 a business carries a lifecycle status — `Pending`, `Active`, `Rejected` or
+`Deactivated` — instead of an active flag, and **only `Active` grants access to its data**. There is
+nothing to configure: `bootstrap-business` creates the business as `Active`, which is the status the
+migration also gave every business that was active before the change, so a bootstrapped and a
+migrated database describe the existing business identically.
+
+This command stays the legacy path, and that is deliberate. It adopts one specific history — the
+single Australian vending operation — so it never creates a pending application, never records an
+application or decision instant, and leaves every profile column the application form collects
+(contact email, GST registration, ABN, applied/decided instants, rejection reason) empty rather than
+inventing a value for a business that predates the form. The self-service application that creates a
+`Pending` business is issue #541, and approving, rejecting or deactivating one is issue #509; neither
+goes through this command.
+
+Two consequences for this procedure. The bootstrap refuses to assign data to a business in any other
+status and names the status in its message (see
+[If something goes wrong](#if-something-goes-wrong)), and the startup readiness check counts a
+business as active only while its status is `Active` — so a business left `Pending`, `Rejected` or
+`Deactivated` reports an unfinished rollout rather than a healthy one. A member of such a business
+signs in successfully and is told their own account state by `GET /api/me/account-state`, but reaches
+no business data at all.
+
 ## Rollout sequence
 
 Steps 3 and 5 are the two decision points. Do not continue past either without reading the
@@ -244,8 +268,8 @@ rolls back automatically if any row count or financial total moved. Then check b
   figures;
 - compare a few known totals against the pre-rollout backup;
 - confirm the API's startup log now reports tenant ownership as bootstrapped — it requires no
-  unassigned rows, **exactly one** business which is **active**, and at least one active
-  membership on that active business, so a partial rollout will not report success. "Exactly
+  unassigned rows, **exactly one** business whose lifecycle status is **`Active`** (issue #540), and
+  at least one active membership on that business, so a partial rollout will not report success. "Exactly
   one" is deliberate for this single-business rollout: a second business appearing is a state a
   human should look at, not a healthy steady state, so it stops reporting ready;
 - read the `BusinessBackfillAudits` table — one row per table, recording rows assigned and rows
@@ -273,8 +297,10 @@ rolls back automatically if any row count or financial total moved. Then check b
   refusing (issue #201) — if Production starts with these tenancy migrations still pending, it
   applies them itself rather than waiting for step 2's manual review, so keep to the sequence above
   rather than relying on that as a substitute for reviewing what `--dry-run` reports.
-- **"the business ... is deactivated".** The business that would own the data is inactive, so its
-  records would be unreachable whoever is a member. Reactivate it deliberately, then run again.
+- **"the business ... is not active (its status is ...)".** The business that would own the data is
+  not in the `Active` lifecycle status — it is `Pending`, `Rejected` or `Deactivated` (issue #540) —
+  so its records would be unreachable whoever is a member. The message names the status it found.
+  Put the business into `Active` deliberately, then run again; nothing was assigned.
 - **Ownership was assigned to the wrong business.** Restore from the backup. Do not attempt to
   reassign rows by hand; ownership is immutable through the application and editing it directly
   bypasses every check in the boundary.

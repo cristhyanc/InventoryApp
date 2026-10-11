@@ -67,7 +67,7 @@ public class EfMemberProfileWriteStoreTests
                 Id = businessId,
                 Name = $"Vending Co {businessId}",
                 TimeZoneId = "Australia/Sydney",
-                IsActive = true,
+                Status = BusinessStatus.Active,
                 CreatedAtUtc = CreatedAt,
             });
         }

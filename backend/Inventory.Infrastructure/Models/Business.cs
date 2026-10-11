@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Inventory.Domain.Tenancy;
 
 namespace Inventory.Infrastructure.Models;
 
@@ -36,10 +37,91 @@ public class Business
     public string TimeZoneId { get; set; } = "Australia/Sydney";
 
     /// <summary>
-    /// Deactivating a business denies access to its data without deleting the records, so an
-    /// offboarded business fails closed rather than being dropped.
+    /// Where the business is in its lifecycle (issue #540), and the single source of truth for
+    /// whether its data may be reached: only <see cref="BusinessStatus.Active"/> resolves, and
+    /// every other value - a pending application, a rejected one, an offboarded business, or a
+    /// value this code does not declare - denies access in
+    /// <see cref="BusinessMembershipResolutionPolicy"/> with the existing denial. It replaced the
+    /// former <c>IsActive</c> flag, which could not tell those situations apart, and no other
+    /// column mirrors it.
+    ///
+    /// Required, and <see cref="BusinessStatus.Active"/> by default. The default is not a
+    /// convenience: it is the value the migration gave every business that was active before this
+    /// slice and the value <c>bootstrap-business</c> creates, so a bootstrapped and a migrated
+    /// database describe the existing business identically. A path that means something else - a
+    /// self-service application, which starts <see cref="BusinessStatus.Pending"/> - states the
+    /// status deliberately instead of relying on it.
+    ///
+    /// Deactivating or rejecting a business denies access to its data without deleting the
+    /// records, so an offboarded or refused business fails closed rather than being dropped.
     /// </summary>
-    public bool IsActive { get; set; } = true;
+    public BusinessStatus Status { get; set; } = BusinessStatus.Active;
+
+    /// <summary>
+    /// The business's own contact email address, as its application recorded it (issue #540), and
+    /// <c>null</c> when none was recorded.
+    ///
+    /// Nullable because the application's existing business predates the application form and has
+    /// no such value: the migration invents none rather than copying a member's address, which
+    /// would be a different fact about a different party. It is business contact detail, never an
+    /// identity - no sign-in, membership, invitation or lookup may key off it, for the same
+    /// reasons that apply to <see cref="BusinessMembership.Email"/>.
+    /// </summary>
+    public string? ContactEmail { get; set; }
+
+    /// <summary>
+    /// Whether the business is registered for GST, or <c>null</c> when that has not been recorded
+    /// (issue #540).
+    ///
+    /// Three states, deliberately: "registered", "not registered" and "we do not know" are
+    /// different facts, and the existing business migrates as unknown rather than being assumed to
+    /// be registered. GST registration is never inferred from anything else - not from an
+    /// <see cref="Abn"/>, which an unregistered entity may hold, and not from GST appearing on a
+    /// supplier's invoice. What a non-registered business's GST report does with this is a
+    /// deliberate follow-up, so nothing reads it yet.
+    /// </summary>
+    public bool? GstRegistered { get; set; }
+
+    /// <summary>
+    /// The business's Australian Business Number as 11 digits with no spaces, or <c>null</c> when
+    /// none was recorded (issue #540).
+    ///
+    /// Optional, and checksum-validated wherever it is set:
+    /// <see cref="Data.BusinessAbnEnforcer"/> refuses a value that is not a well-formed ABN on
+    /// <c>SaveChanges</c>, by the rule in <see cref="AustralianBusinessNumber"/>. The check proves
+    /// the digits are well-formed and never that the ABN is registered, current or this
+    /// business's. "Not recorded" has exactly one representation - <c>null</c> - so a blank string
+    /// is refused rather than stored as a second kind of absence.
+    /// </summary>
+    public string? Abn { get; set; }
+
+    /// <summary>
+    /// When the business applied, and <c>null</c> for a business that never went through an
+    /// application - the existing one, and any created by <c>bootstrap-business</c> (issue #540).
+    /// A missing instant is not backfilled from <see cref="CreatedAtUtc"/>: the record was created
+    /// by an operator adopting existing data, which is not an application, and claiming otherwise
+    /// would invent a business event.
+    /// </summary>
+    public DateTime? AppliedAtUtc { get; set; }
+
+    /// <summary>
+    /// When the application was approved or refused, and <c>null</c> while no decision has been
+    /// recorded (issue #540). Approve, reject and deactivate are issue #509's work; nothing writes
+    /// this yet.
+    /// </summary>
+    public DateTime? DecidedAtUtc { get; set; }
+
+    /// <summary>
+    /// Why the application was refused, recorded by the operator who refused it, and <c>null</c>
+    /// otherwise (issue #540).
+    ///
+    /// It is the one piece of a <see cref="BusinessStatus.Rejected"/> business reported outside
+    /// it: <c>GET /api/me/account-state</c> returns it to the applicant's own identity alongside
+    /// <see cref="AccountState.ApplicationRejected"/>, and to nobody else. A rejection with no
+    /// recorded reason is still a rejection - the state never silently becomes a revocation
+    /// because the text is missing.
+    /// </summary>
+    public string? RejectionReason { get; set; }
 
     public DateTime CreatedAtUtc { get; set; }
 

@@ -1,4 +1,5 @@
 using Inventory.Application.PlatformDiagnostics;
+using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Inventory.Infrastructure.PlatformDiagnostics;
@@ -44,8 +45,20 @@ public sealed class SqliteDiagnosticsQueryExecutorTests : IDisposable
         db.Database.Migrate();
 
         db.Businesses.AddRange(
-            new Business { Id = BusinessAId, Name = "Business A", IsActive = true, CreatedAtUtc = DateTime.UtcNow },
-            new Business { Id = BusinessBId, Name = "Business B", IsActive = true, CreatedAtUtc = DateTime.UtcNow });
+            new Business
+            {
+                Id = BusinessAId,
+                Name = "Business A",
+                Status = BusinessStatus.Active,
+                CreatedAtUtc = DateTime.UtcNow,
+            },
+            new Business
+            {
+                Id = BusinessBId,
+                Name = "Business B",
+                Status = BusinessStatus.Active,
+                CreatedAtUtc = DateTime.UtcNow,
+            });
 
         foreach (var businessId in new[] { BusinessAId, BusinessBId })
         {

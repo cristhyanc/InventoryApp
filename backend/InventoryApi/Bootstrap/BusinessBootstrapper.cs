@@ -132,7 +132,12 @@ public sealed class BusinessBootstrapper
                 // onboarding instead. The command itself derives no business date and needs no
                 // calendar.
                 TimeZoneId = ExistingBusinessTimeZoneId,
-                IsActive = true,
+                // Active, stated rather than left to the entity's default (issue #540). This
+                // command adopts a business that is already trading, so it never creates a
+                // pending application: the self-service application path is the only thing that
+                // does, and the profile columns an application collects stay null here rather
+                // than being invented for a history that predates the form.
+                Status = BusinessStatus.Active,
                 CreatedAtUtc = recordedAt,
             };
             _db.Businesses.Add(business);
@@ -150,19 +155,21 @@ public sealed class BusinessBootstrapper
         var unassignedTotal = await CountUnassignedAsync(tables, cancellationToken);
         if (unassignedTotal > 0)
         {
-            if (!business.IsActive)
+            if (business.Status != BusinessStatus.Active)
             {
+                var status = business.Status.ToString();
                 await transaction.RollbackAsync(cancellationToken);
                 return Failure(
                     BusinessBootstrapOutcome.BusinessInactive,
                     dryRun,
                     $"{unassignedTotal} row(s) are unassigned, but the business that would own them "
-                        + "is deactivated, so its records would be unreachable whoever is a member. "
-                        + "Reactivate the business deliberately, then run again. Nothing was assigned.");
+                        + $"is not active (its status is {status}), so its records would be "
+                        + "unreachable whoever is a member. Put the business into the Active status "
+                        + "deliberately, then run again. Nothing was assigned.");
             }
 
-            // An active membership on a deactivated business grants nothing, so the business
-            // check above has to come first: counting memberships alone would let this pass.
+            // A membership on a business that is not active grants nothing, so the business check
+            // above has to come first: counting memberships alone would let this pass.
             var activeMemberships = await _db.BusinessMemberships
                 .CountAsync(m => m.BusinessId == business.Id && m.IsActive, cancellationToken);
 

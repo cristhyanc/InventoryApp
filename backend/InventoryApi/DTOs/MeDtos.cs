@@ -35,19 +35,19 @@ public sealed record MeAccessResponse(
 /// </summary>
 /// <param name="State">
 /// The published <c>Inventory.Domain.Tenancy.AccountState</c> name - <c>Member</c>,
-/// <c>NoMembership</c>, <c>MembershipRevoked</c>, <c>BusinessDeactivated</c>,
-/// <c>MembershipAmbiguous</c>, and once issue #507 adds the business status
-/// <c>ApplicationPending</c> or <c>ApplicationRejected</c> - rather than a number a client would
-/// have to map and a renumbering would silently change.
+/// <c>NoMembership</c>, <c>ApplicationPending</c>, <c>ApplicationRejected</c>,
+/// <c>MembershipRevoked</c>, <c>BusinessDeactivated</c> or <c>MembershipAmbiguous</c> - rather
+/// than a number a client would have to map and a renumbering would silently change. The two
+/// application states became reportable with the business lifecycle status of issue #540.
 /// </param>
 /// <param name="OnboardingEnabled">
 /// Whether a person with no membership may apply for a business themselves. Always
-/// <see langword="false"/> until issue #507 adds the flag.
+/// <see langword="false"/> until the application endpoints of issue #541 add the flag.
 /// </param>
 /// <param name="RejectionReason">
-/// Why an application was rejected; <see langword="null"/> for every other state, and therefore
-/// always <see langword="null"/> until issue #507. Serialized as an explicit <c>null</c> rather
-/// than omitted, so the field is a stable part of the shape.
+/// Why an application was rejected; <see langword="null"/> for every other state, and also for a
+/// rejection whose reason was not recorded. Serialized as an explicit <c>null</c> rather than
+/// omitted, so the field is a stable part of the shape.
 /// </param>
 public sealed record MeAccountStateResponse(
     string State,
