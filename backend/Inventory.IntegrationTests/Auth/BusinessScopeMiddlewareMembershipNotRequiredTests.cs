@@ -193,8 +193,7 @@ public class BusinessScopeMiddlewareMembershipNotRequiredTests
             timeZoneScope ?? new BusinessTimeZoneScope(),
             new StubBusinessProfileStore(),
             authorizationService ?? new RecordingAuthorizationService(),
-            FakeActorProfileAccessor.Unidentifiable(),
-            TestMemberProfileRefresh.Scheduler());
+            TestMemberProfileRefresh.RequestScheduler(FakeActorProfileAccessor.Unidentifiable()));
 
         return reached;
     }

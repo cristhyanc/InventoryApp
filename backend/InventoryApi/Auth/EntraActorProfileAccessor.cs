@@ -91,12 +91,13 @@ public sealed class EntraActorProfileAccessor : IActorProfileAccessor
     {
         foreach (var claimType in claimTypes)
         {
-            foreach (var claim in principal.FindAll(claimType))
+            var value = principal.FindAll(claimType)
+                .Select(claim => claim.Value)
+                .FirstOrDefault(claimValue => !string.IsNullOrWhiteSpace(claimValue));
+
+            if (value is not null)
             {
-                if (!string.IsNullOrWhiteSpace(claim.Value))
-                {
-                    return claim.Value;
-                }
+                return value;
             }
         }
 

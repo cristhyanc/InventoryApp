@@ -74,6 +74,10 @@ public static class ApplicationServiceCollectionExtensions
         services.AddSingleton<MemberProfileRefreshQueue>();
         services.AddSingleton<ScheduleMemberProfileRefresh>();
 
+        // Scoped, because it wraps the request-scoped IActorProfileAccessor: this is the one
+        // dependency the business-scope middleware injects for the whole feature.
+        services.AddScoped<MemberProfileRefreshRequestScheduler>();
+
         // The write itself is Scoped like every other use case, and is resolved from the drain's own
         // new scope - never the request's - so it runs with a denied business scope and its own
         // AppDbContext (docs/architecture.md § Member display name and email).

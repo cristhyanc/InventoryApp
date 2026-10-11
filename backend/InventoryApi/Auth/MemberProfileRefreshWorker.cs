@@ -64,7 +64,7 @@ public sealed class MemberProfileRefreshWorker : BackgroundService
         // shutdown timeout remains the outer bound, so a stuck write delays nothing indefinitely.
         using var shutdown = stoppingToken.Register(_queue.Complete);
 
-        await foreach (var request in _queue.ReadAllAsync().ConfigureAwait(false))
+        await foreach (var request in _queue.ReadAllAsync(CancellationToken.None).ConfigureAwait(false))
         {
             try
             {

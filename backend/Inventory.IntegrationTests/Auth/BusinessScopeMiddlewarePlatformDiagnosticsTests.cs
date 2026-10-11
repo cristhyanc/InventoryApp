@@ -244,8 +244,7 @@ public class BusinessScopeMiddlewarePlatformDiagnosticsTests
             timeZoneScope ?? new BusinessTimeZoneScope(),
             new StubBusinessProfileStore(storedTimeZoneId),
             new StubAuthorizationService(policySucceeds),
-            FakeActorProfileAccessor.Unidentifiable(),
-            TestMemberProfileRefresh.Scheduler());
+            TestMemberProfileRefresh.RequestScheduler(FakeActorProfileAccessor.Unidentifiable()));
 
         return reached;
     }

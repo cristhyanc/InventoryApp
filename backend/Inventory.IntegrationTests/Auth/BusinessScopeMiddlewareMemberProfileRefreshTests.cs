@@ -225,8 +225,9 @@ public class BusinessScopeMiddlewareMemberProfileRefreshTests
             new BusinessTimeZoneScope(),
             new StubBusinessProfileStore(),
             new StubAuthorizationService(),
-            profileAccessor ?? FakeActorProfileAccessor.For(Actor(), Profile()),
-            TestMemberProfileRefresh.Scheduler(queue));
+            TestMemberProfileRefresh.RequestScheduler(
+                profileAccessor ?? FakeActorProfileAccessor.For(Actor(), Profile()),
+                queue));
 
         return new Invocation(reached, context, queue);
     }

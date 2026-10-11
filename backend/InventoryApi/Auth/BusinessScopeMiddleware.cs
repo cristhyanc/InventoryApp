@@ -76,8 +76,7 @@ public sealed class BusinessScopeMiddleware
         BusinessTimeZoneScope businessTimeZoneScope,
         IBusinessProfileStore businessProfileStore,
         IAuthorizationService authorizationService,
-        IActorProfileAccessor actorProfileAccessor,
-        ScheduleMemberProfileRefresh scheduleMemberProfileRefresh)
+        MemberProfileRefreshRequestScheduler memberProfileRefreshScheduler)
     {
         if (context.User.Identity is not { IsAuthenticated: true })
         {
@@ -131,7 +130,7 @@ public sealed class BusinessScopeMiddleware
 
         await _next(context);
 
-        SchedulePostResponseProfileRefresh(context, actorProfileAccessor, scheduleMemberProfileRefresh);
+        SchedulePostResponseProfileRefresh(context, memberProfileRefreshScheduler);
     }
 
     /// <summary>
@@ -150,8 +149,7 @@ public sealed class BusinessScopeMiddleware
     /// </summary>
     private void SchedulePostResponseProfileRefresh(
         HttpContext context,
-        IActorProfileAccessor actorProfileAccessor,
-        ScheduleMemberProfileRefresh scheduleMemberProfileRefresh)
+        MemberProfileRefreshRequestScheduler memberProfileRefreshScheduler)
     {
         try
         {
@@ -164,10 +162,7 @@ public sealed class BusinessScopeMiddleware
                 return;
             }
 
-            if (actorProfileAccessor.GetCurrentActorProfile() is { } actor)
-            {
-                scheduleMemberProfileRefresh.Handle(actor.Identity, actor.Profile);
-            }
+            memberProfileRefreshScheduler.ScheduleForCurrentActor();
         }
         catch (Exception exception)
         {

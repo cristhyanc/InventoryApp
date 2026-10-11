@@ -1,4 +1,5 @@
 using Inventory.Application.Tenancy;
+using InventoryApi.Tests.Application.Tenancy;
 using InventoryApi.Tests.Application.Time;
 
 namespace InventoryApi.Tests;
@@ -26,6 +27,18 @@ internal static class TestMemberProfileRefresh
         new(
             new MemberProfileRefreshThrottle(new FakeClock(utcNow ?? DefaultNow)),
             queue ?? new MemberProfileRefreshQueue());
+
+    /// <summary>
+    /// The combined scheduler the middleware injects: <paramref name="profileAccessor"/> (a fresh,
+    /// unidentifiable fake when none is given) over <see cref="Scheduler"/>.
+    /// </summary>
+    public static MemberProfileRefreshRequestScheduler RequestScheduler(
+        FakeActorProfileAccessor? profileAccessor = null,
+        MemberProfileRefreshQueue? queue = null,
+        DateTime? utcNow = null) =>
+        new(
+            profileAccessor ?? FakeActorProfileAccessor.Unidentifiable(),
+            Scheduler(queue, utcNow));
 
     /// <summary>
     /// Everything queued so far, in order. The queue is completed first, so the read finishes
