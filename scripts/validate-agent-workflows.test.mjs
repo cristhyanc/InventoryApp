@@ -4,6 +4,7 @@ import './agent-persistence.test.mjs';
 import './agent-review-publication.test.mjs';
 import './agent-review-transport.test.mjs';
 import './agent-architecture-handoff.test.mjs';
+import './agent-pr-guard.test.mjs';
 // Deterministic contract tests for the validation workflow's concurrency and status model.
 // Run with: node --test scripts/validate-agent-workflows.test.mjs
 import assert from 'node:assert/strict';
@@ -51,6 +52,7 @@ import {
   copilotInstructionsPath,
   modelSelectionPath,
   verifyNayaxDocumentationAccess,
+  PR_GUARD_PATH,
 } from './validate-agent-workflows.mjs';
 
 const validateWorkflow = readRepositoryFile(validatePath);
@@ -61,6 +63,7 @@ const appPushRetryScript = readRepositoryFile(appPushRetryPath);
 const repairWorkflow = readRepositoryFile(repairPath);
 const issueTemplate = readRepositoryFile(issueTemplatePath);
 const pullRequestTemplate = readRepositoryFile(pullRequestTemplatePath);
+const prGuardScript = readRepositoryFile(PR_GUARD_PATH);
 
 const PR_NUMBER = 95;
 const HEAD_SHA = 'a'.repeat(40);
@@ -248,11 +251,26 @@ describe('preserved guards', () => {
   });
 
   it('rejects removing the exact current-head or workflow-file guard', () => {
-    const staleAccepted = replaceOnce(validateWorkflow, '[ "$current_sha" = "$head_sha" ] || fail "Refusing stale validation', '# removed');
-    assert.throws(() => runContractChecks({ read: readWithOverrides({ [validatePath]: staleAccepted }) }), /Refusing stale validation/);
+    // The checks live in the one trusted guard script; weakening either is rejected there.
+    for (const [from, to] of [
+      ["  if (current !== sha) refuse('stale'", "  if (false) refuse('stale'"],
+      ["  if (files.some((file) => WORKFLOW_PATH.test(file))) {", '  if (false) {'],
+    ]) {
+      const weakened = replaceOnce(prGuardScript, from, to);
+      assert.throws(() => runContractChecks({ read: readWithOverrides({ [PR_GUARD_PATH]: weakened }) }), /agent-pr-guard\.mjs/);
+    }
 
-    const workflowFilesAccepted = replaceOnce(validateWorkflow, "if grep -Eq '^\\.github/workflows/' <<<\"$changed_files\"; then\n              fail", '# removed\n              true');
-    assert.throws(() => runContractChecks({ read: readWithOverrides({ [validatePath]: workflowFilesAccepted }) }));
+    // The workflow must run the guard against the requested SHA, not whatever the head is now.
+    const staleAccepted = replaceOnce(validateWorkflow, 'node "$guard" check "$pr_number" "$head_sha"', 'node "$guard" check "$pr_number" "$(gh pr view "$pr_number" --json headRefOid --jq .headRefOid)"');
+    assert.throws(() => runContractChecks({ read: readWithOverrides({ [validatePath]: staleAccepted }) }), /validate\.yml/);
+
+    // It must run the copy from its own trusted commit, never one from a checkout.
+    const untrusted = replaceOnce(validateWorkflow, 'contents/scripts/agent-pr-guard.mjs?ref=$GITHUB_WORKFLOW_SHA" > "$guard"', 'contents/scripts/agent-pr-guard.mjs?ref=$INPUT_HEAD_SHA" > "$guard"');
+    assert.throws(() => runContractChecks({ read: readWithOverrides({ [validatePath]: untrusted }) }), /validate\.yml/);
+
+    // An inline copy of a check the guard owns is rejected, so the copies cannot drift apart again.
+    const inline = replaceOnce(validateWorkflow, '            implementer="$(jq -r \'.implementer\' <<<"$pr_guard")"\n', '            implementer="$(jq -r \'.implementer\' <<<"$pr_guard")"\n            [ "$author" = "$EXPECTED_AGENT_AUTHOR" ] || true\n');
+    assert.throws(() => runContractChecks({ read: readWithOverrides({ [validatePath]: inline }) }), /forbidden text: \[ "\$author" = /);
   });
 
   it('has the implementation dispatcher hand off only to the trusted architecture workflow', () => {
@@ -616,7 +634,8 @@ describe('architecture pass contract', () => {
   it('requires the architecture workflow to start from the exact verified SHA and current agent-working issue', () => {
     for (const required of [
       'ref: ${{ needs.context.outputs.head_sha }}',
-      '[ "$current_sha" = "$HEAD_SHA" ] || fail "Refusing stale architecture run:',
+      'node "$guard" check "$PR_NUMBER" "$HEAD_SHA" --issue "$ISSUE_NUMBER"',
+      'node "$guard" check "$PR_NUMBER" "$FINAL_SHA" --issue "$ISSUE_NUMBER"',
       'any(.labels[]?; .name == "agent-working")',
       'git checkout -b "$BRANCH" "$HEAD_SHA"',
     ]) {
@@ -777,14 +796,16 @@ describe('guarded publication contract', () => {
 
   it('requires the publisher to re-verify the head, eligibility and validation before publishing', () => {
     for (const fragment of [
-      '[ "$current_sha" = "$HEAD_SHA" ] || suppress',
+      'node "$guard" check "$PR_NUMBER" "$HEAD_SHA"',
       '[ "$validation_state" = "success" ] || suppress',
       '[ "$reviewed_sha" = "$HEAD_SHA" ] || suppress',
       'all(.criteria[]; .status == "met")',
-      '[ "$is_draft" = "false" ] || suppress',
+      'closed|draft|base|fork|branch|config|author|stale|workflow-files) suppress "$refusal" ;;',
     ]) {
       assertPublicationRejects({ [reviewPath]: replaceOnce(reviewWorkflow, fragment, '# removed') }, /publish job/);
     }
+    // An unreadable live state must stop the publisher, never be recorded as a suppressed review.
+    assertPublicationRejects({ [reviewPath]: replaceOnce(reviewWorkflow, 'closed|draft|base|fork|branch|config|author|stale|workflow-files) suppress', 'closed|draft|base|fork|branch|config|author|stale|workflow-files|unavailable) suppress') }, /publish job/);
   });
 
   it('requires the published review to be bound to the reviewed commit and to stay comment-only', () => {
@@ -814,7 +835,9 @@ describe('updated-head scheduling contract', () => {
 
   it('requires the stale-head guard, the duplicate check and a review only after validation', () => {
     assertPublicationRejects({ [headUpdatePath]: replaceOnce(headUpdateWorkflow, '[ -z "$existing_validation" ]', 'true') }, /missing required text: \[ -z "\$existing_validation" \]/);
-    assertPublicationRejects({ [headUpdatePath]: replaceOnce(headUpdateWorkflow, '[ "$current_sha" = "$HEAD_SHA" ]', 'true') }, /current_sha/);
+    assertPublicationRejects({ [headUpdatePath]: replaceOnce(headUpdateWorkflow, 'node "$guard" check "$PR_NUMBER" "$HEAD_SHA"', 'true') }, /node "\$guard" check/);
+    // A missing App login or an unreadable state fails the job; only an ineligible pull request is skipped.
+    assertPublicationRejects({ [headUpdatePath]: replaceOnce(headUpdateWorkflow, 'closed|draft|base|fork|branch|author|stale|workflow-files) skip', 'closed|draft|base|fork|branch|config|author|stale|workflow-files) skip') }, /agent-head-update\.yml/);
     assertPublicationRejects({ [headUpdatePath]: replaceOnce(headUpdateWorkflow, 'gh workflow run validate.yml', 'gh workflow run agent-review.yml') }, /agent-head-update.yml/);
   });
 
@@ -852,11 +875,12 @@ describe('cross-review contract (Claude implements; Copilot checks and reviews)'
   });
 
   it('accepts only Claude agent/issue-* pull requests at every guarded boundary', () => {
-    const copilotBranch = '          elif [[ "$head_ref" == copilot/* ]]; then\n            implementer="copilot"\n';
-    for (const [path, workflow, anchor] of [
-      [reviewRequestPath, reviewRequestWorkflow, '          else\n            fail "Pull request #$PR_NUMBER does not use an agent/issue-* branch."'],
-      [headUpdatePath, headUpdateWorkflow, '          else\n            skip "pull request #$PR_NUMBER does not use an agent/issue-* branch."'],
-    ]) {
+    // The guard accepts only agent/issue-* branches; a copilot/* exception is rejected there.
+    rejects({ [PR_GUARD_PATH]: replaceOnce(prGuardScript, "if (!head.startsWith(AGENT_BRANCH_PREFIX)) refuse('branch'", "if (!head.startsWith(AGENT_BRANCH_PREFIX) && !head.startsWith('copilot/')) refuse('branch'") }, /agent-pr-guard\.mjs/);
+    // A dispatcher cannot add its own copilot/* exception around the guard either.
+    const copilotBranch = '          [[ "$(jq -r .head_ref <<<"$pr_guard")" == copilot/* ]] && implementer="copilot"\n';
+    for (const [path, workflow] of [[reviewRequestPath, reviewRequestWorkflow], [headUpdatePath, headUpdateWorkflow]]) {
+      const anchor = '          jq -e \'any(.labels[]; . == "agent-review")\' <<<"$pr_guard"';
       rejects({ [path]: replaceOnce(workflow, anchor, copilotBranch + anchor) }, new RegExp(path.replaceAll('.', '\\.')));
     }
   });
