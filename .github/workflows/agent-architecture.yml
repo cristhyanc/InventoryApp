@@ -489,6 +489,10 @@ jobs:
           # would push the agent toward backgrounding or redirecting it, which the allowlist refuses.
           BASH_DEFAULT_TIMEOUT_MS: "1800000"
           BASH_MAX_TIMEOUT_MS: "1800000"
+          # Background work outlives a headless run: an agent that starts validation in the background
+          # and waits for it ends its turn, and the run finishes with uncommitted work (issue #498,
+          # run 38104920781). Disable it so every command, validate.sh included, runs to completion.
+          CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -530,6 +534,7 @@ jobs:
             "mcp__nayax__search_nayax_developer_portal,mcp__nayax__query_docs_filesystem_nayax_developer_portal"
             --disallowedTools "Agent,WebFetch,WebSearch"
             "mcp__nayax__submit_feedback"
+            "Monitor"
             "Bash(git push *),Bash(git push * --force *),Bash(git push * -f *),Bash(git push * --force-with-lease *),Bash(git reset --hard *),Bash(git rebase *)"
             "Bash(git checkout *),Bash(git switch *),Bash(gh pr merge *),Bash(gh pr review *),Bash(gh pr edit *),Bash(gh pr create *),Bash(gh issue edit *),Bash(gh api *),Bash(gh workflow *),Bash(gh run *)"
 

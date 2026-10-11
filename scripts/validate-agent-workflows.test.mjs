@@ -756,6 +756,25 @@ describe('agent shell timeout covers full validation', () => {
   });
 });
 
+describe('agent background tasks are disabled', () => {
+  it('requires background tasks off and Monitor refused for implementation, architecture and repair Claude steps', () => {
+    assert.doesNotThrow(() => runContractChecks());
+    for (const [path, workflow, source] of [
+      [implementPath, implementWorkflow, 'implementation agent'],
+      [architecturePath, architectureWorkflow, 'architect'],
+      [repairPath, repairWorkflow, 'repair agent'],
+    ]) {
+      for (const [from, to, missing] of [
+        ['CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"', 'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "0"', 'missing required text: CLAUDE_CODE_DISABLE_BACKGROUND_TASKS'],
+        ['            "Monitor"\n', '', 'missing required text: +"Monitor"'],
+      ]) {
+        const altered = replaceOnce(workflow, from, to);
+        assert.throws(() => runContractChecks({ read: readWithOverrides({ [path]: altered }) }), new RegExp(`${source}: ${missing}`));
+      }
+    }
+  });
+});
+
 // ---------------------------------------------------------------------------------------
 // Review judgment, guarded publication and updated-head scheduling (issue #268). Each test
 // weakens one requirement and proves the contract rejects it.
