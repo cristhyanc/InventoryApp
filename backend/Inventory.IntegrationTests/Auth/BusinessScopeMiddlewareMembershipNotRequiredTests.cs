@@ -5,6 +5,7 @@ using Inventory.Application.Time;
 using Inventory.Domain.Tenancy;
 using InventoryApi.Auth;
 using InventoryApi.Auth.PlatformAdmin;
+using InventoryApi.Tests.Application.Tenancy;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -191,7 +192,8 @@ public class BusinessScopeMiddlewareMembershipNotRequiredTests
             scope,
             timeZoneScope ?? new BusinessTimeZoneScope(),
             new StubBusinessProfileStore(),
-            authorizationService ?? new RecordingAuthorizationService());
+            authorizationService ?? new RecordingAuthorizationService(),
+            TestMemberProfileRefresh.RequestScheduler(FakeActorProfileAccessor.Unidentifiable()));
 
         return reached;
     }

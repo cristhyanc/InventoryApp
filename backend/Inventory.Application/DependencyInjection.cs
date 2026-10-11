@@ -64,6 +64,25 @@ public static class ApplicationServiceCollectionExtensions
         // operation's write has to save inside.
         services.AddScoped<MembershipWriteGuard>();
 
+        // The member's display-only name and email address, refreshed from their sign-in token
+        // (issue #524). The hourly throttle and the hand-off queue are singletons because both are
+        // state about the process rather than about one request: "this membership was refreshed
+        // within the hour" and "these refreshes are waiting" must be the same answer for every
+        // request. The scheduler the middleware calls is a singleton over them for the same reason,
+        // and holds nothing per request itself.
+        services.AddSingleton<MemberProfileRefreshThrottle>();
+        services.AddSingleton<MemberProfileRefreshQueue>();
+        services.AddSingleton<ScheduleMemberProfileRefresh>();
+
+        // Scoped, because it wraps the request-scoped IActorProfileAccessor: this is the one
+        // dependency the business-scope middleware injects for the whole feature.
+        services.AddScoped<MemberProfileRefreshRequestScheduler>();
+
+        // The write itself is Scoped like every other use case, and is resolved from the drain's own
+        // new scope - never the request's - so it runs with a denied business scope and its own
+        // AppDbContext (docs/architecture.md § Member display name and email).
+        services.AddScoped<RefreshMemberProfile>();
+
         // The Nayax credentials every ordinary Nayax call is made with (issue #520), resolved per
         // call from the trusted current business over #518's store. Scoped for the same reason the
         // current business is: a credential belongs to one caller's business and must never be

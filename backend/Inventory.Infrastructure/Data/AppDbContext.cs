@@ -1,5 +1,6 @@
 using System.Linq.Expressions;
 using Inventory.Application.Tenancy;
+using Inventory.Domain.Tenancy;
 using Microsoft.EntityFrameworkCore;
 using Inventory.Infrastructure.Models;
 
@@ -688,6 +689,21 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<BusinessMembership>()
             .Property(m => m.StatusChangedAtUtc)
             .IsRequired();
+
+        // The member's display-only name and email address (issue #524). Both are nullable, because
+        // a membership exists before its member has ever signed in and a validated token need not
+        // carry either claim, and both are bounded: MemberProfile refuses a longer claim value
+        // outright, and the declared length states that bound in the schema as well.
+        //
+        // Deliberately not indexed, not unique and not collated for lookup, unlike the identity
+        // columns above. These two are display data: nothing resolves a membership, a business or a
+        // person by them, and an index would be the first step towards something doing so.
+        modelBuilder.Entity<BusinessMembership>()
+            .Property(m => m.DisplayName)
+            .HasMaxLength(MemberProfile.MaxLength);
+        modelBuilder.Entity<BusinessMembership>()
+            .Property(m => m.Email)
+            .HasMaxLength(MemberProfile.MaxLength);
 
         // One membership row per (actor, business), active or revoked, so duplicates cannot
         // quietly accumulate for one person in one business.

@@ -49,6 +49,14 @@ namespace InventoryApi.Auth;
 /// weaker: the request keeps the <em>denied</em> scope and no business time zone, so a marked
 /// endpoint reads no business data at all, and the marker does nothing on any other endpoint. An
 /// endpoint carrying both markers stays a diagnostics endpoint, decided by the policy above.</para>
+///
+/// <para><strong>One thing happens after the response (issue #524).</strong> A request that
+/// resolved a membership schedules the member's display name and email address to be refreshed from
+/// the claims the same validated token carried. It is scheduling only: the write happens later, in
+/// its own service scope with no business resolved, so it cannot delay, change or fail the
+/// response - and it is skipped entirely for a request carrying
+/// <see cref="SupportSessionHeader"/>. The two values it refreshes decide nothing; this middleware
+/// still resolves access from the <c>(tid, oid)</c> pair and the membership row alone.</para>
 /// </summary>
 public sealed class BusinessScopeMiddleware
 {
@@ -67,7 +75,8 @@ public sealed class BusinessScopeMiddleware
         BusinessScope businessScope,
         BusinessTimeZoneScope businessTimeZoneScope,
         IBusinessProfileStore businessProfileStore,
-        IAuthorizationService authorizationService)
+        IAuthorizationService authorizationService,
+        MemberProfileRefreshRequestScheduler memberProfileRefreshScheduler)
     {
         if (context.User.Identity is not { IsAuthenticated: true })
         {
@@ -120,6 +129,50 @@ public sealed class BusinessScopeMiddleware
         await PublishBusinessTimeZoneAsync(context, businessId, businessTimeZoneScope, businessProfileStore);
 
         await _next(context);
+
+        SchedulePostResponseProfileRefresh(context, memberProfileRefreshScheduler);
+    }
+
+    /// <summary>
+    /// Schedules the member's display-name and email refresh (issue #524), after the response has
+    /// been decided and only for a request that resolved a membership.
+    ///
+    /// Everything about where this call sits is deliberate. It is after <c>_next</c>, so the refresh
+    /// cannot change or delay what the caller is answered; it only schedules, so the write itself
+    /// happens in another service scope with no business resolved at all; and it is reached only on
+    /// the path above, which means only for a request whose membership resolved - the row that is
+    /// refreshed is the caller's own active membership.
+    ///
+    /// It also cannot fail the request. Scheduling is a dictionary read and a non-blocking queue
+    /// write, neither of which throws, and anything unexpected is swallowed and logged: a display
+    /// value is never worth turning a successful response into a failed one.
+    /// </summary>
+    private void SchedulePostResponseProfileRefresh(
+        HttpContext context,
+        MemberProfileRefreshRequestScheduler memberProfileRefreshScheduler)
+    {
+        try
+        {
+            // A support session is somebody from outside the business looking at the business's
+            // data (issue #512). Their token's name and email address are not the member's, so the
+            // row must not be refreshed from it - and the header's presence alone decides that,
+            // because the only thing it can do here is stop a cosmetic write.
+            if (context.Request.Headers.ContainsKey(SupportSessionHeader.Name))
+            {
+                return;
+            }
+
+            memberProfileRefreshScheduler.ScheduleForCurrentActor();
+        }
+        catch (Exception exception)
+        {
+            // Value-free on purpose: the display name and the email address must not reach a log.
+            _logger.LogWarning(
+                exception,
+                "Scheduling the member display-name and email refresh failed for this request. The "
+                    + "response is unaffected and the member's stored display details stay as they "
+                    + "are.");
+        }
     }
 
     /// <summary>

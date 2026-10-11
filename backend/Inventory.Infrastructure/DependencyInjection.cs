@@ -140,6 +140,10 @@ public static class InfrastructureServiceCollectionExtensions
         // The write side of the membership table (issue #522): the BEGIN IMMEDIATE transaction and
         // the rows the one-active-membership and last-Owner rules are decided from.
         services.AddScoped<IBusinessMembershipWriteStore, EfBusinessMembershipWriteStore>();
+        // The display-only member profile (issue #524): its own narrow write path, deliberately
+        // separate from the membership write store above because it changes nothing a membership
+        // means and takes none of that path's write lock.
+        services.AddScoped<IMemberProfileWriteStore, EfMemberProfileWriteStore>();
         services.AddScoped<IBusinessProfileStore, EfBusinessProfileStore>();
         services.AddScoped<INayaxFeeRateStore, EfNayaxFeeRateStore>();
         // The per-business Nayax connection (issue #518). Its INayaxTokenProtector dependency comes

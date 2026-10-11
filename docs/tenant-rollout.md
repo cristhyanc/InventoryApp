@@ -330,8 +330,11 @@ business's ledger, and neither is a decision a migration may make unattended.
    HAVING COUNT(*) > 1;
    ```
 
-   The result is Entra identifiers, not names: the membership table deliberately stores no email
-   address or display name. Match them to people through Entra, with a person who is entitled to.
+   The result is Entra identifiers. Since issue #524 the table does also carry a `DisplayName` and
+   an `Email`, refreshed from each member's own sign-in token, but they are display-only and may be
+   empty for anybody who has not signed in since — so match the identifiers to people through
+   Entra, with a person who is entitled to, rather than trusting whatever those two columns happen
+   to hold.
 
 2. **Ask, then decide.** For each identity, a human decides which single business that person keeps
    — and says so to the person and to the business losing access. Do not infer it from which

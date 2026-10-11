@@ -244,6 +244,19 @@ builder.Services.AddNayaxTokenProtection(
 // itself (ICurrentBusinessProvider) is registered by AddApplicationServices().
 builder.Services.AddScoped<IAuthenticatedActorAccessor, EntraActorIdentityAccessor>();
 
+// The member's display-only name and email address (issue #524). The accessor is the second, and
+// deliberately separate, claims adapter at this boundary: it reads the name and email claims only,
+// takes the identity half of its answer from the accessor above so there is one implementation of
+// "who is calling", and nothing it returns takes part in an access decision.
+builder.Services.AddScoped<IActorProfileAccessor, EntraActorProfileAccessor>();
+
+// The host-side half of that refresh: one background drain that runs each queued write in its own
+// new service scope, after the request that scheduled it has finished and with no business
+// resolved. It is the only hosted service this application runs; see
+// docs/architecture.md § Member display name and email for why this work is in-process rather than
+// a WebJob or a Function.
+builder.Services.AddHostedService<MemberProfileRefreshWorker>();
+
 // The per-request current business, published by BusinessScopeMiddleware and read by
 // AppDbContext's query filters and SaveChanges enforcement. Registered as the concrete type as
 // well, because only the middleware may resolve it; everything else consumes the read-only port.
