@@ -1,4 +1,6 @@
+using Inventory.Application.Access;
 using Inventory.Application.Gst;
+using InventoryApi.Auth;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Identity.Web.Resource;
@@ -28,10 +30,15 @@ namespace InventoryApi.Controllers;
 // the HTTP boundary does not reclassify it. A caller with no resolvable business reaches
 // BusinessScopeMiddleware's 403, and an unexpected framework or infrastructure failure is
 // deliberately unmapped - it surfaces as GlobalExceptionHandler's logged, generic 500.
+//
+// Both actions require Data.Repair (issue #526), so an Owner alone. The preview is restricted with
+// the apply for the same reason it is a POST: its result is the fingerprint the apply is authorised
+// by, and it is a complete projection of the business's unclassified purchase history.
 [ApiController]
 [Route("api/admin/historical-gst-classification")]
 [Authorize]
 [RequiredScope("access_as_user")]
+[RequireCapability(Capability.DataRepair)]
 public sealed class HistoricalGstClassificationController : ControllerBase
 {
     private readonly PreviewHistoricalGstClassification _preview;

@@ -1,14 +1,25 @@
+using Inventory.Application.Access;
 using Inventory.Application.Costing;
+using InventoryApi.Auth;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Identity.Web.Resource;
 
 namespace InventoryApi.Controllers;
 
+/// <summary>
+/// The sale-costing backfills: the internal-ledger backfill and the Nayax historical cost backfill.
+///
+/// Every action requires <c>Data.Repair</c> (issue #526), so an Owner alone. The dry run is as
+/// restricted as the apply, and has to be: on both surfaces the only difference between projecting
+/// the change and writing it is a flag - <c>dryRun</c> here, a separate route on the Nayax
+/// backfill - and what they project is the business's historical COGS.
+/// </summary>
 [ApiController]
 [Route("api/sale-costing")]
 [Authorize]
 [RequiredScope("access_as_user")]
+[RequireCapability(Capability.DataRepair)]
 public sealed class SaleCostingController : ControllerBase
 {
     private readonly BackfillSaleCosts _backfill;
