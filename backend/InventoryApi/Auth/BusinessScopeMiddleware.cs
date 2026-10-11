@@ -38,6 +38,17 @@ namespace InventoryApi.Auth;
 /// anywhere; its cross-business read happens on the separate read-only SQLite connection the
 /// diagnostics adapter owns. "Unrestricted request-scoped context" remains something no request
 /// path can obtain.</para>
+///
+/// <para><strong>A second endpoint-specific exception (issue #523).</strong> An endpoint marked
+/// with <see cref="MembershipNotRequiredEndpointAttribute"/> may proceed without a membership for
+/// any authenticated caller, because it is the family of endpoints a person with no usable
+/// membership has to be able to call - <c>GET /api/me/account-state</c>, which tells them which
+/// screen to show instead of a bare 403. No policy is evaluated for it: the only thing such an
+/// endpoint may answer is a fact about the caller's own identity, so there is nothing to
+/// authorise beyond being signed in. It is the same shape of bypass as the one above and no
+/// weaker: the request keeps the <em>denied</em> scope and no business time zone, so a marked
+/// endpoint reads no business data at all, and the marker does nothing on any other endpoint. An
+/// endpoint carrying both markers stays a diagnostics endpoint, decided by the policy above.</para>
 /// </summary>
 public sealed class BusinessScopeMiddleware
 {
@@ -83,6 +94,16 @@ public sealed class BusinessScopeMiddleware
                     + "platform-admin policy did not succeed for this request.");
 
             await WriteForbiddenAsync(context, BusinessAccessDenialReason.MembershipMissing);
+            return;
+        }
+
+        // Membership is not resolved at all for a marked endpoint, rather than resolved and
+        // ignored: there is no business to publish either way, and an endpoint that cannot be
+        // given a business cannot accidentally be given one later. The caller's own memberships
+        // are read by the use case that answers them, past this denied scope.
+        if (context.GetEndpoint()?.Metadata.GetMetadata<MembershipNotRequiredEndpointAttribute>() is not null)
+        {
+            await _next(context);
             return;
         }
 
