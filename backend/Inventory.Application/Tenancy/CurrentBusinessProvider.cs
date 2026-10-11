@@ -13,9 +13,10 @@ namespace Inventory.Application.Tenancy;
 /// </list>
 ///
 /// Registered per request scope, and the resolution is memoised for the lifetime of that scope
-/// so several use cases in one request cannot disagree about the current business and do not
-/// each re-query the membership table. Nothing is cached across requests: a revoked membership
-/// takes effect on the next request.
+/// so several use cases in one request cannot disagree about the current business or the caller's
+/// role in it, and do not each re-query the membership table. Nothing is cached across requests:
+/// a revoked membership, and equally a changed role (issue #521), takes effect on the next
+/// request.
 /// </summary>
 public sealed class CurrentBusinessProvider : ICurrentBusinessProvider
 {
@@ -59,6 +60,17 @@ public sealed class CurrentBusinessProvider : ICurrentBusinessProvider
         var resolution = await ResolveAsync(cancellationToken).ConfigureAwait(false);
 
         return resolution.ResolvedBusinessId
+            ?? throw new BusinessAccessDeniedException(
+                resolution.DenialReason ?? BusinessAccessDenialReason.NotAuthenticated);
+    }
+
+    public async Task<BusinessRole> RequireRoleAsync(CancellationToken cancellationToken)
+    {
+        var resolution = await ResolveAsync(cancellationToken).ConfigureAwait(false);
+
+        // Reads the same memoised resolution as the business id, so the role and the business a
+        // request acts in always come from one membership lookup and cannot disagree.
+        return resolution.ResolvedRole
             ?? throw new BusinessAccessDeniedException(
                 resolution.DenialReason ?? BusinessAccessDenialReason.NotAuthenticated);
     }

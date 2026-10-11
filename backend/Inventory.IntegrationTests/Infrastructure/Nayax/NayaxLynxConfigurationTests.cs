@@ -54,18 +54,71 @@ public sealed class NayaxLynxConfigurationTests
         Assert.Contains("NayaxLynx:BaseUrl", failure.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Issue #520 deliberately reversed this: a missing global operator id used to be refused, and
+    /// now it must be accepted, because the operator id is each business's own and is resolved per
+    /// call from its stored connection. Requiring one here would make a business-specific setting a
+    /// condition for the whole API - including every non-Nayax feature - to start.
+    /// </summary>
     [Theory]
     [InlineData(null)]
     [InlineData("")]
     [InlineData("   ")]
-    public void A_missing_operator_id_is_refused(string? operatorId)
+    public void A_missing_operator_id_is_accepted_because_the_operator_id_is_per_business(string? operatorId)
     {
         var options = new NayaxLynxOptions { BaseUrl = "https://lynx.nayax.com", OperatorId = operatorId! };
 
-        var failure = Assert.Throws<InvalidOperationException>(
-            () => NayaxLynxConfiguration.ValidateNonSecretFields(options));
+        var exception = Record.Exception(() => NayaxLynxConfiguration.ValidateNonSecretFields(options));
 
-        Assert.Contains("NayaxLynx:OperatorId", failure.Message, StringComparison.Ordinal);
+        Assert.Null(exception);
+    }
+
+    /// <summary>
+    /// Nothing but the base URL is needed to start: an empty <c>NayaxLynx</c> section binds to the
+    /// defaults and validates, so a deployment that has already removed the global operator id and
+    /// token starts normally.
+    /// </summary>
+    [Fact]
+    public void The_default_options_with_no_credential_at_all_validate()
+    {
+        var exception = Record.Exception(
+            () => NayaxLynxConfiguration.ValidateNonSecretFields(new NayaxLynxOptions()));
+
+        Assert.Null(exception);
+    }
+
+    [Fact]
+    public void The_base_address_is_the_configured_host_plus_the_operational_api_path()
+    {
+        var options = new NayaxLynxOptions { BaseUrl = " https://qa-lynx.nayax.com/ " };
+
+        Assert.Equal(
+            new Uri("https://qa-lynx.nayax.com/operational/v1/"),
+            NayaxLynxConfiguration.BuildBaseAddress(options));
+    }
+
+    /// <summary>
+    /// The trailing slash is load-bearing: <see cref="Uri"/> resolution against a base address
+    /// without one drops its last segment, so every endpoint would silently lose <c>/v1</c>.
+    /// </summary>
+    [Fact]
+    public void A_relative_endpoint_resolves_under_the_operational_api_path()
+    {
+        var baseAddress = NayaxLynxConfiguration.BuildBaseAddress(
+            new NayaxLynxOptions { BaseUrl = "https://lynx.nayax.com" });
+
+        Assert.Equal(
+            "https://lynx.nayax.com/operational/v1/operators/123/products",
+            new Uri(baseAddress, "operators/123/products").ToString());
+    }
+
+    [Fact]
+    public void An_invalid_base_url_is_refused_before_a_base_address_is_built()
+    {
+        var failure = Assert.Throws<InvalidOperationException>(
+            () => NayaxLynxConfiguration.BuildBaseAddress(new NayaxLynxOptions { BaseUrl = "http://lynx.nayax.com" }));
+
+        Assert.Contains("NayaxLynx:BaseUrl", failure.Message, StringComparison.Ordinal);
     }
 
     /// <summary>

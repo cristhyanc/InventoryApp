@@ -19,8 +19,9 @@ namespace Inventory.Infrastructure.Models;
 /// secret-bearing columns carry <see cref="JsonIgnoreAttribute"/> as well, because a credential
 /// must not become part of an API response by someone adding a convenient projection later.
 ///
-/// Nothing reads this record yet: the Nayax client still uses the single configured
-/// operator/token until issue #520.
+/// Since issue #520 this record is what every Nayax call authenticates with: the client resolves
+/// the operator id and the decrypted token from the current business's own row, per call, and there
+/// is no global credential left to fall back to.
 /// </summary>
 public class BusinessNayaxConnection : IBusinessOwned
 {

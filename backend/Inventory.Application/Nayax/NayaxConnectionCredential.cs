@@ -12,9 +12,10 @@ namespace Inventory.Application.Nayax;
 /// instead, and the token-free <see cref="NayaxConnection"/> is what every read that does not have
 /// to authenticate to Nayax uses.
 ///
-/// Obtained only from <see cref="INayaxConnectionStore.FindCredentialAsync"/>, which decrypts the
-/// stored ciphertext for the current business. Never persist, serialise, cache or return this type
-/// across an HTTP boundary.
+/// Obtained only from <see cref="INayaxConnectionStore.FindCredentialAsync"/> or from the snapshot
+/// of <see cref="INayaxConnectionStore.FindForOperationAsync"/>, both of which decrypt the stored
+/// ciphertext for the current business. Never persist, serialise, cache or return this type across
+/// an HTTP boundary.
 /// </summary>
 public sealed class NayaxConnectionCredential
 {

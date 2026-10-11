@@ -1,3 +1,5 @@
+using Inventory.Domain.Nayax;
+
 namespace Inventory.Application.Nayax;
 
 /// <summary>
@@ -41,6 +43,38 @@ public interface INayaxConnectionStore
     Task<NayaxConnectionCredential?> FindCredentialAsync(CancellationToken cancellationToken);
 
     /// <summary>
+    /// The current business's status and credential as one consistent snapshot - both read from the
+    /// same row in the same statement - or <see langword="null"/> when the business has stored no
+    /// connection or none could be scoped to it.
+    ///
+    /// This is what an ordinary Nayax call resolves its credentials through, rather than
+    /// <see cref="FindAsync"/> followed by <see cref="FindCredentialAsync"/>: a credential save
+    /// landing between those two reads would hand the caller the previous status beside the new
+    /// token, and that pair decides both whether the call may run and how a Nayax <c>403</c> is
+    /// classified. One read cannot produce a pair that never existed.
+    ///
+    /// <paramref name="mayDecryptToken"/> is the caller's gate, evaluated against the status in that
+    /// same snapshot and *before* the token is decrypted: a refused status returns a snapshot whose
+    /// <see cref="NayaxConnectionSnapshot.Credential"/> is <see langword="null"/> and never touches
+    /// the ciphertext. Passing the gate into the read is what keeps "which statuses may be used" a
+    /// single Domain rule the caller owns while still resolving everything in one statement.
+    ///
+    /// Decryption fails closed exactly as in <see cref="FindCredentialAsync"/>.
+    /// </summary>
+    /// <param name="mayDecryptToken">
+    /// Whether the token may be decrypted for the status it is stored with -
+    /// <see cref="Domain.Nayax.NayaxConnectionStatusGate.AllowsOrdinaryOperations"/> for an ordinary
+    /// call.
+    /// </param>
+    /// <param name="cancellationToken">The request's cancellation token.</param>
+    /// <exception cref="Exception">
+    /// Decryption failed; see <see cref="FindCredentialAsync"/>.
+    /// </exception>
+    Task<NayaxConnectionSnapshot?> FindForOperationAsync(
+        Func<NayaxConnectionStatus, bool> mayDecryptToken,
+        CancellationToken cancellationToken);
+
+    /// <summary>
     /// Stores a new operator id and access token for the current business, creating the record at
     /// revision 1 when there is none.
     ///
@@ -48,6 +82,10 @@ public interface INayaxConnectionStore
     /// returns to <see cref="Domain.Nayax.NayaxConnectionStatus.PendingPermissions"/> and the
     /// last-tested instant is cleared, so a newly stored token can never inherit the previous
     /// token's test result.
+    ///
+    /// A save is atomic, and it takes part in a transaction already in progress on the same unit of
+    /// work rather than committing on its own, so a save and the status write that follows it can be
+    /// one change that either lands completely or not at all.
     /// </summary>
     /// <param name="operatorId">The Nayax operator id the token belongs to.</param>
     /// <param name="accessToken">The Lynx API access token to store encrypted.</param>

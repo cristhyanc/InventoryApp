@@ -23,8 +23,12 @@ public class CurrentBusinessProviderTests
         return actor!;
     }
 
-    private static ActorBusinessMembership Membership(int businessId, bool isActive = true, bool businessIsActive = true) =>
-        new(BusinessId.From(businessId), isActive, businessIsActive);
+    private static ActorBusinessMembership Membership(
+        int businessId,
+        bool isActive = true,
+        bool businessIsActive = true,
+        BusinessRole role = BusinessRole.Owner) =>
+        new(BusinessId.From(businessId), role, isActive, businessIsActive);
 
     [Fact]
     public async Task Identified_actor_with_one_active_membership_resolves_to_that_business()
@@ -105,6 +109,24 @@ public class CurrentBusinessProviderTests
         Assert.Equal(BusinessAccessDenialReason.MembershipAmbiguous, resolution.DenialReason);
     }
 
+    /// <summary>
+    /// The role reaches the Application layer from the membership the Domain rule resolved
+    /// (issue #521), with nothing in between able to choose or default it.
+    /// </summary>
+    [Theory]
+    [InlineData(BusinessRole.Operator)]
+    [InlineData(BusinessRole.Manager)]
+    [InlineData(BusinessRole.Owner)]
+    public async Task RequireRoleAsync_returns_the_role_the_resolved_membership_carries(BusinessRole role)
+    {
+        var provider = new CurrentBusinessProvider(
+            FakeAuthenticatedActorAccessor.Identified(Actor()),
+            new FakeBusinessMembershipStore(Membership(7, role: role)));
+
+        Assert.Equal(role, await provider.RequireRoleAsync(CancellationToken.None));
+        Assert.Equal(role, (await provider.ResolveAsync(CancellationToken.None)).ResolvedRole);
+    }
+
     [Theory]
     [InlineData(BusinessAccessDenialReason.NotAuthenticated)]
     [InlineData(BusinessAccessDenialReason.UnidentifiableActor)]
@@ -112,12 +134,36 @@ public class CurrentBusinessProviderTests
     [InlineData(BusinessAccessDenialReason.MembershipInactive)]
     [InlineData(BusinessAccessDenialReason.MembershipAmbiguous)]
     [InlineData(BusinessAccessDenialReason.BusinessInactive)]
+    [InlineData(BusinessAccessDenialReason.RoleUnrecognised)]
     public async Task RequireBusinessIdAsync_throws_for_every_denial_reason(BusinessAccessDenialReason reason)
     {
         var provider = CreateProviderDeniedWith(reason);
 
         var exception = await Assert.ThrowsAsync<BusinessAccessDeniedException>(
             () => provider.RequireBusinessIdAsync(CancellationToken.None));
+
+        Assert.Equal(reason, exception.Reason);
+    }
+
+    /// <summary>
+    /// Asking for the role must fail closed in exactly the cases asking for the business does -
+    /// including the unrecognised stored role, which must never come back as some default role a
+    /// capability check would then honour.
+    /// </summary>
+    [Theory]
+    [InlineData(BusinessAccessDenialReason.NotAuthenticated)]
+    [InlineData(BusinessAccessDenialReason.UnidentifiableActor)]
+    [InlineData(BusinessAccessDenialReason.MembershipMissing)]
+    [InlineData(BusinessAccessDenialReason.MembershipInactive)]
+    [InlineData(BusinessAccessDenialReason.MembershipAmbiguous)]
+    [InlineData(BusinessAccessDenialReason.BusinessInactive)]
+    [InlineData(BusinessAccessDenialReason.RoleUnrecognised)]
+    public async Task RequireRoleAsync_throws_for_every_denial_reason(BusinessAccessDenialReason reason)
+    {
+        var provider = CreateProviderDeniedWith(reason);
+
+        var exception = await Assert.ThrowsAsync<BusinessAccessDeniedException>(
+            () => provider.RequireRoleAsync(CancellationToken.None));
 
         Assert.Equal(reason, exception.Reason);
     }
@@ -177,6 +223,9 @@ public class CurrentBusinessProviderTests
         BusinessAccessDenialReason.BusinessInactive => new CurrentBusinessProvider(
             FakeAuthenticatedActorAccessor.Identified(Actor()),
             new FakeBusinessMembershipStore(Membership(7, businessIsActive: false))),
+        BusinessAccessDenialReason.RoleUnrecognised => new CurrentBusinessProvider(
+            FakeAuthenticatedActorAccessor.Identified(Actor()),
+            new FakeBusinessMembershipStore(Membership(7, role: (BusinessRole)0))),
         _ => throw new ArgumentOutOfRangeException(nameof(reason), reason, "Unhandled denial reason."),
     };
 }

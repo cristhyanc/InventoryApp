@@ -2,6 +2,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FULL_PROVIDER_EXECUTION_ENABLED } from './select-implementation-model.mjs';
+import { OUTCOMES, REVIEW_CONTEXT, VALIDATION_CONTEXTS } from './agent-outcomes.mjs';
 
 export const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -368,7 +369,7 @@ export function verifyValidationModeIsolation(workflowText, source) {
 // permission, not issues, regardless of the labelable being a pull request).
 function verifySafeDispatcher(text, source, pullRequestsPermission = 'read') {
   verifySafeDispatcherBase(text, source, pullRequestsPermission);
-  for (const required of ['EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}', 'agent/issue-*']) {
+  for (const required of ['EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}', `contents/${PR_GUARD_PATH}`]) {
     requireText(text, required, source);
   }
 }
@@ -378,8 +379,6 @@ function verifySafeDispatcherBase(text, source, pullRequestsPermission = 'read')
     'actions: write',
     `pull-requests: ${pullRequestsPermission}`,
     '--ref main',
-    'headRefOid',
-    '.github/workflows/',
   ]) {
     requireText(text, required, source);
   }
@@ -406,35 +405,68 @@ function normalizeGuardVariables(text) {
   return text.replaceAll('$head_sha', '$HEAD_SHA').replaceAll('$pr_number', '$PR_NUMBER');
 }
 
-// Implementation identity. Claude is the only implementer: an `agent/issue-*` branch authored by the
-// dedicated agent GitHub App bot (AGENT_AUTOMATION_APP_BOT_LOGIN). Copilot only checks and reviews, so
-// no guarded section may accept a `copilot/*` branch or read the retired Copilot author variable.
-const CLAUDE_PR_GUARDS = Object.freeze([
-  '[[ "$head_ref" == agent/issue-* ]]',
-  'AGENT_AUTOMATION_APP_BOT_LOGIN is not configured',
-  '[ "$author" = "$EXPECTED_AGENT_AUTHOR" ]',
-]);
-// Only the REST pull request endpoint returns the canonical author login reliably for bot
-// authors, so every guarded section reads `.user.login` over REST and compares it with the
-// expected implementer login.
-function verifyAgentPrGuards(text, source, staleMessage) {
+// Implementation identity and eligibility live in one trusted script, scripts/agent-pr-guard.mjs.
+// Claude is the only implementer: an `agent/issue-*` branch authored by the dedicated agent GitHub App
+// bot (AGENT_AUTOMATION_APP_BOT_LOGIN), read over REST because only that endpoint returns the
+// canonical author login reliably for bot authors. Copilot only checks and reviews, so the guard
+// accepts no `copilot/*` branch and reads no Copilot author variable.
+export const PR_GUARD_PATH = 'scripts/agent-pr-guard.mjs';
+export const PR_GUARD_SCRIPT_CONTRACT = Object.freeze({
+  required: [
+    "if (pr.state !== 'OPEN') refuse('closed'",
+    "if (pr.isDraft !== false) refuse('draft'",
+    "if (pr.baseRefName !== 'develop') refuse('base'",
+    "if (headRepository !== repository) refuse('fork'",
+    "export const AGENT_BRANCH_PREFIX = 'agent/issue-';",
+    "if (!head.startsWith(AGENT_BRANCH_PREFIX)) refuse('branch'",
+    'if (issue !== undefined && !head.startsWith(`${AGENT_BRANCH_PREFIX}${issue}-`)) refuse(\'branch\'',
+    "if (!expectedAuthor) refuse('config', 'AGENT_AUTOMATION_APP_BOT_LOGIN is not configured.')",
+    "if (author !== expectedAuthor) refuse('author'",
+    "if (current !== sha) refuse('stale'",
+    "export const WORKFLOW_DIR = '.github/workflows/';",
+    'if (files.some((file) => file.startsWith(WORKFLOW_DIR))) {',
+    "refuse('workflow-files'",
+    `export const REST_PULL_FIELDS = '{author: (.user.login // ""), head_sha: (.head.sha // ""), changed_files: .changed_files}';`,
+    "if (headSha !== sha) refuse('stale'",
+    "if (!Number.isInteger(changedFiles) || changedFiles < 0 || files.length !== changedFiles) {",
+    "return refuse('unavailable'",
+    "const GH_PATH = process.env.AGENT_PR_GUARD_GH_PATH || '/usr/bin/gh';",
+  ],
+  // Standalone and read-only: it is fetched from the trusted commit and must not write anything.
+  forbidden: ['copilot', 'COPILOT', '.author.login', "from './", "'--method'", 'POST', 'writeFile'],
+});
+
+export function verifyPrGuardScript(text, source = PR_GUARD_PATH) {
+  for (const required of PR_GUARD_SCRIPT_CONTRACT.required) requireText(text, required, source);
+  for (const forbidden of PR_GUARD_SCRIPT_CONTRACT.forbidden) forbidText(text, forbidden, source);
+  requireOrder(text, "refuse('closed'", "refuse('workflow-files'", source, 'the guard reports the first failed check in its documented order.');
+  // The REST head is read after the changed files, so a head that moved during the listing is stale.
+  requireOrder(text, "'--paginate', `repos/${repository}/pulls/${pr}/files", "'--jq', REST_PULL_FIELDS", source, 'the head must be re-read after the changed files are listed.');
+}
+
+// Every guarded section fetches the guard from its own workflow commit, never from a checkout, runs it
+// against the exact expected head, and keeps no inline copy of the checks it replaced.
+function verifyAgentPrGuards(text, source, { sha = '$HEAD_SHA', issue = false } = {}) {
   for (const required of [
-    '--json state,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner',
-    '[ "$state" = "OPEN" ]',
-    '[ "$is_draft" = "false" ]',
-    '[ "$base_ref" = "develop" ]',
-    '[ "$head_repo" = "$GITHUB_REPOSITORY" ]',
-    'author="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER"',
-    "--jq '.user.login // empty'",
-    '[ "$current_sha" = "$HEAD_SHA" ]',
-    staleMessage,
-    "grep -Eq '^\\.github/workflows/'",
+    'EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}',
+    'guard="$RUNNER_TEMP/agent-pr-guard.mjs"',
+    `gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/${PR_GUARD_PATH}?ref=$GITHUB_WORKFLOW_SHA" > "$guard"`,
+    `node "$guard" check "$PR_NUMBER" "${sha}"${issue ? ' --issue "$ISSUE_NUMBER"' : ''} 2>"$RUNNER_TEMP/agent-pr-guard.txt"`,
+    'tail -n 1 "$RUNNER_TEMP/agent-pr-guard.txt"',
   ]) {
     requireText(text, required, source);
   }
-  for (const required of CLAUDE_PR_GUARDS) requireText(text, required, source);
+  requireOrder(text, '> "$guard"', 'node "$guard" check', source, 'the guard must be fetched from the trusted commit before it runs.');
 
   for (const forbidden of [
+    `node ${PR_GUARD_PATH}`,
+    `./${PR_GUARD_PATH}`,
+    '--json state,isDraft',
+    '[ "$state" = "OPEN" ]',
+    '[ "$is_draft" = "false" ]',
+    '[ "$author" = ',
+    '.user.login',
+    "grep -Eq '^\\.github/workflows/'",
     '.author.login',
     'headRepositoryOwner,author',
     'copilot/*',
@@ -461,6 +493,7 @@ export const RETIRED_COPILOT_IMPLEMENTATION_PATHS = Object.freeze([
   '.github/workflows/copilot-setup-steps.yml',
 ]);
 export const reviewRequestPath = '.github/workflows/agent-review-request.yml';
+export const reviewTransportCheckPath = '.github/workflows/agent-review-transport-check.yml';
 
 // ---------------------------------------------------------------------------------------
 // Documentation-impact gate. The templates collect the decision, the preflight and validation
@@ -739,7 +772,7 @@ export const REVIEW_PROMPT_JUDGMENT_CONTRACT = Object.freeze([
 export const REVIEW_JOB_CONTRACT = Object.freeze({
   required: [
     'id: review_agent',
-    'structured_output: ${{ steps.review_agent.outputs.structured_output }}',
+    'REVIEW_OUTPUT: ${{ steps.review_agent.outputs.structured_output }}',
     "--json-schema '",
     '"reviewed_head_sha":{"type":"string","pattern":"^[0-9a-f]{40}$"}',
     '"enum":["met","not met","not verified"]',
@@ -759,18 +792,20 @@ export const REVIEW_PUBLISH_CONTRACT = Object.freeze({
     'pull-requests: write',
     'statuses: write',
     'VERDICT_CONTEXT: agent-review-verdict',
-    '[ "$REVIEW_RESULT" = "success" ] || suppress',
-    '[ "$reviewed_sha" = "$HEAD_SHA" ] || suppress',
+    'cancelled) not_published superseded ',
+    '*) not_published provider-failed "the $REVIEWER review job ended with',
+    '[ "$reviewed_sha" = "$HEAD_SHA" ] || not_published provider-failed',
     'all(.criteria[]; .status == "met")',
     '(.blockers | length) > 0',
-    'Refusing stale review publication',
-    'any(.labels[]?; .name == "agent-review")',
+    'stale) not_published superseded "$refusal" ;;',
+    'closed|draft|base|fork|branch|config|author|workflow-files) not_published not-eligible "$refusal" ;;',
+    `any(.labels[]; . == "agent-review")' <<<"$pr_guard"`,
     'select(.context == "agent-validation")',
-    '[ "$validation_state" = "success" ] || suppress',
+    '[ "$validation_state" = "success" ] || not_published not-eligible',
     "grep -c '^VERDICT:'",
     'commit_id: $sha, event: "COMMENT"',
     'repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews',
-    'set_verdict_status error',
+    'record_outcome() {',
     'if: failure()',
   ],
   forbidden: [
@@ -797,15 +832,16 @@ export const HEAD_UPDATE_CONTRACT = Object.freeze({
     'cancel-in-progress: true',
     "contains(github.event.pull_request.labels.*.name, 'agent-review')",
     'statuses: read',
-    'Refusing stale scheduled validation',
-    'any(.labels[]?; .name == "agent-review")',
+    'closed|draft|base|fork|branch|author|stale|workflow-files) skip "$refusal" ;;',
+    '*) fail "Scheduled validation refused: $refusal" ;;',
+    `any(.labels[]; . == "agent-review")' <<<"$pr_guard"`,
     'skip "the agent-review label is absent."',
     'select(.context == "agent-validation")',
     '[ -z "$existing_validation" ]',
     'gh workflow run validate.yml',
     '-f dispatch_review=true',
   ],
-  forbidden: ['statuses: write', 'contents:', 'gh pr review', 'agent-review.yml', 'git push', 'ref: ${{ github.event.pull_request', 'pull-requests: write', 'issues: write', 'gh pr edit', "'copilot/'", 'agent-architecture-fix'],
+  forbidden: ['statuses: write', 'contents: write', 'actions/checkout', 'gh pr review', 'agent-review.yml', 'git push', 'ref: ${{ github.event.pull_request', 'pull-requests: write', 'issues: write', 'gh pr edit', "'copilot/'", 'agent-architecture-fix'],
 });
 
 /** Manual re-review: a human's agent-review label dispatches agent-review.yml from main, nothing else. */
@@ -816,14 +852,15 @@ function verifyReviewRequestDispatcher(workflow) {
   requireText(workflow, 'permissions: {}', reviewRequestPath);
   const job = section(workflow, '  dispatch-review:\n', null, `${reviewRequestPath} dispatcher`);
   verifySafeDispatcher(job, `${reviewRequestPath} dispatcher`);
-  verifyAgentPrGuards(job, `${reviewRequestPath} dispatcher`, 'Refusing stale review request');
+  verifyAgentPrGuards(job, `${reviewRequestPath} dispatcher`);
+  requireText(job, 'Review request refused:', `${reviewRequestPath} dispatcher`);
   for (const required of [
     "github.event.label.name == 'agent-review'", 'statuses: read',
-    'any(.labels[]?; .name == "agent-review")', 'select(.context == "agent-validation")', '[ "$validation_state" = "success" ]',
+    `any(.labels[]; . == "agent-review")' <<<"$pr_guard"`, 'select(.context == "agent-validation")', '[ "$validation_state" = "success" ]',
     'A manual agent-review request requires a successful latest agent-validation status on the exact head SHA.',
     'gh workflow run agent-review.yml', '-f pr_number="$PR_NUMBER"', '-f head_sha="$HEAD_SHA"',
   ]) requireText(job, required, `${reviewRequestPath} dispatcher`);
-  for (const forbidden of ['secrets.COPILOT', 'CLAUDE_CODE_OAUTH_TOKEN', 'AGENT_AUTOMATION_APP_PRIVATE_KEY', 'issues: write', 'contents:', 'statuses: write', 'gh pr edit', 'gh issue edit', 'validate.yml', MERGE_VALIDATION_STATUS]) {
+  for (const forbidden of ['secrets.COPILOT', 'CLAUDE_CODE_OAUTH_TOKEN', 'AGENT_AUTOMATION_APP_PRIVATE_KEY', 'issues: write', 'contents: write', 'actions/checkout', 'statuses: write', 'gh pr edit', 'gh issue edit', 'validate.yml', MERGE_VALIDATION_STATUS]) {
     forbidText(job, forbidden, `${reviewRequestPath} dispatcher`);
   }
   requireOrder(job, '[ "$validation_state" = "success" ]', 'gh workflow run agent-review.yml', `${reviewRequestPath} dispatcher`, 'the exact head must have passed validation before a review is dispatched.');
@@ -854,7 +891,7 @@ function verifyReviewRoutes(review) {
   for (const required of [
     'cross-claude:claude:copilot)',
     'full-claude:claude:claude)', 'Same-provider review (full-claude fallback): not independent',
-    '*) suppress "unknown review route', 'Review type: \\($review_type)',
+    '*) not_published not-eligible "unknown review route', String.raw`Review type: \($review_type)`,
   ]) requireText(publish, required, 'agent-review.yml publish job');
   for (const retired of ['cross-copilot', 'full-copilot']) {
     forbidText(context, retired, 'agent-review.yml context');
@@ -875,7 +912,7 @@ function verifyCopilotReviewJob(review) {
     "--deny-tool='write' \\\n            -p \"$prompt\" > \"$work/copilot-output.md\"", '--no-ask-user',
     '[ -z "$(git status --porcelain)" ]', '[ "$(git rev-parse HEAD)" = "$HEAD_SHA" ]',
     'BEGIN_REVIEW_JSON', 'END_REVIEW_JSON',
-    'structured_output: ${{ steps.copilot_review.outputs.structured_output }}',
+    'jq -c . "$work/review.json" > "$RUNNER_TEMP/review-raw.json"',
   ]) requireText(job, required, 'agent-review.yml Copilot review job');
   // The enforced contract lives in validate_copilot_output; the diagnostics that repeat it do not count.
   const validator = section(job, 'validate_copilot_output() {\n', '\n          }\n', 'agent-review.yml Copilot review contract');
@@ -896,6 +933,153 @@ function verifyCopilotReviewJob(review) {
     'npm install', '@github/copilot@', '--allow-all', "--allow-tool='write'", "--allow-tool='shell'",
     "shell(gh api", "shell(gh pr comment", "shell(gh pr review", "shell(gh pr edit", "shell(gh issue edit", "shell(git push", "shell(git commit",
   ]) forbidText(job, forbidden, 'agent-review.yml Copilot review job');
+}
+
+export const REVIEW_TRANSPORT_CONTRACT = Object.freeze({
+  reviewerOutputs: [
+    'artifact_id: ${{ steps.upload.outputs.artifact-id }}',
+    'artifact_digest: ${{ steps.package.outputs.digest }}',
+  ],
+  packageRequired: [
+    '      - name: Package review result\n        id: package\n',
+    '"repos/$GITHUB_REPOSITORY/contents/scripts/agent-review-transport.mjs?ref=$GITHUB_WORKFLOW_SHA"',
+    'node "$transport" package "$RUNNER_TEMP/review-raw.json" "$result_dir/review-envelope.json"',
+    'rm -f "$RUNNER_TEMP/review-raw.json"',
+    '      - name: Upload review result\n        id: upload\n        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2\n',
+    'name: ${{ steps.package.outputs.name }}',
+    'path: ${{ runner.temp }}/agent-review-result/review-envelope.json',
+    'if-no-files-found: error',
+    'retention-days: 1',
+  ],
+  publishRequired: [
+    '    permissions:\n      pull-requests: write\n      statuses: write\n      contents: read\n      issues: read\n      actions: read\n',
+    '"repos/$GITHUB_REPOSITORY/contents/scripts/agent-review-transport.mjs?ref=$GITHUB_WORKFLOW_SHA"',
+    'node "$transport" fetch "$work/review.json"',
+    '              contract|wrong-sha) not_published provider-failed "the review output was rejected: $transport_error" ;;\n              *) not_published publication-failed "the review result could not be delivered: $transport_error" ;;\n',
+  ],
+  publishForbidden: ['REVIEW_OUTPUT', 'structured_output', 'actions/download-artifact', 'scripts/agent-review-transport.mjs "'],
+});
+
+/**
+ * The review travels from each read-only reviewer job to the publisher as a run-bound artifact, never
+ * as a job output: GitHub withholds a job output containing any masked value, which once silently
+ * lost a finished review (PR #558). Both sides run the transport script from the trusted workflow
+ * commit, never from the pull request head.
+ */
+function verifyReviewTransport(review) {
+  // Each reviewer job hands its own credentials to the package step for exact-value redaction.
+  const heldCredentials = {
+    review: ['REVIEW_REDACT_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}', 'REVIEW_REDACT_PROVIDER_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}'],
+    'copilot-review': ['REVIEW_REDACT_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}', 'REVIEW_REDACT_PROVIDER_TOKEN: ${{ secrets.COPILOT_CLI_TOKEN }}'],
+  };
+  for (const [name, start, end] of [['review', '  review:\n', '  copilot-review:\n'], ['copilot-review', '  copilot-review:\n', '  publish:\n']]) {
+    const job = section(review, start, end, `agent-review.yml ${name} job`);
+    const packageStep = section(job, '      - name: Package review result\n', '      - name: Upload review result\n', `agent-review.yml ${name} package step`);
+    for (const required of heldCredentials[name]) requireText(packageStep, required, `agent-review.yml ${name} review transport`);
+    const outputs = section(job, '    outputs:\n', '\n    steps:\n', `agent-review.yml ${name} outputs`);
+    for (const required of REVIEW_TRANSPORT_CONTRACT.reviewerOutputs) requireText(outputs, required, `agent-review.yml ${name} outputs`);
+    forbidText(outputs, 'structured_output', `agent-review.yml ${name} outputs`);
+    for (const required of REVIEW_TRANSPORT_CONTRACT.packageRequired) requireText(job, required, `agent-review.yml ${name} review transport`);
+    forbidText(job, 'scripts/agent-review-transport.mjs package', `agent-review.yml ${name} review transport`);
+    const permissions = section(job, '    permissions:\n', '\n    outputs:\n', `agent-review.yml ${name} permissions`);
+    forbidText(permissions, 'write', `agent-review.yml ${name} permissions`);
+  }
+  const publish = section(review, '  publish:\n', null, 'agent-review.yml publish job');
+  for (const required of REVIEW_TRANSPORT_CONTRACT.publishRequired) requireText(publish, required, 'agent-review.yml publish transport');
+  for (const forbidden of REVIEW_TRANSPORT_CONTRACT.publishForbidden) forbidText(publish, forbidden, 'agent-review.yml publish transport');
+  requireOrder(publish, 'node "$transport" fetch', 'repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews', 'agent-review.yml publish transport', 'the review must be received and verified before anything is published.');
+}
+
+export const ARCHITECTURE_TRANSPORT_CONTRACT = Object.freeze({
+  checkerOutputs: [
+    'verdict: ${{ steps.check.outputs.verdict }}',
+    'findings_artifact_id: ${{ steps.upload.outputs.artifact-id }}',
+    'findings_digest: ${{ steps.package.outputs.digest }}',
+  ],
+  packageRequired: [
+    '      - name: Package architecture findings\n        id: package\n',
+    'TRUSTED_SHA: ${{ github.sha }}',
+    'git show "$TRUSTED_SHA:scripts/agent-review-transport.mjs" > "$transport"',
+    'node "$transport" package-findings "$RUNNER_TEMP/architecture-raw.md" "$result_dir/findings-envelope.json"',
+    'rm -f "$RUNNER_TEMP/architecture-raw.md"',
+    '      - name: Upload architecture findings\n        id: upload\n        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2\n',
+    'path: ${{ runner.temp }}/agent-architecture-findings/findings-envelope.json',
+    'if-no-files-found: error',
+    'retention-days: 1',
+  ],
+  consumerRequired: [
+    "FINDINGS_ARTIFACT_ID: ${{ needs.context.outputs.checker == 'claude' && needs.claude-check.outputs.findings_artifact_id || needs.copilot-check.outputs.findings_artifact_id }}",
+    "FINDINGS_ARTIFACT_DIGEST: ${{ needs.context.outputs.checker == 'claude' && needs.claude-check.outputs.findings_digest || needs.copilot-check.outputs.findings_digest }}",
+    'AGENT_MODE: ${{ needs.context.outputs.agent_mode }}',
+    'IMPLEMENTER: claude',
+  ],
+});
+
+/**
+ * The architecture checker's findings travel to the fix and finalize jobs as a run-bound artifact,
+ * never as a job output, for the same reason as the review (PR #558). Every side runs the transport
+ * script from the trusted workflow commit, never from the pull request head.
+ */
+function verifyArchitectureTransport(architecture) {
+  // The credentials each checker gives its model, removed from the findings by exact value. The Copilot
+  // check never exposes the job token to the CLI (and verifyReadOnlyCopilotCheck keeps it out of the job).
+  const heldCredentials = {
+    'copilot-check': ['REVIEW_REDACT_PROVIDER_TOKEN: ${{ secrets.COPILOT_CLI_TOKEN }}', 'CHECKER: copilot'],
+    'claude-check': ['REVIEW_REDACT_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}', 'REVIEW_REDACT_PROVIDER_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}', 'CHECKER: claude'],
+  };
+  for (const [name, start, end] of [['copilot-check', '  copilot-check:\n', '  claude-check:\n'], ['claude-check', '  claude-check:\n', '  sonar:\n']]) {
+    const source = `agent-architecture.yml ${name}`;
+    const job = section(architecture, start, end, source);
+    const outputs = section(job, '    outputs:\n', '\n    steps:\n', `${source} outputs`);
+    for (const required of ARCHITECTURE_TRANSPORT_CONTRACT.checkerOutputs) requireText(outputs, required, `${source} outputs`);
+    for (const forbidden of ['findings: ', 'steps.check.outputs.findings']) forbidText(outputs, forbidden, `${source} outputs`);
+    forbidText(job, 'findings<<', `${source} findings transport`);
+    for (const required of ARCHITECTURE_TRANSPORT_CONTRACT.packageRequired) requireText(job, required, `${source} findings transport`);
+    const packageStep = section(job, '      - name: Package architecture findings\n', '      - name: Upload architecture findings\n', `${source} package step`);
+    for (const required of heldCredentials[name]) requireText(packageStep, required, `${source} findings transport`);
+    forbidText(job, 'node scripts/agent-review-transport.mjs', `${source} findings transport`);
+  }
+
+  const fix = section(architecture, '  architecture:\n', '  finalize:\n', 'agent-architecture.yml architecture job');
+  const store = section(fix, '      - name: Store architecture findings and SonarCloud issues for the fix agent\n', '      - name: Set up .NET\n', 'agent-architecture.yml store findings');
+  for (const required of [...ARCHITECTURE_TRANSPORT_CONTRACT.consumerRequired, 'TRUSTED_SHA: ${{ github.sha }}', 'git show "$TRUSTED_SHA:scripts/agent-review-transport.mjs" > "$transport"']) {
+    requireText(store, required, 'agent-architecture.yml store findings');
+  }
+  const finalize = section(architecture, '  finalize:\n', null, 'agent-architecture.yml finalize');
+  for (const required of [
+    ...ARCHITECTURE_TRANSPORT_CONTRACT.consumerRequired,
+    '"repos/$GITHUB_REPOSITORY/contents/scripts/agent-review-transport.mjs?ref=$GITHUB_WORKFLOW_SHA"',
+    'node "$transport" fetch-findings "$check_findings_file"',
+  ]) requireText(finalize, required, 'agent-architecture.yml finalize findings transport');
+  requireOrder(finalize, 'node "$transport" fetch-findings', 'gh pr comment "$PR_NUMBER"', 'agent-architecture.yml finalize findings transport', 'the findings must be received and verified before anything is recorded.');
+  requireOrder(finalize, 'node "$transport" fetch-findings', 'gh workflow run validate.yml', 'agent-architecture.yml finalize findings transport', 'validation must not be dispatched from findings that were not verified.');
+  for (const forbidden of ['CHECK_FINDINGS', 'outputs.findings ', 'outputs.findings}']) forbidText(architecture, forbidden, 'agent-architecture.yml findings transport');
+}
+
+/**
+ * The live hand-off check exercises both transports on real runners with a fixture only: read-only
+ * permissions, no repository secret, no model, and the same pinned upload action and retention.
+ */
+function verifyReviewTransportCheck(check) {
+  const source = reviewTransportCheckPath;
+  for (const required of [
+    'permissions: {}',
+    '      - scripts/agent-review-transport.mjs\n',
+    '      - .github/workflows/agent-review.yml\n',
+    'node scripts/agent-review-transport.mjs package',
+    'node scripts/agent-review-transport.mjs fetch',
+    '      - .github/workflows/agent-architecture.yml\n',
+    'node scripts/agent-review-transport.mjs package-findings',
+    'node scripts/agent-review-transport.mjs fetch-findings',
+    'uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2',
+    'retention-days: 1',
+    'persist-credentials: false',
+  ]) requireText(check, required, source);
+  for (const forbidden of ['secrets.', ': write', 'pull_request_target', 'claude-code-action', 'copilot -', 'gh pr ', 'gh workflow']) forbidText(check, forbidden, source);
+  // Every fixture artifact it uploads expires after one day.
+  for (const [, days] of check.matchAll(/retention-days: (\S+)/g)) {
+    if (days !== '1') throw new Error(`${source}: every uploaded artifact must use retention-days: 1, not ${days}`);
+  }
 }
 
 /** Enforces the review judgment, guarded publication and updated-head scheduling contract. */
@@ -931,14 +1115,15 @@ export function verifyReviewPublicationAndScheduling(read = readRepositoryFile) 
   for (const forbidden of REVIEW_PUBLISH_CONTRACT.forbidden) {
     forbidText(publish, forbidden, 'agent-review.yml publish job');
   }
-  verifyAgentPrGuards(publish, 'agent-review.yml publish job', 'Refusing stale review publication');
+  verifyAgentPrGuards(publish, 'agent-review.yml publish job');
   // The publisher re-derives the implementer and provider mode from the live pull request and takes
   // the review only from the job of the reviewer the verified route selected.
   for (const required of [
     'IMPLEMENTER: ${{ needs.context.outputs.implementer }}',
     '[ "$live_implementer" = "$IMPLEMENTER" ]',
     "REVIEW_RESULT: ${{ needs.context.outputs.reviewer == 'copilot' && needs.copilot-review.result || needs.review.result }}",
-    "REVIEW_OUTPUT: ${{ needs.context.outputs.reviewer == 'copilot' && needs.copilot-review.outputs.structured_output || needs.review.outputs.structured_output }}",
+    "REVIEW_ARTIFACT_ID: ${{ needs.context.outputs.reviewer == 'copilot' && needs.copilot-review.outputs.artifact_id || needs.review.outputs.artifact_id }}",
+    "REVIEW_ARTIFACT_DIGEST: ${{ needs.context.outputs.reviewer == 'copilot' && needs.copilot-review.outputs.artifact_digest || needs.review.outputs.artifact_digest }}",
     'REVIEWER: ${{ needs.context.outputs.reviewer }}',
     '      - review\n      - copilot-review\n',
   ]) requireText(publish, required, 'agent-review.yml publish job');
@@ -948,7 +1133,10 @@ export function verifyReviewPublicationAndScheduling(read = readRepositoryFile) 
   }
   requireOrder(publish, '--input "$work/payload-fallback.json" >/dev/null\n          fi\n', 'echo "review_posted=true" >> "$GITHUB_OUTPUT"', 'agent-review.yml publish job', 'publication must be recorded only after the review was posted.');
   verifyCopilotReviewJob(review);
-  requireOrder(publish, '[ "$current_sha" = "$HEAD_SHA" ]', 'repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews', 'agent-review.yml publish job', 'the current head must be re-verified before the review is published.');
+  verifyReviewTransport(review);
+  verifyReviewTransportCheck(read(reviewTransportCheckPath));
+  verifyPrGuardScript(read(PR_GUARD_PATH));
+  requireOrder(publish, 'node "$guard" check "$PR_NUMBER" "$HEAD_SHA"', 'repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews', 'agent-review.yml publish job', 'the current head must be re-verified before the review is published.');
   requireOrder(publish, '[ "$validation_state" = "success" ]', 'repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews', 'agent-review.yml publish job', 'validation must be re-verified before the review is published.');
 
   const headUpdate = read(headUpdatePath);
@@ -968,7 +1156,7 @@ export function verifyReviewPublicationAndScheduling(read = readRepositoryFile) 
   }
   const dispatcher = section(headUpdate, '  dispatch-validation:\n', null, headUpdatePath);
   verifySafeDispatcher(dispatcher, `${headUpdatePath} dispatcher`);
-  verifyAgentPrGuards(dispatcher, `${headUpdatePath} dispatcher`, 'Refusing stale scheduled validation');
+  verifyAgentPrGuards(dispatcher, `${headUpdatePath} dispatcher`);
   requireOrder(dispatcher, '[ -z "$existing_validation" ]', 'gh workflow run validate.yml', `${headUpdatePath} dispatcher`, 'the duplicate check must run before dispatch.');
 
   const repair = read(repairPath);
@@ -1159,11 +1347,11 @@ function verifyImplementationJob(implementationWorkflow) {
 function verifyArchitectureDispatcher(implementationWorkflow) {
   const implementationDispatcher = section(implementationWorkflow, '  dispatch-architecture:\n', null, 'agent-implement.yml architecture dispatcher');
   verifySafeDispatcher(implementationDispatcher, 'agent-implement.yml architecture dispatcher');
-  verifyAgentPrGuards(implementationDispatcher, 'agent-implement.yml architecture dispatcher', 'Refusing stale architecture dispatch');
+  verifyAgentPrGuards(implementationDispatcher, 'agent-implement.yml architecture dispatcher', { issue: true });
   for (const required of [
     'issues: write',
     'agent-architecture.yml', '-f issue_number="$ISSUE_NUMBER"', '-f pr_number="$PR_NUMBER"', '-f head_sha="$HEAD_SHA"',
-    '[[ "$head_ref" == agent/issue-"$ISSUE_NUMBER"-* ]]',
+    'Architecture dispatch refused:',
     'RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}',
     'trap block_undispatched EXIT', 'dispatched=true',
     '.state == "OPEN" and any(.labels[]?; .name == "agent-working")',
@@ -1190,8 +1378,8 @@ function verifyArchitectureContext(architectureWorkflow) {
   requireText(context, 'EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}', 'agent-architecture.yml context');
   forbidText(context, 'actions/checkout', 'agent-architecture.yml context');
   forbidText(context, 'CLAUDE_CODE_OAUTH_TOKEN', 'agent-architecture.yml context');
-  verifyAgentPrGuards(context, 'agent-architecture.yml context', 'Refusing stale architecture run');
-  requireText(context, '[[ "$head_ref" == agent/issue-"$ISSUE_NUMBER"-* ]]', 'agent-architecture.yml context');
+  verifyAgentPrGuards(context, 'agent-architecture.yml context', { issue: true });
+  requireText(context, 'head_ref="$(jq -r \'.head_ref\' <<<"$pr_guard")"', 'agent-architecture.yml context');
   requireText(context, 'any(.labels[]?; .name == "agent-working")', 'agent-architecture.yml context');
   // The verified route names exactly one checker; any other mode fails closed.
   for (const required of [
@@ -1261,7 +1449,7 @@ function verifyArchitectureClaudeCheck(architectureWorkflow) {
   for (const required of [
     'This is a same-provider check, not an independent one', 'claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}',
     '[ -z "$(git status --porcelain)" ]', '[ "$(git rev-parse HEAD)" = "$HEAD_SHA" ]', '[ "$checked_sha" = "$HEAD_SHA" ]',
-    'verdict: ${{ steps.check.outputs.verdict }}', 'findings: ${{ steps.check.outputs.findings }}',
+    'verdict: ${{ steps.check.outputs.verdict }}',
   ]) requireText(claudeCheck, required, source);
 }
 
@@ -1288,7 +1476,7 @@ function verifyArchitectureFixJob(architectureWorkflow) {
     "if: ${{ !cancelled() && needs.context.result == 'success' && ((needs.context.outputs.checker == 'copilot' && needs.copilot-check.result == 'success') || (needs.context.outputs.checker == 'claude' && needs.claude-check.result == 'success')) && ((needs.context.outputs.checker == 'copilot' && needs.copilot-check.outputs.verdict == 'findings') || (needs.context.outputs.checker == 'claude' && needs.claude-check.outputs.verdict == 'findings') || fromJSON(needs.sonar.outputs.count || '0') > 0) }}",
     'agent-architecture.yml architecture job',
   );
-  requireText(architectureJob, "CHECK_FINDINGS: ${{ needs.context.outputs.checker == 'claude' && needs.claude-check.outputs.findings || needs.copilot-check.outputs.findings }}", 'agent-architecture.yml architecture job');
+  requireText(architectureJob, 'node "$transport" fetch-findings .git/architecture-findings.md', 'agent-architecture.yml architecture job');
   requireText(architectureJob, '> .git/architecture-findings.md', 'agent-architecture.yml architecture job');
   requireText(architectureJob, 'SONAR_ISSUES: ${{ needs.sonar.outputs.issues }}', 'agent-architecture.yml architecture job');
   requireText(architectureJob, '> .git/sonar-new-issues.md', 'agent-architecture.yml architecture job');
@@ -1301,6 +1489,7 @@ function verifyArchitectureFixJob(architectureWorkflow) {
   requireText(architectureJob, '      pull-requests: write', 'agent-architecture.yml architecture permissions');
   requireText(architectureJob, '      issues: read', 'agent-architecture.yml architecture permissions');
   forbidText(architectureJob, 'actions: write', 'agent-architecture.yml architecture permissions');
+  requireText(architectureJob, '      actions: read\n', 'agent-architecture.yml architecture permissions');
   requireText(architectureJob, 'ref: ${{ needs.context.outputs.head_sha }}', 'agent-architecture.yml exact checkout');
   requireText(architectureJob, 'persist-credentials: false', 'agent-architecture.yml exact checkout');
   requireText(architectureJob, 'git checkout -b "$BRANCH" "$HEAD_SHA"', 'agent-architecture.yml local feature branch');
@@ -1332,6 +1521,8 @@ function verifyArchitectureFixJob(architectureWorkflow) {
 
 function verifyArchitectureFinalizer(architectureWorkflow) {
   const finalize = section(architectureWorkflow, '  finalize:\n', null, 'agent-architecture.yml finalize');
+  verifyAgentPrGuards(finalize, 'agent-architecture.yml finalize', { sha: '$FINAL_SHA', issue: true });
+  requireOrder(finalize, 'node "$guard" check', 'gh workflow run validate.yml', 'agent-architecture.yml finalize', 'the final head must be re-verified before validation is dispatched.');
   for (const required of [
     "    if: always()\n", '      - context\n      - copilot-check\n      - claude-check\n      - sonar\n      - architecture\n',
     'SONAR_COUNT: ${{ needs.sonar.outputs.count }}', '[[ "$sonar_count" =~ ^[0-9]+$ ]] || sonar_count=0', 'actions: write', 'pull-requests: write', 'issues: write', 'statuses: read',
@@ -1345,9 +1536,8 @@ function verifyArchitectureFinalizer(architectureWorkflow) {
     "CHECK_VERDICT: ${{ needs.context.outputs.checker == 'claude' && needs.claude-check.outputs.verdict || needs.copilot-check.outputs.verdict }}", '[ "$ARCHITECTURE_JOB_RESULT" = "skipped" ]',
     '[ "$checker_label" != "Unknown" ] || fail',
     'FINAL_SHA="$EXPECTED_START_SHA"', 'FIX_SHA: ${{ needs.architecture.outputs.head_sha }}', 'FINAL_SHA="$FIX_SHA"',
-    '[ "$current_sha" = "$FINAL_SHA" ]',
-    '[[ "$head_ref" == agent/issue-"$ISSUE_NUMBER"-* ]]', '.user.login // empty',
-    'any(.labels[]?; .name == "agent-working")', "grep -Eq '^\\.github/workflows/'",
+    'Architecture finalization refused:',
+    'any(.labels[]?; .name == "agent-working")',
     'gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label agent-review',
     'gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --remove-label agent-working --add-label agent-review',
     'gh workflow run validate.yml', '--ref main', '-f head_sha="$FINAL_SHA"', '-f dispatch_review=true',
@@ -1388,7 +1578,7 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
     'dispatch_review:',
     'inputs.pr_number',
     'agent-validation',
-    'Refusing stale validation',
+    'Validation refused:',
     'persist-credentials: false',
     VALIDATION_CONCURRENCY_GROUP,
     'cancel-in-progress: true',
@@ -1412,7 +1602,7 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
   requireText(validationContext, 'echo "status_context=$STATUS_CONTEXT"', 'validate.yml context job');
   forbidText(validationContext, 'actions/checkout', 'validate.yml context job');
   forbidText(validationContext, 'CLAUDE_CODE_OAUTH_TOKEN', 'validate.yml context job');
-  verifyAgentPrGuards(normalizeGuardVariables(validationContext), 'validate.yml dispatched context', 'Refusing stale validation');
+  verifyAgentPrGuards(normalizeGuardVariables(validationContext), 'validate.yml dispatched context');
 
   // The branch anchors carry a leading newline so the inner, deeper-indented if/else/fi
   // inside the pull_request branch cannot be mistaken for the outer one.
@@ -1449,7 +1639,8 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
   const reviewDispatcher = section(validate, '  dispatch-review:\n', null, validatePath);
   // Read-only apart from dispatching: the dispatcher changes no labels.
   verifySafeDispatcher(reviewDispatcher, 'validate.yml review dispatcher');
-  verifyAgentPrGuards(reviewDispatcher, 'validate.yml review dispatcher', 'Refusing stale review dispatch');
+  verifyAgentPrGuards(reviewDispatcher, 'validate.yml review dispatcher');
+  requireText(reviewDispatcher, 'Review dispatch refused:', 'validate.yml review dispatcher');
   // agent-review.yml picks the reviewer from the verified route, so the dispatcher routes every
   // implementation there and holds no Copilot credential.
   for (const required of [
@@ -1463,7 +1654,7 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
   requireText(reviewDispatcher, 'inputs.dispatch_review == true', 'validate.yml review dispatcher');
   requireText(reviewDispatcher, 'needs.report-status.result', 'validate.yml review dispatcher');
   requireText(reviewDispatcher, 'agent-review', 'validate.yml review dispatcher');
-  requireText(reviewDispatcher, 'any(.labels[]?; .name == "agent-review")', 'validate.yml review dispatcher');
+  requireText(reviewDispatcher, `any(.labels[]; . == "agent-review")' <<<"$pr_guard"`, 'validate.yml review dispatcher');
 
   verifyValidationModeIsolation(validate, validatePath);
 
@@ -1497,10 +1688,11 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
 
     const dispatcher = section(workflow, '  dispatch-validation:\n', null, path);
     verifySafeDispatcher(dispatcher, `${path} validation dispatcher`);
-    verifyAgentPrGuards(dispatcher, `${path} validation dispatcher`, 'Refusing stale validation dispatch');
+    verifyAgentPrGuards(dispatcher, `${path} validation dispatcher`);
+    requireText(dispatcher, 'Validation dispatch refused:', `${path} validation dispatcher`);
     requireText(dispatcher, 'validate.yml', `${path} validation dispatcher`);
     requireText(dispatcher, '-f dispatch_review=true', `${path} validation dispatcher`);
-    requireText(dispatcher, 'any(.labels[]?; .name == "agent-review")', `${path} validation dispatcher`);
+    requireText(dispatcher, `any(.labels[]; . == "agent-review")' <<<"$pr_guard"`, `${path} validation dispatcher`);
   }
   const review = read(reviewPath);
   // Reviews run only as a workflow_dispatch from main. A pull_request run would use the pull
@@ -1519,19 +1711,19 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
     'head_sha:',
     'inputs.pr_number',
     'agent-validation',
-    'Refusing stale review',
+    'Review refused:',
     'persist-credentials: false',
-    '.github/workflows/',
+    `contents/${PR_GUARD_PATH}?ref=$GITHUB_WORKFLOW_SHA`,
     'group: agent-review-pr-${{ inputs.pr_number || github.run_id }}',
   ]) {
     requireText(review, required, reviewPath);
   }
 
   const reviewContext = section(review, '  context:\n', '  review:\n', reviewPath);
-  verifyAgentPrGuards(normalizeGuardVariables(reviewContext), 'agent-review.yml dispatched context', 'Refusing stale review');
+  verifyAgentPrGuards(normalizeGuardVariables(reviewContext), 'agent-review.yml dispatched context');
   requireText(reviewContext, 'echo "implementer=$implementer"', 'agent-review.yml context');
   requireText(reviewContext, 'statuses: read', 'agent-review.yml dispatched context');
-  requireText(reviewContext, 'any(.labels[]?; .name == "agent-review")', 'agent-review.yml dispatched context');
+  requireText(reviewContext, `any(.labels[]; . == "agent-review")' <<<"$pr_guard"`, 'agent-review.yml dispatched context');
   requireText(reviewContext, 'validation_state', 'agent-review.yml dispatched context');
   // A dispatched review accepts only the exact-SHA agent-validation status as evidence; the
   // merge-result status published by pull_request validation is never a substitute.
@@ -1556,6 +1748,7 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
   }
 
   verifyArchitecturePass(read(implementPath), read(architecturePath));
+  verifyArchitectureTransport(read(architecturePath));
 
   // Defence in depth: no agent workflow may resolve a pull request author through the
   // GraphQL actor login anywhere, including in a guard added after this contract was written.
@@ -1574,9 +1767,78 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
 
   verifyDocumentationImpactGate(read);
   verifyReviewPublicationAndScheduling(read);
+  verifyOutcomeTaxonomy(read);
   verifyImplementationModelSelection(read);
   verifyProviderModeProvenance(read);
   verifyNayaxDocumentationAccess(read);
+}
+
+/**
+ * Every status the review publisher and validation report write is one of the fixed outcomes in
+ * scripts/agent-outcomes.mjs, with the same state and description prefix, so a person (and the
+ * project board) can tell a code finding from a provider, delivery or eligibility failure.
+ */
+export function verifyOutcomeTaxonomy(read = readRepositoryFile) {
+  const source = 'agent outcome taxonomy';
+  const review = read(reviewPath);
+  const publishStep = section(review, '      - name: Guard and publish review\n', '      - name: Record fail-closed outcome\n', `${source}: publisher`);
+  const failStep = section(review, '      - name: Record fail-closed outcome\n', null, `${source}: fail-closed step`);
+  verifyReviewOutcomeTable(publishStep, source);
+  verifyFailClosedOutcome(failStep, source);
+  verifyValidationOutcomes(read(validatePath), source);
+}
+
+/** The publisher's record_outcome table matches OUTCOMES, and is the only way it writes a status. */
+function verifyReviewOutcomeTable(publishStep, source) {
+  const table = section(publishStep, '          record_outcome() {\n', '          }\n', `${source}: record_outcome`);
+  const reviewOutcomes = Object.keys(OUTCOMES).filter((name) => OUTCOMES[name].contexts.includes(REVIEW_CONTEXT));
+  const rows = [...table.matchAll(/^ {14}([a-z-]+)\) state=([a-z]+); prefix="([^"]+)" ;;$/gm)];
+  if (rows.length !== reviewOutcomes.length) throw new Error(`${source}: record_outcome must list exactly the ${reviewOutcomes.length} review outcomes, found ${rows.length}.`);
+  for (const [, name, state, prefix] of rows) {
+    const outcome = reviewOutcomes.includes(name) ? OUTCOMES[name] : undefined;
+    if (outcome?.state !== state || outcome?.prefix !== prefix) {
+      throw new Error(`${source}: record_outcome row '${name}' (${state}, "${prefix}") does not match scripts/agent-outcomes.mjs.`);
+    }
+  }
+  requireText(table, `*) echo "::error::Unknown review outcome '$1'."; exit 1 ;;`, `${source}: record_outcome`);
+  requireText(table, 'local description="$prefix: $2"', `${source}: record_outcome`);
+  requireText(table, '"${GITHUB_STEP_SUMMARY:-/dev/null}"', `${source}: record_outcome`);
+  // The status is written only through the outcome table; no free-form description remains.
+  const direct = [...publishStep.matchAll(/set_verdict_status /g)].length;
+  if (direct !== 1) throw new Error(`${source}: the publisher must write its status only through record_outcome (found ${direct} set_verdict_status calls).`);
+  for (const [, kind] of publishStep.matchAll(/(?:not_published|record_outcome) ([a-z-]+) /g)) {
+    if (!reviewOutcomes.includes(kind)) throw new Error(`${source}: publisher records unknown outcome '${kind}'.`);
+  }
+  for (const name of ['ready', 'changes-requested']) requireText(publishStep, `record_outcome ${name} "`, `${source}: publisher`);
+  for (const name of ['superseded', 'provider-failed', 'publication-failed', 'not-eligible']) requireText(publishStep, `not_published ${name} "`, `${source}: publisher`);
+}
+
+/** The fail-closed step records Publication failed, whether or not the review was already posted. */
+function verifyFailClosedOutcome(failStep, source) {
+  const failed = OUTCOMES['publication-failed'];
+  const failDescriptions = [...failStep.matchAll(/^ {12}description="([^"]+)"$/gm)];
+  if (failDescriptions.length !== 2) throw new Error(`${source}: the fail-closed step must describe both a posted and an unposted review, found ${failDescriptions.length} descriptions.`);
+  for (const [, description] of failDescriptions) {
+    if (!description.startsWith(`${failed.prefix}: `) || description.length > 140) throw new Error(`${source}: fail-closed description must start with "${failed.prefix}: " and fit 140 characters: ${description}`);
+  }
+  requireText(failStep, `-f state=${failed.state}`, `${source}: fail-closed step`);
+}
+
+/** The validation report maps success, cancelled and every other result to the three validation outcomes. */
+function verifyValidationOutcomes(validate, source) {
+  const report = section(validate, '      - name: Publish exact-SHA status\n', '  dispatch-review:\n', `${source}: validation report`);
+  const validationRows = [...report.matchAll(/^ {12}([a-z*]+)\)\n {14}state="([a-z]+)"\n {14}description="([^"]+)"\n {14};;$/gm)];
+  const expected = { success: 'validation-passed', cancelled: 'validation-cancelled', '*': 'validation-failed' };
+  if (validationRows.length !== Object.keys(expected).length) throw new Error(`${source}: the validation report must map success, cancelled and every other result, found ${validationRows.length} rows.`);
+  for (const [, result, state, description] of validationRows) {
+    const outcome = OUTCOMES[expected[result]];
+    const matches = description === outcome?.prefix || description.startsWith(`${outcome?.prefix}: `);
+    if (outcome?.state !== state || !matches || description.length > 140) {
+      throw new Error(`${source}: validation result '${result}' must record ${expected[result]} ("${outcome?.prefix}", ${outcome?.state}).`);
+    }
+    if (!VALIDATION_CONTEXTS.every((context) => outcome.contexts.includes(context))) throw new Error(`${source}: ${expected[result]} must cover both validation contexts.`);
+  }
+  requireText(report, '"${GITHUB_STEP_SUMMARY:-/dev/null}"', `${source}: validation report`);
 }
 
 /**
@@ -1683,7 +1945,7 @@ export function verifyProviderModeProvenance(read = readRepositoryFile) {
   const review = read('.github/workflows/agent-review.yml');
   requireText(review, 'agent_mode: ${{ steps.context.outputs.agent_mode }}', 'agent-review.yml context outputs');
   requireText(review, 'AGENT_MODE: ${{ needs.context.outputs.agent_mode }}', 'agent-review.yml publish');
-  requireText(review, '[ "$live_mode" = "$AGENT_MODE" ] || suppress', 'agent-review.yml publish');
+  requireText(review, '[ "$live_mode" = "$AGENT_MODE" ] || not_published not-eligible', 'agent-review.yml publish');
   requireOrder(review, 'live_mode="$(node "$RUNNER_TEMP/agent-mode.mjs" verify-pr', 'gh api --method POST "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews"', 'agent-review.yml publish', 'the provider mode must be rechecked before a review is posted.');
 
   // A claim is the only workflow change that adds agent-working, done in one edit with the

@@ -67,6 +67,32 @@ public class DomainExceptionHandlerTests
         Assert.NotEqual(LogLevel.Error, entry.Level);
     }
 
+    /// <summary>
+    /// The membership refusals of issue #522 travel this same path, which is what makes "a stable
+    /// 409" true rather than planned: <c>MembershipWriteGuard</c> throws
+    /// <see cref="DomainConflictException"/> with one of two fixed Domain messages, and this
+    /// handler publishes it verbatim as <c>409</c>. Asserted here, on the real handler, because
+    /// the endpoints that will raise it arrive in later tasks (#504, #507, #509) and the status
+    /// code must not be theirs to choose.
+    /// </summary>
+    [Theory]
+    [InlineData("This person is already a member of a business.")]
+    [InlineData("A business must keep at least one active Owner. Give another member the Owner role first.")]
+    public async Task A_membership_conflict_becomes_a_409_carrying_its_own_message(string message)
+    {
+        var (handler, context, body, _) = CreateHandler();
+
+        var handled = await handler.TryHandleAsync(
+            context, new DomainConflictException(message), CancellationToken.None);
+
+        Assert.True(handled);
+        Assert.Equal(StatusCodes.Status409Conflict, context.Response.StatusCode);
+
+        var root = ParseBody(body);
+        Assert.Equal(message, root.GetProperty("detail").GetString());
+        Assert.Equal(message, root.GetProperty("message").GetString());
+    }
+
     [Theory]
     [InlineData(typeof(ArgumentException))]
     [InlineData(typeof(ArgumentNullException))]

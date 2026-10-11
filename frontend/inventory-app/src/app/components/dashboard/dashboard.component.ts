@@ -306,4 +306,28 @@ export class DashboardComponent implements OnInit {
   stockAfterMachineNeedClass(product: Product): string {
     return this.stockAfterMachineNeed(product) < 0 ? 'value-negative font-semibold' : '';
   }
+
+  /**
+   * Extends the Machines row's real anchor link to the rest of the row (issue #494), the same
+   * pattern `SiteListComponent.followRowLink` already uses: the anchor - not the row - owns
+   * focus, Enter activation, and ctrl/cmd/middle-click, so this only activates it for a click or
+   * Enter elsewhere in the row. A click on a control inside the row - the anchor included, which
+   * would otherwise navigate twice - and a modified or non-primary click are left to the browser.
+   */
+  followMachineRowLink(rowEvent: Event): void {
+    const event = rowEvent as MouseEvent | KeyboardEvent;
+    const ownControl = (event.target as Element | null)?.closest(
+      'a, button, input, select, textarea, label, [role="button"]'
+    );
+    const browserHandlesIt =
+      event.defaultPrevented ||
+      (event instanceof MouseEvent && event.button !== 0) ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.shiftKey ||
+      event.altKey;
+    if (ownControl || browserHandlesIt) return;
+
+    (event.currentTarget as Element).querySelector<HTMLAnchorElement>('a.table-row-anchor')?.click();
+  }
 }

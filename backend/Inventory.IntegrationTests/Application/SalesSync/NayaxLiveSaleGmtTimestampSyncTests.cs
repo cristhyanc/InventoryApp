@@ -6,6 +6,7 @@ using Inventory.Infrastructure.Models;
 using Inventory.Infrastructure.Nayax;
 using Inventory.Infrastructure.Persistence;
 using InventoryApi.Tests.Application.Time;
+using InventoryApi.Tests.Infrastructure.Nayax;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -323,9 +324,13 @@ public sealed class NayaxLiveSaleGmtTimestampSyncTests : IDisposable
         // real client is used so the production ReadFromJsonAsync serializer options are what bind
         // the payload.
         var handler = new StubNayaxHandler(lastSalesPayload, MachineId);
-        var http = new HttpClient(handler) { BaseAddress = new Uri("https://nayax.invalid") };
-        var options = new NayaxLynxOptions { BaseUrl = "https://nayax.invalid", OperatorId = "test-operator" };
-        return new NayaxLynxClient(http, options, NullLogger<NayaxLynxClient>.Instance);
+        var http = new HttpClient(handler)
+        {
+            BaseAddress = new Uri("https://nayax.invalid/operational/v1/"),
+        };
+        var credentials = new FakeNayaxRequestCredentialProvider(
+            "test-operator", "fake-token-not-a-real-credential");
+        return new NayaxLynxClient(http, credentials, NullLogger<NayaxLynxClient>.Instance);
     }
 
     private async Task<NayaxSales> SingleSaleAsync(int businessId)

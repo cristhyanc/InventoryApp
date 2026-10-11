@@ -34,10 +34,10 @@ public sealed class NayaxTokenProtectionOptions
 
     /// <summary>
     /// Whether this environment has been given any key material at all. Unconfigured is a
-    /// legitimate state - no business has stored Nayax credentials yet, and nothing reads them
-    /// until issue #520 - and it must not stop the API from starting; it makes storing or reading a
-    /// per-business token fail closed instead. See
-    /// <see cref="UnconfiguredNayaxTokenProtector"/>.
+    /// legitimate state - an environment that uses no Nayax integration stores no credentials - and
+    /// it must not stop the API from starting; it makes storing or reading a per-business token fail
+    /// closed instead, which since issue #520 means the Nayax features fail closed and nothing else
+    /// does. See <see cref="UnconfiguredNayaxTokenProtector"/>.
     /// </summary>
     public bool IsConfigured => !string.IsNullOrWhiteSpace(ActiveKeyId) || Keys.Count > 0;
 }

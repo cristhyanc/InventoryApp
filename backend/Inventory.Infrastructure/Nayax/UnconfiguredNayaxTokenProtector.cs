@@ -4,10 +4,12 @@ namespace Inventory.Infrastructure.Nayax;
 /// The protector an environment with no Nayax encryption key configured gets (issue #518).
 ///
 /// Both members throw. That is the fail-closed half of a deliberate split: provisioning the key is
-/// a human step that has not happened in any environment yet, and nothing reads a per-business
-/// connection until issue #520, so a missing key must not stop the API from starting - but it must
-/// never let a token be stored in a form that cannot be protected, or a stored one be read as
-/// absent. The message names the setting to configure.
+/// a human step, and an environment that does not use Nayax at all must still start, so a missing
+/// key must not stop the API from starting - but it must never let a token be stored in a form that
+/// cannot be protected, or a stored one be read as absent. The message names the setting to
+/// configure. Since issue #520 every Nayax call reads a per-business token, so in an environment
+/// that does use Nayax a missing key means the integration fails closed until a human provisions
+/// one; nothing else is affected.
 /// </summary>
 public sealed class UnconfiguredNayaxTokenProtector : INayaxTokenProtector
 {

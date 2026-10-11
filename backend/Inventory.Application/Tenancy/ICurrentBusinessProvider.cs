@@ -24,4 +24,12 @@ public interface ICurrentBusinessProvider
     /// means "carry on unscoped".
     /// </summary>
     Task<BusinessId> RequireBusinessIdAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Returns the role the caller holds in their current business (issue #521), or throws
+    /// <see cref="BusinessAccessDeniedException"/>. Like the business id it is a resolved fact, not
+    /// a caller-supplied one, and there is no return value that means "no role but carry on": an
+    /// actor whose stored role this code does not declare is denied, not defaulted.
+    /// </summary>
+    Task<BusinessRole> RequireRoleAsync(CancellationToken cancellationToken);
 }

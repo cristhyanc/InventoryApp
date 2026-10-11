@@ -1,3 +1,4 @@
+using Inventory.Application.Access;
 using Inventory.Application.Businesses;
 using Inventory.Application.CatalogReconciliation;
 using Inventory.Application.Categories;
@@ -10,6 +11,7 @@ using Inventory.Application.Imports;
 using Inventory.Application.InventoryCounting;
 using Inventory.Application.MachineStockSync;
 using Inventory.Application.Machines;
+using Inventory.Application.Nayax;
 using Inventory.Application.NayaxFeeSettings;
 using Inventory.Application.NayaxProcessingFees;
 using Inventory.Application.PickList;
@@ -47,6 +49,28 @@ public static class ApplicationServiceCollectionExtensions
         // The current business's own name and time zone (issue #499). Per request like everything
         // tenancy-scoped: the answer belongs to one caller's membership.
         services.AddScoped<GetCurrentBusiness>();
+
+        // The signed-in member's role and capabilities (issue #521). Per request for the same
+        // reason, and so a role change applies on the next request rather than being cached.
+        services.AddScoped<GetCurrentAccess>();
+
+        // The signed-in person's own account state (issue #523). Scoped like the rest of tenancy:
+        // the answer belongs to one caller's identity, and a revoked or granted membership must
+        // show up on their next request rather than be cached.
+        services.AddScoped<GetAccountState>();
+
+        // The shared write path every membership change runs through (issue #522). Scoped, because
+        // the transaction it opens is the request's own AppDbContext transaction, which the
+        // operation's write has to save inside.
+        services.AddScoped<MembershipWriteGuard>();
+
+        // The Nayax credentials every ordinary Nayax call is made with (issue #520), resolved per
+        // call from the trusted current business over #518's store. Scoped for the same reason the
+        // current business is: a credential belongs to one caller's business and must never be
+        // cached across callers. The gate-free re-test read (#506) is a separate registration of a
+        // separate port, so nothing that injects the ordinary provider can reach it.
+        services.AddScoped<INayaxRequestCredentialProvider, NayaxRequestCredentialProvider>();
+        services.AddScoped<INayaxConnectionRetestCredentialProvider, NayaxConnectionRetestCredentialProvider>();
 
         services.AddScoped<ListNayaxFeeRates>();
         services.AddScoped<SaveNayaxFeeRate>();

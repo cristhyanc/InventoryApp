@@ -25,7 +25,7 @@
     {
       "type": "repoFileContains",
       "file": ".github/workflows/agent-review.yml",
-      "text": "[ \"$live_mode\" = \"$AGENT_MODE\" ] || suppress"
+      "text": "[ \"$live_mode\" = \"$AGENT_MODE\" ] || not_published not-eligible"
     },
     {
       "type": "repoFileContains",

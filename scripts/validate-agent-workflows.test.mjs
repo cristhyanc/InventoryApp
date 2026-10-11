@@ -2,7 +2,10 @@ import './agent-mode.test.mjs';
 import './select-implementation-model.test.mjs';
 import './agent-persistence.test.mjs';
 import './agent-review-publication.test.mjs';
+import './agent-review-transport.test.mjs';
 import './agent-architecture-handoff.test.mjs';
+import './agent-pr-guard.test.mjs';
+import './agent-outcomes.test.mjs';
 // Deterministic contract tests for the validation workflow's concurrency and status model.
 // Run with: node --test scripts/validate-agent-workflows.test.mjs
 import assert from 'node:assert/strict';
@@ -25,6 +28,7 @@ import {
   evaluateExpression,
   headUpdatePath,
   verifyReviewPublicationAndScheduling,
+  verifyOutcomeTaxonomy,
   verifyScopedDirectoryCreationPermissions,
   appPushRetryPath,
   implementPath,
@@ -50,6 +54,7 @@ import {
   copilotInstructionsPath,
   modelSelectionPath,
   verifyNayaxDocumentationAccess,
+  PR_GUARD_PATH,
 } from './validate-agent-workflows.mjs';
 
 const validateWorkflow = readRepositoryFile(validatePath);
@@ -60,6 +65,7 @@ const appPushRetryScript = readRepositoryFile(appPushRetryPath);
 const repairWorkflow = readRepositoryFile(repairPath);
 const issueTemplate = readRepositoryFile(issueTemplatePath);
 const pullRequestTemplate = readRepositoryFile(pullRequestTemplatePath);
+const prGuardScript = readRepositoryFile(PR_GUARD_PATH);
 
 const PR_NUMBER = 95;
 const HEAD_SHA = 'a'.repeat(40);
@@ -247,11 +253,35 @@ describe('preserved guards', () => {
   });
 
   it('rejects removing the exact current-head or workflow-file guard', () => {
-    const staleAccepted = replaceOnce(validateWorkflow, '[ "$current_sha" = "$head_sha" ] || fail "Refusing stale validation', '# removed');
-    assert.throws(() => runContractChecks({ read: readWithOverrides({ [validatePath]: staleAccepted }) }), /Refusing stale validation/);
+    // The checks live in the one trusted guard script; weakening either is rejected there.
+    for (const [from, to] of [
+      ["  if (current !== sha) refuse('stale'", "  if (false) refuse('stale'"],
+      ["  if (files.some((file) => file.startsWith(WORKFLOW_DIR))) {", '  if (false) {'],
+      ["  if (headSha !== sha) refuse('stale'", "  if (false) refuse('stale'"],
+      ['files.length !== changedFiles', 'files.length > changedFiles'],
+    ]) {
+      const weakened = replaceOnce(prGuardScript, from, to);
+      assert.throws(() => runContractChecks({ read: readWithOverrides({ [PR_GUARD_PATH]: weakened }) }), /agent-pr-guard\.mjs/);
+    }
 
-    const workflowFilesAccepted = replaceOnce(validateWorkflow, "if grep -Eq '^\\.github/workflows/' <<<\"$changed_files\"; then\n              fail", '# removed\n              true');
-    assert.throws(() => runContractChecks({ read: readWithOverrides({ [validatePath]: workflowFilesAccepted }) }));
+    // The head must be re-read after the changed files, or a listing of a newer head could pass.
+    const files = prGuardScript.indexOf('    const files = gh(');
+    const rest = prGuardScript.indexOf('    // Read after the files');
+    const restEnd = prGuardScript.indexOf('    if (!rest');
+    const reordered = prGuardScript.slice(0, files) + prGuardScript.slice(rest, restEnd) + prGuardScript.slice(files, rest) + prGuardScript.slice(restEnd);
+    assert.throws(() => runContractChecks({ read: readWithOverrides({ [PR_GUARD_PATH]: reordered }) }), /re-read after the changed files/);
+
+    // The workflow must run the guard against the requested SHA, not whatever the head is now.
+    const staleAccepted = replaceOnce(validateWorkflow, 'node "$guard" check "$pr_number" "$head_sha"', 'node "$guard" check "$pr_number" "$(gh pr view "$pr_number" --json headRefOid --jq .headRefOid)"');
+    assert.throws(() => runContractChecks({ read: readWithOverrides({ [validatePath]: staleAccepted }) }), /validate\.yml/);
+
+    // It must run the copy from its own trusted commit, never one from a checkout.
+    const untrusted = replaceOnce(validateWorkflow, 'contents/scripts/agent-pr-guard.mjs?ref=$GITHUB_WORKFLOW_SHA" > "$guard"', 'contents/scripts/agent-pr-guard.mjs?ref=$INPUT_HEAD_SHA" > "$guard"');
+    assert.throws(() => runContractChecks({ read: readWithOverrides({ [validatePath]: untrusted }) }), /validate\.yml/);
+
+    // An inline copy of a check the guard owns is rejected, so the copies cannot drift apart again.
+    const inline = replaceOnce(validateWorkflow, '            implementer="$(jq -r \'.implementer\' <<<"$pr_guard")"\n', '            implementer="$(jq -r \'.implementer\' <<<"$pr_guard")"\n            [ "$author" = "$EXPECTED_AGENT_AUTHOR" ] || true\n');
+    assert.throws(() => runContractChecks({ read: readWithOverrides({ [validatePath]: inline }) }), /forbidden text: \[ "\$author" = /);
   });
 
   it('has the implementation dispatcher hand off only to the trusted architecture workflow', () => {
@@ -615,7 +645,8 @@ describe('architecture pass contract', () => {
   it('requires the architecture workflow to start from the exact verified SHA and current agent-working issue', () => {
     for (const required of [
       'ref: ${{ needs.context.outputs.head_sha }}',
-      '[ "$current_sha" = "$HEAD_SHA" ] || fail "Refusing stale architecture run:',
+      'node "$guard" check "$PR_NUMBER" "$HEAD_SHA" --issue "$ISSUE_NUMBER"',
+      'node "$guard" check "$PR_NUMBER" "$FINAL_SHA" --issue "$ISSUE_NUMBER"',
       'any(.labels[]?; .name == "agent-working")',
       'git checkout -b "$BRANCH" "$HEAD_SHA"',
     ]) {
@@ -776,14 +807,17 @@ describe('guarded publication contract', () => {
 
   it('requires the publisher to re-verify the head, eligibility and validation before publishing', () => {
     for (const fragment of [
-      '[ "$current_sha" = "$HEAD_SHA" ] || suppress',
-      '[ "$validation_state" = "success" ] || suppress',
-      '[ "$reviewed_sha" = "$HEAD_SHA" ] || suppress',
+      'node "$guard" check "$PR_NUMBER" "$HEAD_SHA"',
+      '[ "$validation_state" = "success" ] || not_published not-eligible',
+      '[ "$reviewed_sha" = "$HEAD_SHA" ] || not_published provider-failed',
       'all(.criteria[]; .status == "met")',
-      '[ "$is_draft" = "false" ] || suppress',
+      'stale) not_published superseded "$refusal" ;;',
+      'closed|draft|base|fork|branch|config|author|workflow-files) not_published not-eligible "$refusal" ;;',
     ]) {
       assertPublicationRejects({ [reviewPath]: replaceOnce(reviewWorkflow, fragment, '# removed') }, /publish job/);
     }
+    // An unreadable live state must stop the publisher, never be recorded as an unpublished review.
+    assertPublicationRejects({ [reviewPath]: replaceOnce(reviewWorkflow, 'closed|draft|base|fork|branch|config|author|workflow-files) not_published', 'closed|draft|base|fork|branch|config|author|workflow-files|unavailable) not_published') }, /publish job/);
   });
 
   it('requires the published review to be bound to the reviewed commit and to stay comment-only', () => {
@@ -813,7 +847,9 @@ describe('updated-head scheduling contract', () => {
 
   it('requires the stale-head guard, the duplicate check and a review only after validation', () => {
     assertPublicationRejects({ [headUpdatePath]: replaceOnce(headUpdateWorkflow, '[ -z "$existing_validation" ]', 'true') }, /missing required text: \[ -z "\$existing_validation" \]/);
-    assertPublicationRejects({ [headUpdatePath]: replaceOnce(headUpdateWorkflow, '[ "$current_sha" = "$HEAD_SHA" ]', 'true') }, /current_sha/);
+    assertPublicationRejects({ [headUpdatePath]: replaceOnce(headUpdateWorkflow, 'node "$guard" check "$PR_NUMBER" "$HEAD_SHA"', 'true') }, /node "\$guard" check/);
+    // A missing App login or an unreadable state fails the job; only an ineligible pull request is skipped.
+    assertPublicationRejects({ [headUpdatePath]: replaceOnce(headUpdateWorkflow, 'closed|draft|base|fork|branch|author|stale|workflow-files) skip', 'closed|draft|base|fork|branch|config|author|stale|workflow-files) skip') }, /agent-head-update\.yml/);
     assertPublicationRejects({ [headUpdatePath]: replaceOnce(headUpdateWorkflow, 'gh workflow run validate.yml', 'gh workflow run agent-review.yml') }, /agent-head-update.yml/);
   });
 
@@ -851,11 +887,12 @@ describe('cross-review contract (Claude implements; Copilot checks and reviews)'
   });
 
   it('accepts only Claude agent/issue-* pull requests at every guarded boundary', () => {
-    const copilotBranch = '          elif [[ "$head_ref" == copilot/* ]]; then\n            implementer="copilot"\n';
-    for (const [path, workflow, anchor] of [
-      [reviewRequestPath, reviewRequestWorkflow, '          else\n            fail "Pull request #$PR_NUMBER does not use an agent/issue-* branch."'],
-      [headUpdatePath, headUpdateWorkflow, '          else\n            skip "pull request #$PR_NUMBER does not use an agent/issue-* branch."'],
-    ]) {
+    // The guard accepts only agent/issue-* branches; a copilot/* exception is rejected there.
+    rejects({ [PR_GUARD_PATH]: replaceOnce(prGuardScript, "if (!head.startsWith(AGENT_BRANCH_PREFIX)) refuse('branch'", "if (!head.startsWith(AGENT_BRANCH_PREFIX) && !head.startsWith('copilot/')) refuse('branch'") }, /agent-pr-guard\.mjs/);
+    // A dispatcher cannot add its own copilot/* exception around the guard either.
+    const copilotBranch = '          [[ "$(jq -r .head_ref <<<"$pr_guard")" == copilot/* ]] && implementer="copilot"\n';
+    for (const [path, workflow] of [[reviewRequestPath, reviewRequestWorkflow], [headUpdatePath, headUpdateWorkflow]]) {
+      const anchor = '          jq -e \'any(.labels[]; . == "agent-review")\' <<<"$pr_guard"';
       rejects({ [path]: replaceOnce(workflow, anchor, copilotBranch + anchor) }, new RegExp(path.replaceAll('.', '\\.')));
     }
   });
@@ -864,7 +901,7 @@ describe('cross-review contract (Claude implements; Copilot checks and reviews)'
     for (const [unsafe, reason] of [
       [replaceOnce(reviewWorkflow, "if: needs.context.outputs.reviewer == 'claude'", "if: needs.context.outputs.reviewer != ''"), /agent-review.yml review job/],
       [replaceOnce(reviewWorkflow, "    if: needs.context.outputs.reviewer == 'copilot'", "    if: always()"), /agent-review.yml Copilot review job/],
-      [replaceOnce(reviewWorkflow, '[ "$live_implementer" = "$IMPLEMENTER" ] || suppress', 'true || suppress'), /agent-review.yml publish job/],
+      [replaceOnce(reviewWorkflow, '[ "$live_implementer" = "$IMPLEMENTER" ] || not_published', 'true || not_published'), /agent-review.yml publish job/],
       [replaceOnce(reviewWorkflow, "needs.context.outputs.reviewer == 'copilot' && needs.copilot-review.result || needs.review.result", 'needs.review.result'), /agent-review.yml publish job/],
       // The route table: the default route is always reviewed by Copilot, never by its implementer.
       [replaceOnce(reviewWorkflow, '            cross-claude:claude)\n              reviewer=copilot\n', '            cross-claude:claude)\n              reviewer=claude\n'), /agent-review.yml cross-claude route/],
@@ -888,7 +925,7 @@ describe('cross-review contract (Claude implements; Copilot checks and reviews)'
   it('rejects a Copilot final review that could write, float its CLI version or skip the review contract', () => {
     for (const unsafe of [
       replaceOnce(reviewWorkflow, "            --deny-tool='write' \\\n            -p \"$prompt\" > \"$work/copilot-output.md\"", '            -p "$prompt" > "$work/copilot-output.md"'),
-      replaceOnce(reviewWorkflow, "    permissions:\n      contents: read\n      pull-requests: read\n      issues: read\n      actions: read\n      checks: read\n      statuses: read\n    outputs:\n      structured_output: ${{ steps.copilot_review", "    permissions:\n      contents: read\n      pull-requests: write\n      issues: read\n      actions: read\n      checks: read\n      statuses: read\n    outputs:\n      structured_output: ${{ steps.copilot_review"),
+      replaceOnce(reviewWorkflow, "    permissions:\n      contents: read\n      pull-requests: read\n      issues: read\n      actions: read\n      checks: read\n      statuses: read\n    # Only the artifact id and the envelope digest leave this job as outputs; see the review job.", "    permissions:\n      contents: read\n      pull-requests: write\n      issues: read\n      actions: read\n      checks: read\n      statuses: read\n    # Only the artifact id and the envelope digest leave this job as outputs; see the review job."),
       replaceOnce(reviewWorkflow, 'COPILOT_AUTO_UPDATE: "false"', 'COPILOT_AUTO_UPDATE: "true"'),
       reviewWorkflow.replace('npm ci --prefix "$cli_dir" --ignore-scripts --no-audit --no-fund\n          echo "$cli_dir/node_modules/.bin" >> "$GITHUB_PATH"\n\n      - name: Run Copilot review', 'npm install -g @github/copilot@latest\n\n      - name: Run Copilot review'),
       replaceOnce(reviewWorkflow, "--allow-tool='shell(gh run list:*)'", "--allow-tool='shell(gh run list:*)' --allow-tool='shell(gh pr comment:*)'"),
@@ -897,6 +934,64 @@ describe('cross-review contract (Claude implements; Copilot checks and reviews)'
       replaceOnce(reviewWorkflow, 'copilot -s --no-ask-user --disable-builtin-mcps', 'copilot -s --no-ask-user'),
     ]) {
       rejects({ [reviewPath]: unsafe }, /agent-review.yml Copilot review/);
+    }
+  });
+
+  // PR #558: the review must never travel as a job output again, and both ends of the artifact
+  // hand-off must use the trusted transport script and a pinned, short-lived artifact.
+  it('rejects a review hand-off through job outputs, untrusted transport code or a long-lived artifact', () => {
+    const copilotJob = reviewWorkflow.split('\n  copilot-review:\n')[1].split('\n  publish:\n')[0];
+    for (const [unsafe, reason] of [
+      [replaceOnce(reviewWorkflow, '      artifact_id: ${{ steps.upload.outputs.artifact-id }}\n      artifact_digest: ${{ steps.package.outputs.digest }}\n\n    steps:\n      - name: Check out pull request head\n        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0\n        with:\n          ref: ${{ needs.context.outputs.head_sha }}\n          fetch-depth: 0\n          persist-credentials: false\n\n      - name: Run Claude Code review agent', '      artifact_id: ${{ steps.upload.outputs.artifact-id }}\n      artifact_digest: ${{ steps.package.outputs.digest }}\n      structured_output: ${{ steps.review_agent.outputs.structured_output }}\n\n    steps:\n      - name: Check out pull request head\n        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0\n        with:\n          ref: ${{ needs.context.outputs.head_sha }}\n          fetch-depth: 0\n          persist-credentials: false\n\n      - name: Run Claude Code review agent'), /agent-review.yml review outputs/],
+      [reviewWorkflow.replace(copilotJob, copilotJob.replace('node "$transport" package', 'node scripts/agent-review-transport.mjs package')), /agent-review.yml copilot-review review transport/],
+      [reviewWorkflow.replace(copilotJob, copilotJob.replace('retention-days: 1', 'retention-days: 90')), /agent-review.yml copilot-review review transport/],
+      [reviewWorkflow.replace(copilotJob, copilotJob.replace('          REVIEW_REDACT_PROVIDER_TOKEN: ${{ secrets.COPILOT_CLI_TOKEN }}\n', '')), /agent-review.yml copilot-review review transport/],
+      [replaceOnce(reviewWorkflow, '          REVIEW_REDACT_PROVIDER_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\n', ''), /agent-review.yml review review transport/],
+      [reviewWorkflow.replace(copilotJob, copilotJob.replace('actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2', 'actions/upload-artifact@v4')), /agent-review.yml copilot-review review transport/],
+      [replaceOnce(reviewWorkflow, '      issues: read\n      actions: read\n\n    steps:\n      - name: Guard and publish review', '      issues: read\n\n    steps:\n      - name: Guard and publish review'), /agent-review.yml publish transport/],
+      [replaceOnce(reviewWorkflow, "          REVIEW_ARTIFACT_ID: ", "          REVIEW_OUTPUT: ${{ needs.review.outputs.structured_output }}\n          REVIEW_ARTIFACT_ID: "), /agent-review.yml publish (job|transport)/],
+      [replaceOnce(reviewWorkflow, 'not_published publication-failed "the review result could not be delivered: ', 'not_published ready "the review result could not be delivered: '), /agent-review.yml publish transport/],
+      [replaceOnce(reviewWorkflow, 'contract|wrong-sha) not_published provider-failed', 'contract|wrong-sha|missing) not_published provider-failed'), /agent-review.yml publish transport/],
+    ]) {
+      rejects({ [reviewPath]: unsafe }, reason);
+    }
+  });
+
+  // The architecture findings follow the same rule as the review: model text never travels as a job
+  // output, and every end of the hand-off runs the trusted transport script.
+  it('rejects an architecture findings hand-off through job outputs, untrusted transport code or a long-lived artifact', () => {
+    const copilotCheck = architectureWorkflow.split('\n  copilot-check:\n')[1].split('\n  claude-check:\n')[0];
+    const claudeCheck = architectureWorkflow.split('\n  claude-check:\n')[1].split('\n  sonar:\n')[0];
+    const inCopilot = (from, to) => architectureWorkflow.replace(copilotCheck, () => replaceOnce(copilotCheck, from, to));
+    const inClaude = (from, to) => architectureWorkflow.replace(claudeCheck, () => replaceOnce(claudeCheck, from, to));
+    for (const [unsafe, reason] of [
+      [inCopilot('      findings_digest: ${{ steps.package.outputs.digest }}\n', '      findings_digest: ${{ steps.package.outputs.digest }}\n      findings: ${{ steps.check.outputs.findings }}\n'), /agent-architecture.yml copilot-check outputs/],
+      [inClaude('      findings_artifact_id: ${{ steps.upload.outputs.artifact-id }}\n', ''), /agent-architecture.yml claude-check outputs/],
+      [inCopilot('git show "$TRUSTED_SHA:scripts/agent-review-transport.mjs" > "$transport"', 'cp scripts/agent-review-transport.mjs "$transport"'), /agent-architecture.yml copilot-check findings transport/],
+      [inClaude('node "$transport" package-findings', 'node scripts/agent-review-transport.mjs package-findings'), /agent-architecture.yml claude-check findings transport/],
+      [inCopilot('retention-days: 1', 'retention-days: 90'), /agent-architecture.yml copilot-check findings transport/],
+      [inClaude('actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2', 'actions/upload-artifact@v4'), /agent-architecture.yml claude-check findings transport/],
+      [inCopilot('          REVIEW_REDACT_PROVIDER_TOKEN: ${{ secrets.COPILOT_CLI_TOKEN }}\n', ''), /agent-architecture.yml copilot-check findings transport/],
+      [inClaude('          REVIEW_REDACT_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n', ''), /agent-architecture.yml claude-check findings transport/],
+      [inClaude('          CHECKER: claude\n', '          CHECKER: copilot\n'), /agent-architecture.yml claude-check findings transport/],
+      [replaceOnce(architectureWorkflow, '      issues: read\n      # Read-only: lets the trusted step below fetch this run\'s architecture findings artifact.\n      actions: read\n', '      issues: read\n'), /agent-architecture.yml architecture permissions/],
+      [replaceOnce(architectureWorkflow, 'summary="$(node "$transport" fetch-findings .git/architecture-findings.md)"', 'summary="$(node scripts/agent-review-transport.mjs fetch-findings .git/architecture-findings.md)"'), /agent-architecture.yml (architecture job|store findings)/],
+      [replaceOnce(architectureWorkflow, '          node "$transport" fetch-findings "$check_findings_file" >/dev/null \\\n', '          true \\\n'), /agent-architecture.yml finalize findings transport/],
+      [replaceOnce(architectureWorkflow, '            cat "$check_findings_file"\n', '            printf \'%s\\n\' "$CHECK_FINDINGS"\n'), /agent-architecture.yml findings transport/],
+    ]) {
+      rejects({ [architecturePath]: unsafe }, reason);
+    }
+  });
+
+  it('keeps the live transport check read-only and free of secrets', () => {
+    const check = readWithOverrides({})('.github/workflows/agent-review-transport-check.yml');
+    for (const unsafe of [
+      replaceOnce(check, '    permissions:\n      contents: read\n      actions: read\n', '    permissions:\n      contents: read\n      actions: write\n'),
+      replaceOnce(check, '          GH_TOKEN: ${{ github.token }}\n          REVIEW_ARTIFACT_ID: ${{ needs.package.outputs.artifact_id }}\n          REVIEW_ARTIFACT_DIGEST', '          GH_TOKEN: ${{ secrets.AGENT_AUTOMATION_APP_PRIVATE_KEY }}\n          REVIEW_ARTIFACT_ID: ${{ needs.package.outputs.artifact_id }}\n          REVIEW_ARTIFACT_DIGEST'),
+      replaceOnce(check, 'on:\n  pull_request:\n', 'on:\n  pull_request_target:\n'),
+      replaceOnce(check, '          retention-days: 1\n', '          retention-days: 30\n'),
+    ]) {
+      rejects({ '.github/workflows/agent-review-transport-check.yml': unsafe }, /agent-review-transport-check\.yml/);
     }
   });
 
@@ -1030,5 +1125,51 @@ describe('Nayax documentation access (issue #192)', () => {
     for (const required of contract.copilotInstructionsRequired) {
       rejects({ [copilotInstructionsPath]: replaceOnce(instructions, required, 'removed') }, /copilot-instructions.md Nayax contract verification/);
     }
+  });
+});
+
+// Phase 4: every review and validation status is one of the outcomes in scripts/agent-outcomes.mjs.
+describe('distinguishable outcome taxonomy contract', () => {
+  const rejects = (overrides, pattern) => {
+    assert.throws(() => verifyOutcomeTaxonomy(readWithOverrides(overrides)), pattern);
+    // The full run may stop at an earlier check of the same text; it must still reject.
+    assert.throws(() => runContractChecks({ read: readWithOverrides(overrides) }));
+  };
+
+  it('passes for the committed workflows', () => {
+    assert.doesNotThrow(() => verifyOutcomeTaxonomy());
+  });
+
+  it('rejects a publisher outcome table that drifts from the shared one', () => {
+    for (const [from, to] of [
+      ['changes-requested) state=failure; prefix="Changes requested" ;;', 'changes-requested) state=error; prefix="Changes requested" ;;'],
+      ['provider-failed) state=error; prefix="AI provider failed" ;;', 'provider-failed) state=failure; prefix="AI provider failed" ;;'],
+      ['superseded) state=error; prefix="Superseded" ;;', 'superseded) state=error; prefix="Superseded or not published" ;;'],
+      ['ready) state=success; prefix="Ready for human review" ;;', 'ready) state=success; prefix="Ready" ;;'],
+      ['              not-eligible) state=error; prefix="Not eligible" ;;\n', ''],
+    ]) rejects({ [reviewPath]: replaceOnce(reviewWorkflow, from, to) }, /agent outcome taxonomy/);
+  });
+
+  it('rejects an unknown outcome, a free-form status or a missing run summary in the publisher', () => {
+    rejects({ [reviewPath]: replaceOnce(reviewWorkflow, 'stale) not_published superseded "$refusal" ;;', 'stale) not_published stale "$refusal" ;;') }, /unknown outcome 'stale'/);
+    rejects({ [reviewPath]: replaceOnce(reviewWorkflow, 'record_outcome ready "advisory', 'set_verdict_status success "advisory') }, /only through record_outcome|record_outcome ready/);
+    rejects({ [reviewPath]: replaceOnce(reviewWorkflow, `"$VERDICT_CONTEXT" "$prefix" "$2" >> "\${GITHUB_STEP_SUMMARY:-/dev/null}"`, '"$VERDICT_CONTEXT" "$prefix" "$2" >/dev/null') }, /GITHUB_STEP_SUMMARY/);
+    rejects({ [reviewPath]: replaceOnce(reviewWorkflow, `*) echo "::error::Unknown review outcome '$1'."; exit 1 ;;`, '*) state=error; prefix="Unknown" ;;') }, /agent outcome taxonomy/);
+  });
+
+  it('rejects a fail-closed status outside the publication-failed outcome', () => {
+    rejects({ [reviewPath]: replaceOnce(reviewWorkflow, 'description="Publication failed: the publisher stopped before posting; nothing was published"', 'description="Review publication failed closed; nothing was published"') }, /fail-closed description/);
+    rejects({ [reviewPath]: replaceOnce(reviewWorkflow, '            -f state=error \\\n            -f context="$VERDICT_CONTEXT" \\\n            -f description="$description"', '            -f state=failure \\\n            -f context="$VERDICT_CONTEXT" \\\n            -f description="$description"') }, /state=error/);
+  });
+
+  it('rejects a validation report that hides a cancellation or uses another wording', () => {
+    for (const [from, to] of [
+      ['description="Validation passed"', 'description="Validation did pass"'],
+      ['            cancelled)\n              state="failure"', '            cancelled)\n              state="success"'],
+      ['description="Validation failed: the validate job', 'description="Validation did not pass: the validate job'],
+      ['description="Validation cancelled: ', 'description="Validation failed: '],
+    ]) rejects({ [validatePath]: replaceOnce(validateWorkflow, from, to) }, /agent outcome taxonomy/);
+    const merged = replaceOnce(validateWorkflow, '            cancelled)\n              state="failure"\n              description="Validation cancelled: a newer run replaced it or a person stopped it; it did not finish."\n              ;;\n', '');
+    rejects({ [validatePath]: merged }, /must map success, cancelled and every other result/);
   });
 });

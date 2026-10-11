@@ -21,6 +21,17 @@ internal static class MigrationSchemaProbe
     public static Task<List<string>> TableNamesAsync(SqliteConnection connection) =>
         QueryNamesAsync(connection, "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name;");
 
+    /// <summary>
+    /// Every index declared on <paramref name="table"/>, ordered by name. Asked by a migration
+    /// that adds or removes an index, for the same reason the column probe exists: the schema, not
+    /// the model, is what the test is standing on.
+    /// </summary>
+    public static Task<List<string>> IndexNamesAsync(SqliteConnection connection, string table) =>
+        QueryNamesAsync(
+            connection,
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = "
+                + $"'{table}' ORDER BY name;");
+
     private static async Task<List<string>> QueryNamesAsync(SqliteConnection connection, string sql)
     {
         await using var command = connection.CreateCommand();

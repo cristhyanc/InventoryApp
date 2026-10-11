@@ -1039,7 +1039,7 @@ Contains:
 - Dependency injection and application startup.
 - HTTP error/result mapping.
 - The persistence *provider* decision: the `Microsoft.EntityFrameworkCore.Sqlite` reference, the single `options.UseSqlite(ConnectionStrings:DefaultConnection)` call in `Program.cs`, and the `Microsoft.EntityFrameworkCore.Design` reference the `dotnet ef` tooling needs. The model itself is not here (issue #307).
-- The startup schema decision and the human-invoked commands in `InventoryApi/Bootstrap`: `DatabaseSchemaStartup`, `migrate-database`, `bootstrap-business`, `migrate-documents` and the database backup commands.
+- The startup schema decision and the human-invoked commands in `InventoryApi/Bootstrap`: `DatabaseSchemaStartup`, `migrate-database`, `bootstrap-business`, `migrate-documents`, `migrate-nayax-connection` and the database backup commands.
 
 Controllers do not implement accounting, inventory, persistence, or filesystem rules.
 
@@ -1124,8 +1124,9 @@ fails if a file appears under it, its positive counterpart asserts the 29 adapte
 `AddInfrastructureServices()` must still make.
 
 **The `Bootstrap` commands stay thin host commands (issue #309).** `BusinessBootstrapper`,
-`DocumentMigrator`, `DatabaseMigrationCommand`, the database backup commands and
-`DatabaseSchemaStartup` were reviewed with the adapter relocation and deliberately left in
+`DocumentMigrator`, `DatabaseMigrationCommand`, `NayaxConnectionMigrator` (issue #519), the
+database backup commands and `DatabaseSchemaStartup` were reviewed with the adapter relocation and
+deliberately left in
 `InventoryApi/Bootstrap`: they keep calling `Inventory.Infrastructure` services directly, and none of
 their persistence logic moved into an Infrastructure service. They are not request-path persistence
 adapters - they implement no `Inventory.Application` port, nothing injects them, and each command is
@@ -1140,9 +1141,14 @@ permitted to do so (AGENTS.md § Tenant ownership and data isolation); keeping t
 request is served from is what keeps that opt-in visibly exceptional, where an injectable
 Infrastructure service would put unrestricted access one DI registration away from a request path.
 Second, their work - an EF-model-driven ownership backfill, a cross-business document copy, an
-operator-facing migration dry run, a snapshot verification - is a deliberate one-off operation with
-console output and an exit code, not a port a use case calls. Their behaviour, argument parsing,
-transaction boundaries and audit output are unchanged by issue #309.
+operator-facing migration dry run, a snapshot verification, a one-time credential move - is a
+deliberate one-off operation with console output and an exit code, not a port a use case calls.
+Their behaviour, argument parsing, transaction boundaries and audit output are unchanged by issue
+#309.
+`migrate-nayax-connection` is the newest of them and deliberately takes neither property of the
+first: it constructs no unrestricted context at all, because every read and write of the credential
+goes through a context scoped to the one business it resolved (see
+[Migrating the Nayax connection](#migrating-the-nayax-connection-issue-519)).
 
 **No controller names the persistence model (issue #305).** Since the last controller slice of #153,
 no file under `InventoryApi/Controllers` references the EF entity namespace at all: a controller
@@ -1425,11 +1431,11 @@ There is exactly one exception to the two bullets above, and it exists so the br
 
 Authentication answers "who is this?". Tenant ownership answers "whose data is this?", and the two are deliberately not the same question. An Entra directory tenant is not a vending business: the mapping between them is application-owned data, so the business a caller belongs to is a decision this application makes and can audit, not one inherited from the token.
 
-**Identity and membership.** The actor is identified by the validated `(tid, oid)` claim pair — never by email, display name, or the Entra directory tenant alone, all of which are mutable or shared. `BusinessMembership` rows map an actor to one application-owned `Business`. `BusinessMembershipResolutionPolicy` (Domain) decides the outcome: exactly one active membership on an active business resolves; none, or several, denies. Ambiguity is denied rather than resolved by picking one, because silently choosing a business is how data ends up in the wrong ledger.
+**Identity and membership.** The actor is identified by the validated `(tid, oid)` claim pair — never by email, display name, or the Entra directory tenant alone, all of which are mutable or shared. `BusinessMembership` rows map an actor to one application-owned `Business`. `BusinessMembershipResolutionPolicy` (Domain) decides the outcome: exactly one active membership on an active business resolves; none, or several, denies. Ambiguity is denied rather than resolved by picking one, because silently choosing a business is how data ends up in the wrong ledger. Since issue #522 the database also refuses to *create* that ambiguity, so the resolution denial is the second line of defence rather than the first — see [One active membership per identity](#one-active-membership-per-identity-issue-522).
 
 **Layering.** Claims parsing stays at the API boundary (`EntraActorIdentityAccessor`, the only implementation of the Application's `IAuthenticatedActorAccessor` port). `ICurrentBusinessProvider` is the Application-facing abstraction; `Inventory.Domain` and `Inventory.Application` never reference ASP.NET claims or principals. EF query filters and `SaveChanges` enforcement are persistence concerns and live with the `AppDbContext` adapter.
 
-**Per-request resolution.** `BusinessScopeMiddleware` runs after authentication and before the endpoint, resolves membership once, and publishes the answer into the request-scoped `BusinessScope`. An authenticated caller with no usable membership gets `403` and never reaches an action; the response carries no detail about why, because telling an unrecognised caller whether a business exists is information they have not earned. `IBusinessScope` exists as a separate synchronous port because query filters and `SaveChanges` cannot await a membership lookup.
+**Per-request resolution.** `BusinessScopeMiddleware` runs after authentication and before the endpoint, resolves membership once, and publishes the answer into the request-scoped `BusinessScope`. An authenticated caller with no usable membership gets `403` and never reaches an action; the response carries no detail about why, because telling an unrecognised caller whether a business exists is information they have not earned. `IBusinessScope` exists as a separate synchronous port because query filters and `SaveChanges` cannot await a membership lookup. Two endpoint markers, and only two, are eligible to proceed without a membership — the platform diagnostics surface of issue #336 and the account-state family of issue #523 — and a request that does carries the same *denied* scope, so neither reads business data; see [Platform diagnostics](#platform-diagnostics-issue-336) and [Account state and the membership-not-required marker](#account-state-and-the-membership-not-required-marker-issue-523).
 
 **Fail closed.** `BusinessScope` starts denied and can only move forward to a resolved business, once. A denied scope yields a `null` business ID, and the filters compare with `==`, so an unresolved caller matches no row. "No current business" must never be read as "no filter" — that would convert a resolution bug into a cross-business leak. A scope cannot be repointed mid-request.
 
@@ -1439,15 +1445,82 @@ Authentication answers "who is this?". Tenant ownership answers "whose data is t
 
 **Central write enforcement.** Query filters protect reads only. `BusinessOwnershipEnforcer` runs on both `SaveChanges` overloads and enforces four rules: new rows are **stamped** with the caller's business (callers never supply it); inserts, updates, and deletes of another business's row are **rejected**, which is what stops a detached entity attached by ID from slipping through to an `UPDATE`; the business key is **immutable**, so a record cannot be moved between businesses; and every foreign key between tenant-owned entities must **stay inside one business**. The relationship rule is driven by EF model metadata, not a hand-written list, so a new foreign key is covered as soon as it is mapped. Resolving a principal's owner deliberately uses `IgnoreQueryFilters`, because a principal in another business must be reported as a boundary violation rather than mistaken for "does not exist".
 
-**Tenant-scoped uniqueness.** Constraints over externally supplied values are scoped by business, because two businesses may legitimately hold the same external value: Nayax transaction IDs, import file hashes, site commission agreements, fee effective dates, and costing baselines. `NayaxSales` consequently has its own local key with `TransactionID` unique *per business* — a remote identifier is an external identity, not a primary key. This also keeps import de-duplication correct: one business must never be told its own import is a duplicate because another imported the same bytes first, and a shared remote ID must never cause one business's import to update another's row.
+**Tenant-scoped uniqueness.** Constraints over externally supplied values are scoped by business, because two businesses may legitimately hold the same external value: Nayax transaction IDs, import file hashes, site commission agreements, fee effective dates, and costing baselines. `NayaxSales` consequently has its own local key with `TransactionID` unique *per business* — a remote identifier is an external identity, not a primary key. This also keeps import de-duplication correct: one business must never be told its own import is a duplicate because another imported the same bytes first, and a shared remote ID must never cause one business's import to update another's row. The one-active-membership index of issue #522 is deliberately *not* scoped this way, and is not an exception to this rule: `BusinessMembership` is one of the three structural non-tenant-owned tables above, and the value it constrains is an Entra identity that must mean the same person everywhere rather than an externally supplied value two businesses may legitimately share.
 
 **Protected documents.** A document's bytes live outside the database, so hiding the row is not enough. Retrieval always resolves the tenant-owned parent record first — `GET /api/purchases/{id}/file` and `GET /api/operating-expenses/{id}/attachment` both go through the filtered `DbSet` — and the stored file name is read from that record, never from the request. No endpoint accepts a file name or path as input, and `FileSystemDocumentStorage` reduces any stored name with `Path.GetFileName` and then proves the result is inside the category folder, so a crafted value cannot escape it. Knowing another business's purchase ID, attachment ID, stored file name, and on-disk path therefore yields nothing.
 
-**The unrestricted-context rule.** `new AppDbContext(options)` is fail-closed. Unrestricted, all-business access requires passing `UnscopedBusinessScope.Instance` explicitly, so every such place is greppable. Outside tests it exists only in the three human-invoked commands — `migrate-database`, `bootstrap-business` and `migrate-documents`, the last of which reads every business's document metadata to migrate it (see [Document storage](#document-storage)). No controller, service, or request path may run unrestricted; a composition-root test pins down that the DI container never produces an unscoped context. The platform diagnostics API (issue #336) does **not** change this and is deliberately not implemented with it: a diagnostics request carries a *denied* `BusinessScope`, so the query filters and `BusinessOwnershipEnforcer` stay in force and it reads nothing at all through `AppDbContext`. Its cross-business read is a separate read-only SQLite connection restricted by SQLite's own authorizer — see [Platform diagnostics](#platform-diagnostics-issue-336) for the exception's exact boundaries.
+**The unrestricted-context rule.** `new AppDbContext(options)` is fail-closed. Unrestricted, all-business access requires passing `UnscopedBusinessScope.Instance` explicitly, so every such place is greppable. Outside tests it exists only in the three human-invoked commands — `migrate-database`, `bootstrap-business` and `migrate-documents`, the last of which reads every business's document metadata to migrate it (see [Document storage](#document-storage)). Being a human-invoked command is not what grants it: `migrate-nayax-connection` (issue #519) is a fourth such command and constructs no unrestricted context at all, because it needs none — the tenancy tables it reads to resolve the target business carry no tenant filter, and the credential itself is read and written through a context scoped to that one business (see [Migrating the Nayax connection](#migrating-the-nayax-connection-issue-519)). No controller, service, or request path may run unrestricted; a composition-root test pins down that the DI container never produces an unscoped context. The platform diagnostics API (issue #336) does **not** change this and is deliberately not implemented with it: a diagnostics request carries a *denied* `BusinessScope`, so the query filters and `BusinessOwnershipEnforcer` stay in force and it reads nothing at all through `AppDbContext`. Its cross-business read is a separate read-only SQLite connection restricted by SQLite's own authorizer — see [Platform diagnostics](#platform-diagnostics-issue-336) for the exception's exact boundaries.
 
 **Schema and data are separate steps, and only the data step is exclusively human-controlled.** `DatabaseSchemaStartup` decides per environment: Production, Development, and `Testing` all migrate automatically and fail closed if the attempt fails (issue #201); any other non-Production environment does so only under the `Database:AllowAutomaticMigrationUnsafeOutsideDevelopment` override. Migrations never assign ownership, automatically or otherwise. The backfill is exclusively `bootstrap-business`, run by a human: deterministic, idempotent (it touches only unassigned rows), restartable, transactional, dry-runnable, and verified by before/after counts and financial totals, with a `BusinessBackfillAudit` record of what it did. `TenantOwnershipReadiness` reports at startup whether ownership has actually been bootstrapped, so "all my data is gone" cannot be the first symptom of an unfinished rollout.
 
-**Known limits of this rollout.** One business is live. The Nayax client still uses a single operator/token configuration, so remote identifiers and imports are not partitioned per business; a second live business must wait until they are. Issue #518 added the per-business storage those credentials will move into — see [Per-business Nayax connection](#per-business-nayax-connection-issue-518) — but nothing reads it yet, so this limit stands until issue #520 changes the client and issue #519 moves the existing business's credential. The database foreign keys from `BusinessId` to `Businesses` are a deliberate, still-outstanding deferral — see `docs/tenant-rollout.md`. Issue #39 (document storage) consumes this ownership key and must not introduce blob storage before it.
+**Known limits of this rollout.** One business is live. The Nayax **credential** is no longer part of that limit: issue #518 added the per-business storage, issue #519 the human-run `migrate-nayax-connection` command that moves the existing credential into it, and issue #520 made the client read the current business's own operator id and token on every call with no global fallback — see [Per-business Nayax credentials](#per-business-nayax-credentials-issue-520). What is still outstanding before a second business goes live is the rest of #328's self-service work, above all the Owner-facing connection wizard and re-test endpoints of issue #506: today a business's credential reaches the database only through that human-run command, so there is no supported way for a second business to connect its own Nayax account. Running the command is a human step, described in `docs/tenant-rollout.md` § Migrating the Nayax connection into the business. The database foreign keys from `BusinessId` to `Businesses` are a deliberate, still-outstanding deferral — see `docs/tenant-rollout.md`. Issue #39 (document storage) consumes this ownership key and must not introduce blob storage before it.
+
+#### Membership roles and capabilities (issue #521)
+
+Ownership answers "whose data is this?". A role answers "what may this member do with it?", and that is again a separate question: every member of a business sees the same data, and the role decides which of it they may read and change.
+
+**Three roles, on the membership.** `BusinessMembership.Role` is a required `Inventory.Domain.Tenancy.BusinessRole` — `Operator`, `Manager` or `Owner` — stored as that constrained vocabulary's integer value. The values are spaced (`20`, `30`, `40`) so the read-only Viewer role #328 anticipates can be added below `Operator` without renumbering a value that is already persisted, and `0` is deliberately not a declared role, because `0` is what an unfilled integer column and a default-constructed enum both hold. Nothing compares two roles numerically.
+
+**An unknown stored role denies access.** `BusinessMembershipResolutionPolicy` checks the role of the membership that would otherwise have resolved, and a value this code does not declare — a hand-written `UPDATE`, or a role a newer deployment wrote — is denied as `RoleUnrecognised`. It is never read as the lowest declared role, which would grant access nobody recorded, and the adapter does not normalise it on read for the same reason. A membership denial still outranks it, so an operator investigating a refusal is shown the cause they can act on. The role is checked in the Domain policy rather than by a database CHECK constraint: SQLite cannot add one to an existing table without rebuilding it, and a value written by a future deployment has to fail closed in the policy anyway.
+
+**The role travels with the resolved business.** `BusinessMembershipResolution` carries the business id and the role together, so the two always come from one membership lookup and cannot disagree. `ICurrentBusinessProvider.RequireRoleAsync` is how the Application layer reads it, memoised per request exactly like the business id — so a role change applies on the member's next request, with no cache to wait for and no sign-out needed. The one-active-membership fail-closed rule is unchanged.
+
+**One capability table.** `Inventory.Application.Access.RoleCapabilities` is the single role → capability definition, over the fifteen-capability `Capability` vocabulary (`Dashboard.View`, `Dashboard.ViewFinancials`, `PickList.View`, `Inventory.Operate`, `Purchasing.Operate`, `Suppliers.ManageGstDefaults`, `Expenses.Manage`, `Reports.View`, `Imports.Run`, `SiteCommissions.Manage`, `Integration.Manage`, `Data.Repair`, `Members.Manage`, `Roles.View`, `Business.Manage`). An Operator holds the four operational ones; a Manager adds the financial, expense, import and commission work; an Owner adds the business's own configuration — integration, data repair, members, roles and the business record. Each role's set is written out in full, so the table reads the way the agreed table in #328 reads, and the hierarchy it happens to describe is asserted by a test rather than assumed by the code. There is no second table, no per-controller list and no capability derived from a role's stored value.
+
+**Defining a capability is not enforcing one.** Issue #521 stores the role, publishes the vocabulary and reports it. No endpoint checks a capability yet — that is issue #502's work, and it will read `RoleCapabilities.Allows` so that enforcement and the reported list cannot drift apart. Until then every member reaches what they reached before.
+
+**`GET /api/me/access`** returns the caller's role, that role's capability names, and their business's name and time zone (issue #499). It takes no parameter of any kind and describes the caller alone: no other member, no other business, and no identifier for either. It carries the same `[Authorize]`, delegated-scope and membership requirements as every other business endpoint, and deliberately no capability requirement of its own — a member must be able to ask what they may do whatever role they hold. `GET /api/business/current` keeps its own contract.
+
+**A role only ever arrives from a reviewed path.** `bootstrap-business` accepts an optional `Role` name per configured member, validated against the same vocabulary and defaulting to `Owner`; an unrecognised name refuses the whole run and writes nothing. Re-running never changes the role an existing member already holds, for the same reason it never resurrects a revoked approval. The additive migration backfilled every pre-existing membership to `Owner`, so no existing member's access changed. Changing a role afterwards is the member management of issue #524; no request path writes a role today, and no role is ever accepted from client input.
+
+#### One active membership per identity (issue #522)
+
+A person belongs to one business at a time. That was always the resolution rule — `BusinessMembershipResolutionPolicy` denies an actor holding two active memberships *every* business rather than choosing one — but until this slice it was only the resolution rule: the schema allowed the state, and the person found out at their next sign-in, locked out of both businesses at once. Issue #522 moves the rule to where the membership is granted, so the write is refused instead.
+
+**The database enforces it.** `BusinessMemberships` carries a unique index on `(DirectoryTenantId, ObjectId)` **filtered to the active rows** (`IX_BusinessMemberships_DirectoryTenantId_ObjectId_Active`, `WHERE "IsActive" = 1`). Because the filter is on the state rather than on how the state was reached, an `INSERT` of a second active membership and an `UPDATE` that reactivates a revoked one are refused alike, while any number of revoked rows may stay for the membership history — which is also what makes revoking the way a person moves from one business to another. Both columns are `NOCASE`, so a case-shifted hand-entered row collides rather than becoming a second active membership. The unfiltered lookup index stays: the per-request membership resolution has to see revoked rows too, and a filtered index cannot serve that query. The index reads no business state, so a membership in a Pending or Deactivated business still occupies that identity's one active membership.
+
+**The migration can only refuse.** `AddOneActiveMembershipPerIdentity` first counts the identities already holding more than one active membership and, if there are any, aborts with a message naming what to fix and changes nothing at all — no column, no index, no row, and no history entry claiming it ran, so the upgrade is simply re-run once a human has revoked the extra membership. It never picks one membership to keep: choosing which business a person stays in is a decision about access to financial data, and an unattended guess would either strand somebody or hand them the wrong ledger. See `docs/tenant-rollout.md` § One active membership per identity. The rest of the migration is additive: `StatusChangedAtUtc`, filled from `CreatedAtUtc`, and the index.
+
+**`StatusChangedAtUtc` records when the membership's state last changed** — on creation, revocation, reactivation and rejection. It exists because "the most recent record decides" has to be answerable for an identity with no active membership, which is the account-state precedence of issue #523: an old rejection must not outrank a newer revocation, and `CreatedAtUtc` cannot tell them apart. The migration filled every pre-existing row from `CreatedAtUtc`, the only instant those rows record; nothing invents a revocation instant that was never stored. It is a state timestamp, not an audit trail — the row still records neither who changed it nor the states it held before.
+
+**`MembershipEligibility` (Domain) is the one rule**: an identity may gain or regain an active membership only while it holds no other active membership, in any business — Pending and Deactivated ones included. It never reads the owning business's state, so a future business status cannot quietly become an exception to it. The check takes an optional membership id to **exclude**, which is the membership the operation is itself about: approving an applicant's own membership (#509) or changing a member's role (#504) must not be refused by the very row being changed. The exclusion leaves out one row, not the rule — a second active membership elsewhere still refuses the operation. `BusinessOwnerRetention` is its companion: a business must keep at least one active Owner, because only an Owner may manage members, roles, the integration and the business record, so a business that loses its last active Owner cannot be administered by anybody inside it and has no repair path short of a human editing the database. A revoked Owner, a Manager and a stored role this code does not declare are all "not an Owner".
+
+**`Inventory.Application.Tenancy.MembershipWriteGuard` is the one write path**, and every operation that creates, reactivates or deactivates a membership or changes a role goes through it — the invite redemption, reinstatement, revocation and role change of #504, the self-service application of #507, and the approval and rejection of #509. It opens a SQLite `BEGIN IMMEDIATE` transaction, re-checks eligibility *inside* it, runs the operation's own write, re-reads the business and checks the Owner rule on the state that write left behind, and commits only then; a refusal rolls the write back with the transaction. The authoritative read, the rule and the mutation are deliberately one operation, because a check-then-write rule that is not serialised is not a rule: two simultaneous requests otherwise both read "no active membership", or both read "there is another Owner", and both write. `BEGIN IMMEDIATE` rather than the default deferred transaction is the whole point — a deferred transaction takes its write lock at the first write, which is after the check it is supposed to protect. The guard writes no row itself: what belongs in a membership row is the calling operation's business, what must be true around it is the guard's, and an operation declares which rules apply through `MembershipWriteIntent` rather than having them inferred from the rows it changed.
+
+**One refusal, one status code.** Both rules refuse with `DomainConflictException` carrying a fixed Domain message, which the API boundary's `DomainExceptionHandler` publishes verbatim as `409 Conflict` (see [Domain and application error mapping](#domain-and-application-error-mapping)): "This person is already a member of a business." and "A business must keep at least one active Owner. Give another member the Owner role first." Neither names another business, member or role — a person told they may not join is not thereby entitled to know which business they already belong to. The filtered index refusing a write becomes the same first message rather than an unexplained `500`: `EfBusinessMembershipWriteStore` recognises that one constraint violation (told apart from the per-`(actor, business)` index by the `BusinessId` that index also names) and nothing else, so every other database failure keeps propagating untranslated, and the SQLite exception type never crosses into the Application layer.
+
+**Nothing calls the guard yet.** Issue #522 provides the index, the rules and the write path; the endpoints that use them are #504, #507 and #509, and no request path creates, revokes or reactivates a membership today — `bootstrap-business` and the end-to-end fixture are still the only paths that create one, and both now stamp `StatusChangedAtUtc` on creation. What proves this slice: `OneActiveMembershipPerIdentityTests` (the index, including reactivation and the revoked rows it must allow), `AddOneActiveMembershipPerIdentityMigrationTests` (the additive upgrade, and the abort leaving the database untouched), `MembershipEligibilityTests`/`BusinessOwnerRetentionTests` (the two rules), `MembershipWriteGuardTests` (the order the rules are checked in around a write) and `BusinessMembershipWriteTransactionTests`, which runs two writers against a real SQLite file: two simultaneous activations of one identity leave exactly one, and two Owners demoting each other leave one Owner standing. Both of those fail with a deferred transaction.
+
+#### Account state and the membership-not-required marker (issue #523)
+
+The boundary above fails closed, and until this slice it also failed *silently*: an authenticated person with no usable membership got the same public `403` whether nobody had ever approved them, their membership had been revoked, their business had been deactivated, or their records were ambiguous. That response is right for every business endpoint — the caller has earned no detail — but it leaves the frontend nothing to show them but a bare error. Issue #523 adds one endpoint that tells the caller about their own account, and the marker that lets them reach it.
+
+**`GET /api/me/account-state`** returns exactly three fields and nothing else:
+
+```json
+{ "state": "Member", "onboardingEnabled": false, "rejectionReason": null }
+```
+
+`state` is a published `Inventory.Domain.Tenancy.AccountState` name. `onboardingEnabled` is `false` until issue #507 adds the `SelfServiceOnboarding:Enabled` flag it will report, and `rejectionReason` is non-null only for `ApplicationRejected`, which also arrives with #507. The response names **no business** — not a name, not an id, not whether one exists — because the caller may be somebody no business has approved, and the state alone is what decides the screen. The middleware's public `403` body is unchanged: this endpoint is the only place the distinction is visible, and only for the caller's own identity.
+
+**The precedence is the rule, and first match wins.** `AccountStatePolicy` (Domain) decides:
+
+1. `MembershipAmbiguous` — more than one active membership.
+2. `Member` — one active membership in an active business.
+3. `ApplicationPending` — one active membership in a pending business (issue #507's business status).
+4. `BusinessDeactivated` — one active membership in a deactivated business.
+5. No active membership — the most recent inactive record decides: in a rejected business `ApplicationRejected` (issue #507), any other `MembershipRevoked`.
+6. `NoMembership` — no rows.
+
+The ordering is the whole rule: a person's history may hold any number of revoked rows, and an old revocation must never describe an account that works today, so the active membership is examined before the inactive ones rather than merged with them. Steps 3 and 5's rejected case read a business status no business carries yet, so today step 3 cannot match and every inactive record falls to `MembershipRevoked` — which is also why "the most recent inactive record" is currently unobservable rather than unimplemented: with one possible answer for an inactive record, which record is most recent cannot change the state. `BusinessMembership.StatusChangedAtUtc` is already stored and filled (issue #522), so #507 adds the status to `ActorBusinessMembership`, the ordering and the two application states together. `MembershipAmbiguous` is only reachable for legacy data: since #522 the database refuses to create it, and that migration refuses to run while any identity holds two active memberships.
+
+**The state describes; it grants nothing.** `BusinessMembershipResolutionPolicy` remains the only rule that decides access, and no account state is consulted by it. That is also why a current membership whose stored role this code does not declare is still `Member` here while every business endpoint refuses it (`RoleUnrecognised`, see [Membership roles and capabilities](#membership-roles-and-capabilities-issue-521)): the account exists and the undeclared role is an operator's problem, not a different account state. `GetAccountState` (Application) reads the caller's membership records through `IBusinessMembershipStore` rather than through `ICurrentBusinessProvider`, because a resolution is one access decision while this precedence is about the records themselves, including the inactive ones a resolution has no use for. A caller whose token identifies nobody — no authenticated actor, or no usable `(tid, oid)` pair — is reported as `NoMembership` without any lookup, which is their situation exactly: an identity nothing can be recorded against has no membership.
+
+**The marker is eligibility, not permission.** `MembershipNotRequiredEndpointAttribute` (`InventoryApi/Auth/`) is honoured by `BusinessScopeMiddleware` only on the endpoint carrying it, and a marked request keeps the `[Authorize]` requirement and the delegated `access_as_user` scope — "membership not required" is not "anonymous", and an unauthenticated request is still left to the authentication middleware's `401`. The request runs with a **denied** `BusinessScope` and no business time zone, exactly as a diagnostics request does, so the tenant query filters and `BusinessOwnershipEnforcer` stay fully in force and a marked endpoint reads no business data at all through `AppDbContext`; the membership table it does read is one of the three structural non-tenant-owned tables above. Membership is not resolved for a marked endpoint at all, rather than resolved and ignored, so there is no business for anything downstream to pick up. Unlike the diagnostics marker it evaluates no policy, because the only thing such an endpoint may answer is a fact about the caller's own identity; an endpoint carrying both markers stays a diagnostics endpoint, decided by `PlatformAdminPolicy`.
+
+**Which endpoints may carry it is reviewed.** `MembershipNotRequiredEndpointAllowlistTests` fails the build when the marker appears on an endpoint that is not on its allowlist — today `api/me/account-state` alone — and also asserts that every marked endpoint still requires authentication and the delegated scope and carries no `[AllowAnonymous]`. Issue #502 folds that allowlist into its endpoint-classification test as class 3, alongside #504's invite redemption and #507's application endpoints. Do not mark an endpoint that serves business data, and do not add a third bypass to the middleware.
+
+**What proves this slice.** `AccountStatePolicyTests` (the precedence, including that old revocations never override a current membership and that the two application states are unreachable today), `GetAccountStateTests` (the use case, including the ambiguous case the database no longer allows and the always-`false`/always-null fields), `BusinessScopeMiddlewareMembershipNotRequiredTests` (the marker: a denied scope, no policy evaluated, nothing granted on an unmarked endpoint, `401` still `401`), `MeAccountStateApiTests` (every state today's schema can hold, through the real pipeline and the real migration history, with a second active business present throughout — plus the unchanged `403` body and the same callers still reaching nothing else) and the allowlist test above.
 
 ### Platform diagnostics (issue #336)
 
@@ -1509,11 +1582,12 @@ The authorizer is why the acceptance criterion "do not rely on regex rejection a
 
 ### Per-business Nayax connection (issue #518)
 
-The Nayax integration is still configured once for the whole application: `NayaxLynx:OperatorId`
-and the bearer token come from configuration, which is the known single-operator limit recorded in
-[Tenant ownership](#tenant-ownership-issue-64). Issue #518 — a slice of #500, under the contract of
-#328 — adds the **storage** a per-business connection needs, and nothing else: no consumer reads it
-yet, the Nayax client is untouched, and application behaviour is unchanged until issue #520.
+Issue #518 — a slice of #500, under the contract of #328 — added the **storage** a per-business
+connection needs, and nothing else: when it shipped, the Nayax integration was still configured once
+for the whole application (`NayaxLynx:OperatorId` and a configured bearer token), no consumer read
+the new record, and application behaviour was unchanged. Issue #520 is what made the client read it;
+this section describes the storage, and
+[Per-business Nayax credentials](#per-business-nayax-credentials-issue-520) describes its use.
 
 **One row per business, owned centrally.** `BusinessNayaxConnection` (`Inventory.Infrastructure/Models`)
 holds the operator id, the encrypted access token, the id of the key that encrypted it, the
@@ -1522,8 +1596,10 @@ connection status, the credential revision, and the last-tested and updated inst
 tenant-owned entity, with no predicate of its own anywhere; the additive
 `AddBusinessNayaxConnections` migration creates the table and a **unique index on `BusinessId`**, so
 "one connection per business" is a schema guarantee rather than an adapter convention. The migration
-stores and infers nothing — moving the existing configured credential is the human-run command of
-issue #519 — so every business starts with no row at all, which is what `NotConfigured` means.
+stores and infers nothing — moving the existing configured credential is the human-run
+`migrate-nayax-connection` command of issue #519, described in
+[Migrating the Nayax connection](#migrating-the-nayax-connection-issue-519) — so every business
+starts with no row at all, which is what `NotConfigured` means.
 `BusinessNayaxConnections` is deliberately **not** on the [platform diagnostics](#platform-diagnostics-issue-336)
 allow-list and must not be added to it.
 
@@ -1543,14 +1619,20 @@ this — the composition root reads the key configuration and calls `AddNayaxTok
 as it does for the Nayax HTTP client's options — so Key Vault stays out of the inner layers. An
 environment with no key configured gets the fail-closed `UnconfiguredNayaxTokenProtector`: the API
 starts and runs normally, and only storing or reading a per-business token fails, because
-provisioning the production key is a human step (see README.md § Configuration and secrets).
+provisioning the key is a human step (see README.md § Configuration and secrets). Since issue #520
+that is what every Nayax call does, so in an environment that uses Nayax a missing key means the
+Nayax features fail closed until a human provisions one — and nothing else does.
 
 **`CredentialRevision` is what makes a status write safe.** The Application port is
 `Inventory.Application.Nayax.INayaxConnectionStore`, implemented by
 `Inventory.Infrastructure.Persistence.EfNayaxConnectionStore`. A credential save increments the
 revision in the database, resets the status to `PendingPermissions` and clears the last-tested
 instant, so a newly stored token can never inherit the previous token's test result; the first save
-creates the row at revision 1. A permission test result carries the revision it was produced for,
+creates the row at revision 1. A save is atomic, and it takes part in a transaction its caller has
+already begun on the same context instead of committing on its own, which is what lets
+`migrate-nayax-connection` make the save and the status write that follows it one change (see
+[Migrating the Nayax connection](#migrating-the-nayax-connection-issue-519)); with no transaction in
+progress a save still gets its own. A permission test result carries the revision it was produced for,
 and applying it is **one conditional statement** — `UPDATE … WHERE BusinessId = @b AND
 CredentialRevision = @r`, where the business predicate is contributed by the central query filter
 and the revision predicate by the caller's expected value. Zero rows matched means an operator saved
@@ -1575,9 +1657,237 @@ unconfigured protector and the startup validation of the key section.
 SQLite: revision 1 on first save, the increment and cleared test result on a later save, the applied
 and the discarded status result with the log event's exact properties, the statement shape itself,
 two-business isolation for reading, decrypting, saving and status writes, two overlapping saves
-leaving the last committed credentials, a retired key and a tampered ciphertext failing closed, a
+leaving the last committed credentials, a save inside a caller's transaction landing only when that
+caller commits, a retired key and a tampered ciphertext failing closed, a
 denied and an unscoped context writing nothing, and the unique index refusing a second row.
 `AddBusinessNayaxConnectionsMigrationTests` is the upgrade test from the previous migration.
+
+### Migrating the Nayax connection (issue #519)
+
+The record #518 added starts empty, and the credential it is for is live in production
+configuration. `migrate-nayax-connection` is the human-run command that moves it: the fourth
+early-command branch in `Program.cs`, alongside `bootstrap-business`, `migrate-database` and
+`migrate-documents`, so starting the API and moving a credential can never be the same action. The
+operator procedure, the cutover window around issue #520 and when the global settings may be
+removed are in `docs/tenant-rollout.md` § Migrating the Nayax connection into the business; what
+follows is why it is built this way.
+
+**It reads the same configuration the client reads, and writes only through #518's store.**
+`NayaxConnectionMigrationCommand` binds `NayaxLynxOptions` and resolves the token through
+`NayaxLynxConfiguration.ResolveAccessToken`, the same function the composition root uses, so the
+command cannot hold a second opinion about where the live credential lives. It then hands the
+plaintext token to `INayaxConnectionStore.SaveCredentialAsync` exactly once. Encryption, the key id
+and the credential revision stay entirely inside the #518 adapter; nothing here knows a cipher.
+
+**It uses no unrestricted context** — see [the unrestricted-context rule](#tenant-ownership-issue-64).
+`NayaxConnectionMigrator` resolves and verifies the business through a *denied* context, which can
+read `Businesses`, `BusinessMemberships` and `BusinessBackfillAudits` because those are the
+deliberately global tenancy tables, and reaches no tenant-owned row at all. The credential is then
+read and written through a context scoped to that one resolved business, so the central query
+filters and `BusinessOwnershipEnforcer` are in force for every statement, and the adapter's own
+refusal to run without a single resolved business is satisfied honestly rather than bypassed.
+
+**A dry run writes nothing, rather than writing and rolling back.** `bootstrap-business` measures by
+doing the work inside a transaction and rolling it back, because its numbers are counts across every
+owned table. Here the whole change is two values and a status, so it can be reported exactly without
+writing: a dry run opens no transaction on the credential table and the status it reports for
+"after" is declared as a prediction.
+
+**`Ready`, not `PendingPermissions`, and the command never calls Nayax.** Every save through the
+store lands on `PendingPermissions` — a freshly stored token is never assumed to work — so the
+command applies a status result for the exact revision it just wrote, through the same conditional
+`TryApplyStatusResultAsync` path a real permission test uses. The evidence is production use rather
+than a live test, which is also why the instant recorded is when that was adopted. A revision that
+moved in between discards the result rather than describing credentials it was not produced for, and
+the command reports that rather than claiming success.
+
+**An apply is one transaction, so a partial state is not something it can leave.** Storing the
+credential and marking the connection `Ready` are two statements, and a command that committed the
+first and then failed the second would leave a credential whose status was never written while
+reporting a failure — the database changed by a run that says it refused. `NayaxConnectionMigrator`
+therefore opens one transaction on the business-scoped context and does everything inside it: the
+authoritative read of what the business holds, the comparison against the configured credential, the
+save, the `Ready` status write and the read-back. It commits only once the connection is actually
+`Ready`. A refusal, a status result the revision guard discarded, and a failed read or write all
+roll it back, so a run that reports anything other than success has written nothing at all, and
+recovering from one is simply running the command again rather than repairing a half-finished
+change. Putting the read inside that transaction is also what makes the "never replace a credential
+I did not recognise" refusal a decision about the state the write lands on, rather than about a
+state that may have been superseded since; the conditional status write still carries the revision
+it was produced for as well. The one ending the transaction cannot decide is a commit that itself
+fails: the database then holds the whole change or none of it, and the result says exactly that
+(`CommitFailed`, reported as an unknown database state) instead of claiming either. Every result
+carries a `DatabaseState` of `Unchanged`, `Changed` or `Unknown`, and the printed report states it
+in words on success and failure alike, so a refusal can never be read as a partial write.
+
+**Refusals, and what makes a re-run a true no-op.** It refuses when the configuration holds no
+operator id or token; when the schema has pending migrations; when tenant ownership is not
+bootstrapped — which is where "more than one business exists" lands, since `TenantOwnershipReadiness`
+requires exactly one active business with a usable membership and no unassigned rows; when no
+`BusinessBackfillAudit` row names that business, so it is not demonstrably the one
+`bootstrap-business` adopted; when a *different* operator id or token is already stored, because
+replacing a credential something else stored is a human decision; and when the token cannot be
+encrypted or the stored ciphertext cannot be decrypted, which fails closed rather than overwriting
+a credential nothing could read. A business already holding exactly the configured pair, marked
+`Ready`, is left completely untouched — the row is not rewritten, so not even the ciphertext changes
+and the revision does not move. The same pair stored but not yet `Ready` has only its status
+written.
+
+**The token never leaves the ciphertext column.** It is in no result member, no message, no
+exception and no printed line — not as a length, a prefix or a hash. The operator id is printed,
+because it is a remote identity an operator has to be able to confirm, and whether the stored token
+matches the configured one is printed as a plain yes/no.
+`Inventory.IntegrationTests/Bootstrap/NayaxConnectionMigrationTests` asserts that directly: it
+sweeps every reachable outcome's message, record `ToString`, printed report and captured log entries
+for both the configured and a second token, and sweeps every column of the credential table for the
+plaintext. Its fixture is built by running the real `BusinessBootstrapper`, because "bootstrapped"
+means that command's outcome — a migrated-but-unbootstrapped database is not merely empty, since a
+migration seeds a `NayaxProcessingFeeRate` with no owner.
+
+The same tests pin the atomicity, with the credential replaced between the save and the `Ready`
+write: on the first-save path the apply leaves no row at all, on the status-only path the row that
+was committed before it comes out byte-for-byte unchanged, a status write that fails outright takes
+the save back with it, the apply that follows a rolled-back one stores the credential at revision 1
+as a first apply would, and every ending reports its database state — only a failed commit is
+allowed to report `Unknown`, and no refusal may claim a write it did not make.
+
+### Per-business Nayax credentials (issue #520)
+
+Issue #520 — the last slice of #500, under the contract of #328 — is what makes the record of #518
+the thing every Nayax call authenticates with. Before it, `AddNayaxLynxClient` registered one typed
+`HttpClient` with the globally configured operator id and bearer token baked in at construction, and
+about 27 non-test files depended on the resulting `INayaxLynxClient`. After it, **the only global
+Nayax setting left is `NayaxLynx:BaseUrl`**, and there is no fallback to a global credential or to
+another business's: a business either has its own usable connection or its Nayax features fail
+closed.
+
+**The credential is resolved per call, centrally, and no consumer learns that.** `INayaxLynxClient`
+is unchanged, so none of those ~27 consumers changed either. What changed is one step inside
+`Inventory.Infrastructure.Nayax.NayaxLynxClient`: every operation starts by resolving
+`Inventory.Application.Nayax.INayaxRequestCredentialProvider`, and applies the result to *that
+request* — the `Authorization: Bearer` header Nayax documents
+([Security & Token](https://devzone.nayax.com/docs/manage-data-operations/lynx-api/security)) and the
+`OperatorID` path parameter of the operator endpoints, which are built from the same resolved
+credential so the token and the operator id can never belong to different businesses. Nothing
+credential-shaped is held on the shared `HttpClient`, in the container, or in the client's own
+fields, which is what makes the boundary structural rather than careful: there is no place for one
+business's token to outlive its request. `NayaxLynxClient` queries no EF Core; the provider
+(`NayaxRequestCredentialProvider`, in `Inventory.Application`, scoped per request) reads #518's
+`INayaxConnectionStore`, which reads the business the `AppDbContext` tenant filters already resolved.
+A caller with no resolved business reads nothing and therefore calls nothing.
+
+**The status gate is a Domain rule, and it is an allow-list.**
+`Inventory.Domain.Nayax.NayaxConnectionStatusGate.AllowsOrdinaryOperations` is the one place that
+decides: `Ready` and `PendingPermissions` may run ordinary operations, `NotConfigured` and
+`NeedsAttention` may not, and a status value outside the declared vocabulary — which is what a cast
+integer or a hand-edited row can produce — is refused rather than assumed usable. `PendingPermissions`
+is deliberately allowed: the credentials are stored and may well work, and refusing every call until
+something had tested them would make a freshly connected business look broken. The provider caches
+nothing, so the call after a status change sees the new status.
+
+**The status, the operator id, the token and the revision come from one snapshot of the row.** The
+gate decides, and the 403 classification below depends on the status *the sent token is stored
+with* — so resolving the two separately would be wrong, not merely untidy: a credential save
+committing between a status read and a token read hands the caller the previous status beside the new
+token, a pair the record never held, and a connection disabled between those reads would still have
+its credential sent under the status the earlier read saw. `INayaxConnectionStore.FindForOperationAsync`
+is therefore the one read an ordinary call resolves its credentials through, and
+`EfNayaxConnectionStoreTests.The_operation_read_resolves_the_status_and_the_credential_in_one_statement`
+pins it to a single `SELECT`. The gate travels *into* that read as the predicate that decides whether
+the token may be decrypted, which keeps both properties at once: the rule stays the single Domain
+allow-list the Application layer owns, and **a refused status never decrypts the token at all** — the
+adapter stops before the ciphertext, so the gate is still a decision taken before the risky step
+rather than after it. `NayaxRequestCredentialProvider` then applies the same gate to the snapshot's
+own status to refuse and report the operation. `FindAsync` and `FindCredentialAsync` remain for the
+callers that genuinely want one or the other: a token-free status read, and the gate-free re-test
+read below.
+
+**A refusal is a stable error the frontend can show.** `NayaxNotConnectedException` (Application)
+carries the fixed sentence of `NayaxNotConnectedException.StableMessage`, the stable code
+`nayax_not_connected`, and the connection's own status;
+`InventoryApi.Http.NayaxConnectionExceptionHandler` maps it, and
+`NayaxPermissionNotGrantedException`/`nayax_permission_not_granted`, to `409 Conflict`
+`application/problem+json` with `detail`, the `message` extension the existing frontend error
+handling reads, the `code`, and — for a connection failure — `nayaxConnectionStatus`. **Neither
+becomes `401` or `403`**: those statuses describe the *caller's* Entra token and business membership,
+and a signed-in member whose business has not connected Nayax is perfectly entitled to the feature.
+Neither is a `502` either — Nayax answered correctly, or was never called, and retrying would not
+help. Each is logged once at `Warning` with the error code, the status or refused operation, and the
+request's method, path and trace id; the operator id, the token and the upstream body appear in
+neither the response nor the log. Making each individual Nayax screen degrade gracefully around this
+error is issue #329 and is deliberately not part of this change.
+
+**401 and 403 mean different things, because Nayax documents them differently**
+([App tokens troubleshooting](https://devzone.nayax.com/docs/manage-data-operations/lynx-api/app-tokens)):
+
+- **401 — the token is invalid or has expired.** That is a verdict on the stored credentials, so the
+  connection moves to `NeedsAttention` through #518's conditional update, and the caller gets the
+  stable "not connected" error because that is now the connection's state. The revision written is
+  **the one read when the call started**, never whatever is stored when the answer arrives: a 401
+  answering a call that used revision N, arriving after revision N+1 was saved, matches no row and is
+  discarded (with the store's structured "stale Nayax status result discarded" event) rather than
+  marking a token an operator has just fixed as broken. The recorded instant becomes the connection's
+  last test result, because a 401 in production traffic is exactly a test of those credentials.
+- **403 — the token's scopes do not cover this resource or action.** That is a verdict on one
+  feature, not on the credentials, so **nothing writes a status**. While the credentials have not been
+  tested since they were saved (`PendingPermissions` in the same snapshot the request's token came
+  from, never a status read separately from it), it surfaces as the per-feature "Nayax hasn't
+  granted permission for this" error, which is what lets the rest of the integration keep working. A
+  403 against credentials that were tested and worked stays the ordinary upstream failure it was
+  before this change: the issue defines the per-feature error for the unverified state, and widening
+  it would change an established mapping without an issue asking for it.
+
+Every other non-success status is unchanged: one log line with safe fields and
+`NayaxUpstreamException` for the HTTP boundary's controlled `502` (see
+[External integration errors](#external-integration-errors)), caller cancellation stays cancellation
+and writes no status, and the resilience handler underneath is untouched — a 401 or 403 was never
+retryable and still is not.
+
+**The re-test read is a separate port, and that is enforced.** Issue #506's Owner-only re-test has to
+be able to test credentials the gate refuses — otherwise `NeedsAttention` would be unrecoverable, as
+nothing could ever check the stored token again — so `INayaxConnectionRetestCredentialProvider`
+decrypts regardless of status and returns the revision it read, for the result to be applied back to
+the exact credentials it tested. It is a **separate interface** rather than a second method on the
+gated provider, because an ordinary consumer that could reach it would have a way to use credentials
+the gate refuses. `Inventory.IntegrationTests/Architecture/NayaxRetestCredentialBoundaryTests` pins
+that against the compiled assemblies: only the port, its implementation and the registration may name
+it, the gated port's surface is frozen at its two members, `NayaxLynxClient` depends on the gated
+port, and one test proves the dependency rule can actually see a dependent. #506's endpoint adds
+itself to that allow-list as a reviewed edit.
+
+**Startup needs no credential.** `NayaxLynxConfiguration.ValidateNonSecretFields` no longer requires
+an operator id, and `NayaxLynxConfiguration.BuildBaseAddress` is what `AddNayaxLynxClient` validates
+and configures the typed client's base address from, so an API with no Nayax credential in
+configuration at all starts and serves every non-Nayax feature normally. The global
+`NayaxLynx:OperatorId`/`AccessToken` (and the legacy `Nayax:Token`) are read by exactly one thing
+now, the human-run `migrate-nayax-connection` command of
+[issue #519](#migrating-the-nayax-connection-issue-519); removing them from an environment is the
+human step described in `docs/tenant-rollout.md`. **Deploying this change makes Nayax unavailable
+for a business whose credential has not been moved into its record**, scheduled syncs included, which
+is why that command is run around the deploy rather than later.
+
+**What proves it.** `Inventory.UnitTests/Domain/Nayax/NayaxConnectionStatusGateTests` covers every
+declared status, undeclared values, and that a new status cannot be added without a decision here.
+`Inventory.UnitTests/Application/Nayax/NayaxRequestCredentialProviderTests` covers each status
+through the gate, that a refused status never decrypts the token, a missing record, a credential that
+disappears mid-call, an undecryptable credential propagating rather than reading as "not connected",
+the 401 write and its discarded stale-revision case, two businesses resolving their own credentials,
+and that rendering a resolved credential never prints the token;
+`NayaxConnectionRetestCredentialProviderTests` covers the gate-free read at every status.
+`Inventory.IntegrationTests/Infrastructure/Nayax/NayaxLynxClientConnectionGateTests` covers the
+client's side: no HTTP call at all for a refused connection, the bearer token and operator path
+parameter, the 401 report and its revision, the 403 split, that no 401/403 response body or token
+reaches an exception or a log, and cancellation. `NayaxLynxClientPerBusinessCredentialTests` runs the
+real client over the real provider, the real store and real AES-GCM encryption on relational SQLite
+with two businesses: each business's own operator id and token on the wire, a business with no record
+failing closed while the other is connected, a denied caller calling nothing, each status deciding
+whether a call happens, a 401 marking only the calling business's row, the call after a 401 being
+refused by the gate, a 403 leaving the row byte-for-byte unchanged, a credential replaced *while the
+request is in flight* leaving the new revision's status alone, and an existing consumer
+(`NayaxCatalogSnapshotProvider`) working unchanged. `NayaxConnectionExceptionHandlerTests` pins the
+`409` contract and its log; `NayaxLynxClientDependencyInjectionTests` pins the base address, that
+registration needs no credential and registers none, and that the registered client is built from the
+provider.
 
 ### Document storage
 
@@ -1706,6 +2016,8 @@ External service failures are represented by a typed integration exception rathe
 
 The HTTP boundary maps that exception centrally. `NayaxUpstreamExceptionHandler` is an `IExceptionHandler` registered with `AddProblemDetails()` and `UseExceptionHandler()`; it returns `502 Bad Gateway` as `application/problem+json` with the current trace ID, and returns `false` for every other exception so unrelated failures keep their normal pipeline behaviour. Controllers and services do not catch Nayax transport errors individually.
 
+Not every Nayax failure is an upstream one. Since issue #520 two of them are statements about the *current business's own* Nayax connection rather than about the remote service — it has no usable credential, or Nayax refused one feature for lack of permission — and those are Application-owned exceptions mapped to `409 Conflict` by a second handler, `NayaxConnectionExceptionHandler`. They are deliberately neither `502` (Nayax answered correctly, or was never called) nor `401`/`403` (which describe the caller's own token and membership). See [Per-business Nayax credentials](#per-business-nayax-credentials-issue-520) for the complete contract.
+
 Tokens, authorization headers, and raw upstream response bodies must never be logged or returned. A failed call logs the operation, method, endpoint, and numeric upstream status only; the public response carries a fixed title and detail and no exception information. An upstream failure must never be disguised as an empty collection, and caller cancellation must stay cancellation rather than becoming a `502`.
 
 Issue #165 made that log entry explicit at the HTTP boundary: an unreachable or refusing Nayax is an infrastructure failure an operator has to be able to find in retained telemetry, so `NayaxUpstreamExceptionHandler` logs each claimed exception exactly once at `Error` with the structured `NayaxOperation`, `UpstreamMethod`, `NayaxEndpoint` and `UpstreamStatus` properties the exception was designed to carry, plus the request's own `Method`, `Path` and `TraceId`. **The exception object is deliberately not attached to that entry.** `NayaxUpstreamException`'s own message is safe, but its inner exception is whatever the transport threw, and a transport exception's message is text this application did not compose: it can repeat a request header or an upstream response body verbatim. Logging only composed fields is what makes the "never log a token, an authorization header, or a sensitive upstream payload" rule structural rather than a review habit, and the operation name already identifies the call site exactly, so little diagnostic value is given up. An exception this handler does not claim is not logged here either — it belongs to whichever handler does claim it, and double logging would double the telemetry cost.
@@ -1720,7 +2032,7 @@ It composes three bounded Polly v8 strategies, built once per handler instance (
 - **Retry** (outermost, so each retried attempt is individually timed and circuit-broken): up to 3 retries with exponential, jittered backoff (250ms base), applied **only to idempotent requests** (`GET`/`HEAD`) - a request's `HttpMethod` decides this once, at the top of the handler. `CreateMachineProductsAsync`'s `POST` is never retried, because retrying an unsafe write without proven idempotency is exactly the failure mode this issue was written to avoid. A retryable outcome is a network failure (`HttpRequestException`), an attempt timeout (`TimeoutRejectedException`), or an upstream status of `408`, `429`, or any `5xx`; every other 4xx status (authentication, authorization, validation, not-found, conflict) is a terminal failure on the first attempt, and the caller's cancellation is excluded from all of this, per the timeout bullet above. A response that is abandoned in favour of a retry is disposed immediately so its connection is not leaked.
 - **Circuit breaker** (middle): once at least 8 sampled outcomes in a rolling 30-second window are transient failures at a 50%+ ratio, the circuit opens for 15 seconds and every call in that window fails fast with `Polly.CircuitBreaker.BrokenCircuitException` without an upstream HTTP attempt at all - so a sustained Nayax outage is not retried into indefinitely. The breaker shares the same transient-failure definition as retry and observes both `GET` and `POST` traffic (it does not retry, so it carries no idempotency risk of its own).
 
-None of these three strategies changes what a *successful* retry-exhausted or breaker-open call ultimately looks like to a caller: a final non-success `HttpResponseMessage` still reaches `NayaxLynxClient.EnsureNayaxSuccess` unchanged and becomes `NayaxUpstreamException`/`502` exactly as before; an unwrapped exception (`HttpRequestException`, `TimeoutRejectedException`, `BrokenCircuitException`) that survives retries still reaches `GlobalExceptionHandler` as a generic `500` with no Nayax-specific handling, the same place an untranslated provider SDK exception already lands per the exception-ownership table below. The retry-attempt and circuit-open/close log lines carry only the attempt number, the request's relative path, and the HTTP status/break duration - never a token, an authorization header, or a response body.
+None of these three strategies changes what a *successful* retry-exhausted or breaker-open call ultimately looks like to a caller: a final non-success `HttpResponseMessage` still reaches `NayaxLynxClient.EnsureNayaxSuccessAsync` unchanged and becomes `NayaxUpstreamException`/`502` exactly as before — except for the two statuses that describe the business's own connection rather than the remote service, which that method classifies instead (issue #520, [Per-business Nayax credentials](#per-business-nayax-credentials-issue-520)) and which were never retryable anyway; an unwrapped exception (`HttpRequestException`, `TimeoutRejectedException`, `BrokenCircuitException`) that survives retries still reaches `GlobalExceptionHandler` as a generic `500` with no Nayax-specific handling, the same place an untranslated provider SDK exception already lands per the exception-ownership table below. The retry-attempt and circuit-open/close log lines carry only the attempt number, the request's relative path, and the HTTP status/break duration - never a token, an authorization header, or a response body.
 
 ### Domain and application error mapping
 
@@ -1731,9 +2043,9 @@ Issue #59 replaced ad hoc, per-controller exception handling with a small typed 
 | Layer | Owns | Examples | Escapes to the caller as |
 | --- | --- | --- | --- |
 | `Inventory.Domain` (`Inventory.Domain.Exceptions`) | Domain invariants: a deliberate business-rule/input check, or a request that conflicts with the current state of the data | `DomainException` (abstract root), `DomainValidationException`, `DomainConflictException`, `InsufficientStockException` | `400`/`409` via `DomainExceptionHandler`, message verbatim |
-| `Inventory.Application` | Use-case-specific failures that are not domain invariants: a feature's own request validation or an access-control refusal | `Tenancy.BusinessAccessDeniedException` | Not claimed by a handler today; propagates to `GlobalExceptionHandler` as a generic `500` unless a future use case's controller catches it deliberately |
+| `Inventory.Application` | Use-case-specific failures that are not domain invariants: a feature's own request validation, an access-control refusal, or an integration the current business has not made usable | `Tenancy.BusinessAccessDeniedException`; `Nayax.NayaxNotConnectedException` and `Nayax.NayaxPermissionNotGrantedException` (issue #520) | The two Nayax connection failures become `409` via `NayaxConnectionExceptionHandler`, which publishes the fixed, caller-safe sentence each type declares as a constant. Anything else here is not claimed by a handler and propagates to `GlobalExceptionHandler` as a generic `500` unless a use case's controller catches it deliberately |
 | `Inventory.Infrastructure` | Provider-specific failures (EF Core, Azure Blob, filesystem, HTTP, Nayax), translated to a plain answer or a narrow typed exception at that layer's own boundary so the provider SDK's exception type and message never cross it | `Nayax.NayaxUpstreamException`; `Documents.AzureBlobContainer` translates `Azure.RequestFailedException` by `ErrorCode` into a `bool`/`null` return and lets every other Azure failure propagate untranslated (never re-wrapped, never given a caller-safe message) | `502` via `NayaxUpstreamExceptionHandler` for Nayax; an untranslated provider failure (a missing container, a revoked role assignment) reaches `GlobalExceptionHandler` as a generic `500` with no SDK detail |
-| `InventoryApi` | No business exceptions. Only `IExceptionHandler` implementations that translate an already-thrown exception to HTTP `ProblemDetails` | `DomainExceptionHandler`, `NayaxUpstreamExceptionHandler`, `GlobalExceptionHandler` | n/a - these are the translators, not the failures |
+| `InventoryApi` | No business exceptions. Only `IExceptionHandler` implementations that translate an already-thrown exception to HTTP `ProblemDetails` | `DomainExceptionHandler`, `NayaxConnectionExceptionHandler`, `NayaxUpstreamExceptionHandler`, `GlobalExceptionHandler` | n/a - these are the translators, not the failures |
 
 The allowed dependency direction is the same one enforced everywhere else in this document - `Inventory.Domain` ← `Inventory.Application` ← `Inventory.Infrastructure` ← `InventoryApi` - so a domain exception may be thrown from any layer, but only `Inventory.Domain` may *define* one, `Inventory.Application` may define a use-case-specific one without reaching into `Inventory.Domain`'s hierarchy, and a provider-specific exception must never leave `Inventory.Infrastructure` for `Inventory.Application`, `Inventory.Domain`, or `InventoryApi` to see its concrete type or raw message. `CleanArchitectureDependencyTests.No_new_business_exception_is_defined_in_InventoryApi` enforces the `InventoryApi` row: it freezes an explicit allow-list of exceptions that predate this rule and are intimately coupled to code that has not migrated out of `InventoryApi` yet (`Bootstrap.PendingMigrationsException`, `Bootstrap.DatabaseMigrationFailedException` (issue #201, added alongside the pending-migrations one for the same reason), and `Data.CrossBusinessAccessException`, all coupled to `AppDbContext`), and fails if any other exception type is added there. `InventoryCostDataQualityException`, a developer-facing `InvalidOperationException` subclass rather than a caller-safe type, was on that list until issue #296 moved it to `Inventory.Application.Costing` with the product cost rebuild use case that throws it; the HTTP boundary still does not map it.
 
@@ -3183,7 +3495,7 @@ A business's calendar days are derived in **its own** IANA time zone, stored on 
 - **Resolution is per request, from the trusted current business.** `BusinessScopeMiddleware` reads the resolved business's record through `Inventory.Application.Businesses.IBusinessProfileStore` and publishes its zone into the scoped `Inventory.Application.Time.BusinessTimeZoneScope`, exactly as it publishes the business itself into `BusinessScope` and for the same reason: converting an instant to a business date happens synchronously, deep inside a calculation, and cannot await a membership lookup. The scope can only move forward to a zone, once. `IBusinessCalendar` is registered as the scoped `Inventory.Infrastructure.Time.CurrentBusinessCalendar`, which reads that zone, memoises the resolved `TimeZoneInfo` for the request, and derives every date in it. No route, query, body or header value participates: the zone comes from the business the caller's membership resolved, and from nothing else.
 - **It fails closed.** A request with no resolved business, or a business whose stored id the host's time-zone database cannot resolve, gets `Inventory.Application.Time.BusinessTimeZoneUnavailableException` from every member of the port - never `Australia/Sydney`, never the host's zone, never UTC. A substituted zone would move sales, fees, commissions and profit between business days with nothing looking wrong. The exception is not mapped to a caller-facing status: it falls through to `GlobalExceptionHandler`, which logs it and answers a generic `500`. The middleware does not refuse the whole request when a business has no usable zone (most endpoints derive no business date at all); it logs the condition, and any business-date derivation in that request fails.
 - **Maintenance commands have no business calendar, and need none.** The human-invoked `bootstrap-business`, `migrate-database` and database-backup commands run outside a request, so no business is resolved and no zone is published: resolving `IBusinessCalendar` there succeeds but every member fails closed. None of them derives a business date. `BusinessBootstrapper` creates its business with `Australia/Sydney` stated explicitly - the zone the pre-tenancy data it adopts has always been reported in - rather than relying on a default. A maintenance command that ever does need a business date must construct a `ZonedBusinessCalendar` with the zone it means, explicitly.
-- **The frontend gets the zone from the API.** `GET /api/business/current` returns `{ name, timeZoneId }` for the trusted current business, carrying the same `[Authorize]`, delegated-scope and membership requirements as every other business endpoint, and no identifier in either direction. It replaced the frontend's hard-coded `BUSINESS_TIME_ZONE` constant: `BusinessService` reads it once sign-in has settled and publishes the zone into `BusinessTimeZoneService`, which `BusinessDateTimePipe` and the calendar-input components read. The shell holds the routed page back until that lookup has settled, so a page on screen is one whose business context is known; a lookup that failed renders the application with dates unavailable rather than in a guessed zone. Issue #501 may also surface the same values in `/api/me/access`, but must not remove this endpoint.
+- **The frontend gets the zone from the API.** `GET /api/business/current` returns `{ name, timeZoneId }` for the trusted current business, carrying the same `[Authorize]`, delegated-scope and membership requirements as every other business endpoint, and no identifier in either direction. It replaced the frontend's hard-coded `BUSINESS_TIME_ZONE` constant: `BusinessService` reads it once sign-in has settled and publishes the zone into `BusinessTimeZoneService`, which `BusinessDateTimePipe` and the calendar-input components read. The shell holds the routed page back until that lookup has settled, so a page on screen is one whose business context is known; a lookup that failed renders the application with dates unavailable rather than in a guessed zone. Issue #521 also surfaces the same name and zone in `GET /api/me/access` alongside the caller's role and capabilities (see [Membership roles and capabilities](#membership-roles-and-capabilities-issue-521)); that endpoint does not replace this one, and the frontend still reads the zone from here.
 - **A zone change applies to all history.** The owner's decision (recorded on issue #499) is that changing a business's zone later - the Owner business-settings page of issue #511 - re-derives every historical business day in the new zone, with a warning. Nothing stored is rewritten; the boundaries simply move.
 - **Testing.** Two-business relational tests prove isolated boundaries for `Australia/Sydney` and `America/New_York`, including each zone's daylight-saving transition days in both directions (a 23-hour and a 25-hour business day), the write-path refusal, and the fail-closed read for a zone corrupted directly in the database (`PerBusinessTimeZonePersistenceTests`, `ZonedBusinessCalendarTests`, `CurrentBusinessCalendarTests`, `BusinessTimeZonesTests`, `BusinessTimeZoneMigrationTests`, `CurrentBusinessApiTests`).
 
@@ -5696,6 +6008,8 @@ EF Core InMemory tests remain useful for fast service checks but must not be the
 `CalculateReorderNeedsTests.Handle_BoundsPerMachineConcurrency_ToTheConfiguredLimit`, which waits on the use case with a wall-clock hang guard, runs the use case off xUnit's test synchronization context (`Task.Run`), as ASP.NET Core does. Otherwise the use case's continuations queue for one of xUnit's few test threads, which in the integration project are often busy with long synchronous SQLite tests, and the guard can expire after the work has finished.
 
 **Call-sequence (yielding-recorder) tests.** Some defects are about *when* calls happen rather than what they return; two operations overlapping on one request-scoped `AppDbContext` is the current example (see [Concurrency inside one request: the scoped EF context](#concurrency-inside-one-request-the-scoped-ef-context-issue-313)). Neither an InMemory nor a relational SQLite test can prove that one, because SQLite's synchronous async implementation completes each call before the next one starts. Such behavior is tested instead with an in-memory fake of the port that records a `start:`/`end:` marker per call, tracks how many calls were ever in flight at once, and awaits `Task.Yield()` before completing — so an implementation that starts two calls before awaiting either produces an interleaved trace and a concurrency count above one. `ResolveMachineProductPricingTests`' call-sequence recorder and the Sites equivalents (`backend/Inventory.IntegrationTests/Application/Sites/RecordingSiteFactsStore.cs`, plus `RecordingNayaxLynxClient`, which gates its machine-product calls so a serialized fan-out fails rather than hangs) are the examples. Pair them with the behavioral assertions the serialization must not change — per-site totals and revenue attribution, ordering, failure propagation, and the relational two-business isolation tests — so a concurrency fix cannot silently drop a site or move revenue between sites.
+
+**Two-writer tests.** A check-then-write rule enforced by a transaction needs two *real* writers, which neither an InMemory provider (no locking) nor a shared in-memory SQLite database (one connection) can provide. Such a test uses a temporary SQLite **file** instead, with one `AppDbContext` and connection per writer, and releases the operations together at a `Barrier` so the window the rule has to close is actually opened; it then asserts both the surviving data and that the loser was refused with the rule's own message rather than a provider error. `BusinessMembershipWriteTransactionTests` (issue #522) is the example — two simultaneous activations of one identity, and two Owners demoting each other — and it is written so that both cases fail if the write transaction is downgraded from `BEGIN IMMEDIATE` to the provider's deferred default. Delete the file in `Dispose` and clear the connection pool with it, so a run leaves nothing behind.
 
 **Source-scanning architecture tests.** Most architecture rules are checked against the compiled assemblies (`CleanArchitectureDependencyTests`) or the project files (`ProjectDependencyDirectionTests`), but some rules are invisible to both. `TimeAcquisitionTests.Domain_and_Application_acquire_the_current_time_only_through_the_time_ports` (issue #310) fails if any `Inventory.Domain` or `Inventory.Application` source file reads `DateTime.Now`, `DateTime.UtcNow` or `DateTime.Today` instead of injecting `IClock`/`IBusinessCalendar` (see [Time](#time)); it scans the source text because these are property reads on `DateTime` itself, a type the inner layers legitimately depend on everywhere, so a type-level dependency rule cannot distinguish them. `ProjectDependencyDirectionTests.No_other_source_file_references_the_removed_legacy_reporting_service` scans source for the same reason, and so does `ProjectDependencyDirectionTests.No_controller_references_the_persistence_models` (issue #305): `InventoryApi` legitimately depends on the EF entity namespace (`Inventory.Infrastructure.Models` since issue #307) everywhere else in the project, so only a file-scoped source scan can say that the `Controllers` folder does not (see [InventoryApi](#inventoryapi)). `ProjectDependencyDirectionTests.InventoryApi_owns_no_db_context_persistence_model_or_migration` and its positive counterpart (issue #307) read `git ls-files` for a related reason: a project no longer *containing* a folder is a fact about the committed tree, not about either assembly. `ApiLayerOwnershipTests` (issue #154) uses all three techniques in one place, deliberately picking the one each rule needs: `git ls-files` for the retired folders, the frozen top-level folder set and the "no `DbSet`"/"no retired namespace"/"no financial rule named" text rules; the compiled assembly for the `DbContext`, business-service, controller-surface and predicate-visibility rules, because a doc comment that explains why a type must *not* touch EF would otherwise read as the violation it forbids; and a source scan for the `IQueryable`/`Expression<Func<...>>` rule, which is about a declaration rather than a dependency. A new rule of this kind names the offending file and line in its failure message, so the fix is the injection or removal it asks for, never a weakened rule.
 

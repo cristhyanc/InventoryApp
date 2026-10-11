@@ -29,7 +29,7 @@
     {
       "type": "repoFileContains",
       "file": ".github/workflows/agent-review.yml",
-      "text": "*) suppress \"unknown review route '$AGENT_MODE' (implementer '$IMPLEMENTER', reviewer '$REVIEWER').\" ;;"
+      "text": "*) not_published not-eligible \"unknown review route '$AGENT_MODE' (implementer '$IMPLEMENTER', reviewer '$REVIEWER').\" ;;"
     },
     {
       "type": "repoFileContains",

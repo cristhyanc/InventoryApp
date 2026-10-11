@@ -28,8 +28,9 @@ public sealed class BusinessBootstrapOptions
 }
 
 /// <summary>
-/// One approved actor, as the validated Entra <c>(tid, oid)</c> claim pair. No email address or
-/// display name: those are mutable and must never decide data ownership.
+/// One approved actor, as the validated Entra <c>(tid, oid)</c> claim pair, and the role they are
+/// approved in. No email address or display name: those are mutable and must never decide data
+/// ownership.
 /// </summary>
 public sealed class BusinessBootstrapMemberOptions
 {
@@ -38,4 +39,16 @@ public sealed class BusinessBootstrapMemberOptions
 
     /// <summary>The Entra object id (<c>oid</c>) claim value.</summary>
     public string ObjectId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The member's role (issue #521), named as <c>Owner</c>, <c>Manager</c> or <c>Operator</c>
+    /// and matched case-insensitively. Optional: left blank it is <c>Owner</c>, which is what this
+    /// command has always created and what the migration backfills existing rows with, so an
+    /// existing configuration keeps working unchanged.
+    ///
+    /// A value that is not one of those names - including a bare number - makes the command refuse
+    /// and change nothing, rather than resolve to a role nobody asked for. It is validated against
+    /// the same <c>BusinessRoles</c> vocabulary a request path uses.
+    /// </summary>
+    public string Role { get; set; } = string.Empty;
 }

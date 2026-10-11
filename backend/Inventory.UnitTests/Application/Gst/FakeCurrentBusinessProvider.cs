@@ -14,8 +14,8 @@ public sealed class FakeCurrentBusinessProvider : ICurrentBusinessProvider
 {
     private readonly BusinessMembershipResolution _resolution;
 
-    public FakeCurrentBusinessProvider(int businessId) =>
-        _resolution = BusinessMembershipResolution.Resolved(BusinessId.From(businessId));
+    public FakeCurrentBusinessProvider(int businessId, BusinessRole role = BusinessRole.Owner) =>
+        _resolution = BusinessMembershipResolution.Resolved(BusinessId.From(businessId), role);
 
     private FakeCurrentBusinessProvider(BusinessAccessDenialReason reason) =>
         _resolution = BusinessMembershipResolution.Denied(reason);
@@ -29,6 +29,12 @@ public sealed class FakeCurrentBusinessProvider : ICurrentBusinessProvider
     public Task<BusinessId> RequireBusinessIdAsync(CancellationToken cancellationToken) =>
         _resolution.ResolvedBusinessId is { } businessId
             ? Task.FromResult(businessId)
+            : throw new BusinessAccessDeniedException(
+                _resolution.DenialReason ?? BusinessAccessDenialReason.UnidentifiableActor);
+
+    public Task<BusinessRole> RequireRoleAsync(CancellationToken cancellationToken) =>
+        _resolution.ResolvedRole is { } role
+            ? Task.FromResult(role)
             : throw new BusinessAccessDeniedException(
                 _resolution.DenialReason ?? BusinessAccessDenialReason.UnidentifiableActor);
 }

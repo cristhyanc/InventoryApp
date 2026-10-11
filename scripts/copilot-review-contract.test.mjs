@@ -6,7 +6,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 const workflow = readFileSync(new URL('../.github/workflows/agent-review.yml', import.meta.url), 'utf8');
-const processing = workflow.slice(workflow.indexOf('          validate_copilot_output() {'), workflow.indexOf('\n          delimiter="REVIEW_'));
+// The contract check and the one format-only repair, up to where the raw review is handed to the
+// package step (the review never travels as a job output; see agent-review-transport.mjs).
+const processing = workflow.slice(workflow.indexOf('          validate_copilot_output() {'), workflow.indexOf('\n          jq -c . "$work/review.json" > "$RUNNER_TEMP/review-raw.json"'));
 const sha = 'a'.repeat(40);
 const valid = { reviewed_head_sha: sha, verdict: 'READY FOR HUMAN REVIEW', blockers: [], criteria: [{ criterion: 'Required behavior', status: 'met', evidence: 'Regression test passed' }], suggestions: [], validation_evidence: 'Exact-SHA validation passed', inline_comments: [] };
 function run(initial, repaired) {

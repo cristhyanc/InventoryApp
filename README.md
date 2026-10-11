@@ -157,6 +157,37 @@ migrated. Reruns are safe and source documents are never deleted.
 prerequisites, how to read the report, what must be reviewed before an apply, how to verify, and
 why the runtime provider is switched only afterwards.
 
+#### Migrating the Nayax connection into the business
+
+Every Nayax call uses the calling business's own encrypted connection record (issues #518 and #520),
+and the credential this application has used so far is in global configuration (`NayaxLynx__*`).
+Moving that configured operator id and access token into the existing business's record is a separate
+human-invoked command, and until it has run that business has no Nayax connection:
+
+```bash
+dotnet run --project backend/InventoryApi -- migrate-nayax-connection --dry-run
+dotnet run --project backend/InventoryApi -- migrate-nayax-connection --apply
+```
+
+On a deployed application use `dotnet InventoryApi.dll migrate-nayax-connection --dry-run` /
+`--apply` instead. `--apply` must be typed explicitly; neither flag is a dry run, and both together
+are refused.
+
+The dry run writes nothing at all and reports the business it resolved, the configured operator id,
+what is stored today and the change an apply would make. The access token is never printed, logged
+or included in a message. An apply stores the credential encrypted and marks the connection
+`Ready`, because that token is the one already in production use — the command never calls Nayax.
+It is one transaction, committed only once both land, and every run reports a `Database` line
+stating whether anything changed, so a failed apply leaves nothing behind and says so.
+Re-running changes nothing. It refuses, writing nothing, unless the ownership bootstrap is complete
+for exactly one business, that business is the one `bootstrap-business` adopted, no *different*
+credential is already stored, and a `NayaxTokenProtection` key is provisioned.
+
+**Do not run this against production from this description.**
+[docs/tenant-rollout.md § Migrating the Nayax connection into the business](docs/tenant-rollout.md#migrating-the-nayax-connection-into-the-business-issue-519)
+is the canonical procedure, including the cutover window around issue #520, how to verify Nayax
+afterwards and when the global settings may be removed.
+
 ### 2. How the frontend finds the API
 
 Nothing to configure locally. `ConfigService` resolves the API base URL to `/api` whenever the application is served from `localhost` or `127.0.0.1`, and the development proxy forwards `/api` to <http://localhost:5000>. Any other origin is a deployed one and uses `apiBaseUrl` from `frontend/inventory-app/src/assets/config.json`, which holds the deployed Azure API URL. Do not edit that tracked file to switch between local development and deployment, and do not commit a personal endpoint.
@@ -196,9 +227,24 @@ Protected business documents (purchase documents and operating-expense supportin
 
 Azure Static Web Apps direct navigation (including the `/auth` redirect landing) is handled by `frontend/inventory-app/src/staticwebapp.config.json`, which rewrites unmatched paths to `/index.html` so the Angular router — not a platform 404 — handles them.
 
-**Authentication identifies a person; business ownership decides what they may see.** Accepting sign-ins from multiple Microsoft Entra tenants (`TenantId: "common"`) only authenticates a user. Data isolation is a separate boundary, established by issue #64: the validated `(tid, oid)` claim pair is mapped to an application-owned **Business** through explicit `BusinessMembership` rows, and every tenant-owned read and write is scoped to that business centrally in `AppDbContext`. A signed-in account with no usable membership receives `403` and no business data — it fails closed rather than falling back to "see everything". The business ID is never accepted from route, query, form, or JSON input.
+**Authentication identifies a person; business ownership decides what they may see.** Accepting sign-ins from multiple Microsoft Entra tenants (`TenantId: "common"`) only authenticates a user. Data isolation is a separate boundary, established by issue #64: the validated `(tid, oid)` claim pair is mapped to an application-owned **Business** through explicit `BusinessMembership` rows, and every tenant-owned read and write is scoped to that business centrally in `AppDbContext`. A signed-in account with no usable membership receives `403` and no business data — it fails closed rather than falling back to "see everything". The business ID is never accepted from route, query, form, or JSON input. There is one endpoint such an account may still reach, `GET /api/me/account-state` (issue #523), and it answers only with the state that account is in — `Member`, `NoMembership`, `MembershipRevoked`, `BusinessDeactivated` or `MembershipAmbiguous` — so the application can show the right screen instead of a bare error. It names no business and reads no business data; the `403` every other endpoint returns is unchanged.
 
-The first rollout serves **one** business. Adding a second live business is deliberately not enabled: the Nayax integration still uses a single operator/token configuration, so remote identifiers and imports are not yet partitioned per business. See [docs/tenant-rollout.md](docs/tenant-rollout.md) for the bootstrap procedure and [docs/architecture.md](docs/architecture.md#tenant-ownership-issue-64) for the design.
+The first rollout serves **one** business. Adding a second live business is deliberately not enabled. The Nayax credential is no longer the reason: since issue #520 every Nayax call uses the current business's own encrypted operator id and token, with no global fallback (see [docs/architecture.md § Per-business Nayax credentials](docs/architecture.md#per-business-nayax-credentials-issue-520)). What is still missing is the self-service side — a business's credential reaches the database only through the human-run [`migrate-nayax-connection`](#migrating-the-nayax-connection-into-the-business) command, so there is no supported way for a second business to connect its own Nayax account yet. See [docs/tenant-rollout.md](docs/tenant-rollout.md) for the bootstrap procedure and [docs/architecture.md](docs/architecture.md#tenant-ownership-issue-64) for the design.
+
+## Roles and capabilities
+
+Ownership decides *whose* data a member sees; their **role** decides what they may do with it. Every `BusinessMembership` carries one of three roles (issue #521):
+
+| Role | What it may do |
+| --- | --- |
+| **Owner** | Everything, including the Nayax integration, data repairs, members, roles and the business record itself |
+| **Manager** | Everything operational, plus the financial figures: dashboard financials, reports, operating expenses, imports, site commissions and supplier GST defaults |
+| **Operator** | Day-to-day work only: the dashboard without financial figures, the pick list, inventory (products, take inventory, categories, stock history, machines including Sync Restock, sites) and purchasing (purchases, supplier orders, suppliers) |
+
+- A signed-in member reads their own role and the capability names it grants from `GET /api/me/access`, which also returns their business's name and time zone. It describes the caller alone — never another member or another business — and a role change applies on their next request.
+- A role is set when the membership is created, by `bootstrap-business` (its `Role` option is optional and defaults to `Owner`; see [docs/tenant-rollout.md](docs/tenant-rollout.md#the-members-role-issue-521)). Existing memberships were backfilled to `Owner`, so no one's access changed when roles arrived, and nothing accepts a role from client input.
+- A stored role the application does not recognise **denies access** rather than falling back to the least privileged role.
+- **Capabilities are defined and reported, not yet enforced per endpoint.** Issue #502 adds that enforcement; until then every member reaches the same endpoints they did before. The capability vocabulary and the one role → capability table are described in [docs/architecture.md](docs/architecture.md#membership-roles-and-capabilities-issue-521).
 
 ## Configuration and secrets
 
@@ -209,8 +255,6 @@ Common environment-variable names include:
 ```text
 ConnectionStrings__DefaultConnection
 NayaxLynx__BaseUrl
-NayaxLynx__OperatorId
-NayaxLynx__AccessToken
 NayaxTokenProtection__ActiveKeyId
 NayaxTokenProtection__Keys__<key-id>
 PlatformAdmin__DirectoryTenantId
@@ -218,11 +262,13 @@ PlatformAdmin__ObjectId
 APPLICATIONINSIGHTS_CONNECTION_STRING
 ```
 
-`NayaxLynx__BaseUrl` and `NayaxLynx__OperatorId` are non-secret and validated at startup — the API refuses to start with a missing or invalid value rather than failing on the first Nayax call. `NayaxLynx__AccessToken` is the Nayax Core bearer token, a secret: set it through user-secrets locally or Key Vault/App Service configuration in Azure, and it is never logged. The already deployed secret, `Nayax__Token`, keeps working as a fallback with no rollout required — `Inventory.Infrastructure.Nayax.NayaxLynxConfiguration.ResolveAccessToken` prefers `NayaxLynx__AccessToken` when both are set. New environments should set `NayaxLynx__AccessToken`; `Nayax__Token` is retained only for the deployment that predates this consolidation.
+`NayaxLynx__BaseUrl` is the only Nayax **connection** setting left: it is non-secret, global, and validated at startup — the API refuses to start with a missing or invalid value rather than failing on the first Nayax call. **The operator id and the access token are not configuration any more** (issue #520): each business's own pair is held encrypted in its connection record and is read per call from the trusted current business, with no fallback to a global value or to another business's. Startup therefore requires neither, and an API with no Nayax credential configured at all starts and serves every non-Nayax feature normally; a business whose record is empty gets a stable "Nayax is not connected" error on its Nayax features and nothing else. See [docs/architecture.md § Per-business Nayax credentials](docs/architecture.md#per-business-nayax-credentials-issue-520).
 
-`NayaxTokenProtection__ActiveKeyId` and `NayaxTokenProtection__Keys__<key-id>` are the encryption keys a business's **own** stored Nayax access token is protected with (issue #518). Each key is a base64-encoded 256-bit (32-byte) AES key and is a secret: set it with `dotnet user-secrets` locally or Key Vault/App Service configuration in Azure, and never commit it. `ActiveKeyId` names the key new ciphertext is produced with, and the key id is stored beside each ciphertext, so a rotation adds a second `Keys__<key-id>` entry and repoints `ActiveKeyId` while the previous key stays configured until nothing names it any more; removing a key is what retires it, and it makes anything still encrypted with it undecryptable on purpose. A half-configured section — an active key id with no matching key, a value that is not base64, a key of the wrong length — fails at startup with the setting named. **The section is empty in `appsettings.json`, and that is the shipped state**: with no key configured the API starts and runs completely normally, and only storing or reading a *per-business* Nayax token fails closed. Nothing reads a per-business connection yet — the Nayax client still uses the single `NayaxLynx__*` configuration above — so provisioning the production key is a human step that must happen before the existing business's credential is moved into the table. See [docs/architecture.md § Per-business Nayax connection](docs/architecture.md#per-business-nayax-connection-issue-518).
+A still-configured `NayaxLynx__OperatorId`, `NayaxLynx__AccessToken` or legacy `Nayax__Token` is read by exactly one thing: the human-run [`migrate-nayax-connection`](#migrating-the-nayax-connection-into-the-business) command, which moves that pair into the existing business's encrypted record (`NayaxLynx__AccessToken` is preferred over `Nayax__Token` when both are set). Leave them in place until that command has been applied and Nayax has been verified, then remove them as a deliberate human step — [docs/tenant-rollout.md § When to remove the global settings](docs/tenant-rollout.md#when-to-remove-the-global-settings) is the procedure. They are still secrets while they exist: never commit them, and the token is never logged.
 
-`APPLICATIONINSIGHTS_CONNECTION_STRING` is the Application Insights connection string, a secret that is never committed — see [Observability and error diagnostics](#observability-and-error-diagnostics). Unlike the Nayax settings it is optional: with the variable absent or blank no telemetry is registered at all and the API starts and runs normally, which is what local development and the automated tests do.
+`NayaxTokenProtection__ActiveKeyId` and `NayaxTokenProtection__Keys__<key-id>` are the encryption keys a business's **own** stored Nayax access token is protected with (issue #518). Each key is a base64-encoded 256-bit (32-byte) AES key and is a secret: set it with `dotnet user-secrets` locally or Key Vault/App Service configuration in Azure, and never commit it. `ActiveKeyId` names the key new ciphertext is produced with, and the key id is stored beside each ciphertext, so a rotation adds a second `Keys__<key-id>` entry and repoints `ActiveKeyId` while the previous key stays configured until nothing names it any more; removing a key is what retires it, and it makes anything still encrypted with it undecryptable on purpose. A half-configured section — an active key id with no matching key, a value that is not base64, a key of the wrong length — fails at startup with the setting named. **The section is empty in `appsettings.json`, and that is the shipped state**: with no key configured the API starts and runs completely normally, and only storing or reading a *per-business* Nayax token fails closed. Since issue #520 that is what every Nayax call does, so **an environment that uses Nayax must have a key provisioned** — it is a human step, and it must happen before the existing business's credential is moved into the table by [`migrate-nayax-connection`](#migrating-the-nayax-connection-into-the-business) (issue #519), which refuses with the setting named until it is. Keep the key configured afterwards: removing the key that encrypted a stored token is what makes that token undecryptable. An environment with no Nayax integration at all needs no key and is unaffected. See [docs/architecture.md § Per-business Nayax connection](docs/architecture.md#per-business-nayax-connection-issue-518) and [§ Per-business Nayax credentials](docs/architecture.md#per-business-nayax-credentials-issue-520).
+
+`APPLICATIONINSIGHTS_CONNECTION_STRING` is the Application Insights connection string, a secret that is never committed — see [Observability and error diagnostics](#observability-and-error-diagnostics). Unlike the Nayax base URL it is optional: with the variable absent or blank no telemetry is registered at all and the API starts and runs normally, which is what local development and the automated tests do.
 
 `PlatformAdmin__DirectoryTenantId` and `PlatformAdmin__ObjectId` name the platform super-administrator for the diagnostics API below. Neither is a secret — an Entra object id is an identifier that grants nothing without a validated token carrying it — so they are ordinary application settings and need no Key Vault reference, but they are a real person's identifiers and are therefore **empty in `appsettings.json` and must never be committed**. Set them with `dotnet user-secrets` locally or application settings in Azure.
 
@@ -422,7 +468,7 @@ failure. Local development and the whole test suite run that way.
 
 ### Error handling and what reaches a log
 
-The three centrally registered exception handlers decide both the caller's response and the log
+The four centrally registered exception handlers decide both the caller's response and the log
 entry (see
 [docs/architecture.md § Domain and application error mapping](docs/architecture.md#domain-and-application-error-mapping)):
 
@@ -430,6 +476,8 @@ entry (see
 | --- | --- | --- |
 | Expected validation failure (`DomainValidationException`, `InsufficientStockException`) | `400` with the caller-safe message | not logged — it is a normal outcome, not an error |
 | Expected business conflict (`DomainConflictException`) | `409` with the caller-safe message | one `Warning` with the trace ID and the caller-safe detail |
+| This business's Nayax connection is unusable (`NayaxNotConnectedException`) | `409` with the stable "Nayax is not connected" message, the `nayax_not_connected` code and the connection status | one `Warning` with the error code, the connection status, the request method and path, and the trace ID |
+| Nayax refused one feature for lack of permission (`NayaxPermissionNotGrantedException`) | `409` with the stable "Nayax hasn't granted permission for this" message and the `nayax_permission_not_granted` code | one `Warning` with the error code, the refused client operation, the request method and path, and the trace ID |
 | Nayax upstream failure (`NayaxUpstreamException`) | `502`, fixed generic detail | one `Error` with the operation, upstream method, relative endpoint and numeric upstream status, plus the request method, path and trace ID |
 | Anything else | `500`, fixed generic detail | one `Error` with the exception, the request method and path, and the trace ID |
 | Caller cancellation | ASP.NET Core's normal handling | not logged — the caller went away, the server did not fail |
@@ -492,6 +540,22 @@ traces
 | where timestamp > ago(24h) and severityLevel >= 3     // 3 = Error, 4 = Critical
 | project timestamp, operation_Id, message,
           method = tostring(customDimensions.Method),
+          path = tostring(customDimensions.Path),
+          traceId = tostring(customDimensions.TraceId)
+| order by timestamp desc
+```
+
+A business's Nayax connection refusing calls (issue #520) — these are `Warning`, not `Error`, so
+the query above does not show them. `NayaxErrorCode` is `nayax_not_connected` or
+`nayax_permission_not_granted`, and `NayaxConnectionDetail` is the connection status or the refused
+client operation:
+
+```kusto
+traces
+| where timestamp > ago(24h) and message startswith "Nayax connection unavailable"
+| project timestamp, operation_Id,
+          code = tostring(customDimensions.NayaxErrorCode),
+          detail = tostring(customDimensions.NayaxConnectionDetail),
           path = tostring(customDimensions.Path),
           traceId = tostring(customDimensions.TraceId)
 | order by timestamp desc
