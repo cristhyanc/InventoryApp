@@ -36,25 +36,52 @@
           <thead class="table-head">
             <tr>
               <th scope="col" class="table-cell"></th>
-              <th scope="col" class="table-cell">Name</th>
-              <th scope="col" class="table-cell">Category</th>
-              <th scope="col" class="table-cell">Supplier</th>
-              <th scope="col" class="table-cell table-num">Price</th>
-              <th scope="col" class="table-cell">Stock</th>
-              <th scope="col" class="table-cell table-num">Machine need</th>
-              <th scope="col" class="table-cell table-num">Low Stock Threshold</th>
-              <th scope="col" class="table-cell table-num">Restock To</th>
-              <th scope="col" class="table-cell table-num">On order</th>
-              <th scope="col" class="table-cell table-num">Need to Order</th>
-              <th scope="col" class="table-cell">Status</th>
+              <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('name')">
+                <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('name')">{{ sortLabel('Name', 'name') }}</button>
+              </th>
+              <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('category')">
+                <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('category')">{{ sortLabel('Category', 'category') }}</button>
+              </th>
+              <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('supplier')">
+                <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('supplier')">{{ sortLabel('Supplier', 'supplier') }}</button>
+              </th>
+              <th scope="col" class="table-cell table-num" [attr.aria-sort]="ariaSort('price')">
+                <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('price')">{{ sortLabel('Price', 'price') }}</button>
+              </th>
+              <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('stock')">
+                <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('stock')">{{ sortLabel('Stock', 'stock') }}</button>
+              </th>
+              <th scope="col" class="table-cell table-num" [attr.aria-sort]="ariaSort('machineNeed')">
+                <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('machineNeed')">{{ sortLabel('Machine need', 'machineNeed') }}</button>
+              </th>
+              <th scope="col" class="table-cell table-num" [attr.aria-sort]="ariaSort('lowStockThreshold')">
+                <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('lowStockThreshold')">{{ sortLabel('Low Stock Threshold', 'lowStockThreshold') }}</button>
+              </th>
+              <th scope="col" class="table-cell table-num" [attr.aria-sort]="ariaSort('restockTo')">
+                <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('restockTo')">{{ sortLabel('Restock To', 'restockTo') }}</button>
+              </th>
+              <th scope="col" class="table-cell table-num" [attr.aria-sort]="ariaSort('onOrder')">
+                <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('onOrder')">{{ sortLabel('On order', 'onOrder') }}</button>
+              </th>
+              <th scope="col" class="table-cell table-num" [attr.aria-sort]="ariaSort('needToOrder')">
+                <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('needToOrder')">{{ sortLabel('Need to Order', 'needToOrder') }}</button>
+              </th>
+              <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('status')">
+                <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('status')">{{ sortLabel('Status', 'status') }}</button>
+              </th>
               <th scope="col" class="table-cell"></th>
             </tr>
           </thead>
           <tbody>
-            @for (p of products; track p.id) {
-              <tr class="table-row">
+            @for (p of sortedProducts; track p.id) {
+              <tr class="table-row table-row-link" (click)="onRowActivate(p, $event)" (keydown.enter)="onRowActivate(p, $event)">
                 <td class="table-cell"><input type="checkbox" [attr.aria-label]="'Select ' + p.name" [checked]="selectedProductIds.has(p.id)" (change)="toggleSelection(p.id, $any($event.target).checked)" /></td>
-                <td class="table-cell">{{ p.name }}</td>
+                <td class="table-cell">
+                  <a
+                    class="table-row-anchor"
+                    [routerLink]="['/products', p.id, 'edit']"
+                    [attr.aria-label]="'Edit product ' + p.name">{{ p.name }}</a>
+                </td>
                 <td class="table-cell">{{ p.category?.name }}</td>
                 <td class="table-cell">{{ p.supplier?.name }}</td>
                 <td class="table-cell table-num">${{ p.unitPrice.toFixed(2) }}</td>
@@ -74,11 +101,7 @@
                   </button>
                 </td>
                 <td class="table-cell">
-                  <div class="flex flex-wrap gap-2">
-                    <a [routerLink]="['/products', p.id, 'edit']" class="btn btn-sm btn-secondary">Edit</a>
-                    <a [routerLink]="['/products', p.id, 'stock']" class="btn btn-sm btn-primary">Stock</a>
-                    <button type="button" class="btn btn-sm btn-danger" (click)="confirmDelete(p)">Delete</button>
-                  </div>
+                  <a [routerLink]="['/products', p.id, 'stock']" class="btn btn-sm btn-primary">Stock</a>
                 </td>
               </tr>
             }
@@ -149,12 +172,3 @@
     </form>
   </div>
 }
-
-<app-confirmation-dialog
-  confirmLabel="Delete"
-  cancelLabel="Cancel"
-  *ngIf="confirmingProduct"
-  title="Confirm delete"
-  [message]="`Delete product '${confirmingProduct.name}'?`"
-  (confirmed)="deleteConfirmed()"
-  (canceled)="cancelDelete()"></app-confirmation-dialog>

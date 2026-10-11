@@ -1,23 +1,37 @@
 import { Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { RouterLink } from '@angular/router';
+import { Router, RouterLink } from '@angular/router';
 import { EMPTY, Subject } from 'rxjs';
 import { catchError, switchMap, takeUntil, tap } from 'rxjs/operators';
 import { ProductService } from '../../services/product.service';
 import { CategoryService } from '../../services/category.service';
 import { SupplierService } from '../../services/supplier.service';
 import { Product, Category, Supplier } from '../../models/models';
-import { ConfirmationDialogComponent } from '../shared/confirmation-dialog.component';
 import { ListLoadState } from '../shared/list-load-state';
 import { createFilterTrigger$ } from '../shared/filter-request-trigger';
 import { ToastService } from '../../services/toast.service';
 import { SupplierOrderService } from '../../services/supplier-order.service';
 
+type NeedsOrderingSortColumn =
+  | 'name'
+  | 'category'
+  | 'supplier'
+  | 'price'
+  | 'stock'
+  | 'machineNeed'
+  | 'lowStockThreshold'
+  | 'restockTo'
+  | 'onOrder'
+  | 'needToOrder'
+  | 'status';
+type SortDirection = 'asc' | 'desc';
+type SortValue = string | number | Date | null;
+
 @Component({
   selector: 'app-product-needs-ordering',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterLink, ConfirmationDialogComponent],
+  imports: [CommonModule, FormsModule, RouterLink],
   templateUrl: './product-needs-ordering.component.html'
 })
 export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
@@ -25,11 +39,12 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
   categories: Category[] = [];
   suppliers: Supplier[] = [];
   readonly loadState = new ListLoadState();
-  confirmingProduct: Product | null = null;
   search = '';
   categoryId: number | '' = '';
   supplierId: number | '' = '';
   selectedProductIds = new Set<number>();
+  sortColumn: NeedsOrderingSortColumn | null = null;
+  sortDirection: SortDirection = 'asc';
   orderQuantities: Record<number, number> = {};
   showOrderForm = false;
   savingOrder = false;
@@ -50,7 +65,8 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
     private categoryService: CategoryService,
     private supplierService: SupplierService,
     private supplierOrderService: SupplierOrderService,
-    private toastService: ToastService
+    private toastService: ToastService,
+    private router: Router
   ) {}
 
   ngOnInit(): void {
@@ -174,22 +190,117 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
     });
   }
 
-  confirmDelete(product: Product): void {
-    this.confirmingProduct = product;
-  }
-
-  cancelDelete(): void {
-    this.confirmingProduct = null;
-  }
-
-  deleteConfirmed(): void {
-    if (!this.confirmingProduct) {
+  /**
+   * Row click/Enter navigates to the product editor, unless it originated from a nested control
+   * (the name link, checkbox, Stock, Status) or is a modified/non-primary click the browser should handle.
+   * The name cell's routerLink anchor is the real link: it gives keyboard focus, open-in-new-tab and copy-link.
+   */
+  onRowActivate(product: Product, rowEvent: Event): void {
+    // Bound to (click) and (keydown.enter) only; Angular types both template $events as Event.
+    const event = rowEvent as MouseEvent | KeyboardEvent;
+    const ownControl = (event.target as Element | null)?.closest('a, button, input, select, textarea, label');
+    const browserHandlesIt =
+      event.defaultPrevented ||
+      (event instanceof MouseEvent && event.button !== 0) ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.shiftKey ||
+      event.altKey;
+    if (ownControl || browserHandlesIt) {
       return;
     }
 
-    const product = this.confirmingProduct;
-    this.confirmingProduct = null;
-    this.productService.delete(product.id).subscribe(() => this.applyFilters());
+    this.router.navigate(['/products', product.id, 'edit']);
+  }
+
+  get sortedProducts(): Product[] {
+    const column = this.sortColumn;
+    if (!column) {
+      return this.products;
+    }
+
+    const direction = this.sortDirection;
+    return [...this.products].sort((left, right) => {
+      const comparison = this.compareValues(this.sortValue(left, column), this.sortValue(right, column));
+      // Ties keep a deterministic order (by id) instead of relying on sort stability alone.
+      const resolved = comparison !== 0 ? comparison : left.id - right.id;
+      return direction === 'desc' ? -resolved : resolved;
+    });
+  }
+
+  sortBy(column: NeedsOrderingSortColumn): void {
+    if (this.sortColumn === column) {
+      this.sortDirection = this.sortDirection === 'asc' ? 'desc' : 'asc';
+      return;
+    }
+
+    this.sortColumn = column;
+    this.sortDirection = 'asc';
+  }
+
+  ariaSort(column: NeedsOrderingSortColumn): 'ascending' | 'descending' | 'none' {
+    if (this.sortColumn !== column) {
+      return 'none';
+    }
+
+    return this.sortDirection === 'asc' ? 'ascending' : 'descending';
+  }
+
+  sortLabel(label: string, column: NeedsOrderingSortColumn): string {
+    if (this.sortColumn !== column) {
+      return label;
+    }
+
+    return `${label} (${this.sortDirection === 'asc' ? 'ascending' : 'descending'})`;
+  }
+
+  private sortValue(product: Product, column: NeedsOrderingSortColumn): SortValue {
+    switch (column) {
+      case 'name':
+        return product.name;
+      case 'category':
+        return product.category?.name ?? null;
+      case 'supplier':
+        return product.supplier?.name ?? null;
+      case 'price':
+        return product.unitPrice;
+      case 'stock':
+        return product.quantityInStock;
+      case 'machineNeed':
+        return product.machineReplenishmentNeed;
+      case 'lowStockThreshold':
+        return product.lowStockThreshold;
+      case 'restockTo':
+        return product.restockTo;
+      case 'onOrder':
+        return product.onOrderQuantity;
+      case 'needToOrder':
+        return product.needToOrder;
+      case 'status':
+        return product.isActive ? 1 : 0;
+    }
+  }
+
+  /** Missing values always sort last on ascending; numbers compare numerically, everything else as text. */
+  private compareValues(left: SortValue, right: SortValue): number {
+    if (left == null && right == null) {
+      return 0;
+    }
+    if (left == null) {
+      return 1;
+    }
+    if (right == null) {
+      return -1;
+    }
+
+    if (left instanceof Date && right instanceof Date) {
+      return left.getTime() - right.getTime();
+    }
+    if (typeof left === 'number' && typeof right === 'number') {
+      return left - right;
+    }
+
+    return String(left).localeCompare(String(right), undefined, { sensitivity: 'base' });
   }
 
   toggleActive(product: Product): void {
