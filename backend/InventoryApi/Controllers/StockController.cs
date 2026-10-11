@@ -1,5 +1,7 @@
+using Inventory.Application.Access;
 using Inventory.Application.Stock;
 using InventoryApi.Adapters.Mapping;
+using InventoryApi.Auth;
 using InventoryApi.DTOs;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -8,10 +10,16 @@ using DomainStock = Inventory.Domain.Stock;
 
 namespace InventoryApi.Controllers;
 
+/// <summary>
+/// One product's stock movements: its history, the restock cost suggestion and the single write
+/// action that creates a movement. Recording a movement is day-to-day inventory work, so the
+/// controller requires <c>Inventory.Operate</c> (issue #525).
+/// </summary>
 [ApiController]
 [Route("api/products/{productId:long}/stock")]
 [Authorize]
 [RequiredScope("access_as_user")]
+[RequireCapability(Capability.InventoryOperate)]
 public class StockController : ControllerBase
 {
     private readonly GetStockHistory _getStockHistory;

@@ -1,4 +1,6 @@
+using Inventory.Application.Access;
 using Inventory.Application.Businesses;
+using InventoryApi.Auth;
 using InventoryApi.DTOs;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -14,9 +16,13 @@ namespace InventoryApi.Controllers;
 /// parameter: the business comes from the authenticated actor's membership, through the issue #64
 /// current-business abstraction, so no request value can choose whose business is described.
 ///
-/// Until issue #502 introduces role policies it carries exactly the requirements every other
-/// business endpoint carries: authentication, the delegated <c>access_as_user</c> scope, and the
-/// membership check <c>BusinessScopeMiddleware</c> applies before any action runs.
+/// On top of the requirements every business endpoint carries - authentication, the delegated
+/// <c>access_as_user</c> scope and the membership check <c>BusinessScopeMiddleware</c> applies
+/// before any action runs - <c>GET current</c> requires <c>Dashboard.View</c> (issue #525). Every
+/// role holds it: the name and time zone this endpoint reports are what renders the application's
+/// own shell, so anybody who may see a page needs them. The capability is declared on the action
+/// rather than on the controller because changing the business record is <c>Business.Manage</c>
+/// (issue #526), and that endpoint must not inherit this one's rule.
 /// </summary>
 [ApiController]
 [Route("api/business")]
@@ -32,6 +38,7 @@ public sealed class BusinessController : ControllerBase
     }
 
     [HttpGet("current")]
+    [RequireCapability(Capability.DashboardView)]
     public async Task<ActionResult<CurrentBusinessResponse>> Current(CancellationToken cancellationToken)
     {
         var business = await _getCurrentBusiness.Handle(cancellationToken);

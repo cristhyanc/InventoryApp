@@ -14,23 +14,30 @@ namespace InventoryApi.Tests.Architecture;
 /// <para>The membership requirement is what makes an authenticated caller a caller of <em>one</em>
 /// business's API, so an endpoint that leaves it behind is a boundary decision rather than a
 /// convenience. This test is how that decision stays reviewed: the marker may appear only on the
-/// endpoints named below, so marking a new one fails the build until the same pull request adds it
-/// here and a human sees it. Issue #502 folds this list into its endpoint-classification test as
-/// class 3 (<c>/api/me/account-state</c>, #504's invite redemption, #507's application endpoints).
-/// </para>
+/// allowlisted endpoints, so marking a new one fails the build until the same pull request adds it
+/// to the list and a human sees it.</para>
 ///
-/// <para>It also pins what the marker is never allowed to remove. A marked endpoint still requires
-/// authentication and the delegated <c>access_as_user</c> scope: "membership not required" must not
-/// drift into "anonymous", which is the one mistake that would turn an exemption into a public
-/// endpoint.</para>
+/// <para>Issue #525 folded that list into
+/// <see cref="EndpointAuthorizationClassificationTests.MembershipNotRequiredAllowlist"/> as class 3
+/// of the endpoint-classification test, which is where the marker now sits beside the other three
+/// ways an endpoint may be authorized. This test reads the same single list rather than keeping a
+/// second copy that could disagree with it, and keeps the assertions that are about the marker
+/// itself.</para>
+///
+/// <para>Chief among those: what the marker is never allowed to remove. A marked endpoint still
+/// requires authentication and the delegated <c>access_as_user</c> scope - "membership not
+/// required" must not drift into "anonymous", which is the one mistake that would turn an exemption
+/// into a public endpoint.</para>
 /// </summary>
 public class MembershipNotRequiredEndpointAllowlistTests
 {
     /// <summary>
-    /// Every endpoint allowed to carry the marker, as its route template. Adding a line here is
-    /// the reviewed exemption; see the class remarks before doing it.
+    /// Every endpoint allowed to carry the marker, as its route template - the one list, owned by
+    /// the endpoint-classification test. Adding a line there is the reviewed exemption; see that
+    /// test's remarks before doing it.
     /// </summary>
-    private static readonly string[] Allowlist = ["api/me/account-state"];
+    private static readonly string[] Allowlist =
+        EndpointAuthorizationClassificationTests.MembershipNotRequiredAllowlist;
 
     private static readonly Assembly ApiAssembly = typeof(Program).Assembly;
 
@@ -92,10 +99,16 @@ public class MembershipNotRequiredEndpointAllowlistTests
             .Where(action => HasAttribute<MembershipNotRequiredEndpointAttribute>(action.Controller, action.Method))
             .ToList();
 
+    /// <summary>
+    /// Asked over the attribute collection rather than a single attribute, because
+    /// <c>RequireCapabilityAttribute</c> (issue #525) is itself an <see cref="AuthorizeAttribute"/>:
+    /// a controller carrying both <c>[Authorize]</c> and <c>[RequireCapability]</c> has two of them,
+    /// and the single-attribute lookup refuses to answer at all rather than returning one.
+    /// </summary>
     private static bool HasAttribute<TAttribute>(Type controller, MethodInfo method)
         where TAttribute : Attribute =>
-        method.GetCustomAttribute<TAttribute>() is not null
-        || controller.GetCustomAttribute<TAttribute>(inherit: true) is not null;
+        method.GetCustomAttributes<TAttribute>().Any()
+        || controller.GetCustomAttributes<TAttribute>(inherit: true).Any();
 
     /// <summary>
     /// The endpoint's route as a reviewer reads it in the controller: the controller's own

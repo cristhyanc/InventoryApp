@@ -1,4 +1,6 @@
+using Inventory.Application.Access;
 using Inventory.Application.InventoryCounting;
+using InventoryApi.Auth;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Identity.Web.Resource;
@@ -11,11 +13,15 @@ namespace InventoryApi.Controllers;
 /// throws a <c>DomainConflictException</c> (mapped centrally to 409) when it no longer matches what
 /// the operator counted against, and a <c>DomainValidationException</c> (mapped centrally to 400)
 /// for an invalid count or a missing restock-cost suggestion.
+///
+/// Taking inventory is day-to-day inventory work, so it requires <c>Inventory.Operate</c>
+/// (issue #525).
 /// </summary>
 [ApiController]
 [Route("api/products/{productId:long}/inventory-count")]
 [Authorize]
 [RequiredScope("access_as_user")]
+[RequireCapability(Capability.InventoryOperate)]
 public sealed class InventoryCountController : ControllerBase
 {
     private readonly ApplyInventoryCount _applyInventoryCount;
