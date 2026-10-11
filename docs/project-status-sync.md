@@ -15,8 +15,8 @@ issues and checklist epic #383 remain manual even if they acquire agent labels.
 | One readiness label, without conflicting active labels | Ready |
 | `agent-working` | In progress |
 | Open agent PR, validation/review pending | In review |
-| Current-head `agent-review-verdict` failure/error | Changes requested |
-| `agent-blocked`, invalid label combination, multiple open implementation PRs, or validation failure | Blocked |
+| Current-head `agent-review-verdict` failure (a review with blockers) | Changes requested |
+| `agent-blocked`, invalid label combination, multiple open implementation PRs, validation failure, or a current-head `agent-review-verdict` error (no review was published: superseded, AI provider failed, publication failed or not eligible; see `docs/automation.md` § Per-SHA outcomes) | Blocked |
 | Current-head `agent-validation`, `merge-validation` and `agent-review-verdict` all success | Awaiting approval |
 | Implementation PR merged into develop, with no other open implementation PR | Done |
 | Managed issue closed as completed | Done |

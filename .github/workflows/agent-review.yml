@@ -27,8 +27,8 @@ name: Agent review
 #   and uploads it as a short-lived artifact (scripts/agent-review-transport.mjs), never as a job
 #   output, which GitHub withholds when it contains a masked value. A separate deterministic publish
 #   job verifies that artifact, re-verifies the pull request immediately before publishing, binds the
-#   review to the exact reviewed SHA, suppresses stale or ineligible results, and records the outcome
-#   as the per-SHA `agent-review-verdict` commit status. No job can modify code, labels, branches,
+#   review to the exact reviewed SHA, publishes nothing for a stale or ineligible result, and records
+#   one outcome (scripts/agent-outcomes.mjs) as the per-SHA `agent-review-verdict` commit status. No job can modify code, labels, branches,
 #   settings, merge, or deploy.
 
 on:
@@ -566,18 +566,30 @@ jobs:
               -f description="$2" \
               -f target_url="$RUN_URL" >/dev/null
           }
-          # A suppressed result is never published as a review. It is recorded as an error status on
-          # the reviewed SHA only, so it can never read as a ready result for this or any other head.
-          suppress() {
-            echo "::warning::Review not published: $1"
-            set_verdict_status error "Superseded or not published: ${1:0:100}"
-            exit 0
+          # Every result is one of the fixed outcomes in scripts/agent-outcomes.mjs, so the status alone
+          # says what happened: a code finding, a provider failure, a delivery failure, a newer commit, or
+          # a pull request that no longer qualifies. Each is also written to the run summary.
+          record_outcome() {
+            local state prefix
+            case "$1" in
+              ready) state=success; prefix="Ready for human review" ;;
+              changes-requested) state=failure; prefix="Changes requested" ;;
+              superseded) state=error; prefix="Superseded" ;;
+              provider-failed) state=error; prefix="AI provider failed" ;;
+              publication-failed) state=error; prefix="Publication failed" ;;
+              not-eligible) state=error; prefix="Not eligible" ;;
+              *) echo "::error::Unknown review outcome '$1'."; exit 1 ;;
+            esac
+            local description="$prefix: $2"
+            set_verdict_status "$state" "${description:0:140}"
+            printf '### %s: %s\n\n%s\n' "$VERDICT_CONTEXT" "$prefix" "$2" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
           }
-          # The reviewer finished but its result could not be delivered or verified: an infrastructure
-          # failure, never a code finding, and never a ready result.
-          transport_failed() {
-            echo "::warning::Review not published: the review result could not be delivered: $1"
-            set_verdict_status error "Review result not delivered: ${1:0:110}"
+          # A result that is not published is never a review. It is recorded as an error status on the
+          # reviewed SHA only, so it can never read as a ready result for this or any other head. The
+          # reviewer finishing without a deliverable result is an infrastructure failure, never a finding.
+          not_published() {
+            echo "::warning::Review not published ($1): $2"
+            record_outcome "$1" "$2"
             exit 0
           }
 
@@ -588,41 +600,53 @@ jobs:
           case "$AGENT_MODE:$IMPLEMENTER:$REVIEWER" in
             cross-claude:claude:copilot) reviewer="GitHub Copilot (Copilot CLI)"; review_type="Cross-provider review (Claude implemented, Copilot reviewed)" ;;
             full-claude:claude:claude) reviewer="Claude (separate read-only invocation)"; review_type="Same-provider review (full-claude fallback): not independent" ;;
-            *) suppress "unknown review route '$AGENT_MODE' (implementer '$IMPLEMENTER', reviewer '$REVIEWER')." ;;
+            *) not_published not-eligible "unknown review route '$AGENT_MODE' (implementer '$IMPLEMENTER', reviewer '$REVIEWER')." ;;
           esac
-          [ "$REVIEW_RESULT" = "success" ] || suppress "the review job ended with '$REVIEW_RESULT' (failed, cancelled or superseded)."
+          # A cancelled review job was almost always stopped by a newer review run of this pull request
+          # (the concurrency group cancels the older one); any other ending is the provider's failure.
+          case "$REVIEW_RESULT" in
+            success) ;;
+            cancelled) not_published superseded "the review job ended with 'cancelled': a newer review run of this pull request, or a person, stopped it." ;;
+            *) not_published provider-failed "the $REVIEWER review job ended with '$REVIEW_RESULT', so it produced no review." ;;
+          esac
 
           # 1. Receive the review from this run's own artifact, never from a job output, and re-verify
           #    its identity, digest, binding, contract and redaction with the trusted transport script.
           transport="$RUNNER_TEMP/agent-review-transport.mjs"
           gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/scripts/agent-review-transport.mjs?ref=$GITHUB_WORKFLOW_SHA" > "$transport" \
-            || transport_failed "the trusted transport script could not be read."
+            || not_published publication-failed "the trusted transport script could not be read."
           if ! transport_summary="$(node "$transport" fetch "$work/review.json" 2>"$work/transport-error.txt")"; then
-            transport_failed "$(tail -n 1 "$work/transport-error.txt")"
+            transport_error="$(tail -n 1 "$work/transport-error.txt")"
+            # A delivered review that breaks the contract or names another SHA is the provider's failure;
+            # anything else (missing, tampered, expired, unreadable) is a delivery failure.
+            case "${transport_error%%:*}" in
+              contract|wrong-sha) not_published provider-failed "the review output was rejected: $transport_error" ;;
+              *) not_published publication-failed "the review result could not be delivered: $transport_error" ;;
+            esac
           fi
           redactions="$(jq -r '.redactions // 0' <<<"$transport_summary")"
-          [[ "$redactions" =~ ^[0-9]+$ ]] || transport_failed "the transport summary is invalid."
+          [[ "$redactions" =~ ^[0-9]+$ ]] || not_published publication-failed "the transport summary is invalid."
 
           # 2. The review must be well formed, bound to the reviewed SHA, and internally consistent
           #    with the blocking rules before anything else is considered.
-          jq -e 'type == "object"' "$work/review.json" >/dev/null 2>&1 || suppress "the review produced no valid structured output."
+          jq -e 'type == "object"' "$work/review.json" >/dev/null 2>&1 || not_published provider-failed "the review output was rejected: the review produced no valid structured output."
           reviewed_sha="$(jq -r '.reviewed_head_sha // ""' "$work/review.json")"
-          [ "$reviewed_sha" = "$HEAD_SHA" ] || suppress "the review output names SHA '$reviewed_sha', not the reviewed SHA $HEAD_SHA."
+          [ "$reviewed_sha" = "$HEAD_SHA" ] || not_published provider-failed "the review output was rejected: the review output names SHA '$reviewed_sha', not the reviewed SHA $HEAD_SHA."
           verdict="$(jq -r '.verdict // ""' "$work/review.json")"
           case "$verdict" in
             "READY FOR HUMAN REVIEW")
               jq -e '(.blockers | length) == 0 and (.criteria | length) > 0 and all(.criteria[]; .status == "met")' "$work/review.json" >/dev/null \
-                || suppress "a ready verdict requires no blockers and every acceptance criterion met."
+                || not_published provider-failed "the review output was rejected: a ready verdict requires no blockers and every acceptance criterion met."
               ;;
             "CHANGES REQUESTED")
               jq -e '(.blockers | length) > 0' "$work/review.json" >/dev/null \
-                || suppress "a changes-requested verdict must list at least one blocker."
+                || not_published provider-failed "the review output was rejected: a changes-requested verdict must list at least one blocker."
               ;;
-            *) suppress "unknown verdict '$verdict'." ;;
+            *) not_published provider-failed "the review output was rejected: unknown verdict '$verdict'." ;;
           esac
 
           # 3. Re-check eligibility and the current head immediately before publishing, with the trusted
-          #    guard from this workflow's own commit. An ineligible or moved pull request is suppressed;
+          #    guard from this workflow's own commit. An ineligible or moved pull request is not published;
           #    any failure to read the live state, or of the guard itself, stops the step before a
           #    review is posted: fail closed.
           guard="$RUNNER_TEMP/agent-pr-guard.mjs"
@@ -630,7 +654,8 @@ jobs:
           if ! pr_guard="$(node "$guard" check "$PR_NUMBER" "$HEAD_SHA" 2>"$RUNNER_TEMP/agent-pr-guard.txt")"; then
             refusal="$(tail -n 1 "$RUNNER_TEMP/agent-pr-guard.txt")"
             case "${refusal%%:*}" in
-              closed|draft|base|fork|branch|config|author|stale|workflow-files) suppress "$refusal" ;;
+              stale) not_published superseded "$refusal" ;;
+              closed|draft|base|fork|branch|config|author|workflow-files) not_published not-eligible "$refusal" ;;
               *) echo "::error::Review not published: the pull request could not be re-verified: $refusal"; exit 1 ;;
             esac
           fi
@@ -638,16 +663,16 @@ jobs:
             --jq '[.statuses[] | select(.context == "agent-validation")][0].state // ""')"
           # The implementer and route must still be the ones the review ran under.
           live_implementer="$(jq -r '.implementer' <<<"$pr_guard")"
-          [ "$live_implementer" = "$IMPLEMENTER" ] || suppress "pull request #$PR_NUMBER is now implemented by $live_implementer, not $IMPLEMENTER."
+          [ "$live_implementer" = "$IMPLEMENTER" ] || not_published not-eligible "pull request #$PR_NUMBER is now implemented by $live_implementer, not $IMPLEMENTER."
           # The provider mode must still be the one the review ran under; a relabel never reuses an old verdict.
           gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/scripts/agent-mode.mjs?ref=$GITHUB_WORKFLOW_SHA" > "$RUNNER_TEMP/agent-mode.mjs" \
-            || suppress "the provider-mode resolver could not be read."
+            || not_published publication-failed "the provider-mode resolver could not be read."
           live_mode="$(node "$RUNNER_TEMP/agent-mode.mjs" verify-pr "$PR_NUMBER" "$live_implementer")" \
-            || suppress "the provider mode of pull request #$PR_NUMBER could not be verified."
-          [ "$live_mode" = "$AGENT_MODE" ] || suppress "pull request #$PR_NUMBER is now in provider mode $live_mode, not $AGENT_MODE."
+            || not_published not-eligible "the provider mode of pull request #$PR_NUMBER could not be verified."
+          [ "$live_mode" = "$AGENT_MODE" ] || not_published not-eligible "pull request #$PR_NUMBER is now in provider mode $live_mode, not $AGENT_MODE."
           jq -e 'any(.labels[]; . == "agent-review")' <<<"$pr_guard" >/dev/null \
-            || suppress "the agent-review label was removed."
-          [ "$validation_state" = "success" ] || suppress "the reviewed SHA no longer has a successful latest agent-validation status."
+            || not_published not-eligible "the agent-review label was removed."
+          [ "$validation_state" = "success" ] || not_published not-eligible "the reviewed SHA no longer has a successful latest agent-validation status."
 
           # 4. Render the review deterministically. The publisher, not the model, writes the reviewed
           #    SHA, the single verdict line and the advisory sentence.
@@ -663,7 +688,7 @@ jobs:
             + "\n\nThis is an advisory review. Human approval and branch protection remain the merge gate."
           ' "$work/review.json" > "$work/body.md"
           verdict_lines="$(grep -c '^VERDICT:' "$work/body.md" || true)"
-          [ "$verdict_lines" = "1" ] || suppress "the rendered review must contain exactly one verdict line, found $verdict_lines."
+          [ "$verdict_lines" = "1" ] || not_published provider-failed "the review output was rejected: the rendered review must contain exactly one verdict line, found $verdict_lines."
 
           jq -n --arg sha "$HEAD_SHA" --rawfile body "$work/body.md" --slurpfile review "$work/review.json" '
             { commit_id: $sha, event: "COMMENT", body: $body,
@@ -682,9 +707,9 @@ jobs:
           echo "review_posted=true" >> "$GITHUB_OUTPUT"
 
           if [ "$verdict" = "READY FOR HUMAN REVIEW" ]; then
-            set_verdict_status success "Ready for human review (advisory) for this SHA only"
+            record_outcome ready "advisory, for this SHA only; a person approves and merges."
           else
-            set_verdict_status failure "Changes requested for this SHA"
+            record_outcome changes-requested "see the review on this SHA; a person may request a repair."
           fi
 
       - name: Record fail-closed outcome
@@ -697,10 +722,11 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           if [ "$REVIEW_POSTED" = "true" ]; then
-            description="The review was posted, but its verdict status could not be recorded; see the review"
+            description="Publication failed: the review was posted, but its verdict status could not be recorded; see the review"
           else
-            description="Review publication failed closed; nothing was published"
+            description="Publication failed: the publisher stopped before posting; nothing was published"
           fi
+          printf '### %s: Publication failed\n\n%s\n' "$VERDICT_CONTEXT" "$description" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
           gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" \
             -f state=error \
             -f context="$VERDICT_CONTEXT" \

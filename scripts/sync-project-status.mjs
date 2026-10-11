@@ -33,7 +33,11 @@ export function desiredStatus(issue) {
     const pr = open[0];
     if (pr.draft) return 'In progress';
     const status = pr.statuses;
-    if (['failure', 'error'].includes(status['agent-review-verdict'])) return 'Changes requested';
+    // Only a real review finding (failure) asks for changes. An error is an outcome with no review:
+    // the provider or publication failed, a newer run superseded it, or the pull request stopped
+    // qualifying (scripts/agent-outcomes.mjs). That needs a person, not a code change.
+    if (status['agent-review-verdict'] === 'failure') return 'Changes requested';
+    if (status['agent-review-verdict'] === 'error') return 'Blocked';
     if (['agent-validation', 'merge-validation'].some(key => ['failure', 'error'].includes(status[key]))) return 'Blocked';
     if (['agent-validation', 'merge-validation', 'agent-review-verdict'].every(key => status[key] === 'success')) return 'Awaiting approval';
     return 'In review';
