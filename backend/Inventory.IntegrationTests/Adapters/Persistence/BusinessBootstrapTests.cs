@@ -700,7 +700,7 @@ public class BusinessBootstrapTests : IDisposable
         using var db = TestAppDbContext.Unrestricted(_options);
         foreach (var business in db.Businesses.ToList())
         {
-            business.IsActive = false;
+            business.Status = BusinessStatus.Deactivated;
         }
 
         db.SaveChanges();
@@ -730,12 +730,15 @@ public class BusinessBootstrapTests : IDisposable
         var result = await RunAsync(ValidOptions(), dryRun: false);
 
         Assert.Equal(BusinessBootstrapOutcome.BusinessInactive, result.Outcome);
-        Assert.Contains("deactivated", result.Message, StringComparison.Ordinal);
+        Assert.Contains("is not active", result.Message, StringComparison.Ordinal);
+        Assert.Contains("Deactivated", result.Message, StringComparison.Ordinal);
 
         using var verify = TestAppDbContext.Unrestricted(_options);
         Assert.Equal(2, verify.Products.Count(p => p.BusinessId == 0));
         Assert.Equal(2, verify.NayaxSales.Count(s => s.BusinessId == 0));
-        Assert.False(Assert.Single(verify.Businesses.ToList()).IsActive);
+        Assert.Equal(
+            BusinessStatus.Deactivated,
+            Assert.Single(verify.Businesses.ToList()).Status);
     }
 
     /// <summary>
@@ -943,7 +946,12 @@ public class BusinessBootstrapTests : IDisposable
         DeactivateEveryBusiness();
 
         using var db = TestAppDbContext.Unrestricted(_options);
-        db.Businesses.Add(new Business { Name = "Another", IsActive = true, CreatedAtUtc = DateTime.UtcNow });
+        db.Businesses.Add(new Business
+        {
+            Name = "Another",
+            Status = BusinessStatus.Active,
+            CreatedAtUtc = DateTime.UtcNow,
+        });
         db.SaveChanges();
 
         var state = TenantOwnershipReadiness.Inspect(db);
@@ -964,7 +972,12 @@ public class BusinessBootstrapTests : IDisposable
         await RunAsync(ValidOptions(), dryRun: false);
 
         using var db = TestAppDbContext.Unrestricted(_options);
-        db.Businesses.Add(new Business { Name = "Second", IsActive = true, CreatedAtUtc = DateTime.UtcNow });
+        db.Businesses.Add(new Business
+        {
+            Name = "Second",
+            Status = BusinessStatus.Active,
+            CreatedAtUtc = DateTime.UtcNow,
+        });
         db.SaveChanges();
 
         var state = TenantOwnershipReadiness.Inspect(db);

@@ -13,13 +13,14 @@ namespace Inventory.Application.Access;
 /// <param name="State">The caller's own account state, from <see cref="AccountStatePolicy"/>.</param>
 /// <param name="OnboardingEnabled">
 /// Whether a person with no membership may apply for a business themselves. Always
-/// <see langword="false"/> until issue #507 adds the <c>SelfServiceOnboarding:Enabled</c> flag
-/// this will report.
+/// <see langword="false"/> until the application endpoints of issue #541 add the
+/// <c>SelfServiceOnboarding:Enabled</c> flag this will report.
 /// </param>
 /// <param name="RejectionReason">
-/// Why a business application was rejected, and <see langword="null"/> for every other state. It
-/// arrives with issue #507, which adds both the rejected business status and the stored reason, so
-/// it is always <see langword="null"/> today.
+/// Why a business application was rejected, and <see langword="null"/> for every other state
+/// (issue #540). It comes from the business's stored reason through
+/// <see cref="AccountStateDecision"/>, together with the state it belongs to, so a reason is never
+/// reported beside a state it does not describe.
 /// </param>
 public sealed record AccountStateResult(
     AccountState State,

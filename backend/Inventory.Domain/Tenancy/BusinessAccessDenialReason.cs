@@ -29,7 +29,14 @@ public enum BusinessAccessDenialReason
     /// </summary>
     MembershipAmbiguous = 5,
 
-    /// <summary>The single active membership points at a business that is no longer active.</summary>
+    /// <summary>
+    /// The single active membership points at a business whose <see cref="BusinessStatus"/> is not
+    /// <see cref="BusinessStatus.Active"/> (issue #540): one awaiting a decision on its
+    /// application, one whose application was refused, one that was offboarded, or one carrying a
+    /// status this code does not declare. The reason stays one value on purpose - the denial is
+    /// the same, and which situation it was is reported only to the caller's own identity, by
+    /// <see cref="AccountStatePolicy"/>.
+    /// </summary>
     BusinessInactive = 6,
 
     /// <summary>

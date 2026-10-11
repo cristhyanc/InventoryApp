@@ -28,8 +28,15 @@ public class GetAccountStateTests
     private static ActorBusinessMembership Membership(
         int businessId,
         bool isActive = true,
-        bool businessIsActive = true) =>
-        new(BusinessId.From(businessId), BusinessRole.Owner, isActive, businessIsActive);
+        BusinessStatus businessStatus = BusinessStatus.Active,
+        string? rejectionReason = null) =>
+        new(
+            BusinessId.From(businessId),
+            BusinessRole.Owner,
+            isActive,
+            businessStatus,
+            StatusChangedAtUtc: new DateTime(2026, 10, 11, 0, 0, 0, DateTimeKind.Utc),
+            rejectionReason);
 
     private static GetAccountState UseCase(
         FakeBusinessMembershipStore store,
@@ -48,15 +55,17 @@ public class GetAccountStateTests
     }
 
     [Theory]
-    [InlineData(false, true, AccountState.MembershipRevoked)]
-    [InlineData(true, false, AccountState.BusinessDeactivated)]
+    [InlineData(false, BusinessStatus.Active, AccountState.MembershipRevoked)]
+    [InlineData(true, BusinessStatus.Deactivated, AccountState.BusinessDeactivated)]
+    [InlineData(true, BusinessStatus.Pending, AccountState.ApplicationPending)]
+    [InlineData(false, BusinessStatus.Rejected, AccountState.ApplicationRejected)]
     public async Task Reports_each_state_a_single_membership_can_be_in(
         bool isActive,
-        bool businessIsActive,
+        BusinessStatus businessStatus,
         AccountState expected)
     {
         var store = new FakeBusinessMembershipStore(
-            Membership(7, isActive: isActive, businessIsActive: businessIsActive));
+            Membership(7, isActive: isActive, businessStatus: businessStatus));
 
         Assert.Equal(expected, (await UseCase(store).Handle(CancellationToken.None)).State);
     }
@@ -84,9 +93,10 @@ public class GetAccountStateTests
     }
 
     /// <summary>
-    /// <c>onboardingEnabled</c> is part of the agreed response and is <c>false</c> until issue
-    /// #507 adds the self-service onboarding flag. It is answered here, in the Application layer,
-    /// so #507 reads its configuration in one place rather than in the controller.
+    /// <c>onboardingEnabled</c> is part of the agreed response and is <c>false</c> until the
+    /// application endpoints of issue #541 add the self-service onboarding flag. It is answered
+    /// here, in the Application layer, so #541 reads its configuration in one place rather than in
+    /// the controller.
     /// </summary>
     [Fact]
     public async Task Onboarding_is_reported_as_disabled_and_no_rejection_reason_is_given()
@@ -99,24 +109,48 @@ public class GetAccountStateTests
     }
 
     /// <summary>
-    /// A rejection reason exists only for <see cref="AccountState.ApplicationRejected"/>, which
-    /// needs issue #507's business status. No state this slice can report carries one.
+    /// A rejection reason exists only for <see cref="AccountState.ApplicationRejected"/> (issue
+    /// #540): no other state reports one, whatever the records happen to carry.
     /// </summary>
     [Theory]
-    [InlineData(true, true)]
-    [InlineData(true, false)]
-    [InlineData(false, true)]
-    public async Task No_state_this_slice_reports_carries_a_rejection_reason(
+    [InlineData(true, BusinessStatus.Active)]
+    [InlineData(true, BusinessStatus.Pending)]
+    [InlineData(true, BusinessStatus.Deactivated)]
+    [InlineData(false, BusinessStatus.Active)]
+    public async Task No_state_other_than_ApplicationRejected_carries_a_rejection_reason(
         bool isActive,
-        bool businessIsActive)
+        BusinessStatus businessStatus)
     {
         var store = new FakeBusinessMembershipStore(
-            Membership(7, isActive: isActive, businessIsActive: businessIsActive));
+            Membership(7, isActive: isActive, businessStatus: businessStatus, rejectionReason: "Refused."));
 
         var result = await UseCase(store).Handle(CancellationToken.None);
 
         Assert.Null(result.RejectionReason);
         Assert.NotEqual(AccountState.ApplicationRejected, result.State);
+    }
+
+    /// <summary>
+    /// The one state that does carry it: the rejection reason the operator recorded on the
+    /// business reaches the applicant's own account state (issue #540), and it is the only thing
+    /// about that business the response says - still no name, no id, and no confirmation that it
+    /// exists.
+    /// </summary>
+    [Fact]
+    public async Task A_rejected_application_reports_the_recorded_reason()
+    {
+        var store = new FakeBusinessMembershipStore(
+            Membership(
+                7,
+                isActive: false,
+                businessStatus: BusinessStatus.Rejected,
+                rejectionReason: "The ABN provided belongs to another entity."));
+
+        var result = await UseCase(store).Handle(CancellationToken.None);
+
+        Assert.Equal(AccountState.ApplicationRejected, result.State);
+        Assert.Equal("The ABN provided belongs to another entity.", result.RejectionReason);
+        Assert.False(result.OnboardingEnabled);
     }
 
     /// <summary>

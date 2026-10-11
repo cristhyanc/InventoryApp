@@ -1,3 +1,4 @@
+using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
@@ -8,11 +9,14 @@ namespace InventoryApi.Bootstrap;
 /// What the startup readiness check found about tenant ownership.
 /// </summary>
 /// <param name="UnassignedRows">Tenant-owned rows still owned by nobody.</param>
-/// <param name="BusinessCount">Businesses configured in this database, active or not.</param>
-/// <param name="ActiveBusinessCount">Businesses that are currently active.</param>
+/// <param name="BusinessCount">Businesses configured in this database, whatever their status.</param>
+/// <param name="ActiveBusinessCount">
+/// Businesses whose lifecycle status is <c>Active</c> (issue #540). A pending, rejected or
+/// deactivated business is not one of them.
+/// </param>
 /// <param name="UsableMembershipCount">
-/// Active memberships that belong to an <em>active</em> business. A membership pointing at a
-/// deactivated business grants nothing, so it is not counted as access.
+/// Active memberships that belong to an <em>Active</em> business. A membership pointing at a
+/// business in any other status grants nothing, so it is not counted as access.
 /// </param>
 public readonly record struct TenantOwnershipReadinessState(
     long UnassignedRows,
@@ -61,17 +65,20 @@ public static class TenantOwnershipReadiness
     {
         var businesses = db.Businesses.IgnoreQueryFilters();
 
-        // The join is the point: an active membership on a deactivated business authorises
-        // nothing, so counting memberships alone would report access that does not exist.
+        // The join is the point: an active membership on a business that is not Active authorises
+        // nothing, so counting memberships alone would report access that does not exist. The
+        // lifecycle status is read (issue #540), and only Active counts - a pending, rejected or
+        // deactivated business resolves for nobody.
         var usableMemberships = db.BusinessMemberships
             .IgnoreQueryFilters()
             .Count(membership => membership.IsActive
-                && businesses.Any(business => business.Id == membership.BusinessId && business.IsActive));
+                && businesses.Any(business =>
+                    business.Id == membership.BusinessId && business.Status == BusinessStatus.Active));
 
         return new TenantOwnershipReadinessState(
             CountUnassignedRows(db),
             businesses.Count(),
-            businesses.Count(business => business.IsActive),
+            businesses.Count(business => business.Status == BusinessStatus.Active),
             usableMemberships);
     }
 

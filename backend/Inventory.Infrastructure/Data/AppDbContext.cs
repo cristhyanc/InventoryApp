@@ -116,11 +116,16 @@ public class AppDbContext : DbContext
     /// <see cref="BusinessTimeZoneEnforcer"/> joins it for the same reason (issue #499): a
     /// business's time zone is what every business date is derived from, so an unresolvable one is
     /// refused on whichever path writes it rather than per write path.
+    ///
+    /// <see cref="BusinessAbnEnforcer"/> joins them on the same terms (issue #540): the business's
+    /// ABN appears on tax invoices and in the GST accounting aid, so a value that cannot be an ABN
+    /// is refused centrally rather than per write path.
     /// </summary>
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {
         BusinessOwnershipEnforcer.Enforce(this);
         BusinessTimeZoneEnforcer.Enforce(this);
+        BusinessAbnEnforcer.Enforce(this);
         return base.SaveChanges(acceptAllChangesOnSuccess);
     }
 
@@ -130,6 +135,7 @@ public class AppDbContext : DbContext
     {
         BusinessOwnershipEnforcer.Enforce(this);
         BusinessTimeZoneEnforcer.Enforce(this);
+        BusinessAbnEnforcer.Enforce(this);
         return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
     }
 
@@ -644,6 +650,21 @@ public class AppDbContext : DbContext
         // has no derivable business dates at all; the value itself is validated against the host's
         // time-zone database by BusinessTimeZoneEnforcer, which a schema constraint cannot do.
         modelBuilder.Entity<Business>().Property(b => b.TimeZoneId).IsRequired();
+
+        // The lifecycle status (issue #540). Required, because "no status" is not a state a
+        // business can be in and an unfilled column would deny access without saying why; the
+        // vocabulary itself is enforced where it has to be anyway - an undeclared stored value is
+        // not Active, so BusinessMembershipResolutionPolicy denies it. No CHECK constraint, for
+        // the reason BusinessMembership.Role carries none: SQLite cannot add one without
+        // rebuilding the table, and a value a newer deployment writes has to fail closed in the
+        // policy regardless.
+        //
+        // The profile columns the business application collects are all nullable, so the existing
+        // business migrates without a single invented value, and none of them is validated by a
+        // schema constraint: the ABN's check digits are enforced by BusinessAbnEnforcer on
+        // SaveChanges, which a constraint cannot express, and the rest are facts an application
+        // form records rather than values anything derives from.
+        modelBuilder.Entity<Business>().Property(b => b.Status).IsRequired();
 
         // The backfill audit is keyed only by its own id: it records what happened to a table,
         // including runs that assigned rows to the wrong business, so it must stay queryable

@@ -50,7 +50,7 @@ public sealed class GetAccountState
 
         if (actorResult.Actor is null)
         {
-            return Result(AccountState.NoMembership);
+            return Result(new AccountStateDecision(AccountState.NoMembership, RejectionReason: null));
         }
 
         var memberships = await _membershipStore
@@ -60,9 +60,11 @@ public sealed class GetAccountState
         return Result(AccountStatePolicy.Determine(memberships));
     }
 
-    // onboardingEnabled and rejectionReason are decided here rather than at the API boundary, so
-    // issue #507 adds the self-service onboarding flag and the stored rejection reason in the
-    // Application layer and the controller keeps only its mapping to JSON.
-    private static AccountStateResult Result(AccountState state) =>
-        new(state, OnboardingEnabled: false, RejectionReason: null);
+    // onboardingEnabled is decided here rather than at the API boundary, so the application
+    // endpoints of issue #541 read the self-service onboarding flag in the Application layer and
+    // the controller keeps only its mapping to JSON. The rejection reason is not decided here at
+    // all: it comes from the precedence together with the state it belongs to (issue #540), so the
+    // two cannot be reported independently.
+    private static AccountStateResult Result(AccountStateDecision decision) =>
+        new(decision.State, OnboardingEnabled: false, decision.RejectionReason);
 }

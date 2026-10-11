@@ -301,7 +301,7 @@ public sealed class MemberProfileRefreshApiTests : IClassFixture<MemberProfileRe
                 Id = BusinessId,
                 Name = "Vending Co",
                 TimeZoneId = "Australia/Sydney",
-                IsActive = true,
+                Status = BusinessStatus.Active,
                 CreatedAtUtc = CreatedAt,
             });
 

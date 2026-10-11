@@ -35,8 +35,10 @@ public enum BusinessBootstrapOutcome
     NoActiveMembership = 5,
 
     /// <summary>
-    /// The business that would own the data is deactivated, so its records would be unreachable
-    /// however many active members it has. Reactivating a business is a human decision.
+    /// The business that would own the data is not in the <c>Active</c> lifecycle status (issue
+    /// #540) - it is awaiting a decision on its application, was refused, or was deactivated - so
+    /// its records would be unreachable however many active members it has. Moving a business into
+    /// the Active status is a human decision.
     /// </summary>
     BusinessInactive = 6,
 }
