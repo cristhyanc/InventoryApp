@@ -2796,6 +2796,47 @@ co-located `icon-paths.ts`. Later #409 sub-issues wire it into restyled pages an
 
 The Purchases list (`purchase-list.component.html`) keeps its `table-cell` column widths — the `Items` column in particular can grow wide with several product lines — inside a horizontally scrolling `<table class="table min-w-[900px]">` within `overflow-x-auto`. The restyled #410 table widened enough that, without a pinned Actions column, the Edit/Delete buttons could scroll out of view and appear missing. The Actions header `<th>` and each row's Actions `<td>` are `sticky right-0` with their own opaque background (`bg-md-gray-100` on the header, matching `.table-head`; `bg-white` on each row cell) and a `border-md-gray-200` left divider, so both actions stay visible and reachable at the right edge while the rest of the row scrolls underneath, at 1440px and down to the 390px minimum width where horizontal scrolling remains expected. Sticky positioning here only changes where the cell paints; it does not change column sizing. Since issue #475 the Actions cell holds an Edit **link** to `/purchases/:id/edit` (see [Purchase edit page](#purchase-edit-page-issue-475)) beside the unchanged `remove(r)` Delete button; the sticky behaviour is the same for both.
 
+#### Needs Ordering: row navigation, sortable columns, and Delete removal (issue #498)
+
+`/products/needs-ordering` (`ProductNeedsOrderingComponent`) follows the row-navigation and
+sortable-header pattern the Products list established in issue #497
+(`product-list.component.ts`/`.html`), applied to this page's own Edit/Stock/Delete actions and
+its own column set.
+
+- **Row navigates to the same product editor Edit opened.** Clicking or tapping anywhere in a row
+  outside a nested control, or pressing Enter while one is focused, navigates to
+  `/products/:id/edit` — the destination the removed Edit button used. The product Name cell holds
+  the real `<a class="table-row-anchor" [routerLink]="['/products', p.id, 'edit']">`, which gives
+  keyboard focus, Enter activation, ctrl/cmd/middle-click and "copy link address" natively;
+  `onRowActivate` only extends that anchor's plain click to the rest of the row (`table-row-link`
+  on the `<tr>`, `(click)`/`(keydown.enter)` bound to it) and ignores anything that originated from
+  a nested `a`, `button`, `input`, `select`, `textarea` or `label` — the selection checkbox, the
+  Stock link and the Active/Inactive status badge button — or a modified/non-primary click the
+  browser should handle itself (Ctrl/Meta/Shift/Alt, or a non-left mouse button). The row carries
+  no `tabindex` or `role` of its own; the shared `.table-row-link`/`.table-row-anchor` styling
+  (`styles.css`) already supplies the hover cursor, hover underline and `:focus-within` affordance,
+  exactly as it does for the Products list and the Sites list.
+- **Stock is unchanged and isolated from row navigation.** The Stock `<a routerLink>` to
+  `/products/:id/stock` keeps its existing destination and keyboard accessibility; because it is
+  itself an `a`, `onRowActivate`'s nested-control check excludes it, so clicking or activating Stock
+  never navigates to the edit page.
+- **Delete is removed from this page only.** The Delete button and its `app-confirmation-dialog`
+  markup were removed from `ProductNeedsOrderingComponent`'s template and the now-unused
+  `confirmDelete`/`cancelDelete`/`deleteConfirmed`/`confirmingProduct` members were removed from the
+  component; `ProductService.delete` and the Products list's own Delete button are unchanged, as is
+  backend delete authorization.
+- **Every visible data column sorts ascending/descending.** Name, Category, Supplier, Price,
+  Stock, Machine need, Low Stock Threshold, Restock To, On order, Need to Order and Status each
+  have a header `<button>` toggling `sortBy(column)`; the active header's `[attr.aria-sort]`
+  reflects `ascending`/`descending` and its visible label gains the same `(ascending)`/
+  `(descending)` suffix the Products list and Site Products tables use. `sortedProducts` computes a
+  new sorted array from `products` on each read — comparing numbers numerically, everything else as
+  text, a `null`/missing value always last regardless of direction, and a tied or missing
+  comparison falling back to product id — rather than sorting or mutating the `products` array
+  itself, so sorting composes with the existing search/category/supplier filters and the row
+  checkbox selection/"Mark as ordered" workflow without changing what filtering returns or any
+  stored product data.
+
 #### Reconciliation and Transaction Sales table width (issue #452)
 
 These two reports carry the widest tables in the application — twelve financial columns on
