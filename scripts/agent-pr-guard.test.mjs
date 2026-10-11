@@ -16,6 +16,7 @@ const NEWER_SHA = 'f49fcc313ab6295c29d9d426445e1dbbd54fd997';
 const GUARD = new URL('./agent-pr-guard.mjs', import.meta.url).pathname;
 
 function live(overrides = {}) {
+  const files = overrides.files ?? ['backend/InventoryApi/Services/InventoryCountService.cs'];
   return {
     pr: {
       state: 'OPEN',
@@ -29,9 +30,17 @@ function live(overrides = {}) {
       ...(overrides.pr ?? {}),
     },
     author: overrides.author ?? BOT,
-    files: overrides.files ?? ['backend/InventoryApi/Services/InventoryCountService.cs'],
+    files,
+    headSha: overrides.headSha ?? overrides.pr?.headRefOid ?? SHA,
+    changedFiles: Object.hasOwn(overrides, 'changedFiles') ? overrides.changedFiles : files.length,
   };
 }
+
+// The CLI fake serves the REST pull request from these fields of a live() fixture.
+const served = (state) => ({ ...state, restHeadSha: state.headSha });
+
+// n changed paths, none under .github/workflows/.
+const manyFiles = (n) => Array.from({ length: n }, (_, i) => `backend/Generated/File${i}.cs`);
 
 const request = (overrides = {}) => ({ repository: REPO, pr: '267', sha: SHA, issue: undefined, ...overrides });
 
@@ -74,7 +83,14 @@ describe('agent pull request guard: decision', () => {
     ['author', { author: '' }],
     ['stale', { pr: { headRefOid: NEWER_SHA } }],
     ['stale', { pr: { headRefOid: null } }],
+    ['stale', { headSha: NEWER_SHA }],
+    ['stale', { headSha: '' }],
+    ['unavailable', { changedFiles: 2 }],
+    ['unavailable', { changedFiles: undefined }],
+    ['unavailable', { changedFiles: -1 }],
+    ['unavailable', { files: manyFiles(3000), changedFiles: 3001 }],
     ['workflow-files', { files: ['docs/automation.md', '.github/workflows/agent-review.yml'] }],
+    ['workflow-files', { files: [...manyFiles(240), '.github/workflows/validate.yml', ...manyFiles(10)] }],
   ]) {
     it(`refuses with '${code}' for ${JSON.stringify({ ...state, ...req, expected })}`, () => {
       const error = refusal(() => evaluate(request(req), live(state), expected));
@@ -82,6 +98,11 @@ describe('agent pull request guard: decision', () => {
       assert.match(error.message, /\.$/);
     });
   }
+
+  it('accepts a complete listing of more than 100 changed files with no workflow change', () => {
+    assert.equal(evaluate(request(), live({ files: manyFiles(250) }), BOT).head_sha, SHA);
+    assert.equal(evaluate(request(), live({ files: manyFiles(3000) }), BOT).head_sha, SHA);
+  });
 
   it('reports the first failed check in its documented order', () => {
     const everything = live({ pr: { state: 'CLOSED', isDraft: true, headRefOid: NEWER_SHA }, author: 'x', files: ['.github/workflows/a.yml'] });
@@ -123,7 +144,7 @@ if (args[0] === 'pr' && args[1] === 'view') {
   if (state.malformed) { process.stdout.write('not json'); process.exit(0); }
   out(Object.fromEntries(opt('--json').split(',').map((f) => [f, state.pr[f]])));
 } else if (args[0] === 'api' && args.some((a) => a.includes('/files'))) out(state.files.map((filename) => ({ filename })));
-else if (args[0] === 'api') out({ user: { login: state.author } });
+else if (args[0] === 'api') out('rest' in state ? state.rest : { user: { login: state.author }, head: { sha: state.restHeadSha ?? state.pr.headRefOid }, changed_files: state.changedFiles ?? state.files.length });
 else process.exit(3);
 `;
 
@@ -133,7 +154,7 @@ function cli(args, { state = live(), env = {} } = {}) {
     const gh = join(root, 'gh');
     writeFileSync(gh, FAKE_GH);
     chmodSync(gh, 0o755);
-    writeFileSync(join(root, 'state.json'), JSON.stringify(state));
+    writeFileSync(join(root, 'state.json'), JSON.stringify(served(state)));
     const result = spawnSync('node', [GUARD, ...args], {
       encoding: 'utf8',
       env: { ...process.env, AGENT_PR_GUARD_GH_PATH: gh, FAKE_GH_STATE: join(root, 'state.json'), GITHUB_REPOSITORY: REPO, EXPECTED_AGENT_AUTHOR: BOT, ...env },
@@ -172,6 +193,37 @@ describe('agent pull request guard: command line', () => {
       assert.equal(outcome.status, 2);
       assert.equal(outcome.stdout, '');
       assert.match(outcome.stderr, /^unavailable: the live state of pull request #267 could not be read\.\n$/);
+    }
+  });
+
+  it('binds the changed-file list to the expected head and requires it to be complete', () => {
+    // A head that moved while the files were listed is stale, even though the first read matched.
+    const moved = cli(['check', '267', SHA], { state: live({ headSha: NEWER_SHA }) });
+    assert.equal(moved.status, 2);
+    assert.match(moved.stderr, /^stale: the head of pull request #267 moved to f49fcc3\w+ while it was checked/);
+    // GitHub lists at most 3000 files: a pull request with more is never treated as workflow-free.
+    const truncated = cli(['check', '267', SHA], { state: live({ files: manyFiles(3000), changedFiles: 3200 }) });
+    assert.equal(truncated.status, 2);
+    assert.match(truncated.stderr, /^unavailable: only 3000 of 3200 changed files of pull request #267 could be listed\.\n$/);
+    // A workflow change after the first 100 files is still found.
+    const late = cli(['check', '267', SHA], { state: live({ files: [...manyFiles(240), '.github/workflows/validate.yml'] }) });
+    assert.match(late.stderr, /^workflow-files: /);
+    assert.equal(cli(['check', '267', SHA], { state: live({ files: manyFiles(250) }) }).status, 0);
+  });
+
+  it('never accepts a malformed REST pull request', () => {
+    for (const [rest, code] of [
+      [null, 'unavailable'],
+      [[], 'unavailable'],
+      [{ user: { login: BOT }, head: {}, changed_files: 1 }, 'unavailable'],
+      [{ user: { login: BOT }, head: { sha: 'not-a-sha' }, changed_files: 1 }, 'unavailable'],
+      [{ user: {}, head: { sha: SHA }, changed_files: 1 }, 'author'],
+      [{ user: { login: BOT }, head: { sha: SHA } }, 'unavailable'],
+    ]) {
+      const outcome = cli(['check', '267', SHA], { state: { ...live(), rest } });
+      assert.equal(outcome.status, 2, JSON.stringify(rest));
+      assert.equal(outcome.stdout, '');
+      assert.match(outcome.stderr, new RegExp(`^${code}: `), JSON.stringify(rest));
     }
   });
 

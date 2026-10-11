@@ -8,6 +8,11 @@
 // SHA, and changes nothing under .github/workflows/ (those pull requests need a human). The checks
 // run in that order and the first one that fails is reported.
 //
+// The changed-file list is read between two reads of the head, and both must name the expected SHA,
+// so the list cannot belong to a different commit. GitHub lists at most 3000 changed files, so the
+// list must also be complete (its length equal to the pull request's changed_files count); a short or
+// truncated list is `unavailable`, never treated as free of workflow changes.
+//
 // Each workflow keeps its own response to a refusal (fail the job, skip quietly, or suppress a
 // review) and its own extra checks (provider mode, labels, issue state, validation status). This
 // script only decides eligibility. It never writes anything.
@@ -37,6 +42,8 @@ export const REFUSAL_CODES = Object.freeze([
   'workflow-files',
 ]);
 export const PR_VIEW_FIELDS = 'state,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,labels';
+// Only the REST pull request endpoint returns the canonical author login reliably for bot authors.
+export const REST_PULL_FIELDS = '{author: (.user.login // ""), head_sha: (.head.sha // ""), changed_files: .changed_files}';
 export const AGENT_BRANCH_PREFIX = 'agent/issue-';
 export const WORKFLOW_DIR = '.github/workflows/';
 export const REFUSED_EXIT = 2;
@@ -61,11 +68,11 @@ export function parseRequest({ repository, pr, sha, issue }) {
 }
 
 /**
- * Decides eligibility from the live state already read: `pr` is the `gh pr view` JSON, `author` the
- * REST author login, `files` the changed paths. Returns the guard's success output or throws a
- * GuardRefusal.
+ * Decides eligibility from the live state already read: `pr` is the `gh pr view` JSON, `files` the
+ * changed paths, and `author`, `headSha` and `changedFiles` come from the REST pull request read
+ * after the files. Returns the guard's success output or throws a GuardRefusal.
  */
-export function evaluate({ repository, pr: number, sha, issue }, { pr, author, files }, expectedAuthor) {
+export function evaluate({ repository, pr: number, sha, issue }, { pr, author, files, headSha, changedFiles }, expectedAuthor) {
   const head = pr.headRefName ?? '';
   const current = pr.headRefOid ?? '';
   if (pr.state !== 'OPEN') refuse('closed', `pull request #${number} is not open (${pr.state ?? 'unknown'}).`);
@@ -79,6 +86,11 @@ export function evaluate({ repository, pr: number, sha, issue }, { pr, author, f
   if (!expectedAuthor) refuse('config', 'AGENT_AUTOMATION_APP_BOT_LOGIN is not configured.');
   if (author !== expectedAuthor) refuse('author', `pull request #${number} is not authored by ${expectedAuthor}.`);
   if (current !== sha) refuse('stale', `the head of pull request #${number} is now ${current || 'unknown'}, not ${sha}.`);
+  // The head must not have moved while the changed files were listed.
+  if (headSha !== sha) refuse('stale', `the head of pull request #${number} moved to ${headSha || 'unknown'} while it was checked, not ${sha}.`);
+  if (!Number.isInteger(changedFiles) || changedFiles < 0 || files.length !== changedFiles) {
+    refuse('unavailable', `only ${files.length} of ${changedFiles ?? 'unknown'} changed files of pull request #${number} could be listed.`);
+  }
   if (files.some((file) => file.startsWith(WORKFLOW_DIR))) {
     refuse('workflow-files', 'pull requests that change .github/workflows/** require manual validation and review.');
   }
@@ -100,11 +112,13 @@ const gh = (args) => execFileSync(GH_PATH, args, { encoding: 'utf8', stdio: ['ig
 export function readLiveState({ repository, pr }) {
   try {
     const view = JSON.parse(gh(['pr', 'view', pr, '--repo', repository, '--json', PR_VIEW_FIELDS]));
-    const author = gh(['api', `repos/${repository}/pulls/${pr}`, '--jq', '.user.login // empty']).trim();
+    if (!view || typeof view !== 'object' || Array.isArray(view)) throw new Error('malformed');
     const files = gh(['api', '--paginate', `repos/${repository}/pulls/${pr}/files?per_page=100`, '--jq', '.[].filename'])
       .split('\n').filter(Boolean);
-    if (!view || typeof view !== 'object') throw new Error('malformed');
-    return { pr: view, author, files };
+    // Read after the files, so a head that moved during the listing is caught as stale.
+    const rest = JSON.parse(gh(['api', `repos/${repository}/pulls/${pr}`, '--jq', REST_PULL_FIELDS]));
+    if (!rest || typeof rest !== 'object' || typeof rest.author !== 'string' || !/^[0-9a-f]{40}$/.test(rest.head_sha)) throw new Error('malformed');
+    return { pr: view, files, author: rest.author, headSha: rest.head_sha, changedFiles: rest.changed_files };
   } catch {
     return refuse('unavailable', `the live state of pull request #${pr} could not be read.`);
   }

@@ -425,7 +425,9 @@ export const PR_GUARD_SCRIPT_CONTRACT = Object.freeze({
     "export const WORKFLOW_DIR = '.github/workflows/';",
     'if (files.some((file) => file.startsWith(WORKFLOW_DIR))) {',
     "refuse('workflow-files'",
-    "'--jq', '.user.login // empty'",
+    `export const REST_PULL_FIELDS = '{author: (.user.login // ""), head_sha: (.head.sha // ""), changed_files: .changed_files}';`,
+    "if (headSha !== sha) refuse('stale'",
+    "if (!Number.isInteger(changedFiles) || changedFiles < 0 || files.length !== changedFiles) {",
     "return refuse('unavailable'",
     "const GH_PATH = process.env.AGENT_PR_GUARD_GH_PATH || '/usr/bin/gh';",
   ],
@@ -437,6 +439,8 @@ export function verifyPrGuardScript(text, source = PR_GUARD_PATH) {
   for (const required of PR_GUARD_SCRIPT_CONTRACT.required) requireText(text, required, source);
   for (const forbidden of PR_GUARD_SCRIPT_CONTRACT.forbidden) forbidText(text, forbidden, source);
   requireOrder(text, "refuse('closed'", "refuse('workflow-files'", source, 'the guard reports the first failed check in its documented order.');
+  // The REST head is read after the changed files, so a head that moved during the listing is stale.
+  requireOrder(text, "'--paginate', `repos/${repository}/pulls/${pr}/files", "'--jq', REST_PULL_FIELDS", source, 'the head must be re-read after the changed files are listed.');
 }
 
 // Every guarded section fetches the guard from its own workflow commit, never from a checkout, runs it

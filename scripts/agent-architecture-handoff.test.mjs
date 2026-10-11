@@ -72,7 +72,7 @@ else if (args[0] === 'api') {
   const path = args.find((a, i) => i > 0 && !a.startsWith('-') && !['--jq', '-H'].includes(args[i - 1]));
   if (/\\/commits\\/[0-9a-f]{40}\\/status$/.test(path)) out({ statuses: state.statuses[path.split('/commits/')[1].split('/')[0]] ?? [] });
   else if (path.includes('/files')) out(state.files.map((filename) => ({ filename })));
-  else if (/\\/pulls\\/\\d+$/.test(path)) out({ user: { login: state.author } });
+  else if (/\\/pulls\\/\\d+$/.test(path)) out({ user: { login: state.author }, head: { sha: state.restHeadSha ?? state.pr.headRefOid }, changed_files: state.changedFiles ?? state.files.length });
   else if (path.includes('/contents/scripts/agent-mode.mjs')) process.stdout.write(fs.readFileSync(process.env.AGENT_MODE_SCRIPT, 'utf8'));
   else if (path.includes('/contents/scripts/agent-pr-guard.mjs')) process.stdout.write(fs.readFileSync(process.env.AGENT_PR_GUARD_SCRIPT, 'utf8'));
   else if (path.includes('/contents/scripts/agent-review-transport.mjs')) process.stdout.write(fs.readFileSync(process.env.AGENT_REVIEW_TRANSPORT_SCRIPT, 'utf8'));

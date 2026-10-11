@@ -82,7 +82,7 @@ if (args[0] === 'pr' && args[1] === 'view') {
   } else if (path.includes('/files')) {
     out(state.files.map((filename) => ({ filename })));
   } else if (/\\/pulls\\/\\d+$/.test(path)) {
-    out({ user: { login: state.author } });
+    out({ user: { login: state.author }, head: { sha: state.restHeadSha ?? state.pr.headRefOid }, changed_files: state.changedFiles ?? state.files.length });
   } else if (path.includes('/contents/scripts/agent-mode.mjs')) {
     process.stdout.write(fs.readFileSync(process.env.AGENT_MODE_SCRIPT, 'utf8'));
   } else if (path.includes('/contents/scripts/agent-pr-guard.mjs')) {
@@ -394,6 +394,18 @@ describe('guarded review publication', () => {
     assertSuppressed(publish({ state: eligibleState({ author: 'someone-else' }), implementer: 'claude' }), /not authored by/);
   });
 
+  it('suppresses the verdict when the head moves while the changed files are listed', () => {
+    assertSuppressed(publish({ state: { ...eligibleState(), restHeadSha: NEWER_SHA } }), /stale: the head of pull request #267 moved to f49fcc3/);
+  });
+
+  it('never publishes when GitHub cannot list every changed file (more than 3000)', () => {
+    const outcome = publish({ state: { ...eligibleState(), changedFiles: 3001 } });
+    assert.notEqual(outcome.status, 0);
+    assert.equal(reviews(outcome.calls).length, 0);
+    assert.ok(!statuses(outcome.calls).some((s) => s.state === 'success' || s.state === 'failure'));
+    assert.match(outcome.stdout, /could not be re-verified: unavailable: only 2 of 3001 changed files/);
+  });
+
   it('suppresses the verdict for a workflow-changing pull request', () => {
     assertSuppressed(publish({ state: eligibleState({ files: ['.github/workflows/agent-review.yml'] }) }), /\.github\/workflows/);
   });
@@ -698,6 +710,7 @@ describe('updated-head scheduling', () => {
     for (const [state, env, reason] of [
       [eligibleState({ statuses: {} }), { EXPECTED_AGENT_AUTHOR: '' }, /Scheduled validation refused: config:/],
       [eligibleState({ statuses: {}, unavailable: [`pulls/${PR}/files`] }), {}, /Scheduled validation refused: unavailable:/],
+      [{ ...eligibleState({ statuses: {} }), changedFiles: 3001 }, {}, /Scheduled validation refused: unavailable: only 2 of 3001/],
     ]) {
       const outcome = headUpdate(state, env);
       assert.notEqual(outcome.status, 0);

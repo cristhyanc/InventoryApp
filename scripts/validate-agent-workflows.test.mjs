@@ -255,10 +255,19 @@ describe('preserved guards', () => {
     for (const [from, to] of [
       ["  if (current !== sha) refuse('stale'", "  if (false) refuse('stale'"],
       ["  if (files.some((file) => file.startsWith(WORKFLOW_DIR))) {", '  if (false) {'],
+      ["  if (headSha !== sha) refuse('stale'", "  if (false) refuse('stale'"],
+      ['files.length !== changedFiles', 'files.length > changedFiles'],
     ]) {
       const weakened = replaceOnce(prGuardScript, from, to);
       assert.throws(() => runContractChecks({ read: readWithOverrides({ [PR_GUARD_PATH]: weakened }) }), /agent-pr-guard\.mjs/);
     }
+
+    // The head must be re-read after the changed files, or a listing of a newer head could pass.
+    const files = prGuardScript.indexOf('    const files = gh(');
+    const rest = prGuardScript.indexOf('    // Read after the files');
+    const restEnd = prGuardScript.indexOf('    if (!rest');
+    const reordered = prGuardScript.slice(0, files) + prGuardScript.slice(rest, restEnd) + prGuardScript.slice(files, rest) + prGuardScript.slice(restEnd);
+    assert.throws(() => runContractChecks({ read: readWithOverrides({ [PR_GUARD_PATH]: reordered }) }), /re-read after the changed files/);
 
     // The workflow must run the guard against the requested SHA, not whatever the head is now.
     const staleAccepted = replaceOnce(validateWorkflow, 'node "$guard" check "$pr_number" "$head_sha"', 'node "$guard" check "$pr_number" "$(gh pr view "$pr_number" --json headRefOid --jq .headRefOid)"');
