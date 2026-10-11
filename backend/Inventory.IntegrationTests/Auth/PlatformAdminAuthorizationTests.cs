@@ -87,11 +87,26 @@ public sealed class PlatformAdminAuthorizationTests : IClassFixture<PlatformDiag
     /// The membership bypass is endpoint-specific. The platform administrator has no business
     /// membership, and on a business endpoint that still means 403 - the same answer the same actor
     /// got before this issue existed.
+    ///
+    /// <para>Since issue #525 most of these endpoints also require a business capability, which the
+    /// same actor cannot hold either: <c>PlatformAdminPolicy</c> grants no capability, and a
+    /// capability comes from a membership role this actor has no membership to carry. The refusal is
+    /// therefore over-determined rather than dependent on which check runs first, and
+    /// <c>/api/reports/dashboard</c> is deliberately kept in the list as an endpoint that declares
+    /// no capability yet (issue #526).</para>
     /// </summary>
     [Theory]
     [InlineData("/api/products")]
     [InlineData("/api/categories")]
     [InlineData("/api/suppliers")]
+    [InlineData("/api/sites")]
+    [InlineData("/api/machines")]
+    [InlineData("/api/stock-history")]
+    [InlineData("/api/purchases")]
+    [InlineData("/api/supplierorders")]
+    [InlineData("/api/pick-list")]
+    [InlineData("/api/dashboard/summary")]
+    [InlineData("/api/business/current")]
     [InlineData("/api/reports/dashboard")]
     public async Task The_platform_administrator_is_still_refused_by_every_business_endpoint(string route)
     {

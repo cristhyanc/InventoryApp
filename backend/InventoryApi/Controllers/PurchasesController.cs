@@ -1,7 +1,9 @@
+using Inventory.Application.Access;
 using Inventory.Application.Purchases;
 using Inventory.Domain.Gst;
 using Inventory.Domain.Purchases;
 using InventoryApi.Adapters.Mapping;
+using InventoryApi.Auth;
 using InventoryApi.DTOs;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -9,10 +11,17 @@ using Microsoft.Identity.Web.Resource;
 
 namespace InventoryApi.Controllers;
 
+/// <summary>
+/// Recorded purchases, their stored documents and their per-component GST classification. Day-to-day
+/// purchasing work, so every action requires <c>Purchasing.Operate</c> (issue #525), including the
+/// document read: the receipt belongs to the purchase it was recorded with, and whoever may record
+/// the purchase may see it.
+/// </summary>
 [ApiController]
 [Route("api/purchases")]
 [Authorize]
 [RequiredScope("access_as_user")]
+[RequireCapability(Capability.PurchasingOperate)]
 public class PurchasesController : ControllerBase
 {
     /// <summary>
