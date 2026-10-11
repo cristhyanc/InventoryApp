@@ -2,6 +2,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FULL_PROVIDER_EXECUTION_ENABLED } from './select-implementation-model.mjs';
+import { OUTCOMES, REVIEW_CONTEXT, VALIDATION_CONTEXTS } from './agent-outcomes.mjs';
 
 export const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -791,18 +792,20 @@ export const REVIEW_PUBLISH_CONTRACT = Object.freeze({
     'pull-requests: write',
     'statuses: write',
     'VERDICT_CONTEXT: agent-review-verdict',
-    '[ "$REVIEW_RESULT" = "success" ] || suppress',
-    '[ "$reviewed_sha" = "$HEAD_SHA" ] || suppress',
+    'cancelled) not_published superseded ',
+    '*) not_published provider-failed "the $REVIEWER review job ended with',
+    '[ "$reviewed_sha" = "$HEAD_SHA" ] || not_published provider-failed',
     'all(.criteria[]; .status == "met")',
     '(.blockers | length) > 0',
-    'closed|draft|base|fork|branch|config|author|stale|workflow-files) suppress "$refusal" ;;',
+    'stale) not_published superseded "$refusal" ;;',
+    'closed|draft|base|fork|branch|config|author|workflow-files) not_published not-eligible "$refusal" ;;',
     `any(.labels[]; . == "agent-review")' <<<"$pr_guard"`,
     'select(.context == "agent-validation")',
-    '[ "$validation_state" = "success" ] || suppress',
+    '[ "$validation_state" = "success" ] || not_published not-eligible',
     "grep -c '^VERDICT:'",
     'commit_id: $sha, event: "COMMENT"',
     'repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews',
-    'set_verdict_status error',
+    'record_outcome() {',
     'if: failure()',
   ],
   forbidden: [
@@ -888,7 +891,7 @@ function verifyReviewRoutes(review) {
   for (const required of [
     'cross-claude:claude:copilot)',
     'full-claude:claude:claude)', 'Same-provider review (full-claude fallback): not independent',
-    '*) suppress "unknown review route', 'Review type: \\($review_type)',
+    '*) not_published not-eligible "unknown review route', 'Review type: \\($review_type)',
   ]) requireText(publish, required, 'agent-review.yml publish job');
   for (const retired of ['cross-copilot', 'full-copilot']) {
     forbidText(context, retired, 'agent-review.yml context');
@@ -952,8 +955,7 @@ export const REVIEW_TRANSPORT_CONTRACT = Object.freeze({
     '    permissions:\n      pull-requests: write\n      statuses: write\n      contents: read\n      issues: read\n      actions: read\n',
     '"repos/$GITHUB_REPOSITORY/contents/scripts/agent-review-transport.mjs?ref=$GITHUB_WORKFLOW_SHA"',
     'node "$transport" fetch "$work/review.json"',
-    'transport_failed() {',
-    'set_verdict_status error "Review result not delivered: ',
+    '              contract|wrong-sha) not_published provider-failed "the review output was rejected: $transport_error" ;;\n              *) not_published publication-failed "the review result could not be delivered: $transport_error" ;;\n',
   ],
   publishForbidden: ['REVIEW_OUTPUT', 'structured_output', 'actions/download-artifact', 'scripts/agent-review-transport.mjs "'],
 });
@@ -1765,9 +1767,64 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
 
   verifyDocumentationImpactGate(read);
   verifyReviewPublicationAndScheduling(read);
+  verifyOutcomeTaxonomy(read);
   verifyImplementationModelSelection(read);
   verifyProviderModeProvenance(read);
   verifyNayaxDocumentationAccess(read);
+}
+
+/**
+ * Every status the review publisher and validation report write is one of the fixed outcomes in
+ * scripts/agent-outcomes.mjs, with the same state and description prefix, so a person (and the
+ * project board) can tell a code finding from a provider, delivery or eligibility failure.
+ */
+export function verifyOutcomeTaxonomy(read = readRepositoryFile) {
+  const source = 'agent outcome taxonomy';
+  const review = read(reviewPath);
+  const publishStep = section(review, '      - name: Guard and publish review\n', '      - name: Record fail-closed outcome\n', `${source}: publisher`);
+  const failStep = section(review, '      - name: Record fail-closed outcome\n', null, `${source}: fail-closed step`);
+  const table = section(publishStep, '          record_outcome() {\n', '          }\n', `${source}: record_outcome`);
+  const reviewOutcomes = Object.entries(OUTCOMES).filter(([, outcome]) => outcome.contexts.includes(REVIEW_CONTEXT));
+  const rows = [...table.matchAll(/^ {14}([a-z-]+)\) state=([a-z]+); prefix="([^"]+)" ;;$/gm)];
+  if (rows.length !== reviewOutcomes.length) throw new Error(`${source}: record_outcome must list exactly the ${reviewOutcomes.length} review outcomes, found ${rows.length}.`);
+  for (const [, name, state, prefix] of rows) {
+    const outcome = OUTCOMES[name];
+    if (!outcome || !outcome.contexts.includes(REVIEW_CONTEXT) || outcome.state !== state || outcome.prefix !== prefix) {
+      throw new Error(`${source}: record_outcome row '${name}' (${state}, "${prefix}") does not match scripts/agent-outcomes.mjs.`);
+    }
+  }
+  requireText(table, `*) echo "::error::Unknown review outcome '$1'."; exit 1 ;;`, `${source}: record_outcome`);
+  requireText(table, 'local description="$prefix: $2"', `${source}: record_outcome`);
+  requireText(table, '"${GITHUB_STEP_SUMMARY:-/dev/null}"', `${source}: record_outcome`);
+  // The status is written only through the outcome table; no free-form description remains.
+  const direct = [...publishStep.matchAll(/set_verdict_status /g)].length;
+  if (direct !== 1) throw new Error(`${source}: the publisher must write its status only through record_outcome (found ${direct} set_verdict_status calls).`);
+  for (const [, kind] of publishStep.matchAll(/(?:not_published|record_outcome) ([a-z-]+) /g)) {
+    if (!reviewOutcomes.some(([name]) => name === kind)) throw new Error(`${source}: publisher records unknown outcome '${kind}'.`);
+  }
+  for (const name of ['ready', 'changes-requested']) requireText(publishStep, `record_outcome ${name} "`, `${source}: publisher`);
+  for (const name of ['superseded', 'provider-failed', 'publication-failed', 'not-eligible']) requireText(publishStep, `not_published ${name} "`, `${source}: publisher`);
+  const failed = OUTCOMES['publication-failed'];
+  const failDescriptions = [...failStep.matchAll(/^ {12}description="([^"]+)"$/gm)];
+  if (failDescriptions.length !== 2) throw new Error(`${source}: the fail-closed step must describe both a posted and an unposted review, found ${failDescriptions.length} descriptions.`);
+  for (const [, description] of failDescriptions) {
+    if (!description.startsWith(`${failed.prefix}: `) || description.length > 140) throw new Error(`${source}: fail-closed description must start with "${failed.prefix}: " and fit 140 characters: ${description}`);
+  }
+  requireText(failStep, `-f state=${failed.state}`, `${source}: fail-closed step`);
+
+  const validate = read(validatePath);
+  const report = section(validate, '      - name: Publish exact-SHA status\n', '  dispatch-review:\n', `${source}: validation report`);
+  const validationRows = [...report.matchAll(/^ {12}([a-z*]+)\)\n {14}state="([a-z]+)"\n {14}description="([^"]+)"\n {14};;$/gm)];
+  const expected = { success: 'validation-passed', cancelled: 'validation-cancelled', '*': 'validation-failed' };
+  if (validationRows.length !== Object.keys(expected).length) throw new Error(`${source}: the validation report must map success, cancelled and every other result, found ${validationRows.length} rows.`);
+  for (const [, result, state, description] of validationRows) {
+    const outcome = OUTCOMES[expected[result]];
+    if (!outcome || outcome.state !== state || !(description === outcome.prefix || description.startsWith(`${outcome.prefix}: `)) || description.length > 140) {
+      throw new Error(`${source}: validation result '${result}' must record ${expected[result]} ("${outcome?.prefix}", ${outcome?.state}).`);
+    }
+    if (!VALIDATION_CONTEXTS.every((context) => outcome.contexts.includes(context))) throw new Error(`${source}: ${expected[result]} must cover both validation contexts.`);
+  }
+  requireText(report, '"${GITHUB_STEP_SUMMARY:-/dev/null}"', `${source}: validation report`);
 }
 
 /**
@@ -1874,7 +1931,7 @@ export function verifyProviderModeProvenance(read = readRepositoryFile) {
   const review = read('.github/workflows/agent-review.yml');
   requireText(review, 'agent_mode: ${{ steps.context.outputs.agent_mode }}', 'agent-review.yml context outputs');
   requireText(review, 'AGENT_MODE: ${{ needs.context.outputs.agent_mode }}', 'agent-review.yml publish');
-  requireText(review, '[ "$live_mode" = "$AGENT_MODE" ] || suppress', 'agent-review.yml publish');
+  requireText(review, '[ "$live_mode" = "$AGENT_MODE" ] || not_published not-eligible', 'agent-review.yml publish');
   requireOrder(review, 'live_mode="$(node "$RUNNER_TEMP/agent-mode.mjs" verify-pr', 'gh api --method POST "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews"', 'agent-review.yml publish', 'the provider mode must be rechecked before a review is posted.');
 
   // A claim is the only workflow change that adds agent-working, done in one edit with the

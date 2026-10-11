@@ -25,6 +25,8 @@ test('review is exact-head and requires both validation gates', () => {
   assert.equal(desiredStatus(issue({ prs: [pr({ statuses: green })] })), 'Awaiting approval');
   assert.equal(desiredStatus(issue({ prs: [pr()] })), 'In review');
   assert.equal(desiredStatus(issue({ prs: [pr({ statuses: { ...green, 'agent-review-verdict': 'failure' } })] })), 'Changes requested');
+  // A review that produced no verdict (provider, publication, superseded or not eligible) is not a code finding.
+  assert.equal(desiredStatus(issue({ prs: [pr({ statuses: { ...green, 'agent-review-verdict': 'error' } })] })), 'Blocked');
   assert.equal(desiredStatus(issue({ prs: [pr({ statuses: { ...green, 'agent-validation': 'failure' } })] })), 'Blocked');
   assert.equal(desiredStatus(issue({ prs: [pr({ statuses: { ...green, 'merge-validation': 'pending' } })] })), 'In review');
   assert.equal(desiredStatus(issue({ prs: [pr({ draft: true, statuses: green })] })), 'In progress');

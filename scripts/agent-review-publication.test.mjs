@@ -15,6 +15,7 @@ import { describe, it } from 'node:test';
 import { claimEvents } from './agent-mode.fixtures.mjs';
 import { ROUTES } from './agent-mode.mjs';
 import { ENVELOPE_FILE, ENVELOPE_SCHEMA, sha256 } from './agent-review-transport.mjs';
+import { OUTCOMES, REVIEW_CONTEXT, classify } from './agent-outcomes.mjs';
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8').replaceAll('\r\n', '\n');
 
@@ -33,6 +34,8 @@ const headUpdateShell = stepShell(read('.github/workflows/agent-head-update.yml'
 const repairDispatchShell = stepShell(read('.github/workflows/agent-repair.yml'), 'Verify repaired head and dispatch trusted validation');
 const reviewDispatchShell = stepShell(read('.github/workflows/validate.yml'), 'Reverify current head and dispatch review');
 const reviewRequestShell = stepShell(read('.github/workflows/agent-review-request.yml'), 'Reverify current head and dispatch review');
+const failClosedShell = stepShell(read('.github/workflows/agent-review.yml'), 'Record fail-closed outcome');
+const validationReportShell = stepShell(read('.github/workflows/validate.yml'), 'Publish exact-SHA status');
 
 const REPO = 'owner/InventoryApp';
 const BOT = 'inventoryapp-agent-automation[bot]';
@@ -214,8 +217,10 @@ function run(shell, { state, env = {}, artifact, reviewer }) {
     const statePath = join(root, 'state.json');
     const logPath = join(root, 'calls.jsonl');
     const outputPath = join(root, 'github-output');
+    const summaryPath = join(root, 'step-summary.md');
     writeFileSync(statePath, JSON.stringify(state));
     writeFileSync(outputPath, '');
+    writeFileSync(summaryPath, '');
     const result = spawnSync('bash', ['-c', shell], {
       encoding: 'utf8',
       env: {
@@ -226,6 +231,7 @@ function run(shell, { state, env = {}, artifact, reviewer }) {
         FAKE_GH_STATE: statePath,
         FAKE_GH_LOG: logPath,
         GITHUB_OUTPUT: outputPath,
+        GITHUB_STEP_SUMMARY: summaryPath,
         GITHUB_REPOSITORY: REPO,
         RUNNER_TEMP: root,
         GITHUB_WORKFLOW_SHA: 'a'.repeat(40),
@@ -244,7 +250,7 @@ function run(shell, { state, env = {}, artifact, reviewer }) {
     const calls = existsSync(logPath)
       ? readFileSync(logPath, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line))
       : [];
-    return { status: result.status, stdout: result.stdout, stderr: result.stderr, calls, outputs: readFileSync(outputPath, 'utf8') };
+    return { status: result.status, stdout: result.stdout, stderr: result.stderr, calls, outputs: readFileSync(outputPath, 'utf8'), summary: readFileSync(summaryPath, 'utf8') };
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -274,14 +280,24 @@ const reviews = (calls) => calls.filter((c) => c.kind === 'review');
 const statuses = (calls) => calls.filter((c) => c.kind === 'status');
 const dispatches = (calls) => calls.filter((c) => c.kind === 'dispatch');
 
-function assertSuppressed(outcome, reason) {
+// The single status a run records, as the outcome a reader (or the project board) would read from it.
+function recordedOutcome(outcome) {
+  const written = statuses(outcome.calls);
+  assert.equal(written.length, 1, 'exactly one verdict status is recorded per run');
+  const [status] = written;
+  assert.equal(status.sha, SHA, 'the outcome is recorded only on the reviewed SHA');
+  assert.equal(status.context, REVIEW_CONTEXT);
+  assert.ok(status.description.length <= 140, `GitHub truncates status descriptions over 140 characters: ${status.description}`);
+  return classify(status.context, status.state, status.description);
+}
+
+// Nothing is published, and the one status says which kind of non-review outcome it was.
+function assertNotPublished(outcome, kind, reason) {
   assert.equal(outcome.status, 0, outcome.stderr);
   assert.equal(reviews(outcome.calls).length, 0, 'no review may be published');
-  const [status] = statuses(outcome.calls);
-  assert.ok(status, 'a suppressed result must still be recorded');
-  assert.equal(status.sha, SHA, 'the outcome is recorded only on the reviewed SHA');
-  assert.equal(status.context, 'agent-review-verdict');
-  assert.equal(status.state, 'error');
+  assert.equal(OUTCOMES[kind].state, 'error', 'an unpublished result is never a verdict');
+  assert.equal(recordedOutcome(outcome), kind, statuses(outcome.calls)[0].description);
+  assert.match(outcome.stdout + outcome.stderr, new RegExp(`Review not published \\(${kind}\\): `));
   assert.match(outcome.stdout + outcome.stderr, reason);
 }
 
@@ -318,7 +334,7 @@ describe('guarded review publication', () => {
 
   it('suppresses the verdict when the head changed during review (the #267 stale-head case)', () => {
     const state = eligibleState({ pr: { headRefOid: NEWER_SHA } });
-    assertSuppressed(publish({ state }), /stale: the head of pull request #267 is now f49fcc3/);
+    assertNotPublished(publish({ state }), 'superseded', /stale: the head of pull request #267 is now f49fcc3/);
     assert.ok(!statuses(publish({ state }).calls).some((s) => s.sha === NEWER_SHA), 'nothing may be written for the new head');
   });
 
@@ -331,7 +347,7 @@ describe('guarded review publication', () => {
     ['non-agent branch', { headRefName: 'feature/manual' }, /branch: pull request #267 does not use an agent\/issue-\* branch/],
   ]) {
     it(`suppresses the verdict for a ${name} pull request`, () => {
-      assertSuppressed(publish({ state: eligibleState({ pr }) }), reason);
+      assertNotPublished(publish({ state: eligibleState({ pr }) }), 'not-eligible', reason);
     });
   }
 
@@ -344,10 +360,10 @@ describe('guarded review publication', () => {
   it('suppresses the verdict when the issue was re-claimed for another provider during the review', () => {
     // Claimed for the default route, then re-claimed for the full-claude fallback after the pull request opened.
     const events = [...claimEvents('agent-ready-claude'), ...claimEvents('agent-ready-full-claude', '2026-10-03T03:30:00Z', 10)];
-    assertSuppressed(publish({ state: { ...eligibleState(), events } }), /provider mode of pull request #267 could not be verified/);
+    assertNotPublished(publish({ state: { ...eligibleState(), events } }), 'not-eligible', /provider mode of pull request #267 could not be verified/);
   });
   it('suppresses the verdict when the label history shows no verifiable claim', () => {
-    assertSuppressed(publish({ state: { ...eligibleState(), events: [] } }), /could not be verified/);
+    assertNotPublished(publish({ state: { ...eligibleState(), events: [] } }), 'not-eligible', /could not be verified/);
   });
 
   it('publishes the Copilot review of a Claude-implemented pull request through the same guarded path', () => {
@@ -360,16 +376,16 @@ describe('guarded review publication', () => {
   });
 
   it('never publishes a review whose implementer or reviewer does not match the verified route', () => {
-    assertSuppressed(publish({ implementer: '' }), /unknown review route/);
+    assertNotPublished(publish({ implementer: '' }), 'not-eligible', /unknown review route/);
     // The default route never publishes a same-provider review, and the fallback never publishes Copilot's.
-    assertSuppressed(publish({ mode: 'cross-claude', reviewer: 'claude' }), /unknown review route/);
-    assertSuppressed(publish({ mode: 'full-claude', reviewer: 'copilot' }), /unknown review route/);
+    assertNotPublished(publish({ mode: 'cross-claude', reviewer: 'claude' }), 'not-eligible', /unknown review route/);
+    assertNotPublished(publish({ mode: 'full-claude', reviewer: 'copilot' }), 'not-eligible', /unknown review route/);
     // The retired Copilot implementation routes are never published, whatever the reviewer.
     for (const mode of ['cross-copilot', 'full-copilot']) {
-      for (const reviewer of ['claude', 'copilot']) assertSuppressed(publish({ state: copilotState(), implementer: 'copilot', mode, reviewer }), /unknown review route/);
+      for (const reviewer of ['claude', 'copilot']) assertNotPublished(publish({ state: copilotState(), implementer: 'copilot', mode, reviewer }), 'not-eligible', /unknown review route/);
     }
     // A copilot/* pull request is refused even if the route recorded for the review was a Claude one.
-    assertSuppressed(publish({ state: copilotState() }), /branch: pull request #267 does not use an agent\/issue-\* branch \(head is 'copilot\//);
+    assertNotPublished(publish({ state: copilotState() }), 'not-eligible', /branch: pull request #267 does not use an agent\/issue-\* branch \(head is 'copilot\//);
   });
 
   it('publishes full-provider reviews labelled as same-provider, not independent', () => {
@@ -387,15 +403,15 @@ describe('guarded review publication', () => {
 
   it('suppresses a full-provider review when the issue was re-claimed for the cross route during the review', () => {
     const events = [...claimEvents('agent-ready-full-claude'), ...claimEvents('agent-ready-claude', '2026-10-03T01:30:00Z', 10)];
-    assertSuppressed(publish({ state: { ...eligibleState(), events }, implementer: 'claude', mode: 'full-claude' }), /now in provider mode cross-claude, not full-claude/);
+    assertNotPublished(publish({ state: { ...eligibleState(), events }, implementer: 'claude', mode: 'full-claude' }), 'not-eligible', /now in provider mode cross-claude, not full-claude/);
   });
 
   it('suppresses the verdict for an agent/issue-* pull request not authored by the automation App', () => {
-    assertSuppressed(publish({ state: eligibleState({ author: 'someone-else' }), implementer: 'claude' }), /not authored by/);
+    assertNotPublished(publish({ state: eligibleState({ author: 'someone-else' }), implementer: 'claude' }), 'not-eligible', /not authored by/);
   });
 
   it('suppresses the verdict when the head moves while the changed files are listed', () => {
-    assertSuppressed(publish({ state: { ...eligibleState(), restHeadSha: NEWER_SHA } }), /stale: the head of pull request #267 moved to f49fcc3/);
+    assertNotPublished(publish({ state: { ...eligibleState(), restHeadSha: NEWER_SHA } }), 'superseded', /stale: the head of pull request #267 moved to f49fcc3/);
   });
 
   it('never publishes when GitHub cannot list every changed file (more than 3000)', () => {
@@ -407,7 +423,7 @@ describe('guarded review publication', () => {
   });
 
   it('suppresses the verdict for a workflow-changing pull request', () => {
-    assertSuppressed(publish({ state: eligibleState({ files: ['.github/workflows/agent-review.yml'] }) }), /\.github\/workflows/);
+    assertNotPublished(publish({ state: eligibleState({ files: ['.github/workflows/agent-review.yml'] }) }), 'not-eligible', /\.github\/workflows/);
   });
 
   for (const [name, list] of [
@@ -416,41 +432,41 @@ describe('guarded review publication', () => {
     ['pending', [{ context: 'agent-validation', state: 'pending' }]],
   ]) {
     it(`suppresses the verdict when agent-validation is ${name}, even with merge-validation green`, () => {
-      assertSuppressed(publish({ state: eligibleState({ statuses: { [SHA]: list } }) }), /agent-validation/);
+      assertNotPublished(publish({ state: eligibleState({ statuses: { [SHA]: list } }) }), 'not-eligible', /agent-validation/);
     });
   }
 
-  it('records a failed, cancelled or superseded review job as an explicit non-ready outcome', () => {
-    for (const result of ['failure', 'cancelled', 'skipped']) {
-      assertSuppressed(publish({ result, output: null }), new RegExp(`review job ended with '${result}'`));
+  it('records a cancelled review job as superseded and any other unfinished review as a provider failure', () => {
+    for (const [result, kind] of [['cancelled', 'superseded'], ['failure', 'provider-failed'], ['skipped', 'provider-failed'], ['timed_out', 'provider-failed']]) {
+      assertNotPublished(publish({ result, output: null }), kind, new RegExp(`review job ended with '${result}'`));
     }
   });
 
   it('refuses output bound to a different SHA', () => {
-    assertSuppressed(publish({ output: readyOutput({ reviewed_head_sha: NEWER_SHA }) }), /not the reviewed SHA/);
+    assertNotPublished(publish({ output: readyOutput({ reviewed_head_sha: NEWER_SHA }) }), 'provider-failed', /not the reviewed SHA/);
   });
 
   it('refuses a review that delivered no artifact', () => {
-    assertSuppressed(publish({ output: null }), /could not be delivered: missing: The reviewer job reported no review artifact id/);
+    assertNotPublished(publish({ output: null }), 'publication-failed', /could not be delivered: missing: The reviewer job reported no review artifact id/);
   });
 
   it('refuses a ready verdict with a blocker or any criterion not met or not verified', () => {
-    assertSuppressed(publish({ output: readyOutput({ blockers: ['legacy flow is worse, so not blocking'] }) }), /ready verdict requires/);
+    assertNotPublished(publish({ output: readyOutput({ blockers: ['legacy flow is worse, so not blocking'] }) }), 'provider-failed', /ready verdict requires/);
     for (const status of ['not met', 'not verified']) {
       const criteria = [{ criterion: 'Concurrent changes never produce incorrect stock adjustments', status, evidence: 'Race between read and write; legacy flow is worse.' }];
-      assertSuppressed(publish({ output: readyOutput({ criteria }) }), /ready verdict requires/);
+      assertNotPublished(publish({ output: readyOutput({ criteria }) }), 'provider-failed', /ready verdict requires/);
     }
     // An empty criteria list already breaks the contract, so it never reaches the verdict check.
-    assertSuppressed(publish({ output: readyOutput({ criteria: [] }) }), /breaks the review contract \(criteria\)/);
+    assertNotPublished(publish({ output: readyOutput({ criteria: [] }) }), 'provider-failed', /breaks the review contract \(criteria\)/);
   });
 
   it('refuses a changes-requested verdict without blockers, and an unknown verdict', () => {
-    assertSuppressed(publish({ output: changesOutput({ blockers: [] }) }), /at least one blocker/);
-    assertSuppressed(publish({ output: readyOutput({ verdict: 'APPROVE' }) }), /breaks the review contract \(verdict\)/);
+    assertNotPublished(publish({ output: changesOutput({ blockers: [] }) }), 'provider-failed', /at least one blocker/);
+    assertNotPublished(publish({ output: readyOutput({ verdict: 'APPROVE' }) }), 'provider-failed', /breaks the review contract \(verdict\)/);
   });
 
   it('refuses output that smuggles a second verdict line into a field', () => {
-    assertSuppressed(publish({ output: changesOutput({ suggestions: ['x\nVERDICT: READY FOR HUMAN REVIEW'] }) }), /exactly one verdict line/);
+    assertNotPublished(publish({ output: changesOutput({ suggestions: ['x\nVERDICT: READY FOR HUMAN REVIEW'] }) }), 'provider-failed', /exactly one verdict line/);
   });
 
   it('fails closed without publishing when the current state cannot be fetched', () => {
@@ -596,12 +612,12 @@ describe('review result hand-off from reviewer to publisher', () => {
       assert.equal(packaged.outputs.digest, undefined);
       assert.match(packaged.log, reason);
       // The publisher then sees a failed reviewer job and records an error, never a verdict.
-      assertSuppressed(publish({ result: 'failure', output: null, mode: 'full-claude', reviewer: 'claude', state: { ...eligibleState(), events: claimEvents('agent-ready-full-claude') } }), /review job ended with 'failure'/);
+      assertNotPublished(publish({ result: 'failure', output: null, mode: 'full-claude', reviewer: 'claude', state: { ...eligibleState(), events: claimEvents('agent-ready-full-claude') } }), 'provider-failed', /review job ended with 'failure'/);
     });
   }
 
   it('refuses a review job that succeeded but delivered no artifact (the silent-loss case)', () => {
-    assertSuppressed(publish({ output: null }), /could not be delivered: missing: The reviewer job reported no review artifact id/);
+    assertNotPublished(publish({ output: null }), 'publication-failed', /could not be delivered: missing: The reviewer job reported no review artifact id/);
   });
 
   const envelope = (overrides = {}) => envelopeFor(readyOutput(), { mode: 'cross-claude', implementer: 'claude', reviewer: 'copilot', overrides });
@@ -633,15 +649,17 @@ describe('review result hand-off from reviewer to publisher', () => {
   ]) {
     it(`records a transport error and publishes nothing for ${name}`, () => {
       const outcome = publish({ artifact });
-      assertSuppressed(outcome, reason);
-      assert.match(statuses(outcome.calls)[0].description, /^Review result not delivered: /, 'transport failures are distinguishable from review findings');
+      // A delivered review that breaks the contract is the provider's failure; every other delivery fault is publication's.
+      const kind = /wrong-sha/.test(reason.source) ? 'provider-failed' : 'publication-failed';
+      assertNotPublished(outcome, kind, reason);
+      assert.match(statuses(outcome.calls)[0].description, kind === 'publication-failed' ? /^Publication failed: the review result could not be delivered: / : /^AI provider failed: the review output was rejected: wrong-sha: /, 'transport failures are distinguishable from review findings');
     });
   }
 
   it('records a transport error when the artifact cannot be listed or downloaded', () => {
     for (const unavailable of ['/artifacts?', '/zip']) {
       const outcome = publish({ state: eligibleState({ unavailable: [unavailable] }) });
-      assertSuppressed(outcome, /unavailable: The (run artifacts could not be listed|review artifact could not be downloaded)/);
+      assertNotPublished(outcome, 'publication-failed', /unavailable: The (run artifacts could not be listed|review artifact could not be downloaded)/);
     }
   });
 
@@ -974,4 +992,95 @@ describe('manual re-review request (agent-review-request.yml)', () => {
       assert.match(outcome.stdout + outcome.stderr, reason);
     });
   }
+});
+
+// Phase 4 outcome taxonomy: every way a commit's review or validation can end is recorded as one of
+// the fixed outcomes in scripts/agent-outcomes.mjs. These tests run the real trusted steps for one
+// scenario of each outcome and read the result back the way a person or the project board would.
+describe('distinguishable per-SHA outcomes', () => {
+  const produced = new Set();
+  const expectOutcome = (outcome, kind) => {
+    assert.equal(recordedOutcome(outcome), kind, statuses(outcome.calls)[0]?.description);
+    assert.match(outcome.summary, new RegExp(`^### agent-review-verdict: ${OUTCOMES[kind].prefix}\\n`), 'the run summary names the outcome');
+    produced.add(kind);
+  };
+
+  it('reports a review with no blockers as ready for human review', () => {
+    const outcome = publish();
+    assert.equal(reviews(outcome.calls).length, 1);
+    expectOutcome(outcome, 'ready');
+  });
+
+  it('reports a review with blockers as changes requested, never as an infrastructure error', () => {
+    const outcome = publish({ output: changesOutput() });
+    assert.equal(reviews(outcome.calls).length, 1);
+    expectOutcome(outcome, 'changes-requested');
+  });
+
+  it('reports a newer commit or a newer review run as superseded', () => {
+    expectOutcome(publish({ state: eligibleState({ pr: { headRefOid: NEWER_SHA } }) }), 'superseded');
+    expectOutcome(publish({ state: { ...eligibleState(), restHeadSha: NEWER_SHA } }), 'superseded');
+    expectOutcome(publish({ result: 'cancelled', output: null }), 'superseded');
+  });
+
+  it('reports a failed, unavailable or contract-breaking reviewer as an AI provider failure', () => {
+    expectOutcome(publish({ result: 'failure', output: null }), 'provider-failed');
+    expectOutcome(publish({ output: readyOutput({ verdict: 'APPROVE' }) }), 'provider-failed');
+    expectOutcome(publish({ output: changesOutput({ blockers: [] }) }), 'provider-failed');
+  });
+
+  it('reports a review that could not be delivered or recorded as a publication failure', () => {
+    expectOutcome(publish({ output: null }), 'publication-failed');
+    expectOutcome(publish({ state: eligibleState({ unavailable: ['/zip'] }) }), 'publication-failed');
+    // The fail-closed step: the publisher stopped before posting, or after posting the review.
+    for (const posted of ['', 'true']) {
+      const outcome = run(failClosedShell, { state: eligibleState(), env: { REVIEW_POSTED: posted, VERDICT_CONTEXT: 'agent-review-verdict', RUN_URL: 'https://github.com/owner/InventoryApp/actions/runs/1' } });
+      assert.equal(outcome.status, 0, outcome.stderr);
+      expectOutcome(outcome, 'publication-failed');
+      assert.match(statuses(outcome.calls)[0].description, posted ? /the review was posted/ : /nothing was published/);
+    }
+  });
+
+  it('reports a pull request that stopped qualifying as not eligible', () => {
+    expectOutcome(publish({ state: eligibleState({ pr: { isDraft: true } }) }), 'not-eligible');
+    expectOutcome(publish({ state: eligibleState({ pr: { labels: [] } }) }), 'not-eligible');
+  });
+
+  it('never records a code finding for an infrastructure fault, or an error for a code finding', () => {
+    for (const kind of ['superseded', 'provider-failed', 'publication-failed', 'not-eligible']) assert.equal(OUTCOMES[kind].state, 'error');
+    assert.equal(OUTCOMES['changes-requested'].state, 'failure');
+    assert.equal(OUTCOMES.ready.state, 'success');
+  });
+
+  const validationReport = (context, result) => run(validationReportShell, {
+    state: eligibleState(),
+    env: { STATUS_CONTEXT: context, VALIDATION_RESULT: result, RUN_URL: 'https://github.com/owner/InventoryApp/actions/runs/2' },
+  });
+
+  for (const context of ['agent-validation', 'merge-validation']) {
+    it(`reports ${context} as passed, failed or cancelled on the exact SHA`, () => {
+      for (const [result, kind] of [['success', 'validation-passed'], ['failure', 'validation-failed'], ['skipped', 'validation-failed'], ['cancelled', 'validation-cancelled']]) {
+        const outcome = validationReport(context, result);
+        assert.equal(outcome.status, 0, outcome.stderr);
+        const written = statuses(outcome.calls);
+        assert.equal(written.length, 1);
+        assert.equal(written[0].sha, SHA);
+        assert.equal(written[0].context, context);
+        assert.ok(written[0].description.length <= 140);
+        assert.equal(classify(written[0].context, written[0].state, written[0].description), kind, written[0].description);
+        assert.match(outcome.summary, new RegExp(`^### ${context}: ${OUTCOMES[kind].prefix}`));
+        produced.add(kind);
+      }
+    });
+  }
+
+  it('refuses to write an unknown validation context', () => {
+    const outcome = validationReport('agent-review-verdict', 'success');
+    assert.notEqual(outcome.status, 0);
+    assert.equal(statuses(outcome.calls).length, 0);
+  });
+
+  it('produces every outcome in the table from at least one real scenario above', () => {
+    assert.deepEqual([...produced].sort(), Object.keys(OUTCOMES).sort());
+  });
 });

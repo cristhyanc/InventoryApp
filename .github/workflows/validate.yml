@@ -227,13 +227,22 @@ jobs:
             *) fail "Refusing to publish an unknown validation status context '$STATUS_CONTEXT'." ;;
           esac
 
-          if [ "$VALIDATION_RESULT" = "success" ]; then
-            state="success"
-            description="Validation passed"
-          else
-            state="failure"
-            description="Validation did not pass ($VALIDATION_RESULT)"
-          fi
+          # One outcome per exact SHA; the prefixes are the ones scripts/agent-outcomes.mjs defines.
+          case "$VALIDATION_RESULT" in
+            success)
+              state="success"
+              description="Validation passed"
+              ;;
+            cancelled)
+              state="failure"
+              description="Validation cancelled: a newer run replaced it or a person stopped it; it did not finish."
+              ;;
+            *)
+              state="failure"
+              description="Validation failed: the validate job ended with '$VALIDATION_RESULT'; see the run."
+              ;;
+          esac
+          printf '### %s: %s\n' "$STATUS_CONTEXT" "$description" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
 
           gh api \
             --method POST \
