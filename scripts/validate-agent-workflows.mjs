@@ -891,7 +891,7 @@ function verifyReviewRoutes(review) {
   for (const required of [
     'cross-claude:claude:copilot)',
     'full-claude:claude:claude)', 'Same-provider review (full-claude fallback): not independent',
-    '*) not_published not-eligible "unknown review route', 'Review type: \\($review_type)',
+    '*) not_published not-eligible "unknown review route', String.raw`Review type: \($review_type)`,
   ]) requireText(publish, required, 'agent-review.yml publish job');
   for (const retired of ['cross-copilot', 'full-copilot']) {
     forbidText(context, retired, 'agent-review.yml context');
@@ -1783,13 +1783,20 @@ export function verifyOutcomeTaxonomy(read = readRepositoryFile) {
   const review = read(reviewPath);
   const publishStep = section(review, '      - name: Guard and publish review\n', '      - name: Record fail-closed outcome\n', `${source}: publisher`);
   const failStep = section(review, '      - name: Record fail-closed outcome\n', null, `${source}: fail-closed step`);
+  verifyReviewOutcomeTable(publishStep, source);
+  verifyFailClosedOutcome(failStep, source);
+  verifyValidationOutcomes(read(validatePath), source);
+}
+
+/** The publisher's record_outcome table matches OUTCOMES, and is the only way it writes a status. */
+function verifyReviewOutcomeTable(publishStep, source) {
   const table = section(publishStep, '          record_outcome() {\n', '          }\n', `${source}: record_outcome`);
-  const reviewOutcomes = Object.entries(OUTCOMES).filter(([, outcome]) => outcome.contexts.includes(REVIEW_CONTEXT));
+  const reviewOutcomes = Object.keys(OUTCOMES).filter((name) => OUTCOMES[name].contexts.includes(REVIEW_CONTEXT));
   const rows = [...table.matchAll(/^ {14}([a-z-]+)\) state=([a-z]+); prefix="([^"]+)" ;;$/gm)];
   if (rows.length !== reviewOutcomes.length) throw new Error(`${source}: record_outcome must list exactly the ${reviewOutcomes.length} review outcomes, found ${rows.length}.`);
   for (const [, name, state, prefix] of rows) {
-    const outcome = OUTCOMES[name];
-    if (!outcome || !outcome.contexts.includes(REVIEW_CONTEXT) || outcome.state !== state || outcome.prefix !== prefix) {
+    const outcome = reviewOutcomes.includes(name) ? OUTCOMES[name] : undefined;
+    if (outcome?.state !== state || outcome?.prefix !== prefix) {
       throw new Error(`${source}: record_outcome row '${name}' (${state}, "${prefix}") does not match scripts/agent-outcomes.mjs.`);
     }
   }
@@ -1800,10 +1807,14 @@ export function verifyOutcomeTaxonomy(read = readRepositoryFile) {
   const direct = [...publishStep.matchAll(/set_verdict_status /g)].length;
   if (direct !== 1) throw new Error(`${source}: the publisher must write its status only through record_outcome (found ${direct} set_verdict_status calls).`);
   for (const [, kind] of publishStep.matchAll(/(?:not_published|record_outcome) ([a-z-]+) /g)) {
-    if (!reviewOutcomes.some(([name]) => name === kind)) throw new Error(`${source}: publisher records unknown outcome '${kind}'.`);
+    if (!reviewOutcomes.includes(kind)) throw new Error(`${source}: publisher records unknown outcome '${kind}'.`);
   }
   for (const name of ['ready', 'changes-requested']) requireText(publishStep, `record_outcome ${name} "`, `${source}: publisher`);
   for (const name of ['superseded', 'provider-failed', 'publication-failed', 'not-eligible']) requireText(publishStep, `not_published ${name} "`, `${source}: publisher`);
+}
+
+/** The fail-closed step records Publication failed, whether or not the review was already posted. */
+function verifyFailClosedOutcome(failStep, source) {
   const failed = OUTCOMES['publication-failed'];
   const failDescriptions = [...failStep.matchAll(/^ {12}description="([^"]+)"$/gm)];
   if (failDescriptions.length !== 2) throw new Error(`${source}: the fail-closed step must describe both a posted and an unposted review, found ${failDescriptions.length} descriptions.`);
@@ -1811,15 +1822,18 @@ export function verifyOutcomeTaxonomy(read = readRepositoryFile) {
     if (!description.startsWith(`${failed.prefix}: `) || description.length > 140) throw new Error(`${source}: fail-closed description must start with "${failed.prefix}: " and fit 140 characters: ${description}`);
   }
   requireText(failStep, `-f state=${failed.state}`, `${source}: fail-closed step`);
+}
 
-  const validate = read(validatePath);
+/** The validation report maps success, cancelled and every other result to the three validation outcomes. */
+function verifyValidationOutcomes(validate, source) {
   const report = section(validate, '      - name: Publish exact-SHA status\n', '  dispatch-review:\n', `${source}: validation report`);
   const validationRows = [...report.matchAll(/^ {12}([a-z*]+)\)\n {14}state="([a-z]+)"\n {14}description="([^"]+)"\n {14};;$/gm)];
   const expected = { success: 'validation-passed', cancelled: 'validation-cancelled', '*': 'validation-failed' };
   if (validationRows.length !== Object.keys(expected).length) throw new Error(`${source}: the validation report must map success, cancelled and every other result, found ${validationRows.length} rows.`);
   for (const [, result, state, description] of validationRows) {
     const outcome = OUTCOMES[expected[result]];
-    if (!outcome || outcome.state !== state || !(description === outcome.prefix || description.startsWith(`${outcome.prefix}: `)) || description.length > 140) {
+    const matches = description === outcome?.prefix || description.startsWith(`${outcome?.prefix}: `);
+    if (outcome?.state !== state || !matches || description.length > 140) {
       throw new Error(`${source}: validation result '${result}' must record ${expected[result]} ("${outcome?.prefix}", ${outcome?.state}).`);
     }
     if (!VALIDATION_CONTEXTS.every((context) => outcome.contexts.includes(context))) throw new Error(`${source}: ${expected[result]} must cover both validation contexts.`);
