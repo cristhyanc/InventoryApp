@@ -920,6 +920,32 @@ describe('cross-review contract (Claude implements; Copilot checks and reviews)'
     }
   });
 
+  // The architecture findings follow the same rule as the review: model text never travels as a job
+  // output, and every end of the hand-off runs the trusted transport script.
+  it('rejects an architecture findings hand-off through job outputs, untrusted transport code or a long-lived artifact', () => {
+    const copilotCheck = architectureWorkflow.split('\n  copilot-check:\n')[1].split('\n  claude-check:\n')[0];
+    const claudeCheck = architectureWorkflow.split('\n  claude-check:\n')[1].split('\n  sonar:\n')[0];
+    const inCopilot = (from, to) => architectureWorkflow.replace(copilotCheck, () => replaceOnce(copilotCheck, from, to));
+    const inClaude = (from, to) => architectureWorkflow.replace(claudeCheck, () => replaceOnce(claudeCheck, from, to));
+    for (const [unsafe, reason] of [
+      [inCopilot('      findings_digest: ${{ steps.package.outputs.digest }}\n', '      findings_digest: ${{ steps.package.outputs.digest }}\n      findings: ${{ steps.check.outputs.findings }}\n'), /agent-architecture.yml copilot-check outputs/],
+      [inClaude('      findings_artifact_id: ${{ steps.upload.outputs.artifact-id }}\n', ''), /agent-architecture.yml claude-check outputs/],
+      [inCopilot('git show "$TRUSTED_SHA:scripts/agent-review-transport.mjs" > "$transport"', 'cp scripts/agent-review-transport.mjs "$transport"'), /agent-architecture.yml copilot-check findings transport/],
+      [inClaude('node "$transport" package-findings', 'node scripts/agent-review-transport.mjs package-findings'), /agent-architecture.yml claude-check findings transport/],
+      [inCopilot('retention-days: 1', 'retention-days: 90'), /agent-architecture.yml copilot-check findings transport/],
+      [inClaude('actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2', 'actions/upload-artifact@v4'), /agent-architecture.yml claude-check findings transport/],
+      [inCopilot('          REVIEW_REDACT_PROVIDER_TOKEN: ${{ secrets.COPILOT_CLI_TOKEN }}\n', ''), /agent-architecture.yml copilot-check findings transport/],
+      [inClaude('          REVIEW_REDACT_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n', ''), /agent-architecture.yml claude-check findings transport/],
+      [inClaude('          CHECKER: claude\n', '          CHECKER: copilot\n'), /agent-architecture.yml claude-check findings transport/],
+      [replaceOnce(architectureWorkflow, '      issues: read\n      # Read-only: lets the trusted step below fetch this run\'s architecture findings artifact.\n      actions: read\n', '      issues: read\n'), /agent-architecture.yml architecture permissions/],
+      [replaceOnce(architectureWorkflow, 'summary="$(node "$transport" fetch-findings .git/architecture-findings.md)"', 'summary="$(node scripts/agent-review-transport.mjs fetch-findings .git/architecture-findings.md)"'), /agent-architecture.yml (architecture job|store findings)/],
+      [replaceOnce(architectureWorkflow, '          node "$transport" fetch-findings "$check_findings_file" >/dev/null \\\n', '          true \\\n'), /agent-architecture.yml finalize findings transport/],
+      [replaceOnce(architectureWorkflow, '            cat "$check_findings_file"\n', '            printf \'%s\\n\' "$CHECK_FINDINGS"\n'), /agent-architecture.yml findings transport/],
+    ]) {
+      rejects({ [architecturePath]: unsafe }, reason);
+    }
+  });
+
   it('keeps the live transport check read-only and free of secrets', () => {
     const check = readWithOverrides({})('.github/workflows/agent-review-transport-check.yml');
     for (const unsafe of [

@@ -1,23 +1,24 @@
-// Trusted transport of the final review result from a read-only reviewer job to the guarded
-// publisher in agent-review.yml.
+// Trusted transport of model results between jobs of one workflow run, as short-lived artifacts:
+// - the final review, from a read-only reviewer job to the guarded publisher in agent-review.yml;
+// - the architecture findings, from the read-only checker job to the fix and finalize jobs in
+//   agent-architecture.yml.
 //
-// The reviewer used to hand its JSON to the publisher as a job output. GitHub withholds any job
-// output that contains a value it masks ("Skip output 'structured_output' since it may contain
-// secret."), so a successful review could reach the publisher as an empty string and be lost (PR
-// #558, run 38050149174). The review now travels as a short-lived artifact of the same workflow
-// run instead:
+// Both used to travel as job outputs. GitHub withholds any job output that contains a value it masks
+// ("Skip output 'structured_output' since it may contain secret"), so a successful review could reach
+// the publisher as an empty string and be lost (PR #558, run 38050149174), and architecture findings
+// had the same weakness. Each result now travels as an artifact of the same workflow run instead:
 //
-// - `package` (reviewer job) validates the model's JSON against the review contract, redacts
-//   secret-like values, and wraps it in an envelope bound to the repository, pull request, head
-//   SHA, provider route and workflow run. The step then uploads that one file as the artifact named
-//   by `artifact-name` and exposes only the artifact id and the envelope's SHA-256 as job outputs.
-// - `fetch` (publisher job) finds that artifact through the Actions API of this exact run, checks
-//   its id, run, name, expiry, size and digest, extracts the one envelope file with a size bound,
-//   and re-verifies every binding, the contract and the redaction before it writes the plain review
-//   for the publisher. Any mismatch fails with a coded reason and nothing is published.
+// - `package` / `package-findings` (producer job) validates the model's result, redacts secret-like
+//   values, and wraps it in an envelope bound to the repository, pull request, head SHA, provider
+//   route, producer and run. The step then uploads that one file as the artifact named by `name` and
+//   exposes only the artifact id and the envelope's SHA-256 as job outputs.
+// - `fetch` / `fetch-findings` (consumer job) finds that artifact through the Actions API of this exact
+//   run, checks its id, run, name, expiry, size and digest, extracts the one envelope file with a size
+//   bound, and re-verifies every binding, the contract and the redaction before it writes the plain
+//   result. Any mismatch fails with a coded reason and nothing downstream runs on it.
 //
 // Reasons and log lines never echo model text or repository content. This file is standalone (Node
-// built-ins only) because the publisher has no checkout: both jobs fetch it from the trusted
+// built-ins only) because some consumers have no checkout: every job fetches it from the trusted
 // workflow commit, never from the pull request head.
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -37,6 +38,15 @@ const ENVELOPE_KEYS = ['agent_mode', 'head_sha', 'implementer', 'pr_number', 're
 const VERDICTS = new Set(['CHANGES REQUESTED', 'READY FOR HUMAN REVIEW']);
 const STATUSES = new Set(['met', 'not met', 'not verified']);
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
+
+export const FINDINGS_SCHEMA = 'inventoryapp.agent-architecture-findings.v1';
+export const FINDINGS_FILE = 'findings-envelope.json';
+// The fix agent and the PR record have always received at most this much of the checker's text.
+export const MAX_FINDINGS_CHARS = 60000;
+const FINDINGS_ENVELOPE_KEYS = ['agent_mode', 'checker', 'findings', 'head_sha', 'implementer', 'pr_number', 'redactions', 'repository', 'run_attempt', 'run_id', 'schema', 'verdict'];
+const CHECK_VERDICTS = new Set(['clean', 'findings']);
+// The route alone names the architecture checker; nothing falls back to the other provider.
+const CHECKER_FOR_MODE = Object.freeze({ 'cross-claude': 'copilot', 'full-claude': 'claude' });
 
 export class TransportError extends Error {
   constructor(code, message) {
@@ -195,15 +205,14 @@ export function artifactName({ runId, reviewer }) {
   return `agent-review-result-${reviewer}-${runId}`;
 }
 
-/** The binding every envelope must carry, read from the trusted job environment. */
-export function contextFromEnv(env = process.env) {
+/** The binding shared by every envelope, read from the trusted job environment. */
+function baseContextFromEnv(env) {
   const context = {
     repository: env.GITHUB_REPOSITORY ?? '',
     prNumber: env.PR_NUMBER ?? '',
     headSha: env.HEAD_SHA ?? '',
     agentMode: env.AGENT_MODE ?? '',
     implementer: env.IMPLEMENTER ?? '',
-    reviewer: env.REVIEWER ?? '',
     runId: env.GITHUB_RUN_ID ?? '',
     runAttempt: env.GITHUB_RUN_ATTEMPT ?? '',
   };
@@ -213,6 +222,12 @@ export function contextFromEnv(env = process.env) {
   if (!['cross-claude', 'full-claude'].includes(context.agentMode)) fail('context', 'The review route is missing or unknown.');
   if (context.implementer !== 'claude') fail('context', 'The implementer is missing or unknown.');
   if (!/^[1-9]\d*$/.test(context.runAttempt)) fail('context', 'The workflow run attempt is missing or invalid.');
+  return context;
+}
+
+/** The binding every review envelope must carry, read from the trusted job environment. */
+export function contextFromEnv(env = process.env) {
+  const context = { ...baseContextFromEnv(env), reviewer: env.REVIEWER ?? '' };
   artifactName(context);
   return context;
 }
@@ -299,13 +314,13 @@ const UNZIP_PATH = process.env.AGENT_REVIEW_TRANSPORT_UNZIP_PATH || 'unzip';
 const run = (file, args, maxBuffer) => execFileSync(file, args, { maxBuffer, stdio: ['ignore', 'pipe', 'pipe'] });
 
 /**
- * Finds, downloads and verifies this run's review artifact. `artifactId` and `digest` are the
- * reviewer job's outputs; both are short values that can never carry review text.
+ * Finds and downloads one artifact of this run and returns its verified envelope bytes. `artifactId`
+ * and `digest` are the producer job's outputs; both are short values that can never carry model text.
+ * `label` and `producer` only name the artifact in error messages.
  */
-export function fetchReview(context, { artifactId, digest }) {
-  if (!/^[1-9]\d*$/.test(artifactId ?? '')) fail('missing', 'The reviewer job reported no review artifact id.');
-  if (!/^[0-9a-f]{64}$/.test(digest ?? '')) fail('missing', 'The reviewer job reported no review artifact digest.');
-  const name = artifactName(context);
+function fetchEnvelopeBytes(context, { artifactId, digest, name, file, label, producer }) {
+  if (!/^[1-9]\d*$/.test(artifactId ?? '')) fail('missing', `The ${producer} job reported no ${label} artifact id.`);
+  if (!/^[0-9a-f]{64}$/.test(digest ?? '')) fail('missing', `The ${producer} job reported no ${label} artifact digest.`);
   let listing;
   try {
     listing = JSON.parse(run(GH_PATH, ['api', `repos/${context.repository}/actions/runs/${context.runId}/artifacts?name=${name}&per_page=100`], 4 * 1024 * 1024).toString('utf8'));
@@ -313,13 +328,13 @@ export function fetchReview(context, { artifactId, digest }) {
     fail('unavailable', 'The run artifacts could not be listed.');
   }
   const matches = (listing?.artifacts ?? []).filter((a) => a?.name === name);
-  if (matches.length === 0) fail('missing', 'This run has no review artifact.');
-  if (matches.length > 1) fail('mismatch', 'This run has more than one review artifact.');
+  if (matches.length === 0) fail('missing', `This run has no ${label} artifact.`);
+  if (matches.length > 1) fail('mismatch', `This run has more than one ${label} artifact.`);
   const [artifact] = matches;
-  if (String(artifact.id) !== artifactId) fail('mismatch', 'The review artifact id does not match the reviewer job output.');
-  if (String(artifact.workflow_run?.id ?? '') !== String(context.runId)) fail('mismatch', 'The review artifact belongs to another workflow run.');
-  if (artifact.expired) fail('missing', 'The review artifact has expired.');
-  if (!Number.isInteger(artifact.size_in_bytes) || artifact.size_in_bytes > MAX_ARTIFACT_BYTES) fail('oversized', 'The review artifact is larger than allowed.');
+  if (String(artifact.id) !== artifactId) fail('mismatch', `The ${label} artifact id does not match the ${producer} job output.`);
+  if (String(artifact.workflow_run?.id ?? '') !== String(context.runId)) fail('mismatch', `The ${label} artifact belongs to another workflow run.`);
+  if (artifact.expired) fail('missing', `The ${label} artifact has expired.`);
+  if (!Number.isInteger(artifact.size_in_bytes) || artifact.size_in_bytes > MAX_ARTIFACT_BYTES) fail('oversized', `The ${label} artifact is larger than allowed.`);
 
   const work = mkdtempSync(join(tmpdir(), 'agent-review-transport-'));
   try {
@@ -327,26 +342,127 @@ export function fetchReview(context, { artifactId, digest }) {
     try {
       writeFileSync(zip, run(GH_PATH, ['api', `repos/${context.repository}/actions/artifacts/${artifactId}/zip`], MAX_ARTIFACT_BYTES + 1024));
     } catch {
-      fail('unavailable', 'The review artifact could not be downloaded.');
+      fail('unavailable', `The ${label} artifact could not be downloaded.`);
     }
     let entries;
     try {
       entries = run(UNZIP_PATH, ['-Z1', zip], 64 * 1024).toString('utf8').split('\n').filter(Boolean);
     } catch {
-      fail('malformed', 'The review artifact is not a readable archive.');
+      fail('malformed', `The ${label} artifact is not a readable archive.`);
     }
-    if (entries.length !== 1 || entries[0] !== ENVELOPE_FILE) fail('malformed', `The review artifact must contain exactly ${ENVELOPE_FILE}.`);
+    if (entries.length !== 1 || entries[0] !== file) fail('malformed', `The ${label} artifact must contain exactly ${file}.`);
     let bytes;
     try {
-      bytes = run(UNZIP_PATH, ['-p', zip, ENVELOPE_FILE], MAX_ENVELOPE_BYTES);
+      bytes = run(UNZIP_PATH, ['-p', zip, file], MAX_ENVELOPE_BYTES);
     } catch {
-      fail('oversized', `The review artifact could not be extracted within ${MAX_ENVELOPE_BYTES} bytes.`);
+      fail('oversized', `The ${label} artifact could not be extracted within ${MAX_ENVELOPE_BYTES} bytes.`);
     }
-    if (sha256(bytes) !== digest) fail('mismatch', 'The review artifact digest does not match the reviewer job output.');
-    return verifyEnvelope(bytes, context);
+    if (sha256(bytes) !== digest) fail('mismatch', `The ${label} artifact digest does not match the ${producer} job output.`);
+    return bytes;
   } finally {
     rmSync(work, { recursive: true, force: true });
   }
+}
+
+/** Finds, downloads and verifies this run's review artifact. */
+export function fetchReview(context, { artifactId, digest }) {
+  const name = artifactName(context);
+  const bytes = fetchEnvelopeBytes(context, { artifactId, digest, name, file: ENVELOPE_FILE, label: 'review', producer: 'reviewer' });
+  return verifyEnvelope(bytes, context);
+}
+
+// ---- Architecture findings (agent-architecture.yml) ----
+
+/** The run-scoped findings artifact name. As for reviews, the run id is the trust anchor. */
+export function findingsArtifactName({ runId, checker }) {
+  if (!/^[1-9]\d*$/.test(String(runId))) fail('context', 'The workflow run id is missing or invalid.');
+  if (!['claude', 'copilot'].includes(checker)) fail('context', 'The architecture checker is missing or unknown.');
+  return `agent-architecture-findings-${checker}-${runId}`;
+}
+
+/** The binding every findings envelope must carry; the checker must be the one the route names. */
+export function findingsContextFromEnv(env = process.env) {
+  const context = { ...baseContextFromEnv(env), checker: env.CHECKER ?? '' };
+  findingsArtifactName(context);
+  if (CHECKER_FOR_MODE[context.agentMode] !== context.checker) fail('context', 'The architecture checker is not the one the route names.');
+  return context;
+}
+
+/**
+ * Validates the checker's verdict and text and returns the envelope text to upload. The text is
+ * redacted before it is cut to MAX_FINDINGS_CHARS, so a cut can never leave half a credential behind.
+ */
+export function packageFindings(raw, verdict, context, knownValues = []) {
+  if (!CHECK_VERDICTS.has(verdict)) fail('contract', 'The architecture verdict is missing or unknown.');
+  const text = typeof raw === 'string' ? raw : '';
+  if (verdict === 'findings' && text.trim() === '') fail('empty', 'The architecture check reported findings but produced no findings text.');
+  const redacted = redactText(text, knownSecretForms(knownValues));
+  const envelope = {
+    schema: FINDINGS_SCHEMA,
+    repository: context.repository,
+    pr_number: Number(context.prNumber),
+    head_sha: context.headSha,
+    agent_mode: context.agentMode,
+    implementer: context.implementer,
+    checker: context.checker,
+    run_id: Number(context.runId),
+    run_attempt: Number(context.runAttempt),
+    redactions: redacted.count,
+    verdict,
+    findings: redacted.value.slice(0, MAX_FINDINGS_CHARS),
+  };
+  const serialized = JSON.stringify(envelope);
+  if (knownSecretForms(knownValues).some((form) => serialized.includes(form))) fail('secret', 'A credential held by the checker job is still present after redaction.');
+  if (Buffer.byteLength(serialized) > MAX_ENVELOPE_BYTES) fail('oversized', `The architecture findings exceed ${MAX_ENVELOPE_BYTES} bytes.`);
+  return { text: serialized, redactions: redacted.count };
+}
+
+/**
+ * Re-verifies a received findings envelope against the consumer's own trusted context, including the
+ * verdict the checker job reported as its (short, enum) job output.
+ */
+export function verifyFindingsEnvelope(bytes, context, expectedVerdict) {
+  if (bytes.length === 0) fail('empty', 'The architecture findings artifact is empty.');
+  if (bytes.length > MAX_ENVELOPE_BYTES) fail('oversized', `The architecture findings artifact exceeds ${MAX_ENVELOPE_BYTES} bytes.`);
+  let envelope;
+  try {
+    envelope = JSON.parse(bytes.toString('utf8'));
+  } catch {
+    fail('malformed', 'The architecture findings artifact is not valid JSON.');
+  }
+  if (!exactKeys(envelope, FINDINGS_ENVELOPE_KEYS)) fail('malformed', 'The architecture findings artifact does not have the envelope shape.');
+  if (envelope.schema !== FINDINGS_SCHEMA) fail('malformed', 'The architecture findings artifact has an unknown schema.');
+  const expected = {
+    repository: context.repository,
+    pr_number: Number(context.prNumber),
+    head_sha: context.headSha,
+    agent_mode: context.agentMode,
+    implementer: context.implementer,
+    checker: context.checker,
+    run_id: Number(context.runId),
+  };
+  for (const [key, value] of Object.entries(expected)) {
+    if (envelope[key] !== value) fail('mismatch', `The architecture findings artifact is bound to a different ${key.replace('_', ' ')}.`);
+  }
+  if (!Number.isInteger(envelope.run_attempt) || envelope.run_attempt < 1 || envelope.run_attempt > Number(context.runAttempt)) {
+    fail('mismatch', 'The architecture findings artifact is bound to a different run attempt.');
+  }
+  if (!CHECK_VERDICTS.has(envelope.verdict) || typeof envelope.findings !== 'string' || envelope.findings.length > MAX_FINDINGS_CHARS) {
+    fail('contract', 'The architecture findings artifact breaks the findings contract.');
+  }
+  if (envelope.verdict === 'findings' && envelope.findings.trim() === '') fail('contract', 'The architecture findings artifact reports findings but carries no findings text.');
+  if (envelope.verdict !== expectedVerdict) fail('mismatch', 'The architecture findings artifact verdict does not match the checker job output.');
+  // Never trust the checker job's redaction: apply it again before the text is used.
+  const redacted = redactText(envelope.findings);
+  const prior = Number.isInteger(envelope.redactions) && envelope.redactions >= 0 ? envelope.redactions : 0;
+  return { verdict: envelope.verdict, findings: redacted.value, redactions: prior + redacted.count };
+}
+
+/** Finds, downloads and verifies this run's architecture findings artifact. */
+export function fetchFindings(context, { artifactId, digest, verdict }) {
+  const name = findingsArtifactName(context);
+  const bytes = fetchEnvelopeBytes(context, { artifactId, digest, name, file: FINDINGS_FILE, label: 'architecture findings', producer: 'checker' });
+  return verifyFindingsEnvelope(bytes, context, verdict);
 }
 
 function main(argv) {
@@ -368,7 +484,27 @@ function main(argv) {
       process.stdout.write(`${JSON.stringify({ redactions })}\n`);
       return 0;
     }
-    process.stderr.write('usage: agent-review-transport.mjs package <raw-review.json> <envelope-out.json> | fetch <review-out.json>\n');
+    if (command === 'package-findings' && args.length === 2) {
+      const context = findingsContextFromEnv();
+      let raw = '';
+      try { raw = readFileSync(args[0], 'utf8'); } catch { raw = ''; }
+      const { text, redactions } = packageFindings(raw, process.env.CHECK_VERDICT, context, knownSecretsFromEnv());
+      writeFileSync(args[1], text);
+      process.stdout.write(`${JSON.stringify({ name: findingsArtifactName(context), digest: sha256(Buffer.from(text)), bytes: Buffer.byteLength(text), redactions })}\n`);
+      return 0;
+    }
+    if (command === 'fetch-findings' && args.length === 1) {
+      const context = findingsContextFromEnv();
+      const { verdict, findings, redactions } = fetchFindings(context, {
+        artifactId: process.env.FINDINGS_ARTIFACT_ID,
+        digest: process.env.FINDINGS_ARTIFACT_DIGEST,
+        verdict: process.env.CHECK_VERDICT,
+      });
+      writeFileSync(args[0], findings);
+      process.stdout.write(`${JSON.stringify({ verdict, redactions })}\n`);
+      return 0;
+    }
+    process.stderr.write('usage: agent-review-transport.mjs package <raw-review.json> <envelope-out.json> | fetch <review-out.json> | package-findings <raw-findings.md> <envelope-out.json> | fetch-findings <findings-out.md>\n');
     return 64;
   } catch (error) {
     if (error instanceof TransportError) {

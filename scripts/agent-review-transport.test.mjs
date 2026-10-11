@@ -1,5 +1,6 @@
-// Unit tests for the review-result transport (scripts/agent-review-transport.mjs). The end-to-end
-// hand-off through the real workflow steps is in agent-review-publication.test.mjs.
+// Unit tests for the review-result and architecture-findings transport (scripts/agent-review-transport.mjs).
+// The end-to-end hand-offs through the real workflow steps are in agent-review-publication.test.mjs and
+// agent-architecture-handoff.test.mjs.
 // Run with: node --test scripts/agent-review-transport.test.mjs (also imported by validate-agent-workflows.test.mjs).
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -8,8 +9,9 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { describe, it } from 'node:test';
 import {
-  MAX_ENVELOPE_BYTES, TransportError, artifactName, contextFromEnv, contractFailures, knownSecretForms, knownSecretsFromEnv, looksLikeGeneratedToken,
-  packageReview, redactSecrets, redactText, verifyEnvelope,
+  MAX_ENVELOPE_BYTES, MAX_FINDINGS_CHARS, TransportError, artifactName, contextFromEnv, contractFailures, findingsArtifactName, findingsContextFromEnv,
+  knownSecretForms, knownSecretsFromEnv, looksLikeGeneratedToken, packageFindings, packageReview, redactSecrets, redactText, verifyEnvelope,
+  verifyFindingsEnvelope,
 } from './agent-review-transport.mjs';
 
 const SHA = '6b5ade799d290fb2c4e59710cbf047c43a305df0';
@@ -197,5 +199,63 @@ describe('command line', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('architecture findings', () => {
+  const FINDINGS_ENV = { ...ENV, CHECKER: 'copilot' };
+  delete FINDINGS_ENV.REVIEWER;
+  const findingsContext = findingsContextFromEnv(FINDINGS_ENV);
+  const held = 'correct-horse-battery-staple-fixture';
+  const packaged = (raw, verdict = 'findings', knownValues = []) => Buffer.from(packageFindings(raw, verdict, findingsContext, knownValues).text);
+
+  it('names the artifact after the checker and run, and binds the checker to the route', () => {
+    assert.equal(findingsArtifactName(findingsContext), 'agent-architecture-findings-copilot-38050149174');
+    assert.equal(findingsContextFromEnv({ ...FINDINGS_ENV, AGENT_MODE: 'full-claude', CHECKER: 'claude' }).checker, 'claude');
+    for (const env of [{ ...FINDINGS_ENV, AGENT_MODE: 'full-claude' }, { ...FINDINGS_ENV, CHECKER: 'openai' }, { ...FINDINGS_ENV, CHECKER: '' }]) {
+      assert.equal(code(() => findingsContextFromEnv(env)), 'context');
+    }
+  });
+
+  it('packages the verdict and text, redacting held credentials and known formats', () => {
+    const fakeGhs = `ghs_${'Zz9'.repeat(12)}`;
+    const { verdict, findings, redactions } = verifyFindingsEnvelope(packaged(`uses ${held} and ${fakeGhs}`, 'findings', [held]), findingsContext, 'findings');
+    assert.equal(verdict, 'findings');
+    assert.equal(findings, 'uses [REDACTED] and [REDACTED]');
+    assert.equal(redactions, 2);
+  });
+
+  it('cuts the text only after redacting it, so no partial credential survives the cut', () => {
+    const raw = `${'a '.repeat((MAX_FINDINGS_CHARS - 10) / 2)}${held}`;
+    const envelope = JSON.parse(packageFindings(raw, 'findings', findingsContext, [held]).text);
+    assert.ok(envelope.findings.length <= MAX_FINDINGS_CHARS);
+    assert.ok(!envelope.findings.includes(held.slice(0, 10)), 'the cut must not keep the start of the credential');
+  });
+
+  it('accepts a clean verdict with or without text, and refuses findings without text or an unknown verdict', () => {
+    assert.equal(verifyFindingsEnvelope(packaged('', 'clean'), findingsContext, 'clean').findings, '');
+    assert.equal(verifyFindingsEnvelope(packaged('ARCHITECTURE: CLEAN', 'clean'), findingsContext, 'clean').verdict, 'clean');
+    assert.equal(code(() => packageFindings(' \n', 'findings', findingsContext)), 'empty');
+    for (const verdict of ['CLEAN', 'maybe', undefined]) assert.equal(code(() => packageFindings('x', verdict, findingsContext)), 'contract');
+  });
+
+  it('refuses an envelope bound to anything else, or whose verdict differs from the checker job output', () => {
+    const good = JSON.parse(packaged('finding').toString('utf8'));
+    for (const [change, expected] of [
+      [{ repository: 'other/repo' }, 'mismatch'], [{ pr_number: 1 }, 'mismatch'], [{ head_sha: 'f'.repeat(40) }, 'mismatch'],
+      [{ agent_mode: 'full-claude' }, 'mismatch'], [{ checker: 'claude' }, 'mismatch'], [{ run_id: 1 }, 'mismatch'], [{ run_attempt: 2 }, 'mismatch'],
+      [{ schema: 'other' }, 'malformed'], [{ extra: true }, 'malformed'], [{ verdict: 'maybe' }, 'contract'], [{ findings: 7 }, 'contract'],
+      [{ findings: 'x'.repeat(MAX_FINDINGS_CHARS + 1) }, 'contract'], [{ findings: '   ' }, 'contract'], [{ verdict: 'clean' }, 'mismatch'],
+    ]) {
+      assert.equal(code(() => verifyFindingsEnvelope(Buffer.from(JSON.stringify({ ...good, ...change })), findingsContext, 'findings')), expected, JSON.stringify(change));
+    }
+    assert.equal(code(() => verifyFindingsEnvelope(Buffer.alloc(0), findingsContext, 'findings')), 'empty');
+    assert.equal(code(() => verifyFindingsEnvelope(Buffer.from('{'), findingsContext, 'findings')), 'malformed');
+    assert.equal(code(() => verifyFindingsEnvelope(Buffer.alloc(MAX_ENVELOPE_BYTES + 1, 32), findingsContext, 'findings')), 'oversized');
+  });
+
+  it('fails closed when a held credential would still reach the stored envelope', () => {
+    const escaped = 'abcd\\nefgh-held';
+    assert.equal(code(() => packageFindings('abcd\nefgh-held', 'findings', findingsContext, [escaped])), 'secret');
   });
 });
