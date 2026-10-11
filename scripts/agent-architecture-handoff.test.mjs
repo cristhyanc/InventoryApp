@@ -74,6 +74,7 @@ else if (args[0] === 'api') {
   else if (path.includes('/files')) out(state.files.map((filename) => ({ filename })));
   else if (/\\/pulls\\/\\d+$/.test(path)) out({ user: { login: state.author } });
   else if (path.includes('/contents/scripts/agent-mode.mjs')) process.stdout.write(fs.readFileSync(process.env.AGENT_MODE_SCRIPT, 'utf8'));
+  else if (path.includes('/contents/scripts/agent-pr-guard.mjs')) process.stdout.write(fs.readFileSync(process.env.AGENT_PR_GUARD_SCRIPT, 'utf8'));
   else if (path.includes('/contents/scripts/agent-review-transport.mjs')) process.stdout.write(fs.readFileSync(process.env.AGENT_REVIEW_TRANSPORT_SCRIPT, 'utf8'));
   else if (/\\/actions\\/runs\\/\\d+\\/artifacts\\?/.test(path)) out({ total_count: (state.artifacts ?? []).length, artifacts: state.artifacts ?? [] });
   else if (/\\/actions\\/artifacts\\/\\d+\\/zip$/.test(path)) {
@@ -169,6 +170,7 @@ function run(shell, { state, env = {}, findings, cwd }) {
         ...process.env,
         PATH: `${bin}:${process.env.PATH}`,
         AGENT_MODE_GH_PATH: join(bin, 'gh'),
+        AGENT_PR_GUARD_GH_PATH: join(bin, 'gh'),
         AGENT_REVIEW_TRANSPORT_GH_PATH: join(bin, 'gh'),
         AGENT_REVIEW_TRANSPORT_SCRIPT: TRANSPORT_SCRIPT,
         GITHUB_RUN_ID: RUN_ID,
@@ -184,6 +186,7 @@ function run(shell, { state, env = {}, findings, cwd }) {
         RUNNER_TEMP: root,
         GITHUB_WORKFLOW_SHA: 'a'.repeat(40),
         AGENT_MODE_SCRIPT: new URL('./agent-mode.mjs', import.meta.url).pathname,
+        AGENT_PR_GUARD_SCRIPT: new URL('./agent-pr-guard.mjs', import.meta.url).pathname,
         GH_TOKEN: 'fixture-token',
         EXPECTED_AGENT_AUTHOR: BOT,
         ISSUE_NUMBER: ISSUE,

@@ -368,7 +368,7 @@ export function verifyValidationModeIsolation(workflowText, source) {
 // permission, not issues, regardless of the labelable being a pull request).
 function verifySafeDispatcher(text, source, pullRequestsPermission = 'read') {
   verifySafeDispatcherBase(text, source, pullRequestsPermission);
-  for (const required of ['EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}', 'agent/issue-*']) {
+  for (const required of ['EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}', `contents/${PR_GUARD_PATH}`]) {
     requireText(text, required, source);
   }
 }
@@ -378,8 +378,6 @@ function verifySafeDispatcherBase(text, source, pullRequestsPermission = 'read')
     'actions: write',
     `pull-requests: ${pullRequestsPermission}`,
     '--ref main',
-    'headRefOid',
-    '.github/workflows/',
   ]) {
     requireText(text, required, source);
   }
@@ -406,35 +404,64 @@ function normalizeGuardVariables(text) {
   return text.replaceAll('$head_sha', '$HEAD_SHA').replaceAll('$pr_number', '$PR_NUMBER');
 }
 
-// Implementation identity. Claude is the only implementer: an `agent/issue-*` branch authored by the
-// dedicated agent GitHub App bot (AGENT_AUTOMATION_APP_BOT_LOGIN). Copilot only checks and reviews, so
-// no guarded section may accept a `copilot/*` branch or read the retired Copilot author variable.
-const CLAUDE_PR_GUARDS = Object.freeze([
-  '[[ "$head_ref" == agent/issue-* ]]',
-  'AGENT_AUTOMATION_APP_BOT_LOGIN is not configured',
-  '[ "$author" = "$EXPECTED_AGENT_AUTHOR" ]',
-]);
-// Only the REST pull request endpoint returns the canonical author login reliably for bot
-// authors, so every guarded section reads `.user.login` over REST and compares it with the
-// expected implementer login.
-function verifyAgentPrGuards(text, source, staleMessage) {
+// Implementation identity and eligibility live in one trusted script, scripts/agent-pr-guard.mjs.
+// Claude is the only implementer: an `agent/issue-*` branch authored by the dedicated agent GitHub App
+// bot (AGENT_AUTOMATION_APP_BOT_LOGIN), read over REST because only that endpoint returns the
+// canonical author login reliably for bot authors. Copilot only checks and reviews, so the guard
+// accepts no `copilot/*` branch and reads no Copilot author variable.
+export const PR_GUARD_PATH = 'scripts/agent-pr-guard.mjs';
+export const PR_GUARD_SCRIPT_CONTRACT = Object.freeze({
+  required: [
+    "if (pr.state !== 'OPEN') refuse('closed'",
+    "if (pr.isDraft !== false) refuse('draft'",
+    "if (pr.baseRefName !== 'develop') refuse('base'",
+    "if (headRepository !== repository) refuse('fork'",
+    "export const AGENT_BRANCH_PREFIX = 'agent/issue-';",
+    "if (!head.startsWith(AGENT_BRANCH_PREFIX)) refuse('branch'",
+    'if (issue !== undefined && !head.startsWith(`${AGENT_BRANCH_PREFIX}${issue}-`)) refuse(\'branch\'',
+    "if (!expectedAuthor) refuse('config', 'AGENT_AUTOMATION_APP_BOT_LOGIN is not configured.')",
+    "if (author !== expectedAuthor) refuse('author'",
+    "if (current !== sha) refuse('stale'",
+    "export const WORKFLOW_DIR = '.github/workflows/';",
+    'if (files.some((file) => file.startsWith(WORKFLOW_DIR))) {',
+    "refuse('workflow-files'",
+    "'--jq', '.user.login // empty'",
+    "return refuse('unavailable'",
+    "const GH_PATH = process.env.AGENT_PR_GUARD_GH_PATH || '/usr/bin/gh';",
+  ],
+  // Standalone and read-only: it is fetched from the trusted commit and must not write anything.
+  forbidden: ['copilot', 'COPILOT', '.author.login', "from './", "'--method'", 'POST', 'writeFile'],
+});
+
+export function verifyPrGuardScript(text, source = PR_GUARD_PATH) {
+  for (const required of PR_GUARD_SCRIPT_CONTRACT.required) requireText(text, required, source);
+  for (const forbidden of PR_GUARD_SCRIPT_CONTRACT.forbidden) forbidText(text, forbidden, source);
+  requireOrder(text, "refuse('closed'", "refuse('workflow-files'", source, 'the guard reports the first failed check in its documented order.');
+}
+
+// Every guarded section fetches the guard from its own workflow commit, never from a checkout, runs it
+// against the exact expected head, and keeps no inline copy of the checks it replaced.
+function verifyAgentPrGuards(text, source, { sha = '$HEAD_SHA', issue = false } = {}) {
   for (const required of [
-    '--json state,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner',
-    '[ "$state" = "OPEN" ]',
-    '[ "$is_draft" = "false" ]',
-    '[ "$base_ref" = "develop" ]',
-    '[ "$head_repo" = "$GITHUB_REPOSITORY" ]',
-    'author="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER"',
-    "--jq '.user.login // empty'",
-    '[ "$current_sha" = "$HEAD_SHA" ]',
-    staleMessage,
-    "grep -Eq '^\\.github/workflows/'",
+    'EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}',
+    'guard="$RUNNER_TEMP/agent-pr-guard.mjs"',
+    `gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/${PR_GUARD_PATH}?ref=$GITHUB_WORKFLOW_SHA" > "$guard"`,
+    `node "$guard" check "$PR_NUMBER" "${sha}"${issue ? ' --issue "$ISSUE_NUMBER"' : ''} 2>"$RUNNER_TEMP/agent-pr-guard.txt"`,
+    'tail -n 1 "$RUNNER_TEMP/agent-pr-guard.txt"',
   ]) {
     requireText(text, required, source);
   }
-  for (const required of CLAUDE_PR_GUARDS) requireText(text, required, source);
+  requireOrder(text, '> "$guard"', 'node "$guard" check', source, 'the guard must be fetched from the trusted commit before it runs.');
 
   for (const forbidden of [
+    `node ${PR_GUARD_PATH}`,
+    `./${PR_GUARD_PATH}`,
+    '--json state,isDraft',
+    '[ "$state" = "OPEN" ]',
+    '[ "$is_draft" = "false" ]',
+    '[ "$author" = ',
+    '.user.login',
+    "grep -Eq '^\\.github/workflows/'",
     '.author.login',
     'headRepositoryOwner,author',
     'copilot/*',
@@ -764,8 +791,8 @@ export const REVIEW_PUBLISH_CONTRACT = Object.freeze({
     '[ "$reviewed_sha" = "$HEAD_SHA" ] || suppress',
     'all(.criteria[]; .status == "met")',
     '(.blockers | length) > 0',
-    'Refusing stale review publication',
-    'any(.labels[]?; .name == "agent-review")',
+    'closed|draft|base|fork|branch|config|author|stale|workflow-files) suppress "$refusal" ;;',
+    `any(.labels[]; . == "agent-review")' <<<"$pr_guard"`,
     'select(.context == "agent-validation")',
     '[ "$validation_state" = "success" ] || suppress',
     "grep -c '^VERDICT:'",
@@ -798,15 +825,16 @@ export const HEAD_UPDATE_CONTRACT = Object.freeze({
     'cancel-in-progress: true',
     "contains(github.event.pull_request.labels.*.name, 'agent-review')",
     'statuses: read',
-    'Refusing stale scheduled validation',
-    'any(.labels[]?; .name == "agent-review")',
+    'closed|draft|base|fork|branch|author|stale|workflow-files) skip "$refusal" ;;',
+    '*) fail "Scheduled validation refused: $refusal" ;;',
+    `any(.labels[]; . == "agent-review")' <<<"$pr_guard"`,
     'skip "the agent-review label is absent."',
     'select(.context == "agent-validation")',
     '[ -z "$existing_validation" ]',
     'gh workflow run validate.yml',
     '-f dispatch_review=true',
   ],
-  forbidden: ['statuses: write', 'contents:', 'gh pr review', 'agent-review.yml', 'git push', 'ref: ${{ github.event.pull_request', 'pull-requests: write', 'issues: write', 'gh pr edit', "'copilot/'", 'agent-architecture-fix'],
+  forbidden: ['statuses: write', 'contents: write', 'actions/checkout', 'gh pr review', 'agent-review.yml', 'git push', 'ref: ${{ github.event.pull_request', 'pull-requests: write', 'issues: write', 'gh pr edit', "'copilot/'", 'agent-architecture-fix'],
 });
 
 /** Manual re-review: a human's agent-review label dispatches agent-review.yml from main, nothing else. */
@@ -817,14 +845,15 @@ function verifyReviewRequestDispatcher(workflow) {
   requireText(workflow, 'permissions: {}', reviewRequestPath);
   const job = section(workflow, '  dispatch-review:\n', null, `${reviewRequestPath} dispatcher`);
   verifySafeDispatcher(job, `${reviewRequestPath} dispatcher`);
-  verifyAgentPrGuards(job, `${reviewRequestPath} dispatcher`, 'Refusing stale review request');
+  verifyAgentPrGuards(job, `${reviewRequestPath} dispatcher`);
+  requireText(job, 'Review request refused:', `${reviewRequestPath} dispatcher`);
   for (const required of [
     "github.event.label.name == 'agent-review'", 'statuses: read',
-    'any(.labels[]?; .name == "agent-review")', 'select(.context == "agent-validation")', '[ "$validation_state" = "success" ]',
+    `any(.labels[]; . == "agent-review")' <<<"$pr_guard"`, 'select(.context == "agent-validation")', '[ "$validation_state" = "success" ]',
     'A manual agent-review request requires a successful latest agent-validation status on the exact head SHA.',
     'gh workflow run agent-review.yml', '-f pr_number="$PR_NUMBER"', '-f head_sha="$HEAD_SHA"',
   ]) requireText(job, required, `${reviewRequestPath} dispatcher`);
-  for (const forbidden of ['secrets.COPILOT', 'CLAUDE_CODE_OAUTH_TOKEN', 'AGENT_AUTOMATION_APP_PRIVATE_KEY', 'issues: write', 'contents:', 'statuses: write', 'gh pr edit', 'gh issue edit', 'validate.yml', MERGE_VALIDATION_STATUS]) {
+  for (const forbidden of ['secrets.COPILOT', 'CLAUDE_CODE_OAUTH_TOKEN', 'AGENT_AUTOMATION_APP_PRIVATE_KEY', 'issues: write', 'contents: write', 'actions/checkout', 'statuses: write', 'gh pr edit', 'gh issue edit', 'validate.yml', MERGE_VALIDATION_STATUS]) {
     forbidText(job, forbidden, `${reviewRequestPath} dispatcher`);
   }
   requireOrder(job, '[ "$validation_state" = "success" ]', 'gh workflow run agent-review.yml', `${reviewRequestPath} dispatcher`, 'the exact head must have passed validation before a review is dispatched.');
@@ -1080,7 +1109,7 @@ export function verifyReviewPublicationAndScheduling(read = readRepositoryFile) 
   for (const forbidden of REVIEW_PUBLISH_CONTRACT.forbidden) {
     forbidText(publish, forbidden, 'agent-review.yml publish job');
   }
-  verifyAgentPrGuards(publish, 'agent-review.yml publish job', 'Refusing stale review publication');
+  verifyAgentPrGuards(publish, 'agent-review.yml publish job');
   // The publisher re-derives the implementer and provider mode from the live pull request and takes
   // the review only from the job of the reviewer the verified route selected.
   for (const required of [
@@ -1100,7 +1129,8 @@ export function verifyReviewPublicationAndScheduling(read = readRepositoryFile) 
   verifyCopilotReviewJob(review);
   verifyReviewTransport(review);
   verifyReviewTransportCheck(read(reviewTransportCheckPath));
-  requireOrder(publish, '[ "$current_sha" = "$HEAD_SHA" ]', 'repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews', 'agent-review.yml publish job', 'the current head must be re-verified before the review is published.');
+  verifyPrGuardScript(read(PR_GUARD_PATH));
+  requireOrder(publish, 'node "$guard" check "$PR_NUMBER" "$HEAD_SHA"', 'repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews', 'agent-review.yml publish job', 'the current head must be re-verified before the review is published.');
   requireOrder(publish, '[ "$validation_state" = "success" ]', 'repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews', 'agent-review.yml publish job', 'validation must be re-verified before the review is published.');
 
   const headUpdate = read(headUpdatePath);
@@ -1120,7 +1150,7 @@ export function verifyReviewPublicationAndScheduling(read = readRepositoryFile) 
   }
   const dispatcher = section(headUpdate, '  dispatch-validation:\n', null, headUpdatePath);
   verifySafeDispatcher(dispatcher, `${headUpdatePath} dispatcher`);
-  verifyAgentPrGuards(dispatcher, `${headUpdatePath} dispatcher`, 'Refusing stale scheduled validation');
+  verifyAgentPrGuards(dispatcher, `${headUpdatePath} dispatcher`);
   requireOrder(dispatcher, '[ -z "$existing_validation" ]', 'gh workflow run validate.yml', `${headUpdatePath} dispatcher`, 'the duplicate check must run before dispatch.');
 
   const repair = read(repairPath);
@@ -1311,11 +1341,11 @@ function verifyImplementationJob(implementationWorkflow) {
 function verifyArchitectureDispatcher(implementationWorkflow) {
   const implementationDispatcher = section(implementationWorkflow, '  dispatch-architecture:\n', null, 'agent-implement.yml architecture dispatcher');
   verifySafeDispatcher(implementationDispatcher, 'agent-implement.yml architecture dispatcher');
-  verifyAgentPrGuards(implementationDispatcher, 'agent-implement.yml architecture dispatcher', 'Refusing stale architecture dispatch');
+  verifyAgentPrGuards(implementationDispatcher, 'agent-implement.yml architecture dispatcher', { issue: true });
   for (const required of [
     'issues: write',
     'agent-architecture.yml', '-f issue_number="$ISSUE_NUMBER"', '-f pr_number="$PR_NUMBER"', '-f head_sha="$HEAD_SHA"',
-    '[[ "$head_ref" == agent/issue-"$ISSUE_NUMBER"-* ]]',
+    'Architecture dispatch refused:',
     'RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}',
     'trap block_undispatched EXIT', 'dispatched=true',
     '.state == "OPEN" and any(.labels[]?; .name == "agent-working")',
@@ -1342,8 +1372,8 @@ function verifyArchitectureContext(architectureWorkflow) {
   requireText(context, 'EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}', 'agent-architecture.yml context');
   forbidText(context, 'actions/checkout', 'agent-architecture.yml context');
   forbidText(context, 'CLAUDE_CODE_OAUTH_TOKEN', 'agent-architecture.yml context');
-  verifyAgentPrGuards(context, 'agent-architecture.yml context', 'Refusing stale architecture run');
-  requireText(context, '[[ "$head_ref" == agent/issue-"$ISSUE_NUMBER"-* ]]', 'agent-architecture.yml context');
+  verifyAgentPrGuards(context, 'agent-architecture.yml context', { issue: true });
+  requireText(context, 'head_ref="$(jq -r \'.head_ref\' <<<"$pr_guard")"', 'agent-architecture.yml context');
   requireText(context, 'any(.labels[]?; .name == "agent-working")', 'agent-architecture.yml context');
   // The verified route names exactly one checker; any other mode fails closed.
   for (const required of [
@@ -1485,6 +1515,8 @@ function verifyArchitectureFixJob(architectureWorkflow) {
 
 function verifyArchitectureFinalizer(architectureWorkflow) {
   const finalize = section(architectureWorkflow, '  finalize:\n', null, 'agent-architecture.yml finalize');
+  verifyAgentPrGuards(finalize, 'agent-architecture.yml finalize', { sha: '$FINAL_SHA', issue: true });
+  requireOrder(finalize, 'node "$guard" check', 'gh workflow run validate.yml', 'agent-architecture.yml finalize', 'the final head must be re-verified before validation is dispatched.');
   for (const required of [
     "    if: always()\n", '      - context\n      - copilot-check\n      - claude-check\n      - sonar\n      - architecture\n',
     'SONAR_COUNT: ${{ needs.sonar.outputs.count }}', '[[ "$sonar_count" =~ ^[0-9]+$ ]] || sonar_count=0', 'actions: write', 'pull-requests: write', 'issues: write', 'statuses: read',
@@ -1498,9 +1530,8 @@ function verifyArchitectureFinalizer(architectureWorkflow) {
     "CHECK_VERDICT: ${{ needs.context.outputs.checker == 'claude' && needs.claude-check.outputs.verdict || needs.copilot-check.outputs.verdict }}", '[ "$ARCHITECTURE_JOB_RESULT" = "skipped" ]',
     '[ "$checker_label" != "Unknown" ] || fail',
     'FINAL_SHA="$EXPECTED_START_SHA"', 'FIX_SHA: ${{ needs.architecture.outputs.head_sha }}', 'FINAL_SHA="$FIX_SHA"',
-    '[ "$current_sha" = "$FINAL_SHA" ]',
-    '[[ "$head_ref" == agent/issue-"$ISSUE_NUMBER"-* ]]', '.user.login // empty',
-    'any(.labels[]?; .name == "agent-working")', "grep -Eq '^\\.github/workflows/'",
+    'Architecture finalization refused:',
+    'any(.labels[]?; .name == "agent-working")',
     'gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label agent-review',
     'gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --remove-label agent-working --add-label agent-review',
     'gh workflow run validate.yml', '--ref main', '-f head_sha="$FINAL_SHA"', '-f dispatch_review=true',
@@ -1541,7 +1572,7 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
     'dispatch_review:',
     'inputs.pr_number',
     'agent-validation',
-    'Refusing stale validation',
+    'Validation refused:',
     'persist-credentials: false',
     VALIDATION_CONCURRENCY_GROUP,
     'cancel-in-progress: true',
@@ -1565,7 +1596,7 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
   requireText(validationContext, 'echo "status_context=$STATUS_CONTEXT"', 'validate.yml context job');
   forbidText(validationContext, 'actions/checkout', 'validate.yml context job');
   forbidText(validationContext, 'CLAUDE_CODE_OAUTH_TOKEN', 'validate.yml context job');
-  verifyAgentPrGuards(normalizeGuardVariables(validationContext), 'validate.yml dispatched context', 'Refusing stale validation');
+  verifyAgentPrGuards(normalizeGuardVariables(validationContext), 'validate.yml dispatched context');
 
   // The branch anchors carry a leading newline so the inner, deeper-indented if/else/fi
   // inside the pull_request branch cannot be mistaken for the outer one.
@@ -1602,7 +1633,8 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
   const reviewDispatcher = section(validate, '  dispatch-review:\n', null, validatePath);
   // Read-only apart from dispatching: the dispatcher changes no labels.
   verifySafeDispatcher(reviewDispatcher, 'validate.yml review dispatcher');
-  verifyAgentPrGuards(reviewDispatcher, 'validate.yml review dispatcher', 'Refusing stale review dispatch');
+  verifyAgentPrGuards(reviewDispatcher, 'validate.yml review dispatcher');
+  requireText(reviewDispatcher, 'Review dispatch refused:', 'validate.yml review dispatcher');
   // agent-review.yml picks the reviewer from the verified route, so the dispatcher routes every
   // implementation there and holds no Copilot credential.
   for (const required of [
@@ -1616,7 +1648,7 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
   requireText(reviewDispatcher, 'inputs.dispatch_review == true', 'validate.yml review dispatcher');
   requireText(reviewDispatcher, 'needs.report-status.result', 'validate.yml review dispatcher');
   requireText(reviewDispatcher, 'agent-review', 'validate.yml review dispatcher');
-  requireText(reviewDispatcher, 'any(.labels[]?; .name == "agent-review")', 'validate.yml review dispatcher');
+  requireText(reviewDispatcher, `any(.labels[]; . == "agent-review")' <<<"$pr_guard"`, 'validate.yml review dispatcher');
 
   verifyValidationModeIsolation(validate, validatePath);
 
@@ -1650,10 +1682,11 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
 
     const dispatcher = section(workflow, '  dispatch-validation:\n', null, path);
     verifySafeDispatcher(dispatcher, `${path} validation dispatcher`);
-    verifyAgentPrGuards(dispatcher, `${path} validation dispatcher`, 'Refusing stale validation dispatch');
+    verifyAgentPrGuards(dispatcher, `${path} validation dispatcher`);
+    requireText(dispatcher, 'Validation dispatch refused:', `${path} validation dispatcher`);
     requireText(dispatcher, 'validate.yml', `${path} validation dispatcher`);
     requireText(dispatcher, '-f dispatch_review=true', `${path} validation dispatcher`);
-    requireText(dispatcher, 'any(.labels[]?; .name == "agent-review")', `${path} validation dispatcher`);
+    requireText(dispatcher, `any(.labels[]; . == "agent-review")' <<<"$pr_guard"`, `${path} validation dispatcher`);
   }
   const review = read(reviewPath);
   // Reviews run only as a workflow_dispatch from main. A pull_request run would use the pull
@@ -1672,19 +1705,19 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
     'head_sha:',
     'inputs.pr_number',
     'agent-validation',
-    'Refusing stale review',
+    'Review refused:',
     'persist-credentials: false',
-    '.github/workflows/',
+    `contents/${PR_GUARD_PATH}?ref=$GITHUB_WORKFLOW_SHA`,
     'group: agent-review-pr-${{ inputs.pr_number || github.run_id }}',
   ]) {
     requireText(review, required, reviewPath);
   }
 
   const reviewContext = section(review, '  context:\n', '  review:\n', reviewPath);
-  verifyAgentPrGuards(normalizeGuardVariables(reviewContext), 'agent-review.yml dispatched context', 'Refusing stale review');
+  verifyAgentPrGuards(normalizeGuardVariables(reviewContext), 'agent-review.yml dispatched context');
   requireText(reviewContext, 'echo "implementer=$implementer"', 'agent-review.yml context');
   requireText(reviewContext, 'statuses: read', 'agent-review.yml dispatched context');
-  requireText(reviewContext, 'any(.labels[]?; .name == "agent-review")', 'agent-review.yml dispatched context');
+  requireText(reviewContext, `any(.labels[]; . == "agent-review")' <<<"$pr_guard"`, 'agent-review.yml dispatched context');
   requireText(reviewContext, 'validation_state', 'agent-review.yml dispatched context');
   // A dispatched review accepts only the exact-SHA agent-validation status as evidence; the
   // merge-result status published by pull_request validation is never a substitute.

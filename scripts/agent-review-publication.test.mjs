@@ -85,6 +85,8 @@ if (args[0] === 'pr' && args[1] === 'view') {
     out({ user: { login: state.author } });
   } else if (path.includes('/contents/scripts/agent-mode.mjs')) {
     process.stdout.write(fs.readFileSync(process.env.AGENT_MODE_SCRIPT, 'utf8'));
+  } else if (path.includes('/contents/scripts/agent-pr-guard.mjs')) {
+    process.stdout.write(fs.readFileSync(process.env.AGENT_PR_GUARD_SCRIPT, 'utf8'));
   } else if (path.includes('/contents/scripts/agent-review-transport.mjs')) {
     process.stdout.write(fs.readFileSync(process.env.AGENT_REVIEW_TRANSPORT_SCRIPT, 'utf8'));
   } else if (/\\/actions\\/runs\\/\\d+\\/artifacts\\?/.test(path)) {
@@ -220,6 +222,7 @@ function run(shell, { state, env = {}, artifact, reviewer }) {
         ...process.env,
         PATH: `${bin}:${process.env.PATH}`,
         AGENT_MODE_GH_PATH: join(bin, 'gh'),
+        AGENT_PR_GUARD_GH_PATH: join(bin, 'gh'),
         FAKE_GH_STATE: statePath,
         FAKE_GH_LOG: logPath,
         GITHUB_OUTPUT: outputPath,
@@ -227,6 +230,7 @@ function run(shell, { state, env = {}, artifact, reviewer }) {
         RUNNER_TEMP: root,
         GITHUB_WORKFLOW_SHA: 'a'.repeat(40),
         AGENT_MODE_SCRIPT: new URL('./agent-mode.mjs', import.meta.url).pathname,
+        AGENT_PR_GUARD_SCRIPT: new URL('./agent-pr-guard.mjs', import.meta.url).pathname,
         AGENT_REVIEW_TRANSPORT_SCRIPT: new URL('./agent-review-transport.mjs', import.meta.url).pathname,
         GITHUB_RUN_ID: RUN_ID,
         GITHUB_RUN_ATTEMPT: '1',
@@ -314,17 +318,17 @@ describe('guarded review publication', () => {
 
   it('suppresses the verdict when the head changed during review (the #267 stale-head case)', () => {
     const state = eligibleState({ pr: { headRefOid: NEWER_SHA } });
-    assertSuppressed(publish({ state }), /Refusing stale review publication: head moved to f49fcc3/);
+    assertSuppressed(publish({ state }), /stale: the head of pull request #267 is now f49fcc3/);
     assert.ok(!statuses(publish({ state }).calls).some((s) => s.sha === NEWER_SHA), 'nothing may be written for the new head');
   });
 
   for (const [name, pr, reason] of [
-    ['closed', { state: 'CLOSED' }, /no longer open/],
-    ['merged', { state: 'MERGED' }, /no longer open/],
-    ['draft', { isDraft: true }, /now a draft/],
-    ['retargeted', { baseRefName: 'main' }, /no longer targets develop/],
+    ['closed', { state: 'CLOSED' }, /closed: pull request #267 is not open \(CLOSED\)/],
+    ['merged', { state: 'MERGED' }, /closed: pull request #267 is not open \(MERGED\)/],
+    ['draft', { isDraft: true }, /draft: pull request #267 is a draft/],
+    ['retargeted', { baseRefName: 'main' }, /base: pull request #267 targets 'main', not develop/],
     ['unlabelled', { labels: [] }, /agent-review label was removed/],
-    ['non-agent branch', { headRefName: 'feature/manual' }, /no longer uses an agent\/issue-\* branch/],
+    ['non-agent branch', { headRefName: 'feature/manual' }, /branch: pull request #267 does not use an agent\/issue-\* branch/],
   ]) {
     it(`suppresses the verdict for a ${name} pull request`, () => {
       assertSuppressed(publish({ state: eligibleState({ pr }) }), reason);
@@ -365,7 +369,7 @@ describe('guarded review publication', () => {
       for (const reviewer of ['claude', 'copilot']) assertSuppressed(publish({ state: copilotState(), implementer: 'copilot', mode, reviewer }), /unknown review route/);
     }
     // A copilot/* pull request is refused even if the route recorded for the review was a Claude one.
-    assertSuppressed(publish({ state: copilotState() }), /no longer uses an agent\/issue-\* branch/);
+    assertSuppressed(publish({ state: copilotState() }), /branch: pull request #267 does not use an agent\/issue-\* branch \(head is 'copilot\//);
   });
 
   it('publishes full-provider reviews labelled as same-provider, not independent', () => {
@@ -673,11 +677,33 @@ describe('updated-head scheduling', () => {
     const older = headUpdate(eligibleState({ pr: { headRefOid: NEWER_SHA }, statuses: {} }));
     assert.equal(older.status, 0, older.stderr);
     assert.equal(dispatches(older.calls).length, 0);
-    assert.match(older.stdout, /Refusing stale scheduled validation/);
+    assert.match(older.stdout, /No validation scheduled: stale: the head of pull request #267 is now f49fcc3/);
 
     const newer = headUpdate(eligibleState({ pr: { headRefOid: NEWER_SHA }, statuses: {} }), { HEAD_SHA: NEWER_SHA });
     assert.equal(dispatches(newer.calls).length, 1);
     assert.ok(dispatches(newer.calls)[0].args.includes(`head_sha=${NEWER_SHA}`));
+  });
+
+  it('skips an ineligible pull request quietly but fails on missing configuration or an unreadable state', () => {
+    for (const [state, reason] of [
+      [eligibleState({ pr: { isDraft: true }, statuses: {} }), /No validation scheduled: draft:/],
+      [eligibleState({ author: 'someone-else', statuses: {} }), /No validation scheduled: author:/],
+      [eligibleState({ files: ['.github/workflows/validate.yml'], statuses: {} }), /No validation scheduled: workflow-files:/],
+    ]) {
+      const outcome = headUpdate(state);
+      assert.equal(outcome.status, 0, outcome.stderr);
+      assert.equal(dispatches(outcome.calls).length, 0);
+      assert.match(outcome.stdout, reason);
+    }
+    for (const [state, env, reason] of [
+      [eligibleState({ statuses: {} }), { EXPECTED_AGENT_AUTHOR: '' }, /Scheduled validation refused: config:/],
+      [eligibleState({ statuses: {}, unavailable: [`pulls/${PR}/files`] }), {}, /Scheduled validation refused: unavailable:/],
+    ]) {
+      const outcome = headUpdate(state, env);
+      assert.notEqual(outcome.status, 0);
+      assert.equal(dispatches(outcome.calls).length, 0);
+      assert.match(outcome.stdout, reason);
+    }
   });
 
   for (const existing of ['pending', 'success', 'failure']) {
@@ -922,7 +948,7 @@ describe('manual re-review request (agent-review-request.yml)', () => {
 
   for (const [name, state, reason] of [
     ['an unvalidated head', eligibleState({ statuses: { [SHA]: [{ context: 'merge-validation', state: 'success' }] } }), /successful latest agent-validation/],
-    ['a stale head', eligibleState({ pr: { headRefOid: NEWER_SHA } }), /Refusing stale review request/],
+    ['a stale head', eligibleState({ pr: { headRefOid: NEWER_SHA } }), /Review request refused: stale: the head of pull request #267 is now f49fcc3/],
     ['a removed label', eligibleState({ pr: { labels: [] } }), /label was removed/],
     ['a human-authored pull request', eligibleState({ author: 'cristhyanc' }), /not authored by/],
     ['a workflow-changing pull request', eligibleState({ files: ['.github/workflows/agent-review.yml'] }), /\.github\/workflows/],

@@ -605,35 +605,16 @@ jobs:
           }
           trap block_undispatched EXIT
 
-          pr_json="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
-            --json state,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner)"
-          state="$(jq -r '.state' <<<"$pr_json")"
-          is_draft="$(jq -r '.isDraft' <<<"$pr_json")"
-          base_ref="$(jq -r '.baseRefName' <<<"$pr_json")"
-          head_ref="$(jq -r '.headRefName' <<<"$pr_json")"
-          current_sha="$(jq -r '.headRefOid // empty' <<<"$pr_json")"
-          head_repo="$(jq -r '"\(.headRepositoryOwner.login)/\(.headRepository.name)"' <<<"$pr_json")"
-          author="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" \
-            --jq '.user.login // empty')"
-
-          [ "$state" = "OPEN" ] || fail "Pull request #$PR_NUMBER is not open."
-          [ "$is_draft" = "false" ] || fail "Pull request #$PR_NUMBER is a draft."
-          [ "$base_ref" = "develop" ] || fail "Architecture is limited to pull requests targeting develop."
-          [ "$head_repo" = "$GITHUB_REPOSITORY" ] || fail "Architecture is limited to same-repository branches."
-          [[ "$head_ref" == agent/issue-* ]] || fail "Architecture requires an agent/issue-* head branch."
-          [[ "$head_ref" == agent/issue-"$ISSUE_NUMBER"-* ]] || fail "Pull request branch does not match issue #$ISSUE_NUMBER."
-          [ -n "$EXPECTED_AGENT_AUTHOR" ] || fail "AGENT_AUTOMATION_APP_BOT_LOGIN is not configured."
-          [ "$author" = "$EXPECTED_AGENT_AUTHOR" ] || fail "Architecture requires $EXPECTED_AGENT_AUTHOR as the pull request author."
-          [ "$current_sha" = "$HEAD_SHA" ] || fail "Refusing stale architecture dispatch: pull request head is $current_sha, expected $HEAD_SHA."
+          # Eligibility (open, non-draft, develop, same repository, Claude agent branch, App author, exact head,
+          # no workflow files) comes from the one trusted guard in this workflow's own commit.
+          guard="$RUNNER_TEMP/agent-pr-guard.mjs"
+          gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/scripts/agent-pr-guard.mjs?ref=$GITHUB_WORKFLOW_SHA" > "$guard"
+          pr_guard="$(node "$guard" check "$PR_NUMBER" "$HEAD_SHA" --issue "$ISSUE_NUMBER" 2>"$RUNNER_TEMP/agent-pr-guard.txt")" \
+            || fail "Architecture dispatch refused: $(tail -n 1 "$RUNNER_TEMP/agent-pr-guard.txt")"
           # Provider mode (#339): verify the route claimed in the issue's label history against this pull request, using the
           # resolver from this workflow's own commit. A conflicting, malformed or disabled mode fails closed.
           gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/scripts/agent-mode.mjs?ref=$GITHUB_WORKFLOW_SHA" > "$RUNNER_TEMP/agent-mode.mjs"
           agent_mode="$(node "$RUNNER_TEMP/agent-mode.mjs" verify-pr "$PR_NUMBER" "claude")" || fail "the provider mode of pull request #$PR_NUMBER could not be verified."
-
-          changed_files="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" --jq '.[].filename')"
-          if grep -Eq '^\.github/workflows/' <<<"$changed_files"; then
-            fail "Pull requests that change .github/workflows/** require manual validation and review."
-          fi
 
           gh workflow run agent-architecture.yml \
             --repo "$GITHUB_REPOSITORY" \
