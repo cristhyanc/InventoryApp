@@ -1,0 +1,76 @@
+name: Agent branch cleanup
+
+# Housekeeping for Claude implementation branches once an agent pull request closes.
+# See docs/automation.md "Implementation durability and recovery".
+# - Deletes the closed pull request's own `agent/issue-<n>-*` branch while it still points at the
+#   pull request's final head and no open pull request uses it. GitHub keeps that head on the
+#   closed pull request (refs/pull/<n>/head) and offers "Restore branch", so nothing is lost, and a
+#   later implementation run that picks the same branch name is no longer rejected by a stale branch.
+# - Deletes the issue's checkpoint/recovery storage branches: every one once the issue's pull request
+#   merged and no other agent pull request for the issue is open; otherwise only those whose commit
+#   is already contained in the closed pull request's head.
+# Runs trusted `develop` code only (pull_request_target never checks out the pull request), never
+# force-pushes, and touches no branch outside `agent/`.
+
+on:
+  pull_request_target:
+    types: [closed]
+    branches:
+      - develop
+
+permissions: {}
+
+concurrency:
+  group: agent-branch-cleanup-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    name: Delete branches of a closed agent pull request
+    if: github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.event.pull_request.head.ref, 'agent/issue-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: read
+
+    steps:
+      - name: Check out trusted develop
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: develop
+          persist-credentials: false
+
+      - name: Delete closed pull request branch and storage branches
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGED: ${{ github.event.pull_request.merged }}
+        run: |
+          set -euo pipefail
+          [[ "$HEAD_REF" =~ ^agent/issue-([1-9][0-9]*)-[A-Za-z0-9._/-]+$ ]] || { echo "Not an agent implementation branch; nothing to clean."; exit 0; }
+          issue="${BASH_REMATCH[1]}"
+          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Invalid pull request head SHA."; exit 1; }
+
+          live_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$HEAD_REF" --jq '.object.sha' 2>/dev/null || true)"
+          open_on_branch="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$HEAD_REF" --state open --limit 100 --json number --jq 'length')"
+          if [ -z "$live_sha" ]; then
+            echo "$HEAD_REF is already gone."
+          elif [ "$live_sha" != "$HEAD_SHA" ] || [ "$open_on_branch" != "0" ]; then
+            echo "::warning::Keeping $HEAD_REF: it moved after pull request #$PR_NUMBER closed or another open pull request uses it."
+          elif gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$HEAD_REF" --silent; then
+            echo "Deleted $HEAD_REF ($HEAD_SHA); restore it from pull request #$PR_NUMBER if needed."
+          else
+            echo "::warning::Could not delete $HEAD_REF; it was left in place."
+          fi
+
+          open_for_issue="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 200 --json headRefName \
+            --jq "[.[] | select(.headRefName | startswith(\"agent/issue-$issue-\"))] | length")"
+          if [ "$MERGED" = "true" ] && [ "$open_for_issue" = "0" ]; then
+            mode=all
+          else
+            mode=contained
+          fi
+          bash scripts/agent-branch-cleanup.sh "https://github.com/${GITHUB_REPOSITORY}.git" "$issue" "$mode" "$HEAD_SHA"
