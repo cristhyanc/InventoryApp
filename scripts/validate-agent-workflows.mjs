@@ -955,8 +955,74 @@ function verifyReviewTransport(review) {
   requireOrder(publish, 'node "$transport" fetch', 'repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews', 'agent-review.yml publish transport', 'the review must be received and verified before anything is published.');
 }
 
+export const ARCHITECTURE_TRANSPORT_CONTRACT = Object.freeze({
+  checkerOutputs: [
+    'verdict: ${{ steps.check.outputs.verdict }}',
+    'findings_artifact_id: ${{ steps.upload.outputs.artifact-id }}',
+    'findings_digest: ${{ steps.package.outputs.digest }}',
+  ],
+  packageRequired: [
+    '      - name: Package architecture findings\n        id: package\n',
+    'TRUSTED_SHA: ${{ github.sha }}',
+    'git show "$TRUSTED_SHA:scripts/agent-review-transport.mjs" > "$transport"',
+    'node "$transport" package-findings "$RUNNER_TEMP/architecture-raw.md" "$result_dir/findings-envelope.json"',
+    'rm -f "$RUNNER_TEMP/architecture-raw.md"',
+    '      - name: Upload architecture findings\n        id: upload\n        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2\n',
+    'path: ${{ runner.temp }}/agent-architecture-findings/findings-envelope.json',
+    'if-no-files-found: error',
+    'retention-days: 1',
+  ],
+  consumerRequired: [
+    "FINDINGS_ARTIFACT_ID: ${{ needs.context.outputs.checker == 'claude' && needs.claude-check.outputs.findings_artifact_id || needs.copilot-check.outputs.findings_artifact_id }}",
+    "FINDINGS_ARTIFACT_DIGEST: ${{ needs.context.outputs.checker == 'claude' && needs.claude-check.outputs.findings_digest || needs.copilot-check.outputs.findings_digest }}",
+    'AGENT_MODE: ${{ needs.context.outputs.agent_mode }}',
+    'IMPLEMENTER: claude',
+  ],
+});
+
 /**
- * The live hand-off check exercises the transport on real runners with a fixture only: read-only
+ * The architecture checker's findings travel to the fix and finalize jobs as a run-bound artifact,
+ * never as a job output, for the same reason as the review (PR #558). Every side runs the transport
+ * script from the trusted workflow commit, never from the pull request head.
+ */
+function verifyArchitectureTransport(architecture) {
+  // The credentials each checker gives its model, removed from the findings by exact value. The Copilot
+  // check never exposes the job token to the CLI (and verifyReadOnlyCopilotCheck keeps it out of the job).
+  const heldCredentials = {
+    'copilot-check': ['REVIEW_REDACT_PROVIDER_TOKEN: ${{ secrets.COPILOT_CLI_TOKEN }}', 'CHECKER: copilot'],
+    'claude-check': ['REVIEW_REDACT_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}', 'REVIEW_REDACT_PROVIDER_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}', 'CHECKER: claude'],
+  };
+  for (const [name, start, end] of [['copilot-check', '  copilot-check:\n', '  claude-check:\n'], ['claude-check', '  claude-check:\n', '  sonar:\n']]) {
+    const source = `agent-architecture.yml ${name}`;
+    const job = section(architecture, start, end, source);
+    const outputs = section(job, '    outputs:\n', '\n    steps:\n', `${source} outputs`);
+    for (const required of ARCHITECTURE_TRANSPORT_CONTRACT.checkerOutputs) requireText(outputs, required, `${source} outputs`);
+    for (const forbidden of ['findings: ', 'steps.check.outputs.findings']) forbidText(outputs, forbidden, `${source} outputs`);
+    forbidText(job, 'findings<<', `${source} findings transport`);
+    for (const required of ARCHITECTURE_TRANSPORT_CONTRACT.packageRequired) requireText(job, required, `${source} findings transport`);
+    const packageStep = section(job, '      - name: Package architecture findings\n', '      - name: Upload architecture findings\n', `${source} package step`);
+    for (const required of heldCredentials[name]) requireText(packageStep, required, `${source} findings transport`);
+    forbidText(job, 'node scripts/agent-review-transport.mjs', `${source} findings transport`);
+  }
+
+  const fix = section(architecture, '  architecture:\n', '  finalize:\n', 'agent-architecture.yml architecture job');
+  const store = section(fix, '      - name: Store architecture findings and SonarCloud issues for the fix agent\n', '      - name: Set up .NET\n', 'agent-architecture.yml store findings');
+  for (const required of [...ARCHITECTURE_TRANSPORT_CONTRACT.consumerRequired, 'TRUSTED_SHA: ${{ github.sha }}', 'git show "$TRUSTED_SHA:scripts/agent-review-transport.mjs" > "$transport"']) {
+    requireText(store, required, 'agent-architecture.yml store findings');
+  }
+  const finalize = section(architecture, '  finalize:\n', null, 'agent-architecture.yml finalize');
+  for (const required of [
+    ...ARCHITECTURE_TRANSPORT_CONTRACT.consumerRequired,
+    '"repos/$GITHUB_REPOSITORY/contents/scripts/agent-review-transport.mjs?ref=$GITHUB_WORKFLOW_SHA"',
+    'node "$transport" fetch-findings "$check_findings_file"',
+  ]) requireText(finalize, required, 'agent-architecture.yml finalize findings transport');
+  requireOrder(finalize, 'node "$transport" fetch-findings', 'gh pr comment "$PR_NUMBER"', 'agent-architecture.yml finalize findings transport', 'the findings must be received and verified before anything is recorded.');
+  requireOrder(finalize, 'node "$transport" fetch-findings', 'gh workflow run validate.yml', 'agent-architecture.yml finalize findings transport', 'validation must not be dispatched from findings that were not verified.');
+  for (const forbidden of ['CHECK_FINDINGS', 'outputs.findings ', 'outputs.findings}']) forbidText(architecture, forbidden, 'agent-architecture.yml findings transport');
+}
+
+/**
+ * The live hand-off check exercises both transports on real runners with a fixture only: read-only
  * permissions, no repository secret, no model, and the same pinned upload action and retention.
  */
 function verifyReviewTransportCheck(check) {
@@ -967,11 +1033,18 @@ function verifyReviewTransportCheck(check) {
     '      - .github/workflows/agent-review.yml\n',
     'node scripts/agent-review-transport.mjs package',
     'node scripts/agent-review-transport.mjs fetch',
+    '      - .github/workflows/agent-architecture.yml\n',
+    'node scripts/agent-review-transport.mjs package-findings',
+    'node scripts/agent-review-transport.mjs fetch-findings',
     'uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2',
     'retention-days: 1',
     'persist-credentials: false',
   ]) requireText(check, required, source);
   for (const forbidden of ['secrets.', ': write', 'pull_request_target', 'claude-code-action', 'copilot -', 'gh pr ', 'gh workflow']) forbidText(check, forbidden, source);
+  // Every fixture artifact it uploads expires after one day.
+  for (const [, days] of check.matchAll(/retention-days: (\S+)/g)) {
+    if (days !== '1') throw new Error(`${source}: every uploaded artifact must use retention-days: 1, not ${days}`);
+  }
 }
 
 /** Enforces the review judgment, guarded publication and updated-head scheduling contract. */
@@ -1340,7 +1413,7 @@ function verifyArchitectureClaudeCheck(architectureWorkflow) {
   for (const required of [
     'This is a same-provider check, not an independent one', 'claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}',
     '[ -z "$(git status --porcelain)" ]', '[ "$(git rev-parse HEAD)" = "$HEAD_SHA" ]', '[ "$checked_sha" = "$HEAD_SHA" ]',
-    'verdict: ${{ steps.check.outputs.verdict }}', 'findings: ${{ steps.check.outputs.findings }}',
+    'verdict: ${{ steps.check.outputs.verdict }}',
   ]) requireText(claudeCheck, required, source);
 }
 
@@ -1367,7 +1440,7 @@ function verifyArchitectureFixJob(architectureWorkflow) {
     "if: ${{ !cancelled() && needs.context.result == 'success' && ((needs.context.outputs.checker == 'copilot' && needs.copilot-check.result == 'success') || (needs.context.outputs.checker == 'claude' && needs.claude-check.result == 'success')) && ((needs.context.outputs.checker == 'copilot' && needs.copilot-check.outputs.verdict == 'findings') || (needs.context.outputs.checker == 'claude' && needs.claude-check.outputs.verdict == 'findings') || fromJSON(needs.sonar.outputs.count || '0') > 0) }}",
     'agent-architecture.yml architecture job',
   );
-  requireText(architectureJob, "CHECK_FINDINGS: ${{ needs.context.outputs.checker == 'claude' && needs.claude-check.outputs.findings || needs.copilot-check.outputs.findings }}", 'agent-architecture.yml architecture job');
+  requireText(architectureJob, 'node "$transport" fetch-findings .git/architecture-findings.md', 'agent-architecture.yml architecture job');
   requireText(architectureJob, '> .git/architecture-findings.md', 'agent-architecture.yml architecture job');
   requireText(architectureJob, 'SONAR_ISSUES: ${{ needs.sonar.outputs.issues }}', 'agent-architecture.yml architecture job');
   requireText(architectureJob, '> .git/sonar-new-issues.md', 'agent-architecture.yml architecture job');
@@ -1380,6 +1453,7 @@ function verifyArchitectureFixJob(architectureWorkflow) {
   requireText(architectureJob, '      pull-requests: write', 'agent-architecture.yml architecture permissions');
   requireText(architectureJob, '      issues: read', 'agent-architecture.yml architecture permissions');
   forbidText(architectureJob, 'actions: write', 'agent-architecture.yml architecture permissions');
+  requireText(architectureJob, '      actions: read\n', 'agent-architecture.yml architecture permissions');
   requireText(architectureJob, 'ref: ${{ needs.context.outputs.head_sha }}', 'agent-architecture.yml exact checkout');
   requireText(architectureJob, 'persist-credentials: false', 'agent-architecture.yml exact checkout');
   requireText(architectureJob, 'git checkout -b "$BRANCH" "$HEAD_SHA"', 'agent-architecture.yml local feature branch');
@@ -1635,6 +1709,7 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
   }
 
   verifyArchitecturePass(read(implementPath), read(architecturePath));
+  verifyArchitectureTransport(read(architecturePath));
 
   // Defence in depth: no agent workflow may resolve a pull request author through the
   // GraphQL actor login anywhere, including in a guard added after this contract was written.

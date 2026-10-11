@@ -1,6 +1,7 @@
 name: Agent review transport check
 
-# Live GitHub Actions check of the review-result hand-off used by agent-review.yml (PR #558).
+# Live GitHub Actions check of the artifact hand-offs used by agent-review.yml (review result, PR #558)
+# and agent-architecture.yml (architecture findings).
 #
 # GitHub withholds a job output that contains any masked value ("Skip output ... since it may contain
 # secret"). That once lost a finished review on its way to the publisher. agent-review.yml now passes
@@ -15,6 +16,7 @@ name: Agent review transport check
 #   each reviewer job passes the credentials it holds. It must be gone from the stored artifact, which
 #   is the security guarantee (exact-value redaction catches what no pattern recognises);
 # - a fake `ghs_` token: it must be removed by the known-format redaction.
+# The same three values also travel as fixture architecture findings (package-findings / fetch-findings).
 # No repository secret, no model and no write permission is involved; every value is generated here.
 
 on:
@@ -25,6 +27,7 @@ on:
     paths:
       - scripts/agent-review-transport.mjs
       - .github/workflows/agent-review.yml
+      - .github/workflows/agent-architecture.yml
       - .github/workflows/agent-review-transport-check.yml
   workflow_dispatch:
 
@@ -44,6 +47,8 @@ jobs:
     outputs:
       artifact_id: ${{ steps.upload.outputs.artifact-id }}
       artifact_digest: ${{ steps.package.outputs.digest }}
+      findings_artifact_id: ${{ steps.upload_findings.outputs.artifact-id }}
+      findings_digest: ${{ steps.package_findings.outputs.digest }}
       # The original transport, kept only to show GitHub withholding it: never read by a publisher.
       withheld_review: ${{ steps.fixture.outputs.review }}
     env:
@@ -52,6 +57,7 @@ jobs:
       AGENT_MODE: cross-claude
       IMPLEMENTER: claude
       REVIEWER: copilot
+      CHECKER: copilot
 
     steps:
       - name: Check out
@@ -79,6 +85,7 @@ jobs:
             validation_evidence: "The log printed GH_TOKEN=\($token) by mistake.",
             inline_comments: []
           }' > "$RUNNER_TEMP/review-raw.json"
+          printf '%s\n' "- Fixture finding that quotes $marker." "- The run printed the provider credential $held." "- The log printed GH_TOKEN=$fake_token by mistake." "ARCHITECTURE: FINDINGS" > "$RUNNER_TEMP/architecture-raw.md"
           echo "$marker" > "$RUNNER_TEMP/marker-value"
           echo "$held" > "$RUNNER_TEMP/held-value"
           echo "review=$(jq -c . "$RUNNER_TEMP/review-raw.json")" >> "$GITHUB_OUTPUT"
@@ -111,6 +118,34 @@ jobs:
           retention-days: 1
           overwrite: true
 
+      - name: Package architecture findings
+        id: package_findings
+        env:
+          CHECK_VERDICT: findings
+        run: |
+          set -euo pipefail
+          result_dir="$RUNNER_TEMP/agent-architecture-findings"
+          mkdir -p "$result_dir"
+          held="$(cat "$RUNNER_TEMP/held-value")"
+          summary="$(REVIEW_REDACT_FIXTURE_CREDENTIAL="$held" node scripts/agent-review-transport.mjs package-findings "$RUNNER_TEMP/architecture-raw.md" "$result_dir/findings-envelope.json")"
+          echo "Packaged architecture findings: $summary"
+          [ "$(jq -r '.redactions' <<<"$summary")" = "2" ] || { echo "::error::Unexpected findings redaction count before upload."; exit 1; }
+          if grep -qF "$held" "$result_dir/findings-envelope.json"; then echo "::error::The stored findings keep the held credential."; exit 1; fi
+          if grep -q 'ghs_' "$result_dir/findings-envelope.json"; then echo "::error::The stored findings keep the fake token."; exit 1; fi
+          grep -qF "$(cat "$RUNNER_TEMP/marker-value")" "$result_dir/findings-envelope.json" || { echo "::error::The transport marker did not reach the findings artifact."; exit 1; }
+          echo "name=$(jq -r '.name' <<<"$summary")" >> "$GITHUB_OUTPUT"
+          echo "digest=$(jq -r '.digest' <<<"$summary")" >> "$GITHUB_OUTPUT"
+
+      - name: Upload architecture findings
+        id: upload_findings
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.package_findings.outputs.name }}
+          path: ${{ runner.temp }}/agent-architecture-findings/findings-envelope.json
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
   verify:
     name: Fetch and verify the review artifact
     needs: package
@@ -125,6 +160,7 @@ jobs:
       AGENT_MODE: cross-claude
       IMPLEMENTER: claude
       REVIEWER: copilot
+      CHECKER: copilot
 
     steps:
       - name: Check out
@@ -170,3 +206,23 @@ jobs:
             echo "::error::A wrong digest was accepted."; exit 1
           fi
           grep -q '^mismatch: The review artifact digest does not match' "$RUNNER_TEMP/err.txt" || { echo "::error::Unexpected refusal reason."; exit 1; }
+
+      - name: Fetch and verify architecture findings
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHECK_VERDICT: findings
+          FINDINGS_ARTIFACT_ID: ${{ needs.package.outputs.findings_artifact_id }}
+          FINDINGS_ARTIFACT_DIGEST: ${{ needs.package.outputs.findings_digest }}
+        run: |
+          set -euo pipefail
+          summary="$(node scripts/agent-review-transport.mjs fetch-findings "$RUNNER_TEMP/findings.md")"
+          [ "$(jq -r '.redactions' <<<"$summary")" = "2" ] || { echo "::error::Unexpected findings redaction count."; exit 1; }
+          [ "$(jq -r '.verdict' <<<"$summary")" = "findings" ] || { echo "::error::The findings verdict did not arrive intact."; exit 1; }
+          grep -qx -- '- The run printed the provider credential \[REDACTED\].' "$RUNNER_TEMP/findings.md" || { echo "::error::The held credential was not redacted from the findings."; exit 1; }
+          grep -qx -- '- The log printed GH_TOKEN=\[REDACTED\] by mistake.' "$RUNNER_TEMP/findings.md" || { echo "::error::The fake token was not redacted from the findings."; exit 1; }
+          grep -Eqx -- '- Fixture finding that quotes transport-marker-[0-9a-f]{32}\.' "$RUNNER_TEMP/findings.md" || { echo "::error::The findings carrying the transport marker were lost."; exit 1; }
+          # A verdict that differs from the checker job output is refused.
+          if CHECK_VERDICT=clean node scripts/agent-review-transport.mjs fetch-findings "$RUNNER_TEMP/mismatch.md" 2>"$RUNNER_TEMP/err.txt"; then
+            echo "::error::A findings artifact with a different verdict was accepted."; exit 1
+          fi
+          grep -q '^mismatch: The architecture findings artifact verdict does not match' "$RUNNER_TEMP/err.txt" || { echo "::error::Unexpected refusal reason."; exit 1; }

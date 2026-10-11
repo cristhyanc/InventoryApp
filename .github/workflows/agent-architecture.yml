@@ -10,6 +10,11 @@ name: Agent architecture
 #   check (claude-check) and is labelled a same-provider check, not an independent one. No Copilot
 #   invocation or Copilot secret is used.
 # Neither checker can edit, commit or push, and each job fails if the tree changes.
+# The checker's findings are model text, so they never travel as a job output (GitHub withholds an
+# output that contains a masked value, PR #558). The checker job redacts and packages them with the
+# trusted scripts/agent-review-transport.mjs and uploads a one-day artifact of this run; only the
+# verdict (an enum), the artifact id and the envelope digest are job outputs. The fix and finalize jobs
+# fetch and re-verify that artifact by id and digest.
 # In parallel a deterministic job reads the open SonarCloud issues reported on the exact head SHA.
 # Only when the checker reports findings or SonarCloud reports open issues does Claude, the implementer,
 # make narrowly scoped fixes on the existing feature branch; a deterministic step publishes them with
@@ -137,7 +142,8 @@ jobs:
       contents: read
     outputs:
       verdict: ${{ steps.check.outputs.verdict }}
-      findings: ${{ steps.check.outputs.findings }}
+      findings_artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      findings_digest: ${{ steps.package.outputs.digest }}
 
     steps:
       - name: Check out exact implementation head
@@ -207,15 +213,46 @@ jobs:
             *) fail "The Copilot architecture check did not end with an ARCHITECTURE: CLEAN or ARCHITECTURE: FINDINGS line." ;;
           esac
 
-          delimiter="COPILOT_FINDINGS_$(openssl rand -hex 16)"
-          {
-            echo "verdict=$verdict"
-            echo "findings<<$delimiter"
-            head -c 60000 "$out"
-            echo
-            echo "$delimiter"
-          } >> "$GITHUB_OUTPUT"
+          mv "$out" "$RUNNER_TEMP/architecture-raw.md"
+          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
           echo "::notice::Copilot architecture verdict: $verdict"
+
+      - name: Package architecture findings
+        id: package
+        env:
+          TRUSTED_SHA: ${{ github.sha }}
+          CHECK_VERDICT: ${{ steps.check.outputs.verdict }}
+          # The credential this job gives the model, removed from the findings by exact value before
+          # anything is stored. It is only compared against, never printed.
+          REVIEW_REDACT_PROVIDER_TOKEN: ${{ secrets.COPILOT_CLI_TOKEN }}
+          PR_NUMBER: ${{ needs.context.outputs.pr_number }}
+          HEAD_SHA: ${{ needs.context.outputs.head_sha }}
+          AGENT_MODE: ${{ needs.context.outputs.agent_mode }}
+          IMPLEMENTER: claude
+          CHECKER: copilot
+        run: |
+          set -euo pipefail
+          # The transport script comes from the trusted workflow commit, never from the checked-out pull
+          # request head; the full-history checkout already holds that commit, so no token is needed.
+          transport="$RUNNER_TEMP/agent-review-transport.mjs"
+          git show "$TRUSTED_SHA:scripts/agent-review-transport.mjs" > "$transport"
+          result_dir="$RUNNER_TEMP/agent-architecture-findings"
+          mkdir -p "$result_dir"
+          summary="$(node "$transport" package-findings "$RUNNER_TEMP/architecture-raw.md" "$result_dir/findings-envelope.json")"
+          rm -f "$RUNNER_TEMP/architecture-raw.md"
+          echo "Packaged architecture findings: $summary"
+          echo "name=$(jq -r '.name' <<<"$summary")" >> "$GITHUB_OUTPUT"
+          echo "digest=$(jq -r '.digest' <<<"$summary")" >> "$GITHUB_OUTPUT"
+
+      - name: Upload architecture findings
+        id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: ${{ runner.temp }}/agent-architecture-findings/findings-envelope.json
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
 
   claude-check:
     name: Same-provider Claude architecture check (read-only)
@@ -233,7 +270,8 @@ jobs:
       issues: read
     outputs:
       verdict: ${{ steps.check.outputs.verdict }}
-      findings: ${{ steps.check.outputs.findings }}
+      findings_artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      findings_digest: ${{ steps.package.outputs.digest }}
 
     steps:
       - name: Check out exact implementation head
@@ -298,16 +336,47 @@ jobs:
             *) fail "Unknown Claude architecture verdict." ;;
           esac
 
-          jq -r '.findings | map("- `\(.path):\(.line)` (\(.rule)): \(.problem)\n  Fix: \(.fix)") | join("\n")' "$work/check.json" > "$work/findings.md"
-          delimiter="CLAUDE_FINDINGS_$(openssl rand -hex 16)"
-          {
-            echo "verdict=$verdict"
-            echo "findings<<$delimiter"
-            head -c 60000 "$work/findings.md"
-            echo
-            echo "$delimiter"
-          } >> "$GITHUB_OUTPUT"
+          jq -r '.findings | map("- `\(.path):\(.line)` (\(.rule)): \(.problem)\n  Fix: \(.fix)") | join("\n")' "$work/check.json" > "$RUNNER_TEMP/architecture-raw.md"
+          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
           echo "::notice::Same-provider Claude architecture verdict: $verdict"
+
+      - name: Package architecture findings
+        id: package
+        env:
+          TRUSTED_SHA: ${{ github.sha }}
+          CHECK_VERDICT: ${{ steps.check.outputs.verdict }}
+          # The credentials this job holds, removed from the findings by exact value before anything is
+          # stored. They are only compared against, never printed.
+          REVIEW_REDACT_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REVIEW_REDACT_PROVIDER_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          PR_NUMBER: ${{ needs.context.outputs.pr_number }}
+          HEAD_SHA: ${{ needs.context.outputs.head_sha }}
+          AGENT_MODE: ${{ needs.context.outputs.agent_mode }}
+          IMPLEMENTER: claude
+          CHECKER: claude
+        run: |
+          set -euo pipefail
+          # The transport script comes from the trusted workflow commit, never from the checked-out pull
+          # request head; the full-history checkout already holds that commit, so no token is needed.
+          transport="$RUNNER_TEMP/agent-review-transport.mjs"
+          git show "$TRUSTED_SHA:scripts/agent-review-transport.mjs" > "$transport"
+          result_dir="$RUNNER_TEMP/agent-architecture-findings"
+          mkdir -p "$result_dir"
+          summary="$(node "$transport" package-findings "$RUNNER_TEMP/architecture-raw.md" "$result_dir/findings-envelope.json")"
+          rm -f "$RUNNER_TEMP/architecture-raw.md"
+          echo "Packaged architecture findings: $summary"
+          echo "name=$(jq -r '.name' <<<"$summary")" >> "$GITHUB_OUTPUT"
+          echo "digest=$(jq -r '.digest' <<<"$summary")" >> "$GITHUB_OUTPUT"
+
+      - name: Upload architecture findings
+        id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: ${{ runner.temp }}/agent-architecture-findings/findings-envelope.json
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
 
   sonar:
     name: Read SonarCloud issues on the implementation head
@@ -359,6 +428,8 @@ jobs:
       contents: read
       pull-requests: write
       issues: read
+      # Read-only: lets the trusted step below fetch this run's architecture findings artifact.
+      actions: read
     outputs:
       head_sha: ${{ steps.architecture_result.outputs.head_sha }}
 
@@ -382,17 +453,29 @@ jobs:
       - name: Store architecture findings and SonarCloud issues for the fix agent
         # The checker's findings and SonarCloud's issue text are model or external text, so they reach
         # Claude as files, never through an expression interpolated into the prompt. The files live
-        # under .git so they cannot be committed.
+        # under .git so they cannot be committed. The findings arrive as this run's artifact, fetched
+        # and re-verified by id and digest with the transport script from the trusted workflow commit.
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TRUSTED_SHA: ${{ github.sha }}
           CHECK_VERDICT: ${{ needs.context.outputs.checker == 'claude' && needs.claude-check.outputs.verdict || needs.copilot-check.outputs.verdict }}
-          CHECK_FINDINGS: ${{ needs.context.outputs.checker == 'claude' && needs.claude-check.outputs.findings || needs.copilot-check.outputs.findings }}
+          FINDINGS_ARTIFACT_ID: ${{ needs.context.outputs.checker == 'claude' && needs.claude-check.outputs.findings_artifact_id || needs.copilot-check.outputs.findings_artifact_id }}
+          FINDINGS_ARTIFACT_DIGEST: ${{ needs.context.outputs.checker == 'claude' && needs.claude-check.outputs.findings_digest || needs.copilot-check.outputs.findings_digest }}
+          PR_NUMBER: ${{ needs.context.outputs.pr_number }}
+          HEAD_SHA: ${{ needs.context.outputs.head_sha }}
+          AGENT_MODE: ${{ needs.context.outputs.agent_mode }}
+          IMPLEMENTER: claude
+          CHECKER: ${{ needs.context.outputs.checker }}
           SONAR_COUNT: ${{ needs.sonar.outputs.count }}
           SONAR_ISSUES: ${{ needs.sonar.outputs.issues }}
         run: |
           set -euo pipefail
           if [ "$CHECK_VERDICT" = "findings" ]; then
-            [ -n "$CHECK_FINDINGS" ] || { echo "::error::The architecture check reported findings but the findings text is empty"; exit 1; }
-            printf '%s\n' "$CHECK_FINDINGS" > .git/architecture-findings.md
+            transport="$RUNNER_TEMP/agent-review-transport.mjs"
+            git show "$TRUSTED_SHA:scripts/agent-review-transport.mjs" > "$transport"
+            summary="$(node "$transport" fetch-findings .git/architecture-findings.md)" \
+              || { echo "::error::The architecture findings could not be delivered to the fix agent"; exit 1; }
+            echo "Received architecture findings: $summary"
           else
             printf '%s\n' "The architecture check reported a clean architecture; there are no architecture findings to fix." > .git/architecture-findings.md
           fi
@@ -542,7 +625,11 @@ jobs:
           CHECKER: ${{ needs.context.outputs.checker }}
           CHECK_JOB_RESULT: ${{ needs.context.outputs.checker == 'claude' && needs.claude-check.result || needs.copilot-check.result }}
           CHECK_VERDICT: ${{ needs.context.outputs.checker == 'claude' && needs.claude-check.outputs.verdict || needs.copilot-check.outputs.verdict }}
-          CHECK_FINDINGS: ${{ needs.context.outputs.checker == 'claude' && needs.claude-check.outputs.findings || needs.copilot-check.outputs.findings }}
+          FINDINGS_ARTIFACT_ID: ${{ needs.context.outputs.checker == 'claude' && needs.claude-check.outputs.findings_artifact_id || needs.copilot-check.outputs.findings_artifact_id }}
+          FINDINGS_ARTIFACT_DIGEST: ${{ needs.context.outputs.checker == 'claude' && needs.claude-check.outputs.findings_digest || needs.copilot-check.outputs.findings_digest }}
+          AGENT_MODE: ${{ needs.context.outputs.agent_mode }}
+          HEAD_SHA: ${{ needs.context.outputs.head_sha }}
+          IMPLEMENTER: claude
           ARCHITECTURE_JOB_RESULT: ${{ needs.architecture.result }}
           SONAR_STATUS: ${{ needs.sonar.outputs.status }}
           SONAR_COUNT: ${{ needs.sonar.outputs.count }}
@@ -626,6 +713,15 @@ jobs:
           [ "$(jq -r '.state' <<<"$issue_json")" = "OPEN" ] || fail "Issue #$ISSUE_NUMBER is not open."
           jq -e 'any(.labels[]?; .name == "agent-working")' <<<"$issue_json" >/dev/null || fail "Issue #$ISSUE_NUMBER is not in agent-working state."
 
+          # Fetch the checker's findings from this run's artifact, verified by id, digest and binding with
+          # the transport script from the trusted workflow commit. A missing or invalid artifact blocks
+          # the task: nothing is recorded or dispatched from findings that cannot be verified.
+          transport="$RUNNER_TEMP/agent-review-transport.mjs"
+          gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/scripts/agent-review-transport.mjs?ref=$GITHUB_WORKFLOW_SHA" > "$transport"
+          check_findings_file="$RUNNER_TEMP/architecture-findings.md"
+          node "$transport" fetch-findings "$check_findings_file" >/dev/null \
+            || fail "The $checker_label architecture findings could not be delivered: their artifact is missing or failed verification."
+
           # Record the checker's read-only findings on the pull request for traceability.
           findings_file="$(mktemp)"
           {
@@ -639,7 +735,7 @@ jobs:
             echo
             echo "<details><summary>$checker_label findings</summary>"
             echo
-            printf '%s\n' "$CHECK_FINDINGS"
+            cat "$check_findings_file"
             echo
             echo '</details>'
             echo
