@@ -54,6 +54,11 @@ public static class ApplicationServiceCollectionExtensions
         // reason, and so a role change applies on the next request rather than being cached.
         services.AddScoped<GetCurrentAccess>();
 
+        // The signed-in person's own account state (issue #523). Scoped like the rest of tenancy:
+        // the answer belongs to one caller's identity, and a revoked or granted membership must
+        // show up on their next request rather than be cached.
+        services.AddScoped<GetAccountState>();
+
         // The shared write path every membership change runs through (issue #522). Scoped, because
         // the transaction it opens is the request's own AppDbContext transaction, which the
         // operation's write has to save inside.
