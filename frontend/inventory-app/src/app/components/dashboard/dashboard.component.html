@@ -226,13 +226,17 @@
                 <th scope="col" class="table-cell table-num">Last Week</th>
                 <th scope="col" class="table-cell table-num">vs Last Week</th>
                 <th scope="col" class="table-cell table-num">Month to Date</th>
-                <th scope="col" class="table-cell"></th>
               </tr>
             </thead>
             <tbody>
               @for (machine of machines; track machine.machineID) {
-                <tr class="table-row">
-                  <td class="table-cell">{{ machine.machineName || 'Unnamed machine' }}</td>
+                <tr class="table-row table-row-link" (click)="followMachineRowLink($event)" (keydown.enter)="followMachineRowLink($event)">
+                  <td class="table-cell">
+                    <a
+                      class="table-row-anchor"
+                      [routerLink]="['/machines', machine.machineID]"
+                      [attr.aria-label]="'View details for ' + (machine.machineName || 'Unnamed machine')">{{ machine.machineName || 'Unnamed machine' }}</a>
+                  </td>
                   <td class="table-cell table-num">
                     <div>${{ machine.todayGrossRevenue.toFixed(2) }} sales</div>
                     <div class="text-xs value-muted">{{ machine.todayDirectProfit == null ? 'Profit unavailable' : ('$' + machine.todayDirectProfit.toFixed(2) + ' direct profit · ' + directMargin(machine.todayDirectProfit, machine.todayGrossRevenue).toFixed(1) + '% direct margin') }}</div>
@@ -252,7 +256,6 @@
                     <div>${{ machine.monthToDateGrossRevenue.toFixed(2) }} sales</div>
                     <div class="text-xs value-muted">{{ machine.monthToDateDirectProfit == null ? 'Profit unavailable' : ('$' + machine.monthToDateDirectProfit.toFixed(2) + ' direct profit · ' + directMargin(machine.monthToDateDirectProfit, machine.monthToDateGrossRevenue).toFixed(1) + '% direct margin') }}</div>
                   </td>
-                  <td class="table-cell table-num"><a [routerLink]="['/machines', machine.machineID]" class="btn btn-sm btn-primary">Details</a></td>
                 </tr>
               }
             </tbody>
@@ -278,7 +281,6 @@
                   <div>${{ totalMonthToDateSales.toFixed(2) }} sales</div>
                   <div class="text-xs value-muted">{{ isMonthToDateProfitComplete ? ('$' + totalMonthToDateDirectProfit.toFixed(2) + ' direct profit · ' + directMargin(totalMonthToDateDirectProfit, totalMonthToDateSales).toFixed(1) + '% direct margin') : 'Profit unavailable' }}</div>
                 </td>
-                <td class="table-cell"></td>
               </tr>
             </tfoot>
           </table>

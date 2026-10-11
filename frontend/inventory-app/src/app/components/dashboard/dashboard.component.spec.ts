@@ -1,5 +1,5 @@
 import { TestBed } from '@angular/core/testing';
-import { provideRouter } from '@angular/router';
+import { provideRouter, Router } from '@angular/router';
 import { Observable, of, throwError } from 'rxjs';
 import { DashboardComponent } from './dashboard.component';
 import { DashboardSummary, Machine, Product, Site } from '../../models/models';
@@ -303,26 +303,38 @@ describe('DashboardComponent reorder alerts - stock after machine need', () => {
   });
 });
 
+async function renderDashboard(
+  overrides: { products?: Product[]; machines?: Machine[]; summary$?: Observable<DashboardSummary> } = {}
+): Promise<HTMLElement> {
+  await TestBed.configureTestingModule({
+    imports: [DashboardComponent],
+    providers: [
+      provideRouter([]),
+      { provide: ProductService, useValue: { getLowStock: () => of(overrides.products ?? []) } },
+      { provide: MachineService, useValue: { getAll: () => of(overrides.machines ?? []) } },
+      { provide: SiteService, useValue: { getAll: () => of([]) } },
+      { provide: NayaxSalesSyncService, useValue: { syncLatest: () => of(undefined) } },
+      { provide: DashboardService, useValue: { getSummary: () => overrides.summary$ ?? of(SUMMARY) } }
+    ]
+  }).compileComponents();
+
+  const fixture = TestBed.createComponent(DashboardComponent);
+  fixture.detectChanges();
+  return fixture.nativeElement as HTMLElement;
+}
+
+/** `routerLink` navigates through `navigateByUrl`, so that is where a followed link shows up. */
+function spyOnNavigateByUrl() {
+  return jest.spyOn(TestBed.inject(Router), 'navigateByUrl').mockResolvedValue(true);
+}
+
+function navigatedUrls(spy: ReturnType<typeof spyOnNavigateByUrl>): string[] {
+  const router = TestBed.inject(Router);
+  return spy.mock.calls.map(([url]) => (typeof url === 'string' ? url : router.serializeUrl(url)));
+}
+
 describe('DashboardComponent template rendering', () => {
   afterEach(() => TestBed.resetTestingModule());
-
-  async function renderDashboard(overrides: { products?: Product[]; summary$?: Observable<DashboardSummary> } = {}): Promise<HTMLElement> {
-    await TestBed.configureTestingModule({
-      imports: [DashboardComponent],
-      providers: [
-        provideRouter([]),
-        { provide: ProductService, useValue: { getLowStock: () => of(overrides.products ?? []) } },
-        { provide: MachineService, useValue: { getAll: () => of([]) } },
-        { provide: SiteService, useValue: { getAll: () => of([]) } },
-        { provide: NayaxSalesSyncService, useValue: { syncLatest: () => of(undefined) } },
-        { provide: DashboardService, useValue: { getSummary: () => overrides.summary$ ?? of(SUMMARY) } }
-      ]
-    }).compileComponents();
-
-    const fixture = TestBed.createComponent(DashboardComponent);
-    fixture.detectChanges();
-    return fixture.nativeElement as HTMLElement;
-  }
 
   it('no longer shows the Adjust Stock action', async () => {
     const host = await renderDashboard({ products: [product()] });
@@ -403,6 +415,79 @@ describe('DashboardComponent template rendering', () => {
     expect(values).toEqual(['Unavailable', 'Unavailable', 'Unavailable', 'Unavailable']);
     expect(host.textContent).toContain('The Dashboard summary could not be loaded');
   });
+});
+
+describe('DashboardComponent Machines row navigation', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  function machinesTable(host: HTMLElement): HTMLElement {
+    const section = Array.from(host.querySelectorAll('section.card')).find((el) => el.textContent?.includes('Machines'));
+    return section!.querySelector('table') as HTMLElement;
+  }
+
+  it('renders the machine name as a native link to the existing machine details route, and no Details button', async () => {
+    const host = await renderDashboard({ machines: [MACHINE] });
+
+    const table = machinesTable(host);
+    const link = table.querySelector('tbody tr td a') as HTMLAnchorElement;
+
+    expect(link).not.toBeNull();
+    expect(link.getAttribute('href')).toBe('/machines/1');
+    expect(link.textContent?.trim()).toBe('Machine A');
+    expect(link.getAttribute('aria-label')).toBe('View details for Machine A');
+    expect(table.querySelector('.btn')).toBeNull();
+  });
+
+  it('leaves the row itself without an emulated link role', async () => {
+    const host = await renderDashboard({ machines: [MACHINE] });
+
+    const row = machinesTable(host).querySelector('tbody tr') as HTMLElement;
+    expect(row.getAttribute('role')).toBeNull();
+    expect(row.getAttribute('tabindex')).toBeNull();
+    expect(row.classList.contains('table-row-link')).toBe(true);
+  });
+
+  it('follows the row link when the row itself is clicked', async () => {
+    const host = await renderDashboard({ machines: [MACHINE] });
+    const navigateByUrl = spyOnNavigateByUrl();
+
+    const row = machinesTable(host).querySelector('tbody tr') as HTMLElement;
+    row.click();
+
+    expect(navigatedUrls(navigateByUrl)).toEqual(['/machines/1']);
+  });
+
+  it('navigates once, through the link, when the link itself is clicked', async () => {
+    const host = await renderDashboard({ machines: [MACHINE] });
+    const navigateByUrl = spyOnNavigateByUrl();
+
+    const link = machinesTable(host).querySelector('tbody tr td a') as HTMLAnchorElement;
+    link.click();
+
+    expect(navigatedUrls(navigateByUrl)).toEqual(['/machines/1']);
+  });
+
+  it('leaves a ctrl-click on the row to the browser so the link can open in a new tab', async () => {
+    const host = await renderDashboard({ machines: [MACHINE] });
+    const navigateByUrl = spyOnNavigateByUrl();
+
+    const row = machinesTable(host).querySelector('tbody tr') as HTMLElement;
+    row.dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true }));
+
+    expect(navigateByUrl).not.toHaveBeenCalled();
+  });
+
+  it('navigates once when Enter is pressed on the focused link', async () => {
+    const host = await renderDashboard({ machines: [MACHINE] });
+    const navigateByUrl = spyOnNavigateByUrl();
+
+    const link = machinesTable(host).querySelector('tbody tr td a') as HTMLAnchorElement;
+    link.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    link.click(); // the browser's own activation of a focused anchor on Enter
+
+    expect(navigatedUrls(navigateByUrl)).toEqual(['/machines/1']);
+  });
+
 });
 
 describe('DashboardComponent coordinated sales refresh', () => {
