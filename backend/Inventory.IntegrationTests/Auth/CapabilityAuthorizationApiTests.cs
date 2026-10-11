@@ -22,7 +22,7 @@ using Xunit;
 namespace InventoryApi.Tests.Auth;
 
 /// <summary>
-/// The capability policies of issue #525, exercised through the real request pipeline:
+/// The capability policies of issues #525 and #526, exercised through the real request pipeline:
 /// authentication, the required scope, the authorization middleware's capability policy,
 /// <c>BusinessScopeMiddleware</c>, the controller and relational SQLite with the real migration
 /// history.
@@ -32,6 +32,12 @@ namespace InventoryApi.Tests.Auth;
 /// written out literally, from the agreed table of issue #328, rather than read back from
 /// <c>RoleCapabilities</c>: a test that asked the capability table what it allows would pass
 /// whatever that table happened to say.</para>
+///
+/// <para>A second business with its own Owner is seeded alongside the first, so the matrix is not
+/// the only question asked: a capability is what a member may do, and the business boundary is
+/// whose data they may do it to. The two are independent, which
+/// <see cref="An_owner_cannot_reach_another_businesss_data_through_a_capability_they_hold"/> is
+/// what proves - the Owner of A holds every capability and still reaches none of B's rows.</para>
 ///
 /// <para>"Allowed" is asserted as "not <c>403</c>" rather than as a specific success status. What
 /// these rows are about is the access decision; what each endpoint then answers for an empty
@@ -48,8 +54,13 @@ public sealed class CapabilityAuthorizationApiTests : IClassFixture<CapabilityAu
     public CapabilityAuthorizationApiTests(ApiFactory factory) => _factory = factory;
 
     /// <summary>
-    /// Every endpoint this slice puts behind a capability, with the roles the agreed table says may
-    /// call it. Reading down the last column is the role matrix a human reviews.
+    /// Every endpoint these slices put behind a capability, with the roles the agreed table says
+    /// may call it. Reading down the last column is the role matrix a human reviews.
+    ///
+    /// <para>Where a capability has both a read and a write, the row is the read or a write that
+    /// changes nothing - a preview, a dry run, or a delete of an id that does not exist. The
+    /// question here is who is refused, and a row that also wrote a record would be arranging state
+    /// for whichever test in this class happened to run next.</para>
     /// </summary>
     public static TheoryData<string, string, string, string> CapabilityEndpoints => new()
     {
@@ -69,6 +80,31 @@ public sealed class CapabilityAuthorizationApiTests : IClassFixture<CapabilityAu
         { "Purchasing.Operate", "GET", "/api/supplierorders", "Operator,Manager,Owner" },
         { "Purchasing.Operate", "POST", "/api/supplierorders", "Operator,Manager,Owner" },
         { "Suppliers.ManageGstDefaults", "PUT", "/api/suppliers/1/gst-defaults", "Manager,Owner" },
+
+        // Issue #526: the Manager-only surfaces.
+        { "Expenses.Manage", "GET", "/api/operating-expenses", "Manager,Owner" },
+        { "Expenses.Manage", "GET", "/api/operating-expenses/1", "Manager,Owner" },
+        { "Expenses.Manage", "DELETE", "/api/operating-expenses/1", "Manager,Owner" },
+        { "Reports.View", "GET", "/api/reports/daily", "Manager,Owner" },
+        { "Reports.View", "GET", "/api/reports/gst", "Manager,Owner" },
+        { "Imports.Run", "POST", "/api/imports/products", "Manager,Owner" },
+        { "Imports.Run", "POST", "/api/imports/nayax-sales", "Manager,Owner" },
+        { "SiteCommissions.Manage", "GET", "/api/site-commissions", "Manager,Owner" },
+        { "SiteCommissions.Manage", "GET", "/api/site-commissions/agreements", "Manager,Owner" },
+
+        // Issue #526: the Owner-only surfaces.
+        { "Integration.Manage", "GET", "/api/settings/nayax-processing-fee-rates", "Owner" },
+        { "Integration.Manage", "GET", "/api/data-quality/nayax-catalog-reconciliation", "Owner" },
+        { "Data.Repair", "GET", "/api/admin/inventory-cost-repair/1", "Owner" },
+        { "Data.Repair", "POST", "/api/admin/inventory-cost-repair/preview", "Owner" },
+        { "Data.Repair", "POST", "/api/admin/inventory-cost-transition/preview", "Owner" },
+        { "Data.Repair", "POST", "/api/admin/historical-gst-classification/preview", "Owner" },
+        { "Data.Repair", "POST", "/api/admin/nayax-sale-timestamp-repair/preview", "Owner" },
+        { "Data.Repair", "POST", "/api/sale-costing/backfill", "Owner" },
+
+        // Issue #526: the home Dashboard calls this on load, so it follows the Dashboard's own
+        // capability and an Operator's dashboard keeps working.
+        { "Dashboard.View", "POST", "/api/nayax-sales-sync", "Operator,Manager,Owner" },
     };
 
     /// <summary>
@@ -228,6 +264,87 @@ public sealed class CapabilityAuthorizationApiTests : IClassFixture<CapabilityAu
         Assert.NotEqual(HttpStatusCode.Forbidden, asManager.StatusCode);
     }
 
+    #region A capability is not a key to another business
+
+    /// <summary>
+    /// Holding a capability says what a member may do, never whose data they may do it to. The
+    /// Owner of business A holds every capability there is, and still reaches none of business B's
+    /// rows: B's operating expense is absent from A's list and <c>404</c> by its own id, and B's
+    /// Nayax fee rate is absent from A's. Both endpoints are ones this slice has just opened to a
+    /// role for the first time, which is exactly when "may do it" is easiest to confuse with "may
+    /// do it anywhere".
+    /// </summary>
+    [Fact]
+    public async Task An_owner_cannot_reach_another_businesss_data_through_a_capability_they_hold()
+    {
+        await _factory.SeedAsync();
+        var ownerOfA = _factory.Authenticated(ApiFactory.OwnerObjectId);
+
+        var expenses = await ownerOfA.GetAsync("/api/operating-expenses");
+        var otherExpense = await ownerOfA.GetAsync($"/api/operating-expenses/{ApiFactory.OtherBusinessExpenseId}");
+        var feeRates = await ownerOfA.GetAsync("/api/settings/nayax-processing-fee-rates");
+
+        Assert.Equal(HttpStatusCode.OK, expenses.StatusCode);
+        Assert.Contains(ApiFactory.OwnExpenseDescription, await expenses.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            ApiFactory.OtherBusinessExpenseDescription,
+            await expenses.Content.ReadAsStringAsync(),
+            StringComparison.Ordinal);
+
+        Assert.Equal(HttpStatusCode.NotFound, otherExpense.StatusCode);
+
+        Assert.Equal(HttpStatusCode.OK, feeRates.StatusCode);
+        Assert.DoesNotContain(
+            ApiFactory.OtherBusinessFeeRate,
+            await feeRates.Content.ReadAsStringAsync(),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The other direction, so the row above cannot pass because the endpoints are broken for
+    /// everybody: business B's own Owner reads B's expense and B's fee rate perfectly well, by the
+    /// same ids A was refused.
+    /// </summary>
+    [Fact]
+    public async Task The_other_businesss_owner_reaches_their_own_data_by_the_same_ids()
+    {
+        await _factory.SeedAsync();
+        var ownerOfB = _factory.Authenticated(ApiFactory.OtherBusinessOwnerObjectId);
+
+        var ownExpense = await ownerOfB.GetAsync($"/api/operating-expenses/{ApiFactory.OtherBusinessExpenseId}");
+        var feeRates = await ownerOfB.GetAsync("/api/settings/nayax-processing-fee-rates");
+
+        Assert.Equal(HttpStatusCode.OK, ownExpense.StatusCode);
+        Assert.Contains(
+            ApiFactory.OtherBusinessExpenseDescription,
+            await ownExpense.Content.ReadAsStringAsync(),
+            StringComparison.Ordinal);
+
+        Assert.Equal(HttpStatusCode.OK, feeRates.StatusCode);
+        var body = await feeRates.Content.ReadAsStringAsync();
+        Assert.Contains(ApiFactory.OtherBusinessFeeRate, body, StringComparison.Ordinal);
+        Assert.DoesNotContain(ApiFactory.OwnFeeRate, body, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A member of A whose role does not grant the capability is refused before the business
+    /// boundary is ever reached, so the two checks are independent rather than one standing in for
+    /// the other: an Operator of A asking for B's expense gets the capability's bare <c>403</c>,
+    /// not the <c>404</c> the boundary would have given them.
+    /// </summary>
+    [Fact]
+    public async Task An_operator_is_refused_by_the_capability_before_the_business_boundary_answers()
+    {
+        await _factory.SeedAsync();
+
+        var response = await _factory.Authenticated(ApiFactory.OperatorObjectId)
+            .GetAsync($"/api/operating-expenses/{ApiFactory.OtherBusinessExpenseId}");
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    #endregion
+
     #region The order with BusinessScopeMiddleware
 
     /// <summary>
@@ -296,11 +413,30 @@ public sealed class CapabilityAuthorizationApiTests : IClassFixture<CapabilityAu
 
     #endregion
 
+    /// <summary>
+    /// The routes whose action declares <c>[Consumes("multipart/form-data")]</c> because it takes an
+    /// uploaded file. They need a multipart body here for a reason worth recording: a declared
+    /// content type is matched during <em>endpoint selection</em>, which happens before the
+    /// authorization middleware runs, so one of these routes answers <c>415</c> to a JSON body
+    /// whatever the caller's role is - including a role that holds the capability. The <c>415</c>
+    /// leaks nothing (it is decided from the request's own header, with no membership read), but a
+    /// matrix row sent as JSON would be asserting nothing about authorization at all.
+    /// </summary>
+    private static readonly string[] MultipartRoutes =
+    [
+        "/api/imports/nayax-sales",
+        "/api/admin/nayax-sale-timestamp-repair/preview",
+    ];
+
     private static HttpRequestMessage Request(string method, string route)
     {
         var request = new HttpRequestMessage(new HttpMethod(method), route);
 
-        if (method is "POST" or "PUT")
+        if (MultipartRoutes.Contains(route, StringComparer.Ordinal))
+        {
+            request.Content = new MultipartFormDataContent("boundary-" + Guid.NewGuid().ToString("N"));
+        }
+        else if (method is "POST" or "PUT")
         {
             request.Content = new StringContent("{}", Encoding.UTF8);
             request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
@@ -319,7 +455,26 @@ public sealed class CapabilityAuthorizationApiTests : IClassFixture<CapabilityAu
         public const string UndeclaredRoleObjectId = "66666666-6666-6666-6666-666666666666";
         public const string RoleChangeObjectId = "77777777-7777-7777-7777-777777777777";
 
+        /// <summary>The Owner of the second business, who is a member of no other business.</summary>
+        public const string OtherBusinessOwnerObjectId = "88888888-8888-8888-8888-888888888888";
+
+        /// <summary>Business B's own operating expense, by the id business A will ask for.</summary>
+        public const int OtherBusinessExpenseId = 20;
+
+        public const string OwnExpenseDescription = "Business A warehouse rent";
+        public const string OtherBusinessExpenseDescription = "Business B warehouse rent";
+
+        /// <summary>
+        /// The two fee rates, as they are spelled in a JSON response body. Distinct values, so
+        /// "A cannot see B's" is a fact about the rate rather than about the number zero.
+        /// </summary>
+        public const string OwnFeeRate = "0.11";
+
+        public const string OtherBusinessFeeRate = "0.22";
+
         private const int SeededBusinessId = 1;
+        private const int OtherBusinessId = 2;
+        private const int OwnExpenseId = 10;
 
         private static readonly DateTime CreatedAt = new(2026, 10, 11, 4, 0, 0, DateTimeKind.Utc);
 
@@ -381,35 +536,81 @@ public sealed class CapabilityAuthorizationApiTests : IClassFixture<CapabilityAu
                 return;
             }
 
-            db.Businesses.Add(new Business
-            {
-                Id = SeededBusinessId,
-                Name = "Vending Co",
-                TimeZoneId = "Australia/Sydney",
-                CreatedAtUtc = CreatedAt,
-            });
+            db.Businesses.AddRange(
+                new Business
+                {
+                    Id = SeededBusinessId,
+                    Name = "Vending Co",
+                    TimeZoneId = "Australia/Sydney",
+                    CreatedAtUtc = CreatedAt,
+                },
+                new Business
+                {
+                    Id = OtherBusinessId,
+                    Name = "Other Vending Co",
+                    TimeZoneId = "Australia/Sydney",
+                    CreatedAtUtc = CreatedAt,
+                });
 
             db.BusinessMemberships.AddRange(
-                Membership(OwnerObjectId, BusinessRole.Owner),
-                Membership(ManagerObjectId, BusinessRole.Manager),
-                Membership(OperatorObjectId, BusinessRole.Operator),
-                Membership(RoleChangeObjectId, BusinessRole.Operator),
+                Membership(SeededBusinessId, OwnerObjectId, BusinessRole.Owner),
+                Membership(SeededBusinessId, ManagerObjectId, BusinessRole.Manager),
+                Membership(SeededBusinessId, OperatorObjectId, BusinessRole.Operator),
+                Membership(SeededBusinessId, RoleChangeObjectId, BusinessRole.Operator),
                 // A stored role no BusinessRole declares. In production it could only arrive from a
                 // hand-written UPDATE or a newer deployment; the cast is how a test writes it.
-                Membership(UndeclaredRoleObjectId, (BusinessRole)0));
+                Membership(SeededBusinessId, UndeclaredRoleObjectId, (BusinessRole)0),
+                Membership(OtherBusinessId, OtherBusinessOwnerObjectId, BusinessRole.Owner));
+
+            // One record per business on two of the surfaces issue #526 protects, written through
+            // the unrestricted context because arranging another business's state is exactly what
+            // that opt-in exists for. A request never gets one.
+            db.OperatingExpenses.AddRange(
+                Expense(SeededBusinessId, OwnExpenseId, OwnExpenseDescription),
+                Expense(OtherBusinessId, OtherBusinessExpenseId, OtherBusinessExpenseDescription));
+
+            // No explicit id: the AddNayaxProcessingFeeRates migration already inserted the legacy
+            // default rate, so the table's keys are the database's to hand out.
+            db.NayaxProcessingFeeRates.AddRange(
+                FeeRate(SeededBusinessId, 0.11m),
+                FeeRate(OtherBusinessId, 0.22m));
 
             await db.SaveChangesAsync();
             _seeded = true;
         }
 
-        private static BusinessMembership Membership(string objectId, BusinessRole role) =>
+        private static BusinessMembership Membership(int businessId, string objectId, BusinessRole role) =>
             new()
             {
-                BusinessId = SeededBusinessId,
+                BusinessId = businessId,
                 DirectoryTenantId = DirectoryTenantId,
                 ObjectId = objectId,
                 Role = role,
                 CreatedAtUtc = CreatedAt,
+            };
+
+        private static OperatingExpense Expense(int businessId, int id, string description) =>
+            new()
+            {
+                BusinessId = businessId,
+                Id = id,
+                ExpenseDate = CreatedAt.Date,
+                Category = OperatingExpenseCategory.Other,
+                Description = description,
+                AmountExGst = 100m,
+                GstAmount = 10m,
+                TotalAmount = 110m,
+                CreatedAt = CreatedAt,
+                UpdatedAt = CreatedAt,
+            };
+
+        private static NayaxProcessingFeeRate FeeRate(int businessId, decimal feeExGst) =>
+            new()
+            {
+                BusinessId = businessId,
+                EffectiveFrom = CreatedAt.Date,
+                FeeExGst = feeExGst,
+                CreatedAt = CreatedAt,
             };
 
         protected override void ConfigureWebHost(IWebHostBuilder builder)

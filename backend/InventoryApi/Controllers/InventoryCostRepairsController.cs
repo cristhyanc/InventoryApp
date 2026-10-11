@@ -1,4 +1,6 @@
+using Inventory.Application.Access;
 using Inventory.Application.Costing;
+using InventoryApi.Auth;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Identity.Web.Resource;
@@ -26,10 +28,15 @@ namespace InventoryApi.Controllers;
 // Timestamps: the effective instant is a UTC instant. CostingRepairPolicy.NormalizeEffectiveAt
 // converts an offset-bearing value and reads a timezone-less one as UTC (issue #359's existing
 // policy, unchanged here), so every response reports the UTC instant the request named.
+//
+// Authorization: every action requires Data.Repair (issue #526), which only an Owner holds. The
+// preview is as restricted as the apply it precedes - it reads the same historical cost ledger the
+// apply rewrites - so the capability is declared once on the controller rather than per action.
 [ApiController]
 [Route("api/admin/inventory-cost-repair")]
 [Authorize]
 [RequiredScope("access_as_user")]
+[RequireCapability(Capability.DataRepair)]
 public sealed class InventoryCostRepairsController : ControllerBase
 {
     private readonly PreviewInventoryCostRepair _preview;

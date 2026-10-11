@@ -1,3 +1,4 @@
+using Inventory.Application.Access;
 using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Reporting.Dashboard;
 using Inventory.Application.Reporting.Daily;
@@ -8,16 +9,26 @@ using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Shared;
 using Inventory.Application.Reporting.Transactions;
+using InventoryApi.Auth;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Identity.Web.Resource;
 
 namespace InventoryApi.Controllers;
 
+/// <summary>
+/// Every financial report, and the CSV/XLSX export of each.
+///
+/// The whole controller requires <c>Reports.View</c> (issue #526), which a Manager and an Owner
+/// hold and an Operator does not: these are the business's sales, cost, margin, GST and
+/// reconciliation figures. The export carries the same capability as the report it exports, on the
+/// same controller attribute, so a format cannot become a way around the report's own rule.
+/// </summary>
 [ApiController]
 [Route("api/reports")]
 [Authorize]
 [RequiredScope("access_as_user")]
+[RequireCapability(Capability.ReportsView)]
 public sealed class ReportsController : ControllerBase
 {
     private readonly GetReportExportRows _getReportExportRows;

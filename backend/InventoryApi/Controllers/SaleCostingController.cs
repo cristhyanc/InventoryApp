@@ -1,14 +1,25 @@
+using Inventory.Application.Access;
 using Inventory.Application.Costing;
+using InventoryApi.Auth;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Identity.Web.Resource;
 
 namespace InventoryApi.Controllers;
 
+/// <summary>
+/// The sale-costing backfills: the maintenance runs that fill in or recompute the cost recorded
+/// against past sales.
+///
+/// The whole controller requires <c>Data.Repair</c> (issue #526), which only an Owner holds. A
+/// dry run carries the same capability as the apply it precedes: it reads the same historical cost
+/// ledger, and the only difference between the two is a query-string flag.
+/// </summary>
 [ApiController]
 [Route("api/sale-costing")]
 [Authorize]
 [RequiredScope("access_as_user")]
+[RequireCapability(Capability.DataRepair)]
 public sealed class SaleCostingController : ControllerBase
 {
     private readonly BackfillSaleCosts _backfill;

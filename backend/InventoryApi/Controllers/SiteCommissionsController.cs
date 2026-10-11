@@ -1,5 +1,7 @@
+using Inventory.Application.Access;
 using Inventory.Application.Commissions;
 using Inventory.Domain.FinancialConfiguration;
+using InventoryApi.Auth;
 using InventoryApi.DTOs;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -7,10 +9,18 @@ using Microsoft.Identity.Web.Resource;
 
 namespace InventoryApi.Controllers;
 
+/// <summary>
+/// Site commission agreements, the commission report and the payments recorded against it.
+///
+/// The whole controller requires <c>SiteCommissions.Manage</c> (issue #526), which a Manager and an
+/// Owner hold and an Operator does not: an agreement is the rate a site owner is paid at, and a
+/// payment is money recorded as having left the business.
+/// </summary>
 [ApiController]
 [Route("api/site-commissions")]
 [Authorize]
 [RequiredScope("access_as_user")]
+[RequireCapability(Capability.SiteCommissionsManage)]
 public sealed class SiteCommissionsController : ControllerBase
 {
     private readonly IGetSiteCommissionReport _getReport;

@@ -1,5 +1,7 @@
+using Inventory.Application.Access;
 using Inventory.Application.Expenses;
 using Inventory.Domain.Expenses;
+using InventoryApi.Auth;
 using InventoryApi.DTOs;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -7,10 +9,20 @@ using Microsoft.Identity.Web.Resource;
 
 namespace InventoryApi.Controllers;
 
+/// <summary>
+/// The business's operating expenses and their attachments.
+///
+/// The whole controller requires <c>Expenses.Manage</c> (issue #526), which a Manager and an Owner
+/// hold and an Operator does not: an expense is a cost that lands in the profit figures and the GST
+/// report, and the attachment is the supplier paperwork behind it. Reading is on the same
+/// capability as writing, deliberately - there is no part of this resource an Operator needs, and a
+/// read-only split would be a second rule to keep aligned with the page's own menu entry.
+/// </summary>
 [ApiController]
 [Route("api/operating-expenses")]
 [Authorize]
 [RequiredScope("access_as_user")]
+[RequireCapability(Capability.ExpensesManage)]
 public sealed class OperatingExpensesController : ControllerBase
 {
     private const long MaxAttachmentFileSizeBytes = ExpenseAttachmentPolicy.MaxFileSizeBytes;

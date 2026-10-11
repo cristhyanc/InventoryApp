@@ -1,14 +1,24 @@
+using Inventory.Application.Access;
 using Inventory.Application.Imports;
+using InventoryApi.Auth;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Identity.Web.Resource;
 
 namespace InventoryApi.Controllers;
 
+/// <summary>
+/// The sales, reimbursement and catalogue imports, run from the Admin → Imports page.
+///
+/// The whole controller requires <c>Imports.Run</c> (issue #526), which a Manager and an Owner hold
+/// and an Operator does not: an import writes sales, fees and reimbursements that every financial
+/// report is then calculated from, so running one is an accounting act rather than day-to-day work.
+/// </summary>
 [ApiController]
 [Route("api/imports")]
 [Authorize]
 [RequiredScope("access_as_user")]
+[RequireCapability(Capability.ImportsRun)]
 public sealed class ImportsController : ControllerBase
 {
     private readonly ImportNayaxProductCatalog _importProductCatalog;

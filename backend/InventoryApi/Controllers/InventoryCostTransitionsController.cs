@@ -1,4 +1,6 @@
+using Inventory.Application.Access;
 using Inventory.Application.Costing;
+using InventoryApi.Auth;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Identity.Web.Resource;
@@ -11,10 +13,15 @@ namespace InventoryApi.Controllers;
 // these actions used to return directly, so none of them need their own catch block. A Nayax
 // upstream failure reaches NayaxUpstreamExceptionHandler, and an unexpected framework exception is
 // deliberately not mapped: it reaches GlobalExceptionHandler as a logged, generic 500.
+//
+// Authorization: every action requires Data.Repair (issue #526), which only an Owner holds. The
+// AVCO transition rewrites the opening cost position every later sale is costed from, and the
+// preview reads the same history, so both halves carry the one capability.
 [ApiController]
 [Route("api/admin/inventory-cost-transition")]
 [Authorize]
 [RequiredScope("access_as_user")]
+[RequireCapability(Capability.DataRepair)]
 public sealed class InventoryCostTransitionsController : ControllerBase
 {
     private readonly PreviewInventoryCostTransition _preview;

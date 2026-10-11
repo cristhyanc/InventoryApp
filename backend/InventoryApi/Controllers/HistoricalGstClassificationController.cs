@@ -1,4 +1,6 @@
+using Inventory.Application.Access;
 using Inventory.Application.Gst;
+using InventoryApi.Auth;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Identity.Web.Resource;
@@ -28,10 +30,15 @@ namespace InventoryApi.Controllers;
 // the HTTP boundary does not reclassify it. A caller with no resolvable business reaches
 // BusinessScopeMiddleware's 403, and an unexpected framework or infrastructure failure is
 // deliberately unmapped - it surfaces as GlobalExceptionHandler's logged, generic 500.
+//
+// Authorization: every action requires Data.Repair (issue #526), which only an Owner holds.
+// Reclassifying historical sales changes what the GST report owes, and the preview reads the same
+// history the apply rewrites, so both halves carry the one capability.
 [ApiController]
 [Route("api/admin/historical-gst-classification")]
 [Authorize]
 [RequiredScope("access_as_user")]
+[RequireCapability(Capability.DataRepair)]
 public sealed class HistoricalGstClassificationController : ControllerBase
 {
     private readonly PreviewHistoricalGstClassification _preview;
