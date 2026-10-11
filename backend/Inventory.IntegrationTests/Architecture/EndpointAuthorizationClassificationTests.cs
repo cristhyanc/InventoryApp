@@ -311,6 +311,7 @@ public class EndpointAuthorizationClassificationTests
     [InlineData("api/settings/nayax-processing-fee-rates", "GET", Capability.IntegrationManage)]
     [InlineData("api/settings/nayax-processing-fee-rates", "POST", Capability.IntegrationManage)]
     [InlineData("api/data-quality/nayax-catalog-reconciliation", "GET", Capability.IntegrationManage)]
+    [InlineData("api/settings/nayax-connection/test", "POST", Capability.IntegrationManage)]
     [InlineData("api/nayax-sales-sync", "POST", Capability.DashboardView)]
     [InlineData("api/admin/inventory-cost-repair/preview", "POST", Capability.DataRepair)]
     [InlineData("api/admin/inventory-cost-repair/apply", "POST", Capability.DataRepair)]
