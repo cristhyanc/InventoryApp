@@ -106,13 +106,15 @@ public sealed class E2ETestAuthenticationTests : IClassFixture<E2ETestAuthentica
         var businessAProductId = await ProductIdAsync(E2ETestActors.BusinessAOwner.Key, E2ETestFixture.ReorderProductName);
         var businessBProductId = await ProductIdAsync(E2ETestActors.BusinessBOwner.Key, E2ETestFixture.BusinessBProductName);
 
-        var crossReads = await Task.WhenAll(
-            _factory.As(E2ETestActors.BusinessBOwner.Key).GetAsync($"/api/products/{businessAProductId}"),
-            _factory.As(E2ETestActors.BusinessAOwner.Key).GetAsync($"/api/products/{businessBProductId}"));
+        // Sequential on purpose: every request in this host shares one in-memory SqliteConnection,
+        // which is not safe for concurrent use, so two overlapping requests intermittently fail
+        // with a 500 that has nothing to do with business isolation.
+        var businessBReadingA = await _factory.As(E2ETestActors.BusinessBOwner.Key).GetAsync($"/api/products/{businessAProductId}");
+        var businessAReadingB = await _factory.As(E2ETestActors.BusinessAOwner.Key).GetAsync($"/api/products/{businessBProductId}");
 
         Assert.Equal(
             [HttpStatusCode.NotFound, HttpStatusCode.NotFound],
-            crossReads.Select(response => response.StatusCode));
+            new[] { businessBReadingA.StatusCode, businessAReadingB.StatusCode });
     }
 
     /// <summary>
