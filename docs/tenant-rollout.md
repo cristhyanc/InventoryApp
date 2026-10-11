@@ -167,15 +167,16 @@ changed only by a human directly in the database; the members page that will cha
 #524. A signed-in member can see their own role and capabilities at `GET /api/me/access`, and a
 change applies on their next request.
 
-Since issue #525 the role a member is given decides what the API lets them call, rather than only
-describing them: the everyday endpoints require the capability their role grants and answer `403`
-otherwise (see
-[docs/architecture.md § Capability authorization](architecture.md#capability-authorization-issue-525)).
-Within that slice the only refusal a declared role actually meets today is an `Operator` being
-denied `PUT /api/suppliers/{id}/gst-defaults`, because every role holds the other everyday
-capabilities and the Manager- and Owner-only endpoints are not yet enforced (issue #526). Choose the
-role deliberately all the same, since those endpoints will begin refusing as that work lands.
-`Owner`, the default and what every existing member was backfilled to, grants everything.
+Since issues #525 and #526 the role a member is given decides what the API lets them call, rather
+than only describing them: **every** business endpoint requires the capability their role grants and
+answers `403` otherwise (see
+[docs/architecture.md § Capability authorization](architecture.md#capability-authorization-issue-525)
+and [§ its Manager and Owner slice](architecture.md#capability-authorization-on-the-manager-and-owner-endpoints-issue-526),
+which carries the full matrix). Choose the role deliberately: an `Operator` reaches the dashboard,
+the pick list, inventory and purchasing and nothing else — not expenses, reports, imports, site
+commissions, Nayax settings or the admin maintenance workflows — and a `Manager` reaches everything
+except Nayax settings and those workflows. `Owner`, the default and what every existing member was
+backfilled to, grants everything.
 
 ## Rollout sequence
 
