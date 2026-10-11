@@ -1,6 +1,8 @@
+using Inventory.Application.Access;
 using Inventory.Application.Machines;
 using Inventory.Application.MachineStockSync;
 using InventoryApi.Adapters.Mapping;
+using InventoryApi.Auth;
 using InventoryApi.DTOs;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -8,10 +10,17 @@ using Microsoft.Identity.Web.Resource;
 
 namespace InventoryApi.Controllers;
 
+/// <summary>
+/// The machine fleet, its per-machine product lists and the Sync Restock reconciliation workflow.
+/// All of it is day-to-day inventory work, so every action requires <c>Inventory.Operate</c>
+/// (issue #525) - Sync Restock included, because reconciling what a machine reported it dispensed
+/// is exactly the refill work an Operator does.
+/// </summary>
 [ApiController]
 [Route("api/[controller]")]
 [Authorize]
 [RequiredScope("access_as_user")]
+[RequireCapability(Capability.InventoryOperate)]
 public class MachinesController : ControllerBase
 {
     private readonly GetMachineDashboard _getMachineDashboard;

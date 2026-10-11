@@ -153,6 +153,14 @@ public sealed class MeAccountStateApiTests : IClassFixture<MeAccountStateApiTest
     /// The middleware's public 403 body is unchanged: it still carries the same single sentence
     /// and no hint of which state the caller is in. The account-state endpoint is the only place
     /// that distinction is visible, and only for the caller's own identity.
+    ///
+    /// <para>It is probed through <c>GET /api/me/access</c>, which is the endpoint the middleware
+    /// still answers for these callers. Since issue #525 most business endpoints also declare a
+    /// capability, and the authorization middleware - which runs first - refuses a caller with no
+    /// resolved role before this body is ever written; see
+    /// <see cref="A_capability_endpoint_refuses_the_same_caller_with_no_body_at_all"/>. The claim
+    /// here is about the middleware's body, so it is asked of an endpoint the middleware decides.
+    /// </para>
     /// </summary>
     [Theory]
     [InlineData(ApiFactory.StrangerObjectId)]
@@ -162,7 +170,7 @@ public sealed class MeAccountStateApiTests : IClassFixture<MeAccountStateApiTest
     {
         await _factory.SeedAsync();
 
-        var response = await _factory.Authenticated(objectId).GetAsync("/api/products");
+        var response = await _factory.Authenticated(objectId).GetAsync("/api/me/access");
         var json = await ReadJsonAsync(response);
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
@@ -177,6 +185,28 @@ public sealed class MeAccountStateApiTests : IClassFixture<MeAccountStateApiTest
         {
             Assert.DoesNotContain(state, body, StringComparison.Ordinal);
         }
+    }
+
+    /// <summary>
+    /// The one thing issue #525 changed about what these callers are told, recorded here rather
+    /// than left as a silent difference between endpoints: on an endpoint that declares a
+    /// capability the authorization middleware refuses them first, with no body at all. That is
+    /// strictly less than the sentence above and still names no business and no account state, so
+    /// the account-state endpoint remains the only place the distinction is visible.
+    /// </summary>
+    [Theory]
+    [InlineData(ApiFactory.StrangerObjectId)]
+    [InlineData(ApiFactory.RevokedObjectId)]
+    [InlineData(ApiFactory.DeactivatedBusinessObjectId)]
+    public async Task A_capability_endpoint_refuses_the_same_caller_with_no_body_at_all(string objectId)
+    {
+        await _factory.SeedAsync();
+
+        var response = await _factory.Authenticated(objectId).GetAsync("/api/products");
+        var body = await response.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Empty(body);
     }
 
     /// <summary>

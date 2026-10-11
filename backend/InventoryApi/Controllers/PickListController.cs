@@ -1,4 +1,6 @@
+using Inventory.Application.Access;
 using Inventory.Application.PickList;
+using InventoryApi.Auth;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Identity.Web.Resource;
@@ -9,6 +11,7 @@ namespace InventoryApi.Controllers;
 [Route("api/pick-list")]
 [Authorize]
 [RequiredScope("access_as_user")]
+[RequireCapability(Capability.PickListView)]
 public sealed class PickListController : ControllerBase
 {
     private readonly GetPickList _getPickList;

@@ -1,5 +1,7 @@
+using Inventory.Application.Access;
 using Inventory.Application.Stock;
 using InventoryApi.Adapters.Mapping;
+using InventoryApi.Auth;
 using InventoryApi.DTOs;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -17,11 +19,16 @@ namespace InventoryApi.Controllers;
 /// <c>POST /api/products/{productId}/stock</c> (<see cref="StockController"/>), which remains the
 /// single authority on costing, insufficient-stock validation and reason/source semantics; this
 /// controller has no write action and no costing rule.
+///
+/// It requires the same <c>Inventory.Operate</c> capability as the per-product write endpoint
+/// (issue #525): the history it reports is the same movement data, read in one page instead of one
+/// product at a time.
 /// </summary>
 [ApiController]
 [Route("api/stock-history")]
 [Authorize]
 [RequiredScope("access_as_user")]
+[RequireCapability(Capability.InventoryOperate)]
 public sealed class StockHistoryController : ControllerBase
 {
     private readonly ListStockHistory _listStockHistory;

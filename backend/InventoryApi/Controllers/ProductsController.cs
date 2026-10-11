@@ -1,8 +1,10 @@
+using Inventory.Application.Access;
 using Inventory.Application.Gst;
 using Inventory.Application.Products;
 using Inventory.Application.Purchases;
 using Inventory.Application.Reporting.Dashboard;
 using InventoryApi.Adapters.Mapping;
+using InventoryApi.Auth;
 using InventoryApi.DTOs;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -10,10 +12,17 @@ using Microsoft.Identity.Web.Resource;
 
 namespace InventoryApi.Controllers;
 
+/// <summary>
+/// The product catalogue, its stock-planning projections and each product's GST rule. Day-to-day
+/// inventory work, so every action requires <c>Inventory.Operate</c> (issue #525) - the catalogue is
+/// what an Operator refills machines from, and the product GST rule is configuration an Operator
+/// maintains alongside it rather than a separate capability in the agreed table.
+/// </summary>
 [ApiController]
 [Route("api/[controller]")]
 [Authorize]
 [RequiredScope("access_as_user")]
+[RequireCapability(Capability.InventoryOperate)]
 public class ProductsController : ControllerBase
 {
     private readonly ListProducts _listProducts;
