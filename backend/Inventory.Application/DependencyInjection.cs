@@ -91,6 +91,13 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<INayaxRequestCredentialProvider, NayaxRequestCredentialProvider>();
         services.AddScoped<INayaxConnectionRetestCredentialProvider, NayaxConnectionRetestCredentialProvider>();
 
+        // The Owner-only connection test (issue #536). The rate limiter is a singleton because the
+        // window it remembers is state about the process rather than about one request: "this
+        // business has run five tests in the last ten minutes" must be the same answer for every
+        // request, exactly as MemberProfileRefreshThrottle's hour is.
+        services.AddSingleton<NayaxConnectionTestRateLimiter>();
+        services.AddScoped<TestNayaxConnection>();
+
         services.AddScoped<ListNayaxFeeRates>();
         services.AddScoped<SaveNayaxFeeRate>();
         services.AddScoped<GetNayaxProcessingFees>();
