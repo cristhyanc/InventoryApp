@@ -14,9 +14,10 @@ namespace InventoryApi.Controllers;
 /// endpoint takes no business, machine or site identifier from the caller.
 ///
 /// It requires <c>Dashboard.View</c> (issue #525), which every role holds: the Dashboard is the
-/// landing page of the application. Redacting its financial figures for a role that holds
-/// <c>Dashboard.View</c> but not <c>Dashboard.ViewFinancials</c> is issue #527's work, so the
-/// summary's figures are unchanged here.
+/// landing page of the application. <c>Dashboard.ViewFinancials</c> is not an endpoint requirement
+/// here and deliberately cannot be: what a role without it may not see is part of the
+/// <em>response</em>, not the endpoint, so the use case decides the shape and this controller
+/// returns whichever one it built (issue #527). It strips, recomputes and re-decides nothing.
 /// </summary>
 [ApiController]
 [Route("api/dashboard")]
@@ -36,8 +37,14 @@ public sealed class DashboardController : ControllerBase
     /// The read-only sales/refill/ordering/inventory summary behind the Dashboard cards. It creates
     /// no inventory movement, refill or persisted state, and adds no figure a caller must calculate
     /// itself.
+    ///
+    /// The declared type is the published union of the two shapes
+    /// (<c>DashboardSummaryDto</c> for a caller with <c>Dashboard.ViewFinancials</c>,
+    /// <c>RedactedDashboardSummaryDto</c> for one without it); the response is serialized from the
+    /// one the use case actually returned, so a redacted property is absent from the JSON rather
+    /// than written as <c>null</c>.
     /// </summary>
     [HttpGet("summary")]
-    public Task<DashboardSummaryDto> Summary(CancellationToken cancellationToken) =>
+    public Task<IDashboardSummaryDto> Summary(CancellationToken cancellationToken) =>
         _getDashboardSummary.Handle(cancellationToken);
 }
