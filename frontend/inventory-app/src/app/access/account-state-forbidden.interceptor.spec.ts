@@ -1,8 +1,12 @@
 import { HttpClient, HttpErrorResponse, provideHttpClient, withInterceptors } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
+import { ConfigService } from '../services/config.service';
 import { AccountStateService } from './account-state.service';
 import { accountStateForbiddenInterceptor, isMemberAccountStateRefusal } from './account-state-forbidden.interceptor';
+
+/** The dev-proxy API base URL `ConfigService` resolves locally; the deployed one is covered in `member-endpoint.spec.ts`. */
+const API_BASE_URL = '/api';
 
 interface Harness {
   http: HttpClient;
@@ -17,7 +21,8 @@ function configure(): Harness {
     providers: [
       provideHttpClient(withInterceptors([accountStateForbiddenInterceptor])),
       provideHttpClientTesting(),
-      { provide: AccountStateService, useValue: { refreshUnlessReading } }
+      { provide: AccountStateService, useValue: { refreshUnlessReading } },
+      { provide: ConfigService, useValue: { apiBaseUrl: API_BASE_URL } }
     ]
   });
 
@@ -74,6 +79,27 @@ describe('accountStateForbiddenInterceptor (issue #529)', () => {
     expect(harness.refreshUnlessReading).not.toHaveBeenCalled();
   });
 
+  /** AC: a query string or a trailing slash must not defeat that exclusion (issue #602). */
+  it.each(['/api/me/account-state?reason=refresh', '/api/me/account-state/'])(
+    'never reacts to a refusal of %s either',
+    (url) => {
+      const harness = configure();
+
+      refuse(harness, url, 403);
+
+      expect(harness.refreshUnlessReading).not.toHaveBeenCalled();
+    }
+  );
+
+  /** A `403` from the platform diagnostics probe says nothing about a business membership (issue #602). */
+  it('never reacts to a refusal of the platform diagnostics probe', () => {
+    const harness = configure();
+
+    refuse(harness, '/api/admin/diagnostics/access', 403);
+
+    expect(harness.refreshUnlessReading).not.toHaveBeenCalled();
+  });
+
   it('ignores every other failure status', () => {
     const harness = configure();
 
@@ -94,14 +120,19 @@ describe('accountStateForbiddenInterceptor (issue #529)', () => {
 });
 
 describe('isMemberAccountStateRefusal', () => {
-  it('excludes the account-state read itself and the static assets', () => {
-    expect(isMemberAccountStateRefusal('/api/me/account-state')).toBe(false);
-    expect(isMemberAccountStateRefusal('https://api.example.test/api/me/account-state')).toBe(false);
-    expect(isMemberAccountStateRefusal('/assets/config.json')).toBe(false);
+  it('excludes the account-state read itself, the platform diagnostics surface and the static assets', () => {
+    expect(isMemberAccountStateRefusal('/api/me/account-state', API_BASE_URL)).toBe(false);
+    expect(isMemberAccountStateRefusal('/api/me/account-state?reason=refresh', API_BASE_URL)).toBe(false);
+    expect(isMemberAccountStateRefusal('/api/admin/diagnostics/access', API_BASE_URL)).toBe(false);
+    expect(isMemberAccountStateRefusal('/assets/config.json', API_BASE_URL)).toBe(false);
+    expect(
+      isMemberAccountStateRefusal('https://api.example.test/api/me/account-state', 'https://api.example.test/api')
+    ).toBe(false);
   });
 
   it('includes every other member endpoint, including the capability read', () => {
-    expect(isMemberAccountStateRefusal('/api/me/access')).toBe(true);
-    expect(isMemberAccountStateRefusal('/api/dashboard/summary')).toBe(true);
+    expect(isMemberAccountStateRefusal('/api/me/access', API_BASE_URL)).toBe(true);
+    expect(isMemberAccountStateRefusal('/api/me/access?refresh=1', API_BASE_URL)).toBe(true);
+    expect(isMemberAccountStateRefusal('/api/dashboard/summary', API_BASE_URL)).toBe(true);
   });
 });

@@ -2,6 +2,7 @@ import { HttpClient, provideHttpClient, withInterceptors } from '@angular/common
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
 import { Router } from '@angular/router';
+import { ConfigService } from '../services/config.service';
 import { ToastService } from '../services/toast.service';
 import { isAccountStateBypassRoute, memberForbiddenNoticeInterceptor } from './member-forbidden-notice.interceptor';
 
@@ -19,7 +20,8 @@ function configure(currentUrl: string): Harness {
       provideHttpClient(withInterceptors([memberForbiddenNoticeInterceptor])),
       provideHttpClientTesting(),
       { provide: ToastService, useValue: { error } },
-      { provide: Router, useValue: { url: currentUrl } }
+      { provide: Router, useValue: { url: currentUrl } },
+      { provide: ConfigService, useValue: { apiBaseUrl: '/api' } }
     ]
   });
 
@@ -70,6 +72,33 @@ describe('memberForbiddenNoticeInterceptor (issue #529)', () => {
     const harness = configure('/reports/bookkeeping');
 
     refuse(harness, '/api/me/access', 403);
+
+    expect(harness.error).not.toHaveBeenCalled();
+  });
+
+  /**
+   * AC (issue #602): "a 403 from GET /api/admin/diagnostics/access neither displays the
+   * member-access toast nor starts member-cache refreshes". The probe is the sidebar's quiet
+   * platform-admin question (issue #335) and a refusal is its expected answer for every ordinary
+   * member, on any route - the bypass-route list is not what keeps it quiet.
+   */
+  it.each([
+    '/api/admin/diagnostics/access',
+    '/api/admin/diagnostics/access?x=1',
+    '/api/admin/diagnostics/query',
+    '/api/me/account-state'
+  ])('never reports a refusal of %s', (url) => {
+    const harness = configure('/dashboard');
+
+    refuse(harness, url, 403);
+
+    expect(harness.error).not.toHaveBeenCalled();
+  });
+
+  it('never reports a refusal from another origin', () => {
+    const harness = configure('/dashboard');
+
+    refuse(harness, 'https://login.microsoftonline.test/common/discovery', 403);
 
     expect(harness.error).not.toHaveBeenCalled();
   });

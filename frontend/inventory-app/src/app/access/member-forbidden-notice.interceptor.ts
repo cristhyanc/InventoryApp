@@ -2,6 +2,7 @@ import { HttpErrorResponse, HttpInterceptorFn } from '@angular/common/http';
 import { inject } from '@angular/core';
 import { Router } from '@angular/router';
 import { catchError, throwError } from 'rxjs';
+import { ConfigService } from '../services/config.service';
 import { ToastService } from '../services/toast.service';
 import { ACCOUNT_STATE_BYPASS_PATHS, INVITE_ROUTE_PREFIX } from './account-state.guard';
 import { isMemberAccessRefusal } from './access-forbidden.interceptor';
@@ -36,21 +37,28 @@ export function isAccountStateBypassRoute(currentUrl: string): boolean {
  *
  * It reuses `isMemberAccessRefusal`'s member-endpoint test - the same one `accessForbiddenInterceptor`
  * uses to decide whether a refusal says anything about the caller's role - so the two stay in
- * agreement about what counts as a member endpoint. It does **not** fire while the current route
- * is one of {@link isAccountStateBypassRoute}'s: a person there has already been told, by the
- * account-state routing itself or by the page they are on, exactly what their situation is, and a
- * generic toast on top would only contradict or duplicate that.
+ * agreement about what counts as a member endpoint. That test now classifies the configured API
+ * origin and path explicitly (issue #602), which is what keeps the two cache probes, the platform
+ * diagnostics probe (`GET /api/admin/diagnostics/access`, expected to refuse everyone but the
+ * configured platform administrator), static assets and other origins from being reported to an
+ * ordinary member as "you don't have access to this".
+ *
+ * It does **not** fire while the current route is one of {@link isAccountStateBypassRoute}'s: a
+ * person there has already been told, by the account-state routing itself or by the page they are
+ * on, exactly what their situation is, and a generic toast on top would only contradict or
+ * duplicate that.
  */
 export const memberForbiddenNoticeInterceptor: HttpInterceptorFn = (req, next) => {
   const toast = inject(ToastService);
   const router = inject(Router);
+  const config = inject(ConfigService);
 
   return next(req).pipe(
     catchError((error: unknown) => {
       if (
         error instanceof HttpErrorResponse &&
         error.status === 403 &&
-        isMemberAccessRefusal(req.url) &&
+        isMemberAccessRefusal(req.url, config.apiBaseUrl) &&
         !isAccountStateBypassRoute(router.url)
       ) {
         toast.error("You don't have access to this.");

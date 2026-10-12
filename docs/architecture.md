@@ -2992,6 +2992,8 @@ could only diverge from `Inventory.Application.Access.RoleCapabilities`.
 | `access/capability.guard.ts` | `requireCapability(...)`, the `CanActivateFn` every authenticated route declares |
 | `access/access-not-allowed.component.ts` | The page a route the member's role does not allow sends them to |
 | `access/access-forbidden.interceptor.ts` | The "`403` from a member endpoint" trigger on the cache, and nothing else |
+| `access/member-endpoint.ts` | `classifyMemberRequest`, the one answer to "is this refused request a member endpoint?" that all three `403` interceptors read (issue #602) |
+| `access/forbidden-interceptors.ts` | `FORBIDDEN_INTERCEPTORS`: the three `403` interceptors in the order `app.config.ts` installs them, so the composed chain is testable as a whole |
 | `layout/navigation.ts` | Each destination's `capability`, and `navigationFor(capabilities, hasPlatformDiagnosticsAccess)` |
 
 **One cached answer per signed-in identity.** The read is lazy — issued when something first asks,
@@ -3006,7 +3008,7 @@ is dropped or read again on exactly these triggers:
 | Sign-in | Read as the newly signed-in identity |
 | Sign-out | Cleared without reading again — there is nobody to read it for |
 | MSAL active-account change | Read again, unconditionally, because an answer in flight may have been issued as the previous identity |
-| Any `403` from a member endpoint | Read again unless a read is already in flight. `GET /api/me/access` itself is excluded, so a refusal can never drive a refresh loop, and `/assets/*` is excluded because it is not a member endpoint |
+| Any `403` from a member endpoint | Read again unless a read is already in flight. Only a refusal `classifyMemberRequest` calls a `member` one counts: both cache probes, the platform diagnostics surface, `/assets/*` and every other origin are excluded, so a refusal can never drive a refresh loop |
 | Window focus more than 5 minutes after the last answer | Read again, so a tab left open all day stops rendering a menu built from a role somebody has since changed |
 | An explicit `refresh()` | Read again, unconditionally. This is what other work calls after changing something relevant |
 
@@ -3015,6 +3017,38 @@ Sign-in, sign-out and the active-account change are observed from two signals to
 are acted on only when the signed-in identity the cache was read for actually changed. An answer
 from a read a later one superseded is discarded by a generation check when it arrives, so a slow
 read for the previous identity can never build somebody else's menu.
+
+**"A member endpoint" is one classification, read from the configured API base URL** (issue #602).
+`access/member-endpoint.ts` answers it once, for all three `403` interceptors, by normalising the
+request URL and the API base URL that `ConfigService` resolved and comparing them explicitly:
+
+| Classification | What it covers | What a `403` from it does |
+| --- | --- | --- |
+| `member` | Every endpoint under the configured API base that is not named below | Refreshes the capability cache and the account-state cache, and shows the global `403` notice |
+| `access-probe` | `GET /api/me/access`, this cache's own read | Refreshes the account state only, one way (issue #529) |
+| `account-state-probe` | `GET /api/me/account-state`, the sibling cache's own read | Nothing |
+| `platform-admin` | `/api/admin/diagnostics/*` (issue #336), authorized by the configured Entra `(tid, oid)` pair and by no business role | Nothing |
+| `non-api` | `/assets/*`, any other origin (MSAL's own traffic), and any path outside the API base | Nothing |
+
+The classification is by path **segment**, so a query string, a trailing slash, a doubled slash and
+the API's own case-insensitive routing cannot defeat an exclusion, and a path that merely starts
+with the same letters (`/apiary/...`) is not the API. A request counts as an API call only when its
+origin is the configured API's and its path starts with the API's own segments; the default for
+anything else under that base stays `member`, because an endpoint this build has never heard of
+still refuses a member whose role has changed. The other `/api/admin/*` controllers — historical GST
+classification, the repairs — are ordinary capability-policy member endpoints and are deliberately
+**not** part of `platform-admin`.
+
+**The refresh reads are bounded, and the table above is why.** `member` refreshes both caches,
+`access-probe` refreshes the account state, and `account-state-probe` refreshes nothing: the edges
+form a dead end rather than a cycle. A refused member request therefore costs at most one capability
+read and two account-state reads — one from the refusal itself, one from the refused capability
+probe, depending on how the two responses interleave — and the chain then goes quiet whatever keeps
+refusing. Before issue #602 each interceptor excluded only its *own* probe, so a refused account-state
+probe refreshed the capabilities, whose refused probe refreshed the account state, and two refusals
+alternated indefinitely; and `GET /api/admin/diagnostics/access`, which is refused for everyone but
+the configured platform administrator, both started those refreshes and showed an ordinary member
+"you don't have access to this".
 
 **A read that cannot be answered hides nothing.** `unavailable` — nobody signed in, a refusal, a
 failed request — leaves every menu entry, route and action exactly as it was before capabilities
@@ -3086,7 +3120,11 @@ destination before the first answer, and a re-render when the capabilities chang
 `capability.guard.spec.ts` (allowed, refused, any-of, fail-open, waiting for an unread answer, and
 the page naming no capability or role), `app.routes.spec.ts` (every authenticated route guarded,
 the two exceptions, and `MsalGuard` first), `access-forbidden.interceptor.spec.ts` (the `403`
-trigger, the excluded access read and assets, and every other status ignored),
+trigger, the excluded probes, diagnostics surface and assets, and every other status ignored),
+`member-endpoint.spec.ts` (every classification, for the local and the deployed API base URL, with
+query strings, trailing slashes, other origins and the member `/api/admin/*` controllers),
+`forbidden-interceptor-chain.spec.ts` (the composed chain: the asserted request count for
+persistent probe refusals, coalescing, the silent diagnostics probe and the preserved notice),
 `supplier-gst-defaults.component.spec.ts` (the hidden Save, the read-only pickers, no `PUT`, and the
 control returning on a refresh) and `dashboard.component.spec.ts` (the redacted summary rendering
 the two non-financial cards, with no `$0.00` and no withheld figure anywhere).
@@ -3108,7 +3146,7 @@ way as.
 | `access/access-unavailable.component.ts` | The page `BusinessDeactivated`, `MembershipAmbiguous` and `MembershipRevoked` are routed to |
 | `access/onboarding-placeholder.component.ts` | The one stand-in component `/welcome`, `/application-pending`, `/application-rejected` and `/invite/:token` load until #508's and #505's tasks replace each with its own page |
 | `access/account-state-forbidden.interceptor.ts` | The "`403` from a member endpoint" trigger on the account-state cache, mirroring `accessForbiddenInterceptor` |
-| `access/member-forbidden-notice.interceptor.ts` | The global `403` handler: "you don't have access to this", except on a bypass route |
+| `access/member-forbidden-notice.interceptor.ts` | The global `403` handler: "you don't have access to this", except on a bypass route or for a refusal `classifyMemberRequest` does not call a member one |
 | `app.component.ts` | Waits for the account state before looking up the business at all |
 
 **The routing contract** (agreed under #328, with its contract corrections of 10 Oct 2026):
@@ -3146,8 +3184,13 @@ the one sign-out control on every route, this one included.
 
 **The global `403` handler** (`memberForbiddenNoticeInterceptor`) shows "you don't have access to
 this" through the toast every other failure already renders with, for any `403` from a member
-endpoint - the same test `accessForbiddenInterceptor` uses, so the two interceptors agree about
-what counts as one. It does not fire while the current route is `/welcome`,
+endpoint - `classifyMemberRequest`, the same classification `accessForbiddenInterceptor` uses
+([issue #528](#member-access-capability-built-navigation-guards-and-hidden-actions-issue-528)), so
+the two interceptors cannot disagree about what counts as one. A `403` from
+`GET /api/admin/diagnostics/access` is therefore silent on every route: that probe is the sidebar's
+quiet platform-admin question (issue #335), its refusal is the expected answer for every ordinary
+member, and it says nothing about a business membership. It does not fire while the current route is
+`/welcome`,
 `/application-pending`, `/application-rejected`, `/access-unavailable` or `/invite/:token`
 (`ACCOUNT_STATE_BYPASS_PATHS`, matched by prefix for the invite token): a person on one of them has
 already been told, by the routing itself or by the page they are on, exactly what their situation
@@ -3163,6 +3206,16 @@ last read, and an explicit `refresh()`. `AccountStateService` is a sibling cache
 built the same way, rather than a shared base the two refactor into, so #528's already-tested
 caching logic is untouched by this slice.
 
+**The refresh between the two caches runs one way only** (issue #602). `GET /api/me/access`'s own
+refusal still refreshes the account state, for the reason above - a membership revoked while the tab
+was open shows up there first - but `GET /api/me/account-state`'s refusal now refreshes **nothing**:
+not the account state (it is this cache's own read) and not the capabilities either, which is the
+exclusion that was missing. The two probes can therefore no longer refresh each other, so persistent
+`403`s settle instead of alternating for as long as the tab is open; issue #528's classification
+table above lists what each kind of refusal starts, and
+`forbidden-interceptor-chain.spec.ts` asserts the exact request count the composed chain issues
+before it goes quiet.
+
 **The shell waits for the account state before any business call.** `AppComponent`'s existing
 business lookup (issue #499, `GET /api/business/current`) now reads the cached account state
 first and asks for the business only when it answers `Member` - an account with no usable
@@ -3177,7 +3230,10 @@ reading once for several navigations), `access-unavailable.component.spec.ts` (t
 message, naming no business, and the revoked page with onboarding on - both options - and off -
 invite only), `account-state-forbidden.interceptor.spec.ts` and
 `member-forbidden-notice.interceptor.spec.ts` (the respective `403` triggers and the bypass-route
-list, including that a `403` on a bypassed route never shows the generic notice), and
+list, including that a `403` on a bypassed route never shows the generic notice and that the
+diagnostics probe is silent on an ordinary one), `forbidden-interceptor-chain.spec.ts` (the three
+interceptors composed over the real caches: persistent probe refusals settling at an asserted
+request count, the one-way refresh, and the preserved notice and suppression), and
 `app.routes.spec.ts`/`app.component.spec.ts` (`accountStateGuard`'s position on every business
 route, the five bypass routes, and the shell asking for no business before the account state is
 known).
