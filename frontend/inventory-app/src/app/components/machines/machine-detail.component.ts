@@ -7,6 +7,7 @@ import { StockService } from '../../services/stock.service';
 import { ToastService } from '../../services/toast.service';
 import { BreadcrumbService } from '../../layout/breadcrumbs/breadcrumb.service';
 import { MachineRestockSyncComponent } from './machine-restock-sync/machine-restock-sync.component';
+import { NayaxStatusBannerComponent } from '../shared/nayax-status-banner/nayax-status-banner.component';
 import {
   Machine,
   Product,
@@ -17,7 +18,7 @@ import {
 @Component({
   selector: 'app-machine-detail',
   standalone: true,
-  imports: [CommonModule, RouterLink, MachineRestockSyncComponent],
+  imports: [CommonModule, RouterLink, MachineRestockSyncComponent, NayaxStatusBannerComponent],
   templateUrl: './machine-detail.component.html'
 })
 export class MachineDetailComponent implements OnInit {

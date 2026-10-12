@@ -5,11 +5,12 @@ import { RouterLink } from '@angular/router';
 import { MachineService } from '../../services/machine.service';
 import { Machine } from '../../models/models';
 import { ListLoadState } from '../shared/list-load-state';
+import { NayaxStatusBannerComponent } from '../shared/nayax-status-banner/nayax-status-banner.component';
 
 @Component({
   selector: 'app-machine-list',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterLink],
+  imports: [CommonModule, FormsModule, RouterLink, NayaxStatusBannerComponent],
   templateUrl: './machine-list.component.html'
 })
 export class MachineListComponent implements OnInit {

@@ -9,6 +9,7 @@ import { Machine, PickListMachineQuantity, PickListProduct, Product } from '../.
 import { ListLoadState } from '../shared/list-load-state';
 import { MultiSelectDropdownComponent, MultiSelectOption } from '../shared/multi-select-dropdown.component';
 import { BusinessDateTimePipe } from '../../formatting/business-date-time.pipe';
+import { NayaxStatusBannerComponent } from '../shared/nayax-status-banner/nayax-status-banner.component';
 
 /**
  * Pick List (Restock Planning) page (issues #222, #226): a read-only matrix built on the #221
@@ -20,7 +21,7 @@ import { BusinessDateTimePipe } from '../../formatting/business-date-time.pipe';
 @Component({
   selector: 'app-pick-list',
   standalone: true,
-  imports: [CommonModule, MultiSelectDropdownComponent, BusinessDateTimePipe],
+  imports: [CommonModule, MultiSelectDropdownComponent, BusinessDateTimePipe, NayaxStatusBannerComponent],
   templateUrl: './pick-list.component.html'
 })
 export class PickListComponent implements OnInit {

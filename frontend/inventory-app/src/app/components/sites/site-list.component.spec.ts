@@ -4,6 +4,8 @@ import { of, Subject, throwError } from 'rxjs';
 import { SiteListComponent } from './site-list.component';
 import { SiteService } from '../../services/site.service';
 import { Site } from '../../models/models';
+import { AccessService } from '../../access/access.service';
+import { NayaxConnectionService, NayaxConnectionStatusName } from '../../services/nayax-connection.service';
 
 function site(overrides: Partial<Site> = {}): Site {
   return {
@@ -20,10 +22,18 @@ function site(overrides: Partial<Site> = {}): Site {
   };
 }
 
-async function renderWith(getAll: () => ReturnType<SiteService['getAll']>) {
+async function renderWith(
+  getAll: () => ReturnType<SiteService['getAll']>,
+  nayaxStatus: NayaxConnectionStatusName = 'Ready'
+) {
   await TestBed.configureTestingModule({
     imports: [SiteListComponent],
-    providers: [provideRouter([]), { provide: SiteService, useValue: { getAll } }]
+    providers: [
+      provideRouter([]),
+      { provide: SiteService, useValue: { getAll } },
+      { provide: NayaxConnectionService, useValue: { status: () => of({ status: nayaxStatus, machineChecksPending: false }) } },
+      { provide: AccessService, useValue: { allows: () => of(true) } }
+    ]
   }).compileComponents();
 
   const fixture = TestBed.createComponent(SiteListComponent);
@@ -186,5 +196,19 @@ describe('SiteListComponent', () => {
     link.click(); // the browser's own activation of a focused anchor on Enter
 
     expect(navigatedUrls(navigateByUrl)).toEqual(['/sites/42/products']);
+  });
+
+  it('shows the Nayax status banner when the connection is not Ready (issue #539)', async () => {
+    const { fixture, host } = await renderWith(() => of([site()]), 'NotConfigured');
+    fixture.detectChanges();
+
+    expect(host.querySelector('[data-testid="nayax-status-banner"]')).not.toBeNull();
+  });
+
+  it('hides the Nayax status banner once the connection is Ready (issue #539)', async () => {
+    const { fixture, host } = await renderWith(() => of([site()]), 'Ready');
+    fixture.detectChanges();
+
+    expect(host.querySelector('[data-testid="nayax-status-banner"]')).toBeNull();
   });
 });
