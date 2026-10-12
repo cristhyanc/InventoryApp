@@ -111,8 +111,8 @@ public class Business
 
     /// <summary>
     /// When the application was approved or refused, and <c>null</c> while no decision has been
-    /// recorded (issue #540). Approve, reject and deactivate are issue #509's work; nothing writes
-    /// this yet.
+    /// recorded (issue #540). It is written by the Super Admin's approve and reject (issue #544) and
+    /// by nothing else; deactivation and reactivation are issue #545's work.
     /// </summary>
     public DateTime? DecidedAtUtc { get; set; }
 

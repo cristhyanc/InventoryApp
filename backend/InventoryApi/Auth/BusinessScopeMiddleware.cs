@@ -21,8 +21,10 @@ namespace InventoryApi.Auth;
 /// are not signed in" and "you are signed in but not a member of any business". The scope simply
 /// stays denied, so even if such a request did reach persistence it would read and write nothing.
 ///
-/// <para><strong>One endpoint-specific exception (issue #336).</strong> The platform diagnostics
-/// endpoints are marked with <see cref="PlatformDiagnosticsEndpointAttribute"/> and may proceed
+/// <para><strong>One endpoint-specific exception (issue #336, extended to a second surface by issue
+/// #544).</strong> The platform-admin endpoints - the diagnostics API, and the Super Admin's
+/// business directory and decisions - are marked with
+/// <see cref="PlatformDiagnosticsEndpointAttribute"/> and may proceed
 /// without a business membership - but only after this middleware re-evaluates
 /// <see cref="PlatformAdminPolicy"/> and it succeeds. The check is made here, on this request,
 /// rather than inferred from the fact that the authorization middleware ran earlier in the
@@ -36,8 +38,11 @@ namespace InventoryApi.Auth;
 /// The tenant query filters and <c>BusinessOwnershipEnforcer</c> stay fully in force for it, so a
 /// diagnostics request reads nothing at all through <c>AppDbContext</c> and writes nothing
 /// anywhere; its cross-business read happens on the separate read-only SQLite connection the
-/// diagnostics adapter owns. "Unrestricted request-scoped context" remains something no request
-/// path can obtain.</para>
+/// diagnostics adapter owns. The Super Admin businesses API runs under exactly the same denied
+/// scope: what it reaches through <c>AppDbContext</c> is the two structurally non-tenant-owned
+/// tables plus one read-only column of the Nayax connection table, through one narrow store
+/// (docs/architecture.md § Super Admin businesses API). "Unrestricted request-scoped context"
+/// remains something no request path can obtain.</para>
 ///
 /// <para><strong>A second endpoint-specific exception (issue #523).</strong> An endpoint marked
 /// with <see cref="MembershipNotRequiredEndpointAttribute"/> may proceed without a membership for
@@ -99,7 +104,7 @@ public sealed class BusinessScopeMiddleware
             }
 
             _logger.LogWarning(
-                "Platform diagnostics access denied by the business-scope middleware: the "
+                "Platform-admin access denied by the business-scope middleware: the "
                     + "platform-admin policy did not succeed for this request.");
 
             await WriteForbiddenAsync(context, BusinessAccessDenialReason.MembershipMissing);

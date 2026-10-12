@@ -15,7 +15,9 @@ using InventoryApi.Adapters.Businesses;
 using InventoryApi.Adapters.Members;
 using InventoryApi.Adapters.Nayax;
 using InventoryApi.Adapters.Onboarding;
+using InventoryApi.Adapters.PlatformAdmin;
 using InventoryApi.Adapters.PlatformDiagnostics;
+using Inventory.Application.PlatformAdmin;
 using InventoryApi.Bootstrap;
 using InventoryApi.Auth;
 using InventoryApi.Auth.E2ETesting;
@@ -221,6 +223,12 @@ builder.Services.AddScoped<IBusinessSettingsAudit, LoggingBusinessSettingsAudit>
 // ABN, which is what keeps a stranger's submitted personal and tax detail out of the audit trail
 // structurally rather than by a sink's discretion.
 builder.Services.AddScoped<IBusinessApplicationAudit, LoggingBusinessApplicationAudit>();
+// The platform business-decision audit trail (issue #544), on the same terms again, and the first
+// one about a platform-admin *write*. A separate port from the four above because a decision is a
+// different event with different fields - and because its entry type has no field for a business
+// name, a contact address, an applicant identity or the rejection reason's text, which is what keeps
+// all four out of the audit trail structurally rather than by a sink's discretion.
+builder.Services.AddScoped<IPlatformBusinessDecisionAudit, LoggingPlatformBusinessDecisionAudit>();
 
 // Whether self-service onboarding is switched on at all (issue #541). Read once here, because only
 // the composition root reads configuration, and published as the Application layer's narrow flag
