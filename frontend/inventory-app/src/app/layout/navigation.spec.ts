@@ -1,3 +1,4 @@
+import { capabilitySet } from '../access/capabilities';
 import { routes } from '../app.routes';
 import {
   NavGroup,
@@ -10,6 +11,49 @@ import {
   platformDiagnosticsNavLink,
   primaryNavigation
 } from './navigation';
+
+/**
+ * Each role's capability set, written out literally from the agreed table of #328 rather than read
+ * back from the vocabulary, so a navigation entry that quietly moves to another capability fails
+ * here instead of agreeing with itself.
+ */
+const OPERATOR = capabilitySet(['Dashboard.View', 'PickList.View', 'Inventory.Operate', 'Purchasing.Operate']);
+
+const MANAGER = capabilitySet([
+  'Dashboard.View',
+  'Dashboard.ViewFinancials',
+  'PickList.View',
+  'Inventory.Operate',
+  'Purchasing.Operate',
+  'Suppliers.ManageGstDefaults',
+  'Expenses.Manage',
+  'Reports.View',
+  'Imports.Run',
+  'SiteCommissions.Manage'
+]);
+
+const OWNER = capabilitySet([
+  'Dashboard.View',
+  'Dashboard.ViewFinancials',
+  'PickList.View',
+  'Inventory.Operate',
+  'Purchasing.Operate',
+  'Suppliers.ManageGstDefaults',
+  'Expenses.Manage',
+  'Reports.View',
+  'Imports.Run',
+  'SiteCommissions.Manage',
+  'Integration.Manage',
+  'Data.Repair',
+  'Members.Manage',
+  'Roles.View',
+  'Business.Manage'
+]);
+
+/** The navigation an Owner is offered, which is every declared destination. */
+function ownerNavigation(hasPlatformDiagnosticsAccess = false): readonly NavItem[] {
+  return navigationFor(OWNER, hasPlatformDiagnosticsAccess);
+}
 
 function item(label: string, items: readonly NavItem[] = primaryNavigation): NavLink | NavGroup {
   const match = items.find((candidate) => candidate.label === label);
@@ -150,44 +194,176 @@ describe('primary navigation (issue #391)', () => {
  */
 describe('navigationFor (issue #335)', () => {
   it('offers no diagnostics destination until the API confirms platform-admin access', () => {
-    expect(navLinks(navigationFor(false)).map((link) => link.route)).not.toContain(platformDiagnosticsNavLink.route);
-    expect(childRoutes('Admin', navigationFor(false))).toEqual(adminChildRoutes);
+    expect(navLinks(ownerNavigation()).map((link) => link.route)).not.toContain(platformDiagnosticsNavLink.route);
+    expect(childRoutes('Admin', ownerNavigation())).toEqual(adminChildRoutes);
   });
 
   it('adds it to the Admin group, last, once the API confirms access', () => {
-    expect(childRoutes('Admin', navigationFor(true))).toEqual([
+    expect(childRoutes('Admin', ownerNavigation(true))).toEqual([
       ...adminChildRoutes,
       { label: 'Platform Diagnostics', route: '/admin/diagnostics' }
     ]);
   });
 
   it('changes nothing else: the same groups, the same order, and no other new destination', () => {
-    expect(navigationFor(true).map((entry) => `${entry.kind}:${entry.label}`)).toEqual(
+    expect(ownerNavigation(true).map((entry) => `${entry.kind}:${entry.label}`)).toEqual(
       primaryNavigation.map((entry) => `${entry.kind}:${entry.label}`)
     );
-    expect(navLinks(navigationFor(true)).map((link) => link.route)).toEqual([
+    expect(navLinks(ownerNavigation(true)).map((link) => link.route)).toEqual([
       ...navLinks(primaryNavigation).map((link) => link.route),
       platformDiagnosticsNavLink.route
     ]);
   });
 
   it('leaves primaryNavigation itself untouched, so one granted navigation cannot leak into another', () => {
-    navigationFor(true);
+    ownerNavigation(true);
+    navigationFor(OPERATOR, true);
 
     expect(childRoutes('Admin')).toEqual(adminChildRoutes);
+    expect(primaryNavigation.map((entry) => entry.label)).toEqual([
+      'Dashboard',
+      'Pick List',
+      'Products',
+      'Machines',
+      'Sites',
+      'Purchases',
+      'Expenses',
+      'Reports',
+      'Admin'
+    ]);
   });
 
   it('points only at routes declared in app.routes.ts, with or without access', () => {
-    expect(undeclaredRoutes(navigationFor(false))).toEqual([]);
-    expect(undeclaredRoutes(navigationFor(true))).toEqual([]);
+    expect(undeclaredRoutes(ownerNavigation())).toEqual([]);
+    expect(undeclaredRoutes(ownerNavigation(true))).toEqual([]);
+    expect(undeclaredRoutes(navigationFor(OPERATOR, false))).toEqual([]);
+    expect(undeclaredRoutes(navigationFor(MANAGER, false))).toEqual([]);
+    expect(undeclaredRoutes(navigationFor(undefined, true))).toEqual([]);
   });
 
   it('resolves the diagnostics page as the active entry inside the Admin group', () => {
-    const granted = navigationFor(true);
+    const granted = ownerNavigation(true);
 
     expect(activeNavRoute(granted, '/admin/diagnostics')).toBe('/admin/diagnostics');
     expect(activeNavGroup(granted, '/admin/diagnostics')?.label).toBe('Admin');
-    expect(activeNavRoute(navigationFor(false), '/admin/diagnostics')).toBeUndefined();
+    expect(activeNavRoute(ownerNavigation(), '/admin/diagnostics')).toBeUndefined();
+  });
+
+  /**
+   * The diagnostics link declares no capability, so it is offered to the configured platform
+   * administrator whatever business role they hold - which is the point: no role grants it, and
+   * only `GET /api/admin/diagnostics/access` can say yes.
+   */
+  it('keeps the diagnostics link independent of the member capabilities', () => {
+    const operator = navigationFor(OPERATOR, true);
+
+    expect(childRoutes('Admin', operator)).toEqual([{ label: 'Platform Diagnostics', route: '/admin/diagnostics' }]);
+    expect(navLinks(navigationFor(OPERATOR, false)).map((link) => link.route)).not.toContain('/admin/diagnostics');
+  });
+});
+
+/**
+ * The navigation is built from the capabilities `GET /api/me/access` reported (issue #528). Each
+ * destination declares the capability its own page needs, and the API checks the same capability
+ * on every request behind that page - so a destination that is not rendered hides a page rather
+ * than protecting one.
+ */
+describe('navigationFor capabilities (issue #528)', () => {
+  function labels(items: readonly NavItem[]): string[] {
+    return items.map((entry) => entry.label);
+  }
+
+  it('declares the capability its own page needs on every destination', () => {
+    const undeclared = navLinks(primaryNavigation)
+      .filter((entry) => entry.capability === undefined)
+      .map((entry) => entry.route);
+
+    expect(undeclared).toEqual([]);
+  });
+
+  it('offers an Operator no Expenses, no Reports group and no Admin group', () => {
+    const operator = navigationFor(OPERATOR, false);
+
+    expect(labels(operator)).toEqual(['Dashboard', 'Pick List', 'Products', 'Machines', 'Sites', 'Purchases']);
+    expect(navLinks(operator).map((entry) => entry.route)).toEqual([
+      '/',
+      '/pick-list',
+      '/products',
+      '/take-inventory',
+      '/categories',
+      '/stock-history',
+      '/machines',
+      '/sites',
+      '/purchases',
+      '/purchases/orders',
+      '/suppliers'
+    ]);
+  });
+
+  it('offers a Manager the reports and expenses, but no Nayax Settings and no data repair', () => {
+    const manager = navigationFor(MANAGER, false);
+
+    expect(labels(manager)).toEqual([
+      'Dashboard',
+      'Pick List',
+      'Products',
+      'Machines',
+      'Sites',
+      'Purchases',
+      'Expenses',
+      'Reports',
+      'Admin'
+    ]);
+    expect(childRoutes('Reports', manager).map((child) => child.route)).toEqual(
+      childRoutes('Reports').map((child) => child.route)
+    );
+    expect(childRoutes('Admin', manager)).toEqual([
+      { label: 'Site Commission Agreements', route: '/admin/site-commission-agreements' },
+      { label: 'Imports', route: '/admin/imports' }
+    ]);
+  });
+
+  it('offers an Owner every declared destination', () => {
+    expect(navLinks(ownerNavigation()).map((entry) => entry.route)).toEqual(
+      navLinks(primaryNavigation).map((entry) => entry.route)
+    );
+  });
+
+  /**
+   * No current role is missing `Reports.View` while holding `SiteCommissions.Manage`, but the
+   * group must drop only the children the capability set actually withholds, not the whole group.
+   */
+  it('keeps a group whose children are only partly allowed, with only those children', () => {
+    const reportsOnly = capabilitySet(['SiteCommissions.Manage']);
+
+    expect(childRoutes('Reports', navigationFor(reportsOnly, false))).toEqual([
+      { label: 'Site Commissions', route: '/reports/site-commissions' }
+    ]);
+  });
+
+  it('offers nothing at all for an empty capability set, which is what an unread one renders as', () => {
+    expect(navigationFor(capabilitySet([]), false)).toEqual([]);
+    expect(navLinks(navigationFor(capabilitySet([]), false))).toEqual([]);
+  });
+
+  /**
+   * A capability set that could not be read offers everything: the API refuses what the role may
+   * not do regardless, and an empty menu would strand a member whose capability read failed.
+   */
+  it('offers every destination when the capability set is not known', () => {
+    expect(navigationFor(undefined, false)).toEqual(primaryNavigation);
+    expect(childRoutes('Admin', navigationFor(undefined, true))).toEqual([
+      ...adminChildRoutes,
+      { label: 'Platform Diagnostics', route: '/admin/diagnostics' }
+    ]);
+  });
+
+  it('resolves the active entry only among the destinations the member was offered', () => {
+    const operator = navigationFor(OPERATOR, false);
+
+    expect(activeNavRoute(operator, '/products/12/edit')).toBe('/products');
+    expect(activeNavRoute(operator, '/reports/gst')).toBeUndefined();
+    expect(activeNavGroup(operator, '/admin/costing-repair')).toBeUndefined();
   });
 });
 

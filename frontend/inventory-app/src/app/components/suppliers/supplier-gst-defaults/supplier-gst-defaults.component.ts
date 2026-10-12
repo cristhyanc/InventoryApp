@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Observable, of, Subject, Subscription } from 'rxjs';
 import { catchError, map, switchMap, tap } from 'rxjs/operators';
+import { AccessService } from '../../../access/access.service';
 import { SupplierService } from '../../../services/supplier.service';
 import { GstClassification, SupplierGstDefaults } from '../../../models/models';
 
@@ -18,6 +19,14 @@ type SupplierGstDefaultsRead = { id: number; defaults: SupplierGstDefaults | nul
  * delivery. A default is explicit configuration - a supplier being GST-registered is never enough
  * to classify its products - and it only applies where the purchased product has no rule of its
  * own. Saving it reclassifies no purchase that is already recorded.
+ *
+ * **The editor is the one action this page hides by role** (issue #528). Reading the defaults is
+ * on `Purchasing.Operate`, because an Operator recording a purchase needs to see which
+ * classification it will be given, while changing them needs `Suppliers.ManageGstDefaults` - the
+ * one read/write split in the whole capability matrix (issue #525). Without that capability the
+ * three pickers are read-only and the Save control is not rendered; `PUT
+ * /api/suppliers/{id}/gst-defaults` refuses the write itself either way, so this hides a control
+ * rather than protecting the configuration.
  */
 @Component({
   selector: 'app-supplier-gst-defaults',
@@ -57,10 +66,26 @@ export class SupplierGstDefaultsComponent implements OnChanges, OnDestroy {
   saved = false;
   error = '';
 
+  /**
+   * Whether the signed-in member's role may change these defaults. It starts `true` so an
+   * unanswered capability read leaves the control exactly as it was before roles were rendered:
+   * the API refuses the write regardless, and hiding an editor on a read that has not answered
+   * yet would take it away from the Owner it belongs to.
+   */
+  canManage = true;
+
   private readonly requestedSupplierId = new Subject<number | null>();
   private readonly loads: Subscription;
+  private readonly manageAccess: Subscription;
 
-  constructor(private supplierService: SupplierService) {
+  constructor(
+    private supplierService: SupplierService,
+    access: AccessService
+  ) {
+    this.manageAccess = access
+      .allows('Suppliers.ManageGstDefaults')
+      .subscribe((allowed) => (this.canManage = allowed));
+
     // switchMap cancels the in-flight read whenever the selected supplier changes, so opening
     // supplier A and then B can never let A's slower response populate B's form - and a later save
     // write A's values onto B. The identity check discards a response that arrives regardless.
@@ -108,12 +133,16 @@ export class SupplierGstDefaultsComponent implements OnChanges, OnDestroy {
 
   ngOnDestroy(): void {
     this.loads.unsubscribe();
+    this.manageAccess.unsubscribe();
     this.requestedSupplierId.complete();
   }
 
   save(): void {
     const id = this.supplierId;
-    if (id === null || !this.loaded || this.saving) {
+    // `canManage` is checked here as well as in the template, so the hidden action is actually
+    // unavailable rather than merely invisible. It is not the boundary: the endpoint refuses the
+    // write itself, and this only avoids issuing a request that is already known to be refused.
+    if (id === null || !this.loaded || this.saving || !this.canManage) {
       return;
     }
 

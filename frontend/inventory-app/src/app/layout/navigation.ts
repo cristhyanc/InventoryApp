@@ -1,3 +1,5 @@
+import { Capability, CapabilitySet } from '../access/capabilities';
+
 /**
  * The application shell's primary navigation (issue #391, parent #383).
  *
@@ -5,18 +7,29 @@
  * business meaning: every `route` must be a real page declared in `app.routes.ts` (the
  * co-located spec asserts that), and nothing here may introduce a destination ahead of the page
  * that serves it.
+ *
+ * Since issue #528 each destination also declares the capability its page needs, and
+ * `navigationFor` renders only the destinations the signed-in member's capability set allows. The
+ * capability is presentation data like the label and the icon: the endpoints behind each page
+ * check the same capability themselves (see docs/architecture.md § Capability authorization), so a
+ * destination that is not rendered hides a page rather than protecting one.
  */
 
 /**
  * A navigable destination. `icon` is decorative and only the top-level rail needs one; it names a
  * glyph the sidebar renders through `app-icon` in its outlined variant, so the name must have an
  * entry in `OUTLINED_ICON_SHAPES` (issues #411 and #456) and not only in the Rounded `ICON_PATHS`.
+ *
+ * `capability` is the capability the destination's own page needs, as `GET /api/me/access` names
+ * it. A destination without one is offered to every member, which today is only the conditional
+ * `Platform Diagnostics` link, whose own API decides it instead (issue #335).
  */
 export interface NavLink {
   readonly kind: 'link';
   readonly label: string;
   readonly route: string;
   readonly icon?: string;
+  readonly capability?: Capability;
 }
 
 /** An expandable heading. It toggles its children and is deliberately not itself a destination. */
@@ -29,47 +42,53 @@ export interface NavGroup {
 
 export type NavItem = NavLink | NavGroup;
 
-function link(label: string, route: string): NavLink {
-  return { kind: 'link', label, route };
+function link(label: string, route: string, capability: Capability): NavLink {
+  return { kind: 'link', label, route, capability };
 }
 
 export const primaryNavigation: readonly NavItem[] = [
-  { kind: 'link', label: 'Dashboard', route: '/', icon: 'home' },
-  { kind: 'link', label: 'Pick List', route: '/pick-list', icon: 'assignment' },
+  { kind: 'link', label: 'Dashboard', route: '/', icon: 'home', capability: 'Dashboard.View' },
+  { kind: 'link', label: 'Pick List', route: '/pick-list', icon: 'assignment', capability: 'PickList.View' },
   {
     kind: 'group',
     label: 'Products',
     icon: 'inventory_2',
     children: [
-      link('Products', '/products'),
-      link('Take Inventory', '/take-inventory'),
-      link('Categories', '/categories'),
-      link('Stock History', '/stock-history')
+      link('Products', '/products', 'Inventory.Operate'),
+      link('Take Inventory', '/take-inventory', 'Inventory.Operate'),
+      link('Categories', '/categories', 'Inventory.Operate'),
+      link('Stock History', '/stock-history', 'Inventory.Operate')
     ]
   },
-  { kind: 'link', label: 'Machines', route: '/machines', icon: 'refresh' },
-  { kind: 'link', label: 'Sites', route: '/sites', icon: 'location_on' },
+  { kind: 'link', label: 'Machines', route: '/machines', icon: 'refresh', capability: 'Inventory.Operate' },
+  { kind: 'link', label: 'Sites', route: '/sites', icon: 'location_on', capability: 'Inventory.Operate' },
   {
     kind: 'group',
     label: 'Purchases',
     icon: 'download',
-    children: [link('Purchases', '/purchases'), link('Supplier Orders', '/purchases/orders'), link('Suppliers', '/suppliers')]
+    children: [
+      link('Purchases', '/purchases', 'Purchasing.Operate'),
+      link('Supplier Orders', '/purchases/orders', 'Purchasing.Operate'),
+      link('Suppliers', '/suppliers', 'Purchasing.Operate')
+    ]
   },
-  { kind: 'link', label: 'Expenses', route: '/expenses', icon: 'attach_money' },
+  { kind: 'link', label: 'Expenses', route: '/expenses', icon: 'attach_money', capability: 'Expenses.Manage' },
   {
     kind: 'group',
     label: 'Reports',
     icon: 'bar_chart',
     children: [
-      link('Dashboard', '/reports'),
-      link('Bookkeeping', '/reports/bookkeeping'),
-      link('Daily', '/reports/daily'),
-      link('Transactions', '/reports/transactions'),
-      link('Reconciliation', '/reports/reconciliation'),
-      link('Machines', '/reports/machines'),
-      link('Products', '/reports/products'),
-      link('GST', '/reports/gst'),
-      link('Site Commissions', '/reports/site-commissions')
+      link('Dashboard', '/reports', 'Reports.View'),
+      link('Bookkeeping', '/reports/bookkeeping', 'Reports.View'),
+      link('Daily', '/reports/daily', 'Reports.View'),
+      link('Transactions', '/reports/transactions', 'Reports.View'),
+      link('Reconciliation', '/reports/reconciliation', 'Reports.View'),
+      link('Machines', '/reports/machines', 'Reports.View'),
+      link('Products', '/reports/products', 'Reports.View'),
+      link('GST', '/reports/gst', 'Reports.View'),
+      // The site commission report is the surface the agreements are maintained from, so the API
+      // puts it on SiteCommissions.Manage rather than Reports.View (issue #526).
+      link('Site Commissions', '/reports/site-commissions', 'SiteCommissions.Manage')
     ]
   },
   {
@@ -77,14 +96,14 @@ export const primaryNavigation: readonly NavItem[] = [
     label: 'Admin',
     icon: 'settings',
     children: [
-      link('Nayax Settings', '/admin/nayax-settings'),
-      link('Site Commission Agreements', '/admin/site-commission-agreements'),
-      link('Imports', '/admin/imports'),
-      link('Historical Cost Recovery', '/admin/historical-cost-recovery'),
-      link('AVCO Transition', '/admin/avco-transition'),
-      link('Costing Repair', '/admin/costing-repair'),
-      link('Historical GST Classification', '/admin/historical-gst-classification'),
-      link('Nayax Sale Timestamp Repair', '/admin/nayax-sale-timestamp-repair')
+      link('Nayax Settings', '/admin/nayax-settings', 'Integration.Manage'),
+      link('Site Commission Agreements', '/admin/site-commission-agreements', 'SiteCommissions.Manage'),
+      link('Imports', '/admin/imports', 'Imports.Run'),
+      link('Historical Cost Recovery', '/admin/historical-cost-recovery', 'Data.Repair'),
+      link('AVCO Transition', '/admin/avco-transition', 'Data.Repair'),
+      link('Costing Repair', '/admin/costing-repair', 'Data.Repair'),
+      link('Historical GST Classification', '/admin/historical-gst-classification', 'Data.Repair'),
+      link('Nayax Sale Timestamp Repair', '/admin/nayax-sale-timestamp-repair', 'Data.Repair')
     ]
   }
 ];
@@ -99,24 +118,61 @@ export const primaryNavigation: readonly NavItem[] = [
  * directly still resolves, and both diagnostics endpoints authorize every request themselves, so
  * a hidden link hides a page rather than protecting one.
  */
-export const platformDiagnosticsNavLink: NavLink = link('Platform Diagnostics', '/admin/diagnostics');
+export const platformDiagnosticsNavLink: NavLink = {
+  kind: 'link',
+  label: 'Platform Diagnostics',
+  route: '/admin/diagnostics'
+};
 
 /**
- * The navigation to render for an actor the diagnostics API has, or has not, confirmed as the
- * platform administrator. It adds exactly one destination to the end of the `Admin` group and
- * changes nothing else, and it copies rather than mutates, so `primaryNavigation` stays the
- * navigation everyone else sees.
+ * The navigation to render for a member, from the capabilities `GET /api/me/access` reported for
+ * them and the diagnostics API's separate answer about platform-admin access.
+ *
+ * A destination whose capability the member does not hold is left out, and a group all of whose
+ * children were left out is left out with them - so an Operator is offered no `Expenses`, no
+ * `Reports` group and no `Admin` group, and a Manager's `Admin` group holds the imports and the
+ * site commission agreements without the Nayax settings or any data repair. `capabilities` of
+ * `undefined` means the capability set is not known (it could not be read); every destination is
+ * then offered, because the API refuses what the role may not do regardless and hiding the whole
+ * menu over a failed read would be worse than offering a page that answers `403` - see
+ * `AccessService`.
+ *
+ * `Platform Diagnostics` keeps the behaviour issue #335 gave it, unchanged and independent of any
+ * capability: it is appended to the end of the `Admin` group only while
+ * `GET /api/admin/diagnostics/access` confirms access, and it declares no capability of its own
+ * because no business role grants it.
+ *
+ * Everything here copies rather than mutates, so `primaryNavigation` stays the full declared
+ * navigation and one member's rendered menu can never leak into another's.
  */
-export function navigationFor(hasPlatformDiagnosticsAccess: boolean): readonly NavItem[] {
-  if (!hasPlatformDiagnosticsAccess) {
-    return primaryNavigation;
+export function navigationFor(
+  capabilities: CapabilitySet | undefined,
+  hasPlatformDiagnosticsAccess: boolean
+): readonly NavItem[] {
+  const offered = hasPlatformDiagnosticsAccess
+    ? primaryNavigation.map((item) =>
+        item.kind === 'group' && item.label === 'Admin'
+          ? { ...item, children: [...item.children, platformDiagnosticsNavLink] }
+          : item
+      )
+    : primaryNavigation;
+
+  if (capabilities === undefined) {
+    return offered;
   }
 
-  return primaryNavigation.map((item) =>
-    item.kind === 'group' && item.label === 'Admin'
-      ? { ...item, children: [...item.children, platformDiagnosticsNavLink] }
-      : item
-  );
+  return offered.flatMap<NavItem>((item) => {
+    if (item.kind === 'link') {
+      return allowsLink(capabilities, item) ? [item] : [];
+    }
+
+    const children = item.children.filter((child) => allowsLink(capabilities, child));
+    return children.length === 0 ? [] : [{ ...item, children }];
+  });
+}
+
+function allowsLink(capabilities: CapabilitySet, navLink: NavLink): boolean {
+  return navLink.capability === undefined || capabilities.has(navLink.capability);
 }
 
 /** Every destination in the navigation, top-level links first, then each group's children. */
