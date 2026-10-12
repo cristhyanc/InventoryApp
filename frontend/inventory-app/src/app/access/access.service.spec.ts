@@ -338,6 +338,142 @@ describe('AccessService refresh triggers (issue #528)', () => {
   });
 });
 
+/**
+ * An actual change of signed-in identity owns the cache from the moment it happens (issue #603).
+ * The previous identity's answer is not a weaker answer for the new one - it is somebody else's,
+ * and publishing it for a moment is long enough for a guard or a menu to be built from it.
+ */
+describe('AccessService identity change (issue #603)', () => {
+  it('drops the previous identity’s answer before the new identity’s read answers', () => {
+    const pending = new Subject<unknown>();
+    const { signIn, raise, observe } = configure({ responses: [() => of(OWNER_RESPONSE), () => pending] });
+    const observed = observe();
+    expect(statuses(observed)).toEqual(['granted']);
+
+    signIn('member-2');
+    raise(EventType.ACTIVE_ACCOUNT_CHANGED);
+
+    expect(statuses(observed)).toEqual(['granted', 'unread']);
+
+    pending.next(OPERATOR_RESPONSE);
+    pending.complete();
+
+    expect(statuses(observed)).toEqual(['granted', 'unread', 'granted']);
+  });
+
+  it('answers a subscriber that arrives while the new read is pending from the new identity', async () => {
+    const pending = new Subject<unknown>();
+    const { service, signIn, raise, observe } = configure({
+      responses: [() => of(OWNER_RESPONSE), () => pending]
+    });
+    observe();
+
+    signIn('member-2');
+    raise(EventType.ACTIVE_ACCOUNT_CHANGED);
+    const allowed = firstValueFrom(service.allows('Reports.View'));
+
+    pending.next(OPERATOR_RESPONSE);
+    pending.complete();
+
+    await expect(allowed).resolves.toBe(false);
+  });
+
+  it('publishes nothing for an identity two switches ago, and reads each switch once', async () => {
+    const first = new Subject<unknown>();
+    const second = new Subject<unknown>();
+    const { service, get, signIn, raise, observe } = configure({
+      responses: [() => first, () => second, () => of(OPERATOR_RESPONSE)]
+    });
+    const observed = observe();
+
+    signIn('member-2');
+    raise(EventType.ACTIVE_ACCOUNT_CHANGED);
+    signIn('member-3');
+    raise(EventType.ACTIVE_ACCOUNT_CHANGED);
+    expect(get).toHaveBeenCalledTimes(3);
+
+    first.next(OWNER_RESPONSE);
+    first.complete();
+    second.next(OWNER_RESPONSE);
+    second.complete();
+
+    expect(statuses(observed)).toEqual(['unread', 'granted']);
+    await expect(firstValueFrom(service.allows('Reports.View'))).resolves.toBe(false);
+  });
+
+  /** A late answer must not look like the new identity's read finishing, either. */
+  it('leaves the new identity’s read pending when the previous identity answers last', () => {
+    const stale = new Subject<unknown>();
+    const current = new Subject<unknown>();
+    const { service, get, signIn, raise, observe } = configure({
+      responses: [() => stale, () => current]
+    });
+    const observed = observe();
+
+    signIn('member-2');
+    raise(EventType.ACTIVE_ACCOUNT_CHANGED);
+    expect(get).toHaveBeenCalledTimes(2);
+
+    stale.next(OWNER_RESPONSE);
+    stale.complete();
+    service.refreshUnlessReading();
+
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(statuses(observed)).toEqual(['unread']);
+  });
+
+  /**
+   * One sign-in reports itself twice - MSAL raises its account event and `inProgress$` settles -
+   * and neither may become a second read of the same identity.
+   */
+  it('issues one read when an account event and the settling interaction report one change', () => {
+    const { get, inProgress$, signIn, raise, observe } = configure();
+    observe();
+    expect(get).toHaveBeenCalledTimes(1);
+
+    inProgress$.next(InteractionStatus.HandleRedirect);
+    signIn('member-2');
+    raise(EventType.ACTIVE_ACCOUNT_CHANGED);
+    expect(get).toHaveBeenCalledTimes(1);
+
+    inProgress$.next(InteractionStatus.None);
+
+    expect(get).toHaveBeenCalledTimes(2);
+  });
+
+  it('clears the answer and the pending read on a sign-out, without reading again', () => {
+    const pending = new Subject<unknown>();
+    const { service, get, signIn, raise, observe } = configure({
+      responses: [() => of(OWNER_RESPONSE), () => pending]
+    });
+    const observed = observe();
+    service.refresh();
+
+    signIn(null);
+    raise(EventType.LOGOUT_SUCCESS);
+    pending.next(OWNER_RESPONSE);
+    pending.complete();
+
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(statuses(observed)).toEqual(['granted', 'unread']);
+  });
+
+  /** The explicit refresh is unchanged: a same-identity re-read keeps its own answer meanwhile. */
+  it('keeps its own answer published while a same-identity refresh is in flight', () => {
+    const pending = new Subject<unknown>();
+    const { service, observe } = configure({ responses: [() => of(OWNER_RESPONSE), () => pending] });
+    const observed = observe();
+
+    service.refresh();
+    expect(statuses(observed)).toEqual(['granted']);
+
+    pending.next(OPERATOR_RESPONSE);
+    pending.complete();
+
+    expect(statuses(observed)).toEqual(['granted', 'granted']);
+  });
+});
+
 /** `allows` is live, so an action hidden by a stale answer reappears when a refresh allows it. */
 describe('AccessService live capability answers (issue #528)', () => {
   it('emits again when a refresh changes the answer', async () => {

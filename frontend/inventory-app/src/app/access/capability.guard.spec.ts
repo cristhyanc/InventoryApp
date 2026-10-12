@@ -3,8 +3,8 @@ import { Component } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
 import { MsalBroadcastService, MsalService } from '@azure/msal-angular';
-import { AccountInfo, InteractionStatus } from '@azure/msal-browser';
-import { EMPTY, Subject, of, throwError } from 'rxjs';
+import { AccountInfo, EventMessage, EventType, InteractionStatus } from '@azure/msal-browser';
+import { Subject, of, throwError } from 'rxjs';
 import { ConfigService } from '../services/config.service';
 import { AccessNotAllowedComponent } from './access-not-allowed.component';
 import { AccessService } from './access.service';
@@ -20,7 +20,9 @@ class AdminPageComponent {}
 @Component({ standalone: true, template: 'dashboard' })
 class DashboardPageComponent {}
 
-const ACCOUNT = { homeAccountId: 'member-1' } as unknown as AccountInfo;
+function account(homeAccountId: string): AccountInfo {
+  return { homeAccountId } as unknown as AccountInfo;
+}
 
 /** The Operator and Owner rows of #328's table, written out rather than derived. */
 const OPERATOR_CAPABILITIES = ['Dashboard.View', 'PickList.View', 'Inventory.Operate', 'Purchasing.Operate'];
@@ -29,23 +31,31 @@ function response(capabilities: readonly string[]): unknown {
   return { role: 'Test', capabilities: [...capabilities], businessName: 'Vending Co', timeZoneId: 'Australia/Sydney' };
 }
 
+interface Guarded {
+  router: Router;
+  access: AccessService;
+  /** Makes MSAL report a different signed-in account, as switching Microsoft account does. */
+  switchAccount(accountId: string): void;
+}
+
 /**
  * The guard is exercised against the real `AccessService`, with only its one `GET` doubled: a stub
  * that re-implemented the capability answer would be testing itself.
  */
-function accessService(read: () => unknown): AccessService {
-  return new AccessService(
+async function withGuards(read: () => unknown): Promise<Guarded> {
+  let signedIn = 'member-1';
+  const msalSubject$ = new Subject<EventMessage>();
+  const access = new AccessService(
     { get: read } as unknown as HttpClient,
     { apiBaseUrl: '/api' } as unknown as ConfigService,
     {
-      instance: { getActiveAccount: () => ACCOUNT, getAllAccounts: () => [ACCOUNT] }
+      instance: {
+        getActiveAccount: () => account(signedIn),
+        getAllAccounts: () => [account(signedIn)]
+      }
     } as unknown as MsalService,
-    { inProgress$: of(InteractionStatus.None), msalSubject$: EMPTY } as unknown as MsalBroadcastService
+    { inProgress$: of(InteractionStatus.None), msalSubject$ } as unknown as MsalBroadcastService
   );
-}
-
-async function withGuards(read: () => unknown): Promise<{ router: Router; access: AccessService }> {
-  const access = accessService(read);
 
   await TestBed.configureTestingModule({
     providers: [
@@ -63,7 +73,14 @@ async function withGuards(read: () => unknown): Promise<{ router: Router; access
     ]
   }).compileComponents();
 
-  return { router: TestBed.inject(Router), access };
+  return {
+    router: TestBed.inject(Router),
+    access,
+    switchAccount: (accountId) => {
+      signedIn = accountId;
+      msalSubject$.next({ eventType: EventType.ACTIVE_ACCOUNT_CHANGED } as EventMessage);
+    }
+  };
 }
 
 async function renderAccessNotAllowed(): Promise<HTMLElement> {
@@ -176,6 +193,48 @@ describe('requireCapability (issue #528)', () => {
 
     capabilities = OPERATOR_CAPABILITIES;
     access.refresh();
+
+    expect(router.url).toBe('/reports');
+  });
+
+  /**
+   * A guard that activates while the new account's read is still in flight must wait for it
+   * (issue #603). The previous account's capability set is not a usable approximation: it would
+   * open a page to somebody whose own role may not hold it, and the moment between the switch and
+   * the new answer is exactly when a navigation happens.
+   */
+  it('waits for the new account rather than deciding from the previous account’s capabilities', async () => {
+    const pending = new Subject<unknown>();
+    const reads: (() => unknown)[] = [() => of(response(CAPABILITIES)), () => pending];
+    const { router, access, switchAccount } = await withGuards(() => (reads.shift() as () => unknown)());
+    // The shell reads the first account's capabilities as the application renders.
+    access.access$.subscribe();
+
+    switchAccount('member-2');
+    let settled = false;
+    const navigation = router.navigateByUrl('/reports').then(() => (settled = true));
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(router.url).toBe('/');
+
+    pending.next(response(OPERATOR_CAPABILITIES));
+    pending.complete();
+    await navigation;
+
+    expect(router.url).toBe(`/${ACCESS_NOT_ALLOWED_PATH}`);
+  });
+
+  it('lets the new account through once their own capability set allows the page', async () => {
+    const pending = new Subject<unknown>();
+    const reads: (() => unknown)[] = [() => of(response(OPERATOR_CAPABILITIES)), () => pending];
+    const { router, access, switchAccount } = await withGuards(() => (reads.shift() as () => unknown)());
+    access.access$.subscribe();
+
+    switchAccount('member-2');
+    const navigation = router.navigateByUrl('/reports');
+    pending.next(response(CAPABILITIES));
+    pending.complete();
+    await navigation;
 
     expect(router.url).toBe('/reports');
   });

@@ -1,10 +1,14 @@
+import { HttpClient } from '@angular/common/http';
 import { Component } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
-import { BehaviorSubject, NEVER, Observable, of, throwError } from 'rxjs';
+import { MsalBroadcastService, MsalService } from '@azure/msal-angular';
+import { AccountInfo, EventMessage, EventType, InteractionStatus } from '@azure/msal-browser';
+import { BehaviorSubject, NEVER, Observable, Subject, of, throwError } from 'rxjs';
 import { AccessService, MemberAccess, MemberAccessState } from '../access/access.service';
 import { CAPABILITIES, Capability, capabilitySet } from '../access/capabilities';
 import { ICON_PATHS, OUTLINED_ICON_SHAPES } from '../components/shared/icon-paths';
+import { ConfigService } from '../services/config.service';
 import { PlatformDiagnosticsAccessService } from '../services/platform-diagnostics-access.service';
 import { PRIMARY_NAVIGATION_ID, SidebarNavComponent } from './sidebar-nav.component';
 import { NavGroup, navLinks, primaryNavigation } from './navigation';
@@ -44,6 +48,8 @@ async function render(
     navId?: string;
     diagnosticsAccess?: Observable<boolean>;
     access?: Observable<MemberAccessState>;
+    /** The real `AccessService`, for the tests that are about what it publishes when (issue #603). */
+    accessService?: AccessService;
   } = {}
 ): Promise<Rendered> {
   await TestBed.configureTestingModule({
@@ -52,7 +58,7 @@ async function render(
       provideRouter([{ path: '**', component: BlankPageComponent }]),
       {
         provide: AccessService,
-        useValue: { access$: options.access ?? of(EVERY_CAPABILITY) }
+        useValue: options.accessService ?? { access$: options.access ?? of(EVERY_CAPABILITY) }
       },
       {
         provide: PlatformDiagnosticsAccessService,
@@ -397,6 +403,77 @@ describe('SidebarNavComponent capability-driven menu (issue #528)', () => {
       false
     );
     expect(link(host, '/admin/nayax-settings')).toBeNull();
+  });
+});
+
+/**
+ * The menu after a Microsoft account change (issue #603). The sidebar holds one long-lived
+ * subscription for the life of the shell, so it is the consumer that would otherwise keep
+ * presenting the previous account's destinations for as long as the new account's read takes.
+ */
+describe('SidebarNavComponent menu across an account change (issue #603)', () => {
+  const OWNER_RESPONSE = {
+    role: 'Owner',
+    capabilities: [...CAPABILITIES],
+    businessName: 'Vending Co',
+    timeZoneId: 'Australia/Sydney'
+  };
+  const OPERATOR_RESPONSE = {
+    role: 'Operator',
+    capabilities: ['Dashboard.View', 'PickList.View', 'Inventory.Operate', 'Purchasing.Operate'],
+    businessName: 'Other Co',
+    timeZoneId: 'Australia/Sydney'
+  };
+
+  function account(homeAccountId: string): AccountInfo {
+    return { homeAccountId } as unknown as AccountInfo;
+  }
+
+  /** The real service, with only its one `GET` and MSAL's two signals doubled. */
+  function accessWithSwitch(reads: (() => unknown)[]): { access: AccessService; switchAccount(id: string): void } {
+    let signedIn = 'member-1';
+    const msalSubject$ = new Subject<EventMessage>();
+    const access = new AccessService(
+      { get: () => (reads.shift() as () => unknown)() } as unknown as HttpClient,
+      { apiBaseUrl: '/api' } as unknown as ConfigService,
+      {
+        instance: {
+          getActiveAccount: () => account(signedIn),
+          getAllAccounts: () => [account(signedIn)]
+        }
+      } as unknown as MsalService,
+      { inProgress$: of(InteractionStatus.None), msalSubject$ } as unknown as MsalBroadcastService
+    );
+
+    return {
+      access,
+      switchAccount: (id) => {
+        signedIn = id;
+        msalSubject$.next({ eventType: EventType.ACTIVE_ACCOUNT_CHANGED } as EventMessage);
+      }
+    };
+  }
+
+  it('offers no destination while the new account’s capabilities are still being read', async () => {
+    const pending = new Subject<unknown>();
+    const { access, switchAccount } = accessWithSwitch([() => of(OWNER_RESPONSE), () => pending]);
+    const { fixture, host } = await render({ accessService: access });
+    expect(link(host, '/expenses')).not.toBeNull();
+    expect(host.textContent).toContain('Admin');
+
+    switchAccount('member-2');
+    fixture.detectChanges();
+
+    expect(host.querySelectorAll('nav[aria-label="Primary"] a')).toHaveLength(0);
+    expect(host.textContent).not.toContain('Admin');
+
+    pending.next(OPERATOR_RESPONSE);
+    pending.complete();
+    fixture.detectChanges();
+
+    expect(link(host, '/pick-list')).not.toBeNull();
+    expect(link(host, '/expenses')).toBeNull();
+    expect(host.textContent).not.toContain('Admin');
   });
 });
 

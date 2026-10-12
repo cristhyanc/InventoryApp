@@ -2964,9 +2964,9 @@ is dropped or read again on exactly these triggers:
 
 | Trigger | What happens |
 | --- | --- |
-| Sign-in | Read as the newly signed-in identity |
+| Sign-in | The previous answer is dropped and the capabilities are read as the newly signed-in identity |
 | Sign-out | Cleared without reading again — there is nobody to read it for |
-| MSAL active-account change | Read again, unconditionally, because an answer in flight may have been issued as the previous identity |
+| MSAL active-account change | The previous identity's answer is dropped immediately and the capabilities are read again, unconditionally, because an answer in flight may have been issued as the previous identity |
 | Any `403` from a member endpoint | Read again unless a read is already in flight. `GET /api/me/access` itself is excluded, so a refusal can never drive a refresh loop, and `/assets/*` is excluded because it is not a member endpoint |
 | Window focus more than 5 minutes after the last answer | Read again, so a tab left open all day stops rendering a menu built from a role somebody has since changed |
 | An explicit `refresh()` | Read again, unconditionally. This is what other work calls after changing something relevant |
@@ -2976,6 +2976,34 @@ Sign-in, sign-out and the active-account change are observed from two signals to
 are acted on only when the signed-in identity the cache was read for actually changed. An answer
 from a read a later one superseded is discarded by a generation check when it arrives, so a slow
 read for the previous identity can never build somebody else's menu.
+
+**The identity signed in now owns the answer, from the moment it changes** (issue #603). An actual
+change of identity publishes `unread` again *before* the new read is issued or even waited for, so
+there is no window in which the previous account's capabilities are still the published answer:
+
+- a guard or any other subscriber arriving while the new read is pending waits for the new
+  identity's own answer, because `unread` ("nothing has been asked yet") stays deliberately
+  different from `unavailable` ("asked, and could not be answered"), and only the second one is the
+  documented fail-open case;
+- the sidebar's long-lived subscription re-renders with no destination at all for that window,
+  rather than keeping the previous member's menu — the same empty menu it renders before the first
+  answer, and for the same reason;
+- the cache then belongs to no identity until the new read reaches one, which is what makes the
+  MSAL account event and the settling interaction that both report one change read the new identity
+  **once** rather than twice;
+- a late answer for a superseded identity — including after rapid A→B→C switches — is discarded by
+  the generation check and cannot clear the current read's pending state either, so it neither
+  publishes nor makes the new read look finished;
+- a same-identity re-read (an explicit `refresh()`, the `403` trigger, the stale-window focus) is
+  unchanged and keeps its own answer published while it runs: it is re-reading the same person's
+  capabilities, and blanking the menu on a routine refresh would help nobody.
+
+A live `allows(...)` answer is filtered rather than reset while the new read is pending — a
+subscriber that already holds a boolean keeps it until the new identity answers, which is bounded
+by that one read and resolves to the new member's answer (the alternative, emitting the fail-open
+`true` for a pending read, would let a guard decide a navigation from an answer nobody has given
+yet). The one capability-gated control, the supplier GST defaults editor, therefore behaves in that
+window exactly as it does on an unanswered read.
 
 **A read that cannot be answered hides nothing.** `unavailable` — nobody signed in, a refusal, a
 failed request — leaves every menu entry, route and action exactly as it was before capabilities
@@ -2994,8 +3022,10 @@ group and no `Admin` group; a Manager's `Admin` group holds `Site Commission Agr
 destination. `Reports → Site Commissions` follows the API and declares `SiteCommissions.Manage`
 rather than `Reports.View` ([issue #526](#capability-authorization-on-the-manager-and-owner-endpoints-issue-526)).
 Until the capability set has been read the sidebar renders **no** destination, because a menu that
-offered everything and then took entries away would show entries that were never this member's;
-`Platform Diagnostics` is unchanged and still independent of every capability.
+offered everything and then took entries away would show entries that were never this member's —
+and it renders none again from the moment the signed-in identity changes until the new identity's
+own answer arrives (issue #603); `Platform Diagnostics` is unchanged and still independent of every
+capability.
 
 **Route guards are presentation.** Every authenticated route declares
 `canActivate: [MsalGuard, requireCapability(...)]`, with `MsalGuard` first so authentication is
@@ -3039,14 +3069,20 @@ knowing a figure yet is a different thing from having been told it is not this m
 
 **What proves this slice.** `access.service.spec.ts` (the cached read, the fifteen-name vocabulary,
 an undeclared name dropped, the MSAL wait, every refresh trigger including the five-minute focus
-boundary either side, the refusal trigger coalescing, a superseded answer discarded, and the
-fail-open answer for every unreadable case), `navigation.spec.ts` (the per-role menus, written out
-literally from #328's table, a partly-allowed group, the empty and unknown capability sets, and the
-diagnostics link's independence), `sidebar-nav.component.spec.ts` (the rendered menu per role, no
-destination before the first answer, and a re-render when the capabilities change),
-`capability.guard.spec.ts` (allowed, refused, any-of, fail-open, waiting for an unread answer, and
-the page naming no capability or role), `app.routes.spec.ts` (every authenticated route guarded,
-the two exceptions, and `MsalGuard` first), `access-forbidden.interceptor.spec.ts` (the `403`
+boundary either side, the refusal trigger coalescing, a superseded answer discarded, the fail-open
+answer for every unreadable case, and issue #603's identity change: the previous answer dropped
+before the new read answers, a subscriber arriving mid-read answered from the new identity, rapid
+A→B→C switches, a previous identity answering last, one read for the duplicated MSAL notifications,
+a sign-out with a read in flight, and a same-identity refresh keeping its own answer),
+`navigation.spec.ts` (the per-role menus, written out literally from #328's table, a partly-allowed
+group, the empty and unknown capability sets, and the diagnostics link's independence),
+`sidebar-nav.component.spec.ts` (the rendered menu per role, no destination before the first answer,
+a re-render when the capabilities change, and the menu emptied and rebuilt across an account change
+against the real service), `capability.guard.spec.ts` (allowed, refused, any-of, fail-open, waiting
+for an unread answer, waiting for the new account instead of deciding from the previous account's
+capabilities, and the page naming no capability or role), `app.routes.spec.ts` (every authenticated
+route guarded, the two exceptions, and `MsalGuard` first),
+`access-forbidden.interceptor.spec.ts` (the `403`
 trigger, the excluded access read and assets, and every other status ignored),
 `supplier-gst-defaults.component.spec.ts` (the hidden Save, the read-only pickers, no `PUT`, and the
 control returning on a refresh) and `dashboard.component.spec.ts` (the redacted summary rendering
@@ -3124,6 +3160,19 @@ last read, and an explicit `refresh()`. `AccountStateService` is a sibling cache
 built the same way, rather than a shared base the two refactor into, so #528's already-tested
 caching logic is untouched by this slice.
 
+**The answer belongs to the identity signed in now** (issue #603), by the same rule and the same
+mechanism [#528's section](#member-access-capability-built-navigation-guards-and-hidden-actions-issue-528)
+states for the capability cache. An actual change of signed-in identity publishes `unread` again
+before the new read is issued or waited for, so `accountStateGuard` and the shell's own business
+lookup wait for the new person's state rather than routing the new account on the previous
+account's `Member` (or `NoMembership`) answer; a late response from a read the change superseded —
+including after rapid switches — is refused by the generation check, publishes nothing, and does
+not clear the current read's pending state; a sign-out clears both answers with no authenticated
+probe; and the MSAL account event and the settling interaction that both report one change read the
+new identity once. A same-identity re-read keeps its own answer published while it runs. Pending is
+still not the same thing as the current identity's `unavailable`: only the second one is the
+documented fail-open case that lets a navigation through.
+
 **The shell waits for the account state before any business call.** `AppComponent`'s existing
 business lookup (issue #499, `GET /api/business/current`) now reads the cached account state
 first and asks for the business only when it answers `Member` - an account with no usable
@@ -3132,9 +3181,14 @@ member endpoint already gives it. An account state that could not be read still 
 lookup, for the same fail-open reason the guard does: the endpoint itself remains the boundary.
 
 **What proves this slice.** `account-state.service.spec.ts` (mirroring `access.service.spec.ts`:
-the cached read, every refresh trigger, the unknown-state fallback, and a superseded answer
-discarded), `account-state.guard.spec.ts` (routing for every state, the fail-open answer, and
-reading once for several navigations), `access-unavailable.component.spec.ts` (the per-state
+the cached read, every refresh trigger, the unknown-state fallback, a superseded answer discarded,
+and issue #603's identity-change suite - the previous answer dropped before the new read answers, a
+subscriber arriving mid-read answered from the new identity, rapid switches, a previous identity
+answering last, one read for the duplicated MSAL notifications, a sign-out with a read in flight,
+and a same-identity refresh keeping its own answer), `account-state.guard.spec.ts` (routing for
+every state, the fail-open answer, reading once for several navigations, and waiting for the new
+account instead of routing on the previous account's state),
+`access-unavailable.component.spec.ts` (the per-state
 message, naming no business, and the revoked page with onboarding on - both options - and off -
 invite only), `account-state-forbidden.interceptor.spec.ts` and
 `member-forbidden-notice.interceptor.spec.ts` (the respective `403` triggers and the bypass-route
