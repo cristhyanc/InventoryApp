@@ -1,32 +1,27 @@
-import { HttpClient, HttpErrorResponse } from '@angular/common/http';
-import { MsalBroadcastService, MsalService } from '@azure/msal-angular';
-import { AccountInfo, EventMessage, EventType, InteractionStatus } from '@azure/msal-browser';
-import { BehaviorSubject, Subject, firstValueFrom, of, throwError } from 'rxjs';
-import { ConfigService } from '../services/config.service';
+import { HttpErrorResponse } from '@angular/common/http';
+import { EventType, InteractionStatus } from '@azure/msal-browser';
+import { Subject, filter, firstValueFrom, of, throwError } from 'rxjs';
 import { AccountStateAnswer, AccountStateService } from './account-state.service';
-
-function account(homeAccountId: string): AccountInfo {
-  return { homeAccountId, username: `${homeAccountId}@example.test` } as unknown as AccountInfo;
-}
+import {
+  IdentityCacheHarness,
+  apiConfig,
+  describeIdentityChange,
+  queuedReads,
+  readingHttp,
+  signedInIdentity
+} from './identity-cache.spec-helpers';
 
 const MEMBER_RESPONSE = { state: 'Member', onboardingEnabled: false, rejectionReason: null };
 const REVOKED_RESPONSE = { state: 'MembershipRevoked', onboardingEnabled: true, rejectionReason: null };
 
-interface Harness {
-  service: AccountStateService;
-  get: jest.Mock;
-  inProgress$: BehaviorSubject<InteractionStatus>;
-  signIn(accountId: string | null): void;
-  raise(eventType: EventType): void;
-  observe(): AccountStateAnswer[];
-}
+type Harness = IdentityCacheHarness<AccountStateService, AccountStateAnswer>;
 
 /**
  * The service is constructed directly, with only its one `GET` doubled, for the same reason
  * `access.service.spec.ts` does: a stub that re-implemented the account-state answer would be
  * testing itself. This is a sibling cache to `AccessService`, built and invalidated the same way
  * (issue #529), so these tests mirror `access.service.spec.ts`'s rather than re-deriving each
- * trigger's rationale, which is documented there.
+ * trigger's rationale, which is documented there, and both specs share the same doubles.
  */
 function configure(
   options: {
@@ -35,35 +30,16 @@ function configure(
     responses?: (() => unknown)[];
   } = {}
 ): Harness {
-  let signedIn = options.signedIn === undefined ? 'member-1' : options.signedIn;
-  const responses = [...(options.responses ?? [])];
-  const get = jest.fn(() => {
-    const next = responses.shift();
-    return next === undefined ? of(MEMBER_RESPONSE) : next();
-  });
-  const inProgress$ = new BehaviorSubject(options.interaction ?? InteractionStatus.None);
-  const msalSubject$ = new Subject<EventMessage>();
-
-  const service = new AccountStateService(
-    { get } as unknown as HttpClient,
-    { apiBaseUrl: '/api' } as unknown as ConfigService,
-    {
-      instance: {
-        getActiveAccount: () => (signedIn === null ? null : account(signedIn)),
-        getAllAccounts: () => (signedIn === null ? [] : [account(signedIn)])
-      }
-    } as unknown as MsalService,
-    { inProgress$, msalSubject$ } as unknown as MsalBroadcastService
-  );
+  const identity = signedInIdentity(options);
+  const get = queuedReads(options.responses ?? [], MEMBER_RESPONSE);
+  const service = new AccountStateService(readingHttp(get), apiConfig(), identity.msal, identity.broadcast);
 
   return {
     service,
     get,
-    inProgress$,
-    signIn: (accountId) => {
-      signedIn = accountId;
-    },
-    raise: (eventType) => msalSubject$.next({ eventType } as EventMessage),
+    inProgress$: identity.inProgress$,
+    signIn: identity.signIn,
+    raise: identity.raise,
     observe: () => {
       const observed: AccountStateAnswer[] = [];
       service.state$.subscribe((answer) => observed.push(answer));
@@ -291,4 +267,25 @@ describe('AccountStateService refresh triggers (issue #529)', () => {
     const answer = await firstValueFrom(service.state$);
     expect(answer.status === 'known' && answer.accountState.state).toBe('Member');
   });
+});
+
+/**
+ * An actual change of signed-in identity owns the answer from the moment it happens (issue #603) -
+ * the same rule, for the same reason, as `AccessService`: the previous person's account state is
+ * not a weaker answer for the new one, and routing anybody on it, even for a moment, routes them
+ * as somebody else. The suite both caches are asserted against lives in
+ * `identity-cache.spec-helpers.ts`.
+ */
+describeIdentityChange<AccountStateService, AccountStateAnswer>({
+  subject: 'AccountStateService',
+  answered: 'known',
+  firstResponse: MEMBER_RESPONSE,
+  secondResponse: REVOKED_RESPONSE,
+  configure: (responses) => configure({ responses }),
+  // What `accountStateGuard` subscribes to: the first answer that is not "nothing asked yet".
+  guardAnswer: async ({ service }) => {
+    const published = service.state$.pipe(filter((answer) => answer.status !== 'unread'));
+    const answer = await firstValueFrom(published);
+    expect(answer.status === 'known' && answer.accountState.state).toBe('MembershipRevoked');
+  }
 });

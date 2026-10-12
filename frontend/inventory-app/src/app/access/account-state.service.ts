@@ -90,6 +90,13 @@ const ACCOUNT_EVENTS: ReadonlySet<string> = new Set<string>([
  * {@link refresh}. See `AccessService` for the rationale behind each trigger; it is not repeated
  * here.
  *
+ * **A changed identity owns the answer from the moment it changes** (issue #603), exactly as it
+ * does on `AccessService`: an actual change of signed-in identity publishes `unread` again before
+ * the new read is issued or waited for, so `accountStateGuard` and the shell's own business lookup
+ * wait for the new person's state instead of routing on the previous person's. A late answer from
+ * the superseded read is discarded whenever it arrives and never clears the current read's pending
+ * state. A same-identity re-read keeps its own answer published while it runs.
+ *
  * **A read that cannot be answered allows the application through.** `unavailable` is treated the
  * same way `AccessService` treats its own unreadable answer: the membership check the backend
  * applies to every business endpoint (`BusinessScopeMiddleware`) remains the real boundary, so
@@ -106,7 +113,14 @@ export class AccountStateService implements OnDestroy {
   private reading?: Observable<AccountStateAnswer>;
   private isReading = false;
   private answeredAtMs: number | null = null;
-  private readForAccountKey?: string | null;
+
+  /**
+   * The signed-in identity the cache belongs to, with the same three cases `AccessService`
+   * documents: an identity, `null` for nobody signed in, and `undefined` while it belongs to no
+   * identity at all - nothing read yet, or a read waiting for MSAL's interaction to settle, which
+   * will belong to whoever is signed in then.
+   */
+  private cachedForAccountKey?: string | null;
   private generation = 0;
 
   private readonly destroying$ = new Subject<void>();
@@ -148,9 +162,8 @@ export class AccountStateService implements OnDestroy {
     this.generation++;
     this.reading = undefined;
     this.isReading = false;
-    this.answeredAtMs = null;
-    this.readForAccountKey = null;
-    this.answer.next(UNREAD);
+    this.cachedForAccountKey = null;
+    this.forgetAnswer();
   }
 
   ngOnDestroy(): void {
@@ -175,7 +188,7 @@ export class AccountStateService implements OnDestroy {
       switchMap(() => {
         const accountKey = this.activeAccountKey();
         if (generation === this.generation) {
-          this.readForAccountKey = accountKey;
+          this.cachedForAccountKey = accountKey;
         }
         return accountKey === null ? of(UNAVAILABLE) : this.read();
       }),
@@ -230,12 +243,15 @@ export class AccountStateService implements OnDestroy {
   }
 
   private applySignedInAccount(): void {
-    if (this.readForAccountKey === undefined) {
+    if (this.cachedForAccountKey === undefined) {
+      // Nothing to invalidate: nothing has been read, or the read in flight belongs to whoever is
+      // signed in once MSAL's interaction settles. That is also what coalesces the account event
+      // and the settling interaction that both report one change.
       return;
     }
 
     const accountKey = this.activeAccountKey();
-    if (accountKey === this.readForAccountKey) {
+    if (accountKey === this.cachedForAccountKey) {
       return;
     }
 
@@ -244,7 +260,20 @@ export class AccountStateService implements OnDestroy {
       return;
     }
 
+    // The previous identity's account state is dropped before the new read is issued or waited
+    // for (issue #603): routing anybody on the previous person's state, even for the moment the
+    // new read takes, routes them as somebody else.
+    this.cachedForAccountKey = undefined;
+    this.forgetAnswer();
     this.refresh();
+  }
+
+  /** Publishes `unread` again, so nothing is answered from what the previous identity read. */
+  private forgetAnswer(): void {
+    this.answeredAtMs = null;
+    if (this.answer.value.status !== 'unread') {
+      this.answer.next(UNREAD);
+    }
   }
 
   private refreshIfStale(): void {

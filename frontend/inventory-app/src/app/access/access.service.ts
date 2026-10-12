@@ -13,6 +13,7 @@ import {
   map,
   of,
   shareReplay,
+  skipWhile,
   switchMap,
   take,
   takeUntil,
@@ -55,6 +56,23 @@ const UNREAD: MemberAccessState = { status: 'unread' };
 const UNAVAILABLE: MemberAccessState = { status: 'unavailable' };
 
 /**
+ * Whether `state` grants at least one of `capabilities`, or `undefined` while nothing has been
+ * read: "not known yet" is not the same answer as "not granted", and only the caller knows which
+ * of the two it can act on. An unreadable capability set grants it - the fail-open rule documented
+ * on {@link AccessService}.
+ */
+function grantedBy(state: MemberAccessState, capabilities: readonly Capability[]): boolean | undefined {
+  switch (state.status) {
+    case 'unread':
+      return undefined;
+    case 'granted':
+      return capabilities.some((capability) => state.access.capabilities.has(capability));
+    default:
+      return true;
+  }
+}
+
+/**
  * What the signed-in member may do, read once from `GET /api/me/access` (issue #521) and cached
  * for the application shell, the navigation, the route guards and the pages that hide an action a
  * role cannot use (issue #528).
@@ -75,6 +93,20 @@ const UNAVAILABLE: MemberAccessState = { status: 'unavailable' };
  *   and from the three MSAL account events, and acted on only when the signed-in identity the
  *   cache was read for actually changed. A sign-out clears it without reading again, because
  *   there is nobody to read it for;
+ *
+ *   **A changed identity owns the answer from the moment it changes** (issue #603). The previous
+ *   identity's capabilities are dropped before the new read is issued or even waited for, so the
+ *   published answer goes back to `unread` and stays there until the new identity's own answer
+ *   arrives: a guard activated in that window waits for it, the shell renders no capability at
+ *   all rather than the previous member's, and a page already rendering an action is told the
+ *   grant is withdrawn - {@link allowsAny} reports `false` for the window, because a subscriber
+ *   that received `true` can be corrected only by another answer. The cache then belongs to no
+ *   identity until the new read reaches one, which is what makes the account event and the
+ *   settling interaction that both report one change read it once. An answer from the superseded
+ *   read is discarded whenever it arrives - including after rapid switches - and cannot clear the
+ *   current read's pending state either. A same-identity re-read (an explicit {@link refresh}, a
+ *   `403`, a stale window) keeps its own answer published while it runs, because it is re-reading
+ *   the same person's capabilities;
  * - **any `403` from a member endpoint** - the member's role may have changed since the cache was
  *   filled, so `accessForbiddenInterceptor` calls {@link refreshUnlessReading}. A `403` from
  *   `GET /api/me/access` itself is excluded there, so a refusal can never drive a refresh loop;
@@ -106,10 +138,15 @@ export class AccessService implements OnDestroy {
   private answeredAtMs: number | null = null;
 
   /**
-   * The signed-in identity the cache belongs to: `undefined` before anything has been read, and
-   * `null` once it has been read with nobody signed in.
+   * The signed-in identity the cache belongs to, and `null` once it belongs to nobody signed in.
+   *
+   * It is `undefined` while the cache belongs to no identity at all: before anything has been
+   * read, and while the read a changed identity started is still waiting for MSAL's interaction to
+   * settle, because that read belongs to whoever is signed in once it does. Nothing is published
+   * in either case, so a further account notification arriving meanwhile has nothing to
+   * invalidate and starts no second read of the same identity.
    */
-  private readForAccountKey?: string | null;
+  private cachedForAccountKey?: string | null;
 
   /** Bumped by every invalidation; a read from an older generation must not publish its answer. */
   private generation = 0;
@@ -148,15 +185,21 @@ export class AccessService implements OnDestroy {
   /**
    * Whether the member's role grants at least one of `capabilities` - what a page reachable
    * through several of them (the Admin hub) needs. An empty list is granted by nothing.
+   *
+   * **It waits for the first answer, and withdraws a grant the identity change takes away**
+   * (issue #603). Nothing is emitted while the capabilities have never been read, so a guard
+   * activating then waits for the answer instead of being refused a page their own role may well
+   * allow. Once an answer has been published, a return to `unread` is an identity change: the
+   * answer belonged to somebody else, so the grant is reported as withdrawn until the new
+   * identity's own answer arrives. A subscriber that is already rendering the action cannot be
+   * told any other way, and leaving the previous member's `true` as the last thing it heard is
+   * what kept the supplier GST editor's Save control enabled for the next member's role.
    */
   allowsAny(capabilities: readonly Capability[]): Observable<boolean> {
     return this.access$.pipe(
-      filter((state) => state.status !== 'unread'),
-      map((state) =>
-        state.status === 'granted'
-          ? capabilities.some((capability) => state.access.capabilities.has(capability))
-          : true
-      ),
+      map((state) => grantedBy(state, capabilities)),
+      skipWhile((granted) => granted === undefined),
+      map((granted) => granted ?? false),
       distinctUntilChanged()
     );
   }
@@ -196,9 +239,8 @@ export class AccessService implements OnDestroy {
     this.generation++;
     this.reading = undefined;
     this.isReading = false;
-    this.answeredAtMs = null;
-    this.readForAccountKey = null;
-    this.state.next(UNREAD);
+    this.cachedForAccountKey = null;
+    this.forgetAnswer();
   }
 
   ngOnDestroy(): void {
@@ -223,7 +265,7 @@ export class AccessService implements OnDestroy {
       switchMap(() => {
         const accountKey = activeAccountKey(this.authService);
         if (generation === this.generation) {
-          this.readForAccountKey = accountKey;
+          this.cachedForAccountKey = accountKey;
         }
         // Nobody signed in is an answer, not a request: an unauthenticated read would only have
         // MsalInterceptor start an interactive sign-in nobody asked for.
@@ -283,13 +325,16 @@ export class AccessService implements OnDestroy {
   }
 
   private applySignedInAccount(): void {
-    if (this.readForAccountKey === undefined) {
-      // Nothing has been read yet, so the first read will read it as whoever is signed in then.
+    if (this.cachedForAccountKey === undefined) {
+      // The cache belongs to no identity: nothing has been read yet, or the read in flight will
+      // read it as whoever is signed in once MSAL's interaction settles. Either way there is
+      // nothing to invalidate, which is also what coalesces the account event and the settling
+      // interaction that both report one sign-in or account change.
       return;
     }
 
     const accountKey = activeAccountKey(this.authService);
-    if (accountKey === this.readForAccountKey) {
+    if (accountKey === this.cachedForAccountKey) {
       return;
     }
 
@@ -298,7 +343,26 @@ export class AccessService implements OnDestroy {
       return;
     }
 
+    // The previous identity's answer is dropped here, before the new read is issued or even
+    // waited for (issue #603). It is not a weaker answer for the new identity - it is somebody
+    // else's - and leaving it published, for as long as the new read takes, is long enough for a
+    // guard to decide a navigation from it or for the shell to build a menu out of it.
+    this.cachedForAccountKey = undefined;
+    this.forgetAnswer();
     this.refresh();
+  }
+
+  /**
+   * Publishes `unread` again, so nothing can be answered from what the previous identity read: a
+   * consumer subscribing now waits for the next answer exactly as it would have before anything
+   * had been read at all. The published answer is already `unread` when a read that has not
+   * answered yet is the thing being invalidated.
+   */
+  private forgetAnswer(): void {
+    this.answeredAtMs = null;
+    if (this.state.value.status !== 'unread') {
+      this.state.next(UNREAD);
+    }
   }
 
   private refreshIfStale(): void {
