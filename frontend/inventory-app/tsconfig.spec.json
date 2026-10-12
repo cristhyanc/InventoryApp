@@ -10,5 +10,7 @@
     "allowJs": true,
     "types": ["jest", "node"]
   },
-  "include": ["src/**/*.spec.ts", "src/**/*.d.ts", "tailwind.config.js"]
+  // `*.spec-helpers.ts` holds doubles and shared suites several specs use; it is test-only, and
+  // the application build (tsconfig.app.json) never compiles it.
+  "include": ["src/**/*.spec.ts", "src/**/*.spec-helpers.ts", "src/**/*.d.ts", "tailwind.config.js"]
 }

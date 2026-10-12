@@ -1858,6 +1858,15 @@ POST /api/admin/diagnostics/query    { sql } -> a bounded, truncation-flagged re
 
 **The super-admin page (issue #335, moved under its own top-level group in issue #546).** `/super-admin/diagnostics` is the Angular page in front of those two endpoints, and it is presentation only: it adds no authority, no limit and no second access rule. `/admin/diagnostics` is its old address and now only redirects there. The sidebar's top-level `Super Admin` group offers its link only while `GET /api/admin/diagnostics/access` has confirmed the signed-in actor, and the route itself carries `platformAdminGuard`, which asks the same probe and sends a refusal to the dashboard; the page then asks the same endpoint again on arrival and renders a refusal instead of the query form when it is refused — but **neither guard nor page is the boundary, and the design depends on that rather than on hiding the link**. Entering either URL directly reaches the page (through the redirect for the old one), and reaches nothing else: the policy on `POST /api/admin/diagnostics/query` re-decides authority on every single request regardless of what the frontend guard or page decided. There is deliberately no frontend role, claim, flag or cached verdict that could grant access and then diverge from the configured Entra `(tid, oid)` identity: `PlatformDiagnosticsAccessService` asks the API, treats a refusal, a failure, an unanswered probe and a body that does not confirm access all as "no", and never reports a capability the API did not confirm. Unlike every business route, `/super-admin/diagnostics` carries no `accountStateGuard`: platform-admin authority has nothing to do with business membership, so a refusal belongs on the dashboard, never on a membership-handling destination.
 
+**The cached probe belongs to one signed-in identity (issue #605).** `PlatformDiagnosticsAccessService` coalesces **one** `GET /api/admin/diagnostics/access` per current identity — the sidebar and the guard share it however often they ask — and that answer is bound to the identity it was asked as, because a browser outlives a session: one memoised probe for the service's lifetime would carry the administrator's grant onto the next person who signs in, and an ordinary member's refusal onto the administrator. The cache is dropped on sign-in, sign-out and an MSAL active-account change, observed from MSAL's own account events and from `inProgress$` settling together — the same two signals [`AccessService`](#member-access-capability-built-navigation-guards-and-hidden-actions-issue-528) watches, deliberately not read through it, because this answer has nothing to do with membership or capabilities — and acted on only when the identity the answer was asked for actually changed, so a duplicate notification costs nothing. The two members say what each consumer needs:
+
+| Member | Answers | Used by |
+| --- | --- | --- |
+| `granted$` | `false` until the current identity's own probe confirms access, and `false` again the moment the identity changes | The sidebar's `Super Admin` group, so a previous identity's granted group is gone on the switch itself |
+| `isGranted()` | Once, with the answer for whoever is signed in when it is asked, waiting for that identity's probe | `platformAdminGuard`, which must not refuse the administrator over an answer that has not arrived yet |
+
+**A superseded probe decides nothing.** Every invalidation bumps a generation: an answer that arrives for an identity that is already gone is discarded instead of published, and a probe whose request has not been sent yet — one still waiting for a sign-in interaction to settle — is never sent at all. Neither an A → B → C switch nor a sign-out during a pending probe can therefore restore an earlier grant. Nobody signed in is an *answer* (`false`) rather than a request, so no protected probe is issued while signed out or while sign-in is in progress, and a refused or failed probe stays the same quiet `false` it always was: unreported, unlogged and never retried behind the operator's back. None of this is a boundary either — it decides which menu entry and which route redirect an identity is shown, while the policy on both endpoints re-decides authority per request.
+
 The page says what it is before it knows who is asking: cross-business scope, read-only, repair out of scope, every query audited. It publishes the server's own limits — the 5-second ceiling, the 500-row cap, the 1 MiB response cap and the 16 KiB SQL cap — from the `access` body rather than restating them, lists the permitted table/column surface as help text while saying the server is what decides, and offers only read-only examples. Every outcome the contract can report has its own visible state: a complete result, a timeout, a refusal with its denial reason, a provider failure, and a truncated read labelled **incomplete** with the cap that stopped it — the row cap and the response-byte cap separately, because a byte cap reached before 500 rows is exactly the case a row count alone would misrepresent. Result values and server messages are rendered through Angular interpolation only, never as markup. The statement and its results live in component state while the page is open and nowhere else: no `localStorage`, `sessionStorage`, cookie, URL, toast or console, because they describe data across every business. The query-shape fingerprint the response carries is shown so a result on screen can be matched to its audit entry without the statement appearing in either. Per [Page composition boundary](#page-composition-boundary-issue-191) the routed `PlatformDiagnosticsComponent` resolves the capability and composes `PlatformDiagnosticsQueryComponent`, which owns the statement, the submission and every outcome.
 
 **The permitted data surface.** `Inventory.Application.PlatformDiagnostics.PlatformDiagnosticsDataSurface` is an allowlist of table *and column* pairs, with no wildcard over current or future columns. The physical names are verified against the mappings on `develop` — `Purchase` is mapped to `Receipts` and `PurchaseItem` to `ReceiptItems`, and `PurchaseItem.ReceiptId` / `StockAdjustment.ReceiptItemId` keep their legacy names:
@@ -2841,10 +2850,15 @@ appends the whole group, last, and only `GET /api/admin/diagnostics/access` can 
 page) — a `NavPlaceholder` that renders as inert text, because `navigation.ts`'s one rule, that
 every `route` must be a real page already declared in `app.routes.ts`, leaves no route to give it
 before that page exists. Neither child declares a capability, because no business role grants
-either. `SidebarNavComponent` starts from `navigationFor(false)`, asks
-`PlatformDiagnosticsAccessService` once, and re-resolves the active entry when the answer arrives;
-a refusal, a failure and an unanswered probe all leave the navigation everyone else gets, silently,
-because a navigation menu is not the place to report that one capability could not be checked. The
+either. `SidebarNavComponent` starts from `navigationFor(false)`, follows
+`PlatformDiagnosticsAccessService.granted$`, and re-resolves the active entry whenever that answer
+changes; a refusal, a failure and an unanswered probe all leave the navigation everyone else gets,
+silently, because a navigation menu is not the place to report that one capability could not be
+checked. **The group follows the signed-in identity (issue #605):** that answer is cached per
+identity, so changing the active account, signing out or signing in removes a granted `Super Admin`
+group on the switch itself — not when some other identity's answer happens to arrive — and the
+group comes back only if the new identity's own probe confirms access, with a late answer for a
+superseded identity discarded (see [Platform diagnostics](#platform-diagnostics-issue-336)). The
 group is presentation and never a boundary — the route and both endpoints are independently
 authorized, so a hidden group hides a page rather than protecting one (see [Platform
 diagnostics](#platform-diagnostics-issue-336)). Everything else about the shell is unchanged: the
@@ -2904,6 +2918,37 @@ sidebar or the sticky header.
 account resolution and `loginRedirect`/`logoutRedirect` calls; `UserMenuComponent` is presentation
 only and reports the two intents the application actually has. It invents no profile or account
 destination. The public `/auth` callback route and `MsalGuard` on every other route are untouched.
+
+**The shell follows the identity signed in now (issue #604).** `AppComponent` watches the shared
+`signedInAccountMayHaveChanged` trigger (`access/signed-in-account.ts`) — MSAL's own account
+events, `ACTIVE_ACCOUNT_CHANGED` among them, as well as `inProgress$` settling — rather than the
+interaction status alone. A direct Microsoft active-account switch raises only the event, because
+no interaction is involved and `inProgress$` never leaves `None`: a shell watching the interaction
+status alone therefore kept the previous account's displayed name, `businessAccountKey` and
+published business time zone for the rest of the session, and the new account-state answer could
+not repair it because the lookup that would have read it had already completed. The identity is
+compared through the same `activeAccountKey` the access caches key their answers on, so the shell
+and they cannot disagree about who is signed in. When it has actually changed, the shell does all
+of this in one step, before anything is read for the new account:
+
+- shows the new account in the header;
+- calls `BusinessService.reset()`, which drops the cached business and clears the published zone,
+  so no date is rendered in the previous business's zone and none is rendered in a guessed one;
+- cancels the lookup in flight for the previous account, including a retry still waiting;
+- closes the routed-page gate (`isBusinessContextReady`), so the page waits again instead of
+  rendering the new account's data against the previous business's calendar.
+
+It then waits for the new identity's own account state and reads its business once — see
+[Account-state routing](#account-state-routing-the-access-unavailable-page-and-the-global-403-handler-issue-529)
+below. A superseded lookup answering late can neither publish a zone (`BusinessService`'s
+generation check refuses it) nor open the gate (its subscription is gone); a further notification
+for the identity already loaded reads nothing again and does not restart a settled context; a
+sign-out clears the context with no authenticated call; and the MSAL listeners end with the
+component. `app.component.spec.ts` covers a direct event-only switch between two business zones
+(`Australia/Sydney` to `Europe/London`, against the real `BusinessService` and
+`BusinessTimeZoneService`), the new identity answering `NoMembership`, an unreadable new state,
+the previous account's response arriving after the switch, the sign-out event, a duplicate
+notification, and the cleanup on destroy.
 
 Adding a navigation entry is therefore a data change in `layout/navigation.ts` once the page and
 its route exist — not a template change in the shell.
@@ -3005,18 +3050,61 @@ is dropped or read again on exactly these triggers:
 
 | Trigger | What happens |
 | --- | --- |
-| Sign-in | Read as the newly signed-in identity |
+| Sign-in | The previous answer is dropped and the capabilities are read as the newly signed-in identity |
 | Sign-out | Cleared without reading again — there is nobody to read it for |
-| MSAL active-account change | Read again, unconditionally, because an answer in flight may have been issued as the previous identity |
+| MSAL active-account change | The previous identity's answer is dropped immediately and the capabilities are read again, unconditionally, because an answer in flight may have been issued as the previous identity |
 | Any `403` from a member endpoint | Read again unless a read is already in flight. Only a refusal `classifyMemberRequest` calls a `member` one counts: both cache probes, the platform diagnostics surface, `/assets/*` and every other origin are excluded, so a refusal can never drive a refresh loop |
 | Window focus more than 5 minutes after the last answer | Read again, so a tab left open all day stops rendering a menu built from a role somebody has since changed |
 | An explicit `refresh()` | Read again, unconditionally. This is what other work calls after changing something relevant |
 
 Sign-in, sign-out and the active-account change are observed from two signals together — MSAL's
-`msalSubject$` account events and `inProgress$` settling, which is what the shell already uses — and
-are acted on only when the signed-in identity the cache was read for actually changed. An answer
-from a read a later one superseded is discarded by a generation check when it arrives, so a slow
-read for the previous identity can never build somebody else's menu.
+`msalSubject$` account events and `inProgress$` settling, the shared trigger the shell watches too
+(issue #604) — and are acted on only when the signed-in identity the cache was read for actually
+changed. An answer from a read a later one superseded is discarded by a generation check when it
+arrives, so a slow read for the previous identity can never build somebody else's menu.
+
+**The identity signed in now owns the answer, from the moment it changes** (issue #603). An actual
+change of identity publishes `unread` again *before* the new read is issued or even waited for, so
+there is no window in which the previous account's capabilities are still the published answer:
+
+- a guard or any other subscriber arriving while the new read is pending waits for the new
+  identity's own answer, because `unread` ("nothing has been asked yet") stays deliberately
+  different from `unavailable` ("asked, and could not be answered"), and only the second one is the
+  documented fail-open case;
+- a subscriber that is *already* holding an answer is told the grant is withdrawn rather than left
+  with the previous member's `true`, which is what takes the supplier GST editor's Save control
+  away the moment the account changes;
+- the sidebar's long-lived subscription re-renders with no destination at all for that window,
+  rather than keeping the previous member's menu — the same empty menu it renders before the first
+  answer, and for the same reason;
+- the cache then belongs to no identity until the new read reaches one, which is what makes the
+  MSAL account event and the settling interaction that both report one change read the new identity
+  **once** rather than twice;
+- a late answer for a superseded identity — including after rapid A→B→C switches — is discarded by
+  the generation check and cannot clear the current read's pending state either, so it neither
+  publishes nor makes the new read look finished;
+- a same-identity re-read (an explicit `refresh()`, the `403` trigger, the stale-window focus) is
+  unchanged and keeps its own answer published while it runs: it is re-reading the same person's
+  capabilities, and blanking the menu on a routine refresh would help nobody.
+
+**A live `allows(...)` answer is withdrawn, never left standing.** The two consumers of that
+boolean need opposite things from a pending read, and `allowsAny` gives each of them theirs:
+
+- a subscriber that has **never** had an answer receives nothing while the read is pending. That is
+  what lets `requireCapability` wait for the new identity instead of deciding a navigation from an
+  answer nobody has given yet, and it is why emitting the fail-open `true` for a pending read would
+  be wrong.
+- a subscriber that has **already** received `true` is corrected. Once an answer has been
+  published, a return to `unread` reports `false` until the new identity's own answer arrives,
+  because another answer is the only way to tell a control that is already rendered that the grant
+  it was given belonged to somebody else. The one capability-gated control, the supplier GST
+  defaults editor, therefore loses its Save control the moment the signed-in account changes, and
+  gets it back only if the new member's own capability set holds `Suppliers.ManageGstDefaults`; a
+  late answer for the superseded identity restores nothing, and `save()` issues no `PUT` in the
+  meantime.
+
+The fail-open rule is unchanged, and it belongs to the identity signed in now: an `unavailable`
+answer for *that* identity reports `true` again, exactly as it always has.
 
 **"A member endpoint" is one classification, read from the configured API base URL** (issue #602).
 `access/member-endpoint.ts` answers it once, for all three `403` interceptors, by normalising the
@@ -3067,8 +3155,10 @@ group and no `Admin` group; a Manager's `Admin` group holds `Site Commission Agr
 destination. `Reports → Site Commissions` follows the API and declares `SiteCommissions.Manage`
 rather than `Reports.View` ([issue #526](#capability-authorization-on-the-manager-and-owner-endpoints-issue-526)).
 Until the capability set has been read the sidebar renders **no** destination, because a menu that
-offered everything and then took entries away would show entries that were never this member's;
-`Platform Diagnostics` is unchanged and still independent of every capability.
+offered everything and then took entries away would show entries that were never this member's —
+and it renders none again from the moment the signed-in identity changes until the new identity's
+own answer arrives (issue #603); `Platform Diagnostics` is unchanged and still independent of every
+capability.
 
 **Route guards are presentation.** Every authenticated route declares
 `canActivate: [MsalGuard, requireCapability(...)]`, with `MsalGuard` first so authentication is
@@ -3112,21 +3202,35 @@ knowing a figure yet is a different thing from having been told it is not this m
 
 **What proves this slice.** `access.service.spec.ts` (the cached read, the fifteen-name vocabulary,
 an undeclared name dropped, the MSAL wait, every refresh trigger including the five-minute focus
-boundary either side, the refusal trigger coalescing, a superseded answer discarded, and the
-fail-open answer for every unreadable case), `navigation.spec.ts` (the per-role menus, written out
-literally from #328's table, a partly-allowed group, the empty and unknown capability sets, and the
-diagnostics link's independence), `sidebar-nav.component.spec.ts` (the rendered menu per role, no
-destination before the first answer, and a re-render when the capabilities change),
-`capability.guard.spec.ts` (allowed, refused, any-of, fail-open, waiting for an unread answer, and
-the page naming no capability or role), `app.routes.spec.ts` (every authenticated route guarded,
-the two exceptions, and `MsalGuard` first), `access-forbidden.interceptor.spec.ts` (the `403`
+boundary either side, the refusal trigger coalescing, a superseded answer discarded, the fail-open
+answer for every unreadable case, and — for issue #603 — the withdrawal a long-lived `allows(...)`
+subscriber is told about: the permission cleared while the new identity's read is still pending, a
+late answer for the previous identity unable to restore it, the fail-open `true` returning for the
+new identity's own unreadable read, and a subscriber arriving in the window still waiting),
+`identity-cache.spec-helpers.ts` (the identity-change suite both caches are asserted against,
+written once because they are siblings: the previous answer dropped before the new read answers, a
+subscriber arriving mid-read answered from the new identity, rapid A→B→C switches, a previous
+identity answering last, one read for the duplicated MSAL notifications, a sign-out with a read in
+flight, and a same-identity refresh keeping its own answer),
+`navigation.spec.ts` (the per-role menus, written out literally from #328's table, a partly-allowed
+group, the empty and unknown capability sets, and the diagnostics link's independence),
+`sidebar-nav.component.spec.ts` (the rendered menu per role, no destination before the first answer,
+a re-render when the capabilities change, and the menu emptied and rebuilt across an account change
+against the real service), `capability.guard.spec.ts` (allowed, refused, any-of, fail-open, waiting
+for an unread answer, waiting for the new account instead of deciding from the previous account's
+capabilities, and the page naming no capability or role), `app.routes.spec.ts` (every authenticated
+route guarded, the two exceptions, and `MsalGuard` first),
+`access-forbidden.interceptor.spec.ts` (the `403`
 trigger, the excluded probes, diagnostics surface and assets, and every other status ignored),
 `member-endpoint.spec.ts` (every classification, for the local and the deployed API base URL, with
 query strings, trailing slashes, other origins and the member `/api/admin/*` controllers),
 `forbidden-interceptor-chain.spec.ts` (the composed chain: the asserted request count for
 persistent probe refusals, coalescing, the silent diagnostics probe and the preserved notice),
-`supplier-gst-defaults.component.spec.ts` (the hidden Save, the read-only pickers, no `PUT`, and the
-control returning on a refresh) and `dashboard.component.spec.ts` (the redacted summary rendering
+`supplier-gst-defaults.component.spec.ts` (the hidden Save, the read-only pickers, no `PUT`, the
+control returning on a refresh, and — against the real service — the Save control taken away the
+moment the signed-in account changes, no `PUT` issued in that window, a late answer for the
+previous account restoring nothing, and the control returning only on the new account's own
+answer) and `dashboard.component.spec.ts` (the redacted summary rendering
 the two non-financial cards, with no `$0.00` and no withheld figure anywhere).
 
 ### Account-state routing, the access-unavailable page and the global 403 handler (issue #529)
@@ -3216,6 +3320,19 @@ table above lists what each kind of refusal starts, and
 `forbidden-interceptor-chain.spec.ts` asserts the exact request count the composed chain issues
 before it goes quiet.
 
+**The answer belongs to the identity signed in now** (issue #603), by the same rule and the same
+mechanism [#528's section](#member-access-capability-built-navigation-guards-and-hidden-actions-issue-528)
+states for the capability cache. An actual change of signed-in identity publishes `unread` again
+before the new read is issued or waited for, so `accountStateGuard` and the shell's own business
+lookup wait for the new person's state rather than routing the new account on the previous
+account's `Member` (or `NoMembership`) answer; a late response from a read the change superseded —
+including after rapid switches — is refused by the generation check, publishes nothing, and does
+not clear the current read's pending state; a sign-out clears both answers with no authenticated
+probe; and the MSAL account event and the settling interaction that both report one change read the
+new identity once. A same-identity re-read keeps its own answer published while it runs. Pending is
+still not the same thing as the current identity's `unavailable`: only the second one is the
+documented fail-open case that lets a navigation through.
+
 **The shell waits for the account state before any business call.** `AppComponent`'s existing
 business lookup (issue #499, `GET /api/business/current`) now reads the cached account state
 first and asks for the business only when it answers `Member` - an account with no usable
@@ -3223,10 +3340,26 @@ membership has no business to look up, and the call would only receive the same 
 member endpoint already gives it. An account state that could not be read still attempts the
 lookup, for the same fail-open reason the guard does: the endpoint itself remains the boundary.
 
+**And the state it waits for is the current identity's** (issue #604). The shell starts that lookup
+afresh on the same account-change trigger these caches use (see [Application shell and
+navigation](#application-shell-and-navigation-issue-391)), and the previous identity's answer has
+already gone back to `unread` by then (issue #603), so a switched-to account is never granted a
+business lookup - or refused one - by the previous account's `Member` or `NoMembership` answer.
+`GET /api/business/current` is issued for the new identity once that identity's own state has
+answered, exactly once, and not at all while it is still pending; the documented unavailable
+fallback and the bounded retries are unchanged, and a late answer from the superseded read reaches
+no shell decision at all.
+
 **What proves this slice.** `account-state.service.spec.ts` (mirroring `access.service.spec.ts`:
-the cached read, every refresh trigger, the unknown-state fallback, and a superseded answer
-discarded), `account-state.guard.spec.ts` (routing for every state, the fail-open answer, and
-reading once for several navigations), `access-unavailable.component.spec.ts` (the per-state
+the cached read, every refresh trigger, the unknown-state fallback, a superseded answer discarded,
+and issue #603's shared identity-change suite from `identity-cache.spec-helpers.ts`, asserted
+against this cache too - the previous answer dropped before the new read answers, a subscriber
+arriving mid-read answered from the new identity, rapid switches, a previous identity answering
+last, one read for the duplicated MSAL notifications, a sign-out with a read in flight, and a
+same-identity refresh keeping its own answer), `account-state.guard.spec.ts` (routing for
+every state, the fail-open answer, reading once for several navigations, and waiting for the new
+account instead of routing on the previous account's state),
+`access-unavailable.component.spec.ts` (the per-state
 message, naming no business, and the revoked page with onboarding on - both options - and off -
 invite only), `account-state-forbidden.interceptor.spec.ts` and
 `member-forbidden-notice.interceptor.spec.ts` (the respective `403` triggers and the bypass-route
@@ -4545,7 +4678,7 @@ A business's calendar days are derived in **its own** IANA time zone, stored on 
 - **Resolution is per request, from the trusted current business.** `BusinessScopeMiddleware` reads the resolved business's record through `Inventory.Application.Businesses.IBusinessProfileStore` and publishes its zone into the scoped `Inventory.Application.Time.BusinessTimeZoneScope`, exactly as it publishes the business itself into `BusinessScope` and for the same reason: converting an instant to a business date happens synchronously, deep inside a calculation, and cannot await a membership lookup. The scope can only move forward to a zone, once. `IBusinessCalendar` is registered as the scoped `Inventory.Infrastructure.Time.CurrentBusinessCalendar`, which reads that zone, memoises the resolved `TimeZoneInfo` for the request, and derives every date in it. No route, query, body or header value participates: the zone comes from the business the caller's membership resolved, and from nothing else.
 - **It fails closed.** A request with no resolved business, or a business whose stored id the host's time-zone database cannot resolve, gets `Inventory.Application.Time.BusinessTimeZoneUnavailableException` from every member of the port - never `Australia/Sydney`, never the host's zone, never UTC. A substituted zone would move sales, fees, commissions and profit between business days with nothing looking wrong. The exception is not mapped to a caller-facing status: it falls through to `GlobalExceptionHandler`, which logs it and answers a generic `500`. The middleware does not refuse the whole request when a business has no usable zone (most endpoints derive no business date at all); it logs the condition, and any business-date derivation in that request fails.
 - **Maintenance commands have no business calendar, and need none.** The human-invoked `bootstrap-business`, `migrate-database` and database-backup commands run outside a request, so no business is resolved and no zone is published: resolving `IBusinessCalendar` there succeeds but every member fails closed. None of them derives a business date. `BusinessBootstrapper` creates its business with `Australia/Sydney` stated explicitly - the zone the pre-tenancy data it adopts has always been reported in - rather than relying on a default. A maintenance command that ever does need a business date must construct a `ZonedBusinessCalendar` with the zone it means, explicitly.
-- **The frontend gets the zone from the API.** `GET /api/business/current` returns `{ name, timeZoneId }` for the trusted current business, carrying the same `[Authorize]`, delegated-scope and membership requirements as every other business endpoint, and no identifier in either direction. It replaced the frontend's hard-coded `BUSINESS_TIME_ZONE` constant: `BusinessService` reads it once sign-in has settled and publishes the zone into `BusinessTimeZoneService`, which `BusinessDateTimePipe` and the calendar-input components read. The shell holds the routed page back until that lookup has settled, so a page on screen is one whose business context is known; a lookup that failed renders the application with dates unavailable rather than in a guessed zone. Issue #521 also surfaces the same name and zone in `GET /api/me/access` alongside the caller's role and capabilities (see [Membership roles and capabilities](#membership-roles-and-capabilities-issue-521)); that endpoint does not replace this one, and the frontend still reads the zone from here.
+- **The frontend gets the zone from the API.** `GET /api/business/current` returns `{ name, timeZoneId }` for the trusted current business, carrying the same `[Authorize]`, delegated-scope and membership requirements as every other business endpoint, and no identifier in either direction. It replaced the frontend's hard-coded `BUSINESS_TIME_ZONE` constant: `BusinessService` reads it once sign-in has settled - and again whenever the signed-in account changes, including a direct MSAL active-account switch (issue #604, see [Application shell and navigation](#application-shell-and-navigation-issue-391)) - and publishes the zone into `BusinessTimeZoneService`, which `BusinessDateTimePipe` and the calendar-input components read. The shell holds the routed page back until that lookup has settled, so a page on screen is one whose business context is known; a lookup that failed renders the application with dates unavailable rather than in a guessed zone, and a changed account publishes no zone at all until its own business has answered. Issue #521 also surfaces the same name and zone in `GET /api/me/access` alongside the caller's role and capabilities (see [Membership roles and capabilities](#membership-roles-and-capabilities-issue-521)); that endpoint does not replace this one, and the frontend still reads the zone from here.
 - **A zone change applies to all history.** The owner's decision (recorded on issue #499) is that changing a business's zone later re-derives every historical business day in the new zone, with a warning. Nothing stored is rewritten; the boundaries simply move. Since issue #548 that change is reachable: `PUT /api/business/settings` saves the zone, the next request resolves it from the business's own record, and every business date - for data already stored as much as for new data - is derived in the new zone, including its daylight-saving transitions. See [Business settings API](#business-settings-api-issue-548); the page that shows the warning is issue #549.
 - **Testing.** Two-business relational tests prove isolated boundaries for `Australia/Sydney` and `America/New_York`, including each zone's daylight-saving transition days in both directions (a 23-hour and a 25-hour business day), the write-path refusal, and the fail-closed read for a zone corrupted directly in the database (`PerBusinessTimeZonePersistenceTests`, `ZonedBusinessCalendarTests`, `CurrentBusinessCalendarTests`, `BusinessTimeZonesTests`, `BusinessTimeZoneMigrationTests`, `CurrentBusinessApiTests`).
 

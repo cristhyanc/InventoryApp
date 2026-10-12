@@ -1,14 +1,16 @@
-import { HttpClient, HttpErrorResponse } from '@angular/common/http';
-import { MsalBroadcastService, MsalService } from '@azure/msal-angular';
-import { AccountInfo, EventMessage, EventType, InteractionStatus } from '@azure/msal-browser';
-import { BehaviorSubject, Subject, firstValueFrom, of, throwError } from 'rxjs';
-import { ConfigService } from '../services/config.service';
+import { HttpErrorResponse } from '@angular/common/http';
+import { EventType, InteractionStatus } from '@azure/msal-browser';
+import { Subject, firstValueFrom, of, throwError } from 'rxjs';
 import { AccessService, MemberAccessState } from './access.service';
-import { CAPABILITIES } from './capabilities';
-
-function account(homeAccountId: string): AccountInfo {
-  return { homeAccountId, username: `${homeAccountId}@example.test` } as unknown as AccountInfo;
-}
+import { CAPABILITIES, Capability } from './capabilities';
+import {
+  IdentityCacheHarness,
+  apiConfig,
+  describeIdentityChange,
+  queuedReads,
+  readingHttp,
+  signedInIdentity
+} from './identity-cache.spec-helpers';
 
 const OWNER_RESPONSE = {
   role: 'Owner',
@@ -25,23 +27,13 @@ const OPERATOR_RESPONSE = {
   timeZoneId: 'Australia/Sydney'
 };
 
-interface Harness {
-  service: AccessService;
-  /** Every `GET /api/me/access` the service issued. */
-  get: jest.Mock;
-  inProgress$: BehaviorSubject<InteractionStatus>;
-  /** Changes who MSAL reports as signed in. */
-  signIn(accountId: string | null): void;
-  /** Raises one MSAL account event. */
-  raise(eventType: EventType): void;
-  /** Starts recording what the service publishes, which also triggers the first read. */
-  observe(): MemberAccessState[];
-}
+type Harness = IdentityCacheHarness<AccessService, MemberAccessState>;
 
 /**
  * The service is constructed directly rather than through `TestBed`: it issues exactly one `GET`,
  * so a hand-written double keeps these tests about the caching and refresh rules rather than about
- * `HttpClient`.
+ * `HttpClient`. The doubles themselves are shared with the sibling cache's spec and with the
+ * guard, sidebar and supplier specs that exercise the real service (`identity-cache.spec-helpers`).
  */
 function configure(
   options: {
@@ -50,35 +42,16 @@ function configure(
     responses?: (() => unknown)[];
   } = {}
 ): Harness {
-  let signedIn = options.signedIn === undefined ? 'member-1' : options.signedIn;
-  const responses = [...(options.responses ?? [])];
-  const get = jest.fn(() => {
-    const next = responses.shift();
-    return next === undefined ? of(OWNER_RESPONSE) : next();
-  });
-  const inProgress$ = new BehaviorSubject(options.interaction ?? InteractionStatus.None);
-  const msalSubject$ = new Subject<EventMessage>();
-
-  const service = new AccessService(
-    { get } as unknown as HttpClient,
-    { apiBaseUrl: '/api' } as unknown as ConfigService,
-    {
-      instance: {
-        getActiveAccount: () => (signedIn === null ? null : account(signedIn)),
-        getAllAccounts: () => (signedIn === null ? [] : [account(signedIn)])
-      }
-    } as unknown as MsalService,
-    { inProgress$, msalSubject$ } as unknown as MsalBroadcastService
-  );
+  const identity = signedInIdentity(options);
+  const get = queuedReads(options.responses ?? [], OWNER_RESPONSE);
+  const service = new AccessService(readingHttp(get), apiConfig(), identity.msal, identity.broadcast);
 
   return {
     service,
     get,
-    inProgress$,
-    signIn: (accountId) => {
-      signedIn = accountId;
-    },
-    raise: (eventType) => msalSubject$.next({ eventType } as EventMessage),
+    inProgress$: identity.inProgress$,
+    signIn: identity.signIn,
+    raise: identity.raise,
     observe: () => {
       const observed: MemberAccessState[] = [];
       service.access$.subscribe((state) => observed.push(state));
@@ -335,6 +308,113 @@ describe('AccessService refresh triggers (issue #528)', () => {
     slow.complete();
 
     await expect(firstValueFrom(service.allows('Data.Repair'))).resolves.toBe(false);
+  });
+});
+
+/**
+ * An actual change of signed-in identity owns the cache from the moment it happens (issue #603).
+ * The previous identity's answer is not a weaker answer for the new one - it is somebody else's,
+ * and publishing it for a moment is long enough for a guard or a menu to be built from it.
+ *
+ * The rule is the same on the sibling `AccountStateService`, so the suite itself lives in
+ * `identity-cache.spec-helpers.ts` and both services are asserted against it.
+ */
+describeIdentityChange<AccessService, MemberAccessState>({
+  subject: 'AccessService',
+  answered: 'granted',
+  firstResponse: OWNER_RESPONSE,
+  secondResponse: OPERATOR_RESPONSE,
+  configure: (responses) => configure({ responses }),
+  // What `requireCapability` subscribes to, and an Operator does not hold `Reports.View`.
+  guardAnswer: ({ service }) => expect(firstValueFrom(service.allows('Reports.View'))).resolves.toBe(false)
+});
+
+/**
+ * What a long-lived UI subscriber is told across an identity change (issue #603). `allows` waits
+ * for the first answer, which is what a guard needs; a page that is already rendering an action
+ * the previous identity was granted needs the opposite - an answer that withdraws it, because the
+ * `true` it received is otherwise the last thing it ever hears about somebody else's role.
+ */
+describe('AccessService capability answers across an identity change (issue #603)', () => {
+  function observeAllows(service: AccessService, capability: Capability): boolean[] {
+    const answers: boolean[] = [];
+    service.allows(capability).subscribe((allowed) => answers.push(allowed));
+    return answers;
+  }
+
+  it('withdraws the previous identity’s permission while the new identity’s read is pending', () => {
+    const pending = new Subject<unknown>();
+    const { service, signIn, raise } = configure({ responses: [() => of(OWNER_RESPONSE), () => pending] });
+    const allowed = observeAllows(service, 'Suppliers.ManageGstDefaults');
+    expect(allowed).toEqual([true]);
+
+    signIn('member-2');
+    raise(EventType.ACTIVE_ACCOUNT_CHANGED);
+
+    expect(allowed).toEqual([true, false]);
+
+    pending.next(OPERATOR_RESPONSE);
+    pending.complete();
+
+    // The new identity is an Operator, who does not hold it: the answer stays withdrawn.
+    expect(allowed).toEqual([true, false]);
+  });
+
+  it('cannot have the previous identity’s late answer restore a withdrawn permission', () => {
+    const stale = new Subject<unknown>();
+    const { service, signIn, raise } = configure({
+      responses: [() => of(OWNER_RESPONSE), () => stale, () => new Subject<unknown>()]
+    });
+    const allowed = observeAllows(service, 'Suppliers.ManageGstDefaults');
+    // The previous identity's own re-read, still in flight when the identity changes.
+    service.refresh();
+    expect(allowed).toEqual([true]);
+
+    signIn('member-2');
+    raise(EventType.ACTIVE_ACCOUNT_CHANGED);
+    expect(allowed).toEqual([true, false]);
+
+    stale.next(OWNER_RESPONSE);
+    stale.complete();
+
+    expect(allowed).toEqual([true, false]);
+  });
+
+  /**
+   * The fail-open rule survives the withdrawal: `unavailable` is "asked and could not be
+   * answered" for the identity signed in now, and hiding an action over a failed probe would take
+   * it away from the member it belongs to.
+   */
+  it('allows the action again when the new identity’s read cannot be answered', () => {
+    const { service, signIn, raise } = configure({
+      responses: [() => of(OWNER_RESPONSE), () => throwError(() => refusal(500))]
+    });
+    const allowed = observeAllows(service, 'Suppliers.ManageGstDefaults');
+    expect(allowed).toEqual([true]);
+
+    signIn('member-2');
+    raise(EventType.ACTIVE_ACCOUNT_CHANGED);
+
+    expect(allowed).toEqual([true, false, true]);
+  });
+
+  /** A guard activating in the window still waits, rather than being refused the page. */
+  it('answers a subscriber that arrives in the window only once the new identity has answered', async () => {
+    const pending = new Subject<unknown>();
+    const { service, signIn, raise, observe } = configure({
+      responses: [() => of(OWNER_RESPONSE), () => pending]
+    });
+    observe();
+
+    signIn('member-2');
+    raise(EventType.ACTIVE_ACCOUNT_CHANGED);
+    const allowed = observeAllows(service, 'Suppliers.ManageGstDefaults');
+    expect(allowed).toEqual([]);
+
+    pending.next(OWNER_RESPONSE);
+    pending.complete();
+
+    expect(allowed).toEqual([true]);
   });
 });
 

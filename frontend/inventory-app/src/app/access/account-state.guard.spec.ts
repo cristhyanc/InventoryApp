@@ -1,13 +1,11 @@
-import { HttpClient, HttpErrorResponse } from '@angular/common/http';
+import { HttpErrorResponse } from '@angular/common/http';
 import { Component } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
-import { MsalBroadcastService, MsalService } from '@azure/msal-angular';
-import { AccountInfo, InteractionStatus } from '@azure/msal-browser';
-import { EMPTY, Subject, of, throwError } from 'rxjs';
-import { ConfigService } from '../services/config.service';
+import { Subject, of, throwError } from 'rxjs';
 import { AccountState, AccountStateName, AccountStateService } from './account-state.service';
 import { ACCOUNT_STATE_ROUTE, accountStateGuard } from './account-state.guard';
+import { apiConfig, readingHttp, signedInIdentity } from './identity-cache.spec-helpers';
 
 @Component({ standalone: true, template: 'dashboard' })
 class DashboardPageComponent {}
@@ -24,10 +22,15 @@ class RejectedPageComponent {}
 @Component({ standalone: true, template: 'unavailable' })
 class UnavailablePageComponent {}
 
-const ACCOUNT = { homeAccountId: 'member-1' } as unknown as AccountInfo;
-
 function response(state: AccountStateName, onboardingEnabled = false): unknown {
   return { state, onboardingEnabled, rejectionReason: null };
+}
+
+interface Guarded {
+  router: Router;
+  accountState: AccountStateService;
+  /** Makes MSAL report a different signed-in account, as switching Microsoft account does. */
+  switchAccount(accountId: string): void;
 }
 
 /**
@@ -35,19 +38,9 @@ function response(state: AccountStateName, onboardingEnabled = false): unknown {
  * for the same reason `capability.guard.spec.ts` doubles only `AccessService`'s read: a stub that
  * re-implemented the account-state answer would be testing itself.
  */
-function accountStateService(read: () => unknown): AccountStateService {
-  return new AccountStateService(
-    { get: read } as unknown as HttpClient,
-    { apiBaseUrl: '/api' } as unknown as ConfigService,
-    {
-      instance: { getActiveAccount: () => ACCOUNT, getAllAccounts: () => [ACCOUNT] }
-    } as unknown as MsalService,
-    { inProgress$: of(InteractionStatus.None), msalSubject$: EMPTY } as unknown as MsalBroadcastService
-  );
-}
-
-async function withGuard(read: () => unknown): Promise<{ router: Router; accountState: AccountStateService }> {
-  const accountState = accountStateService(read);
+async function withGuard(read: () => unknown): Promise<Guarded> {
+  const identity = signedInIdentity();
+  const accountState = new AccountStateService(readingHttp(read), apiConfig(), identity.msal, identity.broadcast);
 
   await TestBed.configureTestingModule({
     providers: [
@@ -62,7 +55,7 @@ async function withGuard(read: () => unknown): Promise<{ router: Router; account
     ]
   }).compileComponents();
 
-  return { router: TestBed.inject(Router), accountState };
+  return { router: TestBed.inject(Router), accountState, switchAccount: identity.switchAccount };
 }
 
 /**
@@ -115,6 +108,31 @@ describe('accountStateGuard (issue #529)', () => {
     pending.complete();
 
     await navigation;
+    expect(router.url).toBe('/welcome');
+  });
+
+  /**
+   * A guard that activates while the new account's read is still in flight must wait for it
+   * (issue #603): the previous account's `Member` answer would let somebody with no membership
+   * of their own straight into a business route, and the moment between the switch and the new
+   * answer is exactly when a navigation happens.
+   */
+  it('waits for the new account rather than routing on the previous account’s state', async () => {
+    const pending = new Subject<unknown>();
+    const reads: (() => unknown)[] = [() => of(response('Member')), () => pending];
+    const { router, accountState, switchAccount } = await withGuard(() => (reads.shift() as () => unknown)());
+    accountState.state$.subscribe();
+
+    switchAccount('member-2');
+    let settled = false;
+    const navigation = router.navigateByUrl('/').then(() => (settled = true));
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    pending.next(response('NoMembership'));
+    pending.complete();
+    await navigation;
+
     expect(router.url).toBe('/welcome');
   });
 
