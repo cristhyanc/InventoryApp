@@ -823,7 +823,7 @@ describe('AppComponent active-account switch (issue #604)', () => {
     // The header is the new account's at once, and the previous account's context is discarded.
     expect(headerText(fixture)).toContain('Lee Operator');
     expect(headerText(fixture)).not.toContain('Dana Operator');
-    expect(businessReset.mock.calls.length).toBe(resets + 1);
+    expect(businessReset.mock.calls).toHaveLength(resets + 1);
 
     // The routed-page gate is closed again, and nothing is asked of the business endpoint until
     // the new identity's own account state has answered.
@@ -889,7 +889,7 @@ describe('AppComponent active-account switch (issue #604)', () => {
     active = null;
     raiseAccountEvent(EventType.LOGOUT_SUCCESS);
 
-    expect(businessReset.mock.calls.length).toBe(resets + 1);
+    expect(businessReset.mock.calls).toHaveLength(resets + 1);
     expect(businessLoad).toHaveBeenCalledTimes(1);
     expect(accountStateReads).toEqual(['dana.tenant']);
     expect(headerText(fixture)).not.toContain('Dana Operator');
@@ -907,7 +907,7 @@ describe('AppComponent active-account switch (issue #604)', () => {
     raiseAccountEvent(EventType.ACTIVE_ACCOUNT_CHANGED);
 
     expect(businessLoad).toHaveBeenCalledTimes(1);
-    expect(businessReset.mock.calls.length).toBe(resets);
+    expect(businessReset.mock.calls).toHaveLength(resets);
     expect(accountStateReads).toHaveLength(1);
     expect(mainText(fixture)).toContain('page body');
   });
@@ -923,7 +923,7 @@ describe('AppComponent active-account switch (issue #604)', () => {
     active = lee;
     raiseAccountEvent(EventType.ACTIVE_ACCOUNT_CHANGED);
 
-    expect(businessReset.mock.calls.length).toBe(resets);
+    expect(businessReset.mock.calls).toHaveLength(resets);
     expect(businessLoad).toHaveBeenCalledTimes(1);
   });
 
