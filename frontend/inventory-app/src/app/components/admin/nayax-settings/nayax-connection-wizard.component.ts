@@ -413,9 +413,10 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
    * The token field. It is read at the moment Test is pressed and cleared when that call returns:
    * there is deliberately no `ngModel`, signal or field holding the token between those two points.
    */
-  @ViewChild('tokenField') private tokenField?: ElementRef<HTMLInputElement>;
+  @ViewChild('tokenField') private readonly tokenField?: ElementRef<HTMLInputElement>;
 
-  @ViewChild('supportRequestField') private supportRequestField?: ElementRef<HTMLTextAreaElement>;
+  @ViewChild('supportRequestField')
+  private readonly supportRequestField?: ElementRef<HTMLTextAreaElement>;
 
   private statusSubscription: Subscription | null = null;
   private testSubscription: Subscription | null = null;
@@ -766,7 +767,10 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
 
   private previousStep(): number {
     if (this.step === 6) {
-      return this.result === null ? 3 : this.anyFailed ? 5 : 4;
+      if (this.result === null) {
+        return 3;
+      }
+      return this.anyFailed ? 5 : 4;
     }
     if (this.step === 5 || this.step === 4) {
       return this.step === 5 ? 4 : 3;
