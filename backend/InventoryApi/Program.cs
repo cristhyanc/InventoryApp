@@ -3,6 +3,7 @@ using Inventory.Application;
 using Inventory.Application.Access;
 using Inventory.Application.Members;
 using Inventory.Application.Nayax;
+using Inventory.Application.Onboarding;
 using Inventory.Application.Tenancy;
 using Inventory.Application.Time;
 using Inventory.Infrastructure;
@@ -13,6 +14,7 @@ using Inventory.Application.Businesses;
 using InventoryApi.Adapters.Businesses;
 using InventoryApi.Adapters.Members;
 using InventoryApi.Adapters.Nayax;
+using InventoryApi.Adapters.Onboarding;
 using InventoryApi.Adapters.PlatformDiagnostics;
 using InventoryApi.Bootstrap;
 using InventoryApi.Auth;
@@ -213,6 +215,21 @@ builder.Services.AddScoped<IMemberInviteAudit, LoggingMemberInviteAudit>();
 // transport fact. The event names the fields that changed and never a value - see
 // LoggingBusinessSettingsAudit.
 builder.Services.AddScoped<IBusinessSettingsAudit, LoggingBusinessSettingsAudit>();
+// The self-service business application audit trail (issue #541), on the same terms again. It is a
+// separate port from the three above because an application is a different event with different
+// fields - and because its entry type has no field for a business name, a contact address or an
+// ABN, which is what keeps a stranger's submitted personal and tax detail out of the audit trail
+// structurally rather than by a sink's discretion.
+builder.Services.AddScoped<IBusinessApplicationAudit, LoggingBusinessApplicationAudit>();
+
+// Whether self-service onboarding is switched on at all (issue #541). Read once here, because only
+// the composition root reads configuration, and published as the Application layer's narrow flag
+// port so the apply endpoint and GET /api/me/account-state cannot disagree about it. Off unless the
+// setting says otherwise - an absent, blank or unparseable value leaves it off - and switching it
+// on in production is gated on the human-verified release steps in docs/tenant-rollout.md. A
+// singleton, because it is one startup decision rather than a per-request one.
+builder.Services.AddSingleton<ISelfServiceOnboardingFlag>(
+    new ConfiguredSelfServiceOnboardingFlag(builder.Configuration));
 
 builder.Services.AddCors(options =>
 {
