@@ -10,6 +10,7 @@ import { SupplierService } from '../../services/supplier.service';
 import { Product, Category, Supplier } from '../../models/models';
 import { ListLoadState } from '../shared/list-load-state';
 import { createFilterTrigger$ } from '../shared/filter-request-trigger';
+import { SortDirection, SortValue, compareSortValues, nextSortState, sortAriaState, sortColumnLabel } from '../shared/sortable-column';
 import { ToastService } from '../../services/toast.service';
 import { SupplierOrderService } from '../../services/supplier-order.service';
 
@@ -25,8 +26,6 @@ type NeedsOrderingSortColumn =
   | 'onOrder'
   | 'needToOrder'
   | 'status';
-type SortDirection = 'asc' | 'desc';
-type SortValue = string | number | Date | null;
 
 @Component({
   selector: 'app-product-needs-ordering',
@@ -232,7 +231,7 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
         return leftValue == null ? 1 : -1;
       }
 
-      const comparison = this.compareValues(leftValue, rightValue);
+      const comparison = compareSortValues(leftValue, rightValue);
       // Ties keep a deterministic order (by id) instead of relying on sort stability alone.
       const resolved = comparison !== 0 ? comparison : left.id - right.id;
       return direction === 'desc' ? -resolved : resolved;
@@ -240,29 +239,17 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
   }
 
   sortBy(column: NeedsOrderingSortColumn): void {
-    if (this.sortColumn === column) {
-      this.sortDirection = this.sortDirection === 'asc' ? 'desc' : 'asc';
-      return;
-    }
-
-    this.sortColumn = column;
-    this.sortDirection = 'asc';
+    const next = nextSortState(this.sortColumn, this.sortDirection, column);
+    this.sortColumn = next.column;
+    this.sortDirection = next.direction;
   }
 
   ariaSort(column: NeedsOrderingSortColumn): 'ascending' | 'descending' | 'none' {
-    if (this.sortColumn !== column) {
-      return 'none';
-    }
-
-    return this.sortDirection === 'asc' ? 'ascending' : 'descending';
+    return sortAriaState(this.sortColumn, this.sortDirection, column);
   }
 
   sortLabel(label: string, column: NeedsOrderingSortColumn): string {
-    if (this.sortColumn !== column) {
-      return label;
-    }
-
-    return `${label} (${this.sortDirection === 'asc' ? 'ascending' : 'descending'})`;
+    return sortColumnLabel(label, this.sortColumn, this.sortDirection, column);
   }
 
   private sortValue(product: Product, column: NeedsOrderingSortColumn): SortValue {
@@ -290,18 +277,6 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
       case 'status':
         return product.isActive ? 1 : 0;
     }
-  }
-
-  /** Compares two non-missing values: numbers compare numerically, everything else as text. */
-  private compareValues(left: NonNullable<SortValue>, right: NonNullable<SortValue>): number {
-    if (left instanceof Date && right instanceof Date) {
-      return left.getTime() - right.getTime();
-    }
-    if (typeof left === 'number' && typeof right === 'number') {
-      return left - right;
-    }
-
-    return String(left).localeCompare(String(right), undefined, { sensitivity: 'base' });
   }
 
   toggleActive(product: Product): void {

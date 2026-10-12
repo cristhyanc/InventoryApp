@@ -3301,6 +3301,39 @@ its own column set.
   checkbox selection/"Mark as ordered" workflow without changing what filtering returns or any
   stored product data.
 
+#### Shared sorting helper for Products and Needs Ordering (issue #583)
+
+`frontend/inventory-app/src/app/components/shared/sortable-column.ts` is the one place the
+column-sort mechanics shared by `product-list.component.ts` (issue #497) and
+`product-needs-ordering.component.ts` (issue #498, above) are implemented, extracted after
+SonarCloud flagged 13.3% new-code duplication on PR #578 (threshold 3%) because the Needs Ordering
+page had copied the Products list's sort toggling, header state and non-missing-value comparator
+verbatim. It exports:
+
+- `nextSortState(currentColumn, currentDirection, requestedColumn)` — the header click/Enter rule
+  both `sortBy(column)` methods delegate to: the same column toggles direction, a different column
+  restarts ascending.
+- `sortAriaState`/`sortColumnLabel` — the `[attr.aria-sort]` value and the visible
+  `(ascending)`/`(descending)` label suffix, both pages' `ariaSort`/`sortLabel` methods delegate to.
+- `compareSortValues(left, right)` — compares two **non-missing** values: numbers and dates
+  numerically, everything else as locale-aware, case-insensitive text. Needs Ordering's
+  `sortedProducts` calls this directly on the two values once it has already decided neither is
+  missing (see below).
+- `compareSortValuesDirectionalNulls(left, right)` — the same comparison, plus the Products list's
+  own null policy: a missing value sorts after a present one in the comparator's own terms, so
+  reversing the comparator for a descending sort also reverses where the missing value lands.
+  Products' `sortedProducts` calls this directly; it has no page-local null handling left.
+
+**What stays local to each page, deliberately.** Each component keeps its own `sortValue(product,
+column)` — the column-to-field mapping — entirely private, including which `Product` fields each
+page exposes as sortable; a shared mapping would have coupled the two pages' column sets together
+for no benefit. The two pages' **missing-value placement is genuinely different and both are
+preserved as page-local policy**, not folded into the shared helper: the Products list uses
+`compareSortValuesDirectionalNulls` and lets a missing value's position flip with direction, while
+Needs Ordering's `sortedProducts` getter resolves a missing value to always sort last regardless of
+direction *before* calling `compareSortValues`, per the issue #582 regression fix — folding that
+policy into a shared function would have forced one page's behaviour onto the other.
+
 #### Reconciliation and Transaction Sales table width (issue #452)
 
 These two reports carry the widest tables in the application — twelve financial columns on
