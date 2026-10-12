@@ -2919,6 +2919,37 @@ account resolution and `loginRedirect`/`logoutRedirect` calls; `UserMenuComponen
 only and reports the two intents the application actually has. It invents no profile or account
 destination. The public `/auth` callback route and `MsalGuard` on every other route are untouched.
 
+**The shell follows the identity signed in now (issue #604).** `AppComponent` watches the shared
+`signedInAccountMayHaveChanged` trigger (`access/signed-in-account.ts`) — MSAL's own account
+events, `ACTIVE_ACCOUNT_CHANGED` among them, as well as `inProgress$` settling — rather than the
+interaction status alone. A direct Microsoft active-account switch raises only the event, because
+no interaction is involved and `inProgress$` never leaves `None`: a shell watching the interaction
+status alone therefore kept the previous account's displayed name, `businessAccountKey` and
+published business time zone for the rest of the session, and the new account-state answer could
+not repair it because the lookup that would have read it had already completed. The identity is
+compared through the same `activeAccountKey` the access caches key their answers on, so the shell
+and they cannot disagree about who is signed in. When it has actually changed, the shell does all
+of this in one step, before anything is read for the new account:
+
+- shows the new account in the header;
+- calls `BusinessService.reset()`, which drops the cached business and clears the published zone,
+  so no date is rendered in the previous business's zone and none is rendered in a guessed one;
+- cancels the lookup in flight for the previous account, including a retry still waiting;
+- closes the routed-page gate (`isBusinessContextReady`), so the page waits again instead of
+  rendering the new account's data against the previous business's calendar.
+
+It then waits for the new identity's own account state and reads its business once — see
+[Account-state routing](#account-state-routing-the-access-unavailable-page-and-the-global-403-handler-issue-529)
+below. A superseded lookup answering late can neither publish a zone (`BusinessService`'s
+generation check refuses it) nor open the gate (its subscription is gone); a further notification
+for the identity already loaded reads nothing again and does not restart a settled context; a
+sign-out clears the context with no authenticated call; and the MSAL listeners end with the
+component. `app.component.spec.ts` covers a direct event-only switch between two business zones
+(`Australia/Sydney` to `Europe/London`, against the real `BusinessService` and
+`BusinessTimeZoneService`), the new identity answering `NoMembership`, an unreadable new state,
+the previous account's response arriving after the switch, the sign-out event, a duplicate
+notification, and the cleanup on destroy.
+
 Adding a navigation entry is therefore a data change in `layout/navigation.ts` once the page and
 its route exist — not a template change in the shell.
 
@@ -3025,10 +3056,10 @@ is dropped or read again on exactly these triggers:
 | An explicit `refresh()` | Read again, unconditionally. This is what other work calls after changing something relevant |
 
 Sign-in, sign-out and the active-account change are observed from two signals together — MSAL's
-`msalSubject$` account events and `inProgress$` settling, which is what the shell already uses — and
-are acted on only when the signed-in identity the cache was read for actually changed. An answer
-from a read a later one superseded is discarded by a generation check when it arrives, so a slow
-read for the previous identity can never build somebody else's menu.
+`msalSubject$` account events and `inProgress$` settling, the shared trigger the shell watches too
+(issue #604) — and are acted on only when the signed-in identity the cache was read for actually
+changed. An answer from a read a later one superseded is discarded by a generation check when it
+arrives, so a slow read for the previous identity can never build somebody else's menu.
 
 **The identity signed in now owns the answer, from the moment it changes** (issue #603). An actual
 change of identity publishes `unread` again *before* the new read is issued or even waited for, so
@@ -3255,6 +3286,16 @@ first and asks for the business only when it answers `Member` - an account with 
 membership has no business to look up, and the call would only receive the same `403` every other
 member endpoint already gives it. An account state that could not be read still attempts the
 lookup, for the same fail-open reason the guard does: the endpoint itself remains the boundary.
+
+**And the state it waits for is the current identity's** (issue #604). The shell starts that lookup
+afresh on the same account-change trigger these caches use (see [Application shell and
+navigation](#application-shell-and-navigation-issue-391)), and the previous identity's answer has
+already gone back to `unread` by then (issue #603), so a switched-to account is never granted a
+business lookup - or refused one - by the previous account's `Member` or `NoMembership` answer.
+`GET /api/business/current` is issued for the new identity once that identity's own state has
+answered, exactly once, and not at all while it is still pending; the documented unavailable
+fallback and the bounded retries are unchanged, and a late answer from the superseded read reaches
+no shell decision at all.
 
 **What proves this slice.** `account-state.service.spec.ts` (mirroring `access.service.spec.ts`:
 the cached read, every refresh trigger, the unknown-state fallback, a superseded answer discarded,
@@ -4581,7 +4622,7 @@ A business's calendar days are derived in **its own** IANA time zone, stored on 
 - **Resolution is per request, from the trusted current business.** `BusinessScopeMiddleware` reads the resolved business's record through `Inventory.Application.Businesses.IBusinessProfileStore` and publishes its zone into the scoped `Inventory.Application.Time.BusinessTimeZoneScope`, exactly as it publishes the business itself into `BusinessScope` and for the same reason: converting an instant to a business date happens synchronously, deep inside a calculation, and cannot await a membership lookup. The scope can only move forward to a zone, once. `IBusinessCalendar` is registered as the scoped `Inventory.Infrastructure.Time.CurrentBusinessCalendar`, which reads that zone, memoises the resolved `TimeZoneInfo` for the request, and derives every date in it. No route, query, body or header value participates: the zone comes from the business the caller's membership resolved, and from nothing else.
 - **It fails closed.** A request with no resolved business, or a business whose stored id the host's time-zone database cannot resolve, gets `Inventory.Application.Time.BusinessTimeZoneUnavailableException` from every member of the port - never `Australia/Sydney`, never the host's zone, never UTC. A substituted zone would move sales, fees, commissions and profit between business days with nothing looking wrong. The exception is not mapped to a caller-facing status: it falls through to `GlobalExceptionHandler`, which logs it and answers a generic `500`. The middleware does not refuse the whole request when a business has no usable zone (most endpoints derive no business date at all); it logs the condition, and any business-date derivation in that request fails.
 - **Maintenance commands have no business calendar, and need none.** The human-invoked `bootstrap-business`, `migrate-database` and database-backup commands run outside a request, so no business is resolved and no zone is published: resolving `IBusinessCalendar` there succeeds but every member fails closed. None of them derives a business date. `BusinessBootstrapper` creates its business with `Australia/Sydney` stated explicitly - the zone the pre-tenancy data it adopts has always been reported in - rather than relying on a default. A maintenance command that ever does need a business date must construct a `ZonedBusinessCalendar` with the zone it means, explicitly.
-- **The frontend gets the zone from the API.** `GET /api/business/current` returns `{ name, timeZoneId }` for the trusted current business, carrying the same `[Authorize]`, delegated-scope and membership requirements as every other business endpoint, and no identifier in either direction. It replaced the frontend's hard-coded `BUSINESS_TIME_ZONE` constant: `BusinessService` reads it once sign-in has settled and publishes the zone into `BusinessTimeZoneService`, which `BusinessDateTimePipe` and the calendar-input components read. The shell holds the routed page back until that lookup has settled, so a page on screen is one whose business context is known; a lookup that failed renders the application with dates unavailable rather than in a guessed zone. Issue #521 also surfaces the same name and zone in `GET /api/me/access` alongside the caller's role and capabilities (see [Membership roles and capabilities](#membership-roles-and-capabilities-issue-521)); that endpoint does not replace this one, and the frontend still reads the zone from here.
+- **The frontend gets the zone from the API.** `GET /api/business/current` returns `{ name, timeZoneId }` for the trusted current business, carrying the same `[Authorize]`, delegated-scope and membership requirements as every other business endpoint, and no identifier in either direction. It replaced the frontend's hard-coded `BUSINESS_TIME_ZONE` constant: `BusinessService` reads it once sign-in has settled - and again whenever the signed-in account changes, including a direct MSAL active-account switch (issue #604, see [Application shell and navigation](#application-shell-and-navigation-issue-391)) - and publishes the zone into `BusinessTimeZoneService`, which `BusinessDateTimePipe` and the calendar-input components read. The shell holds the routed page back until that lookup has settled, so a page on screen is one whose business context is known; a lookup that failed renders the application with dates unavailable rather than in a guessed zone, and a changed account publishes no zone at all until its own business has answered. Issue #521 also surfaces the same name and zone in `GET /api/me/access` alongside the caller's role and capabilities (see [Membership roles and capabilities](#membership-roles-and-capabilities-issue-521)); that endpoint does not replace this one, and the frontend still reads the zone from here.
 - **A zone change applies to all history.** The owner's decision (recorded on issue #499) is that changing a business's zone later re-derives every historical business day in the new zone, with a warning. Nothing stored is rewritten; the boundaries simply move. Since issue #548 that change is reachable: `PUT /api/business/settings` saves the zone, the next request resolves it from the business's own record, and every business date - for data already stored as much as for new data - is derived in the new zone, including its daylight-saving transitions. See [Business settings API](#business-settings-api-issue-548); the page that shows the warning is issue #549.
 - **Testing.** Two-business relational tests prove isolated boundaries for `Australia/Sydney` and `America/New_York`, including each zone's daylight-saving transition days in both directions (a 23-hour and a 25-hour business day), the write-path refusal, and the fail-closed read for a zone corrupted directly in the database (`PerBusinessTimeZonePersistenceTests`, `ZonedBusinessCalendarTests`, `CurrentBusinessCalendarTests`, `BusinessTimeZonesTests`, `BusinessTimeZoneMigrationTests`, `CurrentBusinessApiTests`).
 
