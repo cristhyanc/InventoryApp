@@ -66,7 +66,10 @@ public sealed class EfNayaxConnectionStore : INayaxConnectionStore
                 connection.Status,
                 connection.CredentialRevision,
                 connection.LastTestedAtUtc,
-                connection.UpdatedAtUtc))
+                connection.UpdatedAtUtc)
+            {
+                MachineChecksPending = connection.MachineChecksPending,
+            })
             .SingleOrDefaultAsync(cancellationToken)
             .ConfigureAwait(false);
     }
@@ -191,6 +194,11 @@ public sealed class EfNayaxConnectionStore : INayaxConnectionStore
                     .SetProperty(connection => connection.EncryptionKeyId, protectedToken.KeyId)
                     .SetProperty(connection => connection.Status, NayaxConnectionStatus.PendingPermissions)
                     .SetProperty(connection => connection.LastTestedAtUtc, (DateTime?)null)
+                    // Cleared for the same reason the last-tested instant is: the machine checks
+                    // that were or were not verified belong to the token being replaced, and a new
+                    // token must inherit none of the previous one's test facts. A save from a tested
+                    // draft writes the real value immediately afterwards, in the same transaction.
+                    .SetProperty(connection => connection.MachineChecksPending, false)
                     .SetProperty(connection => connection.UpdatedAtUtc, savedAt)
                     .SetProperty(
                         connection => connection.CredentialRevision,
@@ -223,15 +231,34 @@ public sealed class EfNayaxConnectionStore : INayaxConnectionStore
         // credential save committed after the test started cannot be overwritten by its result.
         // The owning business is in the same WHERE clause, contributed by the central query filter
         // rather than by a predicate written here.
-        var updated = await _db.BusinessNayaxConnections
-            .Where(connection => connection.CredentialRevision == result.CredentialRevision)
-            .ExecuteUpdateAsync(
-                setters => setters
-                    .SetProperty(connection => connection.Status, result.Status)
-                    .SetProperty(connection => connection.LastTestedAtUtc, result.TestedAtUtc)
-                    .SetProperty(connection => connection.UpdatedAtUtc, _clock.UtcNow),
-                cancellationToken)
-            .ConfigureAwait(false);
+        var matching = _db.BusinessNayaxConnections
+            .Where(connection => connection.CredentialRevision == result.CredentialRevision);
+        var updatedAt = _clock.UtcNow;
+
+        // Two statements rather than one with a conditional setter, because `ExecuteUpdate` takes an
+        // expression that cannot be composed at runtime. Which one runs is the difference between a
+        // result that ran the machine checks and one that says nothing about them (issue #537): a
+        // 401 from an ordinary call must not claim those checks passed, so it leaves the column
+        // exactly as it is. The revision predicate - the part that makes the write safe - is the
+        // same in both.
+        var updated = result.MachineChecksPending is { } machineChecksPending
+            ? await matching
+                .ExecuteUpdateAsync(
+                    setters => setters
+                        .SetProperty(connection => connection.Status, result.Status)
+                        .SetProperty(connection => connection.MachineChecksPending, machineChecksPending)
+                        .SetProperty(connection => connection.LastTestedAtUtc, result.TestedAtUtc)
+                        .SetProperty(connection => connection.UpdatedAtUtc, updatedAt),
+                    cancellationToken)
+                .ConfigureAwait(false)
+            : await matching
+                .ExecuteUpdateAsync(
+                    setters => setters
+                        .SetProperty(connection => connection.Status, result.Status)
+                        .SetProperty(connection => connection.LastTestedAtUtc, result.TestedAtUtc)
+                        .SetProperty(connection => connection.UpdatedAtUtc, updatedAt),
+                    cancellationToken)
+                .ConfigureAwait(false);
 
         if (updated > 0)
         {
@@ -271,6 +298,7 @@ public sealed class EfNayaxConnectionStore : INayaxConnectionStore
             Status = NayaxConnectionStatus.PendingPermissions,
             CredentialRevision = 1,
             LastTestedAtUtc = null,
+            MachineChecksPending = false,
             UpdatedAtUtc = savedAt,
         };
 
@@ -284,7 +312,10 @@ public sealed class EfNayaxConnectionStore : INayaxConnectionStore
             row.Status,
             row.CredentialRevision,
             row.LastTestedAtUtc,
-            row.UpdatedAtUtc);
+            row.UpdatedAtUtc)
+        {
+            MachineChecksPending = row.MachineChecksPending,
+        };
     }
 
     /// <summary>

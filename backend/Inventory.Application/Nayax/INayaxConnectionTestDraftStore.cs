@@ -49,6 +49,27 @@ public sealed record StoredNayaxConnectionTestDraft(
     DateTime ExpiresAtUtc);
 
 /// <summary>
+/// A draft that one save claimed, <strong>with</strong> its decrypted token (issue #537).
+///
+/// This is the one read of a draft that handles the secret, and it exists only because accepting a
+/// draft means storing the pair it holds. It is returned by
+/// <see cref="INayaxConnectionTestDraftStore.TryClaimAsync"/> alone - the claim that also deletes
+/// the row - so there is no way to decrypt a draft without consuming it.
+///
+/// The credential's revision is <c>0</c>: these credentials have never been stored, so there is no
+/// revision to attribute a result to yet. The revision the save writes comes from
+/// <see cref="INayaxConnectionStore.SaveCredentialAsync"/>, which computes it in the database.
+/// </summary>
+/// <param name="Credential">
+/// The tested operator id and decrypted token. Carries a secret: hand it to the connection store
+/// and nowhere else, and never log, serialise or return it.
+/// </param>
+/// <param name="ResultsJson">The serialized check report the test produced.</param>
+public sealed record ClaimedNayaxConnectionTestDraft(
+    NayaxConnectionCredential Credential,
+    string ResultsJson);
+
+/// <summary>
 /// Narrow persistence port for the short-lived, encrypted Nayax connection-test draft (issue #536,
 /// a slice of #506).
 ///
@@ -88,6 +109,36 @@ public interface INayaxConnectionTestDraftStore
     /// <param name="actor">The Entra <c>(tid, oid)</c> the draft must have been created by.</param>
     /// <param name="cancellationToken">The request's cancellation token.</param>
     Task<StoredNayaxConnectionTestDraft?> FindAsync(
+        Guid draftId,
+        ActorIdentity actor,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Claims the current business's draft with this id, created by this actor and not yet expired,
+    /// <strong>deleting it in the same statement</strong>, and returns its decrypted credential and
+    /// its results - or <see langword="null"/> when there was no such draft to claim (issue #537).
+    ///
+    /// <para><strong>A claim is single-use, and that is enforced by the delete, not by a check.</strong>
+    /// The row is removed by a conditional <c>DELETE</c> carrying the id, the owning business, the
+    /// creating actor and the expiry, and the claim succeeds only when that statement removed exactly
+    /// one row. Two simultaneous saves of one draft therefore cannot both succeed however they
+    /// interleave: the second one's <c>DELETE</c> matches nothing. A test-then-delete would leave
+    /// precisely that race open, which is why this is one statement and why the claim - not the read
+    /// - is what the caller branches on.</para>
+    ///
+    /// <para>It fails closed in every direction and reports one answer for all of them, exactly as
+    /// <see cref="FindAsync"/> does: no such draft, another business's, another member's, an expired
+    /// one, and one a previous save already claimed all read as <see langword="null"/>.</para>
+    ///
+    /// <para>The caller is expected to run this inside
+    /// <see cref="INayaxConnectionSaveTransactions"/>'s transaction together with the connection
+    /// write, so a failure to store the credential puts the claimed draft back rather than consuming
+    /// a test result that was never accepted.</para>
+    /// </summary>
+    /// <param name="draftId">The opaque identifier the test returned.</param>
+    /// <param name="actor">The Entra <c>(tid, oid)</c> the draft must have been created by.</param>
+    /// <param name="cancellationToken">The request's cancellation token.</param>
+    Task<ClaimedNayaxConnectionTestDraft?> TryClaimAsync(
         Guid draftId,
         ActorIdentity actor,
         CancellationToken cancellationToken);

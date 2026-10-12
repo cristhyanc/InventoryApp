@@ -73,6 +73,21 @@ public class BusinessNayaxConnection : IBusinessOwned
     /// </summary>
     public DateTime? LastTestedAtUtc { get; set; }
 
+    /// <summary>
+    /// Whether the last completed connection check left the machine-scoped checks unverified
+    /// (issue #537): the business had no machine in Nayax to run <c>GET machines/{id}</c> and its
+    /// siblings against, so those permissions are neither granted nor refused as far as this
+    /// application knows.
+    ///
+    /// It is written only by a save from a tested draft and by a re-test, and only together with the
+    /// status those checks concluded. A 401 reported by an ordinary Nayax call leaves it alone,
+    /// because such a call never ran the machine checks. <see langword="false"/> is therefore both
+    /// "the machine checks passed" and "no check has ever run", which is deliberate: the flag asks
+    /// an Owner to re-test once their machines are set up, and a connection that is working must not
+    /// be made to look incomplete by a check nobody has run yet.
+    /// </summary>
+    public bool MachineChecksPending { get; set; }
+
     /// <summary>When this record last changed, for either reason.</summary>
     public DateTime UpdatedAtUtc { get; set; }
 }

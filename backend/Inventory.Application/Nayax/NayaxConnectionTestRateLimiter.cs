@@ -8,6 +8,10 @@ namespace Inventory.Application.Nayax;
 /// "At most <see cref="MaxRunsPerWindow"/> connection tests per business per
 /// <see cref="Window"/>" (issue #536), enforced before any Nayax call is made.
 ///
+/// <para>Since issue #537 the Owner-only re-test of the <em>stored</em> credentials claims from this
+/// same limiter, so test and re-test runs count together: a re-test is the same eight calls against
+/// the same upstream, and two separate allowances would simply double the rate.</para>
+///
 /// <para>The limit is per business rather than per actor because what it protects is the upstream:
 /// one test is eight Nayax calls, and a form with a Test button is trivially clickable in a loop.
 /// Rate-limiting the actor would let a second Owner start again from zero against the same operator

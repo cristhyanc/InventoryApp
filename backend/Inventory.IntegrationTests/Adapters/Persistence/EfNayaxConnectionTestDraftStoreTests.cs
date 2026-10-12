@@ -280,6 +280,153 @@ public class EfNayaxConnectionTestDraftStoreTests
         Assert.Equal(existing, rows[0].Id);
     }
 
+    /// <summary>
+    /// A claim hands back the decrypted credential and the stored results, and removes the row in
+    /// the same breath (issue #537): the draft is single-use, and the delete is what enforces it.
+    /// </summary>
+    [Fact]
+    public async Task A_claim_returns_the_decrypted_credential_and_deletes_the_draft()
+    {
+        await using var fixture = await DraftFixture.CreateAsync();
+        var store = fixture.StoreFor(fixture.BusinessA);
+        var draftId = Guid.NewGuid();
+        await store.ReplaceAsync(Draft(draftId), CancellationToken.None);
+
+        var claimed = await store.TryClaimAsync(draftId, Owner, CancellationToken.None);
+
+        Assert.NotNull(claimed);
+        Assert.Equal(OperatorId, claimed!.Credential.OperatorId);
+        Assert.Equal(Token, claimed.Credential.AccessToken);
+        Assert.Equal(0, claimed.Credential.CredentialRevision);
+        Assert.Equal("{\"checks\":\"ok\"}", claimed.ResultsJson);
+        Assert.Empty(await fixture.AllRowsAsync());
+    }
+
+    /// <summary>
+    /// The second claim of one draft finds nothing, which is what makes two saves of one test result
+    /// end as one save and one refusal however they interleave.
+    /// </summary>
+    [Fact]
+    public async Task A_draft_can_be_claimed_only_once()
+    {
+        await using var fixture = await DraftFixture.CreateAsync();
+        var store = fixture.StoreFor(fixture.BusinessA);
+        var draftId = Guid.NewGuid();
+        await store.ReplaceAsync(Draft(draftId), CancellationToken.None);
+
+        Assert.NotNull(await store.TryClaimAsync(draftId, Owner, CancellationToken.None));
+        Assert.Null(await store.TryClaimAsync(draftId, Owner, CancellationToken.None));
+    }
+
+    /// <summary>
+    /// Every way a claim can fail reads the same, and none of them removes a row: an id no draft
+    /// has, another member's draft, and an expired one. Reporting which would tell a caller that
+    /// somebody else's draft exists.
+    /// </summary>
+    [Fact]
+    public async Task An_unknown_draft_another_actor_s_draft_and_an_expired_one_all_claim_nothing()
+    {
+        await using var fixture = await DraftFixture.CreateAsync();
+        var draftId = Guid.NewGuid();
+        await fixture.StoreFor(fixture.BusinessA).ReplaceAsync(Draft(draftId), CancellationToken.None);
+
+        Assert.Null(await fixture.StoreFor(fixture.BusinessA)
+            .TryClaimAsync(Guid.NewGuid(), Owner, CancellationToken.None));
+        Assert.Null(await fixture.StoreFor(fixture.BusinessA)
+            .TryClaimAsync(draftId, OtherOwner, CancellationToken.None));
+        Assert.Null(await fixture.StoreFor(fixture.BusinessA, readAt: ExpiresAt)
+            .TryClaimAsync(draftId, Owner, CancellationToken.None));
+
+        Assert.Single(await fixture.AllRowsAsync());
+    }
+
+    /// <summary>
+    /// One business cannot claim another's draft even knowing its exact id and presenting the same
+    /// actor identity - and the attempt deletes nothing, which is the part the central query filter
+    /// has to carry into the <c>DELETE</c> itself.
+    /// </summary>
+    [Fact]
+    public async Task One_business_cannot_claim_another_s_draft()
+    {
+        await using var fixture = await DraftFixture.CreateAsync();
+        var a = Guid.NewGuid();
+        var b = Guid.NewGuid();
+        await fixture.StoreFor(fixture.BusinessA).ReplaceAsync(Draft(a), CancellationToken.None);
+        await fixture.StoreFor(fixture.BusinessB).ReplaceAsync(
+            Draft(b, OtherOperatorId, OtherToken), CancellationToken.None);
+
+        Assert.Null(await fixture.StoreFor(fixture.BusinessA).TryClaimAsync(b, Owner, CancellationToken.None));
+        Assert.Null(await fixture.StoreFor(fixture.BusinessB).TryClaimAsync(a, Owner, CancellationToken.None));
+
+        var rows = await fixture.AllRowsAsync();
+        Assert.Equal(2, rows.Count);
+    }
+
+    /// <summary>
+    /// A claim without a single resolved business is refused rather than running unscoped: the
+    /// conditional <c>DELETE</c> does not pass through <c>BusinessOwnershipEnforcer</c>, so an
+    /// unscoped statement would reach - and consume - every business's draft.
+    /// </summary>
+    [Fact]
+    public async Task A_claim_without_a_resolved_business_is_refused_and_deletes_nothing()
+    {
+        await using var fixture = await DraftFixture.CreateAsync();
+        var draftId = Guid.NewGuid();
+        await fixture.StoreFor(fixture.BusinessA).ReplaceAsync(Draft(draftId), CancellationToken.None);
+
+        await Assert.ThrowsAsync<CrossBusinessAccessException>(
+            () => fixture.DeniedStore().TryClaimAsync(draftId, Owner, CancellationToken.None));
+        await Assert.ThrowsAsync<CrossBusinessAccessException>(
+            () => fixture.UnscopedStore().TryClaimAsync(draftId, Owner, CancellationToken.None));
+
+        Assert.Single(await fixture.AllRowsAsync());
+    }
+
+    /// <summary>
+    /// A ciphertext whose key is not configured fails closed instead of reporting an absent draft -
+    /// an undecryptable credential must never look like one that was never tested - and the draft
+    /// is left in place, because the decryption happens before the row is removed.
+    /// </summary>
+    [Fact]
+    public async Task A_claim_whose_token_cannot_be_decrypted_fails_closed_and_consumes_nothing()
+    {
+        await using var fixture = await DraftFixture.CreateAsync();
+        var draftId = Guid.NewGuid();
+        await fixture.StoreFor(fixture.BusinessA).ReplaceAsync(Draft(draftId), CancellationToken.None);
+
+        await Assert.ThrowsAsync<NayaxTokenProtectionException>(
+            () => fixture.StoreFor(fixture.BusinessA, new UnconfiguredNayaxTokenProtector())
+                .TryClaimAsync(draftId, Owner, CancellationToken.None));
+
+        Assert.Single(await fixture.AllRowsAsync());
+    }
+
+    /// <summary>
+    /// The claim is decided by its <c>DELETE</c> removing exactly one row, not by the read that
+    /// preceded it. Here the row disappears between the two - which is what a second save doing the
+    /// same thing looks like from inside this one - and the claim reports no draft rather than
+    /// handing out a credential whose single-use row somebody else already took.
+    ///
+    /// <para>The disappearance is staged through the protector, which the adapter calls between the
+    /// read and the delete. That is a seam rather than a behaviour, and it is used deliberately:
+    /// the alternative is leaving the one statement that makes two simultaneous saves safe with no
+    /// test of its own.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_draft_that_disappears_between_the_read_and_the_delete_claims_nothing()
+    {
+        await using var fixture = await DraftFixture.CreateAsync();
+        var draftId = Guid.NewGuid();
+        await fixture.StoreFor(fixture.BusinessA).ReplaceAsync(Draft(draftId), CancellationToken.None);
+
+        var racing = new RowRemovingProtector(Protector(ActiveKeyId), fixture.DeleteEveryDraft);
+        var claimed = await fixture.StoreFor(fixture.BusinessA, racing)
+            .TryClaimAsync(draftId, Owner, CancellationToken.None);
+
+        Assert.Null(claimed);
+        Assert.Empty(await fixture.AllRowsAsync());
+    }
+
     private static NewNayaxConnectionTestDraft Draft(
         Guid id,
         string operatorId = OperatorId,
@@ -307,6 +454,30 @@ public class EfNayaxConnectionTestDraftStoreTests
             Enumerable.Repeat((byte)7, NayaxTokenProtectionConfiguration.KeySizeInBytes).ToArray());
 
         return new AesGcmNayaxTokenProtector(options);
+    }
+
+    /// <summary>
+    /// A protector that removes the draft row while it decrypts, so the adapter's "exactly one row
+    /// was claimed" check can be observed. It decrypts normally otherwise.
+    /// </summary>
+    private sealed class RowRemovingProtector : INayaxTokenProtector
+    {
+        private readonly INayaxTokenProtector _inner;
+        private readonly Action _whileDecrypting;
+
+        public RowRemovingProtector(INayaxTokenProtector inner, Action whileDecrypting)
+        {
+            _inner = inner;
+            _whileDecrypting = whileDecrypting;
+        }
+
+        public ProtectedNayaxToken Protect(string accessToken) => _inner.Protect(accessToken);
+
+        public string Unprotect(ProtectedNayaxToken protectedToken)
+        {
+            _whileDecrypting();
+            return _inner.Unprotect(protectedToken);
+        }
     }
 
     /// <summary>
@@ -384,6 +555,17 @@ public class EfNayaxConnectionTestDraftStoreTests
         {
             await using var context = TestAppDbContext.Unrestricted(_options);
             return await context.NayaxConnectionTestDrafts.AsNoTracking().ToListAsync();
+        }
+
+        /// <summary>
+        /// Removes every draft row directly, for the one test that needs the row to disappear in
+        /// the middle of a claim. Synchronous, because it is called from inside the adapter.
+        /// </summary>
+        public void DeleteEveryDraft()
+        {
+            using var command = _connection.CreateCommand();
+            command.CommandText = "DELETE FROM NayaxConnectionTestDrafts;";
+            command.ExecuteNonQuery();
         }
 
         /// <summary>Every stored value of the draft table, as text, for a plaintext sweep.</summary>

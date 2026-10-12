@@ -80,6 +80,71 @@ public sealed class EfNayaxConnectionTestDraftStore : INayaxConnectionTestDraftS
     }
 
     /// <inheritdoc />
+    public async Task<ClaimedNayaxConnectionTestDraft?> TryClaimAsync(
+        Guid draftId,
+        ActorIdentity actor,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+
+        RequireCurrentBusinessId("claimed");
+
+        var now = _clock.UtcNow;
+
+        // Every condition of the claim, written once and used by both statements below: the id, the
+        // creating actor and the expiry, with the owning business contributed by the central query
+        // filter rather than by a predicate written here.
+        var claimable = _db.NayaxConnectionTestDrafts
+            .Where(draft => draft.Id == draftId
+                && draft.CreatedByDirectoryTenantId == actor.DirectoryTenantId
+                && draft.CreatedByObjectId == actor.ObjectId
+                && draft.ExpiresAt > now);
+
+        // The ciphertext is read first because the delete cannot return it, and then the delete -
+        // not this read - is what decides whether the claim succeeded. That order matters: a caller
+        // that trusted the read would hand the same credential to two concurrent saves, while a
+        // caller that trusts the delete cannot, because only one `DELETE` can remove a row.
+        var stored = await claimable
+            .AsNoTracking()
+            .Select(draft => new
+            {
+                draft.OperatorId,
+                draft.AccessTokenCiphertext,
+                draft.EncryptionKeyId,
+                draft.ResultsJson,
+            })
+            .SingleOrDefaultAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        if (stored is null)
+        {
+            return null;
+        }
+
+        // Decrypted before the row is removed, so a key-configuration failure claims nothing at all
+        // rather than consuming a draft it cannot hand back. Throws for a corrupt ciphertext or an
+        // unconfigured key, exactly as the connection store does: an undecryptable credential must
+        // never look like an absent draft.
+        var accessToken = _protector.Unprotect(
+            new ProtectedNayaxToken(stored.EncryptionKeyId, stored.AccessTokenCiphertext));
+
+        var claimed = await claimable.ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        if (claimed != 1)
+        {
+            // Another save claimed it between the read and this statement, or the row expired under
+            // the same predicate. Either way this caller has no draft, and reporting one would let
+            // a test result be accepted twice.
+            return null;
+        }
+
+        return new ClaimedNayaxConnectionTestDraft(
+            // Revision 0: nothing has stored these credentials yet, so there is no revision to
+            // attribute a result to. The save's own write is what produces one.
+            new NayaxConnectionCredential(stored.OperatorId, accessToken, credentialRevision: 0),
+            stored.ResultsJson);
+    }
+
+    /// <inheritdoc />
     public async Task ReplaceAsync(NewNayaxConnectionTestDraft draft, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(draft);
@@ -132,7 +197,8 @@ public sealed class EfNayaxConnectionTestDraftStore : INayaxConnectionTestDraftS
     /// database without passing through <c>BusinessOwnershipEnforcer</c>, so an unscoped statement
     /// would carry no business predicate and reach every business's draft.
     /// </summary>
-    private void RequireCurrentBusinessId()
+    /// <param name="operation">What was attempted, for the refusal message.</param>
+    private void RequireCurrentBusinessId(string operation = "stored")
     {
         if (_db.CurrentBusinessId is not null)
         {
@@ -140,7 +206,7 @@ public sealed class EfNayaxConnectionTestDraftStore : INayaxConnectionTestDraftS
         }
 
         throw new CrossBusinessAccessException(
-            "A Nayax connection test draft cannot be stored without a single resolved current "
+            $"A Nayax connection test draft cannot be {operation} without a single resolved current "
                 + "business. The caller has no business membership, or the context was "
                 + "constructed unscoped, so the write is refused.");
     }
