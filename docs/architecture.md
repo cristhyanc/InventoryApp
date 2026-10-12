@@ -2337,6 +2337,21 @@ how often somebody pressed Test, and on a single instance
 ([SQLite operating assumptions](#sqlite-operating-assumptions-and-scale-strategy-issue-53)) in-process
 state is the whole truth.
 
+**The allowance is the business's, and clearing out memory never changes it** (issue #606). The
+limiter remembers one claim history per business and, once more than `MaxTrackedBusinesses` (256) are
+remembered, each granted claim also clears out what has gone stale. That housekeeping is bounded by
+one rule: it expires the attempts that have **left** the window and forgets only a business left with
+none of them. A business whose oldest attempt has expired while later ones are still live keeps those
+live attempts and so keeps exactly the slots they have freed — dropping its history wholesale would
+restart its window and let five more runs reach Nayax inside the same ten minutes, which is the
+regression issue #606 fixed and `NayaxConnectionTestRateLimiterTests` now pins with a deterministic
+one-attempt-then-four sequence. The threshold is therefore a hint about memory, never a cap: crossing
+it neither grants, denies nor resets any business's allowance, and a business that really has been
+quiet for a whole window is still forgotten. Expiring, counting and recording a claim are one
+operation on the history that business is tracked by, so a claim racing the clear-out is still counted
+against the window rather than landing in a forgotten history — test and re-test share that one
+history, so the pair of them is five runs per business per rolling ten minutes in any mix.
+
 **Nothing is logged that should not be.** The runner logs nothing itself; the underlying client's one
 `Error` line for an ordinary upstream failure carries the operation, method, relative endpoint and
 status code and never the token, the authorization header or the upstream body, exactly as before.
@@ -2353,7 +2368,10 @@ documented status on every check, the two `404` readings, no answer at all, and 
 so a check, status or cause added later has to make a decision there.
 `Inventory.UnitTests/Application/Nayax/NayaxConnectionTestRateLimiterTests` — the fifth run allowed
 and the sixth refused, the sliding boundary and its `Retry-After`, a clock that moved backwards not
-reopening a slot, and one business not spending another's allowance.
+reopening a slot, one business not spending another's allowance, and, above the tracking threshold
+(issue #606), clearing out keeping a mixed history's live attempts over repeated passes, forgetting a
+fully idle business, leaving an unrelated business's allowance alone, and a coordinated race of claims
+against clearing out granting the five runs exactly once.
 `TestNayaxConnectionTests` — the submitted credentials reaching the runner, pasted whitespace trimmed,
 a blank field refused before any call or allowance, no token in the result or the stored results,
 the fifteen-minute expiry, the opaque id, replacement, actor binding, and a rate-limited request
