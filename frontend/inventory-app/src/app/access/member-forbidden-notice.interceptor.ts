@@ -6,9 +6,15 @@ import { ToastService } from '../services/toast.service';
 import { ACCOUNT_STATE_BYPASS_PATHS, INVITE_ROUTE_PREFIX } from './account-state.guard';
 import { isMemberAccessRefusal } from './access-forbidden.interceptor';
 
+const SLASH = '/'.charCodeAt(0);
+
 function normalizedCurrentPath(url: string): string {
   const path = url.split('?')[0].split('#')[0];
-  return path.replace(/^\/+/, '').replace(/\/+$/, '');
+  let start = 0;
+  while (path.charCodeAt(start) === SLASH) start++;
+  let end = path.length;
+  while (end > start && path.charCodeAt(end - 1) === SLASH) end--;
+  return path.slice(start, end);
 }
 
 /**
