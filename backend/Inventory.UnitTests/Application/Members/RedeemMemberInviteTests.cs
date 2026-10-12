@@ -34,6 +34,12 @@ public class RedeemMemberInviteTests
 
     private static readonly DateTime Now = new(2026, 10, 12, 1, 0, 0, DateTimeKind.Utc);
 
+    /// <summary>
+    /// An expiry deliberately just ahead of <see cref="Now"/>, so the timing tests of issue #608 can
+    /// cross it inside one request without a wall-clock sleep.
+    /// </summary>
+    private static readonly DateTime ExpiresAt = Now.AddMinutes(5);
+
     #region Joining
 
     /// <summary>
@@ -371,6 +377,129 @@ public class RedeemMemberInviteTests
 
     #endregion
 
+    #region The expiry boundary in time (issue #608)
+
+    /// <summary>
+    /// The time-of-check defect issue #608 fixes. The request arrives while the link is still live
+    /// and is then held at <c>BEGIN IMMEDIATE</c> while another writer holds the lock; by the time it
+    /// is admitted the link has expired. The authoritative decision is the one made inside the
+    /// transaction, so the expired link grants nothing - rather than being judged at the instant the
+    /// request happened to enter the process.
+    /// </summary>
+    /// <param name="ticksPastExpiry">
+    /// <c>0</c> is the inclusive boundary <see cref="MemberInvitePolicy"/> promises: an invite is
+    /// expired *at* its expiry instant, so being admitted exactly then is already too late.
+    /// </param>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public async Task An_invite_that_expires_while_the_write_lock_is_awaited_grants_nothing(long ticksPastExpiry)
+    {
+        var fixture = new Fixture();
+        fixture.SeedInvite(BusinessRole.Manager, expiresAtUtc: ExpiresAt);
+        fixture.WriteStore.WhileWaitingForTheWriteLock = () =>
+            fixture.Clock.UtcNow = ExpiresAt.AddTicks(ticksPastExpiry);
+
+        var refusal = await Assert.ThrowsAsync<DomainValidationException>(() =>
+            fixture.Redeem().Handle(Token, CancellationToken.None));
+
+        Assert.Equal(MemberInviteRedemptionPolicy.InvalidInviteMessage, refusal.Message);
+        Assert.False(fixture.Store.HasMembership(InvitingBusinessId, fixture.Joiner));
+        AssertTheInviteWasNotConsumed(fixture);
+    }
+
+    /// <summary>
+    /// The second half of the same defect: the link is live when the in-transaction read judges it,
+    /// and has expired by the time the invite would be consumed. The conditional close is made at a
+    /// fresh instant, so it matches nothing and the membership this attempt prepared goes back with
+    /// the transaction - the same refusal the single-use race already produced.
+    /// </summary>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public async Task An_invite_that_expires_before_it_is_consumed_grants_nothing(long ticksPastExpiry)
+    {
+        var fixture = new Fixture();
+        fixture.SeedInvite(BusinessRole.Manager, expiresAtUtc: ExpiresAt);
+        fixture.Store.OnceAfterLookup = () => fixture.Clock.UtcNow = ExpiresAt.AddTicks(ticksPastExpiry);
+
+        var refusal = await Assert.ThrowsAsync<DomainValidationException>(() =>
+            fixture.Redeem().Handle(Token, CancellationToken.None));
+
+        Assert.Equal(MemberInviteRedemptionPolicy.InvalidInviteMessage, refusal.Message);
+        AssertTheInviteWasNotConsumed(fixture);
+    }
+
+    /// <summary>
+    /// The same late refusal for somebody rejoining: the revoked row is reactivated and the link has
+    /// expired before it can be consumed, so nothing is committed. That the reactivation is really
+    /// undone is proved against a real database by <c>MemberInviteRedemptionExpiryTests</c>; what
+    /// this asserts is that the use case refuses rather than commits.
+    /// </summary>
+    [Fact]
+    public async Task A_revoked_member_rejoining_commits_nothing_when_the_invite_expires_first()
+    {
+        var fixture = new Fixture();
+        fixture.SeedInvite(BusinessRole.Owner, expiresAtUtc: ExpiresAt);
+        fixture.Store.AddMembership(InvitingBusinessId, fixture.Joiner, membershipId: 77, isActive: false);
+        fixture.Store.OnceAfterLookup = () => fixture.Clock.UtcNow = ExpiresAt;
+
+        var refusal = await Assert.ThrowsAsync<DomainValidationException>(() =>
+            fixture.Redeem().Handle(Token, CancellationToken.None));
+
+        Assert.Equal(MemberInviteRedemptionPolicy.InvalidInviteMessage, refusal.Message);
+        Assert.Contains(FakeMemberInviteRedemptionStore.ReactivateMembership, fixture.Operations);
+        AssertTheInviteWasNotConsumed(fixture);
+    }
+
+    /// <summary>
+    /// A link that is still live redeems normally however long the request waited, and the instants
+    /// recorded describe what really happened rather than the wait: the membership's state instant is
+    /// the one the transaction decided at, and the invite's used instant and the audit event's are
+    /// the instant it was actually consumed.
+    /// </summary>
+    [Fact]
+    public async Task A_still_live_invite_records_the_instants_the_redemption_really_happened_at()
+    {
+        var admitted = Now.AddMinutes(1);
+        var consumed = Now.AddMinutes(2);
+
+        var fixture = new Fixture();
+        fixture.SeedInvite(BusinessRole.Manager, expiresAtUtc: ExpiresAt);
+        fixture.WriteStore.WhileWaitingForTheWriteLock = () => fixture.Clock.UtcNow = admitted;
+        fixture.Store.OnceAfterLookup = () => fixture.Clock.UtcNow = consumed;
+
+        var redeemed = await fixture.Redeem().Handle(Token, CancellationToken.None);
+
+        Assert.Equal(BusinessRole.Manager, redeemed.Role);
+
+        var membership = fixture.Store.MembershipFor(InvitingBusinessId, fixture.Joiner);
+        Assert.Equal(admitted, membership.StatusChangedAtUtc);
+
+        var invite = fixture.Store.InviteFor(MemberInviteToken.Hash(Token));
+        Assert.Equal(MemberInviteStatus.Used, invite.StoredStatus);
+        Assert.Equal(consumed, invite.UsedAtUtc);
+
+        Assert.Equal(consumed, Assert.Single(fixture.Audit.Entries).OccurredAtUtc);
+    }
+
+    /// <summary>
+    /// Nothing about the invite changed and nothing was committed or audited: the four facts a late
+    /// refusal must leave untouched, in one place because every timing test asserts all of them.
+    /// </summary>
+    private static void AssertTheInviteWasNotConsumed(Fixture fixture)
+    {
+        var invite = fixture.Store.InviteFor(MemberInviteToken.Hash(Token));
+        Assert.Equal(MemberInviteStatus.Pending, invite.StoredStatus);
+        Assert.Null(invite.UsedAtUtc);
+        Assert.Null(invite.UsedByMembershipId);
+
+        Assert.Empty(fixture.Audit.Entries);
+        Assert.DoesNotContain(FakeBusinessMembershipWriteStore.Commit, fixture.Operations);
+    }
+
+    #endregion
+
     #region Eligibility
 
     /// <summary>
@@ -580,6 +709,13 @@ public class RedeemMemberInviteTests
         public FakeMemberInviteAudit Audit { get; } = new();
 
         /// <summary>
+        /// The one clock the redemption reads, held here so a test can move it on from a store hook
+        /// - which is how the timing regressions of issue #608 cross an expiry inside one request
+        /// without a wall-clock sleep.
+        /// </summary>
+        public FakeClock Clock { get; } = new(Now);
+
+        /// <summary>
         /// Every call both stores saw, in one order. The guard's own operations and the
         /// redemption's are interleaved on purpose: "the invite was read inside the transaction" is
         /// only assertable if the two sequences are one.
@@ -607,7 +743,7 @@ public class RedeemMemberInviteTests
                 Store,
                 new MembershipWriteGuard(WriteStore),
                 Audit,
-                new FakeClock(Now));
+                Clock);
 
         private static ActorIdentity Identity()
         {

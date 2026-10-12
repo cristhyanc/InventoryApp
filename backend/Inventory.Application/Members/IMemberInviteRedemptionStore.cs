@@ -132,6 +132,12 @@ public interface IMemberInviteRedemptionStore
     /// one operation in the database rather than a read this caller then trusts. That is what makes
     /// "one invite, one membership" true under concurrency: a second redemption of the same invite
     /// matches nothing here and is refused, with its own membership write rolled back.
+    ///
+    /// <para><paramref name="usedAtUtc"/> must be read immediately before this call, inside the
+    /// transaction (issue #608). It is both the expiry the condition is judged against and the
+    /// instant the row records, so an instant carried over from before a lock wait would compare
+    /// the invite to a time that has already passed - letting a link that expired during the wait
+    /// be consumed - and would then record the redemption as having happened then.</para>
     /// </summary>
     /// <returns>
     /// <see langword="true"/> when this call marked it used; <see langword="false"/> when the

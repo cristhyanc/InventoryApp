@@ -99,7 +99,7 @@ async function render(
       // The shell renders the sidebar, which asks the diagnostics API whether to offer the
       // super-admin link (issue #335). The shell itself owns no part of that decision, so the
       // probe is stubbed as refused here and tested where it belongs.
-      { provide: PlatformDiagnosticsAccessService, useValue: { isGranted: () => of(false) } },
+      { provide: PlatformDiagnosticsAccessService, useValue: { granted$: of(false) } },
       // The sidebar also renders the capabilities GET /api/me/access reported (issue #528). The
       // shell owns no part of that decision either, so it is stubbed as every capability here and
       // tested in access.service.spec.ts and sidebar-nav.component.spec.ts.

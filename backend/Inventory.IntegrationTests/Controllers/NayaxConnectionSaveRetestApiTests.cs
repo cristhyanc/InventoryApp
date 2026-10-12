@@ -339,6 +339,57 @@ public sealed class NayaxConnectionSaveRetestApiTests : IClassFixture<NayaxConne
     }
 
     /// <summary>
+    /// The same correction for a run that concluded nothing (issue #607), through the real pipeline:
+    /// a replacement token is saved while an inconclusive re-test is running, so the stale report is
+    /// refused with the same <c>409</c> sentence and the replacement's row is left exactly as the
+    /// save left it - status, revision, token, last-tested instant and machine-check flag alike.
+    ///
+    /// A timeout, a <c>5xx</c> and an open circuit all reach this boundary as
+    /// <see cref="NayaxConnectionCheckFailure.NayaxUnavailable"/>; the runner's own mapping of each
+    /// one is <c>Infrastructure.Nayax.NayaxConnectionCheckRunnerTests</c>'. The two other causes that
+    /// conclude nothing are included so the rule is not tied to one of them.
+    /// </summary>
+    [Theory]
+    [InlineData(NayaxConnectionCheckFailure.NayaxUnavailable)]
+    [InlineData(NayaxConnectionCheckFailure.UnexpectedResponse)]
+    [InlineData(NayaxConnectionCheckFailure.PermissionNotGranted)]
+    public async Task An_inconclusive_re_test_overtaken_by_a_save_is_refused_and_writes_nothing(
+        NayaxConnectionCheckFailure failure)
+    {
+        await _factory.ResetAsync();
+        await AssertOk(await Save(ApiFactory.OwnerObjectId, await TestAsync()));
+
+        // The replacement is prepared first, then saved from inside the running re-test.
+        var replacementDraftId = await TestAsync(token: "the-replacement-token");
+        _factory.Runner.Reset();
+        _factory.Runner.Report = Report(
+            NayaxConnectionCheckLine.Failed(NayaxConnectionCheck.SignIn, failure));
+        string? afterReplacement = null;
+        _factory.Runner.DuringRun = async () =>
+        {
+            await AssertOk(await Save(ApiFactory.OwnerObjectId, replacementDraftId));
+            afterReplacement = await _factory.StoredConnectionAsync();
+        };
+
+        var response = await Retest(ApiFactory.OwnerObjectId);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Contains(
+            RetestNayaxConnection.ConnectionChangedMessage,
+            await response.Content.ReadAsStringAsync(),
+            StringComparison.Ordinal);
+
+        // The replacement's row is byte-for-byte what its own save wrote.
+        Assert.Equal(afterReplacement, await _factory.StoredConnectionAsync());
+
+        await using var db = _factory.Database();
+        var connection = await db.BusinessNayaxConnections.AsNoTracking().SingleAsync();
+        Assert.Equal(NayaxConnectionStatus.Ready, connection.Status);
+        Assert.Equal(2, connection.CredentialRevision);
+        Assert.Equal("the-replacement-token", _factory.Decrypt(connection));
+    }
+
+    /// <summary>
     /// There is nothing to re-test, and the answer is the stable "Nayax is not connected" failure
     /// with its own error code rather than an invented one.
     /// </summary>

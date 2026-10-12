@@ -225,6 +225,106 @@ public class RetestNayaxConnectionTests
     }
 
     /// <summary>
+    /// The same rule for a run that concluded nothing (issue #607): an inconclusive report belongs
+    /// to the revision it was produced for just as a concluded one does, so a replacement saved
+    /// mid-run refuses it with the same sentence rather than returning the old credentials' report
+    /// beside the new credentials' summary.
+    ///
+    /// The three transport outcomes the requirement names - a timeout, a <c>5xx</c> and an open
+    /// circuit - are one cause at this layer, <see cref="NayaxConnectionCheckFailure.NayaxUnavailable"/>;
+    /// which Nayax answer or transport failure produces it is
+    /// <c>Infrastructure.Nayax.NayaxConnectionCheckRunnerTests</c>'. The other two causes that
+    /// conclude nothing are included so the rule is not tied to one of them.
+    /// </summary>
+    [Theory]
+    [InlineData(NayaxConnectionCheckFailure.NayaxUnavailable)]
+    [InlineData(NayaxConnectionCheckFailure.UnexpectedResponse)]
+    [InlineData(NayaxConnectionCheckFailure.PermissionNotGranted)]
+    public async Task An_inconclusive_result_for_replaced_credentials_is_refused_and_writes_nothing(
+        NayaxConnectionCheckFailure failure)
+    {
+        var clock = new FakeClock(Now);
+        var connections = new FakeNayaxConnectionStore(
+            OperatorId, Token, NayaxConnectionStatus.Ready, credentialRevision: 1);
+
+        var runner = new InterleavingRunner(
+            Report(NayaxConnectionCheckLine.Failed(NayaxConnectionCheck.SignIn, failure)),
+            async () =>
+            {
+                await connections.SaveCredentialAsync(
+                    OperatorId, "the-replacement-token", CancellationToken.None);
+                await connections.TryApplyStatusResultAsync(
+                    new NayaxConnectionStatusResult(2, NayaxConnectionStatus.Ready, Now)
+                    {
+                        MachineChecksPending = false,
+                    },
+                    CancellationToken.None);
+            });
+
+        var retest = Retest(connections, runner, clock);
+        var exception = await Assert.ThrowsAsync<DomainConflictException>(() => retest.Handle());
+
+        Assert.Equal(RetestNayaxConnection.ConnectionChangedMessage, exception.Message);
+
+        // The replacement's own write is the only one, and no stale result was even attempted: an
+        // inconclusive run has nothing to write, so there is no conditional update to discard.
+        Assert.Equal(2, Assert.Single(connections.AppliedResults).CredentialRevision);
+        Assert.Empty(connections.DiscardedResults);
+        Assert.Equal(NayaxConnectionStatus.Ready, connections.Connection!.Status);
+        Assert.Equal(2, connections.Connection.CredentialRevision);
+    }
+
+    /// <summary>
+    /// A connection that is gone by the time an inconclusive run finishes is the replaced one's twin
+    /// (issue #607): neither is the revision this run tested, so both get the same conflict the
+    /// concluded path gives - never a <c>NotConfigured</c> summary beside a completed report.
+    /// </summary>
+    [Fact]
+    public async Task An_inconclusive_result_for_a_connection_that_is_gone_is_refused_the_same_way()
+    {
+        var clock = new FakeClock(Now);
+        var connections = new FakeNayaxConnectionStore(
+            OperatorId, Token, NayaxConnectionStatus.Ready, credentialRevision: 1);
+
+        var runner = new InterleavingRunner(
+            Report(NayaxConnectionCheckLine.Failed(
+                NayaxConnectionCheck.SignIn,
+                NayaxConnectionCheckFailure.NayaxUnavailable)),
+            () =>
+            {
+                connections.Remove();
+                return Task.CompletedTask;
+            });
+
+        var exception = await Assert.ThrowsAsync<DomainConflictException>(
+            () => Retest(connections, runner, clock).Handle());
+
+        Assert.Equal(RetestNayaxConnection.ConnectionChangedMessage, exception.Message);
+        Assert.Empty(connections.AppliedResults);
+        Assert.Empty(connections.DiscardedResults);
+    }
+
+    /// <summary>
+    /// The revision comparison and the summary come from one read of the row (issue #607), so the
+    /// report an unchanged revision accepts can never be paired with a state some later read saw.
+    /// </summary>
+    [Fact]
+    public async Task An_unchanged_revision_compares_and_reports_from_one_connection_read()
+    {
+        var fixture = new Fixture(
+            NayaxConnectionStatus.Ready,
+            Report(NayaxConnectionCheckLine.Failed(
+                NayaxConnectionCheck.SignIn,
+                NayaxConnectionCheckFailure.NayaxUnavailable)));
+
+        var outcome = await fixture.Retest.Handle();
+
+        Assert.False(outcome.Result!.StatusUpdated);
+        Assert.Equal(NayaxConnectionStatus.Ready, outcome.Result.Summary.Status);
+        Assert.Equal(1, fixture.Connections.ConnectionReads);
+    }
+
+    /// <summary>
     /// There is nothing to re-test, and the answer is the stable "Nayax is not connected" failure
     /// rather than an invented one. No allowance is spent on it.
     /// </summary>
@@ -319,6 +419,19 @@ public class RetestNayaxConnectionTests
 
     private static NayaxConnectionCheckReport Report(params NayaxConnectionCheckLine[] lines) =>
         new(lines, MachineCount: null);
+
+    /// <summary>The use case over one store and one runner, for the interleaved-replacement tests.</summary>
+    private static RetestNayaxConnection Retest(
+        FakeNayaxConnectionStore connections,
+        INayaxConnectionCheckRunner runner,
+        FakeClock clock) =>
+        new(
+            new NayaxConnectionRetestCredentialProvider(connections),
+            runner,
+            connections,
+            new NayaxConnectionTestRateLimiter(clock),
+            new FakeCurrentBusinessProvider(TestBusinessId),
+            clock);
 
     private static ActorIdentity Actor()
     {

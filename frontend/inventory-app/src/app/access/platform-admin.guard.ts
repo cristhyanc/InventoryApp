@@ -9,6 +9,10 @@ import { PlatformDiagnosticsAccessService } from '../services/platform-diagnosti
  * `PlatformDiagnosticsAccessService.isGranted()` so the sidebar's `Super Admin` group and the
  * routes it points at ask the same cached probe and never disagree.
  *
+ * That cache belongs to one signed-in identity (issue #605): `isGranted()` emits the answer for
+ * whoever is signed in when this guard asks, waiting for that identity's own probe rather than
+ * replaying a previous one's grant or refusing on an answer that has not arrived yet.
+ *
  * **It is presentation, not a boundary.** Platform-admin authority is a separately configured
  * Entra `(tid, oid)` pair, re-checked by every diagnostics endpoint on every request regardless of
  * what this guard decided, so entering a `/super-admin/*` URL directly is safe either way.

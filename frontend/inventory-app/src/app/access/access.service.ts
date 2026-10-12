@@ -1,7 +1,7 @@
 import { HttpClient } from '@angular/common/http';
 import { Injectable, OnDestroy } from '@angular/core';
 import { MsalBroadcastService, MsalService } from '@azure/msal-angular';
-import { EventMessage, EventType, InteractionStatus } from '@azure/msal-browser';
+import { InteractionStatus } from '@azure/msal-browser';
 import {
   BehaviorSubject,
   Observable,
@@ -11,7 +11,6 @@ import {
   distinctUntilChanged,
   filter,
   map,
-  merge,
   of,
   shareReplay,
   skipWhile,
@@ -22,6 +21,7 @@ import {
 } from 'rxjs';
 import { ConfigService } from '../services/config.service';
 import { Capability, CapabilitySet, capabilitySet } from './capabilities';
+import { activeAccountKey, signedInAccountMayHaveChanged } from './signed-in-account';
 
 /** The `GET /api/me/access` response body (issue #521). */
 interface MeAccessResponse {
@@ -71,13 +71,6 @@ function grantedBy(state: MemberAccessState, capabilities: readonly Capability[]
       return true;
   }
 }
-
-/** The MSAL events that mean the signed-in identity may have changed. */
-const ACCOUNT_EVENTS: ReadonlySet<string> = new Set<string>([
-  EventType.LOGIN_SUCCESS,
-  EventType.LOGOUT_SUCCESS,
-  EventType.ACTIVE_ACCOUNT_CHANGED
-]);
 
 /**
  * What the signed-in member may do, read once from `GET /api/me/access` (issue #521) and cached
@@ -270,7 +263,7 @@ export class AccessService implements OnDestroy {
       filter((status: InteractionStatus) => status === InteractionStatus.None),
       take(1),
       switchMap(() => {
-        const accountKey = this.activeAccountKey();
+        const accountKey = activeAccountKey(this.authService);
         if (generation === this.generation) {
           this.cachedForAccountKey = accountKey;
         }
@@ -325,20 +318,8 @@ export class AccessService implements OnDestroy {
     this.state.next(answer);
   }
 
-  /**
-   * Sign-in, sign-out and an active-account change, from the two signals that report them: MSAL's
-   * own account events, and `inProgress$` settling, which is what the shell already uses to decide
-   * that an interaction has finished.
-   */
   private observeSignedInAccount(): void {
-    merge(
-      this.msalBroadcastService.inProgress$.pipe(
-        filter((status: InteractionStatus) => status === InteractionStatus.None)
-      ),
-      this.msalBroadcastService.msalSubject$.pipe(
-        filter((event: EventMessage) => ACCOUNT_EVENTS.has(event.eventType))
-      )
-    )
+    signedInAccountMayHaveChanged(this.msalBroadcastService)
       .pipe(takeUntil(this.destroying$))
       .subscribe(() => this.applySignedInAccount());
   }
@@ -352,7 +333,7 @@ export class AccessService implements OnDestroy {
       return;
     }
 
-    const accountKey = this.activeAccountKey();
+    const accountKey = activeAccountKey(this.authService);
     if (accountKey === this.cachedForAccountKey) {
       return;
     }
@@ -390,16 +371,5 @@ export class AccessService implements OnDestroy {
     }
 
     this.refreshUnlessReading();
-  }
-
-  /** The stable identity of the signed-in account, independent of its display name. */
-  private activeAccountKey(): string | null {
-    const account =
-      this.authService.instance.getActiveAccount() ?? this.authService.instance.getAllAccounts()[0] ?? null;
-    if (account === null) {
-      return null;
-    }
-
-    return account.homeAccountId || account.localAccountId || account.username || '';
   }
 }

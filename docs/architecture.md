@@ -1759,13 +1759,22 @@ POST /api/invites/redeem    { "token": "…" } → 200 { "role": "Manager" }
 
 **The whole redemption is one transaction, and its authoritative read is inside it.** `RedeemMemberInvite` runs through issue #522's `MembershipWriteGuard` (see [One active membership per identity](#one-active-membership-per-identity-issue-522)) with `IdentityGainingAnActiveMembership` set and no exclusion — a redemption either creates a row or reactivates a revoked one, and neither is an active row that could count against itself — and no business keeping an Owner, because a redemption can only add access. Inside the `BEGIN IMMEDIATE` transaction, in order: the invite is read by token hash, the policy is applied to it, the membership is created (or the business's revoked row for that person reactivated, with the invite's role, since the invite is the new decision about what they may do), and the invite is marked used against that membership. Both writes are **conditional**: the reactivation matches only a row that is still revoked, and the close matches only an invite that is still live, with the status, the used instant and `RedeemedByMembershipId` set in that one statement. So the decision and the mutation are one operation twice over, and a close that matches nothing refuses the whole redemption and takes its membership write back with the transaction. Without that, two people would both be let in on one single-use link and the row would record only one of them.
 
+**The instants it is judged at are inside the transaction too (issue #608).** A conditional statement is only as authoritative as the values in its `WHERE` clause, and the expiry half of this one is compared against a *time*. `RedeemMemberInvite` therefore reads `IClock` twice, both times inside the write transaction, and never before it:
+
+- **The decision instant** is sampled at the top of the in-transaction delegate, with `BEGIN IMMEDIATE` already granted. It is what `MemberInviteRedemptionPolicy.IsRedeemable` judges the invite at, and what the created or reactivated membership records as its creation and state-change instant.
+- **The consumption instant** is sampled again immediately before `MarkUsedAsync`, and is both the expiry the conditional `UPDATE` compares `ExpiresAtUtc` against and the `UsedAtUtc` it writes. The audit event reports it too.
+
+The defect this replaced was reading the clock once, when the request entered the process, and carrying that one instant through all three steps. Between that read and the write there is a **wait**: `BEGIN IMMEDIATE` blocks for as long as any other membership write holds the write lock, and preparing the membership takes further statements. A link that expired during either gap still satisfied the stale instant — including `ExpiresAtUtc > usedAtUtc`, which compared the row to a time that had already passed — so an **expired invite could still grant access**, and `UsedAtUtc` and the audit event would then describe the moment the request arrived rather than the moment it was admitted. Two instants rather than one is deliberate: the membership row records when the business admitted the person, the invite records when it was actually spent, and the refusal in between is why those are different facts. The boundary stays `MemberInvitePolicy`'s inclusive one — an invite is expired *at* `ExpiresAtUtc` — so a redemption admitted exactly then is refused.
+
+A late refusal is the same refusal as every other unusable invite: the generic `400`, with the whole transaction rolled back. That covers a membership row this attempt inserted *and* a revoked row it reactivated, and because the audit event is recorded after the commit, a refused redemption still emits none. Nothing about the guard, the one-active-membership rule, the denied scope, the token hashing or the single-use race changes; the only thing that moved is *when* the clock is read.
+
 **One audit event per committed redemption.** `IMemberInviteAudit` gains `MemberInviteChange.Redeemed`, and the event carries the actor's Entra `(tid, oid)` pair, the business id (from the invite row — the actor was not a member of it a moment earlier), the invite id and the role granted. `MemberInviteAuditEntry` still has **no field for the token**, hashed or not, and none for the note, the display name or the email address, so the structural guarantee is unchanged. It is emitted after the commit and only for a real redemption: a refused one is audited as nothing, and the refusal is still visible as the `DomainExceptionHandler` warning.
 
 **What the response says, and what it refuses to say.** `200 { "role": "…" }`, and nothing else — no business name, no business id, no membership key, no token. The caller is a member from the next request onwards and reads their business's name from `GET /api/me/access` like everybody else, which keeps the one endpoint a person with no membership may call from publishing a business in *any* of its three answers.
 
 **What this slice does not do.** No invite creation or cancellation (#531 above), no member management (#533), no self-service application or approval (#507/#509/#541), and no invite page (#505's tasks) — nothing in `frontend/inventory-app/src` calls this route yet. There is **no schema change**: the ownership change is declared in the model and the index set is the one the `AddMemberInvites` migration already created, which `MigrationRelocationTests`' no-pending-model-changes assertion confirms.
 
-**What proves this slice.** `InviteRedemptionApiTests` (the whole pipeline over two seeded businesses and the real migration history: the Owner-creates-then-stranger-joins workflow end to end with the account state before and after, the response carrying only the role, the joiner's own display name and email stored on the new membership, a revoked member rejoining by reactivating their own row rather than gaining a second, the invite deciding which business is joined, every unusable invite and every blank or near-miss token answered with one `400` and writing nothing, the same link refused the second time, an existing member and a pending-business member refused with `409` while keeping their own access and leaving the invite live, the deactivated-business caller's own sentence, a rejected applicant admitted, `401` unauthenticated, `403` without the delegated scope, the same business-less caller refused by every other endpoint, and the audit event carrying neither the token nor any name while a refused redemption is audited as nothing), `EfMemberInviteRedemptionStoreTests` (the relational adapter under the denied scope every redemption carries: the lookup by hash and not by the token, an unknown and an ambiguous token both not found, closed invites and closed businesses reported exactly as stored, the membership lookup confined to one business and one identity, the creation's columns and instants, the filtered index still refusing a second active membership, the conditional reactivation declining for an active row and another business's, display values refreshed without erasing what a silent token did not report, the conditional close declining for every non-live state and another business's invite, a rolled-back transaction leaving no membership and no used invite, and the denied context still reading and writing no business data), `MemberInviteRedemptionConcurrencyTests` (two real writers on a real SQLite file through the shared `MembershipWriteRaceHarness`: the same invite twice leaving exactly one membership and one correctly-attributed row, two invites from two businesses for one identity leaving one membership and one *unused* invite, the same race on two revoked rows reactivating exactly one, and the sequential replay changing nothing), `RedeemMemberInviteTests` (the decisions over fakes: the order of the reads and writes inside the transaction, every write naming the business the invite reported, the lookup by hash and never the token, the three admitted and four refused account states with their two sentences, an invite used or a row reactivated between the read and the write granting nothing, and nothing audited for a refused redemption) and `MemberInviteRedemptionPolicyTests` plus `BusinessOwnershipCoverageTests` (the deterministic rules, and the ownership decision itself: four declared global tables, the invite carrying no query filter, and its token hash still unique per business).
+**What proves this slice.** `InviteRedemptionApiTests` (the whole pipeline over two seeded businesses and the real migration history: the Owner-creates-then-stranger-joins workflow end to end with the account state before and after, the response carrying only the role, the joiner's own display name and email stored on the new membership, a revoked member rejoining by reactivating their own row rather than gaining a second, the invite deciding which business is joined, every unusable invite and every blank or near-miss token answered with one `400` and writing nothing, the same link refused the second time, an existing member and a pending-business member refused with `409` while keeping their own access and leaving the invite live, the deactivated-business caller's own sentence, a rejected applicant admitted, `401` unauthenticated, `403` without the delegated scope, the same business-less caller refused by every other endpoint, and the audit event carrying neither the token nor any name while a refused redemption is audited as nothing), `EfMemberInviteRedemptionStoreTests` (the relational adapter under the denied scope every redemption carries: the lookup by hash and not by the token, an unknown and an ambiguous token both not found, closed invites and closed businesses reported exactly as stored, the membership lookup confined to one business and one identity, the creation's columns and instants, the filtered index still refusing a second active membership, the conditional reactivation declining for an active row and another business's, display values refreshed without erasing what a silent token did not report, the conditional close declining for every non-live state and another business's invite, a rolled-back transaction leaving no membership and no used invite, and the denied context still reading and writing no business data), `MemberInviteRedemptionConcurrencyTests` (two real writers on a real SQLite file through the shared `MembershipWriteRaceHarness`: the same invite twice leaving exactly one membership and one correctly-attributed row, two invites from two businesses for one identity leaving one membership and one *unused* invite, the same race on two revoked rows reactivating exactly one, and the sequential replay changing nothing), `RedeemMemberInviteTests` (the decisions over fakes: the order of the reads and writes inside the transaction, every write naming the business the invite reported, the lookup by hash and never the token, the three admitted and four refused account states with their two sentences, an invite used or a row reactivated between the read and the write granting nothing, and nothing audited for a refused redemption — and issue #608's timing regressions, where a hook moves a `FakeClock` past the expiry while the write lock is awaited and again between the authoritative read and the consumption, at the expiry instant and one tick past it, with a still-live redemption recording the instants it really happened at), `MemberInviteRedemptionExpiryTests` (the same boundary against a real SQLite file and the real stores, which is where the rollback is actually proved: a membership this attempt inserted and a revoked row it reactivated are both gone when the consumption is refused, the invite is exactly as it was seeded, nothing is audited, and a live redemption persists the admission instant on the membership and the consumption instant on the invite and the audit event) and `MemberInviteRedemptionPolicyTests` plus `BusinessOwnershipCoverageTests` (the deterministic rules, and the ownership decision itself: four declared global tables, the invite carrying no query filter, and its token hash still unique per business).
 
 #### Business lifecycle status and profile (issue #540)
 
@@ -1848,6 +1857,15 @@ POST /api/admin/diagnostics/query    { sql } -> a bounded, truncation-flagged re
 `access` exists for the UI in issue #335 and exposes no tenant data at all — reaching it *is* the signal, and the body carries only the server's limits. `query` takes one statement and nothing else: no page size, no row count, no timeout and no business identifier, so there is no request input that could widen or loosen anything. `crossBusinessScope` is `true` in both contracts because this path reads across every business by design, and saying so in the contract is what keeps it from being a surprise.
 
 **The super-admin page (issue #335, moved under its own top-level group in issue #546).** `/super-admin/diagnostics` is the Angular page in front of those two endpoints, and it is presentation only: it adds no authority, no limit and no second access rule. `/admin/diagnostics` is its old address and now only redirects there. The sidebar's top-level `Super Admin` group offers its link only while `GET /api/admin/diagnostics/access` has confirmed the signed-in actor, and the route itself carries `platformAdminGuard`, which asks the same probe and sends a refusal to the dashboard; the page then asks the same endpoint again on arrival and renders a refusal instead of the query form when it is refused — but **neither guard nor page is the boundary, and the design depends on that rather than on hiding the link**. Entering either URL directly reaches the page (through the redirect for the old one), and reaches nothing else: the policy on `POST /api/admin/diagnostics/query` re-decides authority on every single request regardless of what the frontend guard or page decided. There is deliberately no frontend role, claim, flag or cached verdict that could grant access and then diverge from the configured Entra `(tid, oid)` identity: `PlatformDiagnosticsAccessService` asks the API, treats a refusal, a failure, an unanswered probe and a body that does not confirm access all as "no", and never reports a capability the API did not confirm. Unlike every business route, `/super-admin/diagnostics` carries no `accountStateGuard`: platform-admin authority has nothing to do with business membership, so a refusal belongs on the dashboard, never on a membership-handling destination.
+
+**The cached probe belongs to one signed-in identity (issue #605).** `PlatformDiagnosticsAccessService` coalesces **one** `GET /api/admin/diagnostics/access` per current identity — the sidebar and the guard share it however often they ask — and that answer is bound to the identity it was asked as, because a browser outlives a session: one memoised probe for the service's lifetime would carry the administrator's grant onto the next person who signs in, and an ordinary member's refusal onto the administrator. The cache is dropped on sign-in, sign-out and an MSAL active-account change, observed from MSAL's own account events and from `inProgress$` settling together — the same two signals [`AccessService`](#member-access-capability-built-navigation-guards-and-hidden-actions-issue-528) watches, deliberately not read through it, because this answer has nothing to do with membership or capabilities — and acted on only when the identity the answer was asked for actually changed, so a duplicate notification costs nothing. The two members say what each consumer needs:
+
+| Member | Answers | Used by |
+| --- | --- | --- |
+| `granted$` | `false` until the current identity's own probe confirms access, and `false` again the moment the identity changes | The sidebar's `Super Admin` group, so a previous identity's granted group is gone on the switch itself |
+| `isGranted()` | Once, with the answer for whoever is signed in when it is asked, waiting for that identity's probe | `platformAdminGuard`, which must not refuse the administrator over an answer that has not arrived yet |
+
+**A superseded probe decides nothing.** Every invalidation bumps a generation: an answer that arrives for an identity that is already gone is discarded instead of published, and a probe whose request has not been sent yet — one still waiting for a sign-in interaction to settle — is never sent at all. Neither an A → B → C switch nor a sign-out during a pending probe can therefore restore an earlier grant. Nobody signed in is an *answer* (`false`) rather than a request, so no protected probe is issued while signed out or while sign-in is in progress, and a refused or failed probe stays the same quiet `false` it always was: unreported, unlogged and never retried behind the operator's back. None of this is a boundary either — it decides which menu entry and which route redirect an identity is shown, while the policy on both endpoints re-decides authority per request.
 
 The page says what it is before it knows who is asking: cross-business scope, read-only, repair out of scope, every query audited. It publishes the server's own limits — the 5-second ceiling, the 500-row cap, the 1 MiB response cap and the 16 KiB SQL cap — from the `access` body rather than restating them, lists the permitted table/column surface as help text while saying the server is what decides, and offers only read-only examples. Every outcome the contract can report has its own visible state: a complete result, a timeout, a refusal with its denial reason, a provider failure, and a truncated read labelled **incomplete** with the cap that stopped it — the row cap and the response-byte cap separately, because a byte cap reached before 500 rows is exactly the case a row count alone would misrepresent. Result values and server messages are rendered through Angular interpolation only, never as markup. The statement and its results live in component state while the page is open and nowhere else: no `localStorage`, `sessionStorage`, cookie, URL, toast or console, because they describe data across every business. The query-shape fingerprint the response carries is shown so a result on screen can be matched to its audit entry without the statement appearing in either. Per [Page composition boundary](#page-composition-boundary-issue-191) the routed `PlatformDiagnosticsComponent` resolves the capability and composes `PlatformDiagnosticsQueryComponent`, which owns the statement, the submission and every outcome.
 
@@ -2337,6 +2355,21 @@ how often somebody pressed Test, and on a single instance
 ([SQLite operating assumptions](#sqlite-operating-assumptions-and-scale-strategy-issue-53)) in-process
 state is the whole truth.
 
+**The allowance is the business's, and clearing out memory never changes it** (issue #606). The
+limiter remembers one claim history per business and, once more than `MaxTrackedBusinesses` (256) are
+remembered, each granted claim also clears out what has gone stale. That housekeeping is bounded by
+one rule: it expires the attempts that have **left** the window and forgets only a business left with
+none of them. A business whose oldest attempt has expired while later ones are still live keeps those
+live attempts and so keeps exactly the slots they have freed — dropping its history wholesale would
+restart its window and let five more runs reach Nayax inside the same ten minutes, which is the
+regression issue #606 fixed and `NayaxConnectionTestRateLimiterTests` now pins with a deterministic
+one-attempt-then-four sequence. The threshold is therefore a hint about memory, never a cap: crossing
+it neither grants, denies nor resets any business's allowance, and a business that really has been
+quiet for a whole window is still forgotten. Expiring, counting and recording a claim are one
+operation on the history that business is tracked by, so a claim racing the clear-out is still counted
+against the window rather than landing in a forgotten history — test and re-test share that one
+history, so the pair of them is five runs per business per rolling ten minutes in any mix.
+
 **Nothing is logged that should not be.** The runner logs nothing itself; the underlying client's one
 `Error` line for an ordinary upstream failure carries the operation, method, relative endpoint and
 status code and never the token, the authorization header or the upstream body, exactly as before.
@@ -2353,7 +2386,10 @@ documented status on every check, the two `404` readings, no answer at all, and 
 so a check, status or cause added later has to make a decision there.
 `Inventory.UnitTests/Application/Nayax/NayaxConnectionTestRateLimiterTests` — the fifth run allowed
 and the sixth refused, the sliding boundary and its `Retry-After`, a clock that moved backwards not
-reopening a slot, and one business not spending another's allowance.
+reopening a slot, one business not spending another's allowance, and, above the tracking threshold
+(issue #606), clearing out keeping a mixed history's live attempts over repeated passes, forgetting a
+fully idle business, leaving an unrelated business's allowance alone, and a coordinated race of claims
+against clearing out granting the five runs exactly once.
 `TestNayaxConnectionTests` — the submitted credentials reaching the runner, pasted whitespace trimmed,
 a blank field refused before any call or allowance, no token in the result or the stored results,
 the fifteen-minute expiry, the opaque id, replacement, actor binding, and a rate-limited request
@@ -2473,17 +2509,25 @@ exception that boundary always anticipated, and nothing else may join it. It run
 checks through the same `INayaxConnectionCheckRunner`, so a re-test makes exactly the same eight
 `GET`s and no write.
 
-**Its result is bound to the revision it tested, and a run that learned nothing writes nothing.** The
-credential read reports the revision the token was read at, and the status is written by #518's
-conditional `UPDATE … WHERE CredentialRevision = @r`. An Owner who saves a replacement token while a
-re-test is in flight therefore keeps the replacement's own status: the older run describes credentials
-that no longer exist, so its result is discarded and the caller gets `409` with the fixed sentence
-*"The connection changed while testing. Run the test again."* When the sign-in produced no verdict at
-all — a `5xx`, a timeout, an open circuit — **nothing is written**, not even a last-tested instant
-that would claim the current credentials had been checked: the response is `200` with
+**Every result is bound to the revision it tested — whatever it concluded — and a run that learned
+nothing writes nothing.** The credential read reports the revision the token was read at. A concluded
+status is written by #518's conditional `UPDATE … WHERE CredentialRevision = @r`, and a run that
+concluded nothing compares that revision with the stored one before its report is accepted
+([issue #607](https://github.com/cristhyanc/InventoryApp/issues/607)). An Owner who saves a
+replacement token while a re-test is in flight therefore keeps the replacement's own status in both
+cases: the older run describes credentials that no longer exist, so its result is discarded — never
+returned beside the replacement's summary — and the caller gets `409` with the fixed sentence *"The
+connection changed while testing. Run the test again."* A connection that has been removed by then is
+the same answer as a replaced one. When the sign-in produced no verdict at all — a `5xx`, a timeout,
+an open circuit — **nothing is written** either way, not even a last-tested instant that would claim
+the current credentials had been checked: at the tested revision the response is `200` with
 `statusUpdated: false`, the stored status read back from the row, and the lines that say Nayax was
-unavailable. A business with no stored credentials has nothing to re-test and gets the stable
-`nayax_not_connected` `409`.
+unavailable; at any other revision it is the `409` above, with no completed stale report and the
+replacement's status, token, revision, last-tested instant and machine-check flag all untouched. That
+comparison and the summary returned with it come from **one** read of the row
+(`INayaxConnectionStore.FindAsync`, one statement), for the same reason #520's snapshot exists: two
+reads could pair the old run's report with the new credentials' state. A business with no stored
+credentials has nothing to re-test and gets the stable `nayax_not_connected` `409`.
 
 **Test and re-test share one per-business allowance.** A re-test is the same eight calls against the
 same upstream, so it claims from the same `NayaxConnectionTestRateLimiter` singleton, before the
@@ -2510,8 +2554,10 @@ with the revision increased once, expiry and actor binding refused identically, 
 refused before a transaction is begun. `RetestNayaxConnectionTests` — each outcome from each of
 `Ready`, `PendingPermissions` and `NeedsAttention`, an unavailable Nayax leaving the row
 byte-for-byte, the revision the checks ran with, the pending machine checks recorded and then
-cleared, a replacement saved mid-run keeping its own status, no stored credentials, and the shared
-allowance. `GetNayaxConnectionStatusTests` — the two fields, `NotConfigured`, and no token decrypted.
+cleared, a replacement saved mid-run keeping its own status for a concluded *and* for an inconclusive
+run (each cause that concludes nothing, plus a connection removed mid-run), an unchanged revision
+comparing and reporting from one read, no stored credentials, and the shared allowance.
+`GetNayaxConnectionStatusTests` — the two fields, `NotConfigured`, and no token decrypted.
 `Adapters/Persistence/NayaxConnectionSaveTransactionTests` — relational SQLite over a database
 *file*, so two saves of one draft are genuinely concurrent: exactly one succeeds, the other is the
 `409`, the revision increases once, and the draft is consumed once; plus a refused save and a failed
@@ -2527,9 +2573,11 @@ other column or index changes, the existing connection is byte-for-byte unchange
 pending", and nothing is backfilled. `Controllers/NayaxConnectionSaveRetestApiTests` — the whole flow
 through the real pipeline and the real migration history: test then save, the token as ciphertext and
 never echoed, every refusal's status and sentence, the re-test outcomes including the recovery from
-`NeedsAttention` and the re-test overtaken by a save, the shared `429`, the status read for each role
-with exactly two fields, and a non-Owner neither saving nor re-testing. `CapabilityAuthorizationApiTests`
-and `EndpointAuthorizationClassificationTests` carry the three endpoints' capability rows.
+`NeedsAttention` and both the concluded and the inconclusive re-test overtaken by a save — the `409`,
+its exact sentence and the replacement's row byte-for-byte unchanged — the shared `429`, the status
+read for each role with exactly two fields, and a non-Owner neither saving nor re-testing.
+`CapabilityAuthorizationApiTests` and `EndpointAuthorizationClassificationTests` carry the three
+endpoints' capability rows.
 
 ### Document storage
 
@@ -2802,10 +2850,15 @@ appends the whole group, last, and only `GET /api/admin/diagnostics/access` can 
 page) — a `NavPlaceholder` that renders as inert text, because `navigation.ts`'s one rule, that
 every `route` must be a real page already declared in `app.routes.ts`, leaves no route to give it
 before that page exists. Neither child declares a capability, because no business role grants
-either. `SidebarNavComponent` starts from `navigationFor(false)`, asks
-`PlatformDiagnosticsAccessService` once, and re-resolves the active entry when the answer arrives;
-a refusal, a failure and an unanswered probe all leave the navigation everyone else gets, silently,
-because a navigation menu is not the place to report that one capability could not be checked. The
+either. `SidebarNavComponent` starts from `navigationFor(false)`, follows
+`PlatformDiagnosticsAccessService.granted$`, and re-resolves the active entry whenever that answer
+changes; a refusal, a failure and an unanswered probe all leave the navigation everyone else gets,
+silently, because a navigation menu is not the place to report that one capability could not be
+checked. **The group follows the signed-in identity (issue #605):** that answer is cached per
+identity, so changing the active account, signing out or signing in removes a granted `Super Admin`
+group on the switch itself — not when some other identity's answer happens to arrive — and the
+group comes back only if the new identity's own probe confirms access, with a late answer for a
+superseded identity discarded (see [Platform diagnostics](#platform-diagnostics-issue-336)). The
 group is presentation and never a boundary — the route and both endpoints are independently
 authorized, so a hidden group hides a page rather than protecting one (see [Platform
 diagnostics](#platform-diagnostics-issue-336)). Everything else about the shell is unchanged: the
