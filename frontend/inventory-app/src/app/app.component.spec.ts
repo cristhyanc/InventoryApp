@@ -4,6 +4,8 @@ import { Router, provideRouter } from '@angular/router';
 import { MsalBroadcastService, MsalService } from '@azure/msal-angular';
 import { AccountInfo, InteractionStatus } from '@azure/msal-browser';
 import { BehaviorSubject, Observable, Subject, of } from 'rxjs';
+import { AccessService, MemberAccessState } from './access/access.service';
+import { CAPABILITIES, capabilitySet } from './access/capabilities';
 import { AppComponent } from './app.component';
 import { PlatformDiagnosticsAccessService } from './services/platform-diagnostics-access.service';
 import { BusinessService, CurrentBusiness } from './services/business.service';
@@ -90,6 +92,23 @@ async function render(
       // super-admin link (issue #335). The shell itself owns no part of that decision, so the
       // probe is stubbed as refused here and tested where it belongs.
       { provide: PlatformDiagnosticsAccessService, useValue: { isGranted: () => of(false) } },
+      // The sidebar also renders the capabilities GET /api/me/access reported (issue #528). The
+      // shell owns no part of that decision either, so it is stubbed as every capability here and
+      // tested in access.service.spec.ts and sidebar-nav.component.spec.ts.
+      {
+        provide: AccessService,
+        useValue: {
+          access$: of<MemberAccessState>({
+            status: 'granted',
+            access: {
+              role: 'Owner',
+              capabilities: capabilitySet([...CAPABILITIES]),
+              businessName: 'Vending Co',
+              timeZoneId: 'Australia/Sydney'
+            }
+          })
+        }
+      },
       // The shell reads the signed-in operator's business so every instant on the page can be
       // rendered in that business's time zone (issue #499). The shell owns only the waiting; the
       // lookup itself is tested in business.service.spec.ts.

@@ -1,7 +1,9 @@
 import { Component } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
-import { NEVER, Observable, of, throwError } from 'rxjs';
+import { BehaviorSubject, NEVER, Observable, of, throwError } from 'rxjs';
+import { AccessService, MemberAccess, MemberAccessState } from '../access/access.service';
+import { CAPABILITIES, Capability, capabilitySet } from '../access/capabilities';
 import { ICON_PATHS, OUTLINED_ICON_SHAPES } from '../components/shared/icon-paths';
 import { PlatformDiagnosticsAccessService } from '../services/platform-diagnostics-access.service';
 import { PRIMARY_NAVIGATION_ID, SidebarNavComponent } from './sidebar-nav.component';
@@ -10,6 +12,19 @@ import { NavGroup, navLinks, primaryNavigation } from './navigation';
 @Component({ standalone: true, template: '' })
 class BlankPageComponent {}
 
+function granted(capabilities: readonly Capability[]): MemberAccessState {
+  const access: MemberAccess = {
+    role: 'Test',
+    capabilities: capabilitySet([...capabilities]),
+    businessName: 'Vending Co',
+    timeZoneId: 'Australia/Sydney'
+  };
+  return { status: 'granted', access };
+}
+
+/** Every capability, which is what an Owner holds and what the shell tests assume by default. */
+const EVERY_CAPABILITY = granted(CAPABILITIES);
+
 interface Rendered {
   fixture: ComponentFixture<SidebarNavComponent>;
   component: SidebarNavComponent;
@@ -17,8 +32,9 @@ interface Rendered {
 }
 
 /**
- * The diagnostics access probe is stubbed, because the sidebar must never be the thing that
- * decides platform-admin access: it renders whatever the API's answer was (issue #335).
+ * Both access answers are stubbed, because the sidebar must never be the thing that decides
+ * either: it renders the capabilities `GET /api/me/access` reported (issue #528) and the
+ * diagnostics API's separate answer about platform-admin access (issue #335).
  */
 async function render(
   options: {
@@ -27,12 +43,17 @@ async function render(
     url?: string;
     navId?: string;
     diagnosticsAccess?: Observable<boolean>;
+    access?: Observable<MemberAccessState>;
   } = {}
 ): Promise<Rendered> {
   await TestBed.configureTestingModule({
     imports: [SidebarNavComponent],
     providers: [
       provideRouter([{ path: '**', component: BlankPageComponent }]),
+      {
+        provide: AccessService,
+        useValue: { access$: options.access ?? of(EVERY_CAPABILITY) }
+      },
       {
         provide: PlatformDiagnosticsAccessService,
         useValue: { isGranted: () => options.diagnosticsAccess ?? of(false) }
@@ -286,6 +307,93 @@ describe('SidebarNavComponent super-admin diagnostics link (issue #335)', () => 
       ...navLinks(primaryNavigation).map((entry) => entry.route),
       '/admin/diagnostics'
     ]);
+  });
+});
+
+/**
+ * The capability-driven menu (issue #528). The sidebar renders the capability set the access
+ * service reported and decides nothing itself; a destination it does not render hides a page
+ * rather than protecting one, because the endpoints behind that page authorize every request.
+ */
+describe('SidebarNavComponent capability-driven menu (issue #528)', () => {
+  const operator = granted(['Dashboard.View', 'PickList.View', 'Inventory.Operate', 'Purchasing.Operate']);
+  const manager = granted([
+    'Dashboard.View',
+    'Dashboard.ViewFinancials',
+    'PickList.View',
+    'Inventory.Operate',
+    'Purchasing.Operate',
+    'Suppliers.ManageGstDefaults',
+    'Expenses.Manage',
+    'Reports.View',
+    'Imports.Run',
+    'SiteCommissions.Manage'
+  ]);
+
+  it('renders no destination at all until the capability set has been read', async () => {
+    const { host } = await render({ access: NEVER });
+
+    expect(host.querySelector('nav[aria-label="Primary"]')).not.toBeNull();
+    expect(host.querySelectorAll('nav[aria-label="Primary"] a')).toHaveLength(0);
+    expect(host.textContent).not.toContain('Expenses');
+  });
+
+  it('offers an Operator no Expenses link and no Reports or Admin heading', async () => {
+    const { host } = await render({ access: of(operator) });
+
+    expect(link(host, '/')).not.toBeNull();
+    expect(link(host, '/pick-list')).not.toBeNull();
+    expect(link(host, '/expenses')).toBeNull();
+    expect(host.textContent).not.toContain('Expenses');
+    expect(host.textContent).not.toContain('Reports');
+    expect(host.textContent).not.toContain('Admin');
+  });
+
+  it('offers a Manager the Reports and Admin groups, without Nayax Settings or a repair page', async () => {
+    const { fixture, host } = await render({ access: of(manager) });
+    groupToggle(host, 'Admin').click();
+    groupToggle(host, 'Reports').click();
+    fixture.detectChanges();
+
+    expect(link(host, '/expenses')).not.toBeNull();
+    expect(link(host, '/reports/gst')).not.toBeNull();
+    expect(link(host, '/admin/imports')).not.toBeNull();
+    expect(link(host, '/admin/site-commission-agreements')).not.toBeNull();
+    expect(link(host, '/admin/nayax-settings')).toBeNull();
+    expect(link(host, '/admin/costing-repair')).toBeNull();
+    expect(link(host, '/admin/historical-gst-classification')).toBeNull();
+  });
+
+  it('re-renders when the capability set is read again, so a role change reaches the menu', async () => {
+    const access = new BehaviorSubject<MemberAccessState>(operator);
+    const { fixture, host } = await render({ access });
+    expect(link(host, '/expenses')).toBeNull();
+
+    access.next(EVERY_CAPABILITY);
+    fixture.detectChanges();
+
+    expect(link(host, '/expenses')).not.toBeNull();
+  });
+
+  /**
+   * The fail-open rule: the capability set could not be read, the API still refuses what the role
+   * may not do, and an empty menu would strand a member whose capability read happened to fail.
+   */
+  it('offers every destination when the capability set could not be read', async () => {
+    const { component } = await render({ access: of<MemberAccessState>({ status: 'unavailable' }) });
+
+    expect(navLinks(component.navigation).map((entry) => entry.route)).toEqual(
+      navLinks(primaryNavigation).map((entry) => entry.route)
+    );
+  });
+
+  it('still offers the diagnostics link to an Operator the diagnostics API confirms', async () => {
+    const { fixture, host } = await render({ access: of(operator), diagnosticsAccess: of(true) });
+    groupToggle(host, 'Admin').click();
+    fixture.detectChanges();
+
+    expect(link(host, '/admin/diagnostics')).not.toBeNull();
+    expect(link(host, '/admin/nayax-settings')).toBeNull();
   });
 });
 

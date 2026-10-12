@@ -1,5 +1,7 @@
 import { MsalGuard } from '@azure/msal-angular';
 import { Route } from '@angular/router';
+import { ACCESS_NOT_ALLOWED_PATH } from './access/capability.guard';
+import { AccessNotAllowedComponent } from './access/access-not-allowed.component';
 import { routes } from './app.routes';
 import { StockHistoryPageComponent } from './components/stock/stock-history-page.component';
 import { AdminImportsComponent } from './components/admin/imports/admin-imports.component';
@@ -122,5 +124,46 @@ describe('Admin costing and maintenance routes (issue #390)', () => {
     const admin = route('admin');
     expect(admin.redirectTo).toBeUndefined();
     expect(admin.canActivate).toContain(MsalGuard);
+  });
+});
+
+/**
+ * Capability route guards (issue #528). They are presentation only - every endpoint behind every
+ * page checks the same capability itself - but a page nobody's role allows must not be left
+ * rendering a screen full of refusals, so each authenticated route declares one alongside
+ * `MsalGuard`.
+ */
+describe('capability route guards (issue #528)', () => {
+  function authenticatedRoutes(): Route[] {
+    return routes.filter((candidate) => (candidate.canActivate ?? []).includes(MsalGuard));
+  }
+
+  /**
+   * The two exceptions are deliberate and are the whole list: `/access-not-allowed` is where a
+   * capability guard *sends* a member, so guarding it by one would send them away from their own
+   * explanation; `/admin/diagnostics` is decided by the diagnostics API per request rather than by
+   * any business role, and shows a refusal instead of data (issue #335).
+   */
+  it('guards every authenticated route with a capability, except the two that cannot carry one', () => {
+    const unguarded = authenticatedRoutes()
+      .filter((candidate) => (candidate.canActivate ?? []).length < 2)
+      .map((candidate) => candidate.path ?? '');
+
+    expect(unguarded).toEqual([ACCESS_NOT_ALLOWED_PATH, 'admin/diagnostics']);
+  });
+
+  it('keeps MsalGuard first on every route it guards, so authentication is still decided first', () => {
+    for (const candidate of authenticatedRoutes()) {
+      expect((candidate.canActivate ?? [])[0]).toBe(MsalGuard);
+    }
+  });
+
+  it('serves the access-not-allowed page behind authentication alone', async () => {
+    expect(route(ACCESS_NOT_ALLOWED_PATH).canActivate).toContain(MsalGuard);
+    await expect(loadedComponent(ACCESS_NOT_ALLOWED_PATH)).resolves.toBe(AccessNotAllowedComponent);
+  });
+
+  it('keeps the public Entra callback route free of any guard', () => {
+    expect(route('auth').canActivate).toBeUndefined();
   });
 });

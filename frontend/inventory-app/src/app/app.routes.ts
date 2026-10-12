@@ -1,24 +1,44 @@
 import { Routes } from '@angular/router';
 import { MsalGuard } from '@azure/msal-angular';
+import { ACCESS_NOT_ALLOWED_PATH, requireCapability } from './access/capability.guard';
 import { AuthCallbackComponent } from './auth/auth-callback.component';
 import { designSystemRoutes } from './design-system/design-system.routes';
 
+/**
+ * Every authenticated route carries `MsalGuard` and, since issue #528, the capability its page
+ * needs - the same capability the endpoints behind that page already require (see
+ * docs/architecture.md § Capability authorization on the Manager and Owner endpoints for the
+ * matrix these mirror).
+ *
+ * `requireCapability` is presentation only: it replaces a page full of refusals with the
+ * "access not allowed" page, and protects nothing. The two routes that deliberately carry no
+ * capability are `/access-not-allowed` itself, which every member must be able to reach, and
+ * `/admin/diagnostics`, whose platform-admin authority is decided by the diagnostics API on every
+ * request and by no business role (issue #335).
+ */
 export const routes: Routes = [
   // Public: the Entra redirect callback must be reachable without authentication.
   { path: 'auth', component: AuthCallbackComponent },
   {
-    path: '',
+    // Reached by a guard above, so it declares no capability of its own: a member sent here
+    // because their role does not allow a page must not be sent away from the explanation too.
+    path: ACCESS_NOT_ALLOWED_PATH,
     canActivate: [MsalGuard],
+    loadComponent: () => import('./access/access-not-allowed.component').then((m) => m.AccessNotAllowedComponent)
+  },
+  {
+    path: '',
+    canActivate: [MsalGuard, requireCapability('Dashboard.View')],
     loadComponent: () => import('./components/dashboard/dashboard.component').then((m) => m.DashboardComponent)
   },
   {
     path: 'products/:id/edit',
-    canActivate: [MsalGuard],
+    canActivate: [MsalGuard, requireCapability('Inventory.Operate')],
     loadComponent: () => import('./components/products/product-form.component').then((m) => m.ProductFormComponent)
   },
   {
     path: 'stock-history',
-    canActivate: [MsalGuard],
+    canActivate: [MsalGuard, requireCapability('Inventory.Operate')],
     loadComponent: () => import('./components/stock/stock-history-page.component').then((m) => m.StockHistoryPageComponent)
   },
   {
@@ -27,12 +47,12 @@ export const routes: Routes = [
     // /stock-history?productId=123 - so the links, bookmarks and deep links that already exist keep
     // working instead of being redirected to a page that has lost the product.
     path: 'products/:id/stock',
-    canActivate: [MsalGuard],
+    canActivate: [MsalGuard, requireCapability('Inventory.Operate')],
     loadComponent: () => import('./components/stock/stock-history-page.component').then((m) => m.StockHistoryPageComponent)
   },
   {
     path: 'products',
-    canActivate: [MsalGuard],
+    canActivate: [MsalGuard, requireCapability('Inventory.Operate')],
     loadComponent: () => import('./components/products/products-shell.component').then((m) => m.ProductsShellComponent),
     children: [
       {
@@ -56,47 +76,49 @@ export const routes: Routes = [
   },
   {
     path: 'categories',
-    canActivate: [MsalGuard],
+    canActivate: [MsalGuard, requireCapability('Inventory.Operate')],
     loadComponent: () => import('./components/categories/category-list.component').then((m) => m.CategoryListComponent)
   },
   {
+    // Suppliers are purchasing work, so an Operator recording a purchase reaches this page; the
+    // GST defaults editor on it is the one action it hides (issue #528).
     path: 'suppliers',
-    canActivate: [MsalGuard],
+    canActivate: [MsalGuard, requireCapability('Purchasing.Operate')],
     loadComponent: () => import('./components/suppliers/supplier-list.component').then((m) => m.SupplierListComponent)
   },
   {
     path: 'machines',
-    canActivate: [MsalGuard],
+    canActivate: [MsalGuard, requireCapability('Inventory.Operate')],
     loadComponent: () => import('./components/machines/machine-list.component').then((m) => m.MachineListComponent)
   },
   {
     path: 'machines/:id',
-    canActivate: [MsalGuard],
+    canActivate: [MsalGuard, requireCapability('Inventory.Operate')],
     loadComponent: () => import('./components/machines/machine-detail.component').then((m) => m.MachineDetailComponent)
   },
   {
     path: 'sites',
-    canActivate: [MsalGuard],
+    canActivate: [MsalGuard, requireCapability('Inventory.Operate')],
     loadComponent: () => import('./components/sites/site-list.component').then((m) => m.SiteListComponent)
   },
   {
     path: 'sites/:id/products',
-    canActivate: [MsalGuard],
+    canActivate: [MsalGuard, requireCapability('Inventory.Operate')],
     loadComponent: () => import('./components/sites/site-products.component').then((m) => m.SiteProductsComponent)
   },
   {
     path: 'purchases',
-    canActivate: [MsalGuard],
+    canActivate: [MsalGuard, requireCapability('Purchasing.Operate')],
     loadComponent: () => import('./components/purchases/purchase-list.component').then((m) => m.PurchaseListComponent)
   },
   {
     path: 'purchases/new',
-    canActivate: [MsalGuard],
+    canActivate: [MsalGuard, requireCapability('Purchasing.Operate')],
     loadComponent: () => import('./components/purchases/purchase-upload.component').then((m) => m.PurchaseUploadComponent)
   },
   {
     path: 'purchases/orders',
-    canActivate: [MsalGuard],
+    canActivate: [MsalGuard, requireCapability('Purchasing.Operate')],
     loadComponent: () => import('./components/purchases/supplier-orders.component').then((m) => m.SupplierOrdersComponent)
   },
   {
@@ -105,81 +127,88 @@ export const routes: Routes = [
     // Declared after `purchases/new` and `purchases/orders`, which are two-segment paths this
     // three-segment pattern cannot shadow either way.
     path: 'purchases/:id/edit',
-    canActivate: [MsalGuard],
+    canActivate: [MsalGuard, requireCapability('Purchasing.Operate')],
     loadComponent: () =>
       import('./components/purchases/purchase-edit/purchase-edit-page.component').then((m) => m.PurchaseEditPageComponent)
   },
   {
     path: 'reports',
-    canActivate: [MsalGuard],
+    canActivate: [MsalGuard, requireCapability('Reports.View')],
     loadComponent: () => import('./components/reports/dashboard-report.component').then((m) => m.DashboardReportComponent)
   },
   {
     path: 'reports/bookkeeping',
-    canActivate: [MsalGuard],
+    canActivate: [MsalGuard, requireCapability('Reports.View')],
     loadComponent: () => import('./components/reports/bookkeeping-report.component').then((m) => m.BookkeepingReportComponent)
   },
   {
     path: 'reports/daily',
-    canActivate: [MsalGuard],
+    canActivate: [MsalGuard, requireCapability('Reports.View')],
     loadComponent: () => import('./components/reports/daily-report.component').then((m) => m.DailyReportComponent)
   },
   {
     path: 'reports/transactions',
-    canActivate: [MsalGuard],
+    canActivate: [MsalGuard, requireCapability('Reports.View')],
     loadComponent: () =>
       import('./components/reports/transaction-sales-report.component').then((m) => m.TransactionSalesReportComponent)
   },
   {
     path: 'reports/reconciliation',
-    canActivate: [MsalGuard],
+    canActivate: [MsalGuard, requireCapability('Reports.View')],
     loadComponent: () =>
       import('./components/reports/reconciliation-report.component').then((m) => m.ReconciliationReportComponent)
   },
   {
     path: 'reports/machines',
-    canActivate: [MsalGuard],
+    canActivate: [MsalGuard, requireCapability('Reports.View')],
     loadComponent: () => import('./components/reports/machine-report.component').then((m) => m.MachineReportComponent)
   },
   {
     path: 'reports/products',
-    canActivate: [MsalGuard],
+    canActivate: [MsalGuard, requireCapability('Reports.View')],
     loadComponent: () => import('./components/reports/product-report.component').then((m) => m.ProductReportComponent)
   },
   {
     path: 'reports/gst',
-    canActivate: [MsalGuard],
+    canActivate: [MsalGuard, requireCapability('Reports.View')],
     loadComponent: () => import('./components/reports/gst-report.component').then((m) => m.GstReportComponent)
   },
   {
+    // The site commission report is on `SiteCommissions.Manage`, not `Reports.View`: it is the
+    // surface the agreements are maintained from, and the API draws the same line (issue #526).
     path: 'reports/site-commissions',
-    canActivate: [MsalGuard],
+    canActivate: [MsalGuard, requireCapability('SiteCommissions.Manage')],
     loadComponent: () =>
       import('./components/reports/site-commissions-report.component').then((m) => m.SiteCommissionsReportComponent)
   },
   {
     path: 'pick-list',
-    canActivate: [MsalGuard],
+    canActivate: [MsalGuard, requireCapability('PickList.View')],
     loadComponent: () => import('./components/pick-list/pick-list.component').then((m) => m.PickListComponent)
   },
   {
     path: 'take-inventory',
-    canActivate: [MsalGuard],
+    canActivate: [MsalGuard, requireCapability('Inventory.Operate')],
     loadComponent: () => import('./components/take-inventory/take-inventory.component').then((m) => m.TakeInventoryComponent)
   },
   {
+    // The Admin link hub owns no workflow of its own, so it is offered to a member who holds any
+    // of the capabilities its pages need rather than to one particular role.
     path: 'admin',
-    canActivate: [MsalGuard],
+    canActivate: [
+      MsalGuard,
+      requireCapability('Imports.Run', 'SiteCommissions.Manage', 'Integration.Manage', 'Data.Repair')
+    ],
     loadComponent: () => import('./components/admin/admin.component').then((m) => m.AdminComponent)
   },
   {
     path: 'admin/imports',
-    canActivate: [MsalGuard],
+    canActivate: [MsalGuard, requireCapability('Imports.Run')],
     loadComponent: () => import('./components/admin/imports/admin-imports.component').then((m) => m.AdminImportsComponent)
   },
   {
     path: 'admin/historical-cost-recovery',
-    canActivate: [MsalGuard],
+    canActivate: [MsalGuard, requireCapability('Data.Repair')],
     loadComponent: () =>
       import('./components/admin/historical-cost-recovery/historical-cost-recovery.component').then(
         (m) => m.HistoricalCostRecoveryComponent
@@ -187,19 +216,19 @@ export const routes: Routes = [
   },
   {
     path: 'admin/avco-transition',
-    canActivate: [MsalGuard],
+    canActivate: [MsalGuard, requireCapability('Data.Repair')],
     loadComponent: () =>
       import('./components/admin/avco-transition/avco-transition.component').then((m) => m.AvcoTransitionComponent)
   },
   {
     path: 'admin/costing-repair',
-    canActivate: [MsalGuard],
+    canActivate: [MsalGuard, requireCapability('Data.Repair')],
     loadComponent: () =>
       import('./components/admin/costing-repair/costing-repair-page.component').then((m) => m.CostingRepairPageComponent)
   },
   {
     path: 'admin/historical-gst-classification',
-    canActivate: [MsalGuard],
+    canActivate: [MsalGuard, requireCapability('Data.Repair')],
     loadComponent: () =>
       import('./components/admin/historical-gst-classification/historical-gst-classification.component').then(
         (m) => m.HistoricalGstClassificationComponent
@@ -207,7 +236,7 @@ export const routes: Routes = [
   },
   {
     path: 'admin/nayax-sale-timestamp-repair',
-    canActivate: [MsalGuard],
+    canActivate: [MsalGuard, requireCapability('Data.Repair')],
     loadComponent: () =>
       import('./components/admin/nayax-sale-timestamp-repair/nayax-sale-timestamp-repair.component').then(
         (m) => m.NayaxSaleTimestampRepairComponent
@@ -225,13 +254,13 @@ export const routes: Routes = [
   },
   {
     path: 'admin/nayax-settings',
-    canActivate: [MsalGuard],
+    canActivate: [MsalGuard, requireCapability('Integration.Manage')],
     loadComponent: () =>
       import('./components/admin/nayax-settings/nayax-settings.component').then((m) => m.NayaxSettingsComponent)
   },
   {
     path: 'admin/site-commission-agreements',
-    canActivate: [MsalGuard],
+    canActivate: [MsalGuard, requireCapability('SiteCommissions.Manage')],
     loadComponent: () =>
       import('./components/admin/site-commission-agreements/site-commission-agreements.component').then(
         (m) => m.SiteCommissionAgreementsComponent
@@ -239,7 +268,7 @@ export const routes: Routes = [
   },
   {
     path: 'expenses',
-    canActivate: [MsalGuard],
+    canActivate: [MsalGuard, requireCapability('Expenses.Manage')],
     loadComponent: () => import('./components/expenses/operating-expense.component').then((m) => m.OperatingExpenseComponent)
   },
   // Empty in every optimized build; the unoptimized dev/e2e servers add the #411 screenshot
