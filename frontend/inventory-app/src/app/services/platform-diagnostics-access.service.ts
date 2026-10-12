@@ -1,6 +1,6 @@
 import { Injectable, OnDestroy } from '@angular/core';
 import { MsalBroadcastService, MsalService } from '@azure/msal-angular';
-import { EventMessage, EventType, InteractionStatus } from '@azure/msal-browser';
+import { InteractionStatus } from '@azure/msal-browser';
 import {
   BehaviorSubject,
   EMPTY,
@@ -11,7 +11,6 @@ import {
   distinctUntilChanged,
   filter,
   map,
-  merge,
   of,
   shareReplay,
   switchMap,
@@ -19,6 +18,7 @@ import {
   takeUntil,
   tap
 } from 'rxjs';
+import { activeAccountKey, signedInAccountMayHaveChanged } from '../access/signed-in-account';
 import { PlatformDiagnosticsService } from './platform-diagnostics.service';
 
 /**
@@ -34,18 +34,6 @@ type PlatformAccessState = { readonly status: 'unknown' } | AnsweredPlatformAcce
 const UNKNOWN: PlatformAccessState = { status: 'unknown' };
 const REFUSED: AnsweredPlatformAccess = { status: 'answered', granted: false };
 const GRANTED: AnsweredPlatformAccess = { status: 'answered', granted: true };
-
-/**
- * The MSAL events that mean the signed-in identity may have changed. Deliberately the same three
- * `AccessService` watches, and deliberately not read through it: the platform-admin answer has
- * nothing to do with business membership or capabilities, so the two caches share their triggers
- * and nothing else.
- */
-const ACCOUNT_EVENTS: ReadonlySet<string> = new Set<string>([
-  EventType.LOGIN_SUCCESS,
-  EventType.LOGOUT_SUCCESS,
-  EventType.ACTIVE_ACCOUNT_CHANGED
-]);
 
 /**
  * Whether the application shell should offer the super-admin diagnostics link (issue #335).
@@ -153,7 +141,7 @@ export class PlatformDiagnosticsAccessService implements OnDestroy {
           return EMPTY;
         }
 
-        const accountKey = this.activeAccountKey();
+        const accountKey = activeAccountKey(this.authService);
         this.probedForAccountKey = accountKey;
         // Nobody signed in is an answer, not a request: an unauthenticated probe would only have
         // MsalInterceptor start an interactive sign-in nobody asked for.
@@ -187,20 +175,8 @@ export class PlatformDiagnosticsAccessService implements OnDestroy {
     this.state.next(answer);
   }
 
-  /**
-   * Sign-in, sign-out and an active-account change, from the two signals that report them: MSAL's
-   * own account events, and `inProgress$` settling, which is what the shell already uses to decide
-   * that an interaction has finished.
-   */
   private observeSignedInAccount(): void {
-    merge(
-      this.msalBroadcastService.inProgress$.pipe(
-        filter((status: InteractionStatus) => status === InteractionStatus.None)
-      ),
-      this.msalBroadcastService.msalSubject$.pipe(
-        filter((event: EventMessage) => ACCOUNT_EVENTS.has(event.eventType))
-      )
-    )
+    signedInAccountMayHaveChanged(this.msalBroadcastService)
       .pipe(takeUntil(this.destroying$))
       .subscribe(() => this.applySignedInAccount());
   }
@@ -211,7 +187,7 @@ export class PlatformDiagnosticsAccessService implements OnDestroy {
       return;
     }
 
-    const accountKey = this.activeAccountKey();
+    const accountKey = activeAccountKey(this.authService);
     if (accountKey === this.probedForAccountKey) {
       return;
     }
@@ -244,16 +220,5 @@ export class PlatformDiagnosticsAccessService implements OnDestroy {
   private probeAgain(): void {
     this.state.next(UNKNOWN);
     this.beginProbe();
-  }
-
-  /** The stable identity of the signed-in account, independent of its display name. */
-  private activeAccountKey(): string | null {
-    const account =
-      this.authService.instance.getActiveAccount() ?? this.authService.instance.getAllAccounts()[0] ?? null;
-    if (account === null) {
-      return null;
-    }
-
-    return account.homeAccountId || account.localAccountId || account.username || '';
   }
 }
