@@ -45,17 +45,22 @@ public class Business
     /// former <c>IsActive</c> flag, which could not tell those situations apart, and no other
     /// column mirrors it.
     ///
-    /// Required, and <see cref="BusinessStatus.Active"/> by default. The default is not a
-    /// convenience: it is the value the migration gave every business that was active before this
-    /// slice and the value <c>bootstrap-business</c> creates, so a bootstrapped and a migrated
-    /// database describe the existing business identically. A path that means something else - a
-    /// self-service application, which starts <see cref="BusinessStatus.Pending"/> - states the
-    /// status deliberately instead of relying on it.
+    /// <c>required</c>, and with no default at all (issue #584). It used to default to
+    /// <see cref="BusinessStatus.Active"/>, which made the status the one thing about a new business
+    /// that could be decided by forgetting to decide it: a write path that never assigned this
+    /// property created a trading tenant whose data is reachable. Every path therefore states it -
+    /// <c>bootstrap-business</c> states <see cref="BusinessStatus.Active"/> because it adopts a
+    /// business that is already trading, and a self-service application states
+    /// <see cref="BusinessStatus.Pending"/> - and the compiler, not a convention, is what requires
+    /// that. The value an instance holds before anything states one is <c>0</c>, which
+    /// <see cref="BusinessStatuses"/> declares no status at and
+    /// <see cref="BusinessMembershipResolutionPolicy"/> denies, and which
+    /// <see cref="Data.BusinessStatusEnforcer"/> refuses to store on <c>SaveChanges</c>.
     ///
     /// Deactivating or rejecting a business denies access to its data without deleting the
     /// records, so an offboarded or refused business fails closed rather than being dropped.
     /// </summary>
-    public BusinessStatus Status { get; set; } = BusinessStatus.Active;
+    public required BusinessStatus Status { get; set; }
 
     /// <summary>
     /// The business's own contact email address, as its application recorded it (issue #540), and

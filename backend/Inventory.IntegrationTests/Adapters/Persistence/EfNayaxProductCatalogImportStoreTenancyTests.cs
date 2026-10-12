@@ -1,4 +1,5 @@
 using Inventory.Application.Imports;
+using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
@@ -39,8 +40,8 @@ public class EfNayaxProductCatalogImportStoreTenancyTests : IDisposable
         using var setup = TestAppDbContext.Unrestricted(_options);
         setup.Database.EnsureCreated();
         setup.Businesses.AddRange(
-            new Business { Id = BusinessA, Name = "Vending A", CreatedAtUtc = DateTime.UtcNow },
-            new Business { Id = BusinessB, Name = "Vending B", CreatedAtUtc = DateTime.UtcNow });
+            new Business { Id = BusinessA, Name = "Vending A", Status = BusinessStatus.Active, CreatedAtUtc = DateTime.UtcNow },
+            new Business { Id = BusinessB, Name = "Vending B", Status = BusinessStatus.Active, CreatedAtUtc = DateTime.UtcNow });
         setup.SaveChanges();
     }
 

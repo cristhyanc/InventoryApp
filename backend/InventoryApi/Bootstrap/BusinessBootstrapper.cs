@@ -132,9 +132,11 @@ public sealed class BusinessBootstrapper
                 // onboarding instead. The command itself derives no business date and needs no
                 // calendar.
                 TimeZoneId = ExistingBusinessTimeZoneId,
-                // Active, stated rather than left to the entity's default (issue #540). This
-                // command adopts a business that is already trading, so it never creates a
-                // pending application: the self-service application path is the only thing that
+                // Active, stated here because this command adopts a business that is already
+                // trading (issue #540). There is no entity default to fall back on - an omitted
+                // status is a compile error since issue #584 - and that is the point: this is a
+                // decision about one specific history, not a convenience. It never creates a
+                // pending application; the self-service application path is the only thing that
                 // does, and the profile columns an application collects stay null here rather
                 // than being invented for a history that predates the form.
                 Status = BusinessStatus.Active,

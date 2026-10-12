@@ -127,12 +127,18 @@ public class AppDbContext : DbContext
     /// <see cref="BusinessAbnEnforcer"/> joins them on the same terms (issue #540): the business's
     /// ABN appears on tax invoices and in the GST accounting aid, so a value that cannot be an ABN
     /// is refused centrally rather than per write path.
+    ///
+    /// <see cref="BusinessStatusEnforcer"/> joins them for the strongest of those reasons (issue
+    /// #584): the business's lifecycle status is what decides whether its data may be reached at
+    /// all, so a status nobody declared is refused here rather than stored as a business whose
+    /// access state nobody chose.
     /// </summary>
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {
         BusinessOwnershipEnforcer.Enforce(this);
         BusinessTimeZoneEnforcer.Enforce(this);
         BusinessAbnEnforcer.Enforce(this);
+        BusinessStatusEnforcer.Enforce(this);
         return base.SaveChanges(acceptAllChangesOnSuccess);
     }
 
@@ -143,6 +149,7 @@ public class AppDbContext : DbContext
         BusinessOwnershipEnforcer.Enforce(this);
         BusinessTimeZoneEnforcer.Enforce(this);
         BusinessAbnEnforcer.Enforce(this);
+        BusinessStatusEnforcer.Enforce(this);
         return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
     }
 

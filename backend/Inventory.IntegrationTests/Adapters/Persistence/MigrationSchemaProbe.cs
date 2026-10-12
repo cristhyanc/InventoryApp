@@ -32,6 +32,27 @@ internal static class MigrationSchemaProbe
             "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = "
                 + $"'{table}' ORDER BY name;");
 
+    /// <summary>
+    /// The default expression SQLite holds for <paramref name="column"/> of
+    /// <paramref name="table"/>, exactly as the schema declares it, or <see langword="null"/> when
+    /// the column has no default at all.
+    ///
+    /// Asked by a migration whose point *is* the default (issue #584): what a row gets when an
+    /// insert states no value is a property of the schema, not of the model, so the only way to
+    /// prove it is to read it back from the database.
+    /// </summary>
+    public static async Task<string?> ColumnDefaultAsync(
+        SqliteConnection connection,
+        string table,
+        string column)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            $"SELECT dflt_value FROM pragma_table_info('{table}') WHERE name = '{column}';";
+        var value = await command.ExecuteScalarAsync();
+        return value is null or DBNull ? null : (string)value;
+    }
+
     private static async Task<List<string>> QueryNamesAsync(SqliteConnection connection, string sql)
     {
         await using var command = connection.CreateCommand();

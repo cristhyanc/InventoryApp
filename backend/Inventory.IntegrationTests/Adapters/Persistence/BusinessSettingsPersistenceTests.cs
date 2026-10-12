@@ -55,8 +55,22 @@ public class BusinessSettingsPersistenceTests : IDisposable
         using var setup = TestAppDbContext.Unrestricted(_options);
         setup.Database.EnsureCreated();
         setup.Businesses.AddRange(
-            new Business { Id = SydneyBusiness, Name = "Vending Sydney", TimeZoneId = Sydney, CreatedAtUtc = CreatedAt },
-            new Business { Id = NewYorkBusiness, Name = "Vending New York", TimeZoneId = NewYork, CreatedAtUtc = CreatedAt });
+            new Business
+            {
+                Id = SydneyBusiness,
+                Name = "Vending Sydney",
+                TimeZoneId = Sydney,
+                Status = BusinessStatus.Active,
+                CreatedAtUtc = CreatedAt,
+            },
+            new Business
+            {
+                Id = NewYorkBusiness,
+                Name = "Vending New York",
+                TimeZoneId = NewYork,
+                Status = BusinessStatus.Active,
+                CreatedAtUtc = CreatedAt,
+            });
         setup.SaveChanges();
     }
 

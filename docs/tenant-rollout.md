@@ -205,6 +205,40 @@ business as active only while its status is `Active` — so a business left `Pen
 signs in successfully and is told their own account state by `GET /api/me/account-state`, but reaches
 no business data at all.
 
+#### A status is always stated, never defaulted (issue #584)
+
+Since issue #584 nothing creates a business without saying what its status is. `bootstrap-business`
+is unchanged in what it does — it still creates the business as `Active`, and still only for the
+authorized caller the configuration names — but it now states that status because the application
+gives it no choice: the entity property is `required`, a status outside the declared four is refused
+on `SaveChanges`, and the `Businesses.Status` column's database default is no longer `Active`. There
+is still nothing to configure, and no step of this procedure changes.
+
+**For an existing database, the operational effect is one migration and no data change.**
+`RemoveBusinessStatusActiveDatabaseDefault` replaces the column's `DEFAULT 20` (`Active`) with
+`DEFAULT 0`, a value that is not a status at all and that the access decision denies. It preserves
+every business's exact status — an `Active` business stays `Active` and keeps its access, a
+`Deactivated`, `Pending` or `Rejected` one stays denied — and changes no other column. It does this
+with four in-place statements rather than rebuilding the `Businesses` table: a replacement column is
+added with the new default, each row's status is copied into it, the old column is dropped, and the
+replacement is renamed into its place, all inside the migration's transaction. The only visible
+schema difference besides the default is that `Status` is now the last column of the table, which
+nothing reads by position. Startup applies it automatically in Production exactly as it applies any
+other pending migration (see
+[Automatic Production-startup migration](#automatic-production-startup-migration-issue-201)); it
+needs no window, no backfill and no manual step beyond the backup this procedure already requires.
+
+**Rolling it back is equally uneventful.** `Down` restores issue #540's schema, `Active` default
+included, and again preserves every stored status, so a downgrade reactivates, deactivates or
+reclassifies no business. What a rollback restores is the accidental-`Active` default itself — the
+thing this change removed — so a database that has been rolled back is again one where an `INSERT`
+that omits the status would create a reachable business.
+
+**If a business ever shows a status of `0`.** That is not one of the four statuses: it means a row
+was inserted by something that bypassed the application, and it denies all access. Do not "fix" it
+by guessing. Decide what the business actually is and set that status deliberately, the same way any
+other lifecycle decision is made.
+
 ## Rollout sequence
 
 Steps 3 and 5 are the two decision points. Do not continue past either without reading the

@@ -225,6 +225,7 @@ public sealed class DashboardSummaryRedactionApiTests : IClassFixture<DashboardS
                 Id = BusinessId,
                 Name = "Vending Co",
                 TimeZoneId = "Australia/Sydney",
+                Status = BusinessStatus.Active,
                 CreatedAtUtc = CreatedAt,
             });
 

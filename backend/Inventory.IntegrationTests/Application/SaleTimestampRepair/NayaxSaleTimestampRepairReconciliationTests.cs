@@ -86,7 +86,8 @@ public class NayaxSaleTimestampRepairReconciliationTests : IDisposable
 
         using var setup = TestAppDbContext.Unrestricted(_options);
         setup.Database.EnsureCreated();
-        setup.Businesses.Add(new Business { Id = BusinessA, Name = "Vending A", CreatedAtUtc = Now });
+        setup.Businesses.Add(
+            new Business { Id = BusinessA, Name = "Vending A", Status = BusinessStatus.Active, CreatedAtUtc = Now });
         setup.SaveChanges();
 
         BuildCohorts();
