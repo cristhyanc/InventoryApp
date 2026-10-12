@@ -1772,7 +1772,7 @@ A late refusal is the same refusal as every other unusable invite: the generic `
 
 **What the response says, and what it refuses to say.** `200 { "role": "…" }`, and nothing else — no business name, no business id, no membership key, no token. The caller is a member from the next request onwards and reads their business's name from `GET /api/me/access` like everybody else, which keeps the one endpoint a person with no membership may call from publishing a business in *any* of its three answers.
 
-**What this slice does not do.** No invite creation or cancellation (#531 above), no member management (#533), no self-service application or approval (#507/#509/#541), and no invite page (#505's tasks) — nothing in `frontend/inventory-app/src` calls this route yet. There is **no schema change**: the ownership change is declared in the model and the index set is the one the `AddMemberInvites` migration already created, which `MigrationRelocationTests`' no-pending-model-changes assertion confirms.
+**What this slice does not do.** No invite creation or cancellation (#531 above), no member management (#533), and no self-service application or approval (#507/#509/#541). The invite acceptance page is issue #535's task, which is what now calls this route — see [Invite acceptance page](#invite-acceptance-page-issue-535). There is **no schema change**: the ownership change is declared in the model and the index set is the one the `AddMemberInvites` migration already created, which `MigrationRelocationTests`' no-pending-model-changes assertion confirms.
 
 **What proves this slice.** `InviteRedemptionApiTests` (the whole pipeline over two seeded businesses and the real migration history: the Owner-creates-then-stranger-joins workflow end to end with the account state before and after, the response carrying only the role, the joiner's own display name and email stored on the new membership, a revoked member rejoining by reactivating their own row rather than gaining a second, the invite deciding which business is joined, every unusable invite and every blank or near-miss token answered with one `400` and writing nothing, the same link refused the second time, an existing member and a pending-business member refused with `409` while keeping their own access and leaving the invite live, the deactivated-business caller's own sentence, a rejected applicant admitted, `401` unauthenticated, `403` without the delegated scope, the same business-less caller refused by every other endpoint, and the audit event carrying neither the token nor any name while a refused redemption is audited as nothing), `EfMemberInviteRedemptionStoreTests` (the relational adapter under the denied scope every redemption carries: the lookup by hash and not by the token, an unknown and an ambiguous token both not found, closed invites and closed businesses reported exactly as stored, the membership lookup confined to one business and one identity, the creation's columns and instants, the filtered index still refusing a second active membership, the conditional reactivation declining for an active row and another business's, display values refreshed without erasing what a silent token did not report, the conditional close declining for every non-live state and another business's invite, a rolled-back transaction leaving no membership and no used invite, and the denied context still reading and writing no business data), `MemberInviteRedemptionConcurrencyTests` (two real writers on a real SQLite file through the shared `MembershipWriteRaceHarness`: the same invite twice leaving exactly one membership and one correctly-attributed row, two invites from two businesses for one identity leaving one membership and one *unused* invite, the same race on two revoked rows reactivating exactly one, and the sequential replay changing nothing), `RedeemMemberInviteTests` (the decisions over fakes: the order of the reads and writes inside the transaction, every write naming the business the invite reported, the lookup by hash and never the token, the three admitted and four refused account states with their two sentences, an invite used or a row reactivated between the read and the write granting nothing, and nothing audited for a refused redemption — and issue #608's timing regressions, where a hook moves a `FakeClock` past the expiry while the write lock is awaited and again between the authoritative read and the consumption, at the expiry instant and one tick past it, with a still-live redemption recording the instants it really happened at), `MemberInviteRedemptionExpiryTests` (the same boundary against a real SQLite file and the real stores, which is where the rollback is actually proved: a membership this attempt inserted and a revoked row it reactivated are both gone when the consumption is refused, the invite is exactly as it was seeded, nothing is audited, and a live redemption persists the admission instant on the membership and the consumption instant on the invite and the audit event) and `MemberInviteRedemptionPolicyTests` plus `BusinessOwnershipCoverageTests` (the deterministic rules, and the ownership decision itself: four declared global tables, the invite carrying no query filter, and its token hash still unique per business).
 
@@ -3248,7 +3248,7 @@ way as.
 | `access/account-state.service.ts` | `AccountStateService`: the cached `GET /api/me/account-state` read, built and invalidated exactly like `AccessService` |
 | `access/account-state.guard.ts` | `accountStateGuard`, the `CanActivateFn` every business route declares, and `ACCOUNT_STATE_ROUTE`/`ACCOUNT_STATE_BYPASS_PATHS` |
 | `access/access-unavailable.component.ts` | The page `BusinessDeactivated`, `MembershipAmbiguous` and `MembershipRevoked` are routed to |
-| `access/onboarding-placeholder.component.ts` | The one stand-in component `/welcome`, `/application-pending`, `/application-rejected` and `/invite/:token` load until #508's and #505's tasks replace each with its own page |
+| `access/onboarding-placeholder.component.ts` | The one stand-in component `/welcome`, `/application-pending` and `/application-rejected` load until #508's tasks replace each with its own page; `/invite/:token` carried this placeholder until issue #535 replaced it with `InviteAcceptanceComponent` |
 | `access/account-state-forbidden.interceptor.ts` | The "`403` from a member endpoint" trigger on the account-state cache, mirroring `accessForbiddenInterceptor` |
 | `access/member-forbidden-notice.interceptor.ts` | The global `403` handler: "you don't have access to this", except on a bypass route or for a refusal `classifyMemberRequest` does not call a member one |
 | `app.component.ts` | Waits for the account state before looking up the business at all |
@@ -3270,7 +3270,7 @@ business calls ever run.
 presentation, not a boundary, for the same reason `requireCapability` is: `BusinessScopeMiddleware`
 refuses every business call for an account with no usable membership whatever the router did, so a
 state that could not be read lets the navigation through rather than guessing. The five
-destinations above and `/invite/:token` (issue #505's redemption page) carry no `accountStateGuard`
+destinations above and `/invite/:token` (issue #535's acceptance page) carry no `accountStateGuard`
 of their own - adding one would send a person this guard already routed there straight back to
 themselves, or away from the one explanation their state has - and `/access-not-allowed` stays the
 exception issue #528 already documents. `/super-admin/diagnostics` carries no `accountStateGuard`
@@ -3370,6 +3370,92 @@ request count, the one-way refresh, and the preserved notice and suppression), a
 `app.routes.spec.ts`/`app.component.spec.ts` (`accountStateGuard`'s position on every business
 route, the five bypass routes, and the shell asking for no business before the account state is
 known).
+
+### Invite acceptance page (issue #535)
+
+`/invite/:token` carried `OnboardingPlaceholderComponent` until this slice of #505 (under #328)
+replaced it with `InviteAcceptanceComponent`: where an invited person who opens their link, signs
+in if needed, joins the business with one click. The redemption endpoint it calls,
+`POST /api/invites/redeem`, is issue #532's ([Invite redemption](#invite-redemption-issue-532));
+this slice is the one caller `frontend/inventory-app/src` has for it.
+
+| File | Responsibility |
+| --- | --- |
+| `access/invite-acceptance.component.ts` | `InviteAcceptanceComponent`: reads the token, strips it from the address bar, decides Accept-button vs. redirect from the cached account state, calls the redemption endpoint, and refreshes both caches before landing on the dashboard |
+| `access/invite-redemption.service.ts` | `InviteRedemptionService`: the one `POST /api/invites/redeem` call, with the token in the request body and nothing else |
+| `access/account-state.guard.ts` | Gained `REDEEMABLE_ACCOUNT_STATES` and `nonRedeemableAccountStateDestination`, alongside `ACCOUNT_STATE_ROUTE` |
+
+**The token never leaves memory, and the address bar is cleared before anything else runs.**
+`InviteAcceptanceComponent.ngOnInit` reads the token from the route `ActivatedRoute` already
+matched and holds it only in a component field; its very next statement, before any analytics,
+logging or navigation, is `history.replaceState(history.state, '', '/invite')`. That rewrites the
+browser's own history entry — independently of what Angular's router still thinks the current URL
+is — so the token is gone from the address bar an instant after the page loads. Application code
+never writes it to `localStorage`, `sessionStorage`, a cookie, a log line or an error report, and
+`InviteRedemptionService` sends it only in this one request's JSON body, never in a URL path or
+query string, so no HTTP or router logging of a request or route *URL* can ever carry it either —
+there is no app-level logging of either kind in this build today, and this is why there will not
+be one carrying it later.
+
+**MSAL's own transient copy is the one accepted residual.** A signed-out visitor reaches this
+component at all only after `MsalGuard` (still the route's only guard — see [Account-state
+routing](#account-state-routing-the-access-unavailable-page-and-the-global-403-handler-issue-529))
+has sent them through the login redirect, with this exact URL — token included — as its own
+default redirect start page, and brought them back to it once the round trip completes. Nothing in
+this slice starts, configures or reads that bookkeeping: it is MSAL's existing
+`BrowserCacheLocation.LocalStorage` (`auth-config.ts`), already relied on by every other bypass
+route on this guard, holding the address for exactly the length of one redirect and clearing it
+once it lands. The token is single-use, expires after seven days, and is stored only as a hash on
+the server (`MemberInviteToken.Hash`, [Invite redemption](#invite-redemption-issue-532)) — so this
+one transient, third-party copy is the full extent of what survives a sign-in round trip, and it is
+accepted rather than worked around.
+
+**Eligibility is read from the cached account state, never assumed.**
+`REDEEMABLE_ACCOUNT_STATES` — `NoMembership`, `MembershipRevoked` and `ApplicationRejected` —
+mirrors the backend's `MembershipEligibility.AllowsActiveMembership` ([Invite
+redemption](#invite-redemption-issue-532)): the three states that hold no active membership of
+their own are the three the component offers the Accept button to, and an account state that could
+not be read (`AccountStateService`'s own fail-open `unavailable` answer) is treated the same way,
+for the same reason `accountStateGuard` fails open — the redemption endpoint re-checks eligibility
+itself and is the one answer that counts. Every other state — `Member`, `ApplicationPending`,
+`BusinessDeactivated` and `MembershipAmbiguous` — is sent straight to the page its own state
+already calls for, through `nonRedeemableAccountStateDestination`: `Member` to the dashboard,
+every other one to `ACCOUNT_STATE_ROUTE`'s existing destination, rather than showing a button the
+API would only refuse.
+
+**The API's refusal is shown exactly as it is written.** `InviteRedemptionService` does not
+interpret the response body beyond the one field a successful redemption carries; a refusal's text
+comes from `error.error.message`, the `ProblemDetails` extension `DomainExceptionHandler` already
+writes, so the one generic unusable-invite sentence (expired, used, cancelled, invalid, or an
+undeclared role — [Invite redemption](#invite-redemption-issue-532)), the already-a-member
+conflict, and the deactivated-business release sentence each render verbatim rather than being
+reworded or guessed at by this component. A refusal with no readable message (a non-domain error)
+falls back to one generic sentence this component owns, and leaves the Accept button enabled again
+so the attempt can be retried.
+
+**Acceptance re-reads both caches, in order, before it lands anywhere.** On a successful
+redemption, `AccountStateService.refresh()` and then `AccessService.refresh()` are chained and
+awaited — not fired without waiting for either to answer — before the one navigation to `/`: by the
+time it runs, the dashboard's own `accountStateGuard` and capability guard read the caller's new
+`Member` state and granted capabilities already published, rather than the stale pre-redemption
+answer either cache would still be holding if the navigation ran first.
+
+**What this slice does not do.** No invite preview before acceptance (the redemption endpoint
+takes a token and returns only the granted role — there is nothing to preview), the Users page
+(#534's task), and the first-sign-in "start a new business" choice (#508's tasks).
+
+**What proves this slice.** `invite-acceptance.component.spec.ts` (the token stripped from the
+address bar before anything else, never written to a Storage API or a cookie, the token surviving
+in memory through to redemption, the Accept button for each redeemable state and fail-open for an
+unreadable one, a successful redemption for a `MembershipRevoked` and an `ApplicationRejected`
+caller, every other state sent to its own page instead of a `Member` to the dashboard, the two
+cache refreshes awaited in order before the dashboard navigation, each API refusal's message shown
+verbatim, the generic fallback for an unreadable refusal, and a failed attempt leaving the button
+enabled again), `invite-redemption.service.spec.ts` (the token posted in the body and never the
+URL, and the response's one field), the `REDEEMABLE_ACCOUNT_STATES`/
+`nonRedeemableAccountStateDestination` cases added to `account-state.guard.spec.ts`, and
+`app.routes.spec.ts` (the route now loads `InviteAcceptanceComponent`, still behind `MsalGuard`
+alone).
 
 ### Breadcrumbs (issue #457)
 

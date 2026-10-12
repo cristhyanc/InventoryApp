@@ -30,6 +30,30 @@ export const INVITE_ROUTE_PREFIX = 'invite/';
 export const ACCOUNT_STATE_BYPASS_PATHS: ReadonlySet<string> = new Set<string>(Object.values(ACCOUNT_STATE_ROUTE));
 
 /**
+ * The account states #532's redemption endpoint admits - `NoMembership`, `MembershipRevoked` and
+ * `ApplicationRejected`, the three that hold no active membership of their own - mirroring
+ * `MembershipEligibility.AllowsActiveMembership` on the backend (issue #535). `InviteAcceptanceComponent`
+ * uses this to decide whether to offer the Accept button at all; it decides nothing by itself, since
+ * the redemption endpoint re-checks eligibility authoritatively and is the one that may refuse it.
+ */
+export const REDEEMABLE_ACCOUNT_STATES: ReadonlySet<AccountStateName> = new Set<AccountStateName>([
+  'NoMembership',
+  'MembershipRevoked',
+  'ApplicationRejected'
+]);
+
+/**
+ * Where a caller whose account state is not one of {@link REDEEMABLE_ACCOUNT_STATES} is sent from
+ * `/invite/:token` (issue #535): `Member` to the dashboard, every other state to the page
+ * {@link ACCOUNT_STATE_ROUTE} already names for it. Written separately from that table rather than
+ * folded into it, because `Member`'s destination there is "the route asked for" - meaningless on a
+ * route nobody but an invite could be asking for.
+ */
+export function nonRedeemableAccountStateDestination(state: AccountStateName): string {
+  return state === 'Member' ? '/' : `/${ACCOUNT_STATE_ROUTE[state]}`;
+}
+
+/**
  * Sends a signed-in person who is not `Member` to the route their account state calls for, before
  * the business route they asked for ever activates (issue #529). Every onboarding route, the
  * access-unavailable page and `/invite/:token` carry no `accountStateGuard` of their own - adding
