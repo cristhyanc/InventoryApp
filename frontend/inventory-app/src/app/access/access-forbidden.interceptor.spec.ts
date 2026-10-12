@@ -68,34 +68,20 @@ describe('accessForbiddenInterceptor (issue #528)', () => {
   });
 
   /**
-   * A `403` from `GET /api/me/access` is the answer to this very question. Reacting to it would
-   * read it again, and again.
+   * A `403` from `GET /api/me/access` is the answer to this very question - reacting to it would
+   * read it again, and again. `GET /api/me/account-state` is the other cache's own probe (issue
+   * #602): reacting to it used to make the two caches refresh each other without end;
+   * `forbidden-interceptor-chain.spec.ts` asserts the composed chain settles. The platform
+   * diagnostics probe's `403` is the expected answer for every member (issue #602).
    */
-  it('never reacts to a refusal of the capability read itself', () => {
+  it.each([
+    ['the capability read itself', '/api/me/access'],
+    ['the account-state read', '/api/me/account-state'],
+    ['the platform diagnostics probe', '/api/admin/diagnostics/access']
+  ])('never reacts to a refusal of %s', (_name, url) => {
     const harness = configure();
 
-    refuse(harness, '/api/me/access', 403);
-
-    expect(harness.refreshUnlessReading).not.toHaveBeenCalled();
-  });
-
-  /**
-   * The other cache's probe (issue #602). Reacting to it used to make the two caches refresh each
-   * other without end; `forbidden-interceptor-chain.spec.ts` asserts the composed chain settles.
-   */
-  it('never reacts to a refusal of the account-state read', () => {
-    const harness = configure();
-
-    refuse(harness, '/api/me/account-state', 403);
-
-    expect(harness.refreshUnlessReading).not.toHaveBeenCalled();
-  });
-
-  /** A `403` from the platform diagnostics probe is the expected answer for every member (issue #602). */
-  it('never reacts to a refusal of the platform diagnostics probe', () => {
-    const harness = configure();
-
-    refuse(harness, '/api/admin/diagnostics/access', 403);
+    refuse(harness, url, 403);
 
     expect(harness.refreshUnlessReading).not.toHaveBeenCalled();
   });
