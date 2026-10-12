@@ -1,5 +1,7 @@
 using Inventory.Application.Access;
+using Inventory.Application.Onboarding;
 using Inventory.Domain.Tenancy;
+using InventoryApi.Tests.Application.Onboarding;
 using InventoryApi.Tests.Application.Tenancy;
 using Xunit;
 
@@ -40,8 +42,12 @@ public class GetAccountStateTests
 
     private static GetAccountState UseCase(
         FakeBusinessMembershipStore store,
-        FakeAuthenticatedActorAccessor? accessor = null) =>
-        new(accessor ?? FakeAuthenticatedActorAccessor.Identified(Actor()), store);
+        FakeAuthenticatedActorAccessor? accessor = null,
+        ISelfServiceOnboardingFlag? onboarding = null) =>
+        new(
+            accessor ?? FakeAuthenticatedActorAccessor.Identified(Actor()),
+            store,
+            onboarding ?? FakeSelfServiceOnboardingFlag.Disabled);
 
     [Fact]
     public async Task Reports_the_state_the_precedence_gives_for_the_callers_own_memberships()
@@ -93,10 +99,10 @@ public class GetAccountStateTests
     }
 
     /// <summary>
-    /// <c>onboardingEnabled</c> is part of the agreed response and is <c>false</c> until the
-    /// application endpoints of issue #541 add the self-service onboarding flag. It is answered
-    /// here, in the Application layer, so #541 reads its configuration in one place rather than in
-    /// the controller.
+    /// <c>onboardingEnabled</c> is the deployment's own self-service onboarding flag (issue #541),
+    /// read through the same port the apply endpoint reads, so a screen that offers "Start a new
+    /// business" and the endpoint behind it cannot disagree. It is answered here, in the
+    /// Application layer, rather than in the controller, which is what makes that one read.
     /// </summary>
     [Fact]
     public async Task Onboarding_is_reported_as_disabled_and_no_rejection_reason_is_given()
@@ -106,6 +112,50 @@ public class GetAccountStateTests
 
         Assert.False(result.OnboardingEnabled);
         Assert.Null(result.RejectionReason);
+    }
+
+    /// <summary>
+    /// And it reports the flag being on, for every state alike: the field describes the deployment,
+    /// not the caller. Whether <em>this</em> account may apply is
+    /// <c>ApplyForBusiness</c>'s decision from their own membership records, so a member and a
+    /// pending applicant see <c>true</c> here too while the endpoint still refuses them - the
+    /// alternative, answering this field from the caller's eligibility, would be a second copy of
+    /// that rule in the one place it must not be duplicated.
+    /// </summary>
+    [Theory]
+    [InlineData(true, BusinessStatus.Active)]
+    [InlineData(true, BusinessStatus.Pending)]
+    [InlineData(false, BusinessStatus.Active)]
+    [InlineData(false, BusinessStatus.Rejected)]
+    public async Task Onboarding_is_reported_as_enabled_for_every_state_when_the_deployment_allows_it(
+        bool isActive,
+        BusinessStatus businessStatus)
+    {
+        var store = new FakeBusinessMembershipStore(
+            Membership(7, isActive: isActive, businessStatus: businessStatus));
+
+        var result = await UseCase(store, onboarding: FakeSelfServiceOnboardingFlag.Enabled)
+            .Handle(CancellationToken.None);
+
+        Assert.True(result.OnboardingEnabled);
+    }
+
+    /// <summary>
+    /// Including for a caller whose token identifies nobody, who is reported as
+    /// <see cref="AccountState.NoMembership"/>: the flag is not a fact about them, so it is not
+    /// withheld from them either.
+    /// </summary>
+    [Fact]
+    public async Task Onboarding_is_reported_for_a_caller_whose_token_identifies_nobody()
+    {
+        var result = await UseCase(
+                new FakeBusinessMembershipStore(),
+                FakeAuthenticatedActorAccessor.Unidentifiable(),
+                FakeSelfServiceOnboardingFlag.Enabled)
+            .Handle(CancellationToken.None);
+
+        Assert.Equal(AccountState.NoMembership, result.State);
+        Assert.True(result.OnboardingEnabled);
     }
 
     /// <summary>
