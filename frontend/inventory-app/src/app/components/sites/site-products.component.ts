@@ -4,11 +4,12 @@ import { ActivatedRoute, RouterLink } from '@angular/router';
 import { BehaviorSubject, catchError, map, Observable, of, switchMap, tap } from 'rxjs';
 import { Site, SiteProduct } from '../../models/models';
 import { SiteService } from '../../services/site.service';
+import { NayaxStatusBannerComponent } from '../shared/nayax-status-banner/nayax-status-banner.component';
 
 @Component({
   selector: 'app-site-products',
   standalone: true,
-  imports: [CommonModule, RouterLink],
+  imports: [CommonModule, RouterLink, NayaxStatusBannerComponent],
   templateUrl: './site-products.component.html'
 })
 export class SiteProductsComponent implements OnInit {

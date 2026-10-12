@@ -1,4 +1,5 @@
 import { TestBed } from '@angular/core/testing';
+import { provideRouter } from '@angular/router';
 import { of } from 'rxjs';
 import { PickListComponent } from './pick-list.component';
 import { MachineService } from '../../services/machine.service';
@@ -7,6 +8,8 @@ import { PickListService } from '../../services/pick-list.service';
 import { ToastService } from '../../services/toast.service';
 import { Machine, PickListResult, Product } from '../../models/models';
 import { BusinessTimeZoneService } from '../../formatting/business-time-zone.service';
+import { AccessService } from '../../access/access.service';
+import { NayaxConnectionService, NayaxConnectionStatusName } from '../../services/nayax-connection.service';
 
 function machine(overrides: Partial<Machine>): Machine {
   return {
@@ -444,15 +447,19 @@ describe('PickListComponent rendered structure', () => {
   async function render(
     machines: Machine[] = [machine({ machineID: 10, machineName: 'Machine A' }), machine({ machineID: 20, machineName: 'Machine B' })],
     products: Product[] = [product({ id: 1, name: 'Coke' }), product({ id: 2, name: 'Chips' })],
-    pickList: jest.Mock = jest.fn(() => of(pickListResult()))
+    pickList: jest.Mock = jest.fn(() => of(pickListResult())),
+    nayaxStatus: NayaxConnectionStatusName = 'Ready'
   ) {
     await TestBed.configureTestingModule({
       imports: [PickListComponent],
       providers: [
+        provideRouter([]),
         { provide: MachineService, useValue: { getAll: jest.fn(() => of(machines)) } },
         { provide: ProductService, useValue: { getAll: jest.fn(() => of(products)) } },
         { provide: PickListService, useValue: { get: pickList } },
-        { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() } }
+        { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() } },
+        { provide: NayaxConnectionService, useValue: { status: () => of({ status: nayaxStatus, machineChecksPending: false }) } },
+        { provide: AccessService, useValue: { allows: () => of(true) } }
       ]
     }).compileComponents();
 
@@ -764,5 +771,17 @@ describe('PickListComponent rendered structure', () => {
     expect(dropdownTrigger('Machines').textContent).toContain('No machines selected');
     expect(dropdownTrigger('Products').textContent).toContain('All products');
     expect(host.querySelector('table')).toBeNull();
+  });
+
+  it('shows the Nayax status banner when the connection is not Ready (issue #539)', async () => {
+    const { host } = await render(undefined, undefined, undefined, 'NotConfigured');
+
+    expect(host.querySelector('[data-testid="nayax-status-banner"]')).not.toBeNull();
+  });
+
+  it('hides the Nayax status banner once the connection is Ready (issue #539)', async () => {
+    const { host } = await render(undefined, undefined, undefined, 'Ready');
+
+    expect(host.querySelector('[data-testid="nayax-status-banner"]')).toBeNull();
   });
 });

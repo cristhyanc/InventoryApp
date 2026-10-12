@@ -10,6 +10,7 @@ import {
 } from '../../../formatting/business-time-zone';
 import { BusinessTimeZoneService } from '../../../formatting/business-time-zone.service';
 import { BusinessDateTimePipe } from '../../../formatting/business-date-time.pipe';
+import { NayaxStatusBannerComponent } from '../../shared/nayax-status-banner/nayax-status-banner.component';
 import {
   NayaxDuplicateResolution,
   NayaxDuplicateResolutionChoice,
@@ -39,7 +40,7 @@ import {
 @Component({
   selector: 'app-machine-restock-sync',
   standalone: true,
-  imports: [CommonModule, BusinessDateTimePipe],
+  imports: [CommonModule, BusinessDateTimePipe, NayaxStatusBannerComponent],
   templateUrl: './machine-restock-sync.component.html',
   styles: [
     `

@@ -15,6 +15,8 @@
     <a routerLink="/" class="btn btn-secondary">Back to Dashboard</a>
   </header>
 
+  <app-nayax-status-banner></app-nayax-status-banner>
+
   <ng-container *ngIf="loading$ | async as loading">
     <p class="text-md-body value-muted" *ngIf="loading">Loading site products…</p>
   </ng-container>

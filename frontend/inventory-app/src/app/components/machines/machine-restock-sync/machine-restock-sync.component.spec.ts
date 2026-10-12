@@ -1,4 +1,5 @@
 import { TestBed } from '@angular/core/testing';
+import { provideRouter } from '@angular/router';
 import { Subject, of, throwError } from 'rxjs';
 import { MachineRestockSyncComponent } from './machine-restock-sync.component';
 import { MachineService } from '../../../services/machine.service';
@@ -9,6 +10,8 @@ import {
   startOfDayUtc
 } from '../../../formatting/business-time-zone';
 import { BusinessTimeZoneService } from '../../../formatting/business-time-zone.service';
+import { AccessService } from '../../../access/access.service';
+import { NayaxConnectionService, NayaxConnectionStatusName } from '../../../services/nayax-connection.service';
 import {
   NayaxDuplicateResolution,
   NayaxDuplicateResolutionChoice,
@@ -683,17 +686,21 @@ describe('MachineRestockSyncComponent dialog', () => {
     applySyncRestock: jest.Mock = jest.fn(() => of({ results: [] } as NayaxMachineStockApplyResponse)),
     resolveSyncRestockDuplicate: jest.Mock = jest.fn(() =>
       of({ eventId: 1, outcome: NayaxStockEventApplyOutcome.Reconciled, message: 'Reconciled', stockAdjustmentId: null } as NayaxStockEventApplyResult)),
-    resolveSyncRestockManually: jest.Mock = jest.fn(() => of({ results: [] } as NayaxMachineStockApplyResponse))
+    resolveSyncRestockManually: jest.Mock = jest.fn(() => of({ results: [] } as NayaxMachineStockApplyResponse)),
+    nayaxStatus: NayaxConnectionStatusName = 'Ready'
   ) {
     const toast = { success: jest.fn(), error: jest.fn(), warning: jest.fn() };
     await TestBed.configureTestingModule({
       imports: [MachineRestockSyncComponent],
       providers: [
+        provideRouter([]),
         {
           provide: MachineService,
           useValue: { syncRestock, applySyncRestock, resolveSyncRestockDuplicate, resolveSyncRestockManually }
         },
-        { provide: ToastService, useValue: toast }
+        { provide: ToastService, useValue: toast },
+        { provide: NayaxConnectionService, useValue: { status: () => of({ status: nayaxStatus, machineChecksPending: false }) } },
+        { provide: AccessService, useValue: { allows: () => of(true) } }
       ]
     }).compileComponents();
 
@@ -1171,5 +1178,17 @@ describe('MachineRestockSyncComponent dialog', () => {
     const row = host.querySelector<HTMLInputElement>('tbody input[type="checkbox"]');
     expect(row?.disabled).toBe(true);
     expect(host.querySelector('tbody')?.textContent).toContain('Reconciled: already recorded manually');
+  });
+
+  it('shows the Nayax status banner next to Sync Restock when the connection is not Ready (issue #539)', async () => {
+    const { host } = await render(undefined, undefined, undefined, undefined, 'NotConfigured');
+
+    expect(host.querySelector('[data-testid="nayax-status-banner"]')).not.toBeNull();
+  });
+
+  it('hides the Nayax status banner once the connection is Ready (issue #539)', async () => {
+    const { host } = await render(undefined, undefined, undefined, undefined, 'Ready');
+
+    expect(host.querySelector('[data-testid="nayax-status-banner"]')).toBeNull();
   });
 });

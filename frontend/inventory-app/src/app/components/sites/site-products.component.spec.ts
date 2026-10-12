@@ -4,6 +4,8 @@ import { of } from 'rxjs';
 import { SiteProductsComponent } from './site-products.component';
 import { SiteService } from '../../services/site.service';
 import { Site, SiteProduct } from '../../models/models';
+import { AccessService } from '../../access/access.service';
+import { NayaxConnectionService, NayaxConnectionStatusName } from '../../services/nayax-connection.service';
 
 function site(overrides: Partial<Site> = {}): Site {
   return {
@@ -188,14 +190,16 @@ describe('SiteProductsComponent multi-machine MDB codes', () => {
 });
 
 describe('SiteProductsComponent rendered table', () => {
-  async function render(products: SiteProduct[]) {
+  async function render(products: SiteProduct[], nayaxStatus: NayaxConnectionStatusName = 'Ready') {
     const siteService = { getAll: () => of([site()]), getProducts: () => of(products) } as unknown as SiteService;
 
     await TestBed.configureTestingModule({
       imports: [SiteProductsComponent],
       providers: [
         { provide: ActivatedRoute, useValue: route() },
-        { provide: SiteService, useValue: siteService }
+        { provide: SiteService, useValue: siteService },
+        { provide: NayaxConnectionService, useValue: { status: () => of({ status: nayaxStatus, machineChecksPending: false }) } },
+        { provide: AccessService, useValue: { allows: () => of(true) } }
       ]
     }).compileComponents();
 
@@ -281,5 +285,17 @@ describe('SiteProductsComponent rendered table', () => {
 
     expect(mdbHeaderButton.closest('th')?.getAttribute('aria-sort')).toBe('descending');
     expect(Array.from(host.querySelectorAll('tbody tr'))[0].textContent).toContain('Chips');
+  });
+
+  it('shows the Nayax status banner when the connection is not Ready (issue #539)', async () => {
+    const { host } = await render([product()], 'NotConfigured');
+
+    expect(host.querySelector('[data-testid="nayax-status-banner"]')).not.toBeNull();
+  });
+
+  it('hides the Nayax status banner once the connection is Ready (issue #539)', async () => {
+    const { host } = await render([product()], 'Ready');
+
+    expect(host.querySelector('[data-testid="nayax-status-banner"]')).toBeNull();
   });
 });
