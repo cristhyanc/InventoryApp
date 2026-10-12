@@ -2,13 +2,14 @@ import { Component, ElementRef, HostListener, OnDestroy, OnInit, ViewChild } fro
 import { RouterOutlet } from '@angular/router';
 import { MsalBroadcastService, MsalService } from '@azure/msal-angular';
 import { AccountInfo, AuthenticationResult, InteractionStatus } from '@azure/msal-browser';
-import { Subject, Subscription, catchError, defer, filter, map, of, retry, takeUntil, timer } from 'rxjs';
+import { Subject, Subscription, catchError, defer, filter, map, of, retry, switchMap, take, takeUntil, timer } from 'rxjs';
 import { ToastContainerComponent } from "./components/shared/toast-container.component";
 import { IconComponent } from './components/shared/icon.component';
 import { LoadingIndicatorComponent } from './components/shared/loading-indicator.component';
 import { BreadcrumbsComponent } from './layout/breadcrumbs/breadcrumbs.component';
 import { PRIMARY_NAVIGATION_ID, SidebarNavComponent } from './layout/sidebar-nav.component';
 import { UserMenuComponent } from './layout/user-menu.component';
+import { AccountStateService } from './access/account-state.service';
 import { BusinessService } from './services/business.service';
 import { loginRequest } from './auth-config';
 
@@ -89,6 +90,7 @@ export class AppComponent implements OnInit, OnDestroy {
   constructor(
     private readonly authService: MsalService,
     private readonly msalBroadcastService: MsalBroadcastService,
+    private readonly accountState: AccountStateService,
     private readonly businessService: BusinessService
   ) {}
 
@@ -253,22 +255,38 @@ export class AppComponent implements OnInit, OnDestroy {
       // requested here, once sign-in has settled. The routed page waits for it (see
       // isBusinessContextReady), because a page rendered before the business is known would show
       // its instants in no time zone at all.
+      //
+      // It waits for the account state first (issue #529): a person who is not `Member` has no
+      // business to look up, and `GET /api/business/current` would only answer the same `403`
+      // `BusinessScopeMiddleware` already gives every other member endpoint. An account state that
+      // could not be read is treated the same way `accountStateGuard` treats it - the lookup is
+      // attempted anyway, because the membership check on the endpoint itself is the real boundary.
       this.businessRequested = true;
-      this.businessLookup = defer(() => this.businessService.load())
+      this.businessLookup = this.accountState.state$
         .pipe(
-          // A failed lookup emits null and is retryable (BusinessService drops it), so it is asked
-          // again, with a growing delay, before the shell gives up on it.
-          map((business) => {
-            if (business === null) {
-              throw new Error('The current business could not be read.');
+          filter((answer) => answer.status !== 'unread'),
+          take(1),
+          switchMap((answer) => {
+            if (answer.status === 'known' && answer.accountState.state !== 'Member') {
+              return of(null);
             }
-            return business;
+
+            return defer(() => this.businessService.load()).pipe(
+              // A failed lookup emits null and is retryable (BusinessService drops it), so it is
+              // asked again, with a growing delay, before the shell gives up on it.
+              map((business) => {
+                if (business === null) {
+                  throw new Error('The current business could not be read.');
+                }
+                return business;
+              }),
+              retry({
+                count: AppComponent.businessLookupRetries,
+                delay: (_error, attempt) => timer(attempt * AppComponent.businessLookupRetryDelayMs)
+              }),
+              catchError(() => of(null))
+            );
           }),
-          retry({
-            count: AppComponent.businessLookupRetries,
-            delay: (_error, attempt) => timer(attempt * AppComponent.businessLookupRetryDelayMs)
-          }),
-          catchError(() => of(null)),
           takeUntil(this.destroying$)
         )
         .subscribe(() => {

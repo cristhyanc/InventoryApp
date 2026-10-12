@@ -1,7 +1,10 @@
 import { MsalGuard } from '@azure/msal-angular';
 import { Route } from '@angular/router';
 import { ACCESS_NOT_ALLOWED_PATH } from './access/capability.guard';
+import { accountStateGuard } from './access/account-state.guard';
 import { AccessNotAllowedComponent } from './access/access-not-allowed.component';
+import { AccessUnavailableComponent } from './access/access-unavailable.component';
+import { OnboardingPlaceholderComponent } from './access/onboarding-placeholder.component';
 import { routes } from './app.routes';
 import { StockHistoryPageComponent } from './components/stock/stock-history-page.component';
 import { AdminImportsComponent } from './components/admin/imports/admin-imports.component';
@@ -139,17 +142,27 @@ describe('capability route guards (issue #528)', () => {
   }
 
   /**
-   * The two exceptions are deliberate and are the whole list: `/access-not-allowed` is where a
-   * capability guard *sends* a member, so guarding it by one would send them away from their own
-   * explanation; `/admin/diagnostics` is decided by the diagnostics API per request rather than by
-   * any business role, and shows a refusal instead of data (issue #335).
+   * `/access-not-allowed` is where a capability guard *sends* a member, so guarding it by one
+   * would send them away from their own explanation; `/admin/diagnostics` is decided by the
+   * diagnostics API per request rather than by any business role, and shows a refusal instead of
+   * data (issue #335). The account-state routing destinations and the invite route (issue #529)
+   * are the other exceptions, for the same reason `accountStateGuard` is absent from them -
+   * see the `account-state routing and the global 403 handler` describe block below.
    */
-  it('guards every authenticated route with a capability, except the two that cannot carry one', () => {
+  it('guards every authenticated route with a capability, except the ones that cannot carry one', () => {
     const unguarded = authenticatedRoutes()
       .filter((candidate) => (candidate.canActivate ?? []).length < 2)
       .map((candidate) => candidate.path ?? '');
 
-    expect(unguarded).toEqual([ACCESS_NOT_ALLOWED_PATH, 'admin/diagnostics']);
+    expect(unguarded).toEqual([
+      ACCESS_NOT_ALLOWED_PATH,
+      'welcome',
+      'application-pending',
+      'application-rejected',
+      'access-unavailable',
+      'invite/:token',
+      'admin/diagnostics'
+    ]);
   });
 
   it('keeps MsalGuard first on every route it guards, so authentication is still decided first', () => {
@@ -165,5 +178,48 @@ describe('capability route guards (issue #528)', () => {
 
   it('keeps the public Entra callback route free of any guard', () => {
     expect(route('auth').canActivate).toBeUndefined();
+  });
+});
+
+/**
+ * Account-state routing (issue #529): `accountStateGuard` runs before the capability guard on
+ * every business route, so the account-state read settles before that page's own business calls
+ * ever run, and it is absent from the routes it would otherwise send somebody straight back to.
+ */
+describe('account-state routing (issue #529)', () => {
+  function capabilityGuardedRoutes(): Route[] {
+    return routes.filter((candidate) => (candidate.canActivate ?? []).length >= 3);
+  }
+
+  const bypassPaths = ['welcome', 'application-pending', 'application-rejected', 'access-unavailable', 'invite/:token'];
+
+  it('puts accountStateGuard second, after MsalGuard and before the capability guard, on every business route', () => {
+    for (const candidate of capabilityGuardedRoutes()) {
+      const guards = candidate.canActivate ?? [];
+      expect(guards[0]).toBe(MsalGuard);
+      expect(guards[1]).toBe(accountStateGuard);
+    }
+  });
+
+  it('carries no accountStateGuard on the account-state destinations or the invite route', () => {
+    for (const path of bypassPaths) {
+      expect(route(path).canActivate ?? []).not.toContain(accountStateGuard);
+    }
+  });
+
+  it('serves the welcome, application-pending and application-rejected placeholders, behind authentication alone', () => {
+    expect(route('welcome').component).toBe(OnboardingPlaceholderComponent);
+    expect(route('welcome').data).toEqual({ heading: 'Welcome' });
+    expect(route('application-pending').component).toBe(OnboardingPlaceholderComponent);
+    expect(route('application-rejected').component).toBe(OnboardingPlaceholderComponent);
+  });
+
+  it('serves the invite placeholder behind authentication alone', () => {
+    expect(route('invite/:token').component).toBe(OnboardingPlaceholderComponent);
+  });
+
+  it('serves the real access-unavailable page, behind authentication alone', () => {
+    expect(route('access-unavailable').canActivate).toEqual([MsalGuard]);
+    expect(route('access-unavailable').component).toBe(AccessUnavailableComponent);
   });
 });
