@@ -312,6 +312,11 @@ public class EndpointAuthorizationClassificationTests
     [InlineData("api/settings/nayax-processing-fee-rates", "POST", Capability.IntegrationManage)]
     [InlineData("api/data-quality/nayax-catalog-reconciliation", "GET", Capability.IntegrationManage)]
     [InlineData("api/settings/nayax-connection/test", "POST", Capability.IntegrationManage)]
+    // Issue #537. Save and re-test configure the whole business's integration, like the test above;
+    // the status read is the connection banner every member sees, so it carries Dashboard.View.
+    [InlineData("api/settings/nayax-connection/save", "POST", Capability.IntegrationManage)]
+    [InlineData("api/settings/nayax-connection/retest", "POST", Capability.IntegrationManage)]
+    [InlineData("api/settings/nayax-connection/status", "GET", Capability.DashboardView)]
     [InlineData("api/nayax-sales-sync", "POST", Capability.DashboardView)]
     [InlineData("api/admin/inventory-cost-repair/preview", "POST", Capability.DataRepair)]
     [InlineData("api/admin/inventory-cost-repair/apply", "POST", Capability.DataRepair)]
