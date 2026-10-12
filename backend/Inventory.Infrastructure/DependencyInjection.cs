@@ -149,6 +149,10 @@ public static class InfrastructureServiceCollectionExtensions
         // reads and writes the same non-tenant-owned table as the two stores above, and takes the
         // business id explicitly for that reason.
         services.AddScoped<IBusinessMemberStore, EfBusinessMemberStore>();
+        // The Owner's invite links (issue #531). Unlike the three stores above it names no business
+        // in its statements: an invite is ordinary tenant-owned data, so the central query filter
+        // scopes its reads and BusinessOwnershipEnforcer stamps its insert.
+        services.AddScoped<IMemberInviteStore, EfMemberInviteStore>();
         services.AddScoped<IBusinessProfileStore, EfBusinessProfileStore>();
         // The Owner-only settings read and write (issue #548), deliberately a separate adapter from
         // the profile read above: that one answers every request, this one is a rare write that has

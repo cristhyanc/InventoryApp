@@ -339,17 +339,21 @@ public class EndpointAuthorizationClassificationTests
     }
 
     /// <summary>
-    /// The member management surface of issue #533, read back off its routes. Every action needs
-    /// <c>Members.Manage</c>, which #328's table gives to an Owner alone - the list included,
-    /// because the list is the roster the changes are made from and it carries every member's
-    /// display name and email address. A later change that put the read on a weaker capability "so
-    /// a Manager can see the team" fails here.
+    /// The member management surface of issue #533 and the invite links of issue #531, read back
+    /// off their routes. Every action needs <c>Members.Manage</c>, which #328's table gives to an
+    /// Owner alone - the two reads included, because the member list is the roster the changes are
+    /// made from and carries every member's display name and email address, and the invite list is
+    /// the record of who was offered access to the business. A later change that put either read on
+    /// a weaker capability "so a Manager can see the team" fails here.
     /// </summary>
     [Theory]
     [InlineData("api/members", "GET")]
     [InlineData("api/members/{membershipId:int}/role", "PUT")]
     [InlineData("api/members/{membershipId:int}/revoke", "POST")]
     [InlineData("api/members/{membershipId:int}/reinstate", "POST")]
+    [InlineData("api/members/invites", "GET")]
+    [InlineData("api/members/invites", "POST")]
+    [InlineData("api/members/invites/{inviteId:int}/cancel", "POST")]
     public void Every_member_management_endpoint_requires_only_the_members_capability(
         string route,
         string httpMethod) =>
