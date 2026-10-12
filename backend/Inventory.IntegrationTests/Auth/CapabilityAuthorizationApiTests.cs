@@ -112,6 +112,10 @@ public sealed class CapabilityAuthorizationApiTests : IClassFixture<CapabilityAu
         { "Integration.Manage", "GET", "/api/settings/nayax-processing-fee-rates", "Owner" },
         { "Integration.Manage", "POST", "/api/settings/nayax-processing-fee-rates", "Owner" },
         { "Integration.Manage", "GET", "/api/data-quality/nayax-catalog-reconciliation", "Owner" },
+        // Issue #536. The empty body is refused by the use case's own validation before a rate-limit
+        // allowance is spent or anything is sent to Nayax, so the allowed direction is safe to call
+        // here: an Owner is answered 400, never 403.
+        { "Integration.Manage", "POST", "/api/settings/nayax-connection/test", "Owner" },
         { "Data.Repair", "GET", $"/api/admin/inventory-cost-repair/{MissingId}", "Owner" },
         { "Data.Repair", "POST", "/api/admin/historical-gst-classification/preview", "Owner" },
         { "Data.Repair", "POST", "/api/sale-costing/backfill", "Owner" },

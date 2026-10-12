@@ -1524,6 +1524,7 @@ Issue #526 is #502's second and last enforcement slice. The twelve controllers #
 | Admin → Nayax Settings | `api/settings/nayax-processing-fee-rates` (read and save) | `Integration.Manage` | ✘ | ✘ | ✔ |
 | Business Settings (the page is issue #549) | `GET`/`PUT api/business/settings` (issue #548) | `Business.Manage` | ✘ | ✘ | ✔ |
 | *(no page — see below)* | `GET api/data-quality/nayax-catalog-reconciliation` | `Integration.Manage` | ✘ | ✘ | ✔ |
+| Admin → Nayax connection test (issue #536, added as a reviewed edit) | `POST api/settings/nayax-connection/test` | `Integration.Manage` | ✘ | ✘ | ✔ |
 | Admin → Costing Repair | `api/admin/inventory-cost-repair/*` (preview, apply, history) | `Data.Repair` | ✘ | ✘ | ✔ |
 | Admin → Inventory AVCO Transition Baseline | `api/admin/inventory-cost-transition/*` (preview, apply, preview-all, apply-all) | `Data.Repair` | ✘ | ✘ | ✔ |
 | Admin → Historical GST Classification | `api/admin/historical-gst-classification/*` (preview, apply) | `Data.Repair` | ✘ | ✘ | ✔ |
@@ -1547,7 +1548,7 @@ The table's last row was added by issue #548, which is the first endpoint to dec
 
 **One testing detail worth knowing.** `POST api/imports/nayax-sales`, `POST api/admin/nayax-sale-timestamp-repair/preview` and the multipart expense create/update overloads declare `[Consumes("multipart/form-data")]`. A declared content type is matched during **endpoint selection**, which runs *before* the authorization middleware, so a JSON body on one of those routes answers `415` for every caller whatever role they hold. A test that wants to assert anything about authorization there has to send a multipart body; the `415` reads no membership and leaks nothing.
 
-**What proves this slice.** `EndpointAuthorizationClassificationTests` — the four-class rule with no pending list, the same rule per controller, the 32 rows reading each #526 capability back off its route (both page-following mappings included), and the repair-controller rule above. `CapabilityAuthorizationApiTests` — every new surface in the role matrix, called as all three roles through the real pipeline and the real migration history with a second business present throughout; the write and apply actions in the one direction a test may assert without running them; a caller with no membership refused everywhere; and the three two-business isolation tests described above.
+**What proves this slice.** `EndpointAuthorizationClassificationTests` — the four-class rule with no pending list, the same rule per controller, the 33 rows reading each Manager/Owner capability back off its route (#526's own 32, both page-following mappings included, plus issue #536's connection test added to the same theory as a reviewed edit), and the repair-controller rule above. `CapabilityAuthorizationApiTests` — every new surface in the role matrix, called as all three roles through the real pipeline and the real migration history with a second business present throughout; the write and apply actions in the one direction a test may assert without running them; a caller with no membership refused everywhere; and the three two-business isolation tests described above.
 
 #### One active membership per identity (issue #522)
 
@@ -2028,6 +2029,177 @@ request is in flight* leaving the new revision's status alone, and an existing c
 `409` contract and its log; `NayaxLynxClientDependencyInjectionTests` pins the base address, that
 registration needs no credential and registers none, and that the registered client is built from the
 provider.
+
+### Nayax connection checks and the Test endpoint (issue #536)
+
+Issue #536 — one slice of #506, under the contract of #328 — is how an Owner finds out whether a
+Nayax token works *before* it becomes the business's connection. The problem it solves is specific:
+new Lynx app tokens frequently authenticate perfectly and lack one or more of the permissions this
+application needs, and until now the only way to discover that was for a feature to fail in
+production. So the server runs the reads the application actually makes, reports each one on its own
+line, and holds the tested credentials as a short-lived **encrypted draft** that nothing has
+accepted yet.
+
+**The checks are the endpoints the application already calls, and they are all reads.**
+`Inventory.Domain.Nayax.NayaxConnectionCheck` is the complete, declared list, and there is one check
+per endpoint rather than one per feature — a token missing one permission is the ordinary case, and
+collapsing two endpoints into one line would hide which of them was refused:
+
+| Check | Endpoint | Scope |
+| --- | --- | --- |
+| `SignIn` | `GET devices` | Proves the token authenticates at all |
+| `Machines` | `GET machines` | Also decides whether the machine checks run |
+| `Machine` | `GET machines/{id}` | Machine-scoped |
+| `ProductCatalogue` | `GET operators/{operatorId}/products` | Operator-scoped |
+| `ProductGroups` | `GET operators/{operatorId}/productGroups` | Operator-scoped |
+| `MachineProducts` | `GET machines/{id}/machineProducts` | Machine-scoped |
+| `MachineLastSales` | `GET machines/{id}/lastSales` | Machine-scoped |
+| `MachineLastAlerts` | `GET machines/{id}/lastAlerts` | Machine-scoped |
+
+**`POST machines/{id}/machineProducts` is never called**, and it is absent from the vocabulary rather
+than merely unused: testing a connection must not change an operator's Nayax data.
+`NayaxConnectionCheckRunnerTests.No_check_ever_makes_a_write_call` asserts that over the wire for a
+success, a `401`, a `403` and a `5xx` alike.
+
+**With no machines, the machine lines read `NotChecked`.** A business connecting Nayax before its
+first machine exists has nothing to run `GET machines/{id}` against, and the same is true when the
+machine list itself could not be read. That is reported as its own status — never as a pass, because
+an untested permission must not look like a granted one, and never as a failure, because the
+credentials did nothing wrong. `NayaxConnectionCheckReport.NothingFailed` is therefore `true` while
+the only non-passing lines are unchecked ones, so the wizard of #538 can let such a business finish.
+The machine checks also run against the **first** machine only: a token either carries the machine
+permissions or it does not, and walking the estate would turn a connection test into a load test of
+somebody else's API.
+
+**What a Nayax answer means is one Domain table.**
+`Inventory.Domain.Nayax.NayaxConnectionCheckPolicy.Classify` is the only place it is decided, for the
+same reason `NayaxConnectionStatusGate` is: "lacks a permission" and "token expired" need completely
+different actions from an operator, and a second opinion written inline in an adapter is how the
+wrong one ends up on somebody's screen. The mapping is Nayax's own documented vocabulary
+([App tokens troubleshooting](https://devzone.nayax.com/docs/manage-data-operations/lynx-api/app-tokens)):
+
+- **`401` → `InvalidOrExpiredToken`.** The documented "token is invalid or has expired".
+- **`403` → `PermissionNotGranted`.** The documented "Insufficient permissions to perform this
+  action" — a verdict on one endpoint, not on the token.
+- **`404` on an operator-scoped check → `OperatorIdMismatch`.** Only `.../operators/{operatorId}/...`
+  carries the submitted operator id, so only those two checks can answer "that operator is not one
+  this token covers". A `404` anywhere else is **not** reported as a mismatch: it would send an
+  operator to re-check a correct operator id.
+- **`5xx`, a timeout, a dropped connection or an open circuit → `NayaxUnavailable`.** Nothing was
+  learned about the credentials, so nothing is concluded about them.
+- **Anything else → `UnexpectedResponse`.** A `400`, the documented `429` rate limit, a `404` on a
+  check that carries no operator id, or a body that is not the documented shape. An answer nobody
+  has interpreted is never presented as one that has been.
+
+**The checks go through `NayaxLynxClient`, with the one thing that differs swapped.** That client is
+the single place a Nayax request is built, authenticated, sent and then accepted or rejected, and the
+runner needs exactly that — the same relative endpoints, the same `Authorization: Bearer` header, the
+same operator-id path parameter built from the same credential, the same rule that an upstream body
+is never read or logged. What differs is **only** where the credential comes from, so only the
+credential provider differs: `Inventory.Infrastructure.Nayax.NayaxConnectionCheckRunner` constructs
+the client over a private `INayaxRequestCredentialProvider` that answers with the pasted pair. Its
+status is `PendingPermissions` — the truth about a token nothing has stored or tested, and what makes
+the client report a `403` as the per-feature permission answer the test needs per line — and its
+`ReportUnauthorizedAsync` is a **no-op**: a `401` here is a verdict on credentials that have never
+been stored, so there is no revision it belongs to and no row it may touch. **A test of a bad token
+therefore cannot move a working stored connection to `NeedsAttention`**, and cannot change its
+operator id, status, revision or last-tested instant either. It gets its own `HttpClient` from the
+same base address with the same `NayaxResilienceHandler`, because "Nayax is unavailable" has to mean
+the same thing on a test as on a sync. This is **not** the gate-free re-test read of
+[issue #520](#per-business-nayax-credentials-issue-520): nothing here reads the stored connection at
+all.
+
+**The draft: encrypted, tenant-owned, actor-bound, one per business, fifteen minutes.**
+`POST /api/settings/nayax-connection/test` takes `{ operatorId, token }`, runs the checks, and stores
+the pair in the additive `NayaxConnectionTestDrafts` table through
+`Inventory.Application.Nayax.INayaxConnectionTestDraftStore`. It is deliberately **not**
+`BusinessNayaxConnections`: a draft holds credentials nothing has accepted, no Nayax call may resolve
+one, it carries no `NayaxConnectionStatus` and no credential revision, and promoting one into the
+connection is issue #537's separate, reviewed step.
+
+- **The token is stored only as ciphertext**, through #518's `INayaxTokenProtector`, with the key id
+  beside it. Holding a plaintext token for fifteen minutes to achieve a pre-flight check would defeat
+  the point of the check. The response body carries the operator id's draft but never the token, and
+  neither do the stored results, a log line or an exception.
+- **It is tenant-owned by the central mechanism.** The entity implements `IBusinessOwned`, so the
+  `AppDbContext` query filters scope every read and `BusinessOwnershipEnforcer` stamps the insert; the
+  adapter adds no business predicate of its own and refuses to run at all without a single resolved
+  business, because the replacing `DELETE` executes in the database without passing through
+  `SaveChanges`.
+- **It is bound to the Owner who created it**, by the validated Entra `(tid, oid)` pair. A draft id
+  naming another business's draft, another member's draft, or an expired one all read as *there is no
+  such draft*: distinguishing them would tell a caller that somebody else's draft exists.
+- **One draft per business, replaced by the next test.** A unique index on the ownership column makes
+  that a schema guarantee rather than a convention, so a second decryptable token cannot exist for a
+  business however the write path is called, and a superseded ciphertext is not left behind. The
+  delete and the insert are one transaction, so a failed replacement leaves the previous draft in
+  place rather than leaving the business with none.
+- **It expires after fifteen minutes** (`TestNayaxConnection.DraftLifetime`) — long enough to read
+  eight result lines and decide, short enough that an abandoned browser tab does not leave a
+  decryptable token in the database for the rest of the day. Expiry is a **read** rule, not a sweep:
+  past the instant the draft stops existing for every caller, and the row goes when the next test
+  replaces it.
+- **The returned `draftId` is opaque.** A random GUID carrying nothing about the business, the actor
+  or the credentials.
+- **It is excluded from platform diagnostics**, like `BusinessNayaxConnections` and for the same
+  reason. `PlatformDiagnosticsDataSurface` is an allow-list of table/column pairs, so a new table is
+  denied automatically until a separately reviewed change adds it — and this one must never be added.
+
+**Owner only, through the ordinary capability mechanism.** `NayaxConnectionController` declares
+`[RequireCapability(Capability.IntegrationManage)]`, which #328's table grants to an Owner alone, the
+same capability `api/settings/nayax-processing-fee-rates` carries and for the same reason. The action
+is a `POST`: it submits a secret in a body rather than a URL, it calls out to Nayax, it writes the
+draft, and a cached `GET` response would hand a caller a verdict about credentials it never tested.
+
+**The rate limit is per business, and spent before anything is sent.**
+`Inventory.Application.Nayax.NayaxConnectionTestRateLimiter` allows five runs per business per rolling
+ten minutes. The bucket is the **business**, not the actor: one run is eight calls against somebody
+else's API, a Test button is trivially clickable in a loop, and rate-limiting the actor would let a
+second Owner start again from zero against the same operator account. The window **slides**, because
+a fixed ten-minute bucket would allow five runs at the end of one and five at the start of the next.
+The allowance is claimed *before* the runner, so a refused request makes no Nayax call and stores
+nothing, and a failing run is not refunded — a failing test is exactly the run that gets repeated.
+The refusal is `429` with a `Retry-After` in seconds and a fixed sentence that names neither the
+count, the window nor the token. The window lives in memory rather than in a column, like
+`MemberProfileRefreshThrottle`'s hour: what the record of a connection holds is the connection, not
+how often somebody pressed Test, and on a single instance
+([SQLite operating assumptions](#sqlite-operating-assumptions-and-scale-strategy-issue-53)) in-process
+state is the whole truth.
+
+**Nothing is logged that should not be.** The runner logs nothing itself; the underlying client's one
+`Error` line for an ordinary upstream failure carries the operation, method, relative endpoint and
+status code and never the token, the authorization header or the upstream body, exactly as before.
+`NayaxConnectionCheckRunnerTests.The_token_and_the_upstream_body_never_reach_the_report_or_a_log`
+sweeps both for a success and for each refusal.
+
+**What is deliberately not here.** Saving a draft and re-testing stored credentials (#537), the
+wizard UI (#538), the connection banners (#539), the permanent credential store and provider (#500's
+own slices), and anything that creates a Nayax token or requests a permission automatically.
+
+**What proves it.** `Inventory.UnitTests/Domain/Nayax/NayaxConnectionCheckPolicyTests` — every
+documented status on every check, the two `404` readings, no answer at all, and the vocabulary itself,
+so a check, status or cause added later has to make a decision there.
+`Inventory.UnitTests/Application/Nayax/NayaxConnectionTestRateLimiterTests` — the fifth run allowed
+and the sixth refused, the sliding boundary and its `Retry-After`, a clock that moved backwards not
+reopening a slot, and one business not spending another's allowance.
+`TestNayaxConnectionTests` — the submitted credentials reaching the runner, pasted whitespace trimmed,
+a blank field refused before any call or allowance, no token in the result or the stored results,
+the fifteen-minute expiry, the opaque id, replacement, actor binding, and a rate-limited request
+calling Nayax not at all. `Inventory.IntegrationTests/Infrastructure/Nayax/NayaxConnectionCheckRunnerTests`
+— the eight endpoints called once each with the submitted bearer token, no write call ever, each
+status mapping over a fake handler, zero machines, the first machine only, a transport failure, an
+unreadable body, caller cancellation, and the token/body log sweep.
+`Adapters/Persistence/EfNayaxConnectionTestDraftStoreTests` — relational SQLite with two businesses:
+ciphertext at rest and no plaintext in any column, replacement, expiry, actor binding, cross-business
+isolation in both directions, an unscoped write refused, and a protector that cannot encrypt leaving
+the previous draft alone. `Adapters/Persistence/AddNayaxConnectionTestDraftsMigrationTests` — the
+table and its unique index arrive, a second draft per business is refused by SQLite, the stored
+connection is byte-for-byte unchanged, and nothing is backfilled.
+`Controllers/NayaxConnectionTestApiTests` — the published response shape through the real pipeline and
+the real migration history, the token never echoed, the draft encrypted and bound, a second test
+replacing the first, the stored connection untouched, `400` for a missing field, and the `429` with
+its `Retry-After`. `CapabilityAuthorizationApiTests` and
+`EndpointAuthorizationClassificationTests` carry the endpoint's capability row.
 
 ### Document storage
 

@@ -154,6 +154,11 @@ public static class InfrastructureServiceCollectionExtensions
         // from AddNayaxTokenProtection below rather than from this method, for the same reason the
         // Nayax HTTP client's options do: only the composition root reads configuration.
         services.AddScoped<INayaxConnectionStore, EfNayaxConnectionStore>();
+        // The short-lived, encrypted connection-test draft (issue #536). A separate store from the
+        // connection above, over a separate table, because a draft is credentials nothing has
+        // accepted: no Nayax call may resolve one, and nothing that reads the connection may reach
+        // one by accident.
+        services.AddScoped<INayaxConnectionTestDraftStore, EfNayaxConnectionTestDraftStore>();
         services.AddScoped<ISiteCommissionStore, EfSiteCommissionStore>();
         services.AddScoped<ICategoryStore, EfCategoryStore>();
         services.AddScoped<ISupplierStore, EfSupplierStore>();
@@ -314,6 +319,15 @@ public static class InfrastructureServiceCollectionExtensions
 
         services.AddTransient<NayaxResilienceHandler>();
         services.AddHttpClient<INayaxLynxClient, NayaxLynxClient>(http => http.BaseAddress = baseAddress)
+            .AddHttpMessageHandler<NayaxResilienceHandler>();
+
+        // The connection-test check runner (issue #536) gets its own HttpClient from the same base
+        // address and the same resilience handler, and registers no credential here either: it
+        // authenticates each check with the pair the Owner submitted, which is why it cannot share
+        // the typed client above. Same base URL and same timeout/retry/circuit-breaker policy on
+        // purpose - "Nayax is unavailable" has to mean the same thing on a test as on a sync.
+        services.AddHttpClient<INayaxConnectionCheckRunner, NayaxConnectionCheckRunner>(
+                http => http.BaseAddress = baseAddress)
             .AddHttpMessageHandler<NayaxResilienceHandler>();
 
         return services;
