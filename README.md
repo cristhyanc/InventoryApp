@@ -262,7 +262,7 @@ Ownership decides *whose* data a member sees; their **role** decides what they m
 
 ### Managing members: changing a role and revoking access
 
-An Owner manages their own business's members through four endpoints (issue #533). They require `Members.Manage`, which only an Owner holds, so a Manager and an Operator get a plain `403` — the list included, because it is the roster the changes are made from and it shows every member's name and email address. No Angular page calls them yet; the Users page is separate work.
+An Owner manages their own business's members through four endpoints (issue #533). They require `Members.Manage`, which only an Owner holds, so a Manager and an Operator get a plain `403` — the list included, because it is the roster the changes are made from and it shows every member's name and email address. The Admin → Users page (issue #534) calls them: it lists every member with their name, email, role and status, and changes a role, revokes or reinstates a member, each behind a confirmation dialog and showing the API's own refusal sentence unchanged — including the last-Owner and already-a-member-elsewhere refusals below.
 
 ```text
 GET  /api/members                              display name, email, role, active, joined
@@ -283,7 +283,7 @@ POST /api/members/{membershipId}/reinstate
 
 ### Adding a member: single-use invite links
 
-Until issue #531 the only way to give somebody access was `bootstrap-business`, run by a human with the new member's Entra ids typed in by hand. An Owner now creates an invite link instead — three endpoints, on the same `Members.Manage` capability as the member management above, so a Manager and an Operator get a plain `403`. No Angular page calls them yet, and **redeeming** an invite is separate work (issue #532), so an invite cannot create a membership yet.
+Until issue #531 the only way to give somebody access was `bootstrap-business`, run by a human with the new member's Entra ids typed in by hand. An Owner now creates an invite link instead — three endpoints, on the same `Members.Manage` capability as the member management above, so a Manager and an Operator get a plain `403`. The Admin → Users page (issue #534) calls them, composing the invite link from the token the creation response carries and showing it once with a Copy button and its expiry; **redeeming** an invite is a separate page (issue #532/#535), so an invite created here cannot be accepted anywhere but `/invite/:token`.
 
 ```text
 POST /api/members/invites                 { "role": "Owner" | "Manager" | "Operator", "note": "optional" }
@@ -291,7 +291,7 @@ GET  /api/members/invites                 every invite, in every state
 POST /api/members/invites/{inviteId}/cancel
 ```
 
-- **The token comes back exactly once**, in the creation response, and never again: the database stores only its SHA-256 hash, no log or audit event carries it, and no later read can produce it. An Owner either copies the link out of that response or creates another invite. The response carries the token rather than a full URL — the API does not know the web application's address, so the Owner-facing page (issue #505) composes the link.
+- **The token comes back exactly once**, in the creation response, and never again: the database stores only its SHA-256 hash, no log or audit event carries it, and no later read can produce it. An Owner either copies the link out of that response or creates another invite. The response carries the token rather than a full URL — the API does not know the web application's address, so the Owner-facing page (issue #534, one slice of #505) composes the link.
 - **The token is 256 bits of cryptographic randomness**, URL-safe, and unguessable by design; that is what makes a plain hash the right way to store it rather than a password-style one.
 - **An invite lasts seven days**, fixed in code. Nothing in the request chooses the business, the creator, the expiry or the token.
 - **Expiry needs no cleanup job.** A pending invite past its expiry is reported as `Expired` with no row having changed, so there is no sweep to run and nothing that could leave an expired link looking usable. The four states are `Pending`, `Used`, `Expired` and `Cancelled`, and the list shows all of them — a used or cancelled invite is part of the record of who was offered access.

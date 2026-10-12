@@ -92,7 +92,8 @@ const adminChildRoutes: { label: string; route: string }[] = [
   { label: 'AVCO Transition', route: '/admin/avco-transition' },
   { label: 'Costing Repair', route: '/admin/costing-repair' },
   { label: 'Historical GST Classification', route: '/admin/historical-gst-classification' },
-  { label: 'Nayax Sale Timestamp Repair', route: '/admin/nayax-sale-timestamp-repair' }
+  { label: 'Nayax Sale Timestamp Repair', route: '/admin/nayax-sale-timestamp-repair' },
+  { label: 'Users', route: '/admin/users' }
 ];
 
 describe('primary navigation (issue #391)', () => {
@@ -156,8 +157,9 @@ describe('primary navigation (issue #391)', () => {
   });
 
   /**
-   * The navigation may only point at pages that exist: no placeholder Users/Roles/Audit/Settings/
-   * Profile destination, and no route invented ahead of the page that would serve it.
+   * The navigation may only point at pages that exist: no placeholder Roles/Audit/Settings/Profile
+   * destination, and no route invented ahead of the page that would serve it. Users is a real
+   * destination since issue #534.
    */
   it('points only at routes declared in app.routes.ts', () => {
     expect(undeclaredRoutes(primaryNavigation)).toEqual([]);
@@ -171,7 +173,6 @@ describe('primary navigation (issue #391)', () => {
 
     expect(labels).not.toContain('Settings');
     expect(labels).not.toContain('Profile');
-    expect(labels).not.toContain('Users');
     expect(labels).not.toContain('Roles');
     expect(labels).not.toContain('Audit');
   });
