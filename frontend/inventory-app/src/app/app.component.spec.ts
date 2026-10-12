@@ -5,6 +5,7 @@ import { MsalBroadcastService, MsalService } from '@azure/msal-angular';
 import { AccountInfo, InteractionStatus } from '@azure/msal-browser';
 import { BehaviorSubject, Observable, Subject, of } from 'rxjs';
 import { AccessService, MemberAccessState } from './access/access.service';
+import { AccountStateAnswer, AccountStateService } from './access/account-state.service';
 import { CAPABILITIES, capabilitySet } from './access/capabilities';
 import { AppComponent } from './app.component';
 import { PlatformDiagnosticsAccessService } from './services/platform-diagnostics-access.service';
@@ -53,12 +54,19 @@ interface Rendered {
   settleInteraction: () => void;
 }
 
+const MEMBER_ACCOUNT_STATE: AccountStateAnswer = {
+  status: 'known',
+  accountState: { state: 'Member', onboardingEnabled: false, rejectionReason: null }
+};
+
 async function render(
   options: {
     signedIn?: boolean;
     business?: () => Observable<CurrentBusiness | null>;
     /** The active account, read on every sign-in check; defaults to `signedIn`. */
     activeAccount?: () => AccountInfo | null;
+    /** Defaults to `Member`, so the existing business-lookup tests are unaffected (issue #529). */
+    accountState?: AccountStateAnswer;
   } = {}
 ): Promise<Rendered> {
   const signedIn = options.signedIn ?? true;
@@ -112,7 +120,11 @@ async function render(
       // The shell reads the signed-in operator's business so every instant on the page can be
       // rendered in that business's time zone (issue #499). The shell owns only the waiting; the
       // lookup itself is tested in business.service.spec.ts.
-      { provide: BusinessService, useValue: { load: businessLoad, reset: businessReset } }
+      { provide: BusinessService, useValue: { load: businessLoad, reset: businessReset } },
+      // The shell waits for the account state before looking up a business at all (issue #529);
+      // that gating is what app.component business-context tests below exercise, so the answer is
+      // stubbed directly rather than through the real cached service.
+      { provide: AccountStateService, useValue: { state$: of(options.accountState ?? MEMBER_ACCOUNT_STATE) } }
     ]
   }).compileComponents();
 
@@ -482,6 +494,33 @@ describe('AppComponent business context (issue #499)', () => {
     const { fixture, businessLoad } = await render({ signedIn: false });
 
     expect(businessLoad).not.toHaveBeenCalled();
+    expect(await navigatedMain(fixture)).toContain('page body');
+  });
+
+  /**
+   * The account-state check issue #529 adds: a person who is not `Member` has no business to look
+   * up, and the lookup would only receive the same `403` every other member endpoint already
+   * gives that account. `GET /api/business/current` must never be called before the account state
+   * is known - this is that ordering.
+   */
+  it('asks for no business when the signed-in person has no usable membership', async () => {
+    const { fixture, businessLoad } = await render({
+      accountState: { status: 'known', accountState: { state: 'NoMembership', onboardingEnabled: false, rejectionReason: null } }
+    });
+
+    expect(businessLoad).not.toHaveBeenCalled();
+    expect(await navigatedMain(fixture)).toContain('page body');
+  });
+
+  /**
+   * The fail-open rule applied to the shell's own business lookup: the endpoint is the real
+   * boundary, so an account state that could not be read must not stop a legitimate member's
+   * business context from loading.
+   */
+  it('still looks up the business when the account state could not be read', async () => {
+    const { fixture, businessLoad } = await render({ accountState: { status: 'unavailable' } });
+
+    expect(businessLoad).toHaveBeenCalledTimes(1);
     expect(await navigatedMain(fixture)).toContain('page body');
   });
 

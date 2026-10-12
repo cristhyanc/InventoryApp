@@ -2530,7 +2530,7 @@ The frontend is an application boundary in its own right. It owns navigation, in
 | --- | --- |
 | `app.component.*` | Application shell: header with the sidebar collapse control and the signed-in user control, the sidebar, the routed page region, MSAL redirect/account handling, and the toast/loading hosts |
 | `layout/` | Primary navigation: `navigation.ts` (the navigation data, each destination's capability, and its pure active-route rules), `sidebar-nav.component.*`, `user-menu.component.ts` |
-| `access/` | What the signed-in member may do (issue #528): the capability vocabulary, the cached `GET /api/me/access` read, the capability route guard, the "access not allowed" page, and the `403` interceptor that keeps the cache current |
+| `access/` | What the signed-in member may do (issue #528) and which account state they are in (issue #529): the capability vocabulary, the cached `GET /api/me/access` and `GET /api/me/account-state` reads, the two route guards, the "access not allowed" and "access unavailable" pages, and the interceptors that keep the caches current and show the global `403` notice |
 | `app.routes.ts` | Product, stock, supplier, machine, site, purchase, report, expense, and administration routes, each with the capability its page needs |
 | `components/` | Routed feature pages plus a small set of shared components |
 | `services/` | Typed HTTP calls, runtime configuration, toast state, and feature-specific client behavior |
@@ -2831,6 +2831,95 @@ trigger, the excluded access read and assets, and every other status ignored),
 `supplier-gst-defaults.component.spec.ts` (the hidden Save, the read-only pickers, no `PUT`, and the
 control returning on a refresh) and `dashboard.component.spec.ts` (the redacted summary rendering
 the two non-financial cards, with no `$0.00` and no withheld figure anywhere).
+
+### Account-state routing, the access-unavailable page and the global 403 handler (issue #529)
+
+Until issue #529 the app called no endpoint that could tell a signed-in person apart from a
+member: every business call for an account with no usable membership answered the same bare `403`
+`BusinessScopeMiddleware` gives today, and nothing routed that person anywhere. This slice reads
+`GET /api/me/account-state` (issue #523) on start-up, before any business call, and routes from
+its answer. It is one slice of #503, which keeps the full agreed contract for this area under
+#328; #528's capability cache and route guards are the sibling slice this one is built the same
+way as.
+
+| File | Responsibility |
+| --- | --- |
+| `access/account-state.service.ts` | `AccountStateService`: the cached `GET /api/me/account-state` read, built and invalidated exactly like `AccessService` |
+| `access/account-state.guard.ts` | `accountStateGuard`, the `CanActivateFn` every business route declares, and `ACCOUNT_STATE_ROUTE`/`ACCOUNT_STATE_BYPASS_PATHS` |
+| `access/access-unavailable.component.ts` | The page `BusinessDeactivated`, `MembershipAmbiguous` and `MembershipRevoked` are routed to |
+| `access/onboarding-placeholder.component.ts` | The one stand-in component `/welcome`, `/application-pending`, `/application-rejected` and `/invite/:token` load until #508's and #505's tasks replace each with its own page |
+| `access/account-state-forbidden.interceptor.ts` | The "`403` from a member endpoint" trigger on the account-state cache, mirroring `accessForbiddenInterceptor` |
+| `access/member-forbidden-notice.interceptor.ts` | The global `403` handler: "you don't have access to this", except on a bypass route |
+| `app.component.ts` | Waits for the account state before looking up the business at all |
+
+**The routing contract** (agreed under #328, with its contract corrections of 10 Oct 2026):
+`Member` reaches the route it asked for; every other state redirects before that route's own
+business calls ever run.
+
+| Account state | Destination |
+| --- | --- |
+| `Member` | The route asked for |
+| `NoMembership` | `/welcome` |
+| `ApplicationPending` | `/application-pending` |
+| `ApplicationRejected` | `/application-rejected` |
+| `MembershipRevoked`, `BusinessDeactivated`, `MembershipAmbiguous` | `/access-unavailable` |
+
+`accountStateGuard` carries this table (`ACCOUNT_STATE_ROUTE`) and is declared, second after
+`MsalGuard` and before `requireCapability`, on every business route in `app.routes.ts`. It is
+presentation, not a boundary, for the same reason `requireCapability` is: `BusinessScopeMiddleware`
+refuses every business call for an account with no usable membership whatever the router did, so a
+state that could not be read lets the navigation through rather than guessing. The five
+destinations above and `/invite/:token` (issue #505's redemption page) carry no `accountStateGuard`
+of their own - adding one would send a person this guard already routed there straight back to
+themselves, or away from the one explanation their state has - and `/access-not-allowed` and
+`/admin/diagnostics` stay the two exceptions issue #528 already documents.
+
+**The access-unavailable page names no business.** `BusinessDeactivated` says to contact the
+business Owner, `MembershipAmbiguous` says to contact support, and `MembershipRevoked` says to
+contact the Owner too, but is also the one state the backend's membership-resolution policy treats
+as eligible under `GET /api/me/account-state`'s `onboardingEnabled` flag - so it is the one state
+the page offers **I have an invite link** for unconditionally, and **Start a new business** for
+only when `onboardingEnabled` is true, matching the API's own eligibility rule rather than a
+frontend guess. Sign-out needs no control of its own here: the application shell's header carries
+the one sign-out control on every route, this one included.
+
+**The global `403` handler** (`memberForbiddenNoticeInterceptor`) shows "you don't have access to
+this" through the toast every other failure already renders with, for any `403` from a member
+endpoint - the same test `accessForbiddenInterceptor` uses, so the two interceptors agree about
+what counts as one. It does not fire while the current route is `/welcome`,
+`/application-pending`, `/application-rejected`, `/access-unavailable` or `/invite/:token`
+(`ACCOUNT_STATE_BYPASS_PATHS`, matched by prefix for the invite token): a person on one of them has
+already been told, by the routing itself or by the page they are on, exactly what their situation
+is, and the shell's own eager reads on those routes (the sidebar's `GET /api/me/access` among
+them) would otherwise show a contradicting toast on top.
+
+**Cache invalidation is #528's trigger set, applied to the account state too**
+(`AccountStateService` and `account-state-forbidden.interceptor.ts`): sign-in, sign-out, an MSAL
+active-account change, any `403` from a member endpoint other than `GET /api/me/account-state`
+itself (a `403` from `GET /api/me/access` **is** included, because that read requires membership
+and its own refusal is itself a staleness signal), window focus more than five minutes after the
+last read, and an explicit `refresh()`. `AccountStateService` is a sibling cache to `AccessService`
+built the same way, rather than a shared base the two refactor into, so #528's already-tested
+caching logic is untouched by this slice.
+
+**The shell waits for the account state before any business call.** `AppComponent`'s existing
+business lookup (issue #499, `GET /api/business/current`) now reads the cached account state
+first and asks for the business only when it answers `Member` - an account with no usable
+membership has no business to look up, and the call would only receive the same `403` every other
+member endpoint already gives it. An account state that could not be read still attempts the
+lookup, for the same fail-open reason the guard does: the endpoint itself remains the boundary.
+
+**What proves this slice.** `account-state.service.spec.ts` (mirroring `access.service.spec.ts`:
+the cached read, every refresh trigger, the unknown-state fallback, and a superseded answer
+discarded), `account-state.guard.spec.ts` (routing for every state, the fail-open answer, and
+reading once for several navigations), `access-unavailable.component.spec.ts` (the per-state
+message, naming no business, and the revoked page with onboarding on - both options - and off -
+invite only), `account-state-forbidden.interceptor.spec.ts` and
+`member-forbidden-notice.interceptor.spec.ts` (the respective `403` triggers and the bypass-route
+list, including that a `403` on a bypassed route never shows the generic notice), and
+`app.routes.spec.ts`/`app.component.spec.ts` (`accountStateGuard`'s position on every business
+route, the five bypass routes, and the shell asking for no business before the account state is
+known).
 
 ### Breadcrumbs (issue #457)
 
