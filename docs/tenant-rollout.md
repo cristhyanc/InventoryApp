@@ -14,7 +14,9 @@ only the schema-migration step's "deploy and let startup apply it" alternative i
 | --- | --- |
 | Apply schema migrations | **Application**, automatically at Production startup (issue #201) — or **Human**, via `migrate-database --apply`, for diagnostics or ahead of a deployment window |
 | Create the `Business` record, in the `Active` lifecycle status | **Human**, via `bootstrap-business` (see [The business lifecycle status](#the-business-lifecycle-status-issue-540)) |
-| Create `BusinessMembership` rows from the supplied Entra mapping, in the role it names | **Human**, via `bootstrap-business` (see [The member's role](#the-members-role-issue-521)) |
+| Create the **first** `BusinessMembership` row from the supplied Entra mapping, in the role it names | **Human**, via `bootstrap-business` (see [The member's role](#the-members-role-issue-521)) |
+| Add any **later** member | An **Owner of that business**, by creating an invite link the person redeems — no operator run and no Entra ids needed (issue #532; see [Adding a member after the bootstrap](#adding-a-member-after-the-bootstrap-invite-links-issues-531-and-532)) |
+| Release a member whose own business has been deactivated, so they can join elsewhere | **Human**, by revoking that membership row deliberately — no Owner of a deactivated business can be reached |
 | Assign existing rows to that business | **Human**, via `bootstrap-business --apply` |
 | Move the global Nayax operator id and token into that business's record | **Human**, via `migrate-nayax-connection --apply` (issue #519; see [Migrating the Nayax connection](#migrating-the-nayax-connection-into-the-business-issue-519)) |
 | Remove the global `NayaxLynx` operator id and token | **Human**, once the per-business record is in use and verified (the client reads it since issue #520; `NayaxLynx__BaseUrl` stays) |
@@ -180,6 +182,54 @@ purchasing and nothing else — no report, expense, import, site commission, set
 tool — and a `Manager` adds the supplier GST defaults, expenses, reports, imports and site
 commissions but not the Nayax settings or any data repair. `Owner`, the default and what every
 existing member was backfilled to, grants everything.
+
+#### Adding a member after the bootstrap: invite links (issues #531 and #532)
+
+`BusinessBootstrap:Members` is **no longer the only way a person gets access**, and from now on it
+should not be the usual one. Since issue #532 an Owner can add somebody without an operator run, a
+deployment or anybody handling Entra ids at all:
+
+1. The Owner creates an invite in the application — `POST /api/members/invites` with the role to
+   grant — and the response carries the token **once**.
+2. The Owner sends the person a link containing that token, by whatever means they already use. The
+   application sends no email, and no later read can produce the token again: a lost link means
+   creating another invite.
+3. The person signs in with their own Microsoft account and redeems it —
+   `POST /api/invites/redeem` with the token — which creates their membership with the invite's
+   role, in that business, and marks the invite used. The invite lasts **seven days** and is
+   single-use.
+
+What this changes for an operator:
+
+- **You no longer need anybody's `(tid, oid)` pair to add a member.** The redemption takes the
+  identity from the person's own validated token, which is why the invite carries a role and not an
+  identity. "Before you start" still asks for the pair, and it still has to, for the *first*
+  Owner — a business with no member has nobody to create an invite.
+- **Use the bootstrap configuration for the first Owner, and invites for everybody after.** Adding
+  members by editing App Service settings and re-running `bootstrap-business` still works and is
+  unchanged, but it needs a deployment-level credential and a person's directory identifiers for
+  something the business can now do itself. Remove those settings once the bootstrap is complete,
+  as that section already says.
+- **A person who left and is coming back is re-invited, not re-bootstrapped.** Re-running
+  `bootstrap-business` deliberately never resurrects a revoked approval; redeeming an invite does
+  reactivate that person's existing revoked row in that business, with the invite's role. There is
+  still one membership row per person per business.
+- **One active membership per identity still holds** (see the section of that name below). Somebody
+  who already belongs to a business cannot redeem an invite into another: they are refused with
+  `409` and "This person is already a member of a business.", and the invite is left unused. The
+  remedy is the deliberate one — an Owner of their current business revokes their membership first.
+- **One case needs you.** If that person's business has been **deactivated**, no Owner of it can be
+  reached to revoke their membership, so the refusal tells them they "must first be released by the
+  platform administrator". Releasing them means revoking that membership row deliberately; there is
+  no self-service path, and it is a human decision about access to financial data.
+- **Nothing a redemption is told reveals a business.** An expired, used, withdrawn or unknown token,
+  and an invite of a business that is not active, all answer with one `400` and the same sentence,
+  and a successful redemption reports only the role. That is deliberate: an invite token is a
+  secret, and an answer that distinguished the cases would confirm which links exist.
+
+See [docs/architecture.md § Invite links](architecture.md#invite-links-create-list-and-cancel-issue-531)
+and [§ Invite redemption](architecture.md#invite-redemption-issue-532). The invite page that will
+drive both is issue #505; until it ships, both endpoints are called directly.
 
 #### The business lifecycle status (issue #540)
 
@@ -355,9 +405,14 @@ unique index allows at most one **active** `BusinessMembership` per Entra identi
 unaffected — any number may exist — so revoking a membership is how somebody moves from one
 business to another.
 
-This matters to an operator in exactly one situation: the migration that adds the index checks the
-existing data first, and **refuses to apply** if any identity already holds more than one active
-membership.
+This matters to an operator in two situations. The migration that adds the index checks the existing
+data first, and **refuses to apply** if any identity already holds more than one active membership
+(below). And since issue #532 the rule is something a person can now run into for themselves:
+redeeming an invite while already a member of a business is refused, and a caller whose own business
+has been **deactivated** has to be released by a platform administrator because no Owner of that
+business can revoke their membership — see
+[Adding a member after the bootstrap](#adding-a-member-after-the-bootstrap-invite-links-issues-531-and-532)
+above.
 
 ### If the migration aborts
 

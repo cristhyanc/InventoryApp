@@ -66,4 +66,29 @@ public static class MembershipEligibility
         memberships is null
         || !memberships.Any(membership =>
             membership.IsActive && membership.MembershipId != excludedMembershipId);
+
+    /// <summary>
+    /// The same rule, asked of the membership records an account-state read already produced
+    /// (issue #532).
+    ///
+    /// <para>It exists so the invite redemption's immediate refusal is this rule rather than a
+    /// second one written over <see cref="AccountState"/>. The redemption has to read the caller's
+    /// records anyway - the state they are in chooses which sentence the refusal carries - and
+    /// asking "may this identity hold an active membership?" of those same records keeps the
+    /// endpoint's answer and <c>MembershipWriteGuard</c>'s authoritative in-transaction answer the
+    /// one rule they have to be.</para>
+    ///
+    /// <para>There is deliberately no exclusion parameter. An <see cref="ActorBusinessMembership"/>
+    /// carries no membership key - the account-state precedence has no use for one - and no
+    /// operation that reads these records is about a membership the caller already holds: a
+    /// redemption either creates a row or reactivates a revoked one, and neither is an active row
+    /// that could count against itself. The serialised check inside the write transaction, which
+    /// does take an exclusion, remains the one a write is decided by.</para>
+    /// </summary>
+    /// <param name="memberships">
+    /// Every membership recorded for the one identity, in every business, active or not. An empty
+    /// or <c>null</c> collection is an identity with no membership at all, which is eligible.
+    /// </param>
+    public static bool AllowsActiveMembership(IReadOnlyCollection<ActorBusinessMembership>? memberships) =>
+        memberships is null || !memberships.Any(membership => membership.IsActive);
 }

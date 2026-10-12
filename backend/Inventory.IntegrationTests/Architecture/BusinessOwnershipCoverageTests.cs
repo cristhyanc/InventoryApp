@@ -29,6 +29,16 @@ public class BusinessOwnershipCoverageTests
     /// readable while diagnosing a run that assigned rows to the wrong business - exactly the case
     /// where a tenant filter would hide the evidence being looked for.
     ///
+    /// <see cref="MemberInvite"/> is the fourth, and the reviewed ownership decision on issue #532
+    /// (it was tenant-owned as issue #531 first shipped it). The structural reason is the
+    /// redemption: a person arriving with an invite link has no membership, so their request
+    /// resolves no business and carries a denied scope, and under a denied scope a filtered read
+    /// matches no row at all - which would make an invite impossible to find by the one thing that
+    /// caller presents, its token. The business cannot come from the request either, so it comes
+    /// from the invite row the token identifies. A filter the one path the table exists for would
+    /// have to evade is not a boundary; the business id named in every statement, which is what both
+    /// invite adapters do, is. See docs/architecture.md § Invite redemption.
+    ///
     /// Nothing else is exempt. In particular there is no "global reference data" in this schema:
     /// the enum-like constants (payment and costing status, expense category, commission basis,
     /// stock adjustment reason) live in code as C# enums, not tables, and every configuration
@@ -40,7 +50,75 @@ public class BusinessOwnershipCoverageTests
         typeof(Business),
         typeof(BusinessMembership),
         typeof(BusinessBackfillAudit),
+        typeof(MemberInvite),
     ];
+
+    /// <summary>
+    /// The four exemptions above are a closed list, asserted rather than left implicit: a fifth
+    /// table arriving here is the one change this whole test exists to make visible, and the
+    /// failure message is where a reviewer is told to look for the structural reason.
+    /// </summary>
+    [Fact]
+    public void Exactly_four_entities_are_declared_structurally_global() =>
+        Assert.Equal(
+            ["Business", "BusinessBackfillAudit", "BusinessMembership", "MemberInvite"],
+            DeliberatelyGlobalEntities
+                .Select(type => type.Name)
+                .Order(StringComparer.Ordinal)
+                .ToArray());
+
+    /// <summary>
+    /// A structurally global table must still be bound to a business by a column every statement
+    /// names - "not tenant-owned" is not "not owned". <see cref="Business"/> is the one exception,
+    /// because it <em>is</em> the business.
+    /// </summary>
+    [Fact]
+    public void Every_structurally_global_table_but_the_business_itself_still_carries_a_business_key() =>
+        Assert.All(
+            DeliberatelyGlobalEntities.Where(type => type != typeof(Business)),
+            type => Assert.NotNull(type.GetProperty(nameof(IBusinessOwned.BusinessId))));
+
+    /// <summary>
+    /// The invite's per-business token uniqueness survives the ownership change. It is asserted
+    /// here because <see cref="Every_unique_constraint_on_business_owned_data_includes_the_business"/>
+    /// below no longer covers this table, and a later edit that "simplified" the index to the hash
+    /// alone would make one business's invite able to deny another's.
+    /// </summary>
+    [Fact]
+    public void The_invite_token_hash_stays_unique_per_business_rather_than_globally()
+    {
+        var invite = BuildModel().FindEntityType(typeof(MemberInvite))!;
+
+        var unique = Assert.Single(invite.GetIndexes().Where(index => index.IsUnique));
+        Assert.Equal(
+            [nameof(IBusinessOwned.BusinessId), nameof(MemberInvite.TokenHash)],
+            unique.Properties.Select(property => property.Name).ToArray());
+
+        // And the leading-column index every statement in both invite adapters relies on.
+        Assert.Contains(
+            invite.GetIndexes(),
+            index => index.Properties.Count == 1
+                && index.Properties[0].Name == nameof(IBusinessOwned.BusinessId));
+    }
+
+    /// <summary>
+    /// The invite carries no global query filter, which is the half of the decision that is easy to
+    /// undo by accident: re-adding <c>IBusinessOwned</c> would compile, pass most tests, and leave
+    /// the redemption unable to find an invite under its denied scope.
+    /// </summary>
+    [Fact]
+    public void The_invite_carries_no_query_filter()
+    {
+        var invite = BuildModel().FindEntityType(typeof(MemberInvite))!;
+
+        Assert.False(typeof(IBusinessOwned).IsAssignableFrom(typeof(MemberInvite)));
+        Assert.True(
+            invite.GetDeclaredQueryFilters() is not { Count: > 0 },
+            "MemberInvite must carry no tenant query filter: the invite redemption of issue #532 "
+                + "finds an invite by its token under a denied business scope, which a filter "
+                + "comparing the current business can never match (docs/architecture.md § Invite "
+                + "redemption).");
+    }
 
     private static IModel BuildModel()
     {

@@ -76,3 +76,34 @@ public sealed record CreatedMemberInviteResponse(string Token, MemberInviteRespo
 /// It is display-only: it is never logged, never audited, and nothing looks an invite up by it.
 /// </param>
 public sealed record CreateMemberInviteRequest(string? Role, string? Note);
+
+/// <summary>
+/// The body of <c>POST /api/invites/redeem</c> (issue #532).
+///
+/// One field, the token from the link, and deliberately nothing else. There is no business id, no
+/// business name, no role and no email address: the business comes from the invite row the token
+/// identifies, the role from that same row, and the person from the validated token the request is
+/// authenticated with. A redemption request that named any of them would be a request choosing
+/// which business it joins, or what it may do there.
+/// </summary>
+/// <param name="Token">
+/// The invite token, exactly as the creation response produced it. A missing, blank or unknown
+/// token is answered with the same <c>400</c> and the same sentence as an expired, used or
+/// withdrawn one, so no submission can be told apart from another.
+/// </param>
+public sealed record RedeemMemberInviteRequest(string? Token);
+
+/// <summary>
+/// The body of a successful redemption (issue #532): the role the caller now holds.
+///
+/// It names no business - not a name, not an id - and carries no membership key. The caller is a
+/// member from this moment on and reads their business's own name from <c>GET /api/me/access</c>
+/// like every other member, which keeps this endpoint, the one endpoint a person with no membership
+/// may call, from publishing a business in any of its answers.
+/// </summary>
+/// <param name="Role">
+/// <c>Owner</c>, <c>Manager</c> or <c>Operator</c> - the published role name rather than a number a
+/// client would have to map. It is never null: an invite granting a role this deployment does not
+/// declare is refused rather than redeemed.
+/// </param>
+public sealed record RedeemedMemberInviteResponse(string Role);

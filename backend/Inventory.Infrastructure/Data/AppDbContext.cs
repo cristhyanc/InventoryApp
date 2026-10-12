@@ -622,6 +622,9 @@ public class AppDbContext : DbContext
     /// <see cref="Business"/> and <see cref="BusinessMembership"/> are deliberately excluded.
     /// They are the tenancy tables themselves: membership is what resolves the scope in the
     /// first place, so filtering it by the scope would be circular and would deny every caller.
+    /// <see cref="MemberInvite"/> is excluded for a related structural reason (issue #532): the
+    /// redemption has to find an invite by the token a caller with no membership presents, under a
+    /// denied scope that matches no filtered row. See <see cref="ConfigureMemberInvites"/>.
     /// </summary>
     private void ConfigureBusinessOwnership(ModelBuilder modelBuilder)
     {
@@ -686,15 +689,29 @@ public class AppDbContext : DbContext
     /// <summary>
     /// Maps the single-use member invite links of issue #531.
     ///
-    /// The invite is tenant-owned, so its business key, its <c>BusinessId</c> index and its global
-    /// query filter all come from <see cref="ConfigureBusinessOwnership"/> and are deliberately not
-    /// repeated here. What this method adds is what is specific to an invite: the bounds on its
-    /// columns, the per-business uniqueness of the token hash, and the foreign key to the
-    /// membership a redemption creates.
+    /// The invite is one of the four structural non-tenant-owned tables (the reviewed decision on
+    /// issue #532, see <see cref="MemberInvite"/>), so <see cref="ConfigureBusinessOwnership"/>
+    /// does not reach it: its business key, its <c>BusinessId</c> index and the absence of a global
+    /// query filter are declared here instead. Everything else this method adds is specific to an
+    /// invite: the bounds on its columns, the per-business uniqueness of the token hash, and the
+    /// foreign key to the membership a redemption creates.
     /// </summary>
     private static void ConfigureMemberInvites(ModelBuilder modelBuilder)
     {
         var invite = modelBuilder.Entity<MemberInvite>();
+
+        // The owning business, declared explicitly because no central mechanism declares it for
+        // this table. Required: an invite with no owner would be an invite into nothing, and the
+        // redemption takes the business it writes in from this column. There is deliberately no
+        // query filter - the redemption has to find an invite by its token under a denied scope,
+        // which a filter would make impossible - so the boundary is this column named in every
+        // statement, exactly as it is for BusinessMembership.
+        invite.Property(x => x.BusinessId).IsRequired();
+
+        // Every statement in both invite adapters starts with "BusinessId = @business", so it
+        // leads. It is the same index ConfigureBusinessOwnership used to add, declared by name here
+        // instead, which is what keeps this ownership change free of any schema change.
+        invite.HasIndex(x => x.BusinessId);
 
         // The role the invite grants (issue #521's vocabulary) and what became of the invite. Both
         // are required integer columns holding a declared value, and neither carries a CHECK
@@ -713,12 +730,16 @@ public class AppDbContext : DbContext
         // has been generated for it: an empty hash would be an invite nothing could ever redeem.
         invite.Property(x => x.TokenHash).IsRequired().HasMaxLength(MemberInviteToken.HashLength);
 
-        // Unique per business, which is the repository-wide rule for a uniqueness constraint on
-        // tenant-owned data (docs/architecture.md § Tenant ownership): a globally unique index here
-        // would let one business's row deny another's, and BusinessOwnershipCoverageTests fails the
-        // build for one. Global uniqueness is not what makes a token unambiguous anyway - 256 bits
-        // of cryptographic randomness is - and the index also makes "which invite is this token?"
-        // an index seek within a business.
+        // Unique per business, which is the repository-wide rule for a uniqueness constraint over
+        // an externally shaped value (docs/architecture.md § Tenant ownership): a globally unique
+        // index here would let one business's row deny another's. Global uniqueness is not what
+        // makes a token unambiguous anyway - 256 bits of cryptographic randomness is.
+        //
+        // The redemption's lookup is by TokenHash alone, because the token is the only thing the
+        // caller presents, so it is a scan of this index rather than a seek into it. That is a
+        // deliberate trade and not a missed index: an index on the hash by itself would be globally
+        // unique in effect over a value two businesses may legitimately hold, and the table holds
+        // one row per invite ever issued - tens, not millions.
         invite.HasIndex(x => new { x.BusinessId, x.TokenHash }).IsUnique();
 
         invite.Property(x => x.CreatedByDirectoryTenantId).IsRequired();

@@ -10,6 +10,14 @@ public enum MemberInviteChange
 
     /// <summary>A live invite was cancelled before it was used.</summary>
     Cancelled = 2,
+
+    /// <summary>
+    /// An invite was redeemed (issue #532): a person presented the link and the business gained a
+    /// member. It is the one change here made by somebody who was not a member of the business a
+    /// moment earlier, which is exactly why it is audited - "how did this person get in?" has to be
+    /// answerable from the actor, the business and the invite this event names.
+    /// </summary>
+    Redeemed = 3,
 }
 
 /// <summary>
@@ -30,7 +38,11 @@ public enum MemberInviteChange
 /// </summary>
 /// <param name="ActorDirectoryTenantId">The acting Owner's Entra <c>tid</c>.</param>
 /// <param name="ActorObjectId">The acting Owner's Entra <c>oid</c>.</param>
-/// <param name="BusinessId">The business the invite belongs to, resolved from that actor's membership.</param>
+/// <param name="BusinessId">
+/// The business the invite belongs to: resolved from the actor's own membership for a creation or a
+/// cancellation, and taken from the invite row itself for a redemption (issue #532), whose actor is
+/// not a member of it until the change this event records.
+/// </param>
 /// <param name="InviteId">The invite that was created or cancelled.</param>
 /// <param name="Change">Which change it was.</param>
 /// <param name="Role">The role the invite grants, which is what makes a creation worth auditing.</param>

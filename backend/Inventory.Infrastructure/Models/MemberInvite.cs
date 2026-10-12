@@ -7,12 +7,26 @@ namespace Inventory.Infrastructure.Models;
 /// One single-use invite link into one business (issue #531, a slice of #504 under #328): the role
 /// it grants, who created it, when it expires, and what became of it.
 ///
-/// <para><strong>Tenant-owned, like ordinary business data.</strong> It implements
-/// <see cref="IBusinessOwned"/>, so the <c>AppDbContext</c> query filters scope every read of it and
-/// <c>BusinessOwnershipEnforcer</c> stamps the owner on insert and keeps it immutable afterwards.
-/// That is the opposite of <see cref="BusinessMembership"/>, which carries no filter because it is
-/// what resolves the boundary: an invite is not part of resolving anything, it is a row inside one
-/// business that only that business's Owners may see.</para>
+/// <para><strong>Structurally non-tenant-owned, on <see cref="BusinessMembership"/>'s pattern</strong>
+/// (reviewed decision on issue #532, replacing issue #531's tenant-owned stamp). It deliberately
+/// does <em>not</em> implement <see cref="IBusinessOwned"/>, so it carries no global query filter and
+/// <c>BusinessOwnershipEnforcer</c> never stamps it: the boundary for this one table is the
+/// <see cref="BusinessId"/> named in every statement, which only ever comes from tenancy resolution
+/// (the Owner-facing create, list and cancel) or from the invite row itself (the redemption).
+///
+/// The structural reason is the redemption. A person arriving with an invite link has no membership,
+/// so their request resolves no business at all and carries a <em>denied</em> scope - and under a
+/// denied scope the central filter matches no row, which would make an invite impossible to find by
+/// the one thing the caller actually presents, its token. The business cannot come from the request
+/// either (AGENTS.md § Tenant ownership), so it has to come from the row the token identifies. A
+/// filter that the one path the table exists for must evade is not a boundary; naming the owner in
+/// the statement is. The invite is therefore listed in
+/// <c>BusinessOwnershipCoverageTests.DeliberatelyGlobalEntities</c> with that reason, and it is the
+/// fourth such table rather than a new class of exception.
+///
+/// What this does <em>not</em> relax: no request value may choose the business, the
+/// <see cref="BusinessId"/> is never written after the insert, every read and write names it, and
+/// one business can therefore still neither read, cancel nor replace another's invite.</para>
 ///
 /// <para><strong>The token is stored only as a hash</strong>
 /// (<see cref="Inventory.Domain.Tenancy.MemberInviteToken"/>), and the plaintext never reaches this
@@ -27,14 +41,16 @@ namespace Inventory.Infrastructure.Models;
 /// <see cref="ExpiresAtUtc"/> by <c>MemberInvitePolicy</c>, so an invite stops being usable the
 /// instant it expires, with no sweep to run and no row left claiming otherwise.</para>
 /// </summary>
-public class MemberInvite : IBusinessOwned
+public class MemberInvite
 {
     /// <summary>The invite's own key, which is what the cancel endpoint takes.</summary>
     public int Id { get; set; }
 
     /// <summary>
-    /// The owning business (issue #64). Stamped from the caller's resolved business on insert and
-    /// immutable afterwards; never read from API input, and never serialised out.
+    /// The owning business (issue #64). Written once, from the business tenancy resolution produced
+    /// for the creating Owner, and never changed afterwards: no path updates this column, and the
+    /// redemption's statements take it from the invite row they found. Never read from API input,
+    /// and never serialised out.
     /// </summary>
     [JsonIgnore]
     public int BusinessId { get; set; }

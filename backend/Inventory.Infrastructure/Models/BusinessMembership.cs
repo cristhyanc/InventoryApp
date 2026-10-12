@@ -8,8 +8,11 @@ namespace Inventory.Infrastructure.Models;
 /// <c>(tid, oid)</c> claim pair, for one <see cref="Models.Business"/> (issue #64).
 ///
 /// This table is the application's authorization boundary for data ownership: an actor with no
-/// active row here reads no business data, whatever Entra directory issued a valid token. Rows
-/// are created by an explicit, human-supplied bootstrap, never by self-service sign-up.
+/// active row here reads no business data, whatever Entra directory issued a valid token. A row is
+/// created either by the human-invoked <c>bootstrap-business</c> command or, since issue #532, by
+/// redeeming an invite an Owner of that business created - never by self-service sign-up, and never
+/// from anything a request chooses: a redemption takes the business from the invite row and the
+/// identity from the caller's own validated token.
 ///
 /// Since issue #524 it also stores two pieces of personal data, <see cref="DisplayName"/> and
 /// <see cref="Email"/>, and they are <em>display only</em>: an Owner has to be able to see who

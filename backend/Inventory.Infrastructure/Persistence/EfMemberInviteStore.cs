@@ -7,27 +7,25 @@ using Microsoft.EntityFrameworkCore;
 namespace Inventory.Infrastructure.Persistence;
 
 /// <summary>
-/// The EF Core implementation of <see cref="IMemberInviteStore"/> (issue #531). Like every other
-/// adapter in this folder it lives beside the <see cref="AppDbContext"/> and the persistence model
-/// it reads and writes.
+/// The EF Core implementation of <see cref="IMemberInviteStore"/> (issue #531, re-scoped by the
+/// reviewed ownership decision on issue #532). Like every other adapter in this folder it lives
+/// beside the <see cref="AppDbContext"/> and the persistence model it reads and writes.
 ///
-/// <para><strong>It adds no business predicate of its own.</strong> An invite is ordinary
-/// tenant-owned data: reads go through the central <see cref="AppDbContext"/> query filter and the
-/// insert is stamped by <c>BusinessOwnershipEnforcer</c> on save, so one business can never read,
-/// cancel or replace another's invite. This is deliberately unlike
-/// <see cref="EfBusinessMemberStore"/>, which names the business in every statement because the
-/// membership table has no filter to defer to.</para>
+/// <para><strong>Why the business id is in every statement.</strong> <c>MemberInvite</c> is one of
+/// the four structural non-tenant-owned tables (docs/architecture.md § Tenant ownership): the
+/// redemption of issue #532 has to find an invite by the token a caller with no membership presents,
+/// and a central query filter keyed to a resolved business can never match that - so the table
+/// carries no filter, and the boundary for it is the business id in the <c>WHERE</c> clause. It is
+/// only ever one tenancy resolution produced from the authenticated actor's membership, and pairing
+/// it with the invite key in every lookup is what makes another business's invite not found rather
+/// than reachable. This is the same shape, for the same reason, as
+/// <see cref="EfBusinessMemberStore"/>, and it is not the per-controller <c>Where</c> clause the
+/// ownership rule warns against: there is no central mechanism for this table to defer to.</para>
 ///
 /// <para><strong>The two cancellations are conditional <c>ExecuteUpdate</c> statements.</strong>
 /// Each names only the two columns a cancellation changes and carries its own "only while this
-/// invite is still live" condition, so the comparison and the write are one operation in the
-/// database rather than a read followed by a trusting write. <c>ExecuteUpdate</c> runs in the
-/// database and does not pass through <c>SaveChanges</c>, so <c>BusinessOwnershipEnforcer</c> never
-/// sees it: its <c>WHERE</c> clause still carries the owning business, because EF applies the same
-/// query filter to the statement's source query, and this adapter additionally refuses to run at
-/// all without a single resolved business - an unscoped context would otherwise be the one way an
-/// <c>UPDATE</c> here could reach every business's invites. That is the same guard, for the same
-/// reason, as <see cref="EfNayaxConnectionTestDraftStore"/>'s.</para>
+/// invite is still live" condition beside the business, so the comparison and the write are one
+/// operation in the database rather than a read followed by a trusting write.</para>
 ///
 /// <para>The token's plaintext never reaches this adapter: the port carries
 /// <see cref="NewMemberInvite.TokenHash"/>, which is all a row holds and all a redemption needs,
@@ -62,15 +60,18 @@ public sealed class EfMemberInviteStore : IMemberInviteStore
 
     /// <inheritdoc />
     public async Task<StoredMemberInvite> CreateAsync(
+        BusinessId businessId,
         NewMemberInvite invite,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(invite);
 
-        // BusinessId is left unset on purpose: BusinessOwnershipEnforcer stamps the caller's
-        // business on save, which is also what refuses the write if no business is resolved.
+        // The owner is written here rather than stamped by BusinessOwnershipEnforcer, which does
+        // not see this table any more. The value is the one the caller's membership resolved to; no
+        // request value can reach it, and nothing ever updates the column afterwards.
         var row = new Models.MemberInvite
         {
+            BusinessId = businessId.Value,
             Role = invite.Role,
             Note = invite.Note,
             TokenHash = invite.TokenHash,
@@ -102,8 +103,10 @@ public sealed class EfMemberInviteStore : IMemberInviteStore
     /// both change over time, so an ordering built on them would reshuffle a list for reasons
     /// nobody asked for. Presentation ordering belongs to the page.
     /// </summary>
-    public async Task<IReadOnlyList<StoredMemberInvite>> ListAsync(CancellationToken cancellationToken) =>
-        await _db.MemberInvites
+    public async Task<IReadOnlyList<StoredMemberInvite>> ListAsync(
+        BusinessId businessId,
+        CancellationToken cancellationToken) =>
+        await Of(businessId)
             .AsNoTracking()
             .OrderBy(invite => invite.Id)
             .Select(Projection)
@@ -111,8 +114,11 @@ public sealed class EfMemberInviteStore : IMemberInviteStore
             .ConfigureAwait(false);
 
     /// <inheritdoc />
-    public Task<StoredMemberInvite?> FindAsync(int inviteId, CancellationToken cancellationToken) =>
-        _db.MemberInvites
+    public Task<StoredMemberInvite?> FindAsync(
+        BusinessId businessId,
+        int inviteId,
+        CancellationToken cancellationToken) =>
+        Of(businessId)
             .AsNoTracking()
             .Where(invite => invite.Id == inviteId)
             .Select(Projection)
@@ -120,13 +126,12 @@ public sealed class EfMemberInviteStore : IMemberInviteStore
 
     /// <inheritdoc />
     public async Task<bool> CancelAsync(
+        BusinessId businessId,
         int inviteId,
         DateTime cancelledAtUtc,
         CancellationToken cancellationToken)
     {
-        RequireCurrentBusinessId();
-
-        var updated = await Live(cancelledAtUtc)
+        var updated = await Live(businessId, cancelledAtUtc)
             .Where(invite => invite.Id == inviteId)
             .ExecuteUpdateAsync(
                 setters => setters
@@ -141,48 +146,35 @@ public sealed class EfMemberInviteStore : IMemberInviteStore
     }
 
     /// <inheritdoc />
-    public Task<int> CancelAllLiveAsync(DateTime cancelledAtUtc, CancellationToken cancellationToken)
-    {
-        RequireCurrentBusinessId();
-
+    public Task<int> CancelAllLiveAsync(
+        BusinessId businessId,
+        DateTime cancelledAtUtc,
+        CancellationToken cancellationToken) =>
         // One statement, so a caller that has already opened a transaction on this context - the
         // business deactivation of #509 - has these cancellations commit or roll back with its own
         // write, with no second round trip in between.
-        return Live(cancelledAtUtc)
+        Live(businessId, cancelledAtUtc)
             .ExecuteUpdateAsync(
                 setters => setters
                     .SetProperty(invite => invite.Status, MemberInviteStatus.Cancelled)
                     .SetProperty(invite => invite.CancelledAtUtc, cancelledAtUtc),
                 cancellationToken);
-    }
 
     /// <summary>
-    /// The invites that may still be cancelled at <paramref name="nowUtc"/>: pending, and not past
-    /// their expiry. It is the SQL half of <c>MemberInvitePolicy.IsLive</c> - the same two
-    /// conditions, in a <c>WHERE</c> clause so the check and the write cannot be separated. The
-    /// owning business is in that clause too, contributed by the central query filter rather than
-    /// by a predicate written here.
+    /// One business's invites. Every statement in this adapter starts here, which is what makes the
+    /// owner impossible to omit on one method: there is no query over this table that does not go
+    /// through it.
     /// </summary>
-    private IQueryable<Models.MemberInvite> Live(DateTime nowUtc) =>
-        _db.MemberInvites.Where(invite =>
+    private IQueryable<Models.MemberInvite> Of(BusinessId businessId) =>
+        _db.MemberInvites.Where(invite => invite.BusinessId == businessId.Value);
+
+    /// <summary>
+    /// The invites of one business that may still be cancelled at <paramref name="nowUtc"/>:
+    /// pending, and not past their expiry. It is the SQL half of <c>MemberInvitePolicy.IsLive</c> -
+    /// the same two conditions, in a <c>WHERE</c> clause so the check and the write cannot be
+    /// separated - with the owning business in that clause beside them.
+    /// </summary>
+    private IQueryable<Models.MemberInvite> Live(BusinessId businessId, DateTime nowUtc) =>
+        Of(businessId).Where(invite =>
             invite.Status == MemberInviteStatus.Pending && invite.ExpiresAtUtc > nowUtc);
-
-    /// <summary>
-    /// A write needs exactly one resolved business. Both an unresolved caller and a deliberately
-    /// unscoped context report none, and neither may write here: <c>ExecuteUpdate</c> runs in the
-    /// database without passing through <c>BusinessOwnershipEnforcer</c>, so an unscoped statement
-    /// would carry no business predicate and cancel every business's invites.
-    /// </summary>
-    private void RequireCurrentBusinessId()
-    {
-        if (_db.CurrentBusinessId is not null)
-        {
-            return;
-        }
-
-        throw new CrossBusinessAccessException(
-            "A member invite cannot be cancelled without a single resolved current business. The "
-                + "caller has no business membership, or the context was constructed unscoped, so "
-                + "the write is refused.");
-    }
 }

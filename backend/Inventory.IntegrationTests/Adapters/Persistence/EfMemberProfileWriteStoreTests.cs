@@ -16,7 +16,7 @@ namespace InventoryApi.Tests.Adapters.Persistence;
 ///
 /// <para>Every context here carries a <em>denied</em> business scope, because that is the situation
 /// the refresh actually runs in: it happens in its own service scope after the request has gone, so
-/// no business is resolved. The write works because <c>BusinessMembership</c> is one of the three
+/// no business is resolved. The write works because <c>BusinessMembership</c> is one of the four
 /// structural non-tenant-owned tables, and the tests below are what prove it still cannot touch any
 /// row but the caller's own.</para>
 /// </summary>
