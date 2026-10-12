@@ -207,6 +207,8 @@ export class MemberManagementComponent implements OnInit {
         return `Revoke ${name}'s access?`;
       case 'reinstate':
         return `Reinstate ${name}'s access?`;
+      default:
+        return '';
     }
   }
 
