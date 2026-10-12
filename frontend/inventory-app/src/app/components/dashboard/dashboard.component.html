@@ -17,37 +17,44 @@
     </div>
   }
 
+  <!--
+    The two money cards are rendered only for a role the API sends the figures to (issues #527 and
+    #528). A role without Dashboard.ViewFinancials receives a summary with no `salesThisWeek` and
+    no `inventory.inventoryValueAtCost` at all, and gets the two non-financial cards alone.
+  -->
   <section class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-    <a
-      routerLink="/reports"
-      class="stat-card block transition-colors hover:border-md-gray-300"
-      aria-label="Sales this week. View the Reporting Dashboard."
-    >
-      <div class="stat-card-head">
-        <div class="stat-card-content">
-          <p class="stat-card-label">Sales this week</p>
-          @if (isLoadingSummary) {
-            <div class="h-8 w-28 animate-pulse rounded bg-md-gray-100"></div>
-          } @else if (summary) {
-            <p class="stat-card-value">{{ money(summary.salesThisWeek.sales) }}</p>
-          } @else {
-            <p class="stat-card-value value-muted">Unavailable</p>
-          }
+    @if (isSalesCardShown) {
+      <a
+        routerLink="/reports"
+        class="stat-card block transition-colors hover:border-md-gray-300"
+        aria-label="Sales this week. View the Reporting Dashboard."
+      >
+        <div class="stat-card-head">
+          <div class="stat-card-content">
+            <p class="stat-card-label">Sales this week</p>
+            @if (isLoadingSummary) {
+              <div class="h-8 w-28 animate-pulse rounded bg-md-gray-100"></div>
+            } @else if (summary) {
+              <p class="stat-card-value">{{ salesValueDisplay }}</p>
+            } @else {
+              <p class="stat-card-value value-muted">Unavailable</p>
+            }
+          </div>
+          <span class="icon-tile icon-tile-dark">
+            <app-icon name="attach_money" />
+          </span>
         </div>
-        <span class="icon-tile icon-tile-dark">
-          <app-icon name="attach_money" />
-        </span>
-      </div>
-      <p class="stat-card-footer">
-        @if (isLoadingSummary) {
-          <span class="value-muted">Loading…</span>
-        } @else if (summary) {
-          <span [ngClass]="salesComparisonClass(summary.salesThisWeek)">{{ salesComparisonText(summary.salesThisWeek) }}</span>
-        } @else {
-          <span class="value-muted">Comparison unavailable</span>
-        }
-      </p>
-    </a>
+        <p class="stat-card-footer">
+          @if (isLoadingSummary) {
+            <span class="value-muted">Loading…</span>
+          } @else if (summary) {
+            <span [ngClass]="salesComparisonDisplayClass">{{ salesComparisonDisplay }}</span>
+          } @else {
+            <span class="value-muted">Comparison unavailable</span>
+          }
+        </p>
+      </a>
+    }
 
     <a
       routerLink="/pick-list"
@@ -111,37 +118,39 @@
       </p>
     </a>
 
-    <a
-      routerLink="/products"
-      class="stat-card block transition-colors hover:border-md-gray-300"
-      aria-label="Inventory. View Products."
-    >
-      <div class="stat-card-head">
-        <div class="stat-card-content">
-          <p class="stat-card-label">Inventory</p>
-          @if (isLoadingSummary) {
-            <div class="h-8 w-28 animate-pulse rounded bg-md-gray-100"></div>
-          } @else if (summary) {
-            <p class="stat-card-value">{{ inventoryValueDisplay(summary.inventory) }}</p>
-          } @else {
-            <p class="stat-card-value value-muted">Unavailable</p>
-          }
+    @if (isInventoryCardShown) {
+      <a
+        routerLink="/products"
+        class="stat-card block transition-colors hover:border-md-gray-300"
+        aria-label="Inventory. View Products."
+      >
+        <div class="stat-card-head">
+          <div class="stat-card-content">
+            <p class="stat-card-label">Inventory</p>
+            @if (isLoadingSummary) {
+              <div class="h-8 w-28 animate-pulse rounded bg-md-gray-100"></div>
+            } @else if (summary) {
+              <p class="stat-card-value">{{ inventoryValueDisplay(summary.inventory) }}</p>
+            } @else {
+              <p class="stat-card-value value-muted">Unavailable</p>
+            }
+          </div>
+          <span class="icon-tile icon-tile-dark">
+            <app-icon name="inventory_2" />
+          </span>
         </div>
-        <span class="icon-tile icon-tile-dark">
-          <app-icon name="inventory_2" />
-        </span>
-      </div>
-      <p class="stat-card-footer">
-        @if (isLoadingSummary) {
-          <span class="value-muted">Loading…</span>
-        } @else if (summary) {
-          <span class="block value-muted">{{ inventoryValueHelpText(summary.inventory) }}</span>
-          <span class="block value-muted">{{ inventoryScopeText(summary.inventory) }}</span>
-        } @else {
-          <span class="value-muted">Inventory figures unavailable</span>
-        }
-      </p>
-    </a>
+        <p class="stat-card-footer">
+          @if (isLoadingSummary) {
+            <span class="value-muted">Loading…</span>
+          } @else if (summary) {
+            <span class="block value-muted">{{ inventoryValueHelpText(summary.inventory) }}</span>
+            <span class="block value-muted">{{ inventoryScopeText(summary.inventory) }}</span>
+          } @else {
+            <span class="value-muted">Inventory figures unavailable</span>
+          }
+        </p>
+      </a>
+    }
   </section>
 
   <section class="card">
