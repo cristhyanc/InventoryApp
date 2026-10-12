@@ -765,6 +765,65 @@ namespace Inventory.Infrastructure.Migrations
                     b.ToTable("InventoryCostTransitionPreviewDrafts");
                 });
 
+            modelBuilder.Entity("Inventory.Infrastructure.Models.MemberInvite", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime?>("CancelledAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CreatedByDirectoryTenantId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CreatedByObjectId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("ExpiresAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Note")
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("RedeemedByMembershipId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Role")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("TokenHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("UsedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex("RedeemedByMembershipId");
+
+                    b.HasIndex("BusinessId", "TokenHash")
+                        .IsUnique();
+
+                    b.ToTable("MemberInvites");
+                });
+
             modelBuilder.Entity("Inventory.Infrastructure.Models.NayaxConnectionTestDraft", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1700,6 +1759,14 @@ namespace Inventory.Infrastructure.Migrations
                         .IsRequired();
 
                     b.Navigation("InventoryCostTransitionBaseline");
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.MemberInvite", b =>
+                {
+                    b.HasOne("Inventory.Infrastructure.Models.BusinessMembership", null)
+                        .WithMany()
+                        .HasForeignKey("RedeemedByMembershipId")
+                        .OnDelete(DeleteBehavior.Restrict);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.NayaxMachineStockEvent", b =>

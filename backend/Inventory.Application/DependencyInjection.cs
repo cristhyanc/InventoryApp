@@ -80,6 +80,14 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<RevokeMember>();
         services.AddScoped<ReinstateMember>();
 
+        // The Owner's invite links (issue #531). Scoped for the same reason: each answer belongs to
+        // one caller's resolved business, and the cancellation's conditional write runs on that
+        // request's own AppDbContext - which is also what lets #509's deactivation call the store's
+        // cancel-all inside its own transaction.
+        services.AddScoped<CreateMemberInvite>();
+        services.AddScoped<ListMemberInvites>();
+        services.AddScoped<CancelMemberInvite>();
+
         // The member's display-only name and email address, refreshed from their sign-in token
         // (issue #524). The hourly throttle and the hand-off queue are singletons because both are
         // state about the process rather than about one request: "this membership was refreshed
