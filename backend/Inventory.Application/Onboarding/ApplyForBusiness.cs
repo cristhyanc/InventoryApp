@@ -113,7 +113,13 @@ public sealed record BusinessApplicationOutcome
 /// nothing happened. A submission that *differs* is refused: changing details an operator is
 /// reviewing is a different request, and this slice does not implement it. That comparison writes
 /// nothing at all, so there is nothing about it to serialise; what has to be one operation is the
-/// creation, and that is what runs inside the guard's transaction.</para>
+/// creation, and that is what runs inside the guard's transaction. Two <em>simultaneous</em>
+/// identical submissions are therefore answered either with two successes reporting the one
+/// application - the second read ran after the first commit and found it - or with one success and
+/// one conflict - the second read ran before it, so the creation reached the guard and its re-check
+/// refused it. Both are correct answers to one form submitted twice, and neither can leave two
+/// tenants: what is fixed either way is that exactly one business with exactly one active Owner
+/// membership exists afterwards, and a refused attempt leaves no business row behind.</para>
 ///
 /// <para><strong>The new business starts empty.</strong> No machine, product, purchase, sale, site,
 /// invite or Nayax connection record is created, so its Nayax status is <c>NotConfigured</c> by

@@ -29,7 +29,16 @@ namespace InventoryApi.Tests.Adapters.Persistence;
 /// <see cref="EfMemberInviteRedemptionStore"/> and the real
 /// <see cref="EfBusinessMembershipWriteStore"/> over the migrated schema, with only the
 /// authenticated actor, the clock, the onboarding flag and the audit sinks faked - because those
-/// are the things a test has to decide rather than observe.</para>
+/// are the things a test has to decide rather than observe. One test adds the use case's own
+/// eligibility <em>read</em> to that list, for the same reason: which instant that read saw is the
+/// thing a barrier cannot decide, and the rule it is the test of lives after it.</para>
+///
+/// <para>What a test here may assert is what the rules guarantee, and not which thread won. Where
+/// an operation has two correct answers depending on the interleaving - as a double application
+/// does, one being the issue's own idempotent resubmission - the assertion is the state the
+/// database is left in and the set of answers allowed, and the interleaving that is only reachable
+/// by timing is pinned down by a separate deterministic test instead. An assertion that names the
+/// winner passes on a quiet machine and fails under load without anything being wrong.</para>
 /// </summary>
 public class BusinessApplicationConcurrencyTests : IAsyncDisposable
 {
@@ -122,32 +131,108 @@ public class BusinessApplicationConcurrencyTests : IAsyncDisposable
 
     /// <summary>
     /// Two applications submitted by one identity at the same instant. Exactly one business is
-    /// created: the loser is refused as a conflict and its own business row goes back with the
-    /// transaction, so a double submission can never leave two Pending tenants for one person.
+    /// created, it has exactly one active Owner membership, and every attempt is answered either
+    /// with that one application or with the membership conflict - so a double submission can never
+    /// leave two Pending tenants for one person.
     ///
-    /// <para>The refusal rather than a second <c>200</c> is the deliberate trade. The resubmission
-    /// shortcut is answered from a read that writes nothing, so it cannot be serialised against a
-    /// creation that has not happened yet; what has to be one operation is the creation, and the
-    /// rule that makes it so is the eligibility re-check inside the write transaction. A simultaneous
-    /// double submission therefore fails closed - one application, one business - and the person's
-    /// next attempt is the ordinary idempotent resubmission.</para>
+    /// <para><strong>Which of the two answers the second attempt gets is the interleaving's to
+    /// decide, and asserting one of them would be asserting the scheduler.</strong> The resubmission
+    /// shortcut is answered from a read that writes nothing and therefore takes no write lock: when
+    /// that read runs <em>after</em> the other attempt committed it sees the application already
+    /// waiting and reports it back, which is the ordinary idempotent retry of the issue's
+    /// acceptance criteria and a second <c>200</c> for the same single application; when it runs
+    /// <em>before</em>, the creation reaches <see cref="MembershipWriteGuard"/> and the eligibility
+    /// re-check inside the write transaction refuses it as a conflict. Both are legitimate answers
+    /// to "I submitted this form twice", and the guarantee underneath them is the same and is what
+    /// this test asserts: one application, one business, one active membership. A run that demanded
+    /// exactly one failure asserted the slower of two threads instead, which is why it failed
+    /// intermittently in CI while the invariant held.</para>
+    ///
+    /// <para>The guard refusal that the second ordering produces is not left to the scheduler
+    /// either; it is proved deterministically by
+    /// <see cref="An_application_whose_eligibility_read_missed_the_committed_one_creates_nothing"/>.</para>
     /// </summary>
     [Fact]
     public async Task Two_applications_by_one_identity_create_exactly_one_business()
     {
+        var outcomes = new BusinessApplicationOutcome?[2];
+
         var failures = await MembershipWriteRaceHarness.RunAsync(
-            token => ApplyAsync(ApplicantOid, Submission(), token),
-            token => ApplyAsync(ApplicantOid, Submission(), token));
+            async token => outcomes[0] = await ApplyAsync(ApplicantOid, Submission(), token),
+            async token => outcomes[1] = await ApplyAsync(ApplicantOid, Submission(), token));
 
-        var conflict = Assert.IsType<DomainConflictException>(
-            MembershipWriteRaceHarness.SingleFailure(failures));
-        Assert.Equal(MembershipEligibility.AlreadyAMemberMessage, conflict.Message);
-
+        // The invariant, whichever way the two interleaved: one Pending business for this identity,
+        // one membership, and it is that business's active Owner.
         var created = Assert.Single(_harness.Businesses().Where(business => business.Status == BusinessStatus.Pending));
         var membership = Assert.Single(_harness.Memberships());
         Assert.Equal(created.Id, membership.BusinessId);
         Assert.Equal(BusinessRole.Owner, membership.Role);
         Assert.True(membership.IsActive);
+
+        // At least one attempt recorded it - two conflicts would mean the application was lost.
+        Assert.NotEmpty(failures.Where(failure => failure is null));
+
+        for (var attempt = 0; attempt < failures.Length; attempt++)
+        {
+            if (failures[attempt] is { } failure)
+            {
+                // Refused by the re-check inside the write transaction, with the one fixed sentence
+                // and nothing written: the single business above is the other attempt's.
+                var conflict = Assert.IsType<DomainConflictException>(failure);
+                Assert.Equal(MembershipEligibility.AlreadyAMemberMessage, conflict.Message);
+                Assert.Null(outcomes[attempt]);
+                continue;
+            }
+
+            // Answered with an application - and it has to be the one that exists, not a second
+            // one: same row, same submission instant, still Pending.
+            var application = outcomes[attempt]?.Application;
+            Assert.NotNull(application);
+            Assert.Equal(created.Id, application.BusinessId.Value);
+            Assert.Equal(created.AppliedAtUtc, application.AppliedAtUtc);
+            Assert.Equal(BusinessStatus.Pending, application.Status);
+        }
+    }
+
+    /// <summary>
+    /// The interleaving above that a barrier cannot pin down, made deterministic: an application
+    /// whose eligibility read answered "no membership" because it ran a moment before the other
+    /// applicant's transaction committed. The resubmission shortcut and the early refusal both pass
+    /// it through, so the creation reaches the guard - and the re-check inside the write transaction
+    /// is what refuses it, with the business row it had already added going back with the
+    /// transaction rather than surviving as a second Pending tenant.
+    ///
+    /// <para>This is the assertion the race test above cannot make reliably, and the one that
+    /// matters: the stale read is the <em>only</em> way two applications by one identity can both
+    /// reach a write, and this is what happens when one does - every time, rather than one run in
+    /// twenty. It does not distinguish which of the two rules refused, because nothing a caller can
+    /// observe does: the re-check inside the transaction and the filtered unique index behind it
+    /// refuse with the same sentence by design, and the order the guard applies its rules in is
+    /// <c>MembershipWriteGuardTests</c>' subject.</para>
+    /// </summary>
+    [Fact]
+    public async Task An_application_whose_eligibility_read_missed_the_committed_one_creates_nothing()
+    {
+        await ApplyAsync(ApplicantOid, Submission(), CancellationToken.None);
+
+        var created = Assert.Single(_harness.Businesses().Where(business => business.Status == BusinessStatus.Pending));
+
+        var conflict = await Assert.ThrowsAsync<DomainConflictException>(
+            () => ApplyAsync(
+                ApplicantOid,
+                Submission(),
+                CancellationToken.None,
+                StaleMembershipStore.SeesNothing));
+
+        Assert.Equal(MembershipEligibility.AlreadyAMemberMessage, conflict.Message);
+
+        // Nothing of the refused attempt is left: the two seeded businesses and the one that was
+        // created, the one membership, and the application instant unchanged.
+        var stillOne = Assert.Single(_harness.Businesses().Where(business => business.Status == BusinessStatus.Pending));
+        Assert.Equal(created.Id, stillOne.Id);
+        Assert.Equal(created.AppliedAtUtc, stillOne.AppliedAtUtc);
+        Assert.Equal(3, _harness.Businesses().Count);
+        Assert.Single(_harness.Memberships());
     }
 
     /// <summary>
@@ -203,11 +288,18 @@ public class BusinessApplicationConcurrencyTests : IAsyncDisposable
     /// Runs one real application on its own connection, as a request would: a denied business scope,
     /// the real guard and the real stores, and the caller's identity supplied the way the API
     /// boundary supplies it.
+    ///
+    /// <para><c>membershipStore</c> is what the use case's <em>own</em> eligibility read uses, for
+    /// the one test that has to decide what that read saw rather than observe it: the real
+    /// relational store by default, and <see cref="StaleMembershipStore"/> to stand for the instant
+    /// before another applicant's transaction committed. The guard's re-check is always the real one
+    /// over the real database, because that is the rule under test.</para>
     /// </summary>
-    private async Task ApplyAsync(
+    private async Task<BusinessApplicationOutcome> ApplyAsync(
         string objectId,
         BusinessApplicationSubmission submission,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IBusinessMembershipStore? membershipStore = null)
     {
         var identity = MembershipWriteRaceHarness.Actor(objectId);
 
@@ -218,7 +310,7 @@ public class BusinessApplicationConcurrencyTests : IAsyncDisposable
         var apply = new ApplyForBusiness(
             FakeSelfServiceOnboardingFlag.Enabled,
             FakeActorProfileAccessor.For(identity, MemberProfile.None),
-            new EfBusinessMembershipStore(db),
+            membershipStore ?? new EfBusinessMembershipStore(db),
             new EfBusinessApplicationStore(db),
             new BusinessApplicationRateLimiter(new FakeClock(Now)),
             new MembershipWriteGuard(new EfBusinessMembershipWriteStore(db)),
@@ -231,6 +323,8 @@ public class BusinessApplicationConcurrencyTests : IAsyncDisposable
         // away rather than ignored: every operation here gets its own limiter and claims once.
         Assert.Null(outcome.RetryAfter);
         Assert.True(outcome.Enabled);
+
+        return outcome;
     }
 
     /// <summary>The same for one real invite redemption, exactly as issue #532's own races run it.</summary>
@@ -249,5 +343,21 @@ public class BusinessApplicationConcurrencyTests : IAsyncDisposable
             new FakeClock(Now));
 
         await redeem.Handle(token, cancellationToken);
+    }
+
+    /// <summary>
+    /// One membership read that answers "this identity has no membership", which is what the real
+    /// read answers for the instant before another applicant's transaction commits. It stands in for
+    /// that instant and for nothing else: everything the use case then does - the write, the
+    /// re-check and the transaction - is the real thing over the real database.
+    /// </summary>
+    private sealed class StaleMembershipStore : IBusinessMembershipStore
+    {
+        public static StaleMembershipStore SeesNothing { get; } = new();
+
+        public Task<IReadOnlyList<ActorBusinessMembership>> FindMembershipsAsync(
+            ActorIdentity actor,
+            CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<ActorBusinessMembership>>([]);
     }
 }
