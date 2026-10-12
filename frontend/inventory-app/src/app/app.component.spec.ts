@@ -1,13 +1,17 @@
+import { HttpClient } from '@angular/common/http';
 import { Component } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
 import { MsalBroadcastService, MsalService } from '@azure/msal-angular';
-import { AccountInfo, InteractionStatus } from '@azure/msal-browser';
-import { BehaviorSubject, Observable, Subject, of } from 'rxjs';
+import { AccountInfo, EventMessage, EventType, InteractionStatus } from '@azure/msal-browser';
+import { BehaviorSubject, NEVER, Observable, Subject, of } from 'rxjs';
 import { AccessService, MemberAccessState } from './access/access.service';
 import { AccountStateAnswer, AccountStateService } from './access/account-state.service';
 import { CAPABILITIES, capabilitySet } from './access/capabilities';
+import { signedInAccountMayHaveChanged } from './access/signed-in-account';
 import { AppComponent } from './app.component';
+import { BusinessTimeZoneService } from './formatting/business-time-zone.service';
+import { ConfigService } from './services/config.service';
 import { PlatformDiagnosticsAccessService } from './services/platform-diagnostics-access.service';
 import { BusinessService, CurrentBusiness } from './services/business.service';
 
@@ -15,6 +19,14 @@ import { BusinessService, CurrentBusiness } from './services/business.service';
 class BlankPageComponent {}
 
 const account = { name: 'Dana Operator', username: 'dana@example.test' } as unknown as AccountInfo;
+
+/** The identity of a signed-in account, as both the shell and the identity caches read it. */
+function accountKeyOf(account: AccountInfo | null): string | null {
+  if (account === null) {
+    return null;
+  }
+  return account.homeAccountId || account.localAccountId || account.username || '';
+}
 
 interface MediaQueryStub {
   emit(matches: boolean): void;
@@ -50,8 +62,18 @@ interface Rendered {
   };
   businessLoad: jest.Mock;
   businessReset: jest.Mock;
+  /** Every `GET /api/business/current` the real lookup issued; only used with `businessHttp`. */
+  businessGet: jest.Mock;
+  /** The zone holder the real lookup publishes into; only meaningful with `businessHttp`. */
+  timeZone: BusinessTimeZoneService;
   /** Re-runs the shell's sign-in check, as MSAL does when an interaction settles. */
   settleInteraction: () => void;
+  /** Raises one MSAL account event, leaving the interaction status where it is (issue #604). */
+  raiseAccountEvent: (eventType: EventType) => void;
+  /** Answers the account-state read that is still pending (issue #604). */
+  answerAccountState: (answer: AccountStateAnswer) => void;
+  /** The identity of every account-state read, in order (issue #604). */
+  accountStateReads: readonly string[];
 }
 
 const MEMBER_ACCOUNT_STATE: AccountStateAnswer = {
@@ -59,21 +81,96 @@ const MEMBER_ACCOUNT_STATE: AccountStateAnswer = {
   accountState: { state: 'Member', onboardingEnabled: false, rejectionReason: null }
 };
 
+const UNREAD_ACCOUNT_STATE: AccountStateAnswer = { status: 'unread' };
+
+/**
+ * `AccountStateService` as the shell consumes it, obeying issue #603's identity-change contract.
+ *
+ * The real service is a root service the shell injects, so it is constructed - and subscribed to
+ * MSAL's two signals - before the component exists. This double is built the same way, from the
+ * same `signedInAccountMayHaveChanged` trigger, so a changed identity publishes `unread` again
+ * before the shell's own handler runs and the new identity's answer arrives only when the test
+ * supplies it. That ordering is the whole point: the shell must never act on the previous
+ * identity's `Member` (or `NoMembership`) answer.
+ */
+class AccountStateDouble {
+  readonly state$ = new BehaviorSubject<AccountStateAnswer>(UNREAD_ACCOUNT_STATE);
+
+  /** The identity of every read this double issued, in order. */
+  readonly reads: string[] = [];
+
+  private cachedFor: string | null;
+
+  constructor(
+    broadcast: MsalBroadcastService,
+    private readonly identity: () => string | null,
+    private readonly answerFor: (identity: string) => AccountStateAnswer | 'pending'
+  ) {
+    this.cachedFor = this.identity();
+    this.issueRead();
+    signedInAccountMayHaveChanged(broadcast).subscribe(() => this.applySignedInAccount());
+  }
+
+  /** Answers the pending read, as the real service's own `GET` answering does. */
+  answer(answer: AccountStateAnswer): void {
+    this.state$.next(answer);
+  }
+
+  private applySignedInAccount(): void {
+    const identity = this.identity();
+    if (identity === this.cachedFor) {
+      return;
+    }
+
+    this.cachedFor = identity;
+    // Issue #603: the previous identity's answer is dropped before the new read is even waited for.
+    this.state$.next(UNREAD_ACCOUNT_STATE);
+    this.issueRead();
+  }
+
+  private issueRead(): void {
+    if (this.cachedFor === null) {
+      // A sign-out clears the answer without an authenticated read.
+      return;
+    }
+
+    this.reads.push(this.cachedFor);
+    const answer = this.answerFor(this.cachedFor);
+    if (answer !== 'pending') {
+      this.state$.next(answer);
+    }
+  }
+}
+
 async function render(
   options: {
     signedIn?: boolean;
     business?: () => Observable<CurrentBusiness | null>;
+    /**
+     * Answers for the **real** `BusinessService` instead of the stubbed one, in read order: what
+     * proves which business zone the shell actually publishes across an account switch (#604).
+     */
+    businessHttp?: readonly (() => Observable<CurrentBusiness>)[];
     /** The active account, read on every sign-in check; defaults to `signedIn`. */
     activeAccount?: () => AccountInfo | null;
     /** Defaults to `Member`, so the existing business-lookup tests are unaffected (issue #529). */
     accountState?: AccountStateAnswer;
+    /** Per-identity account-state answers; `'pending'` holds the read unanswered (issue #604). */
+    accountStateFor?: (identity: string) => AccountStateAnswer | 'pending';
   } = {}
 ): Promise<Rendered> {
   const signedIn = options.signedIn ?? true;
   const activeAccount = options.activeAccount ?? (() => (signedIn ? account : null));
   const businessLoad = jest.fn(options.business ?? (() => of({ name: 'Vending Co', timeZoneId: 'Australia/Sydney' })));
   const businessReset = jest.fn();
+  const queuedBusinessReads = [...(options.businessHttp ?? [])];
+  const businessGet = jest.fn(() => {
+    const next = queuedBusinessReads.shift();
+    return next === undefined ? (NEVER as Observable<CurrentBusiness>) : next();
+  });
   const inProgress$ = new BehaviorSubject(InteractionStatus.None);
+  const msalSubject$ = new Subject<EventMessage>();
+  const broadcast = { inProgress$, msalSubject$ } as unknown as MsalBroadcastService;
   const loginRedirect = jest.fn();
   const logoutRedirect = jest.fn();
   const msalService = {
@@ -90,12 +187,19 @@ async function render(
     logoutRedirect
   };
 
+  const constantAnswer = options.accountState ?? MEMBER_ACCOUNT_STATE;
+  const accountState = new AccountStateDouble(
+    broadcast,
+    () => accountKeyOf(activeAccount()),
+    options.accountStateFor ?? (() => constantAnswer)
+  );
+
   await TestBed.configureTestingModule({
     imports: [AppComponent],
     providers: [
       provideRouter([{ path: '**', component: BlankPageComponent }]),
       { provide: MsalService, useValue: msalService },
-      { provide: MsalBroadcastService, useValue: { inProgress$ } },
+      { provide: MsalBroadcastService, useValue: broadcast },
       // The shell renders the sidebar, which asks the diagnostics API whether to offer the
       // super-admin link (issue #335). The shell itself owns no part of that decision, so the
       // probe is stubbed as refused here and tested where it belongs.
@@ -119,12 +223,19 @@ async function render(
       },
       // The shell reads the signed-in operator's business so every instant on the page can be
       // rendered in that business's time zone (issue #499). The shell owns only the waiting; the
-      // lookup itself is tested in business.service.spec.ts.
-      { provide: BusinessService, useValue: { load: businessLoad, reset: businessReset } },
+      // lookup itself is tested in business.service.spec.ts. The zone tests of issue #604 instead
+      // use the real service over an HttpClient double, because which zone is published across an
+      // account switch is exactly what the real reset/generation protection decides.
+      ...(options.businessHttp === undefined
+        ? [{ provide: BusinessService, useValue: { load: businessLoad, reset: businessReset } }]
+        : [
+            { provide: HttpClient, useValue: { get: businessGet } },
+            { provide: ConfigService, useValue: { apiBaseUrl: '/api' } }
+          ]),
       // The shell waits for the account state before looking up a business at all (issue #529);
-      // that gating is what app.component business-context tests below exercise, so the answer is
-      // stubbed directly rather than through the real cached service.
-      { provide: AccountStateService, useValue: { state$: of(options.accountState ?? MEMBER_ACCOUNT_STATE) } }
+      // that gating is what app.component business-context tests below exercise, so the answer
+      // comes from the double above rather than through the real cached service.
+      { provide: AccountStateService, useValue: { state$: accountState.state$ } }
     ]
   }).compileComponents();
 
@@ -137,10 +248,15 @@ async function render(
     msal: { loginRedirect, logoutRedirect },
     businessLoad,
     businessReset,
+    businessGet,
+    timeZone: TestBed.inject(BusinessTimeZoneService),
     settleInteraction: () => {
       inProgress$.next(InteractionStatus.None);
       fixture.detectChanges();
-    }
+    },
+    raiseAccountEvent: (eventType: EventType) => msalSubject$.next({ eventType } as EventMessage),
+    answerAccountState: (answer: AccountStateAnswer) => accountState.answer(answer),
+    accountStateReads: accountState.reads
   };
 }
 
@@ -634,6 +750,252 @@ describe('AppComponent business context (issue #499)', () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+});
+
+/**
+ * A direct Microsoft active-account switch (issue #604). MSAL raises `ACTIVE_ACCOUNT_CHANGED` and
+ * leaves `inProgress$` at `None`, so a shell that watched the interaction status alone kept the
+ * previous account's name, business and published time zone on screen - the new account-state
+ * answer could not repair it, because the previous lookup had already completed.
+ *
+ * Every test here switches the account through the event only, and never touches `inProgress$`.
+ */
+describe('AppComponent active-account switch (issue #604)', () => {
+  beforeEach(() => stubMatchMedia(true));
+
+  const dana = {
+    name: 'Dana Operator',
+    username: 'dana@example.test',
+    homeAccountId: 'dana.tenant'
+  } as unknown as AccountInfo;
+  const lee = {
+    name: 'Lee Operator',
+    username: 'lee@example.test',
+    homeAccountId: 'lee.tenant'
+  } as unknown as AccountInfo;
+
+  const sydney: CurrentBusiness = { name: 'Vending Co', timeZoneId: 'Australia/Sydney' };
+  const london: CurrentBusiness = { name: 'Vending UK', timeZoneId: 'Europe/London' };
+
+  const NO_MEMBERSHIP: AccountStateAnswer = {
+    status: 'known',
+    accountState: { state: 'NoMembership', onboardingEnabled: false, rejectionReason: null }
+  };
+
+  /** Answers A's state at once and holds B's read pending, so the waiting window is a test step. */
+  const pendingForLee = (identity: string): AccountStateAnswer | 'pending' =>
+    identity === 'lee.tenant' ? 'pending' : MEMBER_ACCOUNT_STATE;
+
+  function mainText(fixture: ComponentFixture<AppComponent>): string {
+    fixture.detectChanges();
+    return (fixture.nativeElement as HTMLElement).querySelector('main')?.textContent ?? '';
+  }
+
+  function headerText(fixture: ComponentFixture<AppComponent>): string {
+    fixture.detectChanges();
+    return (fixture.nativeElement as HTMLElement).querySelector('header')?.textContent ?? '';
+  }
+
+  async function onAPage(fixture: ComponentFixture<AppComponent>): Promise<void> {
+    await TestBed.inject(Router).navigateByUrl('/reports/bookkeeping');
+    fixture.detectChanges();
+  }
+
+  it('follows the account the event reports, holding the page until the new context settles', async () => {
+    let active: AccountInfo | null = dana;
+    const leeBusiness = new Subject<CurrentBusiness | null>();
+    const lookups = [() => of(sydney), () => leeBusiness.asObservable()];
+    let lookup = 0;
+    const { fixture, businessLoad, businessReset, raiseAccountEvent, answerAccountState, accountStateReads } =
+      await render({
+        activeAccount: () => active,
+        accountStateFor: pendingForLee,
+        business: () => lookups[lookup++]()
+      });
+    await onAPage(fixture);
+    expect(mainText(fixture)).toContain('page body');
+    const resets = businessReset.mock.calls.length;
+
+    active = lee;
+    raiseAccountEvent(EventType.ACTIVE_ACCOUNT_CHANGED);
+
+    // The header is the new account's at once, and the previous account's context is discarded.
+    expect(headerText(fixture)).toContain('Lee Operator');
+    expect(headerText(fixture)).not.toContain('Dana Operator');
+    expect(businessReset.mock.calls.length).toBe(resets + 1);
+
+    // The routed-page gate is closed again, and nothing is asked of the business endpoint until
+    // the new identity's own account state has answered.
+    expect(mainText(fixture)).toContain('Loading your business');
+    expect(mainText(fixture)).not.toContain('page body');
+    expect(businessLoad).toHaveBeenCalledTimes(1);
+    expect(accountStateReads).toEqual(['dana.tenant', 'lee.tenant']);
+
+    answerAccountState(MEMBER_ACCOUNT_STATE);
+
+    expect(businessLoad).toHaveBeenCalledTimes(2);
+    expect(mainText(fixture)).toContain('Loading your business');
+
+    leeBusiness.next(london);
+
+    expect(mainText(fixture)).toContain('page body');
+  });
+
+  it('asks for no business when the new identity’s state says it has no usable membership', async () => {
+    let active: AccountInfo | null = dana;
+    const { fixture, businessLoad, raiseAccountEvent, answerAccountState } = await render({
+      activeAccount: () => active,
+      accountStateFor: pendingForLee
+    });
+    await onAPage(fixture);
+
+    active = lee;
+    raiseAccountEvent(EventType.ACTIVE_ACCOUNT_CHANGED);
+    expect(businessLoad).toHaveBeenCalledTimes(1);
+
+    answerAccountState(NO_MEMBERSHIP);
+
+    expect(businessLoad).toHaveBeenCalledTimes(1);
+    // Settled without a business: the page is released rather than waiting for a call that would
+    // only be refused.
+    expect(mainText(fixture)).toContain('page body');
+  });
+
+  it('still looks up the business for the new identity when its account state could not be read', async () => {
+    let active: AccountInfo | null = dana;
+    const { fixture, businessLoad, raiseAccountEvent, answerAccountState } = await render({
+      activeAccount: () => active,
+      accountStateFor: pendingForLee
+    });
+    await onAPage(fixture);
+
+    active = lee;
+    raiseAccountEvent(EventType.ACTIVE_ACCOUNT_CHANGED);
+    answerAccountState({ status: 'unavailable' });
+
+    expect(businessLoad).toHaveBeenCalledTimes(2);
+    expect(mainText(fixture)).toContain('page body');
+  });
+
+  it('clears the context on a sign-out event, without any protected call', async () => {
+    let active: AccountInfo | null = dana;
+    const { fixture, businessLoad, businessReset, raiseAccountEvent, accountStateReads } = await render({
+      activeAccount: () => active
+    });
+    await onAPage(fixture);
+    const resets = businessReset.mock.calls.length;
+
+    active = null;
+    raiseAccountEvent(EventType.LOGOUT_SUCCESS);
+
+    expect(businessReset.mock.calls.length).toBe(resets + 1);
+    expect(businessLoad).toHaveBeenCalledTimes(1);
+    expect(accountStateReads).toEqual(['dana.tenant']);
+    expect(headerText(fixture)).not.toContain('Dana Operator');
+    // Nobody is signed in, so there is no business context to wait for.
+    expect(mainText(fixture)).toContain('page body');
+  });
+
+  it('reads one business and keeps the settled context when the same identity is reported again', async () => {
+    const { fixture, businessLoad, businessReset, raiseAccountEvent, accountStateReads } = await render();
+    await onAPage(fixture);
+    const resets = businessReset.mock.calls.length;
+
+    raiseAccountEvent(EventType.ACTIVE_ACCOUNT_CHANGED);
+    raiseAccountEvent(EventType.LOGIN_SUCCESS);
+    raiseAccountEvent(EventType.ACTIVE_ACCOUNT_CHANGED);
+
+    expect(businessLoad).toHaveBeenCalledTimes(1);
+    expect(businessReset.mock.calls.length).toBe(resets);
+    expect(accountStateReads).toHaveLength(1);
+    expect(mainText(fixture)).toContain('page body');
+  });
+
+  it('stops following MSAL once the shell is destroyed', async () => {
+    let active: AccountInfo | null = dana;
+    const { fixture, businessLoad, businessReset, raiseAccountEvent } = await render({
+      activeAccount: () => active
+    });
+    const resets = businessReset.mock.calls.length;
+
+    fixture.destroy();
+    active = lee;
+    raiseAccountEvent(EventType.ACTIVE_ACCOUNT_CHANGED);
+
+    expect(businessReset.mock.calls.length).toBe(resets);
+    expect(businessLoad).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * The same switch against the real `BusinessService` and `BusinessTimeZoneService`, because which
+   * zone is published is what the reset/generation protection decides - and a stubbed lookup could
+   * not show it. Two synthetic business zones, so a wrong one is visible.
+   */
+  describe('the published business time zone', () => {
+    it('publishes the new business’s zone only, dropping the previous one on the switch itself', async () => {
+      let active: AccountInfo | null = dana;
+      const danaBusiness = new Subject<CurrentBusiness>();
+      const leeBusiness = new Subject<CurrentBusiness>();
+      const { fixture, timeZone, businessGet, raiseAccountEvent, answerAccountState } = await render({
+        activeAccount: () => active,
+        accountStateFor: pendingForLee,
+        businessHttp: [() => danaBusiness.asObservable(), () => leeBusiness.asObservable()]
+      });
+      await onAPage(fixture);
+
+      danaBusiness.next(sydney);
+      expect(timeZone.timeZoneId).toBe('Australia/Sydney');
+      expect(mainText(fixture)).toContain('page body');
+      expect(businessGet).toHaveBeenCalledTimes(1);
+
+      active = lee;
+      raiseAccountEvent(EventType.ACTIVE_ACCOUNT_CHANGED);
+
+      // No zone at all while the new business is unknown: a page that renders an instant renders
+      // it as unavailable rather than in the previous business's zone.
+      expect(timeZone.timeZoneId).toBeNull();
+      expect(mainText(fixture)).toContain('Loading your business');
+      expect(businessGet).toHaveBeenCalledTimes(1);
+
+      answerAccountState(MEMBER_ACCOUNT_STATE);
+      expect(businessGet).toHaveBeenCalledTimes(2);
+
+      leeBusiness.next(london);
+
+      expect(timeZone.timeZoneId).toBe('Europe/London');
+      expect(mainText(fixture)).toContain('page body');
+    });
+
+    it('lets a superseded response publish nothing and ready nothing when it answers late', async () => {
+      let active: AccountInfo | null = dana;
+      const danaBusiness = new Subject<CurrentBusiness>();
+      const leeBusiness = new Subject<CurrentBusiness>();
+      const { fixture, timeZone, businessGet, raiseAccountEvent, answerAccountState } = await render({
+        activeAccount: () => active,
+        accountStateFor: pendingForLee,
+        businessHttp: [() => danaBusiness.asObservable(), () => leeBusiness.asObservable()]
+      });
+      await onAPage(fixture);
+      expect(businessGet).toHaveBeenCalledTimes(1);
+
+      active = lee;
+      raiseAccountEvent(EventType.ACTIVE_ACCOUNT_CHANGED);
+      answerAccountState(MEMBER_ACCOUNT_STATE);
+      expect(businessGet).toHaveBeenCalledTimes(2);
+
+      // The previous account's lookup answers after the switch.
+      danaBusiness.next(sydney);
+
+      expect(timeZone.timeZoneId).toBeNull();
+      expect(mainText(fixture)).toContain('Loading your business');
+      expect(mainText(fixture)).not.toContain('page body');
+
+      leeBusiness.next(london);
+
+      expect(timeZone.timeZoneId).toBe('Europe/London');
+      expect(mainText(fixture)).toContain('page body');
+    });
   });
 });
 

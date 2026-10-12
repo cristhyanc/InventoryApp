@@ -15,8 +15,9 @@ const ACCOUNT_EVENTS: ReadonlySet<string> = new Set<string>([
  * settling, which is what the shell already uses to decide that an interaction has finished.
  *
  * It only says "look again": callers compare `activeAccountKey` with the identity their cached
- * answer belongs to and decide for themselves. `AccessService` and
- * `PlatformDiagnosticsAccessService` share this trigger and nothing else.
+ * answer belongs to and decide for themselves. `AccessService`, `PlatformDiagnosticsAccessService`
+ * and - since issue #604 - `AppComponent`, which reads the shell's own business context from it,
+ * share this trigger and nothing else.
  */
 export function signedInAccountMayHaveChanged(msalBroadcastService: MsalBroadcastService): Observable<void> {
   return merge(
