@@ -43,6 +43,8 @@
     <Compile Include="..\Inventory.UnitTests\Application\Members\FakeMemberInviteAudit.cs" Link="Application\Members\FakeMemberInviteAudit.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Members\FakeMemberManagementAudit.cs" Link="Application\Members\FakeMemberManagementAudit.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\NayaxFeeSettings\FakeNayaxFeeRateStore.cs" Link="Application\NayaxFeeSettings\FakeNayaxFeeRateStore.cs" />
+    <Compile Include="..\Inventory.UnitTests\Application\Onboarding\FakeBusinessApplicationAudit.cs" Link="Application\Onboarding\FakeBusinessApplicationAudit.cs" />
+    <Compile Include="..\Inventory.UnitTests\Application\Onboarding\FakeSelfServiceOnboardingFlag.cs" Link="Application\Onboarding\FakeSelfServiceOnboardingFlag.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Products\FakeSiteFactsStore.cs" Link="Application\Products\FakeSiteFactsStore.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Reporting\Bookkeeping\FakeBookkeepingReportFactsProvider.cs" Link="Application\Reporting\Bookkeeping\FakeBookkeepingReportFactsProvider.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Reporting\Daily\FakeDailyReportFactsProvider.cs" Link="Application\Reporting\Daily\FakeDailyReportFactsProvider.cs" />

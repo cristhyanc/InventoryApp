@@ -244,8 +244,9 @@ single Australian vending operation — so it never creates a pending applicatio
 application or decision instant, and leaves every profile column the application form collects
 (contact email, GST registration, ABN, applied/decided instants, rejection reason) empty rather than
 inventing a value for a business that predates the form. The self-service application that creates a
-`Pending` business is issue #541, and approving, rejecting or deactivating one is issue #509; neither
-goes through this command.
+`Pending` business is issue #541's, behind the flag described in
+[Enabling self-service onboarding](#enabling-self-service-onboarding-issue-541) below, and
+approving, rejecting or deactivating one is issue #509; neither goes through this command.
 
 Two consequences for this procedure. The bootstrap refuses to assign data to a business in any other
 status and names the status in its message (see
@@ -288,6 +289,51 @@ that omits the status would create a reachable business.
 was inserted by something that bypassed the application, and it denies all access. Do not "fix" it
 by guessing. Decide what the business actually is and set that status deliberately, the same way any
 other lifecycle decision is made.
+
+#### Enabling self-service onboarding (issue #541)
+
+Since issue #541 a business can also be created by somebody applying for one:
+`POST /api/onboarding/business-applications` records a `Pending` business with the applicant as its
+Owner, and the Super Admin decides on it. That path is **behind the `SelfServiceOnboarding:Enabled`
+flag, which is `false` in source control and must stay off in production until the gate below has
+been met.** See
+[docs/architecture.md § Self-service business application](architecture.md#self-service-business-application-issue-541)
+for the design.
+
+**Nothing in this procedure changes while the flag is off.** With it off the endpoint answers `404`
+and `GET /api/me/account-state` reports `onboardingEnabled: false`, so nobody can apply and no
+`Pending` business can appear. `bootstrap-business` remains the only way a business exists, and it
+still creates it `Active`. Turning the flag on adds no migration and changes no stored row.
+
+**The release gate — all of it, verified by a human, before the flag is switched on in
+production:**
+
+1. **Issue #500's migration command (#519) has been run in production.** That is
+   [Migrating the Nayax connection into the business](#migrating-the-nayax-connection-into-the-business-issue-519)
+   below, applied and verified in production. Until it has, the existing business's Nayax credential
+   is still only in global configuration, and a second business in the same deployment would be a
+   business whose Nayax calls have no credential of their own to read.
+2. **Issue #329's required changes are deployed to production *and verified there* by a human.**
+   Merging them is explicitly **not** enough. Chief among them is the degraded dashboard: for a
+   business whose Nayax connection status is not usable (`Ready` or `PendingPermissions`),
+   `GET /api/dashboard/summary` must return its local sections with `needsRefill` and `needsOrdering`
+   replaced by `{ "available": false, "reason": "NayaxNotConnected" }` — never a partial result.
+   A newly approved business has no Nayax connection at all, so this is the first screen its Owner
+   sees; without it, their dashboard would fail rather than explain itself.
+
+Record who verified each condition and when, the same way the rest of this procedure is recorded.
+Switching the flag on is a configuration change in the production App Service
+(`SelfServiceOnboarding__Enabled=true`), read once at startup, so it takes effect on the next
+restart; switching it back off is the same change in reverse and disables the endpoint again without
+touching any business that was already created.
+
+**What the flag does not gate.** Approving and rejecting applications is issue #509's work and does
+not exist yet, so while the flag is on, applications accumulate as `Pending` businesses that nobody
+can yet approve and whose applicants see a waiting screen. Do not switch the flag on before that
+side exists, unless the intent is specifically to collect applications and decide on them by hand.
+A `Pending` business reaches no data and reports an unfinished rollout to the startup readiness
+check (see [The business lifecycle status](#the-business-lifecycle-status-issue-540) above), so
+expect `TenantOwnershipReadiness` to count it as a business that is not active.
 
 ## Rollout sequence
 
@@ -615,10 +661,13 @@ token undecryptable.
   [docs/architecture.md § Saving a tested connection and re-testing it](architecture.md#saving-a-tested-connection-and-re-testing-it-issue-537)).
   Issue #538 added the Owner-facing wizard over those endpoints on Admin → Nayax Settings (see
   [docs/architecture.md § The Nayax connection wizard](architecture.md#the-nayax-connection-wizard-issue-538)),
-  so an Owner can now connect, save and re-test their own account from the application. What is
-  still missing is the rest of the self-service side (the connection banners are #539); the business
-  that is live today had its credential moved in by that human-run command. Do not add a second
-  business until the flow is complete.
+  so an Owner can now connect, save and re-test their own account from the application. Since
+  issue #541 the *application* side of onboarding exists too, behind a flag that is off by default
+  and gated as [Enabling self-service onboarding](#enabling-self-service-onboarding-issue-541)
+  describes. What is still missing is the rest of the journey: approving or rejecting an
+  application is #509's, the application and approval pages are #508's and #509's, and the
+  connection banners are #539's; the business that is live today had its credential moved in by
+  that human-run command. Do not add a second live business until the flow is complete.
 - **Database foreign keys from `BusinessId` to `Businesses`.** Deliberately deferred, and still
   **required**. This is an outstanding integrity step, not a decision that the constraint is
   unnecessary.

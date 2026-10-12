@@ -56,8 +56,7 @@ public class EndpointAuthorizationClassificationTests
     /// and the reviewed allowlist issue #523 introduced. Adding a line here is the exemption
     /// itself: the marker is what makes an authenticated caller stop being the caller of
     /// <em>one</em> business's API, so it may only ever be given to an endpoint that answers a fact
-    /// about the caller's own identity and no business data at all. Issue #507's application
-    /// endpoints are the one addition still expected.
+    /// about the caller's own identity and no business data at all.
     ///
     /// <para><c>api/me/account-state</c> (issue #523) reports the caller's own account state and
     /// never another business's name or id.</para>
@@ -70,9 +69,25 @@ public class EndpointAuthorizationClassificationTests
     /// invite row the token identified - never from the request - which is why the invite table is
     /// structurally non-tenant-owned (docs/architecture.md § Invite redemption). It is still a
     /// denied-scope request: it reads nothing tenant-owned through <c>AppDbContext</c>.</para>
+    ///
+    /// <para><c>api/onboarding/business-applications</c> (issue #541) is the reviewed third entry,
+    /// and the addition issue #507 was expected to make. It serves no existing business's data in
+    /// either direction: the request carries only the details of the business being applied for, the
+    /// response carries only that application's own name, status and submission instant - never a
+    /// business id - and every refusal is a fixed sentence that names no business. What it writes is
+    /// a new <c>Pending</c> business and the caller's own Owner membership in it, both in the
+    /// structurally non-tenant-owned tables, under the same denied scope
+    /// (docs/architecture.md § Self-service business application). It is also the one entry behind a
+    /// deployment flag: with <c>SelfServiceOnboarding:Enabled</c> off it answers <c>404</c>, which
+    /// does not change its classification - a disabled endpoint still has to declare how it is
+    /// authorized when it is on.</para>
     /// </summary>
     internal static readonly string[] MembershipNotRequiredAllowlist =
-        ["api/me/account-state", "api/invites/redeem"];
+    [
+        "api/me/account-state",
+        "api/invites/redeem",
+        "api/onboarding/business-applications",
+    ];
 
     /// <summary>
     /// Class 4: the one endpoint that is its own class. It is named rather than marked, because a

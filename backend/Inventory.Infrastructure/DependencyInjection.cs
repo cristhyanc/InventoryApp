@@ -17,6 +17,7 @@ using Inventory.Application.Members;
 using Inventory.Application.Nayax;
 using Inventory.Application.NayaxFeeSettings;
 using Inventory.Application.NayaxProcessingFees;
+using Inventory.Application.Onboarding;
 using Inventory.Application.PickList;
 using Inventory.Application.Products;
 using Inventory.Application.Purchases;
@@ -159,6 +160,12 @@ public static class InfrastructureServiceCollectionExtensions
         // above: its lookup takes only the presented token's hash, and every statement after that
         // names the business id the invite row reported, never one the request supplied.
         services.AddScoped<IMemberInviteRedemptionStore, EfMemberInviteRedemptionStore>();
+        // The self-service business application (issue #541) - the second persistence surface a
+        // caller with no business membership can reach, and the only one that creates a business.
+        // A separate, deliberately tiny adapter again: it reads one business by the id the
+        // applicant's own membership row supplied, and the business it creates is its own owner, so
+        // no statement here names an id that came from a request.
+        services.AddScoped<IBusinessApplicationStore, EfBusinessApplicationStore>();
         services.AddScoped<IBusinessProfileStore, EfBusinessProfileStore>();
         // The Owner-only settings read and write (issue #548), deliberately a separate adapter from
         // the profile read above: that one answers every request, this one is a rare write that has

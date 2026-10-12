@@ -12,9 +12,13 @@ namespace Inventory.Application.Access;
 /// </summary>
 /// <param name="State">The caller's own account state, from <see cref="AccountStatePolicy"/>.</param>
 /// <param name="OnboardingEnabled">
-/// Whether a person with no membership may apply for a business themselves. Always
-/// <see langword="false"/> until the application endpoints of issue #541 add the
-/// <c>SelfServiceOnboarding:Enabled</c> flag this will report.
+/// Whether this deployment lets a person apply for a business themselves: the
+/// <c>SelfServiceOnboarding:Enabled</c> flag, read through
+/// <see cref="Onboarding.ISelfServiceOnboardingFlag"/> (issue #541), which is the same value
+/// <c>POST /api/onboarding/business-applications</c> itself reads. It describes the deployment and
+/// never the caller: whether <em>this</em> account may apply is decided by
+/// <see cref="Onboarding.ApplyForBusiness"/> from their own membership records, so a member or a
+/// pending applicant sees <see langword="true"/> here too while the endpoint still refuses them.
 /// </param>
 /// <param name="RejectionReason">
 /// Why a business application was rejected, and <see langword="null"/> for every other state
