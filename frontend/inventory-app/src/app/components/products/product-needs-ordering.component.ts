@@ -221,7 +221,18 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
 
     const direction = this.sortDirection;
     return [...this.products].sort((left, right) => {
-      const comparison = this.compareValues(this.sortValue(left, column), this.sortValue(right, column));
+      const leftValue = this.sortValue(left, column);
+      const rightValue = this.sortValue(right, column);
+      // Missing values always sort last, regardless of direction; direction only
+      // affects the order of the non-missing values and of ties among them.
+      if (leftValue == null || rightValue == null) {
+        if (leftValue == null && rightValue == null) {
+          return left.id - right.id;
+        }
+        return leftValue == null ? 1 : -1;
+      }
+
+      const comparison = this.compareValues(leftValue, rightValue);
       // Ties keep a deterministic order (by id) instead of relying on sort stability alone.
       const resolved = comparison !== 0 ? comparison : left.id - right.id;
       return direction === 'desc' ? -resolved : resolved;
@@ -281,18 +292,8 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
     }
   }
 
-  /** Missing values always sort last on ascending; numbers compare numerically, everything else as text. */
-  private compareValues(left: SortValue, right: SortValue): number {
-    if (left == null && right == null) {
-      return 0;
-    }
-    if (left == null) {
-      return 1;
-    }
-    if (right == null) {
-      return -1;
-    }
-
+  /** Compares two non-missing values: numbers compare numerically, everything else as text. */
+  private compareValues(left: NonNullable<SortValue>, right: NonNullable<SortValue>): number {
     if (left instanceof Date && right instanceof Date) {
       return left.getTime() - right.getTime();
     }

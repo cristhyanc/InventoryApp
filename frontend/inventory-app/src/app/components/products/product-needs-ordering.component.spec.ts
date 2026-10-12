@@ -95,13 +95,16 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
     expect(editLink.textContent?.trim()).toBe('Widget');
   });
 
-  it('activates row navigation with Enter on a non-action part of the row', async () => {
+  it('defers Enter on the focusable Name anchor to the anchor itself instead of double-navigating', async () => {
     const { host, navigate } = await render([product({ id: 9, name: 'Widget' })]);
 
-    const row = host.querySelector('tbody tr') as HTMLTableRowElement;
-    row.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    // The Name anchor is the real keyboard target (it is focusable); the row's own
+    // keydown.enter handler must recognize the event originated in an own control
+    // and defer to the anchor instead of firing a second, possibly conflicting navigation.
+    const editLink = host.querySelector('tbody tr a.table-row-anchor') as HTMLAnchorElement;
+    editLink.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
 
-    expect(navigate).toHaveBeenCalledWith(['/products', 9, 'edit']);
+    expect(navigate).not.toHaveBeenCalled();
   });
 
   it('does not remove the Edit button twice when the name link itself is clicked', async () => {
@@ -221,6 +224,105 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
     const rows = Array.from(host.querySelectorAll('tbody tr'));
     expect(rows.map((r) => r.querySelectorAll('td')[1]?.textContent?.trim())).toEqual(['A', 'B', 'C']);
     expect(component.sortColumn).toBe('category');
+  });
+
+  it('keeps a missing category last in descending order too (regression for issue #582)', async () => {
+    const { fixture, host } = await render([
+      product({ id: 1, name: 'A', category: { id: 1, name: 'Snacks' } }),
+      product({ id: 2, name: 'B', category: null }),
+      product({ id: 3, name: 'C', category: { id: 2, name: 'Drinks' } })
+    ]);
+
+    const categoryHeader = Array.from(host.querySelectorAll('thead th')).find((th) => th.textContent?.includes('Category')) as HTMLTableCellElement;
+    const categoryButton = categoryHeader.querySelector('button') as HTMLButtonElement;
+    categoryButton.click();
+    fixture.detectChanges();
+    categoryButton.click();
+    fixture.detectChanges();
+
+    const rows = Array.from(host.querySelectorAll('tbody tr'));
+    // Descending by category name (Snacks, Drinks) with the missing value still last, not first.
+    expect(rows.map((r) => r.querySelectorAll('td')[1]?.textContent?.trim())).toEqual(['A', 'C', 'B']);
+  });
+
+  it('keeps a missing supplier last in both ascending and descending order', async () => {
+    const { fixture, host } = await render([
+      product({ id: 1, name: 'A', supplier: { id: 1, name: 'Acme' } }),
+      product({ id: 2, name: 'B', supplier: null }),
+      product({ id: 3, name: 'C', supplier: { id: 2, name: 'Zenith' } })
+    ]);
+
+    const supplierHeader = Array.from(host.querySelectorAll('thead th')).find((th) => th.textContent?.includes('Supplier')) as HTMLTableCellElement;
+    const supplierButton = supplierHeader.querySelector('button') as HTMLButtonElement;
+
+    supplierButton.click();
+    fixture.detectChanges();
+    let rows = Array.from(host.querySelectorAll('tbody tr'));
+    expect(rows.map((r) => r.querySelectorAll('td')[1]?.textContent?.trim())).toEqual(['A', 'C', 'B']);
+
+    supplierButton.click();
+    fixture.detectChanges();
+    rows = Array.from(host.querySelectorAll('tbody tr'));
+    expect(rows.map((r) => r.querySelectorAll('td')[1]?.textContent?.trim())).toEqual(['C', 'A', 'B']);
+  });
+
+  it('breaks a tie between two missing categories deterministically in descending order', async () => {
+    const { fixture, host } = await render([
+      product({ id: 2, name: 'B', category: null }),
+      product({ id: 1, name: 'A', category: null }),
+      product({ id: 3, name: 'C', category: { id: 1, name: 'Snacks' } })
+    ]);
+
+    const categoryHeader = Array.from(host.querySelectorAll('thead th')).find((th) => th.textContent?.includes('Category')) as HTMLTableCellElement;
+    const categoryButton = categoryHeader.querySelector('button') as HTMLButtonElement;
+    categoryButton.click();
+    fixture.detectChanges();
+    categoryButton.click();
+    fixture.detectChanges();
+
+    const rows = Array.from(host.querySelectorAll('tbody tr'));
+    // The non-missing value (Snacks) sorts first; the two missing values stay last,
+    // broken deterministically by id (A before B) rather than by insertion order.
+    expect(rows.map((r) => r.querySelectorAll('td')[1]?.textContent?.trim())).toEqual(['C', 'A', 'B']);
+  });
+
+  it('sorts numeric columns numerically in descending order as well', async () => {
+    const { fixture, host } = await render([
+      product({ id: 1, name: 'A', unitPrice: 9 }),
+      product({ id: 2, name: 'B', unitPrice: 10 }),
+      product({ id: 3, name: 'C', unitPrice: 2 })
+    ]);
+
+    const priceHeader = Array.from(host.querySelectorAll('thead th')).find((th) => th.textContent?.includes('Price')) as HTMLTableCellElement;
+    const priceButton = priceHeader.querySelector('button') as HTMLButtonElement;
+    priceButton.click();
+    fixture.detectChanges();
+    priceButton.click();
+    fixture.detectChanges();
+
+    const rows = Array.from(host.querySelectorAll('tbody tr'));
+    expect(rows.map((r) => r.querySelectorAll('td')[1]?.textContent?.trim())).toEqual(['B', 'A', 'C']);
+  });
+
+  it('sorts the status column both ascending and descending', async () => {
+    const { fixture, host } = await render([
+      product({ id: 1, name: 'A', isActive: true }),
+      product({ id: 2, name: 'B', isActive: false }),
+      product({ id: 3, name: 'C', isActive: true })
+    ]);
+
+    const statusHeader = Array.from(host.querySelectorAll('thead th')).find((th) => th.textContent?.includes('Status')) as HTMLTableCellElement;
+    const statusButton = statusHeader.querySelector('button') as HTMLButtonElement;
+
+    statusButton.click();
+    fixture.detectChanges();
+    let rows = Array.from(host.querySelectorAll('tbody tr'));
+    expect(rows.map((r) => r.querySelectorAll('td')[1]?.textContent?.trim())).toEqual(['B', 'A', 'C']);
+
+    statusButton.click();
+    fixture.detectChanges();
+    rows = Array.from(host.querySelectorAll('tbody tr'));
+    expect(rows.map((r) => r.querySelectorAll('td')[1]?.textContent?.trim())).toEqual(['C', 'A', 'B']);
   });
 
   it('keeps sorting applied after the product list is refreshed by a filter change', async () => {
