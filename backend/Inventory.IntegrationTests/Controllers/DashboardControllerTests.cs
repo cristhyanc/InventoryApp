@@ -4,6 +4,7 @@ using Inventory.Application.Nayax;
 using Inventory.Application.Products;
 using Inventory.Application.Reorder;
 using InventoryApi.Controllers;
+using InventoryApi.Tests.Application.Gst;
 using InventoryApi.Tests.Application.Time;
 using Moq;
 using Xunit;
@@ -43,6 +44,9 @@ public class DashboardControllerTests
         return new DashboardController(new GetDashboardSummary(
             new FakeClock(NowUtc),
             new FakeBusinessCalendar(NowUtc),
+            // An Owner, so the endpoint returns the full shape; the role-dependent shape itself is
+            // DashboardSummaryRedactionApiTests, through the real request pipeline.
+            new FakeCurrentBusinessProvider(businessId: 1),
             salesFacts.Object,
             catalog.Object,
             new CalculateReorderNeeds(nayax.Object, outstandingOrders.Object)));
@@ -68,7 +72,7 @@ public class DashboardControllerTests
     {
         var controller = Controller(300m, 240m, Product(100, "Coke", 12, 30m));
 
-        var summary = await controller.Summary(CancellationToken.None);
+        var summary = Assert.IsType<DashboardSummaryDto>(await controller.Summary(CancellationToken.None));
 
         Assert.Equal(NowUtc, summary.AsOfUtc);
         Assert.Equal(NowUtc.Date, summary.BusinessDate);
@@ -91,7 +95,7 @@ public class DashboardControllerTests
     {
         var controller = Controller(0m, 0m, Product(100, "Coke", 12, null));
 
-        var summary = await controller.Summary(CancellationToken.None);
+        var summary = Assert.IsType<DashboardSummaryDto>(await controller.Summary(CancellationToken.None));
 
         Assert.Null(summary.Inventory.InventoryValueAtCost);
         Assert.False(summary.Inventory.IsInventoryValueComplete);

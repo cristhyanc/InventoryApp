@@ -1,6 +1,8 @@
+using Inventory.Application.Access;
 using Inventory.Application.Machines;
 using Inventory.Application.Products;
 using Inventory.Application.Reorder;
+using Inventory.Application.Tenancy;
 using Inventory.Application.Time;
 using Inventory.Domain.Machines;
 using Inventory.Domain.Reporting.Dashboard;
@@ -35,11 +37,24 @@ namespace Inventory.Application.Dashboard;
 /// <para><b>Reads are serialized.</b> The two persistence reads are awaited one at a time because
 /// the scoped EF adapters share a single <c>AppDbContext</c>, which supports one operation at a
 /// time - the same constraint <c>GetSiteSummaries</c> documents.</para>
+///
+/// <para><b>The financial figures depend on the caller's role (issue #527).</b> The Dashboard is the
+/// landing page, so every role holds <c>Dashboard.View</c> and reaches this use case; the week's
+/// revenue and the inventory valuation additionally need <c>Dashboard.ViewFinancials</c>. A caller
+/// whose role does not grant it is answered <see cref="RedactedDashboardSummaryDto"/>, which simply
+/// has no such properties, and <see cref="IDashboardSummarySalesFactsProvider"/> is not called at
+/// all for them - the figures are withheld because they were never calculated, not stripped on the
+/// way out. The decision is made here rather than at the HTTP boundary because it decides what is
+/// <em>read</em>, and it is made from <see cref="RoleCapabilities"/>, the one role → capability
+/// table <c>GET /api/me/access</c> also reports, through the request's memoised membership
+/// resolution - so it cannot disagree with the capability the endpoint itself enforces. No role name
+/// appears in it.</para>
 /// </summary>
 public sealed class GetDashboardSummary
 {
     private readonly IClock _clock;
     private readonly IBusinessCalendar _businessCalendar;
+    private readonly ICurrentBusinessProvider _currentBusiness;
     private readonly IDashboardSummarySalesFactsProvider _salesFacts;
     private readonly IProductCatalogStore _catalog;
     private readonly CalculateReorderNeeds _calculateReorderNeeds;
@@ -47,35 +62,63 @@ public sealed class GetDashboardSummary
     public GetDashboardSummary(
         IClock clock,
         IBusinessCalendar businessCalendar,
+        ICurrentBusinessProvider currentBusiness,
         IDashboardSummarySalesFactsProvider salesFacts,
         IProductCatalogStore catalog,
         CalculateReorderNeeds calculateReorderNeeds)
     {
         _clock = clock;
         _businessCalendar = businessCalendar;
+        _currentBusiness = currentBusiness;
         _salesFacts = salesFacts;
         _catalog = catalog;
         _calculateReorderNeeds = calculateReorderNeeds;
     }
 
-    public async Task<DashboardSummaryDto> Handle(CancellationToken cancellationToken)
+    /// <exception cref="BusinessAccessDeniedException">
+    /// The caller has no usable membership, so there is no role to decide the response shape from.
+    /// Nothing is read: an unresolved membership is a refusal, never a fall back to the
+    /// least-privileged role. A request cannot reach this - the endpoint's <c>Dashboard.View</c>
+    /// policy refuses such a caller first - and it fails closed if one ever could.
+    /// </exception>
+    public async Task<IDashboardSummaryDto> Handle(CancellationToken cancellationToken)
     {
+        var mayViewFinancials = RoleCapabilities.Allows(
+            await _currentBusiness.RequireRoleAsync(cancellationToken).ConfigureAwait(false),
+            Capability.DashboardViewFinancials);
+
         // Resolved once, before anything is read, so every card describes the same instant and the
         // same business week rather than whichever moment its own read happened to start at.
         var window = MachineDashboardWindow.Resolve(_clock, _businessCalendar);
 
-        var salesFacts = await _salesFacts.GetSalesFactsAsync(
-            window.CurrentWeek, window.PreviousComparableWeek, cancellationToken);
+        // The sales facts are read only for a caller who may be shown them. For anyone else there
+        // is no week-to-date query in the request at all, which is also why the shape below is
+        // chosen by whether they were read: there is nothing to redact, only figures that exist and
+        // figures that were never calculated.
+        var salesFacts = mayViewFinancials
+            ? await _salesFacts.GetSalesFactsAsync(
+                window.CurrentWeek, window.PreviousComparableWeek, cancellationToken)
+            : null;
         var products = await _catalog.ListUnorderedAsync(ProductCatalogFilter.None, cancellationToken);
         var reorderNeeds = await _calculateReorderNeeds.Handle(cancellationToken);
 
-        return new DashboardSummaryDto(
-            window.NowUtc,
-            window.BusinessToday,
-            SalesThisWeek(window, salesFacts),
-            NeedsRefill(reorderNeeds, products),
-            NeedsOrdering(reorderNeeds, products),
-            Inventory(products));
+        var needsRefill = NeedsRefill(reorderNeeds, products);
+        var needsOrdering = NeedsOrdering(reorderNeeds, products);
+
+        return salesFacts is { } facts
+            ? new DashboardSummaryDto(
+                window.NowUtc,
+                window.BusinessToday,
+                SalesThisWeek(window, facts),
+                needsRefill,
+                needsOrdering,
+                Inventory(products))
+            : new RedactedDashboardSummaryDto(
+                window.NowUtc,
+                window.BusinessToday,
+                needsRefill,
+                needsOrdering,
+                RedactedInventory(products));
     }
 
     private static DashboardSalesThisWeekDto SalesThisWeek(
@@ -147,6 +190,26 @@ public sealed class GetDashboardSummary
 
         return new DashboardInventorySummaryDto(
             valuation.TotalInventoryValue,
+            valuation.IsComplete,
+            valuation.ProductsWithUnknownCost,
+            valuation.TotalProducts,
+            products.Sum(product => product.QuantityInStock));
+    }
+
+    /// <summary>
+    /// The inventory card without its valuation (issue #527). Everything it does report is the same
+    /// figure the card above reports over the same catalogue snapshot, including the completeness
+    /// flag and the unknown-cost count: a caller who may not see the amount is still told the
+    /// catalogue's costing is incomplete, because that is a data-quality fact about their stock and
+    /// not a sum of money.
+    /// </summary>
+    private static RedactedDashboardInventorySummaryDto RedactedInventory(
+        IReadOnlyList<ProductRecord> products)
+    {
+        var valuation = InventoryValuationPolicy.Summarize(
+            products.Select(product => product.InventoryValue).ToList());
+
+        return new RedactedDashboardInventorySummaryDto(
             valuation.IsComplete,
             valuation.ProductsWithUnknownCost,
             valuation.TotalProducts,
