@@ -1,8 +1,12 @@
 import { HttpClient, HttpErrorResponse, provideHttpClient, withInterceptors } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
+import { ConfigService } from '../services/config.service';
 import { AccessService } from './access.service';
 import { accessForbiddenInterceptor, isMemberAccessRefusal } from './access-forbidden.interceptor';
+
+/** The dev-proxy API base URL `ConfigService` resolves locally; the deployed one is covered in `member-endpoint.spec.ts`. */
+const API_BASE_URL = '/api';
 
 interface Harness {
   http: HttpClient;
@@ -17,7 +21,8 @@ function configure(): Harness {
     providers: [
       provideHttpClient(withInterceptors([accessForbiddenInterceptor])),
       provideHttpClientTesting(),
-      { provide: AccessService, useValue: { refreshUnlessReading } }
+      { provide: AccessService, useValue: { refreshUnlessReading } },
+      { provide: ConfigService, useValue: { apiBaseUrl: API_BASE_URL } }
     ]
   });
 
@@ -63,13 +68,20 @@ describe('accessForbiddenInterceptor (issue #528)', () => {
   });
 
   /**
-   * A `403` from `GET /api/me/access` is the answer to this very question. Reacting to it would
-   * read it again, and again.
+   * A `403` from `GET /api/me/access` is the answer to this very question - reacting to it would
+   * read it again, and again. `GET /api/me/account-state` is the other cache's own probe (issue
+   * #602): reacting to it used to make the two caches refresh each other without end;
+   * `forbidden-interceptor-chain.spec.ts` asserts the composed chain settles. The platform
+   * diagnostics probe's `403` is the expected answer for every member (issue #602).
    */
-  it('never reacts to a refusal of the capability read itself', () => {
+  it.each([
+    ['the capability read itself', '/api/me/access'],
+    ['the account-state read', '/api/me/account-state'],
+    ['the platform diagnostics probe', '/api/admin/diagnostics/access']
+  ])('never reacts to a refusal of %s', (_name, url) => {
     const harness = configure();
 
-    refuse(harness, '/api/me/access', 403);
+    refuse(harness, url, 403);
 
     expect(harness.refreshUnlessReading).not.toHaveBeenCalled();
   });
@@ -103,16 +115,19 @@ describe('accessForbiddenInterceptor (issue #528)', () => {
 });
 
 describe('isMemberAccessRefusal', () => {
-  it('excludes the capability read itself and the static assets', () => {
-    expect(isMemberAccessRefusal('/api/me/access')).toBe(false);
-    expect(isMemberAccessRefusal('https://api.example.test/api/me/access')).toBe(false);
-    expect(isMemberAccessRefusal('/assets/config.json')).toBe(false);
-    expect(isMemberAccessRefusal('https://app.example.test/assets/config.json')).toBe(false);
+  it('excludes both cache probes, the platform diagnostics surface and the static assets', () => {
+    expect(isMemberAccessRefusal('/api/me/access', API_BASE_URL)).toBe(false);
+    expect(isMemberAccessRefusal('/api/me/access?refresh=1', API_BASE_URL)).toBe(false);
+    expect(isMemberAccessRefusal('/api/me/account-state', API_BASE_URL)).toBe(false);
+    expect(isMemberAccessRefusal('/api/admin/diagnostics/access', API_BASE_URL)).toBe(false);
+    expect(isMemberAccessRefusal('/assets/config.json', API_BASE_URL)).toBe(false);
+    expect(isMemberAccessRefusal('https://app.example.test/assets/config.json', API_BASE_URL)).toBe(false);
+    expect(isMemberAccessRefusal('https://api.example.test/api/me/access', 'https://api.example.test/api')).toBe(false);
   });
 
   it('includes every other member endpoint', () => {
-    expect(isMemberAccessRefusal('/api/me/account-state')).toBe(true);
-    expect(isMemberAccessRefusal('/api/dashboard/summary')).toBe(true);
-    expect(isMemberAccessRefusal('/api/suppliers/7/gst-defaults')).toBe(true);
+    expect(isMemberAccessRefusal('/api/dashboard/summary', API_BASE_URL)).toBe(true);
+    expect(isMemberAccessRefusal('/api/suppliers/7/gst-defaults', API_BASE_URL)).toBe(true);
+    expect(isMemberAccessRefusal('/api/admin/historical-gst-classification/preview', API_BASE_URL)).toBe(true);
   });
 });

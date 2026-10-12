@@ -3,9 +3,7 @@ import { provideRouter } from '@angular/router';
 import { provideHttpClient, withInterceptors, withInterceptorsFromDi } from '@angular/common/http';
 import { routes } from './app.routes';
 import { ConfigService } from './services/config.service';
-import { accessForbiddenInterceptor } from './access/access-forbidden.interceptor';
-import { accountStateForbiddenInterceptor } from './access/account-state-forbidden.interceptor';
-import { memberForbiddenNoticeInterceptor } from './access/member-forbidden-notice.interceptor';
+import { FORBIDDEN_INTERCEPTORS } from './access/forbidden-interceptors';
 import { loadingInterceptor } from './interceptors/loading.interceptor';
 import { browserAuthProviders } from './auth/browser-auth-providers';
 
@@ -16,19 +14,10 @@ export function initializeApp(configService: ConfigService) {
 export const appConfig: ApplicationConfig = {
   providers: [
     provideRouter(routes),
-    // `accessForbiddenInterceptor` and `accountStateForbiddenInterceptor` keep the capability and
-    // account-state caches current when a member endpoint refuses a request (issues #528, #529);
-    // neither reports anything itself. `memberForbiddenNoticeInterceptor` is the one that does
-    // (issue #529's global 403 handler), so it runs after both have had their turn.
-    provideHttpClient(
-      withInterceptors([
-        loadingInterceptor,
-        accessForbiddenInterceptor,
-        accountStateForbiddenInterceptor,
-        memberForbiddenNoticeInterceptor
-      ]),
-      withInterceptorsFromDi()
-    ),
+    // The three `403` interceptors and the order they run in are `FORBIDDEN_INTERCEPTORS`, which
+    // documents each one's job and is the same list the composed-chain regression test installs
+    // (issues #528, #529, #602).
+    provideHttpClient(withInterceptors([loadingInterceptor, ...FORBIDDEN_INTERCEPTORS]), withInterceptorsFromDi()),
     { provide: APP_INITIALIZER, useFactory: initializeApp, deps: [ConfigService], multi: true },
     // How the browser authenticates. The real Microsoft Entra/MSAL wiring lives in
     // auth/browser-auth-providers.ts; the dedicated end-to-end build configuration replaces that
