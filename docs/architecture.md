@@ -1571,7 +1571,7 @@ Nothing else differs: `asOfUtc`, `businessDate`, the refill and ordering cards a
 
 **The controller stays thin.** `DashboardController` keeps `[RequireCapability(Capability.DashboardView)]` exactly as #525 left it, returns whichever shape the use case built, and strips, recomputes and re-decides nothing. No endpoint's authorization class changed and nothing was added to `EndpointAuthorizationClassificationTests`. The Development-only Swagger document describes the union's common properties; the two concrete shapes are documented here rather than as an OpenAPI `oneOf`, because no generated client exists ([API documentation policy](#api-documentation-policy)).
 
-**The Angular Dashboard still expects the full shape**, which is issue #503's task and deliberately out of scope here: `DashboardSummary` in `models.ts` types both figures as always present, and the template reads `summary.salesThisWeek.sales` directly. The Inventory tile already degrades correctly, but the sales card would fail for a caller who is not given that object. Nobody can reach that today — every member of the one live business is an `Owner` — and the fix is for the page to read `GET /api/me/access` and stop asking for figures it may not be given, never for the API to send `null` instead.
+**The Angular Dashboard renders the redacted shape since issue #528.** `DashboardSummary` in `models.ts` types `salesThisWeek` and `inventory.inventoryValueAtCost` as optional, and the page hides the "Sales this week" and "Inventory" cards when they are absent, rendering the two non-financial cards alone. It keys off the response rather than off the capability, so this API's decision stays the only one there is and no card can read a figure it was not given. An incomplete valuation (`inventoryValueAtCost: null`) is present, so that card stays and reports "Unavailable" as it always did; a still-loading or failed summary keeps all four cards, because not knowing a figure yet is not the same as having been told it is not this caller's to see. The fix was never for the API to send `null` instead. See [Member access](#member-access-capability-built-navigation-guards-and-hidden-actions-issue-528).
 
 **What proves this slice.** `DashboardSummaryRedactionApiTests` (the exact serialized property sets through the real request pipeline and the real migration history, with three members of one business holding the three roles over one seeded fleet, catalogue and completed sale: an Operator's top-level and `inventory` sets, that neither property name nor either figure appears anywhere in their body, the full sets plus the seeded valuation for a Manager and an Owner, and an Operator's remaining figures matching a Manager's value for value) and `GetDashboardSummaryRedactionTests` (the decision over a fixed clock, with the roles written out literally from #328's table: the redacted shape for an Operator, zero calls to the sales port and no period handed to it, the non-financial figures identical to an Owner's, the incomplete-valuation flag and unknown-cost count surviving redaction, every figure for a Manager and an Owner, and every denial reason refused with nothing read). `GetDashboardSummaryTenancyTests` additionally covers, relationally, that an unresolved membership reads neither the sales, the catalogue nor the fleet.
 
@@ -2438,8 +2438,9 @@ The frontend is an application boundary in its own right. It owns navigation, in
 | Area | Current responsibility |
 | --- | --- |
 | `app.component.*` | Application shell: header with the sidebar collapse control and the signed-in user control, the sidebar, the routed page region, MSAL redirect/account handling, and the toast/loading hosts |
-| `layout/` | Primary navigation: `navigation.ts` (the navigation data and its pure active-route rules), `sidebar-nav.component.*`, `user-menu.component.ts` |
-| `app.routes.ts` | Product, stock, supplier, machine, site, purchase, report, expense, and administration routes |
+| `layout/` | Primary navigation: `navigation.ts` (the navigation data, each destination's capability, and its pure active-route rules), `sidebar-nav.component.*`, `user-menu.component.ts` |
+| `access/` | What the signed-in member may do (issue #528): the capability vocabulary, the cached `GET /api/me/access` read, the capability route guard, the "access not allowed" page, and the `403` interceptor that keeps the cache current |
+| `app.routes.ts` | Product, stock, supplier, machine, site, purchase, report, expense, and administration routes, each with the capability its page needs |
 | `components/` | Routed feature pages plus a small set of shared components |
 | `services/` | Typed HTTP calls, runtime configuration, toast state, and feature-specific client behavior |
 | `models/models.ts` | Shared inventory, purchase, site, and machine contracts |
@@ -2473,7 +2474,10 @@ and they are the first realized part of the target `layout/` folder described be
 | `app.component.*` | The shell layout, the sidebar open/collapsed state and its handlers, the narrow layout's top-bar opener, the wide-versus-narrow layout decision, and the MSAL identity it passes to the user menu |
 
 `primaryNavigation` is a `NavItem[]` of direct links (`Dashboard`, `Pick List`, `Machines`,
-`Sites`, `Expenses`) and expandable groups (`Products`, `Purchases`, `Reports`, `Admin`). A group
+`Sites`, `Expenses`) and expandable groups (`Products`, `Purchases`, `Reports`, `Admin`). Each
+destination also declares the capability its own page needs, and the sidebar renders only the ones
+the signed-in member holds — see [Member access](#member-access-capability-built-navigation-guards-and-hidden-actions-issue-528)
+below. A group
 heading is a `<button>` that toggles its children and is deliberately not a destination, so no
 group needs an overview page. **Every `route` must be a real page already declared in
 `app.routes.ts`**: `navigation.spec.ts` compares the two and fails on a destination invented ahead
@@ -2615,6 +2619,127 @@ its route exist — not a template change in the shell.
   template, not something the shell imposes or forbids.
 - **Sign-in callback.** `auth-callback.component.ts` centres a `.card` on the canvas background
   instead of a bare paragraph; its logic is still just the static "Signing you in..." message.
+
+### Member access: capability-built navigation, guards and hidden actions (issue #528)
+
+Until issue #528 the sidebar showed every entry to every member and every route was behind
+`MsalGuard` alone: the API refused what a role could not do, and the menu did not know. This slice
+teaches the frontend what the member may do, from the one place that can say — `GET /api/me/access`
+(issue #521) — and renders it. It is one slice of #503, which keeps the full agreed contract for
+this area under #328.
+
+**Nothing here is a boundary, and nothing may be moved behind it.** Every capability the frontend
+reads is also checked by the endpoint behind the page, which answers a bare `403` whatever the
+browser rendered ([Capability authorization](#capability-authorization-issue-525)). A hidden menu
+entry, a redirected route and a hidden button therefore hide a page rather than protect one, for
+exactly the reason the conditional `Platform Diagnostics` link already did. There is deliberately
+no frontend role source: no claim, flag, stored value or second table, because a second source
+could only diverge from `Inventory.Application.Access.RoleCapabilities`.
+
+| File | Responsibility |
+| --- | --- |
+| `access/capabilities.ts` | The fifteen published `Area.Action` capability names, mirrored from `Inventory.Application.Access.Capabilities`, and `capabilitySet`, which keeps only the names this build declares |
+| `access/access.service.ts` | `AccessService`: the cached `GET /api/me/access` read, its refresh triggers, and the `allows`/`allowsAny` answers everything else renders from |
+| `access/capability.guard.ts` | `requireCapability(...)`, the `CanActivateFn` every authenticated route declares |
+| `access/access-not-allowed.component.ts` | The page a route the member's role does not allow sends them to |
+| `access/access-forbidden.interceptor.ts` | The "`403` from a member endpoint" trigger on the cache, and nothing else |
+| `layout/navigation.ts` | Each destination's `capability`, and `navigationFor(capabilities, hasPlatformDiagnosticsAccess)` |
+
+**One cached answer per signed-in identity.** The read is lazy — issued when something first asks,
+which in practice is the shell's sidebar — and only once MSAL reports `InteractionStatus.None`,
+because a protected request issued while a redirect is still being handled would have
+`MsalInterceptor` start an interactive sign-in of its own on the public `/auth` landing route. Every
+consumer shares the one answer; a read already in flight is reused rather than duplicated. The cache
+is dropped or read again on exactly these triggers:
+
+| Trigger | What happens |
+| --- | --- |
+| Sign-in | Read as the newly signed-in identity |
+| Sign-out | Cleared without reading again — there is nobody to read it for |
+| MSAL active-account change | Read again, unconditionally, because an answer in flight may have been issued as the previous identity |
+| Any `403` from a member endpoint | Read again unless a read is already in flight. `GET /api/me/access` itself is excluded, so a refusal can never drive a refresh loop, and `/assets/*` is excluded because it is not a member endpoint |
+| Window focus more than 5 minutes after the last answer | Read again, so a tab left open all day stops rendering a menu built from a role somebody has since changed |
+| An explicit `refresh()` | Read again, unconditionally. This is what other work calls after changing something relevant |
+
+Sign-in, sign-out and the active-account change are observed from two signals together — MSAL's
+`msalSubject$` account events and `inProgress$` settling, which is what the shell already uses — and
+are acted on only when the signed-in identity the cache was read for actually changed. An answer
+from a read a later one superseded is discarded by a generation check when it arrives, so a slow
+read for the previous identity can never build somebody else's menu.
+
+**A read that cannot be answered hides nothing.** `unavailable` — nobody signed in, a refusal, a
+failed request — leaves every menu entry, route and action exactly as it was before capabilities
+were rendered at all. Failing closed here would lock a legitimate member out of their own page over
+a failed menu probe, while failing open shows an entry whose endpoint still refuses what the role
+may not do. (The conditional diagnostics link keeps failing *closed* on its own probe, because
+hiding a link no business role grants costs nothing.) Which screen a person with no usable
+membership is shown at all, and the global `403` handler that tells a member a request was refused,
+are issue #529's account-state routing and are deliberately not here.
+
+**The navigation is built from the capability set**, not conditioned in the sidebar's template:
+`navigationFor` drops each destination whose capability the member does not hold and drops a group
+once all of its children are gone. An Operator is therefore offered no `Expenses`, no `Reports`
+group and no `Admin` group; a Manager's `Admin` group holds `Site Commission Agreements` and
+`Imports` without `Nayax Settings` or any of the five repairs; an Owner is offered every declared
+destination. `Reports → Site Commissions` follows the API and declares `SiteCommissions.Manage`
+rather than `Reports.View` ([issue #526](#capability-authorization-on-the-manager-and-owner-endpoints-issue-526)).
+Until the capability set has been read the sidebar renders **no** destination, because a menu that
+offered everything and then took entries away would show entries that were never this member's;
+`Platform Diagnostics` is unchanged and still independent of every capability.
+
+**Route guards are presentation.** Every authenticated route declares
+`canActivate: [MsalGuard, requireCapability(...)]`, with `MsalGuard` first so authentication is
+still decided first, and the guard redirects to `/access-not-allowed` when the capability set is
+known and does not allow the route. Several capabilities mean "any of these", which is what
+`/admin` needs: the Admin hub owns no workflow, so holding `Imports.Run`, `SiteCommissions.Manage`,
+`Integration.Manage` or `Data.Repair` is enough to be shown it. Two routes deliberately carry no
+capability and that is the whole list — `/access-not-allowed`, because a member sent there must not
+be sent away from their own explanation, and `/admin/diagnostics`, whose authority is the
+diagnostics API's per request and no business role's (issue #335). `app.routes.spec.ts` asserts both
+the exceptions and the ordering. A guard decides one navigation, from the answer that navigation was
+made with; a later refresh re-renders the menu and the hidden actions rather than re-evaluating a
+page the member is already on, which the API keeps authorizing on every request anyway.
+
+**The `/access-not-allowed` page teaches no part of the role matrix.** It names no capability, no
+role and none of the roles that would have been allowed, for the same reason the API's refusal is a
+bare `403`, and it offers the Dashboard so it is never a dead end. It is not the "access
+unavailable" page of issue #529, which is for a person whose *membership* is unusable.
+
+**Hidden actions.** The supplier GST defaults editor is the one action this slice hides, and it
+mirrors the one read/write split in the whole capability matrix: reading the defaults stays on
+`Purchasing.Operate`, because an Operator recording a purchase needs to see which classification it
+will be given, while changing them needs `Suppliers.ManageGstDefaults`. Without that capability the
+three pickers are read-only and no Save control is rendered;
+`PUT /api/suppliers/{id}/gst-defaults` refuses the write itself either way. The Admin hub's eight
+cards are **not** filtered by capability yet — `/admin` is guarded, so an Operator never reaches it,
+but a Manager still sees the six cards their role cannot open and gets `/access-not-allowed` from
+the guard rather than a page of refusals.
+
+**The Dashboard renders the redacted summary.** `DashboardSummary.salesThisWeek` and
+`inventory.inventoryValueAtCost` are optional in `models.ts`, because a role without
+`Dashboard.ViewFinancials` is not sent them at all
+([issue #527](#dashboard-financial-redaction-issue-527)). The page hides the "Sales this week" and
+"Inventory" cards when the figures are **absent** and renders the two non-financial cards alone. It
+keys off the response rather than off the capability, so the API's decision is the only one there
+is and no card can ever read a figure it was not given. An *incomplete* valuation is
+`inventoryValueAtCost: null`, which is present: that card stays and reports "Unavailable" exactly as
+before, and a still-loading or failed summary keeps all four cards for the same reason — not
+knowing a figure yet is a different thing from having been told it is not this member's to see.
+
+**What proves this slice.** `access.service.spec.ts` (the cached read, the fifteen-name vocabulary,
+an undeclared name dropped, the MSAL wait, every refresh trigger including the five-minute focus
+boundary either side, the refusal trigger coalescing, a superseded answer discarded, and the
+fail-open answer for every unreadable case), `navigation.spec.ts` (the per-role menus, written out
+literally from #328's table, a partly-allowed group, the empty and unknown capability sets, and the
+diagnostics link's independence), `sidebar-nav.component.spec.ts` (the rendered menu per role, no
+destination before the first answer, and a re-render when the capabilities change),
+`capability.guard.spec.ts` (allowed, refused, any-of, fail-open, waiting for an unread answer, and
+the page naming no capability or role), `app.routes.spec.ts` (every authenticated route guarded,
+the two exceptions, and `MsalGuard` first), `access-forbidden.interceptor.spec.ts` (the `403`
+trigger, the excluded access read and assets, and every other status ignored),
+`supplier-gst-defaults.component.spec.ts` (the hidden Save, the read-only pickers, no `PUT`, and the
+control returning on a refresh) and `dashboard.component.spec.ts` (the redacted summary rendering
+the two non-financial cards, with no `$0.00` and no withheld figure anywhere).
 
 ### Breadcrumbs (issue #457)
 
@@ -2776,7 +2901,7 @@ partial enforceable rule.
 
 ### Routing and loading
 
-Routes are declared centrally in `app.routes.ts`. Every top-level route loads its component with `loadComponent` (issue #65), except the public `/auth` Entra redirect callback, which stays eagerly imported because it is the landing route for an in-progress authentication redirect, not a migrated feature area. This keeps initial bundles smaller and creates an enforceable feature boundary without introducing NgModules. Preserve route URLs, guards, and parameters when adding or changing a route. Which of these routes the sidebar offers, and under which group, is navigation data in `layout/navigation.ts` (see [Application shell and navigation](#application-shell-and-navigation-issue-391)); a route always keeps working by direct URL whether or not it appears there. Separately, whether a route shows a parent breadcrumb above its page title, and under which label, is `layout/breadcrumbs/breadcrumb-routes.ts` (see [Breadcrumbs](#breadcrumbs-issue-457)) — a third piece of navigation metadata, alongside `app.routes.ts` and `layout/navigation.ts`, that a new nested page should be added to when it has a meaningful parent.
+Routes are declared centrally in `app.routes.ts`. Every top-level route loads its component with `loadComponent` (issue #65), except the public `/auth` Entra redirect callback, which stays eagerly imported because it is the landing route for an in-progress authentication redirect, not a migrated feature area. This keeps initial bundles smaller and creates an enforceable feature boundary without introducing NgModules. Preserve route URLs, guards, and parameters when adding or changing a route. Which of these routes the sidebar offers, and under which group, is navigation data in `layout/navigation.ts` (see [Application shell and navigation](#application-shell-and-navigation-issue-391)); a route the sidebar does not offer still resolves by direct URL, and since issue #528 a route the member's capability set does not allow resolves to the "access not allowed" page instead of the page itself (see [Member access](#member-access-capability-built-navigation-guards-and-hidden-actions-issue-528) — the guard is presentation, and the API authorizes every request behind the page regardless). Separately, whether a route shows a parent breadcrumb above its page title, and under which label, is `layout/breadcrumbs/breadcrumb-routes.ts` (see [Breadcrumbs](#breadcrumbs-issue-457)) — a third piece of navigation metadata, alongside `app.routes.ts` and `layout/navigation.ts`, that a new nested page should be added to when it has a meaningful parent. **A new authenticated route declares the capability its page needs**, alongside `MsalGuard`; `app.routes.spec.ts` fails the build if one does not, and the two documented exceptions are the only ones.
 
 `/machines` (issue #385) is a dedicated, authenticated list page, `MachineListComponent`, that reads the same `MachineService.getAll()` machine-summary contract the home dashboard already uses, applies a client-side name/number search against the loaded list (there is no server-side filter on that endpoint), and never triggers a Nayax sales sync as a side effect of opening the page — it only reads whatever summary data is already persisted. Selecting a machine on this page navigates to the existing `/machines/:id` detail route (`MachineDetailComponent`), which is unchanged; `/machines` is a drill-down entry point into that existing page, not a replacement for it. `Machines` is a top-level link in the sidebar (issue #391; see [Application shell and navigation](#application-shell-and-navigation-issue-391)).
 
