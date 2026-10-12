@@ -143,18 +143,16 @@ public sealed class EfPlatformBusinessDirectoryStore : IPlatformBusinessDirector
             ? active[0]
             : null;
 
-        return new PlatformBusinessDecisionTarget(
-            row.Id,
-            row.Name,
-            row.Status,
-            applicant is null
-                ? null
-                : new PlatformBusinessApplicant(
-                    applicant.Id,
-                    ActorIdentity.TryCreate(applicant.DirectoryTenantId, applicant.ObjectId, out var identity)
-                        ? identity
-                        : null,
-                    applicant.IsActive));
+        PlatformBusinessApplicant? decisionApplicant = null;
+        if (applicant is not null)
+        {
+            var identified = ActorIdentity.TryCreate(applicant.DirectoryTenantId, applicant.ObjectId, out var identity)
+                ? identity
+                : null;
+            decisionApplicant = new PlatformBusinessApplicant(applicant.Id, identified, applicant.IsActive);
+        }
+
+        return new PlatformBusinessDecisionTarget(row.Id, row.Name, row.Status, decisionApplicant);
     }
 
     /// <inheritdoc />
