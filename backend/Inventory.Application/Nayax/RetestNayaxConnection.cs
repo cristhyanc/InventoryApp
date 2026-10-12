@@ -11,6 +11,10 @@ namespace Inventory.Application.Nayax;
 /// <paramref name="Summary"/> is the connection as it stands <em>after</em> the re-test, read back
 /// from the row rather than assembled from what this process intended to write - which is what makes
 /// <paramref name="StatusUpdated"/> honest when nothing was concluded.
+///
+/// A result exists only for the credential revision the run tested: one produced for credentials
+/// that were replaced or removed in the meantime is refused rather than returned, so this summary
+/// can never describe a credential pair the report did not test (issue #607).
 /// </summary>
 /// <param name="Summary">The connection's status and machine-check state after the re-test.</param>
 /// <param name="StatusUpdated">
@@ -65,17 +69,21 @@ public sealed record NayaxConnectionRetestOutcome
 /// recovery impossible. It is listed in <c>NayaxRetestCredentialBoundaryTests</c>' allow-list as the
 /// reviewed exception the boundary always anticipated; nothing else may join it.</para>
 ///
-/// <para><strong>Its result is bound to the revision it tested.</strong> The credential read reports
-/// the revision the token was read at, and the status is written by the store's conditional update
-/// against that revision. An Owner who saves a replacement token while a re-test is in flight
-/// therefore keeps the replacement's own status: the older run's answer describes credentials that no
-/// longer exist, so it is discarded and the caller is told to run the test again.</para>
+/// <para><strong>Every result is bound to the revision it tested - whatever it concluded.</strong>
+/// The credential read reports the revision the token was read at. A concluded status is written by
+/// the store's conditional update against that revision; a run that concluded nothing compares that
+/// revision with the stored one before its report is accepted (issue #607). An Owner who saves a
+/// replacement token while a re-test is in flight therefore keeps the replacement's own status
+/// either way: the older run's answer describes credentials that no longer exist, so it is
+/// discarded - never returned beside the replacement's summary - and the caller is told to run the
+/// test again. A connection that is gone by then is the same answer as a replaced one.</para>
 ///
 /// <para><strong>A run that learned nothing writes nothing.</strong> When Nayax never answered the
 /// sign-in - a <c>5xx</c>, a timeout, an open circuit - the stored status, the last-tested instant
 /// and the machine-check state all stay exactly as they were, because a connection that is working
 /// must not be marked broken by somebody else's outage, and a broken one must not be blessed by it
-/// either.</para>
+/// either. The refusal above writes nothing either: there is no stale result to discard, because
+/// such a run has nothing to write in the first place.</para>
 ///
 /// <para><strong>It shares the test's rate limit</strong>, per business: a re-test is the same eight
 /// calls against the same upstream, so test and re-test runs count together and the allowance is
@@ -119,7 +127,8 @@ public sealed class RetestNayaxConnection
     /// call, every stored status may be re-tested - including the two the gate refuses.
     /// </exception>
     /// <exception cref="DomainConflictException">
-    /// The credentials were replaced while the re-test ran, so its result was discarded; see
+    /// The credentials were replaced - or removed - while the re-test ran, so its result was
+    /// discarded, whether it concluded a status or nothing at all; see
     /// <see cref="ConnectionChangedMessage"/>.
     /// </exception>
     /// <exception cref="BusinessAccessDeniedException">The caller has no resolvable business.</exception>
@@ -144,9 +153,27 @@ public sealed class RetestNayaxConnection
         if (concluded is not { } status)
         {
             // Nothing was learned, so nothing is written - not even a last-tested instant, which
-            // would claim the current credentials had been checked.
+            // would claim the current credentials had been checked. The revision is still compared,
+            // because a report about credentials that have since been replaced is not a report about
+            // this connection, whether it concluded anything or not (issue #607).
+            //
+            // One read answers both questions: the revision this report is compared against and the
+            // status reported beside it come from the same row at the same instant, so no save can
+            // land between two reads and pair this run's report with the replacement's state.
+            // Reporting what is stored - rather than what this run would have concluded - is also
+            // what makes "the status is unchanged" a statement about the database.
+            var current = await _connections.FindAsync(cancellationToken);
+
+            if (current is null || current.CredentialRevision != credential.CredentialRevision)
+            {
+                // A row that is gone and a row at another revision are the same answer: neither is
+                // the connection this run tested, so its result is discarded exactly as a concluded
+                // one is, and nothing about the replacement is touched.
+                throw new DomainConflictException(ConnectionChangedMessage);
+            }
+
             return NayaxConnectionRetestOutcome.Completed(new NayaxConnectionRetestResult(
-                await ReadBackAsync(cancellationToken),
+                NayaxConnectionStatusSummary.From(current),
                 StatusUpdated: false,
                 report));
         }
@@ -170,12 +197,4 @@ public sealed class RetestNayaxConnection
             StatusUpdated: true,
             report));
     }
-
-    /// <summary>
-    /// The connection as the row now holds it, for the one path that wrote nothing. Reporting what
-    /// is stored - rather than what this run would have concluded - is what makes "the status is
-    /// unchanged" a statement about the database.
-    /// </summary>
-    private async Task<NayaxConnectionStatusSummary> ReadBackAsync(CancellationToken cancellationToken) =>
-        NayaxConnectionStatusSummary.From(await _connections.FindAsync(cancellationToken));
 }

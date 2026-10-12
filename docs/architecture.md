@@ -2491,17 +2491,25 @@ exception that boundary always anticipated, and nothing else may join it. It run
 checks through the same `INayaxConnectionCheckRunner`, so a re-test makes exactly the same eight
 `GET`s and no write.
 
-**Its result is bound to the revision it tested, and a run that learned nothing writes nothing.** The
-credential read reports the revision the token was read at, and the status is written by #518's
-conditional `UPDATE … WHERE CredentialRevision = @r`. An Owner who saves a replacement token while a
-re-test is in flight therefore keeps the replacement's own status: the older run describes credentials
-that no longer exist, so its result is discarded and the caller gets `409` with the fixed sentence
-*"The connection changed while testing. Run the test again."* When the sign-in produced no verdict at
-all — a `5xx`, a timeout, an open circuit — **nothing is written**, not even a last-tested instant
-that would claim the current credentials had been checked: the response is `200` with
+**Every result is bound to the revision it tested — whatever it concluded — and a run that learned
+nothing writes nothing.** The credential read reports the revision the token was read at. A concluded
+status is written by #518's conditional `UPDATE … WHERE CredentialRevision = @r`, and a run that
+concluded nothing compares that revision with the stored one before its report is accepted
+([issue #607](https://github.com/cristhyanc/InventoryApp/issues/607)). An Owner who saves a
+replacement token while a re-test is in flight therefore keeps the replacement's own status in both
+cases: the older run describes credentials that no longer exist, so its result is discarded — never
+returned beside the replacement's summary — and the caller gets `409` with the fixed sentence *"The
+connection changed while testing. Run the test again."* A connection that has been removed by then is
+the same answer as a replaced one. When the sign-in produced no verdict at all — a `5xx`, a timeout,
+an open circuit — **nothing is written** either way, not even a last-tested instant that would claim
+the current credentials had been checked: at the tested revision the response is `200` with
 `statusUpdated: false`, the stored status read back from the row, and the lines that say Nayax was
-unavailable. A business with no stored credentials has nothing to re-test and gets the stable
-`nayax_not_connected` `409`.
+unavailable; at any other revision it is the `409` above, with no completed stale report and the
+replacement's status, token, revision, last-tested instant and machine-check flag all untouched. That
+comparison and the summary returned with it come from **one** read of the row
+(`INayaxConnectionStore.FindAsync`, one statement), for the same reason #520's snapshot exists: two
+reads could pair the old run's report with the new credentials' state. A business with no stored
+credentials has nothing to re-test and gets the stable `nayax_not_connected` `409`.
 
 **Test and re-test share one per-business allowance.** A re-test is the same eight calls against the
 same upstream, so it claims from the same `NayaxConnectionTestRateLimiter` singleton, before the
@@ -2528,8 +2536,10 @@ with the revision increased once, expiry and actor binding refused identically, 
 refused before a transaction is begun. `RetestNayaxConnectionTests` — each outcome from each of
 `Ready`, `PendingPermissions` and `NeedsAttention`, an unavailable Nayax leaving the row
 byte-for-byte, the revision the checks ran with, the pending machine checks recorded and then
-cleared, a replacement saved mid-run keeping its own status, no stored credentials, and the shared
-allowance. `GetNayaxConnectionStatusTests` — the two fields, `NotConfigured`, and no token decrypted.
+cleared, a replacement saved mid-run keeping its own status for a concluded *and* for an inconclusive
+run (each cause that concludes nothing, plus a connection removed mid-run), an unchanged revision
+comparing and reporting from one read, no stored credentials, and the shared allowance.
+`GetNayaxConnectionStatusTests` — the two fields, `NotConfigured`, and no token decrypted.
 `Adapters/Persistence/NayaxConnectionSaveTransactionTests` — relational SQLite over a database
 *file*, so two saves of one draft are genuinely concurrent: exactly one succeeds, the other is the
 `409`, the revision increases once, and the draft is consumed once; plus a refused save and a failed
@@ -2545,9 +2555,11 @@ other column or index changes, the existing connection is byte-for-byte unchange
 pending", and nothing is backfilled. `Controllers/NayaxConnectionSaveRetestApiTests` — the whole flow
 through the real pipeline and the real migration history: test then save, the token as ciphertext and
 never echoed, every refusal's status and sentence, the re-test outcomes including the recovery from
-`NeedsAttention` and the re-test overtaken by a save, the shared `429`, the status read for each role
-with exactly two fields, and a non-Owner neither saving nor re-testing. `CapabilityAuthorizationApiTests`
-and `EndpointAuthorizationClassificationTests` carry the three endpoints' capability rows.
+`NeedsAttention` and both the concluded and the inconclusive re-test overtaken by a save — the `409`,
+its exact sentence and the replacement's row byte-for-byte unchanged — the shared `429`, the status
+read for each role with exactly two fields, and a non-Owner neither saving nor re-testing.
+`CapabilityAuthorizationApiTests` and `EndpointAuthorizationClassificationTests` carry the three
+endpoints' capability rows.
 
 ### Document storage
 

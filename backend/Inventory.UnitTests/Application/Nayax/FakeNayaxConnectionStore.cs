@@ -70,6 +70,16 @@ internal sealed class FakeNayaxConnectionStore : INayaxConnectionStore
 
     public NayaxConnection? Connection => _connection;
 
+    /// <summary>
+    /// Forgets the stored connection, for the run that finishes after it was deleted (issue #607).
+    /// A row that is gone is a replaced row's twin: neither is the revision the run tested.
+    /// </summary>
+    public void Remove()
+    {
+        _connection = null;
+        _accessToken = null;
+    }
+
     public Task<NayaxConnection?> FindAsync(CancellationToken cancellationToken)
     {
         ConnectionReads++;
