@@ -8,6 +8,7 @@ InventoryApp is a full-stack operations and bookkeeping system for a vending-mac
 - Purchases, their supporting documents, supplier orders, and stock movements.
 - Sites, vending machines, product assignments, and machine refills.
 - Nayax product and transaction imports with explicit payment/status handling.
+- Owner-driven Nayax connection setup: test a token, see which permissions it carries, save it and re-test it later (see [Connecting Nayax (Admin page)](#connecting-nayax-admin-page)).
 - Historical weighted-average inventory costing and persisted COGS provenance.
 - Effective-dated Nayax processing fees and site commission agreements.
 - Operating expenses, reimbursement imports, and settlement reconciliation.
@@ -183,6 +184,11 @@ Re-running changes nothing. It refuses, writing nothing, unless the ownership bo
 for exactly one business, that business is the one `bootstrap-business` adopted, no *different*
 credential is already stored, and a `NayaxTokenProtection` key is provisioned.
 
+A new business does not need this command: an Owner connects their own Nayax account from the
+application, through the wizard on Admin → Nayax Settings (see
+[Connecting Nayax (Admin page)](#connecting-nayax-admin-page)). The command exists for the business
+whose credential was already in global configuration before that wizard did.
+
 **Do not run this against production from this description.**
 [docs/tenant-rollout.md § Migrating the Nayax connection into the business](docs/tenant-rollout.md#migrating-the-nayax-connection-into-the-business-issue-519)
 is the canonical procedure, including the cutover window around issue #520, how to verify Nayax
@@ -231,7 +237,7 @@ Azure Static Web Apps direct navigation (including the `/auth` redirect landing)
 
 **The Angular application reads that state before any business call and shows the screen it calls for** (issue #529). `Member` reaches the page asked for; `NoMembership` goes to a welcome page, `ApplicationPending`/`ApplicationRejected` to their own pages (all three are placeholders until issues #508 and #505 build the real ones), and `BusinessDeactivated`, `MembershipAmbiguous` and `MembershipRevoked` go to one "access unavailable" page that names no business — it says to contact the business Owner for the first and third, and support for the second. Because a revoked or released person is the one case `GET /api/me/account-state`'s `onboardingEnabled` flag can make eligible, that page also offers **I have an invite link** always and **Start a new business** only when `onboardingEnabled` is true, matching the API's own eligibility rule. A `403` from any other member endpoint shows "you don't have access to this" through the application's toast, except on one of those destination routes or `/invite/:token`, which already explain the situation themselves. None of this is a boundary: `BusinessScopeMiddleware` refuses every business call the same way regardless of what the router shows.
 
-The first rollout serves **one** business. Adding a second live business is deliberately not enabled. The Nayax credential is no longer the reason: since issue #520 every Nayax call uses the current business's own encrypted operator id and token, with no global fallback (see [docs/architecture.md § Per-business Nayax credentials](docs/architecture.md#per-business-nayax-credentials-issue-520)). What is still missing is the self-service side. The API for it exists: an Owner can test a pasted operator id and token, save the tested pair and re-test the stored one (`/api/settings/nayax-connection/test`, `.../save`, `.../retest`; see [docs/architecture.md § Saving a tested connection and re-testing it](docs/architecture.md#saving-a-tested-connection-and-re-testing-it-issue-537)), but there is no user interface for it yet, so in practice a business's credential still arrives through the human-run [`migrate-nayax-connection`](#migrating-the-nayax-connection-into-the-business) command. See [docs/tenant-rollout.md](docs/tenant-rollout.md) for the bootstrap procedure and [docs/architecture.md](docs/architecture.md#tenant-ownership-issue-64) for the design.
+The first rollout serves **one** business. Adding a second live business is deliberately not enabled. The Nayax credential is no longer the reason: since issue #520 every Nayax call uses the current business's own encrypted operator id and token, with no global fallback (see [docs/architecture.md § Per-business Nayax credentials](docs/architecture.md#per-business-nayax-credentials-issue-520)). What is still missing is the self-service side. The API for it exists: an Owner can test a pasted operator id and token, save the tested pair and re-test the stored one (`/api/settings/nayax-connection/test`, `.../save`, `.../retest`; see [docs/architecture.md § Saving a tested connection and re-testing it](docs/architecture.md#saving-a-tested-connection-and-re-testing-it-issue-537)), and an Owner drives it from the connection wizard on Admin → Nayax Settings (see [Connecting Nayax (Admin page)](#connecting-nayax-admin-page)); the connection banners on the other screens are what is still missing. The business that is live today had its credential moved in by the human-run [`migrate-nayax-connection`](#migrating-the-nayax-connection-into-the-business) command. See [docs/tenant-rollout.md](docs/tenant-rollout.md) for the bootstrap procedure and [docs/architecture.md](docs/architecture.md#tenant-ownership-issue-64) for the design.
 
 ## Roles and capabilities
 
@@ -249,7 +255,7 @@ Ownership decides *whose* data a member sees; their **role** decides what they m
 - **Every endpoint is enforced by capability** (issues #525 and #526). The capability a role must grant is checked before the request reaches the endpoint, and a refusal is a plain `403` that describes neither the capability nor the role. What each role can reach:
   - **Operator** — the Dashboard (including its sales refresh) and the Pick List; inventory: products, take inventory, categories, stock and stock history, machines including Sync Restock, and sites; purchasing: purchases, supplier orders and suppliers. They may record a purchase but not change a supplier's GST defaults (`Suppliers.ManageGstDefaults`), and they reach no report, expense, import, site commission, setting or maintenance tool at all.
   - **Manager** — everything an Operator reaches, plus a supplier's GST defaults, operating expenses and their attachments, every report and its CSV/XLSX export, Admin → Imports, and the site commission report, agreements and payments. Not the Nayax settings and not any data repair, so a Manager may read a report whose underlying processing-fee rate only an Owner may change.
-  - **Owner** — everything a Manager reaches, plus Admin → Nayax Settings (the processing fee rates), the Nayax catalogue reconciliation, and all five maintenance repairs: Costing Repair, Inventory AVCO Transition Baseline, Historical GST Classification, Nayax Sale Timestamp Repair and Nayax Historical Cost Recovery. Each repair's preview and dry run is as restricted as its apply.
+  - **Owner** — everything a Manager reaches, plus Admin → Nayax Settings (the Nayax connection wizard and the processing fee rates; see [Connecting Nayax (Admin page)](#connecting-nayax-admin-page)), the Nayax catalogue reconciliation, and all five maintenance repairs: Costing Repair, Inventory AVCO Transition Baseline, Historical GST Classification, Nayax Sale Timestamp Repair and Nayax Historical Cost Recovery. Each repair's preview and dry run is as restricted as its apply.
   - **The dashboard's financial figures are sent only to a role that may see them** (issue #527). Every role reaches `GET /api/dashboard/summary` — it is the landing page — but a role without `Dashboard.ViewFinancials`, today an Operator, receives the response with no `salesThisWeek` object and no `inventory.inventoryValueAtCost`: both are **absent from the JSON**, not `null` and not `0`, and the week's sales are never calculated for that caller. Everything else in the response is unchanged. The Angular dashboard hides those two cards when the figures are absent and shows the two non-financial cards alone (issue #528), so the fix was never to make the API send `null`.
   - **The Angular application renders what the role allows** (issue #528). It reads the caller's capabilities once from `GET /api/me/access` and builds the sidebar from them, so an Operator is offered no Expenses, Reports or Admin entries and a Manager no Nayax Settings or data-repair entries; a route the role does not allow shows an "access not allowed" page, and an action the role cannot use — the supplier GST defaults editor — is not offered. **None of that is the boundary**: the API checks the same capability on every request and refuses it there, so a hidden entry hides a page rather than protecting one, and a capability list that cannot be read hides nothing at all. Since every current member is an Owner, nothing changed for anybody using the application today.
   - The capability vocabulary and the one role → capability table are described in [docs/architecture.md](docs/architecture.md#membership-roles-and-capabilities-issue-521), how they are enforced in [docs/architecture.md § Capability authorization](docs/architecture.md#capability-authorization-issue-525), and the full matrix by page and endpoint in [docs/architecture.md § Capability authorization on the Manager and Owner endpoints](docs/architecture.md#capability-authorization-on-the-manager-and-owner-endpoints-issue-526).
@@ -883,6 +889,57 @@ is correct, only an auditable explanation for a specific situation. It never cha
 stock, machine quantities, or stock adjustments. Use a real purchase or a stock correction instead
 when what is actually wrong is physical stock, not costing history - a repair exists only to record
 costing value that was never recorded in the first place.
+
+## Connecting Nayax (Admin page)
+
+**Admin → Nayax Settings** is where an Owner connects this business's own Nayax account. Only an
+Owner can reach it, and the connection wizard at the top of the page walks through six steps; the
+estimated processing fee rate is configured further down the same page and is unrelated to the
+connection.
+
+1. **Operator ID.** In Nayax Core: open **Operator** in the left sidebar, select your operator and
+   search; the numeric id is listed under **Company Info** as **Operator Id**. It is not a secret and
+   is stored with the connection.
+2. **Create a Lynx token.** In Nayax Core, click your username in the top right corner, then
+   **Account Settings** › **Security and Login** (the second tab) › **User Tokens** (below Your
+   Trusted Devices) › **Add Token**, and choose the **Lynx Token** type. If a Lynx token is already
+   listed, use **Show Token** next to it and copy that instead.
+3. **Paste the token and press Test connection.** The token field is write-only: it is sent once
+   with the test and cleared as soon as the test comes back, and it is never kept in the browser —
+   no local storage, no session storage, no URL. Testing stores nothing yet, changes no Nayax data,
+   and leaves any connection you already have exactly as it is, so testing a bad token cannot break
+   a working one.
+4. **Read the checklist.** The server calls each Nayax endpoint this application reads and reports
+   every one on its own line: a tick for granted, a cross with the cause for refused, and **Not
+   checked** for the machine-scoped lines when the account has no machines yet (or when the machine
+   list itself could not be read — the two are shown differently, because they need different
+   actions). An untested permission is never shown as a granted one. The restock write call is
+   deliberately not tested: a connection test must not change your Nayax data, so it is checked the
+   first time a refill is actually pushed.
+5. **Ask Nayax for anything refused.** Nayax grants a token's permissions, so when a line fails the
+   wizard composes a ready-to-copy request naming your operator id and every refused area with its
+   cause (never the token itself). Raise it in the Nayax support portal,
+   <https://nayax.service-now.com/csm>; if that gets no answer, <integration-support@nayax.com> is
+   the secondary contact. This step is skipped when nothing failed.
+6. **Save the connection.** Saving stores the operator id and the token the server just tested — the
+   page sends back only the server's reference to that test, never the token again. A token that did
+   not sign in to Nayax cannot be saved, and a test result older than fifteen minutes has to be run
+   again first. Saving with some areas still refused records the connection as **Permissions
+   pending**: the features that need those areas keep saying so until Nayax grants them and a
+   re-test confirms it.
+
+**Re-testing.** The stored connection is shown above the wizard with its status — Ready, Permissions
+pending, Needs attention, or Not connected — and a **Re-test this connection** button that runs the
+same read-only checks against the token already stored. Re-test works in every status, including
+Needs attention, which is the state it exists to recover from. When the connection was saved before
+any machine existed in the Nayax account, the page asks you to **re-test once your machines are set
+up**, because those permissions were never verified. If Nayax cannot be reached, the stored status is
+left exactly as it was and the page says so rather than concluding anything. If the token was
+replaced while a re-test was running, the result is discarded and the page asks you to run the test
+again, so the status always describes the token actually stored.
+
+Tests and re-tests share one allowance for the whole business (five runs per ten minutes); past it
+the page asks you to wait a few minutes, and no call reaches Nayax.
 
 ## Delivery workflow
 
