@@ -75,6 +75,61 @@ public sealed class BusinessApplicationDisabledApiTests : IClassFixture<Business
     }
 
     /// <summary>
+    /// A body MVC cannot bind - truncated JSON, a field of the wrong type, an empty body, or one with
+    /// no media type - is the same generic <c>404</c>, not <c>[ApiController]</c>'s automatic
+    /// <c>400</c> or <c>415</c>: the flag is decided before model binding, so a disabled deployment
+    /// cannot be made to describe the endpoint's contract. Nothing is written and the caller's
+    /// account state is unchanged.
+    /// </summary>
+    [Theory]
+    [InlineData("malformed-json")]
+    [InlineData("wrong-field-type")]
+    [InlineData("empty-body")]
+    [InlineData("no-content-type")]
+    public async Task A_body_that_cannot_be_bound_is_not_found_and_writes_nothing(string kind)
+    {
+        await _factory.ResetAsync();
+        var applicant = BusinessApplicationApiFactory.NewApplicantObjectId();
+
+        var response = await _factory.Authenticated(applicant)
+            .PostAsync(Uri, BusinessApplicationApiFactory.UnbindableBody(kind));
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        AssertGenericNotFound(await response.Content.ReadAsStringAsync());
+
+        Assert.Single(await _factory.BusinessesAsync());
+        Assert.Empty(await _factory.MembershipsOfAsync(applicant));
+        Assert.Equal("NoMembership", await _factory.AccountStateOfAsync(applicant));
+    }
+
+    /// <summary>
+    /// And the gate does not run ahead of authentication or the delegated scope: an unbindable body
+    /// from an unauthenticated caller is still <c>401</c>, and from a caller without the scope still
+    /// <c>403</c>, so the order of the answers is the same whether the feature is on or off.
+    /// </summary>
+    [Theory]
+    [InlineData("malformed-json")]
+    [InlineData("wrong-field-type")]
+    [InlineData("empty-body")]
+    public async Task Authentication_still_decides_before_the_flag_for_a_body_that_cannot_be_bound(string kind)
+    {
+        await _factory.ResetAsync();
+        var applicant = BusinessApplicationApiFactory.NewApplicantObjectId();
+
+        Assert.Equal(
+            HttpStatusCode.Unauthorized,
+            (await _factory.CreateClient().PostAsync(Uri, BusinessApplicationApiFactory.UnbindableBody(kind)))
+                .StatusCode);
+        Assert.Equal(
+            HttpStatusCode.Forbidden,
+            (await _factory.WithoutScope(applicant).PostAsync(Uri, BusinessApplicationApiFactory.UnbindableBody(kind)))
+                .StatusCode);
+
+        Assert.Single(await _factory.BusinessesAsync());
+        Assert.Empty(await _factory.MembershipsOfAsync(applicant));
+    }
+
+    /// <summary>
     /// The marker still removes the membership requirement and nothing else, even with the feature
     /// off: an unauthenticated request is <c>401</c> and one without the delegated scope is
     /// <c>403</c>, both decided before the endpoint runs. A disabled feature must not become a way

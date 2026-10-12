@@ -80,9 +80,12 @@ public sealed record BusinessApplicationOutcome
 /// <para><strong>It is behind a flag that is off by default.</strong>
 /// <see cref="ISelfServiceOnboardingFlag"/> is read first, before anything is validated, read or
 /// written, and a deployment with onboarding off answers as though this endpoint did not exist.
-/// Reading the flag here rather than in the controller is what keeps it one decision: the same
-/// value is what <c>GET /api/me/account-state</c> reports as <c>onboardingEnabled</c>, so the
-/// screen that offers "Start a new business" and the endpoint behind it cannot disagree.</para>
+/// The flag is one port, so it is one decision: the same value is what
+/// <c>GET /api/me/account-state</c> reports as <c>onboardingEnabled</c>, so the screen that offers
+/// "Start a new business" and the endpoint behind it cannot disagree. The HTTP boundary reads the
+/// same port once more, before MVC binds the request body
+/// (<c>InventoryApi.Http.SelfServiceOnboardingGateAttribute</c>), because a body that cannot be bound
+/// never reaches this use case; this check stays so the use case is closed whoever calls it.</para>
 ///
 /// <para><strong>Nothing about the new tenant comes from tenancy resolution, because there is
 /// nothing to resolve.</strong> This is the second request path reached by a caller with no

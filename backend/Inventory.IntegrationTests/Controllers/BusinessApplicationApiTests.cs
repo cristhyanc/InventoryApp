@@ -274,6 +274,55 @@ public sealed class BusinessApplicationApiTests : IClassFixture<BusinessApplicat
         Assert.Single(await _factory.BusinessesAsync());
     }
 
+    /// <summary>
+    /// With the feature on, a body MVC cannot bind is still <c>[ApiController]</c>'s ordinary
+    /// <c>400</c> and writes nothing: the onboarding gate that runs before model binding answers only
+    /// for a disabled deployment and changes nothing about an enabled one.
+    /// </summary>
+    [Theory]
+    [InlineData("malformed-json")]
+    [InlineData("wrong-field-type")]
+    [InlineData("empty-body")]
+    public async Task A_body_that_cannot_be_bound_is_a_bad_request_and_writes_nothing(string kind)
+    {
+        await _factory.ResetAsync();
+        var applicant = BusinessApplicationApiFactory.NewApplicantObjectId();
+
+        var response = await _factory.Authenticated(applicant)
+            .PostAsync(Uri, BusinessApplicationApiFactory.UnbindableBody(kind));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Single(await _factory.BusinessesAsync());
+        Assert.Empty(await _factory.MembershipsOfAsync(applicant));
+        Assert.Equal("NoMembership", await _factory.AccountStateOfAsync(applicant));
+    }
+
+    /// <summary>
+    /// The same unbindable bodies from an unauthenticated caller and from one without the delegated
+    /// scope are still <c>401</c> and <c>403</c>: authentication decides before the body is bound.
+    /// </summary>
+    [Theory]
+    [InlineData("malformed-json")]
+    [InlineData("wrong-field-type")]
+    [InlineData("empty-body")]
+    public async Task Authentication_still_decides_before_a_body_that_cannot_be_bound(string kind)
+    {
+        await _factory.ResetAsync();
+        var applicant = BusinessApplicationApiFactory.NewApplicantObjectId();
+
+        Assert.Equal(
+            HttpStatusCode.Unauthorized,
+            (await _factory.CreateClient().PostAsync(Uri, BusinessApplicationApiFactory.UnbindableBody(kind)))
+                .StatusCode);
+        Assert.Equal(
+            HttpStatusCode.Forbidden,
+            (await _factory.WithoutScope(applicant).PostAsync(Uri, BusinessApplicationApiFactory.UnbindableBody(kind)))
+                .StatusCode);
+
+        Assert.Single(await _factory.BusinessesAsync());
+        Assert.Empty(await _factory.MembershipsOfAsync(applicant));
+    }
+
     #endregion
 
     #region Eligibility

@@ -2,6 +2,7 @@ using System.Globalization;
 using Inventory.Application.Onboarding;
 using InventoryApi.Auth;
 using InventoryApi.DTOs;
+using InventoryApi.Http;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Identity.Web.Resource;
@@ -38,14 +39,17 @@ namespace InventoryApi.Controllers;
 /// <para><strong>It is behind a flag, and the flag's "off" answer is a bare <c>404</c>.</strong>
 /// A deployment that has not switched self-service onboarding on has no such endpoint, which is
 /// what a <c>404</c> says - no body, no message, nothing that distinguishes a disabled feature from
-/// a route that was never there. The flag is read by the use case, not here, so the same value
-/// drives <c>onboardingEnabled</c> on <c>GET /api/me/account-state</c>.</para>
+/// a route that was never there. <see cref="SelfServiceOnboardingGateAttribute"/> answers it before
+/// MVC binds the body, so a malformed, empty or wrongly typed body cannot draw
+/// <c>[ApiController]</c>'s automatic <c>400</c> out of a disabled deployment; it reads the same
+/// Application-layer flag the use case re-checks, so the same value drives
+/// <c>onboardingEnabled</c> on <c>GET /api/me/account-state</c>.</para>
 ///
 /// <para>The controller is thin, as every controller here is: it binds the request, invokes the one
 /// use case with the request's cancellation token, and maps the outcome to HTTP. No validation
 /// rule, eligibility rule, rate-limit decision, transaction or EF query lives here, and the
 /// refusals that carry a sentence are <c>DomainValidationException</c> and
-/// <c>DomainConflictException</c>, which <see cref="Http.DomainExceptionHandler"/> answers as
+/// <c>DomainConflictException</c>, which <see cref="DomainExceptionHandler"/> answers as
 /// <c>400</c> and <c>409</c> with the Domain's own caller-safe messages.</para>
 /// </summary>
 [ApiController]
@@ -89,6 +93,7 @@ public sealed class OnboardingController : ControllerBase
     /// </response>
     [HttpPost("business-applications")]
     [MembershipNotRequiredEndpoint]
+    [SelfServiceOnboardingGate]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]

@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using Inventory.Domain.Tenancy;
@@ -72,6 +73,30 @@ public class BusinessApplicationApiFactory : WebApplicationFactory<Program>
     /// means every test independently exercises the limit being per identity.</para>
     /// </summary>
     public static string NewApplicantObjectId() => Guid.NewGuid().ToString();
+
+    /// <summary>
+    /// A request body MVC cannot bind at all, as opposed to one that binds and then breaks an
+    /// application rule. <c>[ApiController]</c> answers each of these with its own automatic
+    /// <c>400</c> before the action runs, which is why the onboarding flag has to be decided before
+    /// model binding (the review finding on issue #541's PR).
+    /// </summary>
+    /// <param name="kind">
+    /// <c>malformed-json</c> (truncated JSON), <c>wrong-field-type</c> (an otherwise complete
+    /// application whose <c>gstRegistered</c> is the string <c>"yes"</c>), <c>empty-body</c> (zero
+    /// bytes declared as JSON) or <c>no-content-type</c> (zero bytes with no media type at all).
+    /// </param>
+    public static HttpContent UnbindableBody(string kind) => kind switch
+    {
+        "malformed-json" => Json("{\"name\":\"Coastal Vending\",\"contactEmail\":"),
+        "wrong-field-type" => Json(
+            "{\"name\":\"Coastal Vending\",\"contactEmail\":\"owner@coastal.example.com\","
+                + "\"abn\":\"51824753556\",\"gstRegistered\":\"yes\",\"timeZoneId\":\"Australia/Brisbane\"}"),
+        "empty-body" => Json(string.Empty),
+        "no-content-type" => new ByteArrayContent([]),
+        _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown unbindable body."),
+    };
+
+    private static StringContent Json(string body) => new(body, Encoding.UTF8, "application/json");
 
     /// <summary>An unrestricted context for arranging and verifying state outside the boundary.</summary>
     public AppDbContext Database()

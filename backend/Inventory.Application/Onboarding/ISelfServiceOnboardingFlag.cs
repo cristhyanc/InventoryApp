@@ -11,11 +11,13 @@ namespace Inventory.Application.Onboarding;
 /// human verification recorded in <c>docs/tenant-rollout.md</c>, not on anything this code can
 /// check.</para>
 ///
-/// <para><strong>One flag, read in one layer.</strong> Both the apply endpoint and the
-/// <c>onboardingEnabled</c> field of <c>GET /api/me/account-state</c> read it here, so what the
-/// account-state response promises and what the apply endpoint does cannot drift apart - a screen
-/// that offers "Start a new business" against an endpoint that answers <c>404</c> is exactly the
-/// failure a second read at the API boundary would eventually produce.</para>
+/// <para><strong>One flag, one source.</strong> The apply use case, the
+/// <c>onboardingEnabled</c> field of <c>GET /api/me/account-state</c>, and the apply endpoint's
+/// pre-binding gate (<c>InventoryApi.Http.SelfServiceOnboardingGateAttribute</c>) all read this one
+/// port, so what the account-state response promises and what the apply endpoint does cannot drift
+/// apart. Nothing reads <c>SelfServiceOnboarding:Enabled</c> any other way: a second source - a
+/// configuration read at the API boundary, say - is exactly what would let a screen offer "Start a
+/// new business" against an endpoint that answers <c>404</c>.</para>
 ///
 /// <para>It is a value a request can neither see nor influence: no route, query, body or header
 /// takes part in it, and a disabled deployment answers an apply with a bare <c>404</c> rather than
